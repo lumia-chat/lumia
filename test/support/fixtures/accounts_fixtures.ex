@@ -28,4 +28,18 @@ defmodule Lumia.AccountsFixtures do
     [_, token | _] = String.split(captured_email.text_body, "[TOKEN]")
     token
   end
+
+  @doc """
+  Generate a user_channel.
+  """
+  def user_channel_fixture(attrs \\ %{}) do
+    {:ok, user_channel} =
+      attrs
+      |> Enum.into(%{
+
+      })
+      |> Lumia.Accounts.create_user_channel()
+
+    user_channel
+  end
 end

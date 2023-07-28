@@ -5,19 +5,19 @@ defmodule Lumia.ServerFixtures do
   """
 
   @doc """
-  Generate a chat.
+  Generate a channel.
   """
-  def chat_fixture(attrs \\ %{}) do
-    {:ok, chat} =
+  def channel_fixture(attrs \\ %{}) do
+    {:ok, channel} =
       attrs
       |> Enum.into(%{
         description: "some description",
         is_private: true,
         name: "some name"
       })
-      |> Lumia.Server.create_chat()
+      |> Lumia.Server.create_channel()
 
-    chat
+    channel
   end
 
   @doc """

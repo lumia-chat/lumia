@@ -5,6 +5,7 @@ defmodule LumiaWeb.UserAuth do
   import Phoenix.Controller
 
   alias Lumia.Accounts
+  alias Lumia.Repo
 
   # Make the remember me cookie valid for 60 days.
   # If you want bump or reduce this value, also change
@@ -25,7 +26,7 @@ defmodule LumiaWeb.UserAuth do
   disconnected on log out. The line can be safely removed
   if you are not using LiveView.
   """
-  def log_in_user(conn, user, params \\ %{}) do
+  def login_user(conn, user, params \\ %{}) do
     token = Accounts.generate_user_session_token(user)
     user_return_to = get_session(conn, :user_return_to)
 
@@ -70,7 +71,7 @@ defmodule LumiaWeb.UserAuth do
 
   It clears all session data for safety. See renew_session.
   """
-  def log_out_user(conn) do
+  def logout_user(conn) do
     user_token = get_session(conn, :user_token)
     user_token && Accounts.delete_user_session_token(user_token)
 
@@ -90,7 +91,12 @@ defmodule LumiaWeb.UserAuth do
   """
   def fetch_current_user(conn, _opts) do
     {user_token, conn} = ensure_user_token(conn)
-    user = user_token && Accounts.get_user_by_session_token(user_token)
+
+    user =
+      if user_token do
+        Accounts.get_user_by_session_token(user_token) |> Repo.preload([:channels])
+      end
+
     assign(conn, :current_user, user)
   end
 
@@ -156,7 +162,7 @@ defmodule LumiaWeb.UserAuth do
       socket =
         socket
         |> Phoenix.LiveView.put_flash(:error, "You must log in to access this page.")
-        |> Phoenix.LiveView.redirect(to: ~p"/users/log_in")
+        |> Phoenix.LiveView.redirect(to: ~p"/users/login")
 
       {:halt, socket}
     end
@@ -175,7 +181,7 @@ defmodule LumiaWeb.UserAuth do
   defp mount_current_user(socket, session) do
     Phoenix.Component.assign_new(socket, :current_user, fn ->
       if user_token = session["user_token"] do
-        Accounts.get_user_by_session_token(user_token)
+        Accounts.get_user_by_session_token(user_token) |> Repo.preload(:channels)
       end
     end)
   end
@@ -206,7 +212,7 @@ defmodule LumiaWeb.UserAuth do
       conn
       |> put_flash(:error, "You must log in to access this page.")
       |> maybe_store_return_to()
-      |> redirect(to: ~p"/users/log_in")
+      |> redirect(to: ~p"/users/login")
       |> halt()
     end
   end

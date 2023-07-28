@@ -1,5 +1,5 @@
 defmodule LumiaWeb.UserLoginLive do
-  use LumiaWeb, :live_view
+  use LumiaWeb, :live_view_session
 
   def render(assigns) do
     ~H"""
@@ -15,7 +15,7 @@ defmodule LumiaWeb.UserLoginLive do
         </:subtitle>
       </.header>
 
-      <.simple_form for={@form} id="login_form" action={~p"/users/log_in"} phx-update="ignore">
+      <.simple_form for={@form} id="login_form" action={~p"/users/login"} phx-update="ignore">
         <.input field={@form[:email]} type="email" label="Email" required />
         <.input field={@form[:password]} type="password" label="Password" required />
 

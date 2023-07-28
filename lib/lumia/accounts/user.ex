@@ -3,11 +3,17 @@ defmodule Lumia.Accounts.User do
 
   import Ecto.Changeset
 
+  alias Lumia.Accounts
+  alias Lumia.Server
+
   schema "users" do
     field :email, :string
     field :password, :string, virtual: true, redact: true
     field :hashed_password, :string, redact: true
     field :confirmed_at, :naive_datetime
+
+    has_many :user_channels, Accounts.UserChannel
+    has_many :channels, through: [:user_channels, :channel]
 
     timestamps()
   end

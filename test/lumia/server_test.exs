@@ -3,38 +3,38 @@ defmodule Lumia.ServerTest do
 
   alias Lumia.Server
 
-  describe "chats" do
-    alias Lumia.Server.Chat
+  describe "channels" do
+    alias Lumia.Server.Channel
 
     import Lumia.ServerFixtures
 
     @invalid_attrs %{description: nil, is_private: nil, name: nil}
 
-    test "list_chats/0 returns all chats" do
-      chat = chat_fixture()
-      assert Server.list_chats() == [chat]
+    test "list_channels/0 returns all channels" do
+      channel = channel_fixture()
+      assert Server.list_channels() == [channel]
     end
 
-    test "get_chat!/1 returns the chat with given id" do
-      chat = chat_fixture()
-      assert Server.get_chat!(chat.id) == chat
+    test "get_channel!/1 returns the channel with given id" do
+      channel = channel_fixture()
+      assert Server.get_channel!(channel.id) == channel
     end
 
-    test "create_chat/1 with valid data creates a chat" do
+    test "create_channel/1 with valid data creates a channel" do
       valid_attrs = %{description: "some description", is_private: true, name: "some name"}
 
-      assert {:ok, %Chat{} = chat} = Server.create_chat(valid_attrs)
-      assert chat.description == "some description"
-      assert chat.is_private == true
-      assert chat.name == "some name"
+      assert {:ok, %Channel{} = channel} = Server.create_channel(valid_attrs)
+      assert channel.description == "some description"
+      assert channel.is_private == true
+      assert channel.name == "some name"
     end
 
-    test "create_chat/1 with invalid data returns error changeset" do
-      assert {:error, %Ecto.Changeset{}} = Server.create_chat(@invalid_attrs)
+    test "create_channel/1 with invalid data returns error changeset" do
+      assert {:error, %Ecto.Changeset{}} = Server.create_channel(@invalid_attrs)
     end
 
-    test "update_chat/2 with valid data updates the chat" do
-      chat = chat_fixture()
+    test "update_channel/2 with valid data updates the channel" do
+      channel = channel_fixture()
 
       update_attrs = %{
         description: "some updated description",
@@ -42,27 +42,27 @@ defmodule Lumia.ServerTest do
         name: "some updated name"
       }
 
-      assert {:ok, %Chat{} = chat} = Server.update_chat(chat, update_attrs)
-      assert chat.description == "some updated description"
-      assert chat.is_private == false
-      assert chat.name == "some updated name"
+      assert {:ok, %Channel{} = channel} = Server.update_channel(channel, update_attrs)
+      assert channel.description == "some updated description"
+      assert channel.is_private == false
+      assert channel.name == "some updated name"
     end
 
-    test "update_chat/2 with invalid data returns error changeset" do
-      chat = chat_fixture()
-      assert {:error, %Ecto.Changeset{}} = Server.update_chat(chat, @invalid_attrs)
-      assert chat == Server.get_chat!(chat.id)
+    test "update_channel/2 with invalid data returns error changeset" do
+      channel = channel_fixture()
+      assert {:error, %Ecto.Changeset{}} = Server.update_channel(channel, @invalid_attrs)
+      assert channel == Server.get_channel!(channel.id)
     end
 
-    test "delete_chat/1 deletes the chat" do
-      chat = chat_fixture()
-      assert {:ok, %Chat{}} = Server.delete_chat(chat)
-      assert_raise Ecto.NoResultsError, fn -> Server.get_chat!(chat.id) end
+    test "delete_channel/1 deletes the channel" do
+      channel = channel_fixture()
+      assert {:ok, %Channel{}} = Server.delete_channel(channel)
+      assert_raise Ecto.NoResultsError, fn -> Server.get_channel!(channel.id) end
     end
 
-    test "change_chat/1 returns a chat changeset" do
-      chat = chat_fixture()
-      assert %Ecto.Changeset{} = Server.change_chat(chat)
+    test "change_channel/1 returns a channel changeset" do
+      channel = channel_fixture()
+      assert %Ecto.Changeset{} = Server.change_channel(channel)
     end
   end
 

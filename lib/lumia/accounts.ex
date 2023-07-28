@@ -350,4 +350,100 @@ defmodule Lumia.Accounts do
       {:error, :user, changeset, _} -> {:error, changeset}
     end
   end
+
+  alias Lumia.Accounts.UserChannel
+
+  @doc """
+  Returns the list of user_channels.
+
+  ## Examples
+
+      iex> list_user_channels()
+      [%UserChannel{}, ...]
+
+  """
+  def list_user_channels do
+    Repo.all(UserChannel)
+  end
+
+  @doc """
+  Gets a single user_channel.
+
+  Raises `Ecto.NoResultsError` if the User channel does not exist.
+
+  ## Examples
+
+      iex> get_user_channel!(123)
+      %UserChannel{}
+
+      iex> get_user_channel!(456)
+      ** (Ecto.NoResultsError)
+
+  """
+  def get_user_channel!(id), do: Repo.get!(UserChannel, id)
+
+  @doc """
+  Creates a user_channel.
+
+  ## Examples
+
+      iex> create_user_channel(%{field: value})
+      {:ok, %UserChannel{}}
+
+      iex> create_user_channel(%{field: bad_value})
+      {:error, %Ecto.Changeset{}}
+
+  """
+  def create_user_channel(attrs \\ %{}) do
+    %UserChannel{}
+    |> UserChannel.changeset(attrs)
+    |> Repo.insert()
+  end
+
+  @doc """
+  Updates a user_channel.
+
+  ## Examples
+
+      iex> update_user_channel(user_channel, %{field: new_value})
+      {:ok, %UserChannel{}}
+
+      iex> update_user_channel(user_channel, %{field: bad_value})
+      {:error, %Ecto.Changeset{}}
+
+  """
+  def update_user_channel(%UserChannel{} = user_channel, attrs) do
+    user_channel
+    |> UserChannel.changeset(attrs)
+    |> Repo.update()
+  end
+
+  @doc """
+  Deletes a user_channel.
+
+  ## Examples
+
+      iex> delete_user_channel(user_channel)
+      {:ok, %UserChannel{}}
+
+      iex> delete_user_channel(user_channel)
+      {:error, %Ecto.Changeset{}}
+
+  """
+  def delete_user_channel(%UserChannel{} = user_channel) do
+    Repo.delete(user_channel)
+  end
+
+  @doc """
+  Returns an `%Ecto.Changeset{}` for tracking user_channel changes.
+
+  ## Examples
+
+      iex> change_user_channel(user_channel)
+      %Ecto.Changeset{data: %UserChannel{}}
+
+  """
+  def change_user_channel(%UserChannel{} = user_channel, attrs \\ %{}) do
+    UserChannel.changeset(user_channel, attrs)
+  end
 end

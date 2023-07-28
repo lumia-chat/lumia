@@ -53,12 +53,12 @@ defmodule LumiaWeb.Router do
     live_session :redirect_if_user_is_authenticated,
       on_mount: [{LumiaWeb.UserAuth, :redirect_if_user_is_authenticated}] do
       live "/users/register", UserRegistrationLive, :new
-      live "/users/log_in", UserLoginLive, :new
+      live "/users/login", UserLoginLive, :new
       live "/users/reset_password", UserForgotPasswordLive, :new
       live "/users/reset_password/:token", UserResetPasswordLive, :edit
     end
 
-    post "/users/log_in", UserSessionController, :create
+    post "/users/login", UserSessionController, :create
   end
 
   scope "/", LumiaWeb do
@@ -69,18 +69,19 @@ defmodule LumiaWeb.Router do
       live "/users/settings", UserSettingsLive, :edit
       live "/users/settings/confirm_email/:token", UserSettingsLive, :confirm_email
 
-      live "/chats", ChatLive.Index, :index
-      live "/chats/new", ChatLive.Index, :new
-      live "/chats/:id/edit", ChatLive.Index, :edit
-      live "/chats/:id", ChatLive.Show, :show
-      live "/chats/:id/show/edit", ChatLive.Show, :edit
+      live "/channels", ChannelLive.Index, :index
+      live "/channels/new", ChannelLive.Index, :new
+      live "/channels/:id/edit", ChannelLive.Index, :edit
+      live "/channels/:id", ChannelLive.Show, :show
+      live "/channels/:id/show/edit", ChannelLive.Show, :edit
     end
   end
 
   scope "/", LumiaWeb do
     pipe_through [:browser]
 
-    delete "/users/log_out", UserSessionController, :delete
+    delete "/users/logout", UserSessionController, :delete
+    get "/users/logout", UserSessionController, :delete
 
     live_session :current_user,
       on_mount: [{LumiaWeb.UserAuth, :mount_current_user}] do

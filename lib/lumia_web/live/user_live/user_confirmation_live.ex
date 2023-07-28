@@ -1,5 +1,5 @@
 defmodule LumiaWeb.UserConfirmationLive do
-  use LumiaWeb, :live_view
+  use LumiaWeb, :live_view_session
 
   alias Lumia.Accounts
 
@@ -17,7 +17,7 @@ defmodule LumiaWeb.UserConfirmationLive do
 
       <p class="text-center mt-4">
         <.link href={~p"/users/register"}>Register</.link>
-        | <.link href={~p"/users/log_in"}>Log in</.link>
+        | <.link href={~p"/users/login"}>Log in</.link>
       </p>
     </div>
     """

@@ -1,4 +1,4 @@
-defmodule LumiaWeb.ChatLive.FormComponent do
+defmodule LumiaWeb.ChannelLive.FormComponent do
   use LumiaWeb, :live_component
 
   alias Lumia.Server
@@ -9,12 +9,12 @@ defmodule LumiaWeb.ChatLive.FormComponent do
     <div>
       <.header>
         <%= @title %>
-        <:subtitle>Use this form to manage chat records in your database.</:subtitle>
+        <:subtitle>Use this form to manage channel records in your database.</:subtitle>
       </.header>
 
       <.simple_form
         for={@form}
-        id="chat-form"
+        id="channel-form"
         phx-target={@myself}
         phx-change="validate"
         phx-submit="save"
@@ -23,7 +23,7 @@ defmodule LumiaWeb.ChatLive.FormComponent do
         <.input field={@form[:description]} type="text" label="Description" />
         <.input field={@form[:is_private]} type="checkbox" label="Is private" />
         <:actions>
-          <.button phx-disable-with="Saving...">Save Chat</.button>
+          <.button phx-disable-with="Saving...">Save Channel</.button>
         </:actions>
       </.simple_form>
     </div>
@@ -31,8 +31,8 @@ defmodule LumiaWeb.ChatLive.FormComponent do
   end
 
   @impl true
-  def update(%{chat: chat} = assigns, socket) do
-    changeset = Server.change_chat(chat)
+  def update(%{channel: channel} = assigns, socket) do
+    changeset = Server.change_channel(channel)
 
     {:ok,
      socket
@@ -41,27 +41,27 @@ defmodule LumiaWeb.ChatLive.FormComponent do
   end
 
   @impl true
-  def handle_event("validate", %{"chat" => chat_params}, socket) do
+  def handle_event("validate", %{"channel" => channel_params}, socket) do
     changeset =
-      socket.assigns.chat
-      |> Server.change_chat(chat_params)
+      socket.assigns.channel
+      |> Server.change_channel(channel_params)
       |> Map.put(:action, :validate)
 
     {:noreply, assign_form(socket, changeset)}
   end
 
-  def handle_event("save", %{"chat" => chat_params}, socket) do
-    save_chat(socket, socket.assigns.action, chat_params)
+  def handle_event("save", %{"channel" => channel_params}, socket) do
+    save_channel(socket, socket.assigns.action, channel_params)
   end
 
-  defp save_chat(socket, :edit, chat_params) do
-    case Server.update_chat(socket.assigns.chat, chat_params) do
-      {:ok, chat} ->
-        notify_parent({:saved, chat})
+  defp save_channel(socket, :edit, channel_params) do
+    case Server.update_channel(socket.assigns.channel, channel_params) do
+      {:ok, channel} ->
+        notify_parent({:saved, channel})
 
         {:noreply,
          socket
-         |> put_flash(:info, "Chat updated successfully")
+         |> put_flash(:info, "Channel updated successfully")
          |> push_patch(to: socket.assigns.patch)}
 
       {:error, %Ecto.Changeset{} = changeset} ->
@@ -69,14 +69,14 @@ defmodule LumiaWeb.ChatLive.FormComponent do
     end
   end
 
-  defp save_chat(socket, :new, chat_params) do
-    case Server.create_chat(chat_params) do
-      {:ok, chat} ->
-        notify_parent({:saved, chat})
+  defp save_channel(socket, :new, channel_params) do
+    case Server.create_channel(channel_params) do
+      {:ok, channel} ->
+        notify_parent({:saved, channel})
 
         {:noreply,
          socket
-         |> put_flash(:info, "Chat created successfully")
+         |> put_flash(:info, "Channel created successfully")
          |> push_patch(to: socket.assigns.patch)}
 
       {:error, %Ecto.Changeset{} = changeset} ->

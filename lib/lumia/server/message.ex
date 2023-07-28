@@ -9,7 +9,7 @@ defmodule Lumia.Server.Message do
   schema "messages" do
     field :text, :string
 
-    belongs_to :chat, Server.Chat
+    belongs_to :channel, Server.Channel
     belongs_to :user, Accounts.User
 
     timestamps(type: :utc_datetime_usec)

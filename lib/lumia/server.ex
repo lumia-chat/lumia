@@ -5,128 +5,150 @@ defmodule Lumia.Server do
 
   import Ecto.Query, warn: false
 
-  alias Lumia.Repo
-  alias Lumia.Server.Chat
+  alias Lumia.Accounts.User
+  alias Lumia.Accounts.UserChannel
+
+  alias Lumia.Server.Channel
   alias Lumia.Server.Message
+
+  alias Lumia.Repo
 
   def broadcast({:error, error}), do: {:error, error}
 
   def broadcast({:ok, %Message{} = message}) do
     message = Repo.preload(message, :user)
-    Phoenix.PubSub.broadcast(Lumia.PubSub, "messages:#{message.chat_id}", {:new_message, message})
+    Phoenix.PubSub.broadcast(Lumia.PubSub, "messages:#{message.channel_id}", {:new_message, message})
     {:ok, message}
   end
 
   @doc """
-  Returns the list of chats.
+  Returns the list of channels.
 
   ## Examples
 
-      iex> list_chats()
-      [%Chat{}, ...]
+      iex> list_channels()
+      [%Channel{}, ...]
 
   """
-  def list_chats do
-    Repo.all(Chat)
+  def list_channels do
+    Repo.all(Channel)
+  end
+
+  def join_channel(%User{id: user_id}, %Channel{id: channel_id}) do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    Repo.insert(
+      %UserChannel{user_id: user_id, channel_id: channel_id, inserted_at: now}
+    )
   end
 
   @doc """
-  Gets a single chat.
+  Gets a single channel.
 
-  Raises `Ecto.NoResultsError` if the Chat does not exist.
+  Raises `Ecto.NoResultsError` if the Channel does not exist.
 
   ## Examples
 
-      iex> get_chat!(123)
-      %Chat{}
+      iex> get_channel!(123)
+      %Channel{}
 
-      iex> get_chat!(456)
+      iex> get_channel!(456)
       ** (Ecto.NoResultsError)
 
   """
-  def get_chat!(id), do: Repo.get!(Chat, id)
+  def get_channel!(id), do: Repo.get!(Channel, id)
 
   @doc """
-  Creates a chat.
+  Creates a channel.
 
   ## Examples
 
-      iex> create_chat(%{field: value})
-      {:ok, %Chat{}}
+      iex> create_channel(%{field: value})
+      {:ok, %Channel{}}
 
-      iex> create_chat(%{field: bad_value})
+      iex> create_channel(%{field: bad_value})
       {:error, %Ecto.Changeset{}}
 
   """
-  def create_chat(attrs \\ %{}) do
-    %Chat{}
-    |> Chat.changeset(attrs)
+  def create_channel(attrs \\ %{}) do
+    %Channel{}
+    |> Channel.changeset(attrs)
     |> Repo.insert()
   end
 
   @doc """
-  Updates a chat.
+  Updates a channel.
 
   ## Examples
 
-      iex> update_chat(chat, %{field: new_value})
-      {:ok, %Chat{}}
+      iex> update_channel(channel, %{field: new_value})
+      {:ok, %Channel{}}
 
-      iex> update_chat(chat, %{field: bad_value})
+      iex> update_channel(channel, %{field: bad_value})
       {:error, %Ecto.Changeset{}}
 
   """
-  def update_chat(%Chat{} = chat, attrs) do
-    chat
-    |> Chat.changeset(attrs)
+  def update_channel(%Channel{} = channel, attrs) do
+    channel
+    |> Channel.changeset(attrs)
     |> Repo.update()
   end
 
   @doc """
-  Deletes a chat.
+  Deletes a channel.
 
   ## Examples
 
-      iex> delete_chat(chat)
-      {:ok, %Chat{}}
+      iex> delete_channel(channel)
+      {:ok, %Channel{}}
 
-      iex> delete_chat(chat)
+      iex> delete_channel(channel)
       {:error, %Ecto.Changeset{}}
 
   """
-  def delete_chat(%Chat{} = chat) do
-    Repo.delete(chat)
+  def delete_channel(%Channel{} = channel) do
+    Repo.delete(channel)
   end
 
   @doc """
-  Returns an `%Ecto.Changeset{}` for tracking chat changes.
+  Returns an `%Ecto.Changeset{}` for tracking channel changes.
 
   ## Examples
 
-      iex> change_chat(chat)
-      %Ecto.Changeset{data: %Chat{}}
+      iex> change_channel(channel)
+      %Ecto.Changeset{data: %Channel{}}
 
   """
-  def change_chat(%Chat{} = chat, attrs \\ %{}) do
-    Chat.changeset(chat, attrs)
+  def change_channel(%Channel{} = channel, attrs \\ %{}) do
+    Channel.changeset(channel, attrs)
   end
 
   @doc """
-  Returns the list of recent messages for a chat.
+  Returns the list of recent messages for a channel.
 
   ## Examples
 
-      iex> list_recent_messages(chat_id)
+      iex> list_recent_messages(channel_id)
       [%Message{}, ...]
 
   """
-  def list_recent_messages(chat_id, limit \\ 10) when is_binary(chat_id) do
+  def list_recent_messages(channel_id, opts \\ []) when is_binary(channel_id) do
+    limit = Keyword.get(opts, :limit, 10)
+
+    before =
+      case Keyword.get(opts, :before) do
+        nil -> true
+        before -> dynamic([m], m.inserted_at < ^before)
+      end
+
     Repo.all(
       from m in Message,
-        where: m.chat_id == ^chat_id,
+        where: m.channel_id == ^channel_id,
+        where: ^before,
         order_by: [desc: m.inserted_at],
         limit: ^limit
     )
+    |> Enum.reverse()
   end
 
   @doc """
@@ -157,8 +179,8 @@ defmodule Lumia.Server do
       {:error, %Ecto.Changeset{}}
 
   """
-  def create_message(chat_id, user_id, attrs) when is_binary(chat_id) and is_binary(user_id) do
-    %Message{chat_id: chat_id, user_id: user_id}
+  def create_message(channel_id, user_id, attrs) when is_binary(channel_id) and is_binary(user_id) do
+    %Message{channel_id: channel_id, user_id: user_id}
     |> Message.changeset(attrs)
     |> Repo.insert()
     |> broadcast()

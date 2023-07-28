@@ -505,4 +505,56 @@ defmodule Lumia.AccountsTest do
       refute inspect(%User{password: "123456"}) =~ "password: \"123456\""
     end
   end
+
+  describe "user_channels" do
+    alias Lumia.Accounts.UserChannel
+
+    import Lumia.AccountsFixtures
+
+    @invalid_attrs %{}
+
+    test "list_user_channels/0 returns all user_channels" do
+      user_channel = user_channel_fixture()
+      assert Accounts.list_user_channels() == [user_channel]
+    end
+
+    test "get_user_channel!/1 returns the user_channel with given id" do
+      user_channel = user_channel_fixture()
+      assert Accounts.get_user_channel!(user_channel.id) == user_channel
+    end
+
+    test "create_user_channel/1 with valid data creates a user_channel" do
+      valid_attrs = %{}
+
+      assert {:ok, %UserChannel{} = user_channel} = Accounts.create_user_channel(valid_attrs)
+    end
+
+    test "create_user_channel/1 with invalid data returns error changeset" do
+      assert {:error, %Ecto.Changeset{}} = Accounts.create_user_channel(@invalid_attrs)
+    end
+
+    test "update_user_channel/2 with valid data updates the user_channel" do
+      user_channel = user_channel_fixture()
+      update_attrs = %{}
+
+      assert {:ok, %UserChannel{} = user_channel} = Accounts.update_user_channel(user_channel, update_attrs)
+    end
+
+    test "update_user_channel/2 with invalid data returns error changeset" do
+      user_channel = user_channel_fixture()
+      assert {:error, %Ecto.Changeset{}} = Accounts.update_user_channel(user_channel, @invalid_attrs)
+      assert user_channel == Accounts.get_user_channel!(user_channel.id)
+    end
+
+    test "delete_user_channel/1 deletes the user_channel" do
+      user_channel = user_channel_fixture()
+      assert {:ok, %UserChannel{}} = Accounts.delete_user_channel(user_channel)
+      assert_raise Ecto.NoResultsError, fn -> Accounts.get_user_channel!(user_channel.id) end
+    end
+
+    test "change_user_channel/1 returns a user_channel changeset" do
+      user_channel = user_channel_fixture()
+      assert %Ecto.Changeset{} = Accounts.change_user_channel(user_channel)
+    end
+  end
 end
