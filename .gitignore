@@ -35,3 +35,6 @@ lumia-*.tar
 npm-debug.log
 /assets/node_modules/
 
+# editor crap
+.zed/
+.vscode/
