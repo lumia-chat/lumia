@@ -21,10 +21,20 @@ import "phoenix_html";
 import {Socket} from "phoenix";
 import {LiveSocket} from "phoenix_live_view";
 import topbar from "../vendor/topbar";
+import hljs from 'highlight.js';
 
-let Hooks = {};
+function highlightAll(where = document) {
+  where.querySelectorAll('pre code').forEach((block) => {
+    const language = block.getAttribute("class");
+    console.log(`highlighting ${language}`);
+    const { value: value } = hljs.highlight(block.innerText, { language });
+    block.innerHTML = value;
+  });
+}
 
-Hooks.EnterSubmit = {
+let hooks = {};
+
+hooks.EnterSubmit = {
   mounted() {
     this.el.addEventListener("keydown", (e) => {
       if (e.key == "Enter" && e.shiftKey == false) {
@@ -38,10 +48,16 @@ Hooks.EnterSubmit = {
   }
 };
 
+hooks.Highlight = {
+  mounted() {
+    highlightAll(this.el);
+  }
+}
+
 let csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content");
 let liveSocket = new LiveSocket("/live", Socket, {
   params: {_csrf_token: csrfToken},
-  hooks: Hooks
+  hooks
 });
 
 // Show progress bar on live navigation and form submits. Only displays if still
@@ -55,6 +71,10 @@ window.addEventListener("phx:page-loading-start", () => {
   };
 });
 window.addEventListener("phx:page-loading-stop", () => {
+  // Highlight when page is done loading.
+  highlightAll();
+
+  // Topbar crap.
   clearTimeout(topBarScheduled);
   topBarScheduled = undefined;
   topbar.hide();

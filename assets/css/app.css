@@ -3,3 +3,31 @@
 @import "tailwindcss/utilities";
 
 /* This file is for your main application CSS */
+.message-body h1 {
+  font-size: 1.25rem; /* 20px */
+  line-height: 1.75rem; /* 28px */
+  font-weight: 700;
+}
+
+.message-body h2 {
+  font-size: 1.125rem; /* 18px */
+  line-height: 1.75rem; /* 28px */
+  font-weight: 700;
+}
+
+.message-body h3, h4, h5 {
+  font-weight: 700;
+}
+
+.message-body > pre {
+  width: 100%;
+  padding: 0.75rem; /* 8px */
+  border-radius: 0.25rem; /* 4px */
+  background-color: rgb(2 6 23); /* bg-slate-950 */
+}
+
+.message-body > code {
+  padding: 0.5rem; /* 8px */
+  border-radius: 0.25rem; /* 4px */
+  background-color: rgb(2 6 23); /* bg-slate-950 */
+}

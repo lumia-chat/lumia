@@ -1,7 +1,7 @@
 <ul role="list" class="divide-y divide-gray-800 bg-gray-900 mb-16" phx-update="stream" id="messages" phx-viewport-top="load-previous">
   <li :for={{dom_id, message} <- @streams.messages} class="py-5 px-5" id={dom_id}>
     <div class="flex justify-between gap-x-6">
-      <div class="flex gap-x-4">
+      <div class="flex grow gap-x-4">
         <img
           class="h-12 w-12 flex-none rounded-full bg-gray-800"
           src={avatar_url(message.user.email)}
@@ -11,13 +11,15 @@
           <p class="text-sm font-semibold leading-6 text-white">
             <%= message.user.email %>
           </p>
-          <p class="mt-1 leading-5 text-gray-300">
-            <%= raw Earmark.as_html!(message.text,
-              breaks: true,
-              code_class_prefix: "",
-              escape: false
-            ) %>
-          </p>
+          <div class="mt-1 leading-5 text-gray-300">
+            <div id={"message-text-#{message.id}"} phx-hook="Highlight" phx-update="ignore" class="message-body">
+              <%= raw Earmark.as_html!(message.text,
+                breaks: true,
+                code_class_prefix: "",
+                escape: false
+              ) %>
+            </div>
+          </div>
         </div>
       </div>
       <div class="hidden sm:flex sm:flex-col sm:items-end">
