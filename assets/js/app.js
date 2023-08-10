@@ -16,18 +16,37 @@
 //
 
 // Include phoenix_html to handle method=PUT/DELETE in forms and buttons.
-import "phoenix_html"
+import "phoenix_html";
 // Establish Phoenix Socket and LiveView configuration.
-import {Socket} from "phoenix"
-import {LiveSocket} from "phoenix_live_view"
-import topbar from "../vendor/topbar"
+import {Socket} from "phoenix";
+import {LiveSocket} from "phoenix_live_view";
+import topbar from "../vendor/topbar";
 
-let csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
-let liveSocket = new LiveSocket("/live", Socket, {params: {_csrf_token: csrfToken}})
+let Hooks = {};
+
+Hooks.EnterSubmit = {
+  mounted() {
+    this.el.addEventListener("keydown", (e) => {
+      if (e.key == "Enter" && e.shiftKey == false) {
+        this.el.form.dispatchEvent(
+          new Event('submit', {bubbles: true, cancelable: true})
+        );
+
+        this.el.value = "";
+      }
+    })
+  }
+};
+
+let csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content");
+let liveSocket = new LiveSocket("/live", Socket, {
+  params: {_csrf_token: csrfToken},
+  hooks: Hooks
+});
 
 // Show progress bar on live navigation and form submits. Only displays if still
 // loading after 120 ms.
-topbar.config({barColors: {0: "#29d"}, shadowColor: "rgba(0, 0, 0, .3)"})
+topbar.config({barColors: {0: "#29d"}, shadowColor: "rgba(0, 0, 0, .3)"});
 
 let topBarScheduled = undefined;
 window.addEventListener("phx:page-loading-start", () => {
@@ -42,11 +61,11 @@ window.addEventListener("phx:page-loading-stop", () => {
 });
 
 // connect if there are any LiveViews on the page
-liveSocket.connect()
+liveSocket.connect();
 
 // expose liveSocket on window for web console debug logs and latency simulation:
 // >> liveSocket.enableDebug()
 // >> liveSocket.enableLatencySim(1000)  // enabled for duration of browser session
 // >> liveSocket.disableLatencySim()
-window.liveSocket = liveSocket
+window.liveSocket = liveSocket;
 

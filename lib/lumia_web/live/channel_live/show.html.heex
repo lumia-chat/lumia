@@ -11,7 +11,13 @@
           <p class="text-sm font-semibold leading-6 text-white">
             <%= message.user.email %>
           </p>
-          <p class="mt-1 leading-5 text-gray-300"><%= message.text %></p>
+          <p class="mt-1 leading-5 text-gray-300">
+            <%= raw Earmark.as_html!(message.text,
+              breaks: true,
+              code_class_prefix: "",
+              escape: false
+            ) %>
+          </p>
         </div>
       </div>
       <div class="hidden sm:flex sm:flex-col sm:items-end">
@@ -44,6 +50,7 @@
         type="message"
         maxlength="600"
         placeholder={"Message ##{@channel.name}"}
+        phx-hook="EnterSubmit"
         class={[
           "block h-8 w-full mt-0 rounded-lg focus:ring-0 sm:text-sm",
           "phx-no-feedback:border-zinc-300 phx-no-feedback:focus:border-zinc-400",
@@ -61,12 +68,8 @@
     </.button>
     </div>
   </div>
-
-
-
   </.simple_form>
 </div>
-
 
 <.back navigate={~p"/channels"}>Back to channels</.back>
 

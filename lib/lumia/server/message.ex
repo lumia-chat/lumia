@@ -21,5 +21,13 @@ defmodule Lumia.Server.Message do
     |> cast(attrs, [:text])
     |> validate_required([:text])
     |> validate_length(:text, max: 600)
+    |> html_escape(:text)
+  end
+
+  defp html_escape(changeset, field) do
+    update_change(changeset, field, fn value ->
+      {:safe, data} = Phoenix.HTML.html_escape(value)
+      IO.iodata_to_binary(data)
+    end)
   end
 end
