@@ -31,3 +31,7 @@
   border-radius: 0.25rem; /* 4px */
   background-color: rgb(2 6 23); /* bg-slate-950 */
 }
+
+.message-body a {
+  text-decoration: underline;
+}
