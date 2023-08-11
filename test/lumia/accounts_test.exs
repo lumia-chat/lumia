@@ -537,12 +537,16 @@ defmodule Lumia.AccountsTest do
       user_channel = user_channel_fixture()
       update_attrs = %{}
 
-      assert {:ok, %UserChannel{} = user_channel} = Accounts.update_user_channel(user_channel, update_attrs)
+      assert {:ok, %UserChannel{} = user_channel} =
+               Accounts.update_user_channel(user_channel, update_attrs)
     end
 
     test "update_user_channel/2 with invalid data returns error changeset" do
       user_channel = user_channel_fixture()
-      assert {:error, %Ecto.Changeset{}} = Accounts.update_user_channel(user_channel, @invalid_attrs)
+
+      assert {:error, %Ecto.Changeset{}} =
+               Accounts.update_user_channel(user_channel, @invalid_attrs)
+
       assert user_channel == Accounts.get_user_channel!(user_channel.id)
     end
 

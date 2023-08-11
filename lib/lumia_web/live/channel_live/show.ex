@@ -14,7 +14,12 @@ defmodule LumiaWeb.ChannelLive.Show do
   def handle_params(%{"id" => id}, _, socket) do
     if connected?(socket), do: LumiaWeb.Endpoint.subscribe("messages:#{id}")
     channel = Server.get_channel!(id)
-    message_changeset = Server.change_message(%Message{channel_id: channel.id, user_id: socket.assigns.current_user.id})
+
+    message_changeset =
+      Server.change_message(%Message{
+        channel_id: channel.id,
+        user_id: socket.assigns.current_user.id
+      })
 
     messages =
       channel.id
@@ -53,14 +58,18 @@ defmodule LumiaWeb.ChannelLive.Show do
 
       [%{inserted_at: last_message_time} | _] = messages ->
         {:noreply,
-          socket
-          |> assign(:last_message_time, last_message_time)
-          |> stream(:messages, Enum.reverse(messages), at: 0)}
+         socket
+         |> assign(:last_message_time, last_message_time)
+         |> stream(:messages, Enum.reverse(messages), at: 0)}
     end
   end
 
   def handle_event("add-message", %{"message" => message_params}, socket) do
-    case Server.create_message(socket.assigns.channel.id, socket.assigns.current_user.id, message_params) do
+    case Server.create_message(
+           socket.assigns.channel.id,
+           socket.assigns.current_user.id,
+           message_params
+         ) do
       {:ok, _message} ->
         {:noreply, assign(socket, :message_form, message_changeset(socket) |> to_form())}
 

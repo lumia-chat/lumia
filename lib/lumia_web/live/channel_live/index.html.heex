@@ -31,7 +31,12 @@
   </:action>
 </.table>
 
-<.modal :if={@live_action in [:new, :edit]} id="channel-modal" show on_cancel={JS.patch(~p"/channels")}>
+<.modal
+  :if={@live_action in [:new, :edit]}
+  id="channel-modal"
+  show
+  on_cancel={JS.patch(~p"/channels")}
+>
   <.live_component
     module={LumiaWeb.ChannelLive.FormComponent}
     id={@channel.id || :new}

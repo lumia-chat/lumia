@@ -35,9 +35,7 @@ defmodule Lumia.AccountsFixtures do
   def user_channel_fixture(attrs \\ %{}) do
     {:ok, user_channel} =
       attrs
-      |> Enum.into(%{
-
-      })
+      |> Enum.into(%{})
       |> Lumia.Accounts.create_user_channel()
 
     user_channel

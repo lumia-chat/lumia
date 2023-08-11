@@ -17,7 +17,13 @@ defmodule Lumia.Server do
 
   def broadcast({:ok, %Message{} = message}) do
     message = Repo.preload(message, :user)
-    Phoenix.PubSub.broadcast(Lumia.PubSub, "messages:#{message.channel_id}", {:new_message, message})
+
+    Phoenix.PubSub.broadcast(
+      Lumia.PubSub,
+      "messages:#{message.channel_id}",
+      {:new_message, message}
+    )
+
     {:ok, message}
   end
 
@@ -37,9 +43,7 @@ defmodule Lumia.Server do
   def join_channel(%User{id: user_id}, %Channel{id: channel_id}) do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-    Repo.insert(
-      %UserChannel{user_id: user_id, channel_id: channel_id, inserted_at: now}
-    )
+    Repo.insert(%UserChannel{user_id: user_id, channel_id: channel_id, inserted_at: now})
   end
 
   @doc """
@@ -179,7 +183,8 @@ defmodule Lumia.Server do
       {:error, %Ecto.Changeset{}}
 
   """
-  def create_message(channel_id, user_id, attrs) when is_binary(channel_id) and is_binary(user_id) do
+  def create_message(channel_id, user_id, attrs)
+      when is_binary(channel_id) and is_binary(user_id) do
     %Message{channel_id: channel_id, user_id: user_id}
     |> Message.changeset(attrs)
     |> Repo.insert()
