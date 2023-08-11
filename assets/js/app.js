@@ -67,17 +67,17 @@ topbar.config({barColors: {0: "#29d"}, shadowColor: "rgba(0, 0, 0, .3)"});
 let topBarScheduled = undefined;
 window.addEventListener("phx:page-loading-start", () => {
   if(!topBarScheduled) {
-    topBarScheduled = setTimeout(() => topbar.show(), 120);
+    topBarScheduled = setTimeout(() => topbar.show(), 200);
   };
 });
 window.addEventListener("phx:page-loading-stop", () => {
-  // Highlight when page is done loading.
-  highlightAll();
-
   // Topbar crap.
   clearTimeout(topBarScheduled);
   topBarScheduled = undefined;
   topbar.hide();
+
+  // Highlight when page is done loading.
+  highlightAll();
 });
 
 // connect if there are any LiveViews on the page

@@ -2,6 +2,8 @@
 @import "tailwindcss/components";
 @import "tailwindcss/utilities";
 
+@import "highlight.js/styles/atom-one-dark.css";
+
 /* This file is for your main application CSS */
 .message-body h1 {
   font-size: 1.25rem; /* 20px */
@@ -23,7 +25,10 @@
   width: 100%;
   padding: 0.75rem; /* 8px */
   border-radius: 0.25rem; /* 4px */
-  background-color: rgb(2 6 23); /* bg-slate-950 */
+  background-color: rgb(31 41 55); /* bg-slate-800 */
+  /* actual atom-one-dark colors: */
+  color: #abb2bf;
+  /* background-color: #282c34; */
 }
 
 .message-body > code {
@@ -34,4 +39,11 @@
 
 .message-body a {
   text-decoration: underline;
+}
+
+.message-body ul {
+  list-style-type: disc;
+  list-style-position: outside;
+  list-style-image: none;
+  padding-left: 1rem;
 }
