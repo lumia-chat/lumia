@@ -1,23 +1,27 @@
 <ul
   role="list"
-  class="divide-y divide-gray-800 bg-gray-900 mb-16"
+  class="bg-gray-900 mb-16"
   phx-update="stream"
   id="messages"
   phx-viewport-top="load-previous"
 >
-  <li :for={{dom_id, message} <- @streams.messages} class="py-5 px-5" id={dom_id}>
+  <li
+    :for={{dom_id, message} <- @streams.messages}
+    id={dom_id}
+    class="group/message py-5 px-5 hover:bg-gray-950"
+  >
     <div class="flex justify-between gap-x-6">
       <div class="flex grow gap-x-4">
         <img
-          class="h-12 w-12 flex-none rounded-full bg-gray-800"
+          class="h-12 w-12 flex-none rounded-full bg-gray-900"
           src={avatar_url(message.user.email)}
           alt={"#{message.user.email}'s avatar"}
         />
-        <div class="min-w-0 flex-auto">
-          <p class="text-sm font-semibold leading-6 text-white">
+        <div class="min-w-0 flex-auto align-top">
+          <p class="text-base font-semibold text-gray-200 align-top">
             <%= message.user.email %>
           </p>
-          <div class="mt-1 leading-5 text-gray-300">
+          <div class="mt-1 text-gray-300">
             <div
               id={"message-text-#{message.id}"}
               phx-hook="Highlight"
@@ -35,9 +39,9 @@
           </div>
         </div>
       </div>
-      <div class="hidden sm:flex sm:flex-col sm:items-end">
-        <p class="mt-1 text-xs leading-5 text-gray-400">
-          <time datetime={iso_time(message.inserted_at)}>
+      <div class="hidden sm:flex sm:flex-col sm:items-end align-top">
+        <p class="mt-1 text-xs text-gray-400 align-top">
+          <time datetime={iso_time(message.inserted_at)} title={message.inserted_at}>
             <%= relative_time(message.inserted_at) %>
           </time>
         </p>
