@@ -19,6 +19,7 @@ defmodule Lumia.Server.Message do
   def changeset(message, attrs) do
     message
     |> cast(attrs, [:text])
+    # |> update_change(:text, &(&1 && String.trim_leading(&1)))
     |> validate_required([:text])
     |> validate_length(:text, max: 600)
     |> html_escape(:text)

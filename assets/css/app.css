@@ -4,6 +4,15 @@
 
 @import "highlight.js/styles/atom-one-dark.css";
 
+#scroller * {
+  overflow-anchor: none;
+}
+
+#scroll-anchor {
+  overflow-anchor: auto;
+  height: 1px;
+}
+
 /* This file is for your main application CSS */
 .message-body h1 {
   font-size: 1.25rem; /* 20px */

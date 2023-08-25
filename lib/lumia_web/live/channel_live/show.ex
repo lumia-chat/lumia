@@ -64,7 +64,9 @@ defmodule LumiaWeb.ChannelLive.Show do
     end
   end
 
-  def handle_event("add-message", %{"message" => message_params}, socket) do
+  def handle_event("add-message", message_params, socket) do
+    IO.inspect(message_params, pretty: true, label: "FROM THE JS")
+
     case Server.create_message(
            socket.assigns.channel.id,
            socket.assigns.current_user.id,

@@ -38,11 +38,13 @@ hooks.EnterSubmit = {
   mounted() {
     this.el.addEventListener("keydown", (e) => {
       if (e.key == "Enter" && e.shiftKey == false) {
-        this.el.form.dispatchEvent(
-          new Event('submit', {bubbles: true, cancelable: true})
-        );
+        this.pushEvent("add-message", {text: this.el.innerText});
 
-        this.el.value = "";
+        // On `Enter` it is still inserting a newline, even though we clear
+        // out the `innerHTML` content. I don't want this.
+        // This works for now.
+        // However, THERE HAS GOT TO BE A BETTER WAY!
+        setTimeout(() => { this.el.innerHTML = ""; }, 80);
       }
     })
   }

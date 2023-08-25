@@ -22,3 +22,19 @@ Ready to run in production? Please [check our deployment guides](https://hexdocs
   - users
   - chats (public/private/group/dm)
     - messages
+
+
+## TODO: Chat/Channel page
+ - [x] Styling
+ - [x] Markdown support
+ - [x] Code highlighting
+ - [x] `Enter` to submit; `Shift`-`Enter` for new line
+ - [x] Text input grows with lines
+ - [x] Anchor scroll to bottom
+ - [ ] Delete messages
+ - [ ] Edit messages
+ - [ ] Fix send button (because `contenteditable`)
+ - [ ] Scroll to last message since last visited?
+ - [ ] Image upload
+ - [ ] Content embeds
+ - [ ] Custom Emoji support 
