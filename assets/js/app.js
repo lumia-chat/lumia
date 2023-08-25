@@ -46,7 +46,7 @@ hooks.EnterSubmit = {
         // However, THERE HAS GOT TO BE A BETTER WAY!
         setTimeout(() => { this.el.innerHTML = ""; }, 80);
       }
-    })
+    });
   }
 };
 
