@@ -114,7 +114,7 @@ A client holds one session per instance it is connected to. The user sees one fl
 
 **Rejected.** *A separate guest table or a separate guest login.* Guest is a role kind plus an access list on the same account row. Anything else duplicates auth, sessions, devices, and E2EE.
 
-**Rationale.** One mechanism, identity-bound guests, serves contractors, connected channels (section 5.4), and DM requests to strangers (section 5.3).
+**Rationale.** One mechanism, identity-bound guests, serves both contractors and connected channels (section 5.4).
 
 ## 5. Servers, channels, DMs, and what the user sees
 
@@ -165,6 +165,22 @@ A person with no flagship account has personal DMs only on the instances they sh
 - *DM-only federation (instances relay E2EE ciphertext to each other).* Simpler than Matrix because servers never interpret content, but still a server-to-server protocol with cross-host key fetching, inter-host spam, and availability coupling. Violates hard rule 1.
 
 **Rationale.** The simplest model that keeps personal DMs global for everyone on the default path, keeps every instance independent, and needs no mechanism the per-instance DM code does not already provide.
+
+#### Friends, DM requests, and blocking
+
+**Friendship is per instance.** A friendship is a row between two accounts on one instance; nothing else is possible without federation. Because both accounts are bound to identity keys, the client shows friends across all connected instances as one list in Home, labelled by host only when ambiguous.
+
+**Who needs a request.** Starting a personal DM requires friendship or an accepted DM request. By default, sharing a server does not skip the request. Each user can loosen this per instance ("allow DMs from members of servers I'm in"), and a server can additionally declare that its members may DM each other without a request, for communities that want it. Server DMs never need a request; server membership is the gate.
+
+**A request carries no message content.** The recipient sees the sender's handle, host, shared servers, mutual friends, and signed profile, then accepts, declines, or blocks. No MLS group exists until accept, so a stranger cannot push ciphertext, key packages, or attachments at someone who has not agreed to talk. This is both the spam defense and the exploit-surface defense.
+
+**Accepting creates the group.** On accept, the recipient's client fetches the sender's key packages and creates the MLS group, so the person who said yes initiates the cryptography. Accepting a DM request does not make the two people friends. A friend request is separate; it grants the request-free path and the friends-list entry.
+
+**Group DMs.** Adding someone to a personal group DM requires that the adder be friends with them or have an accepted DM with them. The group sees who added whom.
+
+**Decline and block.** Decline is silent and permits one further request after a cooldown. Block refuses future requests at the host before anything is created, hides the blocker from the blocked person's member lists, and is per identity, so it covers every account that identity links on the instance.
+
+**Rate limits.** Requests to non-friends are Postgres-backed per identity (section 8).
 
 ### 5.4 Connected channels across organizations
 
