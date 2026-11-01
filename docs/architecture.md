@@ -69,7 +69,7 @@ A client holds one session per instance it is connected to. The user sees one fl
 
 ## 3. Server runtime and clustering
 
-**Decision.** A single Phoenix application (contexts, not an umbrella) released as one OCI image. Nodes are homogeneous and stateless apart from connection processes and presence. Postgres is the single source of truth. Nodes discover each other with libcluster and fan out events with Phoenix.PubSub using the `Phoenix.PubSub.PG2` adapter over Erlang distribution. Presence uses Phoenix.Presence CRDTs. Per-node caches are **advisory**: they speed up reads and are invalidated by PubSub, but no authorization decision for a write or a subscription relies on a cache alone (section 7.4). Background work (retention, purge, thumbnails, webhook retries, backup manifests, blob garbage collection) runs on Oban, which is Postgres-backed and participates in application transactions.
+**Decision.** A single Phoenix application (contexts, not an umbrella) released as one OCI image. Nodes are homogeneous and stateless apart from connection processes and presence. Postgres is the single source of truth. Nodes discover each other with libcluster and fan out events with Phoenix.PubSub using the `Phoenix.PubSub.PG2` adapter over Erlang distribution. Presence uses Phoenix.Presence CRDTs, **scoped per server**: one Presence topic per server, and a client is tracked in it only while it has that server's member list or one of its channels on screen. "Online" for Home and DMs is a separate lightweight per-user topic that friends subscribe to. Phoenix.Presence replicates its whole tracked state to a node when it joins the cluster, so the instance-wide number of tracked entries must stay bounded by what is actually on screen, not by who is logged in. Per-node caches are **advisory**: they speed up reads and are invalidated by PubSub, but no authorization decision for a write or a subscription relies on a cache alone (section 7.4). Background work (retention, purge, thumbnails, webhook retries, backup manifests, blob garbage collection) runs on Oban, which is Postgres-backed and participates in application transactions.
 
 Rust is used through Rustler NIFs only for crypto on trusted input: MLS delivery-service operations, BLAKE3, signature verification. Anything that parses untrusted bytes, image decoding above all, runs in a supervised worker OS process driven over a Port, because a crashing NIF takes the whole VM with it and a NIF is not a sandbox.
 
@@ -132,6 +132,8 @@ Recovery phrase    24 words; derives the root key and the backup key
 
 **First contact is trust-on-first-use.** A directory answer proves which key holds a handle *now*; it does not prove the key belongs to the person the user expects. Clients pin the key on first contact, warn loudly on any change that is not a valid rotation chained from the pinned key, and show safety numbers for manual verification. Key transparency (an append-only, auditable log) is deferred.
 
+**Device changes are visible.** When a contact's roster gains a device, the client shows "added a new device" in the conversation and re-verifies the roster signature against the pinned root key. A device added by a valid roster update is not a key change; a roster signed by an unknown root is.
+
 **Multiple identities.** A client can hold several identities, for example a work identity and a personal one, with one as default. Using one identity across work and personal instances is a correlation mechanism, and the choice to correlate belongs to the user.
 
 **Directory operations in v1.** Register handle, resolve handle, publish roster version, rotate key.
@@ -146,7 +148,7 @@ Recovery phrase    24 words; derives the root key and the backup key
 
 **Decision.** The client renders one flat rail of servers across all connected instances, plus a Home that aggregates personal DMs, friends, Saved, Mentions, and Threads across all of them. The instance appears in exactly these places:
 
-- The join flow. An invite URL carries the host. Joining a server on an instance you have no account on creates one bound to your identity, subject to that instance's sign-in policy (section 6.3).
+- The join flow. An invite URL carries the host. Joining a server on an instance you have no account on shows that host's About and trust card **first** and requires an explicit tap before the client sends anything; only then is an account created, bound to your identity and subject to that instance's sign-in policy (section 6.3). The identity proof is a signed challenge that includes the hostname, so a proof collected by one host cannot be replayed to another. Connected-channel invites (section 6.5) are gated the same way. A URL alone never causes the client to hand a host an identity proof or a profile.
 - Account settings, as a list of hosts, each with its sessions and devices.
 - The About card of a server and of a connected channel, with a trust note: "Operated by Acme Corp. Acme can read channel messages and server DMs, not your personal DMs."
 - A host label on a member or DM request when the host is not the one the viewer expects.
@@ -174,7 +176,7 @@ A **guest membership** sees only the channels granted by explicit per-channel ov
 - Each instance sets whether identity proof alone may **create** an account or **sign in**. Default on for the flagship and community instances. An operator who requires OIDC turns it off; then a user who still holds their identity key gets nothing from it once the employer disables their OIDC account.
 - **Linking** an existing account to an identity requires both the account's own authentication and a signature from the identity. Matching an email or a profile is never sufficient.
 - Authentication methods in v1: password (Argon2id), magic link, passkeys (WebAuthn), OIDC login. MFA via TOTP or passkey. SAML, SCIM provisioning, and group sync are planned for the same codebase after v1 (hard rule 6).
-- Sessions are opaque random tokens, stored hashed, one per device per instance, with a short-lived access token and a long-lived refresh token, so revocation from the device list takes effect within the access-token lifetime. A session is bound to a device key in the roster; a revoked device's sessions die with it.
+- Sessions are opaque random tokens, stored hashed, one per device per instance, with a short-lived access token and a long-lived refresh token, so revocation from the device list takes effect within the access-token lifetime. A session is bound to a device key in the roster; a revoked device's sessions die with it. Revoking a session or a device **broadcasts over PubSub and the session process closes the socket**; a WebSocket authenticated an hour ago does not get to wait for its access token to expire. Token expiry is the backstop, not the mechanism.
 
 **Rejected.** *JWT sessions.* Stateless validation is not worth losing fast revocation and a device list that is actually authoritative.
 
@@ -198,7 +200,7 @@ The same two people can have both. The client offers "Move to personal DM" on a 
 
 **Where personal DMs live.** Personal DMs are an instance feature, not a flagship feature: every instance supports E2EE personal DMs between its own accounts, because the flagship runs the same code with no special cases. The flagship is the **global** place for personal DMs only because everyone has an account there by default. You can personally DM anyone you share an instance with, and the flagship is the instance everyone shares. Nothing routes between instances.
 
-When a pair shares both the flagship and another instance, the client starts a new personal DM on the flagship. An existing personal DM on another instance still shows in Home, labelled by host. A person with no flagship account has personal DMs only on the instances they share with the other person. An isolated instance whose users have no flagship accounts works fully air-gapped, with E2EE personal DMs among its own accounts.
+**Placement is deterministic**, because two clients can start the same DM concurrently on different hosts. Both compute the same rule: the flagship if both have accounts there, else the shared instance whose normalized hostname sorts lowest. Each instance enforces a uniqueness constraint on personal DMs with exactly two participants, keyed on the sorted pair of identity IDs, and returns the existing conversation on conflict. If clients later discover duplicates on different hosts, created with stale knowledge of each other's accounts, the one on the rule-chosen host wins and the other is shown as linked history. Group DMs are exempt: one person creates them and they have an ID. An existing personal DM on a non-chosen instance still shows in Home, labelled by host. A person with no flagship account has personal DMs only on the instances they share with the other person. An isolated instance whose users have no flagship accounts works fully air-gapped, with E2EE personal DMs among its own accounts.
 
 **Costs, stated plainly.** For every personal DM on the flagship, Lumia sees what section 11.1 lists as visible. Two people on two isolated instances with no flagship accounts cannot DM each other at all, which is the isolation those operators chose.
 
@@ -219,6 +221,8 @@ When a pair shares both the flagship and another instance, the client starts a n
 **Group DMs.** Adding someone to a personal group DM requires that the adder be friends with them or have an accepted DM with them. The group sees who added whom.
 
 **Decline and block.** Decline is silent and permits one further request after a cooldown. Block refuses future requests at the host before anything is created, hides the blocker from the blocked person's member lists, and is per identity, so it covers every account that identity links on the instance.
+
+**Blocks across instances.** A block is stored on the instance where it was made, since nothing else is possible, but the client also keeps a block list keyed by identity ID in the encrypted identity backup (section 5.3). The client applies that list locally on every instance, hiding content and auto-declining requests, and pushes it to each instance where the user has an account on the next connect, so a block made on the flagship takes effect on every other host the user uses.
 
 ### 6.5 Connected channels across organizations
 
@@ -283,6 +287,10 @@ Guests start from an empty permission set rather than `@everyone`, and gain acce
 ### 8.1 The event log
 
 Every channel and every DM is an append-only **event log**. The server assigns a per-channel monotonic bigint `seq` on write by locking the channel row (`UPDATE channels SET last_seq = last_seq + 1 ... RETURNING last_seq`) inside the same transaction that inserts the event and updates any materialized state. Event kinds for server content: message created, edited, deleted, reaction added, reaction removed, pinned, unpinned, member joined, member left, thread summary updated, `acl_version` changed. For personal DMs the only kinds are application message and control message (section 11.1). Messages are materialized into a `messages` table from events for query convenience, but `seq` on the event is the ordering and the sync cursor.
+
+**Ordering rules.** Lock the channel row, insert the event, update materialized state, **commit, then broadcast**. Never broadcast inside the transaction: another node would deliver an event that a scrollback query cannot yet return. Never release the lock before commit: a reader could see `seq` 1044 committed while 1043 is still in flight, advance past it, and never fetch it. A consequence worth stating: every write to one channel serializes on one row, so a single hot channel is bounded by Postgres commit latency, and that latency is the floor under the send budget in section 17.
+
+**Growth.** Event rows are permanent (8.5). The events and payloads tables are **hash-partitioned by `channel_id`** from day one (Postgres native partitioning, 32 partitions), so the `(channel_id, seq)` range query and the `(channel_id, command_id)` idempotency lookup each prune to one partition. Tiny instances carry the partitions harmlessly; retrofitting partitioning onto a large table is a rewrite. Time partitioning is rejected because it defeats pruning on the sync query.
 
 An **account-level event log** per instance, with its own `seq`, records what a client cannot learn from channel logs it does not yet know about: memberships added or removed, channels and DMs created or deleted, role changes, device roster updates, profile changes, friend and DM request state.
 
@@ -389,7 +397,7 @@ one bit: application message | MLS control message (needed for push and ordering
 
 Reactions, edits, deletes, thread relationships, mentions, pins, read state, and attachment metadata are all **inside** the ciphertext as application-level operations. Clients validate those operations and maintain the decrypted projections (message list, thread summaries, reaction counts) locally. The server maintains no projection of personal DM content.
 
-**What the hosting instance still knows and controls**, stated so that no claim of "nothing else" is made: the accounts and identities in the conversation, their device IDs and roster versions, session and connection metadata (IP, user agent, times), message timing and sizes, the key packages and GroupInfo it stores, quotas, suspension, and service-level retention of the ciphertext.
+**What the hosting instance still knows and controls**, stated so that no claim of "nothing else" is made: the accounts and identities in the conversation, their device IDs and roster versions, session and connection metadata (IP, user agent, times), message timing and sizes, the key packages and GroupInfo it stores, quotas, suspension, and service-level retention of the ciphertext. If the push relay is enabled, the relay additionally observes device, instance, and push timing (section 15.5).
 
 **Rejected.**
 - *E2EE everywhere including channels.* Loses **server-side** search, moderation, retention enforcement, and automation; bots as explicit MLS members would still work, as they do in personal DMs. The self-hoster already owns the server, so E2EE inside a server protects against the one party who has already been trusted with it.
@@ -415,7 +423,7 @@ Each device is an MLS leaf with its own device key (section 5.1) as the credenti
 - The flagship's web origin may connect to many instances, because Lumia controls its code distribution.
 - A self-hosted instance's web origin connects to **that instance only**. Its JavaScript therefore never sees a device key that works anywhere else.
 - The root key never enters a browser. Linking a web device requires approval from a native device (or the recovery phrase).
-- Keys are held as non-extractable WebCrypto objects where the algorithm allows it. This limits exfiltration of key bytes; it does **not** stop the page's own code from using the keys or reading plaintext. The trust boundary for a web client is the origin operator, full stop, and the device list labels web devices as such.
+- Keys are held as non-extractable WebCrypto objects where the algorithm allows it. This limits exfiltration of key bytes; it does **not** stop the page's own code from using the keys or reading plaintext. The trust boundary for a web client is the origin operator, full stop, and the device list labels web devices as such. HPKE, which MLS depends on, is not in WebCrypto, so a WebCrypto-backed OpenMLS provider is partial at best; some key material will live in WASM linear memory. An out-of-band code-verification browser extension, the only real mitigation for origin trust, is deferred.
 - Storage is SQLite WASM on OPFS in a dedicated worker, with Web Locks electing one tab as owner; the doc notes that browsers may evict OPFS under storage pressure and the client treats a lost local store as the snapshot path (8.4).
 
 **Rejected.**
@@ -428,13 +436,23 @@ Each device is an MLS leaf with its own device key (section 5.1) as the credenti
 
 **Attachments.** Blobs are stored under **application-level envelope encryption**: each blob has a random content key, wrapped by an operator-supplied **instance master key** (a file or environment secret in v1; KMS later), so the storage provider never sees plaintext. For personal DM attachments the client encrypts first with a per-file key carried in the MLS message, and the server's envelope wraps ciphertext it already cannot read.
 
-The content address is a **BLAKE3 hash of the stored ciphertext**, keyed with the instance master key for server content so that a hash cannot be used to confirm whether a server holds a known file. The hash is a **storage key, not an authorization**: every retrieval is access-checked against the referencing message's channel. References are counted; a blob is garbage-collected by Oban when its last reference is purged.
+The content address is a **BLAKE3 hash of the stored ciphertext**, keyed with a **per-server key derived from the instance master key** for server content. Deduplication therefore happens within a server only, and the existence oracle that content addressing creates (upload a file, learn whether it was already there) is scoped to people who can already upload to that server. Personal DM blobs are client-side ciphertext and carry no oracle. The hash is a **storage key, not an authorization**: every retrieval is access-checked against the referencing message's channel. References are counted; a blob is garbage-collected by Oban when its last reference is purged.
 
 Server content is processed in the worker process (section 3): thumbnails, EXIF stripping, with bounded dimensions, memory, CPU time, and concurrency. EXIF stripping is on by default everywhere, done client-side for personal DMs. Upload size limits come from entitlements (section 16).
 
-**Search.** Server content is searched with Postgres full-text search (tsvector with GIN indexes, pg_trgm for fuzzy matching). Personal DMs are searched on-device with SQLite FTS5 in the Rust core. The client's search merges both result sets and labels them. ParadeDB's pg_search is the optional upgrade; a separate search engine was rejected under hard rule 2.
+**Search.** Server content is searched with Postgres full-text search (tsvector with GIN indexes, pg_trgm for fuzzy matching). Results are **filtered by channel ACL at query time**, using the same resolution as reads (section 7.2) for the requester at that moment, never at index time; cross-server search on one instance is exactly where private-channel content leaks otherwise. Personal DMs are searched on-device with SQLite FTS5 in the Rust core. The client's search merges both result sets and labels them. ParadeDB's pg_search is the optional upgrade; a separate search engine was rejected under hard rule 2.
 
 **Local stores.** The client's SQLite database is encrypted with a key held in the platform keystore (Keychain, Android Keystore, DPAPI, Secret Service) and is wiped on logout and on device revocation when the device is online to receive it.
+
+### 12.1 Account deletion and erasure
+
+**Decision.** Deleting an account on an instance removes: the profile and overrides, sessions, device bindings, key packages and GroupInfo contributions, friend and block rows, the identity backup and history chunks stored there, the search index entries for the user's own content, and every blob reference held only by the user's personal content (the blobs follow by garbage collection). Other MLS members see a leave.
+
+Server messages **remain**, attributed to a deleted-user placeholder, so other people's conversations keep their shape. The user may choose **"also delete my messages"**, which writes tombstones for every message they authored through the normal purge path (8.5), including search index and blob references. Operators have an **erasure command** that performs the full tombstone path for an account regardless of the user's choice, for legal compliance.
+
+Deleting an **identity** is separate and done per instance by deleting each account. The directory releases the handle after a 30-day grace period so a mistaken deletion can be reversed and so the handle is not immediately re-registrable by someone else.
+
+**Rejected.** *Deleting server messages by default.* Removes other people's context and is not what Discord or Slack users expect; the explicit option covers the people who want it.
 
 ## 13. Clients
 
@@ -451,6 +469,8 @@ Server content is processed in the worker process (section 3): thumbnails, EXIF 
 - *One cross-platform toolkit everywhere (Flutter, Electron).* Performance is the first priority and Electron's memory footprint is disqualifying.
 - *Fully independent native apps.* Six implementations of MLS and sync is how E2EE bugs happen.
 - *Rust-native desktop UI (Slint, Iced, GPUI).* Still weak on rich text, IME, and accessibility. Named as the upgrade path if webview performance becomes the bottleneck.
+
+**Linux.** Tauri on Linux means WebKitGTK, the weakest of the system webviews for GPU compositing, Wayland, and raw performance. Linux is therefore where the "webview is the bottleneck" trigger fires first, the budgets in section 17 carry a Linux row, and the Rust-native path would start there.
 
 **Local-first.** Every connected instance's data the user has seen is in SQLite and readable offline. Sends are optimistic with client-minted command IDs. Reconnect resumes from cursors per section 8.4.
 
@@ -490,9 +510,9 @@ Migrations run on boot behind an advisory lock, which prevents two runners, not 
 
 ### 15.5 Push
 
-APNs and FCM only accept pushes signed with the app's credentials, so a self-hosted instance cannot push to the official apps alone. Lumia runs an open-source **push relay**. Instances forward **visible** pushes with generic content ("New message") and `mutable-content` set; the app's notification service extension (and the Android equivalent) fetches and decrypts the real content on device over the app's own session, and falls back to the generic text if the fetch fails. Background, content-free wakeups are **not** used for message notifications because iOS treats them as low priority and may throttle or drop them.
+APNs and FCM only accept pushes signed with the app's credentials, so a self-hosted instance cannot push to the official apps alone. Lumia runs an open-source **push relay**. Instances forward **visible** pushes with generic content ("New message") and `mutable-content` set; the app's notification service extension (and the Android equivalent) fetches and decrypts the real content on device over the app's own session, and falls back to the generic text if the fetch fails. The extension and the app share the MLS store and SQLite database through an app-group container under a **single-writer lock**: whichever process decrypts persists the advanced MLS state before returning, and the other reloads before its next operation. Advancing a ratchet from two processes is a known source of E2EE bugs and the lock is the rule, not an optimization. Background, content-free wakeups are **not** used for message notifications because iOS treats them as low priority and may throttle or drop them.
 
-The relay payload carries an opaque device push token, an instance identifier, and nothing else. Push tokens are **pseudonymous routing identifiers**: they do not carry content or account identity, but they are stable per device and the relay can correlate pushes to the same device over time. Android additionally supports UnifiedPush with no relay. Browsers and desktop use Web Push (VAPID) run by the instance itself. Anyone can run their own relay and point their own build at it.
+The relay payload carries an opaque device push token, an instance identifier, and nothing else. Push tokens are **pseudonymous routing identifiers**: they do not carry content or account identity, but they are stable per device. **The relay is a metadata observer**: it sees which device, from which instance, received a push at what time, and can correlate those over time. The privacy posture (section 11.1's visibility list) names it as such. Android additionally supports UnifiedPush with no relay. Browsers and desktop use Web Push (VAPID) run by the instance itself. Anyone can run their own relay and point their own build at it.
 
 ### 15.6 Telemetry
 
@@ -514,6 +534,8 @@ OpenTelemetry traces and metrics plus a Prometheus endpoint for the operator. Up
 - **Plan allowances**: what a plan grants, attached to an instance, a server, or a user.
 - **Governance policies**: retention, who may invite, guest expiry. Set by admins; **never** an entitlement, so no plan can override a server's retention policy.
 
+**Who pays.** Content in a server is the server's: the server's plan sets the upload cap and the storage counts against the server. Content in a personal DM is the sender's: the sender's personal plan sets the cap and the storage counts against the sender only. A personal plan never raises any limit inside a server.
+
 A limit resolves as **min(operator hard limit, max(applicable plan allowances))**. Self-hosted instances ship with an unlimited instance plan and whatever hard limits the operator sets. Quotas are first-class data checked at the API layer, never hard-coded: storage bytes, upload size, history days, call participants, active guests.
 
 ## 17. Performance budgets
@@ -526,6 +548,7 @@ Proposed. Adjust the numbers; keep the section and the workload spec. Each budge
 | Gateway connect, authenticate, resume 50 channels with no gaps | 500 ms | Same database; cursors current; presence for all 50 |
 | Client cold start to interactive, last-viewed channel rendered from SQLite | 1 s | 100k local messages, 5 instances |
 | Idle desktop client RSS, 5 instances connected | 150 MB | After 10 minutes idle, GC settled |
+| Linux desktop (WebKitGTK): scroll a 10k-message channel at 60 fps, cold start, idle RSS | Same budgets as other desktops | Measured separately because WebKitGTK is the weakest webview; a miss here triggers the Rust-native UI path (section 13) |
 | Idle mobile client RSS | 80 MB | Same |
 | Concurrent gateway connections per node (4 vCPU, 8 GB) | 100,000 | 50 subscriptions each, 10% in presence, 1 msg/s per 1,000 connections, p99 delivery still under budget |
 | Protobuf frame for a plain text message, excluding body | 64 bytes | Transport only; E2EE application message overhead budgeted separately once MLS framing is pinned |
@@ -558,7 +581,7 @@ Prove one complete secure lifecycle before any second UI shell starts:
 
 ## 19. Deferred and out of scope
 
-Deferred, with a design path noted in the relevant section: federation of any kind; replicated connected channels; an organization's audit of its members' external guest memberships; cross-instance DM requests to strangers via DM-only guest memberships on the recipient's host; key transparency for the directory; WASM instance plugins; E2EE private channels; read receipts; link unfurling; custom emoji in text; group calls, video, and screen share detail; bundled TURN; "Sign in with Lumia" OIDC; Rust-native desktop UI; SAML, SCIM, group sync, compliance export, and audit log; KMS-backed instance master keys.
+Deferred, with a design path noted in the relevant section: federation of any kind; replicated connected channels; an organization's audit of its members' external guest memberships; cross-instance DM requests to strangers via DM-only guest memberships on the recipient's host; key transparency for the directory; an out-of-band code-verification extension for the web client; WASM instance plugins; E2EE private channels; read receipts; link unfurling; custom emoji in text; group calls, video, and screen share detail; bundled TURN; "Sign in with Lumia" OIDC; Rust-native desktop UI; SAML, SCIM, group sync, compliance export, and audit log; KMS-backed instance master keys.
 
 Out of scope: a hosted-only feature that cannot run self-hosted; a second edition of the server; any mechanism that requires instances to trust each other.
 
