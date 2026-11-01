@@ -22,6 +22,8 @@ Design stage. The architecture and protocol are written; the server, client core
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | Every architectural decision, the alternatives rejected, and why. The hard rules in section 1 govern everything else. Start here. |
 | [docs/protocol.md](docs/protocol.md) | The wire contract: encodings, the gateway, sequence numbers, idempotency, the HTTP mapping, errors, authentication, identity proof. |
+| [docs/specs/](docs/specs/) | Implementation specs for identity, delivery, and authorization, each with its failure-injection tests. |
+| [docs/plan.md](docs/plan.md) | The task checklist with status, and the decisions that changed along the way. |
 | [proto/lumia/v1/](proto/lumia/v1/) | Protobuf schemas. The single source of truth for every shape on the wire; all client and server types are generated from them. |
 
 ## Repository layout

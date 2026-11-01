@@ -581,7 +581,7 @@ Retry a send after the MLS epoch advanced; verify the old command ID is abandone
 
 ## 18. Implementation order
 
-Prove one complete secure lifecycle before any second UI shell starts:
+Prove one complete secure lifecycle before any second UI shell starts. The order and its rationale are here; the task-level checklist with status, and the record of decisions that changed along the way, is [plan.md](plan.md).
 
 1. `proto/` schemas and the protocol contract document.
 2. Server: event log, delivery contract, account log, resume paths, authorization versions, on a single node, with the failure-injection tests above.
