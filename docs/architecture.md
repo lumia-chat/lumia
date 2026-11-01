@@ -37,7 +37,7 @@ flowchart LR
     APIA --> BlobA
   end
 
-  subgraph Flagship["Instance: flagship (default home host)"]
+  subgraph Flagship["Instance: flagship (the one everyone shares)"]
     GWF["Gateway"]
     APIF["HTTP API + MCP"]
     Dir["Directory"]
@@ -92,11 +92,11 @@ A client holds one session per instance it is connected to. The user sees one fl
 
 **Deferred.** "Sign in with Lumia" OIDC from the flagship as an optional convenience that binds a local account to the same key. Never required.
 
-### 4.2 Directory, handles, home host
+### 4.2 Directory and handles
 
-**Decision.** A **directory** maps a handle (`@ryan`) to an identity key, a **home host**, and key-rotation history. The flagship runs one; any instance may run one; none is required. The address `user@host` always resolves at that host without any directory. The home host defaults to the flagship. A client that creates a new identity also creates a flagship account unless the user declines.
+**Decision.** A **directory** maps a handle (`@ryan`) to an identity key and its key-rotation history. The flagship runs one; any instance may run one; none is required. The address `user@host` always resolves at that host without any directory. A client that creates a new identity also creates a flagship account unless the user declines, and in v1 the flagship directory is simply its account table. An identity with no flagship account is reachable only through the hosts it has accounts on.
 
-**Directory operations in v1.** Register handle, resolve handle, rotate key (signed by the old key or by the recovery key), set home host.
+**Directory operations in v1.** Register handle, resolve handle, rotate key (signed by the old key or by the recovery key).
 
 **Rejected.** *Global handle uniqueness enforced across all instances.* Impossible without federation. Handles are unique per directory; the host disambiguates.
 
@@ -139,7 +139,7 @@ A client holds one session per instance it is connected to. The user sees one fl
 
 | | Server DM | Personal DM |
 |---|---|---|
-| Lives on | The server's instance | The recipient's home host, else the flagship if both have accounts there, else any shared instance |
+| Lives on | The server's instance | The instance where it was started, which the client picks: the flagship if both have accounts there, else a shared instance |
 | Governance | The server: retention, moderation, admins | The participants only |
 | Encryption | At rest, server-readable | End-to-end (MLS) |
 | Bots | Allowed | Only as a full MLS member the participants add |
@@ -152,13 +152,19 @@ The same two people can have both. The client offers "Move to personal DM" on a 
 
 ### 5.3 Reaching anyone
 
-**Decision.** Anyone can send a DM request to anyone whose home host allows external requests. If the sender has no account on the recipient's home host, the client creates a **DM-only guest account** there bound to the sender's identity key and delivers the request. The recipient sees the sender's handle, home host, and shared servers before accepting. The host refuses blocked or previously declined identities before creating any session. An operator setting, "accept DM requests from external identities", defaults on for the flagship and off for self-hosted instances. An instance that keeps it off, whose users have no flagship accounts, is fully isolated and works air-gapped.
+**Decision.** Personal DMs are an instance feature, not a flagship feature: every instance supports E2EE personal DMs between its own accounts, because the flagship runs the same code with no special cases. The flagship is the **global** place for personal DMs only because everyone has an account there by default. You can personally DM anyone you share an instance with, and the flagship is the instance everyone shares. Nothing routes between instances.
+
+When a pair shares both the flagship and another instance, the client starts a new personal DM on the flagship. An existing personal DM on another instance still shows in Home, labelled by host. The client prefers the common ground; no server is involved in the choice.
+
+A person with no flagship account has personal DMs only on the instances they share with the other person, and server DMs everywhere else. An isolated instance whose users have no flagship accounts works fully air-gapped, with E2EE personal DMs among its own accounts.
+
+**Costs, stated plainly.** For every personal DM on the flagship, Lumia sees metadata: participants, timing, sizes, nothing else. Two people on two isolated instances with no flagship accounts cannot DM each other at all, which is the isolation those operators chose.
 
 **Rejected.**
-- *Personal DMs live on the flagship, always.* Makes Lumia a mandatory party to every personal conversation. Kept as the default path, not the only one.
-- *DM-only federation (instances relay E2EE ciphertext to each other).* Simpler than Matrix because servers never interpret content, but still a server-to-server protocol with cross-host key fetching, inter-host spam, and availability coupling. Violates hard rule 1. Recorded as the path after guests if guest sessions prove awkward.
+- *A home host per identity, with DM-only guest accounts created on the recipient's host to deliver requests from strangers.* The first draft of this document took it. It reaches anyone on any host, but it adds host selection, a guest-session flow for DMs, an operator setting, and a reachability rule, all to serve the case of two people who share no instance and refuse the flagship. Recorded in section 17 as the path if that case ever matters.
+- *DM-only federation (instances relay E2EE ciphertext to each other).* Simpler than Matrix because servers never interpret content, but still a server-to-server protocol with cross-host key fetching, inter-host spam, and availability coupling. Violates hard rule 1.
 
-**Rationale.** This is the only shape that satisfies "any Lumia user can reach any other" and "an instance never depends on another instance" at the same time.
+**Rationale.** The simplest model that keeps personal DMs global for everyone on the default path, keeps every instance independent, and needs no mechanism the per-instance DM code does not already provide.
 
 ### 5.4 Connected channels across organizations
 
@@ -166,7 +172,7 @@ The same two people can have both. The client offers "Move to personal DM" on a 
 
 **Rejected.** *Replicated channels synced server to server.* Both orgs would get governance, but it brings conflict resolution, dual retention, dual moderation, and an inter-instance protocol. This is the Matrix problem and violates hard rule 1. Recorded as deferred for the case where host-only governance is unacceptable to enterprise buyers.
 
-**Known gap.** Org B's instance does not know its people are guests elsewhere, so Org B's admins cannot audit external channels. Slack can because it is centralized. Deferred, solvable either by the client reporting memberships to the home host or by replication.
+**Known gap.** Org B's instance does not know its people are guests elsewhere, so Org B's admins cannot audit external channels. Slack can because it is centralized. Deferred, solvable either by the client reporting memberships to the organization's own instance or by replication.
 
 ### 5.5 Channels, threads, reactions, roles
 
@@ -257,12 +263,12 @@ sequenceDiagram
 
 **Rejected.**
 - *E2EE everywhere including channels.* Kills server-side search, link previews, bots in the conversation, and moderation. The self-hoster already owns the server, so E2EE inside a server protects against the one party who has already been trusted with it.
-- *No E2EE in v1, self-hosting as the privacy story.* The flagship is the default home host for personal DMs; without E2EE, Lumia would read them.
+- *No E2EE in v1, self-hosting as the privacy story.* The flagship is where global personal DMs live; without E2EE, Lumia would read them.
 - *Signal's double ratchet.* Pairwise ratchets scale poorly to groups and multi-device; MLS is designed for both.
 
-**Devices.** Each device is an MLS leaf with its own device key signed by the identity key. Adding a device: scan a QR from an existing device, which transfers the identity key and authorizes the new leaf. Losing all devices: a user-held **recovery key** (24 words) unlocks an encrypted identity backup stored on the home host. The host holds only ciphertext.
+**Devices.** Each device is an MLS leaf with its own device key signed by the identity key. Adding a device: scan a QR from an existing device, which transfers the identity key and authorizes the new leaf. Losing all devices: a user-held **recovery key** (24 words) unlocks an encrypted identity backup. The backup is small ciphertext and is stored on every instance the identity has an account on, so recovery needs any one of them. No host can read it.
 
-**History.** MLS gives a new device no history. Lumia keeps an **encrypted history backup** on the home host under the recovery key, so a new device restores messages the host cannot read. When an old device is present, device-to-device transfer is the fast path.
+**History.** MLS gives a new device no history. Each instance keeps an **encrypted history backup** of its own personal DMs under the recovery key, so a new device restores messages the host cannot read. When an old device is present, device-to-device transfer is the fast path.
 
 **Web.** The browser is the weakest E2EE client: code is delivered by the server on every load and keys live in IndexedDB. The web client still does E2EE, with keys held as non-extractable WebCrypto keys, the bundle pinned with subresource integrity, and web sessions marked lower-trust in the device list so users see it. Refusing E2EE on web would push people to worse tools.
 
@@ -320,7 +326,7 @@ sequenceDiagram
 
 ## 15. Security and privacy posture
 
-- Personal DMs: the server sees ciphertext and metadata (participants, timing, sizes). The flagship, when it is the home host, sees exactly that and nothing more.
+- Personal DMs: the hosting instance sees ciphertext and metadata (participants, timing, sizes). For global personal DMs that instance is the flagship, which sees exactly that and nothing more.
 - Server content: readable by the operator, the server's admins per their roles, and bots per their scopes. The trust note in the client says so.
 - No outbound calls the operator did not configure (hard rule 3). Push payloads carry no content and no user identifiers.
 - EXIF stripped by default on every attachment.
@@ -350,7 +356,7 @@ Proposed. Adjust the numbers; keep the section. These are what make "performance
 
 ## 17. Deferred and out of scope
 
-Deferred, with a design path noted in the relevant section: federation of any kind; replicated connected channels; home-host audit of external guest memberships; WASM instance plugins; E2EE private channels; read receipts; link unfurling; custom emoji in text; group calls, video, and screen share detail; "Sign in with Lumia" OIDC; Rust-native desktop UI; SAML, SCIM, group sync, compliance export, and audit log; a flagship-independent reachability path beyond guests.
+Deferred, with a design path noted in the relevant section: federation of any kind; replicated connected channels; an organization's audit of its members' external guest memberships; cross-instance DM requests to strangers via DM-only guest accounts on the recipient's host (section 5.3); WASM instance plugins; E2EE private channels; read receipts; link unfurling; custom emoji in text; group calls, video, and screen share detail; "Sign in with Lumia" OIDC; Rust-native desktop UI; SAML, SCIM, group sync, compliance export, and audit log.
 
 Out of scope: a hosted-only feature that cannot run self-hosted; a second edition of the server; any mechanism that requires instances to trust each other.
 
