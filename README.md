@@ -50,6 +50,8 @@ Read [docs/architecture.md](docs/architecture.md) first. A change that conflicts
 
 ## License
 
+Copyright (C) 2026 Ryan Winchester.
+
 Server: AGPL-3.0. Client core and protocol schemas: Apache-2.0.
 
 The root [LICENSE](LICENSE) is AGPL-3.0 and applies to everything not covered by a more specific license file. `apps/instance` carries its own copy of AGPL-3.0 because it ships as a container image. `proto/` carries Apache-2.0, and `apps/core` will when it exists.
