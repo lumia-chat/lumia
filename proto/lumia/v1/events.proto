@@ -1,0 +1,212 @@
+// Lumia protocol: the event log.
+//
+// Implements docs/architecture.md section 8. Every channel and every DM is an
+// append-only log; the server assigns `seq`. The account log is a second log
+// per (instance, account) for things a client cannot learn from channel logs
+// it does not yet know about.
+
+syntax = "proto3";
+
+package lumia.v1;
+
+import "google/protobuf/timestamp.proto";
+import "lumia/v1/chat.proto";
+import "lumia/v1/identity.proto";
+
+option java_multiple_files = true;
+option java_package = "chat.lumia.proto.v1";
+option swift_prefix = "Lumia";
+
+// One entry in a channel log.
+message Event {
+  bytes event_id = 1;         // server-minted UUIDv7 (monotonic)
+  bytes channel_id = 2;
+  uint64 seq = 3;             // ordering and sync cursor
+  // The command that produced this event, when a client command did.
+  bytes command_id = 4;
+  bytes actor_account_id = 5;
+  bytes actor_device_id = 6;
+  google.protobuf.Timestamp created_at = 7;
+  // The channel's ACL version at commit. Sessions whose cached version
+  // differs revalidate before delivering (architecture 7.4).
+  uint64 acl_version = 8;
+
+  // Exactly one. For PERSONAL_* channels it is always `encrypted`.
+  oneof payload {
+    MessageCreated message_created = 20;
+    MessageEdited message_edited = 21;
+    MessageDeleted message_deleted = 22;
+    ReactionAdded reaction_added = 23;
+    ReactionRemoved reaction_removed = 24;
+    MessagePinned message_pinned = 25;
+    MessageUnpinned message_unpinned = 26;
+    ThreadUpdated thread_updated = 27;
+    MemberJoined member_joined = 28;
+    MemberLeft member_left = 29;
+    ChannelUpdated channel_updated = 30;
+    AclChanged acl_changed = 31;
+    // Payload purged by retention or deletion. The event row remains so
+    // ordering and gap detection are unaffected (architecture 8.5).
+    Redacted redacted = 32;
+    EncryptedPayload encrypted = 40;
+  }
+}
+
+message MessageCreated { Message message = 1; }
+
+message MessageEdited {
+  bytes message_id = 1;
+  string body = 2;
+  repeated Mention mentions = 3;
+  google.protobuf.Timestamp edited_at = 4;
+}
+
+message MessageDeleted {
+  bytes message_id = 1;
+  // Clients drop cached body, mentions and attachments.
+  bool purge_cache = 2;
+}
+
+message ReactionAdded {
+  bytes message_id = 1;
+  string reaction = 2;
+  bytes account_id = 3;
+}
+
+message ReactionRemoved {
+  bytes message_id = 1;
+  string reaction = 2;
+  bytes account_id = 3;
+}
+
+message MessagePinned { bytes message_id = 1; }
+message MessageUnpinned { bytes message_id = 1; }
+
+message ThreadUpdated {
+  bytes message_id = 1;  // the thread root
+  ThreadSummary thread = 2;
+}
+
+message MemberJoined { bytes account_id = 1; }
+message MemberLeft {
+  bytes account_id = 1;
+  LeaveReason reason = 2;
+}
+
+enum LeaveReason {
+  LEAVE_REASON_UNSPECIFIED = 0;
+  LEFT = 1;
+  REMOVED = 2;
+  GUEST_EXPIRED = 3;
+  ACCOUNT_DELETED = 4;
+}
+
+message ChannelUpdated { Channel channel = 1; }
+
+// Emitted whenever roles, overwrites or membership change in a way that
+// affects this channel. Carries no detail; clients that care refetch.
+message AclChanged { uint64 acl_version = 1; }
+
+message Redacted {
+  // What kind the payload was, so clients can keep placeholder shape.
+  RedactedKind was = 1;
+}
+
+enum RedactedKind {
+  REDACTED_KIND_UNSPECIFIED = 0;
+  REDACTED_MESSAGE = 1;
+  REDACTED_OTHER = 2;
+}
+
+// Personal DM payload. The server stores and sees exactly these fields.
+// Everything else (text, reactions, edits, threads, mentions, attachment
+// metadata, read state) is inside `mls_message`.
+message EncryptedPayload {
+  EncryptedKind kind = 1;
+  // An MLSMessage (RFC 9420) in TLS presentation format.
+  bytes mls_message = 2;
+  // MLS epoch this message was sent in; lets the delivery service order
+  // commits and lets clients detect messages they cannot yet decrypt.
+  uint64 epoch = 3;
+}
+
+enum EncryptedKind {
+  ENCRYPTED_KIND_UNSPECIFIED = 0;
+  APPLICATION = 1;  // user content; eligible for push
+  CONTROL = 2;      // MLS commit, proposal, welcome; never pushed as a message
+}
+
+// One entry in the account log (architecture 8.1).
+message AccountEvent {
+  bytes event_id = 1;
+  bytes account_id = 2;
+  uint64 seq = 3;
+  google.protobuf.Timestamp created_at = 4;
+
+  oneof payload {
+    MembershipAdded membership_added = 20;
+    MembershipRemoved membership_removed = 21;
+    MembershipUpdated membership_updated = 22;
+    ChannelAdded channel_added = 23;        // a channel the account can now see
+    ChannelRemoved channel_removed = 24;    // lost access or deleted
+    DmRequestReceived dm_request_received = 25;
+    DmRequestUpdated dm_request_updated = 26;
+    FriendshipUpdated friendship_updated = 27;
+    RosterUpdated roster_updated = 28;      // this account's identity roster changed
+    ContactRosterUpdated contact_roster_updated = 29; // a contact added/revoked a device
+    ProfileUpdated profile_updated = 30;
+    SessionRevoked session_revoked = 31;
+    BlockListUpdated block_list_updated = 32;
+  }
+}
+
+message MembershipAdded { Member member = 1; Server server = 2; }
+message MembershipRemoved { bytes server_id = 1; LeaveReason reason = 2; }
+message MembershipUpdated { Member member = 1; }
+message ChannelAdded { Channel channel = 1; }
+message ChannelRemoved { bytes channel_id = 1; }
+
+message DmRequest {
+  bytes request_id = 1;
+  bytes from_account_id = 2;
+  bytes to_account_id = 3;
+  DmRequestState state = 4;
+  // What the recipient sees before accepting (architecture 6.4). No content.
+  repeated bytes shared_server_ids = 5;
+  uint32 mutual_friend_count = 6;
+  SignedProfile from_profile = 7;
+  google.protobuf.Timestamp created_at = 8;
+}
+
+enum DmRequestState {
+  DM_REQUEST_STATE_UNSPECIFIED = 0;
+  PENDING = 1;
+  ACCEPTED = 2;
+  DECLINED = 3;
+  BLOCKED = 4;
+}
+
+message DmRequestReceived { DmRequest request = 1; }
+message DmRequestUpdated { DmRequest request = 1; }
+
+message FriendshipUpdated {
+  bytes other_account_id = 1;
+  FriendshipState state = 2;
+}
+
+enum FriendshipState {
+  FRIENDSHIP_STATE_UNSPECIFIED = 0;
+  FRIENDSHIP_REQUESTED_BY_ME = 1;
+  FRIENDSHIP_REQUESTED_BY_THEM = 2;
+  FRIENDSHIP_FRIENDS = 3;
+  FRIENDSHIP_REMOVED = 4;
+}
+
+message RosterUpdated { SignedRoster roster = 1; }
+message ContactRosterUpdated {
+  bytes identity_id = 1;
+  SignedRoster roster = 2;
+}
+message ProfileUpdated { Account account = 1; }
+message SessionRevoked { bytes session_id = 1; bytes device_id = 2; }
+message BlockListUpdated { repeated bytes blocked_identity_ids = 1; }

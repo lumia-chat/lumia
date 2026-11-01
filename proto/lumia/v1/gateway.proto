@@ -1,0 +1,204 @@
+// Lumia protocol: the real-time gateway.
+//
+// One WebSocket per (client, instance). Subprotocol selects the encoding:
+//   lumia.v1.proto  -> binary frames, each a serialized ClientFrame/ServerFrame
+//   lumia.v1.json   -> text frames, each a JSON ClientFrame/ServerFrame
+// The connection is authenticated by the Authorization header on the upgrade
+// request (or `access_token` query parameter where headers are impossible).
+// Flow, in order: Hello -> Welcome; then any of Subscribe, Resume, Command,
+// HighWaterMark, Presence, Typing, Heartbeat. See docs/protocol.md.
+
+syntax = "proto3";
+
+package lumia.v1;
+
+import "google/protobuf/timestamp.proto";
+import "lumia/v1/chat.proto";
+import "lumia/v1/commands.proto";
+import "lumia/v1/common.proto";
+import "lumia/v1/events.proto";
+
+option java_multiple_files = true;
+option java_package = "chat.lumia.proto.v1";
+option swift_prefix = "Lumia";
+
+message ClientFrame {
+  oneof frame {
+    Hello hello = 1;
+    Subscribe subscribe = 2;
+    Unsubscribe unsubscribe = 3;
+    Command command = 4;
+    HighWaterMarkRequest high_water_mark = 5;
+    Heartbeat heartbeat = 6;
+    PresenceUpdate presence = 7;
+    Typing typing = 8;
+    ResumeAccount resume_account = 9;
+  }
+}
+
+message ServerFrame {
+  oneof frame {
+    Welcome welcome = 1;
+    SubscribeResult subscribe_result = 2;
+    Event event = 3;
+    Ack ack = 4;
+    Error error = 5;
+    Nudge nudge = 6;
+    HighWaterMarkResponse high_water_mark = 7;
+    Heartbeat heartbeat = 8;
+    PresenceDiff presence_diff = 9;
+    TypingIndicator typing = 10;
+    AccountEvent account_event = 11;
+    AccountResumeResult account_resume_result = 12;
+    Disconnect disconnect = 13;
+  }
+}
+
+// First frame from the client.
+message Hello {
+  // e.g. "lumia-desktop/1.4.0 (macos 15.1)". Logged, not trusted.
+  string client = 1;
+  bytes device_id = 2;
+  // The recovery generation this client last saw for this instance, or 0.
+  uint64 recovery_generation = 3;
+  // The client's newest roster version for its identity, so the server can
+  // request the roster if it is behind.
+  uint64 roster_version = 4;
+}
+
+// First frame from the server. Anything else before it is a protocol error.
+message Welcome {
+  bytes session_id = 1;
+  bytes account_id = 2;
+  // If this differs from Hello.recovery_generation, the client MUST discard
+  // every cursor for this instance and take the snapshot path.
+  uint64 recovery_generation = 3;
+  google.protobuf.Timestamp server_time = 4;
+  // Expected heartbeat interval. The server disconnects after missing two.
+  uint32 heartbeat_interval_seconds = 5;
+  // Capabilities the client may rely on.
+  bool turn_configured = 6;
+  bool push_relay_enabled = 7;
+  bool identity_proof_sign_in_enabled = 8;
+  // Instance-wide limits the client should enforce before sending.
+  Limits limits = 9;
+  // Set when the server holds a newer roster than Hello.roster_version.
+  bool roster_update_available = 10;
+}
+
+message Limits {
+  uint32 max_message_bytes = 1;
+  uint64 max_upload_bytes = 2;
+  uint32 max_subscriptions = 3;
+  uint32 max_commands_per_minute = 4;
+}
+
+// Subscribe to channel logs, resuming each from a cursor. Cursor 0 means
+// "from the beginning, or a snapshot if the beginning is not served".
+message Subscribe {
+  repeated Cursor cursors = 1;
+}
+
+message Unsubscribe {
+  repeated bytes channel_ids = 1;
+}
+
+// One result per requested channel.
+message SubscribeResult {
+  repeated ChannelSubscribeResult results = 1;
+}
+
+message ChannelSubscribeResult {
+  bytes channel_id = 1;
+  SubscribeStatus status = 2;
+  // Current head of the log. Events between the client's cursor and this are
+  // being replayed (RESUMED) or must be fetched via snapshot (SNAPSHOT_REQUIRED).
+  uint64 last_seq = 3;
+  uint64 acl_version = 4;
+  // Present on ERROR.
+  Error error = 5;
+}
+
+enum SubscribeStatus {
+  SUBSCRIBE_STATUS_UNSPECIFIED = 0;
+  // Subscribed; missing events will arrive as Event frames in seq order.
+  RESUMED = 1;
+  // Subscribed, but the cursor is no longer served. Fetch
+  // GET /channels/{id}/snapshot, then events after the snapshot's seq.
+  SNAPSHOT_REQUIRED = 2;
+  // Not subscribed. See error.
+  ERROR = 3;
+}
+
+// Resume the account log.
+message ResumeAccount {
+  uint64 after_seq = 1;
+}
+
+message AccountResumeResult {
+  SubscribeStatus status = 1;
+  uint64 last_seq = 2;
+  Error error = 3;
+}
+
+// Server-initiated: a channel's head moved and the client may have missed it
+// (reconciliation, architecture 8.2). The client compares with its cursor and
+// fetches the gap. Never carries the event itself.
+message Nudge {
+  repeated Cursor heads = 1;
+}
+
+// Client asks for the current head of many logs at once (foreground, regain
+// connectivity).
+message HighWaterMarkRequest {
+  repeated bytes channel_ids = 1;
+  bool include_account_log = 2;
+}
+
+message HighWaterMarkResponse {
+  repeated Cursor heads = 1;
+  uint64 account_log_seq = 2;
+}
+
+message Heartbeat {
+  // Echoed back by the server.
+  uint64 nonce = 1;
+}
+
+message PresenceUpdate {
+  PresenceStatus status = 1;
+  string custom_status = 2;
+  // Servers whose presence topics this client wants to receive, because it
+  // has them on screen (architecture 3). Replaces the previous set.
+  repeated bytes watch_server_ids = 3;
+}
+
+message PresenceDiff {
+  // Scope: a server, or empty for the caller's friends topic.
+  bytes server_id = 1;
+  repeated Presence joined = 2;
+  repeated Presence updated = 3;
+  repeated bytes left_account_ids = 4;
+}
+
+message Typing {
+  bytes channel_id = 1;
+}
+
+// Last frame from the server before it closes the socket.
+message Disconnect {
+  DisconnectReason reason = 1;
+  // Seconds before reconnecting is welcome. 0 = immediately.
+  uint32 reconnect_after_seconds = 2;
+  Error error = 3;
+}
+
+enum DisconnectReason {
+  DISCONNECT_REASON_UNSPECIFIED = 0;
+  DISCONNECT_SERVER_SHUTDOWN = 1;    // rolling restart; reconnect with same cursors
+  DISCONNECT_SESSION_REVOKED = 2;    // do not reconnect with this token
+  DISCONNECT_DEVICE_REVOKED = 3;     // do not reconnect with this device key
+  DISCONNECT_HEARTBEAT_TIMEOUT = 4;
+  DISCONNECT_PROTOCOL_ERROR = 5;
+  DISCONNECT_RATE_LIMITED = 6;
+}

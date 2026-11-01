@@ -1,0 +1,131 @@
+// Lumia protocol: identity, device roster, identity proof.
+//
+// Implements docs/architecture.md section 5. Everything that is signed is
+// carried as the exact bytes that were signed (a `bytes body` holding a
+// serialized inner message), so no canonicalization is ever needed.
+
+syntax = "proto3";
+
+package lumia.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option java_multiple_files = true;
+option java_package = "chat.lumia.proto.v1";
+option swift_prefix = "Lumia";
+
+// Ed25519 public key, 32 bytes.
+message PublicKey {
+  bytes ed25519 = 1;
+}
+
+message Signature {
+  SignerKind signer_kind = 1;
+  // device_id for DEVICE, empty for ROOT (the root is identified by the
+  // roster's root_public_key).
+  bytes signer_id = 2;
+  // Ed25519 signature, 64 bytes, over the exact `body` bytes it accompanies.
+  bytes signature = 3;
+}
+
+enum SignerKind {
+  SIGNER_KIND_UNSPECIFIED = 0;
+  ROOT = 1;
+  DEVICE = 2;
+}
+
+enum DeviceKind {
+  DEVICE_KIND_UNSPECIFIED = 0;
+  NATIVE = 1;      // macOS, Windows, Linux, iOS, Android app
+  WEB = 2;         // browser; origin-scoped (architecture 11.4)
+  BOT = 3;         // a bot or agent process
+}
+
+message DeviceEntry {
+  bytes device_id = 1;
+  PublicKey public_key = 2;
+  DeviceKind kind = 3;
+  // Human label, user-editable, e.g. "Ryan's MacBook". Not signed semantics.
+  string label = 4;
+  google.protobuf.Timestamp added_at = 5;
+  // device_id of the device that authorized this one; empty if the root did.
+  bytes added_by = 6;
+  // For WEB devices only: the origin this device key is scoped to.
+  string web_origin = 7;
+}
+
+message RevokedEntry {
+  bytes device_id = 1;
+  google.protobuf.Timestamp revoked_at = 2;
+  bytes revoked_by = 3;  // device_id, or empty for root
+}
+
+// The signed content of a roster. Serialized and carried as SignedRoster.body.
+message RosterBody {
+  // hash of the first root public key; stable across rotations.
+  bytes identity_id = 1;
+  // Monotonic. Highest version wins; at equal version a ROOT signature wins.
+  uint64 version = 2;
+  // Current root public key.
+  PublicKey root_public_key = 3;
+  // Previous root public keys, oldest first, for rotation-chain verification.
+  repeated PublicKey previous_root_public_keys = 4;
+  repeated DeviceEntry devices = 5;
+  repeated RevokedEntry revoked = 6;
+  google.protobuf.Timestamp issued_at = 7;
+}
+
+message SignedRoster {
+  // Serialized RosterBody. Verify signatures over these bytes exactly.
+  bytes body = 1;
+  // At least one. A roster is valid if signed by the root, or by a device that
+  // is authorized and not revoked in the previous version the verifier holds.
+  repeated Signature signatures = 2;
+}
+
+// Issued by a host before account creation, sign-in by identity proof, or
+// account linking. Serialized and carried as IdentityProof.challenge.
+message IdentityChallengeBody {
+  bytes nonce = 1;              // 32 random bytes
+  string host = 2;              // the host that issued it; binds the proof
+  google.protobuf.Timestamp expires_at = 3;
+  ChallengePurpose purpose = 4;
+}
+
+enum ChallengePurpose {
+  CHALLENGE_PURPOSE_UNSPECIFIED = 0;
+  CREATE_ACCOUNT = 1;
+  SIGN_IN = 2;
+  LINK_ACCOUNT = 3;  // also requires the account's own authentication
+  JOIN_AS_GUEST = 4;
+}
+
+message IdentityProof {
+  // Serialized IdentityChallengeBody exactly as issued.
+  bytes challenge = 1;
+  bytes identity_id = 2;
+  bytes device_id = 3;
+  // Device-key signature over `challenge`.
+  Signature signature = 4;
+  // The newest roster the client holds. The host stores it if newer than what
+  // it has, and verifies device_id is authorized and not revoked in it.
+  SignedRoster roster = 5;
+}
+
+// Signed profile carried by an identity and imported on link. Instances may
+// hold local overrides (architecture 4.1 / 6.3).
+message ProfileBody {
+  bytes identity_id = 1;
+  uint64 version = 2;
+  string display_name = 3;
+  string pronouns = 4;
+  string bio = 5;
+  // Content address of the avatar blob on the issuing host, plus the host.
+  string avatar_url = 6;
+  google.protobuf.Timestamp issued_at = 7;
+}
+
+message SignedProfile {
+  bytes body = 1;  // serialized ProfileBody
+  Signature signature = 2;
+}

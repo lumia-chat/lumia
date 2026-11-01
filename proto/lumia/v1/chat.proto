@@ -1,0 +1,217 @@
+// Lumia protocol: servers, channels, members, messages and their parts.
+//
+// These are the materialized shapes returned by the HTTP API and embedded in
+// events. The event log (events.proto) is the ordering; these are views.
+
+syntax = "proto3";
+
+package lumia.v1;
+
+import "google/protobuf/timestamp.proto";
+import "lumia/v1/identity.proto";
+
+option java_multiple_files = true;
+option java_package = "chat.lumia.proto.v1";
+option swift_prefix = "Lumia";
+
+enum ChannelKind {
+  CHANNEL_KIND_UNSPECIFIED = 0;
+  TEXT = 1;          // public or private server channel; privacy is an ACL fact
+  SERVER_DM = 2;     // server-governed DM, server-readable
+  SERVER_GROUP_DM = 3;
+  PERSONAL_DM = 4;   // E2EE; events are opaque (events.proto EncryptedPayload)
+  PERSONAL_GROUP_DM = 5;
+}
+
+enum AccountKind {
+  ACCOUNT_KIND_UNSPECIFIED = 0;
+  ACCOUNT_HUMAN = 1;
+  ACCOUNT_BOT = 2;
+}
+
+enum MembershipKind {
+  MEMBERSHIP_KIND_UNSPECIFIED = 0;
+  MEMBER = 1;
+  GUEST = 2;
+}
+
+enum PresenceStatus {
+  PRESENCE_STATUS_UNSPECIFIED = 0;
+  OFFLINE = 1;
+  ONLINE = 2;
+  AWAY = 3;
+  DO_NOT_DISTURB = 4;
+}
+
+// Named permission flags. The API never exposes a bitfield.
+enum Permission {
+  PERMISSION_UNSPECIFIED = 0;
+  ADMINISTRATOR = 1;
+  MANAGE_SERVER = 2;
+  MANAGE_ROLES = 3;
+  MANAGE_CHANNELS = 4;
+  MANAGE_MEMBERS = 5;   // kick, ban, promote guests
+  CREATE_INVITES = 6;
+  VIEW_CHANNEL = 10;
+  READ_HISTORY = 11;
+  SEND_MESSAGES = 12;
+  SEND_IN_THREADS = 13;
+  ATTACH_FILES = 14;
+  ADD_REACTIONS = 15;
+  MENTION_EVERYONE = 16;
+  MANAGE_MESSAGES = 17;  // delete and pin others' messages
+  START_CALLS = 20;
+  START_SERVER_DMS = 21;
+  MANAGE_WEBHOOKS = 30;
+  MANAGE_BOTS = 31;
+}
+
+message Account {
+  bytes account_id = 1;
+  bytes identity_id = 2;
+  AccountKind kind = 3;
+  string handle = 4;  // unique per instance
+  string display_name = 5;
+  string avatar_url = 6;
+  google.protobuf.Timestamp created_at = 7;
+  // Present only for the caller's own account.
+  SignedProfile profile = 8;
+}
+
+message Server {
+  bytes server_id = 1;
+  string name = 2;
+  string icon_url = 3;
+  bytes owner_account_id = 4;
+  google.protobuf.Timestamp created_at = 5;
+  // Trust card fields (architecture 6.1).
+  string operator_name = 6;
+  string host = 7;
+}
+
+message Role {
+  bytes role_id = 1;
+  bytes server_id = 2;
+  string name = 3;
+  // Lower sorts first; the member's lowest-position role is the display tag.
+  uint32 position = 4;
+  repeated Permission permissions = 5;
+  string color = 6;  // CSS color or empty
+  bool is_everyone = 7;
+}
+
+// Per-channel permission overwrite for a role or a member (architecture 7.2).
+message Overwrite {
+  oneof target {
+    bytes role_id = 1;
+    bytes account_id = 2;
+  }
+  repeated Permission allow = 3;
+  repeated Permission deny = 4;
+}
+
+message Channel {
+  bytes channel_id = 1;
+  ChannelKind kind = 2;
+  // Empty for PERSONAL_* channels, which belong to no server.
+  bytes server_id = 3;
+  string name = 4;   // empty for DMs
+  string topic = 5;
+  uint32 position = 6;
+  repeated Overwrite overwrites = 7;
+  // For DM kinds: the participants.
+  repeated bytes participant_account_ids = 8;
+  uint64 last_seq = 9;
+  uint64 acl_version = 10;
+  google.protobuf.Timestamp created_at = 11;
+  // Personal DMs: the instance hosting it, for Home aggregation labels.
+  string host = 12;
+}
+
+message Member {
+  bytes server_id = 1;
+  bytes account_id = 2;
+  MembershipKind kind = 3;
+  repeated bytes role_ids = 4;
+  string nickname = 5;
+  google.protobuf.Timestamp joined_at = 6;
+  // GUEST only. Empty means no expiry.
+  google.protobuf.Timestamp expires_at = 7;
+}
+
+message Mention {
+  oneof target {
+    bytes account_id = 1;
+    bytes role_id = 2;
+    bool everyone = 3;
+  }
+  // Byte offsets into Message.body (UTF-8), half-open.
+  uint32 start = 4;
+  uint32 end = 5;
+}
+
+message Attachment {
+  bytes attachment_id = 1;
+  // Content address: keyed BLAKE3 of stored ciphertext (architecture 12).
+  bytes content_address = 2;
+  string filename = 3;
+  string media_type = 4;
+  uint64 size_bytes = 5;
+  uint32 width = 6;    // images and video
+  uint32 height = 7;
+  // Server content only; personal DMs carry attachment metadata inside the
+  // ciphertext and the client decrypts the blob with a key from the message.
+  string url = 8;
+  string thumbnail_url = 9;
+}
+
+message ReactionCount {
+  // Key into the per-instance reaction registry, e.g. "thumbs_up".
+  string reaction = 1;
+  uint32 count = 2;
+  // Whether the caller has reacted.
+  bool me = 3;
+}
+
+message ThreadSummary {
+  uint32 reply_count = 1;
+  google.protobuf.Timestamp last_reply_at = 2;
+  // Up to three.
+  repeated bytes participant_account_ids = 3;
+}
+
+message Message {
+  bytes message_id = 1;      // client-minted UUIDv7; also the command_id of the send
+  bytes channel_id = 2;
+  uint64 seq = 3;            // seq of the create event
+  bytes author_account_id = 4;
+  // Thread root this is a reply to. Empty for top-level messages.
+  bytes parent_id = 5;
+  // Markdown subset defined in docs/protocol.md "Message body".
+  string body = 6;
+  repeated Mention mentions = 7;
+  repeated Attachment attachments = 8;
+  repeated ReactionCount reactions = 9;
+  ThreadSummary thread = 10;
+  bool pinned = 11;
+  google.protobuf.Timestamp created_at = 12;
+  // Set when edited. Edit history is available to moderators via the API.
+  google.protobuf.Timestamp edited_at = 13;
+  // Tombstone: body, mentions and attachments are empty; deleted_at is set.
+  google.protobuf.Timestamp deleted_at = 14;
+  // Replies posted "also to channel" reference the reply they mirror.
+  bytes mirrors_message_id = 15;
+}
+
+message Presence {
+  bytes account_id = 1;
+  PresenceStatus status = 2;
+  string custom_status = 3;
+}
+
+message TypingIndicator {
+  bytes channel_id = 1;
+  bytes account_id = 2;
+  // Clients stop showing it when this passes; servers set ~8 seconds ahead.
+  google.protobuf.Timestamp until = 3;
+}

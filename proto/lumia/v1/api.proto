@@ -1,0 +1,344 @@
+// Lumia protocol: HTTP request and response bodies not covered by other
+// files. Paths and methods are in docs/protocol.md "HTTP mapping"; this file
+// defines the shapes those endpoints exchange.
+
+syntax = "proto3";
+
+package lumia.v1;
+
+import "google/protobuf/timestamp.proto";
+import "lumia/v1/chat.proto";
+import "lumia/v1/common.proto";
+import "lumia/v1/events.proto";
+import "lumia/v1/identity.proto";
+
+option java_multiple_files = true;
+option java_package = "chat.lumia.proto.v1";
+option swift_prefix = "Lumia";
+
+// ---- Auth -----------------------------------------------------------------
+
+message TokenPair {
+  string access_token = 1;
+  google.protobuf.Timestamp access_expires_at = 2;
+  string refresh_token = 3;
+  google.protobuf.Timestamp refresh_expires_at = 4;
+  bytes session_id = 5;
+}
+
+message PasswordSignInRequest {
+  string handle_or_email = 1;
+  string password = 2;
+  bytes device_id = 3;
+  SignedRoster roster = 4;
+  // Second factor when required; the first attempt returns FAILED_PRECONDITION
+  // with details.mfa = "totp" | "passkey".
+  string totp_code = 5;
+}
+
+message IdentityProofSignInRequest {
+  IdentityProof proof = 1;
+}
+
+message CreateAccountRequest {
+  string handle = 1;
+  string email = 2;      // optional on identity-proof creation
+  string password = 3;   // optional on identity-proof creation
+  IdentityProof proof = 4;
+  SignedProfile profile = 5;
+  // Invite that led here, if any; grants the membership on success.
+  string invite_code = 6;
+}
+
+message ChallengeRequest {
+  ChallengePurpose purpose = 1;
+}
+
+message ChallengeResponse {
+  // Serialized IdentityChallengeBody. Sign these bytes exactly.
+  bytes challenge = 1;
+  google.protobuf.Timestamp expires_at = 2;
+}
+
+message RefreshRequest { string refresh_token = 1; }
+
+message Session {
+  bytes session_id = 1;
+  bytes device_id = 2;
+  string client = 3;
+  string ip = 4;              // own sessions only
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp last_seen_at = 6;
+  bool current = 7;
+}
+
+message ListSessionsResponse { repeated Session sessions = 1; }
+
+// ---- Instance ---------------------------------------------------------------
+
+// GET /api/v1/instance — unauthenticated. The trust card (architecture 6.1).
+message InstanceInfo {
+  string host = 1;
+  string operator_name = 2;
+  string operator_url = 3;
+  string terms_url = 4;
+  string privacy_url = 5;
+  string software_version = 6;
+  bool identity_proof_sign_in_enabled = 7;
+  bool identity_proof_create_enabled = 8;
+  bool open_registration = 9;
+  bool turn_configured = 10;
+  bool push_relay_enabled = 11;
+  // Reaction registry.
+  repeated ReactionDefinition reactions = 12;
+  uint64 recovery_generation = 13;
+}
+
+message ReactionDefinition {
+  string key = 1;
+  string label = 2;
+  string icon_url = 3;
+}
+
+// ---- Servers, channels, members ------------------------------------------
+
+message ListServersResponse { repeated Server servers = 1; repeated Member memberships = 2; }
+
+message CreateServerRequest { string name = 1; }
+
+message ListChannelsResponse { repeated Channel channels = 1; }
+
+message CreateChannelRequest {
+  bytes server_id = 1;
+  ChannelKind kind = 2;
+  string name = 3;
+  string topic = 4;
+  repeated Overwrite overwrites = 5;
+  // For DM kinds.
+  repeated bytes participant_account_ids = 6;
+}
+
+// Personal DM creation. The server enforces the uniqueness constraint on the
+// sorted identity pair and returns the existing channel on conflict
+// (architecture 6.4).
+message OpenPersonalDmRequest {
+  repeated bytes participant_account_ids = 1;
+}
+
+message OpenPersonalDmResponse {
+  Channel channel = 1;
+  bool existed = 2;
+}
+
+message ListMembersRequest {
+  bytes server_id = 1;
+  PageRequest page = 2;
+  string query = 3;  // prefix search on handle and nickname
+}
+
+message ListMembersResponse {
+  repeated Member members = 1;
+  repeated Account accounts = 2;
+  PageResponse page = 3;
+}
+
+message UpdateMemberRequest {
+  bytes server_id = 1;
+  bytes account_id = 2;
+  repeated bytes role_ids = 3;
+  string nickname = 4;
+  // Promote a guest.
+  MembershipKind kind = 5;
+  google.protobuf.Timestamp expires_at = 6;
+}
+
+message ListRolesResponse { repeated Role roles = 1; }
+
+message UpsertRoleRequest { Role role = 1; }
+
+// ---- Events, messages, snapshots -------------------------------------------
+
+// GET /channels/{id}/events?after=&limit=  — gap fill and scrollback forward.
+message ListEventsRequest {
+  bytes channel_id = 1;
+  uint64 after_seq = 2;
+  uint64 before_seq = 3;  // exclusive; 0 = head
+  uint32 limit = 4;       // 1..200
+}
+
+message ListEventsResponse {
+  repeated Event events = 1;
+  uint64 last_seq = 2;
+  // True when after_seq is below the oldest served event; client must take
+  // the snapshot path for anything older.
+  bool truncated_before = 3;
+}
+
+// GET /channels/{id}/snapshot — current materialized state plus the seq it
+// is valid at. Subsequent events are fetched with after_seq = seq.
+message ChannelSnapshot {
+  Channel channel = 1;
+  uint64 seq = 2;
+  // Most recent messages, newest last. Older via ListMessages.
+  repeated Message messages = 3;
+  repeated Message pinned = 4;
+  // For PERSONAL_* channels: the recent encrypted events instead of messages.
+  repeated Event encrypted_events = 5;
+}
+
+message ListMessagesRequest {
+  bytes channel_id = 1;
+  // Scrollback: messages with seq strictly below this. 0 = head.
+  uint64 before_seq = 2;
+  uint32 limit = 3;
+  // Thread view: only replies to this root.
+  bytes parent_id = 4;
+}
+
+message ListMessagesResponse {
+  repeated Message messages = 1;
+  bool has_more = 2;
+}
+
+message AccountSnapshot {
+  Account account = 1;
+  uint64 seq = 2;
+  repeated Server servers = 3;
+  repeated Member memberships = 4;
+  repeated Channel channels = 5;
+  repeated DmRequest pending_requests = 6;
+  repeated FriendshipUpdated friendships = 7;
+  SignedRoster roster = 8;
+  repeated bytes blocked_identity_ids = 9;
+}
+
+message ListAccountEventsRequest {
+  uint64 after_seq = 1;
+  uint32 limit = 2;
+}
+
+message ListAccountEventsResponse {
+  repeated AccountEvent events = 1;
+  uint64 last_seq = 2;
+  bool truncated_before = 3;
+}
+
+// ---- Uploads ----------------------------------------------------------------
+
+// POST /uploads: metadata first, bytes second (PUT to upload_url).
+message CreateUploadRequest {
+  bytes channel_id = 1;   // determines whose plan pays (architecture 16)
+  string filename = 2;
+  string media_type = 3;
+  uint64 size_bytes = 4;
+  // Personal DMs: the client has already encrypted; the server treats bytes
+  // as opaque and skips processing.
+  bool client_encrypted = 5;
+}
+
+message CreateUploadResponse {
+  bytes attachment_id = 1;
+  string upload_url = 2;
+  google.protobuf.Timestamp upload_expires_at = 3;
+}
+
+// ---- Search -----------------------------------------------------------------
+
+message SearchRequest {
+  string query = 1;
+  bytes server_id = 2;     // empty: all servers the caller is in
+  bytes channel_id = 3;
+  bytes from_account_id = 4;
+  PageRequest page = 5;
+}
+
+message SearchResponse {
+  repeated Message messages = 1;
+  PageResponse page = 2;
+}
+
+// ---- Friends, requests, blocks ---------------------------------------------
+
+message SendDmRequestRequest { bytes to_account_id = 1; }
+message RespondDmRequestRequest {
+  bytes request_id = 1;
+  DmRequestState response = 2;  // ACCEPTED, DECLINED or BLOCKED
+}
+
+message FriendRequestRequest { bytes account_id = 1; }
+message ListFriendsResponse { repeated Account friends = 1; repeated FriendshipUpdated states = 2; }
+
+message UpdateBlockListRequest {
+  // Full replacement, pushed from the client's identity-held list
+  // (architecture 6.4).
+  repeated bytes blocked_identity_ids = 1;
+}
+
+// ---- Identity and devices -------------------------------------------------
+
+message PublishRosterRequest { SignedRoster roster = 1; }
+
+message RevokeDeviceRequest {
+  // New roster with the device in `revoked`.
+  SignedRoster roster = 1;
+  // Required in addition to the roster signature (architecture 5.1):
+  // a fresh password / passkey / TOTP proof for this account.
+  string reauth_token = 2;
+}
+
+message GetRosterResponse { SignedRoster roster = 1; }
+
+// MLS delivery-service endpoints.
+message PublishKeyPackagesRequest {
+  // KeyPackage messages (RFC 9420) in TLS presentation format.
+  repeated bytes key_packages = 1;
+}
+
+message ClaimKeyPackageRequest {
+  bytes account_id = 1;
+  bytes device_id = 2;   // empty: one per authorized device
+}
+
+message ClaimKeyPackageResponse {
+  message Claimed { bytes device_id = 1; bytes key_package = 2; }
+  repeated Claimed key_packages = 1;
+}
+
+message PublishGroupInfoRequest {
+  bytes channel_id = 1;
+  bytes group_info = 2;  // for external commits on recovery (architecture 11.3)
+}
+
+// ---- Invites ----------------------------------------------------------------
+
+message Invite {
+  string code = 1;
+  bytes server_id = 2;
+  bytes channel_id = 3;         // connected-channel invite
+  bytes created_by = 4;
+  google.protobuf.Timestamp expires_at = 5;
+  uint32 max_uses = 6;
+  uint32 uses = 7;
+  // Joiners become guests (connected channels, contractors).
+  bool as_guest = 8;
+  google.protobuf.Timestamp guest_expires_at = 9;
+}
+
+message CreateInviteRequest {
+  bytes server_id = 1;
+  bytes channel_id = 2;
+  google.protobuf.Timestamp expires_at = 3;
+  uint32 max_uses = 4;
+  bool as_guest = 5;
+  uint32 guest_days = 6;
+}
+
+// GET /invites/{code} — unauthenticated. What the trust card shows before
+// the user agrees to join (architecture 6.1).
+message InvitePreview {
+  Server server = 1;
+  Channel channel = 2;
+  uint32 member_count = 3;
+  bool as_guest = 4;
+  InstanceInfo instance = 5;
+}

@@ -1,0 +1,88 @@
+// Lumia protocol: client commands.
+//
+// A command is a client's request to append to a channel log. Every command
+// carries a client-minted UUIDv7 `command_id`; the server applies the
+// idempotency rules in docs/architecture.md 8.3. The same Command message is
+// the body of POST /api/v1/channels/{channel_id}/commands and of
+// ClientFrame.command on the gateway.
+
+syntax = "proto3";
+
+package lumia.v1;
+
+import "lumia/v1/chat.proto";
+import "lumia/v1/events.proto";
+
+option java_multiple_files = true;
+option java_package = "chat.lumia.proto.v1";
+option swift_prefix = "Lumia";
+
+message Command {
+  // Client-minted UUIDv7. For SendMessage this is also the message_id.
+  bytes command_id = 1;
+  bytes channel_id = 2;
+
+  oneof op {
+    SendMessage send_message = 10;
+    EditMessage edit_message = 11;
+    DeleteMessage delete_message = 12;
+    AddReaction add_reaction = 13;
+    RemoveReaction remove_reaction = 14;
+    PinMessage pin_message = 15;
+    UnpinMessage unpin_message = 16;
+    // PERSONAL_* channels only. The server never inspects the payload.
+    SendEncrypted send_encrypted = 20;
+  }
+}
+
+message SendMessage {
+  string body = 1;
+  repeated Mention mentions = 2;
+  // Attachment IDs from prior uploads (POST /api/v1/uploads).
+  repeated bytes attachment_ids = 3;
+  // Thread root to reply to.
+  bytes parent_id = 4;
+  // When replying: also post this reply to the channel as a top-level
+  // message that mirrors it.
+  bool also_send_to_channel = 5;
+}
+
+message EditMessage {
+  bytes message_id = 1;
+  string body = 2;
+  repeated Mention mentions = 3;
+}
+
+message DeleteMessage { bytes message_id = 1; }
+
+message AddReaction {
+  bytes message_id = 1;
+  string reaction = 2;
+}
+
+message RemoveReaction {
+  bytes message_id = 1;
+  string reaction = 2;
+}
+
+message PinMessage { bytes message_id = 1; }
+message UnpinMessage { bytes message_id = 1; }
+
+message SendEncrypted {
+  EncryptedPayload payload = 1;
+  // A retry MUST carry the identical payload. If the epoch has advanced and
+  // the original cannot be delivered, the client abandons this command_id and
+  // sends a new command (architecture 8.3).
+}
+
+// Successful result of a command. On the gateway: ServerFrame.ack. Over HTTP:
+// the 200 body. A replayed command returns the original Ack.
+message Ack {
+  bytes command_id = 1;
+  bytes channel_id = 2;
+  uint64 seq = 3;
+  bytes event_id = 4;
+  // For SendMessage with also_send_to_channel: the mirror's seq and id.
+  uint64 mirror_seq = 5;
+  bytes mirror_event_id = 6;
+}

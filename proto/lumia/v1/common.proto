@@ -1,0 +1,95 @@
+// Lumia protocol: shared scalar conventions, errors, pagination.
+//
+// Conventions that apply to every file in this package (see docs/protocol.md):
+//   - Fields named *_id of type bytes are 16-byte UUIDs. In JSON they are
+//     canonical lowercase UUID strings, not base64.
+//   - Every uint64 / int64 is a decimal string in JSON (ProtoJSON rule).
+//   - Fields are only ever added. Numbers are never reused or retyped.
+//   - Unknown fields are ignored on read and preserved on re-serialization.
+//   - Unknown enum values are preserved as integers and treated as the
+//     *_UNSPECIFIED value by logic that does not understand them.
+
+syntax = "proto3";
+
+package lumia.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option java_multiple_files = true;
+option java_package = "chat.lumia.proto.v1";
+option swift_prefix = "Lumia";
+
+// Error envelope. Returned as the body of every non-2xx HTTP response and as
+// ServerFrame.error on the gateway.
+message Error {
+  ErrorCode code = 1;
+  // Human-readable, English, not for display to end users. Clients map `code`
+  // to localized text.
+  string message = 2;
+  // Machine-readable details. Keys are documented per ErrorCode in
+  // docs/protocol.md. Example: {"field": "name", "max": "100"}.
+  map<string, string> details = 3;
+  // Present on RATE_LIMITED and UNAVAILABLE. Seconds.
+  uint32 retry_after_seconds = 4;
+  // The command_id this error answers, when it answers a command.
+  bytes command_id = 5;
+}
+
+enum ErrorCode {
+  ERROR_CODE_UNSPECIFIED = 0;
+
+  // 400-class
+  INVALID_ARGUMENT = 1;      // malformed input; details.field names the field
+  FAILED_PRECONDITION = 2;   // valid input, wrong state (e.g. channel archived)
+  CONFLICT = 3;              // idempotency conflict: same command_id, different operation
+  ALREADY_EXISTS = 4;        // uniqueness violated; details.existing_id when disclosable
+  CURSOR_EXPIRED = 5;        // resume cursor no longer served; take the snapshot path
+  GENERATION_CHANGED = 6;    // recovery generation differs; discard all cursors
+  PAYLOAD_TOO_LARGE = 7;     // details.max bytes
+  UNSUPPORTED_ENCODING = 8;  // gateway subprotocol not offered
+
+  // 401 / 403
+  UNAUTHENTICATED = 20;      // no or invalid token; refresh or re-authenticate
+  TOKEN_EXPIRED = 21;        // access token expired; refresh
+  SESSION_REVOKED = 22;      // this session was revoked; do not retry
+  DEVICE_REVOKED = 23;       // this device is revoked in the roster the host holds
+  PERMISSION_DENIED = 24;    // authenticated, not allowed
+  IDENTITY_PROOF_INVALID = 25; // signature, host binding, or roster version rejected
+  POLICY_DENIED = 26;        // instance policy forbids (e.g. identity-proof sign-in off)
+
+  // 404
+  NOT_FOUND = 40;            // also returned for content the caller may not know exists
+
+  // 429 / 503
+  RATE_LIMITED = 60;
+  UNAVAILABLE = 61;
+
+  // 500
+  INTERNAL = 80;
+}
+
+// Cursor-based pagination. Cursors are opaque; clients never construct them.
+message PageRequest {
+  // 1..200. Default 50.
+  uint32 page_size = 1;
+  // From a previous PageResponse.next_cursor. Empty for the first page.
+  string cursor = 2;
+}
+
+message PageResponse {
+  // Empty when there are no more results.
+  string next_cursor = 1;
+}
+
+// A monotonically increasing per-log sequence number. See docs/protocol.md
+// "Sequence numbers". Wrapped in a message only where a bare uint64 would be
+// ambiguous; most fields use uint64 directly.
+message Cursor {
+  bytes log_id = 1;   // channel_id, or the account_id for the account log
+  uint64 seq = 2;
+}
+
+// Wall-clock instant assigned by the server. Never derived from an ID.
+message ServerTime {
+  google.protobuf.Timestamp at = 1;
+}
