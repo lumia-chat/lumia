@@ -87,7 +87,7 @@ One connection per (device, instance). A second connection with the same session
 
 ### 6.2 Handshake
 
-1. Client sends `Hello` within 5 seconds of the upgrade, or is disconnected.
+1. Client sends `Hello` within 5 seconds of the upgrade, or is disconnected. (Server-side, `Hello` is the join of the single Phoenix channel per socket; no join framing appears on the wire.)
 2. Server sends `Welcome`. Anything else before `Welcome` is a protocol error.
 3. If `Welcome.recovery_generation` differs from what the client stored for this instance, the client **discards every cursor** it holds for this instance, stores the new generation, and proceeds with the snapshot path for everything.
 4. If `Welcome.roster_update_available` is set, the client fetches `GET /identity/roster` before doing anything that depends on its own device list.
@@ -99,7 +99,7 @@ One connection per (device, instance). A second connection with the same session
 | `status` | Meaning | Client action |
 |---|---|---|
 | `RESUMED` | Subscribed. Events from `cursor+1` to `last_seq` will arrive as `Event` frames in order, then live events. | Apply as they arrive. |
-| `SNAPSHOT_REQUIRED` | Subscribed, but `cursor` is older than the oldest served event. | `GET /channels/{id}/snapshot`, apply it, set the cursor to `snapshot.seq`, then `GET /channels/{id}/events?after_seq=snapshot.seq` until `last_seq`. Live events that arrived meanwhile are applied after by `seq`. |
+| `SNAPSHOT_REQUIRED` | Subscribed, but the cursor is more than 1,000 events behind the head, so the replay is not streamed (specs/delivery.md 6). | `GET /channels/{id}/snapshot`, apply it, set the cursor to `snapshot.seq`, then `GET /channels/{id}/events?after_seq=snapshot.seq` until `last_seq`. Live events that arrived meanwhile are applied after by `seq`. |
 | `ERROR` | Not subscribed. | Inspect `error`. `PERMISSION_DENIED` and `NOT_FOUND` mean the client should drop the channel locally. |
 
 A subscription replay may be large. The server streams it as ordinary `Event` frames interleaved with other traffic; the client orders by `(channel_id, seq)` and nothing else.
@@ -130,7 +130,7 @@ The client sends `Heartbeat` every `heartbeat_interval_seconds`; the server echo
 
 ### 6.8 Disconnect
 
-The server sends `Disconnect` before closing. `DISCONNECT_SERVER_SHUTDOWN` means reconnect with the same cursors after `reconnect_after_seconds`. `DISCONNECT_SESSION_REVOKED` and `DISCONNECT_DEVICE_REVOKED` mean the client must not reconnect with that token or device key, and must wipe the local store for that instance (architecture 12).
+The server sends `Disconnect` before closing. `DISCONNECT_SERVER_SHUTDOWN` and `DISCONNECT_SLOW_CONSUMER` mean reconnect with the same cursors after `reconnect_after_seconds`. `DISCONNECT_SESSION_REVOKED` and `DISCONNECT_DEVICE_REVOKED` mean the client must not reconnect with that token or device key, and must wipe the local store for that instance (architecture 12).
 
 ## 7. Account log and snapshots
 

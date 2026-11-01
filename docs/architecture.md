@@ -2,7 +2,7 @@
 
 Status: **accepted direction**, 2026-11-01. This is the source of truth for architectural decisions. Each section records a decision, the alternatives rejected, and why. Change it by editing the decision and its rationale, not by appending exceptions elsewhere.
 
-Sections marked **provisional** state intent and the shape of the guarantee, but need a focused specification before implementation: delivery and sync (section 8); E2EE backup and rejoin (section 11.3); authorization and revocation (section 7.4); deployment recovery (section 15). Implementation of a provisional area starts with writing that spec, not with code. Identity, devices, and recovery (section 5) is specified in [specs/identity.md](specs/identity.md).
+Sections marked **provisional** state intent and the shape of the guarantee, but need a focused specification before implementation: E2EE backup and rejoin (section 11.3); authorization and revocation (section 7.4); deployment recovery (section 15). Implementation of a provisional area starts with writing that spec, not with code. Specified so far: identity, devices, and recovery (section 5) in [specs/identity.md](specs/identity.md); delivery and sync (section 8) in [specs/delivery.md](specs/delivery.md).
 
 Lumia is a chat app: servers with public and private channels, direct messages inside and outside servers. The difference from Discord and Slack is that anyone can self-host an instance, an instance can hold many servers, and one client talks to many instances at once.
 
@@ -85,7 +85,7 @@ Rust is used through Rustler NIFs only for crypto on trusted input: MLS delivery
 
 ## 4. Gateway and wire protocol
 
-**Decision.** One persistent WebSocket per instance per client, plus HTTP for CRUD and uploads. The gateway runs **one Phoenix channel per connection**: the session. Subscriptions to chat channels are PubSub subscriptions held by that session process, which are ETS entries, not processes. The session process holds each subscription's cached permission state and its last-delivered `seq` (section 8). This keeps a node with 100,000 connections at 100,000 processes, not 100,000 times the number of joined channels.
+**Decision.** One persistent WebSocket per instance per client, plus HTTP for CRUD and uploads. The gateway runs **one Phoenix channel per connection**: the session, with a custom serializer so that `Hello` is the join, `Welcome` is the join reply, and every other frame is a bare `ClientFrame` or `ServerFrame` with no Phoenix envelope on the wire. Phoenix.Presence and `Phoenix.ChannelTest` come along for free. Subscriptions to chat channels are PubSub subscriptions held by that session process, which are ETS entries, not processes. The session process holds each subscription's cached permission state and its last-delivered `seq` (section 8). This keeps a node with 100,000 connections at 100,000 processes, not 100,000 times the number of joined channels.
 
 Encoding is negotiated by WebSocket subprotocol: **protobuf** for first-party clients, **JSON** for bots that want it. The protobuf schemas in `proto/` are the single source of truth; the HTTP API's OpenAPI document and the clients' types are generated from them.
 
@@ -284,7 +284,9 @@ Guests start from an empty permission set rather than `@everyone`, and gain acce
 
 **Failure mode, stated.** Between a membership removal committing and the unsubscribe or next event arriving, a session on a node that missed the invalidation can hold a subscription for at most the bounded-staleness interval, during which no event is delivered without a version check. A removed member can therefore never receive an event committed after their removal.
 
-## 8. Delivery and sync — provisional
+## 8. Delivery and sync
+
+Specified in full in [specs/delivery.md](specs/delivery.md), which owns the tables, the session process, the replay loop and its cap, reconciliation, resume outcomes, purge, timings, and tests. This section records the decisions and their rationale.
 
 ### 8.1 The event log
 
@@ -361,6 +363,8 @@ Cursor still served          → incremental replay of events after the cursor
 Cursor no longer served      → snapshot of current state plus a new cursor
 Recovery generation changed  → discard all cursors, snapshot everything
 ```
+
+"No longer served" is a replay cap, not purged rows: event rows are permanent, but a cursor more than 1,000 events behind the head is answered with a snapshot rather than a stream.
 
 The **recovery generation** is one integer in instance configuration that an operator bumps after restoring the database from a backup. It is sent on every connect; a client whose stored generation differs does a full reconcile, because `seq` values after the restore point may now refer to different events.
 

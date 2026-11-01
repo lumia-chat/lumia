@@ -48,9 +48,14 @@ message Event {
     // Payload purged by retention or deletion. The event row remains so
     // ordering and gap detection are unaffected (architecture 8.5).
     Redacted redacted = 32;
+    // Retention ran: every payload with seq < before_seq is now null.
+    // Clients drop cached bodies below it (specs/delivery.md 10).
+    PayloadsPurged payloads_purged = 33;
     EncryptedPayload encrypted = 40;
   }
 }
+
+message PayloadsPurged { uint64 before_seq = 1; }
 
 message MessageCreated { Message message = 1; }
 

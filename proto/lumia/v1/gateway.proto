@@ -201,4 +201,7 @@ enum DisconnectReason {
   DISCONNECT_HEARTBEAT_TIMEOUT = 4;
   DISCONNECT_PROTOCOL_ERROR = 5;
   DISCONNECT_RATE_LIMITED = 6;
+  // The client could not keep up with its outbound queue. Reconnect and
+  // resume from cursors (specs/delivery.md 5).
+  DISCONNECT_SLOW_CONSUMER = 7;
 }
