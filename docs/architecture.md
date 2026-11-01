@@ -2,7 +2,7 @@
 
 Status: **accepted direction**, 2026-11-01. This is the source of truth for architectural decisions. Each section records a decision, the alternatives rejected, and why. Change it by editing the decision and its rationale, not by appending exceptions elsewhere.
 
-Sections marked **provisional** state intent and the shape of the guarantee, but need a focused specification before implementation: identity, devices, and recovery (section 5); delivery and sync (section 8); E2EE backup and rejoin (section 11.3); authorization and revocation (section 7.4); deployment recovery (section 15). Implementation of a provisional area starts with writing that spec, not with code.
+Sections marked **provisional** state intent and the shape of the guarantee, but need a focused specification before implementation: delivery and sync (section 8); E2EE backup and rejoin (section 11.3); authorization and revocation (section 7.4); deployment recovery (section 15). Implementation of a provisional area starts with writing that spec, not with code. Identity, devices, and recovery (section 5) is specified in [specs/identity.md](specs/identity.md).
 
 Lumia is a chat app: servers with public and private channels, direct messages inside and outside servers. The difference from Discord and Slack is that anyone can self-host an instance, an instance can hold many servers, and one client talks to many instances at once.
 
@@ -97,7 +97,9 @@ Encoding is negotiated by WebSocket subprotocol: **protobuf** for first-party cl
 - *gRPC.* Browser support still needs a proxy, and Phoenix Channels already gives the topic and presence model.
 - *MessagePack.* Compact but schemaless; same drift problem as JSON.
 
-## 5. Identity, devices, and recovery — provisional
+## 5. Identity, devices, and recovery
+
+Specified in full in [specs/identity.md](specs/identity.md), which owns derivation, the roster's verification order, every flow, conflict rules, limits, and tests. This section records the decisions and their rationale.
 
 ### 5.1 The hierarchy
 
@@ -116,7 +118,7 @@ Recovery phrase    24 words; derives the root key and the backup key
 - **Adding a device** requires either a signature from an existing authorized device, with approval shown on that device (QR or code), or the root key, which means entering the recovery phrase. The new device gets its own device key. The root private key is never copied to a device as part of this flow.
 - **Revoking a device** requires a signature from an authorized device **and** authentication to the instance's own account (password, passkey, or MFA). A thief holding a stolen device therefore cannot win a race to revoke the owner's real devices: they have a device key but not the account credentials.
 - **Rotating the root key** is signed by the previous root or by the recovery phrase and chains from the identity ID, so the identity does not change when the key does.
-- **Rosters are client-carried.** On every connect, the client presents the newest roster it holds. An instance accepts a device only if it appears in the newest roster version the instance has seen and is not revoked. Roster versions are monotonic and signed, which gives replay protection and deterministic conflict resolution (highest version wins; a root signature beats a device signature at the same version).
+- **Rosters are self-certifying and client-carried.** Every device entry carries a certificate signed by the root or by the device that added it, and every revocation carries the revoker's signature, so any instance can verify any roster version from the bytes alone with no earlier version. On every connect, the client presents the newest roster it holds. An instance accepts a device only if it appears in the newest roster version the instance has seen and is not revoked. Roster versions are monotonic and signed, which gives replay protection and deterministic conflict resolution (highest version wins; a root signature beats a device signature at the same version; revocations win a merge).
 - **Revocation is per instance and eventually consistent.** Because instances do not talk to each other, an instance that is unreachable when a device is revoked learns on the next connect that carries the new roster. The UI shows "revoked on 2 of 3 instances" and names the one that has not confirmed. "Globally revoked" is never displayed.
 
 **Rejected.**
@@ -140,7 +142,7 @@ Recovery phrase    24 words; derives the root key and the backup key
 
 ### 5.3 Recovery
 
-**Decision.** The recovery phrase derives the root key and a separate **backup key**. Losing all devices: enter the phrase, derive the root, sign a new roster containing a fresh device key, present it to each instance. History recovery is section 11.3. The **encrypted identity backup** (the roster, pinned keys for contacts, profile) is small ciphertext under the backup key, stored on every instance the identity has an account on, so recovery needs any one of them. No host can read it.
+**Decision.** The recovery phrase (24 BIP39 words) derives the root key and a separate **backup key** by HKDF, so the phrase alone recovers everything and no server holds anything the root depends on. Losing all devices: enter the phrase, derive the root, sign a new roster that revokes the old devices and contains a fresh device key, present it to each instance; root-signed rosters bypass the reauth rule. History recovery is section 11.3. The **encrypted identity backup** (the roster, pinned contact keys, block list, profile, hosts) is small ciphertext under the backup key, stored on every instance the identity has an account on, so recovery needs any one of them. No host can read it. Adding a device when one already exists needs no phrase: the existing device approves a QR, signs the certificate, and hands over the backup key in an encrypted link bundle claimed with a short code. Web devices never receive the backup key.
 
 ## 6. Servers, channels, DMs, and what the user sees
 

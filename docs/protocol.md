@@ -9,7 +9,7 @@ When this document and the architecture disagree, the architecture wins and this
 | File | Holds |
 |---|---|
 | `common.proto` | `Error`, `ErrorCode`, pagination, `Cursor` |
-| `identity.proto` | Roster, device entries, identity challenge and proof, signed profile |
+| `identity.proto` | Roster with device certificates, revocations and rotations; identity challenge and proof; signed profile; link bundles; identity backup |
 | `chat.proto` | Materialized shapes: `Server`, `Channel`, `Member`, `Role`, `Message`, `Attachment`, presence, permissions |
 | `events.proto` | `Event` (channel log) and `AccountEvent` (account log), including `EncryptedPayload` |
 | `commands.proto` | `Command` and `Ack` |
@@ -176,10 +176,15 @@ Base path `/api/v1`. All endpoints require `Authorization: Bearer <access_token>
 | `POST /auth/sign-out` | → 204 | Revokes the current session and closes its gateway connection. |
 | `GET /sessions` | → `ListSessionsResponse` | |
 | `DELETE /sessions/{session_id}` | → 204 | Revokes and disconnects. |
+| `POST /auth/reauth` | `ReauthRequest` → `ReauthResponse` | Five-minute token for revoke and link. |
 | `GET /identity/roster` | → `GetRosterResponse` | The newest roster this instance holds for the caller's identity. |
-| `POST /identity/roster` | `PublishRosterRequest` → 204 | Accepted only if newer and validly signed. |
-| `POST /identity/devices/revoke` | `RevokeDeviceRequest` → 204 | Requires `reauth_token` from a fresh password, passkey, or TOTP proof. |
-| `POST /identity/link` | `IdentityProof` → 204 | Requires the account's own authentication within the last 5 minutes. |
+| `POST /identity/roster` | `PublishRosterRequest` → 204 | Verified per specs/identity.md 3.3. `CONFLICT` carries the held roster in `details.held`. Rosters that add revocations are refused here with `POLICY_DENIED`. |
+| `POST /identity/devices/revoke` | `RevokeDeviceRequest` → 204 | The only non-root path that may add revocations. Requires `reauth_token`. |
+| `POST /identity/link` | `IdentityProof` + `reauth_token` → 204 | Binds the current account to the proven identity. |
+| `POST /identity/link-bundles` | `CreateLinkBundleRequest` → `CreateLinkBundleResponse` | Existing device uploads the bundle for a device being added. |
+| `GET /identity/link-bundles/{code}?device_id=` | → `GetLinkBundleResponse` | Public. Single use, ten minutes, five attempts. |
+| `PUT /identity/backup` | `PutIdentityBackupRequest` → 204 | Highest version wins. |
+| `GET /identity/backup` | → `GetIdentityBackupResponse` | |
 
 ### Servers, channels, members, roles
 
@@ -301,17 +306,18 @@ List endpoints take `page_size` (1 to 200, default 50) and an opaque `cursor`, a
 
 ```
 1. Client: POST /auth/challenge {purpose}
-2. Server: ChallengeResponse{challenge: serialize(IdentityChallengeBody{nonce, host, expires_at, purpose})}
+2. Server: ChallengeResponse{challenge: serialize(IdentityChallengeBody{nonce, host, expires_at, purpose, mac})}
 3. Client: verify body.host == the host it is talking to; refuse otherwise
 4. Client: sign the exact challenge bytes with the device key
 5. Client: IdentityProof{challenge, identity_id, device_id, signature, roster}
-6. Server: deserialize challenge; verify nonce unused, not expired, host == self, purpose matches
-          verify roster signatures and version against what it holds; store if newer
-          verify device_id is in roster.devices and not in roster.revoked
+6. Server: deserialize challenge; verify mac, not expired, host == self, purpose matches
+          verify the roster per specs/identity.md 3.3 (certificates, chain, monotonicity); store if newer
+          verify device_id is in roster.devices
           verify signature over challenge bytes with that device's public key
+          insert nonce into used_challenges; a duplicate is a replay
 ```
 
-A proof is accepted exactly once. A challenge for `CREATE_ACCOUNT` is refused when the instance has disabled identity-proof creation; the client learns that in advance from `InstanceInfo` and shows the trust card before requesting any challenge (architecture 6.1).
+A proof is accepted exactly once. The full roster rules, the add and revoke flows, link bundles, and recovery are in [specs/identity.md](specs/identity.md). A challenge for `CREATE_ACCOUNT` is refused when the instance has disabled identity-proof creation; the client learns that in advance from `InstanceInfo` and shows the trust card before requesting any challenge (architecture 6.1).
 
 ## 14. Message body
 

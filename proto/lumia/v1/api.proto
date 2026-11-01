@@ -282,11 +282,71 @@ message RevokeDeviceRequest {
   // New roster with the device in `revoked`.
   SignedRoster roster = 1;
   // Required in addition to the roster signature (architecture 5.1):
-  // a fresh password / passkey / TOTP proof for this account.
+  // from POST /auth/reauth.
   string reauth_token = 2;
 }
 
 message GetRosterResponse { SignedRoster roster = 1; }
+
+// POST /auth/reauth: a fresh credential proof for the current account.
+message ReauthRequest {
+  oneof credential {
+    string password = 1;
+    string totp_code = 2;
+    // WebAuthn assertion JSON, from the ceremony started at
+    // POST /auth/passkey/assert/start.
+    string passkey_assertion = 3;
+  }
+}
+
+message ReauthResponse {
+  // Five minutes, single purpose, bound to this session.
+  string reauth_token = 1;
+  google.protobuf.Timestamp expires_at = 2;
+}
+
+// POST /identity/link-bundles: an existing device uploads the encrypted
+// bundle for a device being added (specs/identity.md 6).
+message CreateLinkBundleRequest {
+  // XChaCha20-Poly1305 over a serialized LinkBundleBody, keyed by
+  // X25519(existing device ephemeral, LinkRequest.ephemeral_public_key).
+  bytes ciphertext = 1;
+  // The existing device's ephemeral X25519 public key, for the new device
+  // to derive the shared key.
+  bytes sender_ephemeral_public_key = 2;
+  bytes nonce = 3;
+  // Device being added; bound so the bundle cannot be fetched for another.
+  bytes device_id = 4;
+}
+
+message CreateLinkBundleResponse {
+  // Eight characters, Crockford base32, shown to the user to type into the
+  // new device. Single use, ten minutes.
+  string code = 1;
+  google.protobuf.Timestamp expires_at = 2;
+}
+
+// GET /identity/link-bundles/{code}?device_id= — public, single use.
+message GetLinkBundleResponse {
+  bytes ciphertext = 1;
+  bytes sender_ephemeral_public_key = 2;
+  bytes nonce = 3;
+  string host = 4;
+}
+
+// PUT /identity/backup — versioned, last-writer-wins by version.
+message PutIdentityBackupRequest {
+  uint64 version = 1;
+  // XChaCha20-Poly1305 over a serialized IdentityBackupBody under the backup key.
+  bytes ciphertext = 2;
+  bytes nonce = 3;
+}
+
+message GetIdentityBackupResponse {
+  uint64 version = 1;
+  bytes ciphertext = 2;
+  bytes nonce = 3;
+}
 
 // MLS delivery-service endpoints.
 message PublishKeyPackagesRequest {

@@ -1,8 +1,11 @@
 // Lumia protocol: identity, device roster, identity proof.
 //
-// Implements docs/architecture.md section 5. Everything that is signed is
-// carried as the exact bytes that were signed (a `bytes body` holding a
-// serialized inner message), so no canonicalization is ever needed.
+// Implements docs/architecture.md section 5 and docs/specs/identity.md.
+// Everything that is signed is carried as the exact bytes that were signed
+// (a `bytes body` holding a serialized inner message), so no canonicalization
+// is ever needed. A roster verifies standalone: every device entry carries a
+// certificate chaining to a root, so an instance seeing version N for the
+// first time needs no earlier version.
 
 syntax = "proto3";
 
@@ -21,8 +24,8 @@ message PublicKey {
 
 message Signature {
   SignerKind signer_kind = 1;
-  // device_id for DEVICE, empty for ROOT (the root is identified by the
-  // roster's root_public_key).
+  // DEVICE: the device_id. ROOT: the 32-byte root public key that signed,
+  // so a rotation can carry signatures by both the old and the new root.
   bytes signer_id = 2;
   // Ed25519 signature, 64 bytes, over the exact `body` bytes it accompanies.
   bytes signature = 3;
@@ -37,39 +40,83 @@ enum SignerKind {
 enum DeviceKind {
   DEVICE_KIND_UNSPECIFIED = 0;
   NATIVE = 1;      // macOS, Windows, Linux, iOS, Android app
-  WEB = 2;         // browser; origin-scoped (architecture 11.4)
+  WEB = 2;         // browser; origin-scoped, never holds the backup key
   BOT = 3;         // a bot or agent process
 }
 
-message DeviceEntry {
-  bytes device_id = 1;
-  PublicKey public_key = 2;
-  DeviceKind kind = 3;
-  // Human label, user-editable, e.g. "Ryan's MacBook". Not signed semantics.
-  string label = 4;
+// The signed content of a device certificate. Serialized and carried as
+// DeviceEntry.cert_body. Signed by the root or by the device that added it.
+message DeviceCertBody {
+  bytes identity_id = 1;
+  bytes device_id = 2;
+  PublicKey public_key = 3;
+  DeviceKind kind = 4;
   google.protobuf.Timestamp added_at = 5;
-  // device_id of the device that authorized this one; empty if the root did.
+  // device_id of the authorizing device; empty when the root authorized.
   bytes added_by = 6;
-  // For WEB devices only: the origin this device key is scoped to.
+  // WEB only: the origin this device key is scoped to.
   string web_origin = 7;
 }
 
+message DeviceEntry {
+  // Serialized DeviceCertBody. The fields below mirror it for convenience and
+  // MUST match it; verifiers read the body, not the mirrors.
+  bytes cert_body = 1;
+  Signature authorization = 2;
+
+  bytes device_id = 3;
+  PublicKey public_key = 4;
+  DeviceKind kind = 5;
+  google.protobuf.Timestamp added_at = 6;
+  bytes added_by = 7;
+  string web_origin = 8;
+  // Human label, user-editable, not signed.
+  string label = 9;
+}
+
+// Serialized and carried as RevokedEntry.body. Signed by the root or by an
+// authorized device.
+message RevocationBody {
+  bytes identity_id = 1;
+  bytes device_id = 2;
+  google.protobuf.Timestamp revoked_at = 3;
+  bytes revoked_by = 4;  // device_id, or empty for root
+}
+
 message RevokedEntry {
-  bytes device_id = 1;
-  google.protobuf.Timestamp revoked_at = 2;
-  bytes revoked_by = 3;  // device_id, or empty for root
+  bytes body = 1;
+  Signature signature = 2;
+
+  bytes device_id = 3;
+  google.protobuf.Timestamp revoked_at = 4;
+  bytes revoked_by = 5;
+}
+
+// Serialized and carried as RootRotation.body. Signed by the predecessor root.
+message RootRotationBody {
+  bytes identity_id = 1;
+  PublicKey from = 2;
+  PublicKey to = 3;
+  google.protobuf.Timestamp rotated_at = 4;
+}
+
+message RootRotation {
+  bytes body = 1;
+  // By `from`.
+  Signature signature = 2;
 }
 
 // The signed content of a roster. Serialized and carried as SignedRoster.body.
 message RosterBody {
-  // hash of the first root public key; stable across rotations.
+  // BLAKE3-256 of the first root public key; stable across rotations.
   bytes identity_id = 1;
   // Monotonic. Highest version wins; at equal version a ROOT signature wins.
   uint64 version = 2;
   // Current root public key.
   PublicKey root_public_key = 3;
-  // Previous root public keys, oldest first, for rotation-chain verification.
-  repeated PublicKey previous_root_public_keys = 4;
+  // Oldest first. Empty when the root has never rotated. The chain starts at
+  // the key whose hash is identity_id and ends at root_public_key.
+  repeated RootRotation rotations = 4;
   repeated DeviceEntry devices = 5;
   repeated RevokedEntry revoked = 6;
   google.protobuf.Timestamp issued_at = 7;
@@ -78,8 +125,8 @@ message RosterBody {
 message SignedRoster {
   // Serialized RosterBody. Verify signatures over these bytes exactly.
   bytes body = 1;
-  // At least one. A roster is valid if signed by the root, or by a device that
-  // is authorized and not revoked in the previous version the verifier holds.
+  // At least one, by the current root or by a device that is authorized and
+  // not revoked in this body.
   repeated Signature signatures = 2;
 }
 
@@ -90,6 +137,9 @@ message IdentityChallengeBody {
   string host = 2;              // the host that issued it; binds the proof
   google.protobuf.Timestamp expires_at = 3;
   ChallengePurpose purpose = 4;
+  // HMAC-SHA256 by the issuing instance over the fields above, so issuing a
+  // challenge stores nothing. Opaque to clients.
+  bytes mac = 5;
 }
 
 enum ChallengePurpose {
@@ -128,4 +178,50 @@ message ProfileBody {
 message SignedProfile {
   bytes body = 1;  // serialized ProfileBody
   Signature signature = 2;
+}
+
+// What a new device shows as a QR when being added (specs/identity.md 6).
+message LinkRequest {
+  bytes device_id = 1;
+  PublicKey device_public_key = 2;
+  // X25519, 32 bytes. The bundle is encrypted to this.
+  bytes ephemeral_public_key = 3;
+  DeviceKind kind = 4;
+  string label = 5;
+  string web_origin = 6;
+  bytes nonce = 7;
+}
+
+// Plaintext of a link bundle, before encryption to the ephemeral key.
+message LinkBundleBody {
+  SignedRoster roster = 1;
+  // Absent for WEB devices.
+  bytes backup_key = 2;
+  repeated HostAccount accounts = 3;
+  repeated PinnedKey pinned_keys = 4;
+  bytes nonce = 5;  // echoes LinkRequest.nonce
+}
+
+message HostAccount {
+  string host = 1;
+  bytes account_id = 2;
+}
+
+message PinnedKey {
+  bytes identity_id = 1;
+  PublicKey root_public_key = 2;
+  uint64 roster_version = 3;
+  bool verified = 4;  // safety number compared in person
+  google.protobuf.Timestamp pinned_at = 5;
+}
+
+// Plaintext of the identity backup (specs/identity.md 8).
+message IdentityBackupBody {
+  uint64 version = 1;
+  SignedRoster roster = 2;
+  SignedProfile profile = 3;
+  repeated HostAccount accounts = 4;
+  repeated PinnedKey pinned_keys = 5;
+  repeated bytes blocked_identity_ids = 6;
+  google.protobuf.Timestamp written_at = 7;
 }
