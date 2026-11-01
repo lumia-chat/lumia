@@ -2,7 +2,7 @@
 
 Status: **accepted direction**, 2026-11-01. This is the source of truth for architectural decisions. Each section records a decision, the alternatives rejected, and why. Change it by editing the decision and its rationale, not by appending exceptions elsewhere.
 
-Sections marked **provisional** state intent and the shape of the guarantee, but need a focused specification before implementation: E2EE backup and rejoin (section 11.3); authorization and revocation (section 7.4); deployment recovery (section 15). Implementation of a provisional area starts with writing that spec, not with code. Specified so far: identity, devices, and recovery (section 5) in [specs/identity.md](specs/identity.md); delivery and sync (section 8) in [specs/delivery.md](specs/delivery.md).
+Sections marked **provisional** state intent and the shape of the guarantee, but need a focused specification before implementation: E2EE backup and rejoin (section 11.3); deployment recovery (section 15). Implementation of a provisional area starts with writing that spec, not with code. Specified so far: identity, devices, and recovery (section 5) in [specs/identity.md](specs/identity.md); permissions, authorization, and revocation (section 7) in [specs/authorization.md](specs/authorization.md); delivery and sync (section 8) in [specs/delivery.md](specs/delivery.md).
 
 Lumia is a chat app: servers with public and private channels, direct messages inside and outside servers. The difference from Discord and Slack is that anyone can self-host an instance, an instance can hold many servers, and one client talks to many instances at once.
 
@@ -252,6 +252,8 @@ Deferred: read receipts, link unfurling, custom emoji in text, voice channels, v
 
 ## 7. Permissions, authorization, revocation
 
+Specified in full in [specs/authorization.md](specs/authorization.md), which owns storage, the resolution function and its reference implementation, the snapshot cache, the two propagation paths, instance administration, bot scopes, the audit log, limits, and tests. This section records the decisions and their rationale.
+
 ### 7.1 Roles
 
 A server has roles. A role has a permission set expressed as named flags in the API (bitfield only as a storage detail). A member has many roles. A channel can override permissions per role or per member. A private channel is a channel whose overwrites deny `@everyone`. A member's display tag is their highest-priority role. Instance administration is a separate layer above servers and is not reachable through server roles.
@@ -272,17 +274,19 @@ Within a layer, deny is applied before allow; a later layer overrides an earlier
 
 Guests start from an empty permission set rather than `@everyone`, and gain access only through step 4 and 5 overwrites. Nothing in a guest's resolution ever consults `@everyone`.
 
-### 7.4 Authorization and revocation — provisional
+### 7.4 Authorization and revocation
 
-**Decision.** Caches are advisory; Postgres is authoritative.
+**Decision.** Caches are advisory; Postgres is authoritative. Two propagation paths, both at-least-once:
 
-- **Writes** are checked against Postgres on every request. No write relies on cached permissions.
-- **Live delivery** uses an `acl_version` per channel, bumped inside the same transaction as any role, overwrite, or membership change, and carried on every broadcast event. A session process whose cached version for that channel differs from the event's version revalidates against Postgres before delivering, and drops the subscription if access is gone.
-- **Removal** additionally publishes an explicit unsubscribe for that account on that channel to every node, so the common case is immediate rather than waiting for the next event.
-- **Partition healing.** After a node rejoins the cluster, every session on it revalidates all subscriptions before delivering anything.
-- **Bounded staleness.** A session that has delivered nothing on a channel for longer than a configured interval revalidates it before the next delivery regardless of version.
+- **Definition-level changes** (a role's permissions, overwrites, a channel made private, ownership) bump `acl_version` on every affected channel in the same transaction and are carried on every broadcast event. A session whose cached version differs re-resolves before delivering and drops the subscription if access is gone.
+- **Member-level changes** (roles assigned, a kick, a guest expiring) do not bump `acl_version`; they append to the affected member's account log, whose `seq` and reconciliation give the same guarantee. The member's sessions re-resolve or unsubscribe on receipt.
+- **Writes** are checked against Postgres on every request.
+- **Partition healing.** After a node rejoins the cluster, every session on it re-resolves all subscriptions before delivering anything.
+- **Bounded staleness.** A subscription not re-resolved in ten minutes is re-resolved before its next delivery.
 
-**Failure mode, stated.** Between a membership removal committing and the unsubscribe or next event arriving, a session on a node that missed the invalidation can hold a subscription for at most the bounded-staleness interval, during which no event is delivered without a version check. A removed member can therefore never receive an event committed after their removal.
+**Rejected.** *Bumping `acl_version` on member-level changes.* Correct but a re-resolution storm across every session in a large server on every role assignment.
+
+**Failure mode, stated.** A removed member's stale session can exist for at most one reconciler tick plus the staleness bound, but no event committed after the removal can be delivered through it, because any such event either carries a new `acl_version` or arrives after the account-log nudge.
 
 ## 8. Delivery and sync
 
