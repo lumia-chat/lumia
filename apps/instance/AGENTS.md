@@ -1,23 +1,15 @@
-This is a web application written using the Phoenix web framework.
+This is the Lumia instance: the Elixir server that one deployment runs. It is a Phoenix application with no HTML surface; clients talk to it over the gateway and the JSON/protobuf API defined in `../../docs/protocol.md`. Read `../../docs/architecture.md` before changing anything here; its hard rules govern this code.
 
 ## Project guidelines
 
-- Use `mix precommit` alias when you are done with all changes and fix any pending issues
-- Use the already included and available `:req` (`Req`) library for HTTP requests, **avoid** `:httpoison`, `:tesla`, and `:httpc`. Req is included by default and is the preferred HTTP client for Phoenix apps
-
-### Phoenix v1.8 guidelines
-
-- **Always** begin your LiveView templates with `<Layouts.app flash={@flash} ...>` which wraps all inner content
-- The `MyAppWeb.Layouts` module is aliased in the `my_app_web.ex` file, so you can use it without needing to alias it again
-- Anytime you run into errors with no `current_scope` assign:
-  - You failed to follow the Authenticated Routes guidelines, or you failed to pass `current_scope` to `<Layouts.app>`
-  - **Always** fix the `current_scope` error by moving your routes to the proper `live_session` and ensure you pass `current_scope` as needed
-- Phoenix v1.8 moved the `<.flash_group>` component to the `Layouts` module. You are **forbidden** from calling `<.flash_group>` outside of the `layouts.ex` module
-- Out of the box, `core_components.ex` imports an `<.icon name="hero-x-mark" class="w-5 h-5"/>` component for hero icons. **Always** use the `<.icon>` component for icons, **never** use `Heroicons` modules or similar
-- **Always** use the imported `<.input>` component for form inputs from `core_components.ex` when available. `<.input>` is imported and using it will save steps and prevent errors
-- If you override the default input classes (`<.input class="myclass px-2 py-1 rounded-lg">)`) class with your own values, no default classes are inherited, so your
-custom classes must fully style the input
-
+- Use `mix precommit` when you are done with all changes and fix any pending issues. It compiles with warnings as errors, checks formatting, runs Credo in strict mode, and runs the tests.
+- Elixir 1.20 types are checked at compile time. Rely on them: **no `@spec`** on private functions, no Dialyzer. Public functions may carry `@spec` where it documents a contract. Type warnings are errors in CI.
+- Every schema uses `use Lumia.Schema`: UUIDv7 primary keys minted app-side, UUID foreign keys, microsecond UTC timestamps. Never add a database default for an id column. Never derive a time from an id; `created_at` is always its own column.
+- Migrations get UUID keys and microsecond timestamps from the Repo config. Partitioned tables (`events`, `event_payloads`, `commands`) are keyed on `(channel_id, ...)` and must stay that way so queries prune to one partition.
+- The write path for channels is `Lumia.Events.append/2` and nothing else writes to the event-log tables. Broadcast happens after it returns, never inside it.
+- Spike and benchmark mix tasks live in `bench/`, which compiles only in dev. Results go in `../../docs/spikes/`. Nothing in `bench/` ships.
+- Use the already included `:req` (`Req`) library for HTTP requests; avoid `:httpoison`, `:tesla`, and `:httpc`.
+- Phoenix.PubSub and Erlang distribution are the only coordination between nodes. No Redis, no broker; see architecture hard rule 2.
 
 <!-- usage-rules-start -->
 
@@ -86,12 +78,12 @@ custom classes must fully style the input
 - You **never** need to create your own `alias` for route definitions! The `scope` provides the alias, ie:
 
       scope "/admin", AppWeb.Admin do
-        pipe_through :browser
+        pipe_through :api
 
-        live "/users", UserLive, :index
+        get "/users", UserController, :index
       end
 
-  the UserLive route would point to the `AppWeb.Admin.UserLive` module
+  the UserController route would point to the `AppWeb.Admin.UserController` module
 
 - `Phoenix.View` no longer is needed or included with Phoenix, don't use it
 <!-- phoenix:phoenix-end -->
@@ -99,7 +91,7 @@ custom classes must fully style the input
 <!-- phoenix:ecto-start -->
 ## Ecto Guidelines
 
-- **Always** preload Ecto associations in queries when they'll be accessed in templates, ie a message that needs to reference the `message.user.email`
+- **Always** preload Ecto associations in queries when they'll be accessed by the caller
 - Remember `import Ecto.Query` and other supporting modules when you write `seeds.exs`
 - `Ecto.Schema` fields always use the `:string` type, even for `:text`, columns, ie: `field :name, :string`
 - `Ecto.Changeset.validate_number/2` **DOES NOT SUPPORT the `:allow_nil` option**. By default, Ecto validations only run if a change for the given field exists and the change value is not nil, so such as option is never needed

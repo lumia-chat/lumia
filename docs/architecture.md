@@ -296,7 +296,7 @@ An **account-level event log** per instance, with its own `seq`, records what a 
 
 **IDs.**
 - **Every command carries a client-minted UUIDv7 command ID.** Message creation uses the message ID as its command ID; edits, reactions, pins, and membership changes each get their own. This is what makes retries safe.
-- **All server-minted IDs are UUIDv7 with Ecto's monotonic precision** (`Ecto.UUID.generate(version: 7, precision: :monotonic)`, Ecto 3.14+). Strictly monotonic per node via a node-global counter in the twelve `rand_a` bits.
+- **All server-minted IDs are UUIDv7 with Ecto's monotonic precision** (`Ecto.UUID.generate(version: 7, precision: :monotonic)`, Ecto 3.14+). Strictly monotonic per node via a node-global counter in the twelve `rand_a` bits. Postgres 18's native `uuidv7()` gives the same guarantee per backend; the app mints instead because it needs the ID before the round trip, not because either is more monotonic than the other.
 - **`created_at` is its own column.** The monotonic counter can run ahead of wall clock under burst, and client clocks skew, so no code may derive time from an ID.
 
 **Rejected.**
@@ -541,6 +541,8 @@ A limit resolves as **min(operator hard limit, max(applicable plan allowances))*
 ## 17. Performance budgets
 
 Proposed. Adjust the numbers; keep the section and the workload spec. Each budget is meaningless without its workload, and CI fails on regressions against the ones that can be measured in CI.
+
+Measured so far: the write transaction behind the first row commits in under 1 ms on a laptop and sustains about 10k writes/s across 100 channels with p99 around 6 ms; a single channel under 50 concurrent writers serializes to about 2.8k writes/s. Details and the HOT-update finding in [spikes/2026-11-01-event-log.md](spikes/2026-11-01-event-log.md).
 
 | Budget | Target | Workload |
 |---|---|---|

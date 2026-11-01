@@ -9,7 +9,15 @@ import Config
 
 config :lumia,
   ecto_repos: [Lumia.Repo],
-  generators: [timestamp_type: :utc_datetime]
+  generators: [timestamp_type: :utc_datetime_usec, binary_id: true]
+
+# Every table gets UUID keys and microsecond UTC timestamps. IDs are minted
+# app-side as monotonic UUIDv7 (see Lumia.Schema); migrations declare the
+# column type only and never a database default.
+config :lumia, Lumia.Repo,
+  migration_primary_key: [type: :binary_id],
+  migration_foreign_key: [type: :binary_id],
+  migration_timestamps: [type: :utc_datetime_usec]
 
 # Configure the endpoint
 config :lumia, LumiaWeb.Endpoint,

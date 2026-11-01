@@ -1,0 +1,58 @@
+name: instance
+
+on:
+  push:
+    branches: [master]
+    paths: ["apps/instance/**", ".github/workflows/instance.yml"]
+  pull_request:
+    paths: ["apps/instance/**", ".github/workflows/instance.yml"]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: apps/instance
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    env:
+      MIX_ENV: test
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/lumia_test
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.20.4"
+          otp-version: "29"
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            apps/instance/deps
+            apps/instance/_build
+          key: mix-${{ runner.os }}-${{ hashFiles('apps/instance/mix.lock') }}
+          restore-keys: mix-${{ runner.os }}-
+
+      - run: mix deps.get
+      - run: mix deps.unlock --check-unused
+      - run: mix format --check-formatted
+      - run: mix compile --warnings-as-errors
+      # bench/ (spike tasks, Benchee) only compiles in dev.
+      - run: MIX_ENV=dev mix compile --warnings-as-errors
+      - run: mix credo --strict
+      - run: mix test
