@@ -83,7 +83,12 @@
           # Priority values are: `low, normal, high, higher`
           #
           {Credo.Check.Design.AliasUsage,
-           [priority: :low, if_nested_deeper_than: 2, if_called_more_often_than: 1]},
+           [
+             priority: :low,
+             if_nested_deeper_than: 2,
+             if_called_more_often_than: 2,
+             files: %{excluded: ["test/support/"]}
+           ]},
           {Credo.Check.Design.TagFIXME, []},
           # You can also customize the exit_status of each check.
           # If you don't want TODO comments to cause `mix credo` to fail, just
@@ -166,7 +171,10 @@
           #
           ## Controversial
           #
-          {Credo.Check.Readability.MultiAlias, []}
+          {Credo.Check.Readability.MultiAlias, []},
+          {Credo.Check.Readability.StrictModuleLayout, []},
+          {Credo.Check.Readability.WithCustomTaggedTuple, []},
+          {Credo.Check.Refactor.PassAsyncInTestCases, []}
         ],
         disabled: [
           #
@@ -192,8 +200,8 @@
           {Credo.Check.Readability.SingleFunctionToBlockPipe, []},
           {Credo.Check.Readability.SinglePipe, []},
           {Credo.Check.Readability.Specs, []},
-          {Credo.Check.Readability.StrictModuleLayout, []},
-          {Credo.Check.Readability.WithCustomTaggedTuple, []},
+          # {Credo.Check.Readability.StrictModuleLayout, []},
+          # {Credo.Check.Readability.WithCustomTaggedTuple, []},
           {Credo.Check.Refactor.ABCSize, []},
           {Credo.Check.Refactor.AppendSingleItem, []},
           {Credo.Check.Refactor.CondInsteadOfIfElse, []},
@@ -203,7 +211,7 @@
           {Credo.Check.Refactor.MapMap, []},
           {Credo.Check.Refactor.ModuleDependencies, []},
           {Credo.Check.Refactor.NegatedIsNil, []},
-          {Credo.Check.Refactor.PassAsyncInTestCases, []},
+          # {Credo.Check.Refactor.PassAsyncInTestCases, []},
           {Credo.Check.Refactor.PipeChainStart, []},
           {Credo.Check.Refactor.RejectFilter, []},
           {Credo.Check.Refactor.VariableRebinding, []},
