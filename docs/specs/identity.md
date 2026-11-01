@@ -84,7 +84,7 @@ An instance runs these steps, in order, on every roster it receives, whether by 
 1. **Parse.** Deserialize `body`. Reject if any `DeviceEntry` or `RevokedEntry` mirrors disagree with its signed body, or if a device appears in both lists, or if the roster exceeds the limits in section 11.
 2. **Identity.** Compute the first root: `rotations[0].from` if rotations exist, else `root_public_key`. Reject unless `identity_id == BLAKE3-256(first_root)`.
 3. **Rotation chain.** For each rotation in order: `from` must equal the previous rotation's `to` (or the first root), the signature must verify under `from`, and the last `to` must equal `root_public_key`.
-4. **Device certificates.** For each device: verify `authorization` over `cert_body`. If the signer is ROOT, the signer key must be a root in the chain. If the signer is DEVICE, the signer must be a device in `devices` or `revoked` with `added_at` earlier than this entry's `added_at`, and if revoked, `revoked_at` later than this entry's `added_at`. Resolve in `added_at` order so chains terminate.
+4. **Device certificates.** For each device: verify `authorization` over `cert_body`. If the signer is ROOT, the signer key must be a root in the chain. If the signer is DEVICE, the signer must be a device in `devices` or `revoked` with `added_at` earlier than this entry's `added_at`, and if revoked, `revoked_at` later than this entry's `added_at`. Resolve in `added_at` order so chains terminate. Reject any certificate whose `added_at` is more than five minutes ahead of the instance's clock when first seen, because `added_at` decides authorization and a device could otherwise pre-date certificates past its own future revocation.
 5. **Revocations.** For each revoked entry: verify `signature` over `body`. Signer is a root in the chain, or a device in `devices` other than the revoked one.
 6. **Roster signature.** At least one signature in `signatures` verifies over `body` and is by the current root or by a device in `devices`.
 7. **Monotonicity.** If the instance holds a version for this identity: reject unless `version` is greater, every device in the held version is in `devices` or `revoked`, every revocation in the held version is in `revoked`, and the held rotation chain is a prefix of this one. Equal version with identical bytes is a no-op; equal version with different bytes is a conflict (section 5).
@@ -244,6 +244,10 @@ Present a device certificate signed by a device that was revoked before the
   certificate's added_at; verify rejection at step 4.
 Present a device certificate signed by a device revoked after the certificate's
   added_at; verify acceptance.
+Present a device certificate whose added_at is in the future relative to the
+  verifying instance's clock by more than the allowed skew; verify rejection at
+  step 4, so a device about to be revoked cannot pre-date certificates past its
+  own revocation.
 Replay an identity proof; verify the second use fails on the used_challenges
   insert on a different node than the first.
 Fetch a link bundle twice; verify the second fetch is NOT_FOUND.
