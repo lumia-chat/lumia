@@ -27,7 +27,7 @@ Design stage. The architecture and protocol are written; the server, client core
 ## Repository layout
 
 ```
-apps/server     Elixir server (Phoenix)
+apps/instance   Elixir (Phoenix); what one deployment runs
 apps/core       Rust client core: protocol, MLS, local store, sync
 apps/ios        SwiftUI
 apps/macos      SwiftUI

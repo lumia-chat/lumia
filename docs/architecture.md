@@ -597,7 +597,7 @@ Out of scope: a hosted-only feature that cannot run self-hosted; a second editio
 ## 21. Repository layout
 
 ```
-apps/server     Elixir, single Phoenix app (contexts, not umbrella)
+apps/instance   Elixir, single Phoenix app (contexts, not umbrella); named for what it is, one deployment, since "server" means a community in Lumia
 apps/core       Rust client core: protocol, MLS, SQLite store, sync, search; UniFFI and WASM bindings
 apps/ios        SwiftUI (shared Swift package with macOS)
 apps/macos      SwiftUI
