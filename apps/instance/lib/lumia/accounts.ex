@@ -40,6 +40,48 @@ defmodule Lumia.Accounts do
     |> Repo.insert()
   end
 
+  @doc "Creates an account with a password (Argon2id)."
+  def register(%{password: password} = attrs) when is_binary(password) do
+    with :ok <- validate_password(password),
+         {:ok, account} <- create_account(Map.delete(attrs, :password)) do
+      account
+      |> Ecto.Changeset.change(password_hash: Argon2.hash_pwd_salt(password))
+      |> Repo.update()
+    end
+  end
+
+  @doc "Verifies a password for a handle or email. Constant-time on miss."
+  def authenticate(handle_or_email, password)
+      when is_binary(handle_or_email) and is_binary(password) do
+    needle = String.downcase(handle_or_email)
+
+    account =
+      Repo.one(
+        from a in Account,
+          where:
+            (fragment("lower(?)", a.handle) == ^needle or fragment("lower(?)", a.email) == ^needle) and
+              is_nil(a.deleted_at)
+      )
+
+    cond do
+      is_nil(account) or is_nil(account.password_hash) ->
+        Argon2.no_user_verify()
+        {:error, :unauthenticated}
+
+      Argon2.verify_pass(password, account.password_hash) ->
+        {:ok, account}
+
+      true ->
+        {:error, :unauthenticated}
+    end
+  end
+
+  defp validate_password(password) do
+    if String.length(password) >= 12 and byte_size(password) <= 1024,
+      do: :ok,
+      else: {:error, :invalid_argument}
+  end
+
   @doc """
   Appends an event to an account's log inside one transaction: lock the
   account row by incrementing `last_seq`, insert the event and its payload,

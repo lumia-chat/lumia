@@ -1,12 +1,54 @@
 defmodule LumiaWeb.Router do
   use LumiaWeb, :router
 
-  pipeline :api do
-    plug :accepts, ["json"]
+  # Public endpoints: the trust card and sign-in.
+  pipeline :public do
+    plug :accepts, ["json", "x-protobuf"]
   end
 
-  scope "/api", LumiaWeb do
+  # Everything else: bearer token verified against the session row.
+  pipeline :api do
+    plug :accepts, ["json", "x-protobuf"]
+    plug LumiaWeb.Plugs.Auth
+  end
+
+  scope "/api/v1", LumiaWeb do
+    pipe_through :public
+
+    get "/instance", InstanceController, :show
+    post "/accounts", AuthController, :create_account
+    post "/auth/sign-in/password", AuthController, :sign_in_password
+    post "/auth/refresh", AuthController, :refresh
+  end
+
+  scope "/api/v1", LumiaWeb do
     pipe_through :api
+
+    post "/auth/sign-out", AuthController, :sign_out
+    get "/sessions", AuthController, :list_sessions
+    delete "/sessions/:session_id", AuthController, :revoke_session
+
+    get "/account/snapshot", AccountController, :snapshot
+    get "/account/events", AccountController, :events
+
+    get "/servers", ServerController, :index
+    post "/servers", ServerController, :create
+    get "/servers/:server_id", ServerController, :show
+    get "/servers/:server_id/channels", ServerController, :channels
+    get "/servers/:server_id/members", ServerController, :members
+    patch "/servers/:server_id/members/:account_id", ServerController, :update_member
+    delete "/servers/:server_id/members/:account_id", ServerController, :remove_member
+    get "/servers/:server_id/roles", ServerController, :roles
+    post "/servers/:server_id/roles", ServerController, :create_role
+    put "/servers/:server_id/roles/:role_id", ServerController, :update_role
+    delete "/servers/:server_id/roles/:role_id", ServerController, :delete_role
+
+    post "/channels", ChannelController, :create
+    put "/channels/:channel_id/overwrites", ServerController, :set_overwrite
+    get "/channels/:channel_id/events", ChannelController, :events
+    get "/channels/:channel_id/snapshot", ChannelController, :snapshot
+    get "/channels/:channel_id/messages", ChannelController, :messages
+    post "/channels/:channel_id/commands", ChannelController, :command
   end
 
   # Enable LiveDashboard and Swoosh mailbox preview in development

@@ -20,14 +20,10 @@ defmodule LumiaWeb.Gateway.SessionChannel do
 
   alias Lumia.Accounts
   alias Lumia.Auth
-  alias Lumia.Authz
-  alias Lumia.Authz.Cache
+  alias Lumia.Authz.Access
   alias Lumia.Events
-  alias Lumia.Events.Channel
   alias Lumia.Instance
   alias Lumia.Proto
-  alias Lumia.Repo
-  alias Lumia.Servers
   alias Lumia.V1
 
   @replay_page 200
@@ -338,12 +334,11 @@ defmodule LumiaWeb.Gateway.SessionChannel do
 
   # ---- Authorization -----------------------------------------------------------
 
-  # A subscription record: what the delivery rule needs.
+  # A subscription record: what the delivery rule needs. Authoritative via
+  # Lumia.Authz.Access, shared with the HTTP API.
   defp authorize_read(socket, channel_id) do
-    with {:ok, sub} <- resolve(socket, channel_id) do
-      if Authz.Permission.has?(sub.permissions, :view_channel) or is_nil(sub.server_id),
-        do: {:ok, sub},
-        else: {:error, :not_found}
+    with {:ok, access} <- Access.viewable_channel(socket.assigns.account_id, channel_id) do
+      {:ok, subscription(access)}
     end
   end
 
@@ -362,46 +357,18 @@ defmodule LumiaWeb.Gateway.SessionChannel do
   defp authorize_write(socket, channel_id, %V1.Command{op: {op, _}}) do
     needed = Map.fetch!(@write_permission, op)
 
-    with {:ok, sub} <- resolve(socket, channel_id) do
-      if is_nil(sub.server_id) or Authz.Permission.has?(sub.permissions, needed),
-        do: {:ok, sub},
-        else: {:error, :permission_denied}
+    with {:ok, access} <- Access.require(socket.assigns.account_id, channel_id, needed) do
+      {:ok, subscription(access)}
     end
   end
 
-  # Authoritative: reads the channel row (hence acl_version) from Postgres
-  # and resolves against the cached snapshot for that version.
-  defp resolve(socket, channel_id) do
-    case Repo.get(Channel, channel_id) do
-      nil ->
-        {:error, :not_found}
-
-      %Channel{server_id: nil} = channel ->
-        {:ok,
-         %{
-           server_id: nil,
-           acl_version: channel.acl_version,
-           permissions: Authz.Permission.all(),
-           delivered_seq: 0
-         }}
-
-      %Channel{server_id: server_id} = channel ->
-        with member when not is_nil(member) <-
-               Servers.member_for(server_id, socket.assigns.account_id),
-             {:ok, snapshot} <- Cache.fetch(channel_id, channel.acl_version) do
-          {:ok,
-           %{
-             server_id: server_id,
-             acl_version: channel.acl_version,
-             permissions: Authz.resolve(snapshot, member),
-             delivered_seq: 0
-           }}
-        else
-          nil -> {:error, :not_found}
-          {:error, :stale} -> resolve(socket, channel_id)
-          {:error, _} = e -> e
-        end
-    end
+  defp subscription(access) do
+    %{
+      server_id: access.server_id,
+      acl_version: access.acl_version,
+      permissions: access.permissions,
+      delivered_seq: 0
+    }
   end
 
   # ---- Pushing -----------------------------------------------------------------

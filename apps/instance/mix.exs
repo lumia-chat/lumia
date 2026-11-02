@@ -61,6 +61,9 @@ defmodule Lumia.MixProject do
       # Wire protocol (generated into lib/lumia/proto by scripts/gen_proto.sh).
       {:protobuf, "~> 0.17.1"},
 
+      # Password hashing (architecture 6.3).
+      {:argon2_elixir, "~> 4.1"},
+
       # Testing and development.
       {:benchee, "~> 1.3", only: :dev},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},

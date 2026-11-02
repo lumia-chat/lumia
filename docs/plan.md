@@ -9,7 +9,7 @@ Legend: `[x]` done · `[~]` in progress · `[ ]` not started · `(spec §n)` the
 | Step | State |
 |---|---|
 | 1. Schemas and protocol contract | Done |
-| 2. Server: event log, delivery, account log, resume, authorization | Event log, account log, authorization, sessions, and the gateway's first pass done; HTTP and identity endpoints next |
+| 2. Server: event log, delivery, account log, resume, authorization | Event log, account log, authorization, sessions, gateway, and the HTTP API's first pass done; identity endpoints next |
 | 3. Rust core | Not started |
 | 4. Identity across two instances | Specified, not built |
 | 5. MLS personal DMs, backup, recovery | Not specified, not built |
@@ -117,13 +117,20 @@ Ordered. Each task names the spec section it implements and the tests that close
 - [ ] `Authorization` header on the upgrade (needs a custom upgrade plug); v1 uses `?access_token=`.
 - [ ] JSON sessions use stock ProtoJSON; the protocol's JSON overrides (UUID strings, int64 strings) are not applied yet.
 
-**HTTP**
+**HTTP** (first pass done 2026-11-01)
 
-- [ ] `GET /instance`, `GET /account/snapshot`, `GET /account/events` (protocol §9).
-- [ ] `GET /channels/{id}/events`, `/snapshot`, `/messages`, `POST /channels/{id}/commands` with `truncated_before` and snapshot consistency (delivery §8; test: snapshot during writes).
-- [ ] Servers, channels, members, roles endpoints with authoritative checks and `NOT_FOUND` for non-members (authorization §5).
-- [ ] Error envelope, pagination, token issuance and refresh, session revocation closing sockets (protocol §10 to §12).
-- [ ] Purge and redaction: `MessageDeleted`, retention job, `Redacted` at read, `PayloadsPurged` (delivery §10; tests: tombstones on resume, live purge event).
+- [x] `LumiaWeb.Plugs.ProtoBody` reads JSON or protobuf bodies; `LumiaWeb.ProtoConn` decodes into `Lumia.V1` structs and renders JSON or protobuf by `Accept`; `FallbackController` maps error reasons to the envelope and status table (protocol §2, §10).
+- [x] `LumiaWeb.Plugs.Auth`: bearer access token verified against the session row on every request (protocol §12).
+- [x] `GET /instance` (trust card), `POST /accounts` with Argon2id password, `POST /auth/sign-in/password`, `POST /auth/refresh`, `POST /auth/sign-out`, `GET /sessions`, `DELETE /sessions/{id}`.
+- [x] `GET /account/snapshot`, `GET /account/events` (protocol §7).
+- [x] `GET /channels/{id}/events`, `/snapshot`, `/messages` with `has_more`, `POST /channels/{id}/commands` with idempotent replay (delivery §8; test: snapshot and scrollback paging).
+- [x] Servers, channels, members, roles, overwrites endpoints with authoritative checks through `Lumia.Authz.Access`, shared with the gateway; non-members get `NOT_FOUND` (authorization §5).
+- [ ] Pagination cursors for list endpoints (members, search) and the `PageRequest` shape (protocol §11); members currently return everything.
+- [ ] `truncated_before` is always false: rows are permanent, so no HTTP fetch is truncated yet.
+- [ ] Retention job, `Redacted` on purged rows beyond user deletes, `PayloadsPurged` (delivery §10).
+- [ ] Magic link, passkeys, OIDC, MFA (architecture §6.3).
+- [ ] Invites and discovery endpoints (architecture §6.6).
+- [ ] JSON overrides (UUID and int64 as strings) for JSON clients; stock ProtoJSON for now.
 
 **Identity on the server** (needed before step 4 can be exercised against two instances)
 

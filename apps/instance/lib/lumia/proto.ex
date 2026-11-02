@@ -95,6 +95,41 @@ defmodule Lumia.Proto do
     }
   end
 
+  def account(%Lumia.Accounts.Account{} = a) do
+    %V1.Account{
+      account_id: uuid(a.id),
+      identity_id: a.identity_id || "",
+      kind: account_kind(a.kind),
+      handle: a.handle,
+      display_name: a.display_name || "",
+      avatar_url: a.avatar_url || "",
+      created_at: timestamp(a.inserted_at)
+    }
+  end
+
+  def role(%Lumia.Servers.Role{} = r) do
+    %V1.Role{
+      role_id: uuid(r.id),
+      server_id: uuid(r.server_id),
+      name: r.name,
+      position: r.position,
+      permissions: r.permissions |> Lumia.Authz.Permission.from_bits() |> Enum.map(&permission/1),
+      color: r.color || "",
+      is_everyone: r.is_everyone
+    }
+  end
+
+  @doc "Permission name atom to the wire enum (`:view_channel` → `:VIEW_CHANNEL`)."
+  def permission(name),
+    do: name |> Atom.to_string() |> String.upcase() |> String.to_existing_atom()
+
+  @doc "Wire enum to the permission name atom. Unknown values are dropped by the caller."
+  def from_permission(enum),
+    do: enum |> Atom.to_string() |> String.downcase() |> String.to_existing_atom()
+
+  def account_kind("human"), do: :ACCOUNT_HUMAN
+  def account_kind("bot"), do: :ACCOUNT_BOT
+
   def membership_kind("member"), do: :MEMBER
   def membership_kind("guest"), do: :GUEST
 

@@ -1,0 +1,106 @@
+defmodule Lumia.Authz.Access do
+  @moduledoc """
+  Authoritative access checks shared by the gateway and the HTTP API
+  (docs/specs/authorization.md section 5).
+
+  `channel/2` reads the channel row from Postgres, which yields the
+  authoritative `acl_version`, and resolves the account's permissions
+  against the cached snapshot for that version. A non-member sees
+  `:not_found`, never `:permission_denied`, so channel existence is not
+  disclosed. A channel with no server (spike-level or a future DM) resolves
+  to all permissions for now; participant checks arrive with DMs.
+  """
+
+  alias Lumia.Authz
+  alias Lumia.Authz.Cache
+  alias Lumia.Authz.Permission
+  alias Lumia.Events.Channel
+  alias Lumia.Repo
+  alias Lumia.Servers
+
+  @doc """
+  The account's access to a channel:
+
+      {:ok, %{channel: channel, server_id: id | nil, acl_version: n, permissions: bits}}
+      {:error, :not_found}
+  """
+  def channel(account_id, channel_id) do
+    case Repo.get(Channel, channel_id) do
+      nil ->
+        {:error, :not_found}
+
+      %Channel{deleted_at: %DateTime{}} ->
+        {:error, :not_found}
+
+      %Channel{server_id: nil} = channel ->
+        {:ok,
+         %{
+           channel: channel,
+           server_id: nil,
+           acl_version: channel.acl_version,
+           permissions: Permission.all()
+         }}
+
+      %Channel{server_id: server_id} = channel ->
+        resolve_in_server(account_id, server_id, channel)
+    end
+  end
+
+  @doc "Like `channel/2`, but `{:error, :not_found}` unless the account can view it."
+  def viewable_channel(account_id, channel_id) do
+    with {:ok, access} <- channel(account_id, channel_id) do
+      if Permission.has?(access.permissions, :view_channel),
+        do: {:ok, access},
+        else: {:error, :not_found}
+    end
+  end
+
+  @doc "`{:ok, access}` when the account holds `permission` in the channel, else an error."
+  def require(account_id, channel_id, permission) do
+    with {:ok, access} <- viewable_channel(account_id, channel_id) do
+      if Permission.has?(access.permissions, permission),
+        do: {:ok, access},
+        else: {:error, :permission_denied}
+    end
+  end
+
+  @doc "The channels in a server the account can view, with their access."
+  def viewable_channels(account_id, server_id) do
+    import Ecto.Query
+
+    from(c in Channel,
+      where: c.server_id == ^server_id and is_nil(c.deleted_at),
+      order_by: c.position
+    )
+    |> Repo.all()
+    |> Enum.flat_map(&viewable_access(account_id, server_id, &1))
+  end
+
+  defp viewable_access(account_id, server_id, channel) do
+    case resolve_in_server(account_id, server_id, channel) do
+      {:ok, %{permissions: bits} = access} ->
+        if Permission.has?(bits, :view_channel), do: [access], else: []
+
+      {:error, _} ->
+        []
+    end
+  end
+
+  defp resolve_in_server(account_id, server_id, channel) do
+    with member when not is_nil(member) <- Servers.member_for(server_id, account_id),
+         {:ok, snapshot} <- Cache.fetch(channel.id, channel.acl_version) do
+      {:ok,
+       %{
+         channel: channel,
+         server_id: server_id,
+         acl_version: channel.acl_version,
+         permissions: Authz.resolve(snapshot, member)
+       }}
+    else
+      nil -> {:error, :not_found}
+      # The channel moved on between the row read and the snapshot load.
+      {:error, :stale} -> channel(account_id, channel.id)
+      {:error, _} = e -> e
+    end
+  end
+end

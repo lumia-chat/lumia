@@ -1,0 +1,401 @@
+defmodule LumiaWeb.ApiTest do
+  use LumiaWeb.ConnCase, async: true
+
+  import Lumia.Fixtures
+
+  alias Lumia.Accounts
+  alias Lumia.Auth
+  alias Lumia.Proto
+  alias Lumia.Servers
+  alias Lumia.V1
+
+  @json "application/json"
+  @proto "application/x-protobuf"
+
+  defp post_proto(conn, path, struct, encoding \\ :json)
+
+  defp post_proto(conn, path, struct, :json) do
+    conn
+    |> put_req_header("content-type", @json)
+    |> post(path, Protobuf.JSON.encode!(struct))
+  end
+
+  defp post_proto(conn, path, struct, :proto) do
+    conn
+    |> put_req_header("content-type", @proto)
+    |> put_req_header("accept", @proto)
+    |> post(path, struct.__struct__.encode(struct))
+  end
+
+  defp decode(conn, module) do
+    case get_resp_header(conn, "content-type") do
+      [ct] when ct == @proto <> "; charset=utf-8" or ct == @proto -> module.decode(conn.resp_body)
+      _ -> Protobuf.JSON.decode!(conn.resp_body, module)
+    end
+  end
+
+  defp authed(conn, account) do
+    {:ok, _session, tokens} = Auth.create_session(account.id, Ecto.UUID.generate())
+    put_req_header(conn, "authorization", "Bearer " <> tokens.access_token)
+  end
+
+  describe "public" do
+    test "GET /instance is the trust card", %{conn: conn} do
+      conn = get(conn, "/api/v1/instance")
+
+      assert %V1.InstanceInfo{recovery_generation: gen, reactions: reactions} =
+               decode(conn, V1.InstanceInfo)
+
+      assert gen == Lumia.Instance.recovery_generation()
+      assert Enum.map(reactions, & &1.key) == ~w(thumbs_up check heart sparkle)
+    end
+
+    test "unauthenticated requests get the error envelope", %{conn: conn} do
+      conn = get(conn, "/api/v1/account/snapshot")
+      assert conn.status == 401
+      assert %V1.Error{code: :UNAUTHENTICATED} = decode(conn, V1.Error)
+    end
+  end
+
+  describe "accounts and sign-in" do
+    test "create, sign in, refresh, sign out", %{conn: conn} do
+      handle = "ryan#{System.unique_integer([:positive])}"
+
+      created =
+        post_proto(conn, "/api/v1/accounts", %V1.CreateAccountRequest{
+          handle: handle,
+          password: "correct horse battery"
+        })
+
+      assert created.status == 201
+
+      assert %V1.TokenPair{access_token: access, refresh_token: refresh} =
+               decode(created, V1.TokenPair)
+
+      signed =
+        post_proto(conn, "/api/v1/auth/sign-in/password", %V1.PasswordSignInRequest{
+          handle_or_email: String.upcase(handle),
+          password: "correct horse battery"
+        })
+
+      assert %V1.TokenPair{} = decode(signed, V1.TokenPair)
+
+      wrong =
+        post_proto(conn, "/api/v1/auth/sign-in/password", %V1.PasswordSignInRequest{
+          handle_or_email: handle,
+          password: "nope"
+        })
+
+      assert wrong.status == 401
+
+      refreshed =
+        post_proto(conn, "/api/v1/auth/refresh", %V1.RefreshRequest{refresh_token: refresh})
+
+      assert %V1.TokenPair{access_token: access2} = decode(refreshed, V1.TokenPair)
+      refute access2 == access
+
+      out =
+        conn
+        |> put_req_header("authorization", "Bearer " <> access2)
+        |> post("/api/v1/auth/sign-out")
+
+      assert out.status == 204
+
+      after_out =
+        conn
+        |> put_req_header("authorization", "Bearer " <> access2)
+        |> get("/api/v1/account/snapshot")
+
+      assert %V1.Error{code: :SESSION_REVOKED} = decode(after_out, V1.Error)
+    end
+
+    test "short passwords are rejected with a field detail", %{conn: conn} do
+      conn =
+        post_proto(conn, "/api/v1/accounts", %V1.CreateAccountRequest{
+          handle: "x",
+          password: "short"
+        })
+
+      assert conn.status == 400
+      assert %V1.Error{code: :INVALID_ARGUMENT} = decode(conn, V1.Error)
+    end
+
+    test "sessions can be listed and revoked", %{conn: conn} do
+      account = account()
+      {:ok, s1, t1} = Auth.create_session(account.id, Ecto.UUID.generate())
+      {:ok, s2, _} = Auth.create_session(account.id, Ecto.UUID.generate())
+      conn = put_req_header(conn, "authorization", "Bearer " <> t1.access_token)
+
+      listed = get(conn, "/api/v1/sessions")
+
+      assert %V1.ListSessionsResponse{sessions: sessions} =
+               decode(listed, V1.ListSessionsResponse)
+
+      assert Enum.map(sessions, &Proto.from_uuid(&1.session_id)) |> Enum.sort() ==
+               Enum.sort([s1.id, s2.id])
+
+      assert Enum.find(sessions, & &1.current).session_id == Proto.uuid(s1.id)
+
+      assert delete(conn, "/api/v1/sessions/#{s2.id}").status == 204
+      assert delete(conn, "/api/v1/sessions/#{Ecto.UUID.generate()}").status == 404
+    end
+  end
+
+  describe "servers, channels, members, roles" do
+    setup %{conn: conn} do
+      owner = account("owner")
+      {:ok, server} = Servers.create_server(owner.id, "Acme")
+      {:ok, general} = Servers.create_channel(server.id, owner.id, "general")
+      %{conn: authed(conn, owner), owner: owner, server: server, general: general}
+    end
+
+    test "account snapshot lists servers, memberships and viewable channels", ctx do
+      conn = get(ctx.conn, "/api/v1/account/snapshot")
+
+      assert %V1.AccountSnapshot{servers: [server], memberships: [member], channels: [channel]} =
+               decode(conn, V1.AccountSnapshot)
+
+      assert server.name == "Acme"
+      assert member.kind == :MEMBER
+      assert channel.name == "general"
+    end
+
+    test "create a server and a channel over the API, in protobuf", ctx do
+      created =
+        post_proto(ctx.conn, "/api/v1/servers", %V1.CreateServerRequest{name: "Beta"}, :proto)
+
+      assert created.status == 201
+      assert %V1.Server{server_id: server_id, name: "Beta"} = decode(created, V1.Server)
+
+      channel =
+        post_proto(
+          ctx.conn,
+          "/api/v1/channels",
+          %V1.CreateChannelRequest{server_id: server_id, name: "ops", topic: "on call"},
+          :proto
+        )
+
+      assert %V1.Channel{name: "ops", topic: "on call", acl_version: 1} =
+               decode(channel, V1.Channel)
+    end
+
+    test "a non-member gets NOT_FOUND for a server and its channels", ctx do
+      outsider = account("outsider") |> then(&authed(build_conn(), &1))
+      assert get(outsider, "/api/v1/servers/#{ctx.server.id}").status == 404
+      assert get(outsider, "/api/v1/channels/#{ctx.general.id}/snapshot").status == 404
+      assert get(outsider, "/api/v1/channels/#{ctx.general.id}/events").status == 404
+    end
+
+    test "roles: create, list, update, delete with hierarchy enforced", ctx do
+      role = %V1.Role{name: "mods", position: 3, permissions: [:MANAGE_MESSAGES]}
+
+      created =
+        post_proto(ctx.conn, "/api/v1/servers/#{ctx.server.id}/roles", %V1.UpsertRoleRequest{
+          role: role
+        })
+
+      assert created.status == 201
+
+      assert %V1.Role{role_id: role_id, permissions: [:MANAGE_MESSAGES]} =
+               decode(created, V1.Role)
+
+      rid = Proto.from_uuid(role_id)
+
+      listed = get(ctx.conn, "/api/v1/servers/#{ctx.server.id}/roles")
+      assert %V1.ListRolesResponse{roles: roles} = decode(listed, V1.ListRolesResponse)
+      assert Enum.any?(roles, & &1.is_everyone)
+      assert Enum.any?(roles, &(&1.name == "mods"))
+
+      updated =
+        ctx.conn
+        |> put_req_header("content-type", @json)
+        |> put(
+          "/api/v1/servers/#{ctx.server.id}/roles/#{rid}",
+          Protobuf.JSON.encode!(%V1.UpsertRoleRequest{role: %{role | name: "moderators"}})
+        )
+
+      assert %V1.Role{name: "moderators"} = decode(updated, V1.Role)
+
+      # A member below the role cannot delete it.
+      member = account("member")
+      {:ok, _} = Servers.add_member(ctx.server.id, member.id, ctx.owner.id)
+
+      denied =
+        build_conn() |> authed(member) |> delete("/api/v1/servers/#{ctx.server.id}/roles/#{rid}")
+
+      assert denied.status == 403
+
+      assert delete(ctx.conn, "/api/v1/servers/#{ctx.server.id}/roles/#{rid}").status == 204
+    end
+
+    test "members: list, assign roles, remove", ctx do
+      alice = account("alice")
+      {:ok, _} = Servers.add_member(ctx.server.id, alice.id, ctx.owner.id)
+
+      {:ok, role} =
+        Servers.create_role(ctx.server.id, ctx.owner.id, %{name: "helpers", permissions: []})
+
+      listed = get(ctx.conn, "/api/v1/servers/#{ctx.server.id}/members")
+
+      assert %V1.ListMembersResponse{members: members, accounts: accounts} =
+               decode(listed, V1.ListMembersResponse)
+
+      assert length(members) == 2 and length(accounts) == 2
+
+      patched =
+        ctx.conn
+        |> put_req_header("content-type", @json)
+        |> patch(
+          "/api/v1/servers/#{ctx.server.id}/members/#{alice.id}",
+          Protobuf.JSON.encode!(%V1.UpdateMemberRequest{role_ids: [Proto.uuid(role.id)]})
+        )
+
+      assert %V1.Member{role_ids: [rid]} = decode(patched, V1.Member)
+      assert Proto.from_uuid(rid) == role.id
+      assert "membership_updated" in Accounts.event_kinds(alice.id)
+
+      assert delete(ctx.conn, "/api/v1/servers/#{ctx.server.id}/members/#{alice.id}").status ==
+               204
+
+      refute Servers.member_for(ctx.server.id, alice.id)
+    end
+
+    test "overwrites make a channel private and the API reflects it", ctx do
+      alice = account("alice")
+      {:ok, _} = Servers.add_member(ctx.server.id, alice.id, ctx.owner.id)
+
+      everyone =
+        Lumia.Repo.get_by!(Lumia.Servers.Role, server_id: ctx.server.id, is_everyone: true)
+
+      resp =
+        ctx.conn
+        |> put_req_header("content-type", @json)
+        |> put(
+          "/api/v1/channels/#{ctx.general.id}/overwrites",
+          Protobuf.JSON.encode!(%V1.Overwrite{
+            target: {:role_id, Proto.uuid(everyone.id)},
+            deny: [:VIEW_CHANNEL]
+          })
+        )
+
+      assert resp.status == 204
+      alice_conn = authed(build_conn(), alice)
+      assert get(alice_conn, "/api/v1/channels/#{ctx.general.id}/snapshot").status == 404
+
+      assert %V1.ListChannelsResponse{channels: []} =
+               decode(
+                 get(alice_conn, "/api/v1/servers/#{ctx.server.id}/channels"),
+                 V1.ListChannelsResponse
+               )
+
+      assert %V1.ListChannelsResponse{channels: [_]} =
+               decode(
+                 get(ctx.conn, "/api/v1/servers/#{ctx.server.id}/channels"),
+                 V1.ListChannelsResponse
+               )
+    end
+  end
+
+  describe "commands, events, snapshots, messages" do
+    setup %{conn: conn} do
+      owner = account("owner")
+      {:ok, server} = Servers.create_server(owner.id, "Acme")
+      {:ok, general} = Servers.create_channel(server.id, owner.id, "general")
+      %{conn: authed(conn, owner), owner: owner, server: server, general: general}
+    end
+
+    test "a command is acked and visible in events, snapshot and messages", ctx do
+      cmd = send_message(ctx.general.id, "hello over http")
+      acked = post_proto(ctx.conn, "/api/v1/channels/#{ctx.general.id}/commands", cmd, :proto)
+      assert %V1.Ack{seq: 1, command_id: command_id} = decode(acked, V1.Ack)
+      assert command_id == cmd.command_id
+
+      # Replay is idempotent over HTTP too.
+      again = post_proto(ctx.conn, "/api/v1/channels/#{ctx.general.id}/commands", cmd, :proto)
+      assert %V1.Ack{seq: 1} = decode(again, V1.Ack)
+
+      events = get(ctx.conn, "/api/v1/channels/#{ctx.general.id}/events?after_seq=0")
+
+      assert %V1.ListEventsResponse{
+               events: [%V1.Event{seq: 1}],
+               last_seq: 1,
+               truncated_before: false
+             } = decode(events, V1.ListEventsResponse)
+
+      snap = get(ctx.conn, "/api/v1/channels/#{ctx.general.id}/snapshot")
+
+      assert %V1.ChannelSnapshot{seq: 1, messages: [%V1.Message{body: "hello over http"}]} =
+               decode(snap, V1.ChannelSnapshot)
+
+      messages = get(ctx.conn, "/api/v1/channels/#{ctx.general.id}/messages?limit=10")
+
+      assert %V1.ListMessagesResponse{messages: [_], has_more: false} =
+               decode(messages, V1.ListMessagesResponse)
+    end
+
+    test "scrollback pages by seq with has_more", ctx do
+      actor = %{account_id: ctx.owner.id, device_id: nil}
+
+      for i <- 1..5,
+          do:
+            {:ok, _} =
+              Lumia.Events.append(ctx.general.id, actor, send_message(ctx.general.id, "m#{i}"))
+
+      page =
+        decode(
+          get(ctx.conn, "/api/v1/channels/#{ctx.general.id}/messages?limit=2"),
+          V1.ListMessagesResponse
+        )
+
+      assert Enum.map(page.messages, & &1.body) == ["m4", "m5"]
+      assert page.has_more
+
+      older =
+        decode(
+          get(ctx.conn, "/api/v1/channels/#{ctx.general.id}/messages?limit=2&before_seq=4"),
+          V1.ListMessagesResponse
+        )
+
+      assert Enum.map(older.messages, & &1.body) == ["m2", "m3"]
+    end
+
+    test "a command without SEND_MESSAGES is denied; a malformed body is invalid", ctx do
+      member = account("member")
+      {:ok, _} = Servers.add_member(ctx.server.id, member.id, ctx.owner.id)
+
+      everyone =
+        Lumia.Repo.get_by!(Lumia.Servers.Role, server_id: ctx.server.id, is_everyone: true)
+
+      :ok =
+        Servers.set_overwrite(ctx.general.id, ctx.owner.id, {:role, everyone.id}, [], [
+          :send_messages
+        ])
+
+      denied =
+        build_conn()
+        |> authed(member)
+        |> post_proto("/api/v1/channels/#{ctx.general.id}/commands", send_message(ctx.general.id))
+
+      assert denied.status == 403
+
+      bad =
+        ctx.conn
+        |> put_req_header("content-type", @proto)
+        |> post("/api/v1/channels/#{ctx.general.id}/commands", "not protobuf")
+
+      assert bad.status == 400
+      assert %V1.Error{code: :INVALID_ARGUMENT} = decode(bad, V1.Error)
+    end
+
+    test "account events are listed after a cursor", ctx do
+      {:ok, _} = Accounts.append_event(ctx.owner.id, {:profile_updated, %V1.ProfileUpdated{}})
+      resp = get(ctx.conn, "/api/v1/account/events?after_seq=0")
+
+      assert %V1.ListAccountEventsResponse{events: events, last_seq: last} =
+               decode(resp, V1.ListAccountEventsResponse)
+
+      assert last >= 1
+      assert Enum.any?(events, &match?({:profile_updated, _}, &1.payload))
+    end
+  end
+end
