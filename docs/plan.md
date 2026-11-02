@@ -70,6 +70,7 @@ Things that moved from the first draft, with the reason. The architecture record
 | Credo AliasUsage at stock | Fires above two uses, excludes `test/support` | Generated test scaffolding should stay stock. |
 | Gateway encoding negotiated by WebSocket subprotocol | Chosen by the opcode of the first frame (binary = protobuf, text = JSON) | Phoenix does not expose the negotiated subprotocol to the socket; the opcode is unambiguous and needs no negotiation. |
 | `Authorization` header on the gateway upgrade | `?access_token=` query parameter for all clients in v1 | Phoenix sockets cannot read arbitrary headers; a custom upgrade plug is deferred. |
+| BLAKE3 via a Rustler NIF (architecture §3 names it) | The pure-Elixir `b3` package, behind `Lumia.Crypto` | Identity inputs are 32-byte keys and small bodies; `b3` is maintained with no dependencies, while the `blake3` NIF package pins Rustler 0.30. Keeps the Rust toolchain out of contributor setup until MLS needs it. The facade makes a NIF for large blobs a one-line swap. |
 | Overwrite with a bit in both allow and deny "treated as deny" at resolve time | Normalized on write: a denied bit is cleared from allow | The spec's own same-layer rule made allow win; property tests exposed the contradiction. Normalizing storage keeps the algorithm as written. |
 
 ## Step 2, part 2: delivery, accounts, authorization

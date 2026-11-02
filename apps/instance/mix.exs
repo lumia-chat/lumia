@@ -64,6 +64,9 @@ defmodule Lumia.MixProject do
       # Password hashing (architecture 6.3).
       {:argon2_elixir, "~> 4.1"},
 
+      # BLAKE3 for identity ids and content addressing (pure Elixir; inputs are small).
+      {:b3, "~> 0.2.1"},
+
       # Testing and development.
       {:benchee, "~> 1.3", only: :dev},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
