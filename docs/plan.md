@@ -60,6 +60,10 @@ Things that moved from the first draft, with the reason. The architecture record
 | One Phoenix topic per chat channel | One Phoenix channel per socket, chat subscriptions as PubSub entries in that process | 100k sockets × 50 topics is 5M processes. |
 | OpenMLS on the server through Rustler for delivery-service duties | No MLS library on the server; the delivery service stores opaque bytes and compares the epoch integer the client puts in the envelope | None of the duties parse an MLS message, and a server that cannot parse ciphertext cannot be asked to. |
 | Web MLS keys as non-extractable WebCrypto objects where possible | Keys in WASM memory while the page runs; the OPFS store encrypted at rest under a WebCrypto key | WebCrypto has no HPKE; protecting one key while the rest sit in WASM memory is a claim the product could not make honestly. |
+| Svelte for the web UI (proposed in the step 6 grill) | SolidJS 1.9 with Vite, TanStack Solid Router, Solid Query and Solid Virtual; bun as package manager and script runner | The design system's 36 components exist as React TSX in the design artifact and port to Solid mechanically (JSX kept, hooks become signals); TanStack Router has a Solid package and no Svelte one; Solid and Svelte 5 are equals on a weak webview. React itself was rejected: the components being React is not a reason to carry its runtime. |
+| Electron for desktop (considered against Tauri in the step 6 grill) | Tauri 2 | Electron's bundled Chromium costs 100 to 150 MB idle against the 150 MB budget and buys only Linux consistency; Tauri keeps the Rust core in-process as an option and the Rust-native UI path as the Linux escape hatch. |
+| JS owns the store on web (what `lumia-wasm`'s `Session` surface assumed) | Rust owns the store on web too: rusqlite builds for wasm32 through `sqlite-wasm-rs`, so the native store, MLS key-value store, DM engine and identity flows run unchanged in a worker; JS supplies the UI, the socket and HTTP (confirmed by the step 6 spike, see below) | Zero porting of the E2EE and sync code and one store schema everywhere; the alternative was a second engine in JS or an effects rewrite. |
+| Effect for the web client's JS | Decided by the spike: if Rust owns the transport loop in the worker as well, JS is a thin bridge and Effect is not used; if JS owns reconnect, refresh and worker lifecycle, Effect is used there and nowhere else | Its typed errors, retries and scoped resources fit a transport runtime and nothing else in this UI. Hono has no place: there is no JS server. |
 | Bare `Phoenix.Socket.Transport` (proposed during the delivery grill) | Phoenix Channel with a custom serializer; `Hello` is the join, no envelope on the wire | Keeps Presence, `ChannelTest`, and `phoenix.js`; the serializer removes the framing cost. |
 | "Cursor expired" meaning purged rows | Event rows permanent; "no longer served" is a 1,000-event replay cap | Permanent rows were already decided; the cap is what actually bounds replay cost. |
 | `acl_version` bumped on every membership change | Bumped on definition-level changes only; member-level changes travel the account log | Bumping every channel on every role assignment is a re-resolution storm. |
@@ -229,10 +233,15 @@ Ordered. Each task names the spec section it implements and the tests that close
 
 ## Step 6: web UI in Tauri
 
-- [ ] Web device model with origin-scoped keys (architecture 11.4, identity §7).
-- [ ] SQLite WASM on OPFS in a worker with Web Locks.
-- [ ] The design system's components from the prototype, on the Rust core via WASM.
-- [ ] Tauri shell with the core in-process (open question in architecture §20).
+Settled in the step 6 grill (2026-11-02): SolidJS 1.9 with Vite, TanStack Solid Router, Solid Query and Solid Virtual; bun; Tauri 2; the core as WASM in Tauri first, in-process only when a measured budget misses on WebKitGTK; the Rust core owns the store on web through rusqlite on `sqlite-wasm-rs` in a dedicated worker, with Web Locks electing one owner tab and other tabs showing a take-over screen; the design system (tokens, fonts, 26 icons, logo set, 36 components) vendored from the design artifact once with the repo the master afterwards, shared assets under `assets/`; Playwright in Chromium and WebKit against the dev instance with the CLI as the other device. First screens: add an instance with the trust card, sign in by password or by linking this web device from a native device, Home with instances and personal DMs, a server's channel sidebar, a channel view with scrollback and a composer, personal DMs with requests, a device list with revoke. Out: voice, search, attachments, reactions UI, threads, settings beyond devices.
+
+- [x] Spike (2026-11-02, [spikes/2026-11-02-web-store.md](spikes/2026-11-02-web-store.md)): the native store copied as is and `lumia-core` unchanged run in a Chromium worker on OPFS through rusqlite on `sqlite-wasm-rs`: 200 events applied in 15 ms, an MLS join and decrypt in 9 ms inside a store savepoint, and after a page reload the messages, cursor and group state come back from OPFS. Rust owns the store on web; the transport is ported the same way (reqwest's fetch backend, a web-sys socket, gloo timers), so Effect is not adopted. WebKit is owed: Playwright's WebKit build does not launch on this macOS.
+- [ ] `lumia-client` builds for wasm32 with its transport behind target gates; `lumia-wasm` grows to the client surface (store, engine, identity) instead of the bare session.
+- [ ] `assets/` (brand, icons, fonts, licences, `design/tokens.json`) and `apps/web` (Solid, Vite, bun) with the design system ported.
+- [ ] Web device model with origin-scoped keys (architecture 11.4, identity §7): link from the CLI, the store encrypted at rest under a WebCrypto key.
+- [ ] The first screens, each from the canvas or a new artboard shown first.
+- [ ] `apps/desktop`: Tauri 2 shell on the same build; Windows and Linux CI builds.
+- [ ] Playwright: sign in, link a web device from the CLI, send and receive a personal DM, reload and read it again (e2ee §12 web case).
 
 ## Step 7: multi-node, push, native shells
 
