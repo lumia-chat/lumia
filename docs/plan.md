@@ -101,6 +101,10 @@ Ordered. Each task names the spec section it implements and the tests that close
 - [x] `Lumia.Proto` converts schemas and scalars (UUID bytes, timestamps) to wire structs.
 - [x] Edit and delete materialize; delete redacts the create event's payload (delivery §10).
 
+**Sessions** (done 2026-11-01)
+
+- [x] `sessions` table and `Lumia.Auth`: opaque 15-minute access and 30-day single-use refresh tokens stored as SHA-256; `verify_access/1` checks the row on every call; `refresh/1` rotates both; `revoke/1` marks the row, broadcasts on `session:<id>` so a live socket closes, and appends `SessionRevoked` to the account log; `revoke_device/2` for the identity spec's revoke flow (architecture §6.3, protocol §12).
+
 **Gateway** (first pass done 2026-11-01)
 
 - [x] `LumiaWeb.Gateway.Serializer`: raw `ClientFrame` in, bare `ServerFrame` out, `Hello` as join, event bytes wrapped without re-encoding; encoding chosen by the first frame's opcode (delivery §5; tests: serializer unit tests).
