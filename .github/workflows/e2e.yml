@@ -11,7 +11,10 @@ permissions:
   contents: read
 
 # The browser suite (apps/web/e2e/run.ts): the dev instance on :4000, the
-# release CLI as the other device, Chromium and WebKit through Playwright.
+# release CLI as the other device, Chromium through Playwright. WebKit runs
+# on macOS (locally, every run), where it is Safari's engine; Playwright's
+# Linux WebKit build hangs on first navigations and on this page's
+# teardown, and is not what any user runs (plan, step 7).
 jobs:
   browsers:
     runs-on: ubuntu-24.04
@@ -75,10 +78,10 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('apps/web/bun.lock') }}
-      - run: bunx playwright install-deps chromium webkit
+      - run: bunx playwright install-deps chromium
         working-directory: apps/web
       - if: steps.browsers.outputs.cache-hit != 'true'
-        run: bunx playwright install chromium webkit
+        run: bunx playwright install chromium
         working-directory: apps/web
 
       - name: Start the instance
@@ -90,7 +93,7 @@ jobs:
             sleep 2
           done
           echo "the instance did not come up" >&2; tail -50 /tmp/phx.log; exit 1
-      - run: bun run e2e
+      - run: bun run e2e -- chromium
         working-directory: apps/web
         env:
           DEBUG: "pw:browser"
