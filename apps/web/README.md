@@ -12,6 +12,6 @@ bun run build:instance   # the build an instance serves, into ../instance/priv/s
 
 `LUMIA_BASE=http://localhost:4000 bun run e2e` runs the suite against a UI the dev instance serves instead of starting vite.
 
-The Rust core is built to wasm by `scripts/wasm.ts` (needs the wasm32 target, the `llvm-tools` component and `wasm-bindgen-cli` 0.2.130; see `../core/README.md`) and runs in a worker. The dev server is a trusted web origin of the dev instance (`config/dev.exs`, `web_origins`), which is what lets the page call its API and link web devices.
+The Rust core is built to wasm by `scripts/wasm.ts` (needs the wasm32 target, the `llvm-tools` component and `wasm-bindgen-cli` 0.2.130; see `../core/README.md`), with the size-first `web` Cargo profile and `wasm-opt -Oz` from the `binaryen` package (about 3 MB raw, 1 MB compressed), and runs in a worker. `bun run wasm -- --debug` skips both for a faster build. The dev server is a trusted web origin of the dev instance (`config/dev.exs`, `web_origins`), which is what lets the page call its API and link web devices.
 
 The design system (tokens, components, icons, fonts, logo) is vendored from the Lumia design artifact under `src/design/` and `../../assets/`; see `AGENTS.md`.

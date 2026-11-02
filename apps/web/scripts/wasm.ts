@@ -1,15 +1,19 @@
-// Builds the Rust core for the browser: `lumia-wasm` for wasm32, then
-// wasm-bindgen into src/client/pkg (gitignored). Needs the wasm32 target,
-// the llvm-tools component (its llvm-ar archives the C objects of SQLite;
-// see apps/core/README.md) and wasm-bindgen-cli at the pinned version.
+// Builds the Rust core for the browser: `lumia-wasm` for wasm32 with the
+// size-first `web` profile, then wasm-bindgen into src/client/pkg
+// (gitignored), then wasm-opt -Oz (binaryen: the system one, else the
+// npm package's). Needs the wasm32 target, the llvm-tools component (its
+// llvm-ar archives the C objects of SQLite; see apps/core/README.md) and
+// wasm-bindgen-cli at the pinned version. `--debug` skips the profile and
+// the optimizer.
 import { execSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 
 const web = resolve(import.meta.dir, "..");
 const core = resolve(web, "../core");
 const out = resolve(web, "src/client/pkg");
-const profile = process.argv.includes("--debug") ? "debug" : "release";
+const debug = process.argv.includes("--debug");
+const profile = debug ? "debug" : "web";
 
 function sh(cmd: string, cwd: string) {
   console.log(`$ ${cmd}`);
@@ -30,6 +34,12 @@ if (!process.env.AR_wasm32_unknown_unknown) {
 process.env.SQLITE_WASM_RS_FLAGS ??=
   "-DHAVE_CIPHER_AES_128_CBC=0 -DHAVE_CIPHER_AES_256_CBC=0 -DHAVE_CIPHER_SQLCIPHER=0 -DHAVE_CIPHER_RC4=0 -DHAVE_CIPHER_ASCON128=0 -DHAVE_CIPHER_AEGIS=0";
 
-sh(`cargo build ${profile === "release" ? "--release" : ""} -p lumia-wasm --target wasm32-unknown-unknown`, core);
+sh(`cargo build ${debug ? "" : "--profile web"} -p lumia-wasm --target wasm32-unknown-unknown`, core);
 sh(`wasm-bindgen --target web --out-dir "${out}" "${core}/target/wasm32-unknown-unknown/${profile}/lumia_wasm.wasm"`, core);
-console.log(`wasm: ${out}`);
+if (!debug) {
+  const bin = resolve(web, "node_modules/.bin/wasm-opt");
+  const wasmOpt = existsSync(bin) ? bin : "wasm-opt";
+  const file = resolve(out, "lumia_wasm_bg.wasm");
+  sh(`"${wasmOpt}" -Oz --enable-bulk-memory --enable-nontrapping-float-to-int --strip-debug --strip-producers -o "${file}" "${file}"`, web);
+}
+console.log(`wasm: ${out} (${(statSync(resolve(out, "lumia_wasm_bg.wasm")).size / 1_000_000).toFixed(2)} MB)`);

@@ -40,3 +40,13 @@ missing_debug_implementations = "warn"
 all = { level = "deny", priority = -1 }
 unwrap_used = "deny"
 expect_used = "deny"
+
+# The web build (apps/web/scripts/wasm.ts): size over speed, since the
+# binary is downloaded on every cold load.
+[profile.web]
+inherits = "release"
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+# No `strip`: wasm-bindgen reads the target-features section; wasm-opt strips after it.
