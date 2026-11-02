@@ -15,6 +15,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "lumia/v1/commands.proto",
         "lumia/v1/gateway.proto",
         "lumia/v1/api.proto",
+        "lumia/v1/e2ee.proto",
     ];
 
     for file in &files {

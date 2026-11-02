@@ -1,0 +1,162 @@
+syntax = "proto3";
+
+package lumia.v1;
+
+import "google/protobuf/timestamp.proto";
+import "lumia/v1/identity.proto";
+
+// End-to-end encrypted personal DMs (docs/specs/e2ee.md). Everything in
+// this file is either inside an MLS application message, where no server
+// reads it, or an encrypted history-backup shape the server stores
+// opaquely. The server-visible envelope is `EncryptedPayload` in
+// events.proto.
+
+// ---- Inside the ciphertext --------------------------------------------------
+
+// The plaintext of every application message in a PERSONAL_* channel. A
+// client applies these to its own local projection; the server has none.
+message DmOperation {
+  // UUIDv7, client-minted; the same bytes as the Command.command_id that
+  // carried the ciphertext, so a receiver can tie an operation to its seq.
+  bytes operation_id = 1;
+  google.protobuf.Timestamp sent_at = 2;
+  oneof op {
+    DmSend send = 10;
+    DmEdit edit = 11;
+    DmDelete delete = 12;
+    DmReact react = 13;
+    DmPin pin = 14;
+    DmRead read = 15;
+    DmTyping typing = 16;
+  }
+}
+
+message DmSend {
+  // UUIDv7, client-minted. Edits, deletes, reactions and pins name it.
+  bytes message_id = 1;
+  string body = 2;
+  // Thread parent, or empty.
+  bytes parent_id = 3;
+  repeated DmAttachment attachments = 4;
+  // Identity ids mentioned, for the receiver's notification decision.
+  repeated bytes mentions = 5;
+}
+
+message DmEdit {
+  bytes message_id = 1;
+  string body = 2;
+}
+
+message DmDelete { bytes message_id = 1; }
+
+message DmReact {
+  bytes message_id = 1;
+  // A single emoji (or a server custom-emoji reference is not possible here;
+  // personal DMs have no server emoji).
+  string emoji = 2;
+  bool remove = 3;
+}
+
+message DmPin {
+  bytes message_id = 1;
+  bool unpin = 2;
+}
+
+// Read up to and including this seq in the conversation's log.
+message DmRead { uint64 through_seq = 1; }
+
+// Typing until `until`; receivers stop showing it then without a stop.
+message DmTyping { google.protobuf.Timestamp until = 1; }
+
+// An attachment uploaded as `client_encrypted`: the server holds an opaque
+// blob and its size; the key travels here.
+message DmAttachment {
+  bytes attachment_id = 1;
+  string name = 2;
+  string content_type = 3;
+  uint64 size = 4;
+  // XChaCha20-Poly1305 key and nonce the sender used over the plaintext.
+  bytes key = 5;
+  bytes nonce = 6;
+  // BLAKE3-256 of the plaintext, checked after decryption.
+  bytes hash = 7;
+}
+
+// ---- History backup ---------------------------------------------------------
+
+// Plaintext of one history chunk: a contiguous range of one conversation's
+// operations as this device decrypted them. Encrypted under a per-chunk
+// key before upload.
+message HistoryChunkBody {
+  bytes channel_id = 1;
+  // The instance hosting the conversation, as the client names it.
+  string host = 2;
+  uint64 from_seq = 3;
+  uint64 through_seq = 4;
+  repeated HistoryEntry entries = 5;
+}
+
+message HistoryEntry {
+  uint64 seq = 1;
+  bytes sender_identity_id = 2;
+  bytes sender_device_id = 3;
+  DmOperation operation = 4;
+}
+
+// Plaintext of a device's manifest: which chunks it wrote and their keys,
+// wrapped under the backup key (specs/identity.md section 2). Signed by the
+// device key; the version is monotonic per device.
+message HistoryManifestBody {
+  bytes identity_id = 1;
+  bytes device_id = 2;
+  uint64 version = 3;
+  google.protobuf.Timestamp written_at = 4;
+  repeated HistoryManifestEntry chunks = 5;
+}
+
+message HistoryManifestEntry {
+  // UUIDv7, client-minted; the storage key.
+  bytes chunk_id = 1;
+  bytes channel_id = 2;
+  string host = 3;
+  uint64 from_seq = 4;
+  uint64 through_seq = 5;
+  // The chunk key, XChaCha20-Poly1305 under the backup key.
+  bytes wrapped_key = 6;
+  bytes wrap_nonce = 7;
+  // Ciphertext size, for quota display.
+  uint64 size = 8;
+}
+
+message SignedHistoryManifest {
+  // Serialized HistoryManifestBody.
+  bytes body = 1;
+  // Device signature over `body` (identity.proto Signature, DEVICE).
+  Signature signature = 2;
+}
+
+// PUT /history/chunks/{chunk_id}
+message PutHistoryChunkRequest {
+  bytes channel_id = 1;
+  // XChaCha20-Poly1305 over a serialized HistoryChunkBody under the chunk key.
+  bytes ciphertext = 2;
+  bytes nonce = 3;
+}
+
+// GET /history/chunks/{chunk_id}
+message GetHistoryChunkResponse {
+  bytes ciphertext = 1;
+  bytes nonce = 2;
+}
+
+// PUT /history/manifest — one per device; a lower version is ignored.
+message PutHistoryManifestRequest { SignedHistoryManifest manifest = 1; }
+
+// GET /history/manifests — every device's newest manifest for the identity.
+message ListHistoryManifestsResponse { repeated SignedHistoryManifest manifests = 1; }
+
+// GET /history/usage
+message HistoryUsageResponse {
+  uint64 bytes_used = 1;
+  uint64 bytes_quota = 2;
+}

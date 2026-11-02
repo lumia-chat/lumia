@@ -15,6 +15,7 @@ When this document and the architecture disagree, the architecture wins and this
 | `commands.proto` | `Command` and `Ack` |
 | `gateway.proto` | `ClientFrame`, `ServerFrame`, and every frame body |
 | `api.proto` | HTTP request and response bodies not covered above |
+| `e2ee.proto` | What lives inside an MLS application message (`DmOperation`), and the history-backup chunk, manifest and request shapes (specs/e2ee.md) |
 
 Package `lumia.v1`. Generated code is produced for Elixir (server), Rust (client core), Swift, Kotlin, and TypeScript from these files and nothing else. No client or server hand-writes a wire type.
 
@@ -257,7 +258,21 @@ Search results are filtered by the caller's channel permissions at query time.
 | `POST /mls/group-info` | `PublishGroupInfoRequest` → 204 |
 | `GET /mls/group-info/{channel_id}` | → `{group_info}` |
 
-A claimed key package is deleted on claim. Claiming requires that the caller be in a `PERSONAL_*` channel with the target, or hold an accepted DM request from them.
+A claimed key package is deleted on claim. Claiming requires that the caller be in a `PERSONAL_*` channel with the target, or hold an accepted DM request from them. An empty pool serves the device's last-resort package, which is never deleted on claim. `POST /mls/group-info` keeps the newest GroupInfo per conversation by the epoch it carries and ignores an older one. Cadence and counts are in specs/e2ee.md section 3.
+
+### History backup
+
+| Method and path | Body → Response |
+|---|---|
+| `PUT /history/chunks/{chunk_id}` | `PutHistoryChunkRequest` → 204; `RESOURCE_EXHAUSTED` over quota |
+| `GET /history/chunks/{chunk_id}` | → `GetHistoryChunkResponse` |
+| `DELETE /history/chunks/{chunk_id}` | → 204 |
+| `PUT /history/manifest` | `PutHistoryManifestRequest` → 204; a lower version than held for the device is ignored |
+| `GET /history/manifests` | → `ListHistoryManifestsResponse`, every device's newest manifest for the caller's identity |
+| `DELETE /history` | → 204; every chunk and manifest of the caller's identity on this instance |
+| `GET /history/usage` | → `HistoryUsageResponse` |
+
+Chunks and manifests are opaque to the instance; the caller must be bound to the identity the manifest names (specs/e2ee.md section 9).
 
 ### Invites
 
@@ -329,8 +344,8 @@ For `PERSONAL_DM` and `PERSONAL_GROUP_DM`:
 
 - The only commands are `SendEncrypted`. Any other `op` is `INVALID_ARGUMENT`.
 - The only event payloads are `EncryptedPayload` and `Redacted` (when a participant deletes their account and the ciphertext is purged).
-- `EncryptedPayload.kind` is the single bit the server reads: `APPLICATION` events are eligible for push; `CONTROL` events are not. Everything else about the message is inside `mls_message`.
-- `epoch` lets the delivery service refuse a commit for a stale epoch with `FAILED_PRECONDITION{state: "epoch"}`, which is how concurrent commits are serialized. Application messages for any epoch are accepted and ordered by `seq`.
+- `EncryptedPayload.kind` is the single bit the server reads: `APPLICATION` events are eligible for push; `CONTROL` events are not. Everything else about the message is inside `mls_message`: for `APPLICATION` it is a `DmOperation` (`e2ee.proto`), for `CONTROL` an MLS commit, proposal, welcome or external commit.
+- `epoch` on a `CONTROL` event is the epoch the commit produces; the delivery service accepts it only when it is the conversation's current epoch plus one and answers `FAILED_PRECONDITION{state: "epoch"}` otherwise, which is how concurrent commits are serialized. Application messages carry the epoch they were encrypted in, are accepted for any epoch, and are ordered by `seq`.
 - Snapshots return `encrypted_events` rather than `messages`; there are no server-side messages to return.
 - `ThreadSummary`, `ReactionCount`, `pinned`, and `Mention` are never populated by the server for these channels. Clients compute them from decrypted content.
 

@@ -662,6 +662,7 @@ defmodule Lumia.V1.PublishKeyPackagesRequest do
     syntax: :proto3
 
   field :key_packages, 1, repeated: true, type: :bytes, json_name: "keyPackages"
+  field :last_resort_key_package, 2, type: :bytes, json_name: "lastResortKeyPackage"
 end
 
 defmodule Lumia.V1.ClaimKeyPackageRequest do

@@ -12,7 +12,7 @@ Legend: `[x]` done · `[~]` in progress · `[ ]` not started · `(spec §n)` the
 | 2. Server: event log, delivery, account log, resume, authorization | First pass complete 2026-11-01; six items carried into step 3 (listed under "Closing step 2") |
 | 3. Rust core | Done 2026-11-01: sync engine, SQLite store, reconnecting CLI on the real gateway, identity with shared vectors, scenario suite, UniFFI and wasm surfaces |
 | 4. Identity across two instances | First pass 2026-11-01: lifecycle run across two dev instances with the CLI; the §12 list is partly end to end, the rest unit-level |
-| 5. MLS personal DMs, backup, recovery | Not specified, not built |
+| 5. MLS personal DMs, backup, recovery | Specified 2026-11-01 (specs/e2ee.md, OpenMLS spike done); not built |
 | 6. Web UI in Tauri | Not started |
 | 7. Multi-node, push, SwiftUI, Compose | Not started |
 
@@ -58,6 +58,8 @@ Things that moved from the first draft, with the reason. The architecture record
 | Content-free silent push wakeups | Visible push with generic text, on-device fetch and decrypt in the notification extension | iOS throttles and drops silent pushes; they cannot carry a timely notification. |
 | Subresource integrity as the web E2EE defense | Origin-scoped web device keys; the origin operator is the trust boundary | SRI hashes are set by the party serving the HTML. |
 | One Phoenix topic per chat channel | One Phoenix channel per socket, chat subscriptions as PubSub entries in that process | 100k sockets × 50 topics is 5M processes. |
+| OpenMLS on the server through Rustler for delivery-service duties | No MLS library on the server; the delivery service stores opaque bytes and compares the epoch integer the client puts in the envelope | None of the duties parse an MLS message, and a server that cannot parse ciphertext cannot be asked to. |
+| Web MLS keys as non-extractable WebCrypto objects where possible | Keys in WASM memory while the page runs; the OPFS store encrypted at rest under a WebCrypto key | WebCrypto has no HPKE; protecting one key while the rest sit in WASM memory is a claim the product could not make honestly. |
 | Bare `Phoenix.Socket.Transport` (proposed during the delivery grill) | Phoenix Channel with a custom serializer; `Hello` is the join, no envelope on the wire | Keeps Presence, `ChannelTest`, and `phoenix.js`; the serializer removes the framing cost. |
 | "Cursor expired" meaning purged rows | Event rows permanent; "no longer served" is a 1,000-event replay cap | Permanent rows were already decided; the cap is what actually bounds replay cost. |
 | `acl_version` bumped on every membership change | Bumped on definition-level changes only; member-level changes travel the account log | Bumping every channel on every role assignment is a re-resolution storm. |
@@ -211,9 +213,10 @@ Ordered. Each task names the spec section it implements and the tests that close
 
 ## Step 5: MLS personal DMs, backup, recovery
 
-- [ ] Write `docs/specs/e2ee.md` to retire architecture 11.3, after OpenMLS is linked and its provider traits are understood (open question in architecture §20).
-- [ ] Delivery-service endpoints: key packages, GroupInfo, epoch-ordered commits.
-- [ ] Personal DM send and receive, history chunks and manifests, recovery with external-commit rejoin.
+- [x] OpenMLS 0.9.2 linked in a spike (2026-11-01): a two-member group with a welcome and an application message round-trips on Rust 1.96, and the crate compiles for `wasm32-unknown-unknown` with its `js` feature plus the `js`/`wasm_js` features of the three transitive getrandom majors. Its provider is crypto, randomness, and a 72-method typed key-value storage trait; WebCrypto has no HPKE, so the web proof obligation in architecture §20 resolved to keys in WASM memory with the OPFS store encrypted at rest.
+- [x] `docs/specs/e2ee.md` written: suite 0x0001, basic credential of identity id and device id signed by the device key, leaf validation against the roster, key-package cadence (20, top up under 10, 90 days, one last-resort), group lifecycle (accepter creates; any device commits; epoch plus one at the delivery service; link approver adds leaves; revocation removes them), `DmOperation` inside the ciphertext with projection rules, client-encrypted attachments, SQLite storage provider in the store's transaction, web key handling, history backup (chunks under per-chunk keys, manifests under the backup key, on the hosting instance, off by default), recovery by external commit. Architecture 11.1, 11.3 and 11.4 amended; `e2ee.proto` and the history endpoints added to the protocol.
+- [ ] Core: `StorageProvider` over the SQLite store, group create/join/add/remove, `DmOperation` encrypt and decrypt with the projection; the Elixir side: key-package pool, last-resort, GroupInfo, epoch check on `CONTROL`, history storage with quotas.
+- [ ] Personal DM send and receive over the real gateway from the CLI (two identities, three devices), then history chunks and manifests, then recovery with external-commit rejoin; the tests in e2ee §12.
 
 ## Step 6: web UI in Tauri
 

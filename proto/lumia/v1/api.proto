@@ -350,8 +350,12 @@ message GetIdentityBackupResponse {
 
 // MLS delivery-service endpoints.
 message PublishKeyPackagesRequest {
-  // KeyPackage messages (RFC 9420) in TLS presentation format.
+  // KeyPackage messages (RFC 9420) in TLS presentation format. Replaces
+  // nothing: the instance adds these to the device's pool.
   repeated bytes key_packages = 1;
+  // A KeyPackage with the last_resort extension, handed out only when the
+  // pool is empty and never deleted on claim. Replaces the previous one.
+  bytes last_resort_key_package = 2;
 }
 
 message ClaimKeyPackageRequest {

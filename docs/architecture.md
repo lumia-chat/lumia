@@ -396,7 +396,7 @@ Event rows are permanent: ID, kind, actor, `seq`, `created_at`, `acl_version`. P
 
 ### 11.1 What is encrypted and what is not
 
-**Decision.** Personal DMs and personal group DMs are end-to-end encrypted with **MLS (RFC 9420)** using OpenMLS: natively in the client's Rust core, and via Rustler on the server for delivery-service duties (key package storage, welcome and commit ordering, epoch bookkeeping, GroupInfo storage for external joins). The delivery service is never a group member. Server channels and server DMs are encrypted at rest only.
+**Decision.** Personal DMs and personal group DMs are end-to-end encrypted with **MLS (RFC 9420)** using OpenMLS in the client's Rust core. The server is the delivery service and links no MLS library: its duties (key package storage and claims, commit ordering by the epoch number the client puts in the envelope, GroupInfo storage for external joins, history-backup storage) handle opaque bytes and integers only. The delivery service is never a group member. Server channels and server DMs are encrypted at rest only. The ciphersuite, credentials, group lifecycle, storage provider, and backup are in [specs/e2ee.md](specs/e2ee.md).
 
 **Personal DM events are opaque.** The shared event schema does not decide what leaks. For a personal DM the server stores and sees exactly:
 
@@ -418,13 +418,13 @@ Reactions, edits, deletes, thread relationships, mentions, pins, read state, and
 
 Each device is an MLS leaf with its own device key (section 5.1) as the credential's signing key. Adding a device to the identity (roster) and adding its leaf to each group are separate steps; an existing device performs the group adds. MLS state and queued outbound messages are persisted crash-safely in the device's SQLite store before any network send, so a crash never produces a leaf that has advanced an epoch it cannot resume.
 
-### 11.3 History backup and rejoin — provisional
+### 11.3 History backup and rejoin
 
-**Decision.** The host cannot build a backup of what it cannot read, so **clients construct it**. Each device appends encrypted **history chunks** under the backup key (derived from the recovery phrase, section 5.3) and publishes a signed **manifest** (device key signature, monotonic version, chunk list, covered conversations and ranges). Concurrent devices write independent chunks; restore takes the union, deduplicates by message ID, and restores only conversations the identity was a member of at the time. Chunk and manifest deletion follows the user's deletion of the underlying messages; backup rotation on recovery-phrase change re-encrypts manifests, not chunks, by wrapping the chunk keys.
+**Decision.** The host cannot build a backup of what it cannot read, so **clients construct it**, and it is **off by default**. Each native device writes encrypted **history chunks** under per-chunk keys and a signed **manifest** that wraps those keys under the backup key (derived from the recovery phrase, section 5.3), both stored on the instance hosting the conversation. Concurrent devices write independent chunks; restore takes the union and deduplicates by operation ID. Deletion follows the user's deletion of the underlying messages; phrase rotation re-wraps chunk keys, not chunks. Specified in [specs/e2ee.md](specs/e2ee.md) section 9.
 
-**Live MLS state is never restored from backup.** A recovered device gets a fresh device key, is added to the roster (section 5.3), and joins each group fresh: by an existing device adding it, or, when no device remains, by an **external commit** using the GroupInfo the delivery service stores. Other participants see a "device recovered" notice, and their clients re-verify the identity's root key against the pinned one.
+**Live MLS state is never restored from backup.** A recovered device gets a fresh device key, is added to the roster (section 5.3), and joins each group fresh: by an existing device adding it, or, when no device remains, by an **external commit** using the GroupInfo the delivery service stores, which every committer republishes after each commit. Other participants see a "device recovered" marker, and their clients re-verify the identity's root key against the pinned one. A device added by link likewise sees history only from its join forward unless backup restores it; the link bundle carries no history.
 
-**Privacy claim, qualified.** Retained history is only as confidential as the recovery phrase. MLS provides forward secrecy and post-compromise security for live traffic; an encrypted archive by its nature reduces those guarantees for whatever it retains, and the doc and the product say so where users turn history backup on.
+**Privacy claim, qualified.** Retained history is only as confidential as the recovery phrase. MLS provides forward secrecy and post-compromise security for live traffic; an encrypted archive by its nature reduces those guarantees for whatever it retains, and the product says so where users turn history backup on.
 
 ### 11.4 Web client
 
@@ -433,14 +433,13 @@ Each device is an MLS leaf with its own device key (section 5.1) as the credenti
 - The flagship's web origin may connect to many instances, because Lumia controls its code distribution.
 - A self-hosted instance's web origin connects to **that instance only**. Its JavaScript therefore never sees a device key that works anywhere else.
 - The root key never enters a browser. Linking a web device requires approval from a native device (or the recovery phrase).
-- Keys are held as non-extractable WebCrypto objects where the algorithm allows it. This limits exfiltration of key bytes; it does **not** stop the page's own code from using the keys or reading plaintext. The trust boundary for a web client is the origin operator, full stop, and the device list labels web devices as such. HPKE, which MLS depends on, is not in WebCrypto, so a WebCrypto-backed OpenMLS provider is partial at best; some key material will live in WASM linear memory. An out-of-band code-verification browser extension, the only real mitigation for origin trust, is deferred.
+- **Keys live in WASM linear memory while the page runs.** WebCrypto has no HPKE, and MLS needs private key bytes for every commit and welcome, so a WebCrypto-backed crypto provider is not possible (settled 2026-11-01 against OpenMLS 0.9's provider traits; specs/e2ee.md section 8). At rest, the OPFS SQLite store that holds them is encrypted under a non-extractable WebCrypto AES-GCM key per origin, which protects the store from other origins and from copies of the files, not from the page. The trust boundary for a web client is the origin operator, full stop, and the device list labels web devices with their origin. An out-of-band code-verification browser extension, the only real mitigation for origin trust, is deferred.
 - Storage is SQLite WASM on OPFS in a dedicated worker, with Web Locks electing one tab as owner; the doc notes that browsers may evict OPFS under storage pressure and the client treats a lost local store as the snapshot path (8.4).
 
 **Rejected.**
 - *Subresource integrity as a defense.* SRI verifies resources against hashes in the HTML; the party serving the HTML sets the hashes. It defends against a compromised CDN, not against the origin.
 - *No E2EE on web.* Pushes people to worse tools.
-
-**Proof obligation (section 20).** OpenMLS builds for wasm32 but does not test it, and ships no WebCrypto-backed crypto provider. The browser key-storage model above must be demonstrated against OpenMLS's provider traits before this section leaves provisional status.
+- *Non-extractable WebCrypto keys for MLS.* Not possible for HPKE; and for the signing key alone it would protect one key while every other secret sits in WASM memory, a claim the product could not make honestly.
 
 ## 12. Storage, attachments, search
 
@@ -600,8 +599,6 @@ Out of scope: a hosted-only feature that cannot run self-hosted; a second editio
 ## 20. Open questions and proof obligations
 
 - Exact numbers in section 17, after a first load test.
-- Which MLS ciphersuite to pin in v1 and the key-package refresh cadence.
-- **Proof obligation:** OpenMLS on wasm32 with a storage provider that keeps keys in WebCrypto; or an explicit decision that web device keys are held in WASM memory and the trust statement in 11.4 is adjusted.
 - Whether the Tauri shell ships the Rust core in-process from day one or starts as WASM for parity with web.
 - Link unfurling: server-fetched versus client-fetched, and whether it exists at all in personal DMs.
 - The reconciliation interval and the bounded-staleness interval (7.4), to be set from measurements.
