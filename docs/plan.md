@@ -9,7 +9,7 @@ Legend: `[x]` done · `[~]` in progress · `[ ]` not started · `(spec §n)` the
 | Step | State |
 |---|---|
 | 1. Schemas and protocol contract | Done |
-| 2. Server: event log, delivery, account log, resume, authorization | Event log done and measured; the rest specified, not built |
+| 2. Server: event log, delivery, account log, resume, authorization | Event log, account log, and all tables done; authorization, gateway, HTTP, identity endpoints next |
 | 3. Rust core | Not started |
 | 4. Identity across two instances | Specified, not built |
 | 5. MLS personal DMs, backup, recovery | Not specified, not built |
@@ -73,12 +73,12 @@ Things that moved from the first draft, with the reason. The architecture record
 
 Ordered. Each task names the spec section it implements and the tests that close it. Tests come from the spec's test list; a task is done when its tests pass in CI.
 
-**Foundations**
+**Foundations** (done 2026-11-01)
 
-- [ ] `accounts` table with `instance_role`, `last_seq`, `last_seq_at` (second granularity, `fillfactor = 70`), and `instance_settings` with `recovery_generation` read into `persistent_term` at boot (delivery §2, §8).
-- [ ] `account_events` and `account_event_payloads`, hash-partitioned by `account_id`; `Lumia.Accounts.Log.append/2` sharing the write path shape with `Lumia.Events` (delivery §2).
-- [ ] `servers`, `server_members`, `roles`, `member_roles`, `channel_overwrites`, `audit_log` (authorization §2).
-- [ ] Oban, with the `commands` purge job (delivery §9) as the first worker.
+- [x] `accounts` table with `instance_role`, `last_seq`, `last_seq_at` (second granularity, `fillfactor = 70`), and `instance_settings` with `recovery_generation` read into `persistent_term` at boot by `Lumia.Instance` (delivery §2, §8).
+- [x] `account_events` and `account_event_payloads`, hash-partitioned by `account_id`; `Lumia.Accounts.append_event/3` with the same write-path shape as `Lumia.Events` (delivery §2).
+- [x] `servers`, `server_members`, `roles`, `member_roles`, `channel_overwrites`, `audit_log` with `Lumia.Audit.record/4` (authorization §2, §9). `channels` gained `server_id`, `name`, `topic`, `position`.
+- [x] Oban 2.24 with `Lumia.Workers.PurgeCommands` on a daily cron (delivery §9). A retry after purge surfaces as `CONFLICT`, never a duplicate message; tested.
 
 **Authorization**
 

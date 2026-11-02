@@ -132,15 +132,30 @@ defmodule Lumia.Events do
   # Only message creation is materialized in the spike. Edits, deletes and
   # reactions follow when the full event types land.
   defp materialize(channel_id, seq, %{kind: "message_created"} = command, now) do
-    Repo.insert(%Message{
-      id: command.command_id,
-      channel_id: channel_id,
-      seq: seq,
-      author_account_id: Map.get(command, :actor_account_id),
-      parent_id: command.payload["parent_id"],
-      body: command.payload["body"],
-      created_at: now
-    })
+    # A retry after the commands row was purged lands here: the message id is
+    # the command id, so the insert collides and the caller sees a conflict,
+    # never a duplicate message (docs/specs/delivery.md section 9).
+    result =
+      %Message{
+        id: command.command_id,
+        channel_id: channel_id,
+        seq: seq,
+        author_account_id: Map.get(command, :actor_account_id),
+        parent_id: command.payload["parent_id"],
+        body: command.payload["body"],
+        created_at: now
+      }
+      |> Ecto.Changeset.change()
+      |> Ecto.Changeset.unique_constraint(:id, name: :messages_pkey)
+      |> Repo.insert()
+
+    case result do
+      {:error, %Ecto.Changeset{errors: [id: {_, [constraint: :unique] ++ _}]}} ->
+        {:error, :conflict}
+
+      other ->
+        other
+    end
   end
 
   defp materialize(_channel_id, _seq, _command, _now), do: {:ok, nil}

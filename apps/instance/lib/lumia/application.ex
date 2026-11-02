@@ -10,10 +10,12 @@ defmodule Lumia.Application do
     children = [
       LumiaWeb.Telemetry,
       Lumia.Repo,
+      # Loads instance settings (recovery generation) into persistent_term
+      # before anything that sends them to clients starts.
+      Lumia.Instance,
+      {Oban, Application.fetch_env!(:lumia, Oban)},
       {DNSCluster, query: Application.get_env(:lumia, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Lumia.PubSub},
-      # Start a worker by calling: Lumia.Worker.start_link(arg)
-      # {Lumia.Worker, arg},
       # Start to serve requests, typically the last entry
       LumiaWeb.Endpoint
     ]
