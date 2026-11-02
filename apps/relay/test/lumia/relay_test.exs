@@ -1,6 +1,8 @@
 defmodule Lumia.RelayTest do
   use ExUnit.Case, async: false
-  use Plug.Test
+
+  import Plug.Conn
+  import Plug.Test
 
   alias Lumia.Relay.Jwt
   alias Lumia.Relay.Provider.Apns
