@@ -1,0 +1,51 @@
+# The single-node profile of docs/specs/deployment.md, and the shape of
+# the multi-node one: `docker compose up -d --scale instance=2` runs two
+# nodes, which find each other through Compose's DNS for the service
+# name (DNS_CLUSTER_QUERY); Caddy in front spreads connections over them
+# and is where TLS would terminate. Set SECRET_KEY_BASE and PHX_HOST in
+# `.env`.
+#
+#   docker build -f apps/instance/Dockerfile -t lumia/instance ../../..
+#   docker compose up -d
+#   docker compose exec instance bin/lumia-admin backup /backups/$(date +%F)
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: lumia
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-lumia}
+      POSTGRES_DB: lumia
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lumia"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  instance:
+    image: lumia/instance
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://lumia:${POSTGRES_PASSWORD:-lumia}@postgres/lumia
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE:?set SECRET_KEY_BASE in .env (mix phx.gen.secret)}
+      PHX_HOST: ${PHX_HOST:-localhost}
+      DNS_CLUSTER_QUERY: instance
+      LUMIA_METRICS: "false"
+    volumes:
+      - backups:/backups
+
+  proxy:
+    image: caddy:2
+    depends_on:
+      - instance
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+
+volumes:
+  pgdata:
+  backups:

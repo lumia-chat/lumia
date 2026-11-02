@@ -1,0 +1,12 @@
+**/target
+**/node_modules
+**/_build
+**/deps
+**/dist
+**/.work
+apps/web/src/client/pkg
+apps/web/src/design/tokens.css
+apps/instance/priv/static/ui
+apps/desktop
+docs
+.git

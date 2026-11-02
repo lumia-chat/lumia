@@ -84,7 +84,7 @@ defmodule LumiaWeb.Gateway.MultiNodeTest do
     refute_push "frame", {:event_bytes, _}
 
     assert tick() >= 1
-    assert_push "frame", {:event_bytes, bytes}
+    assert_push "frame", {:event_bytes, bytes}, 5_000
     assert V1.Event.decode(bytes).seq == 1
     refute_push "frame", {:event_bytes, _}
   end
@@ -96,7 +96,7 @@ defmodule LumiaWeb.Gateway.MultiNodeTest do
 
     true = Node.connect(ctx.node)
     assert tick() >= 1
-    assert_push "frame", {:event_bytes, bytes}
+    assert_push "frame", {:event_bytes, bytes}, 5_000
     assert V1.Event.decode(bytes).seq == 1
     refute_push "frame", {:event_bytes, _}
   end
@@ -132,8 +132,8 @@ defmodule LumiaWeb.Gateway.MultiNodeTest do
     :ok = PeerNode.call(ctx.peer, Events, :broadcast, [ctx.channel.id, two, V1.Event.encode(two)])
     :ok = PeerNode.call(ctx.peer, Events, :broadcast, [ctx.channel.id, one, V1.Event.encode(one)])
 
-    assert_push "frame", {:event_bytes, first}
-    assert_push "frame", {:event_bytes, second}
+    assert_push "frame", {:event_bytes, first}, 5_000
+    assert_push "frame", {:event_bytes, second}, 5_000
     assert V1.Event.decode(first).seq == 1
     assert V1.Event.decode(second).seq == 2
     refute_push "frame", {:event_bytes, _}

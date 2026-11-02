@@ -47,3 +47,6 @@ config :phoenix,
 
 # A trusted web origin for the CORS and web-device tests.
 config :lumia, :identity, web_origins: ["http://localhost:5173"]
+
+# Pushes go to the test that asked for them, never to a push service.
+config :lumia, :push_sender, Lumia.Push.Sender.Test

@@ -46,6 +46,9 @@ async function waitFor(url: string, what: string) {
   throw new Error(`${what} did not answer at ${url}`);
 }
 
+// The page of the step in progress, for a screenshot when it fails.
+const live: { page: Page | null } = { page: null };
+
 async function open(which: string, name: string, keep = false): Promise<{ ctx: BrowserContext; page: Page }> {
   const profile = resolve(work, `profile-${name}-${which}`);
   if (!keep) rmSync(profile, { recursive: true, force: true });
@@ -55,6 +58,7 @@ async function open(which: string, name: string, keep = false): Promise<{ ctx: B
   const launched = engine.launchPersistentContext(profile, { viewport: { width: 1440, height: 960 }, timeout: 60_000 }).then(async (ctx) => ({ ctx, page: await ctx.newPage() }));
   const { ctx, page } = await Promise.race([launched, Bun.sleep(90_000).then(() => Promise.reject(new Error(`${which} did not open a page within 90 s`)))]);
   console.log(`  [${which}] browser ${ctx.browser()?.version() ?? "?"} up`);
+  live.page = page;
   page.on("pageerror", (e) => console.log(`  [${which}] page error: ${e.message}`));
   page.on("console", (m) => {
     if (m.type() === "error") console.log(`  [${which}] console: ${m.text()}`);
@@ -116,6 +120,20 @@ async function signInSteps(which: string, page: Page, handle: string) {
   await page.reload();
   await page.getByText(body).waitFor();
   await page.screenshot({ path: `${out}/${which}-channel.png` });
+  // Turning notifications on registers the service worker (Chromium:
+  // Playwright's WebKit has no service workers; the subscription itself
+  // needs a push service, which a headless browser has no account with).
+  if (which === "chromium") {
+    await page.context().grantPermissions(["notifications"]);
+    await page.getByRole("button", { name: "Turn on notifications" }).click();
+    const sw = await page.evaluate(() =>
+      Promise.race([
+        navigator.serviceWorker.ready.then((r) => r.active?.scriptURL ?? ""),
+        new Promise<string>((resolve) => setTimeout(() => resolve(""), 15_000)),
+      ]),
+    );
+    if (!sw.endsWith("/sw.js")) throw new Error(`no service worker (${sw || "none"})`);
+  }
   // At rest (e2ee spec 8): no file in OPFS starts a page with SQLite's
   // plaintext header, so the stores are ciphertext without the key.
   const plain = await page.evaluate(async () => {
@@ -263,6 +281,15 @@ try {
       } catch (e) {
         failed++;
         console.log(`  ${which}: ${name} FAILED: ${e instanceof Error ? e.message.split("\n")[0] : String(e)}`);
+        try {
+          const page = live.page;
+          if (page) {
+            await page.screenshot({ path: `${out}/${which}-${name.replace(/\s+/g, "-")}-failed.png`, timeout: 10_000 });
+            console.log(`  [${which}] at ${page.url()}: ${(await page.textContent("body", { timeout: 5_000 }))?.replace(/\s+/g, " ").slice(0, 200)}`);
+          }
+        } catch {
+          /* the page may be gone */
+        }
       }
     }
   }

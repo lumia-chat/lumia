@@ -67,6 +67,9 @@ defmodule LumiaWeb.Router do
     get "/channels/:channel_id/messages", ChannelController, :messages
     post "/channels/:channel_id/commands", ChannelController, :command
 
+    put "/push/subscription", PushController, :put
+    delete "/push/subscription", PushController, :delete
+
     post "/dms/personal", DmController, :open_personal
     post "/dm-requests", DmController, :send_request
     post "/dm-requests/:request_id/respond", DmController, :respond

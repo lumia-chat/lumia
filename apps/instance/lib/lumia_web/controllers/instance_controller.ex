@@ -20,6 +20,11 @@ defmodule LumiaWeb.InstanceController do
       identity_proof_sign_in_enabled: Keyword.get(config, :identity_proof_sign_in, true),
       identity_proof_create_enabled: Keyword.get(config, :identity_proof_create, true),
       open_registration: Keyword.get(config, :open_registration, true),
+      web_push_public_key:
+        case Lumia.Instance.settings().vapid_public_key do
+          nil -> ""
+          key -> Base.url_encode64(key, padding: false)
+        end,
       turn_configured: false,
       push_relay_enabled: false,
       reactions:

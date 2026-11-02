@@ -246,6 +246,8 @@ The upload URL is single-use and expires. The attachment ID is then referenced f
 | `POST /friends/requests` | `FriendRequestRequest` → 204 |
 | `POST /friends/requests/{account_id}/accept` | → 204 |
 | `DELETE /friends/{account_id}` | → 204 |
+| `PUT /push/subscription` | `PushSubscription` → 204 | One per (device, kind), replacing the previous. Content-free pushes ("New message") go to devices with no live session, for personal DM messages and account mentions (architecture 15.5). |
+| `DELETE /push/subscription?kind=` | → 204 | Removes this device's subscription of that kind. |
 | `POST /dm-requests` | `SendDmRequestRequest` → `DmRequest` (201); `ALREADY_EXISTS` when the pair already has a personal DM; `NOT_FOUND` for a sender the recipient blocked |
 | `POST /dm-requests/{request_id}/respond` | `RespondDmRequestRequest` → `DmRequest`; only the recipient; accepting opens the pair's personal DM and puts `DmRequestUpdated` then `ChannelAdded` on both account logs |
 | `PUT /blocks` | `UpdateBlockListRequest` → 204 |

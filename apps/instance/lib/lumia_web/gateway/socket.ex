@@ -22,6 +22,7 @@ defmodule LumiaWeb.Gateway.Socket do
 
     case Auth.verify_access(token) do
       {:ok, session} ->
+        :telemetry.execute([:lumia, :gateway, :connect], %{count: 1}, %{})
         # One connection per session (protocol 6.1): a session process that
         # is already live for this session closes its socket with
         # DISCONNECT_PROTOCOL_ERROR. This connection's own session process

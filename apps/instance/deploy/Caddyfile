@@ -1,0 +1,4 @@
+:4000 {
+	# The instance nodes, by Compose's DNS for the service; WebSockets pass through.
+	reverse_proxy instance:4000
+}

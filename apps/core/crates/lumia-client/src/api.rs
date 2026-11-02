@@ -19,8 +19,8 @@ use lumia_core::proto::{
     IdentityProofSignInRequest, ListAccountEventsResponse, ListChannelsResponse,
     ListEventsResponse, ListMembersResponse, ListServersResponse, OpenPersonalDmRequest,
     OpenPersonalDmResponse, PasswordSignInRequest, PublishGroupInfoRequest,
-    PublishKeyPackagesRequest, PublishRosterRequest, ReauthRequest, ReauthResponse, RefreshRequest,
-    RevokeDeviceRequest, Server, SignedRoster, TokenPair,
+    PublishKeyPackagesRequest, PublishRosterRequest, PushSubscription, ReauthRequest,
+    ReauthResponse, RefreshRequest, RevokeDeviceRequest, Server, SignedRoster, TokenPair,
 };
 use lumia_core::proto::{
     DmRequest, DmRequestState, GetHistoryChunkResponse, GetIdentityBackupResponse,
@@ -751,6 +751,36 @@ impl Api {
     ) -> Result<GetHistoryChunkResponse, ClientError> {
         self.get(&format!("/api/v1/history/chunks/{chunk_id}"))
             .await
+    }
+
+    /// `PUT /push/subscription`: this device's push subscription of one
+    /// kind, replacing the previous (architecture 15.5).
+    ///
+    /// # Errors
+    /// `INVALID_ARGUMENT` for a malformed subscription; transport failure.
+    pub async fn put_push_subscription(
+        &self,
+        subscription: &PushSubscription,
+    ) -> Result<(), ClientError> {
+        self.empty(
+            reqwest::Method::PUT,
+            "/api/v1/push/subscription",
+            Some(subscription.encode_to_vec()),
+        )
+        .await
+    }
+
+    /// `DELETE /push/subscription?kind=`.
+    ///
+    /// # Errors
+    /// On transport failure or an API error.
+    pub async fn delete_push_subscription(&self, kind: &str) -> Result<(), ClientError> {
+        self.empty(
+            reqwest::Method::DELETE,
+            &format!("/api/v1/push/subscription?kind={}", url_encode(kind)),
+            None,
+        )
+        .await
     }
 
     /// `DELETE /history/chunks/{chunk_id}`.

@@ -44,9 +44,30 @@ defmodule Lumia.Instance do
     settings
   end
 
+  @doc "The settings row as last loaded."
+  def settings, do: :persistent_term.get(@key)
+
+  @doc "Generates the VAPID key pair once (first boot), then reloads."
+  def ensure_vapid do
+    case Repo.one!(Settings) do
+      %Settings{vapid_private_key: nil} = settings ->
+        {public, private} = :crypto.generate_key(:ecdh, :prime256v1)
+
+        {:ok, _} =
+          settings
+          |> Ecto.Changeset.change(vapid_public_key: public, vapid_private_key: private)
+          |> Repo.update()
+
+        reload()
+
+      _settings ->
+        reload()
+    end
+  end
+
   @impl GenServer
   def init(_opts) do
-    reload()
+    ensure_vapid()
     {:ok, %{}}
   end
 end

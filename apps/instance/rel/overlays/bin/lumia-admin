@@ -1,0 +1,15 @@
+#!/bin/sh
+# Operator commands (docs/specs/deployment.md): run inside the release.
+#   bin/lumia-admin migrate
+#   bin/lumia-admin backup <dir>
+#   bin/lumia-admin restore <dir> [--replace]
+set -eu
+here=$(dirname "$0")
+case "${1:-}" in
+  migrate) exec "$here/lumia" eval "Lumia.Release.migrate()" ;;
+  backup)  exec "$here/lumia" eval "Lumia.Release.backup(\"$2\")" ;;
+  restore)
+    replace=false; [ "${3:-}" = "--replace" ] && replace=true
+    exec "$here/lumia" eval "Lumia.Release.restore(\"$2\", replace: $replace) |> IO.inspect()" ;;
+  *) echo "usage: lumia-admin migrate | backup <dir> | restore <dir> [--replace]" >&2; exit 64 ;;
+esac

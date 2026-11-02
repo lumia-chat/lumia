@@ -45,7 +45,9 @@ defmodule LumiaWeb.Gateway.Reconciler do
       )
     end)
 
-    length(channels) + length(accounts)
+    behind = length(channels) + length(accounts)
+    :telemetry.execute([:lumia, :reconciler, :tick], %{count: 1, behind: behind}, %{})
+    behind
   end
 
   @impl GenServer

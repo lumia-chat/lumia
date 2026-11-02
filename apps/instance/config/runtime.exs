@@ -22,6 +22,37 @@ end
 
 config :lumia, LumiaWeb.Endpoint, http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 
+# The instance's own settings (docs/specs/deployment.md section 3), in
+# every environment so a developer can set them too.
+config :lumia, :instance,
+  operator_name: System.get_env("LUMIA_OPERATOR_NAME", ""),
+  operator_url: System.get_env("LUMIA_OPERATOR_URL", ""),
+  terms_url: System.get_env("LUMIA_TERMS_URL", ""),
+  privacy_url: System.get_env("LUMIA_PRIVACY_URL", ""),
+  open_registration: System.get_env("LUMIA_OPEN_REGISTRATION", "true") == "true"
+
+if origins = System.get_env("LUMIA_WEB_ORIGINS") do
+  config :lumia, :identity,
+    web_origins:
+      origins |> String.split(",") |> Enum.map(&String.trim/1) |> Enum.reject(&(&1 == ""))
+end
+
+if path = System.get_env("LUMIA_MASTER_KEY_FILE") do
+  config :lumia, :master_key_file, path
+end
+
+config :lumia, :metrics, System.get_env("LUMIA_METRICS") == "true"
+
+# Push (architecture 15.5): the relay for APNs and FCM, and the contact
+# the VAPID token names.
+if relay = System.get_env("LUMIA_PUSH_RELAY_URL") do
+  config :lumia, :push_relay_url, String.trim_trailing(relay, "/")
+end
+
+if contact = System.get_env("LUMIA_PUSH_CONTACT") do
+  config :lumia, :push_contact, contact
+end
+
 if config_env() == :prod do
   database_url =
     System.get_env("DATABASE_URL") ||

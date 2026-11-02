@@ -101,7 +101,34 @@ message InstanceInfo {
   // Reaction registry.
   repeated ReactionDefinition reactions = 12;
   uint64 recovery_generation = 13;
+  // Web Push (RFC 8292): the instance's VAPID public key, uncompressed
+  // P-256 point, base64url without padding. Empty when Web Push is off.
+  string web_push_public_key = 14;
 }
+
+// ---- Push (architecture 15.5, docs/specs/deployment.md) --------------------
+
+enum PushKind {
+  PUSH_KIND_UNSPECIFIED = 0;
+  WEB_PUSH = 1;       // RFC 8030/8291/8292, served by the instance itself
+  UNIFIED_PUSH = 2;   // a plain POST to the endpoint, served by the instance itself
+  RELAY_APNS = 3;     // through the relay, with the device's APNs token
+  RELAY_FCM = 4;      // through the relay, with the device's FCM token
+}
+
+// PUT /push/subscription — one per (device, kind); replaces the previous.
+// The instance pushes content-free notifications ("New message") for
+// personal DMs and mentions to devices with no live session.
+message PushSubscription {
+  PushKind kind = 1;
+  // WEB_PUSH and UNIFIED_PUSH: the push service URL. RELAY_*: the device token.
+  string endpoint = 2;
+  // WEB_PUSH: the subscription's keys, base64url without padding.
+  string p256dh = 3;
+  string auth = 4;
+}
+
+// DELETE /push/subscription?kind= — removes this device's subscription of that kind.
 
 message ReactionDefinition {
   string key = 1;

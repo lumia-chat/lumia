@@ -54,6 +54,11 @@ defmodule LumiaWeb.Gateway.SessionChannel do
     # anything is delivered (delivery section 5).
     :ok = :net_kernel.monitor_nodes(true)
 
+    {:ok, _} =
+      LumiaWeb.Presence.track(self(), "devices", socket.assigns.device_id, %{
+        account_id: socket.assigns.account_id
+      })
+
     socket =
       assign(socket,
         subscriptions: %{},
@@ -131,6 +136,8 @@ defmodule LumiaWeb.Gateway.SessionChannel do
 
     with {:ok, _sub} <- authorize_write(socket, channel_id, command),
          {:ok, ack} <- Events.append(channel_id, actor, command) do
+      :telemetry.execute([:lumia, :gateway, :ack], %{count: 1}, %{})
+
       ack = %V1.Ack{
         command_id: command.command_id,
         channel_id: command.channel_id,

@@ -18,7 +18,7 @@ import {
   type ChannelItem,
 } from "../design/components";
 import type { ChannelSummary, MessageSummary, ServerSummary } from "../client/bridge";
-import { client, connection, messagesQuery, queryClient, snapshotQuery, startGateway } from "../client/state";
+import { checkPush, client, connection, enableNotifications, messagesQuery, pushState, queryClient, snapshotQuery, startGateway } from "../client/state";
 import { ConversationAside, HomeMain, HomeSidebar, type HomeView } from "./home";
 
 const TONES = ["peach", "blue", "purple", "mint", "amber", "sky", "stone", "green", "indigo"] as const;
@@ -87,6 +87,7 @@ export function App() {
       if (!list.some((c) => c.channelId === channelId())) setChannelId(list[0]?.channelId);
     }),
   );
+  void checkPush();
 
   const send = async () => {
     const id = channelId();
@@ -137,8 +138,14 @@ export function App() {
           <ServerHeader name={server()?.name ?? "Lumia"} />
           <SearchTrigger label={`Search ${server()?.name ?? ""}`} />
           <ChannelList sections={[{ title: "Channels", items: items() }]} />
+          <Show when={pushState() === "off" || pushState() === "failed"}>
+            <button type="button" class="lu-link app__push" onClick={() => void enableNotifications()}>
+              Turn on notifications
+            </button>
+          </Show>
           <p class="app__status" aria-live="polite">
             {connection()}
+            {pushState() === "subscribed" ? " · notifications on" : pushState() === "denied" ? " · notifications blocked" : ""}
           </p>
         </Show>
       }

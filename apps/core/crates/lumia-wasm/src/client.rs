@@ -109,6 +109,8 @@ struct InstanceSummary {
     identity_proof_sign_in_enabled: bool,
     identity_proof_create_enabled: bool,
     open_registration: bool,
+    /// The VAPID public key for Web Push, base64url; empty when off.
+    web_push_public_key: String,
 }
 
 #[derive(Serialize)]
@@ -648,6 +650,7 @@ impl Client {
             identity_proof_sign_in_enabled: info.identity_proof_sign_in_enabled,
             identity_proof_create_enabled: info.identity_proof_create_enabled,
             open_registration: info.open_registration,
+            web_push_public_key: info.web_push_public_key,
         })
     }
 
@@ -747,6 +750,42 @@ impl Client {
                 .collect(),
             pending_requests: snap.pending_requests.iter().map(request_summary).collect(),
         })
+    }
+
+    /// Registers this device's Web Push subscription with the instance
+    /// (architecture 15.5): the push service URL and the subscription's
+    /// keys, base64url without padding.
+    ///
+    /// # Errors
+    /// `INVALID_ARGUMENT` for a malformed subscription; transport failure.
+    #[wasm_bindgen(js_name = pushSubscribe)]
+    pub async fn push_subscribe(
+        &self,
+        endpoint: String,
+        p256dh: String,
+        auth: String,
+    ) -> Result<(), JsError> {
+        self.api
+            .put_push_subscription(&lumia_core::proto::PushSubscription {
+                kind: lumia_core::proto::PushKind::WebPush as i32,
+                endpoint,
+                p256dh,
+                auth,
+            })
+            .await
+            .map_err(js)
+    }
+
+    /// Removes this device's Web Push subscription from the instance.
+    ///
+    /// # Errors
+    /// On transport or API failure.
+    #[wasm_bindgen(js_name = pushUnsubscribe)]
+    pub async fn push_unsubscribe(&self) -> Result<(), JsError> {
+        self.api
+            .delete_push_subscription("web_push")
+            .await
+            .map_err(js)
     }
 
     /// `GET /accounts/{id}`: another account's public profile, when

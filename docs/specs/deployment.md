@@ -42,6 +42,8 @@ All configuration is environment variables read at boot (`config/runtime.exs`); 
 | `LUMIA_OPERATOR_NAME`, `LUMIA_OPERATOR_URL`, `LUMIA_TERMS_URL`, `LUMIA_PRIVACY_URL` | no | The trust card (`GET /instance`) |
 | `LUMIA_OPEN_REGISTRATION` | no | `true` (default) or `false` |
 | `LUMIA_METRICS` | no | `true` exposes `/metrics` (section 7); default `false` |
+| `LUMIA_PUSH_RELAY_URL` | for APNs and FCM | The push relay (architecture 15.5); without it, relay subscriptions are kept and skipped |
+| `LUMIA_PUSH_CONTACT` | no | The address the Web Push VAPID token names (`mailto:`); default `ops@` the host |
 
 ## 4. Backups and restore
 

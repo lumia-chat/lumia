@@ -13,6 +13,7 @@ export interface InstanceSummary {
   identityProofSignInEnabled: boolean;
   identityProofCreateEnabled: boolean;
   openRegistration: boolean;
+  webPushPublicKey: string;
 }
 export interface ServerSummary {
   serverId: string;
@@ -235,6 +236,12 @@ export class Bridge {
   }
   identityRevoke(deviceId: string, password: string): Promise<RosterSummary> {
     return this.call("identityRevoke", deviceId, password);
+  }
+  pushSubscribe(endpoint: string, p256dh: string, auth: string): Promise<void> {
+    return this.call("pushSubscribe", endpoint, p256dh, auth);
+  }
+  pushUnsubscribe(): Promise<void> {
+    return this.call("pushUnsubscribe");
   }
   account(accountId: string): Promise<MemberSummary> {
     return this.call("account", accountId);

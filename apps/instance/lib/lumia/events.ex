@@ -65,6 +65,7 @@ defmodule Lumia.Events do
 
   defp settle({:ok, {ack, {event, bytes}}}, channel_id, _actor, _command, _key, opts) do
     broadcast_after_commit(channel_id, event, bytes, opts)
+    Tx.after_commit(fn -> Lumia.Push.after_commit(channel_id, event) end)
 
     {:ok, ack}
   end

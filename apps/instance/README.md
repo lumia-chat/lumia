@@ -61,3 +61,16 @@ cd ../web && bun run build:instance   # builds into ../instance/priv/static/ui
 ```
 
 Every path the API does not claim then renders the app's `index.html`; without a build the instance answers those paths with a plain note. The directory is not in the repo; a release build installs it.
+
+## Deploying
+
+[docs/specs/deployment.md](../../docs/specs/deployment.md) is the contract. In short:
+
+```sh
+docker build -f apps/instance/Dockerfile -t lumia/instance .   # from the repository root; builds the web UI in
+cd apps/instance/deploy && cp .env.example .env               # SECRET_KEY_BASE, PHX_HOST, POSTGRES_PASSWORD
+docker compose up -d                                           # one node; --scale instance=2 for two
+docker compose exec instance bin/lumia-admin backup /backups/$(date +%F)
+```
+
+The release's own commands are `bin/lumia-admin migrate | backup <dir> | restore <dir> [--replace]` (`Lumia.Release`). Every setting is an environment variable listed in the spec's section 3; `LUMIA_METRICS=true` serves Prometheus text at `/metrics`.

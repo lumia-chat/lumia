@@ -70,6 +70,39 @@ export async function openInstance(baseUrl: string): Promise<Opened> {
   return result;
 }
 
+export type PushState = "unknown" | "off" | "subscribed" | "unavailable" | "denied" | "failed";
+const [pushState, setPushState] = createSignal<PushState>("unknown");
+export { pushState };
+
+/** Whether this browser already registered the worker (and so asked before). */
+export async function checkPush(): Promise<void> {
+  if (pushState() !== "unknown") return;
+  if (inShell() || typeof navigator === "undefined" || !("serviceWorker" in navigator) || !("PushManager" in window)) {
+    setPushState("unavailable");
+    return;
+  }
+  try {
+    const registration = await navigator.serviceWorker.getRegistration("/");
+    const subscription = registration && (await registration.pushManager.getSubscription());
+    setPushState(subscription ? "subscribed" : "off");
+  } catch {
+    setPushState("off");
+  }
+}
+
+/**
+ * Turns notifications on from a user gesture (browsers require one for
+ * the permission): registers the service worker, subscribes with the
+ * instance's key, and registers the subscription with the instance.
+ */
+export async function enableNotifications(): Promise<PushState> {
+  const { enablePush } = await import("./push");
+  const info = await client().instanceInfo();
+  const outcome = await enablePush(info.webPushPublicKey);
+  setPushState(outcome);
+  return outcome;
+}
+
 /** Starts the gateway loop once and routes its events into the queries. */
 export async function startGateway(channelIds: string[]): Promise<void> {
   if (started()) return;

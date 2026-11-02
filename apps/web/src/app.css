@@ -49,3 +49,5 @@ a { color: var(--link); }
 .app__person { cursor: default; }
 .app__person .lu-member__text { flex: 1; min-width: 0; }
 .app__row { display: flex; flex-wrap: wrap; gap: var(--space-8); }
+.app__push { margin: auto 0 0; padding: var(--space-8) var(--space-12); font: inherit; font-size: 12.5px; text-align: left; background: none; border: 0; cursor: pointer; }
+.app__push + .app__status { margin-top: 0; }

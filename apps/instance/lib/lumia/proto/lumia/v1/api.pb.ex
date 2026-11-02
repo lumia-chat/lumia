@@ -1,3 +1,19 @@
+defmodule Lumia.V1.PushKind do
+  @moduledoc false
+
+  use Protobuf,
+    enum: true,
+    full_name: "lumia.v1.PushKind",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :PUSH_KIND_UNSPECIFIED, 0
+  field :WEB_PUSH, 1
+  field :UNIFIED_PUSH, 2
+  field :RELAY_APNS, 3
+  field :RELAY_FCM, 4
+end
+
 defmodule Lumia.V1.TokenPair do
   @moduledoc false
 
@@ -161,6 +177,21 @@ defmodule Lumia.V1.InstanceInfo do
   field :push_relay_enabled, 11, type: :bool, json_name: "pushRelayEnabled"
   field :reactions, 12, repeated: true, type: Lumia.V1.ReactionDefinition
   field :recovery_generation, 13, type: :uint64, json_name: "recoveryGeneration"
+  field :web_push_public_key, 14, type: :string, json_name: "webPushPublicKey"
+end
+
+defmodule Lumia.V1.PushSubscription do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.PushSubscription",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :kind, 1, type: Lumia.V1.PushKind, enum: true
+  field :endpoint, 2, type: :string
+  field :p256dh, 3, type: :string
+  field :auth, 4, type: :string
 end
 
 defmodule Lumia.V1.ReactionDefinition do

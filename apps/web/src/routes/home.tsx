@@ -26,7 +26,7 @@ import {
   type DeviceEntry,
 } from "../design/components";
 import { ClientError, type ChannelSummary, type DeviceSummary, type DmMessageSummary, type MemberSummary, type SnapshotSummary } from "../client/bridge";
-import { client, dmChannelsQuery, dmMessagesQuery, hasIdentityQuery, peopleQuery, profileOf, queryClient, rosterQuery } from "../client/state";
+import { client, dmChannelsQuery, dmMessagesQuery, enableNotifications, hasIdentityQuery, peopleQuery, profileOf, pushState, queryClient, rosterQuery } from "../client/state";
 import { initialsOf, timeOf, toneFor } from "./app";
 
 export type HomeView = "dm" | "requests" | "devices" | "new";
@@ -440,6 +440,15 @@ function Devices(props: HomeProps) {
         <Notice icon="shield" action={{ label: "Link a device", onClick: props.toLink }}>
           Your identity lives on these devices, not on any instance. Revoking one takes effect on every instance that holds your roster.
         </Notice>
+        <Show when={pushState() !== "unavailable"}>
+          <Notice icon="mention" action={pushState() === "subscribed" ? undefined : { label: "Turn on notifications", onClick: () => void enableNotifications() }}>
+            {pushState() === "subscribed"
+              ? "This browser gets a notification for new personal messages and mentions while it has no live session. The notice says nothing more; the app fetches the message."
+              : pushState() === "denied"
+                ? "Notifications are blocked for this site in the browser's settings."
+                : "This browser can get a notification for new personal messages and mentions while it has no live session. The notice says nothing more; the app fetches the message."}
+          </Notice>
+        </Show>
         <Show when={roster.data} fallback={<EmptyState icon="shield" title={roster.isLoading ? "Looking…" : "No identity on this device"} />}>
           <DeviceList devices={entries()} onRevoke={(d) => setRevoking(roster.data?.devices.find((x) => x.deviceId === d.id) ?? null)} />
         </Show>
