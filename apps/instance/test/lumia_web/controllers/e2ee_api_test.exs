@@ -46,15 +46,72 @@ defmodule LumiaWeb.E2eeApiTest do
     a
   end
 
-  test "open a personal DM: 201 then 200 with existed", %{conn: conn} do
+  test "a DM request, its answer, and the personal DM it opens", %{conn: conn} do
     a = account("a")
     b = account("b")
     req = %V1.OpenPersonalDmRequest{participant_account_ids: [Proto.uuid(b.id)]}
 
-    first = conn |> authed(a) |> send_proto(:post, "/api/v1/dms/personal", req)
-    assert first.status == 201
+    refused = conn |> authed(a) |> send_proto(:post, "/api/v1/dms/personal", req)
+    assert refused.status == 400
 
-    assert %V1.OpenPersonalDmResponse{existed: false, channel: ch} =
+    assert %V1.Error{code: :FAILED_PRECONDITION, details: %{"state" => "request"}} =
+             decode(refused, V1.Error)
+
+    sent =
+      conn
+      |> authed(a)
+      |> send_proto(:post, "/api/v1/dm-requests", %V1.SendDmRequestRequest{
+        to_account_id: Proto.uuid(b.id)
+      })
+
+    assert sent.status == 201
+    assert %V1.DmRequest{request_id: rid, state: :PENDING} = decode(sent, V1.DmRequest)
+    request_id = Proto.from_uuid(rid)
+
+    not_mine =
+      conn
+      |> authed(a)
+      |> send_proto(
+        :post,
+        "/api/v1/dm-requests/#{request_id}/respond",
+        %V1.RespondDmRequestRequest{
+          response: :ACCEPTED
+        }
+      )
+
+    assert not_mine.status == 404
+
+    bad =
+      conn
+      |> authed(b)
+      |> send_proto(
+        :post,
+        "/api/v1/dm-requests/#{request_id}/respond",
+        %V1.RespondDmRequestRequest{
+          response: :PENDING
+        }
+      )
+
+    assert bad.status == 400
+
+    accepted =
+      conn
+      |> authed(b)
+      |> send_proto(
+        :post,
+        "/api/v1/dm-requests/#{request_id}/respond",
+        %V1.RespondDmRequestRequest{
+          response: :ACCEPTED
+        }
+      )
+
+    assert accepted.status == 200
+    assert %V1.DmRequest{state: :ACCEPTED} = decode(accepted, V1.DmRequest)
+
+    first = conn |> authed(a) |> send_proto(:post, "/api/v1/dms/personal", req)
+    assert first.status == 200
+
+    assert %V1.OpenPersonalDmResponse{existed: true, channel: ch} =
              decode(first, V1.OpenPersonalDmResponse)
 
     assert ch.kind == :PERSONAL_DM
@@ -89,7 +146,7 @@ defmodule LumiaWeb.E2eeApiTest do
 
     assert (conn |> authed(stranger) |> get("/api/v1/accounts/#{b.id}/roster")).status == 404
 
-    {:ok, ch, false} = Lumia.Dms.open_personal(a.id, [b.id])
+    %{channel: ch} = personal_dm(a, b)
 
     fetched = conn |> authed(a) |> get("/api/v1/accounts/#{b.id}/roster")
     assert fetched.status == 200

@@ -107,6 +107,21 @@ defmodule Lumia.Proto do
     }
   end
 
+  def dm_request(%Lumia.Dms.Request{} = r) do
+    %V1.DmRequest{
+      request_id: uuid(r.id),
+      from_account_id: uuid(r.from_account_id),
+      to_account_id: uuid(r.to_account_id),
+      state: dm_request_state(r.state),
+      created_at: timestamp(r.created_at)
+    }
+  end
+
+  def dm_request_state("pending"), do: :PENDING
+  def dm_request_state("accepted"), do: :ACCEPTED
+  def dm_request_state("declined"), do: :DECLINED
+  def dm_request_state("blocked"), do: :BLOCKED
+
   def account(%Lumia.Accounts.Account{} = a) do
     %V1.Account{
       account_id: uuid(a.id),

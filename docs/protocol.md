@@ -202,7 +202,7 @@ Base path `/api/v1`. All endpoints require `Authorization: Bearer <access_token>
 | `POST /channels` | `CreateChannelRequest` → `Channel` |
 | `PATCH /channels/{channel_id}` | `Channel` (partial) → `Channel` |
 | `DELETE /channels/{channel_id}` | → 204 |
-| `POST /dms/personal` | `OpenPersonalDmRequest` → `OpenPersonalDmResponse` |
+| `POST /dms/personal` | `OpenPersonalDmRequest` → `OpenPersonalDmResponse` (200 existing, 201 new); `FAILED_PRECONDITION{state: "request"}` without an accepted DM request with each participant; three or more participants open a new `PERSONAL_GROUP_DM` |
 | `GET /servers/{server_id}/members` | `ListMembersRequest` as query → `ListMembersResponse` |
 | `PATCH /servers/{server_id}/members/{account_id}` | `UpdateMemberRequest` → `Member` |
 | `DELETE /servers/{server_id}/members/{account_id}` | → 204 |
@@ -246,8 +246,8 @@ The upload URL is single-use and expires. The attachment ID is then referenced f
 | `POST /friends/requests` | `FriendRequestRequest` → 204 |
 | `POST /friends/requests/{account_id}/accept` | → 204 |
 | `DELETE /friends/{account_id}` | → 204 |
-| `POST /dm-requests` | `SendDmRequestRequest` → `DmRequest` |
-| `POST /dm-requests/{request_id}/respond` | `RespondDmRequestRequest` → `DmRequest` |
+| `POST /dm-requests` | `SendDmRequestRequest` → `DmRequest` (201); `ALREADY_EXISTS` when the pair already has a personal DM; `NOT_FOUND` for a sender the recipient blocked |
+| `POST /dm-requests/{request_id}/respond` | `RespondDmRequestRequest` → `DmRequest`; only the recipient; accepting opens the pair's personal DM and puts `DmRequestUpdated` then `ChannelAdded` on both account logs |
 | `PUT /blocks` | `UpdateBlockListRequest` → 204 |
 
 Search results are filtered by the caller's channel permissions at query time.

@@ -50,7 +50,8 @@ lumia-cli identity claim <code>                  # on the new device
 lumia-cli identity revoke <device-id> --phrase '...'       # root-signed
 lumia-cli identity revoke <device-id> --password '...'     # device-signed, reauth by password
 lumia-cli identity link-account --password '...'           # bind a password account to the identity
-lumia-cli identity recover --phrase '...'        # no device left: revoke them all, add this one
+lumia-cli identity recover --phrase '...'        # no device left: revoke them all, add this one, read the backup
+lumia-cli identity backup                        # write the identity backup here (sync writes it everywhere)
 lumia-cli identity status                        # the roster version each instance holds
 lumia-cli identity sync                          # publish this device's roster everywhere
 ```
@@ -59,9 +60,13 @@ Personal DMs (specs/e2ee.md) are end-to-end encrypted with MLS; the device that 
 
 ```sh
 lumia-cli dm setup                               # publish key packages now; prints the account id
-lumia-cli dm open <account-id>                   # open the DM; the opener creates the group
+lumia-cli dm request <account-id>                # ask for a DM; they answer with:
+lumia-cli dm requests                            # pending requests to this account
+lumia-cli dm respond <request-id> accept         # the accepter creates the group (or decline, block)
+lumia-cli dm open <account-id> [<account-id>...] # the pair's DM, or a new group DM; needs accepted requests
 lumia-cli dm tail <channel-id>                   # join from the welcome, decrypt as events arrive
 lumia-cli dm send <channel-id> "hello"
+lumia-cli dm delete <channel-id> <message-id>    # a deleted message also leaves the backup
 lumia-cli dm messages <channel-id>               # the projection this device holds
 lumia-cli dm backup on|off|status                # history backup on this instance (spec section 9)
 lumia-cli dm restore                             # replay every device's backup into this one
@@ -70,7 +75,7 @@ lumia-cli dm rejoin <channel-id>                 # after recovery: external comm
 
 A device revoked from the roster is removed from every group by the first device that learns of it, and refused by the others from the moment they hold the new roster. A newly linked device is added to every group by the first member that sees it in the roster and finds its key packages.
 
-`scenario <name>` (or `all`) runs the failure-injection cases a client can drive on its own against the instance (delivery spec 12, identity spec 12): `token-rotation`, `frame-before-hello`, `duplicate-command`, `snapshot-under-writes`, `snapshot-threshold`, `stale-roster`, `device-revoke`, `roster-rules`, `reconnect`. Each sets up a throwaway server or identity and fails with what it saw.
+`scenario <name>` (or `all`) runs the failure-injection cases a client can drive on its own against the instance (delivery spec 12, identity spec 12): `token-rotation`, `frame-before-hello`, `duplicate-command`, `snapshot-under-writes`, `snapshot-threshold`, `stale-roster`, `device-revoke`, `roster-rules`, `last-resort`, `reconnect`. Each sets up a throwaway server or identity and fails with what it saw.
 
 ## Identity vectors
 

@@ -21,8 +21,10 @@ use lumia_core::proto::{
     RevokeDeviceRequest, Server, SignedRoster, TokenPair,
 };
 use lumia_core::proto::{
-    GetHistoryChunkResponse, HistoryUsageResponse, ListHistoryManifestsResponse,
-    PutHistoryChunkRequest, PutHistoryManifestRequest, SignedHistoryManifest,
+    DmRequest, DmRequestState, GetHistoryChunkResponse, GetIdentityBackupResponse,
+    HistoryUsageResponse, ListHistoryManifestsResponse, PutHistoryChunkRequest,
+    PutHistoryManifestRequest, PutIdentityBackupRequest, RespondDmRequestRequest,
+    SendDmRequestRequest, SignedHistoryManifest,
 };
 use prost::Message;
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
@@ -469,21 +471,87 @@ impl Api {
 
     // ---- Personal DMs and the MLS delivery service (e2ee spec section 11) ----
 
-    /// `POST /dms/personal`: opens (or finds) the personal DM with `other`.
+    /// `POST /dms/personal`: opens (or finds) the personal DM with `others`
+    /// (one other: the pair's DM; more: a new personal group DM).
     ///
     /// # Errors
-    /// On transport failure or an API error.
+    /// On transport failure or an API error (`FAILED_PRECONDITION{state:
+    /// "request"}` without an accepted DM request).
     pub async fn open_personal_dm(
         &self,
-        other: Vec<u8>,
+        others: Vec<Vec<u8>>,
     ) -> Result<OpenPersonalDmResponse, ClientError> {
         self.post(
             "/api/v1/dms/personal",
             &OpenPersonalDmRequest {
-                participant_account_ids: vec![other],
+                participant_account_ids: others,
             },
         )
         .await
+    }
+
+    /// `POST /dm-requests`.
+    ///
+    /// # Errors
+    /// On transport failure or an API error.
+    pub async fn send_dm_request(&self, to: Vec<u8>) -> Result<DmRequest, ClientError> {
+        self.post(
+            "/api/v1/dm-requests",
+            &SendDmRequestRequest { to_account_id: to },
+        )
+        .await
+    }
+
+    /// `POST /dm-requests/{id}/respond`.
+    ///
+    /// # Errors
+    /// On transport failure or an API error.
+    pub async fn respond_dm_request(
+        &self,
+        request_id: &str,
+        response: DmRequestState,
+    ) -> Result<DmRequest, ClientError> {
+        self.post(
+            &format!("/api/v1/dm-requests/{request_id}/respond"),
+            &RespondDmRequestRequest {
+                response: response as i32,
+                ..Default::default()
+            },
+        )
+        .await
+    }
+
+    /// `PUT /identity/backup`.
+    ///
+    /// # Errors
+    /// On transport failure or an API error.
+    pub async fn put_identity_backup(
+        &self,
+        version: u64,
+        ciphertext: Vec<u8>,
+        nonce: Vec<u8>,
+    ) -> Result<(), ClientError> {
+        self.empty(
+            reqwest::Method::PUT,
+            "/api/v1/identity/backup",
+            Some(
+                PutIdentityBackupRequest {
+                    version,
+                    ciphertext,
+                    nonce,
+                }
+                .encode_to_vec(),
+            ),
+        )
+        .await
+    }
+
+    /// `GET /identity/backup`.
+    ///
+    /// # Errors
+    /// On transport failure or an API error (`NOT_FOUND` when none).
+    pub async fn get_identity_backup(&self) -> Result<GetIdentityBackupResponse, ClientError> {
+        self.get("/api/v1/identity/backup").await
     }
 
     /// `GET /accounts/{id}/roster`: another participant's roster.

@@ -17,6 +17,7 @@ use lumia_core::identity::roster::{verify_roster, Verified};
 use lumia_core::mls::credential::{device_signer, LeafIdentity};
 use lumia_core::mls::group::{Commit, Conversation, Incoming};
 use lumia_core::mls::key_packages::{new_key_package, parse_key_package};
+use lumia_core::mls::projection::Projection;
 use lumia_core::mls::storage::Provider;
 use lumia_core::mls::{
     MlsError, SignatureKeyPair, KEY_PACKAGE_LIFETIME_SECS, KEY_PACKAGE_POOL,
@@ -24,8 +25,9 @@ use lumia_core::mls::{
 };
 use lumia_core::proto::{
     account_event, command, dm_operation, event, AccountEvent, Channel, ChannelKind, Command,
-    DmOperation, DmSend, EncryptedKind, EncryptedPayload, Event, HistoryChunkBody, HistoryEntry,
-    HistoryManifestBody, HistoryManifestEntry, SendEncrypted, SignedHistoryManifest, Welcome,
+    DmDelete, DmOperation, DmSend, EncryptedKind, EncryptedPayload, Event, HistoryChunkBody,
+    HistoryEntry, HistoryManifestBody, HistoryManifestEntry, SendEncrypted, SignedHistoryManifest,
+    Welcome,
 };
 use lumia_core::store::{OutboxEntry, Store as _};
 use lumia_core::sync::Notice;
@@ -517,6 +519,23 @@ impl DmEngine {
                 body: body.to_string(),
                 ..Default::default()
             })),
+        };
+        self.send_operation(channel_id, op)
+    }
+
+    /// Deletes one of this identity's messages (a `DmDelete` operation).
+    ///
+    /// # Errors
+    /// As [`DmEngine::send_operation`].
+    pub fn send_delete(
+        &mut self,
+        channel_id: &[u8],
+        message_id: Vec<u8>,
+    ) -> Result<Vec<Outcome>, ClientError> {
+        let op = DmOperation {
+            operation_id: wire::new_id(),
+            sent_at: Some(now_ts()),
+            op: Some(dm_operation::Op::Delete(DmDelete { message_id })),
         };
         self.send_operation(channel_id, op)
     }
@@ -1345,57 +1364,112 @@ impl DmEngine {
                 .meta_get(&format!("history:backed:{}", hex(&channel)))?
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0);
-            let entries: Vec<HistoryEntry> = self
+            let rows = self.store.dm_rows(&channel)?;
+            // Deleted messages leave the archive (spec section 9): their
+            // `send` is never written, and a chunk that already holds one is
+            // rewritten without it.
+            let mut projection = Projection::default();
+            let mut ops: Vec<(DmRow, DmOperation)> = Vec::new();
+            for r in rows.into_iter().filter(|r| r.status == DmStatus::Decrypted) {
+                if let Ok(op) = DmOperation::decode(r.bytes.as_slice()) {
+                    projection.apply(r.seq, &r.sender_identity_id, &r.sender_device_id, &op);
+                    ops.push((r, op));
+                }
+            }
+            let deleted_seqs: HashSet<u64> = projection
+                .messages()
+                .filter(|m| m.deleted)
+                .map(|m| m.seq)
+                .collect();
+            let entry_of = |r: &DmRow, op: &DmOperation| HistoryEntry {
+                seq: r.seq,
+                sender_identity_id: r.sender_identity_id.clone(),
+                sender_device_id: r.sender_device_id.clone(),
+                operation: Some(op.clone()),
+            };
+
+            // Chunks already written that now cover a deleted message.
+            let handled_key = format!("history:rewritten:{}", hex(&channel));
+            let mut handled: HashSet<u64> = self
                 .store
-                .dm_rows(&channel)?
-                .into_iter()
-                .filter(|r| r.seq > backed && r.status == DmStatus::Decrypted)
-                .filter_map(|r| {
-                    DmOperation::decode(r.bytes.as_slice())
-                        .ok()
-                        .map(|op| HistoryEntry {
-                            seq: r.seq,
-                            sender_identity_id: r.sender_identity_id,
-                            sender_device_id: r.sender_device_id,
-                            operation: Some(op),
+                .meta_get(&handled_key)?
+                .map(|s| s.split(',').filter_map(|x| x.parse().ok()).collect())
+                .unwrap_or_default();
+            let stale: Vec<usize> = manifest
+                .chunks
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| {
+                    e.channel_id == channel
+                        && deleted_seqs.iter().any(|s| {
+                            *s >= e.from_seq && *s <= e.through_seq && !handled.contains(s)
                         })
                 })
+                .map(|(i, _)| i)
                 .collect();
-            let (Some(first), Some(last)) = (entries.first(), entries.last()) else {
+            for i in stale {
+                let old = manifest.chunks[i].clone();
+                let entries: Vec<HistoryEntry> = ops
+                    .iter()
+                    .filter(|(r, _)| {
+                        r.seq >= old.from_seq
+                            && r.seq <= old.through_seq
+                            && !deleted_seqs.contains(&r.seq)
+                    })
+                    .map(|(r, op)| entry_of(r, op))
+                    .collect();
+                let rewritten = self
+                    .write_chunk(
+                        &backup_key,
+                        &channel,
+                        old.from_seq,
+                        old.through_seq,
+                        entries,
+                    )
+                    .await?;
+                self.api
+                    .delete_history_chunk(&wire::display(&old.chunk_id))
+                    .await?;
+                manifest.chunks[i] = rewritten;
+                for s in &deleted_seqs {
+                    if *s >= old.from_seq && *s <= old.through_seq {
+                        handled.insert(*s);
+                    }
+                }
+                written.push((channel.clone(), backed, 0));
+            }
+            self.store.set_meta(
+                &handled_key,
+                &handled
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(","),
+            )?;
+
+            // New operations since the last chunk.
+            let entries: Vec<HistoryEntry> = ops
+                .iter()
+                .filter(|(r, _)| r.seq > backed && !deleted_seqs.contains(&r.seq))
+                .map(|(r, op)| entry_of(r, op))
+                .collect();
+            let newest = ops.iter().map(|(r, _)| r.seq).max().unwrap_or(0);
+            if entries.is_empty() {
+                if newest > backed {
+                    // Everything new was deleted; the range is still covered.
+                    self.store.set_meta(
+                        &format!("history:backed:{}", hex(&channel)),
+                        &newest.to_string(),
+                    )?;
+                }
                 continue;
-            };
-            let body = HistoryChunkBody {
-                channel_id: channel.clone(),
-                host: self.api.host(),
-                from_seq: first.seq,
-                through_seq: last.seq,
-                entries: entries.clone(),
-            };
-            let mut chunk_key = [0u8; 32];
-            random(&mut chunk_key)?;
-            let (nonce, ciphertext) = seal(&chunk_key, &body.encode_to_vec())?;
-            let (wrap_nonce, wrapped_key) = seal(&backup_key, &chunk_key)?;
-            let chunk_id = wire::new_id();
-            let size = ciphertext.len() as u64;
-            self.api
-                .put_history_chunk(
-                    &wire::display(&chunk_id),
-                    channel.clone(),
-                    ciphertext,
-                    nonce,
-                )
+            }
+            let n = entries.len();
+            let entry = self
+                .write_chunk(&backup_key, &channel, backed + 1, newest, entries)
                 .await?;
-            manifest.chunks.push(HistoryManifestEntry {
-                chunk_id,
-                channel_id: channel.clone(),
-                host: self.api.host(),
-                from_seq: body.from_seq,
-                through_seq: body.through_seq,
-                wrapped_key,
-                wrap_nonce,
-                size,
-            });
-            written.push((channel, body.through_seq, entries.len()));
+            manifest.chunks.push(entry);
+            written.push((channel, newest, n));
         }
         if written.is_empty() {
             return Ok(Vec::new());
@@ -1425,13 +1499,63 @@ impl DmEngine {
         Ok(written
             .iter()
             .map(|(channel, through, n)| {
-                Outcome::Print(format!(
-                    "backed up {n} operation(s) of {} through seq {through} (manifest v{})",
-                    wire::display(channel),
-                    manifest.version
-                ))
+                if *n == 0 {
+                    Outcome::Print(format!(
+                        "rewrote a chunk of {} without a deleted message (manifest v{})",
+                        wire::display(channel),
+                        manifest.version
+                    ))
+                } else {
+                    Outcome::Print(format!(
+                        "backed up {n} operation(s) of {} through seq {through} (manifest v{})",
+                        wire::display(channel),
+                        manifest.version
+                    ))
+                }
             })
             .collect())
+    }
+
+    /// Seals and uploads one chunk, returning its manifest entry.
+    async fn write_chunk(
+        &self,
+        backup_key: &[u8],
+        channel: &[u8],
+        from_seq: u64,
+        through_seq: u64,
+        entries: Vec<HistoryEntry>,
+    ) -> Result<HistoryManifestEntry, ClientError> {
+        let body = HistoryChunkBody {
+            channel_id: channel.to_vec(),
+            host: self.api.host(),
+            from_seq,
+            through_seq,
+            entries,
+        };
+        let mut chunk_key = [0u8; 32];
+        random(&mut chunk_key)?;
+        let (nonce, ciphertext) = seal(&chunk_key, &body.encode_to_vec())?;
+        let (wrap_nonce, wrapped_key) = seal(backup_key, &chunk_key)?;
+        let chunk_id = wire::new_id();
+        let size = ciphertext.len() as u64;
+        self.api
+            .put_history_chunk(
+                &wire::display(&chunk_id),
+                channel.to_vec(),
+                ciphertext,
+                nonce,
+            )
+            .await?;
+        Ok(HistoryManifestEntry {
+            chunk_id,
+            channel_id: channel.to_vec(),
+            host: self.api.host(),
+            from_seq,
+            through_seq,
+            wrapped_key,
+            wrap_nonce,
+            size,
+        })
     }
 
     /// Restores history from every device's manifest on this instance:

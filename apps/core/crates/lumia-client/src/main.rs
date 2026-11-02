@@ -99,9 +99,24 @@ enum Cmd {
 
 #[derive(Subcommand, Debug)]
 enum DmCmd {
-    /// Open (or find) the personal DM with an account. The device that
-    /// opens it first creates the MLS group and welcomes every other device.
-    Open { account_id: String },
+    /// Open (or find) the personal DM with an account, or a personal group
+    /// DM with several. Needs an accepted DM request with each. The device
+    /// that opens it creates the MLS group and welcomes every other device.
+    Open { account_ids: Vec<String> },
+    /// Ask an account for a DM; they accept with `dm respond`.
+    Request { account_id: String },
+    /// Pending DM requests to this account.
+    Requests,
+    /// Answer a DM request: accept (this device creates the group), decline, or block.
+    Respond {
+        request_id: String,
+        response: String,
+    },
+    /// Delete one of this identity's messages.
+    Delete {
+        channel_id: String,
+        message_id: String,
+    },
     /// Send a text message.
     Send { channel_id: String, body: String },
     /// Follow a personal DM, decrypting as events arrive; ctrl-c to stop.
@@ -183,6 +198,8 @@ enum IdentityCmd {
         #[arg(long, default_value = "recovered")]
         label: String,
     },
+    /// Write the identity backup (roster, host accounts) to the current instance.
+    Backup,
     /// Which roster version each instance holds: the honest "revoked on 1 of 2".
     Status,
     /// Publish this device's current roster to every instance it knows.
@@ -416,6 +433,8 @@ enum DmMode {
     Setup,
     /// Rejoin by external commit, then stop once the commit is acked.
     Rejoin(Vec<u8>),
+    /// Delete one message, wait for the ack, then stop.
+    Delete(Vec<u8>, Vec<u8>),
 }
 
 fn dm_engine(ctx: &mut Ctx, api: &Api) -> Result<DmEngine, ClientError> {
@@ -444,35 +463,80 @@ fn dm_engine(ctx: &mut Ctx, api: &Api) -> Result<DmEngine, ClientError> {
 
 async fn dm_cmd(mut ctx: Ctx, api: Api, action: DmCmd) -> Result<(), ClientError> {
     match action {
-        DmCmd::Open { account_id } => {
-            let other = parse_uuid(&account_id)?;
-            let opened = api.open_personal_dm(other).await?;
-            let channel = opened
-                .channel
-                .ok_or_else(|| ClientError::State("no channel in response".into()))?;
-            let mut engine = dm_engine(&mut ctx, &api)?;
-            engine.record_channel(&channel)?;
+        DmCmd::Open { account_ids } => {
+            let mut others = Vec::with_capacity(account_ids.len());
+            for id in &account_ids {
+                others.push(parse_uuid(id)?);
+            }
+            open_dm(ctx, api, others, false).await
+        }
+        DmCmd::Request { account_id } => {
+            let request = api.send_dm_request(parse_uuid(&account_id)?).await?;
             println!(
-                "{}  personal DM ({})",
-                wire::display(&channel.channel_id),
-                if opened.existed { "existing" } else { "new" }
+                "request {} to {}: {:?}",
+                wire::display(&request.request_id),
+                account_id,
+                lumia_core::proto::DmRequestState::try_from(request.state).unwrap_or_default()
             );
-            let mode = if opened.existed && !engine.is_member(&channel.channel_id)? {
-                println!("waiting for the welcome from the device that opened it");
-                DmMode::Open(channel.channel_id.clone())
-            } else if opened.existed {
-                println!("already a member");
-                return Ok(());
-            } else {
-                DmMode::Open(channel.channel_id.clone())
+            Ok(())
+        }
+        DmCmd::Requests => {
+            let snapshot = api.account_snapshot().await?;
+            if snapshot.pending_requests.is_empty() {
+                println!("no pending requests");
+            }
+            for r in snapshot.pending_requests {
+                println!(
+                    "{}  from {}",
+                    wire::display(&r.request_id),
+                    wire::display(&r.from_account_id)
+                );
+            }
+            Ok(())
+        }
+        DmCmd::Respond {
+            request_id,
+            response,
+        } => {
+            use lumia_core::proto::DmRequestState;
+            let state = match response.as_str() {
+                "accept" => DmRequestState::Accepted,
+                "decline" => DmRequestState::Declined,
+                "block" => DmRequestState::Blocked,
+                other => {
+                    return Err(ClientError::State(format!(
+                        "unknown response {other}; accept, decline or block"
+                    )))
+                }
             };
+            let request = api.respond_dm_request(&request_id, state).await?;
+            println!(
+                "request {} {:?}",
+                wire::display(&request.request_id),
+                DmRequestState::try_from(request.state).unwrap_or_default()
+            );
+            if state == DmRequestState::Accepted {
+                // The accepter creates the group (e2ee spec section 4).
+                open_dm(ctx, api, vec![request.from_account_id], true).await
+            } else {
+                Ok(())
+            }
+        }
+        DmCmd::Delete {
+            channel_id,
+            message_id,
+        } => {
+            let channel = parse_uuid(&channel_id)?;
+            let message = parse_uuid(&message_id)?;
+            let mut engine = dm_engine(&mut ctx, &api)?;
+            engine.load_participants(&channel)?;
             dm_loop(
                 ctx,
                 api,
                 engine,
-                vec![channel.channel_id],
-                mode,
-                !opened.existed,
+                vec![channel.clone()],
+                DmMode::Delete(channel, message),
+                false,
             )
             .await
         }
@@ -592,6 +656,45 @@ async fn dm_cmd(mut ctx: Ctx, api: Api, action: DmCmd) -> Result<(), ClientError
     }
 }
 
+/// Opens (or finds) the conversation with `others` and, when this device
+/// is the one that should create its group (the opener of a new one, or
+/// the accepter of a request), creates it and welcomes everyone.
+async fn open_dm(
+    mut ctx: Ctx,
+    api: Api,
+    others: Vec<Vec<u8>>,
+    accepter: bool,
+) -> Result<(), ClientError> {
+    let opened = api.open_personal_dm(others).await?;
+    let channel = opened
+        .channel
+        .ok_or_else(|| ClientError::State("no channel in response".into()))?;
+    let mut engine = dm_engine(&mut ctx, &api)?;
+    engine.record_channel(&channel)?;
+    println!(
+        "{}  personal DM ({})",
+        wire::display(&channel.channel_id),
+        if opened.existed { "existing" } else { "new" }
+    );
+    let create = accepter || !opened.existed;
+    if engine.is_member(&channel.channel_id)? {
+        println!("already a member");
+        return Ok(());
+    }
+    if !create {
+        println!("waiting for the welcome from the device that created it");
+    }
+    dm_loop(
+        ctx,
+        api,
+        engine,
+        vec![channel.channel_id.clone()],
+        DmMode::Open(channel.channel_id),
+        create,
+    )
+    .await
+}
+
 /// Runs the gateway with the DM engine attached until `mode` is satisfied.
 /// `create` means this device opened the channel and creates the group.
 async fn dm_loop(
@@ -653,6 +756,9 @@ async fn dm_loop(
                         }
                         DmMode::Send(channel, body) => out.extend(engine.send_text(channel, body)?),
                         DmMode::Rejoin(channel) => out.extend(engine.rejoin(channel).await?),
+                        DmMode::Delete(channel, message) => {
+                            out.extend(engine.send_delete(channel, message.clone())?);
+                        }
                         DmMode::Setup => {
                             println!("account {}", wire::display(&w.account_id));
                             done = true;
@@ -705,7 +811,7 @@ async fn dm_loop(
                     }
                     Outcome::Delivered(id) => {
                         println!("delivered {}", wire::display(&id));
-                        if matches!(mode, DmMode::Send(..)) {
+                        if matches!(mode, DmMode::Send(..) | DmMode::Delete(..)) {
                             done = true;
                         }
                     }
@@ -922,11 +1028,32 @@ async fn identity_cmd(ctx: &mut Ctx, api: &Api, action: IdentityCmd) -> Result<(
         IdentityCmd::Recover { phrase, label } => {
             let tokens = device(ctx).recover(api, &phrase, &label).await?;
             save_tokens(ctx, &tokens)?;
+            api.set_tokens(&tokens);
             let verified = device(ctx).roster()?;
             println!(
                 "recovered: roster v{} with this device only, signed in on {}",
                 verified.version, ctx.host
             );
+            // The backup names the other hosts to sign in to (identity spec 8).
+            match device(ctx).read_backup(api).await {
+                Ok(backup) => {
+                    for account in backup.accounts {
+                        println!(
+                            "  backup v{}: account {} on {}",
+                            backup.version,
+                            wire::display(&account.account_id),
+                            account.host
+                        );
+                    }
+                }
+                Err(e) => println!("  no identity backup read here: {e}"),
+            }
+            Ok(())
+        }
+        IdentityCmd::Backup => {
+            let accounts = host_accounts(ctx)?;
+            let version = device(ctx).write_backup(api, accounts).await?;
+            println!("identity backup v{version} written to {}", ctx.host);
             Ok(())
         }
         IdentityCmd::Status => {
@@ -967,14 +1094,40 @@ async fn identity_cmd(ctx: &mut Ctx, api: &Api, action: IdentityCmd) -> Result<(
 /// root-signed; the report says so per instance. Never stops early.
 async fn publish_everywhere(ctx: &mut Ctx) -> Result<(), ClientError> {
     let roster = device(ctx).roster()?;
+    let accounts = host_accounts(ctx)?;
     for (host, base, tokens) in instances(ctx)? {
         let api = Api::new(&base).with_tokens(tokens);
         match api.publish_roster(roster.signed.clone()).await {
             Ok(()) => println!("  {host}: now v{}", roster.version),
             Err(e) => println!("  {host}: not updated ({e})"),
         }
+        match device(ctx).write_backup(&api, accounts.clone()).await {
+            Ok(v) => println!("  {host}: identity backup v{v}"),
+            Err(e) => println!("  {host}: backup not written ({e})"),
+        }
     }
     Ok(())
+}
+
+/// The accounts this device holds on every instance it knows, for the
+/// identity backup: each instance store records its account id on connect.
+fn host_accounts(ctx: &Ctx) -> Result<Vec<lumia_core::proto::HostAccount>, ClientError> {
+    let mut out = Vec::new();
+    for (_, base, _) in instances(ctx)? {
+        let host = url::Url::parse(&base)
+            .ok()
+            .and_then(|u| u.host_str().map(str::to_string))
+            .unwrap_or_default();
+        let dir = ctx.data_dir.join(host_of(&base));
+        let store = SqliteStore::open(&dir.join("store.sqlite"))?;
+        if let Some(hex_id) = store.meta_get("account_id")? {
+            out.push(lumia_core::proto::HostAccount {
+                host,
+                account_id: hex::decode(hex_id).unwrap_or_default(),
+            });
+        }
+    }
+    Ok(out)
 }
 
 fn print_event(e: &lumia_core::proto::Event) {

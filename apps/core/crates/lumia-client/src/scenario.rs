@@ -44,6 +44,7 @@ pub const NAMES: &[&str] = &[
     "stale-roster",
     "device-revoke",
     "roster-rules",
+    "last-resort",
     "reconnect",
 ];
 
@@ -98,6 +99,7 @@ async fn run_one(name: &str, env: &Env) -> Result<(), ClientError> {
         "stale-roster" => stale_roster(env).await,
         "device-revoke" => device_revoke(env).await,
         "roster-rules" => roster_rules(env).await,
+        "last-resort" => last_resort(env).await,
         "reconnect" => reconnect(env).await,
         other => Err(ClientError::State(format!(
             "unknown scenario {other}; one of: all, {}",
@@ -452,6 +454,77 @@ async fn device_revoke(env: &Env) -> Result<(), ClientError> {
         other => return Err(fail(format!("expected DeviceRevoked at v3, got {other:?}"))),
     }
     println!("   a revoked b with its device key and a password reauth; b is out");
+    Ok(())
+}
+
+/// Key-package exhaustion (e2ee spec sections 3 and 12): a device's one
+/// package is claimed and deleted, the pool is then empty so the
+/// last-resort package is served, served again (never deleted), and
+/// replaced by the device's next publish.
+async fn last_resort(env: &Env) -> Result<(), ClientError> {
+    let base = env.api.base().to_string();
+    let anon = Api::new(&base);
+    let mut a = Throwaway::open(&env.scratch, "lr-a")?;
+    let mut b = Throwaway::open(&env.scratch, "lr-b")?;
+    a.device().create("a")?;
+    let tokens = a.device().create_account(&anon, &handle("lr")).await?;
+    let api_a = Api::new(&base).with_tokens(pair(&tokens));
+    link(&mut a, &mut b, &api_a, &anon).await?;
+    let tokens_b = b.device().sign_in(&anon).await?;
+    let api_b = Api::new(&base).with_tokens(pair(&tokens_b));
+    let account = api_a
+        .account_snapshot()
+        .await?
+        .account
+        .unwrap_or_default()
+        .account_id;
+
+    // The instance stores packages as opaque bytes, so labels will do.
+    api_b
+        .publish_key_packages(vec![b"kp-1".to_vec()], b"last-1".to_vec())
+        .await?;
+    let claim = |label: &'static str| {
+        let api_a = api_a.clone();
+        let account = account.clone();
+        async move {
+            let resp = api_a.claim_key_packages(account).await?;
+            let packages: Vec<Vec<u8>> = resp
+                .key_packages
+                .into_iter()
+                .map(|c| c.key_package)
+                .collect();
+            check(
+                packages.len() == 1,
+                format!(
+                    "{label}: expected one package for B, got {}",
+                    packages.len()
+                ),
+            )?;
+            Ok::<_, ClientError>(packages.into_iter().next().unwrap_or_default())
+        }
+    };
+    check(
+        claim("first claim").await? == b"kp-1",
+        "the pool's package was not served first",
+    )?;
+    check(
+        claim("second claim").await? == b"last-1",
+        "an empty pool did not serve the last-resort package",
+    )?;
+    check(
+        claim("third claim").await? == b"last-1",
+        "the last-resort package was deleted on claim",
+    )?;
+    println!("   one package claimed and gone; the last-resort package served twice and kept");
+
+    api_b
+        .publish_key_packages(vec![], b"last-2".to_vec())
+        .await?;
+    check(
+        claim("after top-up").await? == b"last-2",
+        "the next publish did not replace the last-resort package",
+    )?;
+    println!("   the next publish replaced it");
     Ok(())
 }
 

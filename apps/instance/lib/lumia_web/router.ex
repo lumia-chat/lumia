@@ -67,6 +67,8 @@ defmodule LumiaWeb.Router do
     post "/channels/:channel_id/commands", ChannelController, :command
 
     post "/dms/personal", DmController, :open_personal
+    post "/dm-requests", DmController, :send_request
+    post "/dm-requests/:request_id/respond", DmController, :respond
 
     post "/mls/key-packages", MlsController, :publish_key_packages
     post "/mls/key-packages/claim", MlsController, :claim

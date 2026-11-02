@@ -5,7 +5,7 @@
 
 use base64::Engine;
 use ed25519_dalek::SigningKey;
-use lumia_core::identity::keys::{generate_signing_key, signing_key, ts_nanos};
+use lumia_core::identity::keys::{generate_signing_key, open, seal, signing_key, ts_nanos};
 use lumia_core::identity::link::{seal_bundle, LinkRequester};
 use lumia_core::identity::phrase::Phrase;
 use lumia_core::identity::proof::build_proof;
@@ -15,8 +15,8 @@ use lumia_core::identity::roster::{
 };
 use lumia_core::keystore::Keystore;
 use lumia_core::proto::{
-    ChallengePurpose, CreateLinkBundleRequest, DeviceKind, LinkBundleBody, LinkRequest,
-    SignedRoster, TokenPair,
+    ChallengePurpose, CreateLinkBundleRequest, DeviceKind, HostAccount, IdentityBackupBody,
+    LinkBundleBody, LinkRequest, SignedRoster, TokenPair,
 };
 use lumia_core::store::Store;
 use lumia_core::wire;
@@ -340,6 +340,57 @@ impl<S: Store, K: Keystore> Device<'_, S, K> {
         self.save_roster(&verified.identity_id, &roster)?;
         self.keystore.delete("link_secret")?;
         Ok(verified)
+    }
+
+    /// Writes the identity backup to `api`'s instance (spec 8): the roster,
+    /// the host accounts this device knows, and a version above the last
+    /// one written, sealed under the backup key.
+    ///
+    /// # Errors
+    /// Without a backup key (web devices), or on API failure.
+    pub async fn write_backup(
+        &mut self,
+        api: &Api,
+        accounts: Vec<HostAccount>,
+    ) -> Result<u64, ClientError> {
+        let key = self
+            .keystore
+            .get("backup_key")?
+            .ok_or_else(|| ClientError::State("this device holds no backup key".into()))?;
+        let verified = self.roster()?;
+        let version = self
+            .store
+            .meta_get("backup_version")?
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(0)
+            + 1;
+        let body = IdentityBackupBody {
+            version,
+            roster: Some(verified.signed),
+            accounts,
+            written_at: Some(now()),
+            ..Default::default()
+        };
+        let (nonce, ciphertext) = seal(&key, &body.encode_to_vec())?;
+        api.put_identity_backup(version, ciphertext, nonce).await?;
+        self.store
+            .meta_set("backup_version", &version.to_string())?;
+        Ok(version)
+    }
+
+    /// Reads and opens the identity backup held by `api`'s instance.
+    ///
+    /// # Errors
+    /// Without a backup key, when none is held (`NOT_FOUND`), or when it
+    /// does not open under this device's backup key.
+    pub async fn read_backup(&self, api: &Api) -> Result<IdentityBackupBody, ClientError> {
+        let key = self
+            .keystore
+            .get("backup_key")?
+            .ok_or_else(|| ClientError::State("this device holds no backup key".into()))?;
+        let held = api.get_identity_backup().await?;
+        let plain = open(&key, &held.nonce, &held.ciphertext)?;
+        Ok(IdentityBackupBody::decode(plain.as_slice())?)
     }
 
     /// Recovery with no device left (spec 4.3): from the phrase, a fresh

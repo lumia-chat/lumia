@@ -7,13 +7,18 @@ defmodule Lumia.Dms do
 
   A personal DM between two accounts is unique: `dm_key` is the sha256 of
   the sorted participant ids, and opening it again returns the existing
-  channel.
+  channel. Opening one needs a gate (architecture 6.4): a shared personal
+  channel already, or a DM request the other side accepted. A personal
+  group DM is created by its creator for everyone it is gated with, and is
+  never deduplicated.
   """
 
   import Ecto.Query
 
   alias Lumia.Accounts
+  alias Lumia.Accounts.Account
   alias Lumia.Dms.Participant
+  alias Lumia.Dms.Request
   alias Lumia.Events.Channel
   alias Lumia.Proto
   alias Lumia.Repo
@@ -25,21 +30,176 @@ defmodule Lumia.Dms do
   @doc "Whether a channel kind is end-to-end encrypted."
   def personal_kind?(kind), do: kind in @personal_kinds
 
+  # ---- Requests ----------------------------------------------------------------
+
   @doc """
-  Opens the personal DM between the actor and one other account. Returns
-  `{:ok, channel, existed?}`: the existing channel when the pair already
-  has one, else a new one with `ChannelAdded` on both account logs. More
-  than two distinct participants is `{:error, :invalid_argument}`
-  (personal group DMs come later).
+  Sends a DM request from one account to another. Returns `{:ok, request}`
+  (the existing pending one in either direction when there is one) and
+  appends `DmRequestReceived` to the target's log. To oneself is
+  `{:error, :invalid_argument}`; an unknown target `{:error,
+  :account_not_found}`; a pair that already shares a personal channel
+  `{:error, :already_exists}`; a target that answered `blocked` before is
+  `{:error, :not_found}`, which discloses nothing.
+  """
+  def send_request(from_account_id, to_account_id) do
+    cond do
+      from_account_id == to_account_id -> {:error, :invalid_argument}
+      is_nil(Repo.get(Account, to_account_id)) -> {:error, :account_not_found}
+      blocked?(from_account_id, to_account_id) -> {:error, :not_found}
+      shares_personal_channel?(from_account_id, to_account_id) -> {:error, :already_exists}
+      true -> pending_or_create(from_account_id, to_account_id)
+    end
+  end
+
+  defp blocked?(from, to) do
+    Repo.exists?(
+      from r in Request,
+        where: r.from_account_id == ^from and r.to_account_id == ^to and r.state == "blocked"
+    )
+  end
+
+  defp pending_or_create(from, to) do
+    case pending_between(from, to) do
+      %Request{} = existing -> {:ok, existing}
+      nil -> create_request(from, to)
+    end
+  end
+
+  defp pending_between(a, b) do
+    Repo.one(
+      from r in Request,
+        where:
+          r.state == "pending" and
+            ((r.from_account_id == ^a and r.to_account_id == ^b) or
+               (r.from_account_id == ^b and r.to_account_id == ^a)),
+        limit: 1
+    )
+  end
+
+  defp create_request(from, to) do
+    Tx.transact(fn ->
+      with {:ok, request} <-
+             Repo.insert(%Request{
+               from_account_id: from,
+               to_account_id: to,
+               created_at: DateTime.utc_now()
+             }),
+           {:ok, _} <-
+             Accounts.append_event(
+               to,
+               {:dm_request_received, %V1.DmRequestReceived{request: Proto.dm_request(request)}}
+             ) do
+        {:ok, request}
+      end
+    end)
+  end
+
+  @doc """
+  Answers a request as its recipient with `:accepted`, `:declined` or
+  `:blocked`. Anyone else sees `{:error, :not_found}`; a request already
+  answered is `{:error, :failed_precondition}`. Accepting opens the personal
+  DM in the same transaction, after `DmRequestUpdated` is on both logs, so
+  a client sees the acceptance before the channel. Returns
+  `{:ok, request, channel_or_nil}`.
+  """
+  def respond(request_id, actor_account_id, state)
+      when state in [:accepted, :declined, :blocked] do
+    result =
+      Tx.transact(fn ->
+        with %Request{} = request <- Repo.get(Request, request_id) || {:error, :not_found},
+             true <- request.to_account_id == actor_account_id || {:error, :not_found},
+             true <- request.state == "pending" || {:error, :failed_precondition},
+             {:ok, request} <- answer(request, state),
+             :ok <- announce_request(request),
+             {:ok, channel} <- open_on_accept(request, state) do
+          {:ok, {request, channel}}
+        end
+      end)
+
+    case result do
+      {:ok, {request, channel}} -> {:ok, request, channel}
+      error -> error
+    end
+  end
+
+  defp answer(request, state) do
+    request
+    |> Ecto.Changeset.change(state: Atom.to_string(state), responded_at: DateTime.utc_now())
+    |> Repo.update()
+  end
+
+  defp announce_request(request) do
+    payload = {:dm_request_updated, %V1.DmRequestUpdated{request: Proto.dm_request(request)}}
+
+    Enum.reduce_while([request.from_account_id, request.to_account_id], :ok, fn id, :ok ->
+      case Accounts.append_event(id, payload) do
+        {:ok, _} -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp open_on_accept(request, :accepted) do
+    case open_pair(Enum.sort([request.from_account_id, request.to_account_id])) do
+      {:ok, channel, _existed} -> {:ok, channel}
+      error -> error
+    end
+  end
+
+  defp open_on_accept(_request, _state), do: {:ok, nil}
+
+  @doc "Whether a request between the two accounts was accepted, in either direction."
+  def accepted_request?(a, b) do
+    Repo.exists?(
+      from r in Request,
+        where:
+          r.state == "accepted" and
+            ((r.from_account_id == ^a and r.to_account_id == ^b) or
+               (r.from_account_id == ^b and r.to_account_id == ^a))
+    )
+  end
+
+  @doc "Requests still waiting for this account's answer, newest first."
+  def pending_requests_to(account_id) do
+    Repo.all(
+      from r in Request,
+        where: r.to_account_id == ^account_id and r.state == "pending",
+        order_by: [desc: r.created_at]
+    )
+  end
+
+  # ---- Channels ----------------------------------------------------------------
+
+  @doc """
+  Opens a personal DM. With one other account: `{:ok, channel, existed?}`,
+  the existing channel when the pair has one, else a new one with
+  `ChannelAdded` on both logs; it needs the gate, a shared personal channel
+  or an accepted request either way, else `{:error, {:failed_precondition,
+  "request"}}`. With two or more others: a new `personal_group_dm` every
+  time (`{:ok, channel, false}`), needing the gate between the actor and
+  every other participant. No other participants is `{:error,
+  :invalid_argument}`.
   """
   def open_personal(actor_account_id, participant_account_ids) do
     ids = Enum.uniq([actor_account_id | participant_account_ids])
+    others = ids -- [actor_account_id]
 
-    case ids do
-      [_, _] -> open_pair(Enum.sort(ids))
-      _ -> {:error, :invalid_argument}
+    cond do
+      others == [] ->
+        {:error, :invalid_argument}
+
+      Enum.any?(others, &(not gated?(actor_account_id, &1))) ->
+        {:error, {:failed_precondition, "request"}}
+
+      length(ids) == 2 ->
+        open_pair(Enum.sort(ids))
+
+      true ->
+        create_group(Enum.sort(ids))
     end
   end
+
+  defp gated?(a, b), do: shares_personal_channel?(a, b) or accepted_request?(a, b)
 
   defp open_pair(ids) do
     key = dm_key(ids)
@@ -53,7 +213,7 @@ defmodule Lumia.Dms do
   defp create_pair(ids, key) do
     result =
       Tx.transact(fn ->
-        with {:ok, channel} <- insert_channel(key),
+        with {:ok, channel} <- insert_channel("personal_dm", key),
              :ok <- insert_participants(channel.id, ids),
              :ok <- announce(channel, ids) do
           {:ok, channel}
@@ -73,8 +233,24 @@ defmodule Lumia.Dms do
     end
   end
 
-  defp insert_channel(key) do
-    %Channel{kind: "personal_dm", dm_key: key}
+  defp create_group(ids) do
+    result =
+      Tx.transact(fn ->
+        with {:ok, channel} <- insert_channel("personal_group_dm", nil),
+             :ok <- insert_participants(channel.id, ids),
+             :ok <- announce(channel, ids) do
+          {:ok, channel}
+        end
+      end)
+
+    case result do
+      {:ok, channel} -> {:ok, channel, false}
+      other -> other
+    end
+  end
+
+  defp insert_channel(kind, key) do
+    %Channel{kind: kind, dm_key: key}
     |> Ecto.Changeset.change()
     |> Ecto.Changeset.unique_constraint(:dm_key, name: :channels_dm_key_index)
     |> Repo.insert()

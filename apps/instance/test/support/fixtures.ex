@@ -20,7 +20,8 @@ defmodule Lumia.Fixtures do
   def personal_dm(a \\ nil, b \\ nil) do
     a = a || account("a")
     b = b || account("b")
-    {:ok, channel, false} = Lumia.Dms.open_personal(a.id, [b.id])
+    {:ok, request} = Lumia.Dms.send_request(a.id, b.id)
+    {:ok, _request, channel} = Lumia.Dms.respond(request.id, b.id, :accepted)
     %{channel: channel, a: a, b: b}
   end
 

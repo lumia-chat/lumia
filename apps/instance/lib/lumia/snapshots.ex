@@ -50,7 +50,8 @@ defmodule Lumia.Snapshots do
       seq: seq,
       servers: Enum.map(servers, &Proto.server/1),
       memberships: Enum.map(memberships, &Proto.member(&1, Map.get(role_ids, &1.server_id, []))),
-      channels: channels
+      channels: channels,
+      pending_requests: Enum.map(Lumia.Dms.pending_requests_to(account_id), &Proto.dm_request/1)
     }
   end
 
