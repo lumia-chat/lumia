@@ -42,5 +42,7 @@ jobs:
       # SQLite is compiled to wasm by the cc crate, which needs an archiver
       # that understands wasm objects (docs/spikes/2026-11-02-web-store.md).
       - run: rustup component add llvm-tools
-      - run: echo "AR_wasm32_unknown_unknown=$(rustc --print sysroot)/lib/rustlib/$(rustc -vV | sed -n 's/host: //p')/bin/llvm-ar" >> "$GITHUB_ENV"
+      - run: |
+          host=$(rustc -vV | sed -n 's/^host: //p')
+          echo "AR_wasm32_unknown_unknown=$(rustc --print sysroot)/lib/rustlib/$host/bin/llvm-ar" >> "$GITHUB_ENV"
       - run: cargo check -p lumia-client -p lumia-wasm --target wasm32-unknown-unknown
