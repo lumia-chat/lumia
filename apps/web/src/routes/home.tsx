@@ -210,7 +210,8 @@ function Conversation(props: HomeProps) {
             </Show>
           </MessageList>
           <Composer
-            placeholder={`Message ${title()}`}
+            placeholder={state()?.member ? `Message ${title()}` : "Setting up the encrypted group…"}
+            disabled={!state()?.member}
             value={draft()}
             onInput={(e) => setDraft(e.currentTarget.value)}
             onKeyDown={(e) => {

@@ -224,7 +224,13 @@ async function dmSteps(which: string, page: Page, aDir: string, bAccount: string
   const opened = lumia(aDir, "dm", "open", bAccount);
   const channel = opened.match(/([0-9a-f-]{36})\s+personal DM/)?.[1];
   if (!channel) throw new Error(`no channel from dm open:\n${opened}`);
-  const seen = lumia(aDir, "dm", "messages", channel);
+  // The CLI joined from the welcome; the browser's message lands in its
+  // store once its tail has applied the channel log, which takes a moment.
+  let seen = "";
+  for (let i = 0; i < 20 && !seen.includes(hello); i++) {
+    if (i > 0) await Bun.sleep(1_500);
+    seen = lumia(aDir, "dm", "messages", channel);
+  }
   if (!seen.includes(hello)) throw new Error(`the CLI did not read the browser's message:\n${seen}`);
   const reply = `reply from the cli ${Date.now()}`;
   lumia(aDir, "dm", "send", channel, reply);
