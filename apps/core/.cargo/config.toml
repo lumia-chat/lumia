@@ -1,0 +1,4 @@
+# getrandom on the browser target takes its entropy from the JS host; the
+# crate requires both its `wasm_js` feature (set in lumia-core) and this cfg.
+[target.wasm32-unknown-unknown]
+rustflags = ['--cfg', 'getrandom_backend="wasm_js"']

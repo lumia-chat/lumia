@@ -10,7 +10,7 @@ Legend: `[x]` done · `[~]` in progress · `[ ]` not started · `(spec §n)` the
 |---|---|
 | 1. Schemas and protocol contract | Done |
 | 2. Server: event log, delivery, account log, resume, authorization | First pass complete 2026-11-01; six items carried into step 3 (listed under "Closing step 2") |
-| 3. Rust core | Milestone 1 done: sync engine, SQLite store, CLI talking to the real gateway |
+| 3. Rust core | Milestones 1 and 2 done: sync engine, SQLite store, CLI on the real gateway, identity with shared vectors |
 | 4. Identity across two instances | Specified, not built |
 | 5. MLS personal DMs, backup, recovery | Not specified, not built |
 | 6. Web UI in Tauri | Not started |
@@ -177,7 +177,15 @@ Ordered. Each task names the spec section it implements and the tests that close
 - [ ] Refresh-token rotation when the access token expires.
 - [ ] `scenario <name>` subcommands for the failure-injection cases against a running instance.
 
-**Milestone 2**: identity in the core (phrase, derivation, roster build and verify with the eight steps, link request and bundle), with cross-implementation test vectors written by a mix task in `apps/instance/bench` to `proto/vectors/identity/`.
+**Milestone 2** (2026-11-01): identity in the core.
+
+- [x] `lumia-core::identity::phrase`: 24-word BIP39 phrase, HKDF derivation of the root and backup keys, identity id (identity §2).
+- [x] `identity::keys`: Ed25519, XChaCha20-Poly1305, BLAKE3, root and device `Signature` helpers.
+- [x] `identity::roster`: the eight-step verifier as a port of `Lumia.Identity.Roster`, builders for device entries, revocations, rotations and signed rosters (identity §3, §4).
+- [x] `identity::link`: `LinkRequester` and `seal_bundle` over X25519 and HKDF (identity §4.2, §6).
+- [x] Cross-implementation vectors: `apps/instance/test/lumia/identity/vectors_test.exs` writes `proto/vectors/identity/rosters.json` with `LUMIA_WRITE_VECTORS=1` and checks the Elixir verifier against it; `apps/core/crates/lumia-core/tests/identity_vectors.rs` checks the Rust verifier against the same file. 17 vectors, both agree.
+- [ ] The CLI's `identity create`, `identity add-device`, `login --identity` flows over the identity endpoints.
+- [ ] A test that round-trips a Rust-built roster through the instance's `POST /identity/roster`.
 
 **Milestone 3**: UniFFI surface with one `Client` object and a callback interface; wasm-bindgen surface over a JS-provided store.
 

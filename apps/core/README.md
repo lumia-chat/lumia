@@ -37,3 +37,11 @@ cargo run -p lumia-client -- tail <channel-id>
 ```
 
 `tail` subscribes from the store's cursor, so a second run replays only what it missed. The CLI's keystore is a plaintext file at mode 0600 and is for development only.
+
+## Identity vectors
+
+`proto/vectors/identity/rosters.json` holds rosters with the outcome the spec requires. The Elixir suite writes it and checks its verifier; `crates/lumia-core/tests/identity_vectors.rs` checks the Rust verifier against the same bytes. To regenerate after changing the fixtures or the proto:
+
+```sh
+cd ../instance && LUMIA_WRITE_VECTORS=1 mix test test/lumia/identity/vectors_test.exs
+```
