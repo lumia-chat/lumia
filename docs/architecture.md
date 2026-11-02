@@ -477,9 +477,20 @@ Deleting an **identity** is separate and done per instance by deleting each acco
 **Rejected.**
 - *One cross-platform toolkit everywhere (Flutter, Electron).* Performance is the first priority and Electron's memory footprint is disqualifying.
 - *Fully independent native apps.* Six implementations of MLS and sync is how E2EE bugs happen.
-- *Rust-native desktop UI (Slint, Iced, GPUI).* Still weak on rich text, IME, and accessibility. Named as the upgrade path if webview performance becomes the bottleneck.
+- *Rust-native desktop UI (Slint, Iced, GPUI).* Still weak on rich text, IME, and accessibility, which are exactly what a chat composer and a message list need. Was the named upgrade path until Qt replaced it (below).
+- *Toolkit-native shells for Windows and Linux (WinUI, GTK).* WinUI is one more UI codebase for one platform on a toolkit Microsoft keeps churning; Linux has no single native toolkit, so GTK or Qt chosen for "nativeness" covers part of the desktops either way.
 
-**Linux.** Tauri on Linux means WebKitGTK, the weakest of the system webviews for GPU compositing, Wayland, and raw performance. Linux is therefore where the "webview is the bottleneck" trigger fires first, the budgets in section 17 carry a Linux row, and the Rust-native path would start there.
+**Linux.** Tauri on Linux means WebKitGTK, the weakest of the system webviews for GPU compositing, Wayland, and raw performance. Linux is therefore where the "webview is the bottleneck" trigger fires first, the budgets in section 17 carry a Linux row, and the Qt path would start there.
+
+**Qt as the desktop escape hatch.** If the Linux budget row in section 17 misses, the desktop shell for **Windows and Linux together** moves from Tauri to **Qt 6 with Qt Quick**, the UI in QML and the glue in Rust through cxx-qt, the Rust core linked in-process. Qt is chosen over the Rust-native toolkits because it is strong where they are weak: rich text (`QTextDocument`), input methods on Wayland and X11, and accessibility (AT-SPI on Linux, UIA on Windows). Telegram Desktop is the existence proof of a Qt chat client that scrolls very large channels smoothly on both platforms, and Qt Quick's scene graph fits a 10k-message list better than WebKitGTK compositing. Considerations recorded so the decision does not have to be re-derived:
+
+- *Both platforms or neither.* Qt buys little on Windows alone: WebView2 is Chromium, so the webview is not the bottleneck there, and a Qt window looks no more native than a webview does. But once the Qt codebase exists for Linux, Windows is nearly free, and Qt for Linux beside Tauri for Windows means two desktop shells, two bug surfaces, and two CI pipelines for one platform class. One desktop codebase, whichever it is; `apps/desktop` is replaced, not joined.
+- *Cost.* A fourth UI implementation (SwiftUI, Compose, the web UI, Qt), and the web UI still exists for the browser. The design system's components are rebuilt in QML; tokens, fonts, and icons carry over from `assets/`. This is the argument that rejected every other extra shell in this section, and it still applies; the measured Linux budget is what overrides it, not preference.
+- *Licensing.* The client core is Apache-2.0 and Qt's main modules are LGPL v3, so Qt is linked dynamically: Flatpak with the KDE runtime on Linux, `windeployqt` on Windows. Static linking under the LGPL needs relinkable objects and is not done. Modules stay on Core, Gui, Quick, Network, and Multimedia; GPL-only modules (Charts, Virtual Keyboard, Data Visualization) are not used.
+- *What it resolves.* The open question of whether the Tauri shell ships the core in-process or as WASM (section 20) disappears, since a Qt shell links the core directly and the desktop gets the native core row in the table above.
+- *What it costs the web client.* The web UI loses its desktop dogfooding; it is exercised in browsers only.
+
+The trigger is the Linux row in section 17, measured on the Tauri shell CI builds. Until it misses, Tauri stays.
 
 **Local-first.** Every connected instance's data the user has seen is in SQLite and readable offline. Sends are optimistic with client-minted command IDs. Reconnect resumes from cursors per section 8.4.
 
@@ -559,7 +570,7 @@ Measured so far, on a laptop: the write transaction commits in under 1 ms and su
 | Gateway connect, authenticate, resume 50 channels with no gaps | 500 ms | Same database; cursors current; presence for all 50 |
 | Client cold start to interactive, last-viewed channel rendered from SQLite | 1 s | 100k local messages, 5 instances |
 | Idle desktop client RSS, 5 instances connected | 150 MB | After 10 minutes idle, GC settled |
-| Linux desktop (WebKitGTK): scroll a 10k-message channel at 60 fps, cold start, idle RSS | Same budgets as other desktops | Measured separately because WebKitGTK is the weakest webview; a miss here triggers the Rust-native UI path (section 13) |
+| Linux desktop (WebKitGTK): scroll a 10k-message channel at 60 fps, cold start, idle RSS | Same budgets as other desktops | Measured separately because WebKitGTK is the weakest webview; a miss here triggers the Qt desktop shell for Windows and Linux together (section 13) |
 | Idle mobile client RSS | 80 MB | Same |
 | Concurrent gateway connections per node (4 vCPU, 8 GB) | 100,000 | 50 subscriptions each, 10% in presence, 1 msg/s per 1,000 connections, p99 delivery still under budget |
 | Protobuf frame for a plain text message, excluding body | 64 bytes | Transport only; E2EE application message overhead budgeted separately once MLS framing is pinned |
@@ -592,14 +603,14 @@ Prove one complete secure lifecycle before any second UI shell starts. The order
 
 ## 19. Deferred and out of scope
 
-Deferred, with a design path noted in the relevant section: federation of any kind; replicated connected channels; an organization's audit of its members' external guest memberships; cross-instance DM requests to strangers via DM-only guest memberships on the recipient's host; key transparency for the directory; an out-of-band code-verification extension for the web client; WASM instance plugins; E2EE private channels; read receipts; link unfurling; custom emoji in text; group calls, video, and screen share detail; bundled TURN; "Sign in with Lumia" OIDC; Rust-native desktop UI; SAML, SCIM, group sync, compliance export, and audit log; KMS-backed instance master keys.
+Deferred, with a design path noted in the relevant section: federation of any kind; replicated connected channels; an organization's audit of its members' external guest memberships; cross-instance DM requests to strangers via DM-only guest memberships on the recipient's host; key transparency for the directory; an out-of-band code-verification extension for the web client; WASM instance plugins; E2EE private channels; read receipts; link unfurling; custom emoji in text; group calls, video, and screen share detail; bundled TURN; "Sign in with Lumia" OIDC; a Qt desktop shell for Windows and Linux (section 13, on the Linux budget trigger); SAML, SCIM, group sync, compliance export, and audit log; KMS-backed instance master keys.
 
 Out of scope: a hosted-only feature that cannot run self-hosted; a second edition of the server; any mechanism that requires instances to trust each other.
 
 ## 20. Open questions and proof obligations
 
 - Exact numbers in section 17, after a first load test.
-- Whether the Tauri shell ships the Rust core in-process from day one or starts as WASM for parity with web.
+- Whether the Tauri shell ships the Rust core in-process from day one or starts as WASM for parity with web. Moot if the Linux budget sends desktop to Qt (section 13).
 - Link unfurling: server-fetched versus client-fetched, and whether it exists at all in personal DMs.
 - The reconciliation interval and the bounded-staleness interval (7.4), to be set from measurements.
 
@@ -611,7 +622,7 @@ apps/core       Rust client core: protocol, MLS, SQLite store, sync, search; Uni
 apps/ios        SwiftUI (shared Swift package with macOS)
 apps/macos      SwiftUI
 apps/android    Jetpack Compose
-apps/desktop    Tauri shell for Windows and Linux
+apps/desktop    Tauri shell for Windows and Linux; a Qt shell would replace it here, never sit beside it (section 13)
 apps/web        Web UI, shared with apps/desktop
 proto/          Protobuf schemas; the source of truth for the gateway, the API, and generated types
 docs/           This document, the protocol contract, and the provisional-section specs

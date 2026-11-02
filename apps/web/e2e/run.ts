@@ -74,7 +74,7 @@ async function open(which: string, name: string, keep = false): Promise<{ ctx: B
     // still sees the last run's stores; clear them before the worker opens
     // any. Best effort and bounded: an engine without OPFS iteration must
     // not hang the suite here, it fails later where the store opens.
-    await page.goto(`${base}/design`);
+    await goto(page, `${base}/design`);
     const cleared = page.evaluate(async () => {
       const root = await navigator.storage.getDirectory();
       for await (const name of (root as unknown as { keys(): AsyncIterable<string> }).keys()) await root.removeEntry(name, { recursive: true });
@@ -87,8 +87,19 @@ async function open(which: string, name: string, keep = false): Promise<{ ctx: B
   return { ctx, page };
 }
 
+// WebKit on Linux CI sometimes never finishes a profile's first navigation;
+// a second attempt does.
+async function goto(page: Page, url: string) {
+  try {
+    await page.goto(url, { timeout: 45_000 });
+  } catch (e) {
+    console.log(`  retrying ${url}: ${e instanceof Error ? e.message.split("\n")[0] : String(e)}`);
+    await page.goto(url, { timeout: 90_000 });
+  }
+}
+
 async function trustCard(page: Page) {
-  await page.goto(base);
+  await goto(page, base);
   await page.locator(".lu-card").waitFor();
   // A UI served by its instance has no address to ask for.
   const field = page.getByLabel("Instance");
@@ -213,7 +224,7 @@ async function dmSteps(which: string, page: Page, aDir: string, bAccount: string
   phase("cli request");
   lumia(aDir, "dm", "request", bAccount);
   phase("open requests");
-  await page.goto(`${base}/app?place=home&view=requests`);
+  await goto(page, `${base}/app?place=home&view=requests`);
   const accept = page.getByRole("button", { name: "Accept" });
   await accept.waitFor();
   // The sender's handle comes from the public profile, visible while the request waits.
@@ -236,10 +247,14 @@ async function dmSteps(which: string, page: Page, aDir: string, bAccount: string
   if (!channel) throw new Error(`no channel from dm open:\n${opened}`);
   // The CLI joined from the welcome; the browser's message lands in its
   // store once its tail has applied the channel log, which takes a moment.
+  // `dm messages` reads the CLI's store without syncing, and `dm open`
+  // returns as soon as the group is ready, which can be before the
+  // browser's message was applied: follow the conversation for a moment,
+  // then read, until the message is there.
   phase("cli read");
   let seen = "";
-  for (let i = 0; i < 20 && !seen.includes(hello); i++) {
-    if (i > 0) await Bun.sleep(1_500);
+  for (let i = 0; i < 10 && !seen.includes(hello); i++) {
+    Bun.spawnSync([cli, "--data-dir", aDir, "dm", "tail", channel], { cwd: web, timeout: 4_000 });
     seen = lumia(aDir, "dm", "messages", channel);
   }
   if (!seen.includes(hello)) throw new Error(`the CLI did not read the browser's message:\n${seen}`);
