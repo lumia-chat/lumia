@@ -66,6 +66,7 @@ defmodule Lumia.MixProject do
 
       # BLAKE3 for identity ids and content addressing (pure Elixir; inputs are small).
       {:b3, "~> 0.2.1"},
+      {:nimble_totp, "~> 1.0"},
 
       # Testing and development.
       {:benchee, "~> 1.3", only: :dev},
