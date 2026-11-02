@@ -1,0 +1,28 @@
+[package]
+name = "lumia-desktop"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.96"
+license = "Apache-2.0"
+description = "The Lumia desktop shell: the web UI on the system webview (architecture section 13)"
+
+# Its own workspace: Tauri's dependency tree stays out of apps/core.
+[workspace]
+
+[lib]
+# A distinct library name, so the binary and the library do not collide on Windows.
+name = "lumia_desktop_lib"
+crate-type = ["rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.7.4", features = [] }
+
+[dependencies]
+tauri = { version = "2.12.5", features = [] }
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"

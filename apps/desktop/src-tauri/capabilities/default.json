@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "What the main window may ask of the shell: the core set and nothing else yet.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

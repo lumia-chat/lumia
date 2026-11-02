@@ -19,8 +19,8 @@ function sh(cmd: string, cwd: string) {
 if (!process.env.AR_wasm32_unknown_unknown) {
   const sysroot = execSync("rustc --print sysroot", { cwd: core }).toString().trim();
   const host = execSync("rustc -vV", { cwd: core }).toString().match(/host: (\S+)/)?.[1] ?? "";
-  const ar = `${sysroot}/lib/rustlib/${host}/bin/llvm-ar`;
-  if (existsSync(ar)) process.env.AR_wasm32_unknown_unknown = ar;
+  const ar = [`${sysroot}/lib/rustlib/${host}/bin/llvm-ar`, `${sysroot}/lib/rustlib/${host}/bin/llvm-ar.exe`].find(existsSync);
+  if (ar) process.env.AR_wasm32_unknown_unknown = ar;
   else console.warn("llvm-ar not found; run `rustup component add llvm-tools` if the link fails");
 }
 

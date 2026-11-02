@@ -19,7 +19,7 @@ function ensureInit(): Promise<void> {
 async function dispatch(method: string, args: unknown[]): Promise<unknown> {
   await ensureInit();
   if (method === "open") {
-    client = await Client.open(String(args[0]), await storeKey());
+    client = await Client.open(String(args[0]), await storeKey(), args[1] === true);
     return { host: client.host(), deviceId: client.deviceId(), signedIn: client.signedIn() };
   }
   if (!client) throw new Error("open the client first");

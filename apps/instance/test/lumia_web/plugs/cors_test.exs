@@ -1,6 +1,8 @@
 defmodule LumiaWeb.Plugs.CorsTest do
   use LumiaWeb.ConnCase, async: true
 
+  alias LumiaWeb.Plugs.Cors
+
   @allowed "http://localhost:5173"
   @other "https://evil.example"
 
@@ -18,6 +20,23 @@ defmodule LumiaWeb.Plugs.CorsTest do
     assert [headers] = get_resp_header(conn, "access-control-allow-headers")
     assert headers =~ "authorization"
     assert get_resp_header(conn, "vary") == ["origin"]
+  end
+
+  test "the desktop shell's origin is allowed for the API and the gateway", %{conn: conn} do
+    conn =
+      conn
+      |> put_req_header("origin", "tauri://localhost")
+      |> put_req_header("access-control-request-method", "GET")
+      |> options(~p"/api/v1/account/snapshot")
+
+    assert conn.status == 204
+    assert get_resp_header(conn, "access-control-allow-origin") == ["tauri://localhost"]
+
+    assert Cors.socket_origin?(URI.parse("tauri://localhost"))
+    assert Cors.socket_origin?(URI.parse("https://tauri.localhost"))
+    assert Cors.socket_origin?(URI.parse("http://localhost:5173"))
+    assert Cors.socket_origin?(URI.parse("https://localhost:443"))
+    refute Cors.socket_origin?(URI.parse("https://evil.example"))
   end
 
   test "a preflight from any other origin is refused", %{conn: conn} do

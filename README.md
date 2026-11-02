@@ -41,7 +41,7 @@ proto/          Protobuf schemas
 docs/           Architecture, protocol contract, and specs
 ```
 
-`apps/instance` and `apps/core` exist; the rest do not yet. Section 18 of the architecture doc gives the order they will be built in.
+`apps/instance`, `apps/core`, `apps/web` and `apps/desktop` exist; the rest do not yet. Section 18 of the architecture doc gives the order they will be built in.
 
 ## Platforms
 

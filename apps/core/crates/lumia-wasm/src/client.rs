@@ -517,6 +517,9 @@ pub struct Client {
     device_id: Vec<u8>,
     /// The at-rest key of every store this client opens (e2ee spec 8).
     store_key: Option<Vec<u8>>,
+    /// Inside the desktop shell (apps/desktop): the device is NATIVE, with
+    /// no origin, since the shell serves its own bundled code.
+    shell: bool,
     inner: Rc<RefCell<Inner>>,
     identity: Rc<RefCell<IdentityStores>>,
     /// The personal-DM engine, once this device holds an identity. Behind
@@ -544,7 +547,11 @@ impl Client {
     /// # Errors
     /// When OPFS is unavailable (not in a worker, or storage refused) or a
     /// store fails to open.
-    pub async fn open(base_url: String, store_key: Option<Vec<u8>>) -> Result<Client, JsError> {
+    pub async fn open(
+        base_url: String,
+        store_key: Option<Vec<u8>>,
+        shell: bool,
+    ) -> Result<Client, JsError> {
         ensure_vfs().await?;
         if let Some(k) = &store_key {
             if k.len() != 32 {
@@ -588,6 +595,7 @@ impl Client {
             host,
             device_id,
             store_key,
+            shell,
             inner: Rc::new(RefCell::new(Inner {
                 store: Some(store),
                 reader,
@@ -943,9 +951,12 @@ impl Client {
     pub fn identity_link_request(&self, label: String) -> Result<String, JsError> {
         let mut stores = self.identity.borrow_mut();
         let mut device = device(&mut stores, &self.device_id);
-        device
-            .link_request_as(&label, lumia_core::proto::DeviceKind::Web, &origin())
-            .map_err(js)
+        let (kind, origin) = if self.shell {
+            (lumia_core::proto::DeviceKind::Native, String::new())
+        } else {
+            (lumia_core::proto::DeviceKind::Web, origin())
+        };
+        device.link_request_as(&label, kind, &origin).map_err(js)
     }
 
     /// Step 7: claims the bundle a native device uploaded, then signs in

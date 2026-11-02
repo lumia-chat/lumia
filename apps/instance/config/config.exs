@@ -39,6 +39,8 @@ config :lumia, Oban,
 config :lumia, LumiaWeb.Endpoint,
   url: [host: "localhost"],
   adapter: Bandit.PhoenixAdapter,
+  # The gateway accepts the same origins as the API (dev turns this off).
+  check_origin: {LumiaWeb.Plugs.Cors, :socket_origin?, []},
   render_errors: [
     formats: [json: LumiaWeb.ErrorJSON],
     layout: false

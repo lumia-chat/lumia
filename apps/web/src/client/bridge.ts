@@ -178,8 +178,9 @@ export class Bridge {
     return () => this.listeners.delete(listener);
   }
 
-  open(baseUrl: string): Promise<Opened> {
-    return this.call("open", baseUrl);
+  /** `shell` means the desktop shell: the device is NATIVE, not origin-scoped WEB. */
+  open(baseUrl: string, shell = false): Promise<Opened> {
+    return this.call("open", baseUrl, shell);
   }
   instanceInfo(): Promise<InstanceSummary> {
     return this.call("instanceInfo");

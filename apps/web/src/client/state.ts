@@ -50,9 +50,14 @@ export async function ensureOwner(): Promise<boolean> {
   return ok;
 }
 
+/** Whether the page runs inside the desktop shell (apps/desktop). */
+export function inShell(): boolean {
+  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
 /** Opens the client for `baseUrl` and remembers it. */
 export async function openInstance(baseUrl: string): Promise<Opened> {
-  const result = await client().open(baseUrl);
+  const result = await client().open(baseUrl, inShell());
   rememberInstance(baseUrl);
   setOpened(result);
   return result;

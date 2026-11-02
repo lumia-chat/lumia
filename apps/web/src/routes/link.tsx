@@ -5,7 +5,7 @@
 import { Show, createSignal } from "solid-js";
 import { useNavigate } from "@tanstack/solid-router";
 import { Button, Card, TextField } from "../design/components";
-import { client } from "../client/state";
+import { client, inShell } from "../client/state";
 
 export function Link() {
   const navigate = useNavigate();
@@ -17,7 +17,7 @@ export function Link() {
   const start = async () => {
     setError("");
     try {
-      setRequest(await client().identityLinkRequest("browser"));
+      setRequest(await client().identityLinkRequest(inShell() ? "desktop" : "browser"));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -39,12 +39,12 @@ export function Link() {
 
   return (
     <div class="auth">
-      <Card title="Link this browser" subtitle="A device you already use approves this one; the recovery phrase never enters the browser.">
+      <Card title={inShell() ? "Link this computer" : "Link this browser"} subtitle={inShell() ? "A device you already use approves this one." : "A device you already use approves this one; the recovery phrase never enters the browser."}>
         <Show
           when={request()}
           fallback={
             <div class="auth__form">
-              <p class="auth__note">This browser gets its own device key, scoped to {typeof location !== "undefined" ? location.origin : "this origin"}.</p>
+              <p class="auth__note">{inShell() ? "This computer gets its own device key." : `This browser gets its own device key, scoped to ${typeof location !== "undefined" ? location.origin : "this origin"}.`}</p>
               <Button variant="primary" block onClick={() => void start()}>
                 Start linking
               </Button>
