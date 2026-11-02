@@ -73,7 +73,9 @@ defmodule Lumia.IdentityFixtures do
       identity_id: identity.identity_id,
       device_id: device.id,
       revoked_at: Keyword.get(opts, :revoked_at, now()),
-      revoked_by: if(signer == :root, do: "", else: signer.id)
+      revoked_by: if(signer == :root, do: "", else: signer.id),
+      public_key: %V1.PublicKey{ed25519: device.pub},
+      added_at: Keyword.get(opts, :added_at, now(-60))
     }
 
     bytes = V1.RevocationBody.encode(body)

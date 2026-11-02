@@ -371,28 +371,33 @@ defmodule Lumia.Identity do
         case Repo.one(
                from b in LinkBundle, where: b.code == ^String.upcase(code), lock: "FOR UPDATE"
              ) do
-          nil ->
-            {:error, :not_found}
-
-          %LinkBundle{expires_at: exp} = b when exp <= now ->
-            Repo.delete(b)
-            {:error, :not_found}
-
-          %LinkBundle{device_id: ^device_id} = b ->
-            Repo.delete(b)
-            {:ok, b}
-
-          %LinkBundle{attempts: n} = b when n + 1 >= @link_attempts ->
-            Repo.delete(b)
-            {:error, :not_found}
-
-          %LinkBundle{} = b ->
-            b |> Ecto.Changeset.change(attempts: b.attempts + 1) |> Repo.update()
-            {:error, :not_found}
+          nil -> {:error, :not_found}
+          %LinkBundle{} = b -> claim(b, device_id, now)
         end
       end)
 
     result
+  end
+
+  defp claim(%LinkBundle{} = b, device_id, now) do
+    cond do
+      # DateTime structs are compared with DateTime.compare, never <=.
+      DateTime.compare(b.expires_at, now) != :gt ->
+        Repo.delete(b)
+        {:error, :not_found}
+
+      b.device_id == device_id ->
+        Repo.delete(b)
+        {:ok, b}
+
+      b.attempts + 1 >= @link_attempts ->
+        Repo.delete(b)
+        {:error, :not_found}
+
+      true ->
+        b |> Ecto.Changeset.change(attempts: b.attempts + 1) |> Repo.update()
+        {:error, :not_found}
+    end
   end
 
   # ---- Backups (section 8) -------------------------------------------------------

@@ -153,7 +153,7 @@ Ordered. Each task names the spec section it implements and the tests that close
 - [ ] Profile import on link (signed profile → account display fields).
 - [ ] Oban purge of expired `used_challenges`, `link_bundles`, `reauth_tokens`.
 - [ ] A revoked device that is still connected over the gateway is disconnected through its session revocation; verified for sessions, not yet end to end with a live socket in the identity tests.
-- [ ] Certificates issued by a device that was later revoked cannot be re-verified from the roster alone, because the revocation entry does not carry the revoked device's public key. Such certificates currently fail at step 4 after the issuer is revoked. Needs `RevocationBody.public_key` in the proto and a spec amendment.
+- [x] `RevocationBody` carries the revoked device's public key and `added_at`, so certificates it issued before revocation stay verifiable from the roster alone (found by the verifier; proto and spec amended).
 
 **Closing step 2**
 

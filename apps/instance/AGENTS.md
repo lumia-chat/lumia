@@ -9,6 +9,7 @@ This is the Lumia instance: the Elixir server that one deployment runs. It is a 
 - The write path for channels is `Lumia.Events.append/2` and nothing else writes to the event-log tables. Broadcast happens after it returns, never inside it.
 - Spike and benchmark mix tasks live in `bench/`, which compiles only in dev. Results go in `../../docs/spikes/`. Nothing in `bench/` ships.
 - Use the already included `:req` (`Req`) library for HTTP requests; avoid `:httpoison`, `:tesla`, and `:httpc`.
+- Never compare `DateTime` (or `Date`, `Time`) structs with `<`, `<=`, `>`, `>=`, including in guards: that is structural comparison and silently wrong. Use `DateTime.compare/2`, or push the comparison into the query.
 - Phoenix.PubSub and Erlang distribution are the only coordination between nodes. No Redis, no broker; see architecture hard rule 2.
 
 <!-- usage-rules-start -->

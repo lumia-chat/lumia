@@ -115,6 +115,8 @@ defmodule Lumia.V1.RevocationBody do
   field :device_id, 2, type: :bytes, json_name: "deviceId"
   field :revoked_at, 3, type: Google.Protobuf.Timestamp, json_name: "revokedAt"
   field :revoked_by, 4, type: :bytes, json_name: "revokedBy"
+  field :public_key, 5, type: Lumia.V1.PublicKey, json_name: "publicKey"
+  field :added_at, 6, type: Google.Protobuf.Timestamp, json_name: "addedAt"
 end
 
 defmodule Lumia.V1.RevokedEntry do

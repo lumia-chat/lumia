@@ -88,6 +88,41 @@ defmodule Lumia.Identity.RosterTest do
       assert {:error, {:certs, :signer}} = Roster.verify(roster)
     end
 
+    test "a certificate issued by a device that was revoked afterwards still verifies" do
+      %{identity: identity, device: phone} = bootstrap()
+      laptop = device("laptop")
+      phone_added = now(-100)
+      laptop_cert = cert(identity, laptop, phone, added_at: now(-50))
+
+      roster =
+        roster(identity, :root,
+          version: 2,
+          devices: [laptop_cert],
+          revoked: [
+            revocation(identity, phone, :root, added_at: phone_added, revoked_at: now(-10))
+          ]
+        )
+
+      assert {:ok, verified} = Roster.verify(roster)
+      assert Map.has_key?(verified.devices, laptop.id)
+      assert Map.has_key?(verified.revoked, phone.id)
+    end
+
+    test "a certificate issued by a device before that device was added fails at certs" do
+      %{identity: identity, device: phone} = bootstrap()
+      laptop = device("laptop")
+      laptop_cert = cert(identity, laptop, phone, added_at: now(-200))
+
+      roster =
+        roster(identity, :root,
+          version: 2,
+          devices: [laptop_cert],
+          revoked: [revocation(identity, phone, :root, added_at: now(-100), revoked_at: now(-10))]
+        )
+
+      assert {:error, {:certs, :signer}} = Roster.verify(roster)
+    end
+
     test "a future-dated certificate fails at certs" do
       %{identity: identity, device: phone} = bootstrap()
 

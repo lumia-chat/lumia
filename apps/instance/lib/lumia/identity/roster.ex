@@ -147,7 +147,16 @@ defmodule Lumia.Identity.Roster do
         entry.device_id == body.device_id and entry.revoked_at == body.revoked_at and
           entry.revoked_by == body.revoked_by
 
-      if same?, do: {:ok, body}, else: {:error, {:parse, :mirror_mismatch}}
+      cond do
+        not same? ->
+          {:error, {:parse, :mirror_mismatch}}
+
+        is_nil(body.public_key) or byte_size(body.public_key.ed25519) != 32 ->
+          {:error, {:parse, :revoked_key}}
+
+        true ->
+          {:ok, body}
+      end
     end
   end
 
@@ -272,10 +281,9 @@ defmodule Lumia.Identity.Roster do
         ts(d.cert.added_at) < ts(cert.added_at)
 
       r = revoked[signer] ->
-        # Revoked signer: must have been added before, and revoked after,
-        # the certificate it issued. Its own cert is gone with it, so the
-        # roster cannot say when it was added; the revocation time bounds it.
-        ts(r.body.revoked_at) > ts(cert.added_at)
+        # Revoked signer: added before, and revoked after, the certificate
+        # it issued. Its key and added_at travel in the revocation body.
+        ts(r.body.added_at) < ts(cert.added_at) and ts(r.body.revoked_at) > ts(cert.added_at)
 
       true ->
         false
@@ -393,17 +401,10 @@ defmodule Lumia.Identity.Roster do
   defp signer_key(%V1.Signature{signer_kind: :DEVICE, signer_id: id}, devices, revoked) do
     cond do
       d = devices[id] -> d.cert.public_key.ed25519
-      r = revoked[id] -> revoked_public_key(r)
+      r = revoked[id] -> r.body.public_key.ed25519
       true -> <<0::256>>
     end
   end
-
-  # A revoked device's public key is not in the roster any more; the
-  # revocation body does not carry it either. Certificates issued by a
-  # device that was later revoked therefore cannot be re-verified from the
-  # roster alone unless the revocation entry carries the key. Until the
-  # proto gains that field, such certificates fail verification.
-  defp revoked_public_key(_), do: <<0::256>>
 
   defp decode(module, bytes, step) do
     {:ok, module.decode(bytes)}

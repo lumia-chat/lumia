@@ -81,6 +81,11 @@ message RevocationBody {
   bytes device_id = 2;
   google.protobuf.Timestamp revoked_at = 3;
   bytes revoked_by = 4;  // device_id, or empty for root
+  // The revoked device's public key and the added_at from its certificate,
+  // carried here because its DeviceEntry leaves the roster. Certificates it
+  // issued before revoked_at stay verifiable from the roster alone.
+  PublicKey public_key = 5;
+  google.protobuf.Timestamp added_at = 6;
 }
 
 message RevokedEntry {
