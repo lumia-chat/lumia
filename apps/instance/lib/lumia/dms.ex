@@ -281,6 +281,17 @@ defmodule Lumia.Dms do
     end)
   end
 
+  @doc "The `PERSONAL_*` channels the account is in, oldest first."
+  def personal_channels(account_id) do
+    Repo.all(
+      from c in Channel,
+        join: p in Participant,
+        on: p.channel_id == c.id,
+        where: p.account_id == ^account_id,
+        order_by: c.inserted_at
+    )
+  end
+
   @doc "The participant account ids of a channel, sorted."
   def participants(channel_id) do
     Repo.all(

@@ -62,6 +62,23 @@ defmodule Lumia.DmsTest do
       assert Dms.pending_requests_to(c.id) == []
     end
 
+    test "the snapshot lists the account's personal channels with their participants" do
+      a = account("a")
+      b = account("b")
+      {:ok, request} = Dms.send_request(a.id, b.id)
+      {:ok, _, channel} = Dms.respond(request.id, b.id, :accepted)
+
+      for id <- [a.id, b.id] do
+        snapshot = Snapshots.account(id)
+        assert [%V1.Channel{kind: :PERSONAL_DM} = personal] = snapshot.channels
+        assert personal.channel_id == Ecto.UUID.dump!(channel.id)
+        assert personal.host == Lumia.Identity.host()
+
+        assert Enum.sort(personal.participant_account_ids) ==
+                 Enum.sort([Ecto.UUID.dump!(a.id), Ecto.UUID.dump!(b.id)])
+      end
+    end
+
     test "the snapshot lists requests waiting for the account" do
       a = account("a")
       b = account("b")

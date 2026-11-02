@@ -40,10 +40,14 @@ defmodule Lumia.Snapshots do
       |> Repo.all()
       |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
 
+    # Every channel the account can view: its servers' channels, then the
+    # personal DMs it is in (with their participants and host).
     channels =
       server_ids
       |> Enum.flat_map(&Access.viewable_channels(account_id, &1))
-      |> Enum.map(&Proto.channel(&1.channel))
+      |> Enum.map(& &1.channel)
+      |> Enum.concat(Dms.personal_channels(account_id))
+      |> Enum.map(&Proto.channel/1)
 
     %V1.AccountSnapshot{
       account: Proto.account(account),

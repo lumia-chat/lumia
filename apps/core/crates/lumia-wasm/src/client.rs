@@ -176,6 +176,8 @@ struct DmMessageSummary {
     seq: u64,
     sender_identity_id: String,
     sender_device_id: String,
+    /// The sender's account on this instance, when known.
+    sender_account_id: String,
     body: String,
     sent_at_micros: i64,
     edited: bool,
@@ -1252,6 +1254,10 @@ impl Client {
                 seq: m.seq,
                 sender_identity_id: hex::encode(&m.sender_identity_id),
                 sender_device_id: wire::display(&m.sender_device_id),
+                sender_account_id: e
+                    .account_of(&m.sender_identity_id)
+                    .map(|a| wire::display(a))
+                    .unwrap_or_default(),
                 body: m.body.clone(),
                 sent_at_micros: i64::try_from(m.sent_at_nanos / 1000).unwrap_or(0),
                 edited: m.edited,

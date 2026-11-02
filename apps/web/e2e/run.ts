@@ -43,9 +43,9 @@ async function waitFor(url: string, what: string) {
   throw new Error(`${what} did not answer at ${url}`);
 }
 
-async function open(which: string, name: string): Promise<{ ctx: BrowserContext; page: Page }> {
+async function open(which: string, name: string, keep = false): Promise<{ ctx: BrowserContext; page: Page }> {
   const profile = resolve(work, `profile-${name}-${which}`);
-  rmSync(profile, { recursive: true, force: true });
+  if (!keep) rmSync(profile, { recursive: true, force: true });
   const engine = which === "webkit" ? webkit : chromium;
   const ctx = await engine.launchPersistentContext(profile, { viewport: { width: 1440, height: 960 } });
   const page = await ctx.newPage();
@@ -53,6 +53,16 @@ async function open(which: string, name: string): Promise<{ ctx: BrowserContext;
   page.on("console", (m) => {
     if (m.type() === "error") console.log(`  [${which}] console: ${m.text()}`);
   });
+  if (!keep) {
+    // WebKit keeps OPFS outside the profile directory, so a fresh profile
+    // still sees the last run's stores; clear them before the worker opens any.
+    await page.goto(`${base}/design`);
+    await page.evaluate(async () => {
+      const root = await navigator.storage.getDirectory();
+      for await (const name of (root as unknown as { keys(): AsyncIterable<string> }).keys()) await root.removeEntry(name, { recursive: true });
+    });
+    await page.evaluate(() => localStorage.clear());
+  }
   return { ctx, page };
 }
 
@@ -108,6 +118,52 @@ async function link(which: string, dataDir: string) {
   console.log(`  ${which}: linked and signed in by identity proof in ${Date.now() - t0} ms`);
 }
 
+// A personal DM between the linked browser (B) and the CLI (A): A asks, B
+// accepts in the browser and creates the group, both send, B reloads.
+async function dm(which: string, aDir: string, bAccount: string) {
+  const { ctx, page } = await open(which, "link", true);
+  const t0 = Date.now();
+  try {
+    await dmSteps(which, page, aDir, bAccount);
+  } catch (e) {
+    await page.screenshot({ path: `${out}/${which}-dm-failed.png` });
+    const alerts = await page.getByRole("alert").allTextContents();
+    if (alerts.length) console.log(`  [${which}] on screen: ${alerts.join(" | ")}`);
+    throw e;
+  } finally {
+    await ctx.close();
+  }
+  console.log(`  ${which}: personal DM both ways and back after reload in ${Date.now() - t0} ms`);
+}
+
+async function dmSteps(which: string, page: Page, aDir: string, bAccount: string) {
+  lumia(aDir, "dm", "request", bAccount);
+  await page.goto(`${base}/app?place=home&view=requests`);
+  const accept = page.getByRole("button", { name: "Accept" });
+  await accept.waitFor();
+  await page.waitForTimeout(1500); // the gateway loop starts after the snapshot
+  await accept.click();
+  const composer = page.getByPlaceholder(/^Message /);
+  await composer.waitFor();
+  await page.screenshot({ path: `${out}/${which}-dm-open.png` });
+  const hello = `hello from ${which} ${Date.now()}`;
+  await composer.fill(hello);
+  await page.keyboard.press("Enter");
+  await page.getByText(hello).waitFor();
+  const opened = lumia(aDir, "dm", "open", bAccount);
+  const channel = opened.match(/([0-9a-f-]{36})\s+personal DM/)?.[1];
+  if (!channel) throw new Error(`no channel from dm open:\n${opened}`);
+  const seen = lumia(aDir, "dm", "messages", channel);
+  if (!seen.includes(hello)) throw new Error(`the CLI did not read the browser's message:\n${seen}`);
+  const reply = `reply from the cli ${Date.now()}`;
+  lumia(aDir, "dm", "send", channel, reply);
+  await page.getByText(reply).waitFor();
+  await page.reload();
+  await page.getByText(hello).waitFor();
+  await page.getByText(reply).waitFor();
+  await page.screenshot({ path: `${out}/${which}-dm.png` });
+}
+
 if (!existsSync(cli)) run(["cargo", "build", "--release", "-p", "lumia-cli"], resolve(web, "../core"));
 rmSync(work, { recursive: true, force: true });
 mkdirSync(out, { recursive: true });
@@ -128,6 +184,8 @@ lumia(identityDir, "identity", "link-account", "--password", password);
 const linked = lumia(identityDir, "server-create", "Linked").match(/[0-9a-f-]{36}/)?.[0];
 if (!linked) throw new Error("no server id");
 lumia(identityDir, "channel-create", linked, "general");
+const bAccount = lumia(identityDir, "dm", "setup").match(/account ([0-9a-f-]{36})/)?.[1];
+if (!bAccount) throw new Error("no account id from dm setup");
 console.log("seeded");
 
 const vite = Bun.spawn(["bun", "run", "dev"], { cwd: web, stdout: "ignore", stderr: "ignore" });
@@ -135,15 +193,23 @@ try {
   await waitFor(base, "vite");
   let failed = 0;
   for (const which of engines) {
+    // A fresh CLI identity per browser, so each gets its own request.
+    const aDir = resolve(work, `cli-a-${which}`);
+    lumia(aDir, "instance", "add", instance);
+    lumia(aDir, "account", "create", "--handle", `a${which}${stamp}`, "--password", password);
+    lumia(aDir, "identity", "create", "--label", "desk");
+    lumia(aDir, "identity", "link-account", "--password", password);
+    lumia(aDir, "dm", "setup");
     for (const [name, step] of [
       ["sign in", () => signInAndSend(which, `web${stamp}`)],
       ["link", () => link(which, identityDir)],
+      ["dm", () => dm(which, aDir, bAccount)],
     ] as const) {
       try {
         await step();
       } catch (e) {
         failed++;
-        console.log(`  ${which}: ${name} FAILED: ${e instanceof Error ? e.message : String(e)}`);
+        console.log(`  ${which}: ${name} FAILED: ${e instanceof Error ? e.message.split("\n")[0] : String(e)}`);
       }
     }
   }

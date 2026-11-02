@@ -6,7 +6,7 @@ import { Outlet, createRootRoute, createRoute, redirect } from "@tanstack/solid-
 import { Show, createResource } from "solid-js";
 import { Button, Card } from "../design/components";
 import { ensureOwner, openInstance, opened, savedInstance } from "../client/state";
-import { App } from "./app";
+import { App, type AppSearch } from "./app";
 import { DesignGallery } from "./design";
 import { Link } from "./link";
 import { SignIn } from "./sign-in";
@@ -62,7 +62,18 @@ const indexRoute = createRoute({
 
 const signInRoute = createRoute({ getParentRoute: () => rootRoute, path: "/sign-in", component: SignIn });
 const linkRoute = createRoute({ getParentRoute: () => rootRoute, path: "/link", component: Link });
-const appRoute = createRoute({ getParentRoute: () => rootRoute, path: "/app", component: App, beforeLoad: requireSession });
+const appRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/app",
+  component: App,
+  beforeLoad: requireSession,
+  validateSearch: (s: Record<string, unknown>): AppSearch => ({
+    place: s.place === "home" ? "home" : undefined,
+    view: s.view === "requests" || s.view === "devices" || s.view === "new" || s.view === "dm" ? s.view : undefined,
+    dm: typeof s.dm === "string" ? s.dm : undefined,
+    server: typeof s.server === "string" ? s.server : undefined,
+  }),
+});
 const designRoute = createRoute({ getParentRoute: () => rootRoute, path: "/design", component: DesignGallery });
 
 export const routeTree = rootRoute.addChildren([indexRoute, signInRoute, linkRoute, appRoute, designRoute]);

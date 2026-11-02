@@ -137,7 +137,7 @@ The server sends `Disconnect` before closing. `DISCONNECT_SERVER_SHUTDOWN` and `
 
 A client's first connection to an instance, and any connection after a generation change, follows this path:
 
-1. `GET /account/snapshot` → `AccountSnapshot` with `seq`. Apply it: servers, memberships, channels, pending requests, friendships, roster, block list.
+1. `GET /account/snapshot` → `AccountSnapshot` with `seq`. Apply it: servers, memberships, channels (the servers' and the personal DMs the account is in, with their participants), pending requests, friendships, roster, block list.
 2. `ResumeAccount{after_seq: snapshot.seq}` on the gateway.
 3. `Subscribe` with cursor 0 for every channel in the snapshot, which yields `SNAPSHOT_REQUIRED` for each; take the channel snapshot path for the ones the user opens first and lazily for the rest.
 

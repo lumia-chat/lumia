@@ -4,7 +4,7 @@
 // bridge; nothing here renders.
 import { QueryClient, createQuery, useQueryClient } from "@tanstack/solid-query";
 import { createSignal } from "solid-js";
-import { Bridge, claimOwnership, type ClientEvent, type Opened } from "./bridge";
+import { Bridge, claimOwnership, type ClientEvent, type MemberSummary, type Opened } from "./bridge";
 
 export const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: Infinity, retry: false } },
@@ -73,6 +73,7 @@ export async function startGateway(channelIds: string[]): Promise<void> {
         break;
       case "accountApplied":
         void queryClient.invalidateQueries({ queryKey: ["snapshot"] });
+        void queryClient.invalidateQueries({ queryKey: ["dmChannels"] });
         break;
       case "snapshotTaken":
         void queryClient.invalidateQueries({ queryKey: ["messages", e.channelId] });
@@ -130,6 +131,28 @@ export function dmMessagesQuery(channelId: () => string | undefined) {
     queryKey: ["dm", channelId()],
     queryFn: () => client().dmMessages(channelId() as string),
     enabled: !!channelId(),
+  }));
+}
+
+/** Everyone this account shares a server with, by account id. */
+export function peopleQuery(serverIds: () => string[]) {
+  return createQuery(() => ({
+    queryKey: ["people", serverIds().join(",")],
+    queryFn: async () => {
+      const people = new Map<string, MemberSummary>();
+      for (const id of serverIds()) {
+        for (const m of await client().members(id)) people.set(m.accountId, m);
+      }
+      return people;
+    },
+    enabled: serverIds().length > 0,
+  }));
+}
+
+export function hasIdentityQuery() {
+  return createQuery(() => ({
+    queryKey: ["hasIdentity"],
+    queryFn: () => client().hasIdentity(),
   }));
 }
 

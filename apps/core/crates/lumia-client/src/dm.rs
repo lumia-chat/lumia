@@ -228,6 +228,16 @@ impl DmEngine {
         self.my_account = account_id;
     }
 
+    /// The account on this instance an identity is known by, when a
+    /// conversation or the account log has named it.
+    #[must_use]
+    pub fn account_of(&self, identity_id: &[u8]) -> Option<&Vec<u8>> {
+        self.account_identity
+            .iter()
+            .find(|(_, id)| id.as_slice() == identity_id)
+            .map(|(account, _)| account)
+    }
+
     /// The personal channels this engine knows, with their participants.
     #[must_use]
     pub fn channels(&self) -> &HashMap<Vec<u8>, Vec<Vec<u8>>> {

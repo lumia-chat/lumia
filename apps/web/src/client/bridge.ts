@@ -59,6 +59,7 @@ export interface DmMessageSummary {
   seq: number;
   senderIdentityId: string;
   senderDeviceId: string;
+  senderAccountId: string;
   body: string;
   sentAtMicros: number;
   edited: boolean;
