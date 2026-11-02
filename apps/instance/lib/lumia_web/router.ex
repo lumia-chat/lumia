@@ -10,6 +10,7 @@ defmodule LumiaWeb.Router do
   pipeline :api do
     plug :accepts, ["json", "x-protobuf"]
     plug LumiaWeb.Plugs.Auth
+    plug LumiaWeb.Plugs.ValidateIds
   end
 
   scope "/api/v1", LumiaWeb do

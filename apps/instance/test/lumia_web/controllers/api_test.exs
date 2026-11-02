@@ -179,6 +179,12 @@ defmodule LumiaWeb.ApiTest do
                decode(channel, V1.Channel)
     end
 
+    test "a malformed id in the path is NOT_FOUND, not a crash", ctx do
+      assert get(ctx.conn, "/api/v1/servers/not-a-uuid/channels").status == 404
+      assert get(ctx.conn, "/api/v1/channels/channels/snapshot").status == 404
+      assert %V1.Error{code: :NOT_FOUND} = decode(get(ctx.conn, "/api/v1/servers/x"), V1.Error)
+    end
+
     test "a non-member gets NOT_FOUND for a server and its channels", ctx do
       outsider = account("outsider") |> then(&authed(build_conn(), &1))
       assert get(outsider, "/api/v1/servers/#{ctx.server.id}").status == 404

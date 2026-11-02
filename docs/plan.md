@@ -10,7 +10,7 @@ Legend: `[x]` done · `[~]` in progress · `[ ]` not started · `(spec §n)` the
 |---|---|
 | 1. Schemas and protocol contract | Done |
 | 2. Server: event log, delivery, account log, resume, authorization | First pass complete 2026-11-01; six items carried into step 3 (listed under "Closing step 2") |
-| 3. Rust core | Not started |
+| 3. Rust core | Milestone 1 done: sync engine, SQLite store, CLI talking to the real gateway |
 | 4. Identity across two instances | Specified, not built |
 | 5. MLS personal DMs, backup, recovery | Not specified, not built |
 | 6. Web UI in Tauri | Not started |
@@ -131,6 +131,7 @@ Ordered. Each task names the spec section it implements and the tests that close
 - [x] `GET /account/snapshot`, `GET /account/events` (protocol §7).
 - [x] `GET /channels/{id}/events`, `/snapshot`, `/messages` with `has_more`, `POST /channels/{id}/commands` with idempotent replay (delivery §8; test: snapshot and scrollback paging).
 - [x] Servers, channels, members, roles, overwrites endpoints with authoritative checks through `Lumia.Authz.Access`, shared with the gateway; non-members get `NOT_FOUND` (authorization §5).
+- [x] Malformed `*_id` path parameters answer `NOT_FOUND` through `LumiaWeb.Plugs.ValidateIds` instead of raising (found by the first CLI run).
 - [ ] Pagination cursors for list endpoints (members, search) and the `PageRequest` shape (protocol §11); members currently return everything.
 - [ ] `truncated_before` is always false: rows are permanent, so no HTTP fetch is truncated yet.
 - [x] `Lumia.Workers.Retention` (daily): per-server `retention_days` set by `Servers.set_retention/3` (MANAGE_SERVER, audited); `Events.purge_before/2` nulls payloads, deletes messages, appends `PayloadsPurged`; resumed clients see `Redacted` (delivery §10; tests: purge, idempotence, no policy untouched).
@@ -164,12 +165,21 @@ Ordered. Each task names the spec section it implements and the tests that close
 
 ## Step 3: Rust core
 
-- [ ] Crate layout under `apps/core`: protocol (generated from `proto/`), store (SQLite), sync, identity, mls, with UniFFI and WASM bindings.
-- [ ] Protocol encode and decode against the gateway, including the JSON overrides for debugging.
-- [ ] SQLite store with per-log cursors persisted in the same transaction as applied state (protocol §5).
-- [ ] Sync engine: the three resume outcomes, gap fetch, dedup by event ID, high-water-mark on foreground (delivery §8).
-- [ ] Identity: phrase, derivation, roster build and verify, link request and bundle (identity §2 to §6).
-- [ ] A headless test client that drives the gateway for the failure-injection tests.
+**Milestone 1** (2026-11-01): the sync engine talks to the real gateway.
+
+- [x] Workspace at `apps/core`: `lumia-proto`, `lumia-core`, `lumia-client`, `lumia-ffi`, `lumia-wasm`; Rust 1.96 pinned; Apache-2.0; `AGENTS.md`; `core.yml` CI with fmt, clippy `-D warnings`, tests, wasm32 check.
+- [x] `lumia-proto`: prost through protox from `proto/` at build time, nothing committed.
+- [x] `lumia-core::sync::Session`: sans-I/O state machine with scripted tests for in-order apply, duplicates, gap fetch with a single in-flight fetch, snapshot path holding live events, nudges and high-water marks, generation change discarding cursors, subscription errors (protocol §5, delivery §8).
+- [x] `Store` and `Keystore` contracts; `wire` scalar helpers.
+- [x] `lumia-client`: SQLite store applying events, materialized messages and cursor in one transaction, refusing gaps; snapshot replace; outbox; HTTP client with protobuf bodies; gateway loop carrying out effects with heartbeat and outbox retry on welcome; file keystore (dev only).
+- [x] `lumia-cli`: `instance add`, `account create`, `login`, `servers`, `server create`, `channels`, `channel create`, `send`, `tail`.
+- [ ] Reconnect with backoff around the gateway loop (the loop runs one connection; the CLI runs it once).
+- [ ] Refresh-token rotation when the access token expires.
+- [ ] `scenario <name>` subcommands for the failure-injection cases against a running instance.
+
+**Milestone 2**: identity in the core (phrase, derivation, roster build and verify with the eight steps, link request and bundle), with cross-implementation test vectors written by a mix task in `apps/instance/bench` to `proto/vectors/identity/`.
+
+**Milestone 3**: UniFFI surface with one `Client` object and a callback interface; wasm-bindgen surface over a JS-provided store.
 
 ## Step 4: identity across two instances
 

@@ -13,6 +13,8 @@ Early. The event-log write path exists and is measured; the gateway, API, identi
 
 Dev and test connect to `postgres:postgres@localhost` by default. Set `DATABASE_URL` to override.
 
+If you use Postgres.app on macOS, it gates "trust" connections behind a per-process permission dialog. A server started from a non-interactive process (a script, `nohup`, an agent) cannot answer it and every connection handshake is rejected. Either approve the BEAM in Postgres.app's settings or run the server from your own terminal.
+
 ## Running
 
 ```sh
