@@ -263,6 +263,20 @@ console.log("seeded");
 const vite = process.env.LUMIA_BASE ? null : Bun.spawn(["bun", "run", "dev"], { cwd: web, stdout: "ignore", stderr: "ignore" });
 try {
   await waitFor(base, vite ? "vite" : "the served UI");
+  if (engines.includes("webkit") && process.platform === "linux") {
+    // WebKit's first page on a fresh Linux runner takes minutes (its caches
+    // are built on first use); later launches take seconds. Pay it once here.
+    const t0 = Date.now();
+    const warm = await webkit.launchPersistentContext(resolve(work, "profile-warm-webkit"), { timeout: 120_000 });
+    try {
+      const page = await warm.newPage();
+      await page.goto(`${base}/design`, { timeout: 300_000 });
+      await page.locator(".lu-shell").waitFor({ timeout: 60_000 });
+    } finally {
+      await warm.close();
+    }
+    console.log(`  webkit warmed up in ${Date.now() - t0} ms`);
+  }
   let failed = 0;
   for (const which of engines) {
     // A fresh CLI identity per browser, so each gets its own request.
