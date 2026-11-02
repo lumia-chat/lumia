@@ -4,7 +4,7 @@
 // bridge; nothing here renders.
 import { QueryClient, createQuery, useQueryClient } from "@tanstack/solid-query";
 import { createSignal } from "solid-js";
-import { Bridge, claimOwnership, type ClientEvent, type MemberSummary, type Opened } from "./bridge";
+import { Bridge, ClientError, claimOwnership, type ClientEvent, type MemberSummary, type Opened } from "./bridge";
 
 export const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: Infinity, retry: false } },
@@ -159,6 +159,29 @@ export function peopleQuery(serverIds: () => string[]) {
     },
     enabled: serverIds().length > 0,
   }));
+}
+
+// Public profiles of people outside a shared server (a DM participant, a
+// request's sender), fetched once each and read reactively; null when the
+// instance will not show one.
+const profiles = new Map<string, MemberSummary | null | undefined>();
+const [profilesVersion, setProfilesVersion] = createSignal(0);
+
+export function profileOf(accountId: string): MemberSummary | null | undefined {
+  profilesVersion();
+  if (!accountId) return null;
+  if (profiles.has(accountId)) return profiles.get(accountId);
+  profiles.set(accountId, undefined); // in flight
+  void client()
+    .account(accountId)
+    .then((p) => profiles.set(accountId, p))
+    .catch((e: unknown) => {
+      // Not visible stays null; any other failure is retried on the next read.
+      if (e instanceof ClientError && e.code === "NOT_FOUND") profiles.set(accountId, null);
+      else profiles.delete(accountId);
+    })
+    .finally(() => setProfilesVersion((v) => v + 1));
+  return undefined;
 }
 
 export function hasIdentityQuery() {

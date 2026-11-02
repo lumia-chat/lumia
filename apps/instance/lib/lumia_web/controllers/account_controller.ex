@@ -12,6 +12,17 @@ defmodule LumiaWeb.AccountController do
     ProtoConn.render(conn, Snapshots.account(conn.assigns.current_account_id))
   end
 
+  @doc "Another account's public profile, when the caller may see it (`Lumia.Accounts.visible_to?/2`)."
+  def show(conn, %{"account_id" => account_id}) do
+    caller = conn.assigns.current_account_id
+
+    with true <- Lumia.Accounts.visible_to?(caller, account_id) || {:error, :not_found},
+         %Lumia.Accounts.Account{} = account <-
+           Lumia.Repo.get(Lumia.Accounts.Account, account_id) || {:error, :not_found} do
+      ProtoConn.render(conn, Lumia.Proto.account(account))
+    end
+  end
+
   def events(conn, params) do
     after_seq = int(params["after_seq"], 0)
     limit = int(params["limit"], 200)

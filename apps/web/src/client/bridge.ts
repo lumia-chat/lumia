@@ -236,6 +236,9 @@ export class Bridge {
   identityRevoke(deviceId: string, password: string): Promise<RosterSummary> {
     return this.call("identityRevoke", deviceId, password);
   }
+  account(accountId: string): Promise<MemberSummary> {
+    return this.call("account", accountId);
+  }
   members(serverId: string, query = ""): Promise<MemberSummary[]> {
     return this.call("members", serverId, query);
   }

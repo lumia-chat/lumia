@@ -11,13 +11,14 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use lumia_core::proto::InstanceInfo;
 use lumia_core::proto::{
-    reauth_request, AccountSnapshot, Ack, ChallengePurpose, ChallengeRequest, ChallengeResponse,
-    Channel, ChannelSnapshot, ClaimKeyPackageRequest, ClaimKeyPackageResponse, Command,
-    CreateAccountRequest, CreateChannelRequest, CreateLinkBundleRequest, CreateLinkBundleResponse,
-    CreateServerRequest, Error as ApiError, ErrorCode, GetGroupInfoResponse, GetLinkBundleResponse,
-    GetRosterResponse, IdentityProof, IdentityProofSignInRequest, ListAccountEventsResponse,
-    ListChannelsResponse, ListEventsResponse, ListMembersResponse, ListServersResponse,
-    OpenPersonalDmRequest, OpenPersonalDmResponse, PasswordSignInRequest, PublishGroupInfoRequest,
+    reauth_request, Account, AccountSnapshot, Ack, ChallengePurpose, ChallengeRequest,
+    ChallengeResponse, Channel, ChannelSnapshot, ClaimKeyPackageRequest, ClaimKeyPackageResponse,
+    Command, CreateAccountRequest, CreateChannelRequest, CreateLinkBundleRequest,
+    CreateLinkBundleResponse, CreateServerRequest, Error as ApiError, ErrorCode,
+    GetGroupInfoResponse, GetLinkBundleResponse, GetRosterResponse, IdentityProof,
+    IdentityProofSignInRequest, ListAccountEventsResponse, ListChannelsResponse,
+    ListEventsResponse, ListMembersResponse, ListServersResponse, OpenPersonalDmRequest,
+    OpenPersonalDmResponse, PasswordSignInRequest, PublishGroupInfoRequest,
     PublishKeyPackagesRequest, PublishRosterRequest, ReauthRequest, ReauthResponse, RefreshRequest,
     RevokeDeviceRequest, Server, SignedRoster, TokenPair,
 };
@@ -476,6 +477,15 @@ impl Api {
     pub async fn channels(&self, server_id: &str) -> Result<ListChannelsResponse, ClientError> {
         self.get(&format!("/api/v1/servers/{server_id}/channels"))
             .await
+    }
+
+    /// `GET /accounts/{id}`: another account's public profile, when the
+    /// caller may see it (a shared server or personal DM, or a request).
+    ///
+    /// # Errors
+    /// `NOT_FOUND` when not visible; transport failure.
+    pub async fn account(&self, account_id: &str) -> Result<Account, ClientError> {
+        self.get(&format!("/api/v1/accounts/{account_id}")).await
     }
 
     /// `GET /servers/{id}/members`: a page of members with their accounts,

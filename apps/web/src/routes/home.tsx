@@ -26,7 +26,7 @@ import {
   type DeviceEntry,
 } from "../design/components";
 import { ClientError, type ChannelSummary, type DeviceSummary, type DmMessageSummary, type MemberSummary, type SnapshotSummary } from "../client/bridge";
-import { client, dmChannelsQuery, dmMessagesQuery, hasIdentityQuery, peopleQuery, queryClient, rosterQuery } from "../client/state";
+import { client, dmChannelsQuery, dmMessagesQuery, hasIdentityQuery, peopleQuery, profileOf, queryClient, rosterQuery } from "../client/state";
 import { initialsOf, timeOf, toneFor } from "./app";
 
 export type HomeView = "dm" | "requests" | "devices" | "new";
@@ -47,7 +47,7 @@ function useNames(props: { snapshot: SnapshotSummary | undefined }) {
   const people = peopleQuery(serverIds);
   const nameOf = (accountId: string): string => {
     if (accountId && accountId === props.snapshot?.accountId) return props.snapshot?.displayName || props.snapshot?.handle || "You";
-    const p = people.data?.get(accountId);
+    const p = people.data?.get(accountId) ?? profileOf(accountId);
     return p?.displayName || p?.nickname || p?.handle || (accountId ? accountId.slice(0, 8) : "Someone");
   };
   return { people, nameOf };
@@ -308,7 +308,7 @@ function Requests(props: HomeProps) {
             {(r) => (
               <RequestCard
                 name={nameOf(r.fromAccountId)}
-                handle={people.data?.get(r.fromAccountId)?.handle}
+                handle={(people.data?.get(r.fromAccountId) ?? profileOf(r.fromAccountId))?.handle}
                 initials={initialsOf(nameOf(r.fromAccountId))}
                 tone={toneFor(r.fromAccountId)}
                 meta={meta(r)}

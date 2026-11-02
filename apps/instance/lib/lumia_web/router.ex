@@ -46,6 +46,7 @@ defmodule LumiaWeb.Router do
 
     get "/account/snapshot", AccountController, :snapshot
     get "/account/events", AccountController, :events
+    get "/accounts/:account_id", AccountController, :show
 
     get "/servers", ServerController, :index
     post "/servers", ServerController, :create

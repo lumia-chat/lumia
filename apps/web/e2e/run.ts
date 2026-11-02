@@ -146,11 +146,11 @@ async function link(which: string, dataDir: string) {
 
 // A personal DM between the linked browser (B) and the CLI (A): A asks, B
 // accepts in the browser and creates the group, both send, B reloads.
-async function dm(which: string, aDir: string, bAccount: string) {
+async function dm(which: string, aDir: string, bAccount: string, aHandle: string) {
   const { ctx, page } = await open(which, "link", true);
   const t0 = Date.now();
   try {
-    await dmSteps(which, page, aDir, bAccount);
+    await dmSteps(which, page, aDir, bAccount, aHandle);
   } catch (e) {
     await page.screenshot({ path: `${out}/${which}-dm-failed.png` });
     const alerts = await page.getByRole("alert").allTextContents();
@@ -162,11 +162,13 @@ async function dm(which: string, aDir: string, bAccount: string) {
   console.log(`  ${which}: personal DM both ways and back after reload in ${Date.now() - t0} ms`);
 }
 
-async function dmSteps(which: string, page: Page, aDir: string, bAccount: string) {
+async function dmSteps(which: string, page: Page, aDir: string, bAccount: string, aHandle: string) {
   lumia(aDir, "dm", "request", bAccount);
   await page.goto(`${base}/app?place=home&view=requests`);
   const accept = page.getByRole("button", { name: "Accept" });
   await accept.waitFor();
+  // The sender's handle comes from the public profile, visible while the request waits.
+  await page.getByText(`@${aHandle}`).waitFor();
   await page.waitForTimeout(1500); // the gateway loop starts after the snapshot
   await accept.click();
   const composer = page.getByPlaceholder(/^Message /);
@@ -187,6 +189,7 @@ async function dmSteps(which: string, page: Page, aDir: string, bAccount: string
   await page.reload();
   await page.getByText(hello).waitFor();
   await page.getByText(reply).waitFor();
+  if ((await page.getByText(aHandle).count()) === 0) throw new Error("the CLI's handle is not shown as the sender");
   await page.screenshot({ path: `${out}/${which}-dm.png` });
 }
 
@@ -222,14 +225,15 @@ try {
     // A fresh CLI identity per browser, so each gets its own request.
     const aDir = resolve(work, `cli-a-${which}`);
     lumia(aDir, "instance", "add", instance);
-    lumia(aDir, "account", "create", "--handle", `a${which}${stamp}`, "--password", password);
+    const aHandle = `a${which}${stamp}`;
+    lumia(aDir, "account", "create", "--handle", aHandle, "--password", password);
     lumia(aDir, "identity", "create", "--label", "desk");
     lumia(aDir, "identity", "link-account", "--password", password);
     lumia(aDir, "dm", "setup");
     for (const [name, step] of [
       ["sign in", () => signInAndSend(which, `web${stamp}`)],
       ["link", () => link(which, identityDir)],
-      ["dm", () => dm(which, aDir, bAccount)],
+      ["dm", () => dm(which, aDir, bAccount, aHandle)],
     ] as const) {
       try {
         await step();

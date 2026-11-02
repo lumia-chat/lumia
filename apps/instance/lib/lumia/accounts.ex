@@ -23,6 +23,27 @@ defmodule Lumia.Accounts do
   alias Lumia.Tx
   alias Lumia.V1
 
+  @doc """
+  Whether `viewer_id` may see `account_id`'s public profile: itself, an
+  account it shares a server or a `PERSONAL_*` channel with, or one with
+  a request waiting between them (the recipient needs the sender's name
+  to answer; architecture 6.4 shows nothing more than that).
+  """
+  def visible_to?(viewer_id, account_id) do
+    viewer_id == account_id or shares_server?(viewer_id, account_id) or
+      Lumia.Dms.shares_personal_channel?(viewer_id, account_id) or
+      Lumia.Dms.pending_request?(viewer_id, account_id)
+  end
+
+  defp shares_server?(a, b) do
+    Repo.exists?(
+      from m in Lumia.Servers.Member,
+        join: n in Lumia.Servers.Member,
+        on: m.server_id == n.server_id,
+        where: m.account_id == ^a and n.account_id == ^b
+    )
+  end
+
   @doc "Creates an account. Spike-level; auth flows come with the identity endpoints."
   def create_account(attrs) do
     %Account{}

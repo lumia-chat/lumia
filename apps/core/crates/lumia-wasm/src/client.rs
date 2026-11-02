@@ -749,6 +749,21 @@ impl Client {
         })
     }
 
+    /// `GET /accounts/{id}`: another account's public profile, when
+    /// visible (a shared server or personal DM, or a request between).
+    ///
+    /// # Errors
+    /// `NOT_FOUND` when not visible; transport failure.
+    pub async fn account(&self, account_id: String) -> Result<JsValue, JsError> {
+        let a = self.api.account(&account_id).await.map_err(js)?;
+        to_js(&MemberSummary {
+            account_id: wire::display(&a.account_id),
+            handle: a.handle,
+            display_name: a.display_name,
+            nickname: String::new(),
+        })
+    }
+
     /// `GET /servers/{id}/members`: a server's members with their
     /// accounts, optionally filtered by a handle or nickname prefix.
     ///

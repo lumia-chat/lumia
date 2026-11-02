@@ -148,6 +148,9 @@ defmodule Lumia.Dms do
 
   defp open_on_accept(_request, _state), do: {:ok, nil}
 
+  @doc "Whether a request between the two accounts is waiting, in either direction."
+  def pending_request?(a, b), do: pending_between(a, b) != nil
+
   @doc "Whether a request between the two accounts was accepted, in either direction."
   def accepted_request?(a, b) do
     Repo.exists?(
