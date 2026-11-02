@@ -497,7 +497,7 @@ Deleting an **identity** is separate and done per instance by deleting each acco
 
 **Single-node.** The Lumia image, Postgres, blobs on a persistent local volume, the instance master key and other secrets on a persistent volume, and off-host backups of both the database and the blob volume. This is the two-container default.
 
-**Multi-node.** The same image on N nodes with libcluster configured, **plus** a shared blob store, which is a precondition, not an option: S3-compatible storage or a shared filesystem. Local-disk blobs are refused when clustering is enabled. Postgres availability (replicas, failover) and per-node connection-pool sizing are the operator's configuration and the doc gives recommended values.
+**Multi-node.** The same image on N nodes, clustered by DNS (one name with one record per node, which Kubernetes headless services, Fly and scaled Compose provide; `dns_cluster`, decided in the step 7 grill), **plus** a shared blob store, which is a precondition, not an option: S3-compatible storage or a shared filesystem. Local-disk blobs are refused when clustering is enabled. Postgres availability (replicas, failover) and per-node connection-pool sizing are the operator's configuration and the doc gives recommended values.
 
 ### 15.2 Encryption at rest, stated by responsibility
 
