@@ -68,6 +68,7 @@ defmodule LumiaWeb.ProtoConn do
   defp code_and_status(:invalid_argument), do: {:INVALID_ARGUMENT, 400}
   defp code_and_status(:invalid_command), do: {:INVALID_ARGUMENT, 400}
   defp code_and_status(:failed_precondition), do: {:FAILED_PRECONDITION, 400}
+  defp code_and_status(:identity_proof_invalid), do: {:IDENTITY_PROOF_INVALID, 401}
   defp code_and_status(:unauthenticated), do: {:UNAUTHENTICATED, 401}
   defp code_and_status(:token_expired), do: {:TOKEN_EXPIRED, 401}
   defp code_and_status(:session_revoked), do: {:SESSION_REVOKED, 401}

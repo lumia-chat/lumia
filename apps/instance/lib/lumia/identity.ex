@@ -25,6 +25,7 @@ defmodule Lumia.Identity do
   alias Lumia.Identity.UsedChallenge
   alias Lumia.Proto
   alias Lumia.Repo
+  alias Lumia.Tx
   alias Lumia.V1
 
   @challenge_ttl_seconds 120
@@ -56,7 +57,13 @@ defmodule Lumia.Identity do
   single use), roster (section 3.3, stored if newer), device membership,
   and the device signature. Returns the verified roster and the device.
   """
-  def verify_proof(%V1.IdentityProof{} = proof, purpose, opts \\ []) do
+  def verify_proof(proof, purpose, opts \\ [])
+
+  def verify_proof(
+        %V1.IdentityProof{roster: %V1.SignedRoster{}, signature: %V1.Signature{}} = proof,
+        purpose,
+        opts
+      ) do
     with {:ok, challenge} <- decode_challenge(proof.challenge),
          :ok <- check_challenge(challenge, purpose),
          {:ok, verified} <- accept_roster(proof.roster, Keyword.get(opts, :context, :proof)),
@@ -75,11 +82,20 @@ defmodule Lumia.Identity do
     end
   end
 
+  # A proof without a roster or a signature cannot verify; it is a bad
+  # request, not a crash.
+  def verify_proof(%V1.IdentityProof{}, _purpose, _opts), do: {:error, :identity_proof_invalid}
+
   defp decode_challenge(bytes) do
     {:ok, V1.IdentityChallengeBody.decode(bytes)}
   rescue
     _ -> {:error, :identity_proof_invalid}
   end
+
+  # A challenge this instance issued always carries an expiry; one without
+  # is forged or truncated, and must not reach the MAC input.
+  defp check_challenge(%V1.IdentityChallengeBody{expires_at: nil}, _purpose),
+    do: {:error, :identity_proof_invalid}
 
   defp check_challenge(challenge, purpose) do
     now = DateTime.utc_now()
@@ -154,7 +170,7 @@ defmodule Lumia.Identity do
   account bound to the identity gets `RosterUpdated` on its log.
   """
   def accept_roster(%V1.SignedRoster{} = signed, context) do
-    Repo.transact(fn ->
+    Tx.transact(fn ->
       with {:ok, body} <- decode_body(signed.body),
            held = lock_held(body.identity_id),
            {:ok, verified} <- verify_against(signed, held),

@@ -99,6 +99,105 @@ defmodule Lumia.ServersTest do
     end
   end
 
+  describe "overwrite targets and role limits" do
+    test "an overwrite for a role or member of another server is NOT_FOUND", ctx do
+      stranger = account("stranger")
+
+      other_everyone =
+        Repo.get_by!(Role, server_id: ctx.other_channel.server_id, is_everyone: true)
+
+      assert {:error, :not_found} =
+               Servers.set_overwrite(
+                 ctx.general.id,
+                 ctx.owner.id,
+                 {:role, other_everyone.id},
+                 [],
+                 [
+                   :view_channel
+                 ]
+               )
+
+      assert {:error, :not_found} =
+               Servers.set_overwrite(ctx.general.id, ctx.owner.id, {:member, stranger.id}, [], [
+                 :view_channel
+               ])
+
+      assert {:error, :not_found} =
+               Servers.set_overwrite(ctx.general.id, ctx.owner.id, {:member, nil}, [], [])
+
+      assert Repo.aggregate(Lumia.Servers.ChannelOverwrite, :count) == 0
+    end
+
+    test "an overwrite for a member of this server is accepted", ctx do
+      alice = account("alice")
+      {:ok, _} = Servers.add_member(ctx.server.id, alice.id, ctx.owner.id)
+
+      assert :ok =
+               Servers.set_overwrite(ctx.general.id, ctx.owner.id, {:member, alice.id}, [], [
+                 :send_messages
+               ])
+    end
+
+    test "roles_per_member is enforced by assign_role and set_roles", ctx do
+      Application.put_env(:lumia, :limits, roles_per_member: 2)
+      on_exit(fn -> Application.delete_env(:lumia, :limits) end)
+
+      alice = account("alice")
+      {:ok, _} = Servers.add_member(ctx.server.id, alice.id, ctx.owner.id)
+
+      roles =
+        for name <- ~w(a b c) do
+          {:ok, r} =
+            Servers.create_role(ctx.server.id, ctx.owner.id, %{name: name, permissions: []})
+
+          r
+        end
+
+      [a, b, c] = Enum.map(roles, & &1.id)
+      :ok = Servers.assign_role(ctx.server.id, alice.id, a, ctx.owner.id)
+      :ok = Servers.assign_role(ctx.server.id, alice.id, b, ctx.owner.id)
+
+      assert {:error, :limit_exceeded} =
+               Servers.assign_role(ctx.server.id, alice.id, c, ctx.owner.id)
+
+      assert {:error, :limit_exceeded} =
+               Servers.set_roles(ctx.server.id, alice.id, [a, b, c], ctx.owner.id)
+
+      assert Enum.sort(Servers.member_for(ctx.server.id, alice.id).role_ids) == Enum.sort([a, b])
+    end
+
+    test "set_roles applies the whole diff in one transaction with one account event", ctx do
+      alice = account("alice")
+      {:ok, _} = Servers.add_member(ctx.server.id, alice.id, ctx.owner.id)
+
+      {:ok, a} = Servers.create_role(ctx.server.id, ctx.owner.id, %{name: "a", permissions: []})
+      {:ok, b} = Servers.create_role(ctx.server.id, ctx.owner.id, %{name: "b", permissions: []})
+      :ok = Servers.assign_role(ctx.server.id, alice.id, a.id, ctx.owner.id)
+      before = Enum.count(account_kinds(alice.id), &(&1 == "membership_updated"))
+
+      assert {:ok, _member} = Servers.set_roles(ctx.server.id, alice.id, [b.id], ctx.owner.id)
+      assert Servers.member_for(ctx.server.id, alice.id).role_ids == [b.id]
+      assert Enum.count(account_kinds(alice.id), &(&1 == "membership_updated")) == before + 1
+
+      # Repeating the current roles changes nothing and appends nothing.
+      assert {:ok, _} = Servers.set_roles(ctx.server.id, alice.id, [b.id], ctx.owner.id)
+      assert Enum.count(account_kinds(alice.id), &(&1 == "membership_updated")) == before + 1
+
+      # A role the actor cannot manage fails the whole request; nothing is applied.
+      mod = account("mod")
+      {:ok, _} = Servers.add_member(ctx.server.id, mod.id, ctx.owner.id)
+
+      assert {:error, :permission_denied} =
+               Servers.set_roles(ctx.server.id, alice.id, [a.id], mod.id)
+
+      assert Servers.member_for(ctx.server.id, alice.id).role_ids == [b.id]
+
+      # An unknown role is NOT_FOUND.
+      assert {:error, :not_found} =
+               Servers.set_roles(ctx.server.id, alice.id, [Ecto.UUID.generate()], ctx.owner.id)
+    end
+  end
+
   describe "member-level changes" do
     test "assigning a role bumps nothing and appears on that member's account log only", ctx do
       alice = account("alice")

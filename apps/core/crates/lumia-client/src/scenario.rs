@@ -43,6 +43,7 @@ pub const NAMES: &[&str] = &[
     "snapshot-threshold",
     "stale-roster",
     "device-revoke",
+    "roster-rules",
     "reconnect",
 ];
 
@@ -96,6 +97,7 @@ async fn run_one(name: &str, env: &Env) -> Result<(), ClientError> {
         "snapshot-threshold" => snapshot_threshold(env).await,
         "stale-roster" => stale_roster(env).await,
         "device-revoke" => device_revoke(env).await,
+        "roster-rules" => roster_rules(env).await,
         "reconnect" => reconnect(env).await,
         other => Err(ClientError::State(format!(
             "unknown scenario {other}; one of: all, {}",
@@ -450,6 +452,257 @@ async fn device_revoke(env: &Env) -> Result<(), ClientError> {
         other => return Err(fail(format!("expected DeviceRevoked at v3, got {other:?}"))),
     }
     println!("   a revoked b with its device key and a password reauth; b is out");
+    Ok(())
+}
+
+/// A call that must succeed, with the error's details when it does not.
+fn must(result: Result<(), ClientError>, what: &str) -> Result<(), ClientError> {
+    match result {
+        Ok(()) => Ok(()),
+        Err(ClientError::Api { code, details, .. }) => {
+            Err(fail(format!("{what}: {code} {details:?}")))
+        }
+        Err(e) => Err(fail(format!("{what}: {e}"))),
+    }
+}
+
+/// The verifier's rules at the instance, driven with hand-built rosters
+/// (identity spec 12): a certificate signed by a device revoked before its
+/// `added_at` is refused at the certificate step, one signed before the
+/// revocation is accepted, a future-dated certificate is refused, a roster
+/// that drops a held revocation is refused at the monotonic step, and a
+/// root rotation keeps old certificates valid and lets the device sign in.
+async fn roster_rules(env: &Env) -> Result<(), ClientError> {
+    use lumia_core::identity::keys::{generate_signing_key, signing_key};
+    use lumia_core::identity::phrase::Phrase;
+    use lumia_core::identity::roster::{
+        device_entry, revoked_entry, roster_body, rotation, sign_roster, NewDevice, Signer,
+    };
+    use lumia_core::proto::DeviceKind;
+
+    let base = env.api.base().to_string();
+    let anon = Api::new(&base);
+    let mut a = Throwaway::open(&env.scratch, "rules-a")?;
+    let created = a.device().create("a")?;
+    let tokens = a.device().create_account(&anon, &handle("rules")).await?;
+    let api_a = Api::new(&base).with_tokens(pair(&tokens));
+
+    let derived = Phrase::parse(&created.phrase)?.derive();
+    let identity = derived.identity_id();
+    let root = derived.root;
+    let d1_key = signing_key(&a.keys.get("device_key")?.unwrap_or_default())?;
+    let d1 = a.device_id.clone();
+    let v1 = a.device().roster()?;
+    let d1_entry = v1.body.devices[0].clone();
+
+    let ts = |offset_secs: i64| {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default();
+        prost_types::Timestamp {
+            seconds: i64::try_from(now.as_secs()).unwrap_or(i64::MAX) + offset_secs,
+            nanos: 0,
+        }
+    };
+    let new_device = |id: &[u8], key: &ed25519_dalek::SigningKey, added_at| NewDevice {
+        device_id: id.to_vec(),
+        public_key: key.verifying_key().to_bytes().to_vec(),
+        kind: DeviceKind::Native,
+        web_origin: String::new(),
+        label: "scenario".into(),
+        added_at,
+    };
+    let expect_rejection = |result: Result<(), ClientError>, step: &str, reason: &str| match result
+    {
+        Err(ClientError::Api { code, details, .. })
+            if code == "IDENTITY_PROOF_INVALID"
+                && details.get("step").map(String::as_str) == Some(step)
+                && details.get("reason").map(String::as_str) == Some(reason) =>
+        {
+            Ok(())
+        }
+        other => Err(fail(format!(
+            "expected rejection at {step}/{reason}, got {other:?}"
+        ))),
+    };
+
+    // v2: D1 adds D2. v3: the root revokes D2 at T.
+    let d2_key = generate_signing_key()?;
+    let d2 = wire::new_id();
+    let d2_entry = device_entry(
+        &identity,
+        &new_device(&d2, &d2_key, ts(1)),
+        Signer::Device(&d1, &d1_key),
+    );
+    let v2 = roster_body(
+        &identity,
+        2,
+        &v1.root_public_key,
+        vec![],
+        vec![d1_entry.clone(), d2_entry.clone()],
+        vec![],
+        ts(0),
+    );
+    must(
+        api_a
+            .publish_roster(sign_roster(&v2, Signer::Device(&d1, &d1_key)))
+            .await,
+        "publishing v2",
+    )?;
+    let revoked_at = ts(60);
+    let d2_revoked = revoked_entry(
+        &identity,
+        &d2,
+        &d2_key.verifying_key().to_bytes(),
+        ts(1),
+        revoked_at,
+        Signer::Root(&root),
+    );
+    let v3 = roster_body(
+        &identity,
+        3,
+        &v1.root_public_key,
+        vec![],
+        vec![d1_entry.clone()],
+        vec![d2_revoked.clone()],
+        ts(0),
+    );
+    must(
+        api_a
+            .publish_roster(sign_roster(&v3, Signer::Root(&root)))
+            .await,
+        "publishing v3",
+    )?;
+    println!("   v2 added D2, v3 revoked it by the root");
+
+    // A roster that forgets D2's revocation: refused at the monotonic step.
+    // (Checked here, where every certificate still verifies, so the
+    // rejection is the monotonic one and not an unknown signer.)
+    let bad = roster_body(
+        &identity,
+        4,
+        &v1.root_public_key,
+        vec![],
+        vec![d1_entry.clone()],
+        vec![],
+        ts(0),
+    );
+    expect_rejection(
+        api_a
+            .publish_roster(sign_roster(&bad, Signer::Device(&d1, &d1_key)))
+            .await,
+        "monotonic",
+        "revocation_dropped",
+    )?;
+    println!("   a roster that drops a held revocation is refused (monotonic/revocation_dropped)");
+
+    // A certificate D2 signed after its revocation: refused at the certificate step.
+    let d3_key = generate_signing_key()?;
+    let d3 = wire::new_id();
+    let late = device_entry(
+        &identity,
+        &new_device(&d3, &d3_key, ts(90)),
+        Signer::Device(&d2, &d2_key),
+    );
+    let bad = roster_body(
+        &identity,
+        4,
+        &v1.root_public_key,
+        vec![],
+        vec![d1_entry.clone(), late],
+        vec![d2_revoked.clone()],
+        ts(0),
+    );
+    expect_rejection(
+        api_a
+            .publish_roster(sign_roster(&bad, Signer::Device(&d1, &d1_key)))
+            .await,
+        "certs",
+        "signer",
+    )?;
+    println!("   a certificate signed by D2 after its revocation is refused (certs/signer)");
+
+    // The same device certified before the revocation: accepted.
+    let early = device_entry(
+        &identity,
+        &new_device(&d3, &d3_key, ts(30)),
+        Signer::Device(&d2, &d2_key),
+    );
+    let v4 = roster_body(
+        &identity,
+        4,
+        &v1.root_public_key,
+        vec![],
+        vec![d1_entry.clone(), early.clone()],
+        vec![d2_revoked.clone()],
+        ts(0),
+    );
+    must(
+        api_a
+            .publish_roster(sign_roster(&v4, Signer::Device(&d1, &d1_key)))
+            .await,
+        "publishing v4",
+    )?;
+    println!("   a certificate signed by D2 before its revocation is accepted (v4)");
+
+    // A certificate dated beyond the allowed skew: refused.
+    let d4_key = generate_signing_key()?;
+    let d4 = wire::new_id();
+    let future = device_entry(
+        &identity,
+        &new_device(&d4, &d4_key, ts(600)),
+        Signer::Device(&d1, &d1_key),
+    );
+    let bad = roster_body(
+        &identity,
+        5,
+        &v1.root_public_key,
+        vec![],
+        vec![d1_entry.clone(), early.clone(), future],
+        vec![d2_revoked.clone()],
+        ts(0),
+    );
+    expect_rejection(
+        api_a
+            .publish_roster(sign_roster(&bad, Signer::Device(&d1, &d1_key)))
+            .await,
+        "certs",
+        "future_dated",
+    )?;
+    println!("   a future-dated certificate is refused (certs/future_dated)");
+
+    // Root rotation: old certificates stay valid, and D1 signs in under it.
+    let new_root = Phrase::generate()?.derive().root;
+    let new_public = new_root.verifying_key().to_bytes();
+    let v5 = roster_body(
+        &identity,
+        5,
+        &new_public,
+        vec![rotation(&identity, &root, &new_public, ts(0))],
+        vec![d1_entry, early],
+        vec![d2_revoked],
+        ts(0),
+    );
+    must(
+        api_a
+            .publish_roster(sign_roster(&v5, Signer::Root(&new_root)))
+            .await,
+        "publishing v5",
+    )?;
+    // D1 still holds v1 locally: sign-in reconciles to v5 and succeeds.
+    a.device().sign_in(&anon).await?;
+    let held = a.device().roster()?;
+    check(
+        held.version == 5 && held.root_public_key == new_public && held.roots.len() == 2,
+        format!(
+            "expected D1 to adopt v5 under the rotated root, got v{} with {} roots",
+            held.version,
+            held.roots.len()
+        ),
+    )?;
+    println!(
+        "   root rotated at v5: D1's old certificate verifies and D1 signed in under the new root"
+    );
     Ok(())
 }
 

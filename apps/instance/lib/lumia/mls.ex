@@ -14,6 +14,7 @@ defmodule Lumia.Mls do
   alias Lumia.Mls.GroupInfo
   alias Lumia.Mls.KeyPackage
   alias Lumia.Repo
+  alias Lumia.Tx
 
   @lifetime_days 90
 
@@ -42,7 +43,7 @@ defmodule Lumia.Mls do
         }
       end
 
-    Repo.transact(fn ->
+    Tx.transact(fn ->
       if rows != [], do: Repo.insert_all(KeyPackage, rows)
       if last_resort != "", do: replace_last_resort(account_id, device_id, last_resort, now)
       {:ok, key_package_count(account_id, device_id)}
@@ -93,7 +94,7 @@ defmodule Lumia.Mls do
   def claim(caller_account_id, target_account_id, device_id \\ nil, opts \\ []) do
     if caller_account_id == target_account_id or
          Dms.shares_personal_channel?(caller_account_id, target_account_id),
-       do: Repo.transact(fn -> claim_devices(target_account_id, device_id, opts) end),
+       do: Tx.transact(fn -> claim_devices(target_account_id, device_id, opts) end),
        else: {:error, :not_found}
   end
 

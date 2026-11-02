@@ -43,4 +43,24 @@ defmodule LumiaWeb.Gateway.SocketTest do
              frame: {:disconnect, %V1.Disconnect{reason: :DISCONNECT_PROTOCOL_ERROR}}
            } = V1.ServerFrame.decode(IO.iodata_to_binary(bytes))
   end
+
+  test "the access token is read from the query or from the Sec-WebSocket-Protocol token" do
+    account = Lumia.Fixtures.account("sock")
+    {:ok, _session, tokens} = Lumia.Auth.create_session(account.id, Ecto.UUID.generate())
+
+    assert {:ok, by_query} =
+             Phoenix.ChannelTest.connect(LumiaWeb.Gateway.Socket, %{
+               "access_token" => tokens.access_token
+             })
+
+    assert by_query.assigns.account_id == account.id
+
+    assert {:ok, by_header} =
+             Phoenix.ChannelTest.connect(LumiaWeb.Gateway.Socket, %{},
+               connect_info: %{auth_token: tokens.access_token}
+             )
+
+    assert by_header.assigns.account_id == account.id
+    assert :error = Phoenix.ChannelTest.connect(LumiaWeb.Gateway.Socket, %{})
+  end
 end

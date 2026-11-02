@@ -20,14 +20,17 @@ defmodule Lumia.Proto do
     bin
   end
 
-  @doc "16 bytes to string UUID. Empty maps to nil."
-  def from_uuid(""), do: nil
-  def from_uuid(nil), do: nil
-
+  @doc """
+  16 bytes to string UUID. Empty maps to nil, and so does anything that is
+  not 16 bytes: an id a client got wrong names nothing, and callers treat
+  nil as absent or invalid rather than crashing on it.
+  """
   def from_uuid(<<_::128>> = bin) do
     {:ok, string} = Ecto.UUID.load(bin)
     string
   end
+
+  def from_uuid(_other), do: nil
 
   @doc "DateTime to Timestamp. nil stays nil."
   def timestamp(nil), do: nil

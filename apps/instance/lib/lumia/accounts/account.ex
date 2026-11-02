@@ -18,6 +18,8 @@ defmodule Lumia.Accounts.Account do
     field :avatar_url, :string
     field :email, :string
     field :password_hash, :string, redact: true
+    field :totp_secret, :binary, redact: true
+    field :totp_enabled_at, :utc_datetime_usec
     field :instance_role, :string, default: "none"
     field :last_seq, :integer, default: 0
     # Second granularity; see the migration for why.

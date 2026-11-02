@@ -51,6 +51,26 @@ defmodule Lumia.IdentityTest do
       assert {:error, :identity_proof_invalid} = Identity.verify_proof(proof, :SIGN_IN)
     end
 
+    test "a proof missing its roster, signature, or challenge expiry is invalid, not a crash" do
+      %{identity: identity, device: device, roster: roster} = bootstrap()
+      good = proof(identity, device, roster, :SIGN_IN)
+
+      assert {:error, :identity_proof_invalid} =
+               Identity.verify_proof(%V1.IdentityProof{}, :SIGN_IN)
+
+      assert {:error, :identity_proof_invalid} =
+               Identity.verify_proof(%{good | signature: nil}, :SIGN_IN)
+
+      assert {:error, :identity_proof_invalid} =
+               Identity.verify_proof(%{good | roster: nil}, :SIGN_IN)
+
+      # A forged challenge with no expiry never reaches the MAC input.
+      forged = V1.IdentityChallengeBody.encode(%V1.IdentityChallengeBody{nonce: "n", host: "h"})
+
+      assert {:error, :identity_proof_invalid} =
+               Identity.verify_proof(%{good | challenge: forged}, :SIGN_IN)
+    end
+
     test "wrong purpose, tampered mac, and unauthorized device are rejected" do
       %{identity: identity, device: device, roster: roster} = bootstrap()
 

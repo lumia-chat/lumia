@@ -213,6 +213,18 @@ defmodule LumiaWeb.IdentityController do
     end
   end
 
+  defp credential(%V1.ReauthRequest{credential: {:totp_code, code}}, account_id) do
+    case Lumia.Repo.get(Lumia.Accounts.Account, account_id) do
+      %{totp_enabled_at: %DateTime{}, totp_secret: secret} = account ->
+        if Lumia.Auth.Totp.valid?(secret, code),
+          do: {:ok, account},
+          else: {:error, :unauthenticated}
+
+      _ ->
+        {:error, :unauthenticated}
+    end
+  end
+
   defp credential(_req, _account_id), do: {:error, :invalid_argument}
 
   defp no_account_yet(identity_id) do

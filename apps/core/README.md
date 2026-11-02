@@ -70,7 +70,7 @@ lumia-cli dm rejoin <channel-id>                 # after recovery: external comm
 
 A device revoked from the roster is removed from every group by the first device that learns of it, and refused by the others from the moment they hold the new roster. A newly linked device is added to every group by the first member that sees it in the roster and finds its key packages.
 
-`scenario <name>` (or `all`) runs the failure-injection cases a client can drive on its own against the instance (delivery spec 12, identity spec 12): `token-rotation`, `frame-before-hello`, `duplicate-command`, `snapshot-under-writes`, `snapshot-threshold`, `stale-roster`, `device-revoke`, `reconnect`. Each sets up a throwaway server or identity and fails with what it saw.
+`scenario <name>` (or `all`) runs the failure-injection cases a client can drive on its own against the instance (delivery spec 12, identity spec 12): `token-rotation`, `frame-before-hello`, `duplicate-command`, `snapshot-under-writes`, `snapshot-threshold`, `stale-roster`, `device-revoke`, `roster-rules`, `reconnect`. Each sets up a throwaway server or identity and fails with what it saw.
 
 ## Identity vectors
 

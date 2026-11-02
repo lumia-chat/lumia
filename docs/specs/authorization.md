@@ -90,6 +90,8 @@ Resolving for a session subscription is one ETS lookup plus bit operations. Reso
 - after the node rejoins the cluster following a partition (every subscription);
 - by **bounded staleness**: a subscription not re-resolved in the last 10 minutes is re-resolved before its next delivery.
 
+The partition case uses the staleness rule rather than an immediate pass over every subscription: on `nodeup` the session marks each subscription stale, so each is re-resolved before its next delivery and nothing is delivered on a pre-partition view, without every session on the node querying Postgres in the same instant. Re-resolution happens once per event: if the event's `acl_version` is older than the version just resolved, the event is delivered under the fresh view rather than re-resolved again.
+
 If re-resolution loses `VIEW_CHANNEL`, the session unsubscribes and pushes nothing.
 
 **Stated failure mode.** Between a member-level removal committing and the account-log event reaching a session, that session can hold a subscription for at most one reconciler tick plus the staleness bound. During that window no event committed after the removal can be delivered without a successful re-resolution, because any such event either carries a new `acl_version` (definition-level) or arrives after the account-log nudge (member-level, within one tick). The bound is therefore 5 seconds of a subscription existing, not 5 seconds of leakage.

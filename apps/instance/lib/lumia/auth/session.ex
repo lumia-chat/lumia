@@ -8,6 +8,7 @@ defmodule Lumia.Auth.Session do
     field :device_id, Ecto.UUID
     field :access_hash, :binary, redact: true
     field :refresh_hash, :binary, redact: true
+    field :previous_refresh_hash, :binary, redact: true
     field :client, :string
     field :ip, :string
     field :access_expires_at, :utc_datetime_usec

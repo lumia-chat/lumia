@@ -17,6 +17,7 @@ defmodule Lumia.Dms do
   alias Lumia.Events.Channel
   alias Lumia.Proto
   alias Lumia.Repo
+  alias Lumia.Tx
   alias Lumia.V1
 
   @personal_kinds ~w(personal_dm personal_group_dm)
@@ -51,7 +52,7 @@ defmodule Lumia.Dms do
 
   defp create_pair(ids, key) do
     result =
-      Repo.transact(fn ->
+      Tx.transact(fn ->
         with {:ok, channel} <- insert_channel(key),
              :ok <- insert_participants(channel.id, ids),
              :ok <- announce(channel, ids) do

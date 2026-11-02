@@ -12,6 +12,7 @@ defmodule Lumia.History do
   alias Lumia.History.Chunk
   alias Lumia.History.Manifest
   alias Lumia.Repo
+  alias Lumia.Tx
 
   @default_quota 100 * 1024 * 1024
 
@@ -26,7 +27,7 @@ defmodule Lumia.History do
       when is_binary(ciphertext) and is_binary(nonce) do
     size = byte_size(ciphertext)
 
-    Repo.transact(fn ->
+    Tx.transact(fn ->
       {used, quota} = usage(identity_id)
       existing = chunk_size(identity_id, chunk_id)
 
@@ -133,7 +134,7 @@ defmodule Lumia.History do
 
   @doc "Deletes every chunk and manifest of the identity (backup turned off, account deleted)."
   def delete_all(identity_id) do
-    Repo.transact(fn ->
+    Tx.transact(fn ->
       Repo.delete_all(from c in Chunk, where: c.identity_id == ^identity_id)
       Repo.delete_all(from m in Manifest, where: m.identity_id == ^identity_id)
       {:ok, :ok}

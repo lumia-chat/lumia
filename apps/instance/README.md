@@ -4,7 +4,7 @@ The Elixir server that one Lumia deployment runs. A Phoenix application with no 
 
 ## Status
 
-Early. The event-log write path exists and is measured; the gateway, API, identity, and E2EE delivery service do not exist yet. See architecture section 18 for the order.
+Early. The event log, gateway, HTTP API, sessions, authorization, identity, and the MLS delivery service for personal DMs exist and are tested; presence, invites, push, and multi-node operation do not. [docs/plan.md](../../docs/plan.md) tracks what is done and what is next; architecture section 18 gives the order.
 
 ## Requirements
 

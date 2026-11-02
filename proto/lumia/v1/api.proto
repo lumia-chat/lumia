@@ -40,6 +40,15 @@ message IdentityProofSignInRequest {
   IdentityProof proof = 1;
 }
 
+// POST /auth/totp/enroll: a pending secret, enabled by the first valid code
+// at POST /auth/totp/confirm. RFC 6238, SHA-1, 30 seconds, 6 digits.
+message TotpEnrollResponse {
+  string secret = 1;       // base32, for manual entry
+  string otpauth_uri = 2;  // for a QR code
+}
+
+message TotpConfirmRequest { string code = 1; }
+
 message CreateAccountRequest {
   string handle = 1;
   string email = 2;      // optional on identity-proof creation

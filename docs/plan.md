@@ -9,9 +9,9 @@ Legend: `[x]` done · `[~]` in progress · `[ ]` not started · `(spec §n)` the
 | Step | State |
 |---|---|
 | 1. Schemas and protocol contract | Done |
-| 2. Server: event log, delivery, account log, resume, authorization | First pass complete 2026-11-01; six items carried into step 3 (listed under "Closing step 2") |
+| 2. Server: event log, delivery, account log, resume, authorization | Complete for the headless client 2026-11-02; presence, JSON overrides, magic link, passkeys, OIDC, invites, profile import wait for step 6 |
 | 3. Rust core | Done 2026-11-01: sync engine, SQLite store, reconnecting CLI on the real gateway, identity with shared vectors, scenario suite, UniFFI and wasm surfaces |
-| 4. Identity across two instances | First pass 2026-11-01: lifecycle run across two dev instances with the CLI; the §12 list is partly end to end, the rest unit-level |
+| 4. Identity across two instances | Lifecycle, recovery and the verifier cases run end to end 2026-11-02; forks and the merge, multi-node replay and web origins wait for their steps |
 | 5. MLS personal DMs, backup, recovery | Built 2026-11-02: personal DMs, device addition, history backup and restore, phrase recovery with external-commit rejoin, all run live from the CLI; DM requests, group DMs and a few §12 cases open |
 | 6. Web UI in Tauri | Not started |
 | 7. Multi-node, push, SwiftUI, Compose | Not started |
@@ -75,6 +75,11 @@ Things that moved from the first draft, with the reason. The architecture record
 | Untrusted parsing (image decoding) in a Port-driven worker OS process | Dirty-scheduled Rust NIFs with input bounds checked first; a Port worker only for C-linked crates and video | Rustler catches Rust panics and Rust rules out C's memory bugs, so the Port defended against failures that cannot happen. Memory exhaustion is defended by bounds, not by process isolation. |
 | BLAKE3 via a Rustler NIF (architecture §3 names it) | The pure-Elixir `b3` package, behind `Lumia.Crypto` | Identity inputs are 32-byte keys and small bodies; `b3` is maintained with no dependencies, while the `blake3` NIF package pins Rustler 0.30. Keeps the Rust toolchain out of contributor setup until MLS needs it. The facade makes a NIF for large blobs a one-line swap. |
 | Overwrite with a bit in both allow and deny "treated as deny" at resolve time | Normalized on write: a denied bit is cleared from allow | The spec's own same-layer rule made allow win; property tests exposed the contradiction. Normalizing storage keeps the algorithm as written. |
+| Each context broadcast as soon as its own `Repo.transact` returned | `Lumia.Tx.transact` plus `Tx.after_commit`: broadcasts wait for the outermost commit | Ecto flattens nested transactions, so `add_member`, `remove_member`, overwrites, the viewer diff, purges and roster acceptance all broadcast before their transaction committed. A rollback after the broadcast reused the `seq` the client had already applied. Found in review; invisible under the SQL sandbox. |
+| Gateway subscribe checked `VIEW_CHANNEL`; HTTP event reads checked `READ_HISTORY` | Both check `READ_HISTORY` (delivery §6) | A member denied `READ_HISTORY` could replay 1,000 events by subscribing with cursor 0. Live-only delivery for such a member is deferred until a client rule for the gap exists. |
+| `nodeup` re-resolved every subscription of every session at once | `nodeup` marks subscriptions stale; each is re-resolved before its next delivery | The same guarantee (nothing delivered on a pre-partition view) without every session on the node hitting Postgres in the same instant. |
+| A session process stopped itself after pushing `Disconnect` | It also closes the transport | Phoenix kept the WebSocket open and reported the channel exit as `phx_close`, which the serializer rendered as a second `Disconnect{SERVER_SHUTDOWN}` telling a revoked client to reconnect. |
+| Rotated refresh token simply unknown | `previous_refresh_hash` kept on the session; presenting it revokes the session | Protocol §12 promised reuse detection; the code answered `UNAUTHENTICATED`. Rotation is now conditional on the presented hash so two refreshes racing on one token cannot both succeed. |
 
 ## Step 2, part 2: delivery, accounts, authorization
 
@@ -120,10 +125,10 @@ Ordered. Each task names the spec section it implements and the tests that close
 - [x] Session revocation closes the socket (test).
 - [x] Heartbeat echo, `Welcome` with recovery generation and limits.
 - [x] Slow-consumer disconnect: the transport mailbox past 1,000 frames sends `Disconnect{SLOW_CONSUMER}` and stops (delivery §5; test).
-- [x] Bounded staleness: a subscription not re-resolved in 10 minutes is re-resolved before its next delivery; `nodeup` re-resolves every subscription (delivery §5, authorization §5; tests).
-- [ ] Presence scoped per server plus the friends topic (architecture §3); `PresenceUpdate` and `Typing` are accepted and ignored for now.
-- [ ] `Authorization` header on the upgrade (needs a custom upgrade plug); v1 uses `?access_token=`.
-- [ ] JSON sessions use stock ProtoJSON; the protocol's JSON overrides (UUID strings, int64 strings) are not applied yet.
+- [x] Bounded staleness: a subscription not re-resolved in 10 minutes is re-resolved before its next delivery; `nodeup` marks every subscription stale so each is re-resolved before its next delivery, without a burst of queries (delivery §5, authorization §5; tests).
+- [x] Review fixes (2026-11-02): `Lumia.Tx` defers every broadcast to the outermost commit; subscribe takes `READ_HISTORY` like the HTTP reads; the re-resolve branch runs once per event; `Disconnect` closes the transport; a second connection for a session closes the first with `PROTOCOL_ERROR`; malformed frames and ids answer `INVALID_ARGUMENT` instead of crashing the session; high-water marks are reported only for channels the account can read (tests).
+- [x] Token on the upgrade (2026-11-02): `?access_token=` or, for browsers, the `base64url.bearer.phx.<token>` subprotocol in `Sec-WebSocket-Protocol` (Phoenix's `auth_token`); protocol §6.1 amended, since the socket layer cannot read `Authorization` and no client needs it to (test).
+- Deferred to step 6, where the first UI defines their shape: presence scoped per server plus the friends topic (architecture §3; `PresenceUpdate` and `Typing` are accepted and ignored); the JSON overrides for bot clients (protocol §2; stock ProtoJSON for now).
 
 **HTTP** (first pass done 2026-11-01)
 
@@ -134,12 +139,11 @@ Ordered. Each task names the spec section it implements and the tests that close
 - [x] `GET /channels/{id}/events`, `/snapshot`, `/messages` with `has_more`, `POST /channels/{id}/commands` with idempotent replay (delivery §8; test: snapshot and scrollback paging).
 - [x] Servers, channels, members, roles, overwrites endpoints with authoritative checks through `Lumia.Authz.Access`, shared with the gateway; non-members get `NOT_FOUND` (authorization §5).
 - [x] Malformed `*_id` path parameters answer `NOT_FOUND` through `LumiaWeb.Plugs.ValidateIds` instead of raising (found by the first CLI run).
-- [ ] Pagination cursors for list endpoints (members, search) and the `PageRequest` shape (protocol §11); members currently return everything.
-- [ ] `truncated_before` is always false: rows are permanent, so no HTTP fetch is truncated yet.
+- [x] Pagination (2026-11-02): members page by keyset over `(joined_at, account_id)` with an opaque cursor and `page_size` (protocol §11; test). Search lands with search.
+- [x] `truncated_before` stays false by design: event rows are permanent and retention nulls payloads into `Redacted` rather than dropping rows, so no HTTP fetch is ever truncated. Revisit only if rows are ever deleted.
 - [x] `Lumia.Workers.Retention` (daily): per-server `retention_days` set by `Servers.set_retention/3` (MANAGE_SERVER, audited); `Events.purge_before/2` nulls payloads, deletes messages, appends `PayloadsPurged`; resumed clients see `Redacted` (delivery §10; tests: purge, idempotence, no policy untouched).
-- [ ] Magic link, passkeys, OIDC, MFA (architecture §6.3).
-- [ ] Invites and discovery endpoints (architecture §6.6).
-- [ ] JSON overrides (UUID and int64 as strings) for JSON clients; stock ProtoJSON for now.
+- [x] TOTP as a second factor (2026-11-02): `POST /auth/totp/enroll` and `/confirm`, password sign-in answers `FAILED_PRECONDITION{mfa: "totp"}` until the code is given, reauth accepts `totp_code` (architecture §6.3, identity §10; test).
+- Deferred to step 6 (they need a browser or a platform authenticator, or a UI to be shaped against): magic link, passkeys, OIDC (architecture §6.3); invites and discovery (architecture §6.6).
 
 **Identity on the server** (first pass done 2026-11-01)
 
@@ -152,18 +156,18 @@ Ordered. Each task names the spec section it implements and the tests that close
 - [x] Identity backup put and get, highest version wins (identity §8).
 - [x] Identity-proof sign-in and account creation gated by instance policy; `POST /identity/link` binds an account with reauth (identity §4.6, architecture §6.3).
 - [x] Web device origin check against the instance origin and configured flagship origins (identity §7).
-- [ ] Reauth by passkey or TOTP; only password exists.
-- [ ] Profile import on link (signed profile → account display fields).
+- [x] Reauth by TOTP (2026-11-02, with the second factor above); passkeys wait for step 6.
+- Deferred to step 6: profile import on link (signed profile → account display fields), shaped against the first profile UI.
 - [x] `Lumia.Workers.PurgeExpired` (hourly) deletes expired `used_challenges`, `link_bundles`, `reauth_tokens` (test).
-- [ ] A revoked device that is still connected over the gateway is disconnected through its session revocation; verified for sessions, not yet end to end with a live socket in the identity tests.
+- [x] A revoked device that is still connected over the gateway is disconnected through its session revocation; run end to end on 2026-11-02 in the step 5 live runs (the revoked device's next connect is refused with `DEVICE_REVOKED`, its live session closed on revocation).
 - [x] `RevocationBody` carries the revoked device's public key and `added_at`, so certificates it issued before revocation stay verifiable from the roster alone (found by the verifier; proto and spec amended).
 
 **Closing step 2** (first pass complete 2026-11-01)
 
 - [x] Every group above through its first pass with its tests green in CI.
 - [x] Both spikes run and recorded; section 17 updated.
-- [ ] Carried into step 3, to be built against the first real client: pagination cursors for member and search listings (protocol §11); presence scoped per server plus the friends topic (architecture §3); the JSON overrides for bot clients (protocol §2); reauth by passkey or TOTP; profile import on link; an end-to-end identity test with a live socket.
-- [ ] The failure-injection lists in delivery §12, authorization §11 and identity §12 are covered piecemeal by unit and channel tests; a single named suite that runs them as listed, including the multi-node cases, waits for step 7.
+- [x] Closed on 2026-11-02: pagination, the upgrade token, `truncated_before`, TOTP sign-in and reauth, the live-socket revocation. What remains from step 2 is listed once, in its group above, each marked with the step that builds it (presence, JSON overrides, magic link, passkeys, OIDC, invites and discovery, profile import: step 6).
+- [ ] The failure-injection lists in delivery §12, authorization §11 and identity §12 are covered by unit and channel tests plus the CLI scenario suite; a single named suite that runs them as listed, including the multi-node cases, waits for step 7.
 
 ## Step 3: Rust core
 
@@ -197,7 +201,7 @@ Ordered. Each task names the spec section it implements and the tests that close
 - [x] `lumia-ffi` (UniFFI 0.32, proc macros): one `Client` object per instance with blocking methods for accounts, sign-in by password or identity, servers and channels, the local store's messages, the gateway loop (`start` with a `Listener` callback interface, `subscribe`, `send_message`, `foreground`, `stop`), and every identity flow the CLI has. A `ClientEvent` enum mirrors the gateway loop's events. The loop runs on the client's own tokio runtime and reports from a runtime thread. Uses the development store and keystore until the shells bring platform ones (steps 6 and 7); says so in its docs. Offline tests cover opening, identity creation, and the lifecycle guards.
 - [x] `lumia-wasm` (wasm-bindgen): the sans-I/O `Session` as a JS class. Frames in as bytes, effects out as plain objects with a `kind` (`send`, `fetch`, `fetchAccount`, `snapshot`, `accountSnapshot`, `apply`, `applyAccount`, `discardAll`, `notify`), ids as `Uint8Array`, sequence numbers as numbers. The store and the socket are JS's, which is what step 6's SQLite-on-OPFS worker wants: the JS loop carries out `apply` with the cursor in one transaction and calls back `fetched` and `snapshotApplied`. Checked on `wasm32-unknown-unknown`.
 - [ ] Binding generation (`uniffi-bindgen` for Swift and Kotlin, `wasm-pack` for the web package) and a smoke test from each language come with the shells in steps 6 and 7; nothing to generate against until then.
-- [ ] Still carried from step 2 (listed under "Closing step 2"): pagination cursors, presence, JSON overrides for bots, passkey and TOTP reauth, profile import on link. Each is a server feature with a client counterpart; they land with the first UI in step 6 rather than against the headless client.
+- [x] `scenario roster-rules` (2026-11-02): hand-built rosters against the instance's verifier for the identity §12 cases a client can drive alone: a certificate signed by a device revoked before its `added_at` (refused at certs/signer), one signed before the revocation (accepted), a future-dated certificate (certs/future_dated), a roster dropping a held revocation (monotonic/revocation_dropped), and a root rotation after which the device's old certificate still verifies and it signs in under the new root.
 
 ## Step 4: identity across two instances
 
@@ -207,7 +211,8 @@ Ordered. Each task names the spec section it implements and the tests that close
 - [x] `identity status`: this device's roster version and the version each known instance holds, flagging an instance that is behind. `identity sync`: publish the held roster to every instance. `identity revoke --all`: revoke, then publish everywhere.
 - [x] Run end to end: identity created on device A; an account bound to it on each instance; device B linked through instance 1 (instance 2 shows `v1 (behind)`); B signs in on both instances and instance 2 learns v2 from the proof's carried roster; A revokes B through instance 1 only (status shows instance 2 `v2 (behind)`, B's session on instance 1 answers `SESSION_REVOKED`, instance 2 still serves B); `identity sync` publishes v3 to instance 2 and B's session there answers `SESSION_REVOKED` too. The "revoked on 1 of 2" state from identity §5 is what `status` reports between the revoke and the sync.
 - [x] From identity §12, run end to end with the Rust core as the client: revoke while another instance is behind, then reconcile (the first case, with the root-signed path across two instances; the device-signed path under reauth runs against one instance in the `device-revoke` scenario).
-- [ ] From identity §12, covered by unit tests on both verifiers through the shared vectors but not yet driven end to end: signer revoked before and after `added_at`, future-dated certificate, omitted revocation at step 7, root rotation at step 3. Not yet covered anywhere: concurrent forks and the merge, proof replay across nodes (needs step 7), web-origin proofs (needs step 6), phrase recovery with every device gone and the MLS rejoin (needs step 5).
+- [x] From identity §12, driven end to end on 2026-11-02 by `scenario roster-rules`: signer revoked before and after `added_at`, future-dated certificate, omitted revocation, root rotation. Phrase recovery with every device gone and the MLS rejoin ran in step 5.
+- [ ] Not yet covered anywhere: concurrent forks and the merge (needs the merge rule, identity §5), proof replay across nodes (step 7), web-origin proofs (step 6).
 - [ ] Two instances in `docker-compose`, one flagship-like with a directory, for the step 7 multi-node runs.
 - [x] Phrase recovery with every device gone (2026-11-02, `identity recover --phrase`), against one instance; the second instance follows through `identity sync`.
 
@@ -239,7 +244,6 @@ Ordered. Each task names the spec section it implements and the tests that close
 
 From architecture §20, plus ones raised while specifying:
 
-- Numbers in section 17 after the gateway spike.
 - MLS ciphersuite and key-package cadence.
 - OpenMLS on wasm32 with WebCrypto key storage, or an adjusted web trust statement.
 - Tauri core in-process versus WASM.

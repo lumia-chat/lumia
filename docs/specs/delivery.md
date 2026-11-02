@@ -103,7 +103,7 @@ loop(channel):
 
 Used in three places:
 
-- **Subscribe** with cursor C: set `delivered_seq = C`, subscribe the PubSub topic, answer `RESUMED` with the current head, run the loop. Live broadcasts that arrive during the loop are duplicates (dropped) or extend the gap (same loop).
+- **Subscribe** with cursor C: set `delivered_seq = C`, subscribe the PubSub topic, answer `RESUMED` with the current head, run the loop. Live broadcasts that arrive during the loop are duplicates (dropped) or extend the gap (same loop). Subscribing takes `READ_HISTORY` as well as `VIEW_CHANNEL`, the same check as `GET /channels/{id}/events`; a member with `VIEW_CHANNEL` alone is answered `ERROR` with `PERMISSION_DENIED`. Live-only delivery for such a member (events while connected, no replay) is deferred: it needs a client rule for the gap it would see, and nothing grants `VIEW_CHANNEL` without `READ_HISTORY` yet.
 - **Live gap**: a broadcast with `seq > delivered_seq + 1` runs the loop before pushing the broadcast's event (which is then a duplicate and dropped, having been delivered by the loop).
 - **Reconciliation nudge** (section 7): a `{:head, seq}` with `seq > delivered_seq` runs the loop.
 

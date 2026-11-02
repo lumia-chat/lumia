@@ -33,11 +33,28 @@ defmodule LumiaWeb.AuthController do
   def sign_in_password(conn, _params) do
     with {:ok, req} <- ProtoConn.decode(conn, V1.PasswordSignInRequest),
          {:ok, account} <- Accounts.authenticate(req.handle_or_email, req.password),
+         :ok <- Accounts.check_second_factor(account, req.totp_code),
          {:ok, _session, tokens} <-
            Auth.create_session(account.id, Proto.from_uuid(req.device_id) || Ecto.UUID.generate(),
              client: client(conn)
            ) do
       ProtoConn.render(conn, token_pair(tokens))
+    end
+  end
+
+  def totp_enroll(conn, _params) do
+    with {:ok, enrolment} <- Accounts.enroll_totp(conn.assigns.current_account_id) do
+      ProtoConn.render(conn, %V1.TotpEnrollResponse{
+        secret: enrolment.secret,
+        otpauth_uri: enrolment.otpauth_uri
+      })
+    end
+  end
+
+  def totp_confirm(conn, _params) do
+    with {:ok, req} <- ProtoConn.decode(conn, V1.TotpConfirmRequest),
+         :ok <- Accounts.confirm_totp(conn.assigns.current_account_id, req.code) do
+      ProtoConn.no_content(conn)
     end
   end
 

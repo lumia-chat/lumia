@@ -28,6 +28,7 @@ defmodule Lumia.Servers do
   alias Lumia.Servers.MemberRole
   alias Lumia.Servers.Role
   alias Lumia.Servers.Server
+  alias Lumia.Tx
   alias Lumia.V1
   alias Lumia.Workers.AclChanged
   alias Lumia.Workers.ViewerDiff
@@ -46,7 +47,7 @@ defmodule Lumia.Servers do
 
   @doc "Creates a server with its @everyone role and the owner's membership."
   def create_server(owner_account_id, name) do
-    Repo.transact(fn ->
+    Tx.transact(fn ->
       with {:ok, server} <- Repo.insert(%Server{name: name, owner_account_id: owner_account_id}),
            {:ok, _everyone} <-
              Repo.insert(%Role{
@@ -68,7 +69,7 @@ defmodule Lumia.Servers do
 
   @doc "Creates a text channel in a server. Bumps nothing; the channel is new at version 1."
   def create_channel(server_id, actor_id, name, opts \\ []) do
-    Repo.transact(fn ->
+    Tx.transact(fn ->
       with {:ok, channel} <-
              Repo.insert(%Channel{
                kind: "text",
@@ -94,7 +95,7 @@ defmodule Lumia.Servers do
   def add_member(server_id, account_id, actor_id, opts \\ []) do
     kind = Keyword.get(opts, :kind, "member")
 
-    Repo.transact(fn ->
+    Tx.transact(fn ->
       with {:ok, member} <-
              insert_member(server_id, account_id, kind, Keyword.get(opts, :expires_at)),
            {:ok, server} <- fetch_server(server_id),
@@ -121,7 +122,7 @@ defmodule Lumia.Servers do
   is `"left"`, `"removed"`, `"guest_expired"`, or `"account_deleted"`.
   """
   def remove_member(server_id, account_id, actor_id, reason) do
-    Repo.transact(fn ->
+    Tx.transact(fn ->
       with {:ok, server} <- fetch_server(server_id),
            :ok <- check_removal(server, account_id, actor_id, reason),
            {1, _} <- delete_member(server_id, account_id),
@@ -162,7 +163,7 @@ defmodule Lumia.Servers do
   end
 
   defp change_roles(server_id, account_id, role_id, actor_id, op) do
-    Repo.transact(fn ->
+    Tx.transact(fn ->
       with {:ok, role} <- fetch_role(server_id, role_id),
            {:ok, actor} <- actor(server_id, actor_id),
            true <- Authz.can_manage_role?(actor, role) || {:error, :permission_denied},
@@ -187,13 +188,85 @@ defmodule Lumia.Servers do
     |> unwrap()
   end
 
+  @doc """
+  Sets a member's roles to exactly `role_ids` in one transaction: roles
+  not yet held are assigned, roles no longer wanted are removed, and the
+  member's account log gets one `MembershipUpdated`. Every role changed
+  must be one the actor can manage (section 3.3); the result respects the
+  `roles_per_member` limit (section 10). Returns the member.
+  """
+  def set_roles(server_id, account_id, role_ids, actor_id) when is_list(role_ids) do
+    wanted = Enum.uniq(role_ids)
+
+    Tx.transact(fn ->
+      with {:ok, member} <- fetch_member(server_id, account_id),
+           {:ok, actor} <- actor(server_id, actor_id),
+           current = role_ids(server_id, account_id),
+           changes = (wanted -- current) ++ (current -- wanted),
+           :ok <- check_manageable(server_id, actor, changes),
+           :ok <- check_member_role_limit(length(wanted)),
+           :ok <- each(wanted -- current, &apply_role_change(server_id, account_id, &1, :assign)),
+           :ok <-
+             each(current -- wanted, &apply_role_change(server_id, account_id, &1, :unassign)),
+           :ok <- announce_roles(server_id, account_id, actor_id, member, changes) do
+        {:ok, member}
+      end
+    end)
+  end
+
+  defp check_manageable(server_id, actor, role_ids) do
+    each(role_ids, &manageable(server_id, actor, &1))
+  end
+
+  defp manageable(server_id, actor, role_id) do
+    with {:ok, role} <- fetch_role(server_id, role_id),
+         true <- Authz.can_manage_role?(actor, role) || {:error, :permission_denied} do
+      :ok
+    end
+  end
+
+  # No change, no event: a PATCH that repeats the current roles is a no-op.
+  defp announce_roles(_server_id, _account_id, _actor_id, _member, []), do: :ok
+
+  defp announce_roles(server_id, account_id, actor_id, member, changes) do
+    with {:ok, _} <-
+           Accounts.append_event(
+             account_id,
+             {:membership_updated,
+              %V1.MembershipUpdated{member: Proto.member(member, role_ids(server_id, account_id))}}
+           ),
+         {:ok, _} <-
+           Audit.record({:server, server_id}, actor_id, "member.set_roles",
+             target: {:account, account_id},
+             after: %{"role_ids" => role_ids(server_id, account_id), "changed" => changes}
+           ),
+         {:ok, _} <- ViewerDiff.schedule(server_id) do
+      :ok
+    end
+  end
+
+  defp each(items, fun) do
+    Enum.reduce_while(items, :ok, fn item, :ok ->
+      case fun.(item) do
+        :ok -> {:cont, :ok}
+        {:ok, _} -> {:cont, :ok}
+        error -> {:halt, error}
+      end
+    end)
+  end
+
   defp apply_role_change(server_id, account_id, role_id, :assign) do
-    %MemberRole{server_id: server_id, account_id: account_id, role_id: role_id}
-    |> Ecto.Changeset.change()
-    |> Ecto.Changeset.unique_constraint([:server_id, :account_id, :role_id],
-      name: :member_roles_pkey
-    )
-    |> Repo.insert(on_conflict: :nothing)
+    current = role_ids(server_id, account_id)
+    limit = if role_id in current, do: :ok, else: check_member_role_limit(length(current) + 1)
+
+    with :ok <- limit do
+      %MemberRole{server_id: server_id, account_id: account_id, role_id: role_id}
+      |> Ecto.Changeset.change()
+      |> Ecto.Changeset.unique_constraint([:server_id, :account_id, :role_id],
+        name: :member_roles_pkey
+      )
+      |> Repo.insert(on_conflict: :nothing)
+    end
   end
 
   defp apply_role_change(server_id, account_id, role_id, :unassign) do
@@ -216,7 +289,7 @@ defmodule Lumia.Servers do
   def create_role(server_id, actor_id, attrs) do
     perms = Permission.to_bits(Map.get(attrs, :permissions, []))
 
-    Repo.transact(fn ->
+    Tx.transact(fn ->
       with {:ok, actor} <- actor(server_id, actor_id),
            true <- Authz.can_grant?(actor, perms) || {:error, :permission_denied},
            true <-
@@ -244,7 +317,7 @@ defmodule Lumia.Servers do
 
   @doc "Updates a role's permissions, name, position, or color. Bumps every channel in the server."
   def update_role(server_id, role_id, actor_id, attrs) do
-    Repo.transact(fn ->
+    Tx.transact(fn ->
       with {:ok, role} <- fetch_role(server_id, role_id),
            {:ok, actor} <- actor(server_id, actor_id),
            true <-
@@ -280,7 +353,7 @@ defmodule Lumia.Servers do
 
   @doc "Deletes a role. @everyone cannot be deleted. Bumps every channel in the server."
   def delete_role(server_id, role_id, actor_id) do
-    Repo.transact(fn ->
+    Tx.transact(fn ->
       with {:ok, role} <- fetch_role(server_id, role_id),
            :ok <- deletable(role),
            {:ok, actor} <- actor(server_id, actor_id),
@@ -310,13 +383,14 @@ defmodule Lumia.Servers do
         deny: Permission.to_bits(deny)
       })
 
-    Repo.transact(fn ->
-      with {:ok, channel} <- fetch_channel(channel_id),
+    Tx.transact(fn ->
+      with {:ok, channel} <- fetch_server_channel(channel_id),
            {:ok, actor} <- actor(channel.server_id, actor_id),
            true <-
              (Permission.has?(actor.server_permissions, :manage_channels) or actor.owner?) ||
                {:error, :permission_denied},
            true <- Authz.can_grant?(actor, ow.allow) || {:error, :permission_denied},
+           :ok <- check_overwrite_target(channel.server_id, target_kind, target_id),
            :ok <- check_overwrite_limit(channel_id),
            {:ok, _} <-
              Repo.insert(
@@ -355,7 +429,7 @@ defmodule Lumia.Servers do
   """
   def set_retention(server_id, actor_id, days)
       when is_nil(days) or (is_integer(days) and days > 0) do
-    Repo.transact(fn ->
+    Tx.transact(fn ->
       with {:ok, server} <- fetch_server(server_id),
            {:ok, actor} <- actor(server_id, actor_id),
            true <-
@@ -518,6 +592,31 @@ defmodule Lumia.Servers do
       )
   end
 
+  # Overwrites belong to server channels; a channel with no server (a
+  # personal DM, a spike-level channel) has no roles to overwrite.
+  defp fetch_server_channel(channel_id) do
+    case fetch_channel(channel_id) do
+      {:ok, %Channel{server_id: nil}} -> {:error, :not_found}
+      other -> other
+    end
+  end
+
+  # The target of an overwrite must exist in this server: a role of the
+  # server, or a member of it. Anything else names nothing here.
+  defp check_overwrite_target(server_id, :role, role_id) when is_binary(role_id) do
+    with {:ok, _role} <- fetch_role(server_id, role_id), do: :ok
+  end
+
+  defp check_overwrite_target(server_id, :member, account_id) when is_binary(account_id) do
+    with {:ok, _member} <- fetch_member(server_id, account_id), do: :ok
+  end
+
+  defp check_overwrite_target(_server_id, _kind, _id), do: {:error, :not_found}
+
+  defp check_member_role_limit(count) do
+    if count <= limit(:roles_per_member), do: :ok, else: {:error, :limit_exceeded}
+  end
+
   defp role_ids(server_id, account_id) do
     Repo.all(
       from mr in MemberRole,
@@ -626,7 +725,7 @@ defmodule Lumia.Servers do
   defp deletable(%Role{is_everyone: true}), do: {:error, :permission_denied}
   defp deletable(%Role{}), do: :ok
 
-  # Repo.transact/1 requires {:ok, _} | {:error, _}; callers want :ok.
+  # Tx.transact/1 requires {:ok, _} | {:error, _}; callers want :ok.
   defp unwrap({:ok, :ok}), do: :ok
   defp unwrap(other), do: other
 

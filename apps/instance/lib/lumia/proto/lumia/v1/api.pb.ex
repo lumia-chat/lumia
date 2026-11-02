@@ -39,6 +39,29 @@ defmodule Lumia.V1.IdentityProofSignInRequest do
   field :proof, 1, type: Lumia.V1.IdentityProof
 end
 
+defmodule Lumia.V1.TotpEnrollResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.TotpEnrollResponse",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :secret, 1, type: :string
+  field :otpauth_uri, 2, type: :string, json_name: "otpauthUri"
+end
+
+defmodule Lumia.V1.TotpConfirmRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.TotpConfirmRequest",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :code, 1, type: :string
+end
+
 defmodule Lumia.V1.CreateAccountRequest do
   @moduledoc false
 

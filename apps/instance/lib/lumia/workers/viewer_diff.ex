@@ -19,6 +19,7 @@ defmodule Lumia.Workers.ViewerDiff do
   alias Lumia.Repo
   alias Lumia.Servers
   alias Lumia.Servers.ChannelViewer
+  alias Lumia.Tx
 
   @debounce_seconds 30
 
@@ -52,7 +53,7 @@ defmodule Lumia.Workers.ViewerDiff do
     added = MapSet.difference(current, previous)
     removed = MapSet.difference(previous, current)
 
-    Repo.transact(fn ->
+    Tx.transact(fn ->
       for account_id <- added do
         {:ok, _} = Repo.insert(%ChannelViewer{channel_id: channel_id, account_id: account_id})
 

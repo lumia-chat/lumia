@@ -141,6 +141,88 @@ defmodule LumiaWeb.ApiTest do
     end
   end
 
+  describe "TOTP as a second factor" do
+    test "enrol, confirm, then sign-in and reauth require a code", %{conn: conn} do
+      handle = "totp#{System.unique_integer([:positive])}"
+      password = "correct horse battery"
+
+      created =
+        post_proto(conn, "/api/v1/accounts", %V1.CreateAccountRequest{
+          handle: handle,
+          password: password
+        })
+
+      %V1.TokenPair{access_token: access} = decode(created, V1.TokenPair)
+      authed = put_req_header(conn, "authorization", "Bearer " <> access)
+
+      enrolled = post(authed, "/api/v1/auth/totp/enroll")
+
+      assert %V1.TotpEnrollResponse{secret: secret, otpauth_uri: uri} =
+               decode(enrolled, V1.TotpEnrollResponse)
+
+      assert String.starts_with?(uri, "otpauth://totp/")
+      raw = Base.decode32!(secret, padding: false)
+
+      wrong =
+        post_proto(authed, "/api/v1/auth/totp/confirm", %V1.TotpConfirmRequest{code: "000000"})
+
+      assert wrong.status == 401
+
+      ok =
+        post_proto(authed, "/api/v1/auth/totp/confirm", %V1.TotpConfirmRequest{
+          code: Lumia.Auth.Totp.code(raw)
+        })
+
+      assert ok.status == 204
+
+      # Sign-in now asks for the second factor, then accepts the code.
+      asked =
+        post_proto(conn, "/api/v1/auth/sign-in/password", %V1.PasswordSignInRequest{
+          handle_or_email: handle,
+          password: password
+        })
+
+      assert asked.status == 400
+
+      assert %V1.Error{code: :FAILED_PRECONDITION, details: %{"mfa" => "totp"}} =
+               decode(asked, V1.Error)
+
+      refused =
+        post_proto(conn, "/api/v1/auth/sign-in/password", %V1.PasswordSignInRequest{
+          handle_or_email: handle,
+          password: password,
+          totp_code: "123456"
+        })
+
+      assert refused.status == 401
+
+      signed =
+        post_proto(conn, "/api/v1/auth/sign-in/password", %V1.PasswordSignInRequest{
+          handle_or_email: handle,
+          password: password,
+          totp_code: Lumia.Auth.Totp.code(raw)
+        })
+
+      assert %V1.TokenPair{} = decode(signed, V1.TokenPair)
+
+      # Reauth by TOTP (identity spec 10).
+      reauthed =
+        post_proto(authed, "/api/v1/auth/reauth", %V1.ReauthRequest{
+          credential: {:totp_code, Lumia.Auth.Totp.code(raw)}
+        })
+
+      assert %V1.ReauthResponse{reauth_token: token} = decode(reauthed, V1.ReauthResponse)
+      assert token != ""
+
+      bad_reauth =
+        post_proto(authed, "/api/v1/auth/reauth", %V1.ReauthRequest{
+          credential: {:totp_code, "000000"}
+        })
+
+      assert bad_reauth.status == 401
+    end
+  end
+
   describe "servers, channels, members, roles" do
     setup %{conn: conn} do
       owner = account("owner")
@@ -232,6 +314,32 @@ defmodule LumiaWeb.ApiTest do
       assert denied.status == 403
 
       assert delete(ctx.conn, "/api/v1/servers/#{ctx.server.id}/roles/#{rid}").status == 204
+    end
+
+    test "members paginate by keyset with an opaque cursor (protocol section 11)", ctx do
+      for i <- 1..5 do
+        {:ok, _} = Servers.add_member(ctx.server.id, account("m#{i}").id, ctx.owner.id)
+      end
+
+      first = get(ctx.conn, "/api/v1/servers/#{ctx.server.id}/members?page_size=4")
+
+      assert %V1.ListMembersResponse{members: page1, page: %V1.PageResponse{next_cursor: cursor}} =
+               decode(first, V1.ListMembersResponse)
+
+      assert length(page1) == 4 and cursor != ""
+
+      second =
+        get(ctx.conn, "/api/v1/servers/#{ctx.server.id}/members?page_size=4&cursor=#{cursor}")
+
+      assert %V1.ListMembersResponse{members: page2, page: %V1.PageResponse{next_cursor: ""}} =
+               decode(second, V1.ListMembersResponse)
+
+      assert length(page2) == 2
+      ids = Enum.map(page1 ++ page2, & &1.account_id)
+      assert length(Enum.uniq(ids)) == 6
+
+      bad = get(ctx.conn, "/api/v1/servers/#{ctx.server.id}/members?cursor=not-a-cursor")
+      assert bad.status == 400
     end
 
     test "members: list, assign roles, remove", ctx do

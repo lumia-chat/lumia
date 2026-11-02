@@ -82,7 +82,7 @@ Sec-WebSocket-Protocol: lumia.v1.proto      (or lumia.v1.json)
 Authorization: Bearer <access_token>
 ```
 
-**As implemented in v1**, encoding is chosen by the opcode of the first frame rather than by subprotocol: a binary frame selects protobuf, a text frame selects JSON, and the connection keeps that encoding. The subprotocol header is accepted but not required. The access token is passed as `?access_token=` for every client, because Phoenix sockets cannot read arbitrary request headers; the `Authorization` header form waits for a custom upgrade plug. The server strips the token from logs.
+**As implemented in v1**, encoding is chosen by the opcode of the first frame rather than by subprotocol: a binary frame selects protobuf, a text frame selects JSON, and the connection keeps that encoding. The access token travels as `?access_token=` or, for browsers, whose WebSocket API cannot set `Authorization`, as the subprotocol `base64url.bearer.phx.<base64url token>` in `Sec-WebSocket-Protocol`, which the server consumes before negotiating the rest of the header. The `Authorization` header is not read on the upgrade: the socket layer cannot see it and the one client that would send it, a native one, has the query form. The server strips the token from logs and URLs.
 
 One connection per (device, instance). A second connection with the same session closes the first with `DISCONNECT_PROTOCOL_ERROR`.
 
@@ -167,7 +167,9 @@ Base path `/api/v1`. All endpoints require `Authorization: Bearer <access_token>
 |---|---|---|
 | `GET /instance` | → `InstanceInfo` | Public. The trust card. |
 | `POST /auth/challenge` | `ChallengeRequest` → `ChallengeResponse` | Public. Challenge expires in 2 minutes, single use. |
-| `POST /auth/sign-in/password` | `PasswordSignInRequest` → `TokenPair` | Public. MFA: first call returns `FAILED_PRECONDITION` with `details.mfa`. |
+| `POST /auth/sign-in/password` | `PasswordSignInRequest` → `TokenPair` | Public. MFA: first call returns `FAILED_PRECONDITION` with `details.mfa`; a wrong `totp_code` is `UNAUTHENTICATED`. |
+| `POST /auth/totp/enroll` | → `TotpEnrollResponse` | A pending TOTP secret for the caller; replaces an unconfirmed one. |
+| `POST /auth/totp/confirm` | `TotpConfirmRequest` → 204 | The first valid code enables TOTP; sign-in and reauth then require it. |
 | `POST /auth/sign-in/identity` | `IdentityProofSignInRequest` → `TokenPair` | Public. `POLICY_DENIED` when the instance disables it. |
 | `POST /auth/sign-in/magic-link` | `{email}` → 202 | Public. Link completes at `POST /auth/sign-in/magic-link/complete`. |
 | `GET /auth/oidc/start`, `/auth/oidc/callback` | | Public. Standard code flow. |

@@ -25,6 +25,7 @@ defmodule LumiaWeb.Gateway.SessionChannelTest do
       account: account,
       device_id: device_id,
       session: session,
+      tokens: tokens,
       socket: socket,
       server: server,
       channel: channel
@@ -178,6 +179,91 @@ defmodule LumiaWeb.Gateway.SessionChannelTest do
       assert %V1.ChannelSubscribeResult{status: :ERROR, error: %V1.Error{code: :NOT_FOUND}} =
                subscribe(socket, ctx.channel.id, 0)
     end
+
+    test "a member without READ_HISTORY cannot subscribe, the same as the HTTP reads", ctx do
+      member = account("member")
+      {:ok, _} = Servers.add_member(ctx.server.id, member.id, ctx.account.id)
+
+      everyone =
+        Lumia.Repo.get_by!(Lumia.Servers.Role, server_id: ctx.server.id, is_everyone: true)
+
+      :ok =
+        Servers.set_overwrite(ctx.channel.id, ctx.account.id, {:role, everyone.id}, [], [
+          :read_history
+        ])
+
+      actor = %{account_id: ctx.account.id, device_id: ctx.device_id}
+      {:ok, _} = Events.append(ctx.channel.id, actor, send_message(ctx.channel.id, "secret"))
+
+      {:ok, _, tokens} = Auth.create_session(member.id, Ecto.UUID.generate())
+      {:ok, socket} = connect(Socket, %{"access_token" => tokens.access_token})
+      {_, socket} = join!(socket)
+
+      assert %V1.ChannelSubscribeResult{
+               status: :ERROR,
+               error: %V1.Error{code: :PERMISSION_DENIED}
+             } = subscribe(socket, ctx.channel.id, 0)
+
+      refute_push "frame", {:event_bytes, _}
+    end
+
+    test "high-water marks are not disclosed for channels the account cannot read", ctx do
+      outsider = account("outsider")
+      {:ok, _, tokens} = Auth.create_session(outsider.id, Ecto.UUID.generate())
+      {:ok, socket} = connect(Socket, %{"access_token" => tokens.access_token})
+      {_, socket} = join!(socket)
+
+      send_frame(
+        socket,
+        {:high_water_mark,
+         %V1.HighWaterMarkRequest{channel_ids: [Proto.uuid(ctx.channel.id), "short"]}}
+      )
+
+      assert_push "frame", %V1.ServerFrame{
+        frame: {:high_water_mark, %V1.HighWaterMarkResponse{heads: []}}
+      }
+    end
+
+    test "malformed frames are answered, not crashed on", ctx do
+      {_, socket} = join!(ctx.socket)
+
+      push(socket, "frame", %V1.ClientFrame{frame: nil})
+      assert_push "frame", %V1.ServerFrame{frame: {:error, %V1.Error{code: :INVALID_ARGUMENT}}}
+
+      # An id that is not 16 bytes.
+      send_frame(socket, {:subscribe, %V1.Subscribe{cursors: [%V1.Cursor{log_id: "x", seq: 0}]}})
+
+      assert_push "frame", %V1.ServerFrame{
+        frame:
+          {:subscribe_result,
+           %V1.SubscribeResult{
+             results: [
+               %V1.ChannelSubscribeResult{
+                 status: :ERROR,
+                 error: %V1.Error{code: :INVALID_ARGUMENT}
+               }
+             ]
+           }}
+      }
+
+      send_frame(socket, {:unsubscribe, %V1.Unsubscribe{channel_ids: ["x"]}})
+
+      # A command with no operation, and one with a bad channel id.
+      send_frame(socket, {:command, %V1.Command{command_id: Proto.uuid(Ecto.UUID.generate())}})
+      assert_push "frame", %V1.ServerFrame{frame: {:error, %V1.Error{code: :INVALID_ARGUMENT}}}
+
+      bad = %{send_message(ctx.channel.id) | channel_id: "nope"}
+      send_frame(socket, {:command, bad})
+      assert_push "frame", %V1.ServerFrame{frame: {:error, %V1.Error{code: :INVALID_ARGUMENT}}}
+
+      empty_id = %{send_message(ctx.channel.id) | command_id: ""}
+      send_frame(socket, {:command, empty_id})
+      assert_push "frame", %V1.ServerFrame{frame: {:error, %V1.Error{code: :INVALID_ARGUMENT}}}
+
+      # Still alive and serving.
+      send_frame(socket, {:heartbeat, %V1.Heartbeat{nonce: 5}})
+      assert_push "frame", %V1.ServerFrame{frame: {:heartbeat, %V1.Heartbeat{nonce: 5}}}
+    end
   end
 
   describe "commands" do
@@ -252,7 +338,7 @@ defmodule LumiaWeb.Gateway.SessionChannelTest do
       refute_push "frame", {:event_bytes, _}
     end
 
-    test "session revocation disconnects the socket", ctx do
+    test "session revocation disconnects the socket and closes the transport", ctx do
       {_, _socket} = join!(ctx.socket)
       :ok = Auth.revoke(ctx.session.id)
 
@@ -260,7 +346,33 @@ defmodule LumiaWeb.Gateway.SessionChannelTest do
         frame: {:disconnect, %V1.Disconnect{reason: :DISCONNECT_SESSION_REVOKED}}
       }
 
+      # The transport (this process, under ChannelTest) is told to close,
+      # after the frame, so the client never sees a second Disconnect.
+      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect"}
       assert_receive {:socket_close, _, _}, 500
+    end
+
+    test "a second connection for the same session closes the first with PROTOCOL_ERROR", ctx do
+      {_, _first} = join!(ctx.socket)
+      {:ok, _session, tokens} = Auth.create_session(ctx.account.id, ctx.device_id)
+
+      # A fresh connection for *another* session leaves the first alone.
+      {:ok, _} = connect(Socket, %{"access_token" => tokens.access_token})
+      refute_push "frame", %V1.ServerFrame{frame: {:disconnect, _}}
+
+      # The same session connecting again supersedes the first.
+      {:ok, second} = connect(Socket, %{"access_token" => ctx.tokens.access_token})
+
+      assert_push "frame", %V1.ServerFrame{
+        frame: {:disconnect, %V1.Disconnect{reason: :DISCONNECT_PROTOCOL_ERROR}}
+      }
+
+      assert_receive {:socket_close, _, _}, 500
+
+      # The second connection joins and works normally.
+      {_, second} = join!(second)
+      send_frame(second, {:heartbeat, %V1.Heartbeat{nonce: 2}})
+      assert_push "frame", %V1.ServerFrame{frame: {:heartbeat, %V1.Heartbeat{nonce: 2}}}
     end
   end
 
@@ -296,7 +408,8 @@ defmodule LumiaWeb.Gateway.SessionChannelTest do
       refute_push "frame", {:event_bytes, _}
     end
 
-    test "a node joining the cluster re-resolves every subscription", ctx do
+    test "a node joining the cluster marks every subscription stale, so each is re-resolved before its next delivery",
+         ctx do
       member = account("member")
       {:ok, _} = Servers.add_member(ctx.server.id, member.id, ctx.account.id)
       {:ok, _, tokens} = Auth.create_session(member.id, Ecto.UUID.generate())

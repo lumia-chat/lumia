@@ -16,6 +16,7 @@ defmodule LumiaWeb.Endpoint do
   # transport timeout is two missed 30-second heartbeats.
   socket "/gateway", LumiaWeb.Gateway.Socket,
     websocket: [
+      auth_token: true,
       serializer: [{LumiaWeb.Gateway.Serializer, "~> 1.0"}],
       timeout: 75_000,
       max_frame_size: 1_048_576

@@ -22,6 +22,10 @@ defmodule LumiaWeb.FallbackController do
     ProtoConn.render_error(conn, :conflict, %{"held" => held})
   end
 
+  # A second factor is required: the client asks for it and calls again.
+  def call(conn, {:error, {:failed_precondition, :mfa}}),
+    do: ProtoConn.render_error(conn, :failed_precondition, %{"mfa" => "totp"})
+
   def call(conn, {:error, :resource_exhausted}),
     do:
       ProtoConn.render_error(conn, :resource_exhausted, %{

@@ -19,6 +19,7 @@ defmodule Lumia.Accounts do
   alias Lumia.Proto
   alias Lumia.Repo
   alias Lumia.Schema
+  alias Lumia.Tx
   alias Lumia.V1
 
   @doc "Creates an account. Spike-level; auth flows come with the identity endpoints."
@@ -76,6 +77,72 @@ defmodule Lumia.Accounts do
     end
   end
 
+  @doc """
+  Starts TOTP enrolment: a pending secret replaces any unconfirmed one.
+  Returns `{:ok, %{secret: base32, otpauth_uri: uri}}`; `{:error,
+  :already_exists}` when TOTP is already enabled.
+  """
+  def enroll_totp(account_id) do
+    case Repo.get(Account, account_id) do
+      nil ->
+        {:error, :account_not_found}
+
+      %Account{totp_enabled_at: %DateTime{}} ->
+        {:error, :already_exists}
+
+      %Account{} = account ->
+        secret = Lumia.Auth.Totp.generate_secret()
+
+        with {:ok, _} <-
+               account |> Ecto.Changeset.change(totp_secret: secret) |> Repo.update() do
+          {:ok,
+           %{
+             secret: Lumia.Auth.Totp.encode(secret),
+             otpauth_uri:
+               Lumia.Auth.Totp.otpauth_uri(secret, account.handle, Lumia.Identity.host())
+           }}
+        end
+    end
+  end
+
+  @doc "Enables TOTP with the first valid code against the pending secret."
+  def confirm_totp(account_id, code) do
+    case Repo.get(Account, account_id) do
+      %Account{totp_secret: secret, totp_enabled_at: nil} = account when is_binary(secret) ->
+        if Lumia.Auth.Totp.valid?(secret, code),
+          do: enable_totp(account),
+          else: {:error, :unauthenticated}
+
+      %Account{totp_enabled_at: %DateTime{}} ->
+        {:error, :already_exists}
+
+      _ ->
+        {:error, :failed_precondition}
+    end
+  end
+
+  defp enable_totp(account) do
+    account
+    |> Ecto.Changeset.change(totp_enabled_at: DateTime.utc_now())
+    |> Repo.update()
+    |> case do
+      {:ok, _} -> :ok
+      {:error, _} -> {:error, :internal}
+    end
+  end
+
+  @doc """
+  The second factor after a password: `:ok` when none is enabled or the
+  code is valid; `{:error, {:failed_precondition, :mfa}}` when one is
+  required and no code was given; `{:error, :unauthenticated}` for a bad code.
+  """
+  def check_second_factor(%Account{totp_enabled_at: nil}, _code), do: :ok
+  def check_second_factor(%Account{}, ""), do: {:error, {:failed_precondition, :mfa}}
+
+  def check_second_factor(%Account{totp_secret: secret}, code) do
+    if Lumia.Auth.Totp.valid?(secret, code), do: :ok, else: {:error, :unauthenticated}
+  end
+
   defp validate_password(password) do
     if String.length(password) >= 12 and byte_size(password) <= 1024,
       do: :ok,
@@ -91,7 +158,7 @@ defmodule Lumia.Accounts do
   """
   def append_event(account_id, {tag, _} = payload, opts \\ []) when is_atom(tag) do
     result =
-      Repo.transact(fn ->
+      Tx.transact(fn ->
         now = DateTime.utc_now()
         head_at = DateTime.truncate(now, :second)
 
@@ -104,9 +171,15 @@ defmodule Lumia.Accounts do
       end)
 
     with {:ok, {event, bytes}} <- result do
-      if Keyword.get(opts, :broadcast, true), do: broadcast(account_id, event, bytes)
+      broadcast_after_commit(account_id, event, bytes, opts)
       {:ok, %{account_id: account_id, seq: event.seq, event_id: Proto.from_uuid(event.event_id)}}
     end
+  end
+
+  # Deferred until the outermost transaction commits (see Lumia.Tx).
+  defp broadcast_after_commit(account_id, event, bytes, opts) do
+    if Keyword.get(opts, :broadcast, true),
+      do: Tx.after_commit(fn -> broadcast(account_id, event, bytes) end)
   end
 
   defp write(account_id, seq, payload, now) do

@@ -12,6 +12,9 @@ defmodule Lumia.Repo.Migrations.CreateSessions do
       add :device_id, :binary_id, null: false
       add :access_hash, :binary, null: false
       add :refresh_hash, :binary, null: false
+      # The hash the last refresh retired. A refresh presenting it is a
+      # reuse, which revokes the session (protocol section 12).
+      add :previous_refresh_hash, :binary
       add :client, :text
       add :ip, :text
       add :access_expires_at, :utc_datetime_usec, null: false

@@ -30,7 +30,8 @@ config :lumia, Oban,
      crontab: [
        {"0 3 * * *", Lumia.Workers.PurgeCommands},
        {"30 3 * * *", Lumia.Workers.Retention},
-       {"15 * * * *", Lumia.Workers.PurgeExpired}
+       {"15 * * * *", Lumia.Workers.PurgeExpired},
+       {"45 * * * *", Lumia.Workers.ExpireGuests}
      ]}
   ]
 

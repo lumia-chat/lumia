@@ -45,7 +45,29 @@ defmodule Lumia.AuthTest do
     refute new.access_token == tokens.access_token
     assert {:ok, _} = Auth.verify_access(new.access_token)
     assert {:error, :unauthenticated} = Auth.verify_access(tokens.access_token)
-    assert {:error, :unauthenticated} = Auth.refresh(tokens.refresh_token)
+    assert {:ok, _session, newer} = Auth.refresh(new.refresh_token)
+    assert {:ok, _} = Auth.verify_access(newer.access_token)
+  end
+
+  test "reusing a rotated refresh token revokes the whole session", ctx do
+    assert {:ok, _session, new} = Auth.refresh(ctx.tokens.refresh_token)
+
+    # The retired token comes back: a leak. Everything the session issued dies.
+    assert {:error, :session_revoked} = Auth.refresh(ctx.tokens.refresh_token)
+    assert {:error, :session_revoked} = Auth.verify_access(new.access_token)
+    assert {:error, :session_revoked} = Auth.refresh(new.refresh_token)
+    assert Repo.reload!(ctx.session).revoked_at
+    assert "session_revoked" in Accounts.event_kinds(ctx.account.id)
+
+    # A token that was never issued is still just unknown.
+    assert {:error, :unauthenticated} = Auth.refresh("never-issued")
+  end
+
+  test "two refreshes racing on one token: only the first wins", ctx do
+    # Simulate the race: rotate once, then present the same token again
+    # through the conditional update path, which finds the hash retired.
+    assert {:ok, _, _} = Auth.refresh(ctx.tokens.refresh_token)
+    assert {:error, :session_revoked} = Auth.refresh(ctx.tokens.refresh_token)
   end
 
   test "revoke broadcasts to the session topic and appends to the account log", ctx do

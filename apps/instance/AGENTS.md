@@ -7,10 +7,12 @@ This is the Lumia instance: the Elixir server that one deployment runs. It is a 
 - Every schema uses `use Lumia.Schema`: UUIDv7 primary keys minted app-side, UUID foreign keys, microsecond UTC timestamps. Never add a database default for an id column. Never derive a time from an id; `created_at` is always its own column.
 - Migrations get UUID keys and microsecond timestamps from the Repo config. Partitioned tables (`events`, `event_payloads`, `commands`) are keyed on `(channel_id, ...)` and must stay that way so queries prune to one partition.
 - The write path for channels is `Lumia.Events.append/2` and nothing else writes to the event-log tables. Broadcast happens after it returns, never inside it.
+- Contexts open transactions with `Lumia.Tx.transact/1`, never `Repo.transact/1`, and broadcast through `Lumia.Tx.after_commit/1`. Ecto flattens nested transactions, so a broadcast made inside a nested one would fire before the outer commit; `Lumia.Tx` holds it until the outermost transaction commits and drops it on rollback. The test sandbox hides this bug, so a direct `Repo.transact` around an appending call will pass tests and still be wrong.
 - Spike and benchmark mix tasks live in `bench/`, which compiles only in dev. Results go in `../../docs/spikes/`. Nothing in `bench/` ships.
 - Use the already included `:req` (`Req`) library for HTTP requests; avoid `:httpoison`, `:tesla`, and `:httpc`.
 - Never compare `DateTime` (or `Date`, `Time`) structs with `<`, `<=`, `>`, `>=`, including in guards: that is structural comparison and silently wrong. Use `DateTime.compare/2`, or push the comparison into the query.
 - Phoenix.PubSub and Erlang distribution are the only coordination between nodes. No Redis, no broker; see architecture hard rule 2.
+- We do not need new migrations to change a table. The app is still in development with no users. We can edit existing ones.
 
 <!-- usage-rules-start -->
 

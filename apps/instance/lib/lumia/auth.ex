@@ -20,6 +20,7 @@ defmodule Lumia.Auth do
   alias Lumia.Auth.Session
   alias Lumia.Proto
   alias Lumia.Repo
+  alias Lumia.Tx
   alias Lumia.V1
 
   @access_ttl_seconds 15 * 60
@@ -74,15 +75,17 @@ defmodule Lumia.Auth do
 
   @doc """
   Rotates tokens. The old refresh token becomes invalid. Reuse of a refresh
-  token that was already rotated revokes the session, since it means the
-  token leaked.
+  token that was already rotated revokes the session and answers
+  `:session_revoked`, since it means the token leaked (protocol section
+  12): the retired hash is kept on the row so the reuse is recognised.
   """
   def refresh(refresh_token) when is_binary(refresh_token) do
     now = DateTime.utc_now()
+    presented = hash(refresh_token)
 
-    case Repo.get_by(Session, refresh_hash: hash(refresh_token)) do
+    case Repo.get_by(Session, refresh_hash: presented) do
       nil ->
-        {:error, :unauthenticated}
+        reuse(presented)
 
       %Session{revoked_at: %DateTime{}} ->
         {:error, :session_revoked}
@@ -90,27 +93,55 @@ defmodule Lumia.Auth do
       %Session{} = session ->
         if expired?(session.refresh_expires_at, now),
           do: {:error, :token_expired},
-          else: rotate(session, now)
+          else: rotate(session, presented, now)
     end
   end
 
-  defp rotate(session, now) do
+  def refresh(_), do: {:error, :unauthenticated}
+
+  # The token matches no live refresh hash. If it is the one a rotation
+  # retired, someone is replaying it: revoke the session it belonged to.
+  defp reuse(presented) do
+    case Repo.get_by(Session, previous_refresh_hash: presented) do
+      %Session{revoked_at: nil, id: id} ->
+        _ = revoke(id)
+        {:error, :session_revoked}
+
+      %Session{} ->
+        {:error, :session_revoked}
+
+      nil ->
+        {:error, :unauthenticated}
+    end
+  end
+
+  # Conditional on the presented hash still being current, so two refreshes
+  # racing on one token cannot both succeed: the loser finds the hash
+  # retired and is treated as a reuse.
+  defp rotate(session, presented, now) do
     {access, access_hash} = token()
     {refresh, refresh_hash} = token()
 
-    result =
-      session
-      |> Ecto.Changeset.change(
-        access_hash: access_hash,
-        refresh_hash: refresh_hash,
-        access_expires_at: DateTime.add(now, @access_ttl_seconds, :second),
-        refresh_expires_at: DateTime.add(now, @refresh_ttl_seconds, :second),
-        last_seen_at: now
-      )
-      |> Repo.update()
+    query =
+      from s in Session,
+        where: s.id == ^session.id and s.refresh_hash == ^presented,
+        select: s
 
-    with {:ok, updated} <- result do
-      {:ok, updated, %{access_token: access, refresh_token: refresh}}
+    update =
+      Repo.update_all(query,
+        set: [
+          access_hash: access_hash,
+          refresh_hash: refresh_hash,
+          previous_refresh_hash: presented,
+          access_expires_at: DateTime.add(now, @access_ttl_seconds, :second),
+          refresh_expires_at: DateTime.add(now, @refresh_ttl_seconds, :second),
+          last_seen_at: now
+        ]
+      )
+
+    case update do
+      {1, [updated]} -> {:ok, updated, %{access_token: access, refresh_token: refresh}}
+      {0, _} -> reuse(presented)
     end
   end
 
@@ -128,7 +159,13 @@ defmodule Lumia.Auth do
         {:error, :not_found}
 
       {1, [{account_id, device_id}]} ->
-        Phoenix.PubSub.broadcast(Lumia.PubSub, topic(session_id), {:session_revoked, session_id})
+        Tx.after_commit(fn ->
+          Phoenix.PubSub.broadcast(
+            Lumia.PubSub,
+            topic(session_id),
+            {:session_revoked, session_id}
+          )
+        end)
 
         {:ok, _} =
           Accounts.append_event(

@@ -24,6 +24,7 @@ defmodule Lumia.Events do
   alias Lumia.Proto
   alias Lumia.Repo
   alias Lumia.Schema
+  alias Lumia.Tx
   alias Lumia.V1
 
   @doc "Creates a channel. Spike-level; the real context lives elsewhere later."
@@ -41,10 +42,16 @@ defmodule Lumia.Events do
   Broadcasts after commit unless `broadcast: false`.
   """
   def append(channel_id, actor, %V1.Command{} = command, opts \\ []) do
-    command_id = Proto.from_uuid(command.command_id)
+    case Proto.from_uuid(command.command_id) do
+      nil -> {:error, :invalid_argument}
+      command_id -> append(channel_id, actor, command, command_id, opts)
+    end
+  end
+
+  defp append(channel_id, actor, command, command_id, opts) do
     fingerprint = fingerprint(actor, command)
 
-    Repo.transact(fn ->
+    Tx.transact(fn ->
       case Repo.get_by(Command, channel_id: channel_id, command_id: command_id) do
         %Command{fingerprint: ^fingerprint} = existing -> {:ok, {ack(existing), nil}}
         %Command{} -> {:error, :conflict}
@@ -57,7 +64,8 @@ defmodule Lumia.Events do
   defp settle({:ok, {ack, nil}}, _channel_id, _actor, _command, _key, _opts), do: {:ok, ack}
 
   defp settle({:ok, {ack, {event, bytes}}}, channel_id, _actor, _command, _key, opts) do
-    if Keyword.get(opts, :broadcast, true), do: broadcast(channel_id, event, bytes)
+    broadcast_after_commit(channel_id, event, bytes, opts)
+
     {:ok, ack}
   end
 
@@ -104,7 +112,7 @@ defmodule Lumia.Events do
   """
   def append_system(channel_id, {tag, _} = payload, opts \\ []) when is_atom(tag) do
     result =
-      Repo.transact(fn ->
+      Tx.transact(fn ->
         now = DateTime.utc_now()
 
         with {:ok, seq, acl_version, _kind} <- take_head(channel_id, now) do
@@ -122,9 +130,15 @@ defmodule Lumia.Events do
       end)
 
     with {:ok, {event, bytes}} <- result do
-      if Keyword.get(opts, :broadcast, true), do: broadcast(channel_id, event, bytes)
+      broadcast_after_commit(channel_id, event, bytes, opts)
       {:ok, %{channel_id: channel_id, seq: event.seq, event_id: Proto.from_uuid(event.event_id)}}
     end
+  end
+
+  # Deferred until the outermost transaction commits (see Lumia.Tx).
+  defp broadcast_after_commit(channel_id, event, bytes, opts) do
+    if Keyword.get(opts, :broadcast, true),
+      do: Tx.after_commit(fn -> broadcast(channel_id, event, bytes) end)
   end
 
   @doc """
@@ -135,7 +149,7 @@ defmodule Lumia.Events do
   marker was appended. Idempotent.
   """
   def purge_before(channel_id, %DateTime{} = cutoff) do
-    Repo.transact(fn ->
+    Tx.transact(fn ->
       newest_old =
         Repo.one(
           from e in Event,

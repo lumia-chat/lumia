@@ -11,9 +11,17 @@ defmodule LumiaWeb.Gateway.SessionChannel do
   Delivery rule for a broadcast on a subscribed channel:
 
       seq <= delivered_seq            → drop (duplicate)
-      acl_version != cached           → re-resolve; unsubscribe if view is gone
+      acl_version != cached, or stale → re-resolve once; unsubscribe if view is gone
       seq == delivered_seq + 1        → push; advance
       seq >  delivered_seq + 1        → fill the gap from Postgres, then push
+
+  Reading a channel over the gateway (subscribe, replay, live events) needs
+  `READ_HISTORY` as well as `VIEW_CHANNEL`, the same check as
+  `GET /channels/{id}/events`, so the two paths cannot disagree.
+
+  Malformed client input (an empty frame, an id that is not 16 bytes, a
+  command with no operation) is answered with `INVALID_ARGUMENT`; it never
+  crashes the session.
   """
 
   use Phoenix.Channel
@@ -74,6 +82,10 @@ defmodule LumiaWeb.Gateway.SessionChannel do
     handle_frame(tag, body, socket)
   end
 
+  def handle_in("frame", _empty_or_unknown, socket) do
+    {:noreply, push_error(socket, :INVALID_ARGUMENT, "empty frame")}
+  end
+
   defp handle_frame(:heartbeat, %V1.Heartbeat{} = hb, socket) do
     {:noreply, push_frame(socket, {:heartbeat, hb})}
   end
@@ -88,13 +100,18 @@ defmodule LumiaWeb.Gateway.SessionChannel do
   end
 
   defp handle_frame(:unsubscribe, %V1.Unsubscribe{channel_ids: ids}, socket) do
-    socket = Enum.reduce(ids, socket, fn id, s -> unsubscribe(s, Proto.from_uuid(id)) end)
+    socket =
+      ids
+      |> Enum.map(&Proto.from_uuid/1)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.reduce(socket, fn id, s -> unsubscribe(s, id) end)
+
     {:noreply, socket}
   end
 
   defp handle_frame(:resume_account, %V1.ResumeAccount{after_seq: after_seq}, socket) do
     account_id = socket.assigns.account_id
-    head = Accounts.head(account_id)
+    head = Accounts.head(account_id) || 0
 
     if head - after_seq > @replay_cap do
       result = %V1.AccountResumeResult{status: :SNAPSHOT_REQUIRED, last_seq: head}
@@ -128,15 +145,19 @@ defmodule LumiaWeb.Gateway.SessionChannel do
     end
   end
 
+  # Heads are reported for subscribed channels, or for channels the account
+  # could subscribe to; a head is a fact about a channel and is not
+  # disclosed for one the account cannot see.
   defp handle_frame(:high_water_mark, %V1.HighWaterMarkRequest{} = req, socket) do
     ids =
       case req.channel_ids do
         [] -> Map.keys(socket.assigns.subscriptions)
-        ids -> Enum.map(ids, &Proto.from_uuid/1)
+        ids -> ids |> Enum.map(&Proto.from_uuid/1) |> Enum.reject(&is_nil/1)
       end
 
     heads =
       for id <- ids,
+          readable?(socket, id),
           {seq, _acl} = Events.head(id) || {0, 0},
           do: %V1.Cursor{log_id: Proto.uuid(id), seq: seq}
 
@@ -154,11 +175,21 @@ defmodule LumiaWeb.Gateway.SessionChannel do
     {:noreply, push_error(socket, :INVALID_ARGUMENT, "unexpected frame")}
   end
 
+  defp readable?(socket, channel_id) do
+    Map.has_key?(socket.assigns.subscriptions, channel_id) or
+      match?({:ok, _}, authorize_read(socket, channel_id))
+  end
+
   # ---- Subscribe and replay ----------------------------------------------------
 
   defp subscribe_one(%V1.Cursor{log_id: id_bytes, seq: cursor}, socket) do
-    channel_id = Proto.from_uuid(id_bytes)
+    case Proto.from_uuid(id_bytes) do
+      nil -> {subscribe_error(id_bytes, :invalid_argument), socket}
+      channel_id -> subscribe_channel(channel_id, id_bytes, cursor, socket)
+    end
+  end
 
+  defp subscribe_channel(channel_id, id_bytes, cursor, socket) do
     case authorize_read(socket, channel_id) do
       {:ok, sub} ->
         {head, _} = Events.head(channel_id)
@@ -178,9 +209,13 @@ defmodule LumiaWeb.Gateway.SessionChannel do
         end
 
       {:error, reason} ->
-        error = %V1.Error{code: error_code(reason), message: to_string(reason)}
-        {%V1.ChannelSubscribeResult{channel_id: id_bytes, status: :ERROR, error: error}, socket}
+        {subscribe_error(id_bytes, reason), socket}
     end
+  end
+
+  defp subscribe_error(id_bytes, reason) do
+    error = %V1.Error{code: error_code(reason), message: to_string(reason)}
+    %V1.ChannelSubscribeResult{channel_id: id_bytes, status: :ERROR, error: error}
   end
 
   defp put_subscription(socket, channel_id, sub) do
@@ -274,7 +309,16 @@ defmodule LumiaWeb.Gateway.SessionChannel do
     disconnect(socket, :DISCONNECT_SESSION_REVOKED)
   end
 
-  def handle_info({:nodeup, _node}, socket), do: {:noreply, reresolve_all(socket)}
+  # A newer connection for the same session took over (protocol 6.1).
+  def handle_info({:session_superseded, _id}, socket) do
+    disconnect(socket, :DISCONNECT_PROTOCOL_ERROR)
+  end
+
+  # Every subscription is re-resolved before its next delivery, by the
+  # staleness rule rather than all at once: a node joining the cluster
+  # must not make every session on this node query Postgres in the same
+  # instant.
+  def handle_info({:nodeup, _node}, socket), do: {:noreply, mark_all_stale(socket)}
   def handle_info({:nodedown, _node}, socket), do: {:noreply, socket}
 
   def handle_info(:slow_consumer, socket) do
@@ -291,20 +335,29 @@ defmodule LumiaWeb.Gateway.SessionChannel do
       event.acl_version != sub.acl_version or stale?(sub) ->
         case authorize_read(socket, channel_id) do
           {:ok, fresh} ->
+            fresh = %{fresh | delivered_seq: sub.delivered_seq}
+
             socket
-            |> put_subscription(channel_id, %{fresh | delivered_seq: sub.delivered_seq})
-            |> handle_live(channel_id, %{fresh | delivered_seq: sub.delivered_seq}, event, bytes)
+            |> put_subscription(channel_id, fresh)
+            |> deliver_live(channel_id, fresh, event, bytes)
 
           {:error, _} ->
             unsubscribe(socket, channel_id)
         end
 
-      event.seq == sub.delivered_seq + 1 ->
-        deliver(socket, channel_id, event, bytes)
-
       true ->
-        socket |> replay(channel_id) |> handle_info_dup(channel_id, event, bytes)
+        deliver_live(socket, channel_id, sub, event, bytes)
     end
+  end
+
+  # After the permission check has passed for this event: in order means
+  # push; a gap means fill from Postgres first. An event whose acl_version
+  # is older than the one just resolved is still delivered: the account
+  # holds the view now, and re-resolving again could not change that.
+  defp deliver_live(socket, channel_id, sub, event, bytes) do
+    if event.seq == sub.delivered_seq + 1,
+      do: deliver(socket, channel_id, event, bytes),
+      else: socket |> replay(channel_id) |> handle_info_dup(channel_id, event, bytes)
   end
 
   # After a gap fill the live event is usually already delivered; the
@@ -333,7 +386,10 @@ defmodule LumiaWeb.Gateway.SessionChannel do
   defp apply_account_event(socket, %V1.AccountEvent{
          payload: {:channel_removed, %V1.ChannelRemoved{channel_id: id}}
        }) do
-    unsubscribe(socket, Proto.from_uuid(id))
+    case Proto.from_uuid(id) do
+      nil -> socket
+      channel_id -> unsubscribe(socket, channel_id)
+    end
   end
 
   defp apply_account_event(socket, %V1.AccountEvent{
@@ -351,9 +407,10 @@ defmodule LumiaWeb.Gateway.SessionChannel do
   # ---- Authorization -----------------------------------------------------------
 
   # A subscription record: what the delivery rule needs. Authoritative via
-  # Lumia.Authz.Access, shared with the HTTP API.
+  # Lumia.Authz.Access, shared with the HTTP API: reading the log over the
+  # gateway takes the same permission as GET /channels/{id}/events.
   defp authorize_read(socket, channel_id) do
-    with {:ok, access} <- Access.viewable_channel(socket.assigns.account_id, channel_id) do
+    with {:ok, access} <- Access.require(socket.assigns.account_id, channel_id, :read_history) do
       {:ok, subscription(access)}
     end
   end
@@ -370,13 +427,19 @@ defmodule LumiaWeb.Gateway.SessionChannel do
     send_encrypted: :send_messages
   }
 
-  defp authorize_write(socket, channel_id, %V1.Command{op: {op, _}}) do
-    needed = Map.fetch!(@write_permission, op)
+  defp authorize_write(_socket, nil, _command), do: {:error, :invalid_argument}
 
-    with {:ok, access} <- Access.require(socket.assigns.account_id, channel_id, needed) do
+  defp authorize_write(socket, channel_id, %V1.Command{op: {op, _}}) do
+    with {:ok, needed} <- Map.fetch(@write_permission, op),
+         {:ok, access} <- Access.require(socket.assigns.account_id, channel_id, needed) do
       {:ok, subscription(access)}
+    else
+      :error -> {:error, :invalid_argument}
+      {:error, _} = e -> e
     end
   end
+
+  defp authorize_write(_socket, _channel_id, %V1.Command{}), do: {:error, :invalid_argument}
 
   defp subscription(access) do
     %{
@@ -408,17 +471,15 @@ defmodule LumiaWeb.Gateway.SessionChannel do
 
   defp stale?(%{resolved_at: at}), do: System.monotonic_time(:millisecond) - at > @staleness_ms
 
-  # Every subscription is re-resolved; those that lost view are dropped.
-  defp reresolve_all(socket) do
-    Enum.reduce(socket.assigns.subscriptions, socket, fn {channel_id, sub}, s ->
-      case authorize_read(s, channel_id) do
-        {:ok, fresh} ->
-          put_subscription(s, channel_id, %{fresh | delivered_seq: sub.delivered_seq})
+  # Every subscription is re-resolved before its next delivery.
+  defp mark_all_stale(socket) do
+    past = System.monotonic_time(:millisecond) - @staleness_ms - 1
 
-        {:error, _} ->
-          unsubscribe(s, channel_id)
-      end
-    end)
+    assign(
+      socket,
+      :subscriptions,
+      Map.new(socket.assigns.subscriptions, fn {id, sub} -> {id, %{sub | resolved_at: past}} end)
+    )
   end
 
   defp push_command_error(socket, {:failed_precondition, state}, command_id) do
@@ -444,8 +505,21 @@ defmodule LumiaWeb.Gateway.SessionChannel do
     end
   end
 
+  # Tells the client why, then closes the WebSocket. Stopping the channel
+  # alone would leave the socket open and make Phoenix report the exit as
+  # `phx_close`, which the serializer renders as a second Disconnect with
+  # the wrong reason. The transport closes on this message exactly as it
+  # does for an endpoint `broadcast(socket_id, "disconnect", %{})`; sent
+  # from this process after the push, it arrives after the frame.
   defp disconnect(socket, reason) do
     push(socket, "frame", %V1.ServerFrame{frame: {:disconnect, %V1.Disconnect{reason: reason}}})
+
+    send(socket.transport_pid, %Phoenix.Socket.Broadcast{
+      topic: socket.id || "session",
+      event: "disconnect",
+      payload: %{}
+    })
+
     {:stop, :normal, socket}
   end
 
@@ -455,6 +529,7 @@ defmodule LumiaWeb.Gateway.SessionChannel do
   defp error_code(:channel_not_found), do: :NOT_FOUND
   defp error_code(:message_not_found), do: :NOT_FOUND
   defp error_code(:invalid_command), do: :INVALID_ARGUMENT
+  defp error_code(:invalid_argument), do: :INVALID_ARGUMENT
   defp error_code({:failed_precondition, _}), do: :FAILED_PRECONDITION
   defp error_code(_), do: :INTERNAL
 end

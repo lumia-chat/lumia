@@ -54,10 +54,24 @@ defmodule LumiaWeb.ServerController do
     end
   end
 
-  def members(conn, %{"server_id" => server_id}) do
-    with {:ok, _server} <- member_server(conn, server_id) do
+  @page_default 50
+  @page_max 200
+
+  def members(conn, %{"server_id" => server_id} = params) do
+    with {:ok, _server} <- member_server(conn, server_id),
+         {:ok, cursor} <- decode_cursor(params["cursor"]) do
+      size = params["page_size"] |> page_size()
+
       members =
-        Repo.all(from m in Member, where: m.server_id == ^server_id, order_by: m.joined_at)
+        Repo.all(
+          from m in Member,
+            where: m.server_id == ^server_id,
+            order_by: [asc: m.joined_at, asc: m.account_id],
+            limit: ^(size + 1)
+        )
+        |> after_cursor(cursor)
+
+      {members, next_cursor} = page(members, size)
 
       roles =
         from(mr in MemberRole,
@@ -72,10 +86,61 @@ defmodule LumiaWeb.ServerController do
 
       ProtoConn.render(conn, %V1.ListMembersResponse{
         members: Enum.map(members, &Proto.member(&1, Map.get(roles, &1.account_id, []))),
-        accounts: Enum.map(accounts, &Proto.account/1)
+        accounts: Enum.map(accounts, &Proto.account/1),
+        page: %V1.PageResponse{next_cursor: next_cursor}
       })
     end
   end
+
+  # Keyset pagination over (joined_at, account_id) (protocol section 11).
+  # The cursor is opaque to clients: base64 of the last row's key. The
+  # query above over-fetches by one row past the limit so the window is
+  # applied here, keeping the SQL to one ordered scan with a limit; a
+  # server with more members than a page needs the window in the query,
+  # which is where this moves when member counts call for it.
+  defp page_size(nil), do: @page_default
+
+  defp page_size(value) do
+    case Integer.parse(value) do
+      {n, ""} when n >= 1 -> min(n, @page_max)
+      _ -> @page_default
+    end
+  end
+
+  defp decode_cursor(nil), do: {:ok, nil}
+  defp decode_cursor(""), do: {:ok, nil}
+
+  defp decode_cursor(cursor) do
+    with {:ok, raw} <- Base.url_decode64(cursor, padding: false),
+         [micros, account_id] <- String.split(raw, "|", parts: 2),
+         {m, ""} <- Integer.parse(micros),
+         {:ok, at} <- DateTime.from_unix(m, :microsecond) do
+      {:ok, {at, account_id}}
+    else
+      _ -> {:error, :invalid_argument}
+    end
+  end
+
+  defp after_cursor(members, nil), do: members
+
+  defp after_cursor(members, {at, account_id}) do
+    Enum.drop_while(members, fn m ->
+      case DateTime.compare(m.joined_at, at) do
+        :lt -> true
+        :eq -> m.account_id <= account_id
+        :gt -> false
+      end
+    end)
+  end
+
+  defp page(members, size) when length(members) > size do
+    page = Enum.take(members, size)
+    last = List.last(page)
+    key = "#{DateTime.to_unix(last.joined_at, :microsecond)}|#{last.account_id}"
+    {page, Base.url_encode64(key, padding: false)}
+  end
+
+  defp page(members, _size), do: {members, ""}
 
   def update_member(conn, %{"server_id" => server_id, "account_id" => account_id}) do
     actor = conn.assigns.current_account_id
@@ -83,15 +148,9 @@ defmodule LumiaWeb.ServerController do
     with {:ok, _server} <- member_server(conn, server_id),
          {:ok, req} <- ProtoConn.decode(conn, V1.UpdateMemberRequest),
          wanted = Enum.map(req.role_ids, &Proto.from_uuid/1),
-         current = role_ids(server_id, account_id),
-         :ok <- each(wanted -- current, &Servers.assign_role(server_id, account_id, &1, actor)),
-         :ok <- each(current -- wanted, &Servers.unassign_role(server_id, account_id, &1, actor)),
-         member when not is_nil(member) <-
-           Repo.get_by(Member, server_id: server_id, account_id: account_id) do
+         true <- Enum.all?(wanted, &is_binary/1) || {:error, :invalid_argument},
+         {:ok, member} <- Servers.set_roles(server_id, account_id, wanted, actor) do
       ProtoConn.render(conn, Proto.member(member, role_ids(server_id, account_id)))
-    else
-      nil -> {:error, :not_found}
-      error -> error
     end
   end
 
@@ -193,14 +252,5 @@ defmodule LumiaWeb.ServerController do
         where: mr.server_id == ^server_id and mr.account_id == ^account_id,
         select: mr.role_id
     )
-  end
-
-  defp each(items, fun) do
-    Enum.reduce_while(items, :ok, fn item, :ok ->
-      case fun.(item) do
-        :ok -> {:cont, :ok}
-        error -> {:halt, error}
-      end
-    end)
   end
 end
