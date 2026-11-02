@@ -245,6 +245,7 @@ mod web {
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
+#[allow(clippy::unwrap_used)]
 mod tests {
     #[test]
     fn the_upgrade_carries_the_subprotocols() {
