@@ -181,7 +181,10 @@ pub async fn run_forever<S: Store>(
         // A connection that never reached the command loop cannot see the
         // application drop its sender: look before trying again, keeping
         // any command that arrived meanwhile for the next connection.
-        match commands.try_recv() {
+        // `try_next` is deprecated in favour of `try_recv`, whose error
+        // does not distinguish "empty" from "closed" in this version.
+        #[allow(deprecated)]
+        match commands.try_next() {
             Ok(None) => return store,
             Ok(Some(command)) => stash = Some(command),
             Err(_) => {}
