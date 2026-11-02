@@ -122,18 +122,30 @@ enum IdentityCmd {
     Approve { request: String },
     /// On the new device: claim the bundle by code.
     Claim { code: String },
-    /// Revoke a device with the recovery phrase (root-signed).
+    /// Revoke a device with the recovery phrase (root-signed). With --all,
+    /// publish to every instance this device knows and report each.
     Revoke {
         device_id: String,
         #[arg(long)]
         phrase: String,
+        #[arg(long)]
+        all: bool,
     },
+    /// Which roster version each instance holds: the honest "revoked on 1 of 2".
+    Status,
+    /// Publish this device's current roster to every instance it knows.
+    Sync,
 }
 
 struct Ctx {
     host: String,
+    data_dir: PathBuf,
     store: SqliteStore,
     keystore: FileKeystore,
+    /// Identity state is per device, shared by every instance: lives at
+    /// `<data>/identity/`, not under an instance host.
+    identity_store: SqliteStore,
+    identity_keys: FileKeystore,
     device_id: Vec<u8>,
 }
 
@@ -326,10 +338,35 @@ async fn run(cli: Cli) -> Result<(), ClientError> {
 
 fn device(ctx: &mut Ctx) -> lumia_client::identity::Device<'_, SqliteStore, FileKeystore> {
     lumia_client::identity::Device {
-        store: &mut ctx.store,
-        keystore: &mut ctx.keystore,
+        store: &mut ctx.identity_store,
+        keystore: &mut ctx.identity_keys,
         device_id: ctx.device_id.clone(),
     }
+}
+
+/// Every instance this data dir knows: (host, base url, access token).
+fn instances(ctx: &Ctx) -> Result<Vec<(String, String, Option<String>)>, ClientError> {
+    let mut out = Vec::new();
+    let entries =
+        std::fs::read_dir(&ctx.data_dir).map_err(|e| ClientError::Transport(e.to_string()))?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.join("store.sqlite").exists() || path.file_name().is_some_and(|n| n == "identity")
+        {
+            continue;
+        }
+        let store = SqliteStore::open(&path.join("store.sqlite"))?;
+        let Some(base) = store.meta_get("base_url")? else {
+            continue;
+        };
+        let keys = FileKeystore::open(&path.join("keys"))?;
+        let token = keys
+            .get("access_token")?
+            .and_then(|b| String::from_utf8(b).ok());
+        out.push((entry.file_name().to_string_lossy().to_string(), base, token));
+    }
+    out.sort();
+    Ok(out)
 }
 
 async fn identity_cmd(ctx: &mut Ctx, api: &Api, action: IdentityCmd) -> Result<(), ClientError> {
@@ -393,14 +430,64 @@ async fn identity_cmd(ctx: &mut Ctx, api: &Api, action: IdentityCmd) -> Result<(
             );
             Ok(())
         }
-        IdentityCmd::Revoke { device_id, phrase } => {
+        IdentityCmd::Revoke {
+            device_id,
+            phrase,
+            all,
+        } => {
             device(ctx)
                 .revoke_with_phrase(api, &phrase, &parse_uuid(&device_id)?)
                 .await?;
-            println!("revoked {device_id}");
+            println!("revoked {device_id} on {}", ctx.host);
+            if all {
+                publish_everywhere(ctx).await?;
+            }
             Ok(())
         }
+        IdentityCmd::Status => {
+            let mine = device(ctx).roster()?;
+            println!("this device holds v{}", mine.version);
+            for (host, base, token) in instances(ctx)? {
+                let api = Api::new(&base).with_token(token);
+                match api.get_roster().await {
+                    Ok(resp) => match resp.roster.map(|r| {
+                        lumia_core::identity::roster::verify_roster(
+                            &r,
+                            None,
+                            lumia_client::identity::now_nanos(),
+                        )
+                    }) {
+                        Some(Ok(v)) => {
+                            let behind = if v.version < mine.version {
+                                " (behind)"
+                            } else {
+                                ""
+                            };
+                            println!("  {host}: v{}{behind}", v.version);
+                        }
+                        _ => println!("  {host}: unverifiable roster"),
+                    },
+                    Err(e) => println!("  {host}: unreachable ({e})"),
+                }
+            }
+            Ok(())
+        }
+        IdentityCmd::Sync => publish_everywhere(ctx).await,
     }
+}
+
+/// Carries the current roster to every instance (identity spec 5.1:
+/// rosters are client-carried). Reports per instance; never stops early.
+async fn publish_everywhere(ctx: &mut Ctx) -> Result<(), ClientError> {
+    let roster = device(ctx).roster()?;
+    for (host, base, token) in instances(ctx)? {
+        let api = Api::new(&base).with_token(token);
+        match api.publish_roster(roster.signed.clone()).await {
+            Ok(()) => println!("  {host}: now v{}", roster.version),
+            Err(e) => println!("  {host}: not updated ({e})"),
+        }
+    }
+    Ok(())
 }
 
 fn print_event(e: &lumia_core::proto::Event) {
@@ -432,23 +519,28 @@ fn print_event(e: &lumia_core::proto::Event) {
 fn open(data_dir: &std::path::Path, host: &str) -> Result<Ctx, ClientError> {
     let dir = data_dir.join(host);
     std::fs::create_dir_all(&dir).map_err(|e| ClientError::Transport(e.to_string()))?;
-    let mut store = SqliteStore::open(&dir.join("store.sqlite"))?;
-    let mut keystore = FileKeystore::open(&dir.join("keys"))?;
-    let device_id = match keystore.get("device_id")? {
+    let store = SqliteStore::open(&dir.join("store.sqlite"))?;
+    let keystore = FileKeystore::open(&dir.join("keys"))?;
+
+    let identity_dir = data_dir.join("identity");
+    std::fs::create_dir_all(&identity_dir).map_err(|e| ClientError::Transport(e.to_string()))?;
+    let identity_store = SqliteStore::open(&identity_dir.join("meta.sqlite"))?;
+    let mut identity_keys = FileKeystore::open(&identity_dir.join("keys"))?;
+    let device_id = match identity_keys.get("device_id")? {
         Some(id) => id,
         None => {
             let id = wire::new_id();
-            keystore.put("device_id", &id)?;
+            identity_keys.put("device_id", &id)?;
             id
         }
     };
-    if store.meta_get("device_id")?.is_none() {
-        store.meta_set("device_id", &wire::display(&device_id))?;
-    }
     Ok(Ctx {
         host: host.to_string(),
+        data_dir: data_dir.to_path_buf(),
         store,
         keystore,
+        identity_store,
+        identity_keys,
         device_id,
     })
 }

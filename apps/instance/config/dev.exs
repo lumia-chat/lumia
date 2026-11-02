@@ -26,11 +26,16 @@ config :lumia, Lumia.Repo,
 config :lumia, LumiaWeb.Endpoint,
   # Binding to loopback ipv4 address prevents access from other machines.
   # Change to `ip: {0, 0, 0, 0}` to allow access from other machines.
-  http: [ip: {127, 0, 0, 1}],
+  # PORT, LUMIA_HOST and SECRET_KEY_BASE let a second dev instance run beside
+  # the first (plan step 4): different port, host name, and challenge key.
+  http: [ip: {127, 0, 0, 1}, port: String.to_integer(System.get_env("PORT") || "4000")],
+  url: [host: System.get_env("LUMIA_HOST") || "localhost"],
   check_origin: false,
   code_reloader: true,
   debug_errors: true,
-  secret_key_base: "Sv9nCZibsH4wGxAYYffZKI8FMa/l//tidBXjWRMoCVkfntyVDEZn0uIZndMjN4g1",
+  secret_key_base:
+    System.get_env("SECRET_KEY_BASE") ||
+      "Sv9nCZibsH4wGxAYYffZKI8FMa/l//tidBXjWRMoCVkfntyVDEZn0uIZndMjN4g1",
   watchers: []
 
 # ## SSL Support

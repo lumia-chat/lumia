@@ -11,7 +11,7 @@ Legend: `[x]` done · `[~]` in progress · `[ ]` not started · `(spec §n)` the
 | 1. Schemas and protocol contract | Done |
 | 2. Server: event log, delivery, account log, resume, authorization | First pass complete 2026-11-01; six items carried into step 3 (listed under "Closing step 2") |
 | 3. Rust core | Milestones 1 and 2 done: sync engine, SQLite store, CLI on the real gateway, identity with shared vectors |
-| 4. Identity across two instances | Specified, not built |
+| 4. Identity across two instances | First pass 2026-11-01: lifecycle run across two dev instances with the CLI; the §12 list is partly end to end, the rest unit-level |
 | 5. MLS personal DMs, backup, recovery | Not specified, not built |
 | 6. Web UI in Tauri | Not started |
 | 7. Multi-node, push, SwiftUI, Compose | Not started |
@@ -194,9 +194,15 @@ Ordered. Each task names the spec section it implements and the tests that close
 
 ## Step 4: identity across two instances
 
-- [ ] Two instances in `docker-compose`, one flagship-like with a directory.
-- [ ] Create identity, add a second device by link bundle, revoke it, recover from the phrase, all against both instances.
-- [ ] Every test in identity §12 run end to end with the Rust core as the client.
+**First pass** (2026-11-01), two dev instances on one machine rather than compose: `config/dev.exs` reads `PORT`, `LUMIA_HOST` and `SECRET_KEY_BASE`, so a second instance runs as `PORT=4001 LUMIA_HOST=127.0.0.1 SECRET_KEY_BASE=… DATABASE_URL=…/lumia_dev2 mix phx.server` beside the first. The two differ in host name (challenges are host-bound, identity §9), challenge key and database, which is what the identity flows care about.
+
+- [x] The CLI keeps identity state in `<data>/identity/` (phrase-derived id, device key, roster), shared by every instance under that data directory; per-instance state (`base_url`, session, store) stays in `<data>/<host>/`. One device, many instances, as identity §5.1 says.
+- [x] `identity status`: this device's roster version and the version each known instance holds, flagging an instance that is behind. `identity sync`: publish the held roster to every instance. `identity revoke --all`: revoke, then publish everywhere.
+- [x] Run end to end: identity created on device A; an account bound to it on each instance; device B linked through instance 1 (instance 2 shows `v1 (behind)`); B signs in on both instances and instance 2 learns v2 from the proof's carried roster; A revokes B through instance 1 only (status shows instance 2 `v2 (behind)`, B's session on instance 1 answers `SESSION_REVOKED`, instance 2 still serves B); `identity sync` publishes v3 to instance 2 and B's session there answers `SESSION_REVOKED` too. The "revoked on 1 of 2" state from identity §5 is what `status` reports between the revoke and the sync.
+- [x] From identity §12, run end to end with the Rust core as the client: revoke while another instance is behind, then reconcile (the first case, with the root-signed path; the reauth path waits for a password credential on the CLI).
+- [ ] From identity §12, covered by unit tests on both verifiers through the shared vectors but not yet driven end to end: signer revoked before and after `added_at`, future-dated certificate, omitted revocation at step 7, root rotation at step 3. Not yet covered anywhere: concurrent forks and the merge, proof replay across nodes (needs step 7), web-origin proofs (needs step 6), phrase recovery with every device gone and the MLS rejoin (needs step 5).
+- [ ] Two instances in `docker-compose`, one flagship-like with a directory, for the step 7 multi-node runs.
+- [ ] Phrase recovery with every device gone, against both instances.
 
 ## Step 5: MLS personal DMs, backup, recovery
 

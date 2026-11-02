@@ -380,6 +380,12 @@ impl<S: Store, K: Keystore> Device<'_, S, K> {
     }
 }
 
+/// The wall clock as verification nanoseconds, for callers that verify a
+/// roster outside this module.
+pub fn now_nanos() -> i128 {
+    ts_nanos(Some(&now()))
+}
+
 fn now() -> prost_types::Timestamp {
     let d = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
