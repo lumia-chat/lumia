@@ -5,6 +5,7 @@ defmodule LumiaWeb.ApiTest do
 
   alias Lumia.Accounts
   alias Lumia.Auth
+  alias Lumia.Auth.Totp
   alias Lumia.Proto
   alias Lumia.Servers
   alias Lumia.V1
@@ -170,7 +171,7 @@ defmodule LumiaWeb.ApiTest do
 
       ok =
         post_proto(authed, "/api/v1/auth/totp/confirm", %V1.TotpConfirmRequest{
-          code: Lumia.Auth.Totp.code(raw)
+          code: Totp.code(raw)
         })
 
       assert ok.status == 204
@@ -200,7 +201,7 @@ defmodule LumiaWeb.ApiTest do
         post_proto(conn, "/api/v1/auth/sign-in/password", %V1.PasswordSignInRequest{
           handle_or_email: handle,
           password: password,
-          totp_code: Lumia.Auth.Totp.code(raw)
+          totp_code: Totp.code(raw)
         })
 
       assert %V1.TokenPair{} = decode(signed, V1.TokenPair)
@@ -208,7 +209,7 @@ defmodule LumiaWeb.ApiTest do
       # Reauth by TOTP (identity spec 10).
       reauthed =
         post_proto(authed, "/api/v1/auth/reauth", %V1.ReauthRequest{
-          credential: {:totp_code, Lumia.Auth.Totp.code(raw)}
+          credential: {:totp_code, Totp.code(raw)}
         })
 
       assert %V1.ReauthResponse{reauth_token: token} = decode(reauthed, V1.ReauthResponse)

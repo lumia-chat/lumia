@@ -16,6 +16,7 @@ defmodule Lumia.Accounts do
   alias Lumia.Accounts.Account
   alias Lumia.Accounts.AccountEvent
   alias Lumia.Accounts.AccountEventPayload
+  alias Lumia.Auth.Totp
   alias Lumia.Proto
   alias Lumia.Repo
   alias Lumia.Schema
@@ -91,15 +92,14 @@ defmodule Lumia.Accounts do
         {:error, :already_exists}
 
       %Account{} = account ->
-        secret = Lumia.Auth.Totp.generate_secret()
+        secret = Totp.generate_secret()
 
         with {:ok, _} <-
                account |> Ecto.Changeset.change(totp_secret: secret) |> Repo.update() do
           {:ok,
            %{
-             secret: Lumia.Auth.Totp.encode(secret),
-             otpauth_uri:
-               Lumia.Auth.Totp.otpauth_uri(secret, account.handle, Lumia.Identity.host())
+             secret: Totp.encode(secret),
+             otpauth_uri: Totp.otpauth_uri(secret, account.handle, Lumia.Identity.host())
            }}
         end
     end
@@ -109,7 +109,7 @@ defmodule Lumia.Accounts do
   def confirm_totp(account_id, code) do
     case Repo.get(Account, account_id) do
       %Account{totp_secret: secret, totp_enabled_at: nil} = account when is_binary(secret) ->
-        if Lumia.Auth.Totp.valid?(secret, code),
+        if Totp.valid?(secret, code),
           do: enable_totp(account),
           else: {:error, :unauthenticated}
 
@@ -140,7 +140,7 @@ defmodule Lumia.Accounts do
   def check_second_factor(%Account{}, ""), do: {:error, {:failed_precondition, :mfa}}
 
   def check_second_factor(%Account{totp_secret: secret}, code) do
-    if Lumia.Auth.Totp.valid?(secret, code), do: :ok, else: {:error, :unauthenticated}
+    if Totp.valid?(secret, code), do: :ok, else: {:error, :unauthenticated}
   end
 
   defp validate_password(password) do

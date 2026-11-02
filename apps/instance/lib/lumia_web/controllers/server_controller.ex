@@ -63,13 +63,13 @@ defmodule LumiaWeb.ServerController do
       size = params["page_size"] |> page_size()
 
       members =
-        Repo.all(
-          from m in Member,
-            where: m.server_id == ^server_id,
-            order_by: [asc: m.joined_at, asc: m.account_id],
-            limit: ^(size + 1)
+        from(m in Member,
+          where: m.server_id == ^server_id,
+          order_by: [asc: m.joined_at, asc: m.account_id],
+          limit: ^(size + 1)
         )
         |> after_cursor(cursor)
+        |> Repo.all()
 
       {members, next_cursor} = page(members, size)
 
@@ -94,10 +94,7 @@ defmodule LumiaWeb.ServerController do
 
   # Keyset pagination over (joined_at, account_id) (protocol section 11).
   # The cursor is opaque to clients: base64 of the last row's key. The
-  # query above over-fetches by one row past the limit so the window is
-  # applied here, keeping the SQL to one ordered scan with a limit; a
-  # server with more members than a page needs the window in the query,
-  # which is where this moves when member counts call for it.
+  # query fetches one row past the page to know whether a next page exists.
   defp page_size(nil), do: @page_default
 
   defp page_size(value) do
@@ -121,16 +118,11 @@ defmodule LumiaWeb.ServerController do
     end
   end
 
-  defp after_cursor(members, nil), do: members
+  defp after_cursor(query, nil), do: query
 
-  defp after_cursor(members, {at, account_id}) do
-    Enum.drop_while(members, fn m ->
-      case DateTime.compare(m.joined_at, at) do
-        :lt -> true
-        :eq -> m.account_id <= account_id
-        :gt -> false
-      end
-    end)
+  defp after_cursor(query, {at, account_id}) do
+    from m in query,
+      where: m.joined_at > ^at or (m.joined_at == ^at and m.account_id > ^account_id)
   end
 
   defp page(members, size) when length(members) > size do
