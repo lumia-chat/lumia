@@ -6,6 +6,11 @@ the terms of the GNU Affero General Public License as published by the Free
 Software Foundation, either version 3 of the License, or (at your option) any
 later version. See LICENSE.
 
-The protocol schemas in proto/ and, when it exists, the client core in
-apps/core are licensed separately under the Apache License, Version 2.0.
-See the LICENSE and NOTICE files in those directories.
+The protocol schemas in proto/ and the client core in apps/core are licensed
+separately under the Apache License, Version 2.0. See the LICENSE and NOTICE
+files in those directories.
+
+The Lumia name, logo and wordmark in assets/brand are not covered by any of
+these licences. They are the Lumia brand, all rights reserved; what you may
+do with them is in assets/brand/LICENSE. A fork or a modified build must
+replace them.

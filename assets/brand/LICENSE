@@ -1,0 +1,32 @@
+Lumia brand assets
+
+Copyright (C) 2026 Ryan Winchester. All rights reserved.
+
+The files in this directory (the Lumia logo, symbol and wordmark, in every
+colour and format) and the name "Lumia" are not licensed under the GNU
+Affero General Public License or the Apache License that cover the rest of
+this repository. They are the Lumia brand, and no licence to them is
+granted by those licences, by this file, or by the act of distributing the
+software, except as stated here.
+
+You may:
+
+1. Display these files as they are shipped in unmodified builds of Lumia,
+   including on a self-hosted instance and in the clients that connect to
+   it, so that the software works and is recognisable as Lumia.
+2. Use the name and the unmodified logo to refer to, link to, or write
+   about the Lumia project, in a way that does not suggest endorsement,
+   affiliation or that your product or service is Lumia.
+
+You may not:
+
+1. Use the name or the logo for a modified version of the software, a fork,
+   a derivative product, or a hosted service built on it, in a way that
+   suggests it is Lumia or is provided by the Lumia project. Replace them
+   with your own.
+2. Alter, recolour, redraw, or combine the logo with other marks, or
+   register it or anything confusingly similar as your own mark.
+
+The fonts in ../fonts are under the SIL Open Font License (see the licence
+files beside them). The icons and design tokens under ../icons and ../design
+are part of the software and carry its licence.

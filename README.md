@@ -57,4 +57,4 @@ Copyright (C) 2026 Ryan Winchester.
 
 Server: AGPL-3.0. Client core and protocol schemas: Apache-2.0.
 
-The root [LICENSE](LICENSE) is AGPL-3.0 and applies to everything not covered by a more specific license file. `apps/instance` carries its own copy of AGPL-3.0 because it ships as a container image. `proto/` carries Apache-2.0, and `apps/core` will when it exists.
+The root [LICENSE](LICENSE) is AGPL-3.0 and applies to everything not covered by a more specific license file. `apps/instance` carries its own copy of AGPL-3.0 because it ships as a container image. `proto/` and `apps/core` carry Apache-2.0. The Lumia name, logo and wordmark in `assets/brand` are not open source: they are the brand, all rights reserved, with the permitted uses in [assets/brand/LICENSE](assets/brand/LICENSE); a fork replaces them. The fonts in `assets/fonts` are SIL OFL.
