@@ -2,9 +2,9 @@ name: web
 
 on:
   push:
-    paths: ["apps/web/**", "assets/**", ".github/workflows/web.yml"]
+    paths: ["apps/web/**", "apps/core/**", "assets/**", "proto/**", ".github/workflows/web.yml"]
   pull_request:
-    paths: ["apps/web/**", "assets/**", ".github/workflows/web.yml"]
+    paths: ["apps/web/**", "apps/core/**", "assets/**", "proto/**", ".github/workflows/web.yml"]
 
 jobs:
   build:
@@ -17,5 +17,21 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.3.11"
+      # The core is built to wasm for the worker (apps/core/README.md).
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.96.0"
+          targets: wasm32-unknown-unknown
+          components: llvm-tools
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen-cli@0.2.130
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            apps/core/target
+          key: web-wasm-${{ runner.os }}-${{ hashFiles('apps/core/Cargo.lock') }}
       - run: bun install --frozen-lockfile
       - run: bun run build

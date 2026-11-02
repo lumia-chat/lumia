@@ -11,7 +11,7 @@ The Rust that every Lumia client shares (architecture section 13): the sync engi
 | `lumia-client` | The client for native targets and `wasm32-unknown-unknown`: the HTTP client, the gateway loop over a per-target socket and timer, the SQLite store (also the MLS key-value store and a keystore, in the same transaction; bundled SQLite natively, SQLite on the OPFS pool VFS on the web), the identity flows and the personal-DM engine. |
 | `lumia-cli` | The headless client binary and the scenario suite, on `lumia-client`. |
 | `lumia-ffi` | UniFFI surface for Swift and Kotlin: one `Client` per instance (API, reconnecting gateway loop, store, identity) and a `Listener` callback. Blocking methods, dev store and keystore until the shells bring their own. |
-| `lumia-wasm` | wasm-bindgen surface for the web shell: the sans-I/O `Session` as a JS class, effects as plain objects, the store and socket owned by JS. Checked on `wasm32-unknown-unknown` in CI. |
+| `lumia-wasm` | wasm-bindgen surface for the web shell: `Client`, one per instance, runs in a worker with the store on the OPFS pool VFS, the identity flows and the gateway loop, and delivers events as plain objects; the sans-I/O `Session` is also exposed for the store-less tests. Checked on `wasm32-unknown-unknown` in CI; `apps/web` builds it. |
 
 ## Requirements
 

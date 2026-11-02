@@ -38,6 +38,10 @@ config :lumia, LumiaWeb.Endpoint,
       "Sv9nCZibsH4wGxAYYffZKI8FMa/l//tidBXjWRMoCVkfntyVDEZn0uIZndMjN4g1",
   watchers: []
 
+# The web app's dev server (apps/web) is a trusted web origin: it may call
+# the API from the browser and link web devices (identity §7).
+config :lumia, :identity, web_origins: ["http://localhost:5173"]
+
 # ## SSL Support
 #
 # In order to use HTTPS in development, a self-signed

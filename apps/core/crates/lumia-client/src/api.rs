@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
+use lumia_core::proto::InstanceInfo;
 use lumia_core::proto::{
     reauth_request, AccountSnapshot, Ack, ChallengePurpose, ChallengeRequest, ChallengeResponse,
     Channel, ChannelSnapshot, ClaimKeyPackageRequest, ClaimKeyPackageResponse, Command,
@@ -98,6 +99,11 @@ impl Api {
     pub fn on_rotate(mut self, hook: RotateHook) -> Self {
         self.on_rotate = Some(hook);
         self
+    }
+
+    /// Forgets the pair, as after a sign-out.
+    pub fn clear_tokens(&self) {
+        *self.tokens.lock().unwrap_or_else(PoisonError::into_inner) = Tokens::default();
     }
 
     /// The tokens in use right now.
@@ -324,6 +330,48 @@ impl Api {
         Ok(format!(
             "{ws}/gateway/websocket?access_token={token}&vsn=1.0.0"
         ))
+    }
+
+    /// `GET /instance`: the trust card (public).
+    ///
+    /// # Errors
+    /// On transport failure or an API error.
+    pub async fn instance_info(&self) -> Result<InstanceInfo, ClientError> {
+        let (status, bytes) = self
+            .send_once(reqwest::Method::GET, "/api/v1/instance", None, None, false)
+            .await?;
+        decoded(status, &bytes)
+    }
+
+    /// `POST /auth/sign-in/password` with a second factor.
+    ///
+    /// # Errors
+    /// On transport failure or an API error (`FAILED_PRECONDITION{mfa}`
+    /// without the code, `UNAUTHENTICATED` with a wrong one).
+    pub async fn sign_in_with_totp(
+        &self,
+        handle_or_email: &str,
+        password: &str,
+        device_id: Vec<u8>,
+        totp_code: &str,
+    ) -> Result<TokenPair, ClientError> {
+        let req = PasswordSignInRequest {
+            handle_or_email: handle_or_email.into(),
+            password: password.into(),
+            device_id,
+            totp_code: totp_code.into(),
+            ..Default::default()
+        };
+        self.post("/api/v1/auth/sign-in/password", &req).await
+    }
+
+    /// `POST /auth/sign-out`.
+    ///
+    /// # Errors
+    /// On transport failure or an API error.
+    pub async fn sign_out(&self) -> Result<(), ClientError> {
+        self.empty(reqwest::Method::POST, "/api/v1/auth/sign-out", None)
+            .await
     }
 
     /// `POST /accounts` with a password.

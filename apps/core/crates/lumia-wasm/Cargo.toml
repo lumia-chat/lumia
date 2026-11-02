@@ -1,6 +1,6 @@
 [package]
 name = "lumia-wasm"
-description = "wasm-bindgen surface for the web shell: the sync session over a JS-owned store"
+description = "wasm-bindgen surface for the web shell: the client (store on OPFS, gateway loop, identity) in a worker, and the bare sync session"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -13,9 +13,20 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 lumia-core.workspace = true
+lumia-client.workspace = true
 prost.workspace = true
+uuid.workspace = true
 wasm-bindgen = "0.2.130"
+wasm-bindgen-futures = "0.4"
 js-sys = "0.3.107"
+serde = { version = "1", features = ["derive"] }
+serde-wasm-bindgen = "0.6"
+hex = "0.4"
+url = "2"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+sqlite-wasm-rs = { version = "0.6", features = ["wasm-bindgen"] }
+sqlite-wasm-vfs = { version = "0.3", features = ["sahpool"] }
 
 [lints]
 workspace = true

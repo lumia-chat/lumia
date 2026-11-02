@@ -20,6 +20,9 @@
 //!
 //! Marshalling only. Nothing here is a decision.
 
+#[cfg(target_arch = "wasm32")]
+pub mod client;
+
 use js_sys::{Array, Object, Reflect, Uint8Array};
 use lumia_core::proto::{AccountEvent, Command, Event};
 use lumia_core::sync::{decode_frame, encode_frame, Cursors, Effect, Notice};

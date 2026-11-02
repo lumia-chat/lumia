@@ -53,6 +53,7 @@ defmodule LumiaWeb.Endpoint do
 
   plug Plug.RequestId
   plug Plug.Telemetry, event_prefix: [:phoenix, :endpoint]
+  plug LumiaWeb.Plugs.Cors
 
   plug Plug.Parsers,
     parsers: [LumiaWeb.Plugs.ProtoBody, :urlencoded, :multipart, :json],

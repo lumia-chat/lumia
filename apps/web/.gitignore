@@ -1,3 +1,5 @@
 node_modules
 dist
 src/design/tokens.css
+src/client/pkg
+e2e/.work

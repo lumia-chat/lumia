@@ -239,13 +239,27 @@ impl<S: Store, K: Keystore> Device<'_, S, K> {
     /// # Errors
     /// On keystore or randomness failure.
     pub fn link_request(&mut self, label: &str) -> Result<String, ClientError> {
+        self.link_request_as(label, DeviceKind::Native, "")
+    }
+
+    /// Step 1 for a device of any kind: a web device names its origin,
+    /// which scopes its key (identity spec 7).
+    ///
+    /// # Errors
+    /// On keystore or randomness failure.
+    pub fn link_request_as(
+        &mut self,
+        label: &str,
+        kind: DeviceKind,
+        web_origin: &str,
+    ) -> Result<String, ClientError> {
         let key = self.device_key_or_generate()?;
         let requester = LinkRequester::new(
             self.device_id.clone(),
             key.verifying_key().to_bytes().to_vec(),
-            DeviceKind::Native,
+            kind,
             label,
-            "",
+            web_origin,
         )?;
         self.keystore
             .put("link_secret", &requester.secret_bytes())?;

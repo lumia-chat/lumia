@@ -44,3 +44,6 @@ config :phoenix, :plug_init_mode, :runtime
 # Sort query params output of verified routes for robust url comparisons
 config :phoenix,
   sort_verified_routes_query_params: true
+
+# A trusted web origin for the CORS and web-device tests.
+config :lumia, :identity, web_origins: ["http://localhost:5173"]

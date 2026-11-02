@@ -135,12 +135,7 @@ defmodule Lumia.Identity do
   end
 
   defp check_web_origin(%{cert: %V1.DeviceCertBody{kind: :WEB, web_origin: origin}}) do
-    allowed = [
-      origin_of(host())
-      | Application.get_env(:lumia, :identity, []) |> Keyword.get(:web_origins, [])
-    ]
-
-    if origin in allowed, do: :ok, else: {:error, :identity_proof_invalid}
+    if origin in web_origins(), do: :ok, else: {:error, :identity_proof_invalid}
   end
 
   defp check_web_origin(_device), do: :ok
@@ -496,6 +491,19 @@ defmodule Lumia.Identity do
     Application.get_env(:lumia, LumiaWeb.Endpoint, [])
     |> Keyword.get(:url, [])
     |> Keyword.get(:host, "localhost")
+  end
+
+  @doc """
+  The web origins this instance trusts (identity §7): its own, and the
+  flagship origins configured under `:lumia, :identity, :web_origins`. A
+  web device's certificate must name one, and only these may call the
+  API from a browser (`LumiaWeb.Plugs.Cors`).
+  """
+  def web_origins do
+    [
+      origin_of(host())
+      | Application.get_env(:lumia, :identity, []) |> Keyword.get(:web_origins, [])
+    ]
   end
 
   defp origin_of(host), do: "https://" <> host
