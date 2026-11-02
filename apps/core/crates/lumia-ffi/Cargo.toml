@@ -1,6 +1,6 @@
 [package]
 name = "lumia-ffi"
-description = "UniFFI bindings for Swift and Kotlin shells (filled in with the first native shell)"
+description = "UniFFI surface for the Swift and Kotlin shells: one Client object and a listener callback"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -13,6 +13,11 @@ crate-type = ["lib", "cdylib", "staticlib"]
 
 [dependencies]
 lumia-core.workspace = true
+lumia-client.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+uniffi = "0.32"
+tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
 
 [lints]
 workspace = true

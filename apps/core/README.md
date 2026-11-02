@@ -9,8 +9,8 @@ The Rust that every Lumia client shares (architecture section 13): the sync engi
 | `lumia-proto` | Wire types generated from `../../proto` at build time (prost through protox; no `protoc` needed). |
 | `lumia-core` | The sync state machine, `Store` and `Keystore` traits, identity, crypto. No I/O, no async. |
 | `lumia-client` | tokio transport (WebSocket, HTTP), SQLite store, file keystore, and the `lumia-cli` binary. |
-| `lumia-ffi` | UniFFI bindings for Swift and Kotlin. Scaffolded. |
-| `lumia-wasm` | wasm-bindgen surface for the web shell. Scaffolded; checked on `wasm32-unknown-unknown` in CI. |
+| `lumia-ffi` | UniFFI surface for Swift and Kotlin: one `Client` per instance (API, reconnecting gateway loop, store, identity) and a `Listener` callback. Blocking methods, dev store and keystore until the shells bring their own. |
+| `lumia-wasm` | wasm-bindgen surface for the web shell: the sans-I/O `Session` as a JS class, effects as plain objects, the store and socket owned by JS. Checked on `wasm32-unknown-unknown` in CI. |
 
 ## Requirements
 
@@ -36,7 +36,25 @@ cargo run -p lumia-client -- send <channel-id> "hello"
 cargo run -p lumia-client -- tail <channel-id>
 ```
 
-`tail` subscribes from the store's cursor, so a second run replays only what it missed. The CLI's keystore is a plaintext file at mode 0600 and is for development only.
+`tail` subscribes from the store's cursor, so a second run replays only what it missed, and reconnects with backoff when the connection drops. An access token the instance refuses is refreshed once and the new pair persisted. The CLI's keystore is a plaintext file at mode 0600 and is for development only.
+
+Identity (specs/identity.md) lives under `<data-dir>/identity/`, shared by every instance the data directory knows:
+
+```sh
+lumia-cli identity create --label phone          # prints the recovery phrase once
+lumia-cli account create-by-identity --handle ryan
+lumia-cli login --identity
+lumia-cli identity link-request --label laptop   # on the new device; paste the output to:
+lumia-cli identity approve <request>             # on an existing device; prints a code for:
+lumia-cli identity claim <code>                  # on the new device
+lumia-cli identity revoke <device-id> --phrase '...'       # root-signed
+lumia-cli identity revoke <device-id> --password '...'     # device-signed, reauth by password
+lumia-cli identity link-account --password '...'           # bind a password account to the identity
+lumia-cli identity status                        # the roster version each instance holds
+lumia-cli identity sync                          # publish this device's roster everywhere
+```
+
+`scenario <name>` (or `all`) runs the failure-injection cases a client can drive on its own against the instance (delivery spec 12, identity spec 12): `token-rotation`, `frame-before-hello`, `duplicate-command`, `snapshot-under-writes`, `snapshot-threshold`, `stale-roster`, `device-revoke`, `reconnect`. Each sets up a throwaway server or identity and fails with what it saw.
 
 ## Identity vectors
 

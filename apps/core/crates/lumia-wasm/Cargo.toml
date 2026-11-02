@@ -1,6 +1,6 @@
 [package]
 name = "lumia-wasm"
-description = "wasm-bindgen surface for the web shell (filled in during plan step 6)"
+description = "wasm-bindgen surface for the web shell: the sync session over a JS-owned store"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -13,6 +13,9 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 lumia-core.workspace = true
+prost.workspace = true
+wasm-bindgen = "0.2.130"
+js-sys = "0.3.107"
 
 [lints]
 workspace = true

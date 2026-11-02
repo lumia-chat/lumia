@@ -10,7 +10,7 @@ Legend: `[x]` done · `[~]` in progress · `[ ]` not started · `(spec §n)` the
 |---|---|
 | 1. Schemas and protocol contract | Done |
 | 2. Server: event log, delivery, account log, resume, authorization | First pass complete 2026-11-01; six items carried into step 3 (listed under "Closing step 2") |
-| 3. Rust core | Milestones 1 and 2 done: sync engine, SQLite store, CLI on the real gateway, identity with shared vectors |
+| 3. Rust core | Done 2026-11-01: sync engine, SQLite store, reconnecting CLI on the real gateway, identity with shared vectors, scenario suite, UniFFI and wasm surfaces |
 | 4. Identity across two instances | First pass 2026-11-01: lifecycle run across two dev instances with the CLI; the §12 list is partly end to end, the rest unit-level |
 | 5. MLS personal DMs, backup, recovery | Not specified, not built |
 | 6. Web UI in Tauri | Not started |
@@ -173,9 +173,9 @@ Ordered. Each task names the spec section it implements and the tests that close
 - [x] `Store` and `Keystore` contracts; `wire` scalar helpers.
 - [x] `lumia-client`: SQLite store applying events, materialized messages and cursor in one transaction, refusing gaps; snapshot replace; outbox; HTTP client with protobuf bodies; gateway loop carrying out effects with heartbeat and outbox retry on welcome; file keystore (dev only).
 - [x] `lumia-cli`: `instance add`, `account create`, `login`, `servers`, `server create`, `channels`, `channel create`, `send`, `tail`.
-- [ ] Reconnect with backoff around the gateway loop (the loop runs one connection; the CLI runs it once).
-- [ ] Refresh-token rotation when the access token expires.
-- [ ] `scenario <name>` subcommands for the failure-injection cases against a running instance.
+- [x] Reconnect with backoff: `gateway::run_forever` wraps one connection with exponential backoff (1s doubling to 30s, a quarter jitter), re-subscribes from the store's cursors, honours the server's `reconnect_after_seconds`, resets after a completed handshake, and stops on `SESSION_REVOKED`, `DEVICE_REVOKED`, `PROTOCOL_ERROR`, or when the application drops its sender. `tail` and `send` run on it.
+- [x] Refresh-token rotation: the token pair lives behind a shared handle in `Api`; an `UNAUTHENTICATED` or `TOKEN_EXPIRED` answer with a refresh token on hand rotates once and retries the call, a 401 at the socket upgrade rotates before the next attempt, and a hook persists each new pair (the CLI and the FFI client write it to the keystore).
+- [x] `lumia-cli scenario <name|all>`: the failure-injection cases a client can drive on its own against a running instance, each with its own throwaway server, channel, or identity: `token-rotation`, `frame-before-hello`, `duplicate-command`, `snapshot-under-writes`, `snapshot-threshold` (1,000 behind replays, 1,001 takes the snapshot), `stale-roster`, `device-revoke`, `reconnect`. All eight pass on 2026-11-01. Two server bugs found by them and fixed: a frame before `Hello` crashed the transport instead of answering `DISCONNECT_PROTOCOL_ERROR` and closing; a concurrent identical command that lost the race on the message row got `CONFLICT` instead of the winner's ack. The cases that need the server to misbehave (out-of-order broadcast, purged command row, generation bump, slow consumer, partition) stay server-side tests in `apps/instance`.
 
 **Milestone 2** (2026-11-01): identity in the core.
 
@@ -187,10 +187,15 @@ Ordered. Each task names the spec section it implements and the tests that close
 - [x] `identity::proof` builds a proof from a host's challenge, refusing another host or purpose.
 - [x] `lumia-cli`: `identity create` (phrase shown once, roster v1), `account create-by-identity`, `login --identity`, `identity link-request` / `approve` / `claim` (the full 4.2 flow with the bundle over X25519), `identity revoke --phrase` (root-signed, bypasses reauth), `identity show`.
 - [x] Run end to end against the instance on 2026-11-01: create, account by proof, login by proof, link a second device, second device logs in, root revocation from the phrase, revoked device's session answers `SESSION_REVOKED` and its re-login is refused.
-- [ ] A revoked device that re-presents its older roster gets `CONFLICT`; the client should adopt the held roster from `details.held` and show itself as revoked (identity §5 "older roster").
-- [ ] Device-signed revocation with reauth from the CLI (needs a password credential; identity-only accounts use the root path).
+- [x] Older roster (identity §5): the instance now returns the held roster in `CONFLICT`'s `details.held` as protocol §9 said (it did not before). Sign-in, account creation by proof, and link approval adopt it, verifying it as a successor of the one held locally, and retry once; a device that is revoked in it gets `DeviceRevoked` and `identity show` marks it. Covered by the `stale-roster` scenario and the Elixir API test.
+- [x] Device-signed revocation under reauth: `identity revoke <id> --password` reauths at `POST /auth/reauth`, signs the revocation with this device's key, and sends it to `POST /identity/devices/revoke`; `identity link-account --password` binds a password account to the identity at `POST /identity/link` under the same reauth. Covered by the `device-revoke` scenario, including the wrong-password refusal.
 
-**Milestone 3**: UniFFI surface with one `Client` object and a callback interface; wasm-bindgen surface over a JS-provided store.
+**Milestone 3** (2026-11-01): the binding surfaces, marshalling only.
+
+- [x] `lumia-ffi` (UniFFI 0.32, proc macros): one `Client` object per instance with blocking methods for accounts, sign-in by password or identity, servers and channels, the local store's messages, the gateway loop (`start` with a `Listener` callback interface, `subscribe`, `send_message`, `foreground`, `stop`), and every identity flow the CLI has. A `ClientEvent` enum mirrors the gateway loop's events. The loop runs on the client's own tokio runtime and reports from a runtime thread. Uses the development store and keystore until the shells bring platform ones (steps 6 and 7); says so in its docs. Offline tests cover opening, identity creation, and the lifecycle guards.
+- [x] `lumia-wasm` (wasm-bindgen): the sans-I/O `Session` as a JS class. Frames in as bytes, effects out as plain objects with a `kind` (`send`, `fetch`, `fetchAccount`, `snapshot`, `accountSnapshot`, `apply`, `applyAccount`, `discardAll`, `notify`), ids as `Uint8Array`, sequence numbers as numbers. The store and the socket are JS's, which is what step 6's SQLite-on-OPFS worker wants: the JS loop carries out `apply` with the cursor in one transaction and calls back `fetched` and `snapshotApplied`. Checked on `wasm32-unknown-unknown`.
+- [ ] Binding generation (`uniffi-bindgen` for Swift and Kotlin, `wasm-pack` for the web package) and a smoke test from each language come with the shells in steps 6 and 7; nothing to generate against until then.
+- [ ] Still carried from step 2 (listed under "Closing step 2"): pagination cursors, presence, JSON overrides for bots, passkey and TOTP reauth, profile import on link. Each is a server feature with a client counterpart; they land with the first UI in step 6 rather than against the headless client.
 
 ## Step 4: identity across two instances
 
@@ -199,7 +204,7 @@ Ordered. Each task names the spec section it implements and the tests that close
 - [x] The CLI keeps identity state in `<data>/identity/` (phrase-derived id, device key, roster), shared by every instance under that data directory; per-instance state (`base_url`, session, store) stays in `<data>/<host>/`. One device, many instances, as identity §5.1 says.
 - [x] `identity status`: this device's roster version and the version each known instance holds, flagging an instance that is behind. `identity sync`: publish the held roster to every instance. `identity revoke --all`: revoke, then publish everywhere.
 - [x] Run end to end: identity created on device A; an account bound to it on each instance; device B linked through instance 1 (instance 2 shows `v1 (behind)`); B signs in on both instances and instance 2 learns v2 from the proof's carried roster; A revokes B through instance 1 only (status shows instance 2 `v2 (behind)`, B's session on instance 1 answers `SESSION_REVOKED`, instance 2 still serves B); `identity sync` publishes v3 to instance 2 and B's session there answers `SESSION_REVOKED` too. The "revoked on 1 of 2" state from identity §5 is what `status` reports between the revoke and the sync.
-- [x] From identity §12, run end to end with the Rust core as the client: revoke while another instance is behind, then reconcile (the first case, with the root-signed path; the reauth path waits for a password credential on the CLI).
+- [x] From identity §12, run end to end with the Rust core as the client: revoke while another instance is behind, then reconcile (the first case, with the root-signed path across two instances; the device-signed path under reauth runs against one instance in the `device-revoke` scenario).
 - [ ] From identity §12, covered by unit tests on both verifiers through the shared vectors but not yet driven end to end: signer revoked before and after `added_at`, future-dated certificate, omitted revocation at step 7, root rotation at step 3. Not yet covered anywhere: concurrent forks and the merge, proof replay across nodes (needs step 7), web-origin proofs (needs step 6), phrase recovery with every device gone and the MLS rejoin (needs step 5).
 - [ ] Two instances in `docker-compose`, one flagship-like with a directory, for the step 7 multi-node runs.
 - [ ] Phrase recovery with every device gone, against both instances.
