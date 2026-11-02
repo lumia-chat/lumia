@@ -160,7 +160,9 @@ defmodule Lumia.Identity do
            {:ok, verified} <- verify_against(signed, held),
            :ok <- revocation_policy(verified, context),
            :ok <- store(verified, held),
-           :ok <- apply_revocations(verified) do
+           :ok <- apply_revocations(verified),
+           :ok <- notify_accounts(verified, held),
+           :ok <- notify_contacts(verified, held) do
         {:ok, verified}
       end
     end)
@@ -237,6 +239,27 @@ defmodule Lumia.Identity do
     end
   end
 
+  # A new version reaches everyone who shares a personal DM with an account
+  # of the identity, so their clients re-judge its MLS leaves (e2ee spec
+  # section 4). The same version again is not news.
+  defp notify_contacts(%Roster{version: v}, %Roster{version: v}), do: :ok
+
+  defp notify_contacts(%Roster{} = verified, _held) do
+    accounts =
+      Repo.all(from a in Account, where: a.identity_id == ^verified.identity_id, select: a.id)
+
+    payload =
+      {:contact_roster_updated,
+       %V1.ContactRosterUpdated{identity_id: verified.identity_id, roster: verified.signed}}
+
+    accounts
+    |> Enum.flat_map(&Lumia.Dms.contacts/1)
+    |> Enum.uniq()
+    |> Enum.each(fn contact -> {:ok, _} = Accounts.append_event(contact, payload) end)
+
+    :ok
+  end
+
   defp apply_revocations(%Roster{new_revocations: []}), do: :ok
 
   defp apply_revocations(%Roster{} = verified) do
@@ -248,6 +271,18 @@ defmodule Lumia.Identity do
       Auth.revoke_device(account_id, device_id)
       Lumia.Mls.purge_device(account_id, device_id)
     end
+
+    :ok
+  end
+
+  # Every new version, additions included, reaches the identity's own
+  # accounts: a device that approved a link adds the new leaf to its
+  # groups on this signal (e2ee spec section 4).
+  defp notify_accounts(%Roster{version: v}, %Roster{version: v}), do: :ok
+
+  defp notify_accounts(%Roster{} = verified, _held) do
+    accounts =
+      Repo.all(from a in Account, where: a.identity_id == ^verified.identity_id, select: a.id)
 
     for account_id <- accounts do
       {:ok, _} =

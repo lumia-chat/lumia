@@ -193,20 +193,25 @@ impl Conversation {
     }
 
     /// Joins by external commit from a published GroupInfo (section 10).
-    /// Returns the group and the commit to send as a `CONTROL` event; the
-    /// group is already in the new epoch, so there is nothing to merge.
-    /// Every leaf of the joined tree is validated.
+    /// Returns the group, the commit to send as a `CONTROL` event (the
+    /// group is already in the new epoch, so there is nothing to merge),
+    /// and the leaves the rosters do not vouch for. A recovering device
+    /// expects its own identity's revoked devices among those and removes
+    /// them in the commit that follows; anything else there is the
+    /// caller's reason to drop the group. OpenMLS 0.9 external commits
+    /// cannot carry removal proposals by value, which is why the removal
+    /// is a second commit rather than part of this one.
     ///
     /// # Errors
-    /// [`MlsError::Malformed`] when the bytes are not a GroupInfo, the
-    /// OpenMLS error when the join fails, or [`MlsError::LeafRejected`].
+    /// [`MlsError::Malformed`] when the bytes are not a GroupInfo, or the
+    /// OpenMLS error when the join fails.
     pub fn external_join<K: MlsKv>(
         provider: &Provider<K>,
         signer: &SignatureKeyPair,
         me: &LeafIdentity,
         group_info: &[u8],
         lookup: &dyn RosterLookup,
-    ) -> Result<(Self, Commit), MlsError> {
+    ) -> Result<(Self, Commit, Vec<LeafIdentity>), MlsError> {
         let message = MlsMessageIn::tls_deserialize_exact(group_info)
             .map_err(|e| MlsError::Malformed(e.to_string()))?;
         let info = match message.extract() {
@@ -227,9 +232,14 @@ impl Conversation {
             .finalize(provider)
             .map_err(lib)?;
         let conversation = Self { group };
+        let mut unvouched = Vec::new();
         for member in conversation.group.members() {
-            if member.index != conversation.group.own_leaf_index() {
-                validate_leaf(&member.credential, &member.signature_key, lookup)?;
+            if member.index != conversation.group.own_leaf_index()
+                && validate_leaf(&member.credential, &member.signature_key, lookup).is_err()
+            {
+                if let Some(leaf) = parse_identity(&member.credential) {
+                    unvouched.push(leaf);
+                }
             }
         }
         let (commit, _, _) = bundle.into_contents();
@@ -238,7 +248,7 @@ impl Conversation {
             welcome: None,
             epoch: conversation.epoch(),
         };
-        Ok((conversation, commit))
+        Ok((conversation, commit, unvouched))
     }
 
     /// Deletes this device's state for the group, as after losing a
@@ -815,9 +825,10 @@ mod tests {
         );
         let look = lookup(&rosters);
         let info = gb.group_info(&b.provider, &b.signer).unwrap();
-        let (mut ga4, join) =
+        let (mut ga4, join, unvouched) =
             Conversation::external_join(&a4.provider, &a4.signer, &a4.me, &info, &look).unwrap();
         assert_eq!(join.epoch, 3);
+        assert!(unvouched.is_empty());
         match gb.handle(&b.provider, &join.commit, &look).unwrap() {
             Incoming::Commit { joined, epoch, .. } => {
                 assert_eq!(joined, Some(a4.me.clone()));

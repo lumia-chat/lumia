@@ -110,6 +110,12 @@ enum DmCmd {
     Messages { channel_id: String },
     /// Publish a fresh pool of key packages now (also done on connect when low).
     Setup,
+    /// Rejoin a conversation by external commit from its GroupInfo (recovery).
+    Rejoin { channel_id: String },
+    /// History backup: `on`, `off`, or `status`.
+    Backup { action: String },
+    /// Restore history from every device's manifest on this instance.
+    Restore,
 }
 
 #[derive(Subcommand, Debug)]
@@ -168,6 +174,14 @@ enum IdentityCmd {
         password: Option<String>,
         #[arg(long)]
         all: bool,
+    },
+    /// Recover with no device left: from the phrase, revoke every device the
+    /// instance holds, add this one, and sign in (identity spec 4.3).
+    Recover {
+        #[arg(long)]
+        phrase: String,
+        #[arg(long, default_value = "recovered")]
+        label: String,
     },
     /// Which roster version each instance holds: the honest "revoked on 1 of 2".
     Status,
@@ -400,6 +414,8 @@ enum DmMode {
     Tail,
     /// Publish key packages, then stop.
     Setup,
+    /// Rejoin by external commit, then stop once the commit is acked.
+    Rejoin(Vec<u8>),
 }
 
 fn dm_engine(ctx: &mut Ctx, api: &Api) -> Result<DmEngine, ClientError> {
@@ -413,6 +429,7 @@ fn dm_engine(ctx: &mut Ctx, api: &Api) -> Result<DmEngine, ClientError> {
         .meta_get("account_id")?
         .map(|h| hex::decode(h).unwrap_or_default())
         .unwrap_or_default();
+    let backup_key = ctx.identity_keys.get("backup_key")?;
     let store = SqliteStore::open(&ctx.data_dir.join(&ctx.host).join("store.sqlite"))?;
     DmEngine::new(
         api.clone(),
@@ -420,6 +437,7 @@ fn dm_engine(ctx: &mut Ctx, api: &Api) -> Result<DmEngine, ClientError> {
         account,
         ctx.device_id.clone(),
         &seed,
+        backup_key,
         roster,
     )
 }
@@ -520,6 +538,57 @@ async fn dm_cmd(mut ctx: Ctx, api: Api, action: DmCmd) -> Result<(), ClientError
             let engine = dm_engine(&mut ctx, &api)?;
             dm_loop(ctx, api, engine, Vec::new(), DmMode::Setup, false).await
         }
+        DmCmd::Rejoin { channel_id } => {
+            let channel = parse_uuid(&channel_id)?;
+            let mut engine = dm_engine(&mut ctx, &api)?;
+            engine.load_participants(&channel)?;
+            dm_loop(
+                ctx,
+                api,
+                engine,
+                vec![channel.clone()],
+                DmMode::Rejoin(channel),
+                false,
+            )
+            .await
+        }
+        DmCmd::Backup { action } => {
+            let mut engine = dm_engine(&mut ctx, &api)?;
+            let outcomes = match action.as_str() {
+                "on" => engine.set_backup(true).await?,
+                "off" => engine.set_backup(false).await?,
+                "status" => {
+                    let usage = api.history_usage().await?;
+                    vec![Outcome::Print(format!(
+                        "backup {}; {} of {} bytes used on {}",
+                        if engine.backup_enabled()? {
+                            "on"
+                        } else {
+                            "off"
+                        },
+                        usage.bytes_used,
+                        usage.bytes_quota,
+                        api.host()
+                    ))]
+                }
+                other => return Err(ClientError::State(format!("unknown action {other}"))),
+            };
+            for o in outcomes {
+                if let Outcome::Print(s) = o {
+                    println!("{s}");
+                }
+            }
+            Ok(())
+        }
+        DmCmd::Restore => {
+            let mut engine = dm_engine(&mut ctx, &api)?;
+            for o in engine.restore().await? {
+                if let Outcome::Print(s) = o {
+                    println!("{s}");
+                }
+            }
+            Ok(())
+        }
     }
 }
 
@@ -583,6 +652,7 @@ async fn dm_loop(
                             out.extend(engine.create_group(channel).await?)
                         }
                         DmMode::Send(channel, body) => out.extend(engine.send_text(channel, body)?),
+                        DmMode::Rejoin(channel) => out.extend(engine.rejoin(channel).await?),
                         DmMode::Setup => {
                             println!("account {}", wire::display(&w.account_id));
                             done = true;
@@ -629,7 +699,7 @@ async fn dm_loop(
                     } => print_operation(seq, &sender, &op),
                     Outcome::GroupReady(ch) => {
                         println!("-- group ready for {}", wire::display(&ch));
-                        if matches!(&mode, DmMode::Open(c) if *c == ch) {
+                        if matches!(&mode, DmMode::Open(c) | DmMode::Rejoin(c) if *c == ch) {
                             done = true;
                         }
                     }
@@ -641,7 +711,7 @@ async fn dm_loop(
                     }
                 }
             }
-            if done {
+            if done && !engine.has_pending() {
                 break Ok(());
             }
         }
@@ -649,6 +719,19 @@ async fn dm_loop(
     .await;
     drop(tx);
     gw.abort();
+    // Idle: write what this run decrypted to the history backup (spec section 9).
+    if result.is_ok() {
+        match engine.backup_flush().await {
+            Ok(outcomes) => {
+                for o in outcomes {
+                    if let Outcome::Print(s) = o {
+                        println!("-- {s}");
+                    }
+                }
+            }
+            Err(e) => eprintln!("backup: {e}"),
+        }
+    }
     result
 }
 
@@ -834,6 +917,16 @@ async fn identity_cmd(ctx: &mut Ctx, api: &Api, action: IdentityCmd) -> Result<(
             if all {
                 publish_everywhere(ctx).await?;
             }
+            Ok(())
+        }
+        IdentityCmd::Recover { phrase, label } => {
+            let tokens = device(ctx).recover(api, &phrase, &label).await?;
+            save_tokens(ctx, &tokens)?;
+            let verified = device(ctx).roster()?;
+            println!(
+                "recovered: roster v{} with this device only, signed in on {}",
+                verified.version, ctx.host
+            );
             Ok(())
         }
         IdentityCmd::Status => {

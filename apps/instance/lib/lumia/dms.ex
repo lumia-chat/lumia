@@ -135,6 +135,18 @@ defmodule Lumia.Dms do
     )
   end
 
+  @doc "Every other account that shares a `PERSONAL_*` channel with the account."
+  def contacts(account_id) do
+    Repo.all(
+      from a in Participant,
+        join: b in Participant,
+        on: a.channel_id == b.channel_id,
+        where: a.account_id == ^account_id and b.account_id != ^account_id,
+        distinct: true,
+        select: b.account_id
+    )
+  end
+
   @doc "The uniqueness key of a participant set: sha256 hex of the sorted ids."
   def dm_key(ids) do
     :crypto.hash(:sha256, ids |> Enum.sort() |> Enum.join(",")) |> Base.encode16(case: :lower)

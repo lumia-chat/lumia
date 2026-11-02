@@ -69,4 +69,41 @@ defmodule Lumia.DmsTest do
       assert {:encrypted, %V1.EncryptedPayload{kind: :APPLICATION}} = e2.payload
     end
   end
+
+  test "a contact's roster change lands on the account log as ContactRosterUpdated" do
+    %{identity: identity, device: phone, roster: v1} = Lumia.IdentityFixtures.bootstrap()
+    {:ok, _} = Lumia.Identity.accept_roster(v1, :publish)
+
+    {:ok, bound} =
+      Lumia.Accounts.create_account(%{
+        handle: "bound#{System.unique_integer([:positive])}",
+        identity_id: identity.identity_id
+      })
+
+    other = Lumia.Fixtures.account("other")
+    {:ok, _channel, false} = Dms.open_personal(bound.id, [other.id])
+    assert Dms.contacts(bound.id) == [other.id]
+
+    laptop = Lumia.IdentityFixtures.device("laptop")
+
+    v2 =
+      Lumia.IdentityFixtures.roster(identity, :root,
+        version: 2,
+        devices: [
+          Lumia.IdentityFixtures.cert(identity, phone),
+          Lumia.IdentityFixtures.cert(identity, laptop)
+        ]
+      )
+
+    {:ok, _} = Lumia.Identity.accept_roster(v2, :publish)
+    # Accepting the same version again is not news.
+    {:ok, _} = Lumia.Identity.accept_roster(v2, :publish)
+
+    events = Lumia.Accounts.events_after(other.id, 0)
+
+    assert [%{payload: {:contact_roster_updated, %{identity_id: id, roster: ^v2}}}] =
+             Enum.filter(events, &match?(%{payload: {:contact_roster_updated, _}}, &1))
+
+    assert id == identity.identity_id
+  end
 end

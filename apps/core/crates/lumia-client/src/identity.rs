@@ -342,6 +342,99 @@ impl<S: Store, K: Keystore> Device<'_, S, K> {
         Ok(verified)
     }
 
+    /// Recovery with no device left (spec 4.3): from the phrase, a fresh
+    /// device key and a root-signed roster that revokes every device the
+    /// instance holds and adds this one, published by identity-proof
+    /// sign-in. The held version is learned from the `CONFLICT` a
+    /// provisional roster provokes; without a held roster the provisional
+    /// one stands. Returns the token pair for this instance.
+    ///
+    /// # Errors
+    /// When the phrase does not match the identity the instance holds, or
+    /// on API failure.
+    pub async fn recover(
+        &mut self,
+        api: &Api,
+        phrase: &str,
+        label: &str,
+    ) -> Result<TokenPair, ClientError> {
+        let derived = Phrase::parse(phrase)?.derive();
+        let identity_id = derived.identity_id();
+        let root_public = derived.root.verifying_key().to_bytes().to_vec();
+        let device_key = self.device_key_or_generate()?;
+        let new_device = NewDevice {
+            device_id: self.device_id.clone(),
+            public_key: device_key.verifying_key().to_bytes().to_vec(),
+            kind: DeviceKind::Native,
+            web_origin: String::new(),
+            label: label.to_string(),
+            added_at: now(),
+        };
+        let entry = device_entry(&identity_id, &new_device, Signer::Root(&derived.root));
+
+        // Provisional: version 1 with this device only.
+        let body = roster_body(
+            &identity_id,
+            1,
+            &root_public,
+            vec![],
+            vec![entry.clone()],
+            vec![],
+            now(),
+        );
+        self.keystore.put("backup_key", &derived.backup_key)?;
+        self.save_roster(
+            &identity_id,
+            &sign_roster(&body, Signer::Root(&derived.root)),
+        )?;
+
+        let proof = self.prove(api, ChallengePurpose::SignIn).await?;
+        let held = match api.sign_in_identity(proof).await {
+            Ok(tokens) => return Ok(tokens),
+            Err(e) => match held_in(&e) {
+                Some(held) => held.to_string(),
+                None => return Err(e),
+            },
+        };
+        let bytes = B64
+            .decode(held.trim())
+            .map_err(|e| ClientError::State(format!("held roster: {e}")))?;
+        let held = verify_roster(&SignedRoster::decode(bytes.as_slice())?, None, now_nanos())?;
+        if !held.roots.contains(&root_public) {
+            return Err(ClientError::State(
+                "that phrase is not this identity's root".into(),
+            ));
+        }
+
+        // The real one: every held device revoked by the root, this one added.
+        let mut revoked = held.body.revoked.clone();
+        for (device_id, info) in &held.devices {
+            revoked.push(revoked_entry(
+                &identity_id,
+                device_id,
+                &info.public_key,
+                info.cert.added_at.unwrap_or_default(),
+                now(),
+                Signer::Root(&derived.root),
+            ));
+        }
+        let body = roster_body(
+            &identity_id,
+            held.version + 1,
+            &held.root_public_key,
+            held.body.rotations.clone(),
+            vec![entry],
+            revoked,
+            now(),
+        );
+        self.save_roster(
+            &identity_id,
+            &sign_roster(&body, Signer::Root(&derived.root)),
+        )?;
+        let proof = self.prove(api, ChallengePurpose::SignIn).await?;
+        api.sign_in_identity(proof).await
+    }
+
     /// Revokes a device with the root, from the phrase (spec 4.3 and 4.4's
     /// root path). Publishes the root-signed roster, which bypasses reauth.
     ///

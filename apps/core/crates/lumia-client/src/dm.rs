@@ -9,7 +9,10 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use lumia_core::identity::keys::ts_nanos;
+use base64::Engine as _;
+use lumia_core::identity::keys::{
+    device_signature, open, random, seal, signing_key, ts_nanos, verify,
+};
 use lumia_core::identity::roster::{verify_roster, Verified};
 use lumia_core::mls::credential::{device_signer, LeafIdentity};
 use lumia_core::mls::group::{Commit, Conversation, Incoming};
@@ -21,7 +24,8 @@ use lumia_core::mls::{
 };
 use lumia_core::proto::{
     account_event, command, dm_operation, event, AccountEvent, Channel, ChannelKind, Command,
-    DmOperation, DmSend, EncryptedKind, EncryptedPayload, Event, SendEncrypted, Welcome,
+    DmOperation, DmSend, EncryptedKind, EncryptedPayload, Event, HistoryChunkBody, HistoryEntry,
+    HistoryManifestBody, HistoryManifestEntry, SendEncrypted, SignedHistoryManifest, Welcome,
 };
 use lumia_core::store::{OutboxEntry, Store as _};
 use lumia_core::sync::Notice;
@@ -68,6 +72,9 @@ enum Pending {
         epoch: u64,
         /// Whether this commit created the group (drop it on refusal).
         creating: bool,
+        /// Leaves to remove in a follow-up commit once this one is acked
+        /// (a rejoin's revoked devices, spec section 10).
+        remove_after: Vec<Vec<u8>>,
     },
     /// A welcome; on the ack, the group is ready.
     Welcome { channel_id: Vec<u8> },
@@ -86,6 +93,10 @@ pub struct DmEngine {
     my_account: Vec<u8>,
     me: LeafIdentity,
     signer: SignatureKeyPair,
+    /// The device key seed, for signing history manifests.
+    seed: Vec<u8>,
+    /// The backup key, when this device holds one (native devices do).
+    backup_key: Option<Vec<u8>>,
     /// Rosters by identity id, this device's own included.
     rosters: HashMap<Vec<u8>, Verified>,
     /// Account id to identity id, for every participant seen.
@@ -120,6 +131,10 @@ fn unhex(s: &str) -> Vec<u8> {
 
 fn processed_key(channel_id: &[u8]) -> String {
     format!("dm:processed:{}", hex(channel_id))
+}
+
+fn joined_key(channel_id: &[u8]) -> String {
+    format!("dm:joined_epoch:{}", hex(channel_id))
 }
 
 fn participants_key(channel_id: &[u8]) -> String {
@@ -170,6 +185,7 @@ impl DmEngine {
         my_account: Vec<u8>,
         device_id: Vec<u8>,
         device_key_seed: &[u8],
+        backup_key: Option<Vec<u8>>,
         my_roster: Verified,
     ) -> Result<Self, ClientError> {
         let me = LeafIdentity {
@@ -186,6 +202,8 @@ impl DmEngine {
             my_account,
             me,
             signer: device_signer(device_key_seed)?,
+            seed: device_key_seed.to_vec(),
+            backup_key,
             rosters,
             account_identity,
             participants: HashMap::new(),
@@ -450,6 +468,7 @@ impl DmEngine {
                 packages.push(parse_key_package(&provider, bytes, &lookup)?.0);
             }
             let mut group = Conversation::create(&provider, &self.signer, &self.me, channel_id)?;
+            store.set_meta(&joined_key(channel_id), "0")?;
             let commit = group.add(&provider, &self.signer, &packages)?;
             let command = control(channel_id, commit.commit.clone(), commit.epoch);
             store.push_outbox(&OutboxEntry {
@@ -466,6 +485,7 @@ impl DmEngine {
                 welcome: commit.welcome,
                 epoch: commit.epoch,
                 creating: true,
+                remove_after: Vec::new(),
             },
         );
         Ok(vec![
@@ -612,13 +632,16 @@ impl DmEngine {
                 channel_id,
                 welcome,
                 epoch,
+                remove_after,
                 ..
             } => {
                 let (info, welcome_command) = self.store.transaction(|store| {
                     let provider = Provider::new(store);
                     let mut group =
                         Conversation::load(&provider, &channel_id)?.ok_or(MlsError::NoGroup)?;
-                    group.merge_pending(&provider)?;
+                    if group.has_pending_commit() {
+                        group.merge_pending(&provider)?;
+                    }
                     let info = group.group_info(&provider, &self.signer)?;
                     let welcome_command = match welcome {
                         Some(bytes) => {
@@ -649,6 +672,9 @@ impl DmEngine {
                             },
                         );
                         out.push(Outcome::Send(command));
+                    }
+                    None if !remove_after.is_empty() => {
+                        out.extend(self.commit_removal(&channel_id, &remove_after)?);
                     }
                     None => out.push(Outcome::GroupReady(channel_id)),
                 }
@@ -814,6 +840,14 @@ impl DmEngine {
         })
     }
 
+    fn joined_epoch(&self, channel_id: &[u8]) -> Result<u64, ClientError> {
+        Ok(self
+            .store
+            .meta_get(&joined_key(channel_id))?
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0))
+    }
+
     fn processed(&self, channel_id: &[u8]) -> Result<u64, ClientError> {
         Ok(self
             .store
@@ -844,15 +878,22 @@ impl DmEngine {
                 let provider = Provider::new(store);
                 let result = match Conversation::load(&provider, &ev.channel_id)? {
                     None if is_control => {
-                        Conversation::join(&provider, &payload.mls_message, &lookup).map(|g| {
-                            Incoming::Commit {
-                                epoch: g.epoch(),
-                                added: vec![self.me.clone()],
-                                removed: Vec::new(),
-                                joined: None,
-                                self_removed: false,
+                        match Conversation::join(&provider, &payload.mls_message, &lookup) {
+                            Ok(g) => {
+                                store.set_meta(
+                                    &joined_key(&ev.channel_id),
+                                    &g.epoch().to_string(),
+                                )?;
+                                Ok(Incoming::Commit {
+                                    epoch: g.epoch(),
+                                    added: vec![self.me.clone()],
+                                    removed: Vec::new(),
+                                    joined: None,
+                                    self_removed: false,
+                                })
                             }
-                        })
+                            Err(e) => Err(e),
+                        }
                     }
                     None => Err(MlsError::BeforeJoin),
                     Some(mut group) => group.handle(&provider, &payload.mls_message, &lookup),
@@ -962,6 +1003,15 @@ impl DmEngine {
                     ev.seq
                 )));
             }
+            // Encrypted in an epoch before this device joined (the sender
+            // had not processed the commit yet): history, not a failure.
+            Err(MlsError::Undecryptable) if payload.epoch < self.joined_epoch(&channel)? => {
+                row.status = DmStatus::BeforeJoin;
+                out.push(Outcome::Print(format!(
+                    "[{}] sent before this device joined",
+                    ev.seq
+                )));
+            }
             Err(e) => {
                 out.push(Outcome::Print(format!(
                     "[{}] could not be decrypted: {e}",
@@ -990,27 +1040,119 @@ impl DmEngine {
         self.forget_rosters(channel_id);
         self.ensure_rosters(channel_id).await?;
         let keys = self.keys_for(channel_id);
-        let staged = self.store.transaction(|store| {
-            let provider = Provider::new(store);
-            let Some(mut group) = Conversation::load(&provider, channel_id)? else {
-                return Ok::<_, ClientError>(None);
+        let (stale, missing) = {
+            let provider = Provider::new(&self.store);
+            let Some(group) = Conversation::load(&provider, channel_id)? else {
+                return Ok(Vec::new());
             };
             if group.has_pending_commit() {
-                return Ok(None);
+                return Ok(Vec::new());
             }
-            let stale: Vec<Vec<u8>> = group
-                .members()
-                .into_iter()
+            let members = group.members();
+            let stale: Vec<Vec<u8>> = members
+                .iter()
                 .filter(|(leaf, _)| {
                     !keys.contains_key(&(leaf.identity_id.clone(), leaf.device_id.clone()))
                 })
-                .map(|(leaf, _)| leaf.device_id)
+                .map(|(leaf, _)| leaf.device_id.clone())
                 .collect();
-            if stale.is_empty() {
-                return Ok(None);
+            let missing: Vec<(Vec<u8>, Vec<u8>)> = keys
+                .keys()
+                .filter(|(identity, device)| {
+                    *device != self.me.device_id
+                        && !members
+                            .iter()
+                            .any(|(l, _)| l.identity_id == *identity && l.device_id == *device)
+                })
+                .cloned()
+                .collect();
+            (stale, missing)
+        };
+        if !stale.is_empty() {
+            return self.commit_removal(channel_id, &stale);
+        }
+        if missing.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Devices in the rosters with no leaf: a newly linked device (spec
+        // section 4, "adding a device"). Claim each one's key package.
+        let mut claimed = Vec::new();
+        for (identity, device) in &missing {
+            let Some(account) = self
+                .account_identity
+                .iter()
+                .find(|(_, id)| *id == identity)
+                .map(|(a, _)| a.clone())
+            else {
+                continue;
+            };
+            match self
+                .api
+                .claim_key_package_for(account, device.clone())
+                .await
+            {
+                Ok(resp) => claimed.extend(resp.key_packages.into_iter().map(|c| c.key_package)),
+                Err(e) => {
+                    return Ok(vec![Outcome::Print(format!(
+                        "cannot claim a key package for {}: {e}",
+                        wire::display(device)
+                    ))])
+                }
             }
-            let Some(commit) = group.remove(&provider, &self.signer, &stale)? else {
-                return Ok(None);
+        }
+        if claimed.is_empty() {
+            return Ok(vec![Outcome::Print(format!(
+                "{} device(s) in the rosters have no leaf and no key packages yet",
+                missing.len()
+            ))]);
+        }
+        let lookup = move |i: &[u8], d: &[u8]| keys.get(&(i.to_vec(), d.to_vec())).cloned();
+        let (command, commit) = self.store.transaction(|store| {
+            let provider = Provider::new(store);
+            let mut group = Conversation::load(&provider, channel_id)?.ok_or(MlsError::NoGroup)?;
+            let mut packages = Vec::with_capacity(claimed.len());
+            for bytes in &claimed {
+                packages.push(parse_key_package(&provider, bytes, &lookup)?.0);
+            }
+            let commit = group.add(&provider, &self.signer, &packages)?;
+            let command = control(channel_id, commit.commit.clone(), commit.epoch);
+            store.push_outbox(&OutboxEntry {
+                command_id: command.command_id.clone(),
+                channel_id: channel_id.to_vec(),
+                bytes: command.encode_to_vec(),
+            })?;
+            Ok::<_, ClientError>((command, commit))
+        })?;
+        let n = claimed.len();
+        self.pending.insert(
+            command.command_id.clone(),
+            Pending::Commit {
+                channel_id: channel_id.to_vec(),
+                welcome: commit.welcome,
+                epoch: commit.epoch,
+                creating: false,
+                remove_after: Vec::new(),
+            },
+        );
+        Ok(vec![
+            Outcome::Print(format!(
+                "adding {n} new device leaf(s); committing epoch {}",
+                commit.epoch
+            )),
+            Outcome::Send(command),
+        ])
+    }
+
+    fn commit_removal(
+        &mut self,
+        channel_id: &[u8],
+        stale: &[Vec<u8>],
+    ) -> Result<Vec<Outcome>, ClientError> {
+        let staged = self.store.transaction(|store| {
+            let provider = Provider::new(store);
+            let mut group = Conversation::load(&provider, channel_id)?.ok_or(MlsError::NoGroup)?;
+            let Some(commit) = group.remove(&provider, &self.signer, stale)? else {
+                return Ok::<_, ClientError>(None);
             };
             let command = control(channel_id, commit.commit.clone(), commit.epoch);
             store.push_outbox(&OutboxEntry {
@@ -1018,9 +1160,9 @@ impl DmEngine {
                 channel_id: channel_id.to_vec(),
                 bytes: command.encode_to_vec(),
             })?;
-            Ok(Some((command, commit, stale)))
+            Ok(Some((command, commit)))
         })?;
-        let Some((command, commit, stale)): Option<(Command, Commit, Vec<Vec<u8>>)> = staged else {
+        let Some((command, commit)): Option<(Command, Commit)> = staged else {
             return Ok(Vec::new());
         };
         self.pending.insert(
@@ -1030,6 +1172,7 @@ impl DmEngine {
                 welcome: commit.welcome,
                 epoch: commit.epoch,
                 creating: false,
+                remove_after: Vec::new(),
             },
         );
         Ok(vec![
@@ -1044,6 +1187,382 @@ impl DmEngine {
             )),
             Outcome::Send(command),
         ])
+    }
+
+    /// Rejoins a conversation by external commit from the published
+    /// GroupInfo (spec section 10): the group is in the new epoch at once;
+    /// the commit goes out as a `CONTROL` event and, on its ack, the new
+    /// GroupInfo is published. Leaves of this identity's revoked devices
+    /// are removed by the reconciliation that follows.
+    ///
+    /// # Errors
+    /// When no GroupInfo is published, a leaf fails validation, or on an
+    /// MLS, store or API failure.
+    pub async fn rejoin(&mut self, channel_id: &[u8]) -> Result<Vec<Outcome>, ClientError> {
+        self.ensure_rosters(channel_id).await?;
+        let info = self.api.group_info(&wire::display(channel_id)).await?;
+        let keys = self.keys_for(channel_id);
+        let lookup = move |i: &[u8], d: &[u8]| keys.get(&(i.to_vec(), d.to_vec())).cloned();
+        let my_revoked: HashSet<Vec<u8>> = self
+            .rosters
+            .get(&self.me.identity_id)
+            .map(|r| r.revoked.keys().cloned().collect())
+            .unwrap_or_default();
+        let (command, commit, stale) = self.store.transaction(|store| {
+            let provider = Provider::new(store);
+            if let Some(old) = Conversation::load(&provider, channel_id)? {
+                old.delete(&provider)?;
+            }
+            let (_group, commit, unvouched) = Conversation::external_join(
+                &provider,
+                &self.signer,
+                &self.me,
+                &info.group_info,
+                &lookup,
+            )?;
+            store.set_meta(&joined_key(channel_id), &commit.epoch.to_string())?;
+            // Our own revoked devices are expected and removed next; any
+            // other unvouched leaf means the GroupInfo is not to be trusted.
+            let mut stale = Vec::new();
+            for leaf in unvouched {
+                if leaf.identity_id == self.me.identity_id && my_revoked.contains(&leaf.device_id) {
+                    stale.push(leaf.device_id);
+                } else {
+                    return Err(ClientError::Mls(MlsError::LeafRejected(
+                        "a leaf in the GroupInfo is not in a participant's roster",
+                    )));
+                }
+            }
+            let command = control(channel_id, commit.commit.clone(), commit.epoch);
+            store.push_outbox(&OutboxEntry {
+                command_id: command.command_id.clone(),
+                channel_id: channel_id.to_vec(),
+                bytes: command.encode_to_vec(),
+            })?;
+            Ok::<_, ClientError>((command, commit, stale))
+        })?;
+        // Events before the join are history for this device.
+        let head = self
+            .store
+            .stored_events(lumia_core::store::LogKind::Channel, channel_id)?
+            .last()
+            .map_or(0, |e| e.seq);
+        self.set_processed(channel_id, head)?;
+        self.pending.insert(
+            command.command_id.clone(),
+            Pending::Commit {
+                channel_id: channel_id.to_vec(),
+                welcome: None,
+                epoch: commit.epoch,
+                creating: false,
+                remove_after: stale,
+            },
+        );
+        Ok(vec![
+            Outcome::Print(format!(
+                "rejoining {} by external commit from GroupInfo at epoch {}; committing epoch {}",
+                wire::display(channel_id),
+                info.epoch,
+                commit.epoch
+            )),
+            Outcome::Send(command),
+        ])
+    }
+
+    // ---- History backup (spec section 9) ----
+
+    /// Whether history backup is on for this identity on this instance.
+    ///
+    /// # Errors
+    /// On a store failure.
+    pub fn backup_enabled(&self) -> Result<bool, ClientError> {
+        Ok(self.store.meta_get("history:enabled")?.as_deref() == Some("on"))
+    }
+
+    /// Turns backup on (and writes what is held so far) or off (and deletes
+    /// every chunk and manifest of the identity on this instance).
+    ///
+    /// # Errors
+    /// Without a backup key, or on a store or API failure.
+    pub async fn set_backup(&mut self, on: bool) -> Result<Vec<Outcome>, ClientError> {
+        if on {
+            if self.backup_key.is_none() {
+                return Err(ClientError::State(
+                    "this device holds no backup key; web devices cannot back up".into(),
+                ));
+            }
+            self.store.set_meta("history:enabled", "on")?;
+            return self.backup_flush().await;
+        }
+        self.api.delete_history().await?;
+        self.store.transaction(|store| {
+            store.set_meta("history:enabled", "off")?;
+            store.set_meta("history:manifest", "")?;
+            for channel in self.participants.keys() {
+                store.set_meta(&format!("history:backed:{}", hex(channel)), "0")?;
+            }
+            Ok::<_, ClientError>(())
+        })?;
+        Ok(vec![Outcome::Print(
+            "history backup off; chunks and manifest deleted on this instance".into(),
+        )])
+    }
+
+    fn manifest_body(&self) -> Result<HistoryManifestBody, ClientError> {
+        let stored = self.store.meta_get("history:manifest")?.unwrap_or_default();
+        if stored.is_empty() {
+            return Ok(HistoryManifestBody {
+                identity_id: self.me.identity_id.clone(),
+                device_id: self.me.device_id.clone(),
+                ..Default::default()
+            });
+        }
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(stored)
+            .map_err(|e| ClientError::State(e.to_string()))?;
+        Ok(HistoryManifestBody::decode(bytes.as_slice())?)
+    }
+
+    /// Writes one chunk per conversation with operations not yet backed up,
+    /// then the manifest with a bumped version. A no-op when backup is off
+    /// or nothing is new.
+    ///
+    /// # Errors
+    /// On a store, crypto or API failure (`RESOURCE_EXHAUSTED` over quota).
+    pub async fn backup_flush(&mut self) -> Result<Vec<Outcome>, ClientError> {
+        if !self.backup_enabled()? {
+            return Ok(Vec::new());
+        }
+        let Some(backup_key) = self.backup_key.clone() else {
+            return Ok(Vec::new());
+        };
+        let mut manifest = self.manifest_body()?;
+        let mut written = Vec::new();
+        let channels: Vec<Vec<u8>> = self.participants.keys().cloned().collect();
+        for channel in channels {
+            let backed: u64 = self
+                .store
+                .meta_get(&format!("history:backed:{}", hex(&channel)))?
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
+            let entries: Vec<HistoryEntry> = self
+                .store
+                .dm_rows(&channel)?
+                .into_iter()
+                .filter(|r| r.seq > backed && r.status == DmStatus::Decrypted)
+                .filter_map(|r| {
+                    DmOperation::decode(r.bytes.as_slice())
+                        .ok()
+                        .map(|op| HistoryEntry {
+                            seq: r.seq,
+                            sender_identity_id: r.sender_identity_id,
+                            sender_device_id: r.sender_device_id,
+                            operation: Some(op),
+                        })
+                })
+                .collect();
+            let (Some(first), Some(last)) = (entries.first(), entries.last()) else {
+                continue;
+            };
+            let body = HistoryChunkBody {
+                channel_id: channel.clone(),
+                host: self.api.host(),
+                from_seq: first.seq,
+                through_seq: last.seq,
+                entries: entries.clone(),
+            };
+            let mut chunk_key = [0u8; 32];
+            random(&mut chunk_key)?;
+            let (nonce, ciphertext) = seal(&chunk_key, &body.encode_to_vec())?;
+            let (wrap_nonce, wrapped_key) = seal(&backup_key, &chunk_key)?;
+            let chunk_id = wire::new_id();
+            let size = ciphertext.len() as u64;
+            self.api
+                .put_history_chunk(
+                    &wire::display(&chunk_id),
+                    channel.clone(),
+                    ciphertext,
+                    nonce,
+                )
+                .await?;
+            manifest.chunks.push(HistoryManifestEntry {
+                chunk_id,
+                channel_id: channel.clone(),
+                host: self.api.host(),
+                from_seq: body.from_seq,
+                through_seq: body.through_seq,
+                wrapped_key,
+                wrap_nonce,
+                size,
+            });
+            written.push((channel, body.through_seq, entries.len()));
+        }
+        if written.is_empty() {
+            return Ok(Vec::new());
+        }
+        manifest.version += 1;
+        manifest.written_at = Some(now_ts());
+        let body = manifest.encode_to_vec();
+        let key = signing_key(&self.seed)?;
+        let signed = SignedHistoryManifest {
+            body: body.clone(),
+            signature: Some(device_signature(&self.me.device_id, &key, &body)),
+        };
+        self.api.put_history_manifest(signed).await?;
+        self.store.transaction(|store| {
+            store.set_meta(
+                "history:manifest",
+                &base64::engine::general_purpose::STANDARD.encode(&body),
+            )?;
+            for (channel, through, _) in &written {
+                store.set_meta(
+                    &format!("history:backed:{}", hex(channel)),
+                    &through.to_string(),
+                )?;
+            }
+            Ok::<_, ClientError>(())
+        })?;
+        Ok(written
+            .iter()
+            .map(|(channel, through, n)| {
+                Outcome::Print(format!(
+                    "backed up {n} operation(s) of {} through seq {through} (manifest v{})",
+                    wire::display(channel),
+                    manifest.version
+                ))
+            })
+            .collect())
+    }
+
+    /// Restores history from every device's manifest on this instance:
+    /// each manifest is verified against this identity's roster (a device
+    /// revoked before the manifest's `written_at` is ignored), chunk keys
+    /// are unwrapped under the backup key, and operations are replayed in
+    /// seq order, deduplicated by operation id and by seq already held.
+    ///
+    /// # Errors
+    /// Without a backup key, or on a store, crypto or API failure.
+    pub async fn restore(&mut self) -> Result<Vec<Outcome>, ClientError> {
+        let Some(backup_key) = self.backup_key.clone() else {
+            return Err(ClientError::State("this device holds no backup key".into()));
+        };
+        let Some(roster) = self.rosters.get(&self.me.identity_id).cloned() else {
+            return Err(ClientError::State("no roster for this identity".into()));
+        };
+        let mut out = Vec::new();
+        let mut restored = 0usize;
+        let mut skipped = 0usize;
+        let mut seen_ops: HashSet<Vec<u8>> = HashSet::new();
+        let mut held: HashMap<Vec<u8>, HashSet<u64>> = HashMap::new();
+        for signed in self.api.list_history_manifests().await?.manifests {
+            let body = HistoryManifestBody::decode(signed.body.as_slice())?;
+            let written_at = ts_nanos(body.written_at.as_ref());
+            let Some(signature) = &signed.signature else {
+                continue;
+            };
+            let public = match roster.devices.get(&body.device_id) {
+                Some(info) => Some(info.public_key.clone()),
+                None => roster
+                    .revoked
+                    .get(&body.device_id)
+                    .filter(|r| r.revoked_at > written_at)
+                    .map(|r| r.public_key.clone()),
+            };
+            let Some(public) = public else {
+                out.push(Outcome::Print(format!(
+                    "ignoring manifest v{} from {}: device unknown or revoked before it was written",
+                    body.version,
+                    wire::display(&body.device_id)
+                )));
+                continue;
+            };
+            if body.identity_id != self.me.identity_id
+                || signature.signer_id != body.device_id
+                || !verify(&signed.body, &signature.signature, &public)
+            {
+                out.push(Outcome::Print(format!(
+                    "ignoring manifest from {}: bad signature",
+                    wire::display(&body.device_id)
+                )));
+                continue;
+            }
+            for entry in body.chunks {
+                let chunk_key = match open(&backup_key, &entry.wrap_nonce, &entry.wrapped_key) {
+                    Ok(k) => k,
+                    Err(_) => {
+                        out.push(Outcome::Print("a chunk key did not unwrap; skipped".into()));
+                        continue;
+                    }
+                };
+                let chunk = self
+                    .api
+                    .get_history_chunk(&wire::display(&entry.chunk_id))
+                    .await?;
+                let plain = open(&chunk_key, &chunk.nonce, &chunk.ciphertext)?;
+                let chunk = HistoryChunkBody::decode(plain.as_slice())?;
+                let seqs = match held.get(&chunk.channel_id) {
+                    Some(s) => s.clone(),
+                    None => {
+                        let s: HashSet<u64> = self
+                            .store
+                            .dm_rows(&chunk.channel_id)?
+                            .iter()
+                            .filter(|r| r.status == DmStatus::Decrypted)
+                            .map(|r| r.seq)
+                            .collect();
+                        held.insert(chunk.channel_id.clone(), s.clone());
+                        s
+                    }
+                };
+                for e in chunk.entries {
+                    let Some(op) = e.operation else { continue };
+                    if seqs.contains(&e.seq) || !seen_ops.insert(op.operation_id.clone()) {
+                        skipped += 1;
+                        continue;
+                    }
+                    self.store.put_dm_row(
+                        &chunk.channel_id,
+                        &DmRow {
+                            seq: e.seq,
+                            sender_identity_id: e.sender_identity_id,
+                            sender_device_id: e.sender_device_id,
+                            epoch: 0,
+                            status: DmStatus::Decrypted,
+                            bytes: op.encode_to_vec(),
+                        },
+                    )?;
+                    held.entry(chunk.channel_id.clone())
+                        .or_default()
+                        .insert(e.seq);
+                    restored += 1;
+                }
+            }
+        }
+        out.push(Outcome::Print(format!(
+            "restored {restored} operation(s), {skipped} duplicate(s) skipped"
+        )));
+        Ok(out)
+    }
+
+    /// Whether commands are still waiting for their ack.
+    #[must_use]
+    pub fn has_pending(&self) -> bool {
+        !self.pending.is_empty()
+    }
+
+    /// Reconciles every conversation this device is a member of against
+    /// the rosters, as on connect.
+    ///
+    /// # Errors
+    /// On an MLS, store or API failure.
+    pub async fn reconcile_all(&mut self) -> Result<Vec<Outcome>, ClientError> {
+        let mut out = Vec::new();
+        for channel in self.participants.keys().cloned().collect::<Vec<_>>() {
+            if self.is_member(&channel)? {
+                out.extend(self.reconcile_members(&channel).await?);
+            }
+        }
+        Ok(out)
     }
 
     /// The decrypted log of a conversation, for the projection.

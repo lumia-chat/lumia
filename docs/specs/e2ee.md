@@ -54,7 +54,7 @@ A leaf that fails is rejected and the group is not advanced. A client that holds
 
 **Welcomes** travel as `CONTROL` events in the conversation's log; a joining device learns of the conversation from its account log (`ChannelJoined` for the `PERSONAL_*` channel) and reads the welcome from the channel log. Welcomes are addressed to specific key packages, so only the intended device can open one.
 
-**Adding a device.** After a device approves a link (identity spec 4.2) and publishes the new roster, it claims the new device's key packages on every instance and adds the leaf to every group it is a member of there, one commit per group. Until that commit lands, the new device sees the conversation but cannot read it and says so.
+**Adding a device.** After a device approves a link (identity spec 4.2) and publishes the new roster, it claims the new device's key packages on every instance and adds the leaf to every group it is a member of there, one commit per group. The signal is `RosterUpdated` on its own account log, which every accepted version raises, additions included; a device that connects later does the same reconciliation on connect, and a participant that learns of the addition through `ContactRosterUpdated` may add the leaf first. Until that commit lands, the new device sees the conversation but cannot read it and says so. Application messages a device cannot decrypt from an epoch before the one it joined in are `sent before this device joined`, which also covers a sender that had not yet processed the commit that admitted the device.
 
 **Revoking a device.** Every member that learns of a revocation from the roster (its own identity's, or a participant's through `RosterUpdated` or a fresh roster fetch) proposes and commits the leaf's removal; the first commit wins by epoch and the others become no-ops on retry. From the moment a client holds the revoking roster it refuses application messages from that leaf, and commits authored by it, regardless of whether the removal has landed.
 
@@ -132,9 +132,9 @@ A web device never holds the backup key and cannot restore history (identity spe
 With no device left, recovery follows identity spec 4.3: a fresh device key, a root-signed roster, the identity backup from any host. For every `PERSONAL_*` channel the account log then lists, on every host:
 
 1. `GET /mls/group-info/{channel_id}`; validate the signing leaf (section 2).
-2. Build an external commit joining the group as a new leaf, with proposals removing every leaf of the recovering identity's revoked devices.
+2. Build an external commit joining the group as a new leaf. Leaves of the recovering identity's own revoked devices are tolerated in the tree at this point and removed by the next step; any other leaf the rosters do not vouch for rejects the GroupInfo.
 3. Send it as a `CONTROL` event with the new epoch. On `FAILED_PRECONDITION{state: "epoch"}`, refetch GroupInfo and repeat.
-4. Publish the new GroupInfo (section 6).
+4. Publish the new GroupInfo (section 6), then commit the removal of every leaf of the recovering identity's revoked devices and publish GroupInfo again. OpenMLS 0.9 external commits carry removal proposals only by reference, so the removal is a second commit sent before any application message; a participant that learns of the revocation first may land the removal before the recovering device does, in which case the second commit is a no-op.
 
 Other members' clients see the external commit as a `device recovered` marker and re-verify the identity's root against their pinned copy, since a root rotation can accompany recovery.
 

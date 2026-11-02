@@ -20,6 +20,10 @@ use lumia_core::proto::{
     PublishKeyPackagesRequest, PublishRosterRequest, ReauthRequest, ReauthResponse, RefreshRequest,
     RevokeDeviceRequest, Server, SignedRoster, TokenPair,
 };
+use lumia_core::proto::{
+    GetHistoryChunkResponse, HistoryUsageResponse, ListHistoryManifestsResponse,
+    PutHistoryChunkRequest, PutHistoryManifestRequest, SignedHistoryManifest,
+};
 use prost::Message;
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use reqwest::StatusCode;
@@ -529,6 +533,126 @@ impl Api {
         .await
     }
 
+    /// `POST /mls/key-packages/claim` for one device of `account_id`.
+    ///
+    /// # Errors
+    /// On transport failure or an API error.
+    pub async fn claim_key_package_for(
+        &self,
+        account_id: Vec<u8>,
+        device_id: Vec<u8>,
+    ) -> Result<ClaimKeyPackageResponse, ClientError> {
+        self.post(
+            "/api/v1/mls/key-packages/claim",
+            &ClaimKeyPackageRequest {
+                account_id,
+                device_id,
+            },
+        )
+        .await
+    }
+
+    // ---- History backup (e2ee spec section 9) ----
+
+    /// `PUT /history/chunks/{chunk_id}`.
+    ///
+    /// # Errors
+    /// On transport failure or an API error (`RESOURCE_EXHAUSTED` over quota).
+    pub async fn put_history_chunk(
+        &self,
+        chunk_id: &str,
+        channel_id: Vec<u8>,
+        ciphertext: Vec<u8>,
+        nonce: Vec<u8>,
+    ) -> Result<(), ClientError> {
+        self.empty(
+            reqwest::Method::PUT,
+            &format!("/api/v1/history/chunks/{chunk_id}"),
+            Some(
+                PutHistoryChunkRequest {
+                    channel_id,
+                    ciphertext,
+                    nonce,
+                }
+                .encode_to_vec(),
+            ),
+        )
+        .await
+    }
+
+    /// `GET /history/chunks/{chunk_id}`.
+    ///
+    /// # Errors
+    /// On transport failure or an API error.
+    pub async fn get_history_chunk(
+        &self,
+        chunk_id: &str,
+    ) -> Result<GetHistoryChunkResponse, ClientError> {
+        self.get(&format!("/api/v1/history/chunks/{chunk_id}"))
+            .await
+    }
+
+    /// `DELETE /history/chunks/{chunk_id}`.
+    ///
+    /// # Errors
+    /// On transport failure or an API error.
+    pub async fn delete_history_chunk(&self, chunk_id: &str) -> Result<(), ClientError> {
+        self.empty(
+            reqwest::Method::DELETE,
+            &format!("/api/v1/history/chunks/{chunk_id}"),
+            None,
+        )
+        .await
+    }
+
+    /// `PUT /history/manifest`.
+    ///
+    /// # Errors
+    /// On transport failure or an API error.
+    pub async fn put_history_manifest(
+        &self,
+        manifest: SignedHistoryManifest,
+    ) -> Result<(), ClientError> {
+        self.empty(
+            reqwest::Method::PUT,
+            "/api/v1/history/manifest",
+            Some(
+                PutHistoryManifestRequest {
+                    manifest: Some(manifest),
+                }
+                .encode_to_vec(),
+            ),
+        )
+        .await
+    }
+
+    /// `GET /history/manifests`.
+    ///
+    /// # Errors
+    /// On transport failure or an API error.
+    pub async fn list_history_manifests(
+        &self,
+    ) -> Result<ListHistoryManifestsResponse, ClientError> {
+        self.get("/api/v1/history/manifests").await
+    }
+
+    /// `DELETE /history`: every chunk and manifest of the identity here.
+    ///
+    /// # Errors
+    /// On transport failure or an API error.
+    pub async fn delete_history(&self) -> Result<(), ClientError> {
+        self.empty(reqwest::Method::DELETE, "/api/v1/history", None)
+            .await
+    }
+
+    /// `GET /history/usage`.
+    ///
+    /// # Errors
+    /// On transport failure or an API error.
+    pub async fn history_usage(&self) -> Result<HistoryUsageResponse, ClientError> {
+        self.get("/api/v1/history/usage").await
+    }
+
     /// `POST /mls/group-info`.
     ///
     /// # Errors
@@ -574,6 +698,20 @@ impl Api {
         let (status, bytes) = self
             .send(reqwest::Method::POST, path, Some(req.encode_to_vec()), None)
             .await?;
+        if status.is_success() {
+            Ok(())
+        } else {
+            Err(api_error(status, &bytes))
+        }
+    }
+
+    async fn empty(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        body: Option<Vec<u8>>,
+    ) -> Result<(), ClientError> {
+        let (status, bytes) = self.send(method, path, body, None).await?;
         if status.is_success() {
             Ok(())
         } else {
