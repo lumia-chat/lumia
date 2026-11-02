@@ -15,7 +15,16 @@ defmodule Lumia.ReleaseTest do
   @scratch "lumia_release_test#{System.get_env("MIX_TEST_PARTITION")}"
 
   setup_all do
-    config = Application.fetch_env!(:lumia, Lumia.Repo) |> Keyword.put(:database, @scratch)
+    # CI configures the repo by URL; the storage helpers want the fields.
+    config = Application.fetch_env!(:lumia, Lumia.Repo)
+
+    config =
+      case Keyword.pop(config, :url) do
+        {nil, config} -> config
+        {url, config} -> Keyword.merge(config, Ecto.Repo.Supervisor.parse_url(url))
+      end
+      |> Keyword.put(:database, @scratch)
+
     _ = Postgres.storage_down(config)
     :ok = Postgres.storage_up(config)
 
