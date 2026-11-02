@@ -42,6 +42,9 @@ defmodule Lumia.Identity.Roster do
   def verify(%V1.SignedRoster{body: bytes, signatures: sigs} = signed, opts \\ []) do
     now = Keyword.get(opts, :now, DateTime.utc_now())
     held = Keyword.get(opts, :held)
+    # A held roster was clock-checked when accepted; re-verifying it later
+    # must not fail on skew.
+    now = if Keyword.get(opts, :skip_clock), do: DateTime.add(now, 3650, :day), else: now
 
     with {:ok, body, devices, revoked} <- parse(bytes),
          {:ok, roots} <- identity(body),

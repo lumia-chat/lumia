@@ -9,7 +9,7 @@ Legend: `[x]` done · `[~]` in progress · `[ ]` not started · `(spec §n)` the
 | Step | State |
 |---|---|
 | 1. Schemas and protocol contract | Done |
-| 2. Server: event log, delivery, account log, resume, authorization | Event log, account log, authorization, sessions, gateway, and the HTTP API's first pass done; identity endpoints next |
+| 2. Server: event log, delivery, account log, resume, authorization | Every group through its first pass; closing step 2 means the open items above and the spike with the gateway attached |
 | 3. Rust core | Not started |
 | 4. Identity across two instances | Specified, not built |
 | 5. MLS personal DMs, backup, recovery | Not specified, not built |
@@ -137,14 +137,22 @@ Ordered. Each task names the spec section it implements and the tests that close
 - [ ] Invites and discovery endpoints (architecture §6.6).
 - [ ] JSON overrides (UUID and int64 as strings) for JSON clients; stock ProtoJSON for now.
 
-**Identity on the server** (needed before step 4 can be exercised against two instances)
+**Identity on the server** (first pass done 2026-11-01)
 
-- [ ] Roster verification, all eight steps, with `details.step` on rejection (identity §3.3; tests: the certificate and monotonicity cases).
-- [ ] Challenge issuance with HMAC, `used_challenges` replay table (identity §9; test: replay on a different node).
-- [ ] `POST /auth/reauth`, revoke endpoint, revocation policy (identity §4.4, §10; test: thief without reauth is rejected everywhere).
-- [ ] Link bundles with codes, single use, attempt cap (identity §6; tests: second fetch is `NOT_FOUND`, five wrong attempts delete).
-- [ ] Identity backup put and get (identity §8).
-- [ ] Identity-proof sign-in and account creation gated by instance policy (identity §4.6, architecture §6.3).
+- [x] `Lumia.Identity.Roster`: all eight verification steps as a pure function, every rejection naming its step (identity §3.3; tests: certificate, chain, signature, and monotonicity cases with real Ed25519 keys).
+- [x] `Lumia.Crypto` facade: Ed25519 from `:crypto`, BLAKE3 from `b3`, HMAC.
+- [x] Challenges: HMAC-bound, host-bound, two-minute expiry, `used_challenges` single use across nodes (identity §9; test: replay).
+- [x] `Lumia.Identity.accept_roster/2` with the revocation policy: device-signed revocations only via the revoke endpoint with reauth, root-signed bypass; on acceptance revoked devices lose their sessions and `RosterUpdated` goes on the account log (identity §4.4; tests: refused on publish, accepted with reauth, root path).
+- [x] `POST /auth/reauth` with password; tokens single use, five minutes (identity §10).
+- [x] Link bundles: 8-character code, single use, ten minutes, five wrong attempts delete, 64 KB cap (identity §6; tests).
+- [x] Identity backup put and get, highest version wins (identity §8).
+- [x] Identity-proof sign-in and account creation gated by instance policy; `POST /identity/link` binds an account with reauth (identity §4.6, architecture §6.3).
+- [x] Web device origin check against the instance origin and configured flagship origins (identity §7).
+- [ ] Reauth by passkey or TOTP; only password exists.
+- [ ] Profile import on link (signed profile → account display fields).
+- [ ] Oban purge of expired `used_challenges`, `link_bundles`, `reauth_tokens`.
+- [ ] A revoked device that is still connected over the gateway is disconnected through its session revocation; verified for sessions, not yet end to end with a live socket in the identity tests.
+- [ ] Certificates issued by a device that was later revoked cannot be re-verified from the roster alone, because the revocation entry does not carry the revoked device's public key. Such certificates currently fail at step 4 after the issuer is revoked. Needs `RevocationBody.public_key` in the proto and a spec amendment.
 
 **Closing step 2**
 

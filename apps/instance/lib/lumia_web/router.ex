@@ -17,14 +17,26 @@ defmodule LumiaWeb.Router do
 
     get "/instance", InstanceController, :show
     post "/accounts", AuthController, :create_account
+    post "/accounts/by-identity", IdentityController, :create_account
     post "/auth/sign-in/password", AuthController, :sign_in_password
+    post "/auth/sign-in/identity", IdentityController, :sign_in
+    post "/auth/challenge", IdentityController, :challenge
     post "/auth/refresh", AuthController, :refresh
+    get "/identity/link-bundles/:code", IdentityController, :get_link_bundle
   end
 
   scope "/api/v1", LumiaWeb do
     pipe_through :api
 
     post "/auth/sign-out", AuthController, :sign_out
+    post "/auth/reauth", IdentityController, :reauth
+    get "/identity/roster", IdentityController, :get_roster
+    post "/identity/roster", IdentityController, :publish_roster
+    post "/identity/devices/revoke", IdentityController, :revoke_device
+    post "/identity/link", IdentityController, :link
+    post "/identity/link-bundles", IdentityController, :create_link_bundle
+    put "/identity/backup", IdentityController, :put_backup
+    get "/identity/backup", IdentityController, :get_backup
     get "/sessions", AuthController, :list_sessions
     delete "/sessions/:session_id", AuthController, :revoke_session
 
