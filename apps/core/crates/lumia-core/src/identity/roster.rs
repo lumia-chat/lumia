@@ -629,6 +629,31 @@ pub fn rotation(
     }
 }
 
+/// Assembles a roster body. `rotations` oldest first; `root_public_key` is
+/// the current root.
+#[must_use]
+pub fn roster_body(
+    identity_id: &[u8],
+    version: u64,
+    root_public_key: &[u8],
+    rotations: Vec<RootRotation>,
+    devices: Vec<DeviceEntry>,
+    revoked: Vec<RevokedEntry>,
+    issued_at: prost_types::Timestamp,
+) -> RosterBody {
+    RosterBody {
+        identity_id: identity_id.to_vec(),
+        version,
+        root_public_key: Some(PublicKey {
+            ed25519: root_public_key.to_vec(),
+        }),
+        rotations,
+        devices,
+        revoked,
+        issued_at: Some(issued_at),
+    }
+}
+
 /// Serializes and signs a roster body.
 #[must_use]
 pub fn sign_roster(body: &RosterBody, signer: Signer<'_>) -> SignedRoster {

@@ -1,0 +1,391 @@
+//! The identity flows a client runs (docs/specs/identity.md section 4),
+//! over the core's builders and the API. State per instance: the device
+//! key, backup key and link secret in the keystore; the identity id and
+//! current roster in the store's meta area.
+
+use base64::Engine;
+use ed25519_dalek::SigningKey;
+use lumia_core::identity::keys::{generate_signing_key, signing_key, ts_nanos};
+use lumia_core::identity::link::{seal_bundle, LinkRequester};
+use lumia_core::identity::phrase::Phrase;
+use lumia_core::identity::proof::build_proof;
+use lumia_core::identity::roster::{
+    device_entry, revoked_entry, roster_body, sign_roster, verify_roster, NewDevice, Signer,
+    Verified,
+};
+use lumia_core::keystore::Keystore;
+use lumia_core::proto::{
+    ChallengePurpose, CreateLinkBundleRequest, DeviceKind, LinkBundleBody, LinkRequest,
+    SignedRoster, TokenPair,
+};
+use lumia_core::store::Store;
+use lumia_core::wire;
+use prost::Message;
+
+use crate::api::Api;
+use crate::ClientError;
+
+const B64: base64::engine::GeneralPurpose = base64::engine::general_purpose::STANDARD;
+
+/// Everything the flows touch for one instance.
+pub struct Device<'a, S: Store, K: Keystore> {
+    /// The local store (identity id and roster live in its meta area).
+    pub store: &'a mut S,
+    /// The keystore (device key, backup key, link secret).
+    pub keystore: &'a mut K,
+    /// This device's id.
+    pub device_id: Vec<u8>,
+}
+
+impl<S: Store, K: Keystore> std::fmt::Debug for Device<'_, S, K> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Device")
+            .field("device_id", &wire::display(&self.device_id))
+            .finish_non_exhaustive()
+    }
+}
+
+/// What `create` returns: the phrase to show once, and the identity id.
+#[derive(Debug)]
+pub struct Created {
+    /// The 24 words. Shown once; never stored.
+    pub phrase: String,
+    /// The identity id, hex.
+    pub identity_id: String,
+}
+
+impl<S: Store, K: Keystore> Device<'_, S, K> {
+    /// Creates a new identity on this device (spec 4.1): a phrase, a root,
+    /// this device's key, and roster version 1 signed by the root. The root
+    /// private key is dropped at the end of this function.
+    ///
+    /// # Errors
+    /// On keystore, store, or randomness failure.
+    pub fn create(&mut self, label: &str) -> Result<Created, ClientError> {
+        let phrase = Phrase::generate()?;
+        let derived = phrase.derive();
+        let identity_id = derived.identity_id();
+        let device_key = self.device_key_or_generate()?;
+
+        let entry = device_entry(
+            &identity_id,
+            &NewDevice {
+                device_id: self.device_id.clone(),
+                public_key: device_key.verifying_key().to_bytes().to_vec(),
+                kind: DeviceKind::Native,
+                web_origin: String::new(),
+                label: label.to_string(),
+                added_at: now(),
+            },
+            Signer::Root(&derived.root),
+        );
+        let body = roster_body(
+            &identity_id,
+            1,
+            &derived.root.verifying_key().to_bytes(),
+            vec![],
+            vec![entry],
+            vec![],
+            now(),
+        );
+        let roster = sign_roster(&body, Signer::Root(&derived.root));
+
+        self.keystore.put("backup_key", &derived.backup_key)?;
+        self.save_roster(&identity_id, &roster)?;
+        Ok(Created {
+            phrase: phrase.words(),
+            identity_id: hex::encode(identity_id),
+        })
+    }
+
+    /// The verified current roster, or an error when this device has none.
+    ///
+    /// # Errors
+    /// When no roster is stored or it does not verify.
+    pub fn roster(&self) -> Result<Verified, ClientError> {
+        let b64 = self.store.meta_get("roster")?.ok_or_else(|| {
+            ClientError::State(
+                "no identity on this device; run `identity create` or `identity claim`".into(),
+            )
+        })?;
+        let bytes = B64
+            .decode(b64)
+            .map_err(|e| ClientError::State(e.to_string()))?;
+        let signed = SignedRoster::decode(bytes.as_slice())?;
+        Ok(verify_roster(&signed, None, ts_nanos(Some(&now())))?)
+    }
+
+    /// Proves this identity to `api`'s host for `purpose`.
+    ///
+    /// # Errors
+    /// On API failure, a challenge for another host, or missing state.
+    pub async fn prove(
+        &self,
+        api: &Api,
+        purpose: ChallengePurpose,
+    ) -> Result<lumia_core::proto::IdentityProof, ClientError> {
+        let verified = self.roster()?;
+        let key = self.device_key()?;
+        let challenge = api.challenge(purpose).await?;
+        Ok(build_proof(
+            &challenge.challenge,
+            &api.host(),
+            purpose,
+            &verified.identity_id,
+            &self.device_id,
+            &key,
+            verified.signed,
+        )?)
+    }
+
+    /// Creates an account on the instance by identity proof (spec 4.1 step 5).
+    ///
+    /// # Errors
+    /// On API failure.
+    pub async fn create_account(&self, api: &Api, handle: &str) -> Result<TokenPair, ClientError> {
+        let proof = self.prove(api, ChallengePurpose::CreateAccount).await?;
+        api.create_account_by_identity(handle, proof).await
+    }
+
+    /// Signs in by identity proof.
+    ///
+    /// # Errors
+    /// On API failure, including `POLICY_DENIED` when the instance forbids it.
+    pub async fn sign_in(&self, api: &Api) -> Result<TokenPair, ClientError> {
+        let proof = self.prove(api, ChallengePurpose::SignIn).await?;
+        api.sign_in_identity(proof).await
+    }
+
+    /// Step 1 of adding this device (spec 4.2): the request to show as a
+    /// QR, base64. The ephemeral secret is kept until `claim`.
+    ///
+    /// # Errors
+    /// On keystore or randomness failure.
+    pub fn link_request(&mut self, label: &str) -> Result<String, ClientError> {
+        let key = self.device_key_or_generate()?;
+        let requester = LinkRequester::new(
+            self.device_id.clone(),
+            key.verifying_key().to_bytes().to_vec(),
+            DeviceKind::Native,
+            label,
+            "",
+        )?;
+        self.keystore
+            .put("link_secret", &requester.secret_bytes())?;
+        let request = requester.request.encode_to_vec();
+        self.store.meta_set("link_request", &B64.encode(&request))?;
+        Ok(B64.encode(request))
+    }
+
+    /// Steps 2 to 6 on the existing device: certify the requesting device,
+    /// publish the new roster, upload the encrypted bundle. Returns the code.
+    ///
+    /// # Errors
+    /// On a malformed request, API failure, or missing state.
+    pub async fn approve(&mut self, api: &Api, request_b64: &str) -> Result<String, ClientError> {
+        let bytes = B64
+            .decode(request_b64.trim())
+            .map_err(|e| ClientError::State(format!("bad request: {e}")))?;
+        let request = LinkRequest::decode(bytes.as_slice())?;
+        let verified = self.roster()?;
+        let my_key = self.device_key()?;
+        let new_key = request
+            .device_public_key
+            .as_ref()
+            .map(|k| k.ed25519.clone())
+            .unwrap_or_default();
+        let kind = DeviceKind::try_from(request.kind).unwrap_or(DeviceKind::Native);
+
+        let entry = device_entry(
+            &verified.identity_id,
+            &NewDevice {
+                device_id: request.device_id.clone(),
+                public_key: new_key,
+                kind,
+                web_origin: request.web_origin.clone(),
+                label: request.label.clone(),
+                added_at: now(),
+            },
+            Signer::Device(&self.device_id, &my_key),
+        );
+
+        let mut devices = verified.body.devices.clone();
+        devices.push(entry);
+        let body = roster_body(
+            &verified.identity_id,
+            verified.version + 1,
+            &verified.root_public_key,
+            verified.body.rotations.clone(),
+            devices,
+            verified.body.revoked.clone(),
+            now(),
+        );
+        let roster = sign_roster(&body, Signer::Device(&self.device_id, &my_key));
+        api.publish_roster(roster.clone()).await?;
+        self.save_roster(&verified.identity_id, &roster)?;
+
+        let backup_key = if kind == DeviceKind::Web {
+            Vec::new()
+        } else {
+            self.keystore.get("backup_key")?.unwrap_or_default()
+        };
+        let bundle = LinkBundleBody {
+            roster: Some(roster),
+            backup_key,
+            ..Default::default()
+        };
+        let sealed = seal_bundle(&request, bundle)?;
+        let created = api
+            .create_link_bundle(CreateLinkBundleRequest {
+                ciphertext: sealed.ciphertext,
+                sender_ephemeral_public_key: sealed.sender_ephemeral_public_key,
+                nonce: sealed.nonce,
+                device_id: request.device_id,
+            })
+            .await?;
+        Ok(created.code)
+    }
+
+    /// Step 7 on the new device: fetch and open the bundle, adopt the roster.
+    ///
+    /// # Errors
+    /// On API failure, decryption failure, or a roster that does not verify.
+    pub async fn claim(&mut self, api: &Api, code: &str) -> Result<Verified, ClientError> {
+        let secret = self
+            .keystore
+            .get("link_secret")?
+            .ok_or_else(|| ClientError::State("no link request on this device".into()))?;
+        let request_b64 = self
+            .store
+            .meta_get("link_request")?
+            .ok_or_else(|| ClientError::State("no link request on this device".into()))?;
+        let request = LinkRequest::decode(
+            B64.decode(request_b64)
+                .map_err(|e| ClientError::State(e.to_string()))?
+                .as_slice(),
+        )?;
+        let requester = LinkRequester::from_parts(&secret, request)?;
+
+        let bundle = api
+            .get_link_bundle(code, &wire::display(&self.device_id))
+            .await?;
+        let body = requester.open_bundle(
+            &bundle.sender_ephemeral_public_key,
+            &bundle.nonce,
+            &bundle.ciphertext,
+        )?;
+        let roster = body
+            .roster
+            .ok_or_else(|| ClientError::State("bundle has no roster".into()))?;
+        let verified = verify_roster(&roster, None, ts_nanos(Some(&now())))?;
+        if !verified.devices.contains_key(&self.device_id) {
+            return Err(ClientError::State(
+                "the roster does not include this device".into(),
+            ));
+        }
+        if !body.backup_key.is_empty() {
+            self.keystore.put("backup_key", &body.backup_key)?;
+        }
+        self.save_roster(&verified.identity_id, &roster)?;
+        self.keystore.delete("link_secret")?;
+        Ok(verified)
+    }
+
+    /// Revokes a device with the root, from the phrase (spec 4.3 and 4.4's
+    /// root path). Publishes the root-signed roster, which bypasses reauth.
+    ///
+    /// # Errors
+    /// When the phrase does not match this identity's root, the device is
+    /// unknown, or the API refuses.
+    pub async fn revoke_with_phrase(
+        &mut self,
+        api: &Api,
+        phrase: &str,
+        device_id: &[u8],
+    ) -> Result<(), ClientError> {
+        let derived = Phrase::parse(phrase)?.derive();
+        let verified = self.roster()?;
+        if derived.root.verifying_key().to_bytes().as_slice() != verified.root_public_key.as_slice()
+        {
+            return Err(ClientError::State(
+                "that phrase is not this identity's root".into(),
+            ));
+        }
+        let info = verified
+            .devices
+            .get(device_id)
+            .ok_or_else(|| ClientError::State("unknown device".into()))?;
+        let added_at = info.cert.added_at.unwrap_or_default();
+        let entry = revoked_entry(
+            &verified.identity_id,
+            device_id,
+            &info.public_key,
+            added_at,
+            now(),
+            Signer::Root(&derived.root),
+        );
+
+        let devices: Vec<_> = verified
+            .body
+            .devices
+            .iter()
+            .filter(|d| d.device_id != device_id)
+            .cloned()
+            .collect();
+        let mut revoked = verified.body.revoked.clone();
+        revoked.push(entry);
+        let body = roster_body(
+            &verified.identity_id,
+            verified.version + 1,
+            &verified.root_public_key,
+            verified.body.rotations.clone(),
+            devices,
+            revoked,
+            now(),
+        );
+        let roster = sign_roster(&body, Signer::Root(&derived.root));
+        api.publish_roster(roster.clone()).await?;
+        self.save_roster(&verified.identity_id, &roster)
+    }
+
+    fn device_key(&self) -> Result<SigningKey, ClientError> {
+        let seed = self
+            .keystore
+            .get("device_key")?
+            .ok_or_else(|| ClientError::State("no device key".into()))?;
+        Ok(signing_key(&seed)?)
+    }
+
+    fn device_key_or_generate(&mut self) -> Result<SigningKey, ClientError> {
+        match self.keystore.get("device_key")? {
+            Some(seed) => Ok(signing_key(&seed)?),
+            None => {
+                let key = generate_signing_key()?;
+                self.keystore.put("device_key", &key.to_bytes())?;
+                Ok(key)
+            }
+        }
+    }
+
+    fn save_roster(
+        &mut self,
+        identity_id: &[u8],
+        roster: &SignedRoster,
+    ) -> Result<(), ClientError> {
+        self.store
+            .meta_set("identity_id", &hex::encode(identity_id))?;
+        self.store
+            .meta_set("roster", &B64.encode(roster.encode_to_vec()))?;
+        Ok(())
+    }
+}
+
+fn now() -> prost_types::Timestamp {
+    let d = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    prost_types::Timestamp {
+        seconds: i64::try_from(d.as_secs()).unwrap_or(i64::MAX),
+        nanos: i32::try_from(d.subsec_nanos()).unwrap_or(0),
+    }
+}

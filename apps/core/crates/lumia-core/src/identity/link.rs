@@ -59,6 +59,27 @@ impl LinkRequester {
         Ok(Self { ephemeral, request })
     }
 
+    /// The ephemeral secret, for a client that must persist the requester
+    /// between showing the request and claiming the bundle.
+    #[must_use]
+    pub fn secret_bytes(&self) -> [u8; 32] {
+        self.ephemeral.to_bytes()
+    }
+
+    /// Rebuilds a requester from a persisted secret and request.
+    ///
+    /// # Errors
+    /// When the secret is not 32 bytes.
+    pub fn from_parts(secret: &[u8], request: LinkRequest) -> Result<Self, IdentityError> {
+        let secret: [u8; 32] = secret
+            .try_into()
+            .map_err(|_| IdentityError::Key("secret must be 32 bytes"))?;
+        Ok(Self {
+            ephemeral: StaticSecret::from(secret),
+            request,
+        })
+    }
+
     /// Decrypts the bundle an existing device produced for this request.
     ///
     /// # Errors

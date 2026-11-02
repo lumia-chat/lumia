@@ -53,12 +53,20 @@ enum Cmd {
         #[command(subcommand)]
         action: AccountCmd,
     },
-    /// Sign in with a password.
+    /// Sign in with a password, or with this device's identity (`--identity`).
     Login {
+        #[arg(long, required_unless_present = "identity")]
+        handle: Option<String>,
+        #[arg(long, required_unless_present = "identity")]
+        password: Option<String>,
+        /// Sign in by identity proof instead of a password.
         #[arg(long)]
-        handle: String,
-        #[arg(long)]
-        password: String,
+        identity: bool,
+    },
+    /// Identity: create, show, link devices, revoke.
+    Identity {
+        #[command(subcommand)]
+        action: IdentityCmd,
     },
     /// List servers you belong to.
     Servers,
@@ -88,6 +96,37 @@ enum AccountCmd {
         handle: String,
         #[arg(long)]
         password: String,
+    },
+    /// Create an account bound to this device's identity and sign in.
+    CreateByIdentity {
+        #[arg(long)]
+        handle: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum IdentityCmd {
+    /// Create a new identity on this device; prints the recovery phrase once.
+    Create {
+        #[arg(long, default_value = "cli")]
+        label: String,
+    },
+    /// Show the identity and its roster.
+    Show,
+    /// On a new device: print the link request to approve elsewhere.
+    LinkRequest {
+        #[arg(long, default_value = "cli")]
+        label: String,
+    },
+    /// On an existing device: approve a link request; prints the claim code.
+    Approve { request: String },
+    /// On the new device: claim the bundle by code.
+    Claim { code: String },
+    /// Revoke a device with the recovery phrase (root-signed).
+    Revoke {
+        device_id: String,
+        #[arg(long)]
+        phrase: String,
     },
 }
 
@@ -148,7 +187,16 @@ async fn run(cli: Cli) -> Result<(), ClientError> {
             println!("created and signed in as {handle}");
             Ok(())
         }
-        Cmd::Login { handle, password } => {
+        Cmd::Login { identity: true, .. } => {
+            let tokens = device(&mut ctx).sign_in(&api).await?;
+            save_tokens(&mut ctx, &tokens)?;
+            println!("signed in by identity");
+            Ok(())
+        }
+        Cmd::Login {
+            handle, password, ..
+        } => {
+            let (handle, password) = (handle.unwrap_or_default(), password.unwrap_or_default());
             let tokens = api
                 .sign_in(&handle, &password, ctx.device_id.clone())
                 .await?;
@@ -156,6 +204,15 @@ async fn run(cli: Cli) -> Result<(), ClientError> {
             println!("signed in as {handle}");
             Ok(())
         }
+        Cmd::Account {
+            action: AccountCmd::CreateByIdentity { handle },
+        } => {
+            let tokens = device(&mut ctx).create_account(&api, &handle).await?;
+            save_tokens(&mut ctx, &tokens)?;
+            println!("created {handle} bound to this identity and signed in");
+            Ok(())
+        }
+        Cmd::Identity { action } => identity_cmd(&mut ctx, &api, action).await,
         Cmd::Servers => {
             let list = api.servers().await?;
             for s in list.servers {
@@ -262,6 +319,85 @@ async fn run(cli: Cli) -> Result<(), ClientError> {
             }
             drop(tx);
             gw.abort();
+            Ok(())
+        }
+    }
+}
+
+fn device(ctx: &mut Ctx) -> lumia_client::identity::Device<'_, SqliteStore, FileKeystore> {
+    lumia_client::identity::Device {
+        store: &mut ctx.store,
+        keystore: &mut ctx.keystore,
+        device_id: ctx.device_id.clone(),
+    }
+}
+
+async fn identity_cmd(ctx: &mut Ctx, api: &Api, action: IdentityCmd) -> Result<(), ClientError> {
+    match action {
+        IdentityCmd::Create { label } => {
+            let created = device(ctx).create(&label)?;
+            println!("identity {}", created.identity_id);
+            println!("recovery phrase (shown once, write it down):");
+            println!("{}", created.phrase);
+            Ok(())
+        }
+        IdentityCmd::Show => {
+            let verified = device(ctx).roster()?;
+            println!("identity {}", hex::encode(&verified.identity_id));
+            println!(
+                "roster v{} root_signed={}",
+                verified.version, verified.root_signed
+            );
+            for (id, info) in &verified.devices {
+                let me = if *id == ctx.device_id {
+                    " (this device)"
+                } else {
+                    ""
+                };
+                println!(
+                    "  device {}  {:?}  {}{me}",
+                    wire::display(id),
+                    info.kind,
+                    if info.cert.added_by.is_empty() {
+                        "root"
+                    } else {
+                        "device"
+                    }
+                );
+            }
+            for (id, info) in &verified.revoked {
+                println!(
+                    "  revoked {}  at {}",
+                    wire::display(id),
+                    info.revoked_at / 1_000_000_000
+                );
+            }
+            Ok(())
+        }
+        IdentityCmd::LinkRequest { label } => {
+            let request = device(ctx).link_request(&label)?;
+            println!("{request}");
+            Ok(())
+        }
+        IdentityCmd::Approve { request } => {
+            let code = device(ctx).approve(api, &request).await?;
+            println!("code {code} on {}", api.host());
+            Ok(())
+        }
+        IdentityCmd::Claim { code } => {
+            let verified = device(ctx).claim(api, &code).await?;
+            println!(
+                "linked to identity {} (roster v{})",
+                hex::encode(&verified.identity_id),
+                verified.version
+            );
+            Ok(())
+        }
+        IdentityCmd::Revoke { device_id, phrase } => {
+            device(ctx)
+                .revoke_with_phrase(api, &phrase, &parse_uuid(&device_id)?)
+                .await?;
+            println!("revoked {device_id}");
             Ok(())
         }
     }

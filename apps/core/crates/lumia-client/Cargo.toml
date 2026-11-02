@@ -16,6 +16,7 @@ path = "src/main.rs"
 lumia-core.workspace = true
 lumia-proto.workspace = true
 prost.workspace = true
+prost-types.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
 tracing.workspace = true
@@ -28,6 +29,9 @@ rusqlite = { version = "0.41", features = ["bundled"] }
 clap = { version = "4", features = ["derive"] }
 directories = "6"
 url = "2"
+base64 = "0.22"
+hex = "0.4"
+ed25519-dalek = "3"
 
 [lints]
 workspace = true

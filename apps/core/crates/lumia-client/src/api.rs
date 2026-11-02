@@ -1,10 +1,12 @@
 //! The HTTP API client (docs/protocol.md section 9) with protobuf bodies.
 
 use lumia_core::proto::{
-    AccountSnapshot, Channel, ChannelSnapshot, CreateAccountRequest, CreateChannelRequest,
-    CreateServerRequest, Error as ApiError, ErrorCode, ListAccountEventsResponse,
-    ListChannelsResponse, ListEventsResponse, ListServersResponse, PasswordSignInRequest,
-    RefreshRequest, Server, TokenPair,
+    AccountSnapshot, ChallengePurpose, ChallengeRequest, ChallengeResponse, Channel,
+    ChannelSnapshot, CreateAccountRequest, CreateChannelRequest, CreateLinkBundleRequest,
+    CreateLinkBundleResponse, CreateServerRequest, Error as ApiError, ErrorCode,
+    GetLinkBundleResponse, GetRosterResponse, IdentityProof, IdentityProofSignInRequest,
+    ListAccountEventsResponse, ListChannelsResponse, ListEventsResponse, ListServersResponse,
+    PasswordSignInRequest, PublishRosterRequest, RefreshRequest, Server, SignedRoster, TokenPair,
 };
 use prost::Message;
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
@@ -37,6 +39,109 @@ impl Api {
     pub fn with_token(mut self, token: Option<String>) -> Self {
         self.access_token = token;
         self
+    }
+
+    /// The host this client talks to, as challenges must be bound to it.
+    #[must_use]
+    pub fn host(&self) -> String {
+        url::Url::parse(&self.base)
+            .ok()
+            .and_then(|u| u.host_str().map(str::to_string))
+            .unwrap_or_default()
+    }
+
+    /// `POST /auth/challenge`.
+    ///
+    /// # Errors
+    /// On transport failure or an API error.
+    pub async fn challenge(
+        &self,
+        purpose: ChallengePurpose,
+    ) -> Result<ChallengeResponse, ClientError> {
+        self.post(
+            "/api/v1/auth/challenge",
+            &ChallengeRequest {
+                purpose: purpose as i32,
+            },
+        )
+        .await
+    }
+
+    /// `POST /accounts/by-identity`.
+    ///
+    /// # Errors
+    /// On transport failure or an API error.
+    pub async fn create_account_by_identity(
+        &self,
+        handle: &str,
+        proof: IdentityProof,
+    ) -> Result<TokenPair, ClientError> {
+        let req = CreateAccountRequest {
+            handle: handle.into(),
+            proof: Some(proof),
+            ..Default::default()
+        };
+        self.post("/api/v1/accounts/by-identity", &req).await
+    }
+
+    /// `POST /auth/sign-in/identity`.
+    ///
+    /// # Errors
+    /// On transport failure or an API error.
+    pub async fn sign_in_identity(&self, proof: IdentityProof) -> Result<TokenPair, ClientError> {
+        self.post(
+            "/api/v1/auth/sign-in/identity",
+            &IdentityProofSignInRequest { proof: Some(proof) },
+        )
+        .await
+    }
+
+    /// `POST /identity/roster`.
+    ///
+    /// # Errors
+    /// On transport failure or an API error (including `POLICY_DENIED`).
+    pub async fn publish_roster(&self, roster: SignedRoster) -> Result<(), ClientError> {
+        self.post_empty(
+            "/api/v1/identity/roster",
+            &PublishRosterRequest {
+                roster: Some(roster),
+            },
+        )
+        .await
+    }
+
+    /// `GET /identity/roster`.
+    ///
+    /// # Errors
+    /// On transport failure or an API error.
+    pub async fn get_roster(&self) -> Result<GetRosterResponse, ClientError> {
+        self.get("/api/v1/identity/roster").await
+    }
+
+    /// `POST /identity/link-bundles`.
+    ///
+    /// # Errors
+    /// On transport failure or an API error.
+    pub async fn create_link_bundle(
+        &self,
+        req: CreateLinkBundleRequest,
+    ) -> Result<CreateLinkBundleResponse, ClientError> {
+        self.post("/api/v1/identity/link-bundles", &req).await
+    }
+
+    /// `GET /identity/link-bundles/{code}?device_id=` (public).
+    ///
+    /// # Errors
+    /// On transport failure or an API error.
+    pub async fn get_link_bundle(
+        &self,
+        code: &str,
+        device_id: &str,
+    ) -> Result<GetLinkBundleResponse, ClientError> {
+        self.get(&format!(
+            "/api/v1/identity/link-bundles/{code}?device_id={device_id}"
+        ))
+        .await
     }
 
     /// The gateway WebSocket URL for this instance.
@@ -212,6 +317,33 @@ impl Api {
             builder = builder.header(AUTHORIZATION, format!("Bearer {token}"));
         }
         decode(builder.send().await?).await
+    }
+
+    async fn post_empty<Req: Message>(&self, path: &str, req: &Req) -> Result<(), ClientError> {
+        let mut builder = self
+            .http
+            .post(format!("{}{path}", self.base))
+            .header(CONTENT_TYPE, PROTO)
+            .header(ACCEPT, PROTO)
+            .body(req.encode_to_vec());
+        if let Some(token) = &self.access_token {
+            builder = builder.header(AUTHORIZATION, format!("Bearer {token}"));
+        }
+        let response = builder.send().await?;
+        let status = response.status();
+        if status.is_success() {
+            return Ok(());
+        }
+        let bytes = response.bytes().await?;
+        let error = ApiError::decode(bytes.as_ref()).unwrap_or_default();
+        let code = ErrorCode::try_from(error.code)
+            .map(|c| c.as_str_name().to_string())
+            .unwrap_or_else(|_| "UNKNOWN".into());
+        Err(ClientError::Api {
+            code,
+            message: error.message,
+            status: status.as_u16(),
+        })
     }
 
     async fn get<Resp: Message + Default>(&self, path: &str) -> Result<Resp, ClientError> {

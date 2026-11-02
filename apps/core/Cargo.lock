@@ -1191,12 +1191,16 @@ checksum = "4050469837a6ff301cd14c1f8f24f88549e6d548f24f64e2148eb0f72cebc51f"
 name = "lumia-client"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "clap",
  "directories",
+ "ed25519-dalek",
  "futures-util",
+ "hex",
  "lumia-core",
  "lumia-proto",
  "prost",
+ "prost-types",
  "reqwest",
  "rusqlite",
  "thiserror",

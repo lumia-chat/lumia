@@ -184,8 +184,11 @@ Ordered. Each task names the spec section it implements and the tests that close
 - [x] `identity::roster`: the eight-step verifier as a port of `Lumia.Identity.Roster`, builders for device entries, revocations, rotations and signed rosters (identity §3, §4).
 - [x] `identity::link`: `LinkRequester` and `seal_bundle` over X25519 and HKDF (identity §4.2, §6).
 - [x] Cross-implementation vectors: `apps/instance/test/lumia/identity/vectors_test.exs` writes `proto/vectors/identity/rosters.json` with `LUMIA_WRITE_VECTORS=1` and checks the Elixir verifier against it; `apps/core/crates/lumia-core/tests/identity_vectors.rs` checks the Rust verifier against the same file. 17 vectors, both agree.
-- [ ] The CLI's `identity create`, `identity add-device`, `login --identity` flows over the identity endpoints.
-- [ ] A test that round-trips a Rust-built roster through the instance's `POST /identity/roster`.
+- [x] `identity::proof` builds a proof from a host's challenge, refusing another host or purpose.
+- [x] `lumia-cli`: `identity create` (phrase shown once, roster v1), `account create-by-identity`, `login --identity`, `identity link-request` / `approve` / `claim` (the full 4.2 flow with the bundle over X25519), `identity revoke --phrase` (root-signed, bypasses reauth), `identity show`.
+- [x] Run end to end against the instance on 2026-11-01: create, account by proof, login by proof, link a second device, second device logs in, root revocation from the phrase, revoked device's session answers `SESSION_REVOKED` and its re-login is refused.
+- [ ] A revoked device that re-presents its older roster gets `CONFLICT`; the client should adopt the held roster from `details.held` and show itself as revoked (identity §5 "older roster").
+- [ ] Device-signed revocation with reauth from the CLI (needs a password credential; identity-only accounts use the root path).
 
 **Milestone 3**: UniFFI surface with one `Client` object and a callback interface; wasm-bindgen surface over a JS-provided store.
 

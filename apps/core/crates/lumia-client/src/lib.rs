@@ -10,6 +10,7 @@
 
 pub mod api;
 pub mod gateway;
+pub mod identity;
 pub mod keystore;
 pub mod sqlite;
 
@@ -41,6 +42,15 @@ pub enum ClientError {
     /// Not signed in to this instance.
     #[error("not signed in")]
     NotSignedIn,
+    /// An identity operation failed.
+    #[error(transparent)]
+    Identity(#[from] lumia_core::identity::IdentityError),
+    /// A roster was rejected.
+    #[error(transparent)]
+    Roster(#[from] lumia_core::identity::roster::RosterError),
+    /// Required local state is missing.
+    #[error("{0}")]
+    State(String),
 }
 
 impl From<reqwest::Error> for ClientError {

@@ -8,10 +8,12 @@
 //!   in `proto/vectors/identity/`.
 //! * [`link`]: the link request a new device shows and the bundle an
 //!   existing device encrypts for it.
+//! * [`proof`]: signing a host's challenge with a device key.
 
 pub mod keys;
 pub mod link;
 pub mod phrase;
+pub mod proof;
 pub mod roster;
 
 /// Errors from identity operations other than roster verification.
