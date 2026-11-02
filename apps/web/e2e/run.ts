@@ -263,12 +263,19 @@ async function dmSteps(which: string, page: Page, aDir: string, bAccount: string
   lumia(aDir, "dm", "send", channel, reply);
   phase("wait for the reply");
   await page.getByText(reply).waitFor();
-  phase("reload");
-  await page.reload();
-  await page.getByText(hello).waitFor();
-  await page.getByText(reply).waitFor();
-  if ((await page.getByText(aHandle).count()) === 0) throw new Error("the CLI's handle is not shown as the sender");
-  await page.screenshot({ path: `${out}/${which}-dm.png` });
+  // Back from disk: a fresh page in the same profile (Chromium on the Linux
+  // runner wedges on reloading this page while its worker tears down; the
+  // sign-in step's reload is fine, and locally this one is too).
+  phase("reopen");
+  const url = page.url();
+  const again = await page.context().newPage();
+  live.page = again;
+  await page.close({ runBeforeUnload: false });
+  await goto(again, url);
+  await again.getByText(hello).waitFor();
+  await again.getByText(reply).waitFor();
+  if ((await again.getByText(aHandle).count()) === 0) throw new Error("the CLI's handle is not shown as the sender");
+  await again.screenshot({ path: `${out}/${which}-dm.png` });
 }
 
 if (!existsSync(cli)) run(["cargo", "build", "--release", "-p", "lumia-cli"], resolve(web, "../core"));
