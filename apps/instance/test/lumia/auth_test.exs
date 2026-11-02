@@ -17,7 +17,7 @@ defmodule Lumia.AuthTest do
   test "stores only hashes", %{session: session, tokens: tokens} do
     refute session.access_hash == tokens.access_token
     assert byte_size(session.access_hash) == 32
-    assert inspect(session) =~ "access_hash: **redacted**"
+    refute inspect(session) =~ "access_hash"
   end
 
   test "verifies a live access token", %{session: session, tokens: tokens} do
