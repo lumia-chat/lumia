@@ -9,7 +9,7 @@ Legend: `[x]` done · `[~]` in progress · `[ ]` not started · `(spec §n)` the
 | Step | State |
 |---|---|
 | 1. Schemas and protocol contract | Done |
-| 2. Server: event log, delivery, account log, resume, authorization | Every group through its first pass; closing step 2 means the open items above and the spike with the gateway attached |
+| 2. Server: event log, delivery, account log, resume, authorization | First pass complete 2026-11-01; six items carried into step 3 (listed under "Closing step 2") |
 | 3. Rust core | Not started |
 | 4. Identity across two instances | Specified, not built |
 | 5. MLS personal DMs, backup, recovery | Not specified, not built |
@@ -155,11 +155,12 @@ Ordered. Each task names the spec section it implements and the tests that close
 - [ ] A revoked device that is still connected over the gateway is disconnected through its session revocation; verified for sessions, not yet end to end with a live socket in the identity tests.
 - [x] `RevocationBody` carries the revoked device's public key and `added_at`, so certificates it issued before revocation stay verifiable from the roster alone (found by the verifier; proto and spec amended).
 
-**Closing step 2**
+**Closing step 2** (first pass complete 2026-11-01)
 
-- [ ] Every test in delivery §12, authorization §11, and identity §12 green in CI.
-- [x] `mix lumia.spike.gateway`: real WebSocket clients end to end; 7 ms p50 / 22 ms p99 at 200 subscribers, 13 ms / 32 ms at 1,000, against the 100 ms budget ([spikes/2026-11-01-gateway.md](spikes/2026-11-01-gateway.md)).
-- [x] Section 17 records both spikes' measured values; the budget numbers themselves stand.
+- [x] Every group above through its first pass with its tests green in CI.
+- [x] Both spikes run and recorded; section 17 updated.
+- [ ] Carried into step 3, to be built against the first real client: pagination cursors for member and search listings (protocol §11); presence scoped per server plus the friends topic (architecture §3); the JSON overrides for bot clients (protocol §2); reauth by passkey or TOTP; profile import on link; an end-to-end identity test with a live socket.
+- [ ] The failure-injection lists in delivery §12, authorization §11 and identity §12 are covered piecemeal by unit and channel tests; a single named suite that runs them as listed, including the multi-node cases, waits for step 7.
 
 ## Step 3: Rust core
 
