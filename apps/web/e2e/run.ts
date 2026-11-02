@@ -50,8 +50,11 @@ async function open(which: string, name: string, keep = false): Promise<{ ctx: B
   const profile = resolve(work, `profile-${name}-${which}`);
   if (!keep) rmSync(profile, { recursive: true, force: true });
   const engine = which === "webkit" ? webkit : chromium;
-  const ctx = await engine.launchPersistentContext(profile, { viewport: { width: 1440, height: 960 } });
-  const page = await ctx.newPage();
+  // Bounded as a whole: a browser that launches but never serves a page
+  // would otherwise hang the suite with nothing printed.
+  const launched = engine.launchPersistentContext(profile, { viewport: { width: 1440, height: 960 }, timeout: 60_000 }).then(async (ctx) => ({ ctx, page: await ctx.newPage() }));
+  const { ctx, page } = await Promise.race([launched, Bun.sleep(90_000).then(() => Promise.reject(new Error(`${which} did not open a page within 90 s`)))]);
+  console.log(`  [${which}] browser ${ctx.browser()?.version() ?? "?"} up`);
   page.on("pageerror", (e) => console.log(`  [${which}] page error: ${e.message}`));
   page.on("console", (m) => {
     if (m.type() === "error") console.log(`  [${which}] console: ${m.text()}`);

@@ -81,6 +81,9 @@ jobs:
           echo "the instance did not come up" >&2; tail -50 /tmp/phx.log; exit 1
       - run: bun run e2e
         working-directory: apps/web
+        env:
+          DEBUG: "pw:browser"
+        timeout-minutes: 20
       - if: failure()
         run: tail -200 /tmp/phx.log
       - if: failure()
