@@ -1,0 +1,18 @@
+[package]
+name = "lumia-wasm"
+description = "wasm-bindgen surface for the web shell (filled in during plan step 6)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+lumia-core.workspace = true
+
+[lints]
+workspace = true

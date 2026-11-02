@@ -1,0 +1,39 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/lumia-proto",
+  "crates/lumia-core",
+  "crates/lumia-client",
+  "crates/lumia-ffi",
+  "crates/lumia-wasm",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.96"
+license = "Apache-2.0"
+repository = "https://github.com/lumia-chat/lumia"
+publish = false
+
+[workspace.dependencies]
+lumia-proto = { path = "crates/lumia-proto" }
+lumia-core = { path = "crates/lumia-core" }
+lumia-client = { path = "crates/lumia-client" }
+
+prost = "0.14"
+prost-types = "0.14"
+prost-build = "0.14"
+protox = "0.9"
+thiserror = "2"
+uuid = { version = "1", features = ["v7", "v4"] }
+tracing = "0.1"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"

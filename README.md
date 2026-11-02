@@ -30,7 +30,7 @@ Design stage. The architecture and protocol are written; the server, client core
 
 ```
 apps/instance   Elixir (Phoenix); what one deployment runs
-apps/core       Rust client core: protocol, MLS, local store, sync
+apps/core       Rust client core: protocol, sync engine, local store, identity; lumia-cli
 apps/ios        SwiftUI
 apps/macos      SwiftUI
 apps/android    Jetpack Compose
@@ -40,7 +40,7 @@ proto/          Protobuf schemas
 docs/           Architecture, protocol contract, and specs
 ```
 
-Most of these directories do not exist yet. Section 18 of the architecture doc gives the order they will be built in.
+`apps/instance` and `apps/core` exist; the rest do not yet. Section 18 of the architecture doc gives the order they will be built in.
 
 ## Platforms
 
