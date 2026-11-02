@@ -11,6 +11,18 @@ defmodule LumiaWeb.Endpoint do
     same_site: "Lax"
   ]
 
+  # The gateway (docs/protocol.md section 6). Bare protobuf or JSON frames;
+  # the serializer maps them onto one Phoenix channel per socket. The
+  # transport timeout is two missed 30-second heartbeats.
+  socket "/gateway", LumiaWeb.Gateway.Socket,
+    websocket: [
+      serializer: [{LumiaWeb.Gateway.Serializer, "~> 1.0"}],
+      timeout: 75_000,
+      max_frame_size: 1_048_576
+    ],
+    longpoll: false
+
+  # LiveView socket for the dev-only dashboard.
   socket "/live", Phoenix.LiveView.Socket,
     websocket: [connect_info: [session: @session_options]],
     longpoll: [connect_info: [session: @session_options]]

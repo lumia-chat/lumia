@@ -81,7 +81,7 @@ Sec-WebSocket-Protocol: lumia.v1.proto      (or lumia.v1.json)
 Authorization: Bearer <access_token>
 ```
 
-The server selects exactly one offered subprotocol or fails the upgrade with `UNSUPPORTED_ENCODING`. Where a client cannot set headers (browsers), the token is passed as `?access_token=` and the server strips it from logs.
+**As implemented in v1**, encoding is chosen by the opcode of the first frame rather than by subprotocol: a binary frame selects protobuf, a text frame selects JSON, and the connection keeps that encoding. The subprotocol header is accepted but not required. The access token is passed as `?access_token=` for every client, because Phoenix sockets cannot read arbitrary request headers; the `Authorization` header form waits for a custom upgrade plug. The server strips the token from logs.
 
 One connection per (device, instance). A second connection with the same session closes the first with `DISCONNECT_PROTOCOL_ERROR`.
 

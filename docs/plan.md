@@ -9,7 +9,7 @@ Legend: `[x]` done · `[~]` in progress · `[ ]` not started · `(spec §n)` the
 | Step | State |
 |---|---|
 | 1. Schemas and protocol contract | Done |
-| 2. Server: event log, delivery, account log, resume, authorization | Event log, account log, tables, and authorization done; gateway, HTTP, identity endpoints next |
+| 2. Server: event log, delivery, account log, resume, authorization | Event log, account log, authorization, sessions, and the gateway's first pass done; HTTP and identity endpoints next |
 | 3. Rust core | Not started |
 | 4. Identity across two instances | Specified, not built |
 | 5. MLS personal DMs, backup, recovery | Not specified, not built |
@@ -68,6 +68,8 @@ Things that moved from the first draft, with the reason. The architecture record
 | Spike task under `lib/` | `bench/`, compiled in dev only | Benchee must not ship; the task must not compile in test or prod. |
 | Role and overwrite limits at Discord's caps (250 / 100 / 50) | 50 / 50 / 20, operator-configurable | Discord's caps are sized for communities of hundreds of thousands. |
 | Credo AliasUsage at stock | Fires above two uses, excludes `test/support` | Generated test scaffolding should stay stock. |
+| Gateway encoding negotiated by WebSocket subprotocol | Chosen by the opcode of the first frame (binary = protobuf, text = JSON) | Phoenix does not expose the negotiated subprotocol to the socket; the opcode is unambiguous and needs no negotiation. |
+| `Authorization` header on the gateway upgrade | `?access_token=` query parameter for all clients in v1 | Phoenix sockets cannot read arbitrary headers; a custom upgrade plug is deferred. |
 | Overwrite with a bit in both allow and deny "treated as deny" at resolve time | Normalized on write: a denied bit is cleared from allow | The spec's own same-layer rule made allow win; property tests exposed the contradiction. Normalizing storage keeps the algorithm as written. |
 
 ## Step 2, part 2: delivery, accounts, authorization
@@ -99,17 +101,21 @@ Ordered. Each task names the spec section it implements and the tests that close
 - [x] `Lumia.Proto` converts schemas and scalars (UUID bytes, timestamps) to wire structs.
 - [x] Edit and delete materialize; delete redacts the create event's payload (delivery §10).
 
-**Gateway**
+**Gateway** (first pass done 2026-11-01)
 
-- [ ] Custom `Phoenix.Socket.Serializer`: raw `ClientFrame` in, bare `ServerFrame` out, `Hello` as join, subprotocol negotiation (delivery §5; test: frame before `Hello` is a protocol error).
-- [ ] `SessionChannel` state and the delivery rule (delivery §5; test: N+2 before N+1 delivers in order, nothing twice).
-- [ ] Encode-once broadcast from `Lumia.Events.append/2` callers, after commit (delivery §4).
-- [ ] Subscribe, replay loop, gap fill, replay cap, `SNAPSHOT_REQUIRED` (delivery §6; tests: 1,001 behind gets snapshot, 1,000 replays).
-- [ ] `Reconciler` GenServer with local head broadcasts for channels and accounts (delivery §7; tests: kill before broadcast, delivered within one tick; partition and heal).
-- [ ] Account-log subscription at join, `ResumeAccount`, membership-driven unsubscribe, bounded staleness (delivery §5, authorization §5; test: kick on A with stale session on B).
-- [ ] Slow-consumer disconnect (delivery §5; test: queue past limit, clean resume).
-- [ ] Heartbeats, `Hello` deadline, `Disconnect` reasons (delivery §11).
-- [ ] Presence scoped per server plus the friends topic (architecture §3).
+- [x] `LumiaWeb.Gateway.Serializer`: raw `ClientFrame` in, bare `ServerFrame` out, `Hello` as join, event bytes wrapped without re-encoding; encoding chosen by the first frame's opcode (delivery §5; tests: serializer unit tests).
+- [x] `LumiaWeb.Gateway.SessionChannel`: subscription state, the four-line delivery rule, authoritative resolve on subscribe and on `acl_version` change, membership-driven unsubscribe (delivery §5; tests: N+2 before N+1 in order, duplicates dropped, kicked member receives nothing, acl change caught).
+- [x] Encode-once broadcast from `Lumia.Events` and `Lumia.Accounts` after commit (delivery §4).
+- [x] One replay loop for subscribe, live gaps and nudges; 1,000-event cap answers `SNAPSHOT_REQUIRED` (delivery §6; tests: cap, gap fill).
+- [x] `LumiaWeb.Gateway.Reconciler`: 5 s tick with 1 s overlap, node-local head broadcasts for channels and accounts (delivery §7; test: nudge fills a suppressed broadcast).
+- [x] Account-log subscription at join, `ResumeAccount`, live account events (delivery §5).
+- [x] Session revocation closes the socket (test).
+- [x] Heartbeat echo, `Welcome` with recovery generation and limits.
+- [ ] Slow-consumer disconnect is implemented against the transport mailbox but has no test yet (delivery §5).
+- [ ] Bounded staleness (10 min re-resolve) and partition-heal re-resolve (delivery §5).
+- [ ] Presence scoped per server plus the friends topic (architecture §3); `PresenceUpdate` and `Typing` are accepted and ignored for now.
+- [ ] `Authorization` header on the upgrade (needs a custom upgrade plug); v1 uses `?access_token=`.
+- [ ] JSON sessions use stock ProtoJSON; the protocol's JSON overrides (UUID strings, int64 strings) are not applied yet.
 
 **HTTP**
 

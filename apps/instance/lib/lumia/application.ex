@@ -17,6 +17,8 @@ defmodule Lumia.Application do
       {Oban, Application.fetch_env!(:lumia, Oban)},
       {DNSCluster, query: Application.get_env(:lumia, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Lumia.PubSub},
+      # Per-node reconciliation of missed broadcasts (delivery section 7).
+      LumiaWeb.Gateway.Reconciler,
       # Start to serve requests, typically the last entry
       LumiaWeb.Endpoint
     ]
