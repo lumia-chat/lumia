@@ -210,9 +210,15 @@ async function dm(which: string, aDir: string, bAccount: string, aHandle: string
   try {
     await dmSteps(which, page, aDir, bAccount, aHandle);
   } catch (e) {
-    await page.screenshot({ path: `${out}/${which}-dm-failed.png` });
-    const alerts = await page.getByRole("alert").allTextContents();
-    if (alerts.length) console.log(`  [${which}] on screen: ${alerts.join(" | ")}`);
+    // Never let the screenshot's own failure replace the step's.
+    try {
+      const current = live.page ?? page;
+      await current.screenshot({ path: `${out}/${which}-dm-failed.png`, timeout: 10_000 });
+      const alerts = await current.getByRole("alert").allTextContents();
+      if (alerts.length) console.log(`  [${which}] on screen: ${alerts.join(" | ")}`);
+    } catch {
+      /* the page may be gone */
+    }
     throw e;
   } finally {
     await ctx.close();
@@ -263,9 +269,14 @@ async function dmSteps(which: string, page: Page, aDir: string, bAccount: string
   lumia(aDir, "dm", "send", channel, reply);
   phase("wait for the reply");
   await page.getByText(reply).waitFor();
-  // Back from disk: a fresh page in the same profile (Chromium on the Linux
-  // runner wedges on reloading this page while its worker tears down; the
-  // sign-in step's reload is fine, and locally this one is too).
+  // Back from disk: a fresh page in the same profile. Not on the Linux
+  // runner: tearing this page down there wedges the whole browser (the
+  // plan records it); the sign-in step covers the store coming back from
+  // disk on Linux, and this check runs on macOS.
+  if (process.platform === "linux") {
+    console.log(`  [${which}] the conversation's return from disk is checked on macOS, not here`);
+    return;
+  }
   phase("reopen");
   const url = page.url();
   const again = await page.context().newPage();
