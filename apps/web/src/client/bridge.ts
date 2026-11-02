@@ -24,6 +24,16 @@ export interface ChannelSummary {
   name: string;
   kind: string;
   lastSeq: number;
+  participantAccountIds: string[];
+  host: string;
+}
+export interface DmRequestSummary {
+  requestId: string;
+  fromAccountId: string;
+  toAccountId: string;
+  state: string;
+  sharedServerIds: string[];
+  mutualFriendCount: number;
 }
 export interface SnapshotSummary {
   accountId: string;
@@ -31,6 +41,40 @@ export interface SnapshotSummary {
   displayName: string;
   servers: ServerSummary[];
   channels: ChannelSummary[];
+  pendingRequests: DmRequestSummary[];
+}
+export interface MemberSummary {
+  accountId: string;
+  handle: string;
+  displayName: string;
+  nickname: string;
+}
+export interface DmChannelSummary {
+  channelId: string;
+  participantAccountIds: string[];
+  member: boolean;
+}
+export interface DmMessageSummary {
+  messageId: string;
+  seq: number;
+  senderIdentityId: string;
+  senderDeviceId: string;
+  body: string;
+  sentAtMicros: number;
+  edited: boolean;
+  deleted: boolean;
+  mine: boolean;
+}
+export interface DmLogSummary {
+  messages: DmMessageSummary[];
+  beforeJoin: number;
+  undecryptable: number;
+}
+export interface DmOpened {
+  channelId: string;
+  existed: boolean;
+  member: boolean;
+  creating: boolean;
 }
 export interface MessageSummary {
   messageId: string;
@@ -51,6 +95,7 @@ export interface DeviceSummary {
   kind: string;
   label: string;
   webOrigin: string;
+  addedAtMicros: number;
   thisDevice: boolean;
   revoked: boolean;
 }
@@ -70,7 +115,13 @@ export type ClientEvent =
   | { kind: "snapshotTaken"; channelId: string; seq: number }
   | { kind: "disconnected"; reason: string; reconnectAfterSeconds: number }
   | { kind: "reconnecting"; attempt: number; delayMillis: number; reason: string }
-  | { kind: "closed"; reason: string };
+  | { kind: "closed"; reason: string }
+  | { kind: "dmNote"; message: string }
+  | { kind: "dmError"; message: string }
+  | { kind: "dmSubscribed"; channelId: string }
+  | { kind: "dmOperation"; channelId: string; seq: number; senderIdentityId: string; senderDeviceId: string }
+  | { kind: "dmReady"; channelId: string }
+  | { kind: "dmDelivered"; operationId: string };
 
 export interface Opened {
   host: string;
@@ -179,6 +230,39 @@ export class Bridge {
   }
   identityShow(): Promise<RosterSummary> {
     return this.call("identityShow");
+  }
+  identityRevoke(deviceId: string, password: string): Promise<RosterSummary> {
+    return this.call("identityRevoke", deviceId, password);
+  }
+  members(serverId: string, query = ""): Promise<MemberSummary[]> {
+    return this.call("members", serverId, query);
+  }
+  dmAvailable(): Promise<boolean> {
+    return this.call("dmAvailable");
+  }
+  dmChannels(): Promise<DmChannelSummary[]> {
+    return this.call("dmChannels");
+  }
+  dmOpen(accountIds: string[]): Promise<DmOpened> {
+    return this.call("dmOpen", accountIds);
+  }
+  dmRequest(accountId: string): Promise<DmRequestSummary> {
+    return this.call("dmRequest", accountId);
+  }
+  dmRespond(requestId: string, response: "accept" | "decline" | "block"): Promise<DmOpened | DmRequestSummary> {
+    return this.call("dmRespond", requestId, response);
+  }
+  dmSend(channelId: string, body: string): Promise<void> {
+    return this.call("dmSend", channelId, body);
+  }
+  dmDelete(channelId: string, messageId: string): Promise<void> {
+    return this.call("dmDelete", channelId, messageId);
+  }
+  dmRejoin(channelId: string): Promise<void> {
+    return this.call("dmRejoin", channelId);
+  }
+  dmMessages(channelId: string): Promise<DmLogSummary> {
+    return this.call("dmMessages", channelId);
   }
 }
 

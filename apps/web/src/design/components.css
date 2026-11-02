@@ -142,6 +142,7 @@
 .lu-rail__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; align-items: center; gap: var(--space-12); }
 .lu-rail__server { position: relative; width: var(--tile-size); height: var(--tile-size); border-radius: var(--radius-round); background: var(--tile); font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center; transition: transform .15s ease; }
 .lu-rail__home:hover, .lu-rail__server:not(.is-current):hover, .lu-rail__add:hover { transform: translateY(-1px); }
+.lu-rail__home.is-current { box-shadow: var(--ring-current); }
 .lu-rail__server.is-current { background: var(--raised); color: var(--ink-selected); box-shadow: var(--ring-current); font-family: var(--font-display); font-size: 18px; font-weight: 800; }
 .lu-tile-ink-default { color: var(--ink); }
 .lu-tile-ink-indigo { color: var(--tile-ink-indigo); }
@@ -306,6 +307,42 @@
   .lu-rail__home, .lu-rail__server, .lu-rail__add { transition: none; }
   .lu-actions.is-floating { transition: none; }
 }
+
+/* ── Notice ── */
+.lu-notice { display: flex; align-items: center; gap: var(--space-10); margin: 0 24px 8px; padding: 10px 14px; border-radius: var(--radius-12); background: var(--inset); color: var(--ink-secondary); font-size: 13.5px; line-height: 1.4; }
+.lu-notice--accent { background: var(--accent-soft); color: var(--accent-ink); }
+.lu-notice__glyph { flex: none; }
+.lu-notice__text { flex: 1; min-width: 0; margin: 0; }
+
+/* ── Request card ── */
+.lu-request { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-14); padding: var(--space-16); border: 1px solid var(--line); border-radius: var(--radius-14); background: var(--surface); }
+.lu-request__text { flex: 1 1 220px; min-width: 0; }
+.lu-request__name { margin: 0; display: flex; align-items: baseline; gap: var(--space-8); font-size: 15px; font-weight: 700; color: var(--ink); }
+.lu-request__handle { font-size: 13px; font-weight: 500; color: var(--ink-muted); }
+.lu-request__meta { margin: 2px 0 0; font-size: 13.5px; color: var(--ink-secondary); }
+.lu-request__actions { display: flex; align-items: center; gap: var(--space-8); }
+.lu-request__actions .lu-btn--primary.lu-btn--md { font-size: 14px; padding: 0 18px; box-shadow: none; }
+
+/* ── Device list ── */
+.lu-devices { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-8); }
+.lu-device { display: flex; align-items: center; gap: var(--space-14); padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius-14); background: var(--surface); }
+.lu-device.is-this { border-color: var(--accent); }
+.lu-device.is-revoked { opacity: 0.6; }
+.lu-device__glyph { flex: none; display: flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: var(--radius-12); background: var(--inset); color: var(--ink-secondary); }
+.lu-device.is-this .lu-device__glyph { background: var(--accent-soft); color: var(--accent-ink); }
+.lu-device__text { flex: 1; min-width: 0; }
+.lu-device__name { margin: 0; display: flex; align-items: center; gap: var(--space-8); font-size: 15px; font-weight: 600; color: var(--ink); }
+.lu-device__meta { margin: 2px 0 0; font-size: 13px; color: var(--ink-muted); }
+
+/* ── Empty state ── */
+.lu-empty { margin: auto; max-width: 360px; display: flex; flex-direction: column; align-items: center; gap: var(--space-8); padding: var(--space-24); text-align: center; }
+.lu-empty__glyph { color: var(--ink-muted); margin-bottom: 4px; }
+.lu-empty__title { margin: 0; font-family: var(--font-display); font-size: 18px; font-weight: 700; color: var(--ink); }
+.lu-empty__text { margin: 0 0 8px; font-size: 14px; line-height: 1.45; color: var(--ink-secondary); }
+
+/* ── Page body (requests, devices) ── */
+.lu-page { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: var(--space-12); padding: 16px 24px 24px; }
+.lu-page__title { margin: 8px 0 0; font-size: 12.5px; font-weight: 600; color: var(--ink-muted); }
 
 /* Theme swaps for artwork that has a light and a dark file (the logo) */
 .lu-only-dark { display: none !important; }

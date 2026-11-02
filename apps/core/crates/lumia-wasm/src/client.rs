@@ -11,19 +11,25 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use futures_util::lock::Mutex;
 use js_sys::Function;
 use lumia_client::api::{Api, Tokens};
+use lumia_client::dm::{DmEngine, Outcome};
 use lumia_client::futures_channel::mpsc;
 use lumia_client::futures_util::StreamExt as _;
 use lumia_client::gateway::{self, GatewayCommand, GatewayEvent};
 use lumia_client::identity::Device;
-use lumia_client::sqlite::SqliteStore;
+use lumia_client::sqlite::{DmStatus, SqliteStore};
 use lumia_client::ClientError;
 use lumia_core::keystore::Keystore;
-use lumia_core::proto::{command, event, Command, Event, SendMessage};
+use lumia_core::mls::projection::Projection;
+use lumia_core::proto::{
+    command, event, Command, DmOperation, DmRequest, DmRequestState, Event, SendMessage,
+};
 use lumia_core::store::Store;
 use lumia_core::sync::Notice;
 use lumia_core::wire;
+use prost::Message as _;
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
@@ -117,6 +123,21 @@ struct ChannelSummary {
     name: String,
     kind: String,
     last_seq: u64,
+    /// DM kinds: who is in it.
+    participant_account_ids: Vec<String>,
+    /// Personal DMs: the hosting instance.
+    host: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DmRequestSummary {
+    request_id: String,
+    from_account_id: String,
+    to_account_id: String,
+    state: String,
+    shared_server_ids: Vec<String>,
+    mutual_friend_count: u32,
 }
 
 #[derive(Serialize)]
@@ -127,6 +148,59 @@ struct SnapshotSummary {
     display_name: String,
     servers: Vec<ServerSummary>,
     channels: Vec<ChannelSummary>,
+    pending_requests: Vec<DmRequestSummary>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MemberSummary {
+    account_id: String,
+    handle: String,
+    display_name: String,
+    nickname: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DmChannelSummary {
+    channel_id: String,
+    participant_account_ids: Vec<String>,
+    /// Whether this device holds the group (can read and send).
+    member: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DmMessageSummary {
+    message_id: String,
+    seq: u64,
+    sender_identity_id: String,
+    sender_device_id: String,
+    body: String,
+    sent_at_micros: i64,
+    edited: bool,
+    deleted: bool,
+    mine: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DmLogSummary {
+    messages: Vec<DmMessageSummary>,
+    /// Rows sent before this device joined (unreadable by design).
+    before_join: u32,
+    /// Rows that could not be decrypted.
+    undecryptable: u32,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DmOpened {
+    channel_id: String,
+    existed: bool,
+    member: bool,
+    /// This device is creating the group; `dmReady` follows.
+    creating: bool,
 }
 
 #[derive(Serialize)]
@@ -156,6 +230,7 @@ struct DeviceSummary {
     kind: String,
     label: String,
     web_origin: String,
+    added_at_micros: i64,
     this_device: bool,
     revoked: bool,
 }
@@ -214,6 +289,105 @@ enum ClientEvent {
     Closed {
         reason: String,
     },
+    /// The DM engine said something worth showing (a note, not an error).
+    DmNote {
+        message: String,
+    },
+    /// The engine failed on an event; the conversation may be stale.
+    DmError {
+        message: String,
+    },
+    /// A personal DM the account can now see was subscribed.
+    DmSubscribed {
+        channel_id: String,
+    },
+    /// A decrypted operation landed at `seq`; re-read the conversation.
+    DmOperation {
+        channel_id: String,
+        seq: u64,
+        sender_identity_id: String,
+        sender_device_id: String,
+    },
+    /// The group for this conversation exists and its welcome was acked.
+    DmReady {
+        channel_id: String,
+    },
+    /// This device's operation was acked.
+    DmDelivered {
+        operation_id: String,
+    },
+}
+
+fn emit(listener: &Function, ev: ClientEvent) {
+    if let Ok(value) = to_js(&ev) {
+        let _ = listener.call1(&JsValue::NULL, &value);
+    }
+}
+
+/// Carries out the DM engine's outcomes: commands to the gateway loop,
+/// everything else to the listener.
+fn dispatch(
+    outcomes: Vec<Outcome>,
+    commands: Option<&mpsc::UnboundedSender<GatewayCommand>>,
+    listener: Option<&Function>,
+) {
+    let emit = |ev: ClientEvent| {
+        if let Some(l) = listener {
+            emit(l, ev);
+        }
+    };
+    for outcome in outcomes {
+        match outcome {
+            Outcome::Print(message) => emit(ClientEvent::DmNote { message }),
+            Outcome::Send(cmd) => {
+                if let Some(tx) = commands {
+                    let _ = tx.unbounded_send(GatewayCommand::Send(cmd));
+                }
+            }
+            Outcome::Subscribe(channel_id) => {
+                if let Some(tx) = commands {
+                    let _ = tx.unbounded_send(GatewayCommand::Subscribe(channel_id.clone()));
+                }
+                emit(ClientEvent::DmSubscribed {
+                    channel_id: wire::display(&channel_id),
+                });
+            }
+            Outcome::Operation {
+                channel_id,
+                seq,
+                sender,
+                ..
+            } => emit(ClientEvent::DmOperation {
+                channel_id: wire::display(&channel_id),
+                seq,
+                sender_identity_id: hex::encode(&sender.identity_id),
+                sender_device_id: wire::display(&sender.device_id),
+            }),
+            Outcome::GroupReady(channel_id) => emit(ClientEvent::DmReady {
+                channel_id: wire::display(&channel_id),
+            }),
+            Outcome::Delivered(id) => emit(ClientEvent::DmDelivered {
+                operation_id: wire::display(&id),
+            }),
+        }
+    }
+}
+
+fn request_summary(r: &DmRequest) -> DmRequestSummary {
+    DmRequestSummary {
+        request_id: wire::display(&r.request_id),
+        from_account_id: wire::display(&r.from_account_id),
+        to_account_id: wire::display(&r.to_account_id),
+        state: DmRequestState::try_from(r.state)
+            .map(|s| s.as_str_name().to_string())
+            .unwrap_or_default(),
+        shared_server_ids: r
+            .shared_server_ids
+            .iter()
+            .map(|id| wire::display(id))
+            .collect(),
+        mutual_friend_count: r.mutual_friend_count,
+    }
 }
 
 fn message_summary(m: &lumia_core::proto::Message) -> MessageSummary {
@@ -316,6 +490,8 @@ struct Inner {
     /// This instance's secrets (tokens).
     keys: SqliteStore,
     commands: Option<mpsc::UnboundedSender<GatewayCommand>>,
+    /// The page's listener while the loop runs; DM outcomes go there too.
+    listener: Option<Function>,
 }
 
 /// The identity's stores, shared by every instance on this origin: the
@@ -336,6 +512,11 @@ pub struct Client {
     device_id: Vec<u8>,
     inner: Rc<RefCell<Inner>>,
     identity: Rc<RefCell<IdentityStores>>,
+    /// The personal-DM engine, once this device holds an identity. Behind
+    /// an async mutex: the gateway task and the page's calls take turns,
+    /// each holding it across its own awaits (roster and key-package
+    /// fetches) on this single-threaded worker.
+    dm: Rc<RefCell<Option<Rc<Mutex<DmEngine>>>>>,
 }
 
 impl std::fmt::Debug for Client {
@@ -397,11 +578,13 @@ impl Client {
                 reader,
                 keys,
                 commands: None,
+                listener: None,
             })),
             identity: Rc::new(RefCell::new(IdentityStores {
                 store: identity_store,
                 keys: identity_keys,
             })),
+            dm: Rc::new(RefCell::new(None)),
         })
     }
 
@@ -531,9 +714,39 @@ impl Client {
                         .map(|k| k.as_str_name().to_string())
                         .unwrap_or_default(),
                     last_seq: c.last_seq,
+                    participant_account_ids: c
+                        .participant_account_ids
+                        .iter()
+                        .map(|id| wire::display(id))
+                        .collect(),
+                    host: c.host.clone(),
                 })
                 .collect(),
+            pending_requests: snap.pending_requests.iter().map(request_summary).collect(),
         })
+    }
+
+    /// `GET /servers/{id}/members`: a server's members with their
+    /// accounts, optionally filtered by a handle or nickname prefix.
+    ///
+    /// # Errors
+    /// On transport or API failure.
+    pub async fn members(&self, server_id: String, query: String) -> Result<JsValue, JsError> {
+        let page = self.api.members(&server_id, &query).await.map_err(js)?;
+        let out: Vec<MemberSummary> = page
+            .members
+            .iter()
+            .map(|m| {
+                let account = page.accounts.iter().find(|a| a.account_id == m.account_id);
+                MemberSummary {
+                    account_id: wire::display(&m.account_id),
+                    handle: account.map(|a| a.handle.clone()).unwrap_or_default(),
+                    display_name: account.map(|a| a.display_name.clone()).unwrap_or_default(),
+                    nickname: m.nickname.clone(),
+                }
+            })
+            .collect();
+        to_js(&out)
     }
 
     /// The newest messages of a channel from the local store, oldest first.
@@ -569,10 +782,24 @@ impl Client {
         if !self.signed_in() {
             return Err(JsError::new("not signed in"));
         }
-        let channels = channel_ids
+        let mut channels = channel_ids
             .iter()
             .map(|id| parse_uuid(id))
             .collect::<Result<Vec<_>, _>>()?;
+        // Personal DMs whose participants this device knows are subscribed
+        // from the start; the rest when the account log names them, so
+        // their events are never processed before the rosters can be
+        // fetched (the CLI does the same).
+        let engine = self.dm_engine().ok();
+        if let Some(engine) = &engine {
+            if let Some(e) = engine.try_lock() {
+                for channel in e.channels().keys() {
+                    if !channels.contains(channel) {
+                        channels.push(channel.clone());
+                    }
+                }
+            }
+        }
         let mut inner = self.inner.borrow_mut();
         let store = inner
             .store
@@ -589,15 +816,51 @@ impl Client {
             let mut inner = back.borrow_mut();
             inner.store = Some(store);
             inner.commands = None;
+            inner.listener = None;
         });
+        let dm = Rc::clone(&self.dm);
+        let stores = Rc::clone(&self.inner);
+        let dtx = tx.clone();
+        let page = listener.clone();
         wasm_bindgen_futures::spawn_local(async move {
             while let Some(ev) = erx.next().await {
+                if let GatewayEvent::Notice(Notice::Welcomed(w)) = &ev {
+                    let _ = stores
+                        .borrow_mut()
+                        .reader
+                        .meta_set("account_id", &hex::encode(&w.account_id));
+                }
+                let engine = dm.borrow().clone();
+                if let Some(engine) = engine {
+                    let mut e = engine.lock().await;
+                    let outcomes = match &ev {
+                        GatewayEvent::Notice(Notice::Welcomed(w)) => {
+                            e.set_account(w.account_id.clone());
+                            e.on_welcome(w).await
+                        }
+                        GatewayEvent::Notice(n) => e.on_notice(n).await,
+                        GatewayEvent::Applied(events) => e.on_events(events).await,
+                        GatewayEvent::AccountApplied(events) => e.on_account_events(events).await,
+                        _ => Ok(Vec::new()),
+                    };
+                    drop(e);
+                    match outcomes {
+                        Ok(out) => dispatch(out, Some(&dtx), Some(&page)),
+                        Err(err) => emit(
+                            &page,
+                            ClientEvent::DmError {
+                                message: err.to_string(),
+                            },
+                        ),
+                    }
+                }
                 if let Ok(value) = to_js(&client_event(ev)) {
-                    let _ = listener.call1(&JsValue::NULL, &value);
+                    let _ = page.call1(&JsValue::NULL, &value);
                 }
             }
         });
         inner.commands = Some(tx);
+        inner.listener = Some(listener);
         Ok(())
     }
 
@@ -716,6 +979,293 @@ impl Client {
         to_js(&roster_summary(&roster, &self.device_id))
     }
 
+    /// Revokes another device of this identity, signed by this device
+    /// with the account password as reauth (identity spec 4.4). A device
+    /// cannot revoke itself; that takes the phrase on a native device.
+    ///
+    /// # Errors
+    /// On API failure, a wrong password, or when asked to revoke this device.
+    #[wasm_bindgen(js_name = identityRevoke)]
+    #[allow(clippy::await_holding_refcell_ref)] // see IdentityStores
+    pub async fn identity_revoke(
+        &self,
+        device_id: String,
+        password: String,
+    ) -> Result<JsValue, JsError> {
+        let target = parse_uuid(&device_id)?;
+        let api = self.api.clone();
+        let mut stores = self.identity.borrow_mut();
+        let mut device = device(&mut stores, &self.device_id);
+        device
+            .revoke_with_device(&api, &password, &target)
+            .await
+            .map_err(js)?;
+        let roster = device.roster().map_err(js)?;
+        drop(stores);
+        to_js(&roster_summary(&roster, &self.device_id))
+    }
+
+    // ---- Personal DMs (e2ee spec), through the DM engine ----
+
+    /// Whether personal DMs work on this device: it holds an identity.
+    #[must_use]
+    #[wasm_bindgen(js_name = dmAvailable)]
+    pub fn dm_available(&self) -> bool {
+        self.dm_engine().is_ok()
+    }
+
+    /// The engine, built on first use from this device's identity and its
+    /// own connection to the instance store.
+    fn dm_engine(&self) -> Result<Rc<Mutex<DmEngine>>, JsError> {
+        if let Some(engine) = self.dm.borrow().as_ref() {
+            return Ok(Rc::clone(engine));
+        }
+        let (roster, seed, backup_key) = {
+            let mut stores = self.identity.borrow_mut();
+            let seed = stores
+                .keys
+                .get("device_key")
+                .map_err(js)?
+                .ok_or_else(|| JsError::new("no identity on this device"))?;
+            let backup_key = stores.keys.get("backup_key").map_err(js)?;
+            let roster = device(&mut stores, &self.device_id).roster().map_err(js)?;
+            (roster, seed, backup_key)
+        };
+        let account = self
+            .inner
+            .borrow()
+            .reader
+            .meta_get("account_id")
+            .map_err(js)?
+            .map(|h| hex::decode(h).unwrap_or_default())
+            .unwrap_or_default();
+        let store = SqliteStore::open_on_vfs(&format!("lumia-{}-store.sqlite", self.host), VFS)
+            .map_err(js)?;
+        let engine = DmEngine::new(
+            self.api.clone(),
+            store,
+            account,
+            self.device_id.clone(),
+            &seed,
+            backup_key,
+            roster,
+        )
+        .map_err(js)?;
+        let engine = Rc::new(Mutex::new(engine));
+        *self.dm.borrow_mut() = Some(Rc::clone(&engine));
+        Ok(engine)
+    }
+
+    /// Carries out outcomes from a page-initiated engine call.
+    fn dispatch(&self, outcomes: Vec<Outcome>) {
+        let inner = self.inner.borrow();
+        dispatch(outcomes, inner.commands.as_ref(), inner.listener.as_ref());
+    }
+
+    /// The personal conversations this device knows, with whether it
+    /// holds their group.
+    ///
+    /// # Errors
+    /// Without an identity, or on a store failure.
+    #[wasm_bindgen(js_name = dmChannels)]
+    pub async fn dm_channels(&self) -> Result<JsValue, JsError> {
+        let engine = self.dm_engine()?;
+        let e = engine.lock().await;
+        let mut out = Vec::new();
+        for (channel, participants) in e.channels() {
+            out.push(DmChannelSummary {
+                channel_id: wire::display(channel),
+                participant_account_ids: participants.iter().map(|p| wire::display(p)).collect(),
+                member: e.is_member(channel).map_err(js)?,
+            });
+        }
+        to_js(&out)
+    }
+
+    /// Opens (or finds) the conversation with `account_ids`; when this
+    /// device opened a new one it creates the group and welcomes the
+    /// others (`dmReady` follows on the listener).
+    ///
+    /// # Errors
+    /// `FAILED_PRECONDITION` without an accepted request; or without an
+    /// identity, or before the gateway loop started.
+    #[wasm_bindgen(js_name = dmOpen)]
+    pub async fn dm_open(&self, account_ids: Vec<String>) -> Result<JsValue, JsError> {
+        let others = account_ids
+            .iter()
+            .map(|id| parse_uuid(id))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.open_dm(others, false).await
+    }
+
+    async fn open_dm(&self, others: Vec<Vec<u8>>, accepter: bool) -> Result<JsValue, JsError> {
+        let engine = self.dm_engine()?;
+        let opened = self.api.open_personal_dm(others).await.map_err(js)?;
+        let channel = opened
+            .channel
+            .ok_or_else(|| JsError::new("no channel in the response"))?;
+        let mut e = engine.lock().await;
+        e.record_channel(&channel).map_err(js)?;
+        let member = e.is_member(&channel.channel_id).map_err(js)?;
+        let creating = !member && (accepter || !opened.existed);
+        if creating {
+            if self.inner.borrow().commands.is_none() {
+                return Err(JsError::new("not started"));
+            }
+            let outcomes = e.create_group(&channel.channel_id).await.map_err(js)?;
+            drop(e);
+            self.dispatch(outcomes);
+        }
+        to_js(&DmOpened {
+            channel_id: wire::display(&channel.channel_id),
+            existed: opened.existed,
+            member,
+            creating,
+        })
+    }
+
+    /// Sends a DM request to an account.
+    ///
+    /// # Errors
+    /// `ALREADY_EXISTS` when the pair already has a personal DM.
+    #[wasm_bindgen(js_name = dmRequest)]
+    pub async fn dm_request(&self, account_id: String) -> Result<JsValue, JsError> {
+        let to = parse_uuid(&account_id)?;
+        let request = self.api.send_dm_request(to).await.map_err(js)?;
+        to_js(&request_summary(&request))
+    }
+
+    /// Answers a DM request: `accept`, `decline` or `block`. Accepting
+    /// opens the conversation and, as the accepter, creates its group.
+    ///
+    /// # Errors
+    /// On API failure, an unknown response, or without an identity when accepting.
+    #[wasm_bindgen(js_name = dmRespond)]
+    pub async fn dm_respond(
+        &self,
+        request_id: String,
+        response: String,
+    ) -> Result<JsValue, JsError> {
+        let state = match response.as_str() {
+            "accept" => DmRequestState::Accepted,
+            "decline" => DmRequestState::Declined,
+            "block" => DmRequestState::Blocked,
+            other => return Err(JsError::new(&format!("unknown response {other}"))),
+        };
+        let request = self
+            .api
+            .respond_dm_request(&request_id, state)
+            .await
+            .map_err(js)?;
+        if state == DmRequestState::Accepted {
+            self.open_dm(vec![request.from_account_id.clone()], true)
+                .await
+        } else {
+            to_js(&request_summary(&request))
+        }
+    }
+
+    /// Sends a message in a personal DM; `dmDelivered` follows on the
+    /// listener once the ciphertext is acked.
+    ///
+    /// # Errors
+    /// Without the group for the conversation, or before the loop started.
+    #[wasm_bindgen(js_name = dmSend)]
+    pub async fn dm_send(&self, channel_id: String, body: String) -> Result<(), JsError> {
+        let channel = parse_uuid(&channel_id)?;
+        let engine = self.dm_engine()?;
+        let mut e = engine.lock().await;
+        e.load_participants(&channel).map_err(js)?;
+        let outcomes = e.send_text(&channel, &body).map_err(js)?;
+        drop(e);
+        self.dispatch(outcomes);
+        Ok(())
+    }
+
+    /// Deletes one of this identity's messages in a personal DM.
+    ///
+    /// # Errors
+    /// Without the group for the conversation, or before the loop started.
+    #[wasm_bindgen(js_name = dmDelete)]
+    pub async fn dm_delete(&self, channel_id: String, message_id: String) -> Result<(), JsError> {
+        let channel = parse_uuid(&channel_id)?;
+        let message = parse_uuid(&message_id)?;
+        let engine = self.dm_engine()?;
+        let mut e = engine.lock().await;
+        e.load_participants(&channel).map_err(js)?;
+        let outcomes = e.send_delete(&channel, message).map_err(js)?;
+        drop(e);
+        self.dispatch(outcomes);
+        Ok(())
+    }
+
+    /// Rejoins a conversation by external commit (e2ee spec section 10).
+    ///
+    /// # Errors
+    /// Without an identity, or when the instance holds no group info.
+    #[wasm_bindgen(js_name = dmRejoin)]
+    pub async fn dm_rejoin(&self, channel_id: String) -> Result<(), JsError> {
+        let channel = parse_uuid(&channel_id)?;
+        let engine = self.dm_engine()?;
+        let mut e = engine.lock().await;
+        e.load_participants(&channel).map_err(js)?;
+        let outcomes = e.rejoin(&channel).await.map_err(js)?;
+        drop(e);
+        self.dispatch(outcomes);
+        Ok(())
+    }
+
+    /// The conversation as this device can read it: the projection of its
+    /// decrypted operations, oldest first, with counts of what it cannot.
+    ///
+    /// # Errors
+    /// Without an identity, or on a store failure.
+    #[wasm_bindgen(js_name = dmMessages)]
+    pub async fn dm_messages(&self, channel_id: String) -> Result<JsValue, JsError> {
+        let channel = parse_uuid(&channel_id)?;
+        let engine = self.dm_engine()?;
+        let e = engine.lock().await;
+        let me = e.me().identity_id.clone();
+        let mut projection = Projection::default();
+        let mut before_join = 0u32;
+        let mut undecryptable = 0u32;
+        for row in e.rows(&channel).map_err(js)? {
+            match row.status {
+                DmStatus::Decrypted => {
+                    if let Ok(op) = DmOperation::decode(row.bytes.as_slice()) {
+                        projection.apply(
+                            row.seq,
+                            &row.sender_identity_id,
+                            &row.sender_device_id,
+                            &op,
+                        );
+                    }
+                }
+                DmStatus::BeforeJoin => before_join += 1,
+                DmStatus::Undecryptable => undecryptable += 1,
+            }
+        }
+        let messages = projection
+            .messages()
+            .map(|m| DmMessageSummary {
+                message_id: wire::display(&m.message_id),
+                seq: m.seq,
+                sender_identity_id: hex::encode(&m.sender_identity_id),
+                sender_device_id: wire::display(&m.sender_device_id),
+                body: m.body.clone(),
+                sent_at_micros: i64::try_from(m.sent_at_nanos / 1000).unwrap_or(0),
+                edited: m.edited,
+                deleted: m.deleted,
+                mine: m.sender_identity_id == me,
+            })
+            .collect();
+        to_js(&DmLogSummary {
+            messages,
+            before_join,
+            undecryptable,
+        })
+    }
+
     fn save_tokens(&self, pair: &lumia_core::proto::TokenPair) -> Result<(), JsError> {
         let mut inner = self.inner.borrow_mut();
         inner
@@ -761,6 +1311,7 @@ fn roster_summary(roster: &lumia_core::identity::roster::Verified, me: &[u8]) ->
             kind: format!("{:?}", info.kind).to_lowercase(),
             label: String::new(),
             web_origin: info.web_origin.clone(),
+            added_at_micros: i64::try_from(info.added_at / 1000).unwrap_or(0),
             this_device: id.as_slice() == me,
             revoked: false,
         })
@@ -770,6 +1321,7 @@ fn roster_summary(roster: &lumia_core::identity::roster::Verified, me: &[u8]) ->
         kind: String::new(),
         label: String::new(),
         web_origin: String::new(),
+        added_at_micros: 0,
         this_device: id.as_slice() == me,
         revoked: true,
     }));

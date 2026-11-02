@@ -14,15 +14,19 @@ import {
   ChannelList,
   Checkbox,
   Composer,
+  DeviceList,
   Divider,
+  EmptyState,
   Icon,
   IconButton,
   MemberList,
   Mention,
   Message,
   MessageList,
+  Notice,
   QuickTiles,
   ReactionChip,
+  RequestCard,
   SearchTrigger,
   ServerHeader,
   ServerRail,
@@ -203,6 +207,175 @@ function QuietSplit() {
   );
 }
 
+// Home: personal DMs grouped by the instance that hosts them, requests,
+// and this identity's devices. The same shell as a server; the rail's
+// Home tile is current and the sidebar lists conversations, not channels.
+function HomeSidebar(props: { view: "dm" | "requests" | "devices" }) {
+  return (
+    <>
+      <ServerHeader name="Home" />
+      <SearchTrigger label="Search messages" />
+      <QuickTiles
+        items={[
+          { icon: "mention", label: "Requests", count: 2 },
+          { icon: "shield", label: "Devices" },
+          { icon: "plus", label: "Instance" },
+        ]}
+      />
+      <ChannelList
+        sections={[
+          {
+            title: "chat.acme.dev",
+            items: [
+              { name: PEOPLE.maya.name, kind: "dm", initials: "MC", tone: "peach", status: "online", active: props.view === "dm", unread: true, count: 2 },
+              { name: PEOPLE.devon.name, kind: "dm", initials: "DP", tone: "purple", status: "away" },
+              { name: "Sam, Priya", kind: "group", people: [PEOPLE.sam, PEOPLE.priya] },
+            ],
+          },
+          {
+            title: "lumia.winchester.dev",
+            items: [{ name: PEOPLE.leo.name, kind: "dm", initials: "LM", tone: "sky", status: "online" }],
+          },
+        ]}
+      />
+    </>
+  );
+}
+
+function HomeBoard(props: { view: "dm" | "requests" | "devices" }) {
+  return (
+    <AppShell
+      height={900}
+      rail={
+        <ServerRail
+          logoSrc="/brand/lumia-original-icon.svg"
+          homeUnread={3}
+          homeCurrent
+          servers={[
+            { name: "Acme", initials: "A" },
+            { name: "Design Guild", initials: "DG", ink: "indigo", unread: true },
+            { name: "Lumia Builders", initials: "LB", ink: "green", mentions: 2 },
+          ]}
+          self={{ ...PEOPLE.self, status: "online" }}
+        />
+      }
+      sidebar={<HomeSidebar view={props.view} />}
+      main={props.view === "dm" ? <DmConversation /> : props.view === "requests" ? <Requests /> : <Devices />}
+      aside={props.view === "dm" ? <DmAside /> : undefined}
+    />
+  );
+}
+
+function DmConversation() {
+  return (
+    <>
+      <ChannelHeader
+        kind="dm"
+        name={PEOPLE.maya.name}
+        topic="on chat.acme.dev"
+        actions={[
+          { icon: "search", label: "Search in this conversation" },
+          { icon: "more", label: "Conversation settings" },
+        ]}
+      />
+      <MessageList>
+        <Notice icon="shield">Messages here are end-to-end encrypted. Only your devices and Maya's can read them; chat.acme.dev delivers them without seeing them.</Notice>
+        <Divider variant="day" label="Yesterday" />
+        <Message author={PEOPLE.maya.name} initials="MC" tone="peach" time="4:12 PM" datetime="2026-11-01T16:12">
+          {["Are you around tomorrow? I want to walk you through the onboarding changes before they go to the guild.", "Ten minutes, promise."]}
+        </Message>
+        <Message author={PEOPLE.self.name} initials="RW" tone="indigo" time="4:30 PM" datetime="2026-11-01T16:30">
+          Sure. After standup works.
+        </Message>
+        <Divider variant="day" label="Today" />
+        <Divider variant="new" />
+        <Message author={PEOPLE.maya.name} initials="MC" tone="peach" time="9:41 AM" datetime="2026-11-02T09:41" attachment={{ name: "Onboarding v4.pdf", size: "860 KB" }}>
+          Here it is. Second screen is the one I am least sure about.
+        </Message>
+        <SystemMessage time="9:50 AM" datetime="2026-11-02T09:50">
+          <strong>Maya</strong> added a device, <strong>iPhone</strong>. Earlier messages stay unreadable on it.
+        </SystemMessage>
+      </MessageList>
+      <Composer placeholder={"Message " + PEOPLE.maya.name} />
+    </>
+  );
+}
+
+function DmAside() {
+  return (
+    <SidePanel tabs={[{ id: "details", label: "Details" }]} value="details" onChange={() => {}}>
+      <MemberList
+        sections={[
+          {
+            title: "In this conversation",
+            members: [
+              { ...PEOPLE.maya, status: "online", subtitle: "@maya · chat.acme.dev" },
+              { ...PEOPLE.self, status: "online", subtitle: "@ryan · you", tag: "You" },
+            ],
+          },
+          {
+            title: "Devices that can read it",
+            members: [
+              { name: "Maya's laptop", initials: "M", tone: "peach", subtitle: "Added by Maya, Oct 12" },
+              { name: "Maya's iPhone", initials: "M", tone: "peach", subtitle: "Added today, sees new messages only" },
+              { name: "This browser", initials: "R", tone: "indigo", subtitle: "localhost:5173", tag: "You" },
+              { name: "laptop", initials: "R", tone: "indigo", subtitle: "Added by you, Oct 30" },
+            ],
+          },
+        ]}
+      />
+      <Notice icon="lock" class="gallery-aside-note">History backup is off for this identity. Messages live only on your devices.</Notice>
+    </SidePanel>
+  );
+}
+
+function Requests() {
+  return (
+    <>
+      <ChannelHeader kind="page" name="Requests" topic="People who want to message you" actions={[]} />
+      <div class="lu-page">
+        <Notice icon="shield">A request shows who is asking and what you share, nothing else. Accepting opens an encrypted conversation; the sender cannot see that you looked.</Notice>
+        <RequestCard name="Jordan Lee" handle="jordan" initials="JL" tone="mint" meta="Shares 2 servers with you · 3 mutual friends · chat.acme.dev" />
+        <RequestCard name="Alex Rivera" handle="arivera" initials="AR" tone="amber" meta="Shares Lumia Builders with you · lumia.winchester.dev" />
+        <p class="lu-page__title">Earlier</p>
+        <EmptyState icon="mention" title="Nothing else waiting">
+          Declined requests disappear; blocked people cannot ask again.
+        </EmptyState>
+      </div>
+    </>
+  );
+}
+
+function Devices() {
+  return (
+    <>
+      <ChannelHeader kind="page" name="Devices" topic="Everything that holds your identity" actions={[]} />
+      <div class="lu-page">
+        <Notice icon="shield" action={{ label: "Link a device" }}>Your identity lives on these devices, not on any instance. Revoking one takes effect on every instance that holds your roster.</Notice>
+        <DeviceList
+          devices={[
+            { id: "1", kind: "web", label: "This browser", meta: "localhost:5173 · added today by laptop", thisDevice: true },
+            { id: "2", kind: "native", label: "laptop", meta: "Root device · added Oct 30" },
+            { id: "3", kind: "mobile", label: "iPhone", meta: "Added Nov 1 by laptop" },
+          ]}
+          onRevoke={() => {}}
+        />
+        <Card title="Revoke iPhone?" subtitle="It stops reading new messages the moment every instance has the change. Confirm with your password on chat.acme.dev.">
+          <div class="gallery-auth__form">
+            <TextField label="Password" type="password" reveal placeholder="Your password" autocomplete="current-password" />
+            <div class="pieces__row">
+              <Button variant="primary" size="md">Revoke iPhone</Button>
+              <Button size="md">Keep it</Button>
+            </div>
+          </div>
+        </Card>
+        <p class="lu-page__title">Revoked</p>
+        <DeviceList devices={[{ id: "4", kind: "native", label: "old laptop", meta: "Revoked Oct 28 by laptop", revoked: true }]} />
+      </div>
+    </>
+  );
+}
+
 function SignIn() {
   return (
     <div class="gallery-auth">
@@ -236,13 +409,13 @@ function SignIn() {
 
 export function DesignGallery() {
   const { theme, apply } = useTheme();
-  const [board, setBoard] = createSignal<"split" | "signin" | "pieces">("split");
+  const [board, setBoard] = createSignal<"split" | "home" | "requests" | "devices" | "signin" | "pieces">("split");
   return (
     <div class="gallery">
       <header class="gallery__bar">
         <strong>Lumia design system</strong>
         <nav class="gallery__nav" aria-label="Boards">
-          <For each={[["split", "Quiet Split"], ["signin", "Sign in"], ["pieces", "Pieces"]] as const}>
+          <For each={[["split", "Quiet Split"], ["home", "Home"], ["requests", "Requests"], ["devices", "Devices"], ["signin", "Sign in"], ["pieces", "Pieces"]] as const}>
             {([id, label]) => (
               <button type="button" class="gallery__tab" aria-pressed={board() === id} onClick={() => setBoard(id)}>
                 {label}
@@ -260,7 +433,7 @@ export function DesignGallery() {
         </nav>
       </header>
       <div class="gallery__board">
-        {board() === "split" ? <QuietSplit /> : board() === "signin" ? <SignIn /> : <Pieces />}
+        {board() === "split" ? <QuietSplit /> : board() === "home" ? <HomeBoard view="dm" /> : board() === "requests" ? <HomeBoard view="requests" /> : board() === "devices" ? <HomeBoard view="devices" /> : board() === "signin" ? <SignIn /> : <Pieces />}
       </div>
     </div>
   );

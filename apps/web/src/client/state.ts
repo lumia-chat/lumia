@@ -87,6 +87,20 @@ export async function startGateway(channelIds: string[]): Promise<void> {
         setConnection(`closed: ${e.reason}`);
         setStarted(false);
         break;
+      case "dmSubscribed":
+      case "dmReady":
+        void queryClient.invalidateQueries({ queryKey: ["dmChannels"] });
+        void queryClient.invalidateQueries({ queryKey: ["dm", e.channelId] });
+        break;
+      case "dmOperation":
+        void queryClient.invalidateQueries({ queryKey: ["dm", e.channelId] });
+        break;
+      case "dmDelivered":
+        void queryClient.invalidateQueries({ queryKey: ["dm"] });
+        break;
+      case "dmError":
+        console.error("dm:", e.message);
+        break;
       default:
         break;
     }
@@ -100,6 +114,30 @@ export function snapshotQuery() {
   return createQuery(() => ({
     queryKey: ["snapshot"],
     queryFn: () => client().snapshot(),
+  }));
+}
+
+export function dmChannelsQuery(enabled: () => boolean) {
+  return createQuery(() => ({
+    queryKey: ["dmChannels"],
+    queryFn: () => client().dmChannels(),
+    enabled: enabled(),
+  }));
+}
+
+export function dmMessagesQuery(channelId: () => string | undefined) {
+  return createQuery(() => ({
+    queryKey: ["dm", channelId()],
+    queryFn: () => client().dmMessages(channelId() as string),
+    enabled: !!channelId(),
+  }));
+}
+
+export function rosterQuery(enabled: () => boolean) {
+  return createQuery(() => ({
+    queryKey: ["roster"],
+    queryFn: () => client().identityShow(),
+    enabled: enabled(),
   }));
 }
 

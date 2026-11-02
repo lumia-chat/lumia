@@ -16,8 +16,8 @@ use lumia_core::proto::{
     CreateAccountRequest, CreateChannelRequest, CreateLinkBundleRequest, CreateLinkBundleResponse,
     CreateServerRequest, Error as ApiError, ErrorCode, GetGroupInfoResponse, GetLinkBundleResponse,
     GetRosterResponse, IdentityProof, IdentityProofSignInRequest, ListAccountEventsResponse,
-    ListChannelsResponse, ListEventsResponse, ListServersResponse, OpenPersonalDmRequest,
-    OpenPersonalDmResponse, PasswordSignInRequest, PublishGroupInfoRequest,
+    ListChannelsResponse, ListEventsResponse, ListMembersResponse, ListServersResponse,
+    OpenPersonalDmRequest, OpenPersonalDmResponse, PasswordSignInRequest, PublishGroupInfoRequest,
     PublishKeyPackagesRequest, PublishRosterRequest, ReauthRequest, ReauthResponse, RefreshRequest,
     RevokeDeviceRequest, Server, SignedRoster, TokenPair,
 };
@@ -478,6 +478,23 @@ impl Api {
             .await
     }
 
+    /// `GET /servers/{id}/members`: a page of members with their accounts,
+    /// optionally those whose handle or nickname starts with `query`.
+    ///
+    /// # Errors
+    /// On transport failure or an API error.
+    pub async fn members(
+        &self,
+        server_id: &str,
+        query: &str,
+    ) -> Result<ListMembersResponse, ClientError> {
+        let q = url_encode(query);
+        self.get(&format!(
+            "/api/v1/servers/{server_id}/members?page_size=100&query={q}"
+        ))
+        .await
+    }
+
     /// `POST /channels/{id}/commands`: the HTTP path for a command, which
     /// shares the idempotency table with the gateway (protocol section 7).
     ///
@@ -933,6 +950,20 @@ fn api_error(status: StatusCode, bytes: &[u8]) -> ClientError {
         status: status.as_u16(),
         details: error.details.into_iter().collect::<HashMap<_, _>>(),
     }
+}
+
+/// Percent-encodes a query value (RFC 3986 unreserved characters pass).
+fn url_encode(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for b in value.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char);
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
 }
 
 #[cfg(test)]

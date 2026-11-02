@@ -504,6 +504,8 @@ export interface ServerRailProps {
   logoSrc: string;
   homeLabel?: string;
   homeUnread?: number;
+  /** Home is the current place (no server is). */
+  homeCurrent?: boolean;
   servers?: RailServer[];
   self?: { name: string; initials: string; tone?: Tone; status?: Status; onClick?: () => void };
   onHome?: () => void;
@@ -516,7 +518,7 @@ export function ServerRail(props: ServerRailProps) {
   const homeLabel = () => props.homeLabel ?? "Lumia Home — personal messages";
   return (
     <nav aria-label="Home and servers" class={cx("lu-rail", props.class)}>
-      <button type="button" class="lu-rail__home" onClick={() => props.onHome?.()} aria-label={homeLabel() + (props.homeUnread ? ", " + props.homeUnread + " unread" : "")}>
+      <button type="button" class={cx("lu-rail__home", props.homeCurrent && "is-current")} aria-current={props.homeCurrent ? "true" : undefined} onClick={() => props.onHome?.()} aria-label={homeLabel() + (props.homeUnread ? ", " + props.homeUnread + " unread" : "")}>
         <Show when={props.logoSrc}>
           <img src={props.logoSrc} alt="" width={36} height={36} />
         </Show>
@@ -734,7 +736,8 @@ export function SegmentedTabs(props: SegmentedTabsProps) {
 export interface ChannelHeaderProps {
   name: string;
   topic?: string;
-  kind?: "channel" | "private";
+  /** `dm` shows the lock (end-to-end encrypted); `page` shows no glyph. */
+  kind?: "channel" | "private" | "dm" | "page";
   actions?: { icon: IconName; label: string; onClick?: () => void; strokeWidth?: number }[];
   class?: string;
 }
@@ -751,7 +754,9 @@ export function ChannelHeader(props: ChannelHeaderProps) {
   return (
     <header class={cx("lu-chhead", props.class)}>
       <div class="lu-chhead__id">
-        <Icon name={props.kind === "private" ? "lock" : "hash"} size={20} strokeWidth={2.2} class="lu-chhead__glyph" />
+        <Show when={props.kind !== "page"}>
+          <Icon name={props.kind === "private" || props.kind === "dm" ? "lock" : "hash"} size={20} strokeWidth={2.2} class="lu-chhead__glyph" />
+        </Show>
         <h1 class="lu-chhead__name">{props.name}</h1>
         <Show when={props.topic}>
           <span aria-hidden="true" class="lu-chhead__rule"></span>
@@ -762,6 +767,161 @@ export function ChannelHeader(props: ChannelHeaderProps) {
         <For each={list()}>{(a) => <IconButton icon={a.icon} label={a.label} strokeWidth={a.strokeWidth ?? 1.8} onClick={() => a.onClick?.()} />}</For>
       </div>
     </header>
+  );
+}
+
+/* ── Notice ──────────────────────────────────────────────── */
+
+export interface NoticeProps {
+  icon?: IconName;
+  tone?: "neutral" | "accent";
+  action?: { label: string; onClick?: () => void };
+  children?: JSX.Element;
+  class?: string;
+}
+
+/** An inline strip: what is encrypted, what this device cannot do yet. */
+export function Notice(props: NoticeProps) {
+  return (
+    <div class={cx("lu-notice", "lu-notice--" + (props.tone ?? "neutral"), props.class)} role="note">
+      <Show when={props.icon}>{(icon) => <Icon name={icon()} size={18} class="lu-notice__glyph" />}</Show>
+      <p class="lu-notice__text">{props.children}</p>
+      <Show when={props.action}>{(a) => <Button variant="text" onClick={() => a().onClick?.()}>{a().label}</Button>}</Show>
+    </div>
+  );
+}
+
+/* ── Request card ────────────────────────────────────────── */
+
+export interface RequestCardProps {
+  name: string;
+  handle?: string;
+  initials: string;
+  tone?: Tone;
+  /** What the two of you share, nothing else (architecture 6.4). */
+  meta?: string;
+  busy?: boolean;
+  onAccept?: () => void;
+  onDecline?: () => void;
+  onBlock?: () => void;
+  class?: string;
+}
+
+/** A message request: who is asking and what you share. */
+export function RequestCard(props: RequestCardProps) {
+  return (
+    <article class={cx("lu-request", props.class)} aria-label={"Request from " + props.name}>
+      <Avatar initials={props.initials} tone={props.tone} size={40} />
+      <div class="lu-request__text">
+        <p class="lu-request__name">
+          {props.name}
+          <Show when={props.handle}>
+            <span class="lu-request__handle">@{props.handle}</span>
+          </Show>
+        </p>
+        <Show when={props.meta}>
+          <p class="lu-request__meta">{props.meta}</p>
+        </Show>
+      </div>
+      <div class="lu-request__actions">
+        <Button variant="primary" size="md" disabled={props.busy} onClick={() => props.onAccept?.()}>
+          Accept
+        </Button>
+        <Button size="md" disabled={props.busy} onClick={() => props.onDecline?.()}>
+          Decline
+        </Button>
+        <Button variant="text" disabled={props.busy} onClick={() => props.onBlock?.()}>
+          Block
+        </Button>
+      </div>
+    </article>
+  );
+}
+
+/* ── Device list ─────────────────────────────────────────── */
+
+export interface DeviceEntry {
+  id: string;
+  /** `web`, `native`, `mobile`; anything else draws the key. */
+  kind: string;
+  label: string;
+  meta?: string;
+  thisDevice?: boolean;
+  revoked?: boolean;
+}
+
+export interface DeviceListProps {
+  devices: DeviceEntry[];
+  onRevoke?: (device: DeviceEntry) => void;
+  class?: string;
+}
+
+function deviceIcon(kind: string): IconName {
+  if (kind === "web") return "globe";
+  if (kind === "mobile") return "phone";
+  if (kind === "native") return "monitor";
+  return "key";
+}
+
+/** The devices of an identity, with revoke for the others. */
+export function DeviceList(props: DeviceListProps) {
+  return (
+    <ul class={cx("lu-devices", props.class)}>
+      <For each={props.devices}>
+        {(d) => (
+          <li class={cx("lu-device", d.thisDevice && "is-this", d.revoked && "is-revoked")}>
+            <span class="lu-device__glyph" aria-hidden="true">
+              <Icon name={deviceIcon(d.kind)} size={20} />
+            </span>
+            <div class="lu-device__text">
+              <p class="lu-device__name">
+                {d.label}
+                <Show when={d.thisDevice}>
+                  <Tag tone="accent" size="sm">
+                    This device
+                  </Tag>
+                </Show>
+                <Show when={d.revoked}>
+                  <Tag size="sm">Revoked</Tag>
+                </Show>
+              </p>
+              <Show when={d.meta}>
+                <p class="lu-device__meta">{d.meta}</p>
+              </Show>
+            </div>
+            <Show when={props.onRevoke && !d.thisDevice && !d.revoked}>
+              <Button size="sm" onClick={() => props.onRevoke?.(d)}>
+                Revoke
+              </Button>
+            </Show>
+          </li>
+        )}
+      </For>
+    </ul>
+  );
+}
+
+/* ── Empty state ─────────────────────────────────────────── */
+
+export interface EmptyStateProps {
+  icon?: IconName;
+  title: string;
+  children?: JSX.Element;
+  action?: { label: string; onClick?: () => void };
+  class?: string;
+}
+
+/** A quiet centre for a panel with nothing in it yet. */
+export function EmptyState(props: EmptyStateProps) {
+  return (
+    <div class={cx("lu-empty", props.class)}>
+      <Show when={props.icon}>{(icon) => <Icon name={icon()} size={28} class="lu-empty__glyph" />}</Show>
+      <p class="lu-empty__title">{props.title}</p>
+      <Show when={props.children}>
+        <p class="lu-empty__text">{props.children}</p>
+      </Show>
+      <Show when={props.action}>{(a) => <Button size="md" onClick={() => a().onClick?.()}>{a().label}</Button>}</Show>
+    </div>
   );
 }
 
