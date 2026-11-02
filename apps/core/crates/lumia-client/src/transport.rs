@@ -50,14 +50,17 @@ pub type BoxSocket = Box<dyn Socket>;
 /// apart, and that is where the loop stops. The browser does not expose
 /// the status of a failed upgrade at all, so there every failure is a
 /// transport error and the loop refreshes before its next attempt.
-pub async fn connect(url: &str) -> Result<BoxSocket, ClientError> {
+#[cfg(not(target_arch = "wasm32"))]
+pub use native::upgrade_request;
+
+pub async fn connect(url: &str, subprotocols: &[String]) -> Result<BoxSocket, ClientError> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        native::connect(url).await
+        native::connect(url, subprotocols).await
     }
     #[cfg(target_arch = "wasm32")]
     {
-        web::connect(url).await
+        web::connect(url, subprotocols).await
     }
 }
 
@@ -134,8 +137,32 @@ mod native {
         }
     }
 
-    pub async fn connect(url: &str) -> Result<BoxSocket, ClientError> {
-        match tokio_tungstenite::connect_async(url).await {
+    /// The upgrade request with the subprotocols (the token among them)
+    /// on it, for `tokio_tungstenite::connect_async`.
+    ///
+    /// # Errors
+    /// When the URL or a subprotocol is malformed.
+    pub fn upgrade_request(
+        url: &str,
+        subprotocols: &[String],
+    ) -> Result<tungstenite::handshake::client::Request, ClientError> {
+        use tungstenite::client::IntoClientRequest as _;
+        let mut request = url
+            .into_client_request()
+            .map_err(|e| ClientError::Transport(e.to_string()))?;
+        let header = subprotocols
+            .join(", ")
+            .parse()
+            .map_err(|_| ClientError::Transport("bad subprotocol".into()))?;
+        request
+            .headers_mut()
+            .insert("Sec-WebSocket-Protocol", header);
+        Ok(request)
+    }
+
+    pub async fn connect(url: &str, subprotocols: &[String]) -> Result<BoxSocket, ClientError> {
+        let request = upgrade_request(url, subprotocols)?;
+        match tokio_tungstenite::connect_async(request).await {
             Ok((ws, _)) => Ok(Box::new(Native(ws))),
             Err(tungstenite::Error::Http(response))
                 if response.status() == 401 || response.status() == 403 =>
@@ -210,8 +237,28 @@ mod web {
         }
     }
 
-    pub async fn connect(url: &str) -> Result<BoxSocket, ClientError> {
-        let ws = WebSocket::open(url).map_err(|e| ClientError::Transport(e.to_string()))?;
+    pub async fn connect(url: &str, subprotocols: &[String]) -> Result<BoxSocket, ClientError> {
+        let ws = WebSocket::open_with_protocols(url, subprotocols)
+            .map_err(|e| ClientError::Transport(e.to_string()))?;
         Ok(Box::new(Web(ws)))
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    #[test]
+    fn the_upgrade_carries_the_subprotocols() {
+        let request = super::upgrade_request(
+            "ws://localhost:4000/gateway/websocket?vsn=1.0.0",
+            &["phoenix".to_string(), "base64url.bearer.phx.abc".to_string()],
+        )
+        .unwrap();
+        let header = request
+            .headers()
+            .get("sec-websocket-protocol")
+            .and_then(|v| v.to_str().ok())
+            .unwrap();
+        assert_eq!(header, "phoenix, base64url.bearer.phx.abc");
+        assert_eq!(request.uri().path(), "/gateway/websocket");
     }
 }

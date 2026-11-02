@@ -259,7 +259,7 @@ pub async fn run<S: Store>(
         session.subscribe(id.clone(), cursor);
     }
 
-    let socket = connect(&api.gateway_url()?).await?;
+    let socket = connect(&api.gateway_url(), &api.gateway_subprotocols()?).await?;
     let (mut sink, mut stream) = socket.split();
 
     // A queue, not a stack: effects run in the order the session returns them.

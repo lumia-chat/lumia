@@ -76,13 +76,12 @@ Rules the server implements, stated so clients can rely on them:
 ### 6.1 Connection
 
 ```
-GET /gateway HTTP/1.1
+GET /gateway/websocket?vsn=1.0.0 HTTP/1.1
 Upgrade: websocket
-Sec-WebSocket-Protocol: lumia.v1.proto      (or lumia.v1.json)
-Authorization: Bearer <access_token>
+Sec-WebSocket-Protocol: phoenix, base64url.bearer.phx.<base64(access_token), unpadded>
 ```
 
-**As implemented in v1**, encoding is chosen by the opcode of the first frame rather than by subprotocol: a binary frame selects protobuf, a text frame selects JSON, and the connection keeps that encoding. The access token travels as `?access_token=` or, for browsers, whose WebSocket API cannot set `Authorization`, as the subprotocol `base64url.bearer.phx.<base64url token>` in `Sec-WebSocket-Protocol`, which the server consumes before negotiating the rest of the header. The `Authorization` header is not read on the upgrade: the socket layer cannot see it and the one client that would send it, a native one, has the query form. The server strips the token from logs and URLs.
+**As implemented in v1**, encoding is chosen by the opcode of the first frame rather than by subprotocol: a binary frame selects protobuf, a text frame selects JSON, and the connection keeps that encoding. The access token travels in `Sec-WebSocket-Protocol` as `phoenix, base64url.bearer.phx.<base64 of the token, unpadded>`; the server answers with the `phoenix` subprotocol. It is never a query parameter, which would land in every access log, and browsers cannot set `Authorization` on a WebSocket.
 
 One connection per (device, instance). A second connection with the same session closes the first with `DISCONNECT_PROTOCOL_ERROR`.
 

@@ -84,6 +84,15 @@ async function trustCard(page: Page) {
 async function signInAndSend(which: string, handle: string) {
   const { ctx, page } = await open(which, "sign-in");
   const t0 = Date.now();
+  try {
+    await signInSteps(which, page, handle);
+  } finally {
+    await ctx.close();
+  }
+  console.log(`  ${which}: signed in, sent, reloaded, stores encrypted at rest in ${Date.now() - t0} ms`);
+}
+
+async function signInSteps(which: string, page: Page, handle: string) {
   await trustCard(page);
   await page.screenshot({ path: `${out}/${which}-sign-in.png` });
   await page.getByLabel("Email or handle").fill(handle);
@@ -117,8 +126,6 @@ async function signInAndSend(which: string, handle: string) {
     return found;
   });
   if (plain.length) throw new Error(`plaintext SQLite header in ${plain.join(", ")}`);
-  await ctx.close();
-  console.log(`  ${which}: signed in, sent, reloaded, stores encrypted at rest in ${Date.now() - t0} ms`);
 }
 
 // Link this browser as a web device: the CLI approves, the browser claims
@@ -126,6 +133,15 @@ async function signInAndSend(which: string, handle: string) {
 async function link(which: string, dataDir: string) {
   const { ctx, page } = await open(which, "link");
   const t0 = Date.now();
+  try {
+    await linkSteps(which, page, dataDir);
+  } finally {
+    await ctx.close();
+  }
+  console.log(`  ${which}: linked and signed in by identity proof in ${Date.now() - t0} ms`);
+}
+
+async function linkSteps(which: string, page: Page, dataDir: string) {
   await trustCard(page);
   await page.getByRole("button", { name: "Link this browser to your identity" }).click();
   await page.getByRole("button", { name: "Start linking" }).click();
@@ -138,10 +154,8 @@ async function link(which: string, dataDir: string) {
   await page.getByPlaceholder(/^Message #/).waitFor();
   await page.reload();
   await page.getByPlaceholder(/^Message #/).waitFor();
-  await ctx.close();
   const roster = lumia(dataDir, "identity", "show");
   if (!/Web/.test(roster)) throw new Error(`no web device in the roster:\n${roster}`);
-  console.log(`  ${which}: linked and signed in by identity proof in ${Date.now() - t0} ms`);
 }
 
 // A personal DM between the linked browser (B) and the CLI (A): A asks, B
@@ -244,9 +258,7 @@ try {
     }
   }
   console.log(failed ? `${failed} failed; screenshots in ${out}` : "ok");
-  vite?.kill();
-  // A failed step may leave a browser open, which would keep the process alive.
-  process.exit(failed ? 1 : 0);
+  process.exitCode = failed ? 1 : 0;
 } finally {
   vite?.kill();
 }

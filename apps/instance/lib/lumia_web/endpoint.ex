@@ -14,9 +14,11 @@ defmodule LumiaWeb.Endpoint do
   # The gateway (docs/protocol.md section 6). Bare protobuf or JSON frames;
   # the serializer maps them onto one Phoenix channel per socket. The
   # transport timeout is two missed 30-second heartbeats.
+  # `auth_token` is a socket option (Phoenix copies it into the transport's
+  # config and would overwrite one written inside `websocket:`).
   socket "/gateway", LumiaWeb.Gateway.Socket,
+    auth_token: true,
     websocket: [
-      auth_token: true,
       serializer: [{LumiaWeb.Gateway.Serializer, "~> 1.0"}],
       timeout: 75_000,
       max_frame_size: 1_048_576

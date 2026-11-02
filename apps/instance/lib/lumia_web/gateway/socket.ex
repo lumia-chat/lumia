@@ -3,10 +3,11 @@ defmodule LumiaWeb.Gateway.Socket do
   The gateway WebSocket (docs/protocol.md section 6). Authenticated by the
   access token on the upgrade request; one `session` channel per socket.
 
-  The token arrives as the `access_token` query parameter or, for browsers,
-  which cannot set `Authorization` on a WebSocket, as the subprotocol
-  `base64url.bearer.phx.<token>` in `Sec-WebSocket-Protocol` (protocol
-  section 6). Phoenix sockets cannot read other request headers.
+  The token arrives as the subprotocol `base64url.bearer.phx.<token>` in
+  `Sec-WebSocket-Protocol` (protocol section 6.1): browsers cannot set
+  `Authorization` on a WebSocket, Phoenix sockets cannot read other
+  request headers, and a query parameter would land in every access log,
+  so that is the one way for every client.
   """
 
   use Phoenix.Socket
@@ -16,8 +17,8 @@ defmodule LumiaWeb.Gateway.Socket do
   channel "session", LumiaWeb.Gateway.SessionChannel
 
   @impl Phoenix.Socket
-  def connect(params, socket, connect_info) do
-    token = params["access_token"] || connect_info[:auth_token]
+  def connect(_params, socket, connect_info) do
+    token = connect_info[:auth_token]
 
     case Auth.verify_access(token) do
       {:ok, session} ->

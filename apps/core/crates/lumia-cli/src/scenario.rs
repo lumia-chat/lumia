@@ -161,7 +161,11 @@ async fn token_rotation(env: &Env) -> Result<(), ClientError> {
 /// A client frame before `Hello` is a protocol error and the socket closes
 /// (protocol section 6, delivery spec 12).
 async fn frame_before_hello(env: &Env) -> Result<(), ClientError> {
-    let (ws, _) = tokio_tungstenite::connect_async(env.api.gateway_url()?).await?;
+    let request = lumia_client::transport::upgrade_request(
+        &env.api.gateway_url(),
+        &env.api.gateway_subprotocols()?,
+    )?;
+    let (ws, _) = tokio_tungstenite::connect_async(request).await?;
     let (mut sink, mut stream) = ws.split();
     let frame = ClientFrame {
         frame: Some(client_frame::Frame::Heartbeat(Heartbeat { nonce: 1 })),

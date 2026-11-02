@@ -321,16 +321,30 @@ impl Api {
         .await
     }
 
-    /// The gateway WebSocket URL for this instance, with the current token.
+    /// The gateway WebSocket URL for this instance. The token is not in
+    /// it (it would land in every access log); `gateway_subprotocols`
+    /// carries it on the upgrade.
+    #[must_use]
+    pub fn gateway_url(&self) -> String {
+        let ws = self.base.replacen("http", "ws", 1);
+        format!("{ws}/gateway/websocket?vsn=1.0.0")
+    }
+
+    /// The `Sec-WebSocket-Protocol` values for the upgrade: `phoenix`,
+    /// which the server answers with, and the bearer token the way
+    /// Phoenix reads it (`base64url.bearer.phx.` + unpadded base64 of the
+    /// token; protocol section 6.1).
     ///
     /// # Errors
     /// When not signed in.
-    pub fn gateway_url(&self) -> Result<String, ClientError> {
+    pub fn gateway_subprotocols(&self) -> Result<Vec<String>, ClientError> {
+        use base64::Engine as _;
         let token = self.tokens().access.ok_or(ClientError::NotSignedIn)?;
-        let ws = self.base.replacen("http", "ws", 1);
-        Ok(format!(
-            "{ws}/gateway/websocket?access_token={token}&vsn=1.0.0"
-        ))
+        let encoded = base64::engine::general_purpose::STANDARD_NO_PAD.encode(token);
+        Ok(vec![
+            "phoenix".to_string(),
+            format!("base64url.bearer.phx.{encoded}"),
+        ])
     }
 
     /// `GET /instance`: the trust card (public).

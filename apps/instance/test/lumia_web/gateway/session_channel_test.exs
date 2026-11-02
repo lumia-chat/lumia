@@ -17,7 +17,7 @@ defmodule LumiaWeb.Gateway.SessionChannelTest do
     account = account()
     device_id = Ecto.UUID.generate()
     {:ok, session, tokens} = Auth.create_session(account.id, device_id)
-    {:ok, socket} = connect(Socket, %{"access_token" => tokens.access_token})
+    {:ok, socket} = connect(Socket, %{}, connect_info: %{auth_token: tokens.access_token})
     {:ok, server} = Servers.create_server(account.id, "Acme")
     {:ok, channel} = Servers.create_channel(server.id, account.id, "general")
 
@@ -62,7 +62,7 @@ defmodule LumiaWeb.Gateway.SessionChannelTest do
 
   describe "connect and join" do
     test "rejects a bad token" do
-      assert :error = connect(Socket, %{"access_token" => "nope"})
+      assert :error = connect(Socket, %{}, connect_info: %{auth_token: "nope"})
     end
 
     test "Welcome carries the recovery generation and heartbeat interval", %{
@@ -173,7 +173,7 @@ defmodule LumiaWeb.Gateway.SessionChannelTest do
     test "a non-member cannot subscribe and learns nothing", ctx do
       outsider = account("outsider")
       {:ok, _, tokens} = Auth.create_session(outsider.id, Ecto.UUID.generate())
-      {:ok, socket} = connect(Socket, %{"access_token" => tokens.access_token})
+      {:ok, socket} = connect(Socket, %{}, connect_info: %{auth_token: tokens.access_token})
       {_, socket} = join!(socket)
 
       assert %V1.ChannelSubscribeResult{status: :ERROR, error: %V1.Error{code: :NOT_FOUND}} =
@@ -196,7 +196,7 @@ defmodule LumiaWeb.Gateway.SessionChannelTest do
       {:ok, _} = Events.append(ctx.channel.id, actor, send_message(ctx.channel.id, "secret"))
 
       {:ok, _, tokens} = Auth.create_session(member.id, Ecto.UUID.generate())
-      {:ok, socket} = connect(Socket, %{"access_token" => tokens.access_token})
+      {:ok, socket} = connect(Socket, %{}, connect_info: %{auth_token: tokens.access_token})
       {_, socket} = join!(socket)
 
       assert %V1.ChannelSubscribeResult{
@@ -210,7 +210,7 @@ defmodule LumiaWeb.Gateway.SessionChannelTest do
     test "high-water marks are not disclosed for channels the account cannot read", ctx do
       outsider = account("outsider")
       {:ok, _, tokens} = Auth.create_session(outsider.id, Ecto.UUID.generate())
-      {:ok, socket} = connect(Socket, %{"access_token" => tokens.access_token})
+      {:ok, socket} = connect(Socket, %{}, connect_info: %{auth_token: tokens.access_token})
       {_, socket} = join!(socket)
 
       send_frame(
@@ -292,7 +292,7 @@ defmodule LumiaWeb.Gateway.SessionChannelTest do
         ])
 
       {:ok, _, tokens} = Auth.create_session(member.id, Ecto.UUID.generate())
-      {:ok, socket} = connect(Socket, %{"access_token" => tokens.access_token})
+      {:ok, socket} = connect(Socket, %{}, connect_info: %{auth_token: tokens.access_token})
       {_, socket} = join!(socket)
       send_frame(socket, {:command, send_message(ctx.channel.id)})
       assert_push "frame", %V1.ServerFrame{frame: {:error, %V1.Error{code: :PERMISSION_DENIED}}}
@@ -306,7 +306,7 @@ defmodule LumiaWeb.Gateway.SessionChannelTest do
       Lumia.Workers.ViewerDiff.diff_channel(ctx.channel.id)
 
       {:ok, _, tokens} = Auth.create_session(member.id, Ecto.UUID.generate())
-      {:ok, socket} = connect(Socket, %{"access_token" => tokens.access_token})
+      {:ok, socket} = connect(Socket, %{}, connect_info: %{auth_token: tokens.access_token})
       {_, socket} = join!(socket)
       subscribe(socket, ctx.channel.id, 0)
 
@@ -321,7 +321,7 @@ defmodule LumiaWeb.Gateway.SessionChannelTest do
       member = account("member")
       {:ok, _} = Servers.add_member(ctx.server.id, member.id, ctx.account.id)
       {:ok, _, tokens} = Auth.create_session(member.id, Ecto.UUID.generate())
-      {:ok, socket} = connect(Socket, %{"access_token" => tokens.access_token})
+      {:ok, socket} = connect(Socket, %{}, connect_info: %{auth_token: tokens.access_token})
       {_, socket} = join!(socket)
       subscribe(socket, ctx.channel.id, 0)
 
@@ -357,11 +357,11 @@ defmodule LumiaWeb.Gateway.SessionChannelTest do
       {:ok, _session, tokens} = Auth.create_session(ctx.account.id, ctx.device_id)
 
       # A fresh connection for *another* session leaves the first alone.
-      {:ok, _} = connect(Socket, %{"access_token" => tokens.access_token})
+      {:ok, _} = connect(Socket, %{}, connect_info: %{auth_token: tokens.access_token})
       refute_push "frame", %V1.ServerFrame{frame: {:disconnect, _}}
 
       # The same session connecting again supersedes the first.
-      {:ok, second} = connect(Socket, %{"access_token" => ctx.tokens.access_token})
+      {:ok, second} = connect(Socket, %{}, connect_info: %{auth_token: ctx.tokens.access_token})
 
       assert_push "frame", %V1.ServerFrame{
         frame: {:disconnect, %V1.Disconnect{reason: :DISCONNECT_PROTOCOL_ERROR}}
@@ -382,7 +382,7 @@ defmodule LumiaWeb.Gateway.SessionChannelTest do
       member = account("member")
       {:ok, _} = Servers.add_member(ctx.server.id, member.id, ctx.account.id)
       {:ok, _, tokens} = Auth.create_session(member.id, Ecto.UUID.generate())
-      {:ok, socket} = connect(Socket, %{"access_token" => tokens.access_token})
+      {:ok, socket} = connect(Socket, %{}, connect_info: %{auth_token: tokens.access_token})
       {_, socket} = join!(socket)
       subscribe(socket, ctx.channel.id, 0)
 
@@ -413,7 +413,7 @@ defmodule LumiaWeb.Gateway.SessionChannelTest do
       member = account("member")
       {:ok, _} = Servers.add_member(ctx.server.id, member.id, ctx.account.id)
       {:ok, _, tokens} = Auth.create_session(member.id, Ecto.UUID.generate())
-      {:ok, socket} = connect(Socket, %{"access_token" => tokens.access_token})
+      {:ok, socket} = connect(Socket, %{}, connect_info: %{auth_token: tokens.access_token})
       {_, socket} = join!(socket)
       subscribe(socket, ctx.channel.id, 0)
 
