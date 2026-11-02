@@ -250,7 +250,10 @@ mod tests {
     fn the_upgrade_carries_the_subprotocols() {
         let request = super::upgrade_request(
             "ws://localhost:4000/gateway/websocket?vsn=1.0.0",
-            &["phoenix".to_string(), "base64url.bearer.phx.abc".to_string()],
+            &[
+                "phoenix".to_string(),
+                "base64url.bearer.phx.abc".to_string(),
+            ],
         )
         .unwrap();
         let header = request

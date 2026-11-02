@@ -67,25 +67,27 @@ pub struct Env {
 /// A [`ClientError::State`] saying what was expected and what happened,
 /// or the transport or API error that stopped the case.
 pub async fn run(name: &str, env: &Env) -> Result<(), ClientError> {
-    if name == "all" {
-        let mut failed = Vec::new();
-        for n in NAMES {
-            println!("== {n}");
-            match run_one(n, env).await {
-                Ok(()) => println!("   PASS"),
-                Err(e) => {
-                    println!("   FAIL {e}");
-                    failed.push(*n);
-                }
+    let names: Vec<&str> = if name == "all" {
+        NAMES.to_vec()
+    } else {
+        vec![name]
+    };
+    let mut failed = Vec::new();
+    for n in &names {
+        println!("== {n}");
+        match run_one(n, env).await {
+            Ok(()) => println!("   PASS"),
+            Err(e) => {
+                println!("   FAIL {e}");
+                failed.push(*n);
             }
         }
-        return if failed.is_empty() {
-            Ok(())
-        } else {
-            Err(ClientError::State(format!("failed: {}", failed.join(", "))))
-        };
     }
-    run_one(name, env).await
+    if failed.is_empty() {
+        Ok(())
+    } else {
+        Err(ClientError::State(format!("failed: {}", failed.join(", "))))
+    }
 }
 
 async fn run_one(name: &str, env: &Env) -> Result<(), ClientError> {
