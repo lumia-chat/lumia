@@ -101,6 +101,53 @@ defmodule Lumia.Events do
     end
   end
 
+  @doc """
+  Retention: purges every payload at or below the newest event created
+  before `cutoff`, deletes the materialized messages, and appends one
+  `PayloadsPurged{before_seq}` event (delivery section 10). Returns the
+  number of payloads nulled; zero means nothing was old enough and no
+  marker was appended. Idempotent.
+  """
+  def purge_before(channel_id, %DateTime{} = cutoff) do
+    Repo.transact(fn ->
+      newest_old =
+        Repo.one(
+          from e in Event,
+            where: e.channel_id == ^channel_id and e.created_at < ^cutoff,
+            select: max(e.seq)
+        )
+
+      case newest_old do
+        nil -> {:ok, 0}
+        seq -> purge_through(channel_id, seq)
+      end
+    end)
+  end
+
+  defp purge_through(channel_id, seq) do
+    {nulled, _} =
+      Repo.update_all(
+        from(p in EventPayload,
+          where: p.channel_id == ^channel_id and p.seq <= ^seq and not is_nil(p.payload)
+        ),
+        set: [payload: nil]
+      )
+
+    if nulled == 0 do
+      {:ok, 0}
+    else
+      Repo.delete_all(from m in Message, where: m.channel_id == ^channel_id and m.seq <= ^seq)
+
+      with {:ok, _} <-
+             append_system(
+               channel_id,
+               {:payloads_purged, %V1.PayloadsPurged{before_seq: seq + 1}}
+             ) do
+        {:ok, nulled}
+      end
+    end
+  end
+
   @doc "Events after `after_seq`, in order, as `Lumia.V1.Event` structs. The sync query."
   def events_after(channel_id, after_seq, limit \\ 200) do
     from(e in Event,

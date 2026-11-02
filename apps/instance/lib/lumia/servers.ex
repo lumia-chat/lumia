@@ -346,6 +346,33 @@ defmodule Lumia.Servers do
     |> unwrap()
   end
 
+  # ---- Governance policy ----------------------------------------------------------
+
+  @doc """
+  Sets a server's retention in days (nil for forever). MANAGE_SERVER.
+  Governance policy, not an entitlement (architecture 16): no plan can
+  override it.
+  """
+  def set_retention(server_id, actor_id, days)
+      when is_nil(days) or (is_integer(days) and days > 0) do
+    Repo.transact(fn ->
+      with {:ok, server} <- fetch_server(server_id),
+           {:ok, actor} <- actor(server_id, actor_id),
+           true <-
+             (Permission.has?(actor.server_permissions, :manage_server) or actor.owner?) ||
+               {:error, :permission_denied},
+           {:ok, updated} <-
+             server |> Ecto.Changeset.change(retention_days: days) |> Repo.update(),
+           {:ok, _} <-
+             Audit.record({:server, server_id}, actor_id, "server.retention",
+               before: %{"retention_days" => server.retention_days},
+               after: %{"retention_days" => days}
+             ) do
+        {:ok, updated}
+      end
+    end)
+  end
+
   # ---- Resolution helpers for callers -----------------------------------------
 
   @doc "The member map `Lumia.Authz.resolve/2` takes (account_id, kind, role_ids, owner?), or nil if not a member."

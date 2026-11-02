@@ -28,7 +28,9 @@ config :lumia, Oban,
     {Oban.Plugins.Pruner, max_age: 60 * 60 * 24 * 7},
     {Oban.Plugins.Cron,
      crontab: [
-       {"0 3 * * *", Lumia.Workers.PurgeCommands}
+       {"0 3 * * *", Lumia.Workers.PurgeCommands},
+       {"30 3 * * *", Lumia.Workers.Retention},
+       {"15 * * * *", Lumia.Workers.PurgeExpired}
      ]}
   ]
 

@@ -133,7 +133,7 @@ Ordered. Each task names the spec section it implements and the tests that close
 - [x] Servers, channels, members, roles, overwrites endpoints with authoritative checks through `Lumia.Authz.Access`, shared with the gateway; non-members get `NOT_FOUND` (authorization §5).
 - [ ] Pagination cursors for list endpoints (members, search) and the `PageRequest` shape (protocol §11); members currently return everything.
 - [ ] `truncated_before` is always false: rows are permanent, so no HTTP fetch is truncated yet.
-- [ ] Retention job, `Redacted` on purged rows beyond user deletes, `PayloadsPurged` (delivery §10).
+- [x] `Lumia.Workers.Retention` (daily): per-server `retention_days` set by `Servers.set_retention/3` (MANAGE_SERVER, audited); `Events.purge_before/2` nulls payloads, deletes messages, appends `PayloadsPurged`; resumed clients see `Redacted` (delivery §10; tests: purge, idempotence, no policy untouched).
 - [ ] Magic link, passkeys, OIDC, MFA (architecture §6.3).
 - [ ] Invites and discovery endpoints (architecture §6.6).
 - [ ] JSON overrides (UUID and int64 as strings) for JSON clients; stock ProtoJSON for now.
@@ -151,7 +151,7 @@ Ordered. Each task names the spec section it implements and the tests that close
 - [x] Web device origin check against the instance origin and configured flagship origins (identity §7).
 - [ ] Reauth by passkey or TOTP; only password exists.
 - [ ] Profile import on link (signed profile → account display fields).
-- [ ] Oban purge of expired `used_challenges`, `link_bundles`, `reauth_tokens`.
+- [x] `Lumia.Workers.PurgeExpired` (hourly) deletes expired `used_challenges`, `link_bundles`, `reauth_tokens` (test).
 - [ ] A revoked device that is still connected over the gateway is disconnected through its session revocation; verified for sessions, not yet end to end with a live socket in the identity tests.
 - [x] `RevocationBody` carries the revoked device's public key and `added_at`, so certificates it issued before revocation stay verifiable from the roster alone (found by the verifier; proto and spec amended).
 
