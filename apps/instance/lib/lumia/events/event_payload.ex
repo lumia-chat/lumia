@@ -10,6 +10,6 @@ defmodule Lumia.Events.EventPayload do
   schema "event_payloads" do
     field :channel_id, Ecto.UUID, primary_key: true
     field :seq, :integer, primary_key: true
-    field :payload, :map
+    field :payload, :binary
   end
 end

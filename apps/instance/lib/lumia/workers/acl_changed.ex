@@ -34,7 +34,10 @@ defmodule Lumia.Workers.AclChanged do
     |> Enum.each(fn batch ->
       Enum.each(batch, fn {channel_id, acl_version} ->
         {:ok, _} =
-          Events.append_system(channel_id, "acl_changed", %{"acl_version" => acl_version})
+          Events.append_system(
+            channel_id,
+            {:acl_changed, %Lumia.V1.AclChanged{acl_version: acl_version}}
+          )
       end)
     end)
 

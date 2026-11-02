@@ -15,6 +15,7 @@ defmodule Lumia.Workers.ViewerDiff do
 
   alias Lumia.Accounts
   alias Lumia.Events.Channel
+  alias Lumia.Proto
   alias Lumia.Repo
   alias Lumia.Servers
   alias Lumia.Servers.ChannelViewer
@@ -56,7 +57,11 @@ defmodule Lumia.Workers.ViewerDiff do
         {:ok, _} = Repo.insert(%ChannelViewer{channel_id: channel_id, account_id: account_id})
 
         {:ok, _} =
-          Accounts.append_event(account_id, "channel_added", %{"channel_id" => channel_id})
+          Accounts.append_event(
+            account_id,
+            {:channel_added,
+             %Lumia.V1.ChannelAdded{channel: Proto.channel(Repo.get!(Channel, channel_id))}}
+          )
       end
 
       for account_id <- removed do
@@ -66,7 +71,10 @@ defmodule Lumia.Workers.ViewerDiff do
         )
 
         {:ok, _} =
-          Accounts.append_event(account_id, "channel_removed", %{"channel_id" => channel_id})
+          Accounts.append_event(
+            account_id,
+            {:channel_removed, %Lumia.V1.ChannelRemoved{channel_id: Proto.uuid(channel_id)}}
+          )
       end
 
       {:ok, %{added: MapSet.to_list(added), removed: MapSet.to_list(removed)}}

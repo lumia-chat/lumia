@@ -21,12 +21,14 @@ defmodule Lumia.Servers do
   alias Lumia.Authz
   alias Lumia.Authz.Permission
   alias Lumia.Events.Channel
+  alias Lumia.Proto
   alias Lumia.Repo
   alias Lumia.Servers.ChannelOverwrite
   alias Lumia.Servers.Member
   alias Lumia.Servers.MemberRole
   alias Lumia.Servers.Role
   alias Lumia.Servers.Server
+  alias Lumia.V1
   alias Lumia.Workers.AclChanged
   alias Lumia.Workers.ViewerDiff
 
@@ -95,11 +97,13 @@ defmodule Lumia.Servers do
     Repo.transact(fn ->
       with {:ok, member} <-
              insert_member(server_id, account_id, kind, Keyword.get(opts, :expires_at)),
+           {:ok, server} <- fetch_server(server_id),
            {:ok, _} <-
-             Accounts.append_event(account_id, "membership_added", %{
-               "server_id" => server_id,
-               "kind" => kind
-             }),
+             Accounts.append_event(
+               account_id,
+               {:membership_added,
+                %V1.MembershipAdded{member: Proto.member(member), server: Proto.server(server)}}
+             ),
            {:ok, _} <-
              Audit.record({:server, server_id}, actor_id, "member.add",
                target: {:account, account_id},
@@ -123,10 +127,14 @@ defmodule Lumia.Servers do
            {1, _} <- delete_member(server_id, account_id),
            channel_ids = viewable_channel_ids(server_id, account_id),
            {:ok, _} <-
-             Accounts.append_event(account_id, "membership_removed", %{
-               "server_id" => server_id,
-               "reason" => reason
-             }),
+             Accounts.append_event(
+               account_id,
+               {:membership_removed,
+                %V1.MembershipRemoved{
+                  server_id: Proto.uuid(server_id),
+                  reason: Proto.leave_reason(reason)
+                }}
+             ),
            :ok <- append_channel_removed(account_id, channel_ids),
            {:ok, _} <-
              Audit.record({:server, server_id}, actor_id, "member.remove",
@@ -160,11 +168,13 @@ defmodule Lumia.Servers do
            true <- Authz.can_manage_role?(actor, role) || {:error, :permission_denied},
            {:ok, _} <- apply_role_change(server_id, account_id, role_id, op),
            role_ids = role_ids(server_id, account_id),
+           {:ok, member} <- fetch_member(server_id, account_id),
            {:ok, _} <-
-             Accounts.append_event(account_id, "membership_updated", %{
-               "server_id" => server_id,
-               "role_ids" => role_ids
-             }),
+             Accounts.append_event(
+               account_id,
+               {:membership_updated,
+                %V1.MembershipUpdated{member: Proto.member(member, role_ids)}}
+             ),
            {:ok, _} <-
              Audit.record({:server, server_id}, actor_id, "member.#{op}_role",
                target: {:account, account_id},
@@ -439,7 +449,10 @@ defmodule Lumia.Servers do
 
   defp append_channel_removed(account_id, channel_ids) do
     Enum.reduce_while(channel_ids, :ok, fn channel_id, :ok ->
-      case Accounts.append_event(account_id, "channel_removed", %{"channel_id" => channel_id}) do
+      case Accounts.append_event(
+             account_id,
+             {:channel_removed, %V1.ChannelRemoved{channel_id: Proto.uuid(channel_id)}}
+           ) do
         {:ok, _} -> {:cont, :ok}
         error -> {:halt, error}
       end
@@ -451,6 +464,14 @@ defmodule Lumia.Servers do
       do: (
         nil -> {:error, :not_found}
         s -> {:ok, s}
+      )
+  end
+
+  defp fetch_member(server_id, account_id) do
+    case Repo.get_by(Member, server_id: server_id, account_id: account_id),
+      do: (
+        nil -> {:error, :not_found}
+        m -> {:ok, m}
       )
   end
 
@@ -539,7 +560,10 @@ defmodule Lumia.Servers do
       )
 
     with {:ok, _} <-
-           Lumia.Events.append_system(channel_id, "acl_changed", %{"acl_version" => acl_version}) do
+           Lumia.Events.append_system(
+             channel_id,
+             {:acl_changed, %V1.AclChanged{acl_version: acl_version}}
+           ) do
       ViewerDiff.schedule(server_id)
     end
   end

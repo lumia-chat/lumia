@@ -7,6 +7,6 @@ defmodule Lumia.Accounts.AccountEventPayload do
   schema "account_event_payloads" do
     field :account_id, Ecto.UUID, primary_key: true
     field :seq, :integer, primary_key: true
-    field :payload, :map
+    field :payload, :binary
   end
 end

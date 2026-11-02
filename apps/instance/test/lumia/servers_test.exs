@@ -3,7 +3,6 @@ defmodule Lumia.ServersTest do
   use Oban.Testing, repo: Lumia.Repo
 
   alias Lumia.Accounts
-  alias Lumia.Accounts.AccountEvent
   alias Lumia.Audit.Entry
   alias Lumia.Authz.Cache
   alias Lumia.Authz.Permission
@@ -39,14 +38,7 @@ defmodule Lumia.ServersTest do
     do:
       Repo.all(from c in Channel, where: c.id in ^ids, select: {c.id, c.acl_version}) |> Map.new()
 
-  defp account_kinds(account_id),
-    do:
-      Repo.all(
-        from e in AccountEvent,
-          where: e.account_id == ^account_id,
-          order_by: e.seq,
-          select: e.kind
-      )
+  defp account_kinds(account_id), do: Accounts.event_kinds(account_id)
 
   describe "create_server/2" do
     test "creates @everyone, the owner's membership, and an audit row", ctx do
@@ -84,7 +76,9 @@ defmodule Lumia.ServersTest do
 
       assert_enqueued(worker: AclChanged, args: %{server_id: ctx.server.id})
       assert :ok = perform_job(AclChanged, %{"server_id" => ctx.server.id})
-      assert [%{kind: "acl_changed"}] = Lumia.Events.events_after(ctx.general.id, 0)
+
+      assert [%Lumia.V1.Event{payload: {:acl_changed, _}}] =
+               Lumia.Events.events_after(ctx.general.id, 0)
     end
 
     test "an overwrite bumps that channel only and appends acl_changed", ctx do
@@ -99,7 +93,9 @@ defmodule Lumia.ServersTest do
       after_ = acl_versions([ctx.general.id, ctx.random.id])
       assert after_[ctx.general.id] == before[ctx.general.id] + 1
       assert after_[ctx.random.id] == before[ctx.random.id]
-      assert [%{kind: "acl_changed"}] = Lumia.Events.events_after(ctx.general.id, 0)
+
+      assert [%Lumia.V1.Event{payload: {:acl_changed, _}}] =
+               Lumia.Events.events_after(ctx.general.id, 0)
     end
   end
 

@@ -58,6 +58,9 @@ defmodule Lumia.MixProject do
       # Job processing.
       {:oban, "~> 2.24"},
 
+      # Wire protocol (generated into lib/lumia/proto by scripts/gen_proto.sh).
+      {:protobuf, "~> 0.17.1"},
+
       # Testing and development.
       {:benchee, "~> 1.3", only: :dev},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},

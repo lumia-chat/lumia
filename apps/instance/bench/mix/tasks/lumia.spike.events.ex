@@ -21,6 +21,7 @@ defmodule Mix.Tasks.Lumia.Spike.Events do
   alias Lumia.Repo
 
   @switches [channels: :string, writers: :integer, duration: :integer, payload_bytes: :integer]
+  @actor "00000000-0000-7000-8000-000000000001"
 
   @impl Mix.Task
   def run(args) do
@@ -90,13 +91,13 @@ defmodule Mix.Tasks.Lumia.Spike.Events do
   end
 
   defp append!(channel_id, body) do
-    {:ok, _ack} =
-      Events.append(channel_id, %{
-        command_id: Ecto.UUID.generate(version: 7),
-        kind: "message_created",
-        actor_account_id: Ecto.UUID.generate(),
-        payload: %{"body" => body}
-      })
+    command = %Lumia.V1.Command{
+      command_id: Lumia.Proto.uuid(Ecto.UUID.generate(version: 7)),
+      channel_id: Lumia.Proto.uuid(channel_id),
+      op: {:send_message, %Lumia.V1.SendMessage{body: body}}
+    }
+
+    {:ok, _ack} = Events.append(channel_id, %{account_id: @actor, device_id: nil}, command, broadcast: false)
   end
 
   defp explain_all(channel_id) do

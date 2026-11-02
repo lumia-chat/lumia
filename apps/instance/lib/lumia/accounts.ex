@@ -7,7 +7,8 @@ defmodule Lumia.Accounts do
   logs it does not yet know about. Only the server appends to it, so there
   are no commands and no idempotency table; otherwise it is the same shape
   as the channel log and the same rules apply (dense `seq`, commit then
-  broadcast, reconciliation by `last_seq_at`).
+  broadcast, reconciliation by `last_seq_at`). A stored payload is the
+  serialized `Lumia.V1.AccountEvent` that goes on the wire.
   """
 
   import Ecto.Query
@@ -15,8 +16,10 @@ defmodule Lumia.Accounts do
   alias Lumia.Accounts.Account
   alias Lumia.Accounts.AccountEvent
   alias Lumia.Accounts.AccountEventPayload
+  alias Lumia.Proto
   alias Lumia.Repo
   alias Lumia.Schema
+  alias Lumia.V1
 
   @doc "Creates an account. Spike-level; auth flows come with the identity endpoints."
   def create_account(attrs) do
@@ -40,47 +43,90 @@ defmodule Lumia.Accounts do
   @doc """
   Appends an event to an account's log inside one transaction: lock the
   account row by incrementing `last_seq`, insert the event and its payload,
-  commit. Broadcast is the caller's job and happens after this returns.
+  commit, then broadcast on `account:<id>`. `payload` is a
+  `Lumia.V1.AccountEvent` payload tuple such as
+  `{:membership_added, %Lumia.V1.MembershipAdded{}}`.
   """
-  def append_event(account_id, kind, payload) when is_binary(kind) and is_map(payload) do
-    Repo.transact(fn ->
-      now = DateTime.utc_now()
-      head_at = DateTime.truncate(now, :second)
+  def append_event(account_id, {tag, _} = payload, opts \\ []) when is_atom(tag) do
+    result =
+      Repo.transact(fn ->
+        now = DateTime.utc_now()
+        head_at = DateTime.truncate(now, :second)
 
-      lock = from(a in Account, where: a.id == ^account_id, select: a.last_seq)
+        lock = from(a in Account, where: a.id == ^account_id, select: a.last_seq)
 
-      case Repo.update_all(lock, inc: [last_seq: 1], set: [last_seq_at: head_at]) do
-        {0, _} -> {:error, :account_not_found}
-        {1, [seq]} -> write(account_id, seq, kind, payload, now)
-      end
-    end)
+        case Repo.update_all(lock, inc: [last_seq: 1], set: [last_seq_at: head_at]) do
+          {0, _} -> {:error, :account_not_found}
+          {1, [seq]} -> write(account_id, seq, payload, now)
+        end
+      end)
+
+    with {:ok, {event, bytes}} <- result do
+      if Keyword.get(opts, :broadcast, true), do: broadcast(account_id, event, bytes)
+      {:ok, %{account_id: account_id, seq: event.seq, event_id: Proto.from_uuid(event.event_id)}}
+    end
   end
 
-  defp write(account_id, seq, kind, payload, now) do
-    event_id = Schema.generate_id()
+  defp write(account_id, seq, payload, now) do
+    event = %V1.AccountEvent{
+      event_id: Proto.uuid(Schema.generate_id()),
+      account_id: Proto.uuid(account_id),
+      seq: seq,
+      created_at: Proto.timestamp(now),
+      payload: payload
+    }
+
+    bytes = V1.AccountEvent.encode(event)
 
     with {:ok, _} <-
            Repo.insert(%AccountEvent{
              account_id: account_id,
              seq: seq,
-             id: event_id,
-             kind: kind,
+             id: Proto.from_uuid(event.event_id),
+             kind: Proto.kind(payload),
              created_at: now
            }),
          {:ok, _} <-
-           Repo.insert(%AccountEventPayload{account_id: account_id, seq: seq, payload: payload}) do
-      {:ok, %{account_id: account_id, seq: seq, event_id: event_id}}
+           Repo.insert(%AccountEventPayload{account_id: account_id, seq: seq, payload: bytes}) do
+      {:ok, {event, bytes}}
     end
   end
 
-  @doc "Account events after `after_seq`, in order."
+  @doc "Account events after `after_seq`, in order, as `Lumia.V1.AccountEvent` structs."
   def events_after(account_id, after_seq, limit \\ 200) do
-    Repo.all(
-      from e in AccountEvent,
-        where: e.account_id == ^account_id and e.seq > ^after_seq,
-        order_by: [asc: e.seq],
-        limit: ^limit
+    from(e in AccountEvent,
+      left_join: p in AccountEventPayload,
+      on: p.account_id == e.account_id and p.seq == e.seq,
+      where: e.account_id == ^account_id and e.seq > ^after_seq,
+      order_by: [asc: e.seq],
+      limit: ^limit,
+      select: {e, p.payload}
     )
+    |> Repo.all()
+    |> Enum.map(fn
+      {_row, bytes} when is_binary(bytes) ->
+        V1.AccountEvent.decode(bytes)
+
+      {row, nil} ->
+        %V1.AccountEvent{
+          event_id: Proto.uuid(row.id),
+          account_id: Proto.uuid(account_id),
+          seq: row.seq,
+          created_at: Proto.timestamp(row.created_at)
+        }
+    end)
+  end
+
+  @doc "Event kinds on an account's log, in order. For tests."
+  def event_kinds(account_id) do
+    Repo.all(
+      from e in AccountEvent, where: e.account_id == ^account_id, order_by: e.seq, select: e.kind
+    )
+  end
+
+  @doc "The current head of an account log, or nil."
+  def head(account_id) do
+    Repo.one(from a in Account, where: a.id == ^account_id, select: a.last_seq)
   end
 
   @doc "Accounts whose log head moved at or after `since`. The reconciliation query."
@@ -92,5 +138,13 @@ defmodule Lumia.Accounts do
         where: a.last_seq_at >= ^since,
         select: {a.id, a.last_seq}
     )
+  end
+
+  @doc "The PubSub topic for an account log."
+  def topic(account_id), do: "account:" <> account_id
+
+  @doc "Broadcasts a committed account event: the struct and its serialized bytes."
+  def broadcast(account_id, %V1.AccountEvent{} = event, bytes) when is_binary(bytes) do
+    Phoenix.PubSub.broadcast(Lumia.PubSub, topic(account_id), {:account_event, event, bytes})
   end
 end
