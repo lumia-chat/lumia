@@ -46,8 +46,12 @@ async function waitFor(url: string, what: string) {
   throw new Error(`${what} did not answer at ${url}`);
 }
 
-// The page of the step in progress, for a screenshot when it fails.
-const live: { page: Page | null } = { page: null };
+// The page and the phase of the step in progress, for the heartbeat and
+// for a screenshot when it fails.
+const live: { page: Page | null; phase: string } = { page: null, phase: "" };
+const phase = (what: string) => {
+  live.phase = what;
+};
 
 async function open(which: string, name: string, keep = false): Promise<{ ctx: BrowserContext; page: Page }> {
   const profile = resolve(work, `profile-${name}-${which}`);
@@ -206,26 +210,33 @@ async function dm(which: string, aDir: string, bAccount: string, aHandle: string
 }
 
 async function dmSteps(which: string, page: Page, aDir: string, bAccount: string, aHandle: string) {
+  phase("cli request");
   lumia(aDir, "dm", "request", bAccount);
+  phase("open requests");
   await page.goto(`${base}/app?place=home&view=requests`);
   const accept = page.getByRole("button", { name: "Accept" });
   await accept.waitFor();
   // The sender's handle comes from the public profile, visible while the request waits.
   await page.getByText(`@${aHandle}`).waitFor();
   await page.waitForTimeout(1500); // the gateway loop starts after the snapshot
+  phase("accept");
   await accept.click();
+  phase("wait for the group");
   const composer = page.getByPlaceholder(/^Message /);
   await composer.waitFor();
   await page.screenshot({ path: `${out}/${which}-dm-open.png` });
   const hello = `hello from ${which} ${Date.now()}`;
+  phase("send");
   await composer.fill(hello);
   await page.keyboard.press("Enter");
   await page.getByText(hello).waitFor();
+  phase("cli open");
   const opened = lumia(aDir, "dm", "open", bAccount);
   const channel = opened.match(/([0-9a-f-]{36})\s+personal DM/)?.[1];
   if (!channel) throw new Error(`no channel from dm open:\n${opened}`);
   // The CLI joined from the welcome; the browser's message lands in its
   // store once its tail has applied the channel log, which takes a moment.
+  phase("cli read");
   let seen = "";
   for (let i = 0; i < 20 && !seen.includes(hello); i++) {
     if (i > 0) await Bun.sleep(1_500);
@@ -233,8 +244,11 @@ async function dmSteps(which: string, page: Page, aDir: string, bAccount: string
   }
   if (!seen.includes(hello)) throw new Error(`the CLI did not read the browser's message:\n${seen}`);
   const reply = `reply from the cli ${Date.now()}`;
+  phase("cli send");
   lumia(aDir, "dm", "send", channel, reply);
+  phase("wait for the reply");
   await page.getByText(reply).waitFor();
+  phase("reload");
   await page.reload();
   await page.getByText(hello).waitFor();
   await page.getByText(reply).waitFor();
@@ -302,7 +316,8 @@ try {
       // ends) and a hard bound, so a hang names itself instead of the job
       // timing out.
       const started = Date.now();
-      const beat = setInterval(() => console.log(`  [${which}] ${name}: ${Math.round((Date.now() - started) / 1000)} s, at ${live.page?.url() ?? "no page"}`), 30_000);
+      live.phase = "start";
+      const beat = setInterval(() => console.log(`  [${which}] ${name}: ${Math.round((Date.now() - started) / 1000)} s, ${live.phase}, at ${live.page?.url() ?? "no page"}`), 30_000);
       try {
         await Promise.race([step(), Bun.sleep(240_000).then(() => Promise.reject(new Error(`${name} did not finish within 4 minutes`)))]);
       } catch (e) {

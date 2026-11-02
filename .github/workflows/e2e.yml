@@ -59,6 +59,8 @@ jobs:
         with:
           workspaces: apps/core
           key: e2e
+          # The builds succeed even when the suite does not; keep them.
+          cache-on-failure: true
 
       - run: mix deps.get && mix ecto.setup
         working-directory: apps/instance
