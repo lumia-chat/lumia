@@ -1,0 +1,91 @@
+name: e2e
+
+on:
+  push:
+    branches: [master]
+    paths: ["apps/web/**", "apps/core/**", "apps/instance/**", "assets/**", "proto/**", ".github/workflows/e2e.yml"]
+  pull_request:
+    paths: ["apps/web/**", "apps/core/**", "apps/instance/**", "assets/**", "proto/**", ".github/workflows/e2e.yml"]
+
+permissions:
+  contents: read
+
+# The browser suite (apps/web/e2e/run.ts): the dev instance on :4000, the
+# release CLI as the other device, Chromium and WebKit through Playwright.
+jobs:
+  browsers:
+    runs-on: ubuntu-24.04
+    env:
+      MIX_ENV: dev
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/lumia_dev
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.20.4"
+          otp-version: "29"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.11"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.96.0"
+          targets: wasm32-unknown-unknown
+          components: llvm-tools
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen-cli@0.2.130
+      - uses: actions/cache@v4
+        with:
+          path: |
+            apps/instance/deps
+            apps/instance/_build
+          key: mix-dev-${{ runner.os }}-${{ hashFiles('apps/instance/mix.lock') }}
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            apps/core/target
+          key: e2e-cargo-${{ runner.os }}-${{ hashFiles('apps/core/Cargo.lock') }}
+
+      - run: mix deps.get && mix ecto.setup
+        working-directory: apps/instance
+      - run: cargo build --release -p lumia-cli
+        working-directory: apps/core
+      - run: bun install --frozen-lockfile && bun run wasm
+        working-directory: apps/web
+      - run: bunx playwright install --with-deps chromium webkit
+        working-directory: apps/web
+
+      - name: Start the instance
+        working-directory: apps/instance
+        run: |
+          nohup mix phx.server > /tmp/phx.log 2>&1 &
+          for i in $(seq 1 60); do
+            curl -sf -H 'accept: application/json' http://localhost:4000/api/v1/instance > /dev/null && exit 0
+            sleep 2
+          done
+          echo "the instance did not come up" >&2; tail -50 /tmp/phx.log; exit 1
+      - run: bun run e2e
+        working-directory: apps/web
+      - if: failure()
+        run: tail -200 /tmp/phx.log
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-screenshots
+          path: apps/web/e2e/.work/shots
+          if-no-files-found: ignore
