@@ -35,7 +35,8 @@ apps/ios        SwiftUI
 apps/macos      SwiftUI
 apps/android    Jetpack Compose
 apps/desktop    Tauri shell for Windows and Linux
-apps/web        Web UI, shared with apps/desktop
+apps/web        Web UI (SolidJS), shared with apps/desktop
+assets/         Logo, icons, fonts and design tokens shared by every shell
 proto/          Protobuf schemas
 docs/           Architecture, protocol contract, and specs
 ```

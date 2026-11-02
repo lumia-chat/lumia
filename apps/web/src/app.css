@@ -1,0 +1,25 @@
+/* Page basics outside the components: the ground and the reading defaults. */
+html, body { margin: 0; min-height: 100%; }
+body { background: var(--bg); color: var(--ink-body); font-family: var(--font-sans); font-size: 15px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
+#app { min-height: 100vh; }
+a { color: var(--link); }
+
+/* ── The design gallery (not a product screen) ── */
+.gallery { min-height: 100vh; display: flex; flex-direction: column; }
+.gallery__bar { display: flex; align-items: center; gap: var(--space-16); padding: var(--space-8) var(--space-16); background: var(--surface); box-shadow: var(--shadow-panel); font-size: 13.5px; }
+.gallery__bar strong { color: var(--ink); margin-right: auto; }
+.gallery__nav { display: flex; gap: var(--space-4); }
+.gallery__tab { font: inherit; border: 0; background: var(--track); color: var(--ink-secondary); padding: 6px 12px; border-radius: var(--radius-8); cursor: pointer; }
+.gallery__tab[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent-ink); font-weight: 600; }
+.gallery__board { flex: 1; min-width: 0; }
+.gallery-auth { min-height: 900px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-24); padding: var(--space-24); background: var(--bg); }
+.gallery-auth__logo { width: 150px; height: 138px; overflow: hidden; position: relative; }
+.gallery-auth__logo img { position: absolute; width: 246px; height: 246px; left: -49px; top: -57px; }
+.gallery-auth .lu-card { width: var(--auth-width); max-width: 100%; }
+.gallery-auth__form { display: flex; flex-direction: column; gap: var(--space-16); }
+.gallery-auth__foot { margin: var(--space-16) 0 0; text-align: center; font-size: 13.5px; color: var(--ink-secondary); }
+:root[data-theme="dark"] .lu-only-light, :root:not([data-theme="dark"]) .lu-only-dark { display: none; }
+.pieces { padding: var(--space-24); display: flex; flex-direction: column; gap: var(--space-24); }
+.pieces h2 { font: 600 12.5px/1 var(--font-sans); text-transform: none; color: var(--ink-muted); margin: 0 0 var(--space-12); }
+.pieces__row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-12); }
+.pieces__icon { display: inline-flex; padding: 6px; border-radius: var(--radius-8); background: var(--surface); color: var(--ink-quiet); }

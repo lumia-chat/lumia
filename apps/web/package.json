@@ -1,0 +1,25 @@
+{
+  "name": "lumia-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "tokens": "bun run scripts/tokens.ts",
+    "dev": "bun run tokens && vite",
+    "build": "bun run tokens && tsc --noEmit && vite build",
+    "check": "bun run tokens && tsc --noEmit",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@tanstack/solid-query": "^5.105.2",
+    "@tanstack/solid-router": "^1.170.43",
+    "@tanstack/solid-virtual": "^3.13.52",
+    "solid-js": "1.9.9"
+  },
+  "devDependencies": {
+    "bun-types": "^1.4.4",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5",
+    "vite-plugin-solid": "^2.11.15"
+  }
+}
