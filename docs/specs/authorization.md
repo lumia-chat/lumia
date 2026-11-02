@@ -25,7 +25,7 @@ Two invariants:
 |---|---|---|
 | `roles` | `id`, `server_id`, `name`, `position`, `permissions` bigint, `color`, `is_everyone` | Bit index of `permissions` equals the proto `Permission` enum value. Exactly one `is_everyone` role per server, created with the server, undeletable. |
 | `member_roles` | `server_id`, `account_id`, `role_id` | Primary key on all three. `@everyone` is implicit and never stored. |
-| `channel_overwrites` | `channel_id`, `target_kind` (`role` \| `member`), `target_id`, `allow` bigint, `deny` bigint | Primary key `(channel_id, target_kind, target_id)`. A bit set in both is treated as deny. |
+| `channel_overwrites` | `channel_id`, `target_kind` (`role` \| `member`), `target_id`, `allow` bigint, `deny` bigint | Primary key `(channel_id, target_kind, target_id)`. Normalized on write: a bit present in `deny` is cleared from `allow`, so the two never overlap and the algorithm's same-layer rule (3.1) is unambiguous. |
 | `server_members` | `server_id`, `account_id`, `kind`, `nickname`, `joined_at`, `expires_at` | `kind` is `member` or `guest` (architecture 6.2). |
 | `servers` | …, `owner_account_id` | |
 | `accounts` | …, `instance_role` (`none` \| `moderator` \| `admin` \| `owner`) | Section 7. |

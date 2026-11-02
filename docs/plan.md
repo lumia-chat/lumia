@@ -9,7 +9,7 @@ Legend: `[x]` done · `[~]` in progress · `[ ]` not started · `(spec §n)` the
 | Step | State |
 |---|---|
 | 1. Schemas and protocol contract | Done |
-| 2. Server: event log, delivery, account log, resume, authorization | Event log, account log, and all tables done; authorization, gateway, HTTP, identity endpoints next |
+| 2. Server: event log, delivery, account log, resume, authorization | Event log, account log, tables, and authorization done; gateway, HTTP, identity endpoints next |
 | 3. Rust core | Not started |
 | 4. Identity across two instances | Specified, not built |
 | 5. MLS personal DMs, backup, recovery | Not specified, not built |
@@ -68,6 +68,7 @@ Things that moved from the first draft, with the reason. The architecture record
 | Spike task under `lib/` | `bench/`, compiled in dev only | Benchee must not ship; the task must not compile in test or prod. |
 | Role and overwrite limits at Discord's caps (250 / 100 / 50) | 50 / 50 / 20, operator-configurable | Discord's caps are sized for communities of hundreds of thousands. |
 | Credo AliasUsage at stock | Fires above two uses, excludes `test/support` | Generated test scaffolding should stay stock. |
+| Overwrite with a bit in both allow and deny "treated as deny" at resolve time | Normalized on write: a denied bit is cleared from allow | The spec's own same-layer rule made allow win; property tests exposed the contradiction. Normalizing storage keeps the algorithm as written. |
 
 ## Step 2, part 2: delivery, accounts, authorization
 
@@ -80,15 +81,16 @@ Ordered. Each task names the spec section it implements and the tests that close
 - [x] `servers`, `server_members`, `roles`, `member_roles`, `channel_overwrites`, `audit_log` with `Lumia.Audit.record/4` (authorization §2, §9). `channels` gained `server_id`, `name`, `topic`, `position`.
 - [x] Oban 2.24 with `Lumia.Workers.PurgeCommands` on a daily cron (delivery §9). A retry after purge surfaces as `CONFLICT`, never a duplicate message; tested.
 
-**Authorization**
+**Authorization** (done 2026-11-01)
 
-- [ ] `Lumia.Authz.resolve/2` over bitfields, `test/support/authz_reference.ex` over `MapSet`s, property tests between them (authorization §3; tests: the five properties).
-- [ ] ACL snapshot ETS cache keyed `(channel_id, acl_version)` with TTL sweep (authorization §4; test: one load then ETS hits).
-- [ ] `acl_version` bumps on definition-level changes, `AclChanged` batched by Oban for server-wide bumps (authorization §6.1; tests: role change bumps every channel in the server only).
-- [ ] Member-level changes appended to the account log (authorization §6.2; test: role assignment bumps nothing, appears on one account log).
-- [ ] Viewer-diff job with 30 s debounce (authorization §6.3; test: making a channel private reaches non-viewers' logs).
-- [ ] Management hierarchy and owner rules (authorization §3.3; tests: owner cannot be kicked, cannot edit a role above yours, cannot grant what you lack).
-- [ ] Audit rows in the same transaction (authorization §9).
+- [x] `Lumia.Authz.resolve/2` over bitfields, `test/support/authz_reference.ex` over `MapSet`s, property tests between them (authorization §3). `Lumia.Authz.Permission` maps names to proto enum bits.
+- [x] `Lumia.Authz.Cache`: ETS keyed `(channel_id, acl_version)` with TTL sweep; `fetch/2` returns `:stale` when the channel has moved on (authorization §4).
+- [x] `Lumia.Servers`: definition-level changes bump `acl_version` in-transaction; server-wide bumps enqueue `Lumia.Workers.AclChanged` to append `acl_changed` events in batches; channel-level bumps append it directly (authorization §6.1).
+- [x] Member-level changes append `membership_added`, `membership_updated`, `membership_removed`, `channel_removed` to the account log and touch no `acl_version` (authorization §6.2).
+- [x] `Lumia.Workers.ViewerDiff`, debounced 30 s per server, diffing against a `channel_viewers` table (authorization §6.3).
+- [x] Management hierarchy, owner rules, `@everyone` undeletable, operator limits via `:limits` config (authorization §3.3, §10).
+- [x] `Lumia.Audit.record/4` called in every change's transaction (authorization §9).
+- [x] `Lumia.Events.append_system/3` for server-originated channel events.
 
 **Gateway**
 

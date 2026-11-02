@@ -73,6 +73,48 @@ defmodule Lumia.Events do
     end
   end
 
+  @doc """
+  Appends a server-originated event (membership, ACL change, purge marker)
+  to a channel log. No command, no idempotency row, no materialization.
+  Broadcast is the caller's job and happens after this returns.
+  """
+  @spec append_system(Ecto.UUID.t(), String.t(), map()) ::
+          {:ok, %{channel_id: Ecto.UUID.t(), seq: pos_integer(), event_id: Ecto.UUID.t()}}
+          | {:error, :channel_not_found | Ecto.Changeset.t()}
+  def append_system(channel_id, kind, payload) when is_binary(kind) and is_map(payload) do
+    Repo.transact(fn ->
+      now = DateTime.utc_now()
+      head_at = DateTime.truncate(now, :second)
+      lock = from(c in Channel, where: c.id == ^channel_id, select: {c.last_seq, c.acl_version})
+
+      case Repo.update_all(lock, inc: [last_seq: 1], set: [last_seq_at: head_at]) do
+        {0, _} ->
+          {:error, :channel_not_found}
+
+        {1, [{seq, acl_version}]} ->
+          write_system(channel_id, seq, acl_version, kind, payload, now)
+      end
+    end)
+  end
+
+  defp write_system(channel_id, seq, acl_version, kind, payload, now) do
+    event_id = Schema.generate_id()
+
+    with {:ok, _} <-
+           Repo.insert(%Event{
+             channel_id: channel_id,
+             seq: seq,
+             id: event_id,
+             kind: kind,
+             acl_version: acl_version,
+             created_at: now
+           }),
+         {:ok, _} <-
+           Repo.insert(%EventPayload{channel_id: channel_id, seq: seq, payload: payload}) do
+      {:ok, %{channel_id: channel_id, seq: seq, event_id: event_id}}
+    end
+  end
+
   defp write(channel_id, command, fingerprint) do
     now = DateTime.utc_now()
 

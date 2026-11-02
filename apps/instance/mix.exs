@@ -55,7 +55,8 @@ defmodule Lumia.MixProject do
       {:bandit, "~> 1.5"},
       {:oban, "~> 2.24"},
       {:benchee, "~> 1.3", only: :dev},
-      {:credo, "~> 1.7", only: [:dev, :test], runtime: false}
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
+      {:stream_data, "~> 1.4", only: :test}
     ]
   end
 

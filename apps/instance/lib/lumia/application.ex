@@ -13,6 +13,7 @@ defmodule Lumia.Application do
       # Loads instance settings (recovery generation) into persistent_term
       # before anything that sends them to clients starts.
       Lumia.Instance,
+      Lumia.Authz.Cache,
       {Oban, Application.fetch_env!(:lumia, Oban)},
       {DNSCluster, query: Application.get_env(:lumia, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Lumia.PubSub},
