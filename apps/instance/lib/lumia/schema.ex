@@ -31,6 +31,5 @@ defmodule Lumia.Schema do
   Never derive a time from one of these. The monotonic counter can run ahead
   of the wall clock under burst; `created_at` is always its own column.
   """
-  @spec generate_id() :: Ecto.UUID.t()
   def generate_id, do: Ecto.UUID.generate(version: 7, precision: :monotonic)
 end

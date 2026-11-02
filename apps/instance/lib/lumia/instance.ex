@@ -18,7 +18,6 @@ defmodule Lumia.Instance do
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
   @doc "The current recovery generation. Never hits the database."
-  @spec recovery_generation() :: pos_integer()
   def recovery_generation, do: :persistent_term.get(@key).recovery_generation
 
   @doc """
@@ -26,7 +25,6 @@ defmodule Lumia.Instance do
   cursors on its next connect. Called by `lumia restore` and
   `lumia settings bump-generation`, never by application code.
   """
-  @spec bump_recovery_generation() :: pos_integer()
   def bump_recovery_generation do
     settings = Repo.one!(Settings)
 
@@ -40,7 +38,6 @@ defmodule Lumia.Instance do
   end
 
   @doc "Reloads settings from the database into persistent_term."
-  @spec reload() :: Settings.t()
   def reload do
     settings = Repo.one!(Settings)
     :persistent_term.put(@key, settings)

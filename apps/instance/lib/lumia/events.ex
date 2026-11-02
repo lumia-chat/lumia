@@ -20,23 +20,7 @@ defmodule Lumia.Events do
   alias Lumia.Repo
   alias Lumia.Schema
 
-  @type command :: %{
-          required(:command_id) => Ecto.UUID.t(),
-          required(:kind) => String.t(),
-          required(:payload) => map(),
-          optional(:actor_account_id) => Ecto.UUID.t() | nil,
-          optional(:actor_device_id) => Ecto.UUID.t() | nil
-        }
-
-  @type ack :: %{
-          command_id: Ecto.UUID.t(),
-          channel_id: Ecto.UUID.t(),
-          seq: pos_integer(),
-          event_id: Ecto.UUID.t()
-        }
-
   @doc "Creates a channel. Spike-level; the real context lives elsewhere later."
-  @spec create_channel(String.t()) :: {:ok, Channel.t()} | {:error, Ecto.Changeset.t()}
   def create_channel(kind \\ "text") do
     Repo.insert(%Channel{kind: kind})
   end
@@ -48,8 +32,6 @@ defmodule Lumia.Events do
   command (same id, same fingerprint) returns the original ack without
   writing. The same id with a different operation is `{:error, :conflict}`.
   """
-  @spec append(Ecto.UUID.t(), command()) ::
-          {:ok, ack()} | {:error, :conflict | :channel_not_found | Ecto.Changeset.t()}
   def append(channel_id, %{command_id: command_id} = command) do
     fingerprint = fingerprint(command)
 
@@ -78,9 +60,6 @@ defmodule Lumia.Events do
   to a channel log. No command, no idempotency row, no materialization.
   Broadcast is the caller's job and happens after this returns.
   """
-  @spec append_system(Ecto.UUID.t(), String.t(), map()) ::
-          {:ok, %{channel_id: Ecto.UUID.t(), seq: pos_integer(), event_id: Ecto.UUID.t()}}
-          | {:error, :channel_not_found | Ecto.Changeset.t()}
   def append_system(channel_id, kind, payload) when is_binary(kind) and is_map(payload) do
     Repo.transact(fn ->
       now = DateTime.utc_now()
@@ -203,7 +182,6 @@ defmodule Lumia.Events do
   defp materialize(_channel_id, _seq, _command, _now), do: {:ok, nil}
 
   @doc "Events after `after_seq`, in order. The sync query."
-  @spec events_after(Ecto.UUID.t(), non_neg_integer(), pos_integer()) :: [Event.t()]
   def events_after(channel_id, after_seq, limit \\ 200) do
     Repo.all(
       from e in Event,
@@ -220,7 +198,6 @@ defmodule Lumia.Events do
   in the same second as `since` is returned again. Spurious nudges are
   harmless (architecture 8.2); missed ones are not.
   """
-  @spec changed_since(DateTime.t()) :: [{Ecto.UUID.t(), pos_integer()}]
   def changed_since(%DateTime{} = since) do
     since = DateTime.truncate(since, :second)
 

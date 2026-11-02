@@ -31,46 +31,19 @@ defmodule Lumia.Authz.Permission do
   @names Map.keys(@bits)
   @all Enum.reduce(@bits, 0, fn {_, bit}, acc -> Bitwise.bor(acc, Bitwise.bsl(1, bit)) end)
 
-  @type name ::
-          :administrator
-          | :manage_server
-          | :manage_roles
-          | :manage_channels
-          | :manage_members
-          | :create_invites
-          | :view_channel
-          | :read_history
-          | :send_messages
-          | :send_in_threads
-          | :attach_files
-          | :add_reactions
-          | :mention_everyone
-          | :manage_messages
-          | :start_calls
-          | :start_server_dms
-          | :manage_webhooks
-          | :manage_bots
-
-  @type bits :: non_neg_integer()
-
   @doc "Every permission name."
-  @spec names() :: [name()]
   def names, do: @names
 
   @doc "The bitfield with every permission set."
-  @spec all() :: bits()
   def all, do: @all
 
   @doc "The bit for one permission."
-  @spec bit(name()) :: bits()
   def bit(name), do: Bitwise.bsl(1, Map.fetch!(@bits, name))
 
   @doc "Names to bitfield."
-  @spec to_bits([name()]) :: bits()
   def to_bits(names), do: Enum.reduce(names, 0, &Bitwise.bor(&2, bit(&1)))
 
   @doc "Bitfield to sorted names. Unknown bits are ignored."
-  @spec from_bits(bits()) :: [name()]
   def from_bits(bits) do
     @bits
     |> Enum.filter(fn {_, index} -> Bitwise.band(bits, Bitwise.bsl(1, index)) != 0 end)
@@ -79,10 +52,8 @@ defmodule Lumia.Authz.Permission do
   end
 
   @doc "Whether `bits` includes `name`."
-  @spec has?(bits(), name()) :: boolean()
   def has?(bits, name), do: Bitwise.band(bits, bit(name)) != 0
 
   @doc "Whether every bit in `needed` is in `bits`."
-  @spec includes?(bits(), bits()) :: boolean()
   def includes?(bits, needed), do: Bitwise.band(bits, needed) == needed
 end

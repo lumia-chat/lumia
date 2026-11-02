@@ -18,10 +18,7 @@ defmodule Lumia.Accounts do
   alias Lumia.Repo
   alias Lumia.Schema
 
-  @type appended :: %{account_id: Ecto.UUID.t(), seq: pos_integer(), event_id: Ecto.UUID.t()}
-
   @doc "Creates an account. Spike-level; auth flows come with the identity endpoints."
-  @spec create_account(map()) :: {:ok, Account.t()} | {:error, Ecto.Changeset.t()}
   def create_account(attrs) do
     %Account{}
     |> Ecto.Changeset.cast(attrs, [
@@ -45,8 +42,6 @@ defmodule Lumia.Accounts do
   account row by incrementing `last_seq`, insert the event and its payload,
   commit. Broadcast is the caller's job and happens after this returns.
   """
-  @spec append_event(Ecto.UUID.t(), String.t(), map()) ::
-          {:ok, appended()} | {:error, :account_not_found | Ecto.Changeset.t()}
   def append_event(account_id, kind, payload) when is_binary(kind) and is_map(payload) do
     Repo.transact(fn ->
       now = DateTime.utc_now()
@@ -79,7 +74,6 @@ defmodule Lumia.Accounts do
   end
 
   @doc "Account events after `after_seq`, in order."
-  @spec events_after(Ecto.UUID.t(), non_neg_integer(), pos_integer()) :: [AccountEvent.t()]
   def events_after(account_id, after_seq, limit \\ 200) do
     Repo.all(
       from e in AccountEvent,
@@ -90,7 +84,6 @@ defmodule Lumia.Accounts do
   end
 
   @doc "Accounts whose log head moved at or after `since`. The reconciliation query."
-  @spec changed_since(DateTime.t()) :: [{Ecto.UUID.t(), pos_integer()}]
   def changed_since(%DateTime{} = since) do
     since = DateTime.truncate(since, :second)
 

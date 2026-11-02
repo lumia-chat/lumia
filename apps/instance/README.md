@@ -36,7 +36,7 @@ test/
 
 - Every schema uses `use Lumia.Schema`: UUIDv7 primary keys minted app-side, UUID foreign keys, microsecond UTC timestamps. Never add a database default for an id column. Never derive a time from an id.
 - `Lumia.Events.append/2` is the only writer to the event-log tables. Broadcast happens after it returns, never inside it.
-- Elixir 1.20 types are checked at compile time; no Dialyzer, no `@spec` on private functions. Type warnings are errors.
+- Elixir 1.20 types are checked at compile time and type warnings are errors. No Dialyzer, and no `@spec`, `@type`, or `@typedoc` anywhere: nothing verifies them, so they could be wrong. Contracts go in `@doc` prose.
 - Phoenix.PubSub over Erlang distribution is the only coordination between nodes. No Redis, no broker.
 
 ## Spikes

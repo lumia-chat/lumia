@@ -7,8 +7,6 @@ defmodule Lumia.Servers.Role do
 
   use Lumia.Schema
 
-  @type t :: %__MODULE__{}
-
   schema "roles" do
     field :server_id, Ecto.UUID
     field :name, :string

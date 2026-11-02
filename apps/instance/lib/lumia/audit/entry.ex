@@ -3,8 +3,6 @@ defmodule Lumia.Audit.Entry do
 
   use Lumia.Schema
 
-  @type t :: %__MODULE__{}
-
   schema "audit_log" do
     field :scope_kind, :string
     field :scope_id, Ecto.UUID

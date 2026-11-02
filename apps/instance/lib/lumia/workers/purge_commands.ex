@@ -23,7 +23,6 @@ defmodule Lumia.Workers.PurgeCommands do
   end
 
   @doc "The cutoff instant: rows created before it are purged."
-  @spec cutoff() :: DateTime.t()
   def cutoff, do: DateTime.add(DateTime.utc_now(), -@retention_days, :day)
 
   # Deletes in batches so a long-neglected instance does not hold one giant

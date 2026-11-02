@@ -3,8 +3,6 @@ defmodule Lumia.Servers.ChannelViewer do
 
   use Lumia.Schema
 
-  @type t :: %__MODULE__{}
-
   @primary_key false
   schema "channel_viewers" do
     field :channel_id, Ecto.UUID, primary_key: true

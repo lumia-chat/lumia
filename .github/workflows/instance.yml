@@ -51,6 +51,13 @@ jobs:
       - run: mix deps.get
       - run: mix deps.unlock --check-unused
       - run: mix format --check-formatted
+      # No typespecs: nothing verifies them (no Dialyzer), so they could be wrong.
+      - name: No typespec attributes
+        run: |
+          if grep -rnE '^\s*@(spec|type|typep|opaque|typedoc)\b' lib test bench; then
+            echo "typespec attributes are not allowed; see AGENTS.md" >&2
+            exit 1
+          fi
       - run: mix compile --warnings-as-errors
       # bench/ (spike tasks, Benchee) only compiles in dev.
       - run: MIX_ENV=dev mix compile --warnings-as-errors

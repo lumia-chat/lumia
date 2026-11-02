@@ -24,8 +24,6 @@ defmodule Lumia.Authz.Cache do
   verifies the loaded version matches; a stale request (the channel has
   moved on) returns `{:error, :stale}` so the caller re-reads the version.
   """
-  @spec fetch(Ecto.UUID.t(), pos_integer()) ::
-          {:ok, Snapshot.t()} | {:error, :stale | :channel_not_found}
   def fetch(channel_id, acl_version) do
     case :ets.lookup(@table, {channel_id, acl_version}) do
       [{_, snapshot, _}] -> {:ok, snapshot}
@@ -45,7 +43,6 @@ defmodule Lumia.Authz.Cache do
   end
 
   @doc "The snapshot at the channel's current version, loading if needed."
-  @spec fetch_current(Ecto.UUID.t()) :: {:ok, Snapshot.t()} | {:error, :channel_not_found}
   def fetch_current(channel_id) do
     with {:ok, snapshot} <- Snapshot.load(channel_id) do
       :ets.insert(@table, {{channel_id, snapshot.acl_version}, snapshot, now()})
@@ -54,7 +51,6 @@ defmodule Lumia.Authz.Cache do
   end
 
   @doc "Number of cached entries. For tests and metrics."
-  @spec size() :: non_neg_integer()
   def size, do: :ets.info(@table, :size)
 
   @doc false

@@ -3,8 +3,6 @@ defmodule Lumia.Accounts.AccountEvent do
 
   use Lumia.Schema
 
-  @type t :: %__MODULE__{}
-
   @primary_key false
   schema "account_events" do
     field :account_id, Ecto.UUID, primary_key: true

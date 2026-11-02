@@ -22,7 +22,6 @@ defmodule Lumia.Workers.ViewerDiff do
   @debounce_seconds 30
 
   @doc "Schedules the job for a server, debounced. Safe to call inside a transaction."
-  @spec schedule(Ecto.UUID.t()) :: {:ok, Oban.Job.t()} | {:error, term()}
   def schedule(server_id) do
     Oban.insert(new(%{"server_id" => server_id}, schedule_in: @debounce_seconds))
   end
@@ -39,7 +38,6 @@ defmodule Lumia.Workers.ViewerDiff do
   end
 
   @doc "Diffs one channel now. Used by tests and by channel creation."
-  @spec diff_channel(Ecto.UUID.t()) :: %{added: [Ecto.UUID.t()], removed: [Ecto.UUID.t()]}
   def diff_channel(channel_id) do
     current = MapSet.new(Servers.viewers(channel_id))
 

@@ -3,8 +3,6 @@ defmodule Lumia.Servers.MemberRole do
 
   use Lumia.Schema
 
-  @type t :: %__MODULE__{}
-
   @primary_key false
   schema "member_roles" do
     field :server_id, Ecto.UUID, primary_key: true

@@ -8,16 +8,12 @@ defmodule Lumia.Audit do
   alias Lumia.Audit.Entry
   alias Lumia.Repo
 
-  @type scope :: {:server, Ecto.UUID.t()} | {:instance, nil}
-
   @doc """
   Records a change. Call inside the transaction that makes the change.
 
       Audit.record({:server, server_id}, actor_id, "role.update",
         target: {:role, role_id}, before: old, after: new)
   """
-  @spec record(scope(), Ecto.UUID.t() | nil, String.t(), keyword()) ::
-          {:ok, Entry.t()} | {:error, Ecto.Changeset.t()}
   def record({scope_kind, scope_id}, actor_account_id, action, opts \\ []) do
     {target_kind, target_id} =
       case Keyword.get(opts, :target) do

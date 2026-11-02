@@ -14,19 +14,6 @@ defmodule Lumia.Authz.Snapshot do
   alias Lumia.Servers.Role
   alias Lumia.Servers.Server
 
-  @type role :: %{permissions: non_neg_integer(), position: integer()}
-  @type overwrite :: %{allow: non_neg_integer(), deny: non_neg_integer()}
-
-  @type t :: %__MODULE__{
-          channel_id: Ecto.UUID.t(),
-          server_id: Ecto.UUID.t() | nil,
-          acl_version: pos_integer(),
-          owner_account_id: Ecto.UUID.t() | nil,
-          everyone_role_id: Ecto.UUID.t() | nil,
-          roles: %{Ecto.UUID.t() => role()},
-          overwrites: %{{:role | :member, Ecto.UUID.t()} => overwrite()}
-        }
-
   defstruct channel_id: nil,
             server_id: nil,
             acl_version: 1,
@@ -40,7 +27,6 @@ defmodule Lumia.Authz.Snapshot do
   the channel's *current* `acl_version`; callers that want a specific
   version go through `Lumia.Authz.Cache`.
   """
-  @spec load(Ecto.UUID.t()) :: {:ok, t()} | {:error, :channel_not_found}
   def load(channel_id) do
     query =
       from c in Channel,

@@ -43,7 +43,6 @@ defmodule Lumia.Servers do
   # ---- Servers ---------------------------------------------------------------
 
   @doc "Creates a server with its @everyone role and the owner's membership."
-  @spec create_server(Ecto.UUID.t(), String.t()) :: {:ok, Server.t()} | {:error, term()}
   def create_server(owner_account_id, name) do
     Repo.transact(fn ->
       with {:ok, server} <- Repo.insert(%Server{name: name, owner_account_id: owner_account_id}),
@@ -66,8 +65,6 @@ defmodule Lumia.Servers do
   end
 
   @doc "Creates a text channel in a server. Bumps nothing; the channel is new at version 1."
-  @spec create_channel(Ecto.UUID.t(), Ecto.UUID.t(), String.t(), keyword()) ::
-          {:ok, Channel.t()} | {:error, term()}
   def create_channel(server_id, actor_id, name, opts \\ []) do
     Repo.transact(fn ->
       with {:ok, channel} <-
@@ -92,8 +89,6 @@ defmodule Lumia.Servers do
   # ---- Membership (member-level: account log, no acl bump) --------------------
 
   @doc "Adds a member or guest. Appends MembershipAdded to their account log."
-  @spec add_member(Ecto.UUID.t(), Ecto.UUID.t(), Ecto.UUID.t() | nil, keyword()) ::
-          {:ok, Member.t()} | {:error, term()}
   def add_member(server_id, account_id, actor_id, opts \\ []) do
     kind = Keyword.get(opts, :kind, "member")
 
@@ -121,8 +116,6 @@ defmodule Lumia.Servers do
   kick requires the actor to outrank the target (section 3.3); `reason`
   is `"left"`, `"removed"`, `"guest_expired"`, or `"account_deleted"`.
   """
-  @spec remove_member(Ecto.UUID.t(), Ecto.UUID.t(), Ecto.UUID.t() | nil, String.t()) ::
-          :ok | {:error, :permission_denied | :not_found}
   def remove_member(server_id, account_id, actor_id, reason) do
     Repo.transact(fn ->
       with {:ok, server} <- fetch_server(server_id),
@@ -151,15 +144,11 @@ defmodule Lumia.Servers do
   end
 
   @doc "Assigns a role. Member-level: MembershipUpdated on the account log, no acl bump."
-  @spec assign_role(Ecto.UUID.t(), Ecto.UUID.t(), Ecto.UUID.t(), Ecto.UUID.t()) ::
-          :ok | {:error, :permission_denied | :not_found}
   def assign_role(server_id, account_id, role_id, actor_id) do
     change_roles(server_id, account_id, role_id, actor_id, :assign)
   end
 
   @doc "Removes a role. Member-level: MembershipUpdated on the account log, no acl bump."
-  @spec unassign_role(Ecto.UUID.t(), Ecto.UUID.t(), Ecto.UUID.t(), Ecto.UUID.t()) ::
-          :ok | {:error, :permission_denied | :not_found}
   def unassign_role(server_id, account_id, role_id, actor_id) do
     change_roles(server_id, account_id, role_id, actor_id, :unassign)
   end
@@ -214,7 +203,6 @@ defmodule Lumia.Servers do
   permission granted. Bumps every channel in the server: a new role
   changes nothing until assigned, but its position shifts the hierarchy.
   """
-  @spec create_role(Ecto.UUID.t(), Ecto.UUID.t(), map()) :: {:ok, Role.t()} | {:error, term()}
   def create_role(server_id, actor_id, attrs) do
     perms = Permission.to_bits(Map.get(attrs, :permissions, []))
 
@@ -245,8 +233,6 @@ defmodule Lumia.Servers do
   end
 
   @doc "Updates a role's permissions, name, position, or color. Bumps every channel in the server."
-  @spec update_role(Ecto.UUID.t(), Ecto.UUID.t(), Ecto.UUID.t(), map()) ::
-          {:ok, Role.t()} | {:error, term()}
   def update_role(server_id, role_id, actor_id, attrs) do
     Repo.transact(fn ->
       with {:ok, role} <- fetch_role(server_id, role_id),
@@ -283,7 +269,6 @@ defmodule Lumia.Servers do
   end
 
   @doc "Deletes a role. @everyone cannot be deleted. Bumps every channel in the server."
-  @spec delete_role(Ecto.UUID.t(), Ecto.UUID.t(), Ecto.UUID.t()) :: :ok | {:error, term()}
   def delete_role(server_id, role_id, actor_id) do
     Repo.transact(fn ->
       with {:ok, role} <- fetch_role(server_id, role_id),
@@ -308,14 +293,6 @@ defmodule Lumia.Servers do
   in the server and that the actor holds every permission in `allow`.
   Normalized so `allow` and `deny` never overlap. Bumps that channel.
   """
-  @spec set_overwrite(
-          Ecto.UUID.t(),
-          Ecto.UUID.t(),
-          {:role | :member, Ecto.UUID.t()},
-          [Permission.name()],
-          [Permission.name()]
-        ) ::
-          :ok | {:error, term()}
   def set_overwrite(channel_id, actor_id, {target_kind, target_id}, allow, deny) do
     ow =
       Authz.normalize_overwrite(%{
@@ -361,8 +338,7 @@ defmodule Lumia.Servers do
 
   # ---- Resolution helpers for callers -----------------------------------------
 
-  @doc "The `Lumia.Authz.member/0` shape for an account in a server, or nil if not a member."
-  @spec member_for(Ecto.UUID.t(), Ecto.UUID.t()) :: Authz.member() | nil
+  @doc "The member map `Lumia.Authz.resolve/2` takes (account_id, kind, role_ids, owner?), or nil if not a member."
   def member_for(server_id, account_id) do
     case Repo.get_by(Member, server_id: server_id, account_id: account_id) do
       nil ->
@@ -379,7 +355,6 @@ defmodule Lumia.Servers do
   end
 
   @doc "Every account that can view the channel, resolved fresh from Postgres."
-  @spec viewers(Ecto.UUID.t()) :: [Ecto.UUID.t()]
   def viewers(channel_id) do
     case Lumia.Authz.Cache.fetch_current(channel_id) do
       {:ok, snapshot} when is_binary(snapshot.server_id) ->

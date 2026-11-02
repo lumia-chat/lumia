@@ -3,7 +3,7 @@ This is the Lumia instance: the Elixir server that one deployment runs. It is a 
 ## Project guidelines
 
 - Use `mix precommit` when you are done with all changes and fix any pending issues. It compiles with warnings as errors, checks formatting, runs Credo in strict mode, and runs the tests.
-- Elixir 1.20 types are checked at compile time. Rely on them: **no `@spec`** on private functions, no Dialyzer. Public functions may carry `@spec` where it documents a contract. Type warnings are errors in CI.
+- Elixir 1.20 types are checked at compile time and type warnings are errors in CI. **No `@spec`, `@type`, `@typep`, `@opaque`, or `@typedoc` anywhere**, public functions included, and no Dialyzer: nothing verifies typespecs, so they could be wrong. Put contracts in `@doc` prose. CI greps for these attributes and fails.
 - Every schema uses `use Lumia.Schema`: UUIDv7 primary keys minted app-side, UUID foreign keys, microsecond UTC timestamps. Never add a database default for an id column. Never derive a time from an id; `created_at` is always its own column.
 - Migrations get UUID keys and microsecond timestamps from the Repo config. Partitioned tables (`events`, `event_payloads`, `commands`) are keyed on `(channel_id, ...)` and must stay that way so queries prune to one partition.
 - The write path for channels is `Lumia.Events.append/2` and nothing else writes to the event-log tables. Broadcast happens after it returns, never inside it.

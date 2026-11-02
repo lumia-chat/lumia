@@ -10,8 +10,6 @@ defmodule Lumia.Accounts.Account do
 
   use Lumia.Schema
 
-  @type t :: %__MODULE__{}
-
   schema "accounts" do
     field :identity_id, :binary
     field :kind, :string, default: "human"

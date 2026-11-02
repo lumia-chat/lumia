@@ -12,21 +12,6 @@ defmodule Lumia.Authz do
   alias Lumia.Authz.Permission
   alias Lumia.Authz.Snapshot
 
-  @typedoc """
-  What resolution needs to know about the member:
-
-    * `account_id`
-    * `kind`: `:member` or `:guest`
-    * `role_ids`: roles explicitly held; `@everyone` is implicit
-    * `owner?`: whether this account owns the server
-  """
-  @type member :: %{
-          account_id: Ecto.UUID.t(),
-          kind: :member | :guest,
-          role_ids: [Ecto.UUID.t()],
-          owner?: boolean()
-        }
-
   @doc """
   Resolves a member's permissions in the snapshot's channel. Returns a
   bitfield; use `Lumia.Authz.Permission.from_bits/1` for names.
@@ -38,7 +23,6 @@ defmodule Lumia.Authz do
       5. role overwrites, aggregated  (deny ∪ then allow ∪)
       6. member overwrite
   """
-  @spec resolve(Snapshot.t(), member()) :: Permission.bits()
   def resolve(%Snapshot{}, %{owner?: true}), do: Permission.all()
 
   def resolve(%Snapshot{} = snapshot, member) do
@@ -94,7 +78,6 @@ defmodule Lumia.Authz do
   defp apply_overwrite(bits, %{allow: allow, deny: deny}), do: (bits &&& bnot(deny)) ||| allow
 
   @doc "Whether the member resolves the named permission."
-  @spec can?(Snapshot.t(), member(), Permission.name()) :: boolean()
   def can?(snapshot, member, permission),
     do: Permission.has?(resolve(snapshot, member), permission)
 
@@ -102,13 +85,10 @@ defmodule Lumia.Authz do
   Clears from `allow` any bit present in `deny`, so stored overwrites never
   overlap and the same-layer rule is unambiguous. Applied on every write.
   """
-  @spec normalize_overwrite(%{allow: Permission.bits(), deny: Permission.bits()}) ::
-          %{allow: Permission.bits(), deny: Permission.bits()}
   def normalize_overwrite(%{allow: allow, deny: deny}),
     do: %{allow: allow &&& bnot(deny), deny: deny}
 
   @doc "A channel is private when its @everyone overwrite denies VIEW_CHANNEL."
-  @spec private?(Snapshot.t()) :: boolean()
   def private?(%Snapshot{} = snapshot) do
     case Map.get(snapshot.overwrites, {:role, snapshot.everyone_role_id}) do
       nil -> false
@@ -118,20 +98,11 @@ defmodule Lumia.Authz do
 
   # ---- Management hierarchy (section 3.3) ------------------------------------
 
-  @typedoc "The actor's standing for management checks."
-  @type actor :: %{
-          account_id: Ecto.UUID.t(),
-          owner?: boolean(),
-          server_permissions: Permission.bits(),
-          highest_position: integer() | nil
-        }
-
   @doc """
   Whether the actor may edit, assign, or delete a role: MANAGE_ROLES at the
   server level and the role is positioned below the actor's highest, or the
   actor is owner. Lower position sorts first and is higher.
   """
-  @spec can_manage_role?(actor(), %{position: integer()}) :: boolean()
   def can_manage_role?(%{owner?: true}, _role), do: true
 
   def can_manage_role?(actor, role) do
@@ -143,7 +114,6 @@ defmodule Lumia.Authz do
   end
 
   @doc "Whether the actor may grant every permission in `bits`."
-  @spec can_grant?(actor(), Permission.bits()) :: boolean()
   def can_grant?(%{owner?: true}, _bits), do: true
 
   def can_grant?(actor, bits) do
@@ -155,8 +125,6 @@ defmodule Lumia.Authz do
   Whether the actor may kick or ban a target: MANAGE_MEMBERS, the target
   is not the owner, and the target's highest role is below the actor's.
   """
-  @spec can_remove_member?(actor(), %{owner?: boolean(), highest_position: integer() | nil}) ::
-          boolean()
   def can_remove_member?(_actor, %{owner?: true}), do: false
   def can_remove_member?(%{owner?: true}, _target), do: true
 

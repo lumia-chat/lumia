@@ -3,8 +3,6 @@ defmodule Lumia.Servers.Server do
 
   use Lumia.Schema
 
-  @type t :: %__MODULE__{}
-
   schema "servers" do
     field :name, :string
     field :icon_url, :string

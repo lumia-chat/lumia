@@ -21,7 +21,6 @@ defmodule Lumia.Workers.AclChanged do
   @batch 100
 
   @doc "Schedules the job for a server. Safe to call inside a transaction."
-  @spec schedule(Ecto.UUID.t()) :: {:ok, Oban.Job.t()} | {:error, term()}
   def schedule(server_id), do: Oban.insert(new(%{"server_id" => server_id}))
 
   @impl Oban.Worker
