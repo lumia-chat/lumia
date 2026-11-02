@@ -35,13 +35,14 @@ apps/ios        SwiftUI
 apps/macos      SwiftUI
 apps/android    Jetpack Compose
 apps/desktop    Tauri shell for Windows and Linux
+apps/relay      Push relay for APNs and FCM
 apps/web        Web UI (SolidJS), shared with apps/desktop
 assets/         Logo, icons, fonts and design tokens shared by every shell
 proto/          Protobuf schemas
 docs/           Architecture, protocol contract, and specs
 ```
 
-`apps/instance`, `apps/core`, `apps/web` and `apps/desktop` exist; the rest do not yet. Section 18 of the architecture doc gives the order they will be built in.
+`apps/instance`, `apps/core`, `apps/web`, `apps/desktop` and `apps/relay` exist; the rest do not yet. Section 18 of the architecture doc gives the order they will be built in.
 
 ## Platforms
 

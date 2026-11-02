@@ -1,0 +1,44 @@
+name: relay
+
+on:
+  push:
+    branches: [master]
+    paths: ["apps/relay/**", ".github/workflows/relay.yml"]
+  pull_request:
+    paths: ["apps/relay/**", ".github/workflows/relay.yml"]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: apps/relay
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    env:
+      MIX_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.20.4"
+          otp-version: "29"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            apps/relay/deps
+            apps/relay/_build
+          key: relay-${{ runner.os }}-${{ hashFiles('apps/relay/mix.lock') }}
+      - run: mix deps.get
+      - run: mix format --check-formatted
+      - name: No typespec attributes
+        run: |
+          if grep -rnE '^\s*@(spec|type|typep|opaque|typedoc)\b' lib test; then
+            echo "typespec attributes are not allowed; see AGENTS.md" >&2
+            exit 1
+          fi
+      - run: mix compile --warnings-as-errors
+      - run: mix credo --strict
+      - run: mix test
