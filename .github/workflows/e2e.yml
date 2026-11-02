@@ -66,7 +66,17 @@ jobs:
         working-directory: apps/core
       - run: bun install --frozen-lockfile && bun run wasm
         working-directory: apps/web
-      - run: bunx playwright install --with-deps chromium webkit
+      # The browsers by Playwright version; only their system packages are
+      # installed each run.
+      - uses: actions/cache@v4
+        id: browsers
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('apps/web/bun.lock') }}
+      - run: bunx playwright install-deps chromium webkit
+        working-directory: apps/web
+      - if: steps.browsers.outputs.cache-hit != 'true'
+        run: bunx playwright install chromium webkit
         working-directory: apps/web
 
       - name: Start the instance
@@ -82,7 +92,8 @@ jobs:
         working-directory: apps/web
         env:
           DEBUG: "pw:browser"
-        timeout-minutes: 20
+        # A passing run takes about two minutes; a hang should not wait longer than this.
+        timeout-minutes: 8
       - if: failure()
         run: tail -200 /tmp/phx.log
       - if: failure()

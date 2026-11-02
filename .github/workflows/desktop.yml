@@ -31,14 +31,12 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
-      - uses: actions/cache@v4
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            apps/core/target
-            apps/desktop/src-tauri/target
-          key: desktop-${{ runner.os }}-${{ hashFiles('apps/core/Cargo.lock', 'apps/desktop/src-tauri/Cargo.lock') }}
+          workspaces: |
+            apps/core
+            apps/desktop/src-tauri
+          key: desktop
       - run: bun install --frozen-lockfile
         working-directory: apps/web
       - run: bun install --frozen-lockfile
