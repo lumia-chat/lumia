@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "chat.lumia.desktop",
   "build": {
-    "beforeDevCommand": "bun --cwd ../web run dev",
+    "beforeDevCommand": "bun run --cwd ../web dev",
     "devUrl": "http://localhost:5173",
-    "beforeBuildCommand": "bun --cwd ../web run build",
+    "beforeBuildCommand": "bun run --cwd ../web build",
     "frontendDist": "../../web/dist"
   },
   "app": {
