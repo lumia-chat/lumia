@@ -69,6 +69,7 @@ defmodule Lumia.MixProject do
 
       # Testing and development.
       {:benchee, "~> 1.3", only: :dev},
+      {:mint_web_socket, "~> 1.0", only: :dev},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:stream_data, "~> 1.4", only: :test}
     ]

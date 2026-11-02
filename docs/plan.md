@@ -158,8 +158,8 @@ Ordered. Each task names the spec section it implements and the tests that close
 **Closing step 2**
 
 - [ ] Every test in delivery §12, authorization §11, and identity §12 green in CI.
-- [ ] Rerun the event-log spike with the gateway attached and record send-to-delivered numbers in [spikes/](spikes/).
-- [ ] Section 17 budgets updated with measured values.
+- [x] `mix lumia.spike.gateway`: real WebSocket clients end to end; 7 ms p50 / 22 ms p99 at 200 subscribers, 13 ms / 32 ms at 1,000, against the 100 ms budget ([spikes/2026-11-01-gateway.md](spikes/2026-11-01-gateway.md)).
+- [x] Section 17 records both spikes' measured values; the budget numbers themselves stand.
 
 ## Step 3: Rust core
 

@@ -552,7 +552,7 @@ A limit resolves as **min(operator hard limit, max(applicable plan allowances))*
 
 Proposed. Adjust the numbers; keep the section and the workload spec. Each budget is meaningless without its workload, and CI fails on regressions against the ones that can be measured in CI.
 
-Measured so far: the write transaction behind the first row commits in under 1 ms on a laptop and sustains about 10k writes/s across 100 channels with p99 around 6 ms; a single channel under 50 concurrent writers serializes to about 2.8k writes/s. Details and the HOT-update finding in [spikes/2026-11-01-event-log.md](spikes/2026-11-01-event-log.md).
+Measured so far, on a laptop: the write transaction commits in under 1 ms and sustains about 10k writes/s across 100 channels with p99 around 6 ms ([spikes/2026-11-01-event-log.md](spikes/2026-11-01-event-log.md)). Through the real gateway, send to delivered is 7 ms p50 and 22 ms p99 with 200 subscribers on one channel, and 13 ms p50 and 32 ms p99 with 1,000, against the 100 ms budget ([spikes/2026-11-01-gateway.md](spikes/2026-11-01-gateway.md)).
 
 | Budget | Target | Workload |
 |---|---|---|

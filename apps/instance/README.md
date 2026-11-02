@@ -45,6 +45,7 @@ Measurements that shaped the design live in [docs/spikes/](../../docs/spikes/). 
 
 ```sh
 mix lumia.spike.events --channels 1,100 --writers 50 --duration 15
+mix lumia.spike.gateway --subscribers 200 --messages 300 --rate 50
 ```
 
-It writes to the dev database; `mix ecto.reset` clears it.
+Both write to the dev database; `mix ecto.reset` clears it. The gateway spike starts the endpoint on port 4799.
