@@ -13,7 +13,7 @@ Legend: `[x]` done · `[~]` in progress · `[ ]` not started · `(spec §n)` the
 | 3. Rust core | Done 2026-11-01: sync engine, SQLite store, reconnecting CLI on the real gateway, identity with shared vectors, scenario suite, UniFFI and wasm surfaces |
 | 4. Identity across two instances | Lifecycle, recovery and the verifier cases run end to end 2026-11-02; forks and the merge, multi-node replay and web origins wait for their steps |
 | 5. MLS personal DMs, backup, recovery | Done 2026-11-02: requests, personal and group DMs, device addition and revocation, history backup with deletion, identity backup, phrase recovery with rejoin, all run live from the CLI; root-rotation re-wrap and the fault-injection §12 cases open |
-| 6. Web UI in Tauri | Not started |
+| 6. Web UI in Tauri | Screens, the DM engine in the worker, encrypted stores, the Tauri shell with Linux and Windows CI, and the instance serving the UI landed 2026-11-02; open: names for people outside a shared server (`GET /accounts/{id}`), the gateway token off the query string, the wasm size |
 | 7. Multi-node, push, SwiftUI, Compose | Not started |
 
 Specs written: [identity](specs/identity.md), [delivery](specs/delivery.md), [authorization](specs/authorization.md). Still provisional in the architecture: E2EE backup and rejoin (11.3), deployment recovery (15).
