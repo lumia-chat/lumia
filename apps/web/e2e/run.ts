@@ -23,9 +23,10 @@ const browsers = process.argv.slice(2).filter((a) => a === "chromium" || a === "
 const engines = browsers.length ? browsers : ["chromium", "webkit"];
 
 function run(args: string[], cwd = web): string {
-  const r = Bun.spawnSync(args, { cwd });
+  // A CLI call that waits on the gateway (dm open, dm send) must not hang the suite.
+  const r = Bun.spawnSync(args, { cwd, timeout: 120_000 });
   const text = r.stdout.toString() + r.stderr.toString();
-  if (r.exitCode !== 0) throw new Error(`${args.join(" ")}\n${text}`);
+  if (r.exitCode !== 0) throw new Error(`${args.join(" ")} (${r.signalCode ? "killed by " + r.signalCode : "exit " + r.exitCode})\n${text}`);
   return text;
 }
 
@@ -57,13 +58,18 @@ async function open(which: string, name: string, keep = false): Promise<{ ctx: B
   });
   if (!keep) {
     // WebKit keeps OPFS outside the profile directory, so a fresh profile
-    // still sees the last run's stores; clear them before the worker opens any.
+    // still sees the last run's stores; clear them before the worker opens
+    // any. Best effort and bounded: an engine without OPFS iteration must
+    // not hang the suite here, it fails later where the store opens.
     await page.goto(`${base}/design`);
-    await page.evaluate(async () => {
+    const cleared = page.evaluate(async () => {
       const root = await navigator.storage.getDirectory();
       for await (const name of (root as unknown as { keys(): AsyncIterable<string> }).keys()) await root.removeEntry(name, { recursive: true });
+      localStorage.clear();
+      return true;
     });
-    await page.evaluate(() => localStorage.clear());
+    const outcome = await Promise.race([cleared.catch((e: unknown) => `failed: ${e instanceof Error ? e.message : String(e)}`), Bun.sleep(15_000).then(() => "timed out")]);
+    if (outcome !== true) console.log(`  [${which}] clearing storage ${outcome}`);
   }
   return { ctx, page };
 }
