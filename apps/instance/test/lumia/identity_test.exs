@@ -112,7 +112,7 @@ defmodule Lumia.IdentityTest do
         roster(identity, :root,
           version: 2,
           devices: [
-            cert(identity, web, :root, kind: :WEB, web_origin: "https://" <> Identity.host())
+            cert(identity, web, :root, kind: :WEB, web_origin: Identity.own_origin())
           ]
         )
 

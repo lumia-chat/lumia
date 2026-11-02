@@ -100,4 +100,11 @@ defmodule LumiaWeb.Router do
       forward "/mailbox", Plug.Swoosh.MailboxPreview
     end
   end
+
+  # The web UI, when installed (LumiaWeb.UiController): every path the API
+  # and the dev routes do not claim renders its index.html. Declared last,
+  # with no pipeline: the browser's accept header is not the API's.
+  scope "/", LumiaWeb do
+    get "/*path", UiController, :index
+  end
 end

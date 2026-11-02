@@ -10,7 +10,8 @@
     "build": "bun run tokens && bun run wasm && tsc --noEmit && vite build",
     "check": "bun run tokens && bun run wasm && tsc --noEmit",
     "preview": "vite preview",
-    "e2e": "bun run e2e/run.ts"
+    "e2e": "bun run e2e/run.ts",
+    "build:instance": "bun run tokens && bun run wasm && tsc --noEmit && vite build --mode instance --outDir ../instance/priv/static/ui --emptyOutDir"
   },
   "dependencies": {
     "@tanstack/solid-query": "^5.105.2",

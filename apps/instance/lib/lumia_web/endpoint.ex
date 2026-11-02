@@ -28,6 +28,16 @@ defmodule LumiaWeb.Endpoint do
     websocket: [connect_info: [session: @session_options]],
     longpoll: [connect_info: [session: @session_options]]
 
+  # The web UI (apps/web), when a build is installed under priv/static/ui:
+  # its hashed assets and the shared assets, with the SPA fallback in the
+  # router (LumiaWeb.UiController). Not in the repo; see README.
+  plug Plug.Static,
+    at: "/",
+    from: {:lumia, "priv/static/ui"},
+    gzip: not code_reloading?,
+    headers: %{"cache-control" => "public, max-age=31536000, immutable"},
+    only_matching: ~w(assets brand fonts icons design)
+
   # Serve at "/" the static files from "priv/static" directory.
   #
   # When code reloading is disabled (e.g., in production),

@@ -3,11 +3,11 @@
 // account. Built from the design canvas's "Sign in" board; the instance
 // field and trust card are the additions this product needs before the
 // card the board shows.
-import { Show, createResource, createSignal } from "solid-js";
+import { Show, createResource, createSignal, onMount } from "solid-js";
 import { useNavigate } from "@tanstack/solid-router";
 import { Button, Card, Checkbox, Divider, TextField } from "../design/components";
 import { ClientError, type InstanceSummary } from "../client/bridge";
-import { client, openInstance, savedInstance } from "../client/state";
+import { SERVED_BY_INSTANCE, client, inShell, openInstance, savedInstance } from "../client/state";
 
 type Mode = "signIn" | "create";
 
@@ -23,6 +23,12 @@ export function SignIn() {
   const [needsTotp, setNeedsTotp] = createSignal(false);
   const [error, setError] = createSignal("");
   const [busy, setBusy] = createSignal(false);
+
+  // Served by an instance, the instance is this page's origin: no address to ask for.
+  const fixed = () => SERVED_BY_INSTANCE && !inShell();
+  onMount(() => {
+    if (fixed()) setOpened(location.origin);
+  });
 
   const [trust] = createResource(opened, async (url) => {
     const b = client();
@@ -78,22 +84,24 @@ export function SignIn() {
       <Show
         when={info()}
         fallback={
-          <Card title="Welcome" subtitle="Which instance do you want to sign in to?">
+          <Card title="Welcome" subtitle={fixed() ? "Reaching this instance…" : "Which instance do you want to sign in to?"}>
             <form class="auth__form" onSubmit={connect}>
-              <TextField
-                label="Instance"
-                type="url"
-                placeholder="https://chat.example.com"
-                value={instance()}
-                onInput={(e) => setInstance(e.currentTarget.value)}
-                autocomplete="url"
-              />
+              <Show when={!fixed()}>
+                <TextField
+                  label="Instance"
+                  type="url"
+                  placeholder="https://chat.example.com"
+                  value={instance()}
+                  onInput={(e) => setInstance(e.currentTarget.value)}
+                  autocomplete="url"
+                />
+              </Show>
               <Show when={error()}>
                 <p class="auth__error" role="alert">
                   {error()}
                 </p>
               </Show>
-              <Show when={trust.loading}>
+              <Show when={trust.loading && !fixed()}>
                 <p class="auth__note">Reaching the instance…</p>
               </Show>
               <Show when={trust.error}>
@@ -101,9 +109,11 @@ export function SignIn() {
                   Could not reach that instance: {String((trust.error as Error)?.message ?? trust.error)}
                 </p>
               </Show>
-              <Button variant="primary" type="submit" block disabled={trust.loading}>
-                Continue
-              </Button>
+              <Show when={!fixed() || trust.error}>
+                <Button variant="primary" type="submit" block disabled={trust.loading} onClick={fixed() ? () => setOpened(null) || setOpened(location.origin) : undefined}>
+                  {fixed() ? "Try again" : "Continue"}
+                </Button>
+              </Show>
             </form>
           </Card>
         }
@@ -116,9 +126,11 @@ export function SignIn() {
                 run by {i().operatorName || "an unnamed operator"}
                 {i().softwareVersion ? ` · Lumia ${i().softwareVersion}` : ""}
               </span>
-              <button type="button" class="lu-link auth__change" onClick={() => { setInfo(null); setOpened(null); }}>
-                Change instance
-              </button>
+              <Show when={!fixed()}>
+                <button type="button" class="lu-link auth__change" onClick={() => { setInfo(null); setOpened(null); }}>
+                  Change instance
+                </button>
+              </Show>
             </div>
             <form class="auth__form" onSubmit={(e) => void submit(e)}>
               <TextField label={mode() === "create" ? "Handle" : "Email or handle"} value={handle()} onInput={(e) => setHandle(e.currentTarget.value)} autocomplete="username" placeholder={mode() === "create" ? "yourname" : "you@example.com"} />

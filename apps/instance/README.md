@@ -1,6 +1,6 @@
 # Lumia instance
 
-The Elixir server that one Lumia deployment runs. A Phoenix application with no HTML surface: clients talk to it over the gateway and the API defined in [docs/protocol.md](../../docs/protocol.md). Read [docs/architecture.md](../../docs/architecture.md) before changing anything here.
+The Elixir server that one Lumia deployment runs. A Phoenix application whose only HTML is the web UI it can serve: clients talk to it over the gateway and the API defined in [docs/protocol.md](../../docs/protocol.md). Read [docs/architecture.md](../../docs/architecture.md) before changing anything here.
 
 ## Status
 
@@ -51,3 +51,13 @@ mix lumia.spike.gateway --subscribers 200 --messages 300 --rate 50
 ```
 
 Both write to the dev database; `mix ecto.reset` clears it. The gateway spike starts the endpoint on port 4799.
+
+## The web UI
+
+An instance serves the web app from `priv/static/ui` when a build is installed there, so its web origin is itself (architecture 11.4):
+
+```sh
+cd ../web && bun run build:instance   # builds into ../instance/priv/static/ui
+```
+
+Every path the API does not claim then renders the app's `index.html`; without a build the instance answers those paths with a plain note. The directory is not in the repo; a release build installs it.

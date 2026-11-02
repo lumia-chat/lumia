@@ -35,7 +35,7 @@ defmodule LumiaWeb.Plugs.CorsTest do
     assert Cors.socket_origin?(URI.parse("tauri://localhost"))
     assert Cors.socket_origin?(URI.parse("https://tauri.localhost"))
     assert Cors.socket_origin?(URI.parse("http://localhost:5173"))
-    assert Cors.socket_origin?(URI.parse("https://localhost:443"))
+    assert Cors.socket_origin?(URI.parse(Lumia.Identity.own_origin()))
     refute Cors.socket_origin?(URI.parse("https://evil.example"))
   end
 

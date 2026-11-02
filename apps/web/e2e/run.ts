@@ -14,7 +14,9 @@ const web = resolve(import.meta.dir, "..");
 const cli = resolve(web, "../core/target/release/lumia-cli");
 const work = resolve(import.meta.dir, ".work");
 const out = resolve(work, "shots");
-const base = "http://localhost:5173";
+// LUMIA_BASE points the suite at a UI an instance serves (`bun run
+// build:instance`, then its server); otherwise vite is started here.
+const base = process.env.LUMIA_BASE ?? "http://localhost:5173";
 const instance = process.env.LUMIA_INSTANCE ?? "http://localhost:4000";
 const password = "correct-horse-battery-staple";
 const browsers = process.argv.slice(2).filter((a) => a === "chromium" || a === "webkit");
@@ -68,8 +70,13 @@ async function open(which: string, name: string, keep = false): Promise<{ ctx: B
 
 async function trustCard(page: Page) {
   await page.goto(base);
-  await page.getByLabel("Instance").fill(instance);
-  await page.getByRole("button", { name: "Continue" }).click();
+  await page.locator(".lu-card").waitFor();
+  // A UI served by its instance has no address to ask for.
+  const field = page.getByLabel("Instance");
+  if ((await field.count()) > 0) {
+    await field.fill(instance);
+    await page.getByRole("button", { name: "Continue" }).click();
+  }
   await page.getByText("run by").waitFor();
 }
 
@@ -207,9 +214,9 @@ const bAccount = lumia(identityDir, "dm", "setup").match(/account ([0-9a-f-]{36}
 if (!bAccount) throw new Error("no account id from dm setup");
 console.log("seeded");
 
-const vite = Bun.spawn(["bun", "run", "dev"], { cwd: web, stdout: "ignore", stderr: "ignore" });
+const vite = process.env.LUMIA_BASE ? null : Bun.spawn(["bun", "run", "dev"], { cwd: web, stdout: "ignore", stderr: "ignore" });
 try {
-  await waitFor(base, "vite");
+  await waitFor(base, vite ? "vite" : "the served UI");
   let failed = 0;
   for (const which of engines) {
     // A fresh CLI identity per browser, so each gets its own request.
@@ -233,9 +240,9 @@ try {
     }
   }
   console.log(failed ? `${failed} failed; screenshots in ${out}` : "ok");
-  vite.kill();
+  vite?.kill();
   // A failed step may leave a browser open, which would keep the process alive.
   process.exit(failed ? 1 : 0);
 } finally {
-  vite.kill();
+  vite?.kill();
 }

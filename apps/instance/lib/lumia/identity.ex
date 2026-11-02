@@ -501,12 +501,16 @@ defmodule Lumia.Identity do
   """
   def web_origins do
     [
-      origin_of(host())
+      own_origin()
       | Application.get_env(:lumia, :identity, []) |> Keyword.get(:web_origins, [])
     ]
   end
 
-  defp origin_of(host), do: "https://" <> host
+  @doc """
+  This instance's own web origin: where it serves the web UI from, so a
+  self-hosted instance's web origin is itself (architecture 11.4).
+  """
+  def own_origin, do: LumiaWeb.Endpoint.url()
 
   defp challenge_key do
     secret = Application.get_env(:lumia, LumiaWeb.Endpoint)[:secret_key_base]

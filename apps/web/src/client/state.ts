@@ -50,6 +50,13 @@ export async function ensureOwner(): Promise<boolean> {
   return ok;
 }
 
+/**
+ * Whether this build is served by an instance (`vite build --mode
+ * instance`): then the instance is the page's own origin and the only one
+ * this web origin connects to (architecture 11.4).
+ */
+export const SERVED_BY_INSTANCE = import.meta.env.MODE === "instance";
+
 /** Whether the page runs inside the desktop shell (apps/desktop). */
 export function inShell(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
