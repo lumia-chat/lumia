@@ -31,6 +31,9 @@ defmodule LumiaWeb.Gateway.SessionChannel do
   @heartbeat_seconds 30
   @max_subscriptions 500
   @slow_consumer_frames 1_000
+  # A subscription not re-resolved within this window is re-resolved before
+  # its next delivery (authorization section 5).
+  @staleness_ms :timer.minutes(10)
 
   # ---- Join ------------------------------------------------------------------
 
@@ -38,6 +41,9 @@ defmodule LumiaWeb.Gateway.SessionChannel do
   def join("session", %V1.Hello{} = hello, socket) do
     Phoenix.PubSub.subscribe(Lumia.PubSub, Accounts.topic(socket.assigns.account_id))
     Phoenix.PubSub.subscribe(Lumia.PubSub, Auth.topic(socket.assigns.session_id))
+    # After a partition heals, every subscription is re-resolved before
+    # anything is delivered (delivery section 5).
+    :ok = :net_kernel.monitor_nodes(true)
 
     socket =
       assign(socket,
@@ -265,6 +271,13 @@ defmodule LumiaWeb.Gateway.SessionChannel do
     disconnect(socket, :DISCONNECT_SESSION_REVOKED)
   end
 
+  def handle_info({:nodeup, _node}, socket), do: {:noreply, reresolve_all(socket)}
+  def handle_info({:nodedown, _node}, socket), do: {:noreply, socket}
+
+  def handle_info(:slow_consumer, socket) do
+    disconnect(socket, :DISCONNECT_SLOW_CONSUMER)
+  end
+
   def handle_info(_other, socket), do: {:noreply, socket}
 
   defp handle_live(socket, channel_id, sub, event, bytes) do
@@ -272,7 +285,7 @@ defmodule LumiaWeb.Gateway.SessionChannel do
       event.seq <= sub.delivered_seq ->
         socket
 
-      event.acl_version != sub.acl_version ->
+      event.acl_version != sub.acl_version or stale?(sub) ->
         case authorize_read(socket, channel_id) do
           {:ok, fresh} ->
             socket
@@ -367,7 +380,8 @@ defmodule LumiaWeb.Gateway.SessionChannel do
       server_id: access.server_id,
       acl_version: access.acl_version,
       permissions: access.permissions,
-      delivered_seq: 0
+      delivered_seq: 0,
+      resolved_at: System.monotonic_time(:millisecond)
     }
   end
 
@@ -379,12 +393,29 @@ defmodule LumiaWeb.Gateway.SessionChannel do
 
   defp push_raw(socket, payload) do
     if slow_consumer?(socket) do
-      {:stop, :normal, socket} = disconnect(socket, :DISCONNECT_SLOW_CONSUMER)
+      # Stop from a callback that can return {:stop, ...}; drop this frame,
+      # the client resumes from its cursors after reconnecting.
+      send(self(), :slow_consumer)
       socket
     else
       push(socket, "frame", payload)
       socket
     end
+  end
+
+  defp stale?(%{resolved_at: at}), do: System.monotonic_time(:millisecond) - at > @staleness_ms
+
+  # Every subscription is re-resolved; those that lost view are dropped.
+  defp reresolve_all(socket) do
+    Enum.reduce(socket.assigns.subscriptions, socket, fn {channel_id, sub}, s ->
+      case authorize_read(s, channel_id) do
+        {:ok, fresh} ->
+          put_subscription(s, channel_id, %{fresh | delivered_seq: sub.delivered_seq})
+
+        {:error, _} ->
+          unsubscribe(s, channel_id)
+      end
+    end)
   end
 
   defp push_error(socket, code, message, command_id \\ "") do

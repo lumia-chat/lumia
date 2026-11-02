@@ -117,8 +117,8 @@ Ordered. Each task names the spec section it implements and the tests that close
 - [x] Account-log subscription at join, `ResumeAccount`, live account events (delivery §5).
 - [x] Session revocation closes the socket (test).
 - [x] Heartbeat echo, `Welcome` with recovery generation and limits.
-- [ ] Slow-consumer disconnect is implemented against the transport mailbox but has no test yet (delivery §5).
-- [ ] Bounded staleness (10 min re-resolve) and partition-heal re-resolve (delivery §5).
+- [x] Slow-consumer disconnect: the transport mailbox past 1,000 frames sends `Disconnect{SLOW_CONSUMER}` and stops (delivery §5; test).
+- [x] Bounded staleness: a subscription not re-resolved in 10 minutes is re-resolved before its next delivery; `nodeup` re-resolves every subscription (delivery §5, authorization §5; tests).
 - [ ] Presence scoped per server plus the friends topic (architecture §3); `PresenceUpdate` and `Typing` are accepted and ignored for now.
 - [ ] `Authorization` header on the upgrade (needs a custom upgrade plug); v1 uses `?access_token=`.
 - [ ] JSON sessions use stock ProtoJSON; the protocol's JSON overrides (UUID strings, int64 strings) are not applied yet.

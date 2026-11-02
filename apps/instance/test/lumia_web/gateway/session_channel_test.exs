@@ -1,6 +1,7 @@
 defmodule LumiaWeb.Gateway.SessionChannelTest do
   use LumiaWeb.ChannelCase, async: true
 
+  import Ecto.Query, only: [from: 2]
   import Lumia.Fixtures
 
   alias Lumia.Auth
@@ -260,6 +261,76 @@ defmodule LumiaWeb.Gateway.SessionChannelTest do
       }
 
       assert_receive {:socket_close, _, _}, 500
+    end
+  end
+
+  describe "bounded staleness and slow consumers" do
+    test "a stale subscription is re-resolved before its next delivery and dropped if view is gone",
+         ctx do
+      member = account("member")
+      {:ok, _} = Servers.add_member(ctx.server.id, member.id, ctx.account.id)
+      {:ok, _, tokens} = Auth.create_session(member.id, Ecto.UUID.generate())
+      {:ok, socket} = connect(Socket, %{"access_token" => tokens.access_token})
+      {_, socket} = join!(socket)
+      subscribe(socket, ctx.channel.id, 0)
+
+      # Remove the member directly in the database, without the account-log
+      # event or an acl bump, so only staleness can catch it.
+      Lumia.Repo.delete_all(
+        from(m in Lumia.Servers.Member,
+          where: m.server_id == ^ctx.server.id and m.account_id == ^member.id
+        )
+      )
+
+      # Age the subscription past the window.
+      channel_id = ctx.channel.id
+
+      :sys.replace_state(socket.channel_pid, fn state ->
+        # Monotonic time can be negative on the BEAM, so age relative to now.
+        stale = System.monotonic_time(:millisecond) - :timer.minutes(11)
+        update_in(state.assigns.subscriptions[channel_id].resolved_at, fn _ -> stale end)
+      end)
+
+      actor = %{account_id: ctx.account.id, device_id: ctx.device_id}
+      {:ok, _} = Events.append(ctx.channel.id, actor, send_message(ctx.channel.id, "after"))
+      refute_push "frame", {:event_bytes, _}
+    end
+
+    test "a node joining the cluster re-resolves every subscription", ctx do
+      member = account("member")
+      {:ok, _} = Servers.add_member(ctx.server.id, member.id, ctx.account.id)
+      {:ok, _, tokens} = Auth.create_session(member.id, Ecto.UUID.generate())
+      {:ok, socket} = connect(Socket, %{"access_token" => tokens.access_token})
+      {_, socket} = join!(socket)
+      subscribe(socket, ctx.channel.id, 0)
+
+      Lumia.Repo.delete_all(
+        from(m in Lumia.Servers.Member,
+          where: m.server_id == ^ctx.server.id and m.account_id == ^member.id
+        )
+      )
+
+      send(socket.channel_pid, {:nodeup, :other@host})
+      _ = :sys.get_state(socket.channel_pid)
+
+      actor = %{account_id: ctx.account.id, device_id: ctx.device_id}
+      {:ok, _} = Events.append(ctx.channel.id, actor, send_message(ctx.channel.id, "after"))
+      refute_push "frame", {:event_bytes, _}
+    end
+
+    test "a slow consumer is disconnected and told why", ctx do
+      {_, socket} = join!(ctx.socket)
+      # The test process is the transport; flood its mailbox past the limit.
+      for i <- 1..1_001, do: send(self(), {:junk, i})
+
+      send_frame(socket, {:heartbeat, %V1.Heartbeat{nonce: 1}})
+
+      assert_push "frame", %V1.ServerFrame{
+        frame: {:disconnect, %V1.Disconnect{reason: :DISCONNECT_SLOW_CONSUMER}}
+      }
+
+      assert_receive {:socket_close, _, _}, 500
+      refute_push "frame", %V1.ServerFrame{frame: {:heartbeat, _}}
     end
   end
 
