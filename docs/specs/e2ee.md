@@ -106,7 +106,7 @@ Private keys at rest on native devices are in the SQLite store under the platfor
 A web device is a full MLS leaf. WebCrypto has no HPKE and OpenMLS needs private key bytes for every commit and welcome, so a WebCrypto-backed crypto provider is not possible; the proof obligation in architecture 20 resolved this way on 2026-11-01.
 
 - **While the page runs**, MLS private keys live in WASM linear memory, as every other secret the core handles there.
-- **At rest**, the OPFS SQLite store that holds them is encrypted under a non-extractable AES-GCM WebCrypto key generated per origin and kept in IndexedDB. Another origin cannot read the store, and a copy of the OPFS files is useless without the browser profile.
+- **At rest**, the OPFS SQLite stores that hold them are encrypted page by page (ChaCha20-Poly1305 through SQLite3 Multiple Ciphers) under a random 32-byte store key, which is itself wrapped by a non-extractable AES-GCM WebCrypto key generated once per origin and kept in IndexedDB beside the wrapped bytes. The store key reaches SQLite as raw bytes in the worker while the page runs. Another origin cannot read the stores, and a copy of the OPFS files is useless without the browser profile that holds the wrapping key.
 - **The trust boundary is the origin operator.** The page's own code can use the keys and read plaintext. The device list labels web devices with their origin; a self-hosted instance's web origin connects to that instance only (architecture 11.4). Nothing below the origin is claimed.
 
 A web device never holds the backup key and cannot restore history (identity spec 7).

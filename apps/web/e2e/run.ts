@@ -91,8 +91,27 @@ async function signInAndSend(which: string, handle: string) {
   await page.reload();
   await page.getByText(body).waitFor();
   await page.screenshot({ path: `${out}/${which}-channel.png` });
+  // At rest (e2ee spec 8): no file in OPFS starts a page with SQLite's
+  // plaintext header, so the stores are ciphertext without the key.
+  const plain = await page.evaluate(async () => {
+    const marker = "SQLite format 3";
+    const found: string[] = [];
+    async function walk(dir: FileSystemDirectoryHandle, path: string) {
+      for await (const [name, entry] of (dir as unknown as { entries(): AsyncIterable<[string, FileSystemHandle]> }).entries()) {
+        if (entry.kind === "directory") await walk(entry as FileSystemDirectoryHandle, `${path}/${name}`);
+        else {
+          const file = await (entry as FileSystemFileHandle).getFile();
+          const text = new TextDecoder("latin1").decode(await file.slice(0, 65536).arrayBuffer());
+          if (file.size > 0 && text.includes(marker)) found.push(`${path}/${name}`);
+        }
+      }
+    }
+    await walk(await navigator.storage.getDirectory(), "");
+    return found;
+  });
+  if (plain.length) throw new Error(`plaintext SQLite header in ${plain.join(", ")}`);
   await ctx.close();
-  console.log(`  ${which}: signed in, sent, reloaded in ${Date.now() - t0} ms`);
+  console.log(`  ${which}: signed in, sent, reloaded, stores encrypted at rest in ${Date.now() - t0} ms`);
 }
 
 // Link this browser as a web device: the CLI approves, the browser claims
@@ -214,7 +233,9 @@ try {
     }
   }
   console.log(failed ? `${failed} failed; screenshots in ${out}` : "ok");
-  process.exitCode = failed ? 1 : 0;
+  vite.kill();
+  // A failed step may leave a browser open, which would keep the process alive.
+  process.exit(failed ? 1 : 0);
 } finally {
   vite.kill();
 }

@@ -147,9 +147,32 @@ impl SqliteStore {
     /// When the VFS is not registered, the file cannot be opened, or the
     /// schema fails.
     pub fn open_on_vfs(path: &str, vfs: &str) -> Result<Self, StoreError> {
+        Self::open_on_vfs_keyed(path, vfs, None)
+    }
+
+    /// `open_on_vfs` with the file encrypted at rest under `key` (32 raw
+    /// bytes; ChaCha20-Poly1305 pages through SQLite3 Multiple Ciphers),
+    /// which the build must link; without a key the file is plain.
+    ///
+    /// # Errors
+    /// When the VFS is not registered, the file cannot be opened, the key
+    /// does not open it, or the schema fails.
+    pub fn open_on_vfs_keyed(
+        path: &str,
+        vfs: &str,
+        key: Option<&[u8]>,
+    ) -> Result<Self, StoreError> {
         let flags =
             rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_CREATE;
         let conn = Connection::open_with_flags_and_vfs(path, flags, vfs).map_err(backend)?;
+        if let Some(key) = key {
+            // Before the first read: the cipher, then the raw key.
+            conn.execute_batch(&format!(
+                "PRAGMA cipher = 'chacha20'; PRAGMA hexkey = '{}';",
+                hex::encode(key)
+            ))
+            .map_err(backend)?;
+        }
         Self::init(conn)
     }
 

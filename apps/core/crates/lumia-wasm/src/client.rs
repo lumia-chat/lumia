@@ -33,9 +33,12 @@ use prost::Message as _;
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
-const VFS: &str = "opfs-sahpool";
+/// The OPFS pool VFS behind SQLite3 Multiple Ciphers' shim, which encrypts
+/// pages on their way to it (e2ee spec section 8). Opening on the
+/// prefixed name creates the shim over the real VFS on first use.
+const VFS: &str = "multipleciphers-opfs-sahpool";
 
-/// Installs the OPFS pool VFS once per worker and makes it the default.
+/// Installs the OPFS pool VFS once per worker.
 async fn ensure_vfs() -> Result<(), JsError> {
     thread_local! {
         static INSTALLED: RefCell<bool> = const { RefCell::new(false) };
@@ -512,6 +515,8 @@ pub struct Client {
     api: Api,
     host: String,
     device_id: Vec<u8>,
+    /// The at-rest key of every store this client opens (e2ee spec 8).
+    store_key: Option<Vec<u8>>,
     inner: Rc<RefCell<Inner>>,
     identity: Rc<RefCell<IdentityStores>>,
     /// The personal-DM engine, once this device holds an identity. Behind
@@ -539,21 +544,25 @@ impl Client {
     /// # Errors
     /// When OPFS is unavailable (not in a worker, or storage refused) or a
     /// store fails to open.
-    pub async fn open(base_url: String) -> Result<Client, JsError> {
+    pub async fn open(base_url: String, store_key: Option<Vec<u8>>) -> Result<Client, JsError> {
         ensure_vfs().await?;
+        if let Some(k) = &store_key {
+            if k.len() != 32 {
+                return Err(JsError::new("the store key must be 32 bytes"));
+            }
+        }
         let host = host_of(&base_url);
         let store_path = format!("lumia-{host}-store.sqlite");
         let keys_path = format!("lumia-{host}-keys.sqlite");
-        let mut store = SqliteStore::open_on_vfs(&store_path, VFS).map_err(js)?;
+        let open = |path: &str| SqliteStore::open_on_vfs_keyed(path, VFS, store_key.as_deref());
+        let mut store = open(&store_path).map_err(js)?;
         store
             .meta_set("base_url", base_url.trim_end_matches('/'))
             .map_err(js)?;
-        let reader = SqliteStore::open_on_vfs(&store_path, VFS).map_err(js)?;
-        let keys = SqliteStore::open_on_vfs(&keys_path, VFS).map_err(js)?;
-        let identity_store =
-            SqliteStore::open_on_vfs("lumia-identity-store.sqlite", VFS).map_err(js)?;
-        let mut identity_keys =
-            SqliteStore::open_on_vfs("lumia-identity-keys.sqlite", VFS).map_err(js)?;
+        let reader = open(&store_path).map_err(js)?;
+        let keys = open(&keys_path).map_err(js)?;
+        let identity_store = open("lumia-identity-store.sqlite").map_err(js)?;
+        let mut identity_keys = open("lumia-identity-keys.sqlite").map_err(js)?;
         let device_id = match identity_keys.get("device_id").map_err(js)? {
             Some(id) => id,
             None => {
@@ -563,10 +572,13 @@ impl Client {
             }
         };
         let rotate_path = keys_path.clone();
+        let rotate_key = store_key.clone();
         let api = Api::new(&base_url)
             .with_tokens(tokens(&keys).map_err(js)?)
             .on_rotate(Arc::new(move |pair| {
-                if let Ok(mut keys) = SqliteStore::open_on_vfs(&rotate_path, VFS) {
+                if let Ok(mut keys) =
+                    SqliteStore::open_on_vfs_keyed(&rotate_path, VFS, rotate_key.as_deref())
+                {
                     let _ = keys.put("access_token", pair.access_token.as_bytes());
                     let _ = keys.put("refresh_token", pair.refresh_token.as_bytes());
                 }
@@ -575,6 +587,7 @@ impl Client {
             api,
             host,
             device_id,
+            store_key,
             inner: Rc::new(RefCell::new(Inner {
                 store: Some(store),
                 reader,
@@ -1041,8 +1054,12 @@ impl Client {
             .map_err(js)?
             .map(|h| hex::decode(h).unwrap_or_default())
             .unwrap_or_default();
-        let store = SqliteStore::open_on_vfs(&format!("lumia-{}-store.sqlite", self.host), VFS)
-            .map_err(js)?;
+        let store = SqliteStore::open_on_vfs_keyed(
+            &format!("lumia-{}-store.sqlite", self.host),
+            VFS,
+            self.store_key.as_deref(),
+        )
+        .map_err(js)?;
         let engine = DmEngine::new(
             self.api.clone(),
             store,

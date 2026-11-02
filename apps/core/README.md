@@ -15,6 +15,8 @@ The Rust that every Lumia client shares (architecture section 13): the sync engi
 
 ## Requirements
 
+On the web, `lumia-wasm` builds SQLite as SQLite3 Multiple Ciphers (`sqlite-wasm-rs` with `sqlite3mc`) and opens every store through its shim over the OPFS pool VFS with a raw key (`SqliteStore::open_on_vfs_keyed`), so the files are ciphertext at rest; `apps/web/scripts/wasm.ts` leaves out every cipher but ChaCha20.
+
 The wasm32 build compiles SQLite with the `cc` crate, which needs an archiver that understands wasm objects: install the `llvm-tools` component and point `AR_wasm32_unknown_unknown` at its `llvm-ar` (`$(rustc --print sysroot)/lib/rustlib/<host>/bin/llvm-ar`); Apple's `ar` writes an empty archive and the link fails with undefined `sqlite3_*` symbols.
 
 

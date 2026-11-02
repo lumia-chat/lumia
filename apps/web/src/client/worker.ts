@@ -4,6 +4,7 @@
 // events arrive as `{event}`. Nothing here decides anything; the page's
 // bridge types the calls.
 import init, { Client } from "./pkg/lumia_wasm.js";
+import { storeKey } from "./store-key";
 
 type Call = { id: number; method: string; args: unknown[] };
 
@@ -18,7 +19,7 @@ function ensureInit(): Promise<void> {
 async function dispatch(method: string, args: unknown[]): Promise<unknown> {
   await ensureInit();
   if (method === "open") {
-    client = await Client.open(String(args[0]));
+    client = await Client.open(String(args[0]), await storeKey());
     return { host: client.host(), deviceId: client.deviceId(), signedIn: client.signedIn() };
   }
   if (!client) throw new Error("open the client first");

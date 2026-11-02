@@ -26,7 +26,7 @@ hex = "0.4"
 url = "2"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-sqlite-wasm-rs = { version = "0.6", features = ["wasm-bindgen"] }
+sqlite-wasm-rs = { version = "0.6", features = ["wasm-bindgen", "sqlite3mc"] }
 sqlite-wasm-vfs = { version = "0.3", features = ["sahpool"] }
 
 [lints]

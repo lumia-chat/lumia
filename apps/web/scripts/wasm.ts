@@ -24,6 +24,12 @@ if (!process.env.AR_wasm32_unknown_unknown) {
   else console.warn("llvm-ar not found; run `rustup component add llvm-tools` if the link fails");
 }
 
+// SQLite3 Multiple Ciphers brings every cipher; the stores use ChaCha20
+// only (lumia-client's `open_on_vfs_keyed`), so the rest stay out of the
+// binary. The crate reads these as extra C flags.
+process.env.SQLITE_WASM_RS_FLAGS ??=
+  "-DHAVE_CIPHER_AES_128_CBC=0 -DHAVE_CIPHER_AES_256_CBC=0 -DHAVE_CIPHER_SQLCIPHER=0 -DHAVE_CIPHER_RC4=0 -DHAVE_CIPHER_ASCON128=0 -DHAVE_CIPHER_AEGIS=0";
+
 sh(`cargo build ${profile === "release" ? "--release" : ""} -p lumia-wasm --target wasm32-unknown-unknown`, core);
 sh(`wasm-bindgen --target web --out-dir "${out}" "${core}/target/wasm32-unknown-unknown/${profile}/lumia_wasm.wasm"`, core);
 console.log(`wasm: ${out}`);
