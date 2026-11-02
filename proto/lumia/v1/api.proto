@@ -371,6 +371,15 @@ message ClaimKeyPackageResponse {
 message PublishGroupInfoRequest {
   bytes channel_id = 1;
   bytes group_info = 2;  // for external commits on recovery (architecture 11.3)
+  // The epoch the GroupInfo describes. The instance keeps the newest per
+  // conversation by this number; it never parses `group_info`.
+  uint64 epoch = 3;
+}
+
+// GET /mls/group-info/{channel_id}
+message GetGroupInfoResponse {
+  bytes group_info = 1;
+  uint64 epoch = 2;
 }
 
 // ---- Invites ----------------------------------------------------------------

@@ -7,6 +7,7 @@
 
 use std::path::Path;
 
+use lumia_core::mls::storage::MlsKv;
 use lumia_core::proto::{event, AccountEvent, Event};
 use lumia_core::store::{LogKind, OutboxEntry, Store, StoreError, StoredEvent, StoredMessage};
 use lumia_core::wire;
@@ -47,7 +48,76 @@ CREATE TABLE IF NOT EXISTS outbox (
   bytes BLOB NOT NULL,
   queued_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS mls_kv (
+  kind TEXT NOT NULL,
+  key BLOB NOT NULL,
+  value BLOB NOT NULL,
+  PRIMARY KEY (kind, key)
+);
+CREATE TABLE IF NOT EXISTS mls_list (
+  kind TEXT NOT NULL,
+  key BLOB NOT NULL,
+  position INTEGER NOT NULL,
+  value BLOB NOT NULL,
+  PRIMARY KEY (kind, key, position)
+);
+CREATE TABLE IF NOT EXISTS dm_operations (
+  channel_id BLOB NOT NULL,
+  seq INTEGER NOT NULL,
+  sender_identity_id BLOB NOT NULL,
+  sender_device_id BLOB NOT NULL,
+  epoch INTEGER NOT NULL,
+  status INTEGER NOT NULL,
+  bytes BLOB NOT NULL,
+  PRIMARY KEY (channel_id, seq)
+);
 ";
+
+/// One row of a conversation's decrypted log (e2ee spec section 5).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DmRow {
+    /// Position in the channel log.
+    pub seq: u64,
+    /// The sending identity.
+    pub sender_identity_id: Vec<u8>,
+    /// The sending device.
+    pub sender_device_id: Vec<u8>,
+    /// The epoch it was encrypted in.
+    pub epoch: u64,
+    /// What happened to it.
+    pub status: DmStatus,
+    /// The serialized `DmOperation` when decrypted, else empty.
+    pub bytes: Vec<u8>,
+}
+
+/// What became of one encrypted event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DmStatus {
+    /// Decrypted; `bytes` is the operation.
+    Decrypted,
+    /// Sent before this device joined (spec section 5).
+    BeforeJoin,
+    /// Could not be decrypted in its epoch, or its leaf was rejected.
+    Undecryptable,
+}
+
+impl DmStatus {
+    fn code(self) -> i64 {
+        match self {
+            Self::Decrypted => 0,
+            Self::BeforeJoin => 1,
+            Self::Undecryptable => 2,
+        }
+    }
+
+    fn from_code(code: i64) -> Self {
+        match code {
+            0 => Self::Decrypted,
+            1 => Self::BeforeJoin,
+            _ => Self::Undecryptable,
+        }
+    }
+}
 
 /// A SQLite-backed store for one instance.
 #[derive(Debug)]
@@ -75,10 +145,177 @@ impl SqliteStore {
     }
 
     fn init(conn: Connection) -> Result<Self, StoreError> {
+        // Two connections share one file (the gateway's and the DM engine's);
+        // writers wait for each other instead of failing.
+        conn.busy_timeout(std::time::Duration::from_secs(10))
+            .map_err(backend)?;
         conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")
             .map_err(backend)?;
         conn.execute_batch(SCHEMA).map_err(backend)?;
         Ok(Self { conn })
+    }
+
+    /// Runs `f` inside a savepoint: everything it writes through `&self`
+    /// commits together or not at all. Nests.
+    ///
+    /// # Errors
+    /// The closure's error, after rolling back; or a database failure.
+    pub fn transaction<T, E: From<StoreError>>(
+        &self,
+        f: impl FnOnce(&Self) -> Result<T, E>,
+    ) -> Result<T, E> {
+        // The outermost level takes the write lock up front: a deferred
+        // transaction that reads first and writes later cannot wait out a
+        // concurrent writer under WAL (SQLITE_BUSY_SNAPSHOT), an immediate
+        // one can. Nested levels are savepoints.
+        let (begin, commit, rollback) = if self.conn.is_autocommit() {
+            ("BEGIN IMMEDIATE", "COMMIT", "ROLLBACK")
+        } else {
+            (
+                "SAVEPOINT lumia",
+                "RELEASE lumia",
+                "ROLLBACK TO lumia; RELEASE lumia",
+            )
+        };
+        self.conn.execute_batch(begin).map_err(backend)?;
+        match f(self) {
+            Ok(value) => {
+                self.conn.execute_batch(commit).map_err(backend)?;
+                Ok(value)
+            }
+            Err(e) => {
+                let _ = self.conn.execute_batch(rollback);
+                Err(e)
+            }
+        }
+    }
+
+    /// Writes an instance fact through a shared reference (for use inside
+    /// [`SqliteStore::transaction`]).
+    ///
+    /// # Errors
+    /// On a database failure.
+    pub fn set_meta(&self, key: &str, value: &str) -> Result<(), StoreError> {
+        self.conn
+            .execute(
+                "INSERT INTO meta (key, value) VALUES (?1, ?2) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                params![key, value],
+            )
+            .map(|_| ())
+            .map_err(backend)
+    }
+
+    /// Adds to the outbox through a shared reference.
+    ///
+    /// # Errors
+    /// On a database failure.
+    pub fn push_outbox(&self, entry: &OutboxEntry) -> Result<(), StoreError> {
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO outbox (command_id, channel_id, bytes, queued_at) VALUES (?1, ?2, ?3, ?4)",
+                params![entry.command_id, entry.channel_id, entry.bytes, now_micros()],
+            )
+            .map(|_| ())
+            .map_err(backend)
+    }
+
+    /// Every stored event of a log, in order.
+    ///
+    /// # Errors
+    /// On a database failure.
+    pub fn stored_events(
+        &self,
+        kind: LogKind,
+        log_id: &[u8],
+    ) -> Result<Vec<StoredEvent>, StoreError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT seq, bytes FROM events WHERE kind = ?1 AND log_id = ?2 ORDER BY seq")
+            .map_err(backend)?;
+        let rows = stmt
+            .query_map(params![kind_code(kind), log_id], |row| {
+                let seq: i64 = row.get(0)?;
+                Ok(StoredEvent {
+                    seq: seq.max(0).unsigned_abs(),
+                    bytes: row.get(1)?,
+                })
+            })
+            .map_err(backend)?;
+        rows.collect::<Result<_, _>>().map_err(backend)
+    }
+
+    /// Every stored account event, in order, regardless of account id.
+    ///
+    /// # Errors
+    /// On a database failure.
+    pub fn account_events(&self) -> Result<Vec<StoredEvent>, StoreError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT seq, bytes FROM events WHERE kind = 1 ORDER BY seq")
+            .map_err(backend)?;
+        let rows = stmt
+            .query_map([], |row| {
+                let seq: i64 = row.get(0)?;
+                Ok(StoredEvent {
+                    seq: seq.max(0).unsigned_abs(),
+                    bytes: row.get(1)?,
+                })
+            })
+            .map_err(backend)?;
+        rows.collect::<Result<_, _>>().map_err(backend)
+    }
+
+    /// Records what became of one encrypted event.
+    ///
+    /// # Errors
+    /// On a database failure.
+    pub fn put_dm_row(&self, channel_id: &[u8], row: &DmRow) -> Result<(), StoreError> {
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO dm_operations
+                 (channel_id, seq, sender_identity_id, sender_device_id, epoch, status, bytes)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    channel_id,
+                    to_i64(row.seq),
+                    row.sender_identity_id,
+                    row.sender_device_id,
+                    to_i64(row.epoch),
+                    row.status.code(),
+                    row.bytes
+                ],
+            )
+            .map(|_| ())
+            .map_err(backend)
+    }
+
+    /// A conversation's decrypted log, in seq order.
+    ///
+    /// # Errors
+    /// On a database failure.
+    pub fn dm_rows(&self, channel_id: &[u8]) -> Result<Vec<DmRow>, StoreError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT seq, sender_identity_id, sender_device_id, epoch, status, bytes
+                 FROM dm_operations WHERE channel_id = ?1 ORDER BY seq",
+            )
+            .map_err(backend)?;
+        let rows = stmt
+            .query_map(params![channel_id], |row| {
+                let seq: i64 = row.get(0)?;
+                let epoch: i64 = row.get(3)?;
+                Ok(DmRow {
+                    seq: seq.max(0).unsigned_abs(),
+                    sender_identity_id: row.get(1)?,
+                    sender_device_id: row.get(2)?,
+                    epoch: epoch.max(0).unsigned_abs(),
+                    status: DmStatus::from_code(row.get(4)?),
+                    bytes: row.get(5)?,
+                })
+            })
+            .map_err(backend)?;
+        rows.collect::<Result<_, _>>().map_err(backend)
     }
 
     fn cursor_of(&self, kind: LogKind, log_id: &[u8]) -> Result<u64, StoreError> {
@@ -128,7 +365,10 @@ impl Store for SqliteStore {
             });
         }
 
-        let tx = self.conn.transaction().map_err(backend)?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(backend)?;
         let mut last = cursor;
         for ev in events {
             if ev.seq != last + 1 {
@@ -162,7 +402,10 @@ impl Store for SqliteStore {
         seq: u64,
         messages: &[StoredMessage],
     ) -> Result<(), StoreError> {
-        let tx = self.conn.transaction().map_err(backend)?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(backend)?;
         tx.execute(
             "DELETE FROM events WHERE kind = 0 AND log_id = ?1",
             params![log_id],
@@ -281,6 +524,86 @@ impl Store for SqliteStore {
             .execute(
                 "INSERT INTO meta (key, value) VALUES (?1, ?2) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
                 params![key, value],
+            )
+            .map(|_| ())
+            .map_err(backend)
+    }
+}
+
+// The OpenMLS storage provider's two shapes over the same connection, so
+// MLS state commits in the caller's savepoint (e2ee spec section 7).
+impl MlsKv for SqliteStore {
+    type Error = StoreError;
+
+    fn get(&self, kind: &str, key: &[u8]) -> Result<Option<Vec<u8>>, StoreError> {
+        self.conn
+            .query_row(
+                "SELECT value FROM mls_kv WHERE kind = ?1 AND key = ?2",
+                params![kind, key],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(backend)
+    }
+
+    fn set(&self, kind: &str, key: &[u8], value: &[u8]) -> Result<(), StoreError> {
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO mls_kv (kind, key, value) VALUES (?1, ?2, ?3)",
+                params![kind, key, value],
+            )
+            .map(|_| ())
+            .map_err(backend)
+    }
+
+    fn delete(&self, kind: &str, key: &[u8]) -> Result<(), StoreError> {
+        self.conn
+            .execute(
+                "DELETE FROM mls_kv WHERE kind = ?1 AND key = ?2",
+                params![kind, key],
+            )
+            .map(|_| ())
+            .map_err(backend)
+    }
+
+    fn list(&self, kind: &str, key: &[u8]) -> Result<Vec<Vec<u8>>, StoreError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT value FROM mls_list WHERE kind = ?1 AND key = ?2 ORDER BY position")
+            .map_err(backend)?;
+        let rows = stmt
+            .query_map(params![kind, key], |row| row.get(0))
+            .map_err(backend)?;
+        rows.collect::<Result<_, _>>().map_err(backend)
+    }
+
+    fn append(&self, kind: &str, key: &[u8], value: &[u8]) -> Result<(), StoreError> {
+        self.conn
+            .execute(
+                "INSERT INTO mls_list (kind, key, position, value)
+                 VALUES (?1, ?2, (SELECT COALESCE(MAX(position), 0) + 1 FROM mls_list WHERE kind = ?1 AND key = ?2), ?3)",
+                params![kind, key, value],
+            )
+            .map(|_| ())
+            .map_err(backend)
+    }
+
+    fn remove_item(&self, kind: &str, key: &[u8], value: &[u8]) -> Result<(), StoreError> {
+        self.conn
+            .execute(
+                "DELETE FROM mls_list WHERE rowid = (SELECT rowid FROM mls_list
+                 WHERE kind = ?1 AND key = ?2 AND value = ?3 ORDER BY position LIMIT 1)",
+                params![kind, key, value],
+            )
+            .map(|_| ())
+            .map_err(backend)
+    }
+
+    fn clear_list(&self, kind: &str, key: &[u8]) -> Result<(), StoreError> {
+        self.conn
+            .execute(
+                "DELETE FROM mls_list WHERE kind = ?1 AND key = ?2",
+                params![kind, key],
             )
             .map(|_| ())
             .map_err(backend)
@@ -480,6 +803,30 @@ mod tests {
         store.discard_all().unwrap();
         assert!(store.cursors(LogKind::Channel).unwrap().is_empty());
         assert_eq!(store.generation().unwrap(), Some(3));
+    }
+
+    #[test]
+    fn a_failed_transaction_rolls_back_mls_state_and_meta_together() {
+        let store = SqliteStore::in_memory().unwrap();
+        store.set("k", b"a", b"1").unwrap();
+        let result: Result<(), StoreError> = store.transaction(|s| {
+            s.set("k", b"a", b"2")?;
+            s.append("l", b"x", b"one")?;
+            s.set_meta("m", "v")?;
+            Err(StoreError::Backend("boom".into()))
+        });
+        assert!(result.is_err());
+        assert_eq!(store.get("k", b"a").unwrap(), Some(b"1".to_vec()));
+        assert!(store.list("l", b"x").unwrap().is_empty());
+        assert_eq!(store.meta_get("m").unwrap(), None);
+
+        let ok: Result<(), StoreError> = store.transaction(|s| {
+            s.append("l", b"x", b"one")?;
+            s.append("l", b"x", b"two")?;
+            s.remove_item("l", b"x", b"one")
+        });
+        ok.unwrap();
+        assert_eq!(store.list("l", b"x").unwrap(), vec![b"two".to_vec()]);
     }
 
     #[test]

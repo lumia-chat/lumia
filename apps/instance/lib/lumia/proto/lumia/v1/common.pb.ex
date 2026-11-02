@@ -16,6 +16,7 @@ defmodule Lumia.V1.ErrorCode do
   field :GENERATION_CHANGED, 6
   field :PAYLOAD_TOO_LARGE, 7
   field :UNSUPPORTED_ENCODING, 8
+  field :RESOURCE_EXHAUSTED, 9
   field :UNAUTHENTICATED, 20
   field :TOKEN_EXPIRED, 21
   field :SESSION_REVOKED, 22

@@ -84,6 +84,9 @@ message Welcome {
   Limits limits = 9;
   // Set when the server holds a newer roster than Hello.roster_version.
   bool roster_update_available = 10;
+  // Unclaimed MLS key packages this device has on the instance; the client
+  // tops up when it is below the threshold (specs/e2ee.md section 3).
+  uint32 key_package_count = 11;
 }
 
 message Limits {

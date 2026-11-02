@@ -244,7 +244,9 @@ defmodule Lumia.Identity do
       Repo.all(from a in Account, where: a.identity_id == ^verified.identity_id, select: a.id)
 
     for account_id <- accounts, device_id_bytes <- verified.new_revocations do
-      Auth.revoke_device(account_id, Proto.from_uuid(device_id_bytes))
+      device_id = Proto.from_uuid(device_id_bytes)
+      Auth.revoke_device(account_id, device_id)
+      Lumia.Mls.purge_device(account_id, device_id)
     end
 
     for account_id <- accounts do

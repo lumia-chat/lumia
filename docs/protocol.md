@@ -179,6 +179,7 @@ Base path `/api/v1`. All endpoints require `Authorization: Bearer <access_token>
 | `DELETE /sessions/{session_id}` | → 204 | Revokes and disconnects. |
 | `POST /auth/reauth` | `ReauthRequest` → `ReauthResponse` | Five-minute token for revoke and link. |
 | `GET /identity/roster` | → `GetRosterResponse` | The newest roster this instance holds for the caller's identity. |
+| `GET /accounts/{account_id}/roster` | → `GetRosterResponse` | Another account's roster, for validating its MLS leaves; `NOT_FOUND` unless the caller shares a `PERSONAL_*` channel with it. |
 | `POST /identity/roster` | `PublishRosterRequest` → 204 | Verified per specs/identity.md 3.3. `CONFLICT` carries the held roster in `details.held`. Rosters that add revocations are refused here with `POLICY_DENIED`. |
 | `POST /identity/devices/revoke` | `RevokeDeviceRequest` → 204 | The only non-root path that may add revocations. Requires `reauth_token`. |
 | `POST /identity/link` | `IdentityProof` + `reauth_token` → 204 | Binds the current account to the proven identity. |
@@ -256,9 +257,9 @@ Search results are filtered by the caller's channel permissions at query time.
 | `POST /mls/key-packages` | `PublishKeyPackagesRequest` → 204 |
 | `POST /mls/key-packages/claim` | `ClaimKeyPackageRequest` → `ClaimKeyPackageResponse` |
 | `POST /mls/group-info` | `PublishGroupInfoRequest` → 204 |
-| `GET /mls/group-info/{channel_id}` | → `{group_info}` |
+| `GET /mls/group-info/{channel_id}` | → `GetGroupInfoResponse` |
 
-A claimed key package is deleted on claim. Claiming requires that the caller be in a `PERSONAL_*` channel with the target, or hold an accepted DM request from them. An empty pool serves the device's last-resort package, which is never deleted on claim. `POST /mls/group-info` keeps the newest GroupInfo per conversation by the epoch it carries and ignores an older one. Cadence and counts are in specs/e2ee.md section 3.
+A claimed key package is deleted on claim. Claiming requires that the caller be in a `PERSONAL_*` channel with the target, or hold an accepted DM request from them. An empty pool serves the device's last-resort package, which is never deleted on claim. `POST /mls/group-info` keeps the newest GroupInfo per conversation by the `epoch` the request states and ignores an older one. `Welcome.key_package_count` tells a device how many unclaimed packages it has. Cadence and counts are in specs/e2ee.md section 3.
 
 ### History backup
 
@@ -302,8 +303,9 @@ Every non-2xx response body is an `Error`. HTTP status is derived from `code`:
 | `RATE_LIMITED` | 429 |
 | `INTERNAL` | 500 |
 | `UNAVAILABLE` | 503 |
+| `RESOURCE_EXHAUSTED` | 507 |
 
-`details` keys by code: `INVALID_ARGUMENT.field`; `FAILED_PRECONDITION.mfa`, `.state`; `ALREADY_EXISTS.existing_id` (only when the caller may see it); `PAYLOAD_TOO_LARGE.max`; `RATE_LIMITED.scope`. `NOT_FOUND` is returned both for things that do not exist and for things the caller may not know exist. Clients never distinguish the two.
+`details` keys by code: `INVALID_ARGUMENT.field`; `FAILED_PRECONDITION.mfa`, `.state`; `ALREADY_EXISTS.existing_id` (only when the caller may see it); `PAYLOAD_TOO_LARGE.max`; `RATE_LIMITED.scope`; `RESOURCE_EXHAUSTED.quota` (bytes). `NOT_FOUND` is returned both for things that do not exist and for things the caller may not know exist. Clients never distinguish the two.
 
 ## 11. Pagination
 
@@ -345,7 +347,7 @@ For `PERSONAL_DM` and `PERSONAL_GROUP_DM`:
 - The only commands are `SendEncrypted`. Any other `op` is `INVALID_ARGUMENT`.
 - The only event payloads are `EncryptedPayload` and `Redacted` (when a participant deletes their account and the ciphertext is purged).
 - `EncryptedPayload.kind` is the single bit the server reads: `APPLICATION` events are eligible for push; `CONTROL` events are not. Everything else about the message is inside `mls_message`: for `APPLICATION` it is a `DmOperation` (`e2ee.proto`), for `CONTROL` an MLS commit, proposal, welcome or external commit.
-- `epoch` on a `CONTROL` event is the epoch the commit produces; the delivery service accepts it only when it is the conversation's current epoch plus one and answers `FAILED_PRECONDITION{state: "epoch"}` otherwise, which is how concurrent commits are serialized. Application messages carry the epoch they were encrypted in, are accepted for any epoch, and are ordered by `seq`.
+- `epoch` on a `CONTROL` event is the epoch the commit produces; the delivery service accepts it when it is the conversation's current epoch plus one (a commit, which advances the epoch) or the current epoch (a welcome or proposal, which advances nothing) and answers `FAILED_PRECONDITION{state: "epoch"}` otherwise, which is how concurrent commits are serialized. Application messages carry the epoch they were encrypted in, are accepted for any epoch, and are ordered by `seq`.
 - Snapshots return `encrypted_events` rather than `messages`; there are no server-side messages to return.
 - `ThreadSummary`, `ReactionCount`, `pinned`, and `Mention` are never populated by the server for these channels. Clients compute them from decrypted content.
 

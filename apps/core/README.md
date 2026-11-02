@@ -7,8 +7,8 @@ The Rust that every Lumia client shares (architecture section 13): the sync engi
 | Crate | What it is |
 |---|---|
 | `lumia-proto` | Wire types generated from `../../proto` at build time (prost through protox; no `protoc` needed). |
-| `lumia-core` | The sync state machine, `Store` and `Keystore` traits, identity, crypto. No I/O, no async. |
-| `lumia-client` | tokio transport (WebSocket, HTTP), SQLite store, file keystore, and the `lumia-cli` binary. |
+| `lumia-core` | The sync state machine, `Store` and `Keystore` traits, identity, crypto, and `mls`: OpenMLS behind a storage provider over a key-value contract, leaf validation against rosters, and the DM projection. No I/O, no async. |
+| `lumia-client` | tokio transport (WebSocket, HTTP), SQLite store (also the MLS key-value store, in the same transaction), file keystore, the personal-DM engine, and the `lumia-cli` binary. |
 | `lumia-ffi` | UniFFI surface for Swift and Kotlin: one `Client` per instance (API, reconnecting gateway loop, store, identity) and a `Listener` callback. Blocking methods, dev store and keystore until the shells bring their own. |
 | `lumia-wasm` | wasm-bindgen surface for the web shell: the sans-I/O `Session` as a JS class, effects as plain objects, the store and socket owned by JS. Checked on `wasm32-unknown-unknown` in CI. |
 
@@ -53,6 +53,18 @@ lumia-cli identity link-account --password '...'           # bind a password acc
 lumia-cli identity status                        # the roster version each instance holds
 lumia-cli identity sync                          # publish this device's roster everywhere
 ```
+
+Personal DMs (specs/e2ee.md) are end-to-end encrypted with MLS; the device that opens a conversation creates the group and welcomes every other device of both identities, and key packages are topped up on connect:
+
+```sh
+lumia-cli dm setup                               # publish key packages now; prints the account id
+lumia-cli dm open <account-id>                   # open the DM; the opener creates the group
+lumia-cli dm tail <channel-id>                   # join from the welcome, decrypt as events arrive
+lumia-cli dm send <channel-id> "hello"
+lumia-cli dm messages <channel-id>               # the projection this device holds
+```
+
+A device revoked from the roster is removed from every group by the first device that learns of it, and refused by the others from the moment they hold the new roster.
 
 `scenario <name>` (or `all`) runs the failure-injection cases a client can drive on its own against the instance (delivery spec 12, identity spec 12): `token-rotation`, `frame-before-hello`, `duplicate-command`, `snapshot-under-writes`, `snapshot-threshold`, `stale-roster`, `device-revoke`, `reconnect`. Each sets up a throwaway server or identity and fails with what it saw.
 

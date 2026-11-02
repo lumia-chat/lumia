@@ -77,8 +77,17 @@ defmodule Lumia.Proto do
       position: c.position,
       last_seq: c.last_seq,
       acl_version: c.acl_version,
-      created_at: timestamp(c.inserted_at)
+      created_at: timestamp(c.inserted_at),
+      participant_account_ids: participants(c),
+      host: if(Lumia.Dms.personal_kind?(c.kind), do: Lumia.Identity.host(), else: "")
     }
+  end
+
+  # Personal DMs carry their participants so a client can fetch rosters.
+  defp participants(%Lumia.Events.Channel{kind: kind, id: id}) do
+    if Lumia.Dms.personal_kind?(kind),
+      do: Enum.map(Lumia.Dms.participants(id), &uuid/1),
+      else: []
   end
 
   def message(%Lumia.Events.Message{} = m) do

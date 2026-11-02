@@ -32,6 +32,7 @@ defmodule LumiaWeb.Router do
     post "/auth/sign-out", AuthController, :sign_out
     post "/auth/reauth", IdentityController, :reauth
     get "/identity/roster", IdentityController, :get_roster
+    get "/accounts/:account_id/roster", IdentityController, :get_account_roster
     post "/identity/roster", IdentityController, :publish_roster
     post "/identity/devices/revoke", IdentityController, :revoke_device
     post "/identity/link", IdentityController, :link
@@ -62,6 +63,21 @@ defmodule LumiaWeb.Router do
     get "/channels/:channel_id/snapshot", ChannelController, :snapshot
     get "/channels/:channel_id/messages", ChannelController, :messages
     post "/channels/:channel_id/commands", ChannelController, :command
+
+    post "/dms/personal", DmController, :open_personal
+
+    post "/mls/key-packages", MlsController, :publish_key_packages
+    post "/mls/key-packages/claim", MlsController, :claim
+    post "/mls/group-info", MlsController, :publish_group_info
+    get "/mls/group-info/:channel_id", MlsController, :get_group_info
+
+    put "/history/chunks/:chunk_id", HistoryController, :put_chunk
+    get "/history/chunks/:chunk_id", HistoryController, :get_chunk
+    delete "/history/chunks/:chunk_id", HistoryController, :delete_chunk
+    put "/history/manifest", HistoryController, :put_manifest
+    get "/history/manifests", HistoryController, :list_manifests
+    delete "/history", HistoryController, :delete_all
+    get "/history/usage", HistoryController, :usage
   end
 
   # Enable LiveDashboard and Swoosh mailbox preview in development

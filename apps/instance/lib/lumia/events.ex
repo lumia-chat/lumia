@@ -15,6 +15,7 @@ defmodule Lumia.Events do
 
   import Ecto.Query
 
+  alias Lumia.Dms
   alias Lumia.Events.Channel
   alias Lumia.Events.Command
   alias Lumia.Events.Event
@@ -106,7 +107,7 @@ defmodule Lumia.Events do
       Repo.transact(fn ->
         now = DateTime.utc_now()
 
-        with {:ok, seq, acl_version} <- take_head(channel_id, now) do
+        with {:ok, seq, acl_version, _kind} <- take_head(channel_id, now) do
           event = %V1.Event{
             event_id: Proto.uuid(Schema.generate_id()),
             channel_id: Proto.uuid(channel_id),
@@ -242,7 +243,9 @@ defmodule Lumia.Events do
   defp write(channel_id, actor, command, command_id, fingerprint) do
     now = DateTime.utc_now()
 
-    with {:ok, seq, acl_version} <- take_head(channel_id, now),
+    with {:ok, seq, acl_version, kind} <- take_head(channel_id, now),
+         :ok <- check_kind(kind, command),
+         :ok <- advance_epoch(channel_id, command),
          {:ok, payload} <- payload_for(command, actor, channel_id, seq, now),
          event = build_event(channel_id, seq, acl_version, actor, command, payload, now),
          {:ok, {event, bytes}} <- insert_event(channel_id, event, command_id, actor, now),
@@ -272,13 +275,55 @@ defmodule Lumia.Events do
   # second do not change an indexed column and the row update stays HOT.
   defp take_head(channel_id, now) do
     head_at = DateTime.truncate(now, :second)
-    query = from(c in Channel, where: c.id == ^channel_id, select: {c.last_seq, c.acl_version})
+
+    query =
+      from(c in Channel,
+        where: c.id == ^channel_id,
+        select: {c.last_seq, c.acl_version, c.kind}
+      )
 
     case Repo.update_all(query, inc: [last_seq: 1], set: [last_seq_at: head_at]) do
       {0, _} -> {:error, :channel_not_found}
-      {1, [{seq, acl_version}]} -> {:ok, seq, acl_version}
+      {1, [{seq, acl_version, kind}]} -> {:ok, seq, acl_version, kind}
     end
   end
+
+  # Encrypted channels take only SendEncrypted, and nothing else takes it
+  # (docs/protocol.md section 15).
+  defp check_kind(kind, %V1.Command{op: {:send_encrypted, _}}) do
+    if Dms.personal_kind?(kind), do: :ok, else: {:error, :invalid_command}
+  end
+
+  defp check_kind(kind, %V1.Command{}) do
+    if Dms.personal_kind?(kind), do: {:error, :invalid_command}, else: :ok
+  end
+
+  # A CONTROL event carries the epoch its commit produces; it is accepted
+  # only at the conversation's current epoch plus one, which serializes
+  # concurrent commits (e2ee spec section 4). The channel row is already
+  # locked by take_head, so the conditional update is the whole check.
+  # A CONTROL event at the current epoch is a welcome or a proposal and
+  # advances nothing; one at current + 1 is a commit and advances; anything
+  # else is a stale commit (e2ee spec section 4).
+  defp advance_epoch(channel_id, %V1.Command{
+         op:
+           {:send_encrypted, %V1.SendEncrypted{payload: %V1.EncryptedPayload{kind: :CONTROL} = p}}
+       }) do
+    previous = p.epoch - 1
+
+    query =
+      from(c in Channel,
+        where: c.id == ^channel_id and c.mls_epoch in ^[previous, p.epoch],
+        select: c.mls_epoch
+      )
+
+    case Repo.update_all(query, set: [mls_epoch: p.epoch]) do
+      {1, _} -> :ok
+      {0, _} -> {:error, {:failed_precondition, "epoch"}}
+    end
+  end
+
+  defp advance_epoch(_channel_id, _command), do: :ok
 
   defp insert_event(channel_id, %V1.Event{} = event, command_id, actor, now) do
     bytes = V1.Event.encode(event)

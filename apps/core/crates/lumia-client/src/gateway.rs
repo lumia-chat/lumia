@@ -128,6 +128,20 @@ pub async fn run_forever<S: Store>(
                 }
                 (reason, reconnect_after)
             }
+            Err(ClientError::NotSignedIn) => {
+                let _ = events
+                    .send(GatewayEvent::Closed("not signed in".into()))
+                    .await;
+                return store;
+            }
+            Err(ClientError::Api { code, message, .. })
+                if code == "DEVICE_REVOKED" || code == "SESSION_REVOKED" =>
+            {
+                let _ = events
+                    .send(GatewayEvent::Closed(format!("{code}: {message}")))
+                    .await;
+                return store;
+            }
             Err(ClientError::Api { code, message, .. })
                 if code == "UNAUTHENTICATED" || code == "TOKEN_EXPIRED" =>
             {
@@ -226,6 +240,16 @@ pub async fn run<S: Store>(
                 code: "UNAUTHENTICATED".into(),
                 message: "gateway refused the access token".into(),
                 status: 401,
+                details: std::collections::HashMap::new(),
+            });
+        }
+        // The socket plug answers 403 for a revoked session or device: the
+        // token is valid but may not come back (identity spec 5).
+        Err(tungstenite::Error::Http(response)) if response.status() == 403 => {
+            return Err(ClientError::Api {
+                code: "DEVICE_REVOKED".into(),
+                message: "gateway refused this device or session".into(),
+                status: 403,
                 details: std::collections::HashMap::new(),
             });
         }

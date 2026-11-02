@@ -9,6 +9,7 @@
 //! The binary `lumia-cli` in `main.rs` is the headless client.
 
 pub mod api;
+pub mod dm;
 pub mod gateway;
 pub mod identity;
 pub mod keystore;
@@ -58,6 +59,9 @@ pub enum ClientError {
     /// A roster was rejected.
     #[error(transparent)]
     Roster(#[from] lumia_core::identity::roster::RosterError),
+    /// An MLS operation failed.
+    #[error(transparent)]
+    Mls(#[from] lumia_core::mls::MlsError),
     /// Required local state is missing.
     #[error("{0}")]
     State(String),

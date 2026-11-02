@@ -48,8 +48,17 @@ defmodule LumiaWeb.ProtoConn do
   @doc "Renders an empty 204."
   def no_content(conn), do: send_resp(conn, 204, "")
 
-  @doc "Renders the error envelope for an error reason."
-  def render_error(conn, reason, details \\ %{}) do
+  @doc """
+  Renders the error envelope for an error reason. `{:failed_precondition,
+  state}` carries `details.state` (protocol section 10).
+  """
+  def render_error(conn, reason, details \\ %{})
+
+  def render_error(conn, {:failed_precondition, state}, details) when is_binary(state) do
+    render_error(conn, :failed_precondition, Map.put(details, "state", state))
+  end
+
+  def render_error(conn, reason, details) do
     {code, status} = code_and_status(reason)
     error = %V1.Error{code: code, message: message(reason), details: details}
     render(conn, status, error)
@@ -57,6 +66,7 @@ defmodule LumiaWeb.ProtoConn do
 
   # The protocol's error table (section 10).
   defp code_and_status(:invalid_argument), do: {:INVALID_ARGUMENT, 400}
+  defp code_and_status(:invalid_command), do: {:INVALID_ARGUMENT, 400}
   defp code_and_status(:failed_precondition), do: {:FAILED_PRECONDITION, 400}
   defp code_and_status(:unauthenticated), do: {:UNAUTHENTICATED, 401}
   defp code_and_status(:token_expired), do: {:TOKEN_EXPIRED, 401}
@@ -71,8 +81,11 @@ defmodule LumiaWeb.ProtoConn do
   defp code_and_status(:conflict), do: {:CONFLICT, 409}
   defp code_and_status(:already_exists), do: {:ALREADY_EXISTS, 409}
   defp code_and_status(:limit_exceeded), do: {:FAILED_PRECONDITION, 400}
+  defp code_and_status(:resource_exhausted), do: {:RESOURCE_EXHAUSTED, 507}
   defp code_and_status(:rate_limited), do: {:RATE_LIMITED, 429}
   defp code_and_status(_), do: {:INTERNAL, 500}
+
+  defp message(:resource_exhausted), do: "quota exceeded"
 
   defp message(reason) when is_atom(reason),
     do: reason |> Atom.to_string() |> String.replace("_", " ")

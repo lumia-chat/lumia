@@ -22,5 +22,11 @@ defmodule LumiaWeb.FallbackController do
     ProtoConn.render_error(conn, :conflict, %{"held" => held})
   end
 
+  def call(conn, {:error, :resource_exhausted}),
+    do:
+      ProtoConn.render_error(conn, :resource_exhausted, %{
+        "quota" => Integer.to_string(Lumia.History.quota_bytes())
+      })
+
   def call(conn, {:error, reason}), do: ProtoConn.render_error(conn, reason)
 end

@@ -713,6 +713,19 @@ defmodule Lumia.V1.PublishGroupInfoRequest do
 
   field :channel_id, 1, type: :bytes, json_name: "channelId"
   field :group_info, 2, type: :bytes, json_name: "groupInfo"
+  field :epoch, 3, type: :uint64
+end
+
+defmodule Lumia.V1.GetGroupInfoResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.GetGroupInfoResponse",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :group_info, 1, type: :bytes, json_name: "groupInfo"
+  field :epoch, 2, type: :uint64
 end
 
 defmodule Lumia.V1.Invite do

@@ -14,6 +14,10 @@ defmodule Lumia.Events.Channel do
     # Second granularity; see the migration for why.
     field :last_seq_at, :utc_datetime
     field :acl_version, :integer, default: 1
+    # E2EE conversations (docs/specs/e2ee.md section 11): the current MLS
+    # epoch, and the uniqueness key of a PERSONAL_DM's participant pair.
+    field :mls_epoch, :integer, default: 0
+    field :dm_key, :string
     timestamps()
   end
 end

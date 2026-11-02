@@ -11,6 +11,8 @@ defmodule Lumia.Snapshots do
   alias Lumia.Accounts
   alias Lumia.Accounts.Account
   alias Lumia.Authz.Access
+  alias Lumia.Dms
+  alias Lumia.Events
   alias Lumia.Events.Message
   alias Lumia.Proto
   alias Lumia.Repo
@@ -52,8 +54,23 @@ defmodule Lumia.Snapshots do
     }
   end
 
-  @doc "The channel snapshot: the channel, newest messages and pins at the log head."
-  def channel(%{channel: channel}) do
+  @doc """
+  The channel snapshot: the channel, newest messages and pins at the log
+  head. A `PERSONAL_*` channel has no server-side messages; its snapshot
+  carries the newest encrypted events instead (protocol section 15).
+  """
+  def channel(%{channel: %{kind: kind} = channel}) do
+    if Dms.personal_kind?(kind), do: encrypted_channel(channel), else: plain_channel(channel)
+  end
+
+  defp encrypted_channel(channel) do
+    head = channel.last_seq
+    after_seq = max(head - @snapshot_messages, 0)
+    events = Events.events_after(channel.id, after_seq, @snapshot_messages)
+    %V1.ChannelSnapshot{channel: Proto.channel(channel), seq: head, encrypted_events: events}
+  end
+
+  defp plain_channel(channel) do
     head = channel.last_seq
 
     messages =

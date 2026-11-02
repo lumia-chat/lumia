@@ -33,7 +33,7 @@ OpenMLS 0.9 is the implementation in the client core. Its provider is three trai
 2. The `device_id` is in that identity's roster as the client holds it, not revoked.
 3. The leaf's signature key equals that device's certificate public key.
 
-A leaf that fails is rejected and the group is not advanced. A client that holds no roster for a participant fetches one through the instance's directory before judging; it never accepts a leaf on the credential alone.
+A leaf that fails is rejected and the group is not advanced. A client that holds no roster for a participant fetches one (`GET /accounts/{account_id}/roster`, served across a shared `PERSONAL_*` channel) before judging; it never accepts a leaf on the credential alone. A rejected leaf makes the client fetch the participant's roster once more and judge again before it gives up, since the rejection may be a roster it has not seen yet.
 
 **Extensions.** Groups carry the `ratchet_tree` extension in every GroupInfo so a joiner needs nothing else. Last-resort key packages carry the `last_resort` extension. No other extensions in v1.
 
@@ -42,7 +42,7 @@ A leaf that fails is rejected and the group is not advanced. A client that holds
 - Each device keeps **20** unclaimed key packages on every instance where its identity has an account, with a **90-day** lifetime. On connect, when the instance reports fewer than 10 (the `Welcome` frame carries the count), the device publishes enough to reach 20.
 - Each device also publishes **one last-resort key package**, rotated on every top-up. The instance hands it out only when the pool is empty and never deletes it on claim. A client that joins someone through a last-resort package treats the resulting leaf as any other; the reduced forward secrecy of a reused init key is bounded by the next top-up.
 - Web devices publish key packages like native ones; they are leaves.
-- Claiming (`POST /mls/key-packages/claim`) needs the existing gate: the caller shares a `PERSONAL_*` channel with the target or holds an accepted DM request from them. One package per authorized device of the target is returned and deleted. An empty pool returns the last-resort package.
+- Claiming (`POST /mls/key-packages/claim`) needs the existing gate: the caller shares a `PERSONAL_*` channel with the target, holds an accepted DM request from them, or is the target (a device adding its identity's other devices; the claiming device is left out). One package per authorized device of the target is returned and deleted. An empty pool returns the last-resort package.
 - The instance deletes expired packages and, on device revocation, every package of the revoked device.
 - Private key material for published packages stays in the device's storage provider until the package is used or expires; the storage provider's `delete_key_package` runs on expiry.
 
@@ -50,7 +50,7 @@ A leaf that fails is rejected and the group is not advanced. A client that holds
 
 **Creation.** On an accepted DM request the recipient's client creates the group (architecture 6.4): it claims one key package per device of the sender, adds its own other devices from their key packages, commits, and sends the welcome as a `CONTROL` event. A personal group DM is created by its creator the same way with every member's devices. The creator publishes GroupInfo (section 6) after the first commit.
 
-**Commits.** Any member device may commit. `EncryptedPayload.epoch` on a `CONTROL` event is the epoch the commit **produces**; the instance accepts it only when it equals the conversation's current epoch plus one, answering `FAILED_PRECONDITION{state: "epoch"}` otherwise. A client whose commit is refused discards its pending commit, processes the events it missed, and tries again. Application messages carry the epoch they were encrypted in and are accepted for any epoch.
+**Commits.** Any member device may commit. `EncryptedPayload.epoch` on a `CONTROL` event is the epoch the commit **produces**; the instance accepts it only when it equals the conversation's current epoch plus one, answering `FAILED_PRECONDITION{state: "epoch"}` otherwise. A client whose commit is refused discards its pending commit, processes the events it missed, and tries again. A `CONTROL` event that is not a commit (a welcome, which carries the epoch its commit produced, or a proposal, which carries the current epoch) states the **current** epoch and advances nothing; the instance accepts exactly those two values. A committer therefore sends its commit first and the welcome after the ack. Application messages carry the epoch they were encrypted in and are accepted for any epoch.
 
 **Welcomes** travel as `CONTROL` events in the conversation's log; a joining device learns of the conversation from its account log (`ChannelJoined` for the `PERSONAL_*` channel) and reads the welcome from the channel log. Welcomes are addressed to specific key packages, so only the intended device can open one.
 
@@ -146,7 +146,7 @@ The instance, in Elixir with no MLS library:
 
 - Stores key packages per device as opaque bytes with their expiry, and one last-resort package; claims and deletes per section 3.
 - Keeps the newest GroupInfo per conversation (section 6).
-- Reads `EncryptedPayload.epoch` on `CONTROL` events and enforces current plus one; tracks the current epoch per conversation.
+- Reads `EncryptedPayload.epoch` on `CONTROL` events: current plus one advances the conversation's epoch, current is accepted as a non-advancing control message, anything else is refused.
 - Stores and serves history chunks and manifests as opaque bytes with quotas.
 - Purges a revoked device's key packages, and a deleted account's packages, chunks, manifests, and ciphertext.
 

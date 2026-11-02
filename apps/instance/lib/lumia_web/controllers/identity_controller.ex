@@ -92,6 +92,25 @@ defmodule LumiaWeb.IdentityController do
     end
   end
 
+  @doc """
+  The newest roster held for another account's identity, for validating
+  that account's MLS leaves (e2ee spec section 2). Gated like a key-package
+  claim: the caller must share a personal channel with the account.
+  """
+  def get_account_roster(conn, %{"account_id" => account_id}) do
+    caller = conn.assigns.current_account_id
+
+    with true <- Lumia.Dms.shares_personal_channel?(caller, account_id) || {:error, :not_found},
+         %{identity_id: identity_id} when is_binary(identity_id) <-
+           Lumia.Repo.get(Lumia.Accounts.Account, account_id) || {:error, :not_found},
+         %{signed: signed} <- Identity.held_roster(identity_id) || {:error, :not_found} do
+      ProtoConn.render(conn, %V1.GetRosterResponse{roster: signed})
+    else
+      {:error, _} = error -> error
+      _ -> {:error, :not_found}
+    end
+  end
+
   def publish_roster(conn, _params) do
     with {:ok, identity_id} <- bound_identity(conn),
          {:ok, %V1.PublishRosterRequest{roster: %V1.SignedRoster{} = roster}} <-

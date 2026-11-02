@@ -16,6 +16,27 @@ defmodule Lumia.Fixtures do
     c
   end
 
+  @doc "A personal DM between two accounts (both created when not given)."
+  def personal_dm(a \\ nil, b \\ nil) do
+    a = a || account("a")
+    b = b || account("b")
+    {:ok, channel, false} = Lumia.Dms.open_personal(a.id, [b.id])
+    %{channel: channel, a: a, b: b}
+  end
+
+  @doc "A SendEncrypted command: `kind` is `:APPLICATION` or `:CONTROL`."
+  def send_encrypted(channel_id, kind, epoch, bytes \\ "mls") do
+    %V1.Command{
+      command_id: Proto.uuid(Ecto.UUID.generate(version: 7)),
+      channel_id: Proto.uuid(channel_id),
+      op:
+        {:send_encrypted,
+         %V1.SendEncrypted{
+           payload: %V1.EncryptedPayload{kind: kind, mls_message: bytes, epoch: epoch}
+         }}
+    }
+  end
+
   def actor(account \\ nil) do
     account = account || account()
     %{account_id: account.id, device_id: Ecto.UUID.generate()}

@@ -7,13 +7,15 @@ defmodule Lumia.Authz.Access do
   authoritative `acl_version`, and resolves the account's permissions
   against the cached snapshot for that version. A non-member sees
   `:not_found`, never `:permission_denied`, so channel existence is not
-  disclosed. A channel with no server (spike-level or a future DM) resolves
-  to all permissions for now; participant checks arrive with DMs.
+  disclosed. A `PERSONAL_*` channel resolves to all permissions for a
+  participant and `:not_found` for anyone else (architecture 6.4). A
+  server-less text channel (spike-level) resolves to all permissions.
   """
 
   alias Lumia.Authz
   alias Lumia.Authz.Cache
   alias Lumia.Authz.Permission
+  alias Lumia.Dms
   alias Lumia.Events.Channel
   alias Lumia.Repo
   alias Lumia.Servers
@@ -32,14 +34,10 @@ defmodule Lumia.Authz.Access do
       %Channel{deleted_at: %DateTime{}} ->
         {:error, :not_found}
 
-      %Channel{server_id: nil} = channel ->
-        {:ok,
-         %{
-           channel: channel,
-           server_id: nil,
-           acl_version: channel.acl_version,
-           permissions: Permission.all()
-         }}
+      %Channel{server_id: nil, kind: kind} = channel ->
+        if not Dms.personal_kind?(kind) or Dms.participant?(channel.id, account_id),
+          do: {:ok, full_access(channel)},
+          else: {:error, :not_found}
 
       %Channel{server_id: server_id} = channel ->
         resolve_in_server(account_id, server_id, channel)
@@ -84,6 +82,15 @@ defmodule Lumia.Authz.Access do
       {:error, _} ->
         []
     end
+  end
+
+  defp full_access(channel) do
+    %{
+      channel: channel,
+      server_id: nil,
+      acl_version: channel.acl_version,
+      permissions: Permission.all()
+    }
   end
 
   defp resolve_in_server(account_id, server_id, channel) do

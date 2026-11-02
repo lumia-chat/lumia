@@ -23,6 +23,7 @@ defmodule LumiaWeb.Gateway.SessionChannel do
   alias Lumia.Authz.Access
   alias Lumia.Events
   alias Lumia.Instance
+  alias Lumia.Mls
   alias Lumia.Proto
   alias Lumia.V1
 
@@ -58,7 +59,9 @@ defmodule LumiaWeb.Gateway.SessionChannel do
       recovery_generation: Instance.recovery_generation(),
       server_time: Proto.timestamp(DateTime.utc_now()),
       heartbeat_interval_seconds: @heartbeat_seconds,
-      limits: %V1.Limits{max_subscriptions: @max_subscriptions, max_message_bytes: 16_384}
+      limits: %V1.Limits{max_subscriptions: @max_subscriptions, max_message_bytes: 16_384},
+      key_package_count:
+        Mls.key_package_count(socket.assigns.account_id, socket.assigns.device_id)
     }
 
     {:ok, welcome, socket}
@@ -121,7 +124,7 @@ defmodule LumiaWeb.Gateway.SessionChannel do
       {:noreply, push_frame(socket, {:ack, ack})}
     else
       {:error, reason} ->
-        {:noreply, push_error(socket, error_code(reason), to_string(reason), command.command_id)}
+        {:noreply, push_command_error(socket, reason, command.command_id)}
     end
   end
 
@@ -418,8 +421,19 @@ defmodule LumiaWeb.Gateway.SessionChannel do
     end)
   end
 
-  defp push_error(socket, code, message, command_id \\ "") do
-    push_frame(socket, {:error, %V1.Error{code: code, message: message, command_id: command_id}})
+  defp push_command_error(socket, {:failed_precondition, state}, command_id) do
+    push_error(socket, :FAILED_PRECONDITION, "failed precondition", command_id, %{
+      "state" => state
+    })
+  end
+
+  defp push_command_error(socket, reason, command_id) do
+    push_error(socket, error_code(reason), to_string(reason), command_id)
+  end
+
+  defp push_error(socket, code, message, command_id \\ "", details \\ %{}) do
+    error = %V1.Error{code: code, message: message, command_id: command_id, details: details}
+    push_frame(socket, {:error, error})
   end
 
   # The transport process's mailbox is the outbound queue (delivery section 5).
@@ -441,5 +455,6 @@ defmodule LumiaWeb.Gateway.SessionChannel do
   defp error_code(:channel_not_found), do: :NOT_FOUND
   defp error_code(:message_not_found), do: :NOT_FOUND
   defp error_code(:invalid_command), do: :INVALID_ARGUMENT
+  defp error_code({:failed_precondition, _}), do: :FAILED_PRECONDITION
   defp error_code(_), do: :INTERNAL
 end

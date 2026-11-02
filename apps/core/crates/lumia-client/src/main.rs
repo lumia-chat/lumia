@@ -22,15 +22,18 @@ use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
 use lumia_client::api::{Api, Tokens};
+use lumia_client::dm::{DmEngine, Outcome};
 use lumia_client::gateway::{self, GatewayCommand, GatewayEvent};
 use lumia_client::keystore::FileKeystore;
-use lumia_client::sqlite::SqliteStore;
+use lumia_client::sqlite::{DmStatus, SqliteStore};
 use lumia_client::ClientError;
 use lumia_core::keystore::Keystore;
-use lumia_core::proto::{command, event, Command, SendMessage};
+use lumia_core::mls::projection::Projection;
+use lumia_core::proto::{command, event, Command, DmOperation, SendMessage};
 use lumia_core::store::Store;
 use lumia_core::sync::Notice;
 use lumia_core::wire;
+use prost::Message as _;
 use tokio::sync::mpsc;
 
 #[derive(Parser, Debug)]
@@ -87,6 +90,26 @@ enum Cmd {
     Tail { channel_id: String },
     /// Run a failure-injection scenario against the instance (`all` for every one).
     Scenario { name: String },
+    /// End-to-end encrypted personal DMs.
+    Dm {
+        #[command(subcommand)]
+        action: DmCmd,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum DmCmd {
+    /// Open (or find) the personal DM with an account. The device that
+    /// opens it first creates the MLS group and welcomes every other device.
+    Open { account_id: String },
+    /// Send a text message.
+    Send { channel_id: String, body: String },
+    /// Follow a personal DM, decrypting as events arrive; ctrl-c to stop.
+    Tail { channel_id: String },
+    /// Show the conversation as this device projects it.
+    Messages { channel_id: String },
+    /// Publish a fresh pool of key packages now (also done on connect when low).
+    Setup,
 }
 
 #[derive(Subcommand, Debug)]
@@ -361,6 +384,302 @@ async fn run(cli: Cli) -> Result<(), ClientError> {
             };
             scenario::run(&name, &env).await
         }
+        Cmd::Dm { action } => dm_cmd(ctx, api, action).await,
+    }
+}
+
+// ---- Personal DMs ----------------------------------------------------------------
+
+/// What a `dm` run is waiting for before it exits.
+enum DmMode {
+    /// Create the group (or wait for its welcome), then stop.
+    Open(Vec<u8>),
+    /// Send one message, wait for the ack, then stop.
+    Send(Vec<u8>, String),
+    /// Run until ctrl-c.
+    Tail,
+    /// Publish key packages, then stop.
+    Setup,
+}
+
+fn dm_engine(ctx: &mut Ctx, api: &Api) -> Result<DmEngine, ClientError> {
+    let roster = device(ctx).roster()?;
+    let seed = ctx
+        .identity_keys
+        .get("device_key")?
+        .ok_or_else(|| ClientError::State("no device key; create or claim an identity".into()))?;
+    let account = ctx
+        .store
+        .meta_get("account_id")?
+        .map(|h| hex::decode(h).unwrap_or_default())
+        .unwrap_or_default();
+    let store = SqliteStore::open(&ctx.data_dir.join(&ctx.host).join("store.sqlite"))?;
+    DmEngine::new(
+        api.clone(),
+        store,
+        account,
+        ctx.device_id.clone(),
+        &seed,
+        roster,
+    )
+}
+
+async fn dm_cmd(mut ctx: Ctx, api: Api, action: DmCmd) -> Result<(), ClientError> {
+    match action {
+        DmCmd::Open { account_id } => {
+            let other = parse_uuid(&account_id)?;
+            let opened = api.open_personal_dm(other).await?;
+            let channel = opened
+                .channel
+                .ok_or_else(|| ClientError::State("no channel in response".into()))?;
+            let mut engine = dm_engine(&mut ctx, &api)?;
+            engine.record_channel(&channel)?;
+            println!(
+                "{}  personal DM ({})",
+                wire::display(&channel.channel_id),
+                if opened.existed { "existing" } else { "new" }
+            );
+            let mode = if opened.existed && !engine.is_member(&channel.channel_id)? {
+                println!("waiting for the welcome from the device that opened it");
+                DmMode::Open(channel.channel_id.clone())
+            } else if opened.existed {
+                println!("already a member");
+                return Ok(());
+            } else {
+                DmMode::Open(channel.channel_id.clone())
+            };
+            dm_loop(
+                ctx,
+                api,
+                engine,
+                vec![channel.channel_id],
+                mode,
+                !opened.existed,
+            )
+            .await
+        }
+        DmCmd::Send { channel_id, body } => {
+            let channel = parse_uuid(&channel_id)?;
+            let mut engine = dm_engine(&mut ctx, &api)?;
+            engine.load_participants(&channel)?;
+            dm_loop(
+                ctx,
+                api,
+                engine,
+                vec![channel.clone()],
+                DmMode::Send(channel, body),
+                false,
+            )
+            .await
+        }
+        DmCmd::Tail { channel_id } => {
+            let channel = parse_uuid(&channel_id)?;
+            let mut engine = dm_engine(&mut ctx, &api)?;
+            engine.load_participants(&channel)?;
+            println!("tailing {channel_id}; ctrl-c to stop");
+            dm_loop(ctx, api, engine, vec![channel], DmMode::Tail, false).await
+        }
+        DmCmd::Messages { channel_id } => {
+            let channel = parse_uuid(&channel_id)?;
+            let engine = dm_engine(&mut ctx, &api)?;
+            let mut projection = Projection::default();
+            for row in engine.rows(&channel)? {
+                match row.status {
+                    DmStatus::Decrypted => {
+                        if let Ok(op) = DmOperation::decode(row.bytes.as_slice()) {
+                            projection.apply(
+                                row.seq,
+                                &row.sender_identity_id,
+                                &row.sender_device_id,
+                                &op,
+                            );
+                        }
+                    }
+                    DmStatus::BeforeJoin => {
+                        println!("[{}] sent before this device joined", row.seq)
+                    }
+                    DmStatus::Undecryptable => println!("[{}] could not be decrypted", row.seq),
+                }
+            }
+            for m in projection.messages() {
+                let flags = match (m.deleted, m.edited) {
+                    (true, _) => " (deleted)",
+                    (false, true) => " (edited)",
+                    _ => "",
+                };
+                println!(
+                    "[{}] {}: {}{flags}",
+                    m.seq,
+                    hex::encode(&m.sender_identity_id[..4]),
+                    m.body
+                );
+            }
+            Ok(())
+        }
+        DmCmd::Setup => {
+            let engine = dm_engine(&mut ctx, &api)?;
+            dm_loop(ctx, api, engine, Vec::new(), DmMode::Setup, false).await
+        }
+    }
+}
+
+/// Runs the gateway with the DM engine attached until `mode` is satisfied.
+/// `create` means this device opened the channel and creates the group.
+async fn dm_loop(
+    ctx: Ctx,
+    api: Api,
+    mut engine: DmEngine,
+    channels: Vec<Vec<u8>>,
+    mode: DmMode,
+    create: bool,
+) -> Result<(), ClientError> {
+    let (tx, rx) = mpsc::channel(16);
+    let (etx, mut erx) = mpsc::channel(64);
+    // Subscribe up front only to conversations whose participants this
+    // device already knows; the others are subscribed when the account log
+    // names them, so their events are never processed before the rosters
+    // can be fetched.
+    let mut known = Vec::new();
+    for channel in channels {
+        if !engine.load_participants(&channel)?.is_empty() {
+            known.push(channel);
+        }
+    }
+    let gw = tokio::spawn(gateway::run_forever(
+        api,
+        ctx.store,
+        "lumia-cli",
+        ctx.device_id.clone(),
+        known.clone(),
+        rx,
+        etx,
+    ));
+    let mut host_store = SqliteStore::open(&ctx.data_dir.join(&ctx.host).join("store.sqlite"))?;
+    let mut done = false;
+    let result: Result<(), ClientError> = async {
+        loop {
+            let ev = tokio::select! {
+                ev = erx.recv() => ev,
+                _ = tokio::signal::ctrl_c() => break Ok(()),
+            };
+            let Some(ev) = ev else { break Ok(()) };
+            let outcomes = match ev {
+                GatewayEvent::Notice(Notice::Welcomed(w)) => {
+                    host_store.meta_set("account_id", &hex::encode(&w.account_id))?;
+                    engine.set_account(w.account_id.clone());
+                    let mut out = match &mode {
+                        DmMode::Setup => {
+                            engine
+                                .on_welcome(&lumia_core::proto::Welcome {
+                                    key_package_count: 0,
+                                    ..w.clone()
+                                })
+                                .await?
+                        }
+                        _ => engine.on_welcome(&w).await?,
+                    };
+                    match &mode {
+                        DmMode::Open(channel) if create => {
+                            out.extend(engine.create_group(channel).await?)
+                        }
+                        DmMode::Send(channel, body) => out.extend(engine.send_text(channel, body)?),
+                        DmMode::Setup => {
+                            println!("account {}", wire::display(&w.account_id));
+                            done = true;
+                        }
+                        _ => {}
+                    }
+                    out
+                }
+                GatewayEvent::Notice(n) => engine.on_notice(&n).await?,
+                GatewayEvent::Applied(events) => engine.on_events(&events).await?,
+                GatewayEvent::AccountApplied(events) => engine.on_account_events(&events).await?,
+                GatewayEvent::SnapshotTaken { seq, .. } => {
+                    vec![Outcome::Print(format!("snapshot to seq {seq}"))]
+                }
+                GatewayEvent::Reconnecting {
+                    attempt,
+                    delay,
+                    reason,
+                } => {
+                    vec![Outcome::Print(format!(
+                        "reconnecting in {delay:?} (attempt {attempt}): {reason}"
+                    ))]
+                }
+                GatewayEvent::Closed(reason) => {
+                    println!("closed: {reason}");
+                    break Ok(());
+                }
+            };
+            for outcome in outcomes {
+                match outcome {
+                    Outcome::Print(s) => println!("-- {s}"),
+                    Outcome::Send(cmd) => tx
+                        .send(GatewayCommand::Send(cmd))
+                        .await
+                        .map_err(|e| ClientError::Transport(e.to_string()))?,
+                    Outcome::Subscribe(ch) => {
+                        println!("-- personal DM {} added", wire::display(&ch));
+                        tx.send(GatewayCommand::Subscribe(ch))
+                            .await
+                            .map_err(|e| ClientError::Transport(e.to_string()))?;
+                    }
+                    Outcome::Operation {
+                        seq, sender, op, ..
+                    } => print_operation(seq, &sender, &op),
+                    Outcome::GroupReady(ch) => {
+                        println!("-- group ready for {}", wire::display(&ch));
+                        if matches!(&mode, DmMode::Open(c) if *c == ch) {
+                            done = true;
+                        }
+                    }
+                    Outcome::Delivered(id) => {
+                        println!("delivered {}", wire::display(&id));
+                        if matches!(mode, DmMode::Send(..)) {
+                            done = true;
+                        }
+                    }
+                }
+            }
+            if done {
+                break Ok(());
+            }
+        }
+    }
+    .await;
+    drop(tx);
+    gw.abort();
+    result
+}
+
+fn print_operation(seq: u64, sender: &lumia_core::mls::credential::LeafIdentity, op: &DmOperation) {
+    use lumia_core::proto::dm_operation::Op;
+    let who = format!(
+        "{}/{}",
+        hex::encode(&sender.identity_id[..4]),
+        &wire::display(&sender.device_id)[..8]
+    );
+    match &op.op {
+        Some(Op::Send(s)) => println!("[{seq}] {who}: {}", s.body),
+        Some(Op::Edit(e)) => println!(
+            "[{seq}] {who} edited {}: {}",
+            wire::display(&e.message_id),
+            e.body
+        ),
+        Some(Op::Delete(d)) => println!("[{seq}] {who} deleted {}", wire::display(&d.message_id)),
+        Some(Op::React(r)) => println!(
+            "[{seq}] {who} {} {}",
+            if r.remove { "unreacted" } else { "reacted" },
+            r.emoji
+        ),
+        Some(Op::Pin(p)) => println!(
+            "[{seq}] {who} {} {}",
+            if p.unpin { "unpinned" } else { "pinned" },
+            wire::display(&p.message_id)
+        ),
+        Some(Op::Read(r)) => println!("[{seq}] {who} read through {}", r.through_seq),
+        Some(Op::Typing(_)) => println!("[{seq}] {who} is typing"),
+        None => println!("[{seq}] {who}: (empty operation)"),
     }
 }
 

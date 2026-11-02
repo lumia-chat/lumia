@@ -127,6 +127,7 @@ defmodule Lumia.V1.Welcome do
   field :identity_proof_sign_in_enabled, 8, type: :bool, json_name: "identityProofSignInEnabled"
   field :limits, 9, type: Lumia.V1.Limits
   field :roster_update_available, 10, type: :bool, json_name: "rosterUpdateAvailable"
+  field :key_package_count, 11, type: :uint32, json_name: "keyPackageCount"
 end
 
 defmodule Lumia.V1.Limits do

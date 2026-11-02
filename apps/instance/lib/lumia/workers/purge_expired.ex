@@ -2,8 +2,9 @@ defmodule Lumia.Workers.PurgeExpired do
   @moduledoc """
   Deletes expired identity rows (docs/specs/identity.md sections 6, 9, 10):
   used challenges past their expiry, unclaimed link bundles, and reauth
-  tokens. Hourly from the Oban cron. Each table is small and indexed on
-  `expires_at`, so one statement per table is enough.
+  tokens; and expired MLS key packages (docs/specs/e2ee.md section 3).
+  Hourly from the Oban cron. Each table is indexed on `expires_at`, so one
+  statement per table is enough.
   """
 
   use Oban.Worker, queue: :maintenance, max_attempts: 3
@@ -25,6 +26,6 @@ defmodule Lumia.Workers.PurgeExpired do
         {schema, n}
       end
 
-    {:ok, counts}
+    {:ok, Map.put(counts, Lumia.Mls.KeyPackage, Lumia.Mls.purge_expired())}
   end
 end

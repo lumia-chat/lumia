@@ -13,6 +13,7 @@
 
 pub mod identity;
 pub mod keystore;
+pub mod mls;
 pub mod store;
 pub mod sync;
 pub mod wire;

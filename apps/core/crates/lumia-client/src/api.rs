@@ -11,11 +11,13 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use lumia_core::proto::{
     reauth_request, AccountSnapshot, Ack, ChallengePurpose, ChallengeRequest, ChallengeResponse,
-    Channel, ChannelSnapshot, Command, CreateAccountRequest, CreateChannelRequest,
-    CreateLinkBundleRequest, CreateLinkBundleResponse, CreateServerRequest, Error as ApiError,
-    ErrorCode, GetLinkBundleResponse, GetRosterResponse, IdentityProof, IdentityProofSignInRequest,
-    ListAccountEventsResponse, ListChannelsResponse, ListEventsResponse, ListServersResponse,
-    PasswordSignInRequest, PublishRosterRequest, ReauthRequest, ReauthResponse, RefreshRequest,
+    Channel, ChannelSnapshot, ClaimKeyPackageRequest, ClaimKeyPackageResponse, Command,
+    CreateAccountRequest, CreateChannelRequest, CreateLinkBundleRequest, CreateLinkBundleResponse,
+    CreateServerRequest, Error as ApiError, ErrorCode, GetGroupInfoResponse, GetLinkBundleResponse,
+    GetRosterResponse, IdentityProof, IdentityProofSignInRequest, ListAccountEventsResponse,
+    ListChannelsResponse, ListEventsResponse, ListServersResponse, OpenPersonalDmRequest,
+    OpenPersonalDmResponse, PasswordSignInRequest, PublishGroupInfoRequest,
+    PublishKeyPackagesRequest, PublishRosterRequest, ReauthRequest, ReauthResponse, RefreshRequest,
     RevokeDeviceRequest, Server, SignedRoster, TokenPair,
 };
 use prost::Message;
@@ -458,6 +460,102 @@ impl Api {
     /// On transport failure or an API error.
     pub async fn channel_snapshot(&self, channel_id: &str) -> Result<ChannelSnapshot, ClientError> {
         self.get(&format!("/api/v1/channels/{channel_id}/snapshot"))
+            .await
+    }
+
+    // ---- Personal DMs and the MLS delivery service (e2ee spec section 11) ----
+
+    /// `POST /dms/personal`: opens (or finds) the personal DM with `other`.
+    ///
+    /// # Errors
+    /// On transport failure or an API error.
+    pub async fn open_personal_dm(
+        &self,
+        other: Vec<u8>,
+    ) -> Result<OpenPersonalDmResponse, ClientError> {
+        self.post(
+            "/api/v1/dms/personal",
+            &OpenPersonalDmRequest {
+                participant_account_ids: vec![other],
+            },
+        )
+        .await
+    }
+
+    /// `GET /accounts/{id}/roster`: another participant's roster.
+    ///
+    /// # Errors
+    /// On transport failure or an API error (`NOT_FOUND` without a shared DM).
+    pub async fn account_roster(&self, account_id: &str) -> Result<GetRosterResponse, ClientError> {
+        self.get(&format!("/api/v1/accounts/{account_id}/roster"))
+            .await
+    }
+
+    /// `POST /mls/key-packages`.
+    ///
+    /// # Errors
+    /// On transport failure or an API error.
+    pub async fn publish_key_packages(
+        &self,
+        key_packages: Vec<Vec<u8>>,
+        last_resort_key_package: Vec<u8>,
+    ) -> Result<(), ClientError> {
+        self.post_empty(
+            "/api/v1/mls/key-packages",
+            &PublishKeyPackagesRequest {
+                key_packages,
+                last_resort_key_package,
+            },
+        )
+        .await
+    }
+
+    /// `POST /mls/key-packages/claim`: one package per device of `account_id`
+    /// (this device excluded when claiming its own identity's).
+    ///
+    /// # Errors
+    /// On transport failure or an API error.
+    pub async fn claim_key_packages(
+        &self,
+        account_id: Vec<u8>,
+    ) -> Result<ClaimKeyPackageResponse, ClientError> {
+        self.post(
+            "/api/v1/mls/key-packages/claim",
+            &ClaimKeyPackageRequest {
+                account_id,
+                device_id: Vec::new(),
+            },
+        )
+        .await
+    }
+
+    /// `POST /mls/group-info`.
+    ///
+    /// # Errors
+    /// On transport failure or an API error.
+    pub async fn publish_group_info(
+        &self,
+        channel_id: Vec<u8>,
+        group_info: Vec<u8>,
+        epoch: u64,
+    ) -> Result<(), ClientError> {
+        self.post_empty(
+            "/api/v1/mls/group-info",
+            &PublishGroupInfoRequest {
+                channel_id,
+                group_info,
+                epoch,
+            },
+        )
+        .await
+    }
+
+    /// `GET /mls/group-info/{channel_id}`.
+    ///
+    /// # Errors
+    /// On transport failure or an API error.
+    pub async fn group_info(&self, channel_id: &str) -> Result<GetGroupInfoResponse, ClientError> {
+        self.get(&format!("/api/v1/mls/group-info/{channel_id}"))
             .await
     }
 

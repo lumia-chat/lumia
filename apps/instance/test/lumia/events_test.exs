@@ -192,3 +192,87 @@ defmodule Lumia.EventsTest do
     end
   end
 end
+
+defmodule Lumia.Events.EncryptedTest do
+  use Lumia.DataCase, async: true
+
+  import Lumia.Fixtures
+
+  alias Lumia.Events
+  alias Lumia.Events.Channel
+
+  setup do
+    %{channel: channel, a: a} = personal_dm()
+    %{channel: channel, actor: actor(a)}
+  end
+
+  test "an encrypted channel takes only SendEncrypted, and nothing else takes it", ctx do
+    assert {:error, :invalid_command} =
+             Events.append(ctx.channel.id, ctx.actor, send_message(ctx.channel.id))
+
+    plain = channel()
+
+    assert {:error, :invalid_command} =
+             Events.append(plain.id, ctx.actor, send_encrypted(plain.id, :APPLICATION, 0))
+
+    assert Repo.get!(Channel, ctx.channel.id).last_seq == 0
+  end
+
+  test "CONTROL advances the epoch by exactly one; APPLICATION passes at any epoch", ctx do
+    assert {:error, {:failed_precondition, "epoch"}} =
+             Events.append(ctx.channel.id, ctx.actor, send_encrypted(ctx.channel.id, :CONTROL, 2))
+
+    assert {:error, {:failed_precondition, "epoch"}} =
+             Events.append(ctx.channel.id, ctx.actor, send_encrypted(ctx.channel.id, :CONTROL, 3))
+
+    assert Repo.get!(Channel, ctx.channel.id).mls_epoch == 0
+
+    assert {:ok, %{seq: 1}} =
+             Events.append(ctx.channel.id, ctx.actor, send_encrypted(ctx.channel.id, :CONTROL, 1))
+
+    assert Repo.get!(Channel, ctx.channel.id).mls_epoch == 1
+
+    # A welcome or proposal at the current epoch passes without advancing.
+    assert {:ok, %{seq: 2}} =
+             Events.append(ctx.channel.id, ctx.actor, send_encrypted(ctx.channel.id, :CONTROL, 1))
+
+    assert Repo.get!(Channel, ctx.channel.id).mls_epoch == 1
+
+    # The loser of a concurrent commit targets an epoch already two behind.
+    assert {:error, {:failed_precondition, "epoch"}} =
+             Events.append(ctx.channel.id, ctx.actor, send_encrypted(ctx.channel.id, :CONTROL, 0))
+
+    assert {:ok, %{seq: 3}} =
+             Events.append(
+               ctx.channel.id,
+               ctx.actor,
+               send_encrypted(ctx.channel.id, :APPLICATION, 0)
+             )
+
+    assert {:ok, %{seq: 4}} =
+             Events.append(
+               ctx.channel.id,
+               ctx.actor,
+               send_encrypted(ctx.channel.id, :APPLICATION, 7)
+             )
+
+    assert {:ok, %{seq: 5}} =
+             Events.append(ctx.channel.id, ctx.actor, send_encrypted(ctx.channel.id, :CONTROL, 2))
+
+    # A refused command took no seq and left no idempotency row: a retry
+    # with the same id at the right epoch succeeds.
+    cmd = send_encrypted(ctx.channel.id, :CONTROL, 9)
+
+    assert {:error, {:failed_precondition, "epoch"}} =
+             Events.append(ctx.channel.id, ctx.actor, cmd)
+
+    right =
+      put_in(
+        cmd.op,
+        {:send_encrypted, %{elem(cmd.op, 1) | payload: %{elem(cmd.op, 1).payload | epoch: 3}}}
+      )
+
+    assert {:ok, %{seq: 6}} = Events.append(ctx.channel.id, ctx.actor, right)
+    assert Repo.get!(Channel, ctx.channel.id).last_seq == 6
+  end
+end

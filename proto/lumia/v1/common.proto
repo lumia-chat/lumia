@@ -47,6 +47,7 @@ enum ErrorCode {
   GENERATION_CHANGED = 6;    // recovery generation differs; discard all cursors
   PAYLOAD_TOO_LARGE = 7;     // details.max bytes
   UNSUPPORTED_ENCODING = 8;  // gateway subprotocol not offered
+  RESOURCE_EXHAUSTED = 9;    // a storage quota is used up (history backup); HTTP 507
 
   // 401 / 403
   UNAUTHENTICATED = 20;      // no or invalid token; refresh or re-authenticate
