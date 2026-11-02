@@ -7,6 +7,7 @@
 
 use std::path::Path;
 
+use lumia_core::keystore::{Keystore, KeystoreError};
 use lumia_core::mls::storage::MlsKv;
 use lumia_core::proto::{event, AccountEvent, Event};
 use lumia_core::store::{LogKind, OutboxEntry, Store, StoreError, StoredEvent, StoredMessage};
@@ -60,6 +61,10 @@ CREATE TABLE IF NOT EXISTS mls_list (
   position INTEGER NOT NULL,
   value BLOB NOT NULL,
   PRIMARY KEY (kind, key, position)
+);
+CREATE TABLE IF NOT EXISTS secrets (
+  name TEXT PRIMARY KEY,
+  value BLOB NOT NULL
 );
 CREATE TABLE IF NOT EXISTS dm_operations (
   channel_id BLOB NOT NULL,
@@ -132,6 +137,19 @@ impl SqliteStore {
     /// When the file cannot be opened or the schema fails.
     pub fn open(path: &Path) -> Result<Self, StoreError> {
         let conn = Connection::open(path).map_err(backend)?;
+        Self::init(conn)
+    }
+
+    /// Opens the database on a named SQLite VFS: the OPFS pool on the web,
+    /// where the file lives in the origin's private file system.
+    ///
+    /// # Errors
+    /// When the VFS is not registered, the file cannot be opened, or the
+    /// schema fails.
+    pub fn open_on_vfs(path: &str, vfs: &str) -> Result<Self, StoreError> {
+        let flags =
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_CREATE;
+        let conn = Connection::open_with_flags_and_vfs(path, flags, vfs).map_err(backend)?;
         Self::init(conn)
     }
 
@@ -530,6 +548,39 @@ impl Store for SqliteStore {
     }
 }
 
+// Secrets in the store itself: on the web the store is the only durable
+// place and is encrypted at rest as a whole (architecture 11.4); natively
+// the shells bring a platform keystore and this is for tests.
+impl Keystore for SqliteStore {
+    fn get(&self, name: &str) -> Result<Option<Vec<u8>>, KeystoreError> {
+        self.conn
+            .query_row(
+                "SELECT value FROM secrets WHERE name = ?1",
+                params![name],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| KeystoreError::Other(e.to_string()))
+    }
+
+    fn put(&mut self, name: &str, value: &[u8]) -> Result<(), KeystoreError> {
+        self.conn
+            .execute(
+                "INSERT INTO secrets (name, value) VALUES (?1, ?2) ON CONFLICT (name) DO UPDATE SET value = excluded.value",
+                params![name, value],
+            )
+            .map(|_| ())
+            .map_err(|e| KeystoreError::Other(e.to_string()))
+    }
+
+    fn delete(&mut self, name: &str) -> Result<(), KeystoreError> {
+        self.conn
+            .execute("DELETE FROM secrets WHERE name = ?1", params![name])
+            .map(|_| ())
+            .map_err(|e| KeystoreError::Other(e.to_string()))
+    }
+}
+
 // The OpenMLS storage provider's two shapes over the same connection, so
 // MLS state commits in the caller's savepoint (e2ee spec section 7).
 impl MlsKv for SqliteStore {
@@ -695,10 +746,7 @@ fn to_i64(n: u64) -> i64 {
 }
 
 fn now_micros() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| i64::try_from(d.as_micros()).unwrap_or(i64::MAX))
-        .unwrap_or(0)
+    crate::time::now_micros()
 }
 
 fn backend(e: rusqlite::Error) -> StoreError {
@@ -808,7 +856,7 @@ mod tests {
     #[test]
     fn a_failed_transaction_rolls_back_mls_state_and_meta_together() {
         let store = SqliteStore::in_memory().unwrap();
-        store.set("k", b"a", b"1").unwrap();
+        MlsKv::set(&store, "k", b"a", b"1").unwrap();
         let result: Result<(), StoreError> = store.transaction(|s| {
             s.set("k", b"a", b"2")?;
             s.append("l", b"x", b"one")?;
@@ -816,7 +864,7 @@ mod tests {
             Err(StoreError::Backend("boom".into()))
         });
         assert!(result.is_err());
-        assert_eq!(store.get("k", b"a").unwrap(), Some(b"1".to_vec()));
+        assert_eq!(MlsKv::get(&store, "k", b"a").unwrap(), Some(b"1".to_vec()));
         assert!(store.list("l", b"x").unwrap().is_empty());
         assert_eq!(store.meta_get("m").unwrap(), None);
 

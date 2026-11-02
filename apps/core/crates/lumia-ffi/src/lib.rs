@@ -18,6 +18,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use lumia_client::api::{Api, Tokens};
+use lumia_client::futures_channel::mpsc;
+use lumia_client::futures_util::StreamExt as _;
 use lumia_client::gateway::{self, GatewayCommand, GatewayEvent};
 use lumia_client::identity::Device;
 use lumia_client::keystore::FileKeystore;
@@ -28,7 +30,6 @@ use lumia_core::proto::{command, event, Command, Event, SendMessage};
 use lumia_core::store::{Store, StoredMessage};
 use lumia_core::sync::Notice;
 use lumia_core::wire;
-use tokio::sync::mpsc;
 
 uniffi::setup_scaffolding!();
 
@@ -247,7 +248,7 @@ struct Inner {
     keystore: FileKeystore,
     identity_store: SqliteStore,
     identity_keys: FileKeystore,
-    commands: Option<mpsc::Sender<GatewayCommand>>,
+    commands: Option<mpsc::UnboundedSender<GatewayCommand>>,
     task: Option<tokio::task::JoinHandle<SqliteStore>>,
 }
 
@@ -510,15 +511,15 @@ impl Client {
             .store
             .take()
             .ok_or_else(|| LumiaError::Lifecycle("already started".into()))?;
-        let (tx, rx) = mpsc::channel(64);
-        let (etx, mut erx) = mpsc::channel(256);
+        let (tx, rx) = mpsc::unbounded();
+        let (etx, mut erx) = mpsc::unbounded();
         let api = self.api.clone();
         let device_id = self.device_id.clone();
         let task = self.runtime.spawn(async move {
             gateway::run_forever(api, store, "lumia-ffi", device_id, channels, rx, etx).await
         });
         self.runtime.spawn(async move {
-            while let Some(ev) = erx.recv().await {
+            while let Some(ev) = erx.next().await {
                 listener.on_event(client_event(ev));
             }
         });
@@ -717,8 +718,7 @@ impl Client {
             .commands
             .clone()
             .ok_or_else(|| LumiaError::Lifecycle("not started".into()))?;
-        self.runtime
-            .block_on(tx.send(command))
+        tx.unbounded_send(command)
             .map_err(|_| LumiaError::Lifecycle("the gateway loop has stopped".into()))
     }
 }

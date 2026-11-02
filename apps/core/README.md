@@ -8,11 +8,15 @@ The Rust that every Lumia client shares (architecture section 13): the sync engi
 |---|---|
 | `lumia-proto` | Wire types generated from `../../proto` at build time (prost through protox; no `protoc` needed). |
 | `lumia-core` | The sync state machine, `Store` and `Keystore` traits, identity, crypto, and `mls`: OpenMLS behind a storage provider over a key-value contract, leaf validation against rosters, and the DM projection. No I/O, no async. |
-| `lumia-client` | tokio transport (WebSocket, HTTP), SQLite store (also the MLS key-value store, in the same transaction), file keystore, the personal-DM engine, and the `lumia-cli` binary. |
+| `lumia-client` | The client for native targets and `wasm32-unknown-unknown`: the HTTP client, the gateway loop over a per-target socket and timer, the SQLite store (also the MLS key-value store and a keystore, in the same transaction; bundled SQLite natively, SQLite on the OPFS pool VFS on the web), the identity flows and the personal-DM engine. |
+| `lumia-cli` | The headless client binary and the scenario suite, on `lumia-client`. |
 | `lumia-ffi` | UniFFI surface for Swift and Kotlin: one `Client` per instance (API, reconnecting gateway loop, store, identity) and a `Listener` callback. Blocking methods, dev store and keystore until the shells bring their own. |
 | `lumia-wasm` | wasm-bindgen surface for the web shell: the sans-I/O `Session` as a JS class, effects as plain objects, the store and socket owned by JS. Checked on `wasm32-unknown-unknown` in CI. |
 
 ## Requirements
+
+The wasm32 build compiles SQLite with the `cc` crate, which needs an archiver that understands wasm objects: install the `llvm-tools` component and point `AR_wasm32_unknown_unknown` at its `llvm-ar` (`$(rustc --print sysroot)/lib/rustlib/<host>/bin/llvm-ar`); Apple's `ar` writes an empty archive and the link fails with undefined `sqlite3_*` symbols.
+
 
 Rust 1.96 (pinned in `rust-toolchain.toml`; rustup and mise pick it up). No other tools.
 
@@ -28,12 +32,12 @@ cargo check -p lumia-wasm --target wasm32-unknown-unknown
 Talks to a running instance (see [apps/instance](../instance/README.md)). State lives under the platform data directory, or `--data-dir`.
 
 ```sh
-cargo run -p lumia-client -- instance add http://127.0.0.1:4000
-cargo run -p lumia-client -- account create --handle ryan --password 'correct horse battery'
-cargo run -p lumia-client -- server-create Acme
-cargo run -p lumia-client -- channel-create <server-id> general
-cargo run -p lumia-client -- send <channel-id> "hello"
-cargo run -p lumia-client -- tail <channel-id>
+cargo run -p lumia-cli -- instance add http://127.0.0.1:4000
+cargo run -p lumia-cli -- account create --handle ryan --password 'correct horse battery'
+cargo run -p lumia-cli -- server-create Acme
+cargo run -p lumia-cli -- channel-create <server-id> general
+cargo run -p lumia-cli -- send <channel-id> "hello"
+cargo run -p lumia-cli -- tail <channel-id>
 ```
 
 `tail` subscribes from the store's cursor, so a second run replays only what it missed, and reconnects with backoff when the connection drops. An access token the instance refuses is refreshed once and the new pair persisted. The CLI's keystore is a plaintext file at mode 0600 and is for development only.

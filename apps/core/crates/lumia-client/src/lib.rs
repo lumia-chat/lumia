@@ -1,19 +1,32 @@
-//! Native transport and store for the Lumia core (architecture section 13).
+//! The Lumia client over the core (architecture section 13), for native
+//! targets and for `wasm32-unknown-unknown` in a browser worker.
 //!
-//! * [`sqlite`] implements [`lumia_core::store::Store`] on `rusqlite`.
-//! * [`api`] is the HTTP client for `/api/v1` with protobuf bodies.
-//! * [`gateway`] drives a [`lumia_core::sync::Session`] over a WebSocket,
-//!   carrying out its effects against the store and the API.
-//! * [`keystore`] is the CLI's file keystore (plain file, 0600, dev only).
+//! * [`sqlite`] implements [`lumia_core::store::Store`], the MLS key-value
+//!   store and a keystore on `rusqlite`: bundled SQLite natively, SQLite on
+//!   the OPFS pool VFS on the web (docs/spikes/2026-11-02-web-store.md).
+//! * [`api`] is the HTTP client for `/api/v1` with protobuf bodies, on
+//!   reqwest's native or fetch backend.
+//! * [`gateway`] drives a [`lumia_core::sync::Session`] over a socket,
+//!   carrying out its effects against the store and the API; the socket
+//!   and timers come from [`transport`] and [`time`], which are the only
+//!   target-specific code.
+//! * [`identity`] and [`dm`] are the flows over those.
+//! * [`keystore`] is the development file keystore (native only).
 //!
-//! The binary `lumia-cli` in `main.rs` is the headless client.
+//! The headless client is the `lumia-cli` crate.
 
 pub mod api;
 pub mod dm;
 pub mod gateway;
 pub mod identity;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod keystore;
 pub mod sqlite;
+pub mod time;
+pub mod transport;
+
+pub use futures_channel;
+pub use futures_util;
 
 /// Errors from the native layer.
 #[derive(Debug, thiserror::Error)]
@@ -73,6 +86,7 @@ impl From<reqwest::Error> for ClientError {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl From<tokio_tungstenite::tungstenite::Error> for ClientError {
     fn from(e: tokio_tungstenite::tungstenite::Error) -> Self {
         Self::Transport(e.to_string())

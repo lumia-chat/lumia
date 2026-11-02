@@ -668,11 +668,5 @@ pub fn now_nanos() -> i128 {
 }
 
 fn now() -> prost_types::Timestamp {
-    let d = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    prost_types::Timestamp {
-        seconds: i64::try_from(d.as_secs()).unwrap_or(i64::MAX),
-        nanos: i32::try_from(d.subsec_nanos()).unwrap_or(0),
-    }
+    crate::time::now_ts()
 }

@@ -16,13 +16,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
+use lumia_client::futures_channel::mpsc;
 use lumia_core::proto::{
     client_frame, command, server_frame, ClientFrame, Command, DisconnectReason, Heartbeat,
     SendMessage,
 };
 use lumia_core::sync::{decode_frame, encode_frame};
 use lumia_core::wire;
-use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 
 use lumia_client::api::{Api, Tokens};
@@ -331,8 +331,8 @@ async fn snapshot_threshold(env: &Env) -> Result<(), ClientError> {
 /// events were applied and whether a snapshot was taken, once the client
 /// has caught up to `head` or 20s pass.
 async fn observe(env: &Env, channel: &[u8], head: u64) -> Result<(u64, Option<u64>), ClientError> {
-    let (tx, mut rx) = mpsc::channel::<GatewayCommand>(1);
-    let (etx, mut erx) = mpsc::channel(256);
+    let (tx, mut rx) = mpsc::unbounded::<GatewayCommand>();
+    let (etx, mut erx) = mpsc::unbounded();
     let api = env.api.clone();
     let device_id = env.device_id.clone();
     let mut channels = vec![channel.to_vec()];
@@ -345,6 +345,7 @@ async fn observe(env: &Env, channel: &[u8], head: u64) -> Result<(u64, Option<u6
             &device_id,
             &mut channels,
             &mut rx,
+            None,
             &etx,
         )
         .await?;
@@ -358,7 +359,7 @@ async fn observe(env: &Env, channel: &[u8], head: u64) -> Result<(u64, Option<u6
     let mut snapshot = None;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
     loop {
-        let ev = tokio::time::timeout_at(deadline, erx.recv()).await;
+        let ev = tokio::time::timeout_at(deadline, erx.next()).await;
         match ev {
             Ok(Some(GatewayEvent::Applied(events))) => applied += events.len() as u64,
             Ok(Some(GatewayEvent::SnapshotTaken { seq, .. })) => snapshot = Some(seq),
@@ -824,8 +825,8 @@ impl Throwaway {
 /// when the application drops its sender.
 async fn reconnect(env: &Env) -> Result<(), ClientError> {
     let api = Api::new("http://127.0.0.1:9").with_token(Some("x".into()));
-    let (tx, rx) = mpsc::channel::<GatewayCommand>(1);
-    let (etx, mut erx) = mpsc::channel(16);
+    let (tx, rx) = mpsc::unbounded::<GatewayCommand>();
+    let (etx, mut erx) = mpsc::unbounded();
     let device_id = env.device_id.clone();
     let task = tokio::spawn(async move {
         let store = SqliteStore::in_memory()?;
@@ -834,7 +835,7 @@ async fn reconnect(env: &Env) -> Result<(), ClientError> {
     });
     let mut delays = Vec::new();
     while delays.len() < 3 {
-        match tokio::time::timeout(Duration::from_secs(10), erx.recv()).await {
+        match tokio::time::timeout(Duration::from_secs(10), erx.next()).await {
             Ok(Some(GatewayEvent::Reconnecting { attempt, delay, .. })) => {
                 println!("   attempt {attempt} in {delay:?}");
                 delays.push(delay);

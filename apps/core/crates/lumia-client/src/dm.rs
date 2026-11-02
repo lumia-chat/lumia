@@ -144,13 +144,7 @@ fn participants_key(channel_id: &[u8]) -> String {
 }
 
 fn now_ts() -> prost_types::Timestamp {
-    let d = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    prost_types::Timestamp {
-        seconds: i64::try_from(d.as_secs()).unwrap_or(i64::MAX),
-        nanos: i32::try_from(d.subsec_nanos()).unwrap_or(0),
-    }
+    crate::time::now_ts()
 }
 
 fn control(channel_id: &[u8], mls_message: Vec<u8>, epoch: u64) -> Command {

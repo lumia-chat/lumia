@@ -1,4 +1,4 @@
-//! `lumia-cli`: the headless client (plan step 3).
+//! `lumia-cli`: the headless client (plan step 3), on `lumia-client`.
 //!
 //!     lumia-cli instance add http://127.0.0.1:4000
 //!     lumia-cli account create --handle ryan --password '...'
@@ -23,6 +23,8 @@ use std::sync::Arc;
 use clap::{Parser, Subcommand};
 use lumia_client::api::{Api, Tokens};
 use lumia_client::dm::{DmEngine, Outcome};
+use lumia_client::futures_channel::mpsc;
+use lumia_client::futures_util::StreamExt as _;
 use lumia_client::gateway::{self, GatewayCommand, GatewayEvent};
 use lumia_client::keystore::FileKeystore;
 use lumia_client::sqlite::{DmStatus, SqliteStore};
@@ -34,7 +36,6 @@ use lumia_core::store::Store;
 use lumia_core::sync::Notice;
 use lumia_core::wire;
 use prost::Message as _;
-use tokio::sync::mpsc;
 
 #[derive(Parser, Debug)]
 #[command(name = "lumia-cli", about = "Headless Lumia client")]
@@ -330,8 +331,8 @@ async fn run(cli: Cli) -> Result<(), ClientError> {
                     ..Default::default()
                 })),
             };
-            let (tx, rx) = mpsc::channel(8);
-            let (etx, mut erx) = mpsc::channel(64);
+            let (tx, rx) = mpsc::unbounded();
+            let (etx, mut erx) = mpsc::unbounded();
             let gw = tokio::spawn(gateway::run_forever(
                 api,
                 ctx.store,
@@ -341,10 +342,9 @@ async fn run(cli: Cli) -> Result<(), ClientError> {
                 rx,
                 etx,
             ));
-            tx.send(GatewayCommand::Send(cmd))
-                .await
+            tx.unbounded_send(GatewayCommand::Send(cmd))
                 .map_err(|e| ClientError::Transport(e.to_string()))?;
-            while let Some(ev) = erx.recv().await {
+            while let Some(ev) = erx.next().await {
                 match ev {
                     GatewayEvent::Notice(Notice::Acked { seq, .. }) => {
                         println!("acked at seq {seq}");
@@ -372,8 +372,8 @@ async fn run(cli: Cli) -> Result<(), ClientError> {
         }
         Cmd::Tail { channel_id } => {
             let channel = parse_uuid(&channel_id)?;
-            let (tx, rx) = mpsc::channel(8);
-            let (etx, mut erx) = mpsc::channel(64);
+            let (tx, rx) = mpsc::unbounded();
+            let (etx, mut erx) = mpsc::unbounded();
             let gw = tokio::spawn(gateway::run_forever(
                 api,
                 ctx.store,
@@ -386,7 +386,7 @@ async fn run(cli: Cli) -> Result<(), ClientError> {
             println!("tailing {channel_id}; ctrl-c to stop");
             loop {
                 tokio::select! {
-                    ev = erx.recv() => match ev {
+                    ev = erx.next() => match ev {
                         Some(GatewayEvent::Applied(events)) => {
                             for e in events { print_event(&e); }
                         }
@@ -705,8 +705,8 @@ async fn dm_loop(
     mode: DmMode,
     create: bool,
 ) -> Result<(), ClientError> {
-    let (tx, rx) = mpsc::channel(16);
-    let (etx, mut erx) = mpsc::channel(64);
+    let (tx, rx) = mpsc::unbounded();
+    let (etx, mut erx) = mpsc::unbounded();
     // Subscribe up front only to conversations whose participants this
     // device already knows; the others are subscribed when the account log
     // names them, so their events are never processed before the rosters
@@ -731,7 +731,7 @@ async fn dm_loop(
     let result: Result<(), ClientError> = async {
         loop {
             let ev = tokio::select! {
-                ev = erx.recv() => ev,
+                ev = erx.next() => ev,
                 _ = tokio::signal::ctrl_c() => break Ok(()),
             };
             let Some(ev) = ev else { break Ok(()) };
@@ -791,13 +791,11 @@ async fn dm_loop(
                 match outcome {
                     Outcome::Print(s) => println!("-- {s}"),
                     Outcome::Send(cmd) => tx
-                        .send(GatewayCommand::Send(cmd))
-                        .await
+                        .unbounded_send(GatewayCommand::Send(cmd))
                         .map_err(|e| ClientError::Transport(e.to_string()))?,
                     Outcome::Subscribe(ch) => {
                         println!("-- personal DM {} added", wire::display(&ch));
-                        tx.send(GatewayCommand::Subscribe(ch))
-                            .await
+                        tx.unbounded_send(GatewayCommand::Subscribe(ch))
                             .map_err(|e| ClientError::Transport(e.to_string()))?;
                     }
                     Outcome::Operation {

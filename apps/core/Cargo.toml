@@ -4,6 +4,7 @@ members = [
   "crates/lumia-proto",
   "crates/lumia-core",
   "crates/lumia-client",
+  "crates/lumia-cli",
   "crates/lumia-ffi",
   "crates/lumia-wasm",
 ]
@@ -26,6 +27,8 @@ prost-types = "0.14"
 prost-build = "0.14"
 protox = "0.9"
 thiserror = "2"
+futures-util = { version = "0.3", features = ["async-await", "async-await-macro", "sink"] }
+futures-channel = "0.3"
 uuid = { version = "1", features = ["v7", "v4"] }
 tracing = "0.1"
 

@@ -9,17 +9,21 @@
 
 use std::time::Duration;
 
-use futures_util::{SinkExt, StreamExt};
+use futures_channel::mpsc;
+use futures_util::{FutureExt, SinkExt, StreamExt};
 use lumia_core::proto::{AccountEvent, Command, DisconnectReason, Event};
 use lumia_core::store::{LogKind, OutboxEntry, Store, StoredEvent, StoredMessage};
 use lumia_core::sync::{decode_frame, encode_frame, Cursors, Effect, Notice, Session};
 use lumia_core::wire;
 use prost::Message as _;
-use tokio::sync::mpsc;
-use tokio_tungstenite::tungstenite::{self, Message as WsMessage};
 
 use crate::api::Api;
+use crate::time::sleep;
+use crate::transport::{connect, Frame};
 use crate::ClientError;
+
+/// Heartbeat period; the server disconnects after missing two.
+const HEARTBEAT: Duration = Duration::from_secs(30);
 
 /// First delay after a drop; doubles per attempt up to [`MAX_BACKOFF`].
 const BASE_BACKOFF: Duration = Duration::from_secs(1);
@@ -92,10 +96,11 @@ pub async fn run_forever<S: Store>(
     client_name: &str,
     device_id: Vec<u8>,
     mut channels: Vec<Vec<u8>>,
-    mut commands: mpsc::Receiver<GatewayCommand>,
-    events: mpsc::Sender<GatewayEvent>,
+    mut commands: mpsc::UnboundedReceiver<GatewayCommand>,
+    events: mpsc::UnboundedSender<GatewayEvent>,
 ) -> S {
     let mut attempt = 0u32;
+    let mut stash: Option<GatewayCommand> = None;
     loop {
         let outcome = run(
             &api,
@@ -104,6 +109,7 @@ pub async fn run_forever<S: Store>(
             &device_id,
             &mut channels,
             &mut commands,
+            stash.take(),
             &events,
         )
         .await;
@@ -114,7 +120,7 @@ pub async fn run_forever<S: Store>(
                 disconnect: Some(d),
                 ..
             }) if !retryable(d) => {
-                let _ = events.send(GatewayEvent::Closed(reason)).await;
+                let _ = events.unbounded_send(GatewayEvent::Closed(reason));
                 return store;
             }
             Ok(Exit::Closed {
@@ -129,17 +135,13 @@ pub async fn run_forever<S: Store>(
                 (reason, reconnect_after)
             }
             Err(ClientError::NotSignedIn) => {
-                let _ = events
-                    .send(GatewayEvent::Closed("not signed in".into()))
-                    .await;
+                let _ = events.unbounded_send(GatewayEvent::Closed("not signed in".into()));
                 return store;
             }
             Err(ClientError::Api { code, message, .. })
                 if code == "DEVICE_REVOKED" || code == "SESSION_REVOKED" =>
             {
-                let _ = events
-                    .send(GatewayEvent::Closed(format!("{code}: {message}")))
-                    .await;
+                let _ = events.unbounded_send(GatewayEvent::Closed(format!("{code}: {message}")));
                 return store;
             }
             Err(ClientError::Api { code, message, .. })
@@ -148,29 +150,41 @@ pub async fn run_forever<S: Store>(
                 // The socket's token was refused: rotate before trying again,
                 // and stop if the instance refuses the refresh too.
                 if let Err(e) = api.refresh_now().await {
-                    let _ = events.send(GatewayEvent::Closed(e.to_string())).await;
+                    let _ = events.unbounded_send(GatewayEvent::Closed(e.to_string()));
                     return store;
                 }
                 (format!("{code}: {message}"), Duration::ZERO)
+            }
+            Err(ClientError::Transport(reason)) if cfg!(target_arch = "wasm32") => {
+                // The browser hides the status of a refused upgrade: rotate
+                // the token when one is on hand, then try again.
+                if api.tokens().refresh.is_some() {
+                    let _ = api.refresh_now().await;
+                }
+                (reason, Duration::ZERO)
             }
             Err(e) => (e.to_string(), Duration::ZERO),
         };
         attempt += 1;
         let delay = backoff(attempt).max(wait);
         if events
-            .send(GatewayEvent::Reconnecting {
+            .unbounded_send(GatewayEvent::Reconnecting {
                 attempt,
                 delay,
                 reason,
             })
-            .await
             .is_err()
         {
             return store;
         }
-        tokio::time::sleep(delay).await;
-        if commands.is_closed() {
-            return store;
+        sleep(delay).await;
+        // A connection that never reached the command loop cannot see the
+        // application drop its sender: look before trying again, keeping
+        // any command that arrived meanwhile for the next connection.
+        match commands.try_recv() {
+            Ok(None) => return store,
+            Ok(Some(command)) => stash = Some(command),
+            Err(_) => {}
         }
     }
 }
@@ -191,12 +205,8 @@ pub fn retryable(reason: DisconnectReason) -> bool {
 pub fn backoff(attempt: u32) -> Duration {
     let exp = attempt.saturating_sub(1).min(16);
     let base = BASE_BACKOFF.saturating_mul(1u32 << exp).min(MAX_BACKOFF);
-    let jitter_nanos = u64::from(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.subsec_nanos())
-            .unwrap_or(0),
-    );
+    let jitter_nanos =
+        u64::try_from(crate::time::now_micros().rem_euclid(1_000_000) * 1000).unwrap_or(0);
     let quarter = base.as_nanos() / 4;
     let jitter = u64::try_from(quarter).map_or(0, |q| if q == 0 { 0 } else { jitter_nanos % q });
     base + Duration::from_nanos(jitter)
@@ -209,14 +219,17 @@ pub fn backoff(attempt: u32) -> Duration {
 /// # Errors
 /// On a transport failure before the handshake, an API failure while
 /// carrying out an effect, or a store failure.
+// The arguments are the loop's whole state; a struct would only rename them.
+#[allow(clippy::too_many_arguments)]
 pub async fn run<S: Store>(
     api: &Api,
     store: &mut S,
     client_name: &str,
     device_id: &[u8],
     channels: &mut Vec<Vec<u8>>,
-    commands: &mut mpsc::Receiver<GatewayCommand>,
-    events: &mpsc::Sender<GatewayEvent>,
+    commands: &mut mpsc::UnboundedReceiver<GatewayCommand>,
+    stash: Option<GatewayCommand>,
+    events: &mpsc::UnboundedSender<GatewayEvent>,
 ) -> Result<Exit, ClientError> {
     let stored = store.cursors(LogKind::Channel)?;
     let cursors = Cursors {
@@ -233,33 +246,14 @@ pub async fn run<S: Store>(
         session.subscribe(id.clone(), cursor);
     }
 
-    let (ws, _) = match tokio_tungstenite::connect_async(api.gateway_url()?).await {
-        Ok(ok) => ok,
-        Err(tungstenite::Error::Http(response)) if response.status() == 401 => {
-            return Err(ClientError::Api {
-                code: "UNAUTHENTICATED".into(),
-                message: "gateway refused the access token".into(),
-                status: 401,
-                details: std::collections::HashMap::new(),
-            });
-        }
-        // The socket plug answers 403 for a revoked session or device: the
-        // token is valid but may not come back (identity spec 5).
-        Err(tungstenite::Error::Http(response)) if response.status() == 403 => {
-            return Err(ClientError::Api {
-                code: "DEVICE_REVOKED".into(),
-                message: "gateway refused this device or session".into(),
-                status: 403,
-                details: std::collections::HashMap::new(),
-            });
-        }
-        Err(e) => return Err(e.into()),
-    };
-    let (mut sink, mut stream) = ws.split();
+    let socket = connect(&api.gateway_url()?).await?;
+    let (mut sink, mut stream) = socket.split();
 
     let mut pending = vec![session.hello()];
-    let mut heartbeat = tokio::time::interval(Duration::from_secs(30));
-    heartbeat.tick().await;
+    if let Some(command) = stash {
+        on_command(command, store, &mut session, channels, &mut pending)?;
+    }
+    let mut heartbeat = Box::pin(sleep(HEARTBEAT).fuse());
     let mut nonce = 0u64;
     let mut account_id: Vec<u8> = Vec::new();
     let mut welcomed = false;
@@ -279,8 +273,7 @@ pub async fn run<S: Store>(
         while let Some(effect) = pending.pop() {
             match effect {
                 Effect::Send(frame) => {
-                    sink.send(WsMessage::Binary(encode_frame(&frame).into()))
-                        .await?;
+                    sink.send(encode_frame(&frame)).await?;
                 }
                 Effect::Fetch {
                     channel_id,
@@ -312,12 +305,10 @@ pub async fn run<S: Store>(
                         })
                         .collect();
                     store.apply_snapshot(&channel_id, snap.seq, &messages)?;
-                    let _ = events
-                        .send(GatewayEvent::SnapshotTaken {
-                            channel_id: channel_id.clone(),
-                            seq: snap.seq,
-                        })
-                        .await;
+                    let _ = events.unbounded_send(GatewayEvent::SnapshotTaken {
+                        channel_id: channel_id.clone(),
+                        seq: snap.seq,
+                    });
                     pending.extend(session.snapshot_applied(&channel_id, snap.seq));
                 }
                 Effect::AccountSnapshot => {
@@ -337,7 +328,7 @@ pub async fn run<S: Store>(
                         })
                         .collect();
                     store.apply(LogKind::Channel, &channel_id, &stored)?;
-                    let _ = events.send(GatewayEvent::Applied(applied)).await;
+                    let _ = events.unbounded_send(GatewayEvent::Applied(applied));
                 }
                 Effect::ApplyAccount { events: applied } => {
                     let stored: Vec<StoredEvent> = applied
@@ -348,7 +339,7 @@ pub async fn run<S: Store>(
                         })
                         .collect();
                     store.apply(LogKind::Account, &account_id, &stored)?;
-                    let _ = events.send(GatewayEvent::AccountApplied(applied)).await;
+                    let _ = events.unbounded_send(GatewayEvent::AccountApplied(applied));
                 }
                 Effect::DiscardAll { generation } => {
                     store.discard_all()?;
@@ -376,57 +367,73 @@ pub async fn run<S: Store>(
                         }
                         _ => {}
                     }
-                    let _ = events.send(GatewayEvent::Notice(notice)).await;
+                    let _ = events.unbounded_send(GatewayEvent::Notice(notice));
                 }
             }
         }
 
-        tokio::select! {
-            message = stream.next() => {
+        futures_util::select! {
+            message = stream.next().fuse() => {
                 match message {
-                    Some(Ok(WsMessage::Binary(bytes))) => {
+                    Some(Ok(Frame::Binary(bytes))) => {
                         let frame = decode_frame(&bytes)?;
                         pending.extend(session.handle(frame));
                     }
-                    Some(Ok(WsMessage::Close(frame))) => {
-                        return Ok(closed(format!("{frame:?}"), &disconnect, welcomed));
+                    Some(Ok(Frame::Close(reason))) => {
+                        return Ok(closed(reason, &disconnect, welcomed));
                     }
-                    Some(Ok(_)) => {}
+                    Some(Ok(Frame::Other)) => {}
                     Some(Err(e)) => return Ok(closed(e.to_string(), &disconnect, welcomed)),
                     None => return Ok(closed("eof".into(), &disconnect, welcomed)),
                 }
             }
-            command = commands.recv() => {
+            command = commands.next().fuse() => {
                 match command {
-                    Some(GatewayCommand::Send(command)) => {
-                        store.outbox_push(&OutboxEntry {
-                            command_id: command.command_id.clone(),
-                            channel_id: command.channel_id.clone(),
-                            bytes: command.encode_to_vec(),
-                        })?;
-                        pending.push(session.command(command));
-                    }
-                    Some(GatewayCommand::Subscribe(channel_id)) => {
-                        let cursor = store
-                            .cursors(LogKind::Channel)?
-                            .into_iter()
-                            .find(|(id, _)| *id == channel_id)
-                            .map_or(0, |(_, s)| s);
-                        if !channels.contains(&channel_id) {
-                            channels.push(channel_id.clone());
-                        }
-                        pending.extend(session.subscribe(channel_id, cursor));
-                    }
-                    Some(GatewayCommand::Foreground) => pending.push(session.high_water_mark()),
+                    Some(command) => on_command(command, store, &mut session, channels, &mut pending)?,
                     None => return Ok(Exit::Done),
                 }
             }
-            _ = heartbeat.tick() => {
+            () = heartbeat => {
                 nonce += 1;
                 pending.push(session.heartbeat(nonce));
+                heartbeat = Box::pin(sleep(HEARTBEAT).fuse());
             }
         }
     }
+}
+
+/// Carries out one application command: the outbox entry and the frame,
+/// a subscription from the store's cursor, or a head check.
+fn on_command<S: Store>(
+    command: GatewayCommand,
+    store: &mut S,
+    session: &mut Session,
+    channels: &mut Vec<Vec<u8>>,
+    pending: &mut Vec<Effect>,
+) -> Result<(), ClientError> {
+    match command {
+        GatewayCommand::Send(command) => {
+            store.outbox_push(&OutboxEntry {
+                command_id: command.command_id.clone(),
+                channel_id: command.channel_id.clone(),
+                bytes: command.encode_to_vec(),
+            })?;
+            pending.push(session.command(command));
+        }
+        GatewayCommand::Subscribe(channel_id) => {
+            let cursor = store
+                .cursors(LogKind::Channel)?
+                .into_iter()
+                .find(|(id, _)| *id == channel_id)
+                .map_or(0, |(_, s)| s);
+            if !channels.contains(&channel_id) {
+                channels.push(channel_id.clone());
+            }
+            pending.extend(session.subscribe(channel_id, cursor));
+        }
+        GatewayCommand::Foreground => pending.push(session.high_water_mark()),
+    }
+    Ok(())
 }
 
 #[cfg(test)]

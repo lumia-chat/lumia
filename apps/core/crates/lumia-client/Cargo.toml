@@ -1,16 +1,12 @@
 [package]
 name = "lumia-client"
-description = "Native transport and store for the Lumia core, plus the headless lumia-cli"
+description = "The Lumia client: transport, SQLite store, identity flows and the personal-DM engine, native and wasm32"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
-
-[[bin]]
-name = "lumia-cli"
-path = "src/main.rs"
 
 [dependencies]
 lumia-core.workspace = true
@@ -20,18 +16,35 @@ prost-types.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
 tracing.workspace = true
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "signal"] }
-tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
-futures-util = "0.3"
-reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2"] }
-rusqlite = { version = "0.41", features = ["bundled"] }
-clap = { version = "4", features = ["derive"] }
-directories = "6"
+futures-util.workspace = true
+futures-channel.workspace = true
 url = "2"
 base64 = "0.22"
 hex = "0.4"
 ed25519-dalek = "3"
+
+# Native: tokio for timers, tungstenite for the socket, bundled SQLite.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
+
+# Web: the browser's fetch and WebSocket, gloo timers, SQLite compiled for
+# wasm with the OPFS pool VFS (docs/spikes/2026-11-02-web-store.md).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+reqwest = { version = "0.13", default-features = false }
+rusqlite = { version = "0.41", default-features = false, features = ["ffi-sqlite-wasm-rs"] }
+sqlite-wasm-rs = { version = "0.6", features = ["wasm-bindgen"] }
+sqlite-wasm-vfs = { version = "0.3", features = ["sahpool"] }
+gloo-net = { version = "0.7", default-features = false, features = ["websocket"] }
+gloo-timers = { version = "0.4", features = ["futures"] }
+js-sys = "0.3"
+wasm-bindgen = "0.2.130"
+wasm-bindgen-futures = "0.4"
+getrandom02 = { package = "getrandom", version = "0.2", features = ["js"] }
+getrandom03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
+getrandom04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
 
 [lints]
 workspace = true
