@@ -42,11 +42,14 @@ pub type BoxSocket = Box<dyn Socket>;
 /// Opens the gateway socket at `url`.
 ///
 /// # Errors
-/// Natively, a refused upgrade is reported with its status as an API error
-/// (`UNAUTHENTICATED` for 401, `DEVICE_REVOKED` for 403) so the loop can
-/// refresh or stop; the browser does not expose the status of a failed
-/// upgrade, so there every failure is a transport error and the loop
-/// refreshes the token before its next attempt.
+/// Natively, a refused upgrade (401 or 403) is reported as the API error
+/// `UNAUTHENTICATED` so the loop refreshes the token and tries again.
+/// Phoenix answers 403 for every refused connect, so at this point an
+/// expired access token is indistinguishable from a revoked session or
+/// device; the refresh's answer (`SESSION_REVOKED`) is what tells them
+/// apart, and that is where the loop stops. The browser does not expose
+/// the status of a failed upgrade at all, so there every failure is a
+/// transport error and the loop refreshes before its next attempt.
 pub async fn connect(url: &str) -> Result<BoxSocket, ClientError> {
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -58,16 +61,13 @@ pub async fn connect(url: &str) -> Result<BoxSocket, ClientError> {
     }
 }
 
+// 401 and 403 alike: the status cannot say whether the token merely
+// expired, so the loop refreshes and lets the refresh's answer decide.
 #[cfg(not(target_arch = "wasm32"))]
 fn refused(status: u16) -> ClientError {
-    let (code, message) = if status == 403 {
-        ("DEVICE_REVOKED", "gateway refused this device or session")
-    } else {
-        ("UNAUTHENTICATED", "gateway refused the access token")
-    };
     ClientError::Api {
-        code: code.into(),
-        message: message.into(),
+        code: "UNAUTHENTICATED".into(),
+        message: "gateway refused the access token (expired, or the session is revoked)".into(),
         status,
         details: std::collections::HashMap::new(),
     }

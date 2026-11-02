@@ -15,7 +15,8 @@ This is the Lumia client core: the Rust that every client shares (architecture s
 - No `unwrap` or `expect` outside tests (workspace lints deny them). Errors are `thiserror` enums with a variant per cause a caller can act on.
 - `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo test --workspace` must pass; CI runs them plus a wasm32 check of `lumia-client` and `lumia-wasm`.
 - Wire scalars follow `docs/protocol.md` section 2: UUIDs are 16 bytes, timestamps are `prost_types::Timestamp`; use `lumia_core::wire` rather than converting inline.
-- The store applies events and the cursor in one transaction, and refuses non-contiguous events. Do not add a path that writes one without the other.
+- The store applies events and the cursor in one transaction, and refuses non-contiguous events. Do not add a path that writes one without the other. A snapshot path (`apply_snapshot`, `apply_account_snapshot`) is the one place a cursor moves without events, and it drops the local events it supersedes.
+- A transport carries out the effects a `Session` returns in the order it returns them (a FIFO queue, never a stack). A fetched page is several `Apply` effects the store accepts only in sequence, and `Welcome` asks for the account log before the channels.
 - A client-minted id is UUIDv7 from `wire::new_id()`; the server mints everything else.
 - Secrets go through the `Keystore` trait. The CLI's file keystore is plaintext at mode 0600 and is for development only; say so wherever it is used.
 - Pinned toolchain in `rust-toolchain.toml`; no nightly features.

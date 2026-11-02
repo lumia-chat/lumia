@@ -335,19 +335,19 @@ impl SqliteStore {
             .map_err(backend)?;
         rows.collect::<Result<_, _>>().map_err(backend)
     }
+}
 
-    fn cursor_of(&self, kind: LogKind, log_id: &[u8]) -> Result<u64, StoreError> {
-        let seq: Option<i64> = self
-            .conn
-            .query_row(
-                "SELECT seq FROM cursors WHERE kind = ?1 AND log_id = ?2",
-                params![kind_code(kind), log_id],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(backend)?;
-        Ok(seq.unwrap_or(0).max(0).unsigned_abs())
-    }
+/// The cursor of a log on `conn`, which may be a transaction.
+fn cursor_in(conn: &Connection, kind: LogKind, log_id: &[u8]) -> Result<u64, StoreError> {
+    let seq: Option<i64> = conn
+        .query_row(
+            "SELECT seq FROM cursors WHERE kind = ?1 AND log_id = ?2",
+            params![kind_code(kind), log_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(backend)?;
+    Ok(seq.unwrap_or(0).max(0).unsigned_abs())
 }
 
 impl Store for SqliteStore {
@@ -375,18 +375,20 @@ impl Store for SqliteStore {
         let Some(first) = events.first() else {
             return Ok(());
         };
-        let cursor = self.cursor_of(kind, log_id)?;
+        // The cursor is read inside the write transaction: another
+        // connection to the same file (the DM engine's) cannot move it
+        // between the check and the write.
+        let tx = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(backend)?;
+        let cursor = cursor_in(&tx, kind, log_id)?;
         if first.seq != cursor + 1 {
             return Err(StoreError::NotContiguous {
                 cursor,
                 first: first.seq,
             });
         }
-
-        let tx = self
-            .conn
-            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-            .map_err(backend)?;
         let mut last = cursor;
         for ev in events {
             if ev.seq != last + 1 {
@@ -446,9 +448,35 @@ impl Store for SqliteStore {
         tx.commit().map_err(backend)
     }
 
+    fn apply_account_snapshot(&mut self, account_id: &[u8], seq: u64) -> Result<(), StoreError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(backend)?;
+        tx.execute(
+            "DELETE FROM events WHERE kind = 1 AND log_id = ?1",
+            params![account_id],
+        )
+        .map_err(backend)?;
+        tx.execute(
+            "INSERT INTO cursors (kind, log_id, seq) VALUES (1, ?1, ?2)
+             ON CONFLICT (kind, log_id) DO UPDATE SET seq = excluded.seq",
+            params![account_id, to_i64(seq)],
+        )
+        .map_err(backend)?;
+        tx.commit().map_err(backend)
+    }
+
+    // The DM engine's per-conversation progress (`dm:processed:<channel>`)
+    // is a position in a channel log; with a new generation those positions
+    // restart, so it goes with the cursors. Group state, decrypted rows and
+    // history watermarks stay: the conversation itself did not change.
     fn discard_all(&mut self) -> Result<(), StoreError> {
         self.conn
-            .execute_batch("DELETE FROM cursors; DELETE FROM events; DELETE FROM messages;")
+            .execute_batch(
+                "DELETE FROM cursors; DELETE FROM events; DELETE FROM messages;
+                 DELETE FROM meta WHERE key LIKE 'dm:processed:%';",
+            )
             .map_err(backend)
     }
 
@@ -875,6 +903,62 @@ mod tests {
         });
         ok.unwrap();
         assert_eq!(store.list("l", b"x").unwrap(), vec![b"two".to_vec()]);
+    }
+
+    #[test]
+    fn account_snapshot_moves_the_cursor_so_the_next_live_event_is_contiguous() {
+        let mut store = SqliteStore::in_memory().unwrap();
+        let account = vec![4u8; 16];
+        let ev = |seq: u64| StoredEvent {
+            seq,
+            bytes: vec![seq as u8],
+        };
+        store.apply(LogKind::Account, &account, &[ev(1)]).unwrap();
+
+        store.apply_account_snapshot(&account, 1500).unwrap();
+        assert_eq!(
+            store.cursors(LogKind::Account).unwrap(),
+            vec![(account.clone(), 1500)]
+        );
+        assert!(store.account_events().unwrap().is_empty());
+
+        // The first live event after the snapshot applies; a stale one does not.
+        assert!(matches!(
+            store.apply(LogKind::Account, &account, &[ev(2)]),
+            Err(StoreError::NotContiguous { cursor: 1500, .. })
+        ));
+        store
+            .apply(LogKind::Account, &account, &[ev(1501)])
+            .unwrap();
+        assert_eq!(
+            store.cursors(LogKind::Account).unwrap(),
+            vec![(account, 1501)]
+        );
+    }
+
+    #[test]
+    fn discard_all_forgets_the_dm_engine_progress_but_not_its_group_state() {
+        let mut store = SqliteStore::in_memory().unwrap();
+        store.set_meta("dm:processed:abcd", "7").unwrap();
+        store.set_meta("dm:joined_epoch:abcd", "2").unwrap();
+        store.set_meta("history:backed:abcd", "7").unwrap();
+        store.set("GroupState", b"g", b"state").unwrap();
+
+        store.discard_all().unwrap();
+
+        assert_eq!(store.meta_get("dm:processed:abcd").unwrap(), None);
+        assert_eq!(
+            store.meta_get("dm:joined_epoch:abcd").unwrap(),
+            Some("2".into())
+        );
+        assert_eq!(
+            store.meta_get("history:backed:abcd").unwrap(),
+            Some("7".into())
+        );
+        assert_eq!(
+            MlsKv::get(&store, "GroupState", b"g").unwrap(),
+            Some(b"state".to_vec())
+        );
     }
 
     #[test]

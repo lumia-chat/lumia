@@ -6,7 +6,13 @@
 //! and stops only when the application drops its command sender or the
 //! server says not to come back (`SESSION_REVOKED`, `DEVICE_REVOKED`,
 //! `PROTOCOL_ERROR`, or a refresh that the instance refuses).
+//!
+//! Effects are carried out in the order the session returns them: a
+//! fetched page yields one `Apply` per contiguous run of events and the
+//! store refuses them out of order, and `Welcome` asks for the account log
+//! before the channels (protocol section 6.3).
 
+use std::collections::VecDeque;
 use std::time::Duration;
 
 use futures_channel::mpsc;
@@ -22,8 +28,9 @@ use crate::time::sleep;
 use crate::transport::{connect, Frame};
 use crate::ClientError;
 
-/// Heartbeat period; the server disconnects after missing two.
-const HEARTBEAT: Duration = Duration::from_secs(30);
+/// Heartbeat period until `Welcome` states one; the server disconnects
+/// after missing two.
+const DEFAULT_HEARTBEAT: Duration = Duration::from_secs(30);
 
 /// First delay after a drop; doubles per attempt up to [`MAX_BACKOFF`].
 const BASE_BACKOFF: Duration = Duration::from_secs(1);
@@ -147,8 +154,11 @@ pub async fn run_forever<S: Store>(
             Err(ClientError::Api { code, message, .. })
                 if code == "UNAUTHENTICATED" || code == "TOKEN_EXPIRED" =>
             {
-                // The socket's token was refused: rotate before trying again,
-                // and stop if the instance refuses the refresh too.
+                // The socket's token was refused. The upgrade answers the
+                // same status for an expired token and a revoked session
+                // (see `transport::connect`), so rotate before trying again
+                // and stop only if the instance refuses the refresh too:
+                // that answer is what tells a revocation apart.
                 if let Err(e) = api.refresh_now().await {
                     let _ = events.unbounded_send(GatewayEvent::Closed(e.to_string()));
                     return store;
@@ -252,11 +262,13 @@ pub async fn run<S: Store>(
     let socket = connect(&api.gateway_url()?).await?;
     let (mut sink, mut stream) = socket.split();
 
-    let mut pending = vec![session.hello()];
+    // A queue, not a stack: effects run in the order the session returns them.
+    let mut pending: VecDeque<Effect> = VecDeque::from([session.hello()]);
     if let Some(command) = stash {
         on_command(command, store, &mut session, channels, &mut pending)?;
     }
-    let mut heartbeat = Box::pin(sleep(HEARTBEAT).fuse());
+    let mut heartbeat_period = DEFAULT_HEARTBEAT;
+    let mut heartbeat = Box::pin(sleep(heartbeat_period).fuse());
     let mut nonce = 0u64;
     let mut account_id: Vec<u8> = Vec::new();
     let mut welcomed = false;
@@ -272,8 +284,8 @@ pub async fn run<S: Store>(
     };
 
     loop {
-        // Carry out effects, which may produce more effects.
-        while let Some(effect) = pending.pop() {
+        // Carry out effects in order; each may queue more behind it.
+        while let Some(effect) = pending.pop_front() {
             match effect {
                 Effect::Send(frame) => {
                     sink.send(encode_frame(&frame)).await?;
@@ -316,7 +328,10 @@ pub async fn run<S: Store>(
                 }
                 Effect::AccountSnapshot => {
                     let snap = api.account_snapshot().await?;
-                    store.apply(LogKind::Account, &account_id, &[])?;
+                    // The store's account cursor must move with the
+                    // session's, or the next live account event is a gap
+                    // the store refuses.
+                    store.apply_account_snapshot(&account_id, snap.seq)?;
                     pending.extend(session.account_snapshot_applied(snap.seq));
                 }
                 Effect::Apply {
@@ -354,14 +369,25 @@ pub async fn run<S: Store>(
                             welcomed = true;
                             account_id.clone_from(&welcome.account_id);
                             store.set_generation(welcome.recovery_generation)?;
+                            if welcome.heartbeat_interval_seconds > 0 {
+                                heartbeat_period = Duration::from_secs(u64::from(
+                                    welcome.heartbeat_interval_seconds,
+                                ));
+                                heartbeat = Box::pin(sleep(heartbeat_period).fuse());
+                            }
                             // Retry anything still in the outbox, verbatim.
                             for entry in store.outbox()? {
                                 if let Ok(command) = Command::decode(entry.bytes.as_slice()) {
-                                    pending.push(session.command(command));
+                                    pending.push_back(session.command(command));
                                 }
                             }
                         }
                         Notice::Acked { command_id, .. } => store.outbox_remove(command_id)?,
+                        // A command gets exactly one Ack or Error (protocol
+                        // 6.5); a refused one is not retried.
+                        Notice::Error(error) if !error.command_id.is_empty() => {
+                            store.outbox_remove(&error.command_id)?;
+                        }
                         Notice::Disconnected(d) => {
                             disconnect = Some((
                                 DisconnectReason::try_from(d.reason).unwrap_or_default(),
@@ -398,8 +424,8 @@ pub async fn run<S: Store>(
             }
             () = heartbeat => {
                 nonce += 1;
-                pending.push(session.heartbeat(nonce));
-                heartbeat = Box::pin(sleep(HEARTBEAT).fuse());
+                pending.push_back(session.heartbeat(nonce));
+                heartbeat = Box::pin(sleep(heartbeat_period).fuse());
             }
         }
     }
@@ -412,7 +438,7 @@ fn on_command<S: Store>(
     store: &mut S,
     session: &mut Session,
     channels: &mut Vec<Vec<u8>>,
-    pending: &mut Vec<Effect>,
+    pending: &mut VecDeque<Effect>,
 ) -> Result<(), ClientError> {
     match command {
         GatewayCommand::Send(command) => {
@@ -421,7 +447,7 @@ fn on_command<S: Store>(
                 channel_id: command.channel_id.clone(),
                 bytes: command.encode_to_vec(),
             })?;
-            pending.push(session.command(command));
+            pending.push_back(session.command(command));
         }
         GatewayCommand::Subscribe(channel_id) => {
             let cursor = store
@@ -434,7 +460,7 @@ fn on_command<S: Store>(
             }
             pending.extend(session.subscribe(channel_id, cursor));
         }
-        GatewayCommand::Foreground => pending.push(session.high_water_mark()),
+        GatewayCommand::Foreground => pending.push_back(session.high_water_mark()),
     }
     Ok(())
 }
@@ -464,5 +490,73 @@ mod tests {
         assert!(!retryable(DisconnectReason::DisconnectSessionRevoked));
         assert!(!retryable(DisconnectReason::DisconnectDeviceRevoked));
         assert!(!retryable(DisconnectReason::DisconnectProtocolError));
+    }
+
+    /// The loop must carry out a batch of effects in the order the session
+    /// returned them: a fetched page is several `Apply` effects that the
+    /// store accepts only in sequence, and `Welcome` resumes the account
+    /// log before subscribing channels.
+    #[test]
+    fn effects_are_queued_in_the_order_the_session_returns_them() {
+        use lumia_core::proto::{
+            client_frame, server_frame, AccountResumeResult, ChannelSubscribeResult, ClientFrame,
+            ServerFrame, SubscribeResult, SubscribeStatus, Welcome,
+        };
+        let chan = vec![1u8; 16];
+        let mut session = Session::new(
+            "t",
+            vec![9; 16],
+            Cursors {
+                channels: vec![(chan.clone(), 1)],
+                account: 0,
+                generation: Some(1),
+            },
+        );
+        let mut pending: VecDeque<Effect> = VecDeque::new();
+        pending.extend(session.handle(ServerFrame {
+            frame: Some(server_frame::Frame::Welcome(Welcome {
+                recovery_generation: 1,
+                ..Default::default()
+            })),
+        }));
+        let sends: Vec<&client_frame::Frame> = pending
+            .iter()
+            .filter_map(|e| match e {
+                Effect::Send(ClientFrame { frame: Some(f) }) => Some(f),
+                _ => None,
+            })
+            .collect();
+        assert!(matches!(sends[0], client_frame::Frame::ResumeAccount(_)));
+        assert!(matches!(sends[1], client_frame::Frame::Subscribe(_)));
+        pending.clear();
+
+        session.handle(ServerFrame {
+            frame: Some(server_frame::Frame::SubscribeResult(SubscribeResult {
+                results: vec![ChannelSubscribeResult {
+                    channel_id: chan.clone(),
+                    status: SubscribeStatus::Resumed as i32,
+                    ..Default::default()
+                }],
+            })),
+        });
+        session.handle(ServerFrame {
+            frame: Some(server_frame::Frame::AccountResumeResult(
+                AccountResumeResult {
+                    status: SubscribeStatus::Resumed as i32,
+                    ..Default::default()
+                },
+            )),
+        });
+        let event = |seq| Event {
+            channel_id: chan.clone(),
+            seq,
+            ..Default::default()
+        };
+        pending.extend(session.fetched(&chan, vec![event(2), event(3), event(4)]));
+        let mut seqs = Vec::new();
+        while let Some(Effect::Apply { events, .. }) = pending.pop_front() {
+            seqs.extend(events.iter().map(|e| e.seq));
+        }
+        assert_eq!(seqs, vec![2, 3, 4]);
     }
 }

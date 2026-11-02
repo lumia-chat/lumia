@@ -79,7 +79,16 @@ pub trait Store {
         messages: &[StoredMessage],
     ) -> Result<(), StoreError>;
 
+    /// Replaces the account log's state from a snapshot: drops local account
+    /// events and sets the account cursor to `seq`. The snapshot's content
+    /// (servers, memberships, channels) is the application's to keep; the
+    /// store only has to agree with the session on where the log stands,
+    /// or the next live account event is a gap it refuses.
+    fn apply_account_snapshot(&mut self, account_id: &[u8], seq: u64) -> Result<(), StoreError>;
+
     /// Drops every cursor and every event (recovery generation changed).
+    /// Implementations also drop any per-log progress they keep elsewhere,
+    /// since sequence numbers restart with the new generation.
     fn discard_all(&mut self) -> Result<(), StoreError>;
 
     /// The recovery generation last seen for this instance.

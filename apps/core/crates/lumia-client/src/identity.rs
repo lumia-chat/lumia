@@ -62,6 +62,14 @@ impl<S: Store, K: Keystore> Device<'_, S, K> {
     /// # Errors
     /// On keystore, store, or randomness failure.
     pub fn create(&mut self, label: &str) -> Result<Created, ClientError> {
+        if self.store.meta_get("roster")?.is_some() {
+            return Err(ClientError::State(
+                "this device already has an identity; its roster and backup key would be \
+                 replaced. Recover the other identity from its phrase on a fresh data \
+                 directory instead"
+                    .into(),
+            ));
+        }
         let phrase = Phrase::generate()?;
         let derived = phrase.derive();
         let identity_id = derived.identity_id();
@@ -669,4 +677,36 @@ pub fn now_nanos() -> i128 {
 
 fn now() -> prost_types::Timestamp {
     crate::time::now_ts()
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use crate::keystore::FileKeystore;
+    use crate::sqlite::SqliteStore;
+
+    #[test]
+    fn a_device_with_an_identity_refuses_to_create_another() {
+        let dir =
+            std::env::temp_dir().join(format!("lumia-identity-{}", wire::display(&wire::new_id())));
+        let mut store = SqliteStore::in_memory().unwrap();
+        let mut keystore = FileKeystore::open(&dir).unwrap();
+        let mut device = Device {
+            store: &mut store,
+            keystore: &mut keystore,
+            device_id: wire::new_id(),
+        };
+        let first = device.create("laptop").unwrap();
+        let backup_key = device.keystore.get("backup_key").unwrap();
+
+        let err = device.create("again").unwrap_err();
+        assert!(matches!(err, ClientError::State(_)));
+        // Nothing moved.
+        assert_eq!(
+            hex::encode(device.roster().unwrap().identity_id),
+            first.identity_id
+        );
+        assert_eq!(device.keystore.get("backup_key").unwrap(), backup_key);
+    }
 }

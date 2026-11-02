@@ -444,7 +444,10 @@ impl Api {
             .await
     }
 
-    /// `GET /channels/{id}/events?after_seq=&before_seq=`.
+    /// `GET /channels/{id}/events?after_seq=&limit=`: events with
+    /// `seq > after`, and when `before > 0` only those below it. The
+    /// instance pages by `after_seq` and `limit` (at most 200), so the
+    /// upper bound becomes the limit rather than a parameter.
     ///
     /// # Errors
     /// On transport failure or an API error.
@@ -454,8 +457,9 @@ impl Api {
         after: u64,
         before: u64,
     ) -> Result<ListEventsResponse, ClientError> {
+        let limit = page_limit(after, before);
         self.get(&format!(
-            "/api/v1/channels/{channel_id}/events?after_seq={after}&before_seq={before}&limit=200"
+            "/api/v1/channels/{channel_id}/events?after_seq={after}&limit={limit}"
         ))
         .await
     }
@@ -856,6 +860,20 @@ fn decoded<Resp: Message + Default>(status: StatusCode, bytes: &[u8]) -> Result<
     }
 }
 
+/// The instance's page size for event listings.
+const PAGE: u64 = 200;
+
+/// How many events to ask for after `after`: a full page, or just enough
+/// to reach `before` (exclusive) when the caller already holds what lies
+/// beyond it. Never zero, so a request always makes progress.
+fn page_limit(after: u64, before: u64) -> u64 {
+    if before > after + 1 {
+        (before - after - 1).min(PAGE)
+    } else {
+        PAGE
+    }
+}
+
 fn api_error(status: StatusCode, bytes: &[u8]) -> ClientError {
     let error = ApiError::decode(bytes).unwrap_or_default();
     let code = ErrorCode::try_from(error.code)
@@ -866,5 +884,23 @@ fn api_error(status: StatusCode, bytes: &[u8]) -> ClientError {
         message: error.message,
         status: status.as_u16(),
         details: error.details.into_iter().collect::<HashMap<_, _>>(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::page_limit;
+
+    #[test]
+    fn the_upper_bound_becomes_the_limit() {
+        // No bound: a full page.
+        assert_eq!(page_limit(10, 0), 200);
+        // Events 11..=14 are wanted: four of them.
+        assert_eq!(page_limit(10, 15), 4);
+        // A bound wider than a page is still one page.
+        assert_eq!(page_limit(10, 1000), 200);
+        // A bound that leaves nothing to fetch still asks for something.
+        assert_eq!(page_limit(10, 11), 200);
+        assert_eq!(page_limit(10, 10), 200);
     }
 }

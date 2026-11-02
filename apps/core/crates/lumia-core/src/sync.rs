@@ -286,26 +286,59 @@ impl Session {
         }
     }
 
-    /// The transport fetched channel events for a [`Effect::Fetch`].
+    /// The transport fetched channel events for a [`Effect::Fetch`]. A page
+    /// that made progress but left buffered events beyond a gap (the server
+    /// pages at 200) is followed by another fetch; an empty page is not, so
+    /// a server with nothing to give cannot be asked in a loop.
     pub fn fetched(&mut self, channel_id: &[u8], events: Vec<Event>) -> Vec<Effect> {
         let mut effects = Vec::new();
         if let Some(sync) = self.channels.get_mut(channel_id) {
             sync.state = LogState::Live;
         }
+        let progressed = !events.is_empty();
         for event in events {
             effects.extend(self.on_event(event));
+        }
+        if progressed {
+            effects.extend(self.refetch_gap(channel_id));
         }
         effects
     }
 
     /// The transport fetched account events for a [`Effect::FetchAccount`].
+    /// Pages the same way as [`Session::fetched`].
     pub fn account_fetched(&mut self, events: Vec<AccountEvent>) -> Vec<Effect> {
         self.account.state = LogState::Live;
+        let progressed = !events.is_empty();
         let mut effects = Vec::new();
         for event in events {
             effects.extend(self.on_account_event(event));
         }
+        if progressed && !self.account.buffer.is_empty() && self.account.state == LogState::Live {
+            self.account.state = LogState::Fetching;
+            effects.push(Effect::FetchAccount {
+                after: self.account.cursor,
+            });
+        }
         effects
+    }
+
+    // Buffered events still sit beyond a gap after a page: fetch the next one.
+    fn refetch_gap(&mut self, channel_id: &[u8]) -> Vec<Effect> {
+        let Some(sync) = self.channels.get_mut(channel_id) else {
+            return Vec::new();
+        };
+        match sync.buffer.keys().next().copied() {
+            Some(first) if sync.state == LogState::Live => {
+                sync.state = LogState::Fetching;
+                vec![Effect::Fetch {
+                    channel_id: channel_id.to_vec(),
+                    after: sync.cursor,
+                    before: first,
+                }]
+            }
+            _ => Vec::new(),
+        }
     }
 
     /// The transport stored a channel snapshot taken at `seq`.
@@ -792,6 +825,75 @@ mod tests {
         let effects = s.fetched(&chan(), vec![event(&chan(), 2), event(&chan(), 3)]);
         assert_eq!(applied(&effects), vec![2, 3, 4, 5]);
         assert_eq!(s.cursor(&chan()), Some(5));
+    }
+
+    #[test]
+    fn a_short_page_is_followed_by_another_fetch_until_the_gap_closes() {
+        let mut s = live_session(0);
+        // A live event far ahead opens a gap of 5.
+        assert_eq!(
+            s.handle(event_frame(&chan(), 6)),
+            vec![Effect::Fetch {
+                channel_id: chan(),
+                after: 0,
+                before: 6
+            }]
+        );
+        // The server pages: two events come back, the gap is still open.
+        let effects = s.fetched(&chan(), vec![event(&chan(), 1), event(&chan(), 2)]);
+        assert_eq!(applied(&effects), vec![1, 2]);
+        assert_eq!(
+            effects.last(),
+            Some(&Effect::Fetch {
+                channel_id: chan(),
+                after: 2,
+                before: 6
+            })
+        );
+        // The rest closes it and drains the buffered event; no further fetch.
+        let effects = s.fetched(
+            &chan(),
+            vec![event(&chan(), 3), event(&chan(), 4), event(&chan(), 5)],
+        );
+        assert_eq!(applied(&effects), vec![3, 4, 5, 6]);
+        assert!(!effects.iter().any(|e| matches!(e, Effect::Fetch { .. })));
+        assert_eq!(s.cursor(&chan()), Some(6));
+    }
+
+    #[test]
+    fn an_empty_page_does_not_fetch_again() {
+        let mut s = live_session(0);
+        s.handle(event_frame(&chan(), 6));
+        assert!(s.fetched(&chan(), vec![]).is_empty());
+        // The next live event reopens the question.
+        assert_eq!(
+            s.handle(event_frame(&chan(), 7)),
+            vec![Effect::Fetch {
+                channel_id: chan(),
+                after: 0,
+                before: 6
+            }]
+        );
+    }
+
+    #[test]
+    fn a_short_account_page_is_followed_by_another_fetch() {
+        let mut s = live_session(0);
+        let account_event = |seq| AccountEvent {
+            seq,
+            ..Default::default()
+        };
+        let gap = ServerFrame {
+            frame: Some(server_frame::Frame::AccountEvent(account_event(4))),
+        };
+        assert_eq!(s.handle(gap), vec![Effect::FetchAccount { after: 0 }]);
+        let effects = s.account_fetched(vec![account_event(1)]);
+        assert_eq!(effects.last(), Some(&Effect::FetchAccount { after: 1 }));
+        let effects = s.account_fetched(vec![account_event(2), account_event(3)]);
+        assert!(!effects
+            .iter()
+            .any(|e| matches!(e, Effect::FetchAccount { .. })));
+        assert_eq!(s.account_cursor(), 4);
     }
 
     #[test]
