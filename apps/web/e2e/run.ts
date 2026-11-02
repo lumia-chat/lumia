@@ -292,8 +292,13 @@ try {
       ["link", () => link(which, identityDir)],
       ["dm", () => dm(which, aDir, bAccount, aHandle)],
     ] as const) {
+      // A heartbeat while the step runs (CI shows a step's log only once it
+      // ends) and a hard bound, so a hang names itself instead of the job
+      // timing out.
+      const started = Date.now();
+      const beat = setInterval(() => console.log(`  [${which}] ${name}: ${Math.round((Date.now() - started) / 1000)} s, at ${live.page?.url() ?? "no page"}`), 30_000);
       try {
-        await step();
+        await Promise.race([step(), Bun.sleep(240_000).then(() => Promise.reject(new Error(`${name} did not finish within 4 minutes`)))]);
       } catch (e) {
         failed++;
         console.log(`  ${which}: ${name} FAILED: ${e instanceof Error ? e.message.split("\n")[0] : String(e)}`);
@@ -306,6 +311,8 @@ try {
         } catch {
           /* the page may be gone */
         }
+      } finally {
+        clearInterval(beat);
       }
     }
   }
