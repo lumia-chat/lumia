@@ -8,7 +8,7 @@ Lumia is a chat app: servers with public and private channels, direct messages i
 
 ## 1. Principles and hard rules
 
-Priorities, in order: performance, privacy, security. When they conflict with convenience, they win.
+Priorities, in order: security, privacy, performance. When they conflict with convenience, they win.
 
 Hard rules. Any future decision that violates one of these must amend this section first.
 
