@@ -139,21 +139,90 @@ impl<S: Store, K: Keystore> Device<'_, S, K> {
     }
 
     /// Creates an account on the instance by identity proof (spec 4.1 step 5).
+    /// A stale roster is reconciled once (spec 5, "older roster").
     ///
     /// # Errors
-    /// On API failure.
-    pub async fn create_account(&self, api: &Api, handle: &str) -> Result<TokenPair, ClientError> {
+    /// On API failure, or [`ClientError::DeviceRevoked`] after adopting a
+    /// held roster that revokes this device.
+    pub async fn create_account(
+        &mut self,
+        api: &Api,
+        handle: &str,
+    ) -> Result<TokenPair, ClientError> {
         let proof = self.prove(api, ChallengePurpose::CreateAccount).await?;
-        api.create_account_by_identity(handle, proof).await
+        match api.create_account_by_identity(handle, proof).await {
+            Err(e) if held_in(&e).is_some() => {
+                self.reconcile(&e)?;
+                let proof = self.prove(api, ChallengePurpose::CreateAccount).await?;
+                api.create_account_by_identity(handle, proof).await
+            }
+            other => other,
+        }
     }
 
-    /// Signs in by identity proof.
+    /// Signs in by identity proof. A stale roster is reconciled once: the
+    /// held version is adopted and, if this device is still in it, the
+    /// sign-in is retried with it.
     ///
     /// # Errors
-    /// On API failure, including `POLICY_DENIED` when the instance forbids it.
-    pub async fn sign_in(&self, api: &Api) -> Result<TokenPair, ClientError> {
+    /// On API failure (including `POLICY_DENIED` when the instance forbids
+    /// it), or [`ClientError::DeviceRevoked`] after adopting a held roster
+    /// that revokes this device.
+    pub async fn sign_in(&mut self, api: &Api) -> Result<TokenPair, ClientError> {
         let proof = self.prove(api, ChallengePurpose::SignIn).await?;
-        api.sign_in_identity(proof).await
+        match api.sign_in_identity(proof).await {
+            Err(e) if held_in(&e).is_some() => {
+                self.reconcile(&e)?;
+                let proof = self.prove(api, ChallengePurpose::SignIn).await?;
+                api.sign_in_identity(proof).await
+            }
+            other => other,
+        }
+    }
+
+    /// Binds the signed-in password account to this device's identity
+    /// (`POST /identity/link`, challenge purpose `LINK_ACCOUNT`), under a
+    /// fresh reauth by password.
+    ///
+    /// # Errors
+    /// On API failure: a wrong password, or `CONFLICT` when the account is
+    /// bound to another identity.
+    pub async fn link_account(&mut self, api: &Api, password: &str) -> Result<(), ClientError> {
+        let reauth = api.reauth_password(password).await?;
+        let proof = self.prove(api, ChallengePurpose::LinkAccount).await?;
+        api.link_identity(proof, &reauth.reauth_token).await
+    }
+
+    /// Adopts the roster an instance returned in `CONFLICT`'s `details.held`
+    /// (spec 5, "older roster"). It must verify against the one held here
+    /// and be newer.
+    ///
+    /// # Errors
+    /// When the held roster is malformed or does not verify as a successor.
+    pub fn adopt_held(&mut self, held_b64: &str) -> Result<Verified, ClientError> {
+        let current = self.roster()?;
+        let bytes = B64
+            .decode(held_b64.trim())
+            .map_err(|e| ClientError::State(format!("held roster: {e}")))?;
+        let signed = SignedRoster::decode(bytes.as_slice())?;
+        let verified = verify_roster(&signed, Some(&current), now_nanos())?;
+        self.save_roster(&verified.identity_id, &signed)?;
+        Ok(verified)
+    }
+
+    /// Adopts the held roster carried by a `CONFLICT`. `Ok` means this
+    /// device is still a member and the caller may retry.
+    fn reconcile(&mut self, err: &ClientError) -> Result<Verified, ClientError> {
+        let held = held_in(err).ok_or_else(|| ClientError::State(err.to_string()))?;
+        let verified = self.adopt_held(held)?;
+        if verified.revoked.contains_key(&self.device_id)
+            || !verified.devices.contains_key(&self.device_id)
+        {
+            return Err(ClientError::DeviceRevoked {
+                roster_version: verified.version,
+            });
+        }
+        Ok(verified)
     }
 
     /// Step 1 of adding this device (spec 4.2): the request to show as a
@@ -187,41 +256,23 @@ impl<S: Store, K: Keystore> Device<'_, S, K> {
             .decode(request_b64.trim())
             .map_err(|e| ClientError::State(format!("bad request: {e}")))?;
         let request = LinkRequest::decode(bytes.as_slice())?;
-        let verified = self.roster()?;
-        let my_key = self.device_key()?;
-        let new_key = request
-            .device_public_key
-            .as_ref()
-            .map(|k| k.ed25519.clone())
-            .unwrap_or_default();
         let kind = DeviceKind::try_from(request.kind).unwrap_or(DeviceKind::Native);
 
-        let entry = device_entry(
-            &verified.identity_id,
-            &NewDevice {
-                device_id: request.device_id.clone(),
-                public_key: new_key,
-                kind,
-                web_origin: request.web_origin.clone(),
-                label: request.label.clone(),
-                added_at: now(),
-            },
-            Signer::Device(&self.device_id, &my_key),
-        );
-
-        let mut devices = verified.body.devices.clone();
-        devices.push(entry);
-        let body = roster_body(
-            &verified.identity_id,
-            verified.version + 1,
-            &verified.root_public_key,
-            verified.body.rotations.clone(),
-            devices,
-            verified.body.revoked.clone(),
-            now(),
-        );
-        let roster = sign_roster(&body, Signer::Device(&self.device_id, &my_key));
-        api.publish_roster(roster.clone()).await?;
+        // Build on the roster held here; if the instance holds a newer one,
+        // adopt it and build again (spec 5, "older roster").
+        let mut verified = self.roster()?;
+        let mut reconciled = false;
+        let roster = loop {
+            let roster = self.addition_roster(&verified, &request, kind)?;
+            match api.publish_roster(roster.clone()).await {
+                Ok(()) => break roster,
+                Err(e) if held_in(&e).is_some() && !reconciled => {
+                    verified = self.reconcile(&e)?;
+                    reconciled = true;
+                }
+                Err(e) => return Err(e),
+            }
+        };
         self.save_roster(&verified.identity_id, &roster)?;
 
         let backup_key = if kind == DeviceKind::Web {
@@ -311,41 +362,76 @@ impl<S: Store, K: Keystore> Device<'_, S, K> {
                 "that phrase is not this identity's root".into(),
             ));
         }
-        let info = verified
-            .devices
-            .get(device_id)
-            .ok_or_else(|| ClientError::State("unknown device".into()))?;
-        let added_at = info.cert.added_at.unwrap_or_default();
-        let entry = revoked_entry(
-            &verified.identity_id,
-            device_id,
-            &info.public_key,
-            added_at,
-            now(),
-            Signer::Root(&derived.root),
-        );
+        let roster = revocation_roster(&verified, device_id, Signer::Root(&derived.root))?;
+        api.publish_roster(roster.clone()).await?;
+        self.save_roster(&verified.identity_id, &roster)
+    }
 
-        let devices: Vec<_> = verified
-            .body
-            .devices
-            .iter()
-            .filter(|d| d.device_id != device_id)
-            .cloned()
-            .collect();
-        let mut revoked = verified.body.revoked.clone();
-        revoked.push(entry);
+    /// Revokes a device with this device's key (spec 4.3, the device path),
+    /// which the instance accepts only with a fresh reauth: the account's
+    /// password here. Goes to `POST /identity/devices/revoke`.
+    ///
+    /// # Errors
+    /// On a wrong password, an unknown device, or `POLICY_DENIED` when the
+    /// instance does not accept the reauth.
+    pub async fn revoke_with_device(
+        &mut self,
+        api: &Api,
+        password: &str,
+        device_id: &[u8],
+    ) -> Result<(), ClientError> {
+        if device_id == self.device_id.as_slice() {
+            return Err(ClientError::State(
+                "a device cannot revoke itself; use the phrase or another device".into(),
+            ));
+        }
+        let verified = self.roster()?;
+        let my_key = self.device_key()?;
+        let my_id = self.device_id.clone();
+        let roster = revocation_roster(&verified, device_id, Signer::Device(&my_id, &my_key))?;
+        let reauth = api.reauth_password(password).await?;
+        api.revoke_device(roster.clone(), &reauth.reauth_token)
+            .await?;
+        self.save_roster(&verified.identity_id, &roster)
+    }
+
+    /// The next roster with the requesting device certified by this one.
+    fn addition_roster(
+        &self,
+        verified: &Verified,
+        request: &LinkRequest,
+        kind: DeviceKind,
+    ) -> Result<SignedRoster, ClientError> {
+        let my_key = self.device_key()?;
+        let new_key = request
+            .device_public_key
+            .as_ref()
+            .map(|k| k.ed25519.clone())
+            .unwrap_or_default();
+        let entry = device_entry(
+            &verified.identity_id,
+            &NewDevice {
+                device_id: request.device_id.clone(),
+                public_key: new_key,
+                kind,
+                web_origin: request.web_origin.clone(),
+                label: request.label.clone(),
+                added_at: now(),
+            },
+            Signer::Device(&self.device_id, &my_key),
+        );
+        let mut devices = verified.body.devices.clone();
+        devices.push(entry);
         let body = roster_body(
             &verified.identity_id,
             verified.version + 1,
             &verified.root_public_key,
             verified.body.rotations.clone(),
             devices,
-            revoked,
+            verified.body.revoked.clone(),
             now(),
         );
-        let roster = sign_roster(&body, Signer::Root(&derived.root));
-        api.publish_roster(roster.clone()).await?;
-        self.save_roster(&verified.identity_id, &roster)
+        Ok(sign_roster(&body, Signer::Device(&self.device_id, &my_key)))
     }
 
     fn device_key(&self) -> Result<SigningKey, ClientError> {
@@ -377,6 +463,57 @@ impl<S: Store, K: Keystore> Device<'_, S, K> {
         self.store
             .meta_set("roster", &B64.encode(roster.encode_to_vec()))?;
         Ok(())
+    }
+}
+
+/// The next roster with `device_id` moved to `revoked`, signed by `signer`.
+fn revocation_roster(
+    verified: &Verified,
+    device_id: &[u8],
+    signer: Signer<'_>,
+) -> Result<SignedRoster, ClientError> {
+    let info = verified
+        .devices
+        .get(device_id)
+        .ok_or_else(|| ClientError::State("unknown device".into()))?;
+    let added_at = info.cert.added_at.unwrap_or_default();
+    let entry = revoked_entry(
+        &verified.identity_id,
+        device_id,
+        &info.public_key,
+        added_at,
+        now(),
+        signer,
+    );
+    let devices: Vec<_> = verified
+        .body
+        .devices
+        .iter()
+        .filter(|d| d.device_id != device_id)
+        .cloned()
+        .collect();
+    let mut revoked = verified.body.revoked.clone();
+    revoked.push(entry);
+    let body = roster_body(
+        &verified.identity_id,
+        verified.version + 1,
+        &verified.root_public_key,
+        verified.body.rotations.clone(),
+        devices,
+        revoked,
+        now(),
+    );
+    Ok(sign_roster(&body, signer))
+}
+
+/// The held roster a `CONFLICT` carries, when it does.
+#[must_use]
+pub fn held_in(err: &ClientError) -> Option<&str> {
+    match err {
+        ClientError::Api { code, details, .. } if code == "CONFLICT" => {
+            details.get("held").map(String::as_str)
+        }
+        _ => None,
     }
 }
 

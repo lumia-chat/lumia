@@ -191,7 +191,9 @@ defmodule Lumia.Identity do
   defp verify_against(signed, held) do
     case Roster.verify(signed, held: held) do
       {:ok, verified} -> {:ok, verified}
-      {:error, {:monotonic, :version}} when not is_nil(held) -> {:error, :conflict}
+      # Older than held: ignored, and the held version goes back to the
+      # client so it can adopt it (identity spec 5, "older roster").
+      {:error, {:monotonic, :version}} when not is_nil(held) -> {:error, {:conflict, held}}
       {:error, {step, reason}} -> {:error, {:identity_proof_invalid, step, reason}}
     end
   end

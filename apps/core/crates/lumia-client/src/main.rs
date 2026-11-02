@@ -7,16 +7,21 @@
 //!     lumia-cli channels <server-id>
 //!     lumia-cli send <channel-id> "hello"
 //!     lumia-cli tail <channel-id>
+//!     lumia-cli scenario all
 //!
-//! State lives under the platform data directory (or `--data-dir`), one
-//! SQLite store and one file keystore per instance host.
+//! State lives under the platform data directory (or `--data-dir`): one
+//! SQLite store and one file keystore per instance host, and the device's
+//! identity under `identity/`, shared by every instance.
 
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
+mod scenario;
+
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
-use lumia_client::api::Api;
+use lumia_client::api::{Api, Tokens};
 use lumia_client::gateway::{self, GatewayCommand, GatewayEvent};
 use lumia_client::keystore::FileKeystore;
 use lumia_client::sqlite::SqliteStore;
@@ -78,8 +83,10 @@ enum Cmd {
     Channels { server_id: String },
     /// Send a message.
     Send { channel_id: String, body: String },
-    /// Follow a channel, printing events as they arrive.
+    /// Follow a channel, printing events as they arrive; reconnects.
     Tail { channel_id: String },
+    /// Run a failure-injection scenario against the instance (`all` for every one).
+    Scenario { name: String },
 }
 
 #[derive(Subcommand, Debug)]
@@ -113,6 +120,11 @@ enum IdentityCmd {
     },
     /// Show the identity and its roster.
     Show,
+    /// Bind the signed-in password account to this device's identity.
+    LinkAccount {
+        #[arg(long)]
+        password: String,
+    },
     /// On a new device: print the link request to approve elsewhere.
     LinkRequest {
         #[arg(long, default_value = "cli")]
@@ -122,12 +134,15 @@ enum IdentityCmd {
     Approve { request: String },
     /// On the new device: claim the bundle by code.
     Claim { code: String },
-    /// Revoke a device with the recovery phrase (root-signed). With --all,
-    /// publish to every instance this device knows and report each.
+    /// Revoke a device: root-signed with the recovery phrase, or signed by
+    /// this device with the account password as reauth. With --all, publish
+    /// to every instance this device knows and report each.
     Revoke {
         device_id: String,
-        #[arg(long)]
-        phrase: String,
+        #[arg(long, required_unless_present = "password")]
+        phrase: Option<String>,
+        #[arg(long, required_unless_present = "phrase")]
+        password: Option<String>,
         #[arg(long)]
         all: bool,
     },
@@ -140,6 +155,7 @@ enum IdentityCmd {
 struct Ctx {
     host: String,
     data_dir: PathBuf,
+    keys_dir: PathBuf,
     store: SqliteStore,
     keystore: FileKeystore,
     /// Identity state is per device, shared by every instance: lives at
@@ -183,11 +199,7 @@ async fn run(cli: Cli) -> Result<(), ClientError> {
             .map_err(|_| ClientError::Transport("no instance; run `instance add <url>`".into()))?,
     };
     let mut ctx = open(&data_dir, host.trim())?;
-    let base = ctx
-        .store
-        .meta_get("base_url")?
-        .ok_or_else(|| ClientError::Transport("instance has no base url".into()))?;
-    let api = Api::new(&base).with_token(token(&ctx)?);
+    let api = api_for(&ctx)?;
 
     match cli.command {
         Cmd::Instance { .. } => Ok(()),
@@ -255,9 +267,7 @@ async fn run(cli: Cli) -> Result<(), ClientError> {
             Ok(())
         }
         Cmd::Send { channel_id, body } => {
-            let channel = wire::uuid_from(&parse_uuid(&channel_id)?)
-                .map(wire::uuid_bytes)
-                .ok_or(ClientError::Transport("bad channel id".into()))?;
+            let channel = parse_uuid(&channel_id)?;
             let cmd = Command {
                 command_id: wire::new_id(),
                 channel_id: channel.clone(),
@@ -268,7 +278,7 @@ async fn run(cli: Cli) -> Result<(), ClientError> {
             };
             let (tx, rx) = mpsc::channel(8);
             let (etx, mut erx) = mpsc::channel(64);
-            let gw = tokio::spawn(gateway::run(
+            let gw = tokio::spawn(gateway::run_forever(
                 api,
                 ctx.store,
                 "lumia-cli",
@@ -290,6 +300,11 @@ async fn run(cli: Cli) -> Result<(), ClientError> {
                         eprintln!("error: {} {}", e.code, e.message);
                         break;
                     }
+                    GatewayEvent::Reconnecting {
+                        attempt,
+                        delay,
+                        reason,
+                    } => eprintln!("reconnecting in {delay:?} (attempt {attempt}): {reason}"),
                     GatewayEvent::Closed(reason) => {
                         eprintln!("closed: {reason}");
                         break;
@@ -305,7 +320,7 @@ async fn run(cli: Cli) -> Result<(), ClientError> {
             let channel = parse_uuid(&channel_id)?;
             let (tx, rx) = mpsc::channel(8);
             let (etx, mut erx) = mpsc::channel(64);
-            let gw = tokio::spawn(gateway::run(
+            let gw = tokio::spawn(gateway::run_forever(
                 api,
                 ctx.store,
                 "lumia-cli",
@@ -322,6 +337,10 @@ async fn run(cli: Cli) -> Result<(), ClientError> {
                             for e in events { print_event(&e); }
                         }
                         Some(GatewayEvent::Notice(n)) => println!("-- {n:?}"),
+                        Some(GatewayEvent::SnapshotTaken { seq, .. }) => println!("-- snapshot to seq {seq}"),
+                        Some(GatewayEvent::Reconnecting { attempt, delay, reason }) => {
+                            println!("-- reconnecting in {delay:?} (attempt {attempt}): {reason}");
+                        }
                         Some(GatewayEvent::Closed(reason)) => { println!("closed: {reason}"); break; }
                         Some(GatewayEvent::AccountApplied(_)) => {}
                         None => break,
@@ -332,6 +351,15 @@ async fn run(cli: Cli) -> Result<(), ClientError> {
             drop(tx);
             gw.abort();
             Ok(())
+        }
+        Cmd::Scenario { name } => {
+            let env = scenario::Env {
+                api,
+                device_id: ctx.device_id.clone(),
+                keys_dir: ctx.keys_dir.clone(),
+                scratch: ctx.data_dir.join("scenario"),
+            };
+            scenario::run(&name, &env).await
         }
     }
 }
@@ -344,8 +372,26 @@ fn device(ctx: &mut Ctx) -> lumia_client::identity::Device<'_, SqliteStore, File
     }
 }
 
-/// Every instance this data dir knows: (host, base url, access token).
-fn instances(ctx: &Ctx) -> Result<Vec<(String, String, Option<String>)>, ClientError> {
+/// The API client for the current instance: its tokens from the keystore,
+/// and every rotation written back there.
+fn api_for(ctx: &Ctx) -> Result<Api, ClientError> {
+    let base = ctx
+        .store
+        .meta_get("base_url")?
+        .ok_or_else(|| ClientError::Transport("instance has no base url".into()))?;
+    let keys_dir = ctx.keys_dir.clone();
+    Ok(Api::new(&base)
+        .with_tokens(tokens(&ctx.keystore)?)
+        .on_rotate(Arc::new(move |pair| {
+            if let Ok(mut keys) = FileKeystore::open(&keys_dir) {
+                let _ = keys.put("access_token", pair.access_token.as_bytes());
+                let _ = keys.put("refresh_token", pair.refresh_token.as_bytes());
+            }
+        })))
+}
+
+/// Every instance this data dir knows: (host, base url, tokens).
+fn instances(ctx: &Ctx) -> Result<Vec<(String, String, Tokens)>, ClientError> {
     let mut out = Vec::new();
     let entries =
         std::fs::read_dir(&ctx.data_dir).map_err(|e| ClientError::Transport(e.to_string()))?;
@@ -360,12 +406,13 @@ fn instances(ctx: &Ctx) -> Result<Vec<(String, String, Option<String>)>, ClientE
             continue;
         };
         let keys = FileKeystore::open(&path.join("keys"))?;
-        let token = keys
-            .get("access_token")?
-            .and_then(|b| String::from_utf8(b).ok());
-        out.push((entry.file_name().to_string_lossy().to_string(), base, token));
+        out.push((
+            entry.file_name().to_string_lossy().to_string(),
+            base,
+            tokens(&keys)?,
+        ));
     }
-    out.sort();
+    out.sort_by(|a, b| a.0.cmp(&b.0));
     Ok(out)
 }
 
@@ -403,12 +450,22 @@ async fn identity_cmd(ctx: &mut Ctx, api: &Api, action: IdentityCmd) -> Result<(
                 );
             }
             for (id, info) in &verified.revoked {
+                let me = if *id == ctx.device_id {
+                    " (this device)"
+                } else {
+                    ""
+                };
                 println!(
-                    "  revoked {}  at {}",
+                    "  revoked {}  at {}{me}",
                     wire::display(id),
                     info.revoked_at / 1_000_000_000
                 );
             }
+            Ok(())
+        }
+        IdentityCmd::LinkAccount { password } => {
+            device(ctx).link_account(api, &password).await?;
+            println!("account on {} bound to this identity", ctx.host);
             Ok(())
         }
         IdentityCmd::LinkRequest { label } => {
@@ -433,12 +490,28 @@ async fn identity_cmd(ctx: &mut Ctx, api: &Api, action: IdentityCmd) -> Result<(
         IdentityCmd::Revoke {
             device_id,
             phrase,
+            password,
             all,
         } => {
-            device(ctx)
-                .revoke_with_phrase(api, &phrase, &parse_uuid(&device_id)?)
-                .await?;
-            println!("revoked {device_id} on {}", ctx.host);
+            let target = parse_uuid(&device_id)?;
+            match (phrase, password) {
+                (Some(phrase), _) => {
+                    device(ctx)
+                        .revoke_with_phrase(api, &phrase, &target)
+                        .await?;
+                    println!("revoked {device_id} on {} (root-signed)", ctx.host);
+                }
+                (None, Some(password)) => {
+                    device(ctx)
+                        .revoke_with_device(api, &password, &target)
+                        .await?;
+                    println!(
+                        "revoked {device_id} on {} (device-signed, reauth by password)",
+                        ctx.host
+                    );
+                }
+                (None, None) => return Err(ClientError::State("--phrase or --password".into())),
+            }
             if all {
                 publish_everywhere(ctx).await?;
             }
@@ -447,8 +520,8 @@ async fn identity_cmd(ctx: &mut Ctx, api: &Api, action: IdentityCmd) -> Result<(
         IdentityCmd::Status => {
             let mine = device(ctx).roster()?;
             println!("this device holds v{}", mine.version);
-            for (host, base, token) in instances(ctx)? {
-                let api = Api::new(&base).with_token(token);
+            for (host, base, tokens) in instances(ctx)? {
+                let api = Api::new(&base).with_tokens(tokens);
                 match api.get_roster().await {
                     Ok(resp) => match resp.roster.map(|r| {
                         lumia_core::identity::roster::verify_roster(
@@ -477,11 +550,13 @@ async fn identity_cmd(ctx: &mut Ctx, api: &Api, action: IdentityCmd) -> Result<(
 }
 
 /// Carries the current roster to every instance (identity spec 5.1:
-/// rosters are client-carried). Reports per instance; never stops early.
+/// rosters are client-carried). A roster that adds revocations relative to
+/// what an instance holds is refused at the publish endpoint unless
+/// root-signed; the report says so per instance. Never stops early.
 async fn publish_everywhere(ctx: &mut Ctx) -> Result<(), ClientError> {
     let roster = device(ctx).roster()?;
-    for (host, base, token) in instances(ctx)? {
-        let api = Api::new(&base).with_token(token);
+    for (host, base, tokens) in instances(ctx)? {
+        let api = Api::new(&base).with_tokens(tokens);
         match api.publish_roster(roster.signed.clone()).await {
             Ok(()) => println!("  {host}: now v{}", roster.version),
             Err(e) => println!("  {host}: not updated ({e})"),
@@ -520,7 +595,8 @@ fn open(data_dir: &std::path::Path, host: &str) -> Result<Ctx, ClientError> {
     let dir = data_dir.join(host);
     std::fs::create_dir_all(&dir).map_err(|e| ClientError::Transport(e.to_string()))?;
     let store = SqliteStore::open(&dir.join("store.sqlite"))?;
-    let keystore = FileKeystore::open(&dir.join("keys"))?;
+    let keys_dir = dir.join("keys");
+    let keystore = FileKeystore::open(&keys_dir)?;
 
     let identity_dir = data_dir.join("identity");
     std::fs::create_dir_all(&identity_dir).map_err(|e| ClientError::Transport(e.to_string()))?;
@@ -537,6 +613,7 @@ fn open(data_dir: &std::path::Path, host: &str) -> Result<Ctx, ClientError> {
     Ok(Ctx {
         host: host.to_string(),
         data_dir: data_dir.to_path_buf(),
+        keys_dir,
         store,
         keystore,
         identity_store,
@@ -545,11 +622,14 @@ fn open(data_dir: &std::path::Path, host: &str) -> Result<Ctx, ClientError> {
     })
 }
 
-fn token(ctx: &Ctx) -> Result<Option<String>, ClientError> {
-    Ok(ctx
-        .keystore
-        .get("access_token")?
-        .and_then(|b| String::from_utf8(b).ok()))
+fn tokens(keys: &FileKeystore) -> Result<Tokens, ClientError> {
+    let read = |name: &str| -> Result<Option<String>, ClientError> {
+        Ok(keys.get(name)?.and_then(|b| String::from_utf8(b).ok()))
+    };
+    Ok(Tokens {
+        access: read("access_token")?,
+        refresh: read("refresh_token")?,
+    })
 }
 
 fn save_tokens(ctx: &mut Ctx, tokens: &lumia_core::proto::TokenPair) -> Result<(), ClientError> {
@@ -557,7 +637,6 @@ fn save_tokens(ctx: &mut Ctx, tokens: &lumia_core::proto::TokenPair) -> Result<(
         .put("access_token", tokens.access_token.as_bytes())?;
     ctx.keystore
         .put("refresh_token", tokens.refresh_token.as_bytes())?;
-    let _ = &ctx.host;
     Ok(())
 }
 

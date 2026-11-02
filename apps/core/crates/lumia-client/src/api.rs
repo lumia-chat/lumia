@@ -1,26 +1,60 @@
 //! The HTTP API client (docs/protocol.md section 9) with protobuf bodies.
+//!
+//! Tokens live behind a shared handle so one rotation is seen by every
+//! clone of the client, including the gateway loop that builds the socket
+//! URL. An `UNAUTHENTICATED` or `TOKEN_EXPIRED` answer with a refresh token
+//! on hand refreshes once and retries the call; the new pair goes to the
+//! rotation hook so the caller can persist it.
+
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use lumia_core::proto::{
-    AccountSnapshot, ChallengePurpose, ChallengeRequest, ChallengeResponse, Channel,
-    ChannelSnapshot, CreateAccountRequest, CreateChannelRequest, CreateLinkBundleRequest,
-    CreateLinkBundleResponse, CreateServerRequest, Error as ApiError, ErrorCode,
-    GetLinkBundleResponse, GetRosterResponse, IdentityProof, IdentityProofSignInRequest,
+    reauth_request, AccountSnapshot, Ack, ChallengePurpose, ChallengeRequest, ChallengeResponse,
+    Channel, ChannelSnapshot, Command, CreateAccountRequest, CreateChannelRequest,
+    CreateLinkBundleRequest, CreateLinkBundleResponse, CreateServerRequest, Error as ApiError,
+    ErrorCode, GetLinkBundleResponse, GetRosterResponse, IdentityProof, IdentityProofSignInRequest,
     ListAccountEventsResponse, ListChannelsResponse, ListEventsResponse, ListServersResponse,
-    PasswordSignInRequest, PublishRosterRequest, RefreshRequest, Server, SignedRoster, TokenPair,
+    PasswordSignInRequest, PublishRosterRequest, ReauthRequest, ReauthResponse, RefreshRequest,
+    RevokeDeviceRequest, Server, SignedRoster, TokenPair,
 };
 use prost::Message;
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
+use reqwest::StatusCode;
 
 use crate::ClientError;
 
 const PROTO: &str = "application/x-protobuf";
+const REAUTH_HEADER: &str = "x-reauth-token";
+
+/// The current token pair for one instance.
+#[derive(Debug, Clone, Default)]
+pub struct Tokens {
+    /// Bearer token for `/api/v1` and the gateway.
+    pub access: Option<String>,
+    /// Rotated at `POST /auth/refresh`.
+    pub refresh: Option<String>,
+}
+
+/// Called with every new pair after a refresh, so the caller can persist it.
+pub type RotateHook = Arc<dyn Fn(&TokenPair) + Send + Sync>;
 
 /// A client for one instance's HTTP API.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Api {
     http: reqwest::Client,
     base: String,
-    access_token: Option<String>,
+    tokens: Arc<Mutex<Tokens>>,
+    on_rotate: Option<RotateHook>,
+}
+
+impl std::fmt::Debug for Api {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Api")
+            .field("base", &self.base)
+            .field("signed_in", &self.tokens().access.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl Api {
@@ -30,15 +64,55 @@ impl Api {
         Self {
             http: reqwest::Client::new(),
             base: base.trim_end_matches('/').to_string(),
-            access_token: None,
+            tokens: Arc::new(Mutex::new(Tokens::default())),
+            on_rotate: None,
         }
     }
 
-    /// Uses this access token for authenticated calls.
+    /// Uses this access token for authenticated calls (no refresh possible).
     #[must_use]
-    pub fn with_token(mut self, token: Option<String>) -> Self {
-        self.access_token = token;
+    pub fn with_token(self, token: Option<String>) -> Self {
+        self.with_tokens(Tokens {
+            access: token,
+            refresh: None,
+        })
+    }
+
+    /// Uses this token pair; with a refresh token, expiry is handled.
+    #[must_use]
+    pub fn with_tokens(self, tokens: Tokens) -> Self {
+        *self.tokens.lock().unwrap_or_else(PoisonError::into_inner) = tokens;
         self
+    }
+
+    /// Called with each rotated pair.
+    #[must_use]
+    pub fn on_rotate(mut self, hook: RotateHook) -> Self {
+        self.on_rotate = Some(hook);
+        self
+    }
+
+    /// The tokens in use right now.
+    #[must_use]
+    pub fn tokens(&self) -> Tokens {
+        self.tokens
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Replaces the pair, as after a sign-in.
+    pub fn set_tokens(&self, pair: &TokenPair) {
+        *self.tokens.lock().unwrap_or_else(PoisonError::into_inner) = Tokens {
+            access: Some(pair.access_token.clone()),
+            refresh: Some(pair.refresh_token.clone()),
+        };
+    }
+
+    /// The base URL.
+    #[must_use]
+    pub fn base(&self) -> &str {
+        &self.base
     }
 
     /// The host this client talks to, as challenges must be bound to it.
@@ -48,6 +122,34 @@ impl Api {
             .ok()
             .and_then(|u| u.host_str().map(str::to_string))
             .unwrap_or_default()
+    }
+
+    /// Rotates the pair at `POST /auth/refresh` and tells the hook.
+    ///
+    /// # Errors
+    /// When there is no refresh token, or the instance refuses it
+    /// (`TOKEN_EXPIRED`, `SESSION_REVOKED`).
+    pub async fn refresh_now(&self) -> Result<(), ClientError> {
+        let refresh = self.tokens().refresh.ok_or(ClientError::NotSignedIn)?;
+        let body = RefreshRequest {
+            refresh_token: refresh,
+        }
+        .encode_to_vec();
+        let (status, bytes) = self
+            .send_once(
+                reqwest::Method::POST,
+                "/api/v1/auth/refresh",
+                Some(body),
+                None,
+                false,
+            )
+            .await?;
+        let pair: TokenPair = decoded(status, &bytes)?;
+        self.set_tokens(&pair);
+        if let Some(hook) = &self.on_rotate {
+            hook(&pair);
+        }
+        Ok(())
     }
 
     /// `POST /auth/challenge`.
@@ -96,6 +198,21 @@ impl Api {
         .await
     }
 
+    /// `POST /auth/reauth` with a password; the token is single use and
+    /// bound to this session (identity spec 10).
+    ///
+    /// # Errors
+    /// On transport failure or an API error.
+    pub async fn reauth_password(&self, password: &str) -> Result<ReauthResponse, ClientError> {
+        self.post(
+            "/api/v1/auth/reauth",
+            &ReauthRequest {
+                credential: Some(reauth_request::Credential::Password(password.into())),
+            },
+        )
+        .await
+    }
+
     /// `POST /identity/roster`.
     ///
     /// # Errors
@@ -108,6 +225,51 @@ impl Api {
             },
         )
         .await
+    }
+
+    /// `POST /identity/devices/revoke`: a device-signed roster that adds a
+    /// revocation, with the reauth token the policy requires.
+    ///
+    /// # Errors
+    /// On transport failure or an API error (`POLICY_DENIED` without reauth).
+    pub async fn revoke_device(
+        &self,
+        roster: SignedRoster,
+        reauth_token: &str,
+    ) -> Result<(), ClientError> {
+        self.post_empty(
+            "/api/v1/identity/devices/revoke",
+            &RevokeDeviceRequest {
+                roster: Some(roster),
+                reauth_token: reauth_token.into(),
+            },
+        )
+        .await
+    }
+
+    /// `POST /identity/link`: binds the signed-in account to the identity
+    /// the proof is for, under reauth.
+    ///
+    /// # Errors
+    /// On transport failure or an API error (`CONFLICT` when bound elsewhere).
+    pub async fn link_identity(
+        &self,
+        proof: IdentityProof,
+        reauth_token: &str,
+    ) -> Result<(), ClientError> {
+        let (status, bytes) = self
+            .send(
+                reqwest::Method::POST,
+                "/api/v1/identity/link",
+                Some(proof.encode_to_vec()),
+                Some((REAUTH_HEADER, reauth_token)),
+            )
+            .await?;
+        if status.is_success() {
+            Ok(())
+        } else {
+            Err(api_error(status, &bytes))
+        }
     }
 
     /// `GET /identity/roster`.
@@ -144,15 +306,12 @@ impl Api {
         .await
     }
 
-    /// The gateway WebSocket URL for this instance.
+    /// The gateway WebSocket URL for this instance, with the current token.
     ///
     /// # Errors
     /// When not signed in.
     pub fn gateway_url(&self) -> Result<String, ClientError> {
-        let token = self
-            .access_token
-            .as_deref()
-            .ok_or(ClientError::NotSignedIn)?;
+        let token = self.tokens().access.ok_or(ClientError::NotSignedIn)?;
         let ws = self.base.replacen("http", "ws", 1);
         Ok(format!(
             "{ws}/gateway/websocket?access_token={token}&vsn=1.0.0"
@@ -193,20 +352,6 @@ impl Api {
             ..Default::default()
         };
         self.post("/api/v1/auth/sign-in/password", &req).await
-    }
-
-    /// `POST /auth/refresh`.
-    ///
-    /// # Errors
-    /// On transport failure or an API error.
-    pub async fn refresh(&self, refresh_token: &str) -> Result<TokenPair, ClientError> {
-        self.post(
-            "/api/v1/auth/refresh",
-            &RefreshRequest {
-                refresh_token: refresh_token.into(),
-            },
-        )
-        .await
     }
 
     /// `GET /account/snapshot`.
@@ -277,6 +422,20 @@ impl Api {
             .await
     }
 
+    /// `POST /channels/{id}/commands`: the HTTP path for a command, which
+    /// shares the idempotency table with the gateway (protocol section 7).
+    ///
+    /// # Errors
+    /// On transport failure or an API error.
+    pub async fn post_command(
+        &self,
+        channel_id: &str,
+        command: &Command,
+    ) -> Result<Ack, ClientError> {
+        self.post(&format!("/api/v1/channels/{channel_id}/commands"), command)
+            .await
+    }
+
     /// `GET /channels/{id}/events?after_seq=&before_seq=`.
     ///
     /// # Errors
@@ -307,71 +466,101 @@ impl Api {
         path: &str,
         req: &Req,
     ) -> Result<Resp, ClientError> {
-        let mut builder = self
-            .http
-            .post(format!("{}{path}", self.base))
-            .header(CONTENT_TYPE, PROTO)
-            .header(ACCEPT, PROTO)
-            .body(req.encode_to_vec());
-        if let Some(token) = &self.access_token {
-            builder = builder.header(AUTHORIZATION, format!("Bearer {token}"));
-        }
-        decode(builder.send().await?).await
+        let (status, bytes) = self
+            .send(reqwest::Method::POST, path, Some(req.encode_to_vec()), None)
+            .await?;
+        decoded(status, &bytes)
     }
 
     async fn post_empty<Req: Message>(&self, path: &str, req: &Req) -> Result<(), ClientError> {
-        let mut builder = self
-            .http
-            .post(format!("{}{path}", self.base))
-            .header(CONTENT_TYPE, PROTO)
-            .header(ACCEPT, PROTO)
-            .body(req.encode_to_vec());
-        if let Some(token) = &self.access_token {
-            builder = builder.header(AUTHORIZATION, format!("Bearer {token}"));
-        }
-        let response = builder.send().await?;
-        let status = response.status();
+        let (status, bytes) = self
+            .send(reqwest::Method::POST, path, Some(req.encode_to_vec()), None)
+            .await?;
         if status.is_success() {
-            return Ok(());
+            Ok(())
+        } else {
+            Err(api_error(status, &bytes))
         }
-        let bytes = response.bytes().await?;
-        let error = ApiError::decode(bytes.as_ref()).unwrap_or_default();
-        let code = ErrorCode::try_from(error.code)
-            .map(|c| c.as_str_name().to_string())
-            .unwrap_or_else(|_| "UNKNOWN".into());
-        Err(ClientError::Api {
-            code,
-            message: error.message,
-            status: status.as_u16(),
-        })
     }
 
     async fn get<Resp: Message + Default>(&self, path: &str) -> Result<Resp, ClientError> {
+        let (status, bytes) = self.send(reqwest::Method::GET, path, None, None).await?;
+        decoded(status, &bytes)
+    }
+
+    /// One call, with one refresh-and-retry when the access token is refused
+    /// and a refresh token is on hand.
+    async fn send(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        body: Option<Vec<u8>>,
+        extra: Option<(&str, &str)>,
+    ) -> Result<(StatusCode, Vec<u8>), ClientError> {
+        let (status, bytes) = self
+            .send_once(method.clone(), path, body.clone(), extra, true)
+            .await?;
+        if status != StatusCode::UNAUTHORIZED || self.tokens().refresh.is_none() {
+            return Ok((status, bytes));
+        }
+        match api_error(status, &bytes) {
+            ClientError::Api { code, .. }
+                if code == "TOKEN_EXPIRED" || code == "UNAUTHENTICATED" =>
+            {
+                self.refresh_now().await?;
+                self.send_once(method, path, body, extra, true).await
+            }
+            _ => Ok((status, bytes)),
+        }
+    }
+
+    async fn send_once(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        body: Option<Vec<u8>>,
+        extra: Option<(&str, &str)>,
+        authenticated: bool,
+    ) -> Result<(StatusCode, Vec<u8>), ClientError> {
         let mut builder = self
             .http
-            .get(format!("{}{path}", self.base))
+            .request(method, format!("{}{path}", self.base))
             .header(ACCEPT, PROTO);
-        if let Some(token) = &self.access_token {
-            builder = builder.header(AUTHORIZATION, format!("Bearer {token}"));
+        if let Some(body) = body {
+            builder = builder.header(CONTENT_TYPE, PROTO).body(body);
         }
-        decode(builder.send().await?).await
+        if let Some((name, value)) = extra {
+            builder = builder.header(name, value);
+        }
+        if authenticated {
+            if let Some(token) = self.tokens().access {
+                builder = builder.header(AUTHORIZATION, format!("Bearer {token}"));
+            }
+        }
+        let response = builder.send().await?;
+        let status = response.status();
+        let bytes = response.bytes().await?;
+        Ok((status, bytes.to_vec()))
     }
 }
 
-async fn decode<Resp: Message + Default>(response: reqwest::Response) -> Result<Resp, ClientError> {
-    let status = response.status();
-    let bytes = response.bytes().await?;
+fn decoded<Resp: Message + Default>(status: StatusCode, bytes: &[u8]) -> Result<Resp, ClientError> {
     if status.is_success() {
-        Ok(Resp::decode(bytes.as_ref())?)
+        Ok(Resp::decode(bytes)?)
     } else {
-        let error = ApiError::decode(bytes.as_ref()).unwrap_or_default();
-        let code = ErrorCode::try_from(error.code)
-            .map(|c| c.as_str_name().to_string())
-            .unwrap_or_else(|_| "UNKNOWN".into());
-        Err(ClientError::Api {
-            code,
-            message: error.message,
-            status: status.as_u16(),
-        })
+        Err(api_error(status, bytes))
+    }
+}
+
+fn api_error(status: StatusCode, bytes: &[u8]) -> ClientError {
+    let error = ApiError::decode(bytes).unwrap_or_default();
+    let code = ErrorCode::try_from(error.code)
+        .map(|c| c.as_str_name().to_string())
+        .unwrap_or_else(|_| "UNKNOWN".into());
+    ClientError::Api {
+        code,
+        message: error.message,
+        status: status.as_u16(),
+        details: error.details.into_iter().collect::<HashMap<_, _>>(),
     }
 }

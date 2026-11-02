@@ -86,6 +86,30 @@ defmodule LumiaWeb.IdentityApiTest do
     assert published.status == 204
     assert Identity.held_roster(identity.identity_id).version == 2
 
+    # Presenting v1 again is ignored; the answer carries v2 for the client
+    # to adopt (identity spec 5, "older roster"; protocol section 9).
+    stale =
+      conn
+      |> put_req_header("authorization", "Bearer " <> access)
+      |> post_proto("/api/v1/identity/roster", %V1.PublishRosterRequest{roster: v1})
+
+    assert stale.status == 409
+
+    assert %V1.Error{code: :CONFLICT, details: %{"held" => held}} =
+             V1.Error.decode(stale.resp_body)
+
+    assert %V1.SignedRoster{} = held_roster = held |> Base.decode64!() |> V1.SignedRoster.decode()
+    assert V1.RosterBody.decode(held_roster.body).version == 2
+
+    # The same at sign-in: a device carrying a stale roster learns the held one.
+    stale_sign_in =
+      post_proto(conn, "/api/v1/auth/sign-in/identity", %V1.IdentityProofSignInRequest{
+        proof: proof(conn, identity, phone, v1, :SIGN_IN)
+      })
+
+    assert stale_sign_in.status == 409
+    assert %V1.Error{details: %{"held" => ^held}} = V1.Error.decode(stale_sign_in.resp_body)
+
     fetched =
       conn
       |> put_req_header("authorization", "Bearer " <> access)

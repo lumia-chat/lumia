@@ -124,7 +124,8 @@ defmodule Lumia.IdentityTest do
       assert {:ok, %{version: 2}} = Identity.accept_roster(v2, :publish)
       assert {:ok, %{version: 2, new_revocations: []}} = Identity.accept_roster(v2, :publish)
 
-      assert {:error, :conflict} =
+      # Not newer than held: ignored, and the held version comes back.
+      assert {:error, {:conflict, %{version: 2}}} =
                Identity.accept_roster(
                  roster(ctx.identity, :root,
                    version: 2,

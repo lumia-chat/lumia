@@ -26,6 +26,16 @@ pub enum ClientError {
         message: String,
         /// HTTP status.
         status: u16,
+        /// `Error.details`, keyed as docs/protocol.md documents per code.
+        details: std::collections::HashMap<String, String>,
+    },
+    /// This device is revoked in the roster it now holds (identity spec 5,
+    /// "older roster": the instance returned the held version and the
+    /// device adopted it).
+    #[error("this device was revoked (roster v{roster_version})")]
+    DeviceRevoked {
+        /// The adopted roster's version.
+        roster_version: u64,
     },
     /// Transport failure.
     #[error("transport: {0}")]

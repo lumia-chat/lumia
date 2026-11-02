@@ -44,6 +44,8 @@ defmodule LumiaWeb.Gateway.Serializer do
 
     case frame do
       %V1.ClientFrame{frame: {:hello, hello}} ->
+        Process.put(:lumia_gateway_hello_seen, true)
+
         %Message{
           topic: @topic,
           event: "phx_join",
@@ -53,6 +55,15 @@ defmodule LumiaWeb.Gateway.Serializer do
         }
 
       %V1.ClientFrame{} ->
+        # Anything before Hello is a protocol error (protocol section 6).
+        # Phoenix answers the unjoined topic with an error reply, which
+        # `encode!/1` turns into the Disconnect; the "disconnect" broadcast
+        # queued here then stops the transport, exactly as an endpoint
+        # `broadcast(socket_id, "disconnect", %{})` would.
+        unless Process.get(:lumia_gateway_hello_seen) do
+          send(self(), %Broadcast{topic: @topic, event: "disconnect", payload: %{}})
+        end
+
         %Message{topic: @topic, event: "frame", payload: frame, ref: nil, join_ref: @join_ref}
     end
   end
@@ -64,6 +75,9 @@ defmodule LumiaWeb.Gateway.Serializer do
         %V1.Welcome{} = welcome -> %V1.ServerFrame{frame: {:welcome, welcome}}
         %V1.Error{} = error -> %V1.ServerFrame{frame: {:error, error}}
         %V1.ServerFrame{} = frame -> frame
+        # Phoenix's own replies (an unmatched topic after the channel went
+        # away) have no place in the protocol: they become a disconnect.
+        %{reason: _} -> protocol_error_frame()
       end
 
     push(frame)
@@ -87,14 +101,18 @@ defmodule LumiaWeb.Gateway.Serializer do
     })
   end
 
-  def encode!(%Message{event: "phx_error"}) do
-    push(%V1.ServerFrame{
-      frame: {:disconnect, %V1.Disconnect{reason: :DISCONNECT_PROTOCOL_ERROR}}
-    })
-  end
+  def encode!(%Message{event: "phx_error"}), do: protocol_error()
 
   @impl Phoenix.Socket.Serializer
   def fastlane!(%Broadcast{}), do: raise("the gateway does not use Phoenix broadcasts")
+
+  defp protocol_error, do: push(protocol_error_frame())
+
+  defp protocol_error_frame do
+    %V1.ServerFrame{
+      frame: {:disconnect, %V1.Disconnect{reason: :DISCONNECT_PROTOCOL_ERROR}}
+    }
+  end
 
   defp push(%V1.ServerFrame{} = frame) do
     case encoding() do

@@ -43,30 +43,55 @@ defmodule Lumia.Events do
     command_id = Proto.from_uuid(command.command_id)
     fingerprint = fingerprint(actor, command)
 
-    result =
-      Repo.transact(fn ->
-        case Repo.get_by(Command, channel_id: channel_id, command_id: command_id) do
-          %Command{fingerprint: ^fingerprint} = existing -> {:ok, {ack(existing), nil}}
-          %Command{} -> {:error, :conflict}
-          nil -> write(channel_id, actor, command, command_id, fingerprint)
-        end
-      end)
+    Repo.transact(fn ->
+      case Repo.get_by(Command, channel_id: channel_id, command_id: command_id) do
+        %Command{fingerprint: ^fingerprint} = existing -> {:ok, {ack(existing), nil}}
+        %Command{} -> {:error, :conflict}
+        nil -> write(channel_id, actor, command, command_id, fingerprint)
+      end
+    end)
+    |> settle(channel_id, actor, command, {command_id, fingerprint}, opts)
+  end
 
-    case result do
-      {:ok, {ack, nil}} ->
-        {:ok, ack}
+  defp settle({:ok, {ack, nil}}, _channel_id, _actor, _command, _key, _opts), do: {:ok, ack}
 
-      {:ok, {ack, {event, bytes}}} ->
-        if Keyword.get(opts, :broadcast, true), do: broadcast(channel_id, event, bytes)
-        {:ok, ack}
+  defp settle({:ok, {ack, {event, bytes}}}, channel_id, _actor, _command, _key, opts) do
+    if Keyword.get(opts, :broadcast, true), do: broadcast(channel_id, event, bytes)
+    {:ok, ack}
+  end
 
-      # A concurrent identical command won the race on the unique key. The
-      # whole transaction rolled back, so the seq it took is gone too.
-      {:error, %Ecto.Changeset{errors: [command_id: {_, [constraint: :unique] ++ _}]}} ->
-        append(channel_id, actor, command, opts)
+  # A concurrent identical command won the race on the unique key. The
+  # whole transaction rolled back, so the seq it took is gone too.
+  defp settle(
+         {:error, %Ecto.Changeset{errors: [command_id: {_, [constraint: :unique] ++ _}]}},
+         channel_id,
+         actor,
+         command,
+         _key,
+         opts
+       ),
+       do: append(channel_id, actor, command, opts)
 
-      other ->
-        other
+  defp settle(
+         {:error, :conflict},
+         channel_id,
+         _actor,
+         _command,
+         {command_id, fingerprint},
+         _opts
+       ),
+       do: settle_conflict(channel_id, command_id, fingerprint)
+
+  defp settle(other, _channel_id, _actor, _command, _key, _opts), do: other
+
+  # The materialized row collided (its id is the command id). Either a
+  # concurrent identical command committed first, in which case its ack is
+  # the answer (delivery spec 12: "both callers receive the same ack"), or
+  # the commands row was purged and this is a late retry: a conflict.
+  defp settle_conflict(channel_id, command_id, fingerprint) do
+    case Repo.get_by(Command, channel_id: channel_id, command_id: command_id) do
+      %Command{fingerprint: ^fingerprint} = existing -> {:ok, ack(existing)}
+      _ -> {:error, :conflict}
     end
   end
 

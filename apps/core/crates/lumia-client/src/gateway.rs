@@ -1,19 +1,30 @@
 //! Drives a [`Session`] over a real WebSocket: frames in, effects carried
 //! out against the store and the API (docs/protocol.md section 6).
+//!
+//! [`run`] is one connection. [`run_forever`] wraps it with reconnect and
+//! exponential backoff, re-subscribing from the store's cursors each time,
+//! and stops only when the application drops its command sender or the
+//! server says not to come back (`SESSION_REVOKED`, `DEVICE_REVOKED`,
+//! `PROTOCOL_ERROR`, or a refresh that the instance refuses).
 
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
-use lumia_core::proto::{AccountEvent, Command, Event};
+use lumia_core::proto::{AccountEvent, Command, DisconnectReason, Event};
 use lumia_core::store::{LogKind, OutboxEntry, Store, StoredEvent, StoredMessage};
 use lumia_core::sync::{decode_frame, encode_frame, Cursors, Effect, Notice, Session};
 use lumia_core::wire;
 use prost::Message as _;
 use tokio::sync::mpsc;
-use tokio_tungstenite::tungstenite::Message as WsMessage;
+use tokio_tungstenite::tungstenite::{self, Message as WsMessage};
 
 use crate::api::Api;
 use crate::ClientError;
+
+/// First delay after a drop; doubles per attempt up to [`MAX_BACKOFF`].
+const BASE_BACKOFF: Duration = Duration::from_secs(1);
+/// The longest wait between attempts.
+const MAX_BACKOFF: Duration = Duration::from_secs(30);
 
 /// What the application receives from the gateway loop.
 #[derive(Debug, Clone)]
@@ -24,7 +35,23 @@ pub enum GatewayEvent {
     AccountApplied(Vec<AccountEvent>),
     /// A notice from the session.
     Notice(Notice),
-    /// The loop ended.
+    /// The channel took the snapshot path (delivery spec 7) up to `seq`.
+    SnapshotTaken {
+        /// The channel log.
+        channel_id: Vec<u8>,
+        /// The snapshot's sequence number.
+        seq: u64,
+    },
+    /// The connection dropped; the loop tries again after `delay`.
+    Reconnecting {
+        /// Consecutive failed attempts so far, from 1.
+        attempt: u32,
+        /// How long the loop waits before this attempt.
+        delay: Duration,
+        /// Why the last connection ended.
+        reason: String,
+    },
+    /// The loop ended for good.
     Closed(String),
 }
 
@@ -39,33 +66,171 @@ pub enum GatewayCommand {
     Foreground,
 }
 
-/// Runs one connection until it closes. Reconnect is the caller's loop.
-///
-/// # Errors
-/// On a transport failure before the handshake completes.
-pub async fn run<S: Store + Send + 'static>(
+/// How one connection ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Exit {
+    /// The application dropped its command sender (or stopped listening).
+    Done,
+    /// The socket closed.
+    Closed {
+        /// The transport's or server's reason.
+        reason: String,
+        /// The server's `Disconnect`, when it sent one.
+        disconnect: Option<DisconnectReason>,
+        /// The server's requested wait before reconnecting.
+        reconnect_after: Duration,
+        /// Whether the handshake completed on this connection.
+        welcomed: bool,
+    },
+}
+
+/// Runs connections until the application is done or the server says stop.
+/// Returns the store so the caller keeps it.
+pub async fn run_forever<S: Store>(
     api: Api,
     mut store: S,
     client_name: &str,
     device_id: Vec<u8>,
-    initial_channels: Vec<Vec<u8>>,
+    mut channels: Vec<Vec<u8>>,
     mut commands: mpsc::Receiver<GatewayCommand>,
     events: mpsc::Sender<GatewayEvent>,
-) -> Result<S, ClientError> {
+) -> S {
+    let mut attempt = 0u32;
+    loop {
+        let outcome = run(
+            &api,
+            &mut store,
+            client_name,
+            &device_id,
+            &mut channels,
+            &mut commands,
+            &events,
+        )
+        .await;
+        let (reason, wait) = match outcome {
+            Ok(Exit::Done) => return store,
+            Ok(Exit::Closed {
+                reason,
+                disconnect: Some(d),
+                ..
+            }) if !retryable(d) => {
+                let _ = events.send(GatewayEvent::Closed(reason)).await;
+                return store;
+            }
+            Ok(Exit::Closed {
+                reason,
+                reconnect_after,
+                welcomed,
+                ..
+            }) => {
+                if welcomed {
+                    attempt = 0;
+                }
+                (reason, reconnect_after)
+            }
+            Err(ClientError::Api { code, message, .. })
+                if code == "UNAUTHENTICATED" || code == "TOKEN_EXPIRED" =>
+            {
+                // The socket's token was refused: rotate before trying again,
+                // and stop if the instance refuses the refresh too.
+                if let Err(e) = api.refresh_now().await {
+                    let _ = events.send(GatewayEvent::Closed(e.to_string())).await;
+                    return store;
+                }
+                (format!("{code}: {message}"), Duration::ZERO)
+            }
+            Err(e) => (e.to_string(), Duration::ZERO),
+        };
+        attempt += 1;
+        let delay = backoff(attempt).max(wait);
+        if events
+            .send(GatewayEvent::Reconnecting {
+                attempt,
+                delay,
+                reason,
+            })
+            .await
+            .is_err()
+        {
+            return store;
+        }
+        tokio::time::sleep(delay).await;
+        if commands.is_closed() {
+            return store;
+        }
+    }
+}
+
+/// Whether a server-initiated disconnect invites a reconnect.
+#[must_use]
+pub fn retryable(reason: DisconnectReason) -> bool {
+    !matches!(
+        reason,
+        DisconnectReason::DisconnectSessionRevoked
+            | DisconnectReason::DisconnectDeviceRevoked
+            | DisconnectReason::DisconnectProtocolError
+    )
+}
+
+/// Exponential backoff with up to a quarter of jitter, capped.
+#[must_use]
+pub fn backoff(attempt: u32) -> Duration {
+    let exp = attempt.saturating_sub(1).min(16);
+    let base = BASE_BACKOFF.saturating_mul(1u32 << exp).min(MAX_BACKOFF);
+    let jitter_nanos = u64::from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(0),
+    );
+    let quarter = base.as_nanos() / 4;
+    let jitter = u64::try_from(quarter).map_or(0, |q| if q == 0 { 0 } else { jitter_nanos % q });
+    base + Duration::from_nanos(jitter)
+}
+
+/// Runs one connection until it closes. Subscribes to `channels` from the
+/// store's cursors; a `Subscribe` command adds to that list so a reconnect
+/// picks it up.
+///
+/// # Errors
+/// On a transport failure before the handshake, an API failure while
+/// carrying out an effect, or a store failure.
+pub async fn run<S: Store>(
+    api: &Api,
+    store: &mut S,
+    client_name: &str,
+    device_id: &[u8],
+    channels: &mut Vec<Vec<u8>>,
+    commands: &mut mpsc::Receiver<GatewayCommand>,
+    events: &mpsc::Sender<GatewayEvent>,
+) -> Result<Exit, ClientError> {
+    let stored = store.cursors(LogKind::Channel)?;
     let cursors = Cursors {
-        channels: store.cursors(LogKind::Channel)?,
+        channels: stored.clone(),
         account: store
             .cursors(LogKind::Account)?
             .first()
             .map_or(0, |(_, s)| *s),
         generation: store.generation()?,
     };
-    let mut session = Session::new(client_name, device_id, cursors);
-    for id in initial_channels {
-        session.subscribe(id, 0);
+    let mut session = Session::new(client_name, device_id.to_vec(), cursors);
+    for id in channels.iter() {
+        let cursor = stored.iter().find(|(c, _)| c == id).map_or(0, |(_, s)| *s);
+        session.subscribe(id.clone(), cursor);
     }
 
-    let (ws, _) = tokio_tungstenite::connect_async(api.gateway_url()?).await?;
+    let (ws, _) = match tokio_tungstenite::connect_async(api.gateway_url()?).await {
+        Ok(ok) => ok,
+        Err(tungstenite::Error::Http(response)) if response.status() == 401 => {
+            return Err(ClientError::Api {
+                code: "UNAUTHENTICATED".into(),
+                message: "gateway refused the access token".into(),
+                status: 401,
+                details: std::collections::HashMap::new(),
+            });
+        }
+        Err(e) => return Err(e.into()),
+    };
     let (mut sink, mut stream) = ws.split();
 
     let mut pending = vec![session.hello()];
@@ -73,6 +238,17 @@ pub async fn run<S: Store + Send + 'static>(
     heartbeat.tick().await;
     let mut nonce = 0u64;
     let mut account_id: Vec<u8> = Vec::new();
+    let mut welcomed = false;
+    let mut disconnect: Option<(DisconnectReason, Duration)> = None;
+
+    let closed = |reason: String, disconnect: &Option<(DisconnectReason, Duration)>, welcomed| {
+        Exit::Closed {
+            reason,
+            disconnect: disconnect.map(|(d, _)| d),
+            reconnect_after: disconnect.map_or(Duration::ZERO, |(_, w)| w),
+            welcomed,
+        }
+    };
 
     loop {
         // Carry out effects, which may produce more effects.
@@ -112,6 +288,12 @@ pub async fn run<S: Store + Send + 'static>(
                         })
                         .collect();
                     store.apply_snapshot(&channel_id, snap.seq, &messages)?;
+                    let _ = events
+                        .send(GatewayEvent::SnapshotTaken {
+                            channel_id: channel_id.clone(),
+                            seq: snap.seq,
+                        })
+                        .await;
                     pending.extend(session.snapshot_applied(&channel_id, snap.seq));
                 }
                 Effect::AccountSnapshot => {
@@ -151,6 +333,7 @@ pub async fn run<S: Store + Send + 'static>(
                 Effect::Notify(notice) => {
                     match &notice {
                         Notice::Welcomed(welcome) => {
+                            welcomed = true;
                             account_id.clone_from(&welcome.account_id);
                             store.set_generation(welcome.recovery_generation)?;
                             // Retry anything still in the outbox, verbatim.
@@ -161,6 +344,12 @@ pub async fn run<S: Store + Send + 'static>(
                             }
                         }
                         Notice::Acked { command_id, .. } => store.outbox_remove(command_id)?,
+                        Notice::Disconnected(d) => {
+                            disconnect = Some((
+                                DisconnectReason::try_from(d.reason).unwrap_or_default(),
+                                Duration::from_secs(u64::from(d.reconnect_after_seconds)),
+                            ));
+                        }
                         _ => {}
                     }
                     let _ = events.send(GatewayEvent::Notice(notice)).await;
@@ -176,18 +365,11 @@ pub async fn run<S: Store + Send + 'static>(
                         pending.extend(session.handle(frame));
                     }
                     Some(Ok(WsMessage::Close(frame))) => {
-                        let _ = events.send(GatewayEvent::Closed(format!("{frame:?}"))).await;
-                        return Ok(store);
+                        return Ok(closed(format!("{frame:?}"), &disconnect, welcomed));
                     }
                     Some(Ok(_)) => {}
-                    Some(Err(e)) => {
-                        let _ = events.send(GatewayEvent::Closed(e.to_string())).await;
-                        return Ok(store);
-                    }
-                    None => {
-                        let _ = events.send(GatewayEvent::Closed("eof".into())).await;
-                        return Ok(store);
-                    }
+                    Some(Err(e)) => return Ok(closed(e.to_string(), &disconnect, welcomed)),
+                    None => return Ok(closed("eof".into(), &disconnect, welcomed)),
                 }
             }
             command = commands.recv() => {
@@ -206,10 +388,13 @@ pub async fn run<S: Store + Send + 'static>(
                             .into_iter()
                             .find(|(id, _)| *id == channel_id)
                             .map_or(0, |(_, s)| s);
+                        if !channels.contains(&channel_id) {
+                            channels.push(channel_id.clone());
+                        }
                         pending.extend(session.subscribe(channel_id, cursor));
                     }
                     Some(GatewayCommand::Foreground) => pending.push(session.high_water_mark()),
-                    None => return Ok(store),
+                    None => return Ok(Exit::Done),
                 }
             }
             _ = heartbeat.tick() => {
@@ -217,5 +402,33 @@ pub async fn run<S: Store + Send + 'static>(
                 pending.push(session.heartbeat(nonce));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn backoff_doubles_and_caps() {
+        let a = backoff(1);
+        let b = backoff(2);
+        let c = backoff(3);
+        assert!(a >= Duration::from_secs(1) && a < Duration::from_millis(1250));
+        assert!(b >= Duration::from_secs(2) && b < Duration::from_millis(2500));
+        assert!(c >= Duration::from_secs(4) && c < Duration::from_millis(5000));
+        let far = backoff(40);
+        assert!(far >= MAX_BACKOFF && far <= MAX_BACKOFF + MAX_BACKOFF / 4);
+    }
+
+    #[test]
+    fn only_revocations_and_protocol_errors_stop_the_loop() {
+        assert!(retryable(DisconnectReason::DisconnectServerShutdown));
+        assert!(retryable(DisconnectReason::DisconnectHeartbeatTimeout));
+        assert!(retryable(DisconnectReason::DisconnectSlowConsumer));
+        assert!(retryable(DisconnectReason::DisconnectRateLimited));
+        assert!(!retryable(DisconnectReason::DisconnectSessionRevoked));
+        assert!(!retryable(DisconnectReason::DisconnectDeviceRevoked));
+        assert!(!retryable(DisconnectReason::DisconnectProtocolError));
     }
 }
