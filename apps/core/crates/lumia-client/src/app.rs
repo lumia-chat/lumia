@@ -19,10 +19,10 @@ use futures_util::StreamExt as _;
 use lumia_core::keystore::Keystore;
 use lumia_core::mls::projection::Projection;
 use lumia_core::proto::{
-    command, event, Command, DeviceKind, DmOperation, DmRequest, DmRequestState, Event, PushKind,
-    PushSubscription, SendMessage, TokenPair,
+    command, dm_operation, event, mention, ChannelKind, Command, DeviceKind, DmOperation,
+    DmRequest, DmRequestState, Event, PushKind, PushSubscription, SendMessage, TokenPair,
 };
-use lumia_core::store::{Store, StoreError};
+use lumia_core::store::{LogKind, Store, StoreError, StoredEvent};
 use lumia_core::sync::Notice;
 use lumia_core::wire;
 use prost::Message as _;
@@ -34,6 +34,7 @@ use crate::futures_channel::mpsc;
 use crate::gateway::{self, GatewayCommand, GatewayEvent};
 use crate::identity::Device;
 use crate::sqlite::{DmStatus, SqliteStore};
+use crate::writer::{WriterGuard, WriterLock};
 use crate::ClientError;
 
 /// Which store a shell is asked to open (`Opener`).
@@ -563,6 +564,12 @@ struct Inner {
     commands: Option<mpsc::UnboundedSender<GatewayCommand>>,
     /// The sink while the loop runs; DM outcomes go there too.
     sink: Option<EventSink>,
+    /// The single-writer lock, held shared while this process is in the
+    /// foreground (`writer.rs`); none on the web.
+    writer_guard: Option<WriterGuard>,
+    /// The store's writer generation as last seen by this process; another
+    /// process bumping it means its writes must be reloaded.
+    writer_generation: u64,
 }
 
 /// The identity's stores: their own lock, so an identity flow that awaits
@@ -597,6 +604,7 @@ pub struct App {
     /// each holding it across its own awaits (roster and key-package
     /// fetches).
     dm: Mutex<Option<Arc<AsyncMutex<DmEngine>>>>,
+    writer: Option<WriterLock>,
 }
 
 impl std::fmt::Debug for App {
@@ -616,10 +624,36 @@ impl App {
     /// # Errors
     /// When a store cannot be opened.
     pub fn open(base_url: &str, place: Place, opener: Opener) -> Result<Arc<Self>, ClientError> {
+        Self::open_with(base_url, place, opener, None)
+    }
+
+    /// `open`, with the single-writer lock at `lock_path` shared with the
+    /// notification extension (architecture 15.5): taken shared here, so
+    /// this process counts as the writer until `background`.
+    ///
+    /// # Errors
+    /// When a store cannot be opened, or the lock cannot be taken.
+    pub fn open_locked(
+        base_url: &str,
+        place: Place,
+        opener: Opener,
+        lock_path: &std::path::Path,
+    ) -> Result<Arc<Self>, ClientError> {
+        Self::open_with(base_url, place, opener, Some(WriterLock::new(lock_path)))
+    }
+
+    fn open_with(
+        base_url: &str,
+        place: Place,
+        opener: Opener,
+        writer: Option<WriterLock>,
+    ) -> Result<Arc<Self>, ClientError> {
         let host = host_of(base_url);
+        let writer_guard = writer.as_ref().map(WriterLock::shared).transpose()?;
         let mut store = opener(StoreName::Instance)?;
         store.meta_set("base_url", base_url.trim_end_matches('/'))?;
         let reader = opener(StoreName::Instance)?;
+        let writer_generation = writer_generation(&reader)?;
         let keys = opener(StoreName::Keys)?;
         let identity_store = opener(StoreName::IdentityStore)?;
         let mut identity_keys = opener(StoreName::IdentityKeys)?;
@@ -655,12 +689,15 @@ impl App {
                 keys,
                 commands: None,
                 sink: None,
+                writer_guard,
+                writer_generation,
             }),
             identity: AsyncMutex::new(IdentityStores {
                 store: identity_store,
                 keys: identity_keys,
             }),
             dm: Mutex::new(None),
+            writer,
         }))
     }
 
@@ -1003,6 +1040,202 @@ impl App {
     /// When not started.
     pub fn foreground(&self) -> Result<(), ClientError> {
         self.send_command(GatewayCommand::Foreground)
+    }
+
+    /// The app is going to the background: the single-writer lock is
+    /// released so the notification extension can take it (the gateway
+    /// loop is left to the platform, which suspends the process).
+    pub fn background(&self) {
+        self.lock().writer_guard = None;
+    }
+
+    /// The app is back in the foreground: the single-writer lock is taken
+    /// shared again (waiting for an extension mid-run), and the answer is
+    /// whether another process wrote meanwhile, in which case the gateway
+    /// loop must be restarted so it resumes from the store's cursors.
+    ///
+    /// # Errors
+    /// When the lock cannot be taken.
+    pub fn resume(&self) -> Result<bool, ClientError> {
+        let Some(writer) = &self.writer else {
+            return Ok(false);
+        };
+        let guard = writer.shared()?;
+        let mut inner = self.lock();
+        inner.writer_guard = Some(guard);
+        let now = writer_generation(&inner.reader)?;
+        let changed = now != inner.writer_generation;
+        inner.writer_generation = now;
+        Ok(changed)
+    }
+
+    /// What a push should say, for the notification extension (architecture
+    /// 15.5): under the exclusive writer lock, every channel of the account
+    /// is brought up to the instance's head over HTTP and applied to the
+    /// store, personal conversations are decrypted through the engine, and
+    /// the newest message for this account (a personal DM, or a server
+    /// message that mentions it) comes back. `None` when the app holds the
+    /// lock (it is live and shows the message itself), when nothing new was
+    /// readable, or when this device is not signed in. The store's writer
+    /// generation is bumped so the app reloads.
+    ///
+    /// # Errors
+    /// On a store failure; API failures on one channel leave it out.
+    pub async fn notification_content(
+        &self,
+        timeout: std::time::Duration,
+    ) -> Result<Option<NotificationContent>, ClientError> {
+        let Some(writer) = &self.writer else {
+            return Err(ClientError::State("no writer lock".into()));
+        };
+        let Some(_guard) = writer.exclusive(timeout)? else {
+            return Ok(None);
+        };
+        if !self.signed_in() {
+            return Ok(None);
+        }
+        let snap = self.api.account_snapshot().await?;
+        let me = snap.account.map(|a| a.account_id).unwrap_or_default();
+        let mut store = (self.opener)(StoreName::Instance)?;
+        let cursors: HashMap<Vec<u8>, u64> = store.cursors(LogKind::Channel)?.into_iter().collect();
+        let mut best: Option<(i64, NotificationContent)> = None;
+        let mut names: HashMap<Vec<u8>, String> = HashMap::new();
+        for channel in &snap.channels {
+            let cursor = cursors.get(&channel.channel_id).copied().unwrap_or(0);
+            if channel.last_seq <= cursor {
+                continue;
+            }
+            // Up to the head, in pages, bounded: a device far behind takes
+            // the snapshot path when the app next runs.
+            let id = wire::display(&channel.channel_id);
+            let mut after = cursor;
+            let mut applied: Vec<Event> = Vec::new();
+            while after < channel.last_seq && applied.len() < 500 {
+                let Ok(page) = self.api.channel_events(&id, after, 0).await else {
+                    break;
+                };
+                if page.events.is_empty() {
+                    break;
+                }
+                let stored: Vec<StoredEvent> = page
+                    .events
+                    .iter()
+                    .map(|e| StoredEvent {
+                        seq: e.seq,
+                        bytes: e.encode_to_vec(),
+                    })
+                    .collect();
+                after = stored.last().map_or(after, |e| e.seq);
+                store.apply(LogKind::Channel, &channel.channel_id, &stored)?;
+                applied.extend(page.events);
+            }
+            let personal = matches!(
+                ChannelKind::try_from(channel.kind),
+                Ok(ChannelKind::PersonalDm | ChannelKind::PersonalGroupDm)
+            );
+            if personal {
+                let Ok(engine) = self.dm_engine() else {
+                    continue;
+                };
+                let mut e = engine.lock().await;
+                e.record_channel(channel)?;
+                let outcomes = match e.catch_up(&channel.channel_id).await {
+                    Ok(o) => o,
+                    Err(_) => continue,
+                };
+                let my_identity = e.me().identity_id.clone();
+                for outcome in outcomes {
+                    let Outcome::Operation { sender, op, .. } = outcome else {
+                        continue;
+                    };
+                    if sender.identity_id == my_identity {
+                        continue;
+                    }
+                    let Some(dm_operation::Op::Send(send)) = op.op else {
+                        continue;
+                    };
+                    let account = e
+                        .account_of(&sender.identity_id)
+                        .cloned()
+                        .unwrap_or_default();
+                    let title = self.name_of(&account, &mut names).await;
+                    let at = op
+                        .sent_at
+                        .as_ref()
+                        .map_or(0, |t| t.seconds * 1_000_000 + i64::from(t.nanos) / 1000);
+                    consider(
+                        &mut best,
+                        at,
+                        NotificationContent {
+                            title,
+                            body: send.body,
+                            channel_id: id.clone(),
+                            kind: "dm".into(),
+                        },
+                    );
+                }
+            } else {
+                for ev in applied {
+                    let Some(event::Payload::MessageCreated(created)) = ev.payload else {
+                        continue;
+                    };
+                    let Some(message) = created.message else {
+                        continue;
+                    };
+                    if ev.actor_account_id == me || me.is_empty() {
+                        continue;
+                    }
+                    let mentioned = message.mentions.iter().any(
+                        |m| matches!(&m.target, Some(mention::Target::AccountId(id)) if *id == me),
+                    );
+                    if !mentioned {
+                        continue;
+                    }
+                    let author = self.name_of(&ev.actor_account_id, &mut names).await;
+                    let title = if channel.name.is_empty() {
+                        author
+                    } else {
+                        format!("{author} in #{}", channel.name)
+                    };
+                    let at = ev
+                        .created_at
+                        .as_ref()
+                        .map_or(0, |t| t.seconds * 1_000_000 + i64::from(t.nanos) / 1000);
+                    consider(
+                        &mut best,
+                        at,
+                        NotificationContent {
+                            title,
+                            body: message.body,
+                            channel_id: id.clone(),
+                            kind: "mention".into(),
+                        },
+                    );
+                }
+            }
+        }
+        let generation = writer_generation(&store)? + 1;
+        store.meta_set("writer_generation", &generation.to_string())?;
+        self.lock().writer_generation = generation;
+        Ok(best.map(|(_, content)| content))
+    }
+
+    /// An account's name for a notice: display name, else handle, else "Someone".
+    async fn name_of(&self, account_id: &[u8], names: &mut HashMap<Vec<u8>, String>) -> String {
+        if let Some(name) = names.get(account_id) {
+            return name.clone();
+        }
+        let name = if account_id.is_empty() {
+            "Someone".to_string()
+        } else {
+            match self.api.account(&wire::display(account_id)).await {
+                Ok(a) if !a.display_name.is_empty() => a.display_name,
+                Ok(a) if !a.handle.is_empty() => a.handle,
+                _ => "Someone".to_string(),
+            }
+        };
+        names.insert(account_id.to_vec(), name.clone());
+        name
     }
 
     // ---- Identity ----
@@ -1438,4 +1671,33 @@ impl App {
         tx.unbounded_send(command)
             .map_err(|_| ClientError::State("the gateway loop has stopped".into()))
     }
+}
+
+/// What a push should say, decided on the device (architecture 15.5).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct NotificationContent {
+    /// Who, and for a mention, where.
+    pub title: String,
+    /// The message.
+    pub body: String,
+    /// The conversation or channel to open (UUID string).
+    pub channel_id: String,
+    /// `dm` or `mention`.
+    pub kind: String,
+}
+
+/// Keeps the newest candidate.
+fn consider(best: &mut Option<(i64, NotificationContent)>, at: i64, content: NotificationContent) {
+    if best.as_ref().is_none_or(|(when, _)| at >= *when) {
+        *best = Some((at, content));
+    }
+}
+
+/// The store's writer generation: bumped by a process that wrote while
+/// another may have been suspended.
+fn writer_generation(store: &SqliteStore) -> Result<u64, ClientError> {
+    Ok(store
+        .meta_get("writer_generation")?
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0))
 }

@@ -55,7 +55,7 @@ xcrun simctl install "$udid" "$app"
 
 shoot() { # <screen> <seconds>
   xcrun simctl terminate "$udid" "$bundle" 2>/dev/null || true
-  SIMCTL_CHILD_LUMIA_DEV_INSTANCE="$instance" SIMCTL_CHILD_LUMIA_DEV_HANDLE="$handle" SIMCTL_CHILD_LUMIA_DEV_PASSWORD="$password" SIMCTL_CHILD_LUMIA_DEV_SCREEN="$1" \
+  SIMCTL_CHILD_LUMIA_DEV_INSTANCE="$instance" SIMCTL_CHILD_LUMIA_DEV_HANDLE="$handle" SIMCTL_CHILD_LUMIA_DEV_PASSWORD="$password" SIMCTL_CHILD_LUMIA_DEV_SCREEN="$1" SIMCTL_CHILD_LUMIA_DEV_NO_PUSH=1 \
     xcrun simctl launch "$udid" "$bundle" >/dev/null
   sleep "$2"
   xcrun simctl io "$udid" screenshot "$work/$1.png" >/dev/null 2>&1

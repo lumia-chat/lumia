@@ -7,6 +7,7 @@ import SwiftUI
 
 @main
 struct LumiaApp: App {
+    @UIApplicationDelegateAdaptor(PushDelegate.self) private var pushDelegate
     @State private var store = AppStore()
 
     var body: some Scene {

@@ -43,7 +43,11 @@ struct ShellView: View {
                 }
             }
         }
-        .task { await session.load() }
+        .task {
+            await session.load()
+            PushRegistrar.shared.register()
+        }
+        .task(id: PushRegistrar.shared.token) { await PushRegistrar.shared.subscribe(session) }
         .onChange(of: servers.map(\.serverId)) { _, ids in
             // With no conversation yet, a first server is the better place to land.
             if case .home = place, let first = ids.first, snapshot?.channels.contains(where: { personalKinds.contains($0.kind) }) == false {
@@ -67,7 +71,12 @@ struct ShellView: View {
             #endif
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { session.foreground() }
+            // The single-writer lock follows the app's phase (architecture 15.5).
+            switch phase {
+            case .active: session.foreground()
+            case .background: session.background()
+            default: break
+            }
         }
     }
 }

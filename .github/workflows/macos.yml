@@ -86,9 +86,11 @@ jobs:
         working-directory: apps/apple/Lumia-macOS
       - run: xcodegen generate
         working-directory: apps/apple/Lumia-iOS
+      # Signed to run locally, so the app-group entitlement the extension
+      # needs is embedded; with the UI test the push smoke drives.
       - run: |
           set -o pipefail
-          xcodebuild -project Lumia.xcodeproj -scheme Lumia -configuration Debug -destination 'generic/platform=iOS Simulator' -derivedDataPath .build CODE_SIGNING_ALLOWED=NO build 2>&1 | grep -E "error:|warning: .*/(LumiaKit|Lumia-iOS)/|BUILD"
+          xcodebuild build-for-testing -project Lumia.xcodeproj -scheme Lumia -configuration Debug -destination 'generic/platform=iOS Simulator' -derivedDataPath .build CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO 2>&1 | grep -E "error:|warning: .*/(LumiaKit|Lumia-iOS)/|BUILD"
         working-directory: apps/apple/Lumia-iOS
 
       - run: cargo build --release -p lumia-cli
@@ -118,11 +120,18 @@ jobs:
       # one launch per screen, screenshots kept on failure.
       - run: apps/apple/scripts/smoke-ios.sh
         timeout-minutes: 10
+      # The notification extension's path: the phone linked as a second
+      # device, a DM accepted elsewhere, the message decrypted for the notice.
+      - run: apps/apple/scripts/smoke-push.sh
+        timeout-minutes: 12
       - if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: ios-screens
-          path: apps/apple/.build/smoke-ios/*.png
+          path: |
+            apps/apple/.build/smoke-ios/*.png
+            apps/apple/.build/smoke-push/*.png
+            apps/apple/.build/smoke-push/uitest.log
           if-no-files-found: ignore
       - run: bun run e2e -- webkit
         working-directory: apps/web

@@ -48,6 +48,16 @@ public actor LumiaClient {
     public func subscribe(channelID: String) throws { try inner.subscribe(channelId: channelID) }
     public func sendMessage(channelID: String, body: String) throws -> String { try inner.sendMessage(channelId: channelID, body: body) }
     public func foreground() throws { try inner.foreground() }
+    /// Going to the background: releases the single-writer lock (architecture 15.5).
+    public func background() { inner.background() }
+    /// Back in the foreground: takes the lock again; true when the
+    /// notification extension wrote meanwhile and the loop must restart.
+    public func resume() throws -> Bool { try inner.resume() }
+    /// For the notification extension: what the push should say, after
+    /// syncing and decrypting under the exclusive lock; nil keeps the generic notice.
+    public func notificationContent(timeoutMs: UInt64 = 3000) throws -> NotificationContent? { try inner.notificationContent(timeoutMs: timeoutMs) }
+    /// The same, blocking, for the notification extension's one call.
+    public nonisolated func notificationContentSync(timeoutMs: UInt64 = 3000) throws -> NotificationContent? { try inner.notificationContent(timeoutMs: timeoutMs) }
 
     public func identityCreate(label: String) throws -> IdentityCreated { try inner.identityCreate(label: label) }
     public func identityLinkAccount(password: String) throws { try inner.identityLinkAccount(password: password) }

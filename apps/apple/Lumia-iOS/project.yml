@@ -1,8 +1,9 @@
 # The iOS app (architecture section 13): the SwiftUI layout for a phone
-# over LumiaKit, the package the macOS app shares. `xcodegen generate`
-# (xcodegen 2.45+) makes the project, which is not committed;
-# `scripts/core.sh --ios` must have run first (it adds the iOS device and
-# simulator slices to the XCFramework).
+# over LumiaKit, the package the macOS app shares, and its notification
+# service extension (architecture 15.5). `xcodegen generate` (xcodegen
+# 2.45+) makes the project, which is not committed; `scripts/core.sh
+# --ios` must have run first (it adds the iOS device and simulator slices
+# to the XCFramework).
 name: Lumia
 options:
   bundleIdPrefix: chat.lumia
@@ -13,6 +14,17 @@ options:
 packages:
   LumiaKit:
     path: ../LumiaKit
+settings:
+  base:
+    SWIFT_VERSION: "5.10"
+    SWIFT_STRICT_CONCURRENCY: minimal
+    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: UZAQ69P4MG
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    # The core's simulator slice is arm64 (core.sh --ios); an Intel
+    # simulator would need an x86_64 build of it too.
+    "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
 targets:
   Lumia:
     type: application
@@ -22,6 +34,7 @@ targets:
       - Resources
     dependencies:
       - package: LumiaKit
+      - target: LumiaNotifications
     info:
       path: Info.plist
       properties:
@@ -42,19 +55,70 @@ targets:
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         UISupportedInterfaceOrientations~ipad: [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
         NSHumanReadableCopyright: ""
+    entitlements:
+      path: Lumia.entitlements
+      properties:
+        # Pushes through the relay, and the container the extension shares.
+        aps-environment: development
+        com.apple.security.application-groups: [group.chat.lumia]
     settings:
       base:
         # One bundle ID with the macOS app: one App Store Connect record
         # carries both platforms.
         PRODUCT_BUNDLE_IDENTIFIER: chat.lumia
-        SWIFT_VERSION: "5.10"
-        SWIFT_STRICT_CONCURRENCY: minimal
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         TARGETED_DEVICE_FAMILY: "1,2"
-        # The core's simulator slice is arm64 (core.sh --ios); an Intel
-        # simulator would need an x86_64 build of it too.
-        "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
-        CODE_SIGN_STYLE: Automatic
-        DEVELOPMENT_TEAM: UZAQ69P4MG
-        MARKETING_VERSION: "0.1.0"
-        CURRENT_PROJECT_VERSION: "1"
+  # The notification service extension: the same core and stores as the
+  # app (the app group), the generic notice replaced by the message.
+  LumiaNotifications:
+    type: app-extension
+    platform: iOS
+    sources:
+      - Notifications
+    dependencies:
+      - package: LumiaKit
+    info:
+      path: Notifications/Info.plist
+      properties:
+        CFBundleDisplayName: Lumia Notifications
+        CFBundleName: LumiaNotifications
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.usernotifications.service
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationService
+    entitlements:
+      path: Notifications/LumiaNotifications.entitlements
+      properties:
+        com.apple.security.application-groups: [group.chat.lumia]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: chat.lumia.notifications
+        TARGETED_DEVICE_FAMILY: "1,2"
+  # The UI test the push smoke runs to answer the notification prompt
+  # (scripts/smoke-push.sh); not a test suite.
+  LumiaUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - UITests
+    dependencies:
+      - target: Lumia
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: chat.lumia.uitests
+        TARGETED_DEVICE_FAMILY: "1,2"
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  Lumia:
+    build:
+      targets:
+        Lumia: all
+        LumiaUITests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets: [LumiaUITests]
+    archive:
+      config: Release

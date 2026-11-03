@@ -25,6 +25,7 @@ pub mod keystore;
 pub mod sqlite;
 pub mod time;
 pub mod transport;
+pub mod writer;
 
 pub use futures_channel;
 pub use futures_util;

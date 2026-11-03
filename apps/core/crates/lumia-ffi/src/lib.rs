@@ -352,6 +352,26 @@ impl From<app::DmMessageSummary> for DmMessageSummary {
     }
 }
 
+/// What a push should say, decided on the device.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct NotificationContent {
+    pub title: String,
+    pub body: String,
+    pub channel_id: String,
+    pub kind: String,
+}
+
+impl From<app::NotificationContent> for NotificationContent {
+    fn from(c: app::NotificationContent) -> Self {
+        Self {
+            title: c.title,
+            body: c.body,
+            channel_id: c.channel_id,
+            kind: c.kind,
+        }
+    }
+}
+
 /// A personal conversation as this device can read it.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct DmLogSummary {
@@ -581,6 +601,7 @@ impl Client {
                 message: e.to_string(),
             })?;
         }
+        let lock_dir = dir.clone();
         let opener: Opener = Arc::new(move |name| {
             let path = match name {
                 StoreName::Instance => dir.join("store.sqlite"),
@@ -590,7 +611,14 @@ impl Client {
             };
             SqliteStore::open(&path)
         });
-        let app = App::open(&base_url, Place::Native, opener)?;
+        // The single-writer lock with the notification extension sits
+        // beside this instance's stores (architecture 15.5).
+        let app = App::open_locked(
+            &base_url,
+            Place::Native,
+            opener,
+            &lock_dir.join("writer.lock"),
+        )?;
         Ok(Arc::new(Self { runtime, app }))
     }
 
@@ -692,6 +720,33 @@ impl Client {
     /// The app came back to the foreground: ask for every head.
     pub fn foreground(&self) -> Res<()> {
         Ok(self.app.foreground()?)
+    }
+
+    /// The app is going to the background: releases the single-writer lock
+    /// so the notification extension can take it.
+    pub fn background(&self) {
+        self.app.background();
+    }
+
+    /// The app is back in the foreground: takes the single-writer lock
+    /// again; true when the extension wrote meanwhile, so the gateway loop
+    /// must be stopped and started to resume from the store.
+    pub fn resume(&self) -> Res<bool> {
+        Ok(self.app.resume()?)
+    }
+
+    /// For the notification extension: what the push should say, after
+    /// syncing and decrypting under the exclusive writer lock (tried for
+    /// `timeout_ms`); nil when the app holds the lock or nothing new was
+    /// readable, so the generic notice stands.
+    pub fn notification_content(&self, timeout_ms: u64) -> Res<Option<NotificationContent>> {
+        Ok(self
+            .runtime
+            .block_on(
+                self.app
+                    .notification_content(std::time::Duration::from_millis(timeout_ms)),
+            )?
+            .map(Into::into))
     }
 
     // ---- Identity ----

@@ -259,8 +259,30 @@ public final class LumiaSession {
         connection = .idle
     }
 
+    /// Going to the background: the single-writer lock is released so the
+    /// notification extension can fetch and decrypt (architecture 15.5).
+    public func background() {
+        Task { await client.background() }
+    }
+
+    /// Back in the foreground: the lock is taken again; when the extension
+    /// wrote meanwhile, the gateway loop restarts from the store's cursors,
+    /// otherwise it is asked for every head.
     public func foreground() {
-        Task { try? await client.foreground() }
+        Task {
+            let wrote = (try? await client.resume()) ?? false
+            if wrote {
+                stop()
+                await load()
+            } else {
+                try? await client.foreground()
+            }
+        }
+    }
+
+    /// Registers this device for pushes through the relay (`apns`).
+    public func pushSubscribe(platform: String, token: String) async {
+        try? await client.pushSubscribe(platform: platform, token: token)
     }
 
     private func handle(_ event: LumiaEvent) async {
