@@ -11,9 +11,14 @@
 # Without --sign the app is exported and the DMG built, a check that
 # everything assembles; only --sign produces something to publish.
 #
+# Signing needs the team's Developer ID Application certificate in a
+# keychain on the machine; the release workflow imports it from a secret
+# (DEVELOPER_ID_P12) into a keychain of its own. An App Store Connect API
+# key cannot sign with it: cloud-managed Developer ID certificates are
+# not offered to this account's keys.
+#
 # Environment:
-#   ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_PATH   App Store Connect API key (Admin): cloud signing on a
-#                                             machine without the certificate, and notarization (--sign)
+#   ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_PATH   App Store Connect API key (any role): notarization (--sign)
 #   SPARKLE_KEY_PATH                          the EdDSA private key file (the base64 seed; the public
 #                                             half is LUMIA_UPDATE_KEY in project.yml); the appcast is
 #                                             written when it is set, signed with it
@@ -34,10 +39,8 @@ sign=false
 [ "${2:-}" = "--sign" ] && sign=true
 build=$(git -C "$here" rev-list --count HEAD)
 
-auth=""
 notary=""
 if [ -n "${ASC_KEY_ID:-}" ]; then
-  auth="-authenticationKeyPath $ASC_KEY_PATH -authenticationKeyID $ASC_KEY_ID -authenticationKeyIssuerID $ASC_ISSUER_ID"
   notary="--key $ASC_KEY_PATH --key-id $ASC_KEY_ID --issuer $ASC_ISSUER_ID"
 fi
 if $sign; then
@@ -59,9 +62,8 @@ xcodebuild -project "$app/Lumia.xcodeproj" -scheme Lumia -configuration Release 
   archive | grep -E "error|warning: .*Sources|ARCHIVE (SUCCEEDED|FAILED)" || true
 [ -d "$out/Lumia.xcarchive" ] || { echo "dist: no archive"; exit 1; }
 
-# shellcheck disable=SC2086
 xcodebuild -exportArchive -archivePath "$out/Lumia.xcarchive" -exportOptionsPlist "$app/ExportOptionsDeveloperID.plist" \
-  -exportPath "$out/export" -allowProvisioningUpdates $auth | grep -E "error|EXPORT (SUCCEEDED|FAILED)" || true
+  -exportPath "$out/export" | grep -E "error|EXPORT (SUCCEEDED|FAILED)" || true
 bundle="$out/export/Lumia.app"
 [ -d "$bundle" ] || { echo "dist: no export"; exit 1; }
 codesign --verify --deep --strict "$bundle"
