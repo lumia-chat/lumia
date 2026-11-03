@@ -428,7 +428,7 @@ Each device is an MLS leaf with its own device key (section 5.1) as the credenti
 
 ### 11.4 Web client
 
-**Decision.** A browser session is a **web device**: its own device key, scoped to the **origin** that served the client.
+**Decision.** A browser session is a **web device**: its own device key, scoped to the **origin** that served the client. With the web on LiveView (section 13, decided 2026-11-03) this section applies to the island, the client-side part that holds the E2EE surfaces; the server-rendered pages are not a device.
 
 - The flagship's web origin may connect to many instances, because Lumia controls its code distribution.
 - A self-hosted instance's web origin connects to **that instance only**. Its JavaScript therefore never sees a device key that works anywhere else.
@@ -471,8 +471,8 @@ Deleting an **identity** is separate and done per instance by deleting each acco
 |---|---|---|
 | macOS, iOS | SwiftUI | Native, via UniFFI |
 | Android | Jetpack Compose | Native, via UniFFI |
-| Windows, Linux | Tauri shell running the web UI on the system webview | Native, in-process |
-| Web | Same UI as the Tauri shell | WASM |
+| Windows, Linux | Qt 6 with Qt Quick, the glue in Rust through cxx-qt (decided 2026-11-03; Tauri on the system webview until it ships, plan step 8) | Native, in-process |
+| Web | Phoenix LiveView rendered by the instance for everything the server can read; the E2EE surfaces (personal conversations, accepting a request, device revoke, linking) as a client-side island (decided 2026-11-03, plan step 8; the SolidJS single-page client until it ships) | None for the LiveView; WASM in the island |
 
 **Rejected.**
 - *One cross-platform toolkit everywhere (Flutter, Electron).* Performance is the first priority and Electron's memory footprint is disqualifying.
@@ -482,7 +482,7 @@ Deleting an **identity** is separate and done per instance by deleting each acco
 
 **Linux.** Tauri on Linux means WebKitGTK, the weakest of the system webviews for GPU compositing, Wayland, and raw performance. Linux is therefore where the "webview is the bottleneck" trigger fires first, the budgets in section 17 carry a Linux row, and the Qt path would start there.
 
-**Qt as the desktop escape hatch.** If the Linux budget row in section 17 misses, the desktop shell for **Windows and Linux together** moves from Tauri to **Qt 6 with Qt Quick**, the UI in QML and the glue in Rust through cxx-qt, the Rust core linked in-process. Qt is chosen over the Rust-native toolkits because it is strong where they are weak: rich text (`QTextDocument`), input methods on Wayland and X11, and accessibility (AT-SPI on Linux, UIA on Windows). Telegram Desktop is the existence proof of a Qt chat client that scrolls very large channels smoothly on both platforms, and Qt Quick's scene graph fits a 10k-message list better than WebKitGTK compositing. Considerations recorded so the decision does not have to be re-derived:
+**Qt for the desktop.** Decided outright on 2026-11-03 (plan step 8) rather than by the Linux budget trigger as first written, which was never measured: the Tauri shell existed only to carry the web UI on the system webview, and the web UI itself is being replaced by LiveView (below), so the shell loses its reason with it. The desktop shell for **Windows and Linux together** moves from Tauri to **Qt 6 with Qt Quick**, the UI in QML and the glue in Rust through cxx-qt, the Rust core linked in-process. Qt is chosen over the Rust-native toolkits because it is strong where they are weak: rich text (`QTextDocument`), input methods on Wayland and X11, and accessibility (AT-SPI on Linux, UIA on Windows). Telegram Desktop is the existence proof of a Qt chat client that scrolls very large channels smoothly on both platforms, and Qt Quick's scene graph fits a 10k-message list better than WebKitGTK compositing. Considerations recorded so the decision does not have to be re-derived:
 
 - *Both platforms or neither.* Qt buys little on Windows alone: WebView2 is Chromium, so the webview is not the bottleneck there, and a Qt window looks no more native than a webview does. But once the Qt codebase exists for Linux, Windows is nearly free, and Qt for Linux beside Tauri for Windows means two desktop shells, two bug surfaces, and two CI pipelines for one platform class. One desktop codebase, whichever it is; `apps/desktop` is replaced, not joined.
 - *Cost.* A fourth UI implementation (SwiftUI, Compose, the web UI, Qt), and the web UI still exists for the browser. The design system's components are rebuilt in QML; tokens, fonts, and icons carry over from `assets/`. This is the argument that rejected every other extra shell in this section, and it still applies; the measured Linux budget is what overrides it, not preference.
@@ -490,7 +490,9 @@ Deleting an **identity** is separate and done per instance by deleting each acco
 - *What it resolves.* The open question of whether the Tauri shell ships the core in-process or as WASM (section 20) disappears, since a Qt shell links the core directly and the desktop gets the native core row in the table above.
 - *What it costs the web client.* The web UI loses its desktop dogfooding; it is exercised in browsers only.
 
-The trigger is the Linux row in section 17, measured on the Tauri shell CI builds. Until it misses, Tauri stays.
+The section 17 desktop rows are the Qt milestone's acceptance test, measured on its CI builds; Tauri ships until the Qt build meets them and takes its place in the release.
+
+**The web on LiveView.** Decided 2026-11-03 (plan step 8). The instance renders the web client with Phoenix LiveView: sign in on a cookie session (a `sessions` row like any other device's, so revocation and the device list treat it alike), the Quiet Split, server channels as streams fed by the same `channel:<id>` broadcasts the gateway sends, requests, people, the device list, all through the contexts the public API uses and under the same authorization resolution. A LiveView page is part of the server, not a client: hard rule 4 means nothing it shows may be impossible through the public API, and it keeps no local store, so the web is not local-first for server content. What a LiveView cannot do is read a personal DM (hard rule 5), hold a device key, or sign a revocation: those surfaces are an **island**, the existing WASM core in its worker on the encrypted OPFS store, mounted by a LiveView hook on the pages that need it, with section 11.4 unchanged for it. Dropping personal DMs from the web instead is the alternative the plan records; choosing it rewrites 11.4.
 
 **Local-first.** Every connected instance's data the user has seen is in SQLite and readable offline. Sends are optimistic with client-minted command IDs. Reconnect resumes from cursors per section 8.4.
 
@@ -576,7 +578,7 @@ Measured so far, on a laptop: the write transaction commits in under 1 ms and su
 | Gateway connect, authenticate, resume 50 channels with no gaps | 500 ms | Same database; cursors current; presence for all 50 |
 | Client cold start to interactive, last-viewed channel rendered from SQLite | 1 s | 100k local messages, 5 instances |
 | Idle desktop client RSS, 5 instances connected | 150 MB | After 10 minutes idle, GC settled |
-| Linux desktop (WebKitGTK): scroll a 10k-message channel at 60 fps, cold start, idle RSS | Same budgets as other desktops | Measured separately because WebKitGTK is the weakest webview; a miss here triggers the Qt desktop shell for Windows and Linux together (section 13) |
+| Linux and Windows desktop (Qt): scroll a 10k-message channel at 60 fps, cold start, idle RSS | Same budgets as other desktops | Measured on the Qt shell's CI builds, on Wayland and X11 and on Windows; the Qt milestone's acceptance test (section 13, plan step 8). Until it ships, the Tauri shell on WebKitGTK is what Linux users run, unmeasured |
 | Idle mobile client RSS | 80 MB | Same |
 | Concurrent gateway connections per node (4 vCPU, 8 GB) | 100,000 | 50 subscriptions each, 10% in presence, 1 msg/s per 1,000 connections, p99 delivery still under budget |
 | Protobuf frame for a plain text message, excluding body | 64 bytes | Transport only; E2EE application message overhead budgeted separately once MLS framing is pinned |
@@ -604,8 +606,9 @@ Prove one complete secure lifecycle before any second UI shell starts. The order
 3. Rust core: protocol, SQLite store, sync engine against (2).
 4. Identity, roster, device add and revoke, across two instances.
 5. MLS personal DMs, history backup, recovery, external-commit rejoin.
-6. The **web UI inside Tauri** as the first shell, because it is also the Windows, Linux, and browser client, so one shell covers four targets and the web device model (section 11.4) is exercised early.
+6. The **web UI inside Tauri** as the first shell, because it is also the Windows, Linux, and browser client, so one shell covers four targets and the web device model (section 11.4) is exercised early. (Done; both are being replaced in step 8, which is why the order mattered: they carried the first six steps.)
 7. Multi-node, push, SwiftUI, Compose, in that order.
+8. Qt for Windows and Linux, then LiveView for the web, then the removals (section 13; plan step 8).
 
 ## 19. Deferred and out of scope
 
@@ -616,7 +619,8 @@ Out of scope: a hosted-only feature that cannot run self-hosted; a second editio
 ## 20. Open questions and proof obligations
 
 - Exact numbers in section 17, after a first load test.
-- Whether the Tauri shell ships the Rust core in-process from day one or starts as WASM for parity with web. Moot if the Linux budget sends desktop to Qt (section 13).
+- ~~Whether the Tauri shell ships the Rust core in-process from day one or starts as WASM for parity with web.~~ Resolved 2026-11-03: the Qt shell links the core in-process (section 13).
+- Whether the web keeps its E2EE surfaces as an island or drops personal DMs (section 13, plan step 8).
 - Link unfurling: server-fetched versus client-fetched, and whether it exists at all in personal DMs.
 - The reconciliation interval and the bounded-staleness interval (7.4), to be set from measurements.
 
@@ -627,8 +631,8 @@ apps/instance   Elixir, single Phoenix app (contexts, not umbrella); named for w
 apps/core       Rust client core: protocol, MLS, SQLite store, sync, search; UniFFI and WASM bindings
 apps/apple      SwiftUI: LumiaKit (the Swift package over the UniFFI bindings: client, session, tokens, components) and one app directory per platform (Lumia-macOS, Lumia-iOS), since the package and the apps version together
 apps/android    Jetpack Compose
-apps/desktop    Tauri shell for Windows and Linux; a Qt shell would replace it here, never sit beside it (section 13)
-apps/web        Web UI, shared with apps/desktop
+apps/desktop    Windows and Linux shell: Tauri today, the Qt shell replacing it in place (section 13, plan step 8)
+apps/web        Web UI, shared with apps/desktop; reduced to the E2EE island once the instance renders the web with LiveView
 proto/          Protobuf schemas; the source of truth for the gateway, the API, and generated types
 docs/           This document, the protocol contract, and the provisional-section specs
 ```
