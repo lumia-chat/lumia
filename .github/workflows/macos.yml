@@ -1,0 +1,116 @@
+name: macos
+
+on:
+  push:
+    branches: [master]
+    paths: ["apps/apple/**", "apps/web/**", "apps/core/**", "apps/instance/**", "assets/**", "proto/**", ".github/workflows/macos.yml"]
+  pull_request:
+    paths: ["apps/apple/**", "apps/web/**", "apps/core/**", "apps/instance/**", "assets/**", "proto/**", ".github/workflows/macos.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Everything that needs a Mac, on one runner (macOS minutes are the dear
+# ones): LumiaKit's tests and the macOS app's build with the smoke run
+# against a dev instance, and the browser suite in WebKit, Safari's engine,
+# which the Linux job (e2e.yml) cannot run reliably. The instance, the
+# release CLI and the web build are shared by the smoke and the suite.
+jobs:
+  apple:
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      MIX_ENV: dev
+      DB_URL: postgres://postgres:postgres@localhost:5432/lumia_dev
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.20.4"
+          otp-version: "29"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.11"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.96.0"
+          targets: wasm32-unknown-unknown
+          components: llvm-tools
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen-cli@0.2.130
+      - run: brew install xcodegen postgresql@18
+      - run: echo "DEVELOPER_DIR=$(xcode-select -p)" >> "$GITHUB_ENV"
+      # Homebrew's install made a cluster owned by the runner's user with
+      # trust authentication on localhost; the instance's URL names the
+      # usual postgres superuser.
+      - name: Start Postgres
+        run: |
+          pg="$(brew --prefix postgresql@18)/bin"
+          "$pg/pg_ctl" -D "$(brew --prefix)/var/postgresql@18" -l "$RUNNER_TEMP/postgres.log" -w start
+          "$pg/createuser" -s postgres
+      - uses: actions/cache@v4
+        with:
+          path: |
+            apps/instance/deps
+            apps/instance/_build
+          key: mix-dev-${{ runner.os }}-${{ hashFiles('apps/instance/mix.lock') }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/core
+          key: macos-ci
+          cache-on-failure: true
+      - uses: actions/cache@v4
+        id: browsers
+        with:
+          path: ~/Library/Caches/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('apps/web/bun.lock') }}
+
+      # The core, its bindings and the XCFramework for this runner's
+      # architecture only; the release build is the universal one.
+      - run: apps/apple/scripts/core.sh --host
+      - run: swift test
+        working-directory: apps/apple/LumiaKit
+      - run: xcodegen generate
+        working-directory: apps/apple/Lumia-macOS
+      # Unsigned: no certificate on the runner, and the smoke run needs none.
+      - run: |
+          set -o pipefail
+          xcodebuild -project Lumia.xcodeproj -scheme Lumia -configuration Debug -derivedDataPath .build CODE_SIGNING_ALLOWED=NO build 2>&1 | grep -E "error:|warning: .*/(LumiaKit|Lumia-macOS)/|BUILD"
+        working-directory: apps/apple/Lumia-macOS
+
+      - run: cargo build --release -p lumia-cli
+        working-directory: apps/core
+      - run: mix deps.get && mix ecto.setup
+        working-directory: apps/instance
+      - run: bun install --frozen-lockfile && bun run wasm
+        working-directory: apps/web
+      - if: steps.browsers.outputs.cache-hit != 'true'
+        run: bunx playwright install webkit
+        working-directory: apps/web
+
+      - name: Start the instance
+        working-directory: apps/instance
+        run: |
+          nohup mix phx.server > "$RUNNER_TEMP/phx.log" 2>&1 &
+          for i in $(seq 1 60); do
+            curl -sf -H 'accept: application/json' http://localhost:4000/api/v1/instance > /dev/null && exit 0
+            sleep 2
+          done
+          echo "the instance did not come up" >&2; tail -50 "$RUNNER_TEMP/phx.log"; exit 1
+      # The debug app signed in through LUMIA_DEV_*: a window, the snapshot,
+      # the gateway (the runner's session has a window server).
+      - run: apps/apple/scripts/smoke.sh
+        timeout-minutes: 5
+      - run: bun run e2e -- webkit
+        working-directory: apps/web
+        timeout-minutes: 10
+      - if: failure()
+        run: tail -200 "$RUNNER_TEMP/phx.log"
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-e2e-screenshots
+          path: apps/web/e2e/.work/shots
+          if-no-files-found: ignore

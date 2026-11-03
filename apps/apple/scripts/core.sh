@@ -5,9 +5,10 @@
 #   tokens (tokens.py). Nothing it produces is committed (LumiaKit/.gitignore).
 #   Needs DEVELOPER_DIR pointing at Xcode (27 on this machine).
 #
-#   scripts/core.sh            # macOS (this machine's arch), debug
+#   scripts/core.sh            # macOS universal, debug
 #   scripts/core.sh --release  # optimized
 #   scripts/core.sh --ios      # adds iOS device and simulator slices
+#   scripts/core.sh --host     # this machine's macOS slice only (CI's tests and debug build)
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 core="$here/../../core"
@@ -15,17 +16,25 @@ kit="$here/../LumiaKit"
 out="$here/../.build/core"
 profile=debug
 ios=false
+host_only=false
 for arg in "$@"; do
   case "$arg" in
     --release) profile=release ;;
     --ios) ios=true ;;
+    --host) host_only=true ;;
   esac
 done
 release_flag=""
 [ "$profile" = release ] && release_flag="--release"
+host=$(cd "$core" && rustc -vV | sed -n 's/^host: //p')
+# The C objects in the core (SQLite, the crypto backends) take the floor
+# from these, so they link into the apps without a newer-SDK warning.
+export MACOSX_DEPLOYMENT_TARGET=14.0 IPHONEOS_DEPLOYMENT_TARGET=17.0
 
-# macOS is universal (an archive links both slices); iOS is arm64 on device and on the simulator.
+# macOS is universal (an archive links both slices) unless only this
+# machine's slice is asked for; iOS is arm64 on device and on the simulator.
 targets="aarch64-apple-darwin x86_64-apple-darwin"
+$host_only && targets="$host"
 $ios && targets="$targets aarch64-apple-ios aarch64-apple-ios-sim"
 for t in $targets; do
   # Inside the core: its rust-toolchain.toml picks the toolchain the target goes on.
@@ -35,7 +44,7 @@ done
 
 # Bindings from the library's own metadata (one source of truth: the Rust).
 mkdir -p "$out/bindings"
-lib="$core/target/aarch64-apple-darwin/$profile/liblumia_ffi.a"
+lib="$core/target/$host/$profile/liblumia_ffi.a"
 (cd "$core" && cargo run -q -p uniffi-bindgen -- generate --library "$lib" --language swift --no-format --out-dir "$out/bindings")
 # The target's directory holds only generated files, so a fresh checkout lacks it.
 mkdir -p "$kit/Sources/LumiaFFI"
@@ -49,7 +58,11 @@ cp "$out/bindings/lumia_ffiFFI.h" "$headers/"
 cp "$out/bindings/lumia_ffiFFI.modulemap" "$headers/module.modulemap"
 
 mkdir -p "$out/macos"
-lipo -create "$core/target/aarch64-apple-darwin/$profile/liblumia_ffi.a" "$core/target/x86_64-apple-darwin/$profile/liblumia_ffi.a" -output "$out/macos/liblumia_ffi.a"
+if $host_only; then
+  cp "$lib" "$out/macos/liblumia_ffi.a"
+else
+  lipo -create "$core/target/aarch64-apple-darwin/$profile/liblumia_ffi.a" "$core/target/x86_64-apple-darwin/$profile/liblumia_ffi.a" -output "$out/macos/liblumia_ffi.a"
+fi
 args=""
 args="$args -library $out/macos/liblumia_ffi.a -headers $headers"
 if $ios; then

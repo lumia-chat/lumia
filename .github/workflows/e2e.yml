@@ -12,9 +12,9 @@ permissions:
 
 # The browser suite (apps/web/e2e/run.ts): the dev instance on :4000, the
 # release CLI as the other device, Chromium through Playwright. WebKit runs
-# on macOS (locally, every run), where it is Safari's engine; Playwright's
-# Linux WebKit build hangs on first navigations and on this page's
-# teardown, and is not what any user runs (plan, step 7).
+# on macOS (macos.yml, and locally every run), where it is Safari's engine;
+# Playwright's Linux WebKit build hangs on first navigations and on this
+# page's teardown, and is not what any user runs (plan, step 7).
 jobs:
   browsers:
     runs-on: ubuntu-24.04
