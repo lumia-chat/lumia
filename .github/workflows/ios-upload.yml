@@ -1,0 +1,55 @@
+# The iOS archive and upload on demand: a TestFlight build re-sent
+# without a new tag (the release workflow's ios job, runnable by hand).
+# The key is checked against Apple first, so a bad secret is named
+# before the archive spends ten minutes.
+name: ios-upload
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "The version (a tag without its v); empty for project.yml's"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  ios:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the build number is the commit count
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.96.0"
+          targets: aarch64-apple-darwin,aarch64-apple-ios
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/core
+          key: ios
+      - run: brew install xcodegen
+      - run: echo "DEVELOPER_DIR=$(xcode-select -p)" >> "$GITHUB_ENV"
+      - run: echo "$ASC_KEY_P8" | base64 -d > "$RUNNER_TEMP/asc.p8"
+        env:
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+      # The key's shape and its standing with Apple, with nothing of it printed.
+      - name: Check the key
+        run: |
+          head -c 27 "$RUNNER_TEMP/asc.p8" | grep -q -- "-----BEGIN PRIVATE KEY" || { echo "ASC_KEY_P8 does not decode to a PEM private key; it must be the base64 of the .p8"; exit 1; }
+          echo "key id ${#ASC_KEY_ID} chars, issuer ${#ASC_ISSUER_ID} chars"
+          if xcrun notarytool history --key "$RUNNER_TEMP/asc.p8" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" >/dev/null 2>"$RUNNER_TEMP/notary.err"; then
+            echo "Apple accepts the key for the notary service"
+          else
+            echo "Apple refuses the key:"; cat "$RUNNER_TEMP/notary.err"; exit 1
+          fi
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      - run: apps/apple/scripts/release.sh ${{ inputs.version }} --upload
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_PATH: ${{ runner.temp }}/asc.p8
