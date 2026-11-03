@@ -30,6 +30,12 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSApplicationCategoryType: public.app-category.social-networking
+        # Export compliance: the app ships its own encryption (the
+        # end-to-end encrypted DMs, the encrypted store), so it is not
+        # exempt. App Store Connect asked on the record's first build and
+        # issues a code; once it does, ITSEncryptionExportComplianceCode
+        # goes here so later uploads skip the question. Declaring
+        # non-exempt without the code is refused at upload.
         # A launch screen from the plist (no storyboard): the app's
         # background colour, drawn until the first frame.
         UILaunchScreen: {}

@@ -1,15 +1,18 @@
 # A release: on a v* tag, and only then, the desktop apps are built,
 # signed and attached to one GitHub Release (architecture section 13,
-# "Distribution"). The release starts as a draft and is published only
-# when every job succeeds, so the "latest" feeds the apps read (Sparkle's
-# appcast.xml, Tauri's latest.json) never point at a half-built release.
+# "Distribution"), and the iOS app is uploaded to App Store Connect for
+# TestFlight, the only channel a phone has. The release starts as a draft
+# and is published only when every desktop job succeeds, so the "latest"
+# feeds the apps read (Sparkle's appcast.xml, Tauri's latest.json) never
+# point at a half-built release; the iOS upload does not gate it, since a
+# TestFlight build can be re-sent without a new tag.
 #
 # The version is the tag without its v. Secrets: DEVELOPER_ID_P12 and
 # DEVELOPER_ID_P12_PASSWORD (the Developer ID Application certificate with
 # its key, base64 of the .p12), ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_P8 (the
-# App Store Connect API key, base64 of the .p8; notarization),
-# SPARKLE_PRIVATE_KEY (the appcast's EdDSA key), TAURI_SIGNING_PRIVATE_KEY
-# (the updater's minisign key).
+# App Store Connect API key, base64 of the .p8; notarization and the iOS
+# upload), SPARKLE_PRIVATE_KEY (the appcast's EdDSA key),
+# TAURI_SIGNING_PRIVATE_KEY (the updater's minisign key).
 name: release
 
 on:
@@ -85,6 +88,36 @@ jobs:
       - run: gh release upload "$GITHUB_REF_NAME" apps/apple/.build/dist/*
         env:
           GH_TOKEN: ${{ github.token }}
+
+  # The iOS archive, signed automatically with the team's Apple Distribution
+  # certificate through the API key (App Store signing is cloud-managed,
+  # unlike Developer ID above), and uploaded; it appears in TestFlight once
+  # App Store Connect has processed it.
+  ios:
+    needs: draft
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the build number is the commit count
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.96.0"
+          targets: aarch64-apple-darwin,aarch64-apple-ios
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/core
+          key: ios
+      - run: brew install xcodegen
+      - run: echo "DEVELOPER_DIR=$(xcode-select -p)" >> "$GITHUB_ENV"
+      - run: echo "$ASC_KEY_P8" | base64 -d > "$RUNNER_TEMP/asc.p8"
+        env:
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+      - run: apps/apple/scripts/release.sh "${GITHUB_REF_NAME#v}" --upload
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_PATH: ${{ runner.temp }}/asc.p8
 
   desktop:
     needs: draft

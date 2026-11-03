@@ -8,6 +8,7 @@
 #   scripts/core.sh            # macOS universal, debug
 #   scripts/core.sh --release  # optimized
 #   scripts/core.sh --ios      # adds iOS device and simulator slices
+#   scripts/core.sh --ios-device  # adds the iOS device slice only (the App Store archive)
 #   scripts/core.sh --host     # this machine's macOS slice only (CI's tests and debug build)
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
@@ -16,11 +17,13 @@ kit="$here/../LumiaKit"
 out="$here/../.build/core"
 profile=debug
 ios=false
+ios_sim=true
 host_only=false
 for arg in "$@"; do
   case "$arg" in
     --release) profile=release ;;
     --ios) ios=true ;;
+    --ios-device) ios=true; ios_sim=false ;;
     --host) host_only=true ;;
   esac
 done
@@ -35,7 +38,8 @@ export MACOSX_DEPLOYMENT_TARGET=14.0 IPHONEOS_DEPLOYMENT_TARGET=17.0
 # machine's slice is asked for; iOS is arm64 on device and on the simulator.
 targets="aarch64-apple-darwin x86_64-apple-darwin"
 $host_only && targets="$host"
-$ios && targets="$targets aarch64-apple-ios aarch64-apple-ios-sim"
+$ios && targets="$targets aarch64-apple-ios"
+$ios && $ios_sim && targets="$targets aarch64-apple-ios-sim"
 for t in $targets; do
   # Inside the core: its rust-toolchain.toml picks the toolchain the target goes on.
   (cd "$core" && { rustup target list --installed | grep -q "^$t$" || rustup target add "$t"; })
@@ -67,7 +71,7 @@ args=""
 args="$args -library $out/macos/liblumia_ffi.a -headers $headers"
 if $ios; then
   args="$args -library $core/target/aarch64-apple-ios/$profile/liblumia_ffi.a -headers $headers"
-  args="$args -library $core/target/aarch64-apple-ios-sim/$profile/liblumia_ffi.a -headers $headers"
+  $ios_sim && args="$args -library $core/target/aarch64-apple-ios-sim/$profile/liblumia_ffi.a -headers $headers"
 fi
 rm -rf "$kit/LumiaCore.xcframework"
 # shellcheck disable=SC2086
