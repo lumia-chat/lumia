@@ -19,6 +19,7 @@ tracing.workspace = true
 futures-util.workspace = true
 futures-channel.workspace = true
 url = "2"
+serde = { version = "1", features = ["derive"] }
 base64 = "0.22"
 hex = "0.4"
 ed25519-dalek = "3"

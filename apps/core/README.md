@@ -10,8 +10,9 @@ The Rust that every Lumia client shares (architecture section 13): the sync engi
 | `lumia-core` | The sync state machine, `Store` and `Keystore` traits, identity, crypto, and `mls`: OpenMLS behind a storage provider over a key-value contract, leaf validation against rosters, and the DM projection. No I/O, no async. |
 | `lumia-client` | The client for native targets and `wasm32-unknown-unknown`: the HTTP client, the gateway loop over a per-target socket and timer, the SQLite store (also the MLS key-value store and a keystore, in the same transaction; bundled SQLite natively, SQLite on the OPFS pool VFS on the web), the identity flows and the personal-DM engine. |
 | `lumia-cli` | The headless client binary and the scenario suite, on `lumia-client`. |
-| `lumia-ffi` | UniFFI surface for Swift and Kotlin: one `Client` per instance (API, reconnecting gateway loop, store, identity) and a `Listener` callback. Blocking methods, dev store and keystore until the shells bring their own. |
-| `lumia-wasm` | wasm-bindgen surface for the web shell: `Client`, one per instance, runs in a worker with the store on the OPFS pool VFS, the identity flows and the gateway loop, and delivers events as plain objects; the sans-I/O `Session` is also exposed for the store-less tests. Checked on `wasm32-unknown-unknown` in CI; `apps/web` builds it. |
+| `lumia-ffi` | UniFFI surface for Swift and Kotlin over `lumia_client::app::App`: one `Client` per instance (API, reconnecting gateway loop on its own Tokio runtime, SQLite store and keystore under the shell's data directory, identity, push, DMs) and a `Listener` callback. Blocking methods; the Swift side wraps them in an actor. |
+| `uniffi-bindgen` | The `uniffi-bindgen` binary pinned to this workspace's UniFFI; `apps/apple/scripts/core.sh` runs it against the built library. |
+| `lumia-wasm` | wasm-bindgen surface for the web shell over the same `App`: `Client`, one per instance, runs in a worker with the store on the OPFS pool VFS, the identity flows and the gateway loop, and delivers events as plain objects; the sans-I/O `Session` is also exposed for the store-less tests. Checked on `wasm32-unknown-unknown` in CI; `apps/web` builds it. |
 
 ## Requirements
 

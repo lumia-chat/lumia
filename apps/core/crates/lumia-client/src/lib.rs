@@ -16,6 +16,7 @@
 //! The headless client is the `lumia-cli` crate.
 
 pub mod api;
+pub mod app;
 pub mod dm;
 pub mod gateway;
 pub mod identity;

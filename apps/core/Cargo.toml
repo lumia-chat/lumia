@@ -4,6 +4,7 @@ members = [
   "crates/lumia-proto",
   "crates/lumia-core",
   "crates/lumia-client",
+  "crates/uniffi-bindgen",
   "crates/lumia-cli",
   "crates/lumia-ffi",
   "crates/lumia-wasm",

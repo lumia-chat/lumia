@@ -1,42 +1,32 @@
-//! UniFFI surface for the native shells (architecture section 13, plan
-//! step 3 milestone 3): one [`Client`] per instance and a [`Listener`] the
-//! shell implements to receive what the gateway loop produces.
+//! UniFFI surface for the native shells (architecture section 13): one
+//! [`Client`] per instance over `lumia_client::app::App`, and a
+//! [`Listener`] the shell implements to receive what the gateway loop and
+//! the DM engine produce.
 //!
 //! Marshalling only. Every method is synchronous and blocking, meant to be
 //! called from a background thread on the shell's side; the gateway loop
 //! runs on the client's own tokio runtime and reports through the listener
 //! from a runtime thread. Ids cross the boundary as UUID strings and times
-//! as microseconds since the epoch.
+//! as microseconds since the epoch. The records here mirror the app's
+//! summaries one for one.
 //!
-//! The store and keystore here are the development ones from
-//! `lumia-client` (SQLite on disk, secrets in plain files at mode 0600).
-//! The shells supply platform secret stores when they arrive (plan steps 6
-//! and 7); until then this surface is for wiring and testing a shell, not
-//! for shipping one.
+//! The stores are SQLite files under the shell's data directory, in the
+//! clear: the platform keystore for the at-rest key is the shells' next
+//! step (plan step 7).
 
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 
-use lumia_client::api::{Api, Tokens};
-use lumia_client::futures_channel::mpsc;
-use lumia_client::futures_util::StreamExt as _;
-use lumia_client::gateway::{self, GatewayCommand, GatewayEvent};
-use lumia_client::identity::Device;
-use lumia_client::keystore::FileKeystore;
+use lumia_client::app::{self, App, EventSink, Opener, Place, StoreName};
 use lumia_client::sqlite::SqliteStore;
 use lumia_client::ClientError;
-use lumia_core::keystore::Keystore;
-use lumia_core::proto::{command, event, Command, Event, SendMessage};
-use lumia_core::store::{Store, StoredMessage};
-use lumia_core::sync::Notice;
-use lumia_core::wire;
+use lumia_core::proto::PushKind;
 
 uniffi::setup_scaffolding!();
 
 /// Why a call failed. The shell gets the message; the variant names the
 /// cause a caller can act on.
 #[derive(Debug, thiserror::Error, uniffi::Error)]
-#[uniffi(flat_error)]
 pub enum LumiaError {
     /// The instance answered with the protocol's error envelope.
     #[error("{code}: {message}")]
@@ -55,15 +45,9 @@ pub enum LumiaError {
     /// Not signed in to this instance.
     #[error("not signed in")]
     NotSignedIn,
-    /// The gateway loop is not running, or is already running.
-    #[error("{0}")]
-    Lifecycle(String),
-    /// A malformed argument, such as an id that is not a UUID.
-    #[error("{0}")]
-    Argument(String),
-    /// Transport, store, keystore, or identity failure.
-    #[error("{0}")]
-    Other(String),
+    /// A malformed argument, a lifecycle mistake, or any other failure.
+    #[error("{message}")]
+    Other { message: String },
 }
 
 impl From<ClientError> for LumiaError {
@@ -72,7 +56,43 @@ impl From<ClientError> for LumiaError {
             ClientError::Api { code, message, .. } => Self::Api { code, message },
             ClientError::DeviceRevoked { roster_version } => Self::DeviceRevoked { roster_version },
             ClientError::NotSignedIn => Self::NotSignedIn,
-            other => Self::Other(other.to_string()),
+            other => Self::Other {
+                message: other.to_string(),
+            },
+        }
+    }
+}
+
+// ---- Records, mirroring lumia_client::app -------------------------------------
+
+/// The trust card.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct InstanceSummary {
+    pub host: String,
+    pub operator_name: String,
+    pub operator_url: String,
+    pub terms_url: String,
+    pub privacy_url: String,
+    pub software_version: String,
+    pub identity_proof_sign_in_enabled: bool,
+    pub identity_proof_create_enabled: bool,
+    pub open_registration: bool,
+    pub web_push_public_key: String,
+}
+
+impl From<app::InstanceSummary> for InstanceSummary {
+    fn from(s: app::InstanceSummary) -> Self {
+        Self {
+            host: s.host,
+            operator_name: s.operator_name,
+            operator_url: s.operator_url,
+            terms_url: s.terms_url,
+            privacy_url: s.privacy_url,
+            software_version: s.software_version,
+            identity_proof_sign_in_enabled: s.identity_proof_sign_in_enabled,
+            identity_proof_create_enabled: s.identity_proof_create_enabled,
+            open_registration: s.open_registration,
+            web_push_public_key: s.web_push_public_key,
         }
     }
 }
@@ -80,157 +100,434 @@ impl From<ClientError> for LumiaError {
 /// A server the account belongs to.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct ServerSummary {
-    /// UUID string.
     pub server_id: String,
-    /// Display name.
     pub name: String,
+}
+
+impl From<app::ServerSummary> for ServerSummary {
+    fn from(s: app::ServerSummary) -> Self {
+        Self {
+            server_id: s.server_id,
+            name: s.name,
+        }
+    }
 }
 
 /// A channel the account can view.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct ChannelSummary {
-    /// UUID string.
     pub channel_id: String,
-    /// Display name, without the `#`.
+    pub server_id: String,
     pub name: String,
-    /// The log's head when listed.
+    pub kind: String,
     pub last_seq: u64,
+    pub participant_account_ids: Vec<String>,
+    pub host: String,
+}
+
+impl From<app::ChannelSummary> for ChannelSummary {
+    fn from(c: app::ChannelSummary) -> Self {
+        Self {
+            channel_id: c.channel_id,
+            server_id: c.server_id,
+            name: c.name,
+            kind: c.kind,
+            last_seq: c.last_seq,
+            participant_account_ids: c.participant_account_ids,
+            host: c.host,
+        }
+    }
+}
+
+/// A DM request waiting for an answer.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct DmRequestSummary {
+    pub request_id: String,
+    pub from_account_id: String,
+    pub to_account_id: String,
+    pub state: String,
+    pub shared_server_ids: Vec<String>,
+    pub mutual_friend_count: u32,
+}
+
+impl From<app::DmRequestSummary> for DmRequestSummary {
+    fn from(r: app::DmRequestSummary) -> Self {
+        Self {
+            request_id: r.request_id,
+            from_account_id: r.from_account_id,
+            to_account_id: r.to_account_id,
+            state: r.state,
+            shared_server_ids: r.shared_server_ids,
+            mutual_friend_count: r.mutual_friend_count,
+        }
+    }
+}
+
+/// The account snapshot.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct SnapshotSummary {
+    pub account_id: String,
+    pub handle: String,
+    pub display_name: String,
+    pub servers: Vec<ServerSummary>,
+    pub channels: Vec<ChannelSummary>,
+    pub pending_requests: Vec<DmRequestSummary>,
+}
+
+impl From<app::SnapshotSummary> for SnapshotSummary {
+    fn from(s: app::SnapshotSummary) -> Self {
+        Self {
+            account_id: s.account_id,
+            handle: s.handle,
+            display_name: s.display_name,
+            servers: s.servers.into_iter().map(Into::into).collect(),
+            channels: s.channels.into_iter().map(Into::into).collect(),
+            pending_requests: s.pending_requests.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+/// A person: a member of a server, or a public profile.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct MemberSummary {
+    pub account_id: String,
+    pub handle: String,
+    pub display_name: String,
+    pub nickname: String,
+}
+
+impl From<app::MemberSummary> for MemberSummary {
+    fn from(m: app::MemberSummary) -> Self {
+        Self {
+            account_id: m.account_id,
+            handle: m.handle,
+            display_name: m.display_name,
+            nickname: m.nickname,
+        }
+    }
 }
 
 /// A message as the local store holds it.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct MessageSummary {
-    /// UUID string (also the create command's id).
     pub message_id: String,
-    /// UUID string.
     pub channel_id: String,
-    /// Sequence number of its create event.
     pub seq: u64,
-    /// UUID string.
     pub author_account_id: String,
-    /// Current body; empty when deleted.
     pub body: String,
-    /// Microseconds since the epoch.
     pub created_at_micros: i64,
-    /// Whether it was deleted.
     pub deleted: bool,
+}
+
+impl From<app::MessageSummary> for MessageSummary {
+    fn from(m: app::MessageSummary) -> Self {
+        Self {
+            message_id: m.message_id,
+            channel_id: m.channel_id,
+            seq: m.seq,
+            author_account_id: m.author_account_id,
+            body: m.body,
+            created_at_micros: m.created_at_micros,
+            deleted: m.deleted,
+        }
+    }
 }
 
 /// One applied channel event.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct EventSummary {
-    /// Position in the channel log.
     pub seq: u64,
-    /// The payload case: `message_created`, `message_edited`, `redacted`, ...
     pub kind: String,
-    /// For `message_created`, the message.
     pub message: Option<MessageSummary>,
 }
 
-/// What `identity_create` returns: the phrase to show once.
-#[derive(Debug, Clone, uniffi::Record)]
-pub struct IdentityCreated {
-    /// The 24 words. Shown once; never stored by the core.
-    pub phrase: String,
-    /// The identity id, hex.
-    pub identity_id: String,
+impl From<app::EventSummary> for EventSummary {
+    fn from(e: app::EventSummary) -> Self {
+        Self {
+            seq: e.seq,
+            kind: e.kind,
+            message: e.message.map(Into::into),
+        }
+    }
 }
 
-/// A device in the roster.
+/// A device of the identity's roster.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct DeviceSummary {
-    /// UUID string.
     pub device_id: String,
-    /// Human label from the certificate; not signed.
+    pub kind: String,
     pub label: String,
-    /// Whether this is the calling device.
+    pub web_origin: String,
+    pub added_at_micros: i64,
     pub this_device: bool,
-    /// Whether the entry is a revocation.
     pub revoked: bool,
 }
 
-/// The roster this device holds.
+impl From<app::DeviceSummary> for DeviceSummary {
+    fn from(d: app::DeviceSummary) -> Self {
+        Self {
+            device_id: d.device_id,
+            kind: d.kind,
+            label: d.label,
+            web_origin: d.web_origin,
+            added_at_micros: d.added_at_micros,
+            this_device: d.this_device,
+            revoked: d.revoked,
+        }
+    }
+}
+
+/// The identity's roster.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct RosterSummary {
-    /// The identity id, hex.
     pub identity_id: String,
-    /// Roster version.
     pub version: u64,
-    /// Whether the roster carries a valid root signature.
-    pub root_signed: bool,
-    /// Current and revoked devices.
     pub devices: Vec<DeviceSummary>,
 }
 
-/// What the gateway loop reports, in order.
+impl From<app::RosterSummary> for RosterSummary {
+    fn from(r: app::RosterSummary) -> Self {
+        Self {
+            identity_id: r.identity_id,
+            version: r.version,
+            devices: r.devices.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+/// What creating an identity gives back: the id, and the phrase shown once.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct IdentityCreated {
+    pub identity_id: String,
+    pub phrase: String,
+}
+
+/// A personal conversation this device knows.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct DmChannelSummary {
+    pub channel_id: String,
+    pub participant_account_ids: Vec<String>,
+    pub member: bool,
+}
+
+impl From<app::DmChannelSummary> for DmChannelSummary {
+    fn from(c: app::DmChannelSummary) -> Self {
+        Self {
+            channel_id: c.channel_id,
+            participant_account_ids: c.participant_account_ids,
+            member: c.member,
+        }
+    }
+}
+
+/// A message of a personal conversation, as projected.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct DmMessageSummary {
+    pub message_id: String,
+    pub seq: u64,
+    pub sender_identity_id: String,
+    pub sender_device_id: String,
+    pub sender_account_id: String,
+    pub body: String,
+    pub sent_at_micros: i64,
+    pub edited: bool,
+    pub deleted: bool,
+    pub mine: bool,
+}
+
+impl From<app::DmMessageSummary> for DmMessageSummary {
+    fn from(m: app::DmMessageSummary) -> Self {
+        Self {
+            message_id: m.message_id,
+            seq: m.seq,
+            sender_identity_id: m.sender_identity_id,
+            sender_device_id: m.sender_device_id,
+            sender_account_id: m.sender_account_id,
+            body: m.body,
+            sent_at_micros: m.sent_at_micros,
+            edited: m.edited,
+            deleted: m.deleted,
+            mine: m.mine,
+        }
+    }
+}
+
+/// A personal conversation as this device can read it.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct DmLogSummary {
+    pub messages: Vec<DmMessageSummary>,
+    pub before_join: u32,
+    pub undecryptable: u32,
+}
+
+impl From<app::DmLogSummary> for DmLogSummary {
+    fn from(l: app::DmLogSummary) -> Self {
+        Self {
+            messages: l.messages.into_iter().map(Into::into).collect(),
+            before_join: l.before_join,
+            undecryptable: l.undecryptable,
+        }
+    }
+}
+
+/// What opening a conversation found or did.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct DmOpened {
+    pub channel_id: String,
+    pub existed: bool,
+    pub member: bool,
+    pub creating: bool,
+}
+
+impl From<app::DmOpened> for DmOpened {
+    fn from(o: app::DmOpened) -> Self {
+        Self {
+            channel_id: o.channel_id,
+            existed: o.existed,
+            member: o.member,
+            creating: o.creating,
+        }
+    }
+}
+
+/// The answer to a DM request: the opened conversation when accepted,
+/// otherwise the request as it now stands.
+#[derive(Debug, Clone, uniffi::Enum)]
+pub enum DmResponse {
+    Opened { opened: DmOpened },
+    Answered { request: DmRequestSummary },
+}
+
+/// What the gateway loop and the DM engine report, in order.
 #[derive(Debug, Clone, uniffi::Enum)]
 pub enum ClientEvent {
-    /// The handshake completed.
     Welcomed {
-        /// UUID string.
         account_id: String,
     },
-    /// Channel events were applied to the store.
     Applied {
-        /// UUID string.
         channel_id: String,
-        /// In `seq` order.
         events: Vec<EventSummary>,
     },
-    /// Account events were applied to the store.
     AccountApplied {
-        /// How many.
-        count: u32,
+        count: u64,
     },
-    /// A command was acknowledged.
     Acked {
-        /// UUID string.
         command_id: String,
-        /// Its event's sequence number.
         seq: u64,
     },
-    /// The server reported an error.
     Error {
-        /// `lumia.v1.ErrorCode` as its name.
         code: String,
-        /// The server's message.
         message: String,
+        command_id: String,
     },
-    /// A subscription failed and was dropped.
     SubscriptionFailed {
-        /// UUID string.
         channel_id: String,
-        /// The server's reason, when given.
         message: String,
     },
-    /// A channel took the snapshot path up to `seq`.
     SnapshotTaken {
-        /// UUID string.
         channel_id: String,
-        /// The snapshot's sequence number.
         seq: u64,
     },
-    /// The server is closing the connection.
     Disconnected {
-        /// `lumia.v1.DisconnectReason` as its name.
         reason: String,
-        /// Seconds before reconnecting is welcome.
         reconnect_after_seconds: u32,
     },
-    /// The connection dropped; the loop retries after `delay_millis`.
     Reconnecting {
-        /// Consecutive failed attempts so far.
         attempt: u32,
-        /// The wait before this attempt.
         delay_millis: u64,
-        /// Why the last connection ended.
         reason: String,
     },
-    /// The loop ended for good.
     Closed {
-        /// Why.
         reason: String,
     },
+    DmNote {
+        message: String,
+    },
+    DmError {
+        message: String,
+    },
+    DmSubscribed {
+        channel_id: String,
+    },
+    DmOperation {
+        channel_id: String,
+        seq: u64,
+        sender_identity_id: String,
+        sender_device_id: String,
+    },
+    DmReady {
+        channel_id: String,
+    },
+    DmDelivered {
+        operation_id: String,
+    },
+}
+
+impl From<app::AppEvent> for ClientEvent {
+    fn from(e: app::AppEvent) -> Self {
+        use app::AppEvent as E;
+        match e {
+            E::Welcomed { account_id } => Self::Welcomed { account_id },
+            E::Applied { channel_id, events } => Self::Applied {
+                channel_id,
+                events: events.into_iter().map(Into::into).collect(),
+            },
+            E::AccountApplied { count } => Self::AccountApplied {
+                count: count as u64,
+            },
+            E::Acked { command_id, seq } => Self::Acked { command_id, seq },
+            E::Error {
+                code,
+                message,
+                command_id,
+            } => Self::Error {
+                code,
+                message,
+                command_id,
+            },
+            E::SubscriptionFailed {
+                channel_id,
+                message,
+            } => Self::SubscriptionFailed {
+                channel_id,
+                message,
+            },
+            E::SnapshotTaken { channel_id, seq } => Self::SnapshotTaken { channel_id, seq },
+            E::Disconnected {
+                reason,
+                reconnect_after_seconds,
+            } => Self::Disconnected {
+                reason,
+                reconnect_after_seconds,
+            },
+            E::Reconnecting {
+                attempt,
+                delay_millis,
+                reason,
+            } => Self::Reconnecting {
+                attempt,
+                delay_millis,
+                reason,
+            },
+            E::Closed { reason } => Self::Closed { reason },
+            E::DmNote { message } => Self::DmNote { message },
+            E::DmError { message } => Self::DmError { message },
+            E::DmSubscribed { channel_id } => Self::DmSubscribed { channel_id },
+            E::DmOperation {
+                channel_id,
+                seq,
+                sender_identity_id,
+                sender_device_id,
+            } => Self::DmOperation {
+                channel_id,
+                seq,
+                sender_identity_id,
+                sender_device_id,
+            },
+            E::DmReady { channel_id } => Self::DmReady { channel_id },
+            E::DmDelivered { operation_id } => Self::DmDelivered { operation_id },
+        }
+    }
 }
 
 /// The shell's side of the gateway loop.
@@ -240,36 +537,23 @@ pub trait Listener: Send + Sync {
     fn on_event(&self, event: ClientEvent);
 }
 
-struct Inner {
-    /// Owned here between runs; moved into the gateway loop while it runs.
-    store: Option<SqliteStore>,
-    /// A second connection for reads while the loop owns the first.
-    reader: SqliteStore,
-    keystore: FileKeystore,
-    identity_store: SqliteStore,
-    identity_keys: FileKeystore,
-    commands: Option<mpsc::UnboundedSender<GatewayCommand>>,
-    task: Option<tokio::task::JoinHandle<SqliteStore>>,
-}
+// ---- The client ------------------------------------------------------------------
 
-/// One instance's client: HTTP API, gateway loop, local store, identity.
+/// One instance's client: HTTP API, gateway loop, local store, identity,
+/// personal DMs.
 #[derive(uniffi::Object)]
 pub struct Client {
     runtime: tokio::runtime::Runtime,
-    api: Api,
-    host: String,
-    device_id: Vec<u8>,
-    inner: Mutex<Inner>,
+    app: Arc<App>,
 }
 
 impl std::fmt::Debug for Client {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Client")
-            .field("host", &self.host)
-            .field("device_id", &wire::display(&self.device_id))
-            .finish_non_exhaustive()
+        self.app.fmt(f)
     }
 }
+
+type Res<T> = Result<T, LumiaError>;
 
 #[uniffi::export]
 impl Client {
@@ -279,686 +563,298 @@ impl Client {
     /// instance opened from the same directory.
     ///
     /// # Errors
-    /// When the directories, store, or keystore cannot be opened.
+    /// When the directories or a store cannot be opened.
     #[uniffi::constructor]
-    pub fn new(base_url: String, data_dir: String) -> Result<Arc<Self>, LumiaError> {
+    pub fn new(base_url: String, data_dir: String) -> Res<Arc<Self>> {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
-            .map_err(|e| LumiaError::Other(e.to_string()))?;
-        let host = host_of(&base_url);
+            .map_err(|e| LumiaError::Other {
+                message: e.to_string(),
+            })?;
+        let host = app::host_of(&base_url);
         let data_dir = PathBuf::from(data_dir);
         let dir = data_dir.join(&host);
         let identity_dir = data_dir.join("identity");
         for d in [&dir, &identity_dir] {
-            std::fs::create_dir_all(d).map_err(|e| LumiaError::Other(e.to_string()))?;
+            std::fs::create_dir_all(d).map_err(|e| LumiaError::Other {
+                message: e.to_string(),
+            })?;
         }
-        let mut store = SqliteStore::open(&dir.join("store.sqlite")).map_err(other)?;
-        store
-            .meta_set("base_url", base_url.trim_end_matches('/'))
-            .map_err(other)?;
-        let reader = SqliteStore::open(&dir.join("store.sqlite")).map_err(other)?;
-        let keys_dir = dir.join("keys");
-        let keystore = FileKeystore::open(&keys_dir).map_err(other)?;
-        let identity_store = SqliteStore::open(&identity_dir.join("meta.sqlite")).map_err(other)?;
-        let mut identity_keys = FileKeystore::open(&identity_dir.join("keys")).map_err(other)?;
-        let device_id = match identity_keys.get("device_id").map_err(other)? {
-            Some(id) => id,
-            None => {
-                let id = wire::new_id();
-                identity_keys.put("device_id", &id).map_err(other)?;
-                id
-            }
-        };
-        let api = Api::new(&base_url)
-            .with_tokens(tokens(&keystore)?)
-            .on_rotate(Arc::new(move |pair| {
-                if let Ok(mut keys) = FileKeystore::open(&keys_dir) {
-                    let _ = keys.put("access_token", pair.access_token.as_bytes());
-                    let _ = keys.put("refresh_token", pair.refresh_token.as_bytes());
-                }
-            }));
-        Ok(Arc::new(Self {
-            runtime,
-            api,
-            host,
-            device_id,
-            inner: Mutex::new(Inner {
-                store: Some(store),
-                reader,
-                keystore,
-                identity_store,
-                identity_keys,
-                commands: None,
-                task: None,
-            }),
-        }))
+        let opener: Opener = Arc::new(move |name| {
+            let path = match name {
+                StoreName::Instance => dir.join("store.sqlite"),
+                StoreName::Keys => dir.join("keys.sqlite"),
+                StoreName::IdentityStore => identity_dir.join("store.sqlite"),
+                StoreName::IdentityKeys => identity_dir.join("keys.sqlite"),
+            };
+            SqliteStore::open(&path)
+        });
+        let app = App::open(&base_url, Place::Native, opener)?;
+        Ok(Arc::new(Self { runtime, app }))
     }
 
-    /// The instance host this client talks to.
+    /// The instance's host name (with the port when not the default).
     pub fn host(&self) -> String {
-        self.host.clone()
+        self.app.host()
     }
 
-    /// This device's id as a UUID string.
+    /// This device's id (UUID string).
     pub fn device_id(&self) -> String {
-        wire::display(&self.device_id)
+        self.app.device_id()
     }
 
-    /// Whether an access token is on hand.
+    /// Whether an access token is held for this instance.
     pub fn signed_in(&self) -> bool {
-        self.api.tokens().access.is_some()
+        self.app.signed_in()
     }
 
-    // ---- Accounts and sessions ----------------------------------------------------
+    /// `GET /instance`: the trust card.
+    pub fn instance_info(&self) -> Res<InstanceSummary> {
+        Ok(self.runtime.block_on(self.app.instance_info())?.into())
+    }
 
-    /// Creates a password account and signs in.
-    ///
-    /// # Errors
-    /// On API failure, such as `ALREADY_EXISTS`.
-    pub fn create_account(&self, handle: String, password: String) -> Result<(), LumiaError> {
-        let pair = self
+    /// Creates an account with a password and signs in.
+    pub fn create_account(&self, handle: String, password: String) -> Res<()> {
+        Ok(self
             .runtime
-            .block_on(self.api.create_account(&handle, &password))?;
-        self.save_tokens(&pair)
+            .block_on(self.app.create_account(&handle, &password))?)
     }
 
-    /// Signs in with a password.
-    ///
-    /// # Errors
-    /// On API failure, such as `UNAUTHENTICATED`.
-    pub fn sign_in(&self, handle: String, password: String) -> Result<(), LumiaError> {
-        let pair =
-            self.runtime
-                .block_on(self.api.sign_in(&handle, &password, self.device_id.clone()))?;
-        self.save_tokens(&pair)
-    }
-
-    /// Creates an account bound to this device's identity and signs in.
-    ///
-    /// # Errors
-    /// On API failure, or [`LumiaError::DeviceRevoked`].
-    pub fn create_account_by_identity(&self, handle: String) -> Result<(), LumiaError> {
-        let mut inner = self.lock();
-        let pair = self
+    /// Signs in with a password, and a TOTP code when the account requires one.
+    pub fn sign_in(&self, handle: String, password: String, totp_code: Option<String>) -> Res<()> {
+        Ok(self
             .runtime
-            .block_on(device(&mut inner, &self.device_id).create_account(&self.api, &handle))?;
-        drop(inner);
-        self.save_tokens(&pair)
+            .block_on(self.app.sign_in(&handle, &password, totp_code.as_deref()))?)
     }
 
-    /// Signs in by identity proof.
-    ///
-    /// # Errors
-    /// On API failure, or [`LumiaError::DeviceRevoked`].
-    pub fn sign_in_identity(&self) -> Result<(), LumiaError> {
-        let mut inner = self.lock();
-        let pair = self
+    /// Signs out: revokes the session and forgets the tokens.
+    pub fn sign_out(&self) -> Res<()> {
+        Ok(self.runtime.block_on(self.app.sign_out())?)
+    }
+
+    /// `GET /account/snapshot`.
+    pub fn snapshot(&self) -> Res<SnapshotSummary> {
+        Ok(self.runtime.block_on(self.app.snapshot())?.into())
+    }
+
+    /// `GET /accounts/{id}`: a public profile, when visible.
+    pub fn account(&self, account_id: String) -> Res<MemberSummary> {
+        Ok(self.runtime.block_on(self.app.account(&account_id))?.into())
+    }
+
+    /// `GET /servers/{id}/members`.
+    pub fn members(&self, server_id: String, query: String) -> Res<Vec<MemberSummary>> {
+        Ok(self
             .runtime
-            .block_on(device(&mut inner, &self.device_id).sign_in(&self.api))?;
-        drop(inner);
-        self.save_tokens(&pair)
-    }
-
-    // ---- Servers and channels -----------------------------------------------------
-
-    /// Servers the account belongs to.
-    ///
-    /// # Errors
-    /// On API failure.
-    pub fn servers(&self) -> Result<Vec<ServerSummary>, LumiaError> {
-        let list = self.runtime.block_on(self.api.servers())?;
-        Ok(list
-            .servers
+            .block_on(self.app.members(&server_id, &query))?
             .into_iter()
-            .map(|s| ServerSummary {
-                server_id: wire::display(&s.server_id),
-                name: s.name,
-            })
+            .map(Into::into)
             .collect())
     }
 
-    /// Creates a server the account owns.
-    ///
-    /// # Errors
-    /// On API failure.
-    pub fn create_server(&self, name: String) -> Result<ServerSummary, LumiaError> {
-        let s = self.runtime.block_on(self.api.create_server(&name))?;
-        Ok(ServerSummary {
-            server_id: wire::display(&s.server_id),
-            name: s.name,
-        })
-    }
-
-    /// Channels in a server the account can view.
-    ///
-    /// # Errors
-    /// On API failure or a malformed id.
-    pub fn channels(&self, server_id: String) -> Result<Vec<ChannelSummary>, LumiaError> {
-        parse_uuid(&server_id)?;
-        let list = self.runtime.block_on(self.api.channels(&server_id))?;
-        Ok(list
-            .channels
+    /// The newest messages of a channel from the local store, oldest first.
+    pub fn messages(&self, channel_id: String, limit: u32) -> Res<Vec<MessageSummary>> {
+        Ok(self
+            .app
+            .messages(&channel_id, limit)?
             .into_iter()
-            .map(|c| ChannelSummary {
-                channel_id: wire::display(&c.channel_id),
-                name: c.name,
-                last_seq: c.last_seq,
-            })
+            .map(Into::into)
             .collect())
     }
 
-    /// Creates a channel in a server.
-    ///
-    /// # Errors
-    /// On API failure or a malformed id.
-    pub fn create_channel(
-        &self,
-        server_id: String,
-        name: String,
-    ) -> Result<ChannelSummary, LumiaError> {
-        let server = parse_uuid(&server_id)?;
-        let c = self
-            .runtime
-            .block_on(self.api.create_channel(server, &name))?;
-        Ok(ChannelSummary {
-            channel_id: wire::display(&c.channel_id),
-            name: c.name,
-            last_seq: c.last_seq,
-        })
+    /// Starts the gateway loop; `listener` gets every event, in order,
+    /// from a runtime thread, until `Closed` or `stop`.
+    pub fn start(&self, channel_ids: Vec<String>, listener: Box<dyn Listener>) -> Res<()> {
+        let listener: Arc<dyn Listener> = Arc::from(listener);
+        let sink: EventSink = Arc::new(move |event| listener.on_event(event.into()));
+        let app = Arc::clone(&self.app);
+        // Spawning happens on the client's runtime.
+        let _guard = self.runtime.enter();
+        Ok(app.start(&channel_ids, sink)?)
     }
 
-    /// The newest messages the local store holds for a channel, oldest
-    /// first, up to `limit`.
-    ///
-    /// # Errors
-    /// On a store failure or a malformed id.
-    pub fn messages(
-        &self,
-        channel_id: String,
-        limit: u32,
-    ) -> Result<Vec<MessageSummary>, LumiaError> {
-        let channel = parse_uuid(&channel_id)?;
-        let inner = self.lock();
-        let rows = inner
-            .reader
-            .messages(&channel, limit as usize)
-            .map_err(other)?;
-        Ok(rows.iter().map(message_summary).collect())
+    /// Stops the gateway loop.
+    pub fn stop(&self) {
+        self.app.stop();
     }
 
-    // ---- Gateway loop ---------------------------------------------------------------
-
-    /// Starts the gateway loop subscribed to `channel_ids`, reporting to
-    /// `listener` until [`Client::stop`]. Reconnects on its own.
-    ///
-    /// # Errors
-    /// When already started, not signed in, or an id is malformed.
-    pub fn start(
-        &self,
-        channel_ids: Vec<String>,
-        listener: Box<dyn Listener>,
-    ) -> Result<(), LumiaError> {
-        if !self.signed_in() {
-            return Err(LumiaError::NotSignedIn);
-        }
-        let channels = channel_ids
-            .iter()
-            .map(|id| parse_uuid(id))
-            .collect::<Result<Vec<_>, _>>()?;
-        let mut inner = self.lock();
-        let store = inner
-            .store
-            .take()
-            .ok_or_else(|| LumiaError::Lifecycle("already started".into()))?;
-        let (tx, rx) = mpsc::unbounded();
-        let (etx, mut erx) = mpsc::unbounded();
-        let api = self.api.clone();
-        let device_id = self.device_id.clone();
-        let task = self.runtime.spawn(async move {
-            gateway::run_forever(api, store, "lumia-ffi", device_id, channels, rx, etx).await
-        });
-        self.runtime.spawn(async move {
-            while let Some(ev) = erx.next().await {
-                listener.on_event(client_event(ev));
-            }
-        });
-        inner.commands = Some(tx);
-        inner.task = Some(task);
-        Ok(())
+    /// Subscribes to a channel from the store's cursor.
+    pub fn subscribe(&self, channel_id: String) -> Res<()> {
+        Ok(self.app.subscribe(&channel_id)?)
     }
 
-    /// Stops the gateway loop and takes the store back.
-    ///
-    /// # Errors
-    /// When not started.
-    pub fn stop(&self) -> Result<(), LumiaError> {
-        let mut inner = self.lock();
-        let task = inner
-            .task
-            .take()
-            .ok_or_else(|| LumiaError::Lifecycle("not started".into()))?;
-        inner.commands = None;
-        let store = self
-            .runtime
-            .block_on(task)
-            .map_err(|e| LumiaError::Other(e.to_string()))?;
-        inner.store = Some(store);
-        Ok(())
+    /// Sends a message; returns the client-minted message id.
+    pub fn send_message(&self, channel_id: String, body: String) -> Res<String> {
+        Ok(self.app.send_message(&channel_id, &body)?)
     }
 
-    /// Subscribes the running loop to a channel from the store's cursor.
-    ///
-    /// # Errors
-    /// When not started or the id is malformed.
-    pub fn subscribe(&self, channel_id: String) -> Result<(), LumiaError> {
-        let channel = parse_uuid(&channel_id)?;
-        self.send_command(GatewayCommand::Subscribe(channel))
+    /// The app came back to the foreground: ask for every head.
+    pub fn foreground(&self) -> Res<()> {
+        Ok(self.app.foreground()?)
     }
 
-    /// Sends a message through the running loop; returns the command id,
-    /// which `Acked` and the message's id will carry.
-    ///
-    /// # Errors
-    /// When not started or the id is malformed.
-    pub fn send_message(&self, channel_id: String, body: String) -> Result<String, LumiaError> {
-        let channel = parse_uuid(&channel_id)?;
-        let command_id = wire::new_id();
-        self.send_command(GatewayCommand::Send(Command {
-            command_id: command_id.clone(),
-            channel_id: channel,
-            op: Some(command::Op::SendMessage(SendMessage {
-                body,
-                ..Default::default()
-            })),
-        }))?;
-        Ok(wire::display(&command_id))
+    // ---- Identity ----
+
+    /// Whether this device holds an identity roster.
+    pub fn has_identity(&self) -> bool {
+        self.app.has_identity()
     }
 
-    /// Tells the running loop the app is in the foreground: it asks for
-    /// every head.
-    ///
-    /// # Errors
-    /// When not started.
-    pub fn foreground(&self) -> Result<(), LumiaError> {
-        self.send_command(GatewayCommand::Foreground)
-    }
-
-    // ---- Identity -------------------------------------------------------------------
-
-    /// Creates a new identity on this device. The phrase is shown once.
-    ///
-    /// # Errors
-    /// On a keystore or store failure.
-    pub fn identity_create(&self, label: String) -> Result<IdentityCreated, LumiaError> {
-        let mut inner = self.lock();
-        let created = device(&mut inner, &self.device_id).create(&label)?;
+    /// Creates a new identity on this device; the phrase is shown once.
+    pub fn identity_create(&self, label: String) -> Res<IdentityCreated> {
+        let (identity_id, phrase) = self.runtime.block_on(self.app.identity_create(&label))?;
         Ok(IdentityCreated {
-            phrase: created.phrase,
-            identity_id: created.identity_id,
+            identity_id,
+            phrase,
         })
-    }
-
-    /// The roster this device holds.
-    ///
-    /// # Errors
-    /// When there is no identity on this device.
-    pub fn identity_show(&self) -> Result<RosterSummary, LumiaError> {
-        let mut inner = self.lock();
-        let verified = device(&mut inner, &self.device_id).roster()?;
-        Ok(roster_summary(&verified, &self.device_id))
     }
 
     /// Binds the signed-in password account to this device's identity.
-    ///
-    /// # Errors
-    /// On a wrong password or `CONFLICT`.
-    pub fn identity_link_account(&self, password: String) -> Result<(), LumiaError> {
-        let mut inner = self.lock();
-        self.runtime
-            .block_on(device(&mut inner, &self.device_id).link_account(&self.api, &password))?;
-        Ok(())
-    }
-
-    /// On a new device: the link request to show as a QR, base64.
-    ///
-    /// # Errors
-    /// On a keystore failure.
-    pub fn identity_link_request(&self, label: String) -> Result<String, LumiaError> {
-        let mut inner = self.lock();
-        Ok(device(&mut inner, &self.device_id).link_request(&label)?)
-    }
-
-    /// On an existing device: approve a link request; returns the code.
-    ///
-    /// # Errors
-    /// On a malformed request or API failure.
-    pub fn identity_approve(&self, request: String) -> Result<String, LumiaError> {
-        let mut inner = self.lock();
+    pub fn identity_link_account(&self, password: String) -> Res<()> {
         Ok(self
             .runtime
-            .block_on(device(&mut inner, &self.device_id).approve(&self.api, &request))?)
+            .block_on(self.app.identity_link_account(&password))?)
     }
 
-    /// On the new device: claim the bundle by code and adopt the roster.
-    ///
-    /// # Errors
-    /// On API failure, a bundle that does not open, or a roster that does
-    /// not verify.
-    pub fn identity_claim(&self, code: String) -> Result<RosterSummary, LumiaError> {
-        let mut inner = self.lock();
-        let verified = self
+    /// Step 1 of linking this device: the request for another device to approve.
+    pub fn identity_link_request(&self, label: String) -> Res<String> {
+        Ok(self
             .runtime
-            .block_on(device(&mut inner, &self.device_id).claim(&self.api, &code))?;
-        Ok(roster_summary(&verified, &self.device_id))
+            .block_on(self.app.identity_link_request(&label))?)
     }
 
-    /// Revokes a device: root-signed with the phrase, or signed by this
-    /// device with the account password as reauth. Exactly one of the two.
-    ///
-    /// # Errors
-    /// On a wrong phrase or password, an unknown device, or `POLICY_DENIED`.
-    pub fn identity_revoke(
-        &self,
-        device_id: String,
-        phrase: Option<String>,
-        password: Option<String>,
-    ) -> Result<(), LumiaError> {
-        let target = parse_uuid(&device_id)?;
-        let mut inner = self.lock();
-        let mut dev = device(&mut inner, &self.device_id);
-        match (phrase, password) {
-            (Some(phrase), _) => self
-                .runtime
-                .block_on(dev.revoke_with_phrase(&self.api, &phrase, &target))?,
-            (None, Some(password)) => self
-                .runtime
-                .block_on(dev.revoke_with_device(&self.api, &password, &target))?,
-            (None, None) => return Err(LumiaError::Argument("phrase or password".into())),
-        }
-        Ok(())
+    /// On a device that holds the identity: approves a link request.
+    pub fn identity_approve(&self, request: String) -> Res<String> {
+        Ok(self.runtime.block_on(self.app.identity_approve(&request))?)
     }
 
-    /// Publishes the roster this device holds to this instance.
-    ///
-    /// # Errors
-    /// On API failure, including `POLICY_DENIED` for a roster that adds
-    /// revocations without being root-signed.
-    pub fn identity_publish(&self) -> Result<(), LumiaError> {
-        let mut inner = self.lock();
-        let verified = device(&mut inner, &self.device_id).roster()?;
-        self.runtime
-            .block_on(self.api.publish_roster(verified.signed))?;
-        Ok(())
-    }
-}
-
-impl Client {
-    fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
-        self.inner.lock().unwrap_or_else(PoisonError::into_inner)
+    /// Claims the bundle an approving device uploaded, then signs in.
+    pub fn identity_claim(&self, code: String) -> Res<RosterSummary> {
+        Ok(self
+            .runtime
+            .block_on(self.app.identity_claim(&code))?
+            .into())
     }
 
-    fn save_tokens(&self, pair: &lumia_core::proto::TokenPair) -> Result<(), LumiaError> {
-        self.api.set_tokens(pair);
-        let mut inner = self.lock();
-        inner
-            .keystore
-            .put("access_token", pair.access_token.as_bytes())
-            .map_err(other)?;
-        inner
-            .keystore
-            .put("refresh_token", pair.refresh_token.as_bytes())
-            .map_err(other)?;
-        Ok(())
+    /// Signs in by identity proof with the roster this device holds.
+    pub fn sign_in_identity(&self) -> Res<()> {
+        Ok(self.runtime.block_on(self.app.sign_in_identity())?)
     }
 
-    fn send_command(&self, command: GatewayCommand) -> Result<(), LumiaError> {
-        let tx = self
-            .lock()
-            .commands
-            .clone()
-            .ok_or_else(|| LumiaError::Lifecycle("not started".into()))?;
-        tx.unbounded_send(command)
-            .map_err(|_| LumiaError::Lifecycle("the gateway loop has stopped".into()))
+    /// The roster this device holds.
+    pub fn identity_show(&self) -> Res<RosterSummary> {
+        Ok(self.runtime.block_on(self.app.identity_show())?.into())
     }
-}
 
-fn device<'a>(inner: &'a mut Inner, device_id: &[u8]) -> Device<'a, SqliteStore, FileKeystore> {
-    Device {
-        store: &mut inner.identity_store,
-        keystore: &mut inner.identity_keys,
-        device_id: device_id.to_vec(),
+    /// Revokes another device, signed by this one with the password as reauth.
+    pub fn identity_revoke(&self, device_id: String, password: String) -> Res<RosterSummary> {
+        Ok(self
+            .runtime
+            .block_on(self.app.identity_revoke(&device_id, &password))?
+            .into())
     }
-}
 
-fn client_event(ev: GatewayEvent) -> ClientEvent {
-    match ev {
-        GatewayEvent::Applied(events) => ClientEvent::Applied {
-            channel_id: events
-                .first()
-                .map(|e| wire::display(&e.channel_id))
-                .unwrap_or_default(),
-            events: events.iter().map(event_summary).collect(),
-        },
-        GatewayEvent::AccountApplied(events) => ClientEvent::AccountApplied {
-            count: u32::try_from(events.len()).unwrap_or(u32::MAX),
-        },
-        GatewayEvent::Notice(Notice::Welcomed(w)) => ClientEvent::Welcomed {
-            account_id: wire::display(&w.account_id),
-        },
-        GatewayEvent::Notice(Notice::Acked { command_id, seq }) => ClientEvent::Acked {
-            command_id: wire::display(&command_id),
-            seq,
-        },
-        GatewayEvent::Notice(Notice::Error(e)) => ClientEvent::Error {
-            code: error_code(e.code),
-            message: e.message,
-        },
-        GatewayEvent::Notice(Notice::SubscriptionFailed { channel_id, error }) => {
-            ClientEvent::SubscriptionFailed {
-                channel_id: wire::display(&channel_id),
-                message: error.map(|e| e.message).unwrap_or_default(),
+    // ---- Push ----
+
+    /// Registers this device's push token with the instance, to be
+    /// reached through the relay: `platform` is `apns` or `fcm`.
+    pub fn push_subscribe(&self, platform: String, token: String) -> Res<()> {
+        let kind = match platform.as_str() {
+            "apns" => PushKind::RelayApns,
+            "fcm" => PushKind::RelayFcm,
+            other => {
+                return Err(LumiaError::Other {
+                    message: format!("unknown platform {other}"),
+                })
             }
-        }
-        GatewayEvent::Notice(Notice::Disconnected(d)) => ClientEvent::Disconnected {
-            reason: lumia_core::proto::DisconnectReason::try_from(d.reason)
-                .map(|r| r.as_str_name().to_string())
-                .unwrap_or_else(|_| "UNKNOWN".into()),
-            reconnect_after_seconds: d.reconnect_after_seconds,
-        },
-        GatewayEvent::SnapshotTaken { channel_id, seq } => ClientEvent::SnapshotTaken {
-            channel_id: wire::display(&channel_id),
-            seq,
-        },
-        GatewayEvent::Reconnecting {
-            attempt,
-            delay,
-            reason,
-        } => ClientEvent::Reconnecting {
-            attempt,
-            delay_millis: u64::try_from(delay.as_millis()).unwrap_or(u64::MAX),
-            reason,
-        },
-        GatewayEvent::Closed(reason) => ClientEvent::Closed { reason },
-    }
-}
-
-fn event_summary(e: &Event) -> EventSummary {
-    let (kind, message) = match &e.payload {
-        Some(event::Payload::MessageCreated(c)) => (
-            "message_created",
-            c.message.as_ref().map(|m| MessageSummary {
-                message_id: wire::display(&m.message_id),
-                channel_id: wire::display(&m.channel_id),
-                seq: m.seq,
-                author_account_id: wire::display(&m.author_account_id),
-                body: m.body.clone(),
-                created_at_micros: wire::micros(m.created_at.as_ref()).unwrap_or(0),
-                deleted: m.deleted_at.is_some(),
-            }),
-        ),
-        Some(event::Payload::MessageEdited(_)) => ("message_edited", None),
-        Some(event::Payload::MessageDeleted(_)) => ("message_deleted", None),
-        Some(event::Payload::Redacted(_)) => ("redacted", None),
-        Some(_) => ("other", None),
-        None => ("empty", None),
-    };
-    EventSummary {
-        seq: e.seq,
-        kind: kind.to_string(),
-        message,
-    }
-}
-
-fn message_summary(m: &StoredMessage) -> MessageSummary {
-    MessageSummary {
-        message_id: wire::display(&m.message_id),
-        channel_id: wire::display(&m.channel_id),
-        seq: m.seq,
-        author_account_id: wire::display(&m.author_account_id),
-        body: m.body.clone(),
-        created_at_micros: m.created_at_micros,
-        deleted: m.deleted,
-    }
-}
-
-fn roster_summary(
-    verified: &lumia_core::identity::roster::Verified,
-    this_device: &[u8],
-) -> RosterSummary {
-    let mut devices: Vec<DeviceSummary> = verified
-        .devices
-        .keys()
-        .map(|id| DeviceSummary {
-            device_id: wire::display(id),
-            label: verified
-                .body
-                .devices
-                .iter()
-                .find(|d| d.device_id == *id)
-                .map(|d| d.label.clone())
-                .unwrap_or_default(),
-            this_device: id == this_device,
-            revoked: false,
-        })
-        .collect();
-    devices.extend(verified.revoked.keys().map(|id| DeviceSummary {
-        device_id: wire::display(id),
-        label: String::new(),
-        this_device: id == this_device,
-        revoked: true,
-    }));
-    RosterSummary {
-        identity_id: hex_encode(&verified.identity_id),
-        version: verified.version,
-        root_signed: verified.root_signed,
-        devices,
-    }
-}
-
-fn error_code(code: i32) -> String {
-    lumia_core::proto::ErrorCode::try_from(code)
-        .map(|c| c.as_str_name().to_string())
-        .unwrap_or_else(|_| "UNKNOWN".into())
-}
-
-fn hex_encode(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-fn tokens(keys: &FileKeystore) -> Result<Tokens, LumiaError> {
-    let read = |name: &str| -> Result<Option<String>, LumiaError> {
-        Ok(keys
-            .get(name)
-            .map_err(other)?
-            .and_then(|b| String::from_utf8(b).ok()))
-    };
-    Ok(Tokens {
-        access: read("access_token")?,
-        refresh: read("refresh_token")?,
-    })
-}
-
-fn parse_uuid(s: &str) -> Result<Vec<u8>, LumiaError> {
-    uuid::Uuid::parse_str(s)
-        .map(wire::uuid_bytes)
-        .map_err(|_| LumiaError::Argument(format!("not a uuid: {s}")))
-}
-
-fn other<E: std::fmt::Display>(e: E) -> LumiaError {
-    LumiaError::Other(e.to_string())
-}
-
-/// `http://127.0.0.1:4000` becomes `127.0.0.1_4000`, the same directory
-/// name `lumia-cli` uses, so one data directory serves both.
-fn host_of(url: &str) -> String {
-    let rest = url
-        .split_once("://")
-        .map_or(url, |(_, rest)| rest)
-        .trim_end_matches('/');
-    rest.replace([':', '/'], "_")
-}
-
-#[cfg(test)]
-#[allow(clippy::unwrap_used)]
-mod tests {
-    use super::*;
-
-    fn scratch(name: &str) -> String {
-        let dir = std::env::temp_dir().join(format!(
-            "lumia-ffi-{name}-{}",
-            wire::display(&wire::new_id())
-        ));
-        dir.to_string_lossy().to_string()
+        };
+        Ok(self
+            .runtime
+            .block_on(self.app.push_subscribe(kind, &token, "", ""))?)
     }
 
-    #[test]
-    fn host_directory_matches_the_cli() {
-        assert_eq!(host_of("http://127.0.0.1:4000"), "127.0.0.1_4000");
-        assert_eq!(host_of("https://chat.example/"), "chat.example");
+    /// Removes this device's push subscription of a platform.
+    pub fn push_unsubscribe(&self, platform: String) -> Res<()> {
+        Ok(self
+            .runtime
+            .block_on(self.app.push_unsubscribe(&format!("relay_{platform}")))?)
     }
 
-    #[test]
-    fn opens_offline_and_runs_the_identity_flows_that_need_no_instance() {
-        let client = Client::new("http://127.0.0.1:1".into(), scratch("open")).unwrap();
-        assert!(!client.signed_in());
-        assert_eq!(client.host(), "127.0.0.1_1");
-        assert!(client.identity_show().is_err());
+    // ---- Personal DMs ----
 
-        let created = client.identity_create("test".into()).unwrap();
-        assert_eq!(created.phrase.split_whitespace().count(), 24);
-        let roster = client.identity_show().unwrap();
-        assert_eq!(roster.version, 1);
-        assert!(roster.root_signed);
-        assert_eq!(roster.identity_id, created.identity_id);
-        assert_eq!(roster.devices.len(), 1);
-        assert!(roster.devices[0].this_device);
-        assert_eq!(roster.devices[0].device_id, client.device_id());
-
-        // Another data directory is another device; the same one is the same device.
-        let other = Client::new("http://127.0.0.1:2".into(), scratch("open-2")).unwrap();
-        assert_ne!(other.device_id(), client.device_id());
+    /// Whether personal DMs work on this device: it holds an identity.
+    pub fn dm_available(&self) -> bool {
+        self.app.dm_available()
     }
 
-    #[test]
-    fn gateway_lifecycle_is_guarded() {
-        let client = Client::new("http://127.0.0.1:1".into(), scratch("life")).unwrap();
-        assert!(matches!(client.stop(), Err(LumiaError::Lifecycle(_))));
-        assert!(matches!(
-            client.send_message(wire::display(&wire::new_id()), "x".into()),
-            Err(LumiaError::Lifecycle(_))
-        ));
-        assert!(matches!(
-            client.subscribe("not-a-uuid".into()),
-            Err(LumiaError::Argument(_))
-        ));
-        struct Noop;
-        impl Listener for Noop {
-            fn on_event(&self, _: ClientEvent) {}
-        }
-        assert!(matches!(
-            client.start(vec![], Box::new(Noop)),
-            Err(LumiaError::NotSignedIn)
-        ));
+    /// The personal conversations this device knows.
+    pub fn dm_channels(&self) -> Res<Vec<DmChannelSummary>> {
+        Ok(self
+            .runtime
+            .block_on(self.app.dm_channels())?
+            .into_iter()
+            .map(Into::into)
+            .collect())
+    }
+
+    /// Opens (or finds) the conversation with `account_ids`.
+    pub fn dm_open(&self, account_ids: Vec<String>) -> Res<DmOpened> {
+        Ok(self
+            .runtime
+            .block_on(self.app.dm_open(&account_ids))?
+            .into())
+    }
+
+    /// Sends a DM request to an account.
+    pub fn dm_request(&self, account_id: String) -> Res<DmRequestSummary> {
+        Ok(self
+            .runtime
+            .block_on(self.app.dm_request(&account_id))?
+            .into())
+    }
+
+    /// Answers a DM request: `accept`, `decline` or `block`.
+    pub fn dm_respond(&self, request_id: String, response: String) -> Res<DmResponse> {
+        Ok(
+            match self
+                .runtime
+                .block_on(self.app.dm_respond(&request_id, &response))?
+            {
+                Ok(opened) => DmResponse::Opened {
+                    opened: opened.into(),
+                },
+                Err(request) => DmResponse::Answered {
+                    request: request.into(),
+                },
+            },
+        )
+    }
+
+    /// Sends a message in a personal DM.
+    pub fn dm_send(&self, channel_id: String, body: String) -> Res<()> {
+        Ok(self
+            .runtime
+            .block_on(self.app.dm_send(&channel_id, &body))?)
+    }
+
+    /// Deletes one of this identity's messages in a personal DM.
+    pub fn dm_delete(&self, channel_id: String, message_id: String) -> Res<()> {
+        Ok(self
+            .runtime
+            .block_on(self.app.dm_delete(&channel_id, &message_id))?)
+    }
+
+    /// Rejoins a conversation by external commit.
+    pub fn dm_rejoin(&self, channel_id: String) -> Res<()> {
+        Ok(self.runtime.block_on(self.app.dm_rejoin(&channel_id))?)
+    }
+
+    /// The conversation as this device can read it.
+    pub fn dm_messages(&self, channel_id: String) -> Res<DmLogSummary> {
+        Ok(self
+            .runtime
+            .block_on(self.app.dm_messages(&channel_id))?
+            .into())
     }
 }

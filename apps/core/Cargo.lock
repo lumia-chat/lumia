@@ -2203,6 +2203,7 @@ dependencies = [
  "prost-types",
  "reqwest",
  "rusqlite",
+ "serde",
  "sqlite-wasm-rs",
  "sqlite-wasm-vfs",
  "thiserror",
@@ -2270,8 +2271,6 @@ dependencies = [
 name = "lumia-wasm"
 version = "0.1.0"
 dependencies = [
- "futures-util",
- "hex",
  "js-sys",
  "lumia-client",
  "lumia-core",
@@ -2280,8 +2279,6 @@ dependencies = [
  "serde-wasm-bindgen",
  "sqlite-wasm-rs",
  "sqlite-wasm-vfs",
- "url",
- "uuid",
  "wasm-bindgen",
  "wasm-bindgen-futures",
 ]
@@ -4058,11 +4055,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "76407f5f396a2c949a069eff4a9fca9ce462410eb872bffef4c2b7b89804a77a"
 dependencies = [
  "anyhow",
+ "camino",
  "cargo_metadata",
+ "clap",
  "uniffi_bindgen",
  "uniffi_core",
  "uniffi_macros",
  "uniffi_pipeline",
+]
+
+[[package]]
+name = "uniffi-bindgen"
+version = "0.1.0"
+dependencies = [
+ "uniffi",
 ]
 
 [[package]]

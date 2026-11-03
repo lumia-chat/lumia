@@ -6,7 +6,8 @@ This is the Lumia client core: the Rust that every client shares (architecture s
 - `lumia-core`: the sync state machine, the `Store` and `Keystore` contracts, identity, crypto. **No I/O and no async.** Everything that must be correct lives here as pure functions and state machines that take frames and return effects.
 - `lumia-client`: the transport (HTTP, the gateway loop), SQLite store, identity flows and DM engine, for native targets and wasm32. Only `transport.rs`, `time.rs` and the manifest's target tables differ per target; everything else is one code path. The wasm32 build needs `AR_wasm32_unknown_unknown` set to `llvm-ar` (README).
 - `lumia-cli`: the headless client binary and the scenario suite.
-- `lumia-ffi` (UniFFI) and `lumia-wasm` (wasm-bindgen): marshalling only, no logic.
+- `lumia-ffi` (UniFFI) and `lumia-wasm` (wasm-bindgen): marshalling only, no logic. Both wrap `lumia_client::app::App`, the one shell-facing client (open, sign in, snapshot, gateway loop with an event sink, identity, push, DMs); a method a shell needs goes on `App`, and the binding crates only convert types.
+- `uniffi-bindgen`: the binary that generates the Swift (and later Kotlin) bindings from `lumia-ffi`'s metadata; `apps/apple/scripts/core.sh` runs it.
 
 ## Rules
 
