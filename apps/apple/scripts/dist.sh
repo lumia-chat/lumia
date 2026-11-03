@@ -84,6 +84,9 @@ ln -s /Applications "$staging/Applications"
 dmg="$dist/Lumia-$version.dmg"
 hdiutil create -volname "Lumia" -srcfolder "$staging" -ov -format UDZO -quiet "$dmg"
 if $sign; then
+  # The image itself is signed too, so Gatekeeper can assess it as a whole,
+  # not only the app inside.
+  codesign --sign "Developer ID Application" --timestamp "$dmg"
   # shellcheck disable=SC2086
   xcrun notarytool submit "$dmg" $notary --wait
   xcrun stapler staple "$dmg"
