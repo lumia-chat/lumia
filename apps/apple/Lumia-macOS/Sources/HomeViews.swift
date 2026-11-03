@@ -23,66 +23,81 @@ struct HomeSidebar: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
+            HStack(spacing: LumiaTokens.space6) {
                 Text("Home").font(LumiaTokens.titleServer.font).foregroundStyle(LumiaTokens.ink.color)
-                Spacer()
-                Button { view = .new } label: { Image(systemName: "square.and.pencil") }
-                    .buttonStyle(.plain).foregroundStyle(LumiaTokens.iconStrong.color).help("New message")
+                Spacer(minLength: 0)
+                Button { view = .new } label: {
+                    Image(systemName: "square.and.pencil").font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(LumiaTokens.iconStrong.color).frame(width: 34, height: 34)
+                }
+                .buttonStyle(.plain).help("New message")
             }
-            .frame(height: LumiaTokens.headerHeight).padding(.horizontal, LumiaTokens.space16)
-            Divider().overlay(LumiaTokens.line.color)
-            HStack(spacing: LumiaTokens.space8) {
+            .padding(.leading, LumiaTokens.space8)
+            .frame(height: 38)
+            .padding(.bottom, LumiaTokens.space10)
+            HStack(spacing: LumiaTokens.space6) {
                 tile("Requests", icon: "at", count: session.snapshot?.pendingRequests.count ?? 0, current: view == .requests) { view = .requests }
                 tile("Devices", icon: "shield", count: 0, current: view == .devices) { view = .devices }
                 tile("New", icon: "square.and.pencil", count: 0, current: view == .new) { view = .new }
             }
-            .padding(LumiaTokens.space12)
-            if byHost.isEmpty {
-                Text("No conversations yet.")
-                    .font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkQuiet.color)
-                    .padding(LumiaTokens.space16)
-            } else {
-                List(selection: Binding(get: { view == .dm ? dmID : nil }, set: { id in
-                    if let id { dmID = id; view = .dm }
-                })) {
+            .padding(.bottom, LumiaTokens.space12)
+            ScrollView {
+                VStack(alignment: .leading, spacing: LumiaTokens.space2) {
+                    if byHost.isEmpty {
+                        Text("No conversations yet.")
+                            .font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkQuiet.color)
+                            .padding(LumiaTokens.space10)
+                    }
                     ForEach(byHost, id: \.host) { group in
-                        Section(group.host) {
-                            ForEach(group.channels, id: \.channelId) { c in
-                                let name = session.conversationName(c)
-                                let others = c.participantAccountIds.filter { $0 != session.me }
-                                HStack(spacing: LumiaTokens.space8) {
-                                    LumiaAvatar(initials: initials(of: name), tone: .of(others.first ?? c.channelId), size: LumiaTokens.avatarSm)
-                                    Text(name).lineLimit(1)
+                        Text(group.host).font(LumiaTokens.textSection.font).foregroundStyle(LumiaTokens.inkMuted.color)
+                            .padding(.horizontal, LumiaTokens.space10).padding(.top, LumiaTokens.space8).padding(.bottom, LumiaTokens.space6)
+                        ForEach(group.channels, id: \.channelId) { c in
+                            let name = session.conversationName(c)
+                            let others = c.participantAccountIds.filter { $0 != session.me }
+                            let active = view == .dm && dmID == c.channelId
+                            Button { dmID = c.channelId; view = .dm } label: {
+                                HStack(spacing: LumiaTokens.space10) {
+                                    LumiaAvatar(initials: initials(of: name), tone: .of(others.first ?? c.channelId), size: LumiaTokens.avatarXs)
+                                    Text(name).font(LumiaTokens.textNav.font)
+                                        .foregroundStyle(active ? LumiaTokens.inkSelected.color : LumiaTokens.inkQuiet.color)
+                                        .fontWeight(active ? .bold : .regular)
+                                        .lineLimit(1)
+                                    Spacer(minLength: 0)
                                 }
-                                .tag(c.channelId)
+                                .padding(.horizontal, LumiaTokens.space10)
+                                .frame(height: 34)
+                                .background(active ? LumiaTokens.surface.color : .clear, in: RoundedRectangle(cornerRadius: LumiaTokens.radius8))
+                                .shadow(color: active ? .black.opacity(0.08) : .clear, radius: 2, y: 1)
+                                .contentShape(RoundedRectangle(cornerRadius: LumiaTokens.radius8))
                             }
+                            .buttonStyle(.plain)
                         }
                     }
                 }
-                .scrollContentBackground(.hidden)
             }
             Spacer(minLength: 0)
-            Text(session.connection.label)
-                .font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkQuiet.color)
-                .padding(LumiaTokens.space12)
         }
+        .padding(.top, LumiaTokens.space14)
+        .padding(.leading, LumiaTokens.space12)
+        .padding(.trailing, LumiaTokens.space10)
     }
 
     private func tile(_ label: String, icon: String, count: Int, current: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             VStack(spacing: LumiaTokens.space4) {
-                Image(systemName: icon).font(.system(size: 15))
+                Image(systemName: icon).font(.system(size: 15, weight: .medium))
                 Text(label).font(LumiaTokens.textCompact.font)
             }
-            .foregroundStyle(current ? LumiaTokens.accentInk.color : LumiaTokens.inkSecondary.color)
-            .frame(maxWidth: .infinity).frame(height: 52)
-            .background(current ? LumiaTokens.accentWash.color : LumiaTokens.inset.color, in: RoundedRectangle(cornerRadius: LumiaTokens.radius10))
+            .foregroundStyle(current ? LumiaTokens.accentInk.color : LumiaTokens.inkBody.color)
+            .frame(maxWidth: .infinity).frame(height: 58)
+            .background(LumiaTokens.tile.color, in: RoundedRectangle(cornerRadius: LumiaTokens.radius14))
+            .overlay(RoundedRectangle(cornerRadius: LumiaTokens.radius14).stroke(current ? LumiaTokens.accent.color : LumiaTokens.line.color))
             .overlay(alignment: .topTrailing) {
                 if count > 0 {
                     Text("\(count)").font(LumiaTokens.textCount.font).foregroundStyle(LumiaTokens.onAccent.color)
-                        .padding(.horizontal, LumiaTokens.space4).frame(minWidth: 16, minHeight: 16)
-                        .background(LumiaTokens.unread.color, in: Capsule())
-                        .offset(x: -4, y: 4)
+                        .padding(.horizontal, 5).frame(minWidth: 18, minHeight: 18)
+                        .background(LumiaTokens.accent.color, in: Capsule())
+                        .offset(x: -6, y: 6)
                 }
             }
         }
@@ -123,15 +138,7 @@ struct PageHeader: View {
     let title: String
     var topic: String?
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(alignment: .firstTextBaseline, spacing: LumiaTokens.space8) {
-                Text(title).font(LumiaTokens.titleChannel.font).foregroundStyle(LumiaTokens.ink.color)
-                if let topic { Text(topic).font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkQuiet.color) }
-                Spacer()
-            }
-            .frame(height: LumiaTokens.headerHeight).padding(.horizontal, LumiaTokens.space16)
-            Divider().overlay(LumiaTokens.line.color)
-        }
+        LumiaPaneHeader(title: title, topic: topic)
     }
 }
 
@@ -180,19 +187,19 @@ struct ConversationView: View {
                             LumiaNotice(icon: "lock") { Text("\(log.undecryptable) could not be decrypted.") }
                         }
                         if let log, !log.messages.isEmpty {
-                            LumiaDayDivider(label: "Messages").padding(.horizontal, -LumiaTokens.space16)
+                            LumiaDayDivider(label: "Messages")
                         }
                         ForEach(log?.messages ?? [], id: \.messageId) { m in
                             let who = m.mine ? session.selfName : (!m.senderAccountId.isEmpty || others.count != 1 ? session.name(of: m.senderAccountId) : session.name(of: others[0]))
                             let toneID = m.mine ? session.me : (m.senderAccountId.isEmpty ? m.senderIdentityId : m.senderAccountId)
                             LumiaMessageRow(author: who, tone: .of(toneID), time: time(ofMicros: m.sentAtMicros), text: m.body, deleted: m.deleted)
-                                .padding(.horizontal, -LumiaTokens.space16)
                                 .id(m.messageId)
                         }
                         if !error.isEmpty { LumiaErrorText(error) }
                     }
-                    .padding(LumiaTokens.space16)
+                    .padding(LumiaTokens.space14)
                 }
+                .defaultScrollAnchor(.bottom)
                 .onChange(of: log?.messages.count ?? 0) { _, _ in
                     if let last = log?.messages.last { proxy.scrollTo(last.messageId, anchor: .bottom) }
                 }
@@ -228,20 +235,18 @@ struct ConversationAside: View {
     var body: some View {
         if let channel = session.snapshot?.channels.first(where: { $0.channelId == channelID }) {
             VStack(alignment: .leading, spacing: 0) {
-                Text("Details").font(LumiaTokens.textNav.font).foregroundStyle(LumiaTokens.ink.color)
-                    .frame(height: LumiaTokens.headerHeight).padding(.horizontal, LumiaTokens.space16)
-                Divider().overlay(LumiaTokens.line.color)
-                Text("In this conversation").font(LumiaTokens.textSection.font).foregroundStyle(LumiaTokens.inkQuiet.color)
-                    .padding(.horizontal, LumiaTokens.space16).padding(.top, LumiaTokens.space12).padding(.bottom, LumiaTokens.space6)
+                LumiaSegmentedTabs(tabs: [.init(id: "details", label: "Details")], selected: .constant("details"))
+                    .padding(LumiaTokens.space12)
+                Rectangle().fill(LumiaTokens.line.color).frame(height: 1)
+                Text("In this conversation").font(LumiaTokens.textSection.font).foregroundStyle(LumiaTokens.inkMuted.color)
+                    .padding(.horizontal, LumiaTokens.space18).padding(.top, LumiaTokens.space12).padding(.bottom, LumiaTokens.space6)
                 ForEach(channel.participantAccountIds, id: \.self) { id in
-                    HStack(spacing: LumiaTokens.space8) {
-                        LumiaAvatar(initials: initials(of: session.name(of: id)), tone: .of(id), size: LumiaTokens.avatarSm)
-                        Text(session.name(of: id)).font(LumiaTokens.textMember.font).foregroundStyle(LumiaTokens.ink.color).lineLimit(1)
-                        Spacer()
-                        if id == session.me { LumiaTag("You") }
-                    }
-                    .padding(.horizontal, LumiaTokens.space16).padding(.vertical, LumiaTokens.space4)
+                    let handle = (session.people[id] ?? session.profile(of: id))?.handle ?? ""
+                    LumiaMemberRow(name: session.name(of: id), subtitle: handle.isEmpty ? nil : "@\(handle)", tone: .of(id), tag: id == session.me ? "You" : nil)
+                        .padding(.horizontal, LumiaTokens.space8)
                 }
+                LumiaNotice(icon: "lock") { Text("History backup is off for this identity. Messages live only on your devices.") }
+                    .padding(LumiaTokens.space14)
                 Spacer()
             }
         }

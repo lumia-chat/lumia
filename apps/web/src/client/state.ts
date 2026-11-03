@@ -267,6 +267,15 @@ export function rosterQuery(enabled: () => boolean) {
   }));
 }
 
+/** A server's members, for the aside. */
+export function membersQuery(serverId: () => string | undefined) {
+  return createQuery(() => ({
+    queryKey: ["members", serverId()],
+    queryFn: () => client().members(serverId() as string),
+    enabled: !!serverId(),
+  }));
+}
+
 export function messagesQuery(channelId: () => string | undefined) {
   return createQuery(() => ({
     queryKey: ["messages", channelId()],

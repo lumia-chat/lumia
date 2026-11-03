@@ -1,7 +1,8 @@
-// The app shell on the Quiet Split: the server rail, a sidebar (a
-// server's channels, or Home's conversations and tiles), the main
-// column, and an aside for a conversation's details. Mirrors the web's
-// app.tsx; the Home screens are in HomeViews.swift.
+// The app shell on the Quiet Split, as the design canvas draws it: the
+// server rail, a sidebar on the ground (a server's channels, or Home's
+// conversations and tiles), the main pane as a floating panel, and an
+// aside panel (a server's members, or a conversation's details). Mirrors
+// the web's app.tsx; the Home screens are in HomeViews.swift.
 import LumiaFFI
 import LumiaKit
 import SwiftUI
@@ -38,21 +39,23 @@ struct ShellView: View {
     var body: some View {
         HStack(spacing: 0) {
             rail
-            Divider().overlay(LumiaTokens.railDivider.color)
             sidebar
                 .frame(width: 240)
-                .background(LumiaTokens.surface.color)
-            Divider().overlay(LumiaTokens.panelEdge.color)
             main
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(LumiaTokens.surface.color)
-            if place == .home, homeView == .dm, let dmID {
-                Divider().overlay(LumiaTokens.panelEdge.color)
-                ConversationAside(session: session, channelID: dmID)
-                    .frame(width: 240)
-                    .background(LumiaTokens.surface.color)
+                .lumiaPanel()
+                .padding(.vertical, LumiaTokens.space8)
+            if let aside {
+                aside
+                    .frame(width: 280)
+                    .frame(maxHeight: .infinity)
+                    .lumiaPanel()
+                    .padding(LumiaTokens.space8)
+            } else {
+                Spacer().frame(width: LumiaTokens.space8)
             }
         }
+        .background(LumiaTokens.bg.color)
         .task { await session.load() }
         .onChange(of: channels.map(\.channelId)) { _, ids in
             if channelID == nil || !ids.contains(channelID ?? "") { channelID = ids.first }
@@ -61,53 +64,73 @@ struct ShellView: View {
             if case .home = place, channelID == nil, let first = ids.first, snapshot?.channels.contains(where: { personalKinds.contains($0.kind) }) == false {
                 place = .server(id: first)
             }
+            #if DEBUG
+            if ProcessInfo.processInfo.environment["LUMIA_DEV_PLACE"] == "home" { place = .home }
+            #endif
         }
     }
 
     // MARK: Rail
 
     private var rail: some View {
-        VStack(spacing: LumiaTokens.space8) {
-            railButton(current: place == .home, badge: snapshot?.pendingRequests.count ?? 0) {
+        VStack(spacing: LumiaTokens.space12) {
+            railButton(current: place == .home, badge: snapshot?.pendingRequests.count ?? 0, label: "Home", rounded: true) {
                 place = .home
             } label: {
-                Image("Logo").resizable().scaledToFit().padding(LumiaTokens.space8)
+                Image("Logo").resizable().scaledToFit().frame(width: 36, height: 36)
             }
-            .help("Home")
             Rectangle().fill(LumiaTokens.railDivider.color).frame(width: 24, height: 1)
             ForEach(servers, id: \.serverId) { s in
-                railButton(current: server?.serverId == s.serverId, badge: 0) {
+                railButton(current: server?.serverId == s.serverId, badge: 0, label: s.name, rounded: false) {
                     place = .server(id: s.serverId)
                 } label: {
-                    Text(initials(of: s.name)).font(LumiaTokens.titleMonogram.font).foregroundStyle(LumiaTokens.ink.color)
+                    Text(initials(of: s.name))
+                        .font(server?.serverId == s.serverId ? LumiaTokens.titleMonogram.font : LumiaTokens.textAuthor.font)
+                        .foregroundStyle(server?.serverId == s.serverId ? LumiaTokens.inkSelected.color : LumiaTokens.ink.color)
                 }
-                .help(s.name)
             }
             Spacer()
             LumiaAvatar(initials: initials(of: session.selfName), tone: .of(session.me), size: LumiaTokens.avatarSelf)
-                .help(session.selfName)
+                .overlay(alignment: .bottomTrailing) {
+                    Circle().fill(session.connection == .connected ? LumiaTokens.online.color : LumiaTokens.inkMuted.color)
+                        .frame(width: 12, height: 12)
+                        .overlay(Circle().stroke(LumiaTokens.rail.color, lineWidth: 2))
+                        .offset(x: 2, y: 2)
+                }
+                .help(session.selfName + " · " + session.connection.label)
                 .padding(.bottom, LumiaTokens.space12)
         }
-        .padding(.top, LumiaTokens.space12)
+        .padding(.top, LumiaTokens.space16)
         .frame(width: LumiaTokens.railWidth)
+        .frame(maxHeight: .infinity)
         .background(LumiaTokens.rail.color)
     }
 
-    private func railButton<L: View>(current: Bool, badge: Int, action: @escaping () -> Void, @ViewBuilder label: () -> L) -> some View {
-        Button(action: action) {
-            label()
+    private func railButton<L: View>(current: Bool, badge: Int, label: String, rounded: Bool, action: @escaping () -> Void, @ViewBuilder label content: () -> L) -> some View {
+        let radius = rounded ? LumiaTokens.radius14 : LumiaTokens.tileSize / 2
+        return Button(action: action) {
+            content()
                 .frame(width: LumiaTokens.tileSize, height: LumiaTokens.tileSize)
-                .background(current ? LumiaTokens.tabActive.color : LumiaTokens.tile.color, in: RoundedRectangle(cornerRadius: current ? LumiaTokens.radius14 : LumiaTokens.radiusRound))
+                .background(current && !rounded ? LumiaTokens.raised.color : LumiaTokens.tile.color, in: RoundedRectangle(cornerRadius: radius))
+                .overlay {
+                    if current {
+                        RoundedRectangle(cornerRadius: radius)
+                            .stroke(LumiaTokens.accent.color, lineWidth: 2)
+                            .padding(-4)
+                    }
+                }
                 .overlay(alignment: .topTrailing) {
                     if badge > 0 {
                         Text("\(badge)").font(LumiaTokens.textCount.font).foregroundStyle(LumiaTokens.onAccent.color)
-                            .padding(.horizontal, LumiaTokens.space4).frame(minWidth: 16, minHeight: 16)
-                            .background(LumiaTokens.unread.color, in: Capsule())
-                            .offset(x: 4, y: -4)
+                            .padding(.horizontal, 5).frame(minWidth: 20, minHeight: 20)
+                            .background(LumiaTokens.accent.color, in: Capsule())
+                            .overlay(Capsule().stroke(LumiaTokens.rail.color, lineWidth: 2))
+                            .offset(x: 5, y: -5)
                     }
                 }
         }
         .buttonStyle(.plain)
+        .help(label)
     }
 
     // MARK: Sidebar
@@ -118,23 +141,39 @@ struct ShellView: View {
             HomeSidebar(session: session, view: $homeView, dmID: $dmID)
         } else {
             VStack(alignment: .leading, spacing: 0) {
-                Text(server?.name ?? "Lumia")
-                    .font(LumiaTokens.titleServer.font).foregroundStyle(LumiaTokens.ink.color)
-                    .frame(height: LumiaTokens.headerHeight).padding(.horizontal, LumiaTokens.space16)
-                Divider().overlay(LumiaTokens.line.color)
-                List(selection: $channelID) {
-                    Section("Channels") {
+                HStack(spacing: LumiaTokens.space6) {
+                    Text(server?.name ?? "Lumia")
+                        .font(LumiaTokens.titleServer.font).foregroundStyle(LumiaTokens.ink.color).lineLimit(1)
+                    Image(systemName: "chevron.down").font(.system(size: 11, weight: .bold)).foregroundStyle(LumiaTokens.inkSecondary.color)
+                    Spacer(minLength: 0)
+                    Button { place = .home; homeView = .new } label: {
+                        Image(systemName: "square.and.pencil").font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(LumiaTokens.iconStrong.color).frame(width: 34, height: 34)
+                    }
+                    .buttonStyle(.plain).help("New message")
+                }
+                .padding(.leading, LumiaTokens.space8)
+                .frame(height: 38)
+                .padding(.bottom, LumiaTokens.space10)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: LumiaTokens.space2) {
+                        Text("Channels").font(LumiaTokens.textSection.font).foregroundStyle(LumiaTokens.inkMuted.color)
+                            .padding(.horizontal, LumiaTokens.space10).padding(.top, LumiaTokens.space4).padding(.bottom, LumiaTokens.space6)
                         ForEach(channels, id: \.channelId) { c in
-                            Label(c.name, systemImage: "number").tag(c.channelId)
+                            ChannelRow(name: c.name, active: channelID == c.channelId) { channelID = c.channelId }
+                        }
+                        if channels.isEmpty {
+                            Text("Create a channel with the CLI and it appears here.")
+                                .font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkQuiet.color)
+                                .padding(LumiaTokens.space10)
                         }
                     }
                 }
-                .scrollContentBackground(.hidden)
                 Spacer(minLength: 0)
-                Text(session.connection.label)
-                    .font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkQuiet.color)
-                    .padding(LumiaTokens.space12)
             }
+            .padding(.top, LumiaTokens.space14)
+            .padding(.leading, LumiaTokens.space12)
+            .padding(.trailing, LumiaTokens.space10)
         }
     }
 
@@ -150,10 +189,55 @@ struct ShellView: View {
         } else if let channel = channels.first(where: { $0.channelId == channelID }) {
             ChannelView(session: session, channel: channel)
         } else {
-            LumiaEmptyState(icon: "number", title: "No channel yet") {
-                Text("Create a server with the CLI and it appears here.")
+            VStack(spacing: 0) {
+                LumiaPaneHeader(title: server?.name ?? "Lumia")
+                LumiaEmptyState(icon: "number", title: "No channel yet") {
+                    Text("Create a server with the CLI and it appears here.")
+                }
+                Spacer()
             }
         }
+    }
+
+    // MARK: Aside
+
+    private var aside: AnyView? {
+        if place == .home {
+            if homeView == .dm, let dmID { return AnyView(ConversationAside(session: session, channelID: dmID)) }
+            return nil
+        }
+        guard let server else { return nil }
+        return AnyView(MembersAside(session: session, server: server))
+    }
+}
+
+/// A channel in the sidebar: the hash glyph, the name, the active row raised.
+struct ChannelRow: View {
+    let name: String
+    let active: Bool
+    let select: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: select) {
+            HStack(spacing: LumiaTokens.space8) {
+                Text("#").font(LumiaTokens.textNav.font)
+                    .foregroundStyle(active ? LumiaTokens.accentInk.color : LumiaTokens.inkMuted.color)
+                    .frame(width: 10)
+                Text(name).font(LumiaTokens.textNav.font)
+                    .foregroundStyle(active ? LumiaTokens.inkSelected.color : LumiaTokens.inkQuiet.color)
+                    .fontWeight(active ? .bold : .regular)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, LumiaTokens.space10)
+            .frame(height: LumiaTokens.rowHeight)
+            .background(active ? LumiaTokens.surface.color : (hovering ? LumiaTokens.hoverRow.color : .clear), in: RoundedRectangle(cornerRadius: LumiaTokens.radius8))
+            .shadow(color: active ? .black.opacity(0.08) : .clear, radius: 2, y: 1)
+            .contentShape(RoundedRectangle(cornerRadius: LumiaTokens.radius8))
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
     }
 }
 
@@ -167,16 +251,12 @@ struct ChannelView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: LumiaTokens.space6) {
-                Image(systemName: "number").foregroundStyle(LumiaTokens.inkQuiet.color)
-                Text(channel.name).font(LumiaTokens.titleChannel.font).foregroundStyle(LumiaTokens.ink.color)
-                Spacer()
-            }
-            .frame(height: LumiaTokens.headerHeight).padding(.horizontal, LumiaTokens.space16)
-            Divider().overlay(LumiaTokens.line.color)
+            LumiaPaneHeader(title: channel.name, glyph: {
+                Image(systemName: "number").font(.system(size: 18, weight: .bold)).foregroundStyle(LumiaTokens.accentInk.color)
+            })
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
+                    LazyVStack(alignment: .leading, spacing: LumiaTokens.space2) {
                         if messages.isEmpty {
                             LumiaEmptyState(icon: "bubble.left", title: "Nothing here yet") { Text("Say something.") }
                         } else {
@@ -186,10 +266,13 @@ struct ChannelView: View {
                             LumiaMessageRow(author: session.name(of: m.authorAccountId), tone: .of(m.authorAccountId), time: time(ofMicros: m.createdAtMicros), text: m.body, deleted: m.deleted)
                                 .id(m.messageId)
                         }
-                        if !error.isEmpty { LumiaErrorText(error).padding(.horizontal, LumiaTokens.space16) }
+                        if !error.isEmpty { LumiaErrorText(error).padding(.horizontal, LumiaTokens.space12) }
                     }
-                    .padding(.vertical, LumiaTokens.space8)
+                    .padding(.horizontal, LumiaTokens.space14)
+                    .padding(.top, LumiaTokens.space14)
+                    .padding(.bottom, LumiaTokens.space8)
                 }
+                .defaultScrollAnchor(.bottom)
                 .onChange(of: messages.count) { _, _ in
                     if let last = messages.last { proxy.scrollTo(last.messageId, anchor: .bottom) }
                 }
@@ -205,5 +288,55 @@ struct ChannelView: View {
         draft = ""
         error = ""
         do { try await session.sendMessage(channelID: channel.channelId, body: body) } catch { self.error = error.lumiaMessage }
+    }
+}
+
+/// A server's members, in the aside panel.
+struct MembersAside: View {
+    let session: LumiaSession
+    let server: ServerSummary
+    @State private var tab = "members"
+    @State private var query = ""
+
+    private var members: [MemberSummary] {
+        let all = session.serverMembers[server.serverId] ?? []
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        return all
+            .filter { q.isEmpty || $0.handle.lowercased().contains(q) || $0.displayName.lowercased().contains(q) || $0.nickname.lowercased().contains(q) }
+            .sorted { name(of: $0).localizedCompare(name(of: $1)) == .orderedAscending }
+    }
+
+    private func name(of m: MemberSummary) -> String {
+        for candidate in [m.displayName, m.nickname, m.handle] where !candidate.isEmpty { return candidate }
+        return String(m.accountId.prefix(8))
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            LumiaSegmentedTabs(tabs: [.init(id: "members", label: "Members", count: (session.serverMembers[server.serverId] ?? []).count)], selected: $tab)
+                .padding(LumiaTokens.space12)
+            Rectangle().fill(LumiaTokens.line.color).frame(height: 1)
+            HStack(spacing: LumiaTokens.space8) {
+                Image(systemName: "magnifyingglass").font(.system(size: 13)).foregroundStyle(LumiaTokens.inkSecondary.color)
+                TextField("Find a member", text: $query).textFieldStyle(.plain).font(LumiaTokens.textBody.font)
+            }
+            .padding(.horizontal, LumiaTokens.space12)
+            .frame(height: 38)
+            .overlay(RoundedRectangle(cornerRadius: LumiaTokens.radius10).stroke(LumiaTokens.border.color))
+            .padding(.horizontal, LumiaTokens.space14)
+            .padding(.top, LumiaTokens.space12)
+            .padding(.bottom, LumiaTokens.space6)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Members · \(members.count)").font(LumiaTokens.textSection.font).foregroundStyle(LumiaTokens.inkMuted.color)
+                        .padding(.horizontal, LumiaTokens.space10).padding(.top, LumiaTokens.space8).padding(.bottom, LumiaTokens.space6)
+                    ForEach(members, id: \.accountId) { m in
+                        LumiaMemberRow(name: name(of: m), subtitle: m.handle.isEmpty ? nil : "@\(m.handle)", tone: .of(m.accountId), tag: m.accountId == session.me ? "You" : nil)
+                    }
+                }
+                .padding(.horizontal, LumiaTokens.space8)
+                .padding(.bottom, LumiaTokens.space14)
+            }
+        }
     }
 }

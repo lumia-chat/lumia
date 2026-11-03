@@ -19,8 +19,9 @@ struct LumiaApp: App {
         WindowGroup {
             RootView()
                 .environment(store)
-                .frame(minWidth: 900, minHeight: 560)
+                .frame(minWidth: 1000, minHeight: 600)
                 .background(LumiaTokens.bg.color)
+                .task { await DevShot.run() }
         }
         .windowStyle(.hiddenTitleBar)
         .commands {
@@ -72,6 +73,25 @@ final class UpdateModel {
             let value = change.newValue ?? false
             Task { @MainActor in self?.canCheck = value }
         }
+    }
+}
+
+/// A debug build writes the window as a PNG to LUMIA_DEV_SHOT a few
+/// seconds after launch (scripts/smoke.sh), drawn from the view hierarchy
+/// itself, which needs no screen-recording permission.
+enum DevShot {
+    static func run() async {
+        #if DEBUG
+        guard let path = ProcessInfo.processInfo.environment["LUMIA_DEV_SHOT"] else { return }
+        let delay = Double(ProcessInfo.processInfo.environment["LUMIA_DEV_SHOT_AFTER"] ?? "") ?? 8
+        try? await Task.sleep(for: .seconds(delay))
+        guard let window = NSApp.windows.first(where: { $0.isVisible }), let view = window.contentView,
+              let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
+        view.cacheDisplay(in: view.bounds, to: rep)
+        if let data = rep.representation(using: .png, properties: [:]) {
+            try? data.write(to: URL(fileURLWithPath: path))
+        }
+        #endif
     }
 }
 

@@ -61,7 +61,7 @@ struct ConversationScreen: View {
                     if let last = log?.messages.last { proxy.scrollTo(last.messageId, anchor: .bottom) }
                 }
             }
-            LumiaComposer(text: $draft, placeholder: state?.member == true ? "Message \(title)" : "Setting up the encrypted group…", disabled: state?.member != true) {
+            LumiaComposer(text: $draft, placeholder: state?.member == true ? "Message \(title)" : "Setting up the encrypted group…", disabled: state?.member != true, hint: nil) {
                 Task { await send() }
             }
         }
@@ -121,7 +121,7 @@ struct ChannelScreen: View {
                     if let last = messages.last { proxy.scrollTo(last.messageId, anchor: .bottom) }
                 }
             }
-            LumiaComposer(text: $draft, placeholder: "Message #\(name)") { Task { await send() } }
+            LumiaComposer(text: $draft, placeholder: "Message #\(name)", hint: nil) { Task { await send() } }
         }
         .task(id: channelID) { await session.refreshMessages(channelID: channelID) }
     }

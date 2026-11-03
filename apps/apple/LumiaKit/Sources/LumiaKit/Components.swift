@@ -92,29 +92,33 @@ public struct LumiaMessageRow: View {
     public let time: String
     public let text: String
     public var deleted = false
+    @State private var hovering = false
 
     public init(author: String, tone: AvatarTone, time: String, text: String, deleted: Bool = false) {
         self.author = author; self.tone = tone; self.time = time; self.text = text; self.deleted = deleted
     }
 
     public var body: some View {
-        HStack(alignment: .top, spacing: LumiaTokens.space12) {
-            LumiaAvatar(initials: initials(of: author), tone: tone, size: LumiaTokens.avatarMd)
-            VStack(alignment: .leading, spacing: LumiaTokens.space2) {
+        HStack(alignment: .top, spacing: LumiaTokens.space14) {
+            LumiaAvatar(initials: initials(of: author), tone: tone, size: LumiaTokens.avatarLg)
+            VStack(alignment: .leading, spacing: LumiaTokens.space4) {
                 HStack(alignment: .firstTextBaseline, spacing: LumiaTokens.space8) {
                     Text(author).font(LumiaTokens.textAuthor.font).foregroundStyle(LumiaTokens.inkEmphasis.color)
-                    Text(time).font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkQuiet.color)
+                    Text(time).font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkSecondary.color)
                 }
                 Text(deleted ? "(deleted)" : text)
                     .font(LumiaTokens.textMessage.font)
+                    .lineSpacing(LumiaTokens.space4)
                     .foregroundStyle(deleted ? LumiaTokens.inkQuiet.color : LumiaTokens.inkBody.color)
                     .italic(deleted)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .padding(.horizontal, LumiaTokens.space16)
-        .padding(.vertical, LumiaTokens.space6)
+        .padding(.horizontal, LumiaTokens.space12)
+        .padding(.vertical, LumiaTokens.space8)
+        .background(hovering ? LumiaTokens.hoverMessage.color : .clear, in: RoundedRectangle(cornerRadius: LumiaTokens.radius12))
+        .onHover { hovering = $0 }
     }
 }
 
@@ -122,12 +126,12 @@ public struct LumiaDayDivider: View {
     public let label: String
     public init(label: String) { self.label = label }
     public var body: some View {
-        HStack(spacing: LumiaTokens.space10) {
+        HStack(spacing: LumiaTokens.space12) {
             Rectangle().fill(LumiaTokens.line.color).frame(height: 1)
             Text(label).font(LumiaTokens.textSection.font).foregroundStyle(LumiaTokens.inkQuiet.color)
             Rectangle().fill(LumiaTokens.line.color).frame(height: 1)
         }
-        .padding(.horizontal, LumiaTokens.space16)
+        .padding(.horizontal, LumiaTokens.space10)
         .padding(.vertical, LumiaTokens.space8)
     }
 }
@@ -136,31 +140,168 @@ public struct LumiaComposer: View {
     @Binding var text: String
     let placeholder: String
     let disabled: Bool
+    let hint: String?
     let send: () -> Void
 
-    public init(text: Binding<String>, placeholder: String, disabled: Bool = false, send: @escaping () -> Void) {
-        self._text = text; self.placeholder = placeholder; self.disabled = disabled; self.send = send
+    public init(text: Binding<String>, placeholder: String, disabled: Bool = false, hint: String? = "Return to send", send: @escaping () -> Void) {
+        self._text = text; self.placeholder = placeholder; self.disabled = disabled; self.hint = hint; self.send = send
+    }
+
+    private var canSend: Bool { !disabled && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: LumiaTokens.space8) {
+            HStack(alignment: .center, spacing: LumiaTokens.space2) {
+                Image(systemName: "plus")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(LumiaTokens.inkQuiet.color)
+                    .frame(width: 36, height: 36)
+                TextField(placeholder, text: $text, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .lineLimit(1...8)
+                    .font(LumiaTokens.textMessage.font)
+                    .foregroundStyle(LumiaTokens.inkField.color)
+                    .disabled(disabled)
+                    .onSubmit(send)
+                    .padding(.horizontal, LumiaTokens.space8)
+                    .frame(minHeight: 42)
+                Button(action: send) {
+                    Image(systemName: "arrow.up").font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(LumiaTokens.onAccent.color)
+                        .frame(width: 40, height: 40)
+                        .background(LumiaTokens.accent.color, in: Circle())
+                        .opacity(canSend ? 1 : 0.5)
+                }
+                .buttonStyle(.plain)
+                .disabled(!canSend)
+                .keyboardShortcut(.return, modifiers: [])
+                .padding(.leading, LumiaTokens.space4)
+            }
+            .padding(.vertical, LumiaTokens.space6)
+            .padding(.leading, LumiaTokens.space8)
+            .padding(.trailing, LumiaTokens.space6)
+            .background(LumiaTokens.field.color, in: RoundedRectangle(cornerRadius: LumiaTokens.radius16))
+            .overlay(RoundedRectangle(cornerRadius: LumiaTokens.radius16).stroke(LumiaTokens.borderComposer.color))
+            .shadow(color: .black.opacity(0.08), radius: 14, y: 8)
+            if let hint {
+                Text(hint).font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkMuted.color)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .padding(.horizontal, LumiaTokens.space8)
+            }
+        }
+        .padding(.horizontal, LumiaTokens.space24)
+        .padding(.top, LumiaTokens.space4)
+        .padding(.bottom, LumiaTokens.space14)
+    }
+}
+
+/// The floating panel a pane sits in: the surface, an 18 px radius, the
+/// panel edge and a soft shadow (the design's `lu-panel`).
+public struct LumiaPanel: ViewModifier {
+    public func body(content: Content) -> some View {
+        content
+            .background(LumiaTokens.surface.color, in: RoundedRectangle(cornerRadius: LumiaTokens.radius18))
+            .overlay(RoundedRectangle(cornerRadius: LumiaTokens.radius18).stroke(LumiaTokens.panelEdge.color))
+            .shadow(color: .black.opacity(0.12), radius: 16, y: 8)
+    }
+}
+
+public extension View {
+    func lumiaPanel() -> some View { modifier(LumiaPanel()) }
+}
+
+/// A pane's header: a glyph, the title, a rule and a topic, then actions.
+public struct LumiaPaneHeader<Glyph: View, Actions: View>: View {
+    let title: String
+    let topic: String?
+    @ViewBuilder let glyph: () -> Glyph
+    @ViewBuilder let actions: () -> Actions
+
+    public init(title: String, topic: String? = nil, @ViewBuilder glyph: @escaping () -> Glyph = { EmptyView() }, @ViewBuilder actions: @escaping () -> Actions = { EmptyView() }) {
+        self.title = title; self.topic = topic; self.glyph = glyph; self.actions = actions
     }
 
     public var body: some View {
-        HStack(alignment: .bottom, spacing: LumiaTokens.space8) {
-            TextField(placeholder, text: $text, axis: .vertical)
-                .textFieldStyle(.plain)
-                .lineLimit(1...8)
-                .font(LumiaTokens.textMessage.font)
-                .disabled(disabled)
-                .onSubmit(send)
-            Button(action: send) {
-                Image(systemName: "arrow.up").font(.system(size: 13, weight: .bold))
+        VStack(spacing: 0) {
+            HStack(spacing: LumiaTokens.space8) {
+                glyph()
+                Text(title).font(LumiaTokens.titleChannel.font).foregroundStyle(LumiaTokens.ink.color).lineLimit(1)
+                if let topic, !topic.isEmpty {
+                    Rectangle().fill(LumiaTokens.lineStrong.color).frame(width: 1, height: 20).padding(.horizontal, LumiaTokens.space6)
+                    Text(topic).font(LumiaTokens.textBody.font).foregroundStyle(LumiaTokens.inkSecondary.color).lineLimit(1)
+                }
+                Spacer(minLength: LumiaTokens.space8)
+                actions()
             }
-            .buttonStyle(.lumiaPrimary)
-            .disabled(disabled || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            .keyboardShortcut(.return, modifiers: [])
+            .padding(.leading, LumiaTokens.space24)
+            .padding(.trailing, LumiaTokens.space14)
+            .frame(height: LumiaTokens.headerHeight)
+            Rectangle().fill(LumiaTokens.line.color).frame(height: 1)
         }
-        .padding(LumiaTokens.space10)
-        .background(LumiaTokens.field.color, in: RoundedRectangle(cornerRadius: LumiaTokens.radius12))
-        .overlay(RoundedRectangle(cornerRadius: LumiaTokens.radius12).stroke(LumiaTokens.borderComposer.color))
-        .padding([.horizontal, .bottom], LumiaTokens.space16)
+    }
+}
+
+/// A member in the aside: avatar, name, a line under it.
+public struct LumiaMemberRow: View {
+    let name: String
+    let subtitle: String?
+    let tone: AvatarTone
+    let tag: String?
+
+    public init(name: String, subtitle: String? = nil, tone: AvatarTone, tag: String? = nil) {
+        self.name = name; self.subtitle = subtitle; self.tone = tone; self.tag = tag
+    }
+
+    public var body: some View {
+        HStack(spacing: LumiaTokens.space12) {
+            LumiaAvatar(initials: initials(of: name), tone: tone, size: LumiaTokens.avatarMd)
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: LumiaTokens.space6) {
+                    Text(name).font(LumiaTokens.textMember.font).foregroundStyle(LumiaTokens.ink.color).lineLimit(1)
+                    if let tag { LumiaTag(tag) }
+                }
+                if let subtitle, !subtitle.isEmpty {
+                    Text(subtitle).font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkSecondary.color).lineLimit(1)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, LumiaTokens.space10)
+        .padding(.vertical, LumiaTokens.space6)
+    }
+}
+
+/// The aside's tabs: one segment on a track, the current one raised.
+public struct LumiaSegmentedTabs: View {
+    public struct Tab: Identifiable, Hashable {
+        public let id: String
+        public let label: String
+        public let count: Int?
+        public init(id: String, label: String, count: Int? = nil) { self.id = id; self.label = label; self.count = count }
+    }
+    let tabs: [Tab]
+    @Binding var selected: String
+
+    public init(tabs: [Tab], selected: Binding<String>) { self.tabs = tabs; self._selected = selected }
+
+    public var body: some View {
+        HStack(spacing: LumiaTokens.space4) {
+            ForEach(tabs) { tab in
+                let on = tab.id == selected
+                Button { selected = tab.id } label: {
+                    HStack(spacing: LumiaTokens.space6) {
+                        Text(tab.label).font(LumiaTokens.textButtonSecondary.font)
+                        if let count = tab.count { Text("\(count)").font(LumiaTokens.textTag.font).foregroundStyle(LumiaTokens.inkSecondary.color) }
+                    }
+                    .foregroundStyle(on ? LumiaTokens.ink.color : LumiaTokens.inkQuiet.color)
+                    .frame(maxWidth: .infinity).frame(height: 34)
+                    .background(on ? LumiaTokens.tabActive.color : .clear, in: RoundedRectangle(cornerRadius: LumiaTokens.radius9))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(LumiaTokens.space4)
+        .background(LumiaTokens.track.color, in: RoundedRectangle(cornerRadius: LumiaTokens.radius12))
     }
 }
 

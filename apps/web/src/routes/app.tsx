@@ -5,6 +5,8 @@
 import { For, Show, createEffect, createMemo, createSignal, on } from "solid-js";
 import { useNavigate, useSearch } from "@tanstack/solid-router";
 import {
+  SidePanel,
+  MemberList,
   AppShell,
   ChannelHeader,
   ChannelList,
@@ -18,7 +20,7 @@ import {
   type ChannelItem,
 } from "../design/components";
 import type { ChannelSummary, MessageSummary, ServerSummary } from "../client/bridge";
-import { checkPush, client, connection, enableNotifications, messagesQuery, pushState, queryClient, snapshotQuery, startGateway } from "../client/state";
+import { checkPush, client, connection, enableNotifications, membersQuery, messagesQuery, pushState, queryClient, snapshotQuery, startGateway } from "../client/state";
 import { useNames } from "../client/names";
 import { ConversationAside, HomeMain, HomeSidebar, type HomeView } from "./home";
 
@@ -245,10 +247,31 @@ export function App() {
         </Show>
       }
       aside={
-        <Show when={home() && (search().view ?? "dm") === "dm" && search().dm}>
-          <ConversationAside {...homeProps()} />
+        <Show when={home() ? (search().view ?? "dm") === "dm" && search().dm : server()}>
+          <Show when={!home()} fallback={<ConversationAside {...homeProps()} />}>
+            <MembersAside serverId={serverId() ?? ""} me={accountId()} />
+          </Show>
         </Show>
       }
     />
+  );
+}
+
+// A server's members, in the aside panel, named as everywhere else.
+function MembersAside(props: { serverId: string; me: string }) {
+  const [tab, setTab] = createSignal("members");
+  const members = membersQuery(() => props.serverId || undefined);
+  const entries = createMemo(() =>
+    (members.data ?? [])
+      .map((m) => {
+        const name = m.displayName || m.nickname || m.handle || m.accountId.slice(0, 8);
+        return { name, initials: initialsOf(name), tone: toneFor(m.accountId), subtitle: m.handle ? "@" + m.handle : undefined, tag: m.accountId === props.me ? "You" : undefined };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name)),
+  );
+  return (
+    <SidePanel tabs={[{ id: "members", label: "Members", count: entries().length }]} value={tab()} onChange={setTab}>
+      <MemberList sections={[{ title: "Members · " + entries().length, members: entries() }]} total={entries().length} />
+    </SidePanel>
   );
 }

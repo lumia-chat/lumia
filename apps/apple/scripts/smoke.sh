@@ -36,7 +36,9 @@ pkill -x Lumia 2>/dev/null || true
 sleep 1
 # The app's state starts empty; a sandboxed build keeps it in its container.
 rm -rf "$HOME/Library/Application Support/Lumia" "$HOME/Library/Containers/chat.lumia/Data/Library/Application Support/Lumia"
-open -n "$app" --env "LUMIA_DEV_INSTANCE=$instance" --env "LUMIA_DEV_HANDLE=$handle" --env "LUMIA_DEV_PASSWORD=$password"
+# The window is written as a PNG by the app itself (LUMIA_DEV_SHOT), since
+# screen capture needs a permission this terminal lacks.
+open -n "$app" --env "LUMIA_DEV_INSTANCE=$instance" --env "LUMIA_DEV_HANDLE=$handle" --env "LUMIA_DEV_PASSWORD=$password" --env "LUMIA_DEV_SHOT=$work/shell.png"
 sleep 10
 
 cat > "$work/windows.swift" <<'EOF'
@@ -55,4 +57,5 @@ sleep 3
 pkill -x Lumia 2>/dev/null || true
 case "$windows" in *"windows: 0"*) echo "FAIL: no window"; exit 1 ;; esac
 [ -n "$alive" ] || { echo "FAIL: the app exited"; exit 1; }
+[ -f "$work/shell.png" ] && echo "  window: $work/shell.png"
 echo "smoke: ok (window shown, app alive after sign-in and the gateway's first messages)"

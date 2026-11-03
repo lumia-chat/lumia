@@ -42,6 +42,8 @@ public final class LumiaSession {
     public private(set) var roster: RosterSummary?
     /// Everyone this account shares a server with, by account id.
     public private(set) var people: [String: MemberSummary] = [:]
+    /// A server's members, by server id, for the members aside.
+    public private(set) var serverMembers: [String: [MemberSummary]] = [:]
     /// Public profiles looked up one at a time; nil once the instance refused one.
     private var profiles: [String: MemberSummary?] = [:]
     private var profilesInFlight: Set<String> = []
@@ -148,10 +150,14 @@ public final class LumiaSession {
 
     private func refreshPeople(serverIDs: [String]) async {
         var found: [String: MemberSummary] = [:]
+        var byServer: [String: [MemberSummary]] = [:]
         for id in serverIDs {
-            for m in (try? await client.members(serverID: id)) ?? [] { found[m.accountId] = m }
+            let members = (try? await client.members(serverID: id)) ?? []
+            byServer[id] = members
+            for m in members { found[m.accountId] = m }
         }
         people = found
+        serverMembers = byServer
     }
 
     // MARK: Actions
