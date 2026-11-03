@@ -24,10 +24,12 @@ done
 release_flag=""
 [ "$profile" = release ] && release_flag="--release"
 
-targets="aarch64-apple-darwin"
+# macOS is universal (an archive links both slices); iOS is arm64 on device and on the simulator.
+targets="aarch64-apple-darwin x86_64-apple-darwin"
 $ios && targets="$targets aarch64-apple-ios aarch64-apple-ios-sim"
 for t in $targets; do
-  rustup target list --installed | grep -q "^$t$" || rustup target add "$t"
+  # Inside the core: its rust-toolchain.toml picks the toolchain the target goes on.
+  (cd "$core" && { rustup target list --installed | grep -q "^$t$" || rustup target add "$t"; })
   (cd "$core" && cargo build $release_flag -p lumia-ffi --target "$t")
 done
 
@@ -44,8 +46,10 @@ rm -rf "$headers" && mkdir -p "$headers"
 cp "$out/bindings/lumia_ffiFFI.h" "$headers/"
 cp "$out/bindings/lumia_ffiFFI.modulemap" "$headers/module.modulemap"
 
+mkdir -p "$out/macos"
+lipo -create "$core/target/aarch64-apple-darwin/$profile/liblumia_ffi.a" "$core/target/x86_64-apple-darwin/$profile/liblumia_ffi.a" -output "$out/macos/liblumia_ffi.a"
 args=""
-args="$args -library $core/target/aarch64-apple-darwin/$profile/liblumia_ffi.a -headers $headers"
+args="$args -library $out/macos/liblumia_ffi.a -headers $headers"
 if $ios; then
   args="$args -library $core/target/aarch64-apple-ios/$profile/liblumia_ffi.a -headers $headers"
   args="$args -library $core/target/aarch64-apple-ios-sim/$profile/liblumia_ffi.a -headers $headers"

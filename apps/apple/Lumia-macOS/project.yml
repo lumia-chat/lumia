@@ -27,6 +27,10 @@ targets:
         CFBundleName: Lumia
         LSMinimumSystemVersion: "14.0"
         NSHumanReadableCopyright: ""
+        # Encryption beyond HTTPS (the end-to-end encrypted DMs): export
+        # compliance is answered in App Store Connect, not exempted here.
+        ITSAppUsesNonExemptEncryption: true
+        LSApplicationCategoryType: public.app-category.social-networking
     entitlements:
       path: Lumia.entitlements
       properties:
@@ -39,8 +43,11 @@ targets:
         SWIFT_VERSION: "5.10"
         SWIFT_STRICT_CONCURRENCY: minimal
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # Automatic signing with the team; a debug build on this machine
+        # (xcodebuild ... CODE_SIGNING_ALLOWED=NO) skips it, a release
+        # archive (scripts/release.sh) uses the team's distribution assets.
         CODE_SIGN_STYLE: Automatic
-        CODE_SIGN_IDENTITY: "-"
+        DEVELOPMENT_TEAM: UZAQ69P4MG
         ENABLE_HARDENED_RUNTIME: true
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
