@@ -407,7 +407,7 @@ one bit: application message | MLS control message (needed for push and ordering
 
 Reactions, edits, deletes, thread relationships, mentions, pins, read state, and attachment metadata are all **inside** the ciphertext as application-level operations. Clients validate those operations and maintain the decrypted projections (message list, thread summaries, reaction counts) locally. The server maintains no projection of personal DM content.
 
-**What the hosting instance still knows and controls**, stated so that no claim of "nothing else" is made: the accounts and identities in the conversation, their device IDs and roster versions, session and connection metadata (IP, user agent, times), message timing and sizes, the key packages and GroupInfo it stores, quotas, suspension, and service-level retention of the ciphertext. If the push relay is enabled, the relay additionally observes device, instance, and push timing (section 15.5).
+**What the hosting instance still knows and controls**, stated so that no claim of "nothing else" is made: the accounts and identities in the conversation, their device IDs and roster versions, session and connection metadata (IP, user agent, times), message timing and sizes, the key packages and GroupInfo it stores, quotas, suspension, and service-level retention of the ciphertext. If the push relay is enabled, the relay additionally observes device, instance, and push timing (section 15.5). The desktop apps' daily update check (section 13, "Distribution") shows GitHub an IP address and nothing else, and can be turned off.
 
 **Rejected.**
 - *E2EE everywhere including channels.* Loses **server-side** search, moderation, retention enforcement, and automation; bots as explicit MLS members would still work, as they do in personal DMs. The self-hoster already owns the server, so E2EE inside a server protects against the one party who has already been trusted with it.
@@ -493,6 +493,12 @@ Deleting an **identity** is separate and done per instance by deleting each acco
 The trigger is the Linux row in section 17, measured on the Tauri shell CI builds. Until it misses, Tauri stays.
 
 **Local-first.** Every connected instance's data the user has seen is in SQLite and readable offline. Sends are optimistic with client-minted command IDs. Reconnect resumes from cursors per section 8.4.
+
+**Distribution.** The desktop apps are published as **GitHub Releases**, not through app stores: a `v*` tag builds the macOS DMG (signed with Developer ID, notarized) and the Tauri bundles for Windows and Linux, attaches them to one release, and publishes it only when every build succeeded. The version is the tag. Each app updates itself from that release: the macOS app through **Sparkle**, reading `appcast.xml`, the Tauri shell through its updater plugin, reading `latest.json`; both feeds are signed with a key whose public half is compiled into the app, so a compromised download host cannot push a build. The feed URLs are build settings, so a fork publishes its own releases and points its builds at them. Linux packages installed from deb or rpm update through the package manager, not the app. iOS and Android cannot self-update; they go through TestFlight and the Play Store (or direct APKs) when they ship.
+
+*What the update check reveals.* It is the one request a client makes to anything other than the user's own instances: once a day, GitHub learns an IP address fetched the feed. The check is the user's to turn off (the macOS app's menu; the Tauri shell's with its settings page), and section 11.1's visibility list names it.
+
+*Rejected.* The Mac App Store as the channel: a sandboxed store app cannot update itself and the store's review stands between a fix and the users, which is the wrong trade for a self-hosted product whose users run their own servers. The App Store Connect record and the TestFlight upload script (`apps/apple/scripts/release.sh`) remain usable for a store listing later; nothing in the app depends on them.
 
 ## 14. Voice and video
 

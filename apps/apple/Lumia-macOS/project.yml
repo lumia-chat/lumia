@@ -11,6 +11,11 @@ options:
 packages:
   LumiaKit:
     path: ../LumiaKit
+  # Updates for the direct-download build (architecture section 13,
+  # "Distribution"): Sparkle reads the appcast a tagged release publishes.
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    from: "2.7.0"
 targets:
   Lumia:
     type: application
@@ -20,11 +25,17 @@ targets:
       - Resources
     dependencies:
       - package: LumiaKit
+      - package: Sparkle
     info:
       path: Info.plist
       properties:
         CFBundleDisplayName: Lumia
         CFBundleName: Lumia
+        # XcodeGen's defaults are literal "1.0" and "1"; the version is
+        # MARKETING_VERSION (the release tag), the build number the commit
+        # count the scripts pass as CURRENT_PROJECT_VERSION.
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSMinimumSystemVersion: "14.0"
         NSHumanReadableCopyright: ""
         # Export compliance: the app ships its own encryption (the
@@ -34,12 +45,26 @@ targets:
         # uploads skip the question. Declaring non-exempt without the code
         # is refused at upload.
         LSApplicationCategoryType: public.app-category.social-networking
+        # Sparkle: the appcast of the latest GitHub release and the EdDSA
+        # key that signs its entries (the private half is a CI secret,
+        # scripts/dist.sh). Checks are automatic unless the user turns them
+        # off in the Lumia menu; the feed URL is a build setting so a fork
+        # points its builds at its own releases.
+        SUFeedURL: $(LUMIA_UPDATE_FEED)
+        SUPublicEDKey: $(LUMIA_UPDATE_KEY)
+        SUEnableAutomaticChecks: true
+        SUScheduledCheckInterval: 86400
     entitlements:
       path: Lumia.entitlements
       properties:
         com.apple.security.app-sandbox: true
         com.apple.security.network.client: true
         com.apple.security.files.user-selected.read-write: false
+        # Sparkle's installer and status XPC services, which a sandboxed
+        # app reaches by name.
+        com.apple.security.temporary-exception.mach-lookup.global-name:
+          - $(PRODUCT_BUNDLE_IDENTIFIER)-spks
+          - $(PRODUCT_BUNDLE_IDENTIFIER)-spki
     settings:
       base:
         # One bundle ID for macOS and iOS: one App Store Connect record
@@ -56,3 +81,8 @@ targets:
         ENABLE_HARDENED_RUNTIME: true
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
+        # Where the direct-download build looks for updates (Info.plist's
+        # SUFeedURL and SUPublicEDKey). The appcast is an asset of every
+        # tagged release; "latest" resolves to the newest published one.
+        LUMIA_UPDATE_FEED: https://github.com/lumia-chat/lumia/releases/latest/download/appcast.xml
+        LUMIA_UPDATE_KEY: GRG890/GstHa+rDtxagnkw6PqSKwmK6D2CwImxkD4yw=

@@ -3,11 +3,17 @@
 // screens routed by what the session knows: no instance, not signed in,
 // linking, or the app.
 import LumiaKit
+import Sparkle
 import SwiftUI
 
 @main
 struct LumiaApp: App {
     @State private var store = AppStore()
+    // Sparkle, for the direct-download build: checks the appcast in
+    // Info.plist (SUFeedURL) once a day unless turned off below, and
+    // installs what the user accepts. Nothing else in the app updates
+    // itself.
+    private let updater = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
 
     var body: some Scene {
         WindowGroup {
@@ -19,12 +25,52 @@ struct LumiaApp: App {
         .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(replacing: .newItem) {}
+            CommandGroup(after: .appInfo) {
+                UpdateCommands(updater: updater.updater)
+            }
             CommandMenu("Account") {
                 Button("Sign out") { Task { await store.signOut() } }
                     .disabled(store.session?.signedIn != true)
                 Button("Change instance") { Task { await store.forgetInstance() } }
                     .disabled(store.session == nil)
             }
+        }
+    }
+}
+
+/// The update items in the application menu: a manual check, and the
+/// switch for the daily automatic one (the only time the app contacts
+/// anything but the user's instances, so it is the user's to turn off).
+struct UpdateCommands: View {
+    @State private var model: UpdateModel
+
+    init(updater: SPUUpdater) {
+        _model = State(initialValue: UpdateModel(updater: updater))
+    }
+
+    var body: some View {
+        Button("Check for updates…") { model.updater.checkForUpdates() }
+            .disabled(!model.canCheck)
+        Toggle("Check for updates automatically", isOn: Binding(
+            get: { model.updater.automaticallyChecksForUpdates },
+            set: { model.updater.automaticallyChecksForUpdates = $0 }
+        ))
+    }
+}
+
+@MainActor
+@Observable
+final class UpdateModel {
+    let updater: SPUUpdater
+    private(set) var canCheck = false
+    @ObservationIgnored private var observation: NSKeyValueObservation?
+
+    init(updater: SPUUpdater) {
+        self.updater = updater
+        canCheck = updater.canCheckForUpdates
+        observation = updater.observe(\.canCheckForUpdates, options: [.new]) { [weak self] _, change in
+            let value = change.newValue ?? false
+            Task { @MainActor in self?.canCheck = value }
         }
     }
 }
