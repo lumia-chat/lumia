@@ -27,9 +27,12 @@ targets:
         CFBundleName: Lumia
         LSMinimumSystemVersion: "14.0"
         NSHumanReadableCopyright: ""
-        # Encryption beyond HTTPS (the end-to-end encrypted DMs): export
-        # compliance is answered in App Store Connect, not exempted here.
-        ITSAppUsesNonExemptEncryption: true
+        # Export compliance: the app ships its own encryption (the
+        # end-to-end encrypted DMs, the encrypted store), so it is not
+        # exempt. App Store Connect asks on the first build; once it issues
+        # a code, ITSEncryptionExportComplianceCode goes here so later
+        # uploads skip the question. Declaring non-exempt without the code
+        # is refused at upload.
         LSApplicationCategoryType: public.app-category.social-networking
     entitlements:
       path: Lumia.entitlements
