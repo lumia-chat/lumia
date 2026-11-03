@@ -253,14 +253,16 @@ public struct LumiaTag: View {
     }
 }
 
-/// The auth card: title, subtitle, a form.
+/// The auth card: title, subtitle, a form. The desktop's fixed width, or
+/// the width it is given (a phone's).
 public struct LumiaCard<Content: View>: View {
     let title: String
     let subtitle: String?
+    let width: CGFloat?
     @ViewBuilder let content: () -> Content
 
-    public init(title: String, subtitle: String? = nil, @ViewBuilder content: @escaping () -> Content) {
-        self.title = title; self.subtitle = subtitle; self.content = content
+    public init(title: String, subtitle: String? = nil, width: CGFloat? = LumiaTokens.authWidth, @ViewBuilder content: @escaping () -> Content) {
+        self.title = title; self.subtitle = subtitle; self.width = width; self.content = content
     }
 
     public var body: some View {
@@ -272,7 +274,8 @@ public struct LumiaCard<Content: View>: View {
             content()
         }
         .padding(LumiaTokens.space24)
-        .frame(width: LumiaTokens.authWidth)
+        .frame(width: width)
+        .frame(maxWidth: width == nil ? .infinity : nil)
         .background(LumiaTokens.surface.color, in: RoundedRectangle(cornerRadius: LumiaTokens.radius16))
         .overlay(RoundedRectangle(cornerRadius: LumiaTokens.radius16).stroke(LumiaTokens.lineAuth.color))
     }

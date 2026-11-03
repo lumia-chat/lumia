@@ -1,0 +1,412 @@
+// The screens pushed over the rail and sidebar, each a floating panel:
+// a conversation, a channel, requests, a new message, devices. The same
+// states, wording and error handling as the web's and the macOS app's.
+import LumiaFFI
+import LumiaKit
+import SwiftUI
+
+// MARK: Conversation
+
+struct ConversationScreen: View {
+    let session: LumiaSession
+    let channelID: String
+    @State private var draft = ""
+    @State private var error = ""
+
+    private var channel: ChannelSummary? { session.snapshot?.channels.first { $0.channelId == channelID } }
+    private var state: DmChannelSummary? { session.dmChannels.first { $0.channelId == channelID } }
+    private var log: DmLogSummary? { session.dmLogs[channelID] }
+    private var others: [String] { channel?.participantAccountIds.filter { $0 != session.me } ?? [] }
+    private var title: String { channel.map { session.conversationName($0) } ?? "Conversation" }
+
+    var body: some View {
+        PanelScreen(back: "Home", title: title, subtitle: (channel?.host).flatMap { $0.isEmpty ? nil : "on \($0)" }, lead: {
+            LumiaAvatar(initials: initials(of: title), tone: .of(others.first ?? channelID), size: LumiaTokens.avatarMd)
+        }) {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: LumiaTokens.space8) {
+                        LumiaNotice(icon: "shield") {
+                            Text("Messages here are end-to-end encrypted. Only your devices and those of \(others.map { session.name(of: $0) }.joined(separator: ", ")) can read them.")
+                        }
+                        if let state, !state.member {
+                            LumiaNotice(icon: "lock", tone: .accent, action: ("Rejoin", { Task { await rejoin() } })) {
+                                Text("This device is not in the conversation's group yet. The device that created it sends a welcome; if that never comes, rejoin from the instance's group info.")
+                            }
+                        }
+                        if let log, log.beforeJoin > 0 {
+                            LumiaNotice(icon: "lock") {
+                                Text("\(log.beforeJoin) earlier \(log.beforeJoin == 1 ? "message was" : "messages were") sent before this device joined and cannot be read here.")
+                            }
+                        }
+                        if let log, log.undecryptable > 0 {
+                            LumiaNotice(icon: "lock") { Text("\(log.undecryptable) could not be decrypted.") }
+                        }
+                        if let log, !log.messages.isEmpty {
+                            LumiaDayDivider(label: "Messages").padding(.horizontal, -LumiaTokens.space16)
+                        }
+                        ForEach(log?.messages ?? [], id: \.messageId) { m in
+                            let who = m.mine ? session.selfName : (!m.senderAccountId.isEmpty || others.count != 1 ? session.name(of: m.senderAccountId) : session.name(of: others[0]))
+                            let toneID = m.mine ? session.me : (m.senderAccountId.isEmpty ? m.senderIdentityId : m.senderAccountId)
+                            LumiaMessageRow(author: who, tone: .of(toneID), time: time(ofMicros: m.sentAtMicros), text: m.body, deleted: m.deleted)
+                                .padding(.horizontal, -LumiaTokens.space16)
+                                .id(m.messageId)
+                        }
+                        if !error.isEmpty { LumiaErrorText(error) }
+                    }
+                    .padding(LumiaTokens.space16)
+                }
+                .scrollDismissesKeyboard(.interactively)
+                .onChange(of: log?.messages.count ?? 0) { _, _ in
+                    if let last = log?.messages.last { proxy.scrollTo(last.messageId, anchor: .bottom) }
+                }
+            }
+            LumiaComposer(text: $draft, placeholder: state?.member == true ? "Message \(title)" : "Setting up the encrypted group…", disabled: state?.member != true) {
+                Task { await send() }
+            }
+        }
+        .task(id: channelID) {
+            await session.refreshDmChannels()
+            await session.refreshDmLog(channelID: channelID)
+        }
+    }
+
+    private func send() async {
+        let body = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !body.isEmpty else { return }
+        draft = ""
+        error = ""
+        do { try await session.dmSend(channelID: channelID, body: body) } catch { self.error = error.lumiaMessage }
+    }
+
+    private func rejoin() async {
+        error = ""
+        do { try await session.dmRejoin(channelID: channelID) } catch { self.error = error.lumiaMessage }
+    }
+}
+
+// MARK: Channel
+
+struct ChannelScreen: View {
+    let session: LumiaSession
+    let channelID: String
+    @State private var draft = ""
+    @State private var error = ""
+
+    private var channel: ChannelSummary? { session.snapshot?.channels.first { $0.channelId == channelID } }
+    private var server: ServerSummary? { session.snapshot?.servers.first { $0.serverId == channel?.serverId } }
+    private var messages: [MessageSummary] { session.messages[channelID] ?? [] }
+    private var name: String { channel?.name ?? "channel" }
+
+    var body: some View {
+        PanelScreen(back: server?.name ?? "the server", title: "# \(name)", subtitle: server?.name) {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        if messages.isEmpty {
+                            LumiaEmptyState(icon: "bubble.left", title: "Nothing here yet") { Text("Say something.") }
+                        } else {
+                            LumiaDayDivider(label: "Today")
+                        }
+                        ForEach(messages, id: \.messageId) { m in
+                            LumiaMessageRow(author: session.name(of: m.authorAccountId), tone: .of(m.authorAccountId), time: time(ofMicros: m.createdAtMicros), text: m.body, deleted: m.deleted)
+                                .id(m.messageId)
+                        }
+                        if !error.isEmpty { LumiaErrorText(error).padding(.horizontal, LumiaTokens.space16) }
+                    }
+                    .padding(.vertical, LumiaTokens.space8)
+                }
+                .scrollDismissesKeyboard(.interactively)
+                .onChange(of: messages.count) { _, _ in
+                    if let last = messages.last { proxy.scrollTo(last.messageId, anchor: .bottom) }
+                }
+            }
+            LumiaComposer(text: $draft, placeholder: "Message #\(name)") { Task { await send() } }
+        }
+        .task(id: channelID) { await session.refreshMessages(channelID: channelID) }
+    }
+
+    private func send() async {
+        let body = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !body.isEmpty else { return }
+        draft = ""
+        error = ""
+        do { try await session.sendMessage(channelID: channelID, body: body) } catch { self.error = error.lumiaMessage }
+    }
+}
+
+// MARK: Requests
+
+struct RequestsScreen: View {
+    let session: LumiaSession
+    @Binding var path: [Screen]
+    @State private var busy: String?
+    @State private var error = ""
+
+    private var requests: [DmRequestSummary] { session.snapshot?.pendingRequests ?? [] }
+
+    var body: some View {
+        PanelScreen(back: "Home", title: "Requests", subtitle: requests.isEmpty ? "No one waiting" : "\(requests.count) waiting for you") {
+            ScrollView {
+                VStack(alignment: .leading, spacing: LumiaTokens.space12) {
+                    LumiaNotice(icon: "shield") {
+                        Text("A request shows who is asking and what you share, nothing else. Accepting opens an encrypted conversation; the sender cannot see that you looked.")
+                    }
+                    if !error.isEmpty { LumiaErrorText(error) }
+                    if requests.isEmpty {
+                        LumiaEmptyState(icon: "at", title: "Nothing waiting") { Text("Declined requests disappear; blocked people cannot ask again.") }
+                    } else {
+                        SectionTitle("Waiting for you").padding(.horizontal, -LumiaTokens.space10)
+                        ForEach(requests, id: \.requestId) { r in
+                            RequestRow(
+                                name: session.name(of: r.fromAccountId),
+                                handle: (session.people[r.fromAccountId] ?? session.profile(of: r.fromAccountId))?.handle,
+                                tone: .of(r.fromAccountId),
+                                meta: meta(r),
+                                busy: busy == r.requestId,
+                                accept: { Task { await respond(r.requestId, "accept") } },
+                                decline: { Task { await respond(r.requestId, "decline") } },
+                                block: { Task { await respond(r.requestId, "block") } }
+                            )
+                        }
+                    }
+                }
+                .padding(LumiaTokens.space16)
+            }
+        }
+    }
+
+    private func meta(_ r: DmRequestSummary) -> String {
+        var parts: [String] = []
+        if !r.sharedServerIds.isEmpty { parts.append("Shares \(r.sharedServerIds.count == 1 ? "a server" : "\(r.sharedServerIds.count) servers") with you") }
+        if r.mutualFriendCount > 0 { parts.append("\(r.mutualFriendCount) mutual \(r.mutualFriendCount == 1 ? "friend" : "friends")") }
+        return parts.isEmpty ? "Nothing in common yet" : parts.joined(separator: " · ")
+    }
+
+    private func respond(_ id: String, _ response: String) async {
+        busy = id
+        error = ""
+        defer { busy = nil }
+        do {
+            if let channelID = try await session.dmRespond(requestID: id, response: response), response == "accept" {
+                path = [.conversation(id: channelID)]
+            }
+        } catch {
+            self.error = error.lumiaMessage
+        }
+    }
+}
+
+/// A request on a phone: who and what you share, the answers on their own line.
+struct RequestRow: View {
+    let name: String
+    let handle: String?
+    let tone: AvatarTone
+    let meta: String
+    let busy: Bool
+    let accept: () -> Void
+    let decline: () -> Void
+    let block: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: LumiaTokens.space10) {
+            HStack(spacing: LumiaTokens.space12) {
+                LumiaAvatar(initials: initials(of: name), tone: tone, size: LumiaTokens.avatarLg)
+                VStack(alignment: .leading, spacing: LumiaTokens.space2) {
+                    HStack(alignment: .firstTextBaseline, spacing: LumiaTokens.space6) {
+                        Text(name).font(LumiaTokens.textAuthor.font).foregroundStyle(LumiaTokens.inkEmphasis.color)
+                        if let handle, !handle.isEmpty { Text("@\(handle)").font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkMuted.color) }
+                    }
+                    Text(meta).font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkSecondary.color)
+                }
+            }
+            HStack(spacing: LumiaTokens.space8) {
+                Button("Accept", action: accept).buttonStyle(.lumiaPrimary)
+                Button("Decline", action: decline).buttonStyle(.lumiaSecondary)
+                Spacer()
+                Button("Block", action: block).buttonStyle(.lumiaLink)
+            }
+        }
+        .disabled(busy)
+        .padding(LumiaTokens.space14)
+        .background(LumiaTokens.tile.color, in: RoundedRectangle(cornerRadius: LumiaTokens.radius14))
+        .overlay(RoundedRectangle(cornerRadius: LumiaTokens.radius14).stroke(LumiaTokens.line.color))
+    }
+}
+
+// MARK: New message
+
+struct NewMessageScreen: View {
+    let session: LumiaSession
+    @Binding var path: [Screen]
+    @State private var query = ""
+    @State private var note = ""
+    @State private var busy: String?
+
+    private var list: [MemberSummary] {
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        return session.people.values
+            .filter { $0.accountId != session.me }
+            .filter { q.isEmpty || $0.handle.lowercased().contains(q) || $0.displayName.lowercased().contains(q) || $0.nickname.lowercased().contains(q) }
+            .sorted { ($0.displayName.isEmpty ? $0.handle : $0.displayName).localizedCompare($1.displayName.isEmpty ? $1.handle : $1.displayName) == .orderedAscending }
+    }
+
+    var body: some View {
+        PanelScreen(back: "Home", title: "New message", subtitle: "Someone you share a server with") {
+            ScrollView {
+                VStack(alignment: .leading, spacing: LumiaTokens.space12) {
+                    LumiaField("Find a person", text: $query, placeholder: "Name or handle")
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    if !note.isEmpty { LumiaNotice(icon: "at") { Text(note) } }
+                    if list.isEmpty {
+                        LumiaEmptyState(icon: "at", title: "No one to show") { Text("Join a server to find people to message.") }
+                    } else {
+                        ForEach(list, id: \.accountId) { p in
+                            let name = p.displayName.isEmpty ? p.handle : p.displayName
+                            HStack(spacing: LumiaTokens.space10) {
+                                LumiaAvatar(initials: initials(of: name), tone: .of(p.accountId), size: LumiaTokens.avatarSm)
+                                VStack(alignment: .leading, spacing: 0) {
+                                    Text(name).font(LumiaTokens.textMember.font).foregroundStyle(LumiaTokens.ink.color)
+                                    Text("@\(p.handle)").font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkQuiet.color)
+                                }
+                                Spacer()
+                                Button("Message") { Task { await message(p) } }
+                                    .buttonStyle(.lumiaSecondary).disabled(busy == p.accountId)
+                            }
+                            .padding(.vertical, LumiaTokens.space4)
+                        }
+                    }
+                }
+                .padding(LumiaTokens.space16)
+            }
+            .scrollDismissesKeyboard(.interactively)
+        }
+    }
+
+    private func message(_ p: MemberSummary) async {
+        busy = p.accountId
+        note = ""
+        defer { busy = nil }
+        do {
+            if let channelID = try await session.dmOpenOrRequest(accountID: p.accountId) {
+                path = [.conversation(id: channelID)]
+            } else {
+                note = "Request sent to \(p.displayName.isEmpty ? p.handle : p.displayName). The conversation opens when they accept."
+            }
+        } catch {
+            note = error.lumiaCode == "ALREADY_EXISTS" ? "You already asked; waiting for their answer." : error.lumiaMessage
+        }
+    }
+}
+
+// MARK: Devices
+
+struct DevicesScreen: View {
+    @Environment(AppStore.self) private var store
+    let session: LumiaSession
+    @State private var revoking: DeviceSummary?
+    @State private var password = ""
+    @State private var busy = false
+    @State private var error = ""
+
+    private var devices: [DeviceSummary] { session.roster?.devices ?? [] }
+    private var active: [DeviceSummary] { devices.filter { !$0.revoked } }
+
+    private func label(_ d: DeviceSummary) -> String {
+        if d.thisDevice { return "This \(UIDevice.current.model)" }
+        if !d.label.isEmpty { return d.label }
+        switch d.kind {
+        case "web": return "Browser"
+        case "native": return "Computer"
+        case "mobile": return "Phone"
+        default: return d.kind.isEmpty ? "Device" : d.kind
+        }
+    }
+
+    private func meta(_ d: DeviceSummary) -> String {
+        var parts: [String] = []
+        if !d.webOrigin.isEmpty { parts.append(d.webOrigin) }
+        if d.addedAtMicros > 0 { parts.append("added \(day(ofMicros: d.addedAtMicros))") }
+        parts.append(String(d.deviceId.prefix(8)))
+        return parts.joined(separator: " · ")
+    }
+
+    var body: some View {
+        PanelScreen(back: "Home", title: "Devices", subtitle: session.roster == nil ? "No identity on this phone" : "\(active.count) linked to you", actions: [("plus", "Link a device", { store.route = .link })]) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: LumiaTokens.space12) {
+                    LumiaNotice(icon: "shield") {
+                        Text("Your identity lives on these devices, not on any instance. Revoking one takes effect on every instance that holds your roster.")
+                    }
+                    if session.roster != nil {
+                        ForEach(active, id: \.deviceId) { d in
+                            LumiaDeviceRow(device: d, label: label(d), meta: meta(d)) { revoking = d; password = ""; error = "" }
+                                .padding(.horizontal, LumiaTokens.space14)
+                                .background(LumiaTokens.tile.color, in: RoundedRectangle(cornerRadius: LumiaTokens.radius14))
+                                .overlay(RoundedRectangle(cornerRadius: LumiaTokens.radius14).stroke(d.thisDevice ? LumiaTokens.accent.color : LumiaTokens.line.color))
+                        }
+                        let revoked = devices.filter(\.revoked)
+                        if !revoked.isEmpty {
+                            SectionTitle("Revoked").padding(.horizontal, -LumiaTokens.space10)
+                            ForEach(revoked, id: \.deviceId) { d in
+                                LumiaDeviceRow(device: d, label: String(d.deviceId.prefix(8)), meta: "", revoke: nil)
+                                    .padding(.horizontal, LumiaTokens.space14)
+                            }
+                        }
+                    } else {
+                        LumiaEmptyState(icon: "shield", title: "No identity on this phone", action: ("Link this phone", { store.route = .link })) {
+                            Text("A device you already use approves this one.")
+                        }
+                    }
+                }
+                .padding(LumiaTokens.space16)
+            }
+        }
+        .task { await session.refreshRoster() }
+        .sheet(item: Binding(get: { revoking }, set: { if $0 == nil { revoking = nil } })) { d in
+            revokeSheet(d)
+                .presentationDetents([.medium])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(LumiaTokens.surface.color)
+        }
+    }
+
+    private func revokeSheet(_ d: DeviceSummary) -> some View {
+        VStack(alignment: .leading, spacing: LumiaTokens.space16) {
+            VStack(alignment: .leading, spacing: LumiaTokens.space4) {
+                Text("Revoke \(label(d))?").font(LumiaTokens.titleAuth.font).foregroundStyle(LumiaTokens.ink.color)
+                Text("It stops reading new messages the moment every instance has the change. Confirm with your password.")
+                    .font(LumiaTokens.textSubtitle.font).foregroundStyle(LumiaTokens.inkSecondary.color)
+            }
+            LumiaField("Password", text: $password, placeholder: "Your password", secure: true)
+                .textContentType(.password)
+                .onSubmit { Task { await revoke(d) } }
+            if !error.isEmpty { LumiaErrorText(error) }
+            HStack(spacing: LumiaTokens.space8) {
+                Button("Revoke \(label(d))") { Task { await revoke(d) } }
+                    .buttonStyle(.lumiaPrimary).disabled(busy || password.isEmpty)
+                Button("Keep it") { revoking = nil }.buttonStyle(.lumiaSecondary)
+            }
+            Spacer()
+        }
+        .padding(LumiaTokens.space24)
+        .padding(.top, LumiaTokens.space8)
+    }
+
+    private func revoke(_ d: DeviceSummary) async {
+        busy = true
+        error = ""
+        defer { busy = false }
+        do {
+            try await session.identityRevoke(deviceID: d.deviceId, password: password)
+            revoking = nil
+            password = ""
+        } catch {
+            self.error = error.lumiaCode == "UNAUTHENTICATED" ? "That password was not accepted." : error.lumiaMessage
+        }
+    }
+}
+
+extension DeviceSummary: @retroactive Identifiable {
+    public var id: String { deviceId }
+}

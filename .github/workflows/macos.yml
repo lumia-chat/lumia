@@ -72,8 +72,9 @@ jobs:
           key: playwright-${{ runner.os }}-${{ hashFiles('apps/web/bun.lock') }}
 
       # The core, its bindings and the XCFramework for this runner's
-      # architecture only; the release build is the universal one.
-      - run: apps/apple/scripts/core.sh --host
+      # architecture and the iOS simulator; the release build is the
+      # universal one.
+      - run: apps/apple/scripts/core.sh --host --ios
       - run: swift test
         working-directory: apps/apple/LumiaKit
       - run: xcodegen generate
@@ -83,6 +84,12 @@ jobs:
           set -o pipefail
           xcodebuild -project Lumia.xcodeproj -scheme Lumia -configuration Debug -derivedDataPath .build CODE_SIGNING_ALLOWED=NO build 2>&1 | grep -E "error:|warning: .*/(LumiaKit|Lumia-macOS)/|BUILD"
         working-directory: apps/apple/Lumia-macOS
+      - run: xcodegen generate
+        working-directory: apps/apple/Lumia-iOS
+      - run: |
+          set -o pipefail
+          xcodebuild -project Lumia.xcodeproj -scheme Lumia -configuration Debug -destination 'generic/platform=iOS Simulator' -derivedDataPath .build CODE_SIGNING_ALLOWED=NO build 2>&1 | grep -E "error:|warning: .*/(LumiaKit|Lumia-iOS)/|BUILD"
+        working-directory: apps/apple/Lumia-iOS
 
       - run: cargo build --release -p lumia-cli
         working-directory: apps/core
@@ -107,6 +114,16 @@ jobs:
       # the gateway (the runner's session has a window server).
       - run: apps/apple/scripts/smoke.sh
         timeout-minutes: 5
+      # The iOS app in whichever iPhone simulator the runner's Xcode ships,
+      # one launch per screen, screenshots kept on failure.
+      - run: apps/apple/scripts/smoke-ios.sh
+        timeout-minutes: 10
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-screens
+          path: apps/apple/.build/smoke-ios/*.png
+          if-no-files-found: ignore
       - run: bun run e2e -- webkit
         working-directory: apps/web
         timeout-minutes: 10

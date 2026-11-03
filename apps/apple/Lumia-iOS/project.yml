@@ -1,0 +1,54 @@
+# The iOS app (architecture section 13): the SwiftUI layout for a phone
+# over LumiaKit, the package the macOS app shares. `xcodegen generate`
+# (xcodegen 2.45+) makes the project, which is not committed;
+# `scripts/core.sh --ios` must have run first (it adds the iOS device and
+# simulator slices to the XCFramework).
+name: Lumia
+options:
+  bundleIdPrefix: chat.lumia
+  deploymentTarget:
+    iOS: "17.0"
+  xcodeVersion: "26.0"
+  generateEmptyDirectories: true
+packages:
+  LumiaKit:
+    path: ../LumiaKit
+targets:
+  Lumia:
+    type: application
+    platform: iOS
+    sources:
+      - Sources
+      - Resources
+    dependencies:
+      - package: LumiaKit
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDisplayName: Lumia
+        CFBundleName: Lumia
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSApplicationCategoryType: public.app-category.social-networking
+        # A launch screen from the plist (no storyboard): the app's
+        # background colour, drawn until the first frame.
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UISupportedInterfaceOrientations~ipad: [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        NSHumanReadableCopyright: ""
+    settings:
+      base:
+        # One bundle ID with the macOS app: one App Store Connect record
+        # carries both platforms.
+        PRODUCT_BUNDLE_IDENTIFIER: chat.lumia
+        SWIFT_VERSION: "5.10"
+        SWIFT_STRICT_CONCURRENCY: minimal
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        TARGETED_DEVICE_FAMILY: "1,2"
+        # The core's simulator slice is arm64 (core.sh --ios); an Intel
+        # simulator would need an x86_64 build of it too.
+        "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: UZAQ69P4MG
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
