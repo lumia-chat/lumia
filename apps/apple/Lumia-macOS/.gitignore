@@ -1,0 +1,4 @@
+*.xcodeproj
+Info.plist
+Lumia.entitlements
+.build

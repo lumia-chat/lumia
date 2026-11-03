@@ -619,8 +619,7 @@ Out of scope: a hosted-only feature that cannot run self-hosted; a second editio
 ```
 apps/instance   Elixir, single Phoenix app (contexts, not umbrella); named for what it is, one deployment, since "server" means a community in Lumia
 apps/core       Rust client core: protocol, MLS, SQLite store, sync, search; UniFFI and WASM bindings
-apps/ios        SwiftUI (shared Swift package with macOS)
-apps/macos      SwiftUI
+apps/apple      SwiftUI: LumiaKit (the Swift package over the UniFFI bindings: client, session, tokens, components) and one app directory per platform (Lumia-macOS, Lumia-iOS), since the package and the apps version together
 apps/android    Jetpack Compose
 apps/desktop    Tauri shell for Windows and Linux; a Qt shell would replace it here, never sit beside it (section 13)
 apps/web        Web UI, shared with apps/desktop
