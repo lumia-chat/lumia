@@ -1,0 +1,61 @@
+# The multi-node profile of docs/specs/deployment.md on Fly.io: N machines
+# of the instance image in one region, clustered through the app's
+# `.internal` name, which resolves to every running machine. The build
+# context is the repository root (the Dockerfile copies the core and the
+# web UI from there), so deploy from the root, naming this file:
+#
+#   fly deploy --config apps/instance/fly.toml
+#
+# Once, before the first deploy:
+#
+#   fly postgres create                       # or an existing cluster
+#   fly postgres attach <pg-app> --app lumia-instance --variable-name DB_URL
+#   fly secrets set SECRET_KEY_BASE=$(mix phx.gen.secret) --app lumia-instance
+#   fly secrets set RELEASE_COOKIE=$(openssl rand -base64 48 | tr -d '/+=') --app lumia-instance
+#
+# Managed Postgres: the attach hands out the pooled (PgBouncer) host; set
+# DB_URL to the same string with `direct.` in place of `pgbouncer.`, which
+# the migrations' lock and the backup's single-session dump need. The host
+# is IPv6 only (ECTO_IPV6 below) with a Let's Encrypt certificate (DB_SSL).
+
+app = 'lumia-instance'
+primary_region = 'yyz'
+kill_signal = 'SIGTERM'
+
+[build]
+  # Relative to this file; the context is the working directory given to
+  # `fly deploy`, the repository root.
+  dockerfile = 'Dockerfile'
+
+[deploy]
+  # Migrate on a throwaway machine before any running one is replaced, so
+  # a failing migration stops the deploy; the image's own start repeats it
+  # behind the advisory lock, which is then a no-op.
+  release_command = 'bin/lumia-admin migrate'
+  strategy = 'rolling'
+
+[env]
+  PHX_HOST = 'lumia-instance.fly.dev'
+  DNS_CLUSTER_QUERY = 'lumia-instance.internal'
+  ECTO_IPV6 = 'true'
+  DB_SSL = 'true'
+  LUMIA_OPEN_REGISTRATION = 'false'
+
+[http_service]
+  internal_port = 4000
+  force_https = true
+  # Gateway sessions, the reconciler and push hold state on every node;
+  # machines never stop on idle.
+  auto_stop_machines = 'off'
+  auto_start_machines = false
+  min_machines_running = 2
+  processes = ['app']
+
+  [http_service.concurrency]
+    type = 'connections'
+    hard_limit = 1000
+    soft_limit = 800
+
+[[vm]]
+  size = 'shared-cpu-1x'
+  memory = '1gb'

@@ -20,7 +20,7 @@ The same image on N nodes, all pointing at one Postgres and one **shared** blob 
 
 - `DNS_CLUSTER_QUERY` names a DNS record that resolves to every node (a Kubernetes headless service, a Fly app, a scaled Compose service). Each node polls it and connects to the others; no other discovery exists (decided in the step 7 grill: one DNS name with one record per node is what every supported deployment provides, and the nodes need nothing more).
 - The blob store is S3-compatible or a shared filesystem. **Local-disk blobs are refused when clustering is on**, because a blob written on one node would be missing on the next. Until attachments exist (architecture 12 is not built), this is a configuration rule with nothing to refuse; it is stated here so the code that adds blobs inherits it.
-- Postgres availability (replicas, failover) and the per-node pool size are the operator's; the install guide recommends `POOL_SIZE` of 10 per node per 4 vCPU and `max_connections` sized for N nodes plus the backup command.
+- Postgres availability (replicas, failover) and the per-node pool size are the operator's; the install guide recommends `DB_POOL_SIZE` of 10 per node per 4 vCPU and `max_connections` sized for N nodes plus the backup command.
 
 Nodes share nothing but the database and the blob store. Live delivery crosses nodes through the cluster's pub/sub; what pub/sub misses, each node's reconciler recovers from the database within one tick ([delivery.md](delivery.md) section 7). Section 8 lists the cross-node cases the tests must pass.
 
@@ -30,14 +30,17 @@ All configuration is environment variables read at boot (`config/runtime.exs`); 
 
 | Variable | Required | Meaning |
 |---|---|---|
-| `DATABASE_URL` | yes | Postgres, with the credentials |
+| `DB_URL` | yes | Postgres, with the credentials |
+| `DB_SSL` | no | `true` connects over TLS verified against the system trust store, for a database with a publicly signed certificate (Fly Managed Postgres); default `false`. An `sslmode` in the URL is ignored |
+| `DB_CA_CERT` | managed Postgres | The PEM of the CA that signed the database's certificate, for one the system store does not trust (DigitalOcean, RDS); TLS on, verified against that CA with the host-name check. Takes precedence over `DB_SSL` |
 | `SECRET_KEY_BASE` | yes | Signs sessions and challenges; at least 64 bytes |
 | `PHX_HOST` | yes | The public host name; the instance's own web origin is `https://` plus this |
 | `PORT` | no | HTTP listener, default 4000; TLS terminates at the operator's proxy |
 | `LUMIA_MASTER_KEY_FILE` | with blobs | Path to the 32-byte instance master key (section 5) |
 | `LUMIA_BLOB_STORE` | with blobs | `local:<path>`, `s3://bucket` with the usual AWS variables, or `fs:<shared path>` |
 | `DNS_CLUSTER_QUERY` | multi-node | The DNS name that resolves to every node |
-| `POOL_SIZE` | no | Database connections per node, default 10 |
+| `RELEASE_COOKIE` | multi-node | The Erlang distribution cookie, the same on every node. Each image build generates its own, so without this a rolling upgrade's new nodes cannot join the old ones (section 6) |
+| `DB_POOL_SIZE` | no | Database connections per node, default 10 |
 | `LUMIA_WEB_ORIGINS` | no | Comma-separated flagship origins allowed to present web devices and call the API (identity §7); the instance's own origin is always allowed |
 | `LUMIA_OPERATOR_NAME`, `LUMIA_OPERATOR_URL`, `LUMIA_TERMS_URL`, `LUMIA_PRIVACY_URL` | no | The trust card (`GET /instance`) |
 | `LUMIA_OPEN_REGISTRATION` | no | `true` (default) or `false` |

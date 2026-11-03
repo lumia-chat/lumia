@@ -1,8 +1,8 @@
 import Config
 
-# Configure your database. DATABASE_URL wins when set; otherwise the local
+# Configure your database. DB_URL wins when set; otherwise the local
 # default matches Postgres.app and the docker-compose service.
-if url = System.get_env("DATABASE_URL") do
+if url = System.get_env("DB_URL") do
   config :lumia, Lumia.Repo, url: url
 else
   config :lumia, Lumia.Repo,

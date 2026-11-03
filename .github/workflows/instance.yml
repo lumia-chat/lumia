@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       MIX_ENV: test
-      DATABASE_URL: postgres://postgres:postgres@localhost:5432/lumia_test
+      DB_URL: postgres://postgres:postgres@localhost:5432/lumia_test
       # The runner's pg_wrapper picks its preinstalled client; the backup
       # commands take the server's major from here.
       PG_BIN: /usr/lib/postgresql/18/bin

@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       MIX_ENV: dev
-      DATABASE_URL: postgres://postgres:postgres@localhost:5432/lumia_dev
+      DB_URL: postgres://postgres:postgres@localhost:5432/lumia_dev
     services:
       postgres:
         image: postgres:18

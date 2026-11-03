@@ -55,18 +55,38 @@ end
 
 if config_env() == :prod do
   database_url =
-    System.get_env("DATABASE_URL") ||
+    System.get_env("DB_URL") ||
       raise """
-      environment variable DATABASE_URL is missing.
+      environment variable DB_URL is missing.
       For example: ecto://USER:PASS@HOST/DATABASE
       """
 
   maybe_ipv6 = if System.get_env("ECTO_IPV6") in ~w(true 1), do: [:inet6], else: []
 
+  # TLS to Postgres (deployment.md section 3), verified with the host name
+  # check either way: DB_SSL=true trusts the system store, for a database
+  # with a publicly signed certificate; DB_CA_CERT (PEM) trusts that CA
+  # instead, for a managed database signed by its own. Postgrex ignores an
+  # `sslmode` query parameter in the URL, so one of these is the switch.
+  ssl =
+    case {System.get_env("DB_CA_CERT"), System.get_env("DB_SSL")} do
+      {nil, enabled} ->
+        enabled in ~w(true 1)
+
+      {pem, _} ->
+        case :public_key.pem_decode(pem) do
+          [] ->
+            raise "environment variable DB_CA_CERT holds no PEM certificate"
+
+          entries ->
+            [cacerts: for({:Certificate, der, :not_encrypted} <- entries, do: der)]
+        end
+    end
+
   config :lumia, Lumia.Repo,
-    # ssl: true,
     url: database_url,
-    pool_size: String.to_integer(System.get_env("POOL_SIZE") || "10"),
+    ssl: ssl,
+    pool_size: String.to_integer(System.get_env("DB_POOL_SIZE") || "10"),
     # For machines with several cores, consider starting multiple pools of `pool_size`
     # pool_count: 4,
     socket_options: maybe_ipv6

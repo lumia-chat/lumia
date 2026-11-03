@@ -29,10 +29,12 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgres://lumia:${POSTGRES_PASSWORD:-lumia}@postgres/lumia
+      DB_URL: postgres://lumia:${POSTGRES_PASSWORD:-lumia}@postgres/lumia
       SECRET_KEY_BASE: ${SECRET_KEY_BASE:?set SECRET_KEY_BASE in .env (mix phx.gen.secret)}
       PHX_HOST: ${PHX_HOST:-localhost}
       DNS_CLUSTER_QUERY: instance
+      # Shared by every node across image upgrades (deployment.md section 3).
+      RELEASE_COOKIE: ${RELEASE_COOKIE:?set RELEASE_COOKIE in .env (openssl rand -base64 48)}
       LUMIA_METRICS: "false"
     volumes:
       - backups:/backups

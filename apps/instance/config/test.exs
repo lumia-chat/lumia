@@ -5,7 +5,7 @@ import Config
 # The MIX_TEST_PARTITION environment variable can be used
 # to provide built-in test partitioning in CI environment.
 # Run `mix help test` for more information.
-if url = System.get_env("DATABASE_URL") do
+if url = System.get_env("DB_URL") do
   config :lumia, Lumia.Repo, url: url
 else
   config :lumia, Lumia.Repo,

@@ -20,9 +20,12 @@ config :lumia, Lumia.Repo,
   migration_timestamps: [type: :utc_datetime_usec]
 
 # Background work (architecture section 3): retention, purges, viewer diffs,
-# webhook retries. Postgres-backed; no extra service.
+# webhook retries. Postgres-backed; no extra service. Notifications go
+# over Erlang distribution (the nodes are clustered, deployment.md 2.2)
+# rather than LISTEN/NOTIFY, so a pooled database connection works.
 config :lumia, Oban,
   repo: Lumia.Repo,
+  notifier: Oban.Notifiers.PG,
   queues: [default: 10, maintenance: 2],
   plugins: [
     {Oban.Plugins.Pruner, max_age: 60 * 60 * 24 * 7},

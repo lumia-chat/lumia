@@ -11,7 +11,7 @@ Early. The event log, gateway, HTTP API, sessions, authorization, identity, and 
 - Elixir 1.20 and OTP 29. The repo root has a `.tool-versions`, so `mise install` or `asdf install` gets the exact versions.
 - Postgres 18. Either a local server or `docker compose up -d` in this directory, which works with Docker Desktop and OrbStack.
 
-Dev and test connect to `postgres:postgres@localhost` by default. Set `DATABASE_URL` to override.
+Dev and test connect to `postgres:postgres@localhost` by default. Set `DB_URL` to override.
 
 If you use Postgres.app on macOS, it gates "trust" connections behind a per-process permission dialog. A server started from a non-interactive process (a script, `nohup`, an agent) cannot answer it and every connection handshake is rejected. Either approve the BEAM in Postgres.app's settings or run the server from your own terminal.
 
