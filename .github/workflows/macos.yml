@@ -42,6 +42,10 @@ jobs:
           tool: wasm-bindgen-cli@0.2.130
       - run: brew install xcodegen postgresql@18
       - run: echo "DEVELOPER_DIR=$(xcode-select -p)" >> "$GITHUB_ENV"
+      # The web build compiles SQLite for wasm32 with the C compiler; the
+      # runner's Apple clang (Xcode 26) has no WebAssembly target, where
+      # Xcode 27's does. Homebrew's LLVM is on the image.
+      - run: echo "CC_wasm32_unknown_unknown=$(brew --prefix llvm@20)/bin/clang" >> "$GITHUB_ENV"
       # Homebrew's install made a cluster owned by the runner's user with
       # trust authentication on localhost; the instance's URL names the
       # usual postgres superuser.
@@ -107,7 +111,7 @@ jobs:
         working-directory: apps/web
         timeout-minutes: 10
       - if: failure()
-        run: tail -200 "$RUNNER_TEMP/phx.log"
+        run: tail -200 "$RUNNER_TEMP/phx.log" || true
       - if: failure()
         uses: actions/upload-artifact@v4
         with:
