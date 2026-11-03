@@ -19,6 +19,40 @@ a { color: var(--link); }
 .gallery-auth__form { display: flex; flex-direction: column; gap: var(--space-16); }
 .gallery-auth__foot { margin: var(--space-16) 0 0; text-align: center; font-size: 13.5px; color: var(--ink-secondary); }
 
+/* The Phone board: iPhone frames with the chrome the app draws natively
+   (status bar, navigation bar, tab bar), around the components. */
+.phones { display: flex; flex-wrap: wrap; gap: var(--space-24); padding: var(--space-24); background: var(--bg); align-items: flex-start; }
+.phone-figure { margin: 0; display: flex; flex-direction: column; align-items: center; width: 390px; }
+.phone { position: relative; width: 390px; height: 844px; border-radius: 44px; border: 1px solid var(--panel-edge); box-shadow: var(--shadow-panel); background: var(--bg); color: var(--ink); overflow: hidden; display: flex; flex-direction: column; font-size: 15px; }
+.phone__status { flex: none; height: 54px; display: flex; align-items: flex-end; justify-content: space-between; padding: 0 36px 10px; font-size: 15px; font-weight: 600; }
+.phone__battery { width: 26px; height: 12px; border: 1.5px solid currentColor; border-radius: 4px; opacity: .7; position: relative; }
+.phone__battery::before { content: ""; position: absolute; inset: 2px; right: 4px; background: currentColor; border-radius: 1.5px; }
+.phone__nav { position: relative; flex: none; display: flex; align-items: center; min-height: 44px; padding: 0 var(--space-8); }
+.phone__back { display: inline-flex; align-items: center; gap: 4px; font: inherit; font-size: 17px; color: var(--accent-ink); background: none; border: 0; padding: 0 6px; cursor: pointer; }
+.phone__title { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: flex; flex-direction: column; align-items: center; font-size: 17px; font-weight: 600; line-height: 1.15; white-space: nowrap; }
+.phone__subtitle { font-size: 12px; font-weight: 500; color: var(--ink-secondary); }
+.phone__action { margin-left: auto; }
+.phone__large { margin: 0; padding: 0 var(--space-16) var(--space-8); font-family: var(--font-display); font-size: 34px; font-weight: 800; letter-spacing: -0.02em; line-height: 1.2; }
+.phone__body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.phone__list { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding: 6px 12px 16px; }
+.phone__page { padding: 8px 16px 24px; }
+.phone__auth { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-16); padding: var(--space-16); }
+.phone__auth .lu-card { padding: var(--space-18); }
+.phone__servers { list-style: none; margin: 0; padding: 6px 12px; display: flex; flex-direction: column; gap: var(--space-4); }
+.phone__server { display: flex; align-items: center; gap: var(--space-12); padding: 8px 10px; border-radius: var(--radius-12); }
+.phone__server .lu-rail__server { width: 44px; height: 44px; font-size: 14px; cursor: default; }
+.phone__server-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.phone__server-name { font-size: 15px; font-weight: 600; color: var(--ink-body); }
+.phone__server-name.is-unread { color: var(--ink); font-weight: 700; }
+.phone__server-meta { font-size: 12.5px; color: var(--ink-muted); }
+.phone__tabs { flex: none; display: flex; height: 83px; padding-bottom: 24px; border-top: 1px solid var(--line); background: var(--surface); }
+.phone__tab { position: relative; flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; font-size: 10px; font-weight: 600; color: var(--ink-quiet); }
+.phone__tab.is-on { color: var(--accent-ink); }
+.phone__tab img { width: 26px; height: 26px; }
+.phone__tab-badge { position: absolute; top: 6px; left: calc(50% + 6px); }
+.phone__home-bar { position: absolute; bottom: 8px; left: 50%; width: 134px; height: 5px; border-radius: 3px; background: var(--ink); opacity: .85; transform: translateX(-50%); }
+.phone__label { margin-top: var(--space-10); max-width: 360px; text-align: center; font-size: 12.5px; color: var(--ink-muted); }
+
 .pieces { padding: var(--space-24); display: flex; flex-direction: column; gap: var(--space-24); }
 .pieces h2 { font: 600 12.5px/1 var(--font-sans); text-transform: none; color: var(--ink-muted); margin: 0 0 var(--space-12); }
 .pieces__row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-12); }
