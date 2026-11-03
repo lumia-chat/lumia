@@ -5,7 +5,7 @@
 import { Outlet, createRootRoute, createRoute, redirect } from "@tanstack/solid-router";
 import { Show, createResource } from "solid-js";
 import { Button, Card } from "../design/components";
-import { ensureOwner, openInstance, opened, savedInstance } from "../client/state";
+import { ensureOwner, openInstance, opened, refreshSignedIn, savedInstance } from "../client/state";
 import { App, type AppSearch } from "./app";
 import { DesignGallery } from "./design";
 import { Link } from "./link";
@@ -37,9 +37,17 @@ function OtherTab() {
 const rootRoute = createRootRoute({ component: Root });
 
 // A signed-in session, reopened from the saved instance after a reload,
-// or the sign-in screen.
+// or the sign-in screen. Synchronous once signed in: this runs on every
+// navigation within `/app` too. An instance open but not yet signed in
+// at open time is asked rather than opened again (the sign-in screens
+// sign in after the open); the answer is kept, so it is asked once.
 async function requireSession(): Promise<void> {
-  if (opened()?.signedIn) return;
+  const o = opened();
+  if (o?.signedIn) return;
+  if (o) {
+    if (await refreshSignedIn()) return;
+    throw redirect({ to: "/sign-in" });
+  }
   const url = savedInstance();
   if (url) {
     try {

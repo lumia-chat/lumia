@@ -9,6 +9,9 @@ import { storeKey } from "./store-key";
 type Call = { id: number; method: string; args: unknown[] };
 
 let client: Client | null = null;
+// What the open client was opened for; opening the same again answers
+// from it rather than building a second client over the same store.
+let openedFor: string | null = null;
 let ready: Promise<void> | null = null;
 
 function ensureInit(): Promise<void> {
@@ -19,7 +22,13 @@ function ensureInit(): Promise<void> {
 async function dispatch(method: string, args: unknown[]): Promise<unknown> {
   await ensureInit();
   if (method === "open") {
-    client = await Client.open(String(args[0]), await storeKey(), args[1] === true);
+    const baseUrl = String(args[0]);
+    const shell = args[1] === true;
+    const key = `${shell ? "shell" : "web"} ${baseUrl}`;
+    if (!client || openedFor !== key) {
+      client = await Client.open(baseUrl, await storeKey(), shell);
+      openedFor = key;
+    }
     return { host: client.host(), deviceId: client.deviceId(), signedIn: client.signedIn() };
   }
   if (!client) throw new Error("open the client first");

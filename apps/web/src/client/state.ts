@@ -70,6 +70,19 @@ export async function openInstance(baseUrl: string): Promise<Opened> {
   return result;
 }
 
+/**
+ * Whether the open client is signed in, asked of the worker: `opened`
+ * records the state at open time, and a sign-in (by password, a new
+ * account or an identity claim) happens after that. Updates `opened`.
+ */
+export async function refreshSignedIn(): Promise<boolean> {
+  const o = opened();
+  if (!o) return false;
+  const signedIn = await client().signedIn();
+  if (signedIn !== o.signedIn) setOpened({ ...o, signedIn });
+  return signedIn;
+}
+
 export type PushState = "unknown" | "off" | "subscribed" | "unavailable" | "denied" | "failed";
 const [pushState, setPushState] = createSignal<PushState>("unknown");
 export { pushState };
@@ -103,57 +116,79 @@ export async function enableNotifications(): Promise<PushState> {
   return outcome;
 }
 
-/** Starts the gateway loop once and routes its events into the queries. */
+// The one gateway listener, registered on the first start and kept: the
+// loop can end (`closed`) and start again, and the listener must not
+// accumulate with it.
+let listening = false;
+
+/**
+ * Starts the gateway loop once and routes its events into the queries.
+ * `started` turns on before the worker answers, so a second call during
+ * that round trip is a no-op rather than a second start, which the core
+ * refuses. A failed start reports on `connection` and leaves `started`
+ * off, so the next snapshot can try again.
+ */
 export async function startGateway(channelIds: string[]): Promise<void> {
   if (started()) return;
-  const b = client();
-  b.onEvent((e: ClientEvent) => {
-    switch (e.kind) {
-      case "welcomed":
-        setConnection("connected");
-        void queryClient.invalidateQueries({ queryKey: ["snapshot"] });
-        break;
-      case "applied":
-        void queryClient.invalidateQueries({ queryKey: ["messages", e.channelId] });
-        break;
-      case "accountApplied":
-        void queryClient.invalidateQueries({ queryKey: ["snapshot"] });
-        void queryClient.invalidateQueries({ queryKey: ["dmChannels"] });
-        break;
-      case "snapshotTaken":
-        void queryClient.invalidateQueries({ queryKey: ["messages", e.channelId] });
-        break;
-      case "reconnecting":
-        setConnection(`reconnecting (attempt ${e.attempt})`);
-        break;
-      case "disconnected":
-        setConnection(`disconnected: ${e.reason}`);
-        break;
-      case "closed":
-        setConnection(`closed: ${e.reason}`);
-        setStarted(false);
-        break;
-      case "dmSubscribed":
-      case "dmReady":
-        void queryClient.invalidateQueries({ queryKey: ["dmChannels"] });
-        void queryClient.invalidateQueries({ queryKey: ["dm", e.channelId] });
-        break;
-      case "dmOperation":
-        void queryClient.invalidateQueries({ queryKey: ["dm", e.channelId] });
-        break;
-      case "dmDelivered":
-        void queryClient.invalidateQueries({ queryKey: ["dm"] });
-        break;
-      case "dmError":
-        console.error("dm:", e.message);
-        break;
-      default:
-        break;
-    }
-  });
-  await b.start(channelIds);
   setStarted(true);
   setConnection("connecting");
+  const b = client();
+  if (!listening) {
+    listening = true;
+    b.onEvent(onGatewayEvent);
+  }
+  try {
+    await b.start(channelIds);
+  } catch (e) {
+    setStarted(false);
+    setConnection(`failed to start: ${e instanceof Error ? e.message : String(e)}`);
+    console.error("gateway:", e);
+  }
+}
+
+function onGatewayEvent(e: ClientEvent): void {
+  switch (e.kind) {
+    case "welcomed":
+      setConnection("connected");
+      void queryClient.invalidateQueries({ queryKey: ["snapshot"] });
+      break;
+    case "applied":
+      void queryClient.invalidateQueries({ queryKey: ["messages", e.channelId] });
+      break;
+    case "accountApplied":
+      void queryClient.invalidateQueries({ queryKey: ["snapshot"] });
+      void queryClient.invalidateQueries({ queryKey: ["dmChannels"] });
+      break;
+    case "snapshotTaken":
+      void queryClient.invalidateQueries({ queryKey: ["messages", e.channelId] });
+      break;
+    case "reconnecting":
+      setConnection(`reconnecting (attempt ${e.attempt})`);
+      break;
+    case "disconnected":
+      setConnection(`disconnected: ${e.reason}`);
+      break;
+    case "closed":
+      setConnection(`closed: ${e.reason}`);
+      setStarted(false);
+      break;
+    case "dmSubscribed":
+    case "dmReady":
+      void queryClient.invalidateQueries({ queryKey: ["dmChannels"] });
+      void queryClient.invalidateQueries({ queryKey: ["dm", e.channelId] });
+      break;
+    case "dmOperation":
+      void queryClient.invalidateQueries({ queryKey: ["dm", e.channelId] });
+      break;
+    case "dmDelivered":
+      void queryClient.invalidateQueries({ queryKey: ["dm"] });
+      break;
+    case "dmError":
+      console.error("dm:", e.message);
+      break;
+    default:
+      break;
+  }
 }
 
 export function snapshotQuery() {

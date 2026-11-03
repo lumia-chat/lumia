@@ -69,22 +69,25 @@ async function open(which: string, name: string, keep = false): Promise<{ ctx: B
   page.on("console", (m) => {
     if (m.type() === "error") console.log(`  [${which}] console: ${m.text()}`);
   });
-  if (!keep) {
-    // WebKit keeps OPFS outside the profile directory, so a fresh profile
-    // still sees the last run's stores; clear them before the worker opens
-    // any. Best effort and bounded: an engine without OPFS iteration must
-    // not hang the suite here, it fails later where the store opens.
-    await goto(page, `${base}/design`);
-    const cleared = page.evaluate(async () => {
-      const root = await navigator.storage.getDirectory();
-      for await (const name of (root as unknown as { keys(): AsyncIterable<string> }).keys()) await root.removeEntry(name, { recursive: true });
-      localStorage.clear();
-      return true;
-    });
-    const outcome = await Promise.race([cleared.catch((e: unknown) => `failed: ${e instanceof Error ? e.message : String(e)}`), Bun.sleep(15_000).then(() => "timed out")]);
-    if (outcome !== true) console.log(`  [${which}] clearing storage ${outcome}`);
-  }
+  if (!keep) await clearStores(which, page, base);
   return { ctx, page };
+}
+
+// WebKit keeps OPFS outside the profile directory, so a fresh profile
+// still sees the last run's stores for `origin`, under a wrapping key the
+// fresh profile no longer has; clear them before the worker opens any.
+// Best effort and bounded: an engine without OPFS iteration must not hang
+// the suite here, it fails later where the store opens.
+async function clearStores(which: string, page: Page, origin: string) {
+  await goto(page, `${origin}/design`);
+  const cleared = page.evaluate(async () => {
+    const root = await navigator.storage.getDirectory();
+    for await (const name of (root as unknown as { keys(): AsyncIterable<string> }).keys()) await root.removeEntry(name, { recursive: true });
+    localStorage.clear();
+    return true;
+  });
+  const outcome = await Promise.race([cleared.catch((e: unknown) => `failed: ${e instanceof Error ? e.message : String(e)}`), Bun.sleep(15_000).then(() => "timed out")]);
+  if (outcome !== true) console.log(`  [${which}] clearing storage at ${origin} ${outcome}`);
 }
 
 // WebKit on Linux CI sometimes never finishes a profile's first navigation;
@@ -108,6 +111,50 @@ async function trustCard(page: Page) {
     await page.getByRole("button", { name: "Continue" }).click();
   }
   await page.getByText("run by").waitFor();
+}
+
+// The UI the instance serves (`bun run build:instance`, installed under
+// the instance's priv/static/ui): its sign-in page has no address field
+// and reaches its own origin. In Chromium, where Playwright can intercept
+// the worker's requests, the instance is unreachable at first load, the
+// page offers "Try again", and that reaches it once it can; WebKit's
+// routing never sees a worker's request, so there the page is only
+// checked as served. Skipped when no build is installed.
+async function instanceServed(which: string) {
+  const probe = await fetch(`${instance}/sign-in`);
+  if (!(probe.headers.get("content-type") ?? "").includes("text/html")) {
+    console.log(`  [${which}] the instance serves no web build; the served sign-in is not checked`);
+    return;
+  }
+  const { ctx, page } = await open(which, "instance");
+  const t0 = Date.now();
+  try {
+    // The instance origin has its own stores (and, in WebKit, last run's).
+    await clearStores(which, page, instance);
+    let unreachable = intercepts(which);
+    if (intercepts(which)) await ctx.route("**/api/v1/instance", (route) => (unreachable ? route.abort("connectionrefused") : route.continue()));
+    await goto(page, `${instance}/sign-in`);
+    if (intercepts(which)) {
+      const again = page.getByRole("button", { name: "Try again" });
+      await again.waitFor();
+      if ((await page.getByLabel("Instance").count()) !== 0) throw new Error("the served sign-in asks for an address");
+      await page.screenshot({ path: `${out}/${which}-served-unreachable.png` });
+      unreachable = false;
+      await again.click();
+    }
+    await page.getByText("run by").waitFor();
+    if ((await page.getByLabel("Instance").count()) !== 0) throw new Error("the served sign-in asks for an address");
+    const alerts = await page.getByRole("alert").allTextContents();
+    if (alerts.length) throw new Error(`an error stayed on screen: ${alerts.join(" | ")}`);
+    await page.screenshot({ path: `${out}/${which}-served.png` });
+  } finally {
+    await ctx.close();
+  }
+  console.log(`  ${which}: the served sign-in ${intercepts(which) ? "recovers with Try again" : "reaches its instance"} in ${Date.now() - t0} ms`);
+}
+
+function intercepts(which: string): boolean {
+  return which === "chromium";
 }
 
 // Sign in by password, send a message, reload, read it back.
@@ -342,6 +389,7 @@ try {
     lumia(aDir, "dm", "setup");
     for (const [name, step] of [
       ["sign in", () => signInAndSend(which, `web${stamp}`)],
+      ["served", () => instanceServed(which)],
       ["link", () => link(which, identityDir)],
       ["dm", () => dm(which, aDir, bAccount, aHandle)],
     ] as const) {

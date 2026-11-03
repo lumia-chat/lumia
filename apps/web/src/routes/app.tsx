@@ -19,6 +19,7 @@ import {
 } from "../design/components";
 import type { ChannelSummary, MessageSummary, ServerSummary } from "../client/bridge";
 import { checkPush, client, connection, enableNotifications, messagesQuery, pushState, queryClient, snapshotQuery, startGateway } from "../client/state";
+import { useNames } from "../client/names";
 import { ConversationAside, HomeMain, HomeSidebar, type HomeView } from "./home";
 
 const TONES = ["peach", "blue", "purple", "mint", "amber", "sky", "stone", "green", "indigo"] as const;
@@ -42,6 +43,39 @@ export function timeOf(micros: number): { time: string; datetime: string } {
   };
 }
 
+/** The local calendar day of a date, as a key that compares. */
+function dayKeyOf(d: Date): string {
+  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+}
+
+function dayKey(micros: number): string {
+  return dayKeyOf(new Date(micros / 1000));
+}
+
+/** "Today", "Yesterday", or the date, for a day divider. */
+export function dayLabel(micros: number, now = Date.now()): string {
+  const key = dayKey(micros);
+  const today = new Date(now);
+  if (key === dayKeyOf(today)) return "Today";
+  // By calendar day, not 24 hours: a day around a clock change is not 24 hours long.
+  if (key === dayKeyOf(new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1))) return "Yesterday";
+  const d = new Date(micros / 1000);
+  const sameYear = d.getFullYear() === today.getFullYear();
+  return d.toLocaleDateString(undefined, sameYear ? { month: "long", day: "numeric" } : { year: "numeric", month: "long", day: "numeric" });
+}
+
+/** Messages in order, split where the local day changes. */
+export function byDay<T>(messages: T[], at: (m: T) => number): { label: string; messages: T[] }[] {
+  const days: { key: string; label: string; messages: T[] }[] = [];
+  for (const m of messages) {
+    const key = dayKey(at(m));
+    const last = days[days.length - 1];
+    if (last && last.key === key) last.messages.push(m);
+    else days.push({ key, label: dayLabel(at(m)), messages: [m] });
+  }
+  return days;
+}
+
 export interface AppSearch {
   place?: "home";
   view?: HomeView;
@@ -57,7 +91,9 @@ export function App() {
   const snapshot = snapshotQuery();
   const [channelId, setChannelId] = createSignal<string | undefined>();
   const [draft, setDraft] = createSignal("");
+  const [error, setError] = createSignal("");
   const messages = messagesQuery(channelId);
+  const days = createMemo(() => byDay(messages.data ?? [], (m) => m.createdAtMicros));
 
   const home = () => search().place === "home";
   const serverId = () => search().server ?? snapshot.data?.servers[0]?.serverId;
@@ -70,6 +106,7 @@ export function App() {
   const current = createMemo(() => channels().find((c) => c.channelId === channelId()));
   const accountId = createMemo(() => snapshot.data?.accountId ?? "");
   const selfName = () => snapshot.data?.displayName || snapshot.data?.handle || "You";
+  const { nameOf } = useNames(() => snapshot.data);
 
   // The gateway starts on every server channel the account can view; the
   // engine adds the personal DMs it knows, the account log the rest.
@@ -94,8 +131,15 @@ export function App() {
     const body = draft().trim();
     if (!id || !body) return;
     setDraft("");
-    await client().sendMessage(id, body);
-    void queryClient.invalidateQueries({ queryKey: ["messages", id] });
+    setError("");
+    try {
+      await client().sendMessage(id, body);
+      void queryClient.invalidateQueries({ queryKey: ["messages", id] });
+    } catch (e) {
+      // The text comes back to the composer unless something new was typed meanwhile.
+      setDraft((d) => d || body);
+      setError(e instanceof Error ? e.message : String(e));
+    }
   };
 
   const items = createMemo<ChannelItem[]>(() =>
@@ -156,23 +200,32 @@ export function App() {
               <>
                 <ChannelHeader name={ch().name} />
                 <MessageList>
-                  <Show when={(messages.data ?? []).length === 0}>
+                  <Show when={days().length === 0}>
                     <div class="app__empty">Nothing here yet. Say something.</div>
                   </Show>
-                  <Show when={(messages.data ?? []).length > 0}>
-                    <Divider variant="day" label="Today" />
-                  </Show>
-                  <For each={messages.data ?? []}>
-                    {(m: MessageSummary) => {
-                      const t = timeOf(m.createdAtMicros);
-                      const author = m.authorAccountId === accountId() ? selfName() : m.authorAccountId.slice(0, 8);
-                      return (
-                        <Message author={author} initials={initialsOf(author)} tone={toneFor(m.authorAccountId)} time={t.time} datetime={t.datetime} actions={false}>
-                          {m.deleted ? "(deleted)" : m.body}
-                        </Message>
-                      );
-                    }}
+                  <For each={days()}>
+                    {(day) => (
+                      <>
+                        <Divider variant="day" label={day.label} />
+                        <For each={day.messages}>
+                          {(m: MessageSummary) => {
+                            const t = timeOf(m.createdAtMicros);
+                            const author = () => nameOf(m.authorAccountId);
+                            return (
+                              <Message author={author()} initials={initialsOf(author())} tone={toneFor(m.authorAccountId)} time={t.time} datetime={t.datetime} actions={false}>
+                                {m.deleted ? "(deleted)" : m.body}
+                              </Message>
+                            );
+                          }}
+                        </For>
+                      </>
+                    )}
                   </For>
+                  <Show when={error()}>
+                    <p class="auth__error" role="alert">
+                      {error()}
+                    </p>
+                  </Show>
                 </MessageList>
                 <Composer
                   placeholder={`Message #${ch().name}`}
@@ -191,7 +244,11 @@ export function App() {
           </Show>
         </Show>
       }
-      aside={home() && (search().view ?? "dm") === "dm" && search().dm ? <ConversationAside {...homeProps()} /> : undefined}
+      aside={
+        <Show when={home() && (search().view ?? "dm") === "dm" && search().dm}>
+          <ConversationAside {...homeProps()} />
+        </Show>
+      }
     />
   );
 }

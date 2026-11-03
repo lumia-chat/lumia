@@ -5,7 +5,7 @@
 // card the board shows.
 import { Show, createResource, createSignal, onMount } from "solid-js";
 import { useNavigate } from "@tanstack/solid-router";
-import { Button, Card, Checkbox, Divider, TextField } from "../design/components";
+import { Button, Card, Divider, TextField } from "../design/components";
 import { ClientError, type InstanceSummary } from "../client/bridge";
 import { SERVED_BY_INSTANCE, client, inShell, openInstance, savedInstance } from "../client/state";
 
@@ -30,7 +30,7 @@ export function SignIn() {
     if (fixed()) setOpened(location.origin);
   });
 
-  const [trust] = createResource(opened, async (url) => {
+  const [trust, { refetch }] = createResource(opened, async (url) => {
     const b = client();
     await openInstance(url);
     const i = await b.instanceInfo();
@@ -40,6 +40,7 @@ export function SignIn() {
 
   const connect = (e: Event) => {
     e.preventDefault();
+    if (fixed()) return;
     setError("");
     const url = instance().trim().replace(/\/+$/, "");
     if (!/^https?:\/\//.test(url)) {
@@ -109,9 +110,14 @@ export function SignIn() {
                   Could not reach that instance: {String((trust.error as Error)?.message ?? trust.error)}
                 </p>
               </Show>
-              <Show when={!fixed() || trust.error}>
-                <Button variant="primary" type="submit" block disabled={trust.loading} onClick={fixed() ? () => setOpened(null) || setOpened(location.origin) : undefined}>
-                  {fixed() ? "Try again" : "Continue"}
+              <Show when={!fixed()}>
+                <Button variant="primary" type="submit" block disabled={trust.loading}>
+                  Continue
+                </Button>
+              </Show>
+              <Show when={fixed() && trust.error}>
+                <Button variant="primary" type="button" block disabled={trust.loading} onClick={() => void refetch()}>
+                  Try again
                 </Button>
               </Show>
             </form>
@@ -137,9 +143,6 @@ export function SignIn() {
               <TextField label="Password" reveal value={password()} onInput={(e) => setPassword(e.currentTarget.value)} autocomplete={mode() === "create" ? "new-password" : "current-password"} placeholder={mode() === "create" ? "At least 12 characters" : "Your password"} />
               <Show when={needsTotp()}>
                 <TextField label="Verification code" value={totp()} onInput={(e) => setTotp(e.currentTarget.value)} inputmode="numeric" autocomplete="one-time-code" placeholder="6 digits from your authenticator" />
-              </Show>
-              <Show when={mode() === "signIn"}>
-                <Checkbox label="Keep me signed in on this device" checked />
               </Show>
               <Show when={error()}>
                 <p class="auth__error" role="alert">

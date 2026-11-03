@@ -7,7 +7,7 @@
 // instead of `className`, `for` instead of `htmlFor`, `style` objects with
 // CSS property names.
 
-import { For, Show, createSignal, createUniqueId, splitProps, type JSX } from "solid-js";
+import { For, Show, children, createSignal, createUniqueId, splitProps, type JSX } from "solid-js";
 import { Dynamic } from "solid-js/web";
 import { ICONS } from "./icons";
 
@@ -1309,6 +1309,11 @@ export interface AppShellProps {
 
 /** The Quiet Split layout. */
 export function AppShell(props: AppShellProps) {
+  // Resolved once: a `when` that evaluated `props.aside` would build the
+  // aside's component inside the condition, and the insert would build it
+  // again; the one here is what the column shows, and the column shows
+  // only when there is something to show.
+  const aside = children(() => props.aside);
   return (
     <div class={cx("lu-shell", props.class)} style={props.height !== undefined ? { height: typeof props.height === "number" ? props.height + "px" : props.height } : undefined}>
       <div class="lu-shell__side">
@@ -1320,9 +1325,9 @@ export function AppShell(props: AppShellProps) {
       <main class="lu-shell__main">
         <Panel class="lu-shell__conversation">{props.main}</Panel>
       </main>
-      <Show when={props.aside}>
+      <Show when={aside()}>
         <aside aria-label="Members and threads" class="lu-shell__aside">
-          {props.aside}
+          {aside()}
         </aside>
       </Show>
     </div>

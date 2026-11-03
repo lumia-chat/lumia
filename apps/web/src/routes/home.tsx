@@ -26,7 +26,8 @@ import {
   type DeviceEntry,
 } from "../design/components";
 import { ClientError, type ChannelSummary, type DeviceSummary, type DmMessageSummary, type MemberSummary, type SnapshotSummary } from "../client/bridge";
-import { client, dmChannelsQuery, dmMessagesQuery, enableNotifications, hasIdentityQuery, peopleQuery, profileOf, pushState, queryClient, rosterQuery } from "../client/state";
+import { client, dmChannelsQuery, dmMessagesQuery, enableNotifications, hasIdentityQuery, peopleQuery, pushState, queryClient, rosterQuery } from "../client/state";
+import { useNames } from "../client/names";
 import { initialsOf, timeOf, toneFor } from "./app";
 
 export type HomeView = "dm" | "requests" | "devices" | "new";
@@ -41,18 +42,6 @@ export interface HomeProps {
 
 const PERSONAL = new Set(["PERSONAL_DM", "PERSONAL_GROUP_DM"]);
 
-/** Names for the people in a conversation, from the people we share servers with. */
-function useNames(props: { snapshot: SnapshotSummary | undefined }) {
-  const serverIds = createMemo(() => (props.snapshot?.servers ?? []).map((s) => s.serverId));
-  const people = peopleQuery(serverIds);
-  const nameOf = (accountId: string): string => {
-    if (accountId && accountId === props.snapshot?.accountId) return props.snapshot?.displayName || props.snapshot?.handle || "You";
-    const p = people.data?.get(accountId) ?? profileOf(accountId);
-    return p?.displayName || p?.nickname || p?.handle || (accountId ? accountId.slice(0, 8) : "Someone");
-  };
-  return { people, nameOf };
-}
-
 function conversationName(c: ChannelSummary, me: string, nameOf: (id: string) => string): string {
   const others = c.participantAccountIds.filter((id) => id !== me);
   if (others.length === 0) return "Just you";
@@ -60,7 +49,7 @@ function conversationName(c: ChannelSummary, me: string, nameOf: (id: string) =>
 }
 
 export function HomeSidebar(props: HomeProps) {
-  const { nameOf } = useNames(props);
+  const { nameOf } = useNames(() => props.snapshot);
   const me = () => props.snapshot?.accountId ?? "";
   const byHost = createMemo(() => {
     const groups = new Map<string, ChannelSummary[]>();
@@ -130,7 +119,7 @@ function NoIdentity(props: { toLink: () => void }) {
 }
 
 function Conversation(props: HomeProps) {
-  const { nameOf } = useNames(props);
+  const { nameOf } = useNames(() => props.snapshot);
   const me = () => props.snapshot?.accountId ?? "";
   const channel = createMemo(() => props.snapshot?.channels.find((c) => c.channelId === props.channelId));
   const dms = dmChannelsQuery(() => true);
@@ -150,6 +139,8 @@ function Conversation(props: HomeProps) {
     try {
       await client().dmSend(id, body);
     } catch (e) {
+      // The text comes back to the composer unless something new was typed meanwhile.
+      setDraft((d) => d || body);
       setError(e instanceof Error ? e.message : String(e));
     }
   };
@@ -242,7 +233,7 @@ function ChooseConversation(props: HomeProps) {
 }
 
 export function ConversationAside(props: HomeProps) {
-  const { nameOf } = useNames(props);
+  const { nameOf } = useNames(() => props.snapshot);
   const me = () => props.snapshot?.accountId ?? "";
   const channel = createMemo(() => props.snapshot?.channels.find((c) => c.channelId === props.channelId));
   return (
@@ -270,7 +261,7 @@ export function ConversationAside(props: HomeProps) {
 }
 
 function Requests(props: HomeProps) {
-  const { nameOf, people } = useNames(props);
+  const { nameOf, profile } = useNames(() => props.snapshot);
   const [busy, setBusy] = createSignal<string | null>(null);
   const [error, setError] = createSignal("");
   const respond = async (requestId: string, response: "accept" | "decline" | "block") => {
@@ -309,7 +300,7 @@ function Requests(props: HomeProps) {
             {(r) => (
               <RequestCard
                 name={nameOf(r.fromAccountId)}
-                handle={(people.data?.get(r.fromAccountId) ?? profileOf(r.fromAccountId))?.handle}
+                handle={profile(r.fromAccountId)?.handle}
                 initials={initialsOf(nameOf(r.fromAccountId))}
                 tone={toneFor(r.fromAccountId)}
                 meta={meta(r)}
