@@ -67,7 +67,7 @@ xcodebuild -exportArchive -archivePath "$out/Lumia.xcarchive" -exportOptionsPlis
 bundle="$out/export/Lumia.app"
 [ -d "$bundle" ] || { echo "dist: no export"; exit 1; }
 codesign --verify --deep --strict "$bundle"
-echo "dist: exported $version ($build), signed as: $(codesign -dv "$bundle" 2>&1 | grep '^Authority' | head -1 | cut -d= -f2)"
+echo "dist: exported $version ($build), signed as: $(codesign -dvv "$bundle" 2>&1 | grep '^Authority' | head -1 | cut -d= -f2)"
 
 if $sign; then
   ditto -c -k --keepParent "$bundle" "$out/Lumia.zip"
