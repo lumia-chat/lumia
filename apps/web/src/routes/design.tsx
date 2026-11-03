@@ -38,6 +38,7 @@ import {
   TypingIndicator,
   icons,
   type IconName,
+  type Tone,
 } from "../design/components";
 
 type Theme = "light" | "dark";
@@ -409,59 +410,17 @@ function SignIn() {
 }
 
 // iOS (architecture section 13, plan step 7): the Quiet Split folded for a
-// phone. The rail becomes a tab bar (Home, Servers), the sidebar a list,
-// the main pane a pushed screen, the aside a sheet. Each frame is a screen
-// of the stack, drawn from the same components with the same sample data;
-// the app draws the chrome (status bar, navigation bar, tab bar) natively.
-type PhoneTab = "home" | "servers";
-
-function PhoneFrame(props: { label: string; title?: string; subtitle?: string; large?: boolean; back?: string; action?: IconName; tab?: PhoneTab; children: JSX.Element }) {
+// phone, as settled on the design canvas. The rail and the sidebar stay one
+// screen (Home, a server); the main pane and the aside become floating
+// panels pushed over it (a conversation, a channel, a thread, requests,
+// devices); there is no tab bar. The status bar and the home indicator are
+// the system's, so a frame keeps only their insets. Same components, same
+// sample data as the other boards.
+function PhoneFrame(props: { label: string; split?: boolean; children: JSX.Element }) {
   return (
     <figure class="phone-figure">
-      <div class="phone" role="group" aria-label={props.label}>
-        <div class="phone__status" aria-hidden="true">
-          <span>9:41</span>
-          <span class="phone__battery"></span>
-        </div>
-        <Show when={props.title !== undefined}>
-          <div class="phone__nav">
-            <Show when={props.back}>
-              <button type="button" class="phone__back">
-                <svg width="12" height="20" viewBox="0 0 12 20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <path d="M10 2 2 10l8 8" />
-                </svg>
-                {props.back}
-              </button>
-            </Show>
-            <Show when={!props.large}>
-              <div class="phone__title">
-                <span>{props.title}</span>
-                <Show when={props.subtitle}>
-                  <span class="phone__subtitle">{props.subtitle}</span>
-                </Show>
-              </div>
-            </Show>
-            <Show when={props.action}>{(icon) => <IconButton icon={icon()} label={props.title ?? ""} class="phone__action" />}</Show>
-          </div>
-          <Show when={props.large}>
-            <h1 class="phone__large">{props.title}</h1>
-          </Show>
-        </Show>
-        <div class="phone__body">{props.children}</div>
-        <Show when={props.tab}>
-          <nav class="phone__tabs" aria-label="Tabs">
-            <span class={cx("phone__tab", props.tab === "home" && "is-on")}>
-              <img src="/brand/lumia-original-icon.svg" alt="" width={26} height={26} />
-              Home
-              <Badge count={3} size="sm" label="3 unread" class="phone__tab-badge" />
-            </span>
-            <span class={cx("phone__tab", props.tab === "servers" && "is-on")}>
-              <Icon name="hash" size={24} strokeWidth={2.2} />
-              Servers
-            </span>
-          </nav>
-        </Show>
-        <span class="phone__home-bar" aria-hidden="true"></span>
+      <div class={cx("phone", props.split && "phone--split")} role="group" aria-label={props.label}>
+        {props.children}
       </div>
       <figcaption class="phone__label">{props.label}</figcaption>
     </figure>
@@ -472,68 +431,155 @@ function cx(...parts: (string | false | undefined)[]) {
   return parts.filter(Boolean).join(" ");
 }
 
+const PHONE_SERVERS = [
+  { name: "Acme", initials: "A", meta: "chat.acme.dev · 128 members" },
+  { name: "Design Guild", initials: "DG", ink: "indigo" as const, unread: true },
+  { name: "Lumia Builders", initials: "LB", ink: "green" as const, mentions: 2 },
+  { name: "Friends", initials: "F", ink: "amber" as const },
+];
+
+function PhoneRail(props: { current: "home" | "acme" }) {
+  return (
+    <ServerRail
+      class="phone__rail"
+      logoSrc="/brand/lumia-original-icon.svg"
+      homeCurrent={props.current === "home"}
+      homeUnread={props.current === "home" ? undefined : 3}
+      servers={PHONE_SERVERS.map((s, i) => ({ ...s, current: props.current === "acme" && i === 0 }))}
+      self={{ ...PEOPLE.self, status: "online" }}
+    />
+  );
+}
+
+// A floating panel pushed over the rail and sidebar: the main pane's card
+// with a back button in its header.
+function PhonePanel(props: { back: string; lead?: JSX.Element; title: JSX.Element; subtitle?: string; actions?: { icon: IconName; label: string }[]; children: JSX.Element }) {
+  return (
+    <>
+      <div class="phone__inset" aria-hidden="true"></div>
+      <main class="phone__panel lu-panel">
+        <header class="phone__panel-head">
+          <button type="button" class="phone__back" aria-label={"Back to " + props.back}>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="m15 5-7 7 7 7" />
+            </svg>
+          </button>
+          {props.lead}
+          <div class="phone__panel-title">
+            <h1>{props.title}</h1>
+            <Show when={props.subtitle}>
+              <p>{props.subtitle}</p>
+            </Show>
+          </div>
+          <For each={props.actions ?? []}>{(a) => <IconButton icon={a.icon} label={a.label} size={40} />}</For>
+        </header>
+        {props.children}
+      </main>
+    </>
+  );
+}
+
 function PhoneSignIn() {
   return (
-    <PhoneFrame label="Sign in: the trust card, password with a second factor, or link">
+    <PhoneFrame label="Sign in: the instance, password, or link this phone">
+      <div class="phone__inset" aria-hidden="true"></div>
       <div class="phone__auth">
-        <div class="gallery-auth__logo">
+        <div class="gallery-auth__logo phone__logo">
           <img src="/brand/lumia-original-light.svg" alt="Lumia" class="lu-only-light" />
           <img src="/brand/lumia-original-dark.svg" alt="Lumia" class="lu-only-dark" />
         </div>
         <Card title="Welcome back" subtitle="Sign in to pick up your conversations.">
-          <div class="auth__trust">
-            <span class="auth__trust-host">chat.acme.dev</span>
-            <span>run by Acme · Lumia 0.1.0</span>
-            <button type="button" class="auth__change lu-link">Change instance</button>
+          <div class="phone__instance">
+            <span class="lu-rail__server lu-tile-ink-default phone__instance-tile" aria-hidden="true">
+              A
+            </span>
+            <span class="phone__instance-text">
+              <span class="phone__instance-host">chat.acme.dev</span>
+              <span class="phone__instance-meta">Run by Acme · Lumia 0.1.0</span>
+            </span>
+            <Button variant="text">Change</Button>
           </div>
           <form class="gallery-auth__form" onSubmit={(e) => e.preventDefault()}>
             <TextField label="Email or handle" type="text" placeholder="you@example.com" autocomplete="username" />
-            <TextField label="Password" reveal placeholder="Your password" autocomplete="current-password" />
+            <TextField label="Password" reveal placeholder="Your password" autocomplete="current-password" action={{ label: "Forgot password?" }} />
             <Button variant="primary" type="submit" block>
               Sign in
             </Button>
             <Divider variant="or" />
-            <Button icon="key" block>
+            <Button icon="phone" block>
               Link this phone from another device
             </Button>
           </form>
-          <p class="gallery-auth__foot">
-            New to Lumia? <a href="#" class="lu-link">Create an account</a>
-          </p>
         </Card>
+        <p class="gallery-auth__foot">
+          New to Lumia? <a href="#" class="lu-link">Create an account</a>
+        </p>
       </div>
+      <footer class="phone__footer">
+        <a href="#">Help</a>
+        <a href="#">Privacy</a>
+        <a href="#">Terms</a>
+      </footer>
     </PhoneFrame>
+  );
+}
+
+function DmRow(props: { person: { name: string; initials: string; tone: Tone }; status?: "online" | "away"; people?: { initials: string; tone: Tone }[]; time: string; datetime: string; preview: string; count?: number }) {
+  return (
+    <li>
+      <a href="#" class={cx("phone__dm", !!props.count && "is-unread")}>
+        <Show when={props.people} fallback={<Avatar initials={props.person.initials} tone={props.person.tone} size={40} status={props.status} ring="bg" />}>
+          {(people) => <AvatarStack people={people()} size={28} />}
+        </Show>
+        <span class="phone__dm-text">
+          <span class="phone__dm-top">
+            <span class="phone__dm-name">{props.person.name}</span>
+            <time datetime={props.datetime} class="phone__dm-time">
+              {props.time}
+            </time>
+          </span>
+          <span class="phone__dm-preview">
+            <span>{props.preview}</span>
+            <Show when={props.count}>
+              <Badge count={props.count} label={props.count + " unread"} />
+            </Show>
+          </span>
+        </span>
+      </a>
+    </li>
   );
 }
 
 function PhoneHome() {
   return (
-    <PhoneFrame label="Home: requests, devices, conversations by instance" title="Home" large action="compose" tab="home">
-      <div class="phone__list">
-        <SearchTrigger label="Search messages" shortcut="" />
-        <QuickTiles
-          items={[
-            { icon: "mention", label: "Requests", count: 2 },
-            { icon: "shield", label: "Devices" },
-            { icon: "plus", label: "Instance" },
-          ]}
-        />
-        <ChannelList
-          sections={[
-            {
-              title: "chat.acme.dev",
-              items: [
-                { name: PEOPLE.maya.name, kind: "dm", initials: "MC", tone: "peach", status: "online", unread: true, count: 2 },
-                { name: PEOPLE.devon.name, kind: "dm", initials: "DP", tone: "purple", status: "away" },
-                { name: "Sam, Priya", kind: "group", people: [PEOPLE.sam, PEOPLE.priya] },
-              ],
-            },
-            {
-              title: "lumia.winchester.dev",
-              items: [{ name: PEOPLE.leo.name, kind: "dm", initials: "LM", tone: "sky", status: "online" }],
-            },
-          ]}
-        />
+    <PhoneFrame label="Home: the rail and the sidebar, conversations with their last line" split>
+      <PhoneRail current="home" />
+      <div class="phone__side">
+        <div class="phone__side-head">
+          <h1>Home</h1>
+          <IconButton icon="compose" label="New message" size={40} />
+        </div>
+        <div class="phone__side-body">
+          <SearchTrigger label="Search messages" shortcut="" />
+          <QuickTiles
+            items={[
+              { icon: "mention", label: "Requests", count: 2 },
+              { icon: "saved", label: "Saved" },
+              { icon: "shield", label: "Devices" },
+            ]}
+          />
+          <section>
+            <h2 class="lu-chlist__title">Direct messages</h2>
+            <ul class="phone__dms">
+              <DmRow person={PEOPLE.maya} status="online" time="9:42 AM" datetime="2026-11-03T09:42" preview="No rush, comments in the doc are fine." count={2} />
+              <DmRow person={{ name: "Sam, Priya", initials: "", tone: "mint" }} people={[PEOPLE.sam, PEOPLE.priya]} time="9:20 AM" datetime="2026-11-03T09:20" preview="Priya: Coffee at 3 before the all-hands?" count={1} />
+              <DmRow person={PEOPLE.devon} status="away" time="Yesterday" datetime="2026-11-02" preview="You: Sent the agenda over." />
+              <DmRow person={PEOPLE.leo} status="online" time="Mon" datetime="2026-11-02" preview="The desk by the windows is yours." />
+              <DmRow person={PEOPLE.sam} time="Oct 28" datetime="2026-10-28" preview="Tacos are back on Friday." />
+              <DmRow person={PEOPLE.priya} time="Oct 26" datetime="2026-10-26" preview="Thanks for the intro!" />
+            </ul>
+          </section>
+        </div>
       </div>
     </PhoneFrame>
   );
@@ -541,94 +587,154 @@ function PhoneHome() {
 
 function PhoneConversation() {
   return (
-    <PhoneFrame label="Conversation: pushed from Home, details in a sheet" title={PEOPLE.maya.name} subtitle="on chat.acme.dev" back="Home" action="more">
-      <MessageList>
-        <Notice icon="shield">Messages here are end-to-end encrypted. Only your devices and Maya's can read them.</Notice>
-        <Divider variant="day" label="Yesterday" />
-        <Message author={PEOPLE.maya.name} initials="MC" tone="peach" time="4:12 PM" datetime="2026-11-01T16:12">
-          Are you around tomorrow? I want to walk you through the onboarding changes.
-        </Message>
-        <Message author={PEOPLE.self.name} initials="RW" tone="indigo" time="4:30 PM" datetime="2026-11-01T16:30">
-          Sure. After standup works.
-        </Message>
-        <Divider variant="day" label="Today" />
-        <Divider variant="new" />
-        <Message author={PEOPLE.maya.name} initials="MC" tone="peach" time="9:41 AM" datetime="2026-11-02T09:41" attachment={{ name: "Onboarding v4.pdf", size: "860 KB" }}>
-          Here it is.
-        </Message>
-        <SystemMessage time="9:50 AM" datetime="2026-11-02T09:50">
-          <strong>Maya</strong> added a device, <strong>iPhone</strong>.
-        </SystemMessage>
-      </MessageList>
-      <Composer placeholder={"Message " + PEOPLE.maya.name} hint="" />
+    <PhoneFrame label="A conversation: the main pane as a floating panel over Home">
+      <PhonePanel
+        back="Home"
+        lead={<Avatar initials="MC" tone="peach" size={34} status="online" ring="surface" />}
+        title={PEOPLE.maya.name}
+        subtitle="Online · Design"
+        actions={[
+          { icon: "voice", label: "Start a voice call" },
+          { icon: "more", label: "Conversation details" },
+        ]}
+      >
+        <MessageList>
+          <Notice icon="shield">Messages with Maya are end-to-end encrypted. Only your devices and Maya's can read them.</Notice>
+          <Divider variant="day" label="Yesterday" />
+          <Message author={PEOPLE.maya.name} initials="MC" tone="peach" time="4:12 PM" datetime="2026-11-02T16:12">
+            Are you around tomorrow? I want to walk you through the onboarding changes.
+          </Message>
+          <Message author={PEOPLE.self.name} initials="RW" tone="indigo" time="4:30 PM" datetime="2026-11-02T16:30" reactions={[{ icon: "thumbs-up", label: "Thumbs up", count: 1 }]}>
+            Sure, after standup works.
+          </Message>
+          <Divider variant="day" label="Today" />
+          <Divider variant="new" />
+          <Message author={PEOPLE.maya.name} initials="MC" tone="peach" time="9:41 AM" datetime="2026-11-03T09:41" attachment={{ name: "Onboarding v4.pdf", size: "860 KB" }}>
+            {["Here it is. Slides 3 and 4 are the big ones.", "No rush, comments in the doc are fine."]}
+          </Message>
+          <SystemMessage time="9:50 AM" datetime="2026-11-03T09:50">
+            <strong>Maya</strong> added a device, <strong>iPhone</strong>.
+          </SystemMessage>
+        </MessageList>
+        <Composer placeholder={"Message " + PEOPLE.maya.name} typing={PEOPLE.maya.name} hint="" />
+      </PhonePanel>
     </PhoneFrame>
   );
 }
 
-function PhoneServers() {
-  const servers = [
-    { name: "Acme", initials: "A", ink: "default", meta: "chat.acme.dev · 128 members", mentions: 0, unread: false },
-    { name: "Design Guild", initials: "DG", ink: "indigo", meta: "chat.acme.dev · 41 members", mentions: 0, unread: true },
-    { name: "Lumia Builders", initials: "LB", ink: "green", meta: "lumia.winchester.dev · 312 members", mentions: 2, unread: true },
-    { name: "Friends", initials: "F", ink: "amber", meta: "lumia.winchester.dev · 9 members", mentions: 0, unread: false },
-  ];
+function PhoneRequests() {
   return (
-    <PhoneFrame label="Servers: the rail as a list" title="Servers" large action="plus" tab="servers">
-      <ul class="phone__servers">
-        <For each={servers}>
-          {(s) => (
-            <li class="phone__server">
-              <span class={cx("lu-rail__server", "lu-tile-ink-" + s.ink)} aria-hidden="true">
-                {s.initials}
+    <PhoneFrame label="Requests: waiting for you, and the ones you sent">
+      <PhonePanel back="Home" title="Requests" subtitle="2 waiting for you">
+        <div class="phone__panel-body">
+          <Notice icon="shield">A request shows who is asking and the servers you share. Nothing else reaches you until you accept.</Notice>
+          <h2 class="phone__section">Waiting for you</h2>
+          <RequestCard name="Jordan Lee" handle="jordan" initials="JL" tone="mint" meta="Shares Acme and Design Guild with you" />
+          <RequestCard name="Alex Rivera" handle="arivera" initials="AR" tone="amber" meta="Shares Lumia Builders with you · lumia.winchester.dev" />
+          <h2 class="phone__section">Sent</h2>
+          <div class="phone__sent">
+            <Avatar initials="NH" tone="green" size={40} />
+            <span class="phone__sent-text">
+              <span class="phone__sent-name">
+                Noor Haddad <span class="lu-request__handle">@noor</span>
               </span>
-              <span class="phone__server-text">
-                <span class={cx("phone__server-name", s.unread && "is-unread")}>{s.name}</span>
-                <span class="phone__server-meta">{s.meta}</span>
-              </span>
-              <Show when={s.mentions} fallback={<Show when={s.unread}><Badge dot /></Show>}>
-                <Badge count={s.mentions} label={s.mentions + " mentions"} />
-              </Show>
-            </li>
-          )}
-        </For>
-      </ul>
+              <span class="phone__sent-meta">Waiting for Noor to accept</span>
+            </span>
+            <Button variant="text">Cancel request</Button>
+          </div>
+          <p class="phone__foot">Declined requests disappear quietly. Blocked people cannot send you another.</p>
+        </div>
+      </PhonePanel>
     </PhoneFrame>
   );
 }
 
-function PhoneChannels() {
+function PhoneDevices() {
   return (
-    <PhoneFrame label="A server: its channels and DMs" title="Acme" back="Servers" action="more">
-      <div class="phone__list">
-        <SearchTrigger label="Search Acme" shortcut="" />
-        <QuickTiles
-          items={[
-            { icon: "thread", label: "Threads", count: 2 },
-            { icon: "mention", label: "Mentions", count: 1 },
-            { icon: "saved", label: "Saved" },
-          ]}
-        />
-        <ChannelList
-          sections={[
-            {
-              title: "Channels",
-              items: [
-                { name: "general", unread: true },
-                { name: "design", unread: true, mentions: 1 },
-                { name: "engineering", unread: true },
-                { name: "random" },
-                { name: "leadership", kind: "private" },
-              ],
-            },
-            {
-              title: "Direct messages",
-              items: [
-                { name: PEOPLE.maya.name, kind: "dm", initials: "MC", tone: "peach", status: "online", unread: true, count: 2 },
-                { name: PEOPLE.devon.name, kind: "dm", initials: "DP", tone: "purple", status: "away" },
-              ],
-            },
-          ]}
-        />
+    <PhoneFrame label="Devices: revoke confirms in a sheet with the password">
+      <PhonePanel back="Home" title="Devices" subtitle="3 linked to you" actions={[{ icon: "plus", label: "Link a device" }]}>
+        <div class="phone__panel-body">
+          <Notice icon="shield">Your identity lives on these devices, not on any instance.</Notice>
+          <DeviceList
+            devices={[
+              { id: "1", kind: "mobile", label: "This iPhone", meta: "Added today by MacBook Pro", thisDevice: true },
+              { id: "2", kind: "native", label: "MacBook Pro", meta: "Root device · added Oct 30" },
+              { id: "3", kind: "web", label: "Safari", meta: "On chat.acme.dev · added Nov 1" },
+            ]}
+            onRevoke={() => {}}
+          />
+        </div>
+      </PhonePanel>
+      <div class="phone__scrim" aria-hidden="true"></div>
+      <section class="phone__sheet" role="dialog" aria-modal="true" aria-labelledby="phone-revoke-title">
+        <span class="phone__sheet-grip" aria-hidden="true"></span>
+        <div class="lu-card__head">
+          <h2 id="phone-revoke-title" class="lu-card__title">
+            Revoke Safari?
+          </h2>
+          <p class="lu-card__subtitle">Safari stops reading new messages as soon as each instance gets the change. Enter your password to confirm.</p>
+        </div>
+        <TextField label="Password" type="password" reveal placeholder="Your password" autocomplete="current-password" />
+        <div class="pieces__row">
+          <Button variant="primary" size="md">Revoke Safari</Button>
+          <Button size="md">Keep it</Button>
+        </div>
+      </section>
+    </PhoneFrame>
+  );
+}
+
+function PhoneServer() {
+  return (
+    <PhoneFrame label="A server: the rail and its sidebar" split>
+      <PhoneRail current="acme" />
+      <div class="phone__side">
+        <div class="phone__side-head">
+          <div class="phone__side-title">
+            <h1>Acme</h1>
+            <span class="phone__side-meta">chat.acme.dev · 128 members</span>
+          </div>
+          <IconButton icon="compose" label="New message" size={40} />
+        </div>
+        <div class="phone__side-body">
+          <SearchTrigger label="Search Acme" shortcut="" />
+          <QuickTiles
+            items={[
+              { icon: "thread", label: "Threads", count: 2 },
+              { icon: "mention", label: "Mentions" },
+              { icon: "saved", label: "Saved" },
+            ]}
+          />
+          <ChannelList
+            sections={[
+              {
+                title: "Channels",
+                items: [
+                  { name: "announcements" },
+                  { name: "general", active: true },
+                  { name: "design", unread: true },
+                  { name: "engineering", unread: true, mentions: 2 },
+                  { name: "random" },
+                ],
+              },
+              {
+                title: "Private",
+                items: [
+                  { name: "leadership", kind: "private" },
+                  { name: "northstar-launch", kind: "private", unread: true },
+                ],
+              },
+              {
+                title: "Direct messages",
+                items: [
+                  { name: PEOPLE.maya.name, kind: "dm", initials: "MC", tone: "peach", status: "online", unread: true, count: 1 },
+                  { name: PEOPLE.devon.name, kind: "dm", initials: "DP", tone: "purple", status: "away" },
+                  { name: "Sam, Priya", kind: "group", people: [PEOPLE.sam, PEOPLE.priya] },
+                ],
+              },
+            ]}
+          />
+        </div>
       </div>
     </PhoneFrame>
   );
@@ -636,69 +742,83 @@ function PhoneChannels() {
 
 function PhoneChannel() {
   return (
-    <PhoneFrame label="A channel: members behind the action" title="# general" subtitle="Company-wide announcements" back="Acme" action="more">
-      <MessageList>
-        <Divider variant="day" label="Today" />
-        <SystemMessage time="9:02 AM" datetime="2026-11-02T09:02">
-          <strong>Leo Martins</strong> joined #general
-        </SystemMessage>
-        <Message author={PEOPLE.maya.name} initials="MC" tone="peach" tag={{ label: "Design" }} time="9:04 AM" datetime="2026-11-02T09:04">
-          {["Morning all. The new onboarding flow is in the design channel if anyone wants a look before standup.", "Two screens changed since Friday, both in the sign-in card."]}
-        </Message>
-        <Message author={PEOPLE.devon.name} initials="DP" tone="purple" time="9:11 AM" datetime="2026-11-02T09:11">
-          <p>
-            Looks great. <Mention>@Sam Okafor</Mention> can you check the copy on the second screen matches the tone guide?
-          </p>
-        </Message>
-        <Divider variant="new" />
-        <Message author={PEOPLE.sam.name} initials="SO" tone="mint" time="9:38 AM" datetime="2026-11-02T09:38">
-          On it.
-        </Message>
-      </MessageList>
-      <Composer placeholder="Message #general" hint="" />
+    <PhoneFrame label="A channel: members and settings behind the header's actions">
+      <PhonePanel
+        back="Acme"
+        title={
+          <>
+            <Icon name="hash" size={18} strokeWidth={2.2} class="phone__hash" />
+            general
+          </>
+        }
+        subtitle="Company-wide announcements and water-cooler chat"
+        actions={[
+          { icon: "member-joined", label: "Members, 128" },
+          { icon: "more", label: "Channel settings" },
+        ]}
+      >
+        <MessageList>
+          <Divider variant="day" label="Today" />
+          <Message
+            author={PEOPLE.maya.name}
+            initials="MC"
+            tone="peach"
+            tag={{ label: "Design" }}
+            time="9:04 AM"
+            datetime="2026-11-03T09:04"
+            reactions={[
+              { icon: "thumbs-up", label: "Thumbs up", count: 12, defaultSelected: true },
+              { icon: "check-circle", label: "Done", count: 5 },
+            ]}
+          >
+            Morning all. The new onboarding flow is in the design channel if anyone wants a look before standup.
+          </Message>
+          <Message
+            author={PEOPLE.devon.name}
+            initials="DP"
+            tone="purple"
+            time="9:31 AM"
+            datetime="2026-11-03T09:31"
+            attachment={{ name: "Q4 all-hands agenda.pdf", size: "1.2 MB" }}
+            thread={{ count: 14, lastReply: "11:36 AM", people: [PEOPLE.priya, PEOPLE.leo, PEOPLE.maya] }}
+          >
+            Q4 all-hands is Thursday at 2:00 PM in the Atrium and on the livestream. Drop your AMA questions in the thread.
+          </Message>
+          <SystemMessage time="10:02 AM" datetime="2026-11-03T10:02">
+            <strong>Leo Martins</strong> joined #general
+          </SystemMessage>
+          <Message author={PEOPLE.priya.name} initials="PN" tone="amber" time="10:05 AM" datetime="2026-11-03T10:05" reactions={[{ icon: "heart", label: "Heart", count: 9, defaultSelected: true }]}>
+            <p>
+              Please welcome <Mention>@Leo Martins</Mention> to Design! He joins from Lisbon to lead our mobile work.
+            </p>
+          </Message>
+          <Divider variant="new" />
+          <Message author={PEOPLE.sam.name} initials="SO" tone="mint" time="11:48 AM" datetime="2026-11-03T11:48">
+            Lunch is on us for the launch. Tacos land in the kitchen at 12:30.
+          </Message>
+        </MessageList>
+        <Composer placeholder="Message #general" typing={PEOPLE.maya.name} hint="" />
+      </PhonePanel>
     </PhoneFrame>
   );
 }
 
-function PhoneRequests() {
+function PhoneThread() {
   return (
-    <PhoneFrame label="Requests" title="Requests" back="Home">
-      <div class="lu-page phone__page">
-        <Notice icon="shield">A request shows who is asking and what you share, nothing else.</Notice>
-        <RequestCard name="Jordan Lee" handle="jordan" initials="JL" tone="mint" meta="Shares 2 servers with you · chat.acme.dev" />
-        <RequestCard name="Alex Rivera" handle="arivera" initials="AR" tone="amber" meta="Shares Lumia Builders with you · lumia.winchester.dev" />
-        <p class="lu-page__title">Earlier</p>
-        <EmptyState icon="mention" title="Nothing else waiting">
-          Declined requests disappear; blocked people cannot ask again.
-        </EmptyState>
-      </div>
-    </PhoneFrame>
-  );
-}
-
-function PhoneDevices() {
-  return (
-    <PhoneFrame label="Devices: revoke confirms with the password" title="Devices" back="Home">
-      <div class="lu-page phone__page">
-        <Notice icon="shield" action={{ label: "Link" }}>Your identity lives on these devices, not on any instance.</Notice>
-        <DeviceList
-          devices={[
-            { id: "1", kind: "mobile", label: "This iPhone", meta: "Added today by laptop", thisDevice: true },
-            { id: "2", kind: "native", label: "laptop", meta: "Root device · added Oct 30" },
-            { id: "3", kind: "web", label: "Safari", meta: "chat.acme.dev · added Nov 1 by laptop" },
+    <PhoneFrame label="A thread: the aside as its own panel">
+      <PhonePanel back="#general" title="Thread" subtitle="#general · 14 replies" actions={[{ icon: "more", label: "Thread options" }]}>
+        <ThreadPanel
+          parent={entry(PEOPLE.devon, "9:31 AM", "Q4 all-hands is Thursday at 2:00 PM in the Atrium and on the livestream. Drop your AMA questions in the thread.")}
+          earlier={10}
+          replies={[
+            entry(PEOPLE.priya, "9:40 AM", "Will the livestream be recorded for anyone who cannot make it live?"),
+            entry(PEOPLE.devon, "9:44 AM", "Yes. The recording goes up in #announcements by Friday morning."),
+            entry(PEOPLE.leo, "10:31 AM", "Is there a seating plan for the Atrium? Want to find the design crew."),
+            entry(PEOPLE.maya, "11:36 AM", "Design sits front-left, Leo. We will save you a seat."),
           ]}
-          onRevoke={() => {}}
+          channel="general"
         />
-        <Card title="Revoke Safari?" subtitle="It stops reading new messages once every instance has the change.">
-          <div class="gallery-auth__form">
-            <TextField label="Password" type="password" reveal placeholder="Your password" autocomplete="current-password" />
-            <div class="pieces__row">
-              <Button variant="primary" size="md">Revoke Safari</Button>
-              <Button size="md">Keep it</Button>
-            </div>
-          </div>
-        </Card>
-      </div>
+      </PhonePanel>
     </PhoneFrame>
   );
 }
@@ -710,10 +830,10 @@ function PhoneBoard() {
       <PhoneHome />
       <PhoneConversation />
       <PhoneRequests />
-      <PhoneServers />
-      <PhoneChannels />
-      <PhoneChannel />
       <PhoneDevices />
+      <PhoneServer />
+      <PhoneChannel />
+      <PhoneThread />
     </div>
   );
 }
