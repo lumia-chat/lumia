@@ -11,9 +11,11 @@ permissions:
   contents: read
 
 # The Android app: the core for arm64 through cargo-ndk, the Kotlin
-# bindings, the tokens, and the debug build with Gradle. The emulator
-# smoke (apps/android/scripts/smoke.sh) runs locally; a hosted emulator
-# needs KVM and minutes this job does not spend yet.
+# bindings, the tokens, and the debug build with Gradle, as the check
+# that it all compiles; the APK is not kept, a build to install is a
+# release's. The emulator smoke (apps/android/scripts/smoke.sh) runs
+# locally; a hosted emulator needs KVM and minutes this job does not
+# spend yet.
 jobs:
   build:
     runs-on: ubuntu-24.04
@@ -44,7 +46,3 @@ jobs:
           ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.2.12479018
       - run: ./gradlew assembleDebug --no-daemon
         working-directory: apps/android
-      - uses: actions/upload-artifact@v4
-        with:
-          name: lumia-debug-apk
-          path: apps/android/app/build/outputs/apk/debug/app-debug.apk
