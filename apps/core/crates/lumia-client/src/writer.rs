@@ -10,7 +10,9 @@
 //!
 //! An advisory lock on a file beside the stores (the standard library's,
 //! `flock` underneath); nothing on the web, where one tab owns the store
-//! through Web Locks.
+//! through Web Locks. Where the platform's standard library reports file
+//! locking as unsupported (Android's does), the lock is a no-op: no second
+//! process shares the stores there, since push is handled inside the app.
 use std::fs::{File, OpenOptions, TryLockError};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -26,7 +28,7 @@ pub struct WriterLock {
 /// Held while the lock is; dropping it releases.
 #[derive(Debug)]
 pub struct WriterGuard {
-    _file: File,
+    _file: Option<File>,
 }
 
 impl WriterLock {
@@ -54,9 +56,13 @@ impl WriterLock {
     /// When the file cannot be opened or locked.
     pub fn shared(&self) -> Result<WriterGuard, ClientError> {
         let file = self.open()?;
-        file.lock_shared()
-            .map_err(|e| ClientError::State(format!("writer lock: {e}")))?;
-        Ok(WriterGuard { _file: file })
+        match file.lock_shared() {
+            Ok(()) => Ok(WriterGuard { _file: Some(file) }),
+            Err(e) if e.kind() == std::io::ErrorKind::Unsupported => {
+                Ok(WriterGuard { _file: None })
+            }
+            Err(e) => Err(ClientError::State(format!("writer lock: {e}"))),
+        }
     }
 
     /// Takes the lock exclusively, trying for up to `timeout`; `None` when
@@ -69,8 +75,11 @@ impl WriterLock {
         let deadline = std::time::Instant::now() + timeout;
         loop {
             match file.try_lock() {
-                Ok(()) => return Ok(Some(WriterGuard { _file: file })),
+                Ok(()) => return Ok(Some(WriterGuard { _file: Some(file) })),
                 Err(TryLockError::WouldBlock) => {}
+                Err(TryLockError::Error(e)) if e.kind() == std::io::ErrorKind::Unsupported => {
+                    return Ok(Some(WriterGuard { _file: None }));
+                }
                 Err(TryLockError::Error(e)) => {
                     return Err(ClientError::State(format!("writer lock: {e}")));
                 }

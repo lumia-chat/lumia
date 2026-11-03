@@ -29,12 +29,12 @@ uniffi::setup_scaffolding!();
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum LumiaError {
     /// The instance answered with the protocol's error envelope.
-    #[error("{code}: {message}")]
+    #[error("{code}: {detail}")]
     Api {
         /// `lumia.v1.ErrorCode` as its name.
         code: String,
         /// The server's message.
-        message: String,
+        detail: String,
     },
     /// This device is revoked in the roster it now holds.
     #[error("this device was revoked (roster v{roster_version})")]
@@ -46,18 +46,21 @@ pub enum LumiaError {
     #[error("not signed in")]
     NotSignedIn,
     /// A malformed argument, a lifecycle mistake, or any other failure.
-    #[error("{message}")]
-    Other { message: String },
+    #[error("{detail}")]
+    Other { detail: String },
 }
 
 impl From<ClientError> for LumiaError {
     fn from(e: ClientError) -> Self {
         match e {
-            ClientError::Api { code, message, .. } => Self::Api { code, message },
+            ClientError::Api { code, message, .. } => Self::Api {
+                code,
+                detail: message,
+            },
             ClientError::DeviceRevoked { roster_version } => Self::DeviceRevoked { roster_version },
             ClientError::NotSignedIn => Self::NotSignedIn,
             other => Self::Other {
-                message: other.to_string(),
+                detail: other.to_string(),
             },
         }
     }
@@ -590,7 +593,7 @@ impl Client {
             .enable_all()
             .build()
             .map_err(|e| LumiaError::Other {
-                message: e.to_string(),
+                detail: e.to_string(),
             })?;
         let host = app::host_of(&base_url);
         let data_dir = PathBuf::from(data_dir);
@@ -598,7 +601,7 @@ impl Client {
         let identity_dir = data_dir.join("identity");
         for d in [&dir, &identity_dir] {
             std::fs::create_dir_all(d).map_err(|e| LumiaError::Other {
-                message: e.to_string(),
+                detail: e.to_string(),
             })?;
         }
         let lock_dir = dir.clone();
@@ -820,7 +823,7 @@ impl Client {
             "fcm" => PushKind::RelayFcm,
             other => {
                 return Err(LumiaError::Other {
-                    message: format!("unknown platform {other}"),
+                    detail: format!("unknown platform {other}"),
                 })
             }
         };
