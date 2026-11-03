@@ -23,7 +23,9 @@ bundle=chat.lumia
 x="$work/x" # the identity the phone joins
 y="$work/y" # the other side of the conversation
 
-curl -s -m 2 "$instance/api/v1/instance" >/dev/null || { echo "no instance at $instance"; exit 1; }
+# The instance, waited for: on a busy runner a single short probe is not enough.
+for _ in $(seq 1 60); do curl -s -m 5 "$instance/api/v1/instance" >/dev/null 2>&1 && break; sleep 2; done
+curl -s -m 5 "$instance/api/v1/instance" >/dev/null || { echo "no instance at $instance"; exit 1; }
 [ -d "$app" ] || { echo "no app at $app"; exit 1; }
 stamp=$(date +%s)
 for d in "$x" "$y"; do "$cli" --data-dir "$d" instance add "$instance" >/dev/null; done
