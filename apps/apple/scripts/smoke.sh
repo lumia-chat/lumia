@@ -35,7 +35,7 @@ echo "seeded $handle, server $server, channel $channel"
 pkill -x Lumia 2>/dev/null || true
 sleep 1
 # The app's state starts empty; a sandboxed build keeps it in its container.
-rm -rf "$HOME/Library/Application Support/Lumia" "$HOME/Library/Containers/chat.lumia.macos/Data/Library/Application Support/Lumia"
+rm -rf "$HOME/Library/Application Support/Lumia" "$HOME/Library/Containers/chat.lumia/Data/Library/Application Support/Lumia"
 open -n "$app" --env "LUMIA_DEV_INSTANCE=$instance" --env "LUMIA_DEV_HANDLE=$handle" --env "LUMIA_DEV_PASSWORD=$password"
 sleep 10
 
