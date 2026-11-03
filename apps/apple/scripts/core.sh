@@ -37,6 +37,8 @@ done
 mkdir -p "$out/bindings"
 lib="$core/target/aarch64-apple-darwin/$profile/liblumia_ffi.a"
 (cd "$core" && cargo run -q -p uniffi-bindgen -- generate --library "$lib" --language swift --no-format --out-dir "$out/bindings")
+# The target's directory holds only generated files, so a fresh checkout lacks it.
+mkdir -p "$kit/Sources/LumiaFFI"
 rm -rf "$kit/Sources/LumiaFFI"/*.swift
 cp "$out/bindings/lumia_ffi.swift" "$kit/Sources/LumiaFFI/LumiaFFI.swift"
 
