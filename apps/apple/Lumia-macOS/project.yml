@@ -75,7 +75,7 @@ targets:
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: UZAQ69P4MG
         ENABLE_HARDENED_RUNTIME: true
-        MARKETING_VERSION: "0.2.0"
+        MARKETING_VERSION: "0.2.1"
         CURRENT_PROJECT_VERSION: "1"
         # Where the direct-download build looks for updates (Info.plist's
         # SUFeedURL and SUPublicEDKey). The appcast is an asset of every
