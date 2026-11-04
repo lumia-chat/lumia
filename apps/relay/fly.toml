@@ -1,0 +1,44 @@
+# The push relay on Fly.io: one small machine, started by the first push
+# after an idle spell (a notice can wait the second that takes). Deploy
+# from this directory:
+#
+#   fly deploy --config apps/relay/fly.toml apps/relay
+#
+# Once, before the first deploy, the credentials as secrets. The APNs key
+# is the .p8 from the developer portal (Keys, with the Apple Push
+# Notifications service), passed inline; the FCM service account is the
+# JSON from the Firebase project, likewise:
+#
+#   fly secrets set --app lumia-relay APNS_KEY="$(cat AuthKey_XXXXXXXXXX.p8)" APNS_KEY_ID=XXXXXXXXXX APNS_TEAM_ID=UZAQ69P4MG APNS_TOPIC=chat.lumia
+#   fly secrets set --app lumia-relay FCM_SERVICE_ACCOUNT="$(cat service-account.json)"
+#
+# An instance names the relay with LUMIA_PUSH_RELAY_URL=https://lumia-relay.fly.dev.
+
+app = 'lumia-relay'
+primary_region = 'yyz'
+kill_signal = 'SIGTERM'
+
+[build]
+  dockerfile = 'Dockerfile'
+
+[env]
+  PORT = '4100'
+
+[http_service]
+  internal_port = 4100
+  force_https = true
+  auto_stop_machines = 'suspend'
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ['app']
+
+  [[http_service.checks]]
+    interval = '30s'
+    timeout = '5s'
+    grace_period = '10s'
+    method = 'GET'
+    path = '/health'
+
+[[vm]]
+  size = 'shared-cpu-1x'
+  memory = '256mb'

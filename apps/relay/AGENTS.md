@@ -4,5 +4,5 @@ This is the Lumia push relay (architecture 15.5): a Plug application that forwar
 
 - The relay never sees message content and never stores anything: a token, an instance name and a time pass through and are logged at info level only as counts. Keep it that way.
 - Providers implement `Lumia.Relay.Provider`; the fake one is what runs without credentials and in tests. A provider's request is built by a pure function (`request/…`) that the tests check; the send is the only I/O.
-- Credentials come from the environment at boot (`config/runtime.exs`); none are in the repo.
+- Credentials come from the environment at boot (`config/runtime.exs`), each as a file or inline; none are in the repo. `Dockerfile` is the release image and `fly.toml` the one-machine deployment; the instance's `fly.toml` names it.
 - No `@spec`, `@type` or `@typedoc` (no Dialyzer). `mix precommit` must pass.

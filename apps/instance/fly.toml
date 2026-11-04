@@ -40,6 +40,8 @@ kill_signal = 'SIGTERM'
   ECTO_IPV6 = 'true'
   DB_SSL = 'true'
   LUMIA_OPEN_REGISTRATION = 'false'
+  # The push relay (apps/relay/fly.toml) for the iOS and Android apps.
+  LUMIA_PUSH_RELAY_URL = 'https://lumia-relay.fly.dev'
 
 [http_service]
   internal_port = 4000
