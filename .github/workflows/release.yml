@@ -109,7 +109,11 @@ jobs:
           workspaces: apps/core
           key: ios
       - run: brew install xcodegen
-      - run: echo "DEVELOPER_DIR=$(xcode-select -p)" >> "$GITHUB_ENV"
+      # Xcode 26.6 refuses the App Store Connect API key for automatic signing
+      # ("Authentication failed: Make sure a bearer token was provided");
+      # 26.5 on the same image accepts it, as does 27 (ios-upload.yml takes a
+      # version to try the image's others).
+      - run: echo "DEVELOPER_DIR=/Applications/Xcode_26.5.app/Contents/Developer" >> "$GITHUB_ENV"
       - run: echo "$ASC_KEY_P8" | base64 -d > "$RUNNER_TEMP/asc.p8"
         env:
           ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}

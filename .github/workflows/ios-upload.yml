@@ -12,9 +12,9 @@ on:
         required: false
         default: ""
       xcode:
-        description: "An Xcode on the runner image, such as 26.5; empty for its default"
+        description: "An Xcode on the runner image (26.6 refuses the API key for signing; 26.5 accepts it)"
         required: false
-        default: ""
+        default: "26.5"
 
 permissions:
   contents: read
