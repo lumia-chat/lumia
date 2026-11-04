@@ -11,6 +11,10 @@ on:
         description: "The version (a tag without its v); empty for project.yml's"
         required: false
         default: ""
+      xcode:
+        description: "An Xcode on the runner image, such as 26.5; empty for its default"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -31,7 +35,14 @@ jobs:
           workspaces: apps/core
           key: ios
       - run: brew install xcodegen
-      - run: echo "DEVELOPER_DIR=$(xcode-select -p)" >> "$GITHUB_ENV"
+      - run: |
+          dir=$(xcode-select -p)
+          [ -n "$XCODE" ] && dir="/Applications/Xcode_$XCODE.app/Contents/Developer"
+          [ -d "$dir" ] || { echo "no Xcode at $dir"; exit 1; }
+          echo "DEVELOPER_DIR=$dir" >> "$GITHUB_ENV"
+          "$dir/usr/bin/xcodebuild" -version
+        env:
+          XCODE: ${{ inputs.xcode }}
       - run: echo "$ASC_KEY_P8" | base64 -d > "$RUNNER_TEMP/asc.p8"
         env:
           ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
