@@ -1,18 +1,23 @@
-# A release: on a v* tag, and only then, the desktop apps are built,
-# signed and attached to one GitHub Release (architecture section 13,
-# "Distribution"), and the iOS app is uploaded to App Store Connect for
-# TestFlight, the only channel a phone has. The release starts as a draft
-# and is published only when every desktop job succeeds, so the "latest"
-# feeds the apps read (Sparkle's appcast.xml, Tauri's latest.json) never
-# point at a half-built release; the iOS upload does not gate it, since a
-# TestFlight build can be re-sent without a new tag.
+# A release: on a v* tag, and only then, the desktop apps and the Android
+# APK are built, signed and attached to one GitHub Release (architecture
+# section 13, "Distribution"), and the iOS app is uploaded to App Store
+# Connect for TestFlight, the only channel an iPhone has. The release
+# starts as a draft and is published only when every job that attaches an
+# asset succeeds, so the "latest" feeds the apps read (Sparkle's
+# appcast.xml, Tauri's latest.json) never point at a half-built release;
+# the iOS upload does not gate it, since a TestFlight build can be re-sent
+# without a new tag.
 #
 # The version is the tag without its v. Secrets: DEVELOPER_ID_P12 and
 # DEVELOPER_ID_P12_PASSWORD (the Developer ID Application certificate with
 # its key, base64 of the .p12), ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_P8 (the
 # App Store Connect API key, base64 of the .p8; notarization and the iOS
 # upload), SPARKLE_PRIVATE_KEY (the appcast's EdDSA key),
-# TAURI_SIGNING_PRIVATE_KEY (the updater's minisign key).
+# TAURI_SIGNING_PRIVATE_KEY (the updater's minisign key),
+# ANDROID_KEYSTORE (the release keystore, base64 of the .jks),
+# ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD, and
+# GOOGLE_SERVICES_JSON (the Firebase project's file, for FCM; optional, the
+# build has UnifiedPush alone without it).
 name: release
 
 on:
@@ -123,6 +128,56 @@ jobs:
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           ASC_KEY_PATH: ${{ runner.temp }}/asc.p8
 
+  # The signed APK, the core optimized and stripped for arm64 (the same
+  # steps as android.yml, in release). The keystore is the one every
+  # build of the app has been signed with: Android installs an update only
+  # over the same key, so losing it means a new application id.
+  android:
+    needs: draft
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the version code is the commit count
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: "platform-tools platforms;android-35 build-tools;35.0.0 ndk;27.2.12479018"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.96.0"
+          targets: aarch64-linux-android
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-ndk
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/core
+          key: android-release
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Keys
+        run: |
+          echo "$ANDROID_KEYSTORE" | base64 -d > "$RUNNER_TEMP/release.jks"
+          [ -s "$RUNNER_TEMP/release.jks" ] || { echo "no ANDROID_KEYSTORE secret"; exit 1; }
+          [ -z "$GOOGLE_SERVICES_JSON" ] || printf '%s' "$GOOGLE_SERVICES_JSON" > apps/android/app/google-services.json
+        env:
+          ANDROID_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+      - run: apps/android/scripts/release.sh "${GITHUB_REF_NAME#v}"
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.2.12479018
+          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/release.jks
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      - run: gh release upload "$GITHUB_REF_NAME" apps/android/.build/dist/*.apk
+        env:
+          GH_TOKEN: ${{ github.token }}
+
   desktop:
     needs: draft
     strategy:
@@ -177,7 +232,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
 
   publish:
-    needs: [macos, desktop]
+    needs: [macos, desktop, android]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4

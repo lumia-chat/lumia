@@ -46,4 +46,14 @@ rm -rf "$kit/src/main/kotlin/uniffi"
 mkdir -p "$kit/src/main/kotlin"
 cp -R "$out/uniffi" "$kit/src/main/kotlin/uniffi"
 python3 "$here/tokens.py"
+
+# A release is stripped once the bindings have read the metadata the
+# symbols carry (cargo-ndk no longer strips, and a profile strip would
+# take the metadata with it). The NDK's strip keeps what the loader needs.
+if [ "$profile" = release ]; then
+  strip=$(ls "$ANDROID_NDK_HOME"/toolchains/llvm/prebuilt/*/bin/llvm-strip | head -1)
+  for abi in $abis; do
+    "$strip" --strip-unneeded "$kit/src/main/jniLibs/$abi/liblumia_ffi.so"
+  done
+fi
 echo "core: $kit/src/main/jniLibs ($profile; ABIs: $abis)"

@@ -13,6 +13,15 @@ if (file("google-services.json").exists()) {
     apply(plugin = libs.plugins.google.services.get().pluginId)
 }
 
+// A release's version is the tag's and its code the commit count, both
+// passed by scripts/release.sh; the values here are the development
+// build's placeholders, as tauri.conf.json's version is.
+val lumiaVersion = findProperty("lumiaVersion")?.toString() ?: "0.2.1"
+val lumiaBuild = findProperty("lumiaBuild")?.toString()?.toInt() ?: 3
+// The release key from the environment (scripts/release.sh names the
+// variables); without one the release build is unsigned.
+val keystorePath = System.getenv("ANDROID_KEYSTORE_PATH")
+
 android {
     namespace = "chat.lumia"
     compileSdk = 35
@@ -20,12 +29,34 @@ android {
         applicationId = "chat.lumia"
         minSdk = 28
         targetSdk = 35
-        versionCode = 3
-        versionName = "0.2.1"
+        versionCode = lumiaBuild
+        versionName = lumiaVersion
+    }
+    signingConfigs {
+        if (keystorePath != null) {
+            create("release") {
+                storeFile = file(keystorePath)
+                storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("ANDROID_KEY_ALIAS")
+                keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+            }
+        }
     }
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // R8 shrinks the Kotlin (Compose, the icon set, Firebase, Play
+            // Services: the unshrunk dex is three times the stripped core);
+            // proguard-rules.pro keeps the bindings and JNA, which reach the
+            // native library by name.
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // A phone is arm64; the x86_64 core is the emulator's (JNA ships
+            // every ABI, this leaves its arm64 one).
+            ndk { abiFilters += "arm64-v8a" }
+            if (keystorePath != null) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
     compileOptions {
@@ -56,6 +87,12 @@ dependencies {
     implementation(libs.unifiedpush.connector)
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.messaging)
+    constraints {
+        // Play Services base, under Firebase, carries a fragment library
+        // from before the activity-result API; the release lint refuses
+        // that beside registerForActivityResult, so the transitive is lifted.
+        implementation(libs.androidx.fragment)
+    }
 }
 
 // The UnifiedPush connector and Firebase both bring Tink; one copy.
