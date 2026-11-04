@@ -63,7 +63,7 @@ rm -rf "$groups"/*/Lumia 2>/dev/null || true
 project="$here/../Lumia-iOS"
 TEST_RUNNER_LUMIA_DEV_INSTANCE="$instance" TEST_RUNNER_LUMIA_DEV_HANDLE="phone$stamp" TEST_RUNNER_LUMIA_DEV_PASSWORD="$password" TEST_RUNNER_LUMIA_DEV_LINK=1 TEST_RUNNER_LUMIA_UITEST_HOLD=25 \
   xcodebuild test-without-building -project "$project/Lumia.xcodeproj" -scheme Lumia -destination "id=$udid" -derivedDataPath "$project/.build" \
-  -only-testing:LumiaUITests > "$work/uitest.log" 2>&1 &
+  -only-testing:LumiaUITests/SmokeUITests/testAllowNotificationsAndHold > "$work/uitest.log" 2>&1 &
 uitest=$!
 request=""
 for _ in $(seq 1 90); do
@@ -108,11 +108,6 @@ for _ in $(seq 1 40); do
 done
 echo "notification content:"; printf '%s\n' "$content" | sed 's/^/  /'
 xcrun simctl terminate "$udid" "$bundle" 2>/dev/null || true
-host=$(printf '%s' "$instance" | sed -E 's#^https?://##; s#/$##')
-printf '{"aps":{"alert":{"title":"Lumia","body":"New message"},"mutable-content":1,"sound":"default"},"instance":"%s"}\n' "$host" > "$work/push.json"
-xcrun simctl push "$udid" "$bundle" "$work/push.json" >/dev/null
-sleep 3
-xcrun simctl io "$udid" screenshot "$work/push.png" >/dev/null 2>&1
 store=$(ls "$data"/*/store.sqlite | grep -v /identity/ | head -1)
 gen=$(sqlite3 "$store" "select value from meta where key = 'writer_generation'" 2>/dev/null || echo 0)
 echo "writer generation after the extension's call: ${gen:-0}"
@@ -121,4 +116,22 @@ case "$content" in
   *) echo "FAIL: the message was not decrypted for the notice"; exit 1 ;;
 esac
 [ "${gen:-0}" -gt 0 ] || { echo "FAIL: no writer generation bump"; exit 1; }
-echo "smoke-push: ok (the phone joined the group and decrypted the message for the notice; the banner is in $work/push.png)"
+
+# The tap: the notification as the extension rewrites it (the sender as
+# the title, the channel and kind in the content) is delivered while the
+# UI test holds the app in the foreground; the test taps the banner and
+# expects the conversation's panel, titled with the other side's handle.
+host=$(printf '%s' "$instance" | sed -E 's#^https?://##; s#/$##')
+printf '{"aps":{"alert":{"title":"cli%s","body":"%s"},"mutable-content":1,"sound":"default"},"instance":"%s","channel_id":"%s","kind":"dm"}\n' "$stamp" "$body" "$host" "$channel" > "$work/push.json"
+TEST_RUNNER_LUMIA_DEV_INSTANCE="$instance" TEST_RUNNER_LUMIA_DEV_HANDLE="phone$stamp" TEST_RUNNER_LUMIA_DEV_PASSWORD="$password" TEST_RUNNER_LUMIA_UITEST_EXPECT="cli$stamp" \
+  xcodebuild test-without-building -project "$project/Lumia.xcodeproj" -scheme Lumia -destination "id=$udid" -derivedDataPath "$project/.build" \
+  -only-testing:LumiaUITests/SmokeUITests/testOpenNotification > "$work/uitest-open.log" 2>&1 &
+uitest=$!
+sleep 20
+xcrun simctl push "$udid" "$bundle" "$work/push.json" >/dev/null
+sleep 2
+xcrun simctl io "$udid" screenshot "$work/push.png" >/dev/null 2>&1
+sleep 6
+xcrun simctl io "$udid" screenshot "$work/opened.png" >/dev/null 2>&1
+wait $uitest || { echo "FAIL: the tap did not open the conversation; see $work/uitest-open.log and $work/opened.png"; grep -E 'error|failed' "$work/uitest-open.log" | head -5; exit 1; }
+echo "smoke-push: ok (the phone joined the group and decrypted the message for the notice; the banner is in $work/push.png, the conversation it opened in $work/opened.png)"

@@ -14,6 +14,7 @@ struct ShellView: View {
 
     private var snapshot: SnapshotSummary? { session.snapshot }
     private var servers: [ServerSummary] { snapshot?.servers ?? [] }
+    private var channels: [ChannelSummary] { snapshot?.channels ?? [] }
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -77,6 +78,25 @@ struct ShellView: View {
             case .background: session.background()
             default: break
             }
+        }
+        .onChange(of: PushRegistrar.shared.target) { _, _ in openTarget() }
+        .onChange(of: channels.map(\.channelId)) { _, _ in openTarget() }
+    }
+
+    /// The conversation a tapped notification names, once the snapshot has
+    /// it (a cold start loads first): a DM opens from Home, a mention opens
+    /// its channel in its server. The generic notice names none and the app
+    /// stays where it was.
+    private func openTarget() {
+        guard let target = PushRegistrar.shared.target,
+              let channel = channels.first(where: { $0.channelId == target.channelID }) else { return }
+        PushRegistrar.shared.target = nil
+        if personalKinds.contains(channel.kind) {
+            place = .home
+            path = [.conversation(id: channel.channelId)]
+        } else {
+            place = .server(id: channel.serverId)
+            path = [.channel(id: channel.channelId)]
         }
     }
 }
