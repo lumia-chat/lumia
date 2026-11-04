@@ -31,7 +31,7 @@ use lumia_client::sqlite::{DmStatus, SqliteStore};
 use lumia_client::ClientError;
 use lumia_core::keystore::Keystore;
 use lumia_core::mls::projection::Projection;
-use lumia_core::proto::{command, event, Command, DmOperation, SendMessage};
+use lumia_core::proto::{command, event, mention, Command, DmOperation, Mention, SendMessage};
 use lumia_core::store::Store;
 use lumia_core::sync::Notice;
 use lumia_core::wire;
@@ -85,8 +85,15 @@ enum Cmd {
     ChannelCreate { server_id: String, name: String },
     /// List channels in a server you can view.
     Channels { server_id: String },
-    /// Send a message.
-    Send { channel_id: String, body: String },
+    /// Send a message; `--mention <account-id>` (repeatable) mentions an account.
+    Send {
+        channel_id: String,
+        body: String,
+        #[arg(long)]
+        mention: Vec<String>,
+    },
+    /// Print this account's id.
+    Whoami,
     /// Follow a channel, printing events as they arrive; reconnects.
     Tail { channel_id: String },
     /// Run a failure-injection scenario against the instance (`all` for every one).
@@ -321,13 +328,34 @@ async fn run(cli: Cli) -> Result<(), ClientError> {
             }
             Ok(())
         }
-        Cmd::Send { channel_id, body } => {
+        Cmd::Whoami => {
+            let snap = api.account_snapshot().await?;
+            let account = snap
+                .account
+                .ok_or_else(|| ClientError::State("not signed in".into()))?;
+            println!("{}", wire::display(&account.account_id));
+            Ok(())
+        }
+        Cmd::Send {
+            channel_id,
+            body,
+            mention,
+        } => {
             let channel = parse_uuid(&channel_id)?;
+            let mut mentions = Vec::with_capacity(mention.len());
+            for id in &mention {
+                mentions.push(Mention {
+                    target: Some(mention::Target::AccountId(parse_uuid(id)?)),
+                    start: 0,
+                    end: 0,
+                });
+            }
             let cmd = Command {
                 command_id: wire::new_id(),
                 channel_id: channel.clone(),
                 op: Some(command::Op::SendMessage(SendMessage {
                     body,
+                    mentions,
                     ..Default::default()
                 })),
             };

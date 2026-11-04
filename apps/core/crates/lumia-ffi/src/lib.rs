@@ -821,6 +821,7 @@ impl Client {
         let kind = match platform.as_str() {
             "apns" => PushKind::RelayApns,
             "fcm" => PushKind::RelayFcm,
+            "unified_push" => PushKind::UnifiedPush,
             other => {
                 return Err(LumiaError::Other {
                     detail: format!("unknown platform {other}"),
@@ -832,11 +833,14 @@ impl Client {
             .block_on(self.app.push_subscribe(kind, &token, "", ""))?)
     }
 
-    /// Removes this device's push subscription of a platform.
+    /// Removes this device's push subscription of a platform (`apns`,
+    /// `fcm` through the relay; `unified_push` served by the instance).
     pub fn push_unsubscribe(&self, platform: String) -> Res<()> {
-        Ok(self
-            .runtime
-            .block_on(self.app.push_unsubscribe(&format!("relay_{platform}")))?)
+        let kind = match platform.as_str() {
+            "unified_push" => platform,
+            _ => format!("relay_{platform}"),
+        };
+        Ok(self.runtime.block_on(self.app.push_unsubscribe(&kind))?)
     }
 
     // ---- Personal DMs ----

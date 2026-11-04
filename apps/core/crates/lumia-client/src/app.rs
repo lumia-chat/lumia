@@ -1088,9 +1088,26 @@ impl App {
         let Some(writer) = &self.writer else {
             return Err(ClientError::State("no writer lock".into()));
         };
-        let Some(_guard) = writer.exclusive(timeout)? else {
-            return Ok(None);
+        // This client's own shared hold, taken at open, would block its
+        // exclusive take (a lock is per open, and the in-process one counts
+        // holders alike); it is let go for the duration and taken again.
+        self.lock().writer_guard = None;
+        let result = match writer.exclusive(timeout)? {
+            Some(guard) => {
+                let result = self.notification_content_exclusive().await;
+                drop(guard);
+                result
+            }
+            None => Ok(None),
         };
+        self.lock().writer_guard = Some(writer.shared()?);
+        result
+    }
+
+    /// The work of `notification_content`, under the exclusive lock.
+    async fn notification_content_exclusive(
+        &self,
+    ) -> Result<Option<NotificationContent>, ClientError> {
         if !self.signed_in() {
             return Ok(None);
         }

@@ -40,7 +40,10 @@ defmodule Lumia.Push.Sender do
     end
 
     def send(%Subscription{kind: "unified_push"} = sub, notice) do
-      post(sub.endpoint, [{"content-type", "application/json"}], Jason.encode!(notice))
+      # The app's push receiver learns which instance to sync from the
+      # notice, as the relay's payload tells it for APNs and FCM.
+      body = Jason.encode!(Map.put(notice, "instance", Lumia.Identity.host()))
+      post(sub.endpoint, [{"content-type", "application/json"}], body)
     end
 
     def send(%Subscription{kind: "relay_" <> platform} = sub, notice) do
