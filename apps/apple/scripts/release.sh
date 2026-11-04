@@ -52,8 +52,10 @@ xcodebuild -project "$app/Lumia.xcodeproj" -scheme Lumia -configuration Release 
 echo "release: archived iOS build $build${version:+ ($version)} at $out/Lumia.xcarchive"
 $upload || exit 0
 
+# The upload destination writes no summary plist, so the log is the record.
 # shellcheck disable=SC2086
 xcodebuild -exportArchive -archivePath "$out/Lumia.xcarchive" -exportOptionsPlist "$app/ExportOptions.plist" \
-  -exportPath "$out/export" -allowProvisioningUpdates $auth | grep -E "error|Upload|EXPORT (SUCCEEDED|FAILED)" || true
-[ -f "$out/export/DistributionSummary.plist" ] || { echo "release: the export did not finish"; exit 1; }
+  -exportPath "$out/export" -allowProvisioningUpdates $auth > "$out/export.log" 2>&1 || true
+grep -E "error|Upload succeeded|EXPORT (SUCCEEDED|FAILED)" "$out/export.log" || true
+grep -q "Upload succeeded" "$out/export.log" || { echo "release: the upload did not finish; see $out/export.log"; exit 1; }
 echo "release: uploaded iOS build $build; it appears in TestFlight after processing"
