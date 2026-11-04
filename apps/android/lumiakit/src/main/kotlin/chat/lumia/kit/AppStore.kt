@@ -13,8 +13,18 @@ import java.io.File
 enum class Route { SIGN_IN, LINK, APP }
 
 class AppStore(context: Context) {
+    companion object {
+        /** The activity's store while one exists, for the push receivers. */
+        var current: AppStore? = null
+
+        fun savedInstance(context: Context): String? =
+            context.getSharedPreferences("lumia", Context.MODE_PRIVATE).getString("instance", null)
+
+        fun dataDirectory(context: Context): File = File(context.filesDir, "lumia")
+    }
+
     private val prefs = context.getSharedPreferences("lumia", Context.MODE_PRIVATE)
-    val dataDirectory: File = File(context.filesDir, "lumia")
+    val dataDirectory: File = dataDirectory(context)
 
     var session by mutableStateOf<LumiaSession?>(null)
         private set
@@ -23,6 +33,12 @@ class AppStore(context: Context) {
         private set
     var openError by mutableStateOf<String?>(null)
         private set
+    /** Whether the activity is resumed: then the app shows messages itself. */
+    var foregrounded = false
+
+    init {
+        current = this
+    }
 
     var savedInstance: String?
         get() = prefs.getString("instance", null)

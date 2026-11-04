@@ -58,4 +58,46 @@ alive=$("$adb" shell pidof "$bundle" 2>/dev/null || true)
 for screen in server channel requests devices new signin link; do shoot "$screen" 7; done
 "$adb" shell am force-stop "$bundle" >/dev/null 2>&1 || true
 [ -n "$alive" ] || { echo "FAIL: the app was not running after launch"; exit 1; }
-echo "smoke: ok (launched signed in, every screen screenshotted under $work)"
+
+# Push (architecture 15.5): a second account, made a member of the server
+# (there is no invite yet, so the instance's own context does it from mix
+# on the same database), mentions the phone's account while the app is
+# away. The receivers' stand-in, a launch with LUMIA_DEV_SCREEN=notify,
+# makes the same call under the same lock as a push would and posts the
+# notification, its content recorded in notification.txt; then the
+# notification's intent, as a tap sends it, opens the channel.
+other="$work/other"
+me=$("$cli" --data-dir "$data" whoami)
+"$cli" --data-dir "$other" instance add "$instance" >/dev/null
+"$cli" --data-dir "$other" account create --handle "mention$stamp" --password "$password" >/dev/null
+other_id=$("$cli" --data-dir "$other" whoami)
+(cd "$root/apps/instance" && mix run -e "{:ok, _} = Lumia.Servers.add_member(\"$server\", \"$other_id\", \"$me\")" >"$work/add-member.log" 2>&1) \
+  || { echo "FAIL: the second account could not join the server; see $work/add-member.log"; exit 1; }
+body="Hey, this is for you on the phone $stamp"
+"$cli" --data-dir "$other" send "$channel" "$body" --mention "$me" >/dev/null
+"$adb" shell pm grant "$bundle" android.permission.POST_NOTIFICATIONS >/dev/null 2>&1 || true
+"$adb" shell am start -W -n "$bundle/.MainActivity" --es LUMIA_DEV_INSTANCE "$emulated" --es LUMIA_DEV_HANDLE "$handle" --es LUMIA_DEV_PASSWORD "$password" --es LUMIA_DEV_SCREEN notify >/dev/null
+content=""
+for _ in $(seq 1 40); do
+  content=$("$adb" shell run-as "$bundle" cat files/lumia/notification.txt 2>/dev/null || true)
+  [ -n "$content" ] && break
+  sleep 1
+done
+echo "notification content:"; printf '%s\n' "$content" | sed 's/^/  /'
+sleep 1
+"$adb" exec-out screencap -p > "$work/notify.png"
+posted=$("$adb" shell dumpsys notification --noredact 2>/dev/null | grep -c "$stamp" || true)
+case "$content" in
+  *"$body"*) ;;
+  *) echo "FAIL: the mention was not found for the notice"; exit 1 ;;
+esac
+[ "${posted:-0}" -gt 0 ] || { echo "FAIL: no notification was posted"; exit 1; }
+"$adb" shell am force-stop "$bundle" >/dev/null 2>&1 || true
+"$adb" shell am start -W -n "$bundle/.MainActivity" --es LUMIA_DEV_INSTANCE "$emulated" --es LUMIA_DEV_HANDLE "$handle" --es LUMIA_DEV_PASSWORD "$password" --es channel_id "$channel" --es kind mention >/dev/null
+sleep 8
+"$adb" exec-out screencap -p > "$work/opened.png"
+"$adb" shell uiautomator dump /sdcard/lumia-ui.xml >/dev/null 2>&1 || true
+"$adb" shell cat /sdcard/lumia-ui.xml 2>/dev/null | grep -q "# general" || { echo "FAIL: the tap did not open the channel; see $work/opened.png"; exit 1; }
+"$adb" shell am force-stop "$bundle" >/dev/null 2>&1 || true
+echo "  push: $work/notify.png (the notification), $work/opened.png (the channel it opened)"
+echo "smoke: ok (launched signed in, every screen screenshotted under $work; a mention became a notification and its tap opened the channel)"

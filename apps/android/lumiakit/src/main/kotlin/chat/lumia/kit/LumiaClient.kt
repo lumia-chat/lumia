@@ -31,6 +31,13 @@ class LumiaClient(val baseUrl: String, dataDirectory: File) {
     /** Runs one blocking call of the client off the main thread. */
     suspend fun <T> call(block: Client.() -> T): T = withContext(Dispatchers.IO) { inner.block() }
 
+    /**
+     * For a push receiver: what the notification should say, after syncing
+     * and decrypting under the exclusive writer lock (tried for `timeoutMs`);
+     * null when the app holds the lock or nothing new was found.
+     */
+    suspend fun notificationContent(timeoutMs: ULong) = call { notificationContent(timeoutMs) }
+
     /** Starts the gateway loop; the flow carries every event in order until the loop closes or `stop()`. */
     fun start(channelIds: List<String>): Flow<LumiaEvent> = callbackFlow {
         inner.start(channelIds, object : Listener {

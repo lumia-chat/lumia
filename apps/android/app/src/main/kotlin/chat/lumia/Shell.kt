@@ -37,6 +37,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import chat.lumia.kit.AppStore
@@ -47,6 +48,7 @@ import chat.lumia.kit.LumiaNotice
 import chat.lumia.kit.LumiaSession
 import chat.lumia.kit.LumiaTokens
 import chat.lumia.kit.NoticeTone
+import chat.lumia.kit.PushRegistrar
 import chat.lumia.kit.Route
 import chat.lumia.kit.SectionTitle
 import chat.lumia.kit.initialsOf
@@ -64,7 +66,30 @@ fun Shell(store: AppStore, session: LumiaSession, devScreen: String?) {
     val pop: () -> Unit = { stack = stack.dropLast(1) }
     val replace: (List<Screen>) -> Unit = { stack = it }
 
-    LaunchedEffect(Unit) { session.load() }
+    val channels = session.snapshot?.channels ?: emptyList()
+    val activity = LocalContext.current as? MainActivity
+    val target = PushRegistrar.target
+
+    LaunchedEffect(Unit) {
+        session.load()
+        // Push registration once signed in; the smoke keeps the prompt away.
+        if (devScreen == null) activity?.pushSetup?.register()
+    }
+    LaunchedEffect(target, channels.map { it.channelId }) {
+        // The conversation a tapped notification names, once the snapshot
+        // has it (a cold start loads first): a DM from Home, a mention in
+        // its server. The generic notice names none and the app stays put.
+        val t = target ?: return@LaunchedEffect
+        val channel = channels.firstOrNull { it.channelId == t.channelId } ?: return@LaunchedEffect
+        PushRegistrar.target = null
+        if (channel.kind in personalKinds) {
+            place = Place.Home
+            stack = listOf(Screen.Conversation(channel.channelId))
+        } else {
+            place = Place.Server(channel.serverId)
+            stack = listOf(Screen.Channel(channel.channelId))
+        }
+    }
     LaunchedEffect(servers.map { it.serverId }) {
         val first = servers.firstOrNull()?.serverId ?: return@LaunchedEffect
         val snapshot = session.snapshot
