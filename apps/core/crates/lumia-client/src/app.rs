@@ -92,6 +92,8 @@ pub struct InstanceSummary {
     pub open_registration: bool,
     /// The VAPID public key for Web Push, base64url; empty when off.
     pub web_push_public_key: String,
+    /// Whether the instance sends magic-link sign-in mail.
+    pub magic_link_enabled: bool,
 }
 
 /// A server the account belongs to.
@@ -133,6 +135,21 @@ pub struct InviteSummary {
     /// 0 is unlimited.
     pub max_uses: u32,
     pub uses: u32,
+}
+
+/// The token inside a magic-link mail's link, or the text itself when it
+/// is the bare code: `https://host/sign-in?magic=abc` and `abc` both give `abc`.
+#[must_use]
+pub fn magic_token_of(text: &str) -> String {
+    let text = text.trim();
+    match text.split_once("magic=") {
+        Some((_, rest)) => rest
+            .split(['&', '#'])
+            .next()
+            .unwrap_or_default()
+            .to_string(),
+        None => text.to_string(),
+    }
 }
 
 /// The code inside an invite link, or the text itself when it is a bare
@@ -826,7 +843,30 @@ impl App {
             identity_proof_create_enabled: info.identity_proof_create_enabled,
             open_registration: info.open_registration,
             web_push_public_key: info.web_push_public_key,
+            magic_link_enabled: info.magic_link_enabled,
         })
+    }
+
+    /// Asks the instance to mail a sign-in link to `email`.
+    ///
+    /// # Errors
+    /// `POLICY_DENIED` when the instance sends no mail, `RATE_LIMITED`; transport failure.
+    pub async fn request_magic_link(&self, email: &str) -> Result<(), ClientError> {
+        self.api.magic_link_request(email.trim()).await
+    }
+
+    /// Signs in with the token from a magic-link mail (pasted as a code, or
+    /// taken from the link's `magic` query) and keeps the session.
+    ///
+    /// # Errors
+    /// `UNAUTHENTICATED` for an unknown, used or expired token; transport failure.
+    pub async fn sign_in_magic_link(&self, token: &str) -> Result<(), ClientError> {
+        let token = magic_token_of(token);
+        let pair = self
+            .api
+            .magic_link_complete(&token, self.device_id.clone())
+            .await?;
+        self.save_tokens(&pair)
     }
 
     /// Creates an account with a password and signs in.
@@ -840,7 +880,7 @@ impl App {
         invite: Option<&str>,
     ) -> Result<(), ClientError> {
         let code = invite.map(invite_code_of).unwrap_or_default();
-        let pair = self.api.create_account(handle, password, &code).await?;
+        let pair = self.api.create_account(handle, "", password, &code).await?;
         self.save_tokens(&pair)
     }
 

@@ -70,6 +70,15 @@ class LumiaSession(val client: LumiaClient) {
 
     suspend fun instanceInfo(): InstanceSummary = client.call { instanceInfo() }
 
+    /** Asks the instance to mail a sign-in link to [email]. */
+    suspend fun requestMagicLink(email: String) { client.call { requestMagicLink(email) } }
+
+    /** Signs in with the token from a magic-link mail (the code, or the whole link). */
+    suspend fun signInMagicLink(token: String) {
+        client.call { signInMagicLink(token) }
+        signedIn = true
+    }
+
     suspend fun signIn(handle: String, password: String, totpCode: String?) {
         client.call { signIn(handle, password, totpCode) }
         signedIn = true

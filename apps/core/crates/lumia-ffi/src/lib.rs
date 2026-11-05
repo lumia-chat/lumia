@@ -81,6 +81,7 @@ pub struct InstanceSummary {
     pub identity_proof_create_enabled: bool,
     pub open_registration: bool,
     pub web_push_public_key: String,
+    pub magic_link_enabled: bool,
 }
 
 impl From<app::InstanceSummary> for InstanceSummary {
@@ -96,6 +97,7 @@ impl From<app::InstanceSummary> for InstanceSummary {
             identity_proof_create_enabled: s.identity_proof_create_enabled,
             open_registration: s.open_registration,
             web_push_public_key: s.web_push_public_key,
+            magic_link_enabled: s.magic_link_enabled,
         }
     }
 }
@@ -814,6 +816,16 @@ impl Client {
             .runtime
             .block_on(self.app.create_channel(&server_id, &name))?
             .into())
+    }
+
+    /// Asks the instance to mail a sign-in link to `email`.
+    pub fn request_magic_link(&self, email: String) -> Res<()> {
+        Ok(self.runtime.block_on(self.app.request_magic_link(&email))?)
+    }
+
+    /// Signs in with the token from a magic-link mail (the code, or the whole link).
+    pub fn sign_in_magic_link(&self, token: String) -> Res<()> {
+        Ok(self.runtime.block_on(self.app.sign_in_magic_link(&token))?)
     }
 
     /// Signs in with a password, and a TOTP code when the account requires one.

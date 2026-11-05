@@ -36,7 +36,8 @@ defmodule LumiaWeb.InstanceController do
         Enum.map(reactions(), fn {key, label} ->
           %V1.ReactionDefinition{key: key, label: label}
         end),
-      recovery_generation: Instance.recovery_generation()
+      recovery_generation: Instance.recovery_generation(),
+      magic_link_enabled: Lumia.Auth.MagicLink.enabled?()
     }
   end
 

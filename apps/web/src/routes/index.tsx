@@ -74,10 +74,13 @@ const indexRoute = createRoute({
 export interface SignInSearch {
   invite?: string;
   instance?: string;
+  /** The token from a magic-link mail's link. */
+  magic?: string;
 }
 const signInSearch = (s: Record<string, unknown>): SignInSearch => ({
   invite: typeof s.invite === "string" && s.invite ? s.invite : undefined,
   instance: typeof s.instance === "string" && s.instance ? s.instance : undefined,
+  magic: typeof s.magic === "string" && s.magic ? s.magic : undefined,
 });
 const signInRoute = createRoute({ getParentRoute: () => rootRoute, path: "/sign-in", component: SignIn, validateSearch: signInSearch });
 // The link an invite is: `/invite/{code}` on the instance (architecture

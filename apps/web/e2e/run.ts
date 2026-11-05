@@ -555,6 +555,42 @@ async function webPush(which: string, handle: string, inviterDir: string, server
   console.log(`  ${which}: subscribed, went away, and the mention came as a push the suite's service decrypted in ${Date.now() - t0} ms`);
 }
 
+// Magic-link sign-in (architecture 6.3): an account with an address asks
+// for a link from the sign-in page, the mail lands in the dev instance's
+// local mailbox, and its link signs this browser in.
+async function magicLink(which: string) {
+  const { ctx, page } = await open(which, "magic");
+  const t0 = Date.now();
+  try {
+    const dir = resolve(work, `cli-magic-${which}`);
+    const handle = `magic${which}${Date.now()}`;
+    const email = `${handle}@example.com`;
+    lumia(dir, "instance", "add", instance);
+    lumia(dir, "account", "create", "--handle", handle, "--password", password, "--email", email);
+    phase("ask");
+    await trustCard(page);
+    await page.getByLabel("Email or handle").fill(email);
+    await page.getByRole("button", { name: "Email me a sign-in link" }).click();
+    await page.getByText("A link is on its way").waitFor();
+    phase("mail");
+    let token = "";
+    for (let i = 0; i < 20 && !token; i++) {
+      const box = (await (await fetch(`${instance}/dev/mailbox/json`)).json()) as { data?: { to?: unknown[]; text_body?: string }[] };
+      const mail = (box.data ?? []).find((m) => (m.to ?? []).some((t) => JSON.stringify(t).includes(email)));
+      token = mail?.text_body?.split("\n").find((l) => /^[A-Za-z0-9_-]{32}$/.test(l.trim()))?.trim() ?? "";
+      if (!token) await Bun.sleep(500);
+    }
+    if (!token) throw new Error("no magic-link mail in the dev mailbox");
+    phase("link");
+    await goto(page, `${base}/sign-in?magic=${encodeURIComponent(token)}&instance=${encodeURIComponent(instance)}`);
+    await page.getByRole("button", { name: "Create, join or discover servers" }).waitFor();
+    await page.screenshot({ path: `${out}/${which}-magic.png` });
+  } finally {
+    await ctx.close();
+  }
+  console.log(`  ${which}: asked for a magic link, took its token from the mailbox, and the link signed the browser in, in ${Date.now() - t0} ms`);
+}
+
 if (!existsSync(cli)) run(["cargo", "build", "--release", "-p", "lumia-cli"], resolve(web, "../core"));
 rmSync(work, { recursive: true, force: true });
 mkdirSync(out, { recursive: true });
@@ -616,6 +652,7 @@ try {
       ["invite", () => invite(which, passwordDir, server)],
       ["create", () => create(which, `web${stamp}`, stamp)],
       ["push", () => webPush(which, `web${stamp}`, passwordDir, server, general, webAccount)],
+      ["magic link", () => magicLink(which)],
     ] as const) {
       // A heartbeat while the step runs (CI shows a step's log only once it
       // ends) and a hard bound, so a hang names itself instead of the job

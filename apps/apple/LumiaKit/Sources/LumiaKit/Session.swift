@@ -66,6 +66,17 @@ public final class LumiaSession {
 
     public func instanceInfo() async throws -> InstanceSummary { try await client.instanceInfo() }
 
+    /// Asks the instance to mail a sign-in link to `email`.
+    public func requestMagicLink(email: String) async throws {
+        try await client.requestMagicLink(email: email)
+    }
+
+    /// Signs in with the token from a magic-link mail (the code, or the whole link).
+    public func signInMagicLink(token: String) async throws {
+        try await client.signInMagicLink(token: token)
+        signedIn = true
+    }
+
     public func signIn(handle: String, password: String, totpCode: String?) async throws {
         try await client.signIn(handle: handle, password: password, totpCode: totpCode)
         signedIn = true

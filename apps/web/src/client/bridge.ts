@@ -14,6 +14,7 @@ export interface InstanceSummary {
   identityProofCreateEnabled: boolean;
   openRegistration: boolean;
   webPushPublicKey: string;
+  magicLinkEnabled: boolean;
 }
 export interface ServerSummary {
   serverId: string;
@@ -244,6 +245,14 @@ export class Bridge {
   }
   createChannel(serverId: string, name: string): Promise<ChannelSummary> {
     return this.call("createChannel", serverId, name);
+  }
+  /** Asks the instance to mail a sign-in link to `email`. */
+  requestMagicLink(email: string): Promise<void> {
+    return this.call("requestMagicLink", email);
+  }
+  /** Signs in with the token from a magic-link mail (the code, or the whole link). */
+  signInMagicLink(token: string): Promise<void> {
+    return this.call("signInMagicLink", token);
   }
   signIn(handle: string, password: string, totpCode?: string): Promise<void> {
     return this.call("signIn", handle, password, totpCode ?? null);

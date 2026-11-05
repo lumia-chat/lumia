@@ -170,7 +170,8 @@ Base path `/api/v1`. All endpoints require `Authorization: Bearer <access_token>
 | `POST /auth/totp/enroll` | → `TotpEnrollResponse` | A pending TOTP secret for the caller; replaces an unconfirmed one. |
 | `POST /auth/totp/confirm` | `TotpConfirmRequest` → 204 | The first valid code enables TOTP; sign-in and reauth then require it. |
 | `POST /auth/sign-in/identity` | `IdentityProofSignInRequest` → `TokenPair` | Public. `POLICY_DENIED` when the instance disables it. |
-| `POST /auth/sign-in/magic-link` | `{email}` → 202 | Public. Link completes at `POST /auth/sign-in/magic-link/complete`. |
+| `POST /auth/sign-in/magic-link` | `MagicLinkRequest` → 202 | Public. 202 whether or not the address has an account; the mail is sent only when it does, with the link `https://{host}/sign-in?magic={token}` and the token as a code. Five an hour per address (`RATE_LIMITED`); `POLICY_DENIED` when `InstanceInfo.magic_link_enabled` is off. |
+| `POST /auth/sign-in/magic-link/complete` | `MagicLinkCompleteRequest` → `TokenPair` | Public. The token, once, within fifteen minutes; `UNAUTHENTICATED` otherwise. |
 | `GET /auth/oidc/start`, `/auth/oidc/callback` | | Public. Standard code flow. |
 | `POST /auth/passkey/*` | | WebAuthn registration and assertion ceremonies. |
 | `POST /accounts` | `CreateAccountRequest` → `TokenPair` | Public. `POLICY_DENIED` if registration or identity-proof creation is off. |

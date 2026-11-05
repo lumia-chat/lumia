@@ -20,6 +20,8 @@ defmodule LumiaWeb.Router do
     post "/accounts", AuthController, :create_account
     post "/accounts/by-identity", IdentityController, :create_account
     post "/auth/sign-in/password", AuthController, :sign_in_password
+    post "/auth/sign-in/magic-link", AuthController, :magic_link
+    post "/auth/sign-in/magic-link/complete", AuthController, :magic_link_complete
     post "/auth/sign-in/identity", IdentityController, :sign_in
     post "/auth/challenge", IdentityController, :challenge
     post "/auth/refresh", AuthController, :refresh

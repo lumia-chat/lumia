@@ -22,7 +22,10 @@ use lumia_core::proto::{
     PublishKeyPackagesRequest, PublishRosterRequest, PushSubscription, ReauthRequest,
     ReauthResponse, RefreshRequest, RevokeDeviceRequest, Server, SignedRoster, TokenPair,
 };
-use lumia_core::proto::{CreateInviteRequest, Invite, InvitePreview, ListInvitesResponse, Member};
+use lumia_core::proto::{
+    CreateInviteRequest, Invite, InvitePreview, ListInvitesResponse, MagicLinkCompleteRequest,
+    MagicLinkRequest, Member,
+};
 use lumia_core::proto::{
     DmRequest, DmRequestState, GetHistoryChunkResponse, GetIdentityBackupResponse,
     HistoryUsageResponse, ListHistoryManifestsResponse, PutHistoryChunkRequest,
@@ -397,11 +400,13 @@ impl Api {
     pub async fn create_account(
         &self,
         handle: &str,
+        email: &str,
         password: &str,
         invite_code: &str,
     ) -> Result<TokenPair, ClientError> {
         let req = CreateAccountRequest {
             handle: handle.into(),
+            email: email.into(),
             password: password.into(),
             invite_code: invite_code.into(),
             ..Default::default()
@@ -460,6 +465,39 @@ impl Api {
             reqwest::Method::DELETE,
             &format!("/api/v1/invites/{}", url_encode(code)),
             None,
+        )
+        .await
+    }
+
+    /// `POST /auth/sign-in/magic-link`: asks for a mail; 202 either way.
+    ///
+    /// # Errors
+    /// `POLICY_DENIED` when the instance sends no mail, `RATE_LIMITED`; transport failure.
+    pub async fn magic_link_request(&self, email: &str) -> Result<(), ClientError> {
+        self.post_empty(
+            "/api/v1/auth/sign-in/magic-link",
+            &MagicLinkRequest {
+                email: email.into(),
+            },
+        )
+        .await
+    }
+
+    /// `POST /auth/sign-in/magic-link/complete`: the token from the mail.
+    ///
+    /// # Errors
+    /// `UNAUTHENTICATED` for an unknown, used or expired token; transport failure.
+    pub async fn magic_link_complete(
+        &self,
+        token: &str,
+        device_id: Vec<u8>,
+    ) -> Result<TokenPair, ClientError> {
+        self.post(
+            "/api/v1/auth/sign-in/magic-link/complete",
+            &MagicLinkCompleteRequest {
+                token: token.into(),
+                device_id,
+            },
         )
         .await
     }

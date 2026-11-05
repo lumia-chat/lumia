@@ -16,6 +16,8 @@ struct SignInView: View {
     @State private var totp = ""
     @State private var needsTotp = false
     @State private var error = ""
+    @State private var magicSent = false
+    @State private var magicCode = ""
     @State private var busy = false
 
     var body: some View {
@@ -78,6 +80,17 @@ struct SignInView: View {
                     .disabled(busy)
                     .frame(maxWidth: .infinity)
                     .keyboardShortcut(.defaultAction)
+                if !creating, info.magicLinkEnabled {
+                    if magicSent {
+                        LumiaNotice(icon: "envelope") { Text("A link is on its way to \(handle.trimmingCharacters(in: .whitespaces)) if it has an account here. Open it on this device, or paste its code below.") }
+                        LumiaField("Code from the email", text: $magicCode, placeholder: "Paste the code")
+                        Button("Sign in with the code") { Task { await completeMagicLink() } }
+                            .buttonStyle(.lumiaPrimary).disabled(busy || magicCode.trimmingCharacters(in: .whitespaces).isEmpty)
+                    } else {
+                        Button("Email me a sign-in link") { Task { await requestMagicLink() } }
+                            .buttonStyle(.lumiaLink).disabled(busy || handle.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
+                }
                 if !creating, info.identityProofSignInEnabled {
                     Button {
                         store.route = .link
@@ -131,6 +144,32 @@ struct SignInView: View {
             info = try await session.instanceInfo()
         } catch {
             self.error = "Could not reach that instance: \(error.lumiaMessage)"
+        }
+    }
+
+    private func requestMagicLink() async {
+        guard let session = store.session else { return }
+        error = ""
+        busy = true
+        defer { busy = false }
+        do {
+            try await session.requestMagicLink(email: handle)
+            magicSent = true
+        } catch {
+            self.error = error.lumiaCode == "RATE_LIMITED" ? "Too many links in the last hour; try later." : error.lumiaMessage
+        }
+    }
+
+    private func completeMagicLink() async {
+        guard let session = store.session else { return }
+        error = ""
+        busy = true
+        defer { busy = false }
+        do {
+            try await session.signInMagicLink(token: magicCode)
+            store.route = .app
+        } catch {
+            self.error = error.lumiaCode == "UNAUTHENTICATED" ? "That code is unknown, used or expired. Ask for a new link." : error.lumiaMessage
         }
     }
 

@@ -40,7 +40,10 @@ import chat.lumia.kit.AppStore
 import chat.lumia.kit.LumiaCard
 import chat.lumia.kit.LumiaErrorText
 import chat.lumia.kit.LumiaField
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Email
 import chat.lumia.kit.LumiaLinkButton
+import chat.lumia.kit.LumiaNotice
 import chat.lumia.kit.LumiaPrimaryButton
 import chat.lumia.kit.LumiaSecondaryButton
 import chat.lumia.kit.LumiaTokens
@@ -63,6 +66,8 @@ fun SignInScreen(store: AppStore) {
     var totp by rememberSaveable { mutableStateOf("") }
     var needsTotp by rememberSaveable { mutableStateOf(false) }
     var error by rememberSaveable { mutableStateOf("") }
+    var magicSent by rememberSaveable { mutableStateOf(false) }
+    var magicCode by rememberSaveable { mutableStateOf("") }
     var busy by rememberSaveable { mutableStateOf(false) }
 
     suspend fun reach() {
@@ -90,6 +95,34 @@ fun SignInScreen(store: AppStore) {
             reach()
         } catch (e: Exception) {
             error = e.lumiaMessage
+        }
+    }
+
+    suspend fun requestMagicLink() {
+        val session = store.session ?: return
+        error = ""
+        busy = true
+        try {
+            session.requestMagicLink(handle)
+            magicSent = true
+        } catch (e: Exception) {
+            error = if (e.lumiaCode == "RATE_LIMITED") "Too many links in the last hour; try later." else e.lumiaMessage
+        } finally {
+            busy = false
+        }
+    }
+
+    suspend fun completeMagicLink() {
+        val session = store.session ?: return
+        error = ""
+        busy = true
+        try {
+            session.signInMagicLink(magicCode)
+            store.route = Route.APP
+        } catch (e: Exception) {
+            error = if (e.lumiaCode == "UNAUTHENTICATED") "That code is unknown, used or expired. Ask for a new link." else e.lumiaMessage
+        } finally {
+            busy = false
         }
     }
 
@@ -162,6 +195,15 @@ fun SignInScreen(store: AppStore) {
                     if (needsTotp) LumiaField("Verification code", totp, { totp = it }, placeholder = "6 digits from your authenticator", keyboard = KeyboardOptions(keyboardType = KeyboardType.Number))
                     if (error.isNotEmpty()) LumiaErrorText(error)
                     LumiaPrimaryButton(if (creating) "Create account" else "Sign in", enabled = !busy, modifier = Modifier.fillMaxWidth()) { scope.launch { submit() } }
+                    if (!creating && current.magicLinkEnabled) {
+                        if (magicSent) {
+                            LumiaNotice(Icons.Filled.Email, text = "A link is on its way to ${handle.trim()} if it has an account here. Open it on this device, or paste its code below.")
+                            LumiaField("Code from the email", magicCode, { magicCode = it }, placeholder = "Paste the code")
+                            LumiaPrimaryButton("Sign in with the code", enabled = !busy && magicCode.isNotBlank(), modifier = Modifier.fillMaxWidth()) { scope.launch { completeMagicLink() } }
+                        } else {
+                            LumiaLinkButton("Email me a sign-in link", enabled = !busy && handle.isNotBlank()) { scope.launch { requestMagicLink() } }
+                        }
+                    }
                     if (!creating && current.identityProofSignInEnabled) {
                         Row(horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space12), verticalAlignment = Alignment.CenterVertically) {
                             Box(Modifier.weight(1f).height(1.dp).background(LumiaTokens.line.color))

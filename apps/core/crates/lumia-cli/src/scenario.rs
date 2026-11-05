@@ -435,7 +435,9 @@ async fn device_revoke(env: &Env) -> Result<(), ClientError> {
     let mut b = Throwaway::open(&env.scratch, "revoke-b")?;
     let password = "correct horse battery staple";
 
-    let tokens = anon.create_account(&handle("revoke"), password, "").await?;
+    let tokens = anon
+        .create_account(&handle("revoke"), "", password, "")
+        .await?;
     let api_a = Api::new(&base).with_tokens(pair(&tokens));
     a.device().create("a")?;
     a.device().link_account(&api_a, password).await?;

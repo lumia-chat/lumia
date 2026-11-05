@@ -178,6 +178,30 @@ defmodule Lumia.V1.InstanceInfo do
   field :reactions, 12, repeated: true, type: Lumia.V1.ReactionDefinition
   field :recovery_generation, 13, type: :uint64, json_name: "recoveryGeneration"
   field :web_push_public_key, 14, type: :string, json_name: "webPushPublicKey"
+  field :magic_link_enabled, 15, type: :bool, json_name: "magicLinkEnabled"
+end
+
+defmodule Lumia.V1.MagicLinkRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.MagicLinkRequest",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :email, 1, type: :string
+end
+
+defmodule Lumia.V1.MagicLinkCompleteRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.MagicLinkCompleteRequest",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :token, 1, type: :string
+  field :device_id, 2, type: :bytes, json_name: "deviceId"
 end
 
 defmodule Lumia.V1.PushSubscription do

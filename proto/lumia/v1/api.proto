@@ -104,6 +104,22 @@ message InstanceInfo {
   // Web Push (RFC 8292): the instance's VAPID public key, uncompressed
   // P-256 point, base64url without padding. Empty when Web Push is off.
   string web_push_public_key = 14;
+  // Magic-link sign-in (architecture 6.3): on when the instance can send mail.
+  bool magic_link_enabled = 15;
+}
+
+// POST /auth/sign-in/magic-link — public, 202 whether or not the address
+// has an account: the mail carries a link `https://{host}/sign-in?magic=…`
+// and the same token as a code to paste.
+message MagicLinkRequest {
+  string email = 1;
+}
+
+// POST /auth/sign-in/magic-link/complete — the token from the mail, once,
+// within its lifetime; answers like a password sign-in.
+message MagicLinkCompleteRequest {
+  string token = 1;
+  bytes device_id = 2;
 }
 
 // ---- Push (architecture 15.5, docs/specs/deployment.md) --------------------

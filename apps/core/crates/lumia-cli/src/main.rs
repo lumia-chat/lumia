@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
 use lumia_client::api::{Api, Tokens};
-use lumia_client::app::invite_code_of;
+use lumia_client::app::{invite_code_of, magic_token_of};
 use lumia_client::dm::{DmEngine, Outcome};
 use lumia_client::futures_channel::mpsc;
 use lumia_client::futures_util::StreamExt as _;
@@ -63,15 +63,20 @@ enum Cmd {
         #[command(subcommand)]
         action: AccountCmd,
     },
-    /// Sign in with a password, or with this device's identity (`--identity`).
+    /// Ask the instance to mail a sign-in link to an address.
+    MagicLink { email: String },
+    /// Sign in with a password, with this device's identity (`--identity`), or with a magic link's token (`--magic`).
     Login {
-        #[arg(long, required_unless_present = "identity")]
+        #[arg(long, required_unless_present_any = ["identity", "magic"])]
         handle: Option<String>,
-        #[arg(long, required_unless_present = "identity")]
+        #[arg(long, required_unless_present_any = ["identity", "magic"])]
         password: Option<String>,
         /// Sign in by identity proof instead of a password.
         #[arg(long)]
         identity: bool,
+        /// The token from a magic-link mail (or the whole link).
+        #[arg(long)]
+        magic: Option<String>,
     },
     /// Identity: create, show, link devices, revoke.
     Identity {
@@ -174,6 +179,9 @@ enum AccountCmd {
         password: String,
         #[arg(long)]
         invite: Option<String>,
+        /// An address for magic-link sign-in and recovery.
+        #[arg(long)]
+        email: Option<String>,
     },
     /// Create an account bound to this device's identity and sign in.
     CreateByIdentity {
@@ -290,12 +298,30 @@ async fn run(cli: Cli) -> Result<(), ClientError> {
                     handle,
                     password,
                     invite,
+                    email,
                 },
         } => {
             let code = invite.as_deref().map(invite_code_of).unwrap_or_default();
-            let tokens = api.create_account(&handle, &password, &code).await?;
+            let tokens = api
+                .create_account(&handle, email.as_deref().unwrap_or(""), &password, &code)
+                .await?;
             save_tokens(&mut ctx, &tokens)?;
             println!("created and signed in as {handle}");
+            Ok(())
+        }
+        Cmd::MagicLink { email } => {
+            api.magic_link_request(&email).await?;
+            println!("if {email} has an account here, a link is on its way");
+            Ok(())
+        }
+        Cmd::Login {
+            magic: Some(token), ..
+        } => {
+            let tokens = api
+                .magic_link_complete(&magic_token_of(&token), ctx.device_id.clone())
+                .await?;
+            save_tokens(&mut ctx, &tokens)?;
+            println!("signed in with the link");
             Ok(())
         }
         Cmd::Login { identity: true, .. } => {

@@ -270,6 +270,24 @@ impl Client {
         )
     }
 
+    /// Asks the instance to mail a sign-in link to `email`.
+    ///
+    /// # Errors
+    /// `POLICY_DENIED` when the instance sends no mail, `RATE_LIMITED`; transport failure.
+    #[wasm_bindgen(js_name = requestMagicLink)]
+    pub async fn request_magic_link(&self, email: String) -> Result<(), JsError> {
+        self.app.request_magic_link(&email).await.map_err(js)
+    }
+
+    /// Signs in with the token from a magic-link mail (the code, or the whole link).
+    ///
+    /// # Errors
+    /// `UNAUTHENTICATED` for an unknown, used or expired token; transport failure.
+    #[wasm_bindgen(js_name = signInMagicLink)]
+    pub async fn sign_in_magic_link(&self, token: String) -> Result<(), JsError> {
+        self.app.sign_in_magic_link(&token).await.map_err(js)
+    }
+
     /// Signs in with a password, and a TOTP code when the account requires one.
     ///
     /// # Errors

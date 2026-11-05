@@ -49,6 +49,25 @@ defmodule LumiaWeb.AuthController do
   def join(nil, _account_id), do: {:ok, nil}
   def join(invite, account_id), do: Lumia.Invites.accept(invite.code, account_id)
 
+  def magic_link(conn, _params) do
+    with {:ok, req} <- ProtoConn.decode(conn, V1.MagicLinkRequest),
+         :ok <- Lumia.Auth.MagicLink.request(req.email) do
+      send_resp(conn, 202, "")
+    end
+  end
+
+  def magic_link_complete(conn, _params) do
+    with {:ok, req} <- ProtoConn.decode(conn, V1.MagicLinkCompleteRequest),
+         {:ok, _session, tokens} <-
+           Lumia.Auth.MagicLink.complete(
+             req.token,
+             Proto.from_uuid(req.device_id) || Ecto.UUID.generate(),
+             client: client(conn)
+           ) do
+      ProtoConn.render(conn, token_pair(tokens))
+    end
+  end
+
   def sign_in_password(conn, _params) do
     with {:ok, req} <- ProtoConn.decode(conn, V1.PasswordSignInRequest),
          {:ok, account} <- Accounts.authenticate(req.handle_or_email, req.password),

@@ -49,6 +49,10 @@ public actor LumiaClient {
     public func createServer(name: String) throws -> ServerSummary { try inner.createServer(name: name) }
     /// A text channel in a server this account may manage channels in.
     public func createChannel(serverID: String, name: String) throws -> ChannelSummary { try inner.createChannel(serverId: serverID, name: name) }
+    /// Asks the instance to mail a sign-in link to `email`.
+    public func requestMagicLink(email: String) throws { try inner.requestMagicLink(email: email) }
+    /// Signs in with the token from a magic-link mail (the code, or the whole link).
+    public func signInMagicLink(token: String) throws { try inner.signInMagicLink(token: token) }
     public func signIn(handle: String, password: String, totpCode: String? = nil) throws {
         try inner.signIn(handle: handle, password: password, totpCode: totpCode)
     }

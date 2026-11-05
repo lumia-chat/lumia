@@ -51,6 +51,50 @@ defmodule LumiaWeb.ApiTest do
       assert Enum.map(reactions, & &1.key) == ~w(thumbs_up check heart sparkle)
     end
 
+    test "a magic link is asked for and completed", %{conn: conn} do
+      email = "link#{System.unique_integer([:positive])}@example.com"
+
+      {:ok, account} =
+        Accounts.create_account(%{
+          handle: "link#{System.unique_integer([:positive])}",
+          email: email
+        })
+
+      assert %V1.InstanceInfo{magic_link_enabled: true} =
+               decode(get(conn, "/api/v1/instance"), V1.InstanceInfo)
+
+      asked =
+        post_proto(conn, "/api/v1/auth/sign-in/magic-link", %V1.MagicLinkRequest{email: email})
+
+      assert asked.status == 202
+
+      token =
+        receive do
+          {:email, mail} ->
+            mail.text_body
+            |> String.split("\n")
+            |> Enum.find(&String.match?(&1, ~r/^[A-Za-z0-9_-]{32}$/))
+        after
+          500 -> flunk("no mail")
+        end
+
+      done =
+        post_proto(conn, "/api/v1/auth/sign-in/magic-link/complete", %V1.MagicLinkCompleteRequest{
+          token: token
+        })
+
+      assert %V1.TokenPair{access_token: access} = decode(done, V1.TokenPair)
+      assert {:ok, %{account_id: account_id}} = Auth.verify_access(access)
+      assert account_id == account.id
+
+      again =
+        post_proto(conn, "/api/v1/auth/sign-in/magic-link/complete", %V1.MagicLinkCompleteRequest{
+          token: token
+        })
+
+      assert again.status == 401
+    end
+
     test "unauthenticated requests get the error envelope", %{conn: conn} do
       conn = get(conn, "/api/v1/account/snapshot")
       assert conn.status == 401

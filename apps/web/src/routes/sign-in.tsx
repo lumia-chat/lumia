@@ -28,6 +28,46 @@ export function SignIn() {
   const [needsTotp, setNeedsTotp] = createSignal(false);
   const [error, setError] = createSignal("");
   const [busy, setBusy] = createSignal(false);
+  // Magic link (architecture 6.3): asked for with the address in the handle
+  // field; completed by the link's `magic` query on this page, or by its
+  // code pasted here.
+  const [magicSent, setMagicSent] = createSignal(false);
+  const [magicCode, setMagicCode] = createSignal("");
+  const land = async () => {
+    const code = invite();
+    if (code) {
+      const serverId = await client().acceptInvite(code);
+      navigate({ to: "/app", search: { server: serverId } });
+    } else {
+      navigate({ to: "/app" });
+    }
+  };
+  const requestMagicLink = async () => {
+    setError("");
+    setBusy(true);
+    try {
+      await client().requestMagicLink(handle());
+      setMagicSent(true);
+    } catch (err) {
+      const ce = err instanceof ClientError ? err : null;
+      setError(ce?.code === "RATE_LIMITED" ? "Too many links in the last hour; try later." : err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const completeMagicLink = async (token: string) => {
+    setError("");
+    setBusy(true);
+    try {
+      await client().signInMagicLink(token);
+      await land();
+    } catch (err) {
+      const ce = err instanceof ClientError ? err : null;
+      setError(ce?.code === "UNAUTHENTICATED" ? "That link is unknown, used or expired. Ask for a new one." : err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   // Served by an instance, the instance is this page's origin: no address to ask for.
   const fixed = () => SERVED_BY_INSTANCE && !inShell();
@@ -41,6 +81,8 @@ export function SignIn() {
     await openInstance(url);
     const i = await b.instanceInfo();
     setInfo(i);
+    const magic = search().magic;
+    if (magic) void completeMagicLink(magic);
     return i;
   });
 
@@ -166,6 +208,22 @@ export function SignIn() {
               <Button variant="primary" type="submit" block disabled={busy()}>
                 {mode() === "create" ? "Create account" : "Sign in"}
               </Button>
+              <Show when={mode() === "signIn" && i().magicLinkEnabled}>
+                <Show
+                  when={magicSent()}
+                  fallback={
+                    <button type="button" class="lu-link auth__switch" disabled={busy() || !handle().trim()} onClick={() => void requestMagicLink()}>
+                      Email me a sign-in link
+                    </button>
+                  }
+                >
+                  <p class="auth__note">A link is on its way to {handle().trim()} if it has an account here. Open it in this browser, or paste its code here.</p>
+                  <TextField label="Code from the email" value={magicCode()} onInput={(e) => setMagicCode(e.currentTarget.value)} autocomplete="one-time-code" placeholder="Paste the code" />
+                  <Button variant="primary" type="button" block disabled={busy() || !magicCode().trim()} onClick={() => void completeMagicLink(magicCode())}>
+                    Sign in with the code
+                  </Button>
+                </Show>
+              </Show>
               <Show when={mode() === "signIn" && i().identityProofSignInEnabled}>
                 <Divider variant="or" />
                 <Button icon="key" block onClick={() => navigate({ to: "/link" })}>

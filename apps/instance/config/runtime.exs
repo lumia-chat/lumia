@@ -29,7 +29,12 @@ config :lumia, :instance,
   operator_url: System.get_env("LUMIA_OPERATOR_URL", ""),
   terms_url: System.get_env("LUMIA_TERMS_URL", ""),
   privacy_url: System.get_env("LUMIA_PRIVACY_URL", ""),
-  open_registration: System.get_env("LUMIA_OPEN_REGISTRATION", "true") == "true"
+  open_registration: System.get_env("LUMIA_OPEN_REGISTRATION", "true") == "true",
+  # Magic-link sign-in needs a mailer; on in production only when one is
+  # configured, and always in development and test, where the mailbox is local.
+  magic_link:
+    System.get_env("LUMIA_MAGIC_LINK", if(config_env() == :prod, do: "false", else: "true")) ==
+      "true"
 
 if origins = System.get_env("LUMIA_WEB_ORIGINS") do
   config :lumia, :identity,
