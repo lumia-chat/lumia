@@ -746,6 +746,23 @@ impl Client {
             .block_on(self.app.accept_invite(&link_or_code))?)
     }
 
+    /// `GET /servers/{id}/invites`: the server's invites, newest first.
+    pub fn invites(&self, server_id: String) -> Res<Vec<InviteSummary>> {
+        Ok(self
+            .runtime
+            .block_on(self.app.invites(&server_id))?
+            .into_iter()
+            .map(Into::into)
+            .collect())
+    }
+
+    /// `DELETE /invites/{code}`: revokes an invite.
+    pub fn revoke_invite(&self, link_or_code: String) -> Res<()> {
+        Ok(self
+            .runtime
+            .block_on(self.app.revoke_invite(&link_or_code))?)
+    }
+
     /// `POST /servers`: a server this account owns.
     pub fn create_server(&self, name: String) -> Res<ServerSummary> {
         Ok(self.runtime.block_on(self.app.create_server(&name))?.into())

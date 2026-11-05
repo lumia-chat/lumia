@@ -917,6 +917,29 @@ impl App {
         Ok(wire::display(&member.server_id))
     }
 
+    /// `GET /servers/{id}/invites`: the server's invites, newest first,
+    /// for a member who may invite.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` without `create_invites` there; transport failure.
+    pub async fn invites(&self, server_id: &str) -> Result<Vec<InviteSummary>, ClientError> {
+        let list = self.api.invites(server_id).await?;
+        Ok(list
+            .invites
+            .iter()
+            .map(|i| self.invite_summary(i))
+            .collect())
+    }
+
+    /// `DELETE /invites/{code}`: revokes an invite this account made, or
+    /// any with `manage_server`.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` otherwise; transport failure.
+    pub async fn revoke_invite(&self, link_or_code: &str) -> Result<(), ClientError> {
+        self.api.delete_invite(&invite_code_of(link_or_code)).await
+    }
+
     fn invite_summary(&self, invite: &lumia_core::proto::Invite) -> InviteSummary {
         InviteSummary {
             code: invite.code.clone(),

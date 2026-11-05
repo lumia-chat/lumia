@@ -98,6 +98,8 @@ enum Cmd {
     Join { link_or_code: String },
     /// Revoke an invite you made (or any, with manage_server).
     InviteRevoke { link_or_code: String },
+    /// List a server's invites (needs create_invites there).
+    Invites { server_id: String },
     /// List channels in a server you can view.
     Channels { server_id: String },
     /// Send a message; `--mention <account-id>` (repeatable) mentions an account.
@@ -382,6 +384,22 @@ async fn run(cli: Cli) -> Result<(), ClientError> {
         Cmd::Join { link_or_code } => {
             let member = api.accept_invite(&invite_code_of(&link_or_code)).await?;
             println!("joined {}", wire::display(&member.server_id));
+            Ok(())
+        }
+        Cmd::Invites { server_id } => {
+            let list = api.invites(&server_id).await?;
+            for i in list.invites {
+                let uses = if i.max_uses == 0 {
+                    format!("{} uses", i.uses)
+                } else {
+                    format!("{}/{} uses", i.uses, i.max_uses)
+                };
+                let expiry = match wire::micros(i.expires_at.as_ref()) {
+                    Some(us) => format!("expires at {}", us / 1_000_000),
+                    None => "no expiry".to_string(),
+                };
+                println!("{}  {uses}  {expiry}", i.code);
+            }
             Ok(())
         }
         Cmd::InviteRevoke { link_or_code } => {

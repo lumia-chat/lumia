@@ -828,3 +828,14 @@ defmodule Lumia.V1.InvitePreview do
   field :as_guest, 4, type: :bool, json_name: "asGuest"
   field :instance, 5, type: Lumia.V1.InstanceInfo
 end
+
+defmodule Lumia.V1.ListInvitesResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.ListInvitesResponse",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :invites, 1, repeated: true, type: Lumia.V1.Invite
+end

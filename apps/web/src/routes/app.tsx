@@ -162,20 +162,58 @@ export function App() {
     toServer: goServer,
   });
 
-  // An invite link for the current server, made on demand and shown to copy.
+  // Invite links for the current server: a new one with an expiry and a
+  // use limit, shown to copy, and the ones that exist, each revocable.
+  const [inviting, setInviting] = createSignal(false);
   const [invite, setInvite] = createSignal<InviteSummary | null>(null);
+  const [invites, setInvites] = createSignal<InviteSummary[]>([]);
+  const [inviteHours, setInviteHours] = createSignal(0);
+  const [inviteUses, setInviteUses] = createSignal(0);
   const [inviteError, setInviteError] = createSignal("");
   const [copied, setCopied] = createSignal(false);
-  createEffect(on(serverId, () => { setInvite(null); setInviteError(""); setCopied(false); }));
-  const makeInvite = async () => {
+  createEffect(on(serverId, () => { setInviting(false); setInvite(null); setInvites([]); setInviteError(""); setCopied(false); }));
+  const describeInvite = (i: InviteSummary) => {
+    const uses = i.maxUses === 0 ? `${i.uses} uses` : `${i.uses}/${i.maxUses} uses`;
+    if (i.expiresAtMicros === null) return `${uses} · no expiry`;
+    return `${uses} · expires ${new Date(i.expiresAtMicros / 1000).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`;
+  };
+  const inviteFailed = (e: unknown) => {
+    const ce = e instanceof ClientError ? e : null;
+    setInviteError(ce?.code === "PERMISSION_DENIED" ? "You cannot invite people to this server." : ce?.code === "RATE_LIMITED" ? "Too many links in the last hour; try later." : e instanceof Error ? e.message : String(e));
+  };
+  const openInvites = async () => {
+    const id = serverId();
+    if (!id) return;
+    setInviting(true);
+    setInviteError("");
+    try {
+      setInvites(await client().invites(id));
+    } catch (e) {
+      inviteFailed(e);
+    }
+  };
+  const makeInvite = async (e: Event) => {
+    e.preventDefault();
     const id = serverId();
     if (!id) return;
     setInviteError("");
+    setCopied(false);
     try {
-      setInvite(await client().createInvite(id));
+      const made = await client().createInvite(id, inviteUses(), inviteHours() || undefined);
+      setInvite(made);
+      setInvites([made, ...invites()]);
+    } catch (err) {
+      inviteFailed(err);
+    }
+  };
+  const revokeInvite = async (i: InviteSummary) => {
+    setInviteError("");
+    try {
+      await client().revokeInvite(i.code);
+      setInvites(invites().filter((x) => x.code !== i.code));
+      if (invite()?.code === i.code) setInvite(null);
     } catch (e) {
-      const ce = e instanceof ClientError ? e : null;
-      setInviteError(ce?.code === "PERMISSION_DENIED" ? "You cannot invite people to this server." : e instanceof Error ? e.message : String(e));
+      inviteFailed(e);
     }
   };
   const copyInvite = async () => {
@@ -253,20 +291,52 @@ export function App() {
               </button>
             </form>
           </Show>
-          <Show when={invite()} fallback={
-            <button type="button" class="lu-link app__push" onClick={() => void makeInvite()}>
+          <Show when={inviting()} fallback={
+            <button type="button" class="lu-link app__push" onClick={() => void openInvites()}>
               Invite people
             </button>
           }>
-            {(i) => (
-              <div class="app__invite">
-                <p class="app__status">Anyone with this link can join.</p>
-                <input class="app__invite-url" type="text" readonly value={i().url} aria-label="Invite link" onFocus={(e) => e.currentTarget.select()} />
-                <button type="button" class="lu-link app__push" onClick={() => void copyInvite()}>
-                  {copied() ? "Copied" : "Copy link"}
-                </button>
-              </div>
-            )}
+            <form class="app__invite" onSubmit={(e) => void makeInvite(e)}>
+              <label class="app__status">
+                Expires
+                <select class="app__invite-url" value={inviteHours()} onChange={(e) => setInviteHours(Number(e.currentTarget.value))} aria-label="Expires">
+                  <option value={0}>Never</option>
+                  <option value={24}>In a day</option>
+                  <option value={168}>In a week</option>
+                </select>
+              </label>
+              <label class="app__status">
+                Uses
+                <select class="app__invite-url" value={inviteUses()} onChange={(e) => setInviteUses(Number(e.currentTarget.value))} aria-label="Uses">
+                  <option value={0}>Unlimited</option>
+                  <option value={1}>Once</option>
+                  <option value={10}>Ten</option>
+                </select>
+              </label>
+              <button type="submit" class="lu-link app__push">
+                Make a link
+              </button>
+              <Show when={invite()}>
+                {(i) => (
+                  <>
+                    <input class="app__invite-url" type="text" readonly value={i().url} aria-label="Invite link" onFocus={(e) => e.currentTarget.select()} />
+                    <button type="button" class="lu-link app__push" onClick={() => void copyInvite()}>
+                      {copied() ? "Copied" : "Copy link"}
+                    </button>
+                  </>
+                )}
+              </Show>
+              <For each={invites()}>
+                {(i) => (
+                  <p class="app__status app__invite-row">
+                    <span>{i.code} · {describeInvite(i)}</span>
+                    <button type="button" class="lu-link" onClick={() => void revokeInvite(i)}>
+                      Revoke
+                    </button>
+                  </p>
+                )}
+              </For>
+            </form>
           </Show>
           <Show when={inviteError()}>
             <p class="auth__error app__status" role="alert">

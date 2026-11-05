@@ -179,6 +179,52 @@ defmodule LumiaWeb.InviteApiTest do
     end
   end
 
+  describe "listing" do
+    test "a server's invites, newest first, for a member with create_invites", ctx do
+      {:ok, first} = Invites.create(ctx.server.id, ctx.owner.id)
+      {:ok, second} = Invites.create(ctx.server.id, ctx.owner.id, %{max_uses: 3})
+      conn = get(authed(ctx.conn, ctx.owner), "/api/v1/servers/#{ctx.server.id}/invites")
+
+      assert %V1.ListInvitesResponse{invites: [a, b]} = decode(conn, V1.ListInvitesResponse)
+      assert {a.code, a.max_uses, b.code} == {second.code, 3, first.code}
+
+      member = account("member")
+      {:ok, _} = Servers.add_member(ctx.server.id, member.id, ctx.owner.id)
+
+      assert get(authed(ctx.conn, member), "/api/v1/servers/#{ctx.server.id}/invites").status ==
+               403
+    end
+  end
+
+  describe "rate limits" do
+    setup do
+      Application.put_env(:lumia, :invite_limits, %{create_per_hour: 2, accept_per_hour: 1})
+      on_exit(fn -> Application.delete_env(:lumia, :invite_limits) end)
+    end
+
+    test "minting is counted per account per hour", ctx do
+      {:ok, _} = Invites.create(ctx.server.id, ctx.owner.id)
+      {:ok, _} = Invites.create(ctx.server.id, ctx.owner.id)
+
+      conn =
+        post_proto(authed(ctx.conn, ctx.owner), "/api/v1/invites", %V1.CreateInviteRequest{
+          server_id: Proto.uuid(ctx.server.id)
+        })
+
+      assert conn.status == 429
+      assert %V1.Error{code: :RATE_LIMITED} = decode(conn, V1.Error)
+    end
+
+    test "accepting is counted per account per hour", ctx do
+      {:ok, other} = Servers.create_server(ctx.owner.id, "Other")
+      {:ok, one} = Invites.create(ctx.server.id, ctx.owner.id)
+      {:ok, two} = Invites.create(other.id, ctx.owner.id)
+      joiner = account("joiner")
+      assert post(authed(ctx.conn, joiner), "/api/v1/invites/#{one.code}/accept").status == 200
+      assert post(authed(ctx.conn, joiner), "/api/v1/invites/#{two.code}/accept").status == 429
+    end
+  end
+
   describe "deleting" do
     test "the creator or a manager revokes; a member cannot", ctx do
       {:ok, invite} = Invites.create(ctx.server.id, ctx.owner.id)

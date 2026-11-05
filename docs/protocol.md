@@ -285,10 +285,11 @@ Chunks and manifests are opaque to the instance; the caller must be bound to the
 |---|---|
 | `GET /invites/{code}` | → `InvitePreview` (public) |
 | `POST /invites` | `CreateInviteRequest` → `Invite` |
+| `GET /servers/{server_id}/invites` | → `ListInvitesResponse`, newest first; `CREATE_INVITES` |
 | `POST /invites/{code}/accept` | → `Member` |
 | `DELETE /invites/{code}` | → 204 |
 
-Creating needs `CREATE_INVITES` in the server; `max_uses` 0 is unlimited; a `channel_id` must be the server's. The preview and accepting answer `NOT_FOUND` alike for an unknown, expired or spent code. Accepting joins the caller as a member, or as a guest whose membership expires after the invite's `guest_days`, and counts a use; a caller already in the server gets the membership back without a use. `CreateAccountRequest.invite_code` joins the new account in the same request and admits it when registration is closed; an unknown code makes no account. Deleting is the creator's or needs `MANAGE_SERVER`. An invite link is `https://{host}/invite/{code}`, which the instance's web UI answers (architecture 6.1: the trust card first).
+Creating needs `CREATE_INVITES` in the server; `max_uses` 0 is unlimited; a `channel_id` must be the server's. The preview and accepting answer `NOT_FOUND` alike for an unknown, expired or spent code. Accepting joins the caller as a member, or as a guest whose membership expires after the invite's `guest_days`, and counts a use; a caller already in the server gets the membership back without a use. `CreateAccountRequest.invite_code` joins the new account in the same request and admits it when registration is closed; an unknown code makes no account. Deleting is the creator's or needs `MANAGE_SERVER`. Minting and accepting are rate-limited per account per hour (`RATE_LIMITED`), counted from the rows themselves so every node shares the count. An invite link is `https://{host}/invite/{code}`, which the instance's web UI answers (architecture 6.1: the trust card first).
 
 ### MCP
 

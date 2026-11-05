@@ -25,6 +25,13 @@ defmodule Lumia.Invites do
   @code_length 10
   @max_guest_days 365
 
+  # Rate limits, Postgres-backed as architecture 7 asks for abuse-prone
+  # operations: what one account minted or accepted in the last hour,
+  # counted from the rows themselves (invites, and the audit log for
+  # accepts), so N nodes share one count. `:invite_limits` in the
+  # application environment overrides them (tests).
+  @limits %{create_per_hour: 30, accept_per_hour: 20}
+
   @doc """
   Mints an invite for a server. The actor needs `create_invites` there.
   `attrs`: `channel_id` (a channel of the server, for a connected-channel
@@ -35,6 +42,7 @@ defmodule Lumia.Invites do
     Tx.transact(fn ->
       with {:ok, actor} <- Servers.actor(server_id, actor_id),
            :ok <- permitted(actor, :create_invites),
+           :ok <- within(:create_per_hour, minted_last_hour(actor_id)),
            {:ok, channel_id} <- check_channel(server_id, Map.get(attrs, :channel_id)),
            {:ok, guest_days} <- check_guest_days(Map.get(attrs, :guest_days)),
            {:ok, invite} <-
@@ -93,7 +101,8 @@ defmodule Lumia.Invites do
   """
   def accept(code, account_id) do
     Tx.transact(fn ->
-      with {:ok, invite} <- lock(code),
+      with :ok <- within(:accept_per_hour, accepted_last_hour(account_id)),
+           {:ok, invite} <- lock(code),
            {:ok, member} <- join(invite, account_id) do
         {:ok, member}
       end
@@ -131,6 +140,33 @@ defmodule Lumia.Invites do
   end
 
   # ---- Internals ---------------------------------------------------------------
+
+  defp within(key, count) do
+    limit = Application.get_env(:lumia, :invite_limits, %{}) |> Map.get(key, @limits[key])
+    if count < limit, do: :ok, else: {:error, :rate_limited}
+  end
+
+  defp minted_last_hour(account_id) do
+    since = DateTime.add(DateTime.utc_now(), -3600, :second)
+
+    Repo.one(
+      from i in Invite,
+        where: i.created_by == ^account_id and i.inserted_at > ^since,
+        select: count()
+    )
+  end
+
+  defp accepted_last_hour(account_id) do
+    since = DateTime.add(DateTime.utc_now(), -3600, :second)
+
+    Repo.one(
+      from e in Lumia.Audit.Entry,
+        where:
+          e.actor_account_id == ^account_id and e.action == "invite.accept" and
+            e.created_at > ^since,
+        select: count()
+    )
+  end
 
   defp join(invite, account_id) do
     case Repo.get_by(Member, server_id: invite.server_id, account_id: account_id) do

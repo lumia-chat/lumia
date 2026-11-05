@@ -80,9 +80,20 @@ public final class LumiaSession {
         try await client.invitePreview(linkOrCode)
     }
 
-    /// An invite link for a server this account can invite to.
-    public func createInvite(serverID: String) async throws -> InviteSummary {
-        try await client.createInvite(serverID: serverID)
+    /// An invite link for a server this account can invite to: unlimited
+    /// unless `maxUses` is set, open-ended unless `expiresInHours` is.
+    public func createInvite(serverID: String, maxUses: UInt32 = 0, expiresInHours: UInt32? = nil) async throws -> InviteSummary {
+        try await client.createInvite(serverID: serverID, maxUses: maxUses, expiresInHours: expiresInHours)
+    }
+
+    /// The server's invites, newest first, for a member who may invite.
+    public func invites(serverID: String) async throws -> [InviteSummary] {
+        try await client.invites(serverID: serverID)
+    }
+
+    /// Revokes an invite this account made, or any with manage_server.
+    public func revokeInvite(_ linkOrCode: String) async throws {
+        try await client.revokeInvite(linkOrCode)
     }
 
     /// Joins the invite's server and refreshes the snapshot so it is listed; returns its id.

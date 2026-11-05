@@ -222,6 +222,12 @@ export class Bridge {
   acceptInvite(linkOrCode: string): Promise<string> {
     return this.call("acceptInvite", linkOrCode);
   }
+  invites(serverId: string): Promise<InviteSummary[]> {
+    return this.call("invites", serverId);
+  }
+  revokeInvite(linkOrCode: string): Promise<void> {
+    return this.call("revokeInvite", linkOrCode);
+  }
   createServer(name: string): Promise<ServerSummary> {
     return this.call("createServer", name);
   }

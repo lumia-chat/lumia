@@ -357,18 +357,40 @@ struct NewChannelScreen: View {
 
 // MARK: Invite people
 
-/// An invite link for the server, made on arrival and ready to copy or share.
+/// Invite links for the server: a new one with an expiry and a use limit,
+/// ready to copy or share, and the ones that exist, each revocable.
 struct InviteScreen: View {
     let session: LumiaSession
     let server: ServerSummary?
+    @State private var expiresInHours: UInt32 = 0
+    @State private var maxUses: UInt32 = 0
     @State private var invite: InviteSummary?
+    @State private var invites: [InviteSummary] = []
     @State private var error = ""
+    @State private var busy = false
     @State private var copied = false
 
     var body: some View {
-        PanelScreen(back: server?.name ?? "Server", title: "Invite people", subtitle: "Anyone with the link can join") {
+        PanelScreen(back: server?.name ?? "Server", title: "Invite people", subtitle: "A link to join \(server?.name ?? "the server")") {
             ScrollView {
                 VStack(alignment: .leading, spacing: LumiaTokens.space12) {
+                    Text("Expires").font(LumiaTokens.textLabel.font).foregroundStyle(LumiaTokens.inkSecondary.color)
+                    Picker("Expires", selection: $expiresInHours) {
+                        Text("Never").tag(UInt32(0))
+                        Text("In a day").tag(UInt32(24))
+                        Text("In a week").tag(UInt32(168))
+                    }
+                    .pickerStyle(.segmented)
+                    Text("Uses").font(LumiaTokens.textLabel.font).foregroundStyle(LumiaTokens.inkSecondary.color)
+                    Picker("Uses", selection: $maxUses) {
+                        Text("Unlimited").tag(UInt32(0))
+                        Text("Once").tag(UInt32(1))
+                        Text("Ten").tag(UInt32(10))
+                    }
+                    .pickerStyle(.segmented)
+                    if !error.isEmpty { LumiaErrorText(error) }
+                    Button("Make a link") { Task { await make() } }
+                        .buttonStyle(.lumiaPrimary).disabled(busy)
                     if let invite {
                         Text(invite.url)
                             .font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.ink.color)
@@ -386,24 +408,70 @@ struct InviteScreen: View {
                                 ShareLink(item: url) { Text("Share") }.buttonStyle(.lumiaSecondary)
                             }
                         }
-                        Text("The link does not expire and has no use limit; revoke it with the CLI if it leaks.")
-                            .font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkQuiet.color)
-                    } else if !error.isEmpty {
-                        LumiaNotice(icon: "lock") { Text(error) }
-                    } else {
-                        Text("Making the link…").font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkQuiet.color)
+                    }
+                    if !invites.isEmpty {
+                        SectionTitle("Invites")
+                        ForEach(invites, id: \.code) { i in
+                            HStack(spacing: LumiaTokens.space10) {
+                                VStack(alignment: .leading, spacing: 0) {
+                                    Text(i.code).font(LumiaTokens.textMember.font).foregroundStyle(LumiaTokens.ink.color)
+                                    Text(describe(i)).font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkQuiet.color)
+                                }
+                                Spacer()
+                                Button("Revoke") { Task { await revoke(i) } }
+                                    .buttonStyle(.lumiaLink).disabled(busy)
+                            }
+                            .padding(.vertical, LumiaTokens.space4)
+                        }
                     }
                 }
                 .padding(LumiaTokens.space16)
             }
         }
-        .task {
-            guard let server, invite == nil else { return }
-            do {
-                invite = try await session.createInvite(serverID: server.serverId)
-            } catch {
-                self.error = error.lumiaCode == "PERMISSION_DENIED" ? "You cannot invite people to this server." : error.lumiaMessage
-            }
+        .task { await load() }
+    }
+
+    private func describe(_ i: InviteSummary) -> String {
+        let uses = i.maxUses == 0 ? "\(i.uses) uses" : "\(i.uses)/\(i.maxUses) uses"
+        guard let micros = i.expiresAtMicros else { return "\(uses) · no expiry" }
+        let at = Date(timeIntervalSince1970: TimeInterval(micros) / 1_000_000)
+        return "\(uses) · expires \(at.formatted(date: .abbreviated, time: .shortened))"
+    }
+
+    private func load() async {
+        guard let server else { return }
+        do {
+            invites = try await session.invites(serverID: server.serverId)
+        } catch {
+            self.error = error.lumiaCode == "PERMISSION_DENIED" ? "You cannot invite people to this server." : error.lumiaMessage
+        }
+    }
+
+    private func make() async {
+        guard let server else { return }
+        busy = true
+        error = ""
+        copied = false
+        defer { busy = false }
+        do {
+            let made = try await session.createInvite(serverID: server.serverId, maxUses: maxUses, expiresInHours: expiresInHours == 0 ? nil : expiresInHours)
+            invite = made
+            invites.insert(made, at: 0)
+        } catch {
+            self.error = error.lumiaCode == "PERMISSION_DENIED" ? "You cannot invite people to this server." : error.lumiaCode == "RATE_LIMITED" ? "Too many links in the last hour; try later." : error.lumiaMessage
+        }
+    }
+
+    private func revoke(_ i: InviteSummary) async {
+        busy = true
+        error = ""
+        defer { busy = false }
+        do {
+            try await session.revokeInvite(i.code)
+            invites.removeAll { $0.code == i.code }
+            if invite?.code == i.code { invite = nil }
+        } catch {
+            self.error = error.lumiaMessage
         }
     }
 }

@@ -48,6 +48,7 @@ import chat.lumia.kit.LumiaDeviceRow
 import chat.lumia.kit.LumiaEmptyState
 import chat.lumia.kit.LumiaErrorText
 import chat.lumia.kit.LumiaField
+import chat.lumia.kit.LumiaLinkButton
 import chat.lumia.kit.LumiaMessageRow
 import chat.lumia.kit.LumiaNotice
 import chat.lumia.kit.LumiaPrimaryButton
@@ -408,26 +409,93 @@ fun NewChannelScreen(session: LumiaSession, server: ServerSummary?, back: () -> 
 
 // Invite people
 
-/** An invite link for the server, made on arrival and ready to copy or share. */
+/**
+ * Invite links for the server: a new one with an expiry and a use limit,
+ * ready to copy or share, and the ones that exist, each revocable.
+ */
 @Composable
 fun InviteScreen(session: LumiaSession, server: ServerSummary?, back: () -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val scope = rememberCoroutineScope()
+    var expiresInHours by rememberSaveable { mutableStateOf(0) }
+    var maxUses by rememberSaveable { mutableStateOf(0) }
     var invite by remember { mutableStateOf<InviteSummary?>(null) }
+    var invites by remember { mutableStateOf<List<InviteSummary>>(emptyList()) }
     var error by rememberSaveable { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
     var copied by remember { mutableStateOf(false) }
+
+    fun describe(i: InviteSummary): String {
+        val uses = if (i.maxUses == 0u) "${i.uses} uses" else "${i.uses}/${i.maxUses} uses"
+        val at = i.expiresAtMicros ?: return "$uses · no expiry"
+        return "$uses · expires ${java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.MEDIUM, java.text.DateFormat.SHORT).format(java.util.Date(at / 1000))}"
+    }
 
     LaunchedEffect(server?.serverId) {
         val id = server?.serverId ?: return@LaunchedEffect
-        if (invite != null) return@LaunchedEffect
         try {
-            invite = session.createInvite(id)
+            invites = session.invites(id)
         } catch (e: Exception) {
             error = if (e.lumiaCode == "PERMISSION_DENIED") "You cannot invite people to this server." else e.lumiaMessage
         }
     }
 
-    PanelScreen(back = server?.name ?: "Server", onBack = back, title = "Invite people", subtitle = "Anyone with the link can join") {
+    fun make() {
+        val id = server?.serverId ?: return
+        scope.launch {
+            busy = true
+            error = ""
+            copied = false
+            try {
+                val made = session.createInvite(id, maxUses.toUInt(), if (expiresInHours == 0) null else expiresInHours.toUInt())
+                invite = made
+                invites = listOf(made) + invites
+            } catch (e: Exception) {
+                error = when (e.lumiaCode) {
+                    "PERMISSION_DENIED" -> "You cannot invite people to this server."
+                    "RATE_LIMITED" -> "Too many links in the last hour; try later."
+                    else -> e.lumiaMessage
+                }
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    fun revoke(i: InviteSummary) {
+        scope.launch {
+            busy = true
+            error = ""
+            try {
+                session.revokeInvite(i.code)
+                invites = invites.filter { it.code != i.code }
+                if (invite?.code == i.code) invite = null
+            } catch (e: Exception) {
+                error = e.lumiaMessage
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    @Composable
+    fun Choice(label: String, options: List<Pair<String, Int>>, value: Int, onValue: (Int) -> Unit) {
+        Column(verticalArrangement = Arrangement.spacedBy(LumiaTokens.space4)) {
+            Text(label, style = LumiaTokens.textLabel.style, color = LumiaTokens.inkSecondary.color)
+            Row(horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space8)) {
+                for ((name, v) in options) {
+                    if (v == value) LumiaPrimaryButton(name) { } else LumiaSecondaryButton(name) { onValue(v) }
+                }
+            }
+        }
+    }
+
+    PanelScreen(back = server?.name ?: "Server", onBack = back, title = "Invite people", subtitle = "A link to join ${server?.name ?: "the server"}") {
         LazyColumn(Modifier.fillMaxSize().navigationBarsPadding(), contentPadding = androidx.compose.foundation.layout.PaddingValues(LumiaTokens.space16), verticalArrangement = Arrangement.spacedBy(LumiaTokens.space12)) {
+            item { Choice("Expires", listOf("Never" to 0, "In a day" to 24, "In a week" to 168), expiresInHours) { expiresInHours = it } }
+            item { Choice("Uses", listOf("Unlimited" to 0, "Once" to 1, "Ten" to 10), maxUses) { maxUses = it } }
+            if (error.isNotEmpty()) item { LumiaErrorText(error) }
+            item { LumiaPrimaryButton("Make a link", Modifier.fillMaxWidth(), enabled = !busy) { make() } }
             val link = invite
             if (link != null) {
                 item {
@@ -449,11 +517,18 @@ fun InviteScreen(session: LumiaSession, server: ServerSummary?, back: () -> Unit
                         }
                     }
                 }
-                item { Text("The link does not expire and has no use limit; revoke it with the CLI if it leaks.", style = LumiaTokens.textMeta.style, color = LumiaTokens.inkQuiet.color) }
-            } else if (error.isNotEmpty()) {
-                item { LumiaNotice(Icons.Filled.Lock, text = error) }
-            } else {
-                item { Text("Making the link…", style = LumiaTokens.textMeta.style, color = LumiaTokens.inkQuiet.color) }
+            }
+            if (invites.isNotEmpty()) {
+                item { SectionTitle("Invites") }
+                items(invites, key = { it.code }) { i ->
+                    Row(Modifier.fillMaxWidth().padding(vertical = LumiaTokens.space4), horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space10), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(i.code, style = LumiaTokens.textMember.style, color = LumiaTokens.ink.color)
+                            Text(describe(i), style = LumiaTokens.textMeta.style, color = LumiaTokens.inkQuiet.color)
+                        }
+                        LumiaLinkButton("Revoke", enabled = !busy) { revoke(i) }
+                    }
+                }
             }
         }
     }

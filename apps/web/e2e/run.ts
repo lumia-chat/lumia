@@ -391,11 +391,25 @@ async function create(which: string, handle: string, stamp: number) {
     await page.getByLabel("Channel name").fill("ops");
     await page.getByRole("button", { name: "Create channel" }).click();
     await page.getByPlaceholder("Message #ops").waitFor();
+    // An invite link from the sidebar, limited to one use, then revoked:
+    // the instance stops answering for it.
+    phase("invite");
+    await page.getByRole("button", { name: "Invite people" }).click();
+    await page.getByLabel("Uses").selectOption("1");
+    await page.getByRole("button", { name: "Make a link" }).click();
+    const link = await page.getByLabel("Invite link").inputValue();
+    const code = link.split("/invite/")[1] ?? "";
+    if (!code) throw new Error(`no code in the link ${link}`);
+    if ((await fetch(`${instance}/api/v1/invites/${code}`)).status !== 200) throw new Error("the instance does not know the link");
+    await page.getByText(`${code} · 0/1 uses`).waitFor();
     await page.screenshot({ path: `${out}/${which}-created.png` });
+    await page.getByRole("button", { name: "Revoke" }).click();
+    await page.getByText(`${code} · 0/1 uses`).waitFor({ state: "detached" });
+    if ((await fetch(`${instance}/api/v1/invites/${code}`)).status !== 404) throw new Error("the revoked link still answers");
   } finally {
     await ctx.close();
   }
-  console.log(`  ${which}: made a server and its first channel from the app in ${Date.now() - t0} ms`);
+  console.log(`  ${which}: made a server, its first channel and a one-use invite from the app, then revoked it, in ${Date.now() - t0} ms`);
 }
 
 // Web Push end to end (architecture 15.5), with a push service of the

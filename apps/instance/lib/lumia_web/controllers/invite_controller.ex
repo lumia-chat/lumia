@@ -23,6 +23,12 @@ defmodule LumiaWeb.InviteController do
     end
   end
 
+  def index(conn, %{"server_id" => server_id}) do
+    with {:ok, invites} <- Invites.list(server_id, conn.assigns.current_account_id) do
+      ProtoConn.render(conn, %V1.ListInvitesResponse{invites: Enum.map(invites, &Proto.invite/1)})
+    end
+  end
+
   def create(conn, _params) do
     with {:ok, req} <- ProtoConn.decode(conn, V1.CreateInviteRequest),
          server_id = Proto.from_uuid(req.server_id),

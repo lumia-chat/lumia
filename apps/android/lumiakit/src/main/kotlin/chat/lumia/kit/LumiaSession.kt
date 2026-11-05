@@ -86,8 +86,14 @@ class LumiaSession(val client: LumiaClient) {
     /** What an invite link or code leads to, before anything is sent. */
     suspend fun invitePreview(linkOrCode: String): InvitePreviewSummary = client.call { invitePreview(linkOrCode) }
 
-    /** An invite link for a server this account can invite to. */
-    suspend fun createInvite(serverId: String): InviteSummary = client.call { createInvite(serverId, 0u, null) }
+    /** An invite link for a server this account can invite to: unlimited unless [maxUses], open-ended unless [expiresInHours]. */
+    suspend fun createInvite(serverId: String, maxUses: UInt = 0u, expiresInHours: UInt? = null): InviteSummary = client.call { createInvite(serverId, maxUses, expiresInHours) }
+
+    /** The server's invites, newest first, for a member who may invite. */
+    suspend fun invites(serverId: String): List<InviteSummary> = client.call { invites(serverId) }
+
+    /** Revokes an invite this account made, or any with manage_server. */
+    suspend fun revokeInvite(linkOrCode: String) { client.call { revokeInvite(linkOrCode) } }
 
     /** Joins the invite's server and refreshes the snapshot so it is listed; returns its id. */
     suspend fun acceptInvite(linkOrCode: String): String {

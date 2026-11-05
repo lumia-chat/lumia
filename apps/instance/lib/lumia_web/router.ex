@@ -61,6 +61,7 @@ defmodule LumiaWeb.Router do
     put "/servers/:server_id/roles/:role_id", ServerController, :update_role
     delete "/servers/:server_id/roles/:role_id", ServerController, :delete_role
 
+    get "/servers/:server_id/invites", InviteController, :index
     post "/invites", InviteController, :create
     post "/invites/:code/accept", InviteController, :accept
     delete "/invites/:code", InviteController, :delete

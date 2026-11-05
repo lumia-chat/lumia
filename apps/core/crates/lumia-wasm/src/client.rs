@@ -210,6 +210,23 @@ impl Client {
         self.app.accept_invite(&link_or_code).await.map_err(js)
     }
 
+    /// `GET /servers/{id}/invites`: the server's invites, newest first.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` without `create_invites` there; transport failure.
+    pub async fn invites(&self, server_id: String) -> Result<JsValue, JsError> {
+        to_js(&self.app.invites(&server_id).await.map_err(js)?)
+    }
+
+    /// `DELETE /invites/{code}`: revokes an invite.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` unless the creator or a manager; transport failure.
+    #[wasm_bindgen(js_name = revokeInvite)]
+    pub async fn revoke_invite(&self, link_or_code: String) -> Result<(), JsError> {
+        self.app.revoke_invite(&link_or_code).await.map_err(js)
+    }
+
     /// `POST /servers`: a server this account owns.
     ///
     /// # Errors

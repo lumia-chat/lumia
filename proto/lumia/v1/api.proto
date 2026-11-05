@@ -451,3 +451,9 @@ message InvitePreview {
   bool as_guest = 4;
   InstanceInfo instance = 5;
 }
+
+// GET /servers/{server_id}/invites — the server's invites, newest first,
+// for a member with CREATE_INVITES.
+message ListInvitesResponse {
+  repeated Invite invites = 1;
+}

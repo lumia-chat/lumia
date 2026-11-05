@@ -22,7 +22,7 @@ use lumia_core::proto::{
     PublishKeyPackagesRequest, PublishRosterRequest, PushSubscription, ReauthRequest,
     ReauthResponse, RefreshRequest, RevokeDeviceRequest, Server, SignedRoster, TokenPair,
 };
-use lumia_core::proto::{CreateInviteRequest, Invite, InvitePreview, Member};
+use lumia_core::proto::{CreateInviteRequest, Invite, InvitePreview, ListInvitesResponse, Member};
 use lumia_core::proto::{
     DmRequest, DmRequestState, GetHistoryChunkResponse, GetIdentityBackupResponse,
     HistoryUsageResponse, ListHistoryManifestsResponse, PutHistoryChunkRequest,
@@ -440,6 +440,15 @@ impl Api {
             )
             .await?;
         decoded(status, &bytes)
+    }
+
+    /// `GET /servers/{id}/invites`: the server's invites, newest first.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` without `CREATE_INVITES`; transport failure.
+    pub async fn invites(&self, server_id: &str) -> Result<ListInvitesResponse, ClientError> {
+        self.get(&format!("/api/v1/servers/{server_id}/invites"))
+            .await
     }
 
     /// `DELETE /invites/{code}`.

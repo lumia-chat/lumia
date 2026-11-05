@@ -39,6 +39,10 @@ public actor LumiaClient {
     }
     /// Joins the invite's server; returns its id.
     public func acceptInvite(_ linkOrCode: String) throws -> String { try inner.acceptInvite(linkOrCode: linkOrCode) }
+    /// The server's invites, newest first.
+    public func invites(serverID: String) throws -> [InviteSummary] { try inner.invites(serverId: serverID) }
+    /// Revokes an invite.
+    public func revokeInvite(_ linkOrCode: String) throws { try inner.revokeInvite(linkOrCode: linkOrCode) }
     /// A server this account owns.
     public func createServer(name: String) throws -> ServerSummary { try inner.createServer(name: name) }
     /// A text channel in a server this account may manage channels in.
