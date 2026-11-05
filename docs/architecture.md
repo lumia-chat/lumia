@@ -606,6 +606,7 @@ Prove one complete secure lifecycle before any second UI shell starts. The order
 5. MLS personal DMs, history backup, recovery, external-commit rejoin.
 6. The **web UI inside Tauri** as the first shell, because it is also the Windows, Linux, and browser client, so one shell covers four targets and the web device model (section 11.4) is exercised early.
 7. Multi-node, push, SwiftUI, Compose, in that order.
+8. A first release: what a new person hits first (servers and channels from the apps, the rest of invites, presence, more sign-in methods), what an operator needs (the release path exercised by a tag, two instances in compose), and the proofs the specs still owe. The checklist is in the plan.
 
 ## 19. Deferred and out of scope
 
