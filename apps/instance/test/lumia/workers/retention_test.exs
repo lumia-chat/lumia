@@ -39,6 +39,7 @@ defmodule Lumia.Workers.RetentionTest do
       %{owner: owner, server: server, channel: channel, actor: actor}
     end
 
+    @tag failure_injection: [delivery: 10]
     test "purges payloads and messages older than the policy and appends PayloadsPurged", ctx do
       {:ok, _} = Servers.set_retention(ctx.server.id, ctx.owner.id, 30)
       age(ctx.channel.id, 3, 31)

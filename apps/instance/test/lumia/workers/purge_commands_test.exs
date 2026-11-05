@@ -27,6 +27,7 @@ defmodule Lumia.Workers.PurgeCommandsTest do
     assert Repo.get_by(Command, channel_id: channel.id, command_id: fresh.command_id)
   end
 
+  @tag failure_injection: [delivery: 8]
   test "a purged message command cannot create a duplicate message on retry" do
     channel = channel()
     actor = actor()

@@ -86,6 +86,8 @@ if event.seq == delivered_seq + 1           → push; delivered_seq = event.seq
 if event.seq >  delivered_seq + 1           → run the gap loop (section 6), then push
 ```
 
+The same `acl_version` and staleness check applies to a page read from Postgres, whether for the gap loop, a subscribe replay or a reconciliation nudge: a page carrying an `acl_version` newer than the cached one, or a subscription past the staleness window (authorization section 5), is re-resolved once before anything from the page is pushed. This is the path by which a change committed on another node during a partition takes effect after the heal, since its broadcast never arrived and reconciliation brings only the head.
+
 Events from one session are therefore always in `seq` order per channel, which is what protocol section 5 promises clients.
 
 **Removal.** When the session's account log delivers `ChannelRemoved` or `MembershipRemoved`, the session unsubscribes the affected channels immediately. The `acl_version` check above is the backstop for a missed account-log message. After the node rejoins the cluster following a partition, the session re-resolves permissions for every subscription before delivering anything.

@@ -11,6 +11,7 @@ defmodule LumiaWeb.Gateway.SocketTest do
   alias LumiaWeb.Gateway.Serializer
   alias Phoenix.Socket.Broadcast
 
+  @tag failure_injection: [delivery: 12]
   test "a frame before Hello queues the transport's disconnect" do
     frame = V1.ClientFrame.encode(%V1.ClientFrame{frame: {:heartbeat, %V1.Heartbeat{nonce: 1}}})
 

@@ -68,6 +68,7 @@ defmodule Lumia.EventsTest do
       assert %DateTime{microsecond: {0, 0}} = channel.last_seq_at
     end
 
+    @tag failure_injection: [delivery: 9]
     test "replaying an identical command returns the original ack and writes nothing", ctx do
       cmd = send_message(ctx.channel.id)
       assert {:ok, ack} = Events.append(ctx.channel.id, ctx.actor, cmd)

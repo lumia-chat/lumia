@@ -32,6 +32,7 @@ defmodule Lumia.Identity.RosterTest do
       assert map_size(verified.devices) == 2
     end
 
+    @tag failure_injection: [identity: 12]
     test "a rotation chain verifies and the identity id stays the first root" do
       %{identity: old, device: phone} = bootstrap()
       new = identity()
@@ -88,6 +89,24 @@ defmodule Lumia.Identity.RosterTest do
       assert {:error, {:certs, :signer}} = Roster.verify(roster)
     end
 
+    @tag failure_injection: [identity: 5]
+    test "a certificate issued by a device after that device was revoked fails at certs" do
+      %{identity: identity, device: phone} = bootstrap()
+      laptop = device("laptop")
+      # The phone lived from -100 to -50; its certificate for the laptop is dated -10.
+      laptop_cert = cert(identity, laptop, phone, added_at: now(-10))
+
+      roster =
+        roster(identity, :root,
+          version: 2,
+          devices: [laptop_cert],
+          revoked: [revocation(identity, phone, :root, added_at: now(-100), revoked_at: now(-50))]
+        )
+
+      assert {:error, {:certs, :signer}} = Roster.verify(roster)
+    end
+
+    @tag failure_injection: [identity: 6]
     test "a certificate issued by a device that was revoked afterwards still verifies" do
       %{identity: identity, device: phone} = bootstrap()
       laptop = device("laptop")
@@ -123,6 +142,7 @@ defmodule Lumia.Identity.RosterTest do
       assert {:error, {:certs, :signer}} = Roster.verify(roster)
     end
 
+    @tag failure_injection: [identity: 7]
     test "a future-dated certificate fails at certs" do
       %{identity: identity, device: phone} = bootstrap()
 
@@ -219,6 +239,7 @@ defmodule Lumia.Identity.RosterTest do
       assert {:error, {:monotonic, :device_dropped}} = Roster.verify(v2, held: ctx.held)
     end
 
+    @tag failure_injection: [identity: 4]
     test "dropping a revocation is rejected", ctx do
       laptop = device("laptop")
 

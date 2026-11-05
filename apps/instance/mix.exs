@@ -32,7 +32,7 @@ defmodule Lumia.MixProject do
 
   def cli do
     [
-      preferred_envs: [precommit: :test]
+      preferred_envs: [precommit: :test, "test.failure_injection": :test]
     ]
   end
 
@@ -101,6 +101,13 @@ defmodule Lumia.MixProject do
       "ecto.setup": ["ecto.create", "ecto.migrate", "run priv/repo/seeds.exs"],
       "ecto.reset": ["ecto.drop", "ecto.setup"],
       test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"],
+      # The failure-injection lists of delivery section 12, authorization
+      # section 11 and identity section 12, as listed (Lumia.FailureInjection).
+      "test.failure_injection": [
+        "ecto.create --quiet",
+        "ecto.migrate --quiet",
+        "test --only failure_injection"
+      ],
       precommit: [
         "compile --warnings-as-errors",
         "deps.unlock --unused",

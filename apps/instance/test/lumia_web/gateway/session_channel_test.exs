@@ -126,6 +126,7 @@ defmodule LumiaWeb.Gateway.SessionChannelTest do
       assert :error = connect(Socket, %{}, connect_info: %{auth_token: "nope"})
     end
 
+    @tag failure_injection: [delivery: 7]
     test "Welcome carries the recovery generation and heartbeat interval", %{
       socket: socket,
       session: session
@@ -168,6 +169,7 @@ defmodule LumiaWeb.Gateway.SessionChannelTest do
                V1.Event.decode(b4)
     end
 
+    @tag failure_injection: [delivery: 2]
     test "a gap in live delivery is filled from Postgres in order", ctx do
       actor = %{account_id: ctx.account.id, device_id: ctx.device_id}
       {_, socket} = join!(ctx.socket)
@@ -202,20 +204,35 @@ defmodule LumiaWeb.Gateway.SessionChannelTest do
       refute_push "frame", _
     end
 
-    test "a cursor more than 1,000 behind gets SNAPSHOT_REQUIRED", ctx do
-      {:ok, _} =
-        Lumia.Repo.query("UPDATE channels SET last_seq = 2000 WHERE id = $1", [
-          Ecto.UUID.dump!(ctx.channel.id)
-        ])
+    @tag failure_injection: [delivery: 5]
+    test "a cursor 1,001 behind gets SNAPSHOT_REQUIRED; 1,000 behind replays", ctx do
+      actor = %{account_id: ctx.account.id, device_id: ctx.device_id}
+
+      for i <- 1..1_001 do
+        {:ok, _} =
+          Events.append(ctx.channel.id, actor, send_message(ctx.channel.id, "m#{i}"),
+            broadcast: false
+          )
+      end
 
       {_, socket} = join!(ctx.socket)
 
-      assert %V1.ChannelSubscribeResult{status: :SNAPSHOT_REQUIRED, last_seq: 2000} =
+      assert %V1.ChannelSubscribeResult{status: :SNAPSHOT_REQUIRED, last_seq: 1001} =
                subscribe(socket, ctx.channel.id, 0)
+
+      refute_push "frame", _
+
+      assert %V1.ChannelSubscribeResult{status: :RESUMED} = subscribe(socket, ctx.channel.id, 1)
+
+      for seq <- 2..1_001 do
+        assert_push "frame", {:event_bytes, bytes}
+        assert V1.Event.decode(bytes).seq == seq
+      end
 
       refute_push "frame", _
     end
 
+    @tag failure_injection: [delivery: 1]
     test "a reconciliation nudge fills what the broadcast missed", ctx do
       actor = %{account_id: ctx.account.id, device_id: ctx.device_id}
       {_, socket} = join!(ctx.socket)
@@ -361,6 +378,7 @@ defmodule LumiaWeb.Gateway.SessionChannelTest do
   end
 
   describe "revocation" do
+    @tag failure_injection: [delivery: 3, authorization: 3]
     test "a kicked member's subscription is dropped on the account-log event", ctx do
       member = account("member")
       {:ok, _} = Servers.add_member(ctx.server.id, member.id, ctx.account.id)
@@ -378,6 +396,7 @@ defmodule LumiaWeb.Gateway.SessionChannelTest do
       refute_push "frame", {:event_bytes, _}
     end
 
+    @tag failure_injection: [authorization: 4]
     test "an acl_version change without a membership event is caught on the next event", ctx do
       member = account("member")
       {:ok, _} = Servers.add_member(ctx.server.id, member.id, ctx.account.id)
@@ -492,8 +511,16 @@ defmodule LumiaWeb.Gateway.SessionChannelTest do
       refute_push "frame", {:event_bytes, _}
     end
 
-    test "a slow consumer is disconnected and told why", ctx do
+    @tag failure_injection: [delivery: 6]
+    test "a slow consumer is disconnected and told why, and resumes cleanly from its cursors",
+         ctx do
+      actor = %{account_id: ctx.account.id, device_id: ctx.device_id}
       {_, socket} = join!(ctx.socket)
+      subscribe(socket, ctx.channel.id, 0)
+      {:ok, _} = Events.append(ctx.channel.id, actor, send_message(ctx.channel.id, "before"))
+      assert_push "frame", {:event_bytes, bytes}
+      assert V1.Event.decode(bytes).seq == 1
+
       # The test process is the transport; flood its mailbox past the limit.
       for i <- 1..1_001, do: send(self(), {:junk, i})
 
@@ -505,6 +532,22 @@ defmodule LumiaWeb.Gateway.SessionChannelTest do
 
       assert_receive {:socket_close, _, _}, 500
       refute_push "frame", %V1.ServerFrame{frame: {:heartbeat, _}}
+
+      # The client drains, reconnects on the same session, and resumes from
+      # the cursor it held: nothing is replayed twice, nothing is lost.
+      for _ <- 1..1_001, do: receive(do: ({:junk, _} -> :ok))
+
+      {:ok, again} =
+        connect(Socket, %{}, connect_info: %{auth_token: ctx.tokens.access_token})
+
+      {_, again} = join!(again)
+      assert %V1.ChannelSubscribeResult{status: :RESUMED} = subscribe(again, ctx.channel.id, 1)
+      refute_push "frame", {:event_bytes, _}
+
+      {:ok, _} = Events.append(ctx.channel.id, actor, send_message(ctx.channel.id, "after"))
+      assert_push "frame", {:event_bytes, bytes}
+      assert V1.Event.decode(bytes).seq == 2
+      refute_push "frame", _
     end
   end
 

@@ -330,6 +330,28 @@ defmodule LumiaWeb.ApiTest do
       assert get(outsider, "/api/v1/channels/#{ctx.general.id}/events").status == 404
     end
 
+    @tag failure_injection: [authorization: 8]
+    test "an instance admin without membership gets NOT_FOUND, private channel included", ctx do
+      everyone =
+        Lumia.Repo.get_by!(Lumia.Servers.Role, server_id: ctx.server.id, is_everyone: true)
+
+      :ok =
+        Servers.set_overwrite(ctx.general.id, ctx.owner.id, {:role, everyone.id}, [], [
+          :view_channel
+        ])
+
+      admin =
+        account("instance-admin")
+        |> Ecto.Changeset.change(instance_role: "admin")
+        |> Lumia.Repo.update!()
+
+      conn = authed(build_conn(), admin)
+      assert get(conn, "/api/v1/servers/#{ctx.server.id}").status == 404
+      assert get(conn, "/api/v1/channels/#{ctx.general.id}/snapshot").status == 404
+      assert get(conn, "/api/v1/channels/#{ctx.general.id}/events").status == 404
+      assert get(conn, "/api/v1/channels/#{ctx.general.id}/messages").status == 404
+    end
+
     test "roles: create, list, update, delete with hierarchy enforced", ctx do
       role = %V1.Role{name: "mods", position: 3, permissions: [:MANAGE_MESSAGES]}
 

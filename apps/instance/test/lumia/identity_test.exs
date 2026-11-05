@@ -38,6 +38,7 @@ defmodule Lumia.IdentityTest do
   end
 
   describe "challenges and proofs" do
+    @tag failure_injection: [identity: 8]
     test "a valid proof verifies, stores the roster, and consumes the nonce" do
       %{identity: identity, device: device, roster: roster} = bootstrap()
       proof = proof(identity, device, roster, :SIGN_IN)
@@ -96,6 +97,7 @@ defmodule Lumia.IdentityTest do
       assert {:error, :identity_proof_invalid} = Identity.verify_proof(bad, :SIGN_IN)
     end
 
+    @tag failure_injection: [identity: 13]
     test "a web device from another origin is rejected" do
       identity = identity()
       web = device("browser")
@@ -155,6 +157,7 @@ defmodule Lumia.IdentityTest do
                )
     end
 
+    @tag failure_injection: [identity: 1, identity: 2]
     test "a device-signed revocation is refused on publish and accepted with reauth", ctx do
       laptop = device("laptop")
 
@@ -196,6 +199,7 @@ defmodule Lumia.IdentityTest do
       assert {:error, :unauthenticated} = Identity.verify_reauth(reauth)
     end
 
+    @tag failure_injection: [identity: 11]
     test "a root-signed revocation bypasses reauth (recovery path)", ctx do
       v2 =
         roster(ctx.identity, :root,
@@ -207,6 +211,33 @@ defmodule Lumia.IdentityTest do
       assert {:ok, %{root_signed?: true}} = Identity.accept_roster(v2, :publish)
     end
 
+    @tag failure_injection: [identity: 12]
+    test "a root rotation is accepted by an instance holding the pre-rotation roster", ctx do
+      new = identity()
+
+      v2 =
+        roster(ctx.identity, :root,
+          version: 2,
+          rotations: [rotation(ctx.identity, new.root_pub)],
+          root_pub: new.root_pub,
+          root_priv: new.root_priv,
+          # The phone's certificate was signed by the old root and stays as it is.
+          devices: [cert(ctx.identity, ctx.phone)]
+        )
+
+      assert {:ok, %{version: 2}} = Identity.accept_roster(v2, :publish)
+      held = Identity.held_roster(ctx.identity.identity_id)
+      assert held.version == 2
+
+      # The old certificate still signs the device in under the rotated root.
+      assert {:ok, verified, _} =
+               Identity.verify_proof(proof(ctx.identity, ctx.phone, v2, :SIGN_IN), :SIGN_IN)
+
+      assert verified.identity_id == ctx.identity.identity_id
+      assert verified.root_public_key == new.root_pub
+    end
+
+    @tag failure_injection: [identity: 4]
     test "a roster that drops a revocation names the step", ctx do
       laptop = device("laptop")
 
@@ -226,6 +257,7 @@ defmodule Lumia.IdentityTest do
   end
 
   describe "link bundles" do
+    @tag failure_injection: [identity: 9, identity: 10]
     test "single use, wrong device counts attempts, fifth attempt deletes" do
       device_id = Ecto.UUID.generate()
 

@@ -304,9 +304,34 @@ defmodule LumiaWeb.Gateway.SessionChannel do
 
       sub ->
         page = Events.events_after(channel_id, sub.delivered_seq, @replay_page)
-        socket = Enum.reduce(page, socket, fn event, s -> deliver(s, channel_id, event, nil) end)
-        if length(page) == @replay_page, do: replay(socket, channel_id), else: socket
+        moved? = Enum.any?(page, &(&1.acl_version > sub.acl_version))
+
+        # The same rule as live delivery (authorization section 5): a page
+        # that carries a newer acl_version, or a stale subscription, is
+        # re-resolved before anything from it is delivered. This is how a
+        # change made on another node during a partition takes effect here
+        # when reconciliation brings the events it was committed with.
+        if page != [] and (moved? or stale?(sub)),
+          do: replay_reauthorized(socket, channel_id, sub, page),
+          else: deliver_page(socket, channel_id, page)
     end
+  end
+
+  defp replay_reauthorized(socket, channel_id, sub, page) do
+    case authorize_read(socket, channel_id) do
+      {:ok, fresh} ->
+        socket
+        |> put_subscription(channel_id, %{fresh | delivered_seq: sub.delivered_seq})
+        |> deliver_page(channel_id, page)
+
+      {:error, _} ->
+        unsubscribe(socket, channel_id)
+    end
+  end
+
+  defp deliver_page(socket, channel_id, page) do
+    socket = Enum.reduce(page, socket, fn event, s -> deliver(s, channel_id, event, nil) end)
+    if length(page) == @replay_page, do: replay(socket, channel_id), else: socket
   end
 
   defp replay_account(socket) do

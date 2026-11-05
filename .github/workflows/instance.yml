@@ -74,6 +74,7 @@ jobs:
       - run: MIX_ENV=dev mix compile --warnings-as-errors
       - run: mix credo --strict
       - run: mix test
+      - run: mix test.failure_injection
 
   # Two instances side by side (deployment.md section 2.3): the image built
   # here, the cross-instance cases run with the release CLI.

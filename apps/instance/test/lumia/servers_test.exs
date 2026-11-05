@@ -55,6 +55,7 @@ defmodule Lumia.ServersTest do
   end
 
   describe "definition-level changes" do
+    @tag failure_injection: [authorization: 1]
     test "a role change bumps every channel in the server and nothing elsewhere", ctx do
       before = acl_versions([ctx.general.id, ctx.random.id, ctx.other_channel.id])
 
@@ -199,6 +200,7 @@ defmodule Lumia.ServersTest do
   end
 
   describe "member-level changes" do
+    @tag failure_injection: [authorization: 2]
     test "assigning a role bumps nothing and appears on that member's account log only", ctx do
       alice = account("alice")
       {:ok, _} = Servers.add_member(ctx.server.id, alice.id, ctx.owner.id)
@@ -266,6 +268,28 @@ defmodule Lumia.ServersTest do
                Servers.remove_member(ctx.server.id, ctx.owner.id, ctx.mod.id, "removed")
     end
 
+    @tag failure_injection: [authorization: 5]
+    test "an administrator cannot kick the owner either", ctx do
+      admin = account("administrator")
+      {:ok, _} = Servers.add_member(ctx.server.id, admin.id, ctx.owner.id)
+
+      {:ok, role} =
+        Servers.create_role(ctx.server.id, ctx.owner.id, %{
+          name: "administrators",
+          position: 2,
+          permissions: [:administrator]
+        })
+
+      :ok = Servers.assign_role(ctx.server.id, admin.id, role.id, ctx.owner.id)
+
+      assert {:error, :permission_denied} =
+               Servers.remove_member(ctx.server.id, ctx.owner.id, admin.id, "removed")
+
+      # Administrator is still enough for everyone else.
+      :ok = Servers.remove_member(ctx.server.id, ctx.mod.id, admin.id, "removed")
+    end
+
+    @tag failure_injection: [authorization: 6]
     test "cannot edit a role above your highest", ctx do
       assert {:error, :permission_denied} =
                Servers.update_role(ctx.server.id, ctx.high_role.id, ctx.mod.id, %{name: "x"})
@@ -274,6 +298,7 @@ defmodule Lumia.ServersTest do
                Servers.update_role(ctx.server.id, ctx.low_role.id, ctx.mod.id, %{name: "x"})
     end
 
+    @tag failure_injection: [authorization: 6]
     test "cannot grant what you lack", ctx do
       assert {:error, :permission_denied} =
                Servers.update_role(ctx.server.id, ctx.low_role.id, ctx.mod.id, %{
@@ -309,6 +334,7 @@ defmodule Lumia.ServersTest do
   end
 
   describe "viewer diff and private channels" do
+    @tag failure_injection: [authorization: 9]
     test "making a channel private removes it from non-viewers and adds it for members of an allowed role",
          ctx do
       alice = account("alice")
@@ -366,6 +392,7 @@ defmodule Lumia.ServersTest do
   end
 
   describe "snapshot cache" do
+    @tag failure_injection: [authorization: 10]
     test "loads once per version and serves from ETS after", ctx do
       Cache.clear()
       {:ok, channel} = Repo.get(Channel, ctx.general.id) |> then(&{:ok, &1})

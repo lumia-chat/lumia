@@ -9,6 +9,7 @@ defmodule Lumia.InstanceTest do
     assert Instance.recovery_generation() >= 1
   end
 
+  @tag failure_injection: [delivery: 7]
   test "bump increments and persists" do
     before = Instance.recovery_generation()
     assert Instance.bump_recovery_generation() == before + 1

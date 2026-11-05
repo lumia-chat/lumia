@@ -211,6 +211,7 @@ defmodule LumiaWeb.IdentityApiTest do
              V1.GetRosterResponse.decode(fetched.resp_body)
   end
 
+  @tag failure_injection: [identity: 1, identity: 2]
   test "revoking a device needs reauth; the revoked device's token dies", %{conn: conn} do
     %{identity: identity, device: phone, roster: v1} = bootstrap()
 
