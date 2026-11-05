@@ -67,6 +67,44 @@ b="$work/b"
 "$cli" --data-dir "$a" channels "$server" | grep -q "general  head=1" || { echo "FAIL: the message did not land on the community"; exit 1; }
 echo "a member joined through an invite and posted; the community has the message"
 
+# Two devices of one identity each add a device at a different instance:
+# forks at one version, merged by the client (identity spec 5), and every
+# device and instance converges on the merged roster.
+fh=$(printf %s "$flagship" | sed 's#^[a-z]*://##; s#:#_#'); ch=$(printf %s "$community" | sed 's#^[a-z]*://##; s#:#_#')
+a2="$work/a2"
+"$cli" --data-dir "$a2" instance add "$community" >/dev/null
+"$cli" --data-dir "$a2" instance add "$flagship" >/dev/null
+request=$("$cli" --data-dir "$a2" identity link-request --label "two-a2")
+code=$("$cli" --data-dir "$a" --instance "$ch" identity approve "$request" | awk '{print $2}')
+"$cli" --data-dir "$a2" --instance "$ch" identity claim "$code" | grep -q "roster v2" || { echo "FAIL: the second device did not claim v2"; exit 1; }
+"$cli" --data-dir "$a2" --instance "$ch" login --identity >/dev/null
+"$cli" --data-dir "$a2" --instance "$fh" login --identity >/dev/null
+x="$work/x"; y="$work/y"
+"$cli" --data-dir "$x" instance add "$flagship" >/dev/null
+"$cli" --data-dir "$y" instance add "$community" >/dev/null
+xr=$("$cli" --data-dir "$x" identity link-request --label "two-x")
+yr=$("$cli" --data-dir "$y" identity link-request --label "two-y")
+# The first device adds x at the flagship, the second adds y at the community: two v3s.
+xc=$("$cli" --data-dir "$a" --instance "$fh" identity approve "$xr" | awk '{print $2}')
+yc=$("$cli" --data-dir "$a2" --instance "$ch" identity approve "$yr" | awk '{print $2}')
+"$cli" --data-dir "$x" identity claim "$xc" | grep -q "roster v3" || { echo "FAIL: x did not claim v3"; exit 1; }
+"$cli" --data-dir "$y" identity claim "$yc" | grep -q "roster v3" || { echo "FAIL: y did not claim v3"; exit 1; }
+# The first device proves itself at the community: CONFLICT with the fork
+# there, merged to v4 and published with the retried proof.
+"$cli" --data-dir "$a" --instance "$ch" login --identity >/dev/null
+roster_is() { "$cli" --data-dir "$1" identity show | grep -q "roster v$2 " && [ "$("$cli" --data-dir "$1" identity show | grep -c '^  device ')" = "$3" ]; }
+roster_is "$a" 4 4 || { echo "FAIL: the first device did not merge to v4 with four devices"; "$cli" --data-dir "$a" identity show; exit 1; }
+# The flagship takes the merge with the first device's next proof; the
+# other devices adopt it with theirs, at either instance.
+"$cli" --data-dir "$a" --instance "$fh" login --identity >/dev/null
+"$cli" --data-dir "$a2" --instance "$fh" login --identity >/dev/null
+"$cli" --data-dir "$x" login --identity >/dev/null
+"$cli" --data-dir "$y" login --identity >/dev/null
+for d in "$a2" "$x" "$y"; do
+  roster_is "$d" 4 4 || { echo "FAIL: $d did not adopt the merged v4"; "$cli" --data-dir "$d" identity show; exit 1; }
+done
+echo "two devices forked the roster at different instances; the client merged it and every device and instance holds v4"
+
 # The scenario suite against each instance, as CI runs it against one.
 for url in "$flagship" "$community"; do
   d="$work/scenario-$(echo "$url" | tr -c 'a-z0-9' '_')"

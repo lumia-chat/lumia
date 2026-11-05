@@ -231,13 +231,33 @@ defmodule Lumia.Identity do
 
   defp verify_against(signed, held) do
     case Roster.verify(signed, held: held) do
-      {:ok, verified} -> {:ok, verified}
-      # Older than held: ignored, and the held version goes back to the
-      # client so it can adopt it (identity spec 5, "older roster").
-      {:error, {:monotonic, :version}} when not is_nil(held) -> {:error, {:conflict, held}}
-      {:error, {step, reason}} -> {:error, {:identity_proof_invalid, step, reason}}
+      {:ok, verified} ->
+        {:ok, verified}
+
+      # The same version or older. Same version, different bytes: a
+      # ROOT-signed roster beats the DEVICE-signed one held (identity spec
+      # 5), which is how a recovery from the phrase wins over a thief's
+      # fork. Otherwise the held version goes back to the client, which
+      # adopts a newer one or merges a fork (spec 5, "older roster").
+      {:error, {:monotonic, :version}} when not is_nil(held) ->
+        root_beats_device(signed, held)
+
+      {:error, {step, reason}} ->
+        {:error, {:identity_proof_invalid, step, reason}}
     end
   end
+
+  defp root_beats_device(signed, %Roster{root_signed?: false} = held) do
+    case Roster.verify(signed) do
+      {:ok, %Roster{root_signed?: true, version: v} = verified} when v == held.version ->
+        {:ok, %{verified | new_revocations: Map.keys(verified.revoked) -- Map.keys(held.revoked)}}
+
+      _ ->
+        {:error, {:conflict, held}}
+    end
+  end
+
+  defp root_beats_device(_signed, held), do: {:error, {:conflict, held}}
 
   defp revocation_policy(%Roster{new_revocations: []}, _context), do: :ok
   defp revocation_policy(%Roster{root_signed?: true}, _context), do: :ok
@@ -256,7 +276,7 @@ defmodule Lumia.Identity do
   defp revocation_policy(_verified, _context), do: {:error, :policy_denied}
 
   defp store(verified, held) do
-    if held && held.version == verified.version do
+    if held && held.signed.body == verified.signed.body do
       :ok
     else
       bytes = V1.SignedRoster.encode(verified.signed)

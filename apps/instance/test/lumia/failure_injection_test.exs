@@ -27,6 +27,8 @@ defmodule Lumia.FailureInjectionTest do
       "lumia-core sync::tests::generation_change_discards_everything_and_resumes_from_zero",
     {:delivery, 11} => "lumia-cli scenario snapshot-under-writes",
     {:identity, 1} => "lumia-cli scenario device-revoke",
+    {:identity, 3} =>
+      "lumia-core identity::roster::tests (the merge), lumia-client identity::tests::a_held_fork_at_the_same_version_is_merged_and_a_newer_successor_adopted, deploy/two-instances.sh (the convergence)",
     {:identity, 11} =>
       "lumia-cli scenario device-revoke (the phrase); lumia-core mls::group::tests::future_epoch_messages_are_held_and_group_info_admits_an_external_join (the rejoin)"
   }
@@ -37,7 +39,6 @@ defmodule Lumia.FailureInjectionTest do
     {:authorization, 7} => "bot tokens and their scopes (authorization section 8) are not built",
     {:authorization, 8} =>
       "the NOT_FOUND half is covered; the override endpoints (authorization section 7) are not built",
-    {:identity, 3} => "forks and the merge rule are not built (plan, step 8)",
     {:identity, 12} =>
       "the verifier and the instance's acceptance are covered; the client's safety-number change has no test (plan, step 8)"
   }

@@ -654,6 +654,103 @@ pub fn roster_body(
     }
 }
 
+// ---- Merging (spec section 5) ---------------------------------------------------------
+
+/// Merges two forks of one identity's roster into version
+/// `max(versions) + 1`, signed by `signer` (spec section 5): devices are
+/// the union of both forks minus any device revoked in either,
+/// revocations the union, and rotations the longer chain, which must have
+/// the shorter as a prefix. Every entry keeps the signature it was carried
+/// with, so the body verifies as a successor of both forks.
+///
+/// A device certified by a signer at or after that signer's revocation in
+/// the other fork could not verify (the certificate rule of step 4), and
+/// monotonicity forbids dropping it, so the merge revokes it, signed by
+/// `signer`: a revoked device's later additions do not count.
+///
+/// # Errors
+/// `Monotonic`/`identity` for forks of different identities;
+/// `Chain`/`rotation_fork` when neither chain is a prefix of the other,
+/// which no merge can reconcile.
+pub fn merge(
+    a: &Verified,
+    b: &Verified,
+    signer: Signer<'_>,
+    issued_at: prost_types::Timestamp,
+) -> Result<SignedRoster, RosterError> {
+    if a.identity_id != b.identity_id {
+        return Err(reject(Step::Monotonic, "identity"));
+    }
+    let (longer, shorter) = if a.body.rotations.len() >= b.body.rotations.len() {
+        (a, b)
+    } else {
+        (b, a)
+    };
+    let longer_chain: Vec<&Vec<u8>> = longer.body.rotations.iter().map(|r| &r.body).collect();
+    let shorter_chain: Vec<&Vec<u8>> = shorter.body.rotations.iter().map(|r| &r.body).collect();
+    if !longer_chain.starts_with(&shorter_chain) {
+        return Err(reject(Step::Chain, "rotation_fork"));
+    }
+
+    let mut revoked: BTreeMap<Vec<u8>, RevokedEntry> = BTreeMap::new();
+    for entry in a.body.revoked.iter().chain(b.body.revoked.iter()) {
+        revoked
+            .entry(entry.device_id.clone())
+            .or_insert_with(|| entry.clone());
+    }
+    let revoked_at = |id: &[u8]| {
+        a.revoked
+            .get(id)
+            .or_else(|| b.revoked.get(id))
+            .map(|r| r.revoked_at)
+    };
+
+    let mut devices: BTreeMap<Vec<u8>, DeviceEntry> = BTreeMap::new();
+    let mut orphans: Vec<DeviceEntry> = Vec::new();
+    for entry in a.body.devices.iter().chain(b.body.devices.iter()) {
+        if revoked.contains_key(&entry.device_id) || devices.contains_key(&entry.device_id) {
+            continue;
+        }
+        let added_at = ts_nanos(entry.added_at.as_ref());
+        let signer_gone = !entry.added_by.is_empty()
+            && revoked_at(&entry.added_by).is_some_and(|at| at <= added_at);
+        if signer_gone {
+            orphans.push(entry.clone());
+        } else {
+            devices.insert(entry.device_id.clone(), entry.clone());
+        }
+    }
+    for orphan in orphans {
+        let public_key = orphan
+            .public_key
+            .as_ref()
+            .map(|k| k.ed25519.clone())
+            .unwrap_or_default();
+        revoked.insert(
+            orphan.device_id.clone(),
+            revoked_entry(
+                &a.identity_id,
+                &orphan.device_id,
+                &public_key,
+                orphan.added_at.unwrap_or_default(),
+                issued_at,
+                signer,
+            ),
+        );
+    }
+
+    let body = roster_body(
+        &a.identity_id,
+        a.version.max(b.version) + 1,
+        &longer.root_public_key,
+        longer.body.rotations.clone(),
+        devices.into_values().collect(),
+        revoked.into_values().collect(),
+        issued_at,
+    );
+    Ok(sign_roster(&body, signer))
+}
+
 /// Serializes and signs a roster body.
 #[must_use]
 pub fn sign_roster(body: &RosterBody, signer: Signer<'_>) -> SignedRoster {
@@ -732,5 +829,268 @@ mod tests {
         assert!(!verified.root_signed);
         assert_eq!(verified.devices.len(), 2);
         assert!(verified.new_revocations.is_empty());
+    }
+
+    /// An identity with two root-signed devices, as `Verified` at version 1.
+    struct Two {
+        root: SigningKey,
+        identity_id: Vec<u8>,
+        phone: (Vec<u8>, SigningKey),
+        laptop: (Vec<u8>, SigningKey),
+        v1: Verified,
+        now: i64,
+    }
+
+    fn nanos(seconds: i64) -> i128 {
+        i128::from(seconds) * 1_000_000_000
+    }
+
+    fn new_device(id: u8, key: &SigningKey, label: &str, added_at: i64) -> NewDevice {
+        NewDevice {
+            device_id: vec![id; 16],
+            public_key: key.verifying_key().to_bytes().to_vec(),
+            kind: DeviceKind::Native,
+            web_origin: String::new(),
+            label: label.into(),
+            added_at: ts(added_at),
+        }
+    }
+
+    fn two() -> Two {
+        let root = generate_signing_key().unwrap();
+        let identity_id = blake3(&root.verifying_key().to_bytes());
+        let phone = generate_signing_key().unwrap();
+        let laptop = generate_signing_key().unwrap();
+        let now = 1_700_000_000i64;
+        let body = roster_body(
+            &identity_id,
+            1,
+            &root.verifying_key().to_bytes(),
+            vec![],
+            vec![
+                device_entry(
+                    &identity_id,
+                    &new_device(1, &phone, "phone", now - 100),
+                    Signer::Root(&root),
+                ),
+                device_entry(
+                    &identity_id,
+                    &new_device(2, &laptop, "laptop", now - 100),
+                    Signer::Root(&root),
+                ),
+            ],
+            vec![],
+            ts(now - 100),
+        );
+        let v1 = verify_roster(&sign_roster(&body, Signer::Root(&root)), None, nanos(now)).unwrap();
+        Two {
+            root,
+            identity_id,
+            phone: (vec![1u8; 16], phone),
+            laptop: (vec![2u8; 16], laptop),
+            v1,
+            now,
+        }
+    }
+
+    /// `signer` adds `device` on top of `base`, as version `base + 1`.
+    fn fork_adding(
+        t: &Two,
+        base: &Verified,
+        signer: &(Vec<u8>, SigningKey),
+        device: NewDevice,
+    ) -> Verified {
+        let mut devices = base.body.devices.clone();
+        devices.push(device_entry(
+            &t.identity_id,
+            &device,
+            Signer::Device(&signer.0, &signer.1),
+        ));
+        let body = roster_body(
+            &t.identity_id,
+            base.version + 1,
+            &base.root_public_key,
+            base.body.rotations.clone(),
+            devices,
+            base.body.revoked.clone(),
+            ts(t.now),
+        );
+        let signed = sign_roster(&body, Signer::Device(&signer.0, &signer.1));
+        verify_roster(&signed, Some(base), nanos(t.now)).unwrap()
+    }
+
+    /// `signer` revokes `target` on top of `base`, as version `base + 1`.
+    fn fork_revoking(
+        t: &Two,
+        base: &Verified,
+        signer: &(Vec<u8>, SigningKey),
+        target: &[u8],
+        at: i64,
+    ) -> Verified {
+        let info = base.devices.get(target).unwrap();
+        let devices: Vec<DeviceEntry> = base
+            .body
+            .devices
+            .iter()
+            .filter(|d| d.device_id != target)
+            .cloned()
+            .collect();
+        let mut revoked = base.body.revoked.clone();
+        revoked.push(revoked_entry(
+            &t.identity_id,
+            target,
+            &info.public_key,
+            info.cert.added_at.unwrap(),
+            ts(at),
+            Signer::Device(&signer.0, &signer.1),
+        ));
+        let body = roster_body(
+            &t.identity_id,
+            base.version + 1,
+            &base.root_public_key,
+            base.body.rotations.clone(),
+            devices,
+            revoked,
+            ts(t.now),
+        );
+        let signed = sign_roster(&body, Signer::Device(&signer.0, &signer.1));
+        verify_roster(&signed, Some(base), nanos(t.now)).unwrap()
+    }
+
+    #[test]
+    fn two_forks_adding_a_device_each_merge_with_both_devices_and_verify_as_a_successor_of_either()
+    {
+        let t = two();
+        let tablet = generate_signing_key().unwrap();
+        let watch = generate_signing_key().unwrap();
+        let a = fork_adding(
+            &t,
+            &t.v1,
+            &t.phone,
+            new_device(3, &tablet, "tablet", t.now - 10),
+        );
+        let b = fork_adding(
+            &t,
+            &t.v1,
+            &t.laptop,
+            new_device(4, &watch, "watch", t.now - 10),
+        );
+        assert_eq!((a.version, b.version), (2, 2));
+        assert_ne!(a.signed.body, b.signed.body);
+
+        let signed = merge(&a, &b, Signer::Device(&t.phone.0, &t.phone.1), ts(t.now)).unwrap();
+        let from_a = verify_roster(&signed, Some(&a), nanos(t.now)).unwrap();
+        let from_b = verify_roster(&signed, Some(&b), nanos(t.now)).unwrap();
+        assert_eq!(from_a.version, 3);
+        assert_eq!(from_a.devices.len(), 4);
+        assert!(from_a.devices.contains_key(&vec![3u8; 16]));
+        assert!(from_a.devices.contains_key(&vec![4u8; 16]));
+        assert!(from_b.new_revocations.is_empty());
+        assert!(!from_a.root_signed);
+        // Idempotent in content: merging the same forks again gives the same body.
+        let again = merge(&b, &a, Signer::Device(&t.phone.0, &t.phone.1), ts(t.now)).unwrap();
+        assert_eq!(
+            RosterBody::decode(again.body.as_slice())
+                .unwrap()
+                .devices
+                .len(),
+            4
+        );
+    }
+
+    #[test]
+    fn a_revocation_in_one_fork_wins_and_takes_the_signers_later_additions_with_it() {
+        let t = two();
+        let watch = generate_signing_key().unwrap();
+        let earlier = generate_signing_key().unwrap();
+        // The laptop adds a watch after the moment the phone revokes it, and
+        // an earlier device before that moment.
+        let b1 = fork_adding(
+            &t,
+            &t.v1,
+            &t.laptop,
+            new_device(5, &earlier, "earlier", t.now - 60),
+        );
+        let b = fork_adding(
+            &t,
+            &b1,
+            &t.laptop,
+            new_device(4, &watch, "watch", t.now - 10),
+        );
+        let a = fork_revoking(&t, &t.v1, &t.phone, &t.laptop.0, t.now - 30);
+
+        let signed = merge(&a, &b, Signer::Device(&t.phone.0, &t.phone.1), ts(t.now)).unwrap();
+        let verified = verify_roster(&signed, Some(&a), nanos(t.now)).unwrap();
+        let from_b = verify_roster(&signed, Some(&b), nanos(t.now)).unwrap();
+        assert_eq!(verified.version, 4);
+        assert!(verified.revoked.contains_key(&t.laptop.0));
+        assert!(
+            verified.devices.contains_key(&vec![5u8; 16]),
+            "added before the revocation"
+        );
+        assert!(
+            verified.revoked.contains_key(&vec![4u8; 16]),
+            "added after it: revoked by the merge"
+        );
+        assert!(!verified.devices.contains_key(&t.laptop.0));
+        // The instance holding the fork with the watch learns two revocations.
+        assert_eq!(from_b.new_revocations.len(), 2);
+    }
+
+    #[test]
+    fn forks_with_diverging_rotation_chains_are_irreconcilable() {
+        let t = two();
+        let new_a = generate_signing_key().unwrap();
+        let new_b = generate_signing_key().unwrap();
+        let rotated = |new_root: &SigningKey| {
+            let body = roster_body(
+                &t.identity_id,
+                2,
+                &new_root.verifying_key().to_bytes(),
+                vec![rotation(
+                    &t.identity_id,
+                    &t.root,
+                    &new_root.verifying_key().to_bytes(),
+                    ts(t.now - 5),
+                )],
+                t.v1.body.devices.clone(),
+                vec![],
+                ts(t.now),
+            );
+            verify_roster(
+                &sign_roster(&body, Signer::Root(new_root)),
+                Some(&t.v1),
+                nanos(t.now),
+            )
+            .unwrap()
+        };
+        let a = rotated(&new_a);
+        let b = rotated(&new_b);
+        let err = merge(&a, &b, Signer::Device(&t.phone.0, &t.phone.1), ts(t.now)).unwrap_err();
+        assert_eq!((err.step, err.reason), (Step::Chain, "rotation_fork"));
+
+        // One fork rotated, the other only added: the chain is the rotated one.
+        let tablet = generate_signing_key().unwrap();
+        let c = fork_adding(
+            &t,
+            &t.v1,
+            &t.phone,
+            new_device(3, &tablet, "tablet", t.now - 10),
+        );
+        let signed = merge(&a, &c, Signer::Device(&t.phone.0, &t.phone.1), ts(t.now)).unwrap();
+        let merged = RosterBody::decode(signed.body.as_slice()).unwrap();
+        assert_eq!(merged.rotations.len(), 1);
+        assert_eq!(
+            merged.root_public_key.as_ref().unwrap().ed25519,
+            new_a.verifying_key().to_bytes().to_vec()
+        );
+        assert_eq!(
+            verify_roster(&signed, Some(&c), nanos(t.now))
+                .unwrap()
+                .devices
+                .len(),
+            3
+        );
+        verify_roster(&signed, Some(&a), nanos(t.now)).unwrap();
     }
 }

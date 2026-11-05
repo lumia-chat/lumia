@@ -166,7 +166,7 @@ Matching an email or profile is never sufficient for linking.
 
 ## 5. Conflicts and merging
 
-**Same version, different bytes.** A ROOT-signed roster beats a DEVICE-signed one. Two DEVICE-signed forks: the instance keeps the one it holds and answers `CONFLICT` with the held roster in `details.held` (base64). The client must not retry the rejected bytes.
+**Same version, different bytes.** A ROOT-signed roster beats a DEVICE-signed one: the instance replaces what it holds without the monotonicity step, since the root is the identity's own authority and this is how a recovery from the phrase displaces a thief's fork; the revocations it adds are applied as on any accepted roster. Two DEVICE-signed forks, or a DEVICE-signed roster against a ROOT-signed one: the instance keeps the one it holds and answers `CONFLICT` with the held roster in `details.held` (base64). The client must not retry the rejected bytes.
 
 **Client merge.** On `CONFLICT`, or when two instances return different held rosters at the same version, the client builds version `max(versions) + 1`:
 
@@ -174,7 +174,9 @@ Matching an email or profile is never sufficient for linking.
 - `revoked` = union of both forks' revocations;
 - `rotations` = the longer chain, which must have the shorter as a prefix, else the forks are irreconcilable and the client refuses and alerts the user.
 
-Each entry keeps its original certificate or revocation signature, so the merged body still verifies. The client signs the merged roster and publishes it everywhere. Revocations always win a merge; a merged roster that adds revocations relative to what some instance holds goes through the revoke endpoint there.
+Each entry keeps its original certificate or revocation signature, so the merged body still verifies. The client signs the merged roster and publishes it everywhere: it is stored on the device at once and reaches each instance with the device's next proof there, where it is accepted as a successor of whichever fork that instance held. Revocations always win a merge; a merged roster that adds revocations relative to what some instance holds goes through the revoke endpoint there.
+
+One case needs more than the union. A device certified by a signer at or after that signer's revocation in the other fork cannot verify (the certificate rule of section 3.3, step 4), and monotonicity forbids dropping a device the instance holds, so the merge revokes it, with a revocation signed by the merging device: a revoked device's later additions do not count. A fork that revokes the merging device itself is not merged; the device reports itself revoked.
 
 **Older roster.** An instance that receives a version lower than it holds ignores it and returns the held version. The client adopts it and reconciles as above.
 

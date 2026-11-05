@@ -12,8 +12,8 @@ use lumia_core::identity::link::{seal_bundle, LinkRequester};
 use lumia_core::identity::phrase::Phrase;
 use lumia_core::identity::proof::build_proof;
 use lumia_core::identity::roster::{
-    device_entry, revoked_entry, roster_body, sign_roster, verify_roster, NewDevice, Signer,
-    Verified,
+    device_entry, merge, revoked_entry, roster_body, sign_roster, verify_roster, NewDevice, Signer,
+    Step, Verified,
 };
 use lumia_core::keystore::Keystore;
 use lumia_core::proto::{
@@ -262,20 +262,61 @@ impl<S: Store, K: Keystore> Device<'_, S, K> {
         api.link_identity(proof, &reauth.reauth_token).await
     }
 
-    /// Adopts the roster an instance returned in `CONFLICT`'s `details.held`
-    /// (spec 5, "older roster"). It must verify against the one held here
-    /// and be newer.
+    /// Reconciles with the roster an instance returned in `CONFLICT`'s
+    /// `details.held` (spec 5). A newer successor of the one held here is
+    /// adopted ("older roster"). A fork, the same version with different
+    /// bytes or any other roster that is not a successor, is merged: the
+    /// union of both, as version `max + 1`, signed by this device and
+    /// stored here; it is published to each instance the next time this
+    /// device proves itself there. A fork that revokes this device is not
+    /// merged.
     ///
     /// # Errors
-    /// When the held roster is malformed or does not verify as a successor.
+    /// When the held roster is malformed or does not verify on its own,
+    /// when the forks' rotation chains diverge (irreconcilable), or
+    /// [`ClientError::DeviceRevoked`] when the held roster revokes this
+    /// device.
     pub fn adopt_held(&mut self, held_b64: &str) -> Result<Verified, ClientError> {
         let current = self.roster()?;
         let bytes = B64
             .decode(held_b64.trim())
             .map_err(|e| ClientError::State(format!("held roster: {e}")))?;
         let signed = SignedRoster::decode(bytes.as_slice())?;
-        let verified = verify_roster(&signed, Some(&current), now_nanos())?;
-        self.save_roster(&verified.identity_id, &signed)?;
+        match verify_roster(&signed, Some(&current), now_nanos()) {
+            Ok(verified) => {
+                self.save_roster(&verified.identity_id, &signed)?;
+                Ok(verified)
+            }
+            Err(e) if e.step == Step::Monotonic => {
+                let theirs = verify_roster(&signed, None, now_nanos())?;
+                self.merge_with(&current, &theirs)
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// The merge rule (spec 5): `current` and `theirs` become one roster,
+    /// signed by this device, which verifies as a successor of both.
+    fn merge_with(
+        &mut self,
+        current: &Verified,
+        theirs: &Verified,
+    ) -> Result<Verified, ClientError> {
+        if theirs.revoked.contains_key(&self.device_id) {
+            return Err(ClientError::DeviceRevoked {
+                roster_version: theirs.version,
+            });
+        }
+        let key = self.device_key()?;
+        let merged = merge(
+            current,
+            theirs,
+            Signer::Device(&self.device_id, &key),
+            now(),
+        )?;
+        let verified = verify_roster(&merged, Some(current), now_nanos())?;
+        verify_roster(&merged, Some(theirs), now_nanos())?;
+        self.save_roster(&verified.identity_id, &merged)?;
         Ok(verified)
     }
 
@@ -783,5 +824,127 @@ mod tests {
             first.identity_id
         );
         assert_eq!(device.keystore.get("backup_key").unwrap(), backup_key);
+    }
+
+    #[test]
+    fn a_held_fork_at_the_same_version_is_merged_and_a_newer_successor_adopted() {
+        use lumia_core::identity::keys::{generate_signing_key, signing_key};
+        use lumia_core::proto::DeviceKind;
+
+        let dir =
+            std::env::temp_dir().join(format!("lumia-identity-{}", wire::display(&wire::new_id())));
+        let mut store = SqliteStore::in_memory().unwrap();
+        let mut keystore = FileKeystore::open(&dir).unwrap();
+        let mut device = Device {
+            store: &mut store,
+            keystore: &mut keystore,
+            device_id: wire::new_id(),
+        };
+        device.create("phone").unwrap();
+        let v1 = device.roster().unwrap();
+        let phone_key = signing_key(&device.keystore.get("device_key").unwrap().unwrap()).unwrap();
+        let new_device = |id: u8, key: &SigningKey, label: &str| NewDevice {
+            device_id: vec![id; 16],
+            public_key: key.verifying_key().to_bytes().to_vec(),
+            kind: DeviceKind::Native,
+            web_origin: String::new(),
+            label: label.into(),
+            added_at: now(),
+        };
+        let add = |base: &Verified, signer: Signer<'_>, entry: NewDevice| {
+            let mut devices = base.body.devices.clone();
+            devices.push(device_entry(&base.identity_id, &entry, signer));
+            let body = roster_body(
+                &base.identity_id,
+                base.version + 1,
+                &base.root_public_key,
+                base.body.rotations.clone(),
+                devices,
+                base.body.revoked.clone(),
+                now(),
+            );
+            sign_roster(&body, signer)
+        };
+
+        // Ours: the phone adds a tablet, version 2.
+        let tablet = generate_signing_key().unwrap();
+        let ours = add(
+            &v1,
+            Signer::Device(&device.device_id, &phone_key),
+            new_device(3, &tablet, "tablet"),
+        );
+        device.save_roster(&v1.identity_id, &ours).unwrap();
+        assert_eq!(device.roster().unwrap().version, 2);
+
+        // Theirs: from version 1 as well, the phone (on another copy) adds a laptop; version 2 too.
+        let laptop = generate_signing_key().unwrap();
+        let theirs = add(
+            &v1,
+            Signer::Device(&device.device_id, &phone_key),
+            new_device(2, &laptop, "laptop"),
+        );
+        assert_ne!(ours.body, theirs.body);
+
+        let merged = device
+            .adopt_held(&B64.encode(theirs.encode_to_vec()))
+            .unwrap();
+        assert_eq!(merged.version, 3);
+        assert_eq!(merged.devices.len(), 3);
+        assert!(merged.devices.contains_key(&vec![2u8; 16]));
+        assert!(merged.devices.contains_key(&vec![3u8; 16]));
+        assert_eq!(device.roster().unwrap().version, 3);
+        // The merged roster is a successor of the fork an instance holds.
+        let theirs_v = verify_roster(&theirs, None, now_nanos()).unwrap();
+        verify_roster(&merged.signed, Some(&theirs_v), now_nanos()).unwrap();
+
+        // A newer successor is simply adopted.
+        let watch = generate_signing_key().unwrap();
+        let newer = add(
+            &merged,
+            Signer::Device(&[2u8; 16], &laptop),
+            new_device(4, &watch, "watch"),
+        );
+        let adopted = device
+            .adopt_held(&B64.encode(newer.encode_to_vec()))
+            .unwrap();
+        assert_eq!((adopted.version, adopted.devices.len()), (4, 4));
+
+        // A fork that revokes this device is refused, and nothing moves.
+        let info = merged.devices.get(&device.device_id).unwrap();
+        let revoking = {
+            let devices: Vec<_> = merged
+                .body
+                .devices
+                .iter()
+                .filter(|d| d.device_id != device.device_id)
+                .cloned()
+                .collect();
+            let revoked = vec![revoked_entry(
+                &merged.identity_id,
+                &device.device_id,
+                &info.public_key,
+                info.cert.added_at.unwrap(),
+                now(),
+                Signer::Device(&[2u8; 16], &laptop),
+            )];
+            let body = roster_body(
+                &merged.identity_id,
+                4,
+                &merged.root_public_key,
+                vec![],
+                devices,
+                revoked,
+                now(),
+            );
+            sign_roster(&body, Signer::Device(&[2u8; 16], &laptop))
+        };
+        let err = device
+            .adopt_held(&B64.encode(revoking.encode_to_vec()))
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            ClientError::DeviceRevoked { roster_version: 4 }
+        ));
+        assert_eq!(device.roster().unwrap().version, 4);
     }
 }

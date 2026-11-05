@@ -146,10 +146,11 @@ defmodule Lumia.IdentityTest do
       assert {:ok, %{version: 2}} = Identity.accept_roster(v2, :publish)
       assert {:ok, %{version: 2, new_revocations: []}} = Identity.accept_roster(v2, :publish)
 
-      # Not newer than held: ignored, and the held version comes back.
+      # Not newer than held and device-signed like it: ignored, and the
+      # held version comes back.
       assert {:error, {:conflict, %{version: 2}}} =
                Identity.accept_roster(
-                 roster(ctx.identity, :root,
+                 roster(ctx.identity, ctx.phone,
                    version: 2,
                    devices: [cert(ctx.identity, ctx.phone)]
                  ),
@@ -209,6 +210,89 @@ defmodule Lumia.IdentityTest do
         )
 
       assert {:ok, %{root_signed?: true}} = Identity.accept_roster(v2, :publish)
+    end
+
+    @tag failure_injection: [identity: 3]
+    test "two device-signed forks at one version: the held one stays, the other gets CONFLICT with it, and the merged successor is accepted",
+         ctx do
+      laptop = device("laptop")
+      tablet = device("tablet")
+      phone_cert = cert(ctx.identity, ctx.phone)
+      laptop_cert = cert(ctx.identity, laptop, ctx.phone, added_at: now(1))
+      tablet_cert = cert(ctx.identity, tablet, ctx.phone, added_at: now(1))
+
+      # Fork A reached this instance first.
+      fork_a = roster(ctx.identity, ctx.phone, version: 2, devices: [phone_cert, laptop_cert])
+      fork_b = roster(ctx.identity, ctx.phone, version: 2, devices: [phone_cert, tablet_cert])
+      assert fork_a.body != fork_b.body
+      assert {:ok, %{version: 2}} = Identity.accept_roster(fork_a, :publish)
+
+      # Fork B is refused with the held bytes for the client to merge with.
+      assert {:error, {:conflict, %{version: 2, signed: %{body: held_body}}}} =
+               Identity.accept_roster(fork_b, :publish)
+
+      assert held_body == fork_a.body
+      assert Identity.held_roster(ctx.identity.identity_id).signed.body == fork_a.body
+
+      # The merge (spec 5): the union at version 3, every entry with its own
+      # signature, signed by the merging device.
+      merged =
+        roster(ctx.identity, ctx.phone,
+          version: 3,
+          devices: [phone_cert, laptop_cert, tablet_cert]
+        )
+
+      assert {:ok, %{version: 3, new_revocations: []} = verified} =
+               Identity.accept_roster(merged, :publish)
+
+      assert Enum.sort(Map.keys(verified.devices)) ==
+               Enum.sort([ctx.phone.id, laptop.id, tablet.id])
+
+      # An instance that held fork B instead accepts the same merged roster.
+      assert {:ok, _} =
+               Lumia.Identity.Roster.verify(merged,
+                 held: elem(Lumia.Identity.Roster.verify(fork_b), 1)
+               )
+    end
+
+    test "at the same version a root-signed roster beats a device-signed one, and never the reverse",
+         ctx do
+      laptop = device("laptop")
+      fresh = device("fresh")
+
+      thief =
+        roster(ctx.identity, ctx.phone,
+          version: 2,
+          devices: [
+            cert(ctx.identity, ctx.phone),
+            cert(ctx.identity, laptop, ctx.phone, added_at: now(1))
+          ]
+        )
+
+      assert {:ok, %{root_signed?: false}} = Identity.accept_roster(thief, :publish)
+
+      # Recovery from the phrase: the root revokes the phone and adds a
+      # fresh device, at the version the fork took.
+      recovery =
+        roster(ctx.identity, :root,
+          version: 2,
+          revoked: [revocation(ctx.identity, ctx.phone)],
+          devices: [cert(ctx.identity, fresh)]
+        )
+
+      assert {:ok, %{root_signed?: true, version: 2, new_revocations: [phone_id]}} =
+               Identity.accept_roster(recovery, :publish)
+
+      assert phone_id == ctx.phone.id
+      held = Identity.held_roster(ctx.identity.identity_id)
+      assert held.signed.body == recovery.body
+      assert held.root_signed?
+
+      # Another device-signed roster at version 2 does not displace it.
+      assert {:error, {:conflict, %{root_signed?: true}}} =
+               Identity.accept_roster(thief, :publish)
+
+      assert Identity.held_roster(ctx.identity.identity_id).signed.body == recovery.body
     end
 
     @tag failure_injection: [identity: 12]
