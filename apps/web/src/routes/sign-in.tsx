@@ -222,6 +222,16 @@ export function SignIn() {
               <Button variant="primary" type="submit" block disabled={busy()}>
                 {mode() === "create" ? "Create account" : "Sign in"}
               </Button>
+              <Show when={mode() === "signIn" && i().oidcName}>
+                <Button icon="key" block type="button" disabled={busy()} onClick={() => {
+                  // Off to the provider; the instance brings the browser back here with a sign-in token.
+                  const instanceUrl = opened() ?? location.origin;
+                  const back = `${location.origin}/sign-in?instance=${encodeURIComponent(instanceUrl)}`;
+                  location.assign(`${instanceUrl}/api/v1/auth/oidc/start?return=${encodeURIComponent(back)}`);
+                }}>
+                  {i().oidcName}
+                </Button>
+              </Show>
               <Show when={mode() === "signIn" && passkeysAvailable()}>
                 <Button icon="key" block type="button" disabled={busy()} onClick={() => void passkey()}>
                   Sign in with a passkey

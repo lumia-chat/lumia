@@ -37,7 +37,8 @@ defmodule LumiaWeb.InstanceController do
           %V1.ReactionDefinition{key: key, label: label}
         end),
       recovery_generation: Instance.recovery_generation(),
-      magic_link_enabled: Lumia.Auth.MagicLink.enabled?()
+      magic_link_enabled: Lumia.Auth.MagicLink.enabled?(),
+      oidc_name: Lumia.Auth.Oidc.name() || ""
     }
   end
 

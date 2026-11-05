@@ -22,6 +22,8 @@ defmodule LumiaWeb.Router do
     post "/auth/sign-in/password", AuthController, :sign_in_password
     post "/auth/sign-in/magic-link", AuthController, :magic_link
     post "/auth/sign-in/magic-link/complete", AuthController, :magic_link_complete
+    get "/auth/oidc/start", OidcController, :start
+    get "/auth/oidc/callback", OidcController, :callback
     post "/auth/passkey/assert/start", PasskeyController, :assert_start
     post "/auth/passkey/assert/finish", PasskeyController, :assert_finish
     post "/auth/sign-in/identity", IdentityController, :sign_in

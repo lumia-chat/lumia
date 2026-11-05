@@ -82,6 +82,7 @@ pub struct InstanceSummary {
     pub open_registration: bool,
     pub web_push_public_key: String,
     pub magic_link_enabled: bool,
+    pub oidc_name: String,
 }
 
 impl From<app::InstanceSummary> for InstanceSummary {
@@ -98,6 +99,7 @@ impl From<app::InstanceSummary> for InstanceSummary {
             open_registration: s.open_registration,
             web_push_public_key: s.web_push_public_key,
             magic_link_enabled: s.magic_link_enabled,
+            oidc_name: s.oidc_name,
         }
     }
 }

@@ -179,6 +179,7 @@ defmodule Lumia.V1.InstanceInfo do
   field :recovery_generation, 13, type: :uint64, json_name: "recoveryGeneration"
   field :web_push_public_key, 14, type: :string, json_name: "webPushPublicKey"
   field :magic_link_enabled, 15, type: :bool, json_name: "magicLinkEnabled"
+  field :oidc_name, 16, type: :string, json_name: "oidcName"
 end
 
 defmodule Lumia.V1.MagicLinkRequest do

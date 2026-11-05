@@ -36,6 +36,17 @@ config :lumia, :instance,
     System.get_env("LUMIA_MAGIC_LINK", if(config_env() == :prod, do: "false", else: "true")) ==
       "true"
 
+# OIDC as a client (architecture 6.3): one provider, set by the operator.
+# LUMIA_OIDC_ISSUER is the issuer URL (discovery under it), LUMIA_OIDC_NAME
+# what the sign-in button says.
+if issuer = System.get_env("LUMIA_OIDC_ISSUER") do
+  config :lumia, :oidc,
+    issuer: issuer,
+    client_id: System.fetch_env!("LUMIA_OIDC_CLIENT_ID"),
+    client_secret: System.get_env("LUMIA_OIDC_CLIENT_SECRET", ""),
+    name: System.get_env("LUMIA_OIDC_NAME", "Sign in with your organisation")
+end
+
 if origins = System.get_env("LUMIA_WEB_ORIGINS") do
   config :lumia, :identity,
     web_origins:

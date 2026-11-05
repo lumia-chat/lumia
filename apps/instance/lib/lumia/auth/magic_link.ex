@@ -60,6 +60,25 @@ defmodule Lumia.Auth.MagicLink do
     end
   end
 
+  @doc """
+  A one-time sign-in token for the account, for a flow that proved the
+  person another way (OIDC); nothing is mailed. Completed as a mailed
+  token is.
+  """
+  def mint(%Account{} = account) do
+    token = Base.url_encode64(:crypto.strong_rand_bytes(24), padding: false)
+    expires_at = DateTime.add(DateTime.utc_now(), @ttl_seconds, :second)
+
+    case Repo.insert(%Link{
+           account_id: account.id,
+           token_hash: hash(token),
+           expires_at: expires_at
+         }) do
+      {:ok, _} -> {:ok, token}
+      {:error, _} -> {:error, :internal}
+    end
+  end
+
   @doc "Signs `device_id` in with a token from the mail: once, within its lifetime."
   def complete(token, device_id, opts \\ []) when is_binary(token) do
     hash = hash(String.trim(token))

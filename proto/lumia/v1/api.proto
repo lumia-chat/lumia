@@ -106,6 +106,10 @@ message InstanceInfo {
   string web_push_public_key = 14;
   // Magic-link sign-in (architecture 6.3): on when the instance can send mail.
   bool magic_link_enabled = 15;
+  // OIDC sign-in (architecture 6.3): the provider's name for the button, such
+  // as "Sign in with Okta"; empty when the instance has no provider. The flow
+  // is GET /auth/oidc/start?return={url}, which ends at {url}?magic={token}.
+  string oidc_name = 16;
 }
 
 // POST /auth/sign-in/magic-link — public, 202 whether or not the address

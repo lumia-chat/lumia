@@ -649,6 +649,86 @@ async function passkey(which: string, handle: string) {
   console.log(`  ${which}: made a passkey, signed in with it, and removed it in ${Date.now() - t0} ms`);
 }
 
+// OIDC sign-in (architecture 6.3), with a provider of the suite's own: the
+// discovery document, an authorize page that sends the browser straight
+// back with a code, a token endpoint that signs an ID token for that
+// code's nonce with the suite's RSA key, the key set and userinfo. The
+// step runs when the instance names a provider (LUMIA_OIDC_ISSUER at
+// this port, with LUMIA_OIDC_CLIENT_ID=suite), and is skipped otherwise.
+const oidcPort = 4920;
+const oidcIssuer = `http://127.0.0.1:${oidcPort}`;
+const oidcKeys = await crypto.subtle.generateKey({ name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" }, true, ["sign", "verify"]);
+const oidcCodes = new Map<string, { nonce: string; clientId: string }>();
+const oidcSubject = `suite-${Date.now()}`;
+const oidcService = Bun.serve({
+  port: oidcPort,
+  hostname: "127.0.0.1",
+  async fetch(req) {
+    const url = new URL(req.url);
+    const json = (body: unknown) => new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+    if (url.pathname === "/.well-known/openid-configuration") {
+      return json({
+        issuer: oidcIssuer,
+        authorization_endpoint: `${oidcIssuer}/authorize`,
+        token_endpoint: `${oidcIssuer}/token`,
+        jwks_uri: `${oidcIssuer}/jwks`,
+        userinfo_endpoint: `${oidcIssuer}/userinfo`,
+        response_types_supported: ["code"],
+        subject_types_supported: ["public"],
+        id_token_signing_alg_values_supported: ["RS256"],
+        token_endpoint_auth_methods_supported: ["client_secret_basic", "client_secret_post"],
+        code_challenge_methods_supported: ["S256"],
+      });
+    }
+    if (url.pathname === "/authorize") {
+      const code = `code-${Date.now()}`;
+      oidcCodes.set(code, { nonce: url.searchParams.get("nonce") ?? "", clientId: url.searchParams.get("client_id") ?? "" });
+      const back = new URL(url.searchParams.get("redirect_uri") ?? "");
+      back.searchParams.set("code", code);
+      back.searchParams.set("state", url.searchParams.get("state") ?? "");
+      return Response.redirect(back.toString(), 302);
+    }
+    if (url.pathname === "/token") {
+      const form = new URLSearchParams(await req.text());
+      const issued = oidcCodes.get(form.get("code") ?? "");
+      if (!issued) return new Response("unknown code", { status: 400 });
+      const now = Math.floor(Date.now() / 1000);
+      const claims = { iss: oidcIssuer, sub: oidcSubject, aud: issued.clientId, exp: now + 300, iat: now, nonce: issued.nonce, email: `${oidcSubject}@example.com`, preferred_username: "suite.person", name: "Suite Person" };
+      const part = (o: unknown) => base64url(new TextEncoder().encode(JSON.stringify(o)));
+      const signingInput = `${part({ alg: "RS256", typ: "JWT" })}.${part(claims)}`;
+      const signature = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", oidcKeys.privateKey, new TextEncoder().encode(signingInput));
+      return json({ access_token: "access", token_type: "Bearer", expires_in: 300, id_token: `${signingInput}.${base64url(signature)}` });
+    }
+    if (url.pathname === "/jwks") {
+      const jwk = await crypto.subtle.exportKey("jwk", oidcKeys.publicKey);
+      return json({ keys: [{ kty: jwk.kty, n: jwk.n, e: jwk.e, alg: "RS256", use: "sig" }] });
+    }
+    if (url.pathname === "/userinfo") return json({ sub: oidcSubject, email: `${oidcSubject}@example.com`, preferred_username: "suite.person", name: "Suite Person" });
+    return new Response("not here", { status: 404 });
+  },
+});
+
+async function oidc(which: string) {
+  const info = (await (await fetch(`${instance}/api/v1/instance`)).json()) as { oidcName?: string };
+  if (!info.oidcName) {
+    console.log(`  ${which}: the instance names no OIDC provider (LUMIA_OIDC_ISSUER=${oidcIssuer} LUMIA_OIDC_CLIENT_ID=suite to try it); skipped`);
+    return;
+  }
+  const { ctx, page } = await open(which, "oidc");
+  const t0 = Date.now();
+  try {
+    phase("provider");
+    await trustCard(page);
+    await page.getByRole("button", { name: info.oidcName }).click();
+    phase("back");
+    await page.getByRole("button", { name: "Create, join or discover servers" }).waitFor();
+    await page.screenshot({ path: `${out}/${which}-oidc.png` });
+  } finally {
+    await ctx.close();
+  }
+  console.log(`  ${which}: went to the provider, came back with a token, and was signed in as its subject in ${Date.now() - t0} ms`);
+}
+
 if (!existsSync(cli)) run(["cargo", "build", "--release", "-p", "lumia-cli"], resolve(web, "../core"));
 rmSync(work, { recursive: true, force: true });
 mkdirSync(out, { recursive: true });
@@ -712,6 +792,7 @@ try {
       ["push", () => webPush(which, `web${stamp}`, passwordDir, server, general, webAccount)],
       ["magic link", () => magicLink(which)],
       ["passkey", () => passkey(which, `web${stamp}`)],
+      ["oidc", () => oidc(which)],
     ] as const) {
       // A heartbeat while the step runs (CI shows a step's log only once it
       // ends) and a hard bound, so a hang names itself instead of the job
@@ -743,4 +824,5 @@ try {
 } finally {
   vite?.kill();
   pushService.stop(true);
+  oidcService.stop(true);
 }

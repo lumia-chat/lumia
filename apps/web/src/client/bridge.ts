@@ -15,6 +15,8 @@ export interface InstanceSummary {
   openRegistration: boolean;
   webPushPublicKey: string;
   magicLinkEnabled: boolean;
+  /** The OIDC provider's name for the sign-in button; empty without one. */
+  oidcName: string;
 }
 export interface ServerSummary {
   serverId: string;

@@ -94,6 +94,8 @@ pub struct InstanceSummary {
     pub web_push_public_key: String,
     /// Whether the instance sends magic-link sign-in mail.
     pub magic_link_enabled: bool,
+    /// The OIDC provider's name for the sign-in button; empty without one.
+    pub oidc_name: String,
 }
 
 /// A server the account belongs to.
@@ -863,6 +865,7 @@ impl App {
             open_registration: info.open_registration,
             web_push_public_key: info.web_push_public_key,
             magic_link_enabled: info.magic_link_enabled,
+            oidc_name: info.oidc_name,
         })
     }
 

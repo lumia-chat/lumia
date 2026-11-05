@@ -56,6 +56,10 @@ defmodule Lumia.MixProject do
       {:swoosh, "~> 1.16"},
       # WebAuthn for passkeys (architecture 6.3).
       {:wax_, "~> 0.7.0"},
+      # OIDC as a client (architecture 6.3).
+      {:assent, "~> 0.3.2"},
+      # Signs the fake provider's ID tokens in the tests.
+      {:jose, "~> 1.11", only: :test},
       {:req, "~> 0.5"},
       {:telemetry_metrics, "~> 1.0"},
       {:telemetry_metrics_prometheus_core, "~> 1.2"},
