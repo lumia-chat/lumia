@@ -369,11 +369,16 @@ async function invite(which: string, dataDir: string, server: string) {
 
 // A server and a channel from the app: the rail's "+" makes a server the
 // account owns, the server sidebar's "New channel" its first channel.
-async function create(which: string, stamp: number) {
-  const { ctx, page } = await open(which, "sign-in", true);
+async function create(which: string, handle: string, stamp: number) {
+  // A profile of its own, signed in here: WebKit does not carry a
+  // profile's session from one step to the next.
+  const { ctx, page } = await open(which, "create");
   const t0 = Date.now();
   try {
-    await goto(page, `${base}/app`);
+    await trustCard(page);
+    await page.getByLabel("Email or handle").fill(handle);
+    await page.getByRole("textbox", { name: "Password" }).fill(password);
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
     await page.getByPlaceholder(/^Message #/).waitFor();
     phase("server");
     await page.getByRole("button", { name: "Create, join or discover servers" }).click();
@@ -591,7 +596,7 @@ try {
       ["link", () => link(which, identityDir)],
       ["dm", () => dm(which, aDir, bAccount, aHandle)],
       ["invite", () => invite(which, passwordDir, server)],
-      ["create", () => create(which, stamp)],
+      ["create", () => create(which, `web${stamp}`, stamp)],
       ["push", () => webPush(which, `web${stamp}`, passwordDir, server, general, webAccount)],
     ] as const) {
       // A heartbeat while the step runs (CI shows a step's log only once it
