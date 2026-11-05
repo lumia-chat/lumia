@@ -24,6 +24,10 @@ The same image on N nodes, all pointing at one Postgres and one **shared** blob 
 
 Nodes share nothing but the database and the blob store. Live delivery crosses nodes through the cluster's pub/sub; what pub/sub misses, each node's reconciler recovers from the database within one tick ([delivery.md](delivery.md) section 7). Section 8 lists the cross-node cases the tests must pass.
 
+### 2.3 Two instances, for development
+
+`apps/instance/deploy/compose.two.yml` runs two single-node instances side by side from the same image, each with a Postgres of its own: the flagship, the one a new identity gets an account on by default (architecture 6.1; its directory is its account table), at `http://localhost:4100`, and a community instance at `http://127.0.0.1:4200`, over plain http and without the proxy; the two names are deliberate, since an identity proof is bound to the host name a client reaches an instance by, and each instance's `PHX_HOST` is that name. They share nothing but the people who hold accounts on both. `deploy/two-instances.sh` builds the image, brings them up, and runs the cross-instance cases with the CLI: one identity with an account on each by proof, its profile travelling with the proof, a server and an invite on the community, a second identity joining through it and posting, and the scenario suite against each. `--keep` leaves them up for the clients (`http://localhost:4100` and `:4200` as instances).
+
 ## 3. Configuration
 
 All configuration is environment variables read at boot (`config/runtime.exs`); none is read later. The instance refuses to start when a required one is missing or malformed, naming it.

@@ -1,0 +1,81 @@
+# Two instances side by side (docs/specs/deployment.md section 2.3): the
+# flagship, the one a new identity gets an account on by default (its
+# directory is its account table, architecture 6.1), and a community
+# instance someone else runs. Each has a Postgres of its own and talks
+# to no one; they share only the people who hold accounts on both. The
+# same image as `compose.yml`, without the proxy: the flagship answers at
+# http://localhost:4100 and the community at http://127.0.0.1:4200, over
+# plain http, for development and the cross-instance runs
+# (`deploy/two-instances.sh`). The two names matter: an identity proof is
+# bound to the host name a client reaches an instance by (architecture
+# 6.1), so each instance's PHX_HOST is the name clients use for it, and
+# `localhost` and `127.0.0.1` are two names that resolve everywhere.
+#
+#   docker build -f apps/instance/Dockerfile -t lumia/instance .   # from the repository root
+#   docker compose -f apps/instance/deploy/compose.two.yml up -d --wait
+services:
+  flagship-db:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: lumia
+      POSTGRES_PASSWORD: lumia
+      POSTGRES_DB: lumia
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lumia"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  flagship:
+    image: ${LUMIA_IMAGE:-lumia/instance}
+    depends_on:
+      flagship-db:
+        condition: service_healthy
+    environment:
+      DB_URL: postgres://lumia:lumia@flagship-db/lumia
+      SECRET_KEY_BASE: ${FLAGSHIP_SECRET_KEY_BASE:-0c3e2a5d7b9f1e4c6a8d0b2f4e6c8a0d2f4b6e8c0a2d4f6b8e0c2a4d6f8b0e2c4a6d8f0b2e4c6a8d0f2b4e6c8a0}
+      RELEASE_COOKIE: ${FLAGSHIP_RELEASE_COOKIE:-flagship-cookie-for-development-only}
+      PHX_HOST: localhost
+      LUMIA_OPERATOR_NAME: Lumia flagship
+      LUMIA_OPEN_REGISTRATION: "true"
+      LUMIA_METRICS: "false"
+    ports:
+      - "4100:4000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:4000/api/v1/instance >/dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  community-db:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: lumia
+      POSTGRES_PASSWORD: lumia
+      POSTGRES_DB: lumia
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lumia"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  community:
+    image: ${LUMIA_IMAGE:-lumia/instance}
+    depends_on:
+      community-db:
+        condition: service_healthy
+    environment:
+      DB_URL: postgres://lumia:lumia@community-db/lumia
+      SECRET_KEY_BASE: ${COMMUNITY_SECRET_KEY_BASE:-9f1e4c6a8d0b2f4e6c8a0d2f4b6e8c0a2d4f6b8e0c2a4d6f8b0e2c4a6d8f0b2e4c6a8d0f2b4e6c8a0c3e2a5d7b}
+      RELEASE_COOKIE: ${COMMUNITY_RELEASE_COOKIE:-community-cookie-for-development-only}
+      PHX_HOST: 127.0.0.1
+      LUMIA_OPERATOR_NAME: A community
+      LUMIA_OPEN_REGISTRATION: "true"
+      LUMIA_METRICS: "false"
+    ports:
+      - "4200:4000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:4000/api/v1/instance >/dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 30

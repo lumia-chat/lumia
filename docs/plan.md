@@ -222,7 +222,7 @@ Ordered. Each task names the spec section it implements and the tests that close
 - [x] From identity §12, run end to end with the Rust core as the client: revoke while another instance is behind, then reconcile (the first case, with the root-signed path across two instances; the device-signed path under reauth runs against one instance in the `device-revoke` scenario).
 - [x] From identity §12, driven end to end on 2026-11-02 by `scenario roster-rules`: signer revoked before and after `added_at`, future-dated certificate, omitted revocation, root rotation. Phrase recovery with every device gone and the MLS rejoin ran in step 5.
 - [ ] Not yet covered anywhere: concurrent forks and the merge (needs the merge rule, identity §5), proof replay across nodes (step 7), web-origin proofs (step 6).
-- [ ] Two instances in `docker-compose`, one flagship-like with a directory, for the step 7 multi-node runs.
+- [x] Two instances in compose: `apps/instance/deploy/compose.two.yml` and `two-instances.sh` (step 8, 2026-11-05).
 - [x] Phrase recovery with every device gone (2026-11-02, `identity recover --phrase`), against one instance; the second instance follows through `identity sync`.
 
 ## Step 5: MLS personal DMs, backup, recovery
@@ -303,7 +303,7 @@ The first person in:
 
 An operator's instance:
 - [ ] The release path exercised by a tag: the Android keystore and its secrets, a deploy of the relay and an instance, the APNs key for the relay, FCM once a Firebase project exists, and a real UnifiedPush distributor against the emulator (ntfy from F-Droid would do).
-- [ ] Two instances in `docker-compose`, one flagship-like with a directory, for the multi-node runs and for a second instance to join from (step 4's checkbox).
+- [x] Two instances in compose (2026-11-05): `deploy/compose.two.yml`, the flagship (the directory being its account table) and a community instance from one image with a Postgres each, and `deploy/two-instances.sh`, which builds the image, brings them up and runs the cross-instance cases with the CLI (one identity with an account on each by proof and its profile with it, an invite on the community joined by a second identity that posts, the scenario suite against each). The instance workflow runs it. Step 4's checkbox on the same is closed by this.
 - [ ] The Chromium renderer wedge on the Linux runner when the DM conversation page reloads during its worker's teardown (step 6); a sync OPFS call in flight is the first suspect.
 
 The proofs the specs owe:

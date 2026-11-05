@@ -74,3 +74,33 @@ jobs:
       - run: MIX_ENV=dev mix compile --warnings-as-errors
       - run: mix credo --strict
       - run: mix test
+
+  # Two instances side by side (deployment.md section 2.3): the image built
+  # here, the cross-instance cases run with the release CLI.
+  two-instances:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.96.0"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/core
+          key: cli
+      - run: cargo build --release -p lumia-cli
+        working-directory: apps/core
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/instance/Dockerfile
+          tags: lumia/instance
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - run: LUMIA_IMAGE=lumia/instance apps/instance/deploy/two-instances.sh
