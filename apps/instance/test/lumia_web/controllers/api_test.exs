@@ -262,6 +262,17 @@ defmodule LumiaWeb.ApiTest do
                decode(channel, V1.Channel)
     end
 
+    test "creating a channel needs manage_channels in that server", ctx do
+      member = account("member")
+      {:ok, _} = Servers.add_member(ctx.server.id, member.id, ctx.owner.id)
+      stranger = account("stranger")
+      req = %V1.CreateChannelRequest{server_id: Proto.uuid(ctx.server.id), name: "ops"}
+
+      assert post_proto(authed(ctx.conn, member), "/api/v1/channels", req).status == 403
+      assert post_proto(authed(ctx.conn, stranger), "/api/v1/channels", req).status == 403
+      assert post_proto(ctx.conn, "/api/v1/channels", req).status == 201
+    end
+
     test "a malformed id in the path is NOT_FOUND, not a crash", ctx do
       assert get(ctx.conn, "/api/v1/servers/not-a-uuid/channels").status == 404
       assert get(ctx.conn, "/api/v1/channels/channels/snapshot").status == 404

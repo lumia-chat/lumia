@@ -199,7 +199,7 @@ Base path `/api/v1`. All endpoints require `Authorization: Bearer <access_token>
 | `GET /servers/{server_id}` | → `Server` |
 | `PATCH /servers/{server_id}` | `Server` (partial) → `Server` |
 | `GET /servers/{server_id}/channels` | → `ListChannelsResponse` |
-| `POST /channels` | `CreateChannelRequest` → `Channel` |
+| `POST /channels` | `CreateChannelRequest` → `Channel`; needs `MANAGE_CHANNELS` in the server (`PERMISSION_DENIED` otherwise, also for a non-member) |
 | `PATCH /channels/{channel_id}` | `Channel` (partial) → `Channel` |
 | `DELETE /channels/{channel_id}` | → 204 |
 | `POST /dms/personal` | `OpenPersonalDmRequest` → `OpenPersonalDmResponse` (200 existing, 201 new); `FAILED_PRECONDITION{state: "request"}` without an accepted DM request with each participant; three or more participants open a new `PERSONAL_GROUP_DM` |

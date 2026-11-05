@@ -67,10 +67,16 @@ defmodule Lumia.Servers do
     end)
   end
 
-  @doc "Creates a text channel in a server. Bumps nothing; the channel is new at version 1."
+  @doc """
+  Creates a text channel in a server; the actor needs `manage_channels`
+  there (the owner has everything). Bumps nothing; the channel is new at
+  version 1.
+  """
   def create_channel(server_id, actor_id, name, opts \\ []) do
     Tx.transact(fn ->
-      with {:ok, channel} <-
+      with {:ok, actor} <- actor(server_id, actor_id),
+           :ok <- require_permission(actor, :manage_channels),
+           {:ok, channel} <-
              Repo.insert(%Channel{
                kind: "text",
                server_id: server_id,
@@ -674,6 +680,14 @@ defmodule Lumia.Servers do
            highest_position: highest_position(server_id, account_id)
          }}
     end
+  end
+
+  defp require_permission(%{owner?: true}, _permission), do: :ok
+
+  defp require_permission(actor, permission) do
+    if Permission.has?(actor.server_permissions, permission),
+      do: :ok,
+      else: {:error, :permission_denied}
   end
 
   defp bump_server(server_id) do
