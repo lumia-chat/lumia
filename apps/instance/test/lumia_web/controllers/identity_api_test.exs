@@ -315,4 +315,38 @@ defmodule LumiaWeb.IdentityApiTest do
     assert get(conn, "/api/v1/identity/link-bundles/#{code}?device_id=#{new_device}").status ==
              404
   end
+
+  test "a held roster is found by its current root, for recovery after a rotation" do
+    %{identity: identity, device: phone, roster: v1} = bootstrap()
+    {:ok, _} = Lumia.Identity.accept_roster(v1, :publish)
+    new = identity()
+
+    v2 =
+      roster(identity, :root,
+        version: 2,
+        rotations: [rotation(identity, new.root_pub)],
+        root_pub: new.root_pub,
+        root_priv: new.root_priv,
+        devices: [cert(identity, phone)]
+      )
+
+    {:ok, _} = Lumia.Identity.accept_roster(v2, :publish)
+
+    by = fn root ->
+      build_conn()
+      |> put_req_header("accept", @proto)
+      |> get("/api/v1/identity/rosters/by-root/#{Base.url_encode64(root, padding: false)}")
+    end
+
+    conn = by.(new.root_pub)
+    assert conn.status == 200
+
+    assert %V1.GetRosterResponse{roster: %V1.SignedRoster{body: body}} =
+             V1.GetRosterResponse.decode(conn.resp_body)
+
+    assert body == v2.body
+    # The first root is history: only the current one finds it.
+    assert by.(identity.root_pub).status == 404
+    assert get(build_conn(), "/api/v1/identity/rosters/by-root/not-base64!").status == 400
+  end
 end

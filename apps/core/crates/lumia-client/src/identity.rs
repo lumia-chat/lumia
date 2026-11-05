@@ -12,13 +12,14 @@ use lumia_core::identity::link::{seal_bundle, LinkRequester};
 use lumia_core::identity::phrase::Phrase;
 use lumia_core::identity::proof::build_proof;
 use lumia_core::identity::roster::{
-    device_entry, merge, revoked_entry, roster_body, sign_roster, verify_roster, NewDevice, Signer,
-    Step, Verified,
+    device_entry, merge, revoked_entry, roster_body, rotation, sign_roster, verify_roster,
+    NewDevice, Signer, Step, Verified,
 };
 use lumia_core::keystore::Keystore;
 use lumia_core::proto::{
-    ChallengePurpose, CreateLinkBundleRequest, DeviceKind, HostAccount, IdentityBackupBody,
-    LinkBundleBody, LinkRequest, ProfileBody, SignedProfile, SignedRoster, TokenPair,
+    ChallengePurpose, CreateLinkBundleRequest, DeviceKind, GetRosterResponse, HostAccount,
+    IdentityBackupBody, LinkBundleBody, LinkRequest, ProfileBody, SignedProfile, SignedRoster,
+    TokenPair,
 };
 use lumia_core::store::Store;
 use lumia_core::wire;
@@ -534,54 +535,77 @@ impl<S: Store, K: Keystore> Device<'_, S, K> {
         label: &str,
     ) -> Result<TokenPair, ClientError> {
         let derived = Phrase::parse(phrase)?.derive();
-        let identity_id = derived.identity_id();
         let root_public = derived.root.verifying_key().to_bytes().to_vec();
         let device_key = self.device_key_or_generate()?;
-        let new_device = NewDevice {
-            device_id: self.device_id.clone(),
-            public_key: device_key.verifying_key().to_bytes().to_vec(),
-            kind: DeviceKind::Native,
-            web_origin: String::new(),
-            label: label.to_string(),
-            added_at: now(),
+        let device_id = self.device_id.clone();
+        let device_public = device_key.verifying_key().to_bytes().to_vec();
+        let new_device = |identity_id: &[u8]| {
+            let device = NewDevice {
+                device_id: device_id.clone(),
+                public_key: device_public.clone(),
+                kind: DeviceKind::Native,
+                web_origin: String::new(),
+                label: label.to_string(),
+                added_at: now(),
+            };
+            device_entry(identity_id, &device, Signer::Root(&derived.root))
         };
-        let entry = device_entry(&identity_id, &new_device, Signer::Root(&derived.root));
-
-        // Provisional: version 1 with this device only.
-        let body = roster_body(
-            &identity_id,
-            1,
-            &root_public,
-            vec![],
-            vec![entry.clone()],
-            vec![],
-            now(),
-        );
         self.keystore.put("backup_key", &derived.backup_key)?;
-        self.save_roster(
-            &identity_id,
-            &sign_roster(&body, Signer::Root(&derived.root)),
-        )?;
 
-        let proof = self.prove(api, ChallengePurpose::SignIn).await?;
-        let held = match api.sign_in_identity(proof).await {
-            Ok(tokens) => return Ok(tokens),
-            Err(e) => match held_in(&e) {
-                Some(held) => held.to_string(),
-                None => return Err(e),
-            },
+        // After a rotation the phrase derives the current root, not the
+        // first one the identity id is the hash of: the instance finds the
+        // roster by its current root. Without a match the phrase's root is
+        // taken as the first, and the held version is learned from the
+        // CONFLICT a provisional roster provokes.
+        let held = match api.roster_by_root(&root_public).await {
+            Ok(GetRosterResponse {
+                roster: Some(signed),
+            }) => Some(verify_roster(&signed, None, now_nanos())?),
+            Ok(_) => None,
+            Err(ClientError::Api { code, .. }) if code == "NOT_FOUND" => None,
+            Err(e) => return Err(e),
         };
-        let bytes = B64
-            .decode(held.trim())
-            .map_err(|e| ClientError::State(format!("held roster: {e}")))?;
-        let held = verify_roster(&SignedRoster::decode(bytes.as_slice())?, None, now_nanos())?;
-        if !held.roots.contains(&root_public) {
-            return Err(ClientError::State(
-                "that phrase is not this identity's root".into(),
-            ));
+        let held = match held {
+            Some(held) => held,
+            None => {
+                let identity_id = derived.identity_id();
+                let body = roster_body(
+                    &identity_id,
+                    1,
+                    &root_public,
+                    vec![],
+                    vec![new_device(&identity_id)],
+                    vec![],
+                    now(),
+                );
+                self.save_roster(
+                    &identity_id,
+                    &sign_roster(&body, Signer::Root(&derived.root)),
+                )?;
+                let proof = self.prove(api, ChallengePurpose::SignIn).await?;
+                let held = match api.sign_in_identity(proof).await {
+                    Ok(tokens) => return Ok(tokens),
+                    Err(e) => match held_in(&e) {
+                        Some(held) => held.to_string(),
+                        None => return Err(e),
+                    },
+                };
+                let bytes = B64
+                    .decode(held.trim())
+                    .map_err(|e| ClientError::State(format!("held roster: {e}")))?;
+                verify_roster(&SignedRoster::decode(bytes.as_slice())?, None, now_nanos())?
+            }
+        };
+        if held.root_public_key != root_public {
+            return Err(ClientError::State(if held.roots.contains(&root_public) {
+                "that phrase was rotated away; recovery needs the current one".into()
+            } else {
+                "that phrase is not this identity's root".into()
+            }));
         }
 
         // The real one: every held device revoked by the root, this one added.
+        let identity_id = held.identity_id.clone();
         let mut revoked = held.body.revoked.clone();
         for (device_id, info) in &held.devices {
             revoked.push(revoked_entry(
@@ -598,7 +622,7 @@ impl<S: Store, K: Keystore> Device<'_, S, K> {
             held.version + 1,
             &held.root_public_key,
             held.body.rotations.clone(),
-            vec![entry],
+            vec![new_device(&identity_id)],
             revoked,
             now(),
         );
@@ -608,6 +632,59 @@ impl<S: Store, K: Keystore> Device<'_, S, K> {
         )?;
         let proof = self.prove(api, ChallengePurpose::SignIn).await?;
         api.sign_in_identity(proof).await
+    }
+
+    /// Rotates the root (spec 4.5): from the old phrase, a new phrase, a
+    /// `RootRotation` from the old root to the new one signed by the old,
+    /// and the next roster version under the new root, signed by it;
+    /// existing certificates stay as they are. Published to `api`'s
+    /// instance and stored here, with the new backup key in the keystore.
+    /// The caller re-wraps the history manifests and rewrites the identity
+    /// backup with [`Rotated::old_backup_key`], and publishes the roster
+    /// to the other instances.
+    ///
+    /// # Errors
+    /// When the phrase is not this identity's current root, or on API
+    /// failure (the roster here is left as it was).
+    pub async fn rotate(&mut self, api: &Api, old_phrase: &str) -> Result<Rotated, ClientError> {
+        let old = Phrase::parse(old_phrase)?.derive();
+        let verified = self.roster()?;
+        if old.root.verifying_key().to_bytes().as_slice() != verified.root_public_key.as_slice() {
+            return Err(ClientError::State(
+                "that phrase is not this identity's current root".into(),
+            ));
+        }
+        let new_phrase = Phrase::generate()?;
+        let new = new_phrase.derive();
+        let new_root_public = new.root.verifying_key().to_bytes().to_vec();
+        let mut rotations = verified.body.rotations.clone();
+        rotations.push(rotation(
+            &verified.identity_id,
+            &old.root,
+            &new_root_public,
+            now(),
+        ));
+        let body = roster_body(
+            &verified.identity_id,
+            verified.version + 1,
+            &new_root_public,
+            rotations,
+            verified.body.devices.clone(),
+            verified.body.revoked.clone(),
+            now(),
+        );
+        let roster = sign_roster(&body, Signer::Root(&new.root));
+        // Verified here first: a broken chain must never leave this device.
+        let rotated = verify_roster(&roster, Some(&verified), now_nanos())?;
+        api.publish_roster(roster.clone()).await?;
+        let old_backup_key = self.keystore.get("backup_key")?.unwrap_or_default();
+        self.keystore.put("backup_key", &new.backup_key)?;
+        self.save_roster(&verified.identity_id, &roster)?;
+        Ok(Rotated {
+            phrase: new_phrase.words(),
+            version: rotated.version,
+            old_backup_key,
+        })
     }
 
     /// Revokes a device with the root, from the phrase (spec 4.3 and 4.4's
@@ -772,6 +849,18 @@ fn revocation_roster(
         now(),
     );
     Ok(sign_roster(&body, signer))
+}
+
+/// What a root rotation leaves the caller with.
+#[derive(Debug, Clone)]
+pub struct Rotated {
+    /// The new recovery phrase, to show once.
+    pub phrase: String,
+    /// The roster version signed by the new root.
+    pub version: u64,
+    /// The backup key the old phrase derived, for re-wrapping what it
+    /// sealed; empty when this device held none.
+    pub old_backup_key: Vec<u8>,
 }
 
 /// The held roster a `CONFLICT` carries, when it does.

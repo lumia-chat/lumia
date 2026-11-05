@@ -313,29 +313,33 @@ defmodule Lumia.Events do
     if Dms.personal_kind?(kind), do: {:error, :invalid_command}, else: :ok
   end
 
-  # A CONTROL event carries the epoch its commit produces; it is accepted
-  # only at the conversation's current epoch plus one, which serializes
-  # concurrent commits (e2ee spec section 4). The channel row is already
-  # locked by take_head, so the conditional update is the whole check.
-  # A CONTROL event at the current epoch is a welcome or a proposal and
-  # advances nothing; one at current + 1 is a commit and advances; anything
-  # else is a stale commit (e2ee spec section 4).
+  # A CONTROL event is a commit and carries the epoch it produces; it is
+  # accepted only at the conversation's current epoch plus one, which
+  # serializes concurrent commits (e2ee spec section 4): the second of two
+  # commits for the same epoch finds the conversation already there and is
+  # refused. The channel row is already locked by take_head, so the
+  # conditional update is the whole check. A WELCOME carries the epoch its
+  # commit produced, which must be the current one, and advances nothing.
   defp advance_epoch(channel_id, %V1.Command{
          op:
            {:send_encrypted, %V1.SendEncrypted{payload: %V1.EncryptedPayload{kind: :CONTROL} = p}}
        }) do
     previous = p.epoch - 1
 
-    query =
-      from(c in Channel,
-        where: c.id == ^channel_id and c.mls_epoch in ^[previous, p.epoch],
-        select: c.mls_epoch
-      )
+    query = from(c in Channel, where: c.id == ^channel_id and c.mls_epoch == ^previous)
 
     case Repo.update_all(query, set: [mls_epoch: p.epoch]) do
       {1, _} -> :ok
       {0, _} -> {:error, {:failed_precondition, "epoch"}}
     end
+  end
+
+  defp advance_epoch(channel_id, %V1.Command{
+         op:
+           {:send_encrypted, %V1.SendEncrypted{payload: %V1.EncryptedPayload{kind: :WELCOME} = p}}
+       }) do
+    current = Repo.one(from c in Channel, where: c.id == ^channel_id, select: c.mls_epoch)
+    if current == p.epoch, do: :ok, else: {:error, {:failed_precondition, "epoch"}}
   end
 
   defp advance_epoch(_channel_id, _command), do: :ok

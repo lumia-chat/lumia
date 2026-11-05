@@ -84,6 +84,8 @@ A device revoked from the roster is removed from every group by the first device
 
 `scenario <name>` (or `all`) runs the failure-injection cases a client can drive on its own against the instance (delivery spec 12, identity spec 12): `token-rotation`, `frame-before-hello`, `duplicate-command`, `snapshot-under-writes`, `snapshot-threshold`, `stale-roster`, `device-revoke`, `roster-rules`, `last-resort`, `reconnect`. Each sets up a throwaway server or identity and fails with what it saw.
 
+`scripts/dm-faults.sh [instance-url]` drives the e2ee spec's section 12 cases that need a second process or a fault, with the CLI as every device: a crash between the MLS persist and the send (`dm send --crash-after-persist`), the epoch moving under an unacked send, two members committing at once, and a root rotation (`identity rotate`) re-wrapping the history backup. It needs a running instance (http://localhost:4001 by default) and leaves its state under `.build/dm-faults/`.
+
 ## Identity vectors
 
 `proto/vectors/identity/rosters.json` holds rosters with the outcome the spec requires. The Elixir suite writes it and checks its verifier; `crates/lumia-core/tests/identity_vectors.rs` checks the Rust verifier against the same bytes. To regenerate after changing the fixtures or the proto:

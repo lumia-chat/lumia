@@ -131,6 +131,8 @@ The bundle is single-use and expires ten minutes after creation. A fetch with th
 4. Discard the root private key. Publish the roster everywhere by identity proof sign-in; root-signed rosters pass the revocation policy without reauth.
 5. Rejoin MLS groups per architecture 11.3: by external commit, since no device remains to add this one.
 
+After a root rotation (4.5) the phrase derives the **current** root, not the first one the identity id is the hash of. The device therefore asks the instance for the roster by that root first (`GET /identity/rosters/by-root/{root}`, public) and builds the recovery roster on what comes back; only when no instance knows the root is it taken as the first root of a new identity. A phrase that was rotated away finds nothing by root, and its provisional roster meets a held one whose current root is not its own, so recovery with it is refused.
+
 ### 4.4 Revoke a device
 
 From any authorized device D, revoking device X:

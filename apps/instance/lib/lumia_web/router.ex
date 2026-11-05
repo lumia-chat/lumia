@@ -28,6 +28,7 @@ defmodule LumiaWeb.Router do
     post "/auth/passkey/assert/finish", PasskeyController, :assert_finish
     post "/auth/sign-in/identity", IdentityController, :sign_in
     post "/auth/challenge", IdentityController, :challenge
+    get "/identity/rosters/by-root/:root", IdentityController, :get_roster_by_root
     post "/auth/refresh", AuthController, :refresh
     get "/identity/link-bundles/:code", IdentityController, :get_link_bundle
     get "/invites/:code", InviteController, :show

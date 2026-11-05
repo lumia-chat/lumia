@@ -138,7 +138,8 @@ message EncryptedPayload {
 enum EncryptedKind {
   ENCRYPTED_KIND_UNSPECIFIED = 0;
   APPLICATION = 1;  // user content; eligible for push
-  CONTROL = 2;      // MLS commit, proposal, welcome; never pushed as a message
+  CONTROL = 2;      // an MLS commit (external commits included): advances the epoch
+  WELCOME = 3;      // an MLS welcome: carries the epoch its commit produced, advances nothing
 }
 
 // One entry in the account log (architecture 8.1).

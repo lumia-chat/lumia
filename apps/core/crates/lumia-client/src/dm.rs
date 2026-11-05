@@ -107,8 +107,13 @@ pub struct DmEngine {
     participants: HashMap<Vec<u8>, Vec<Vec<u8>>>,
     pending: HashMap<Vec<u8>, Pending>,
     /// Operations this session sent, by command id, so the sender's own
-    /// events can be recorded when they come back through the log.
+    /// events can be recorded when they come back through the log. Also
+    /// kept in the store (`dm:sent:<id>`) for a send that outlives the
+    /// process: the outbox resends it, and the ack or the event records it.
     sent: HashMap<Vec<u8>, (Vec<u8>, u64)>,
+    /// Conversations whose commit was refused on the epoch rule: their
+    /// leaves are reconciled again once the missed events are processed.
+    retry_after_refusal: HashSet<Vec<u8>>,
 }
 
 impl std::fmt::Debug for DmEngine {
@@ -139,6 +144,33 @@ fn joined_key(channel_id: &[u8]) -> String {
     format!("dm:joined_epoch:{}", hex(channel_id))
 }
 
+/// A sent operation read back from the store: channel, operation bytes, epoch.
+type StoredSent = (Vec<u8>, Vec<u8>, u64);
+
+fn sent_key(command_id: &[u8]) -> String {
+    format!("dm:sent:{}", hex(command_id))
+}
+
+/// A sent operation as the store keeps it: the channel, the epoch and the
+/// operation bytes.
+fn sent_value(channel_id: &[u8], op: &[u8], epoch: u64) -> String {
+    format!(
+        "{}:{epoch}:{}",
+        hex(channel_id),
+        base64::engine::general_purpose::STANDARD.encode(op)
+    )
+}
+
+fn parse_sent(value: &str) -> Option<StoredSent> {
+    let mut parts = value.splitn(3, ':');
+    let channel = unhex(parts.next()?);
+    let epoch = parts.next()?.parse().ok()?;
+    let op = base64::engine::general_purpose::STANDARD
+        .decode(parts.next()?)
+        .ok()?;
+    Some((channel, op, epoch))
+}
+
 fn participants_key(channel_id: &[u8]) -> String {
     format!("dm:participants:{}", hex(channel_id))
 }
@@ -147,18 +179,28 @@ fn now_ts() -> prost_types::Timestamp {
     crate::time::now_ts()
 }
 
-fn control(channel_id: &[u8], mls_message: Vec<u8>, epoch: u64) -> Command {
+fn encrypted(kind: EncryptedKind, channel_id: &[u8], mls_message: Vec<u8>, epoch: u64) -> Command {
     Command {
         command_id: wire::new_id(),
         channel_id: channel_id.to_vec(),
         op: Some(command::Op::SendEncrypted(SendEncrypted {
             payload: Some(EncryptedPayload {
-                kind: EncryptedKind::Control as i32,
+                kind: kind as i32,
                 mls_message,
                 epoch,
             }),
         })),
     }
+}
+
+/// A commit (or external commit): advances the epoch to `epoch`.
+fn control(channel_id: &[u8], mls_message: Vec<u8>, epoch: u64) -> Command {
+    encrypted(EncryptedKind::Control, channel_id, mls_message, epoch)
+}
+
+/// A welcome: carries the epoch its commit produced, advances nothing.
+fn welcome(channel_id: &[u8], mls_message: Vec<u8>, epoch: u64) -> Command {
+    encrypted(EncryptedKind::Welcome, channel_id, mls_message, epoch)
 }
 
 fn is_personal(channel: &Channel) -> bool {
@@ -205,6 +247,7 @@ impl DmEngine {
             participants: HashMap::new(),
             pending: HashMap::new(),
             sent: HashMap::new(),
+            retry_after_refusal: HashSet::new(),
         };
         for stored in engine.store.account_events()? {
             if let Ok(ev) = AccountEvent::decode(stored.bytes.as_slice()) {
@@ -580,6 +623,10 @@ impl DmEngine {
                 channel_id: channel_id.to_vec(),
                 bytes: command.encode_to_vec(),
             })?;
+            store.set_meta(
+                &sent_key(&command.command_id),
+                &sent_value(channel_id, &op.encode_to_vec(), out.epoch),
+            )?;
             Ok::<_, ClientError>(command)
         })?;
         let epoch = match &command.op {
@@ -609,8 +656,18 @@ impl DmEngine {
     pub async fn on_notice(&mut self, notice: &Notice) -> Result<Vec<Outcome>, ClientError> {
         match notice {
             Notice::Acked { command_id, seq } => {
-                let Some(pending) = self.pending.remove(command_id) else {
-                    return Ok(Vec::new());
+                let pending = match self.pending.remove(command_id) {
+                    Some(pending) => pending,
+                    // A send from before a restart, resent from the outbox:
+                    // the store still knows what it was.
+                    None => match self.stored_sent(command_id)? {
+                        Some((channel_id, op, epoch)) => Pending::Message {
+                            channel_id,
+                            op,
+                            epoch,
+                        },
+                        None => return Ok(Vec::new()),
+                    },
                 };
                 self.on_ack(command_id, *seq, pending).await
             }
@@ -618,7 +675,13 @@ impl DmEngine {
                 let Some(pending) = self.pending.remove(&error.command_id) else {
                     return Ok(Vec::new());
                 };
-                self.on_refused(pending, error)
+                let mut out = self.on_refused(pending, error)?;
+                // The missed events may already be in; catching up runs the
+                // retry either way.
+                for channel in self.retry_after_refusal.clone() {
+                    out.extend(self.catch_up(&channel).await?);
+                }
+                Ok(out)
             }
             _ => Ok(Vec::new()),
         }
@@ -637,17 +700,23 @@ impl DmEngine {
                 epoch,
             } => {
                 // The sender's own operation enters its log at the acked seq.
-                self.store.put_dm_row(
-                    &channel_id,
-                    &DmRow {
-                        seq,
-                        sender_identity_id: self.me.identity_id.clone(),
-                        sender_device_id: self.me.device_id.clone(),
-                        epoch,
-                        status: DmStatus::Decrypted,
-                        bytes: op,
-                    },
-                )?;
+                let me = self.me.clone();
+                self.store.transaction(|store| {
+                    store.put_dm_row(
+                        &channel_id,
+                        &DmRow {
+                            seq,
+                            sender_identity_id: me.identity_id.clone(),
+                            sender_device_id: me.device_id.clone(),
+                            epoch,
+                            status: DmStatus::Decrypted,
+                            bytes: op,
+                        },
+                    )?;
+                    store.set_meta(&sent_key(command_id), "")?;
+                    Ok::<_, ClientError>(())
+                })?;
+                self.sent.remove(command_id);
                 Ok(vec![Outcome::Delivered(command_id.to_vec())])
             }
             Pending::Welcome { channel_id } => Ok(vec![Outcome::GroupReady(channel_id)]),
@@ -668,7 +737,7 @@ impl DmEngine {
                     let info = group.group_info(&provider, &self.signer)?;
                     let welcome_command = match welcome {
                         Some(bytes) => {
-                            let command = control(&channel_id, bytes, epoch);
+                            let command = self::welcome(&channel_id, bytes, epoch);
                             store.push_outbox(&OutboxEntry {
                                 command_id: command.command_id.clone(),
                                 channel_id: channel_id.clone(),
@@ -732,14 +801,27 @@ impl DmEngine {
             }
             Ok::<_, ClientError>(())
         })?;
+        if !creating {
+            self.retry_after_refusal.insert(channel_id);
+        }
         Ok(vec![Outcome::Print(if creating {
             "commit refused: another device created the group first; waiting for its welcome".into()
         } else {
             format!(
-                "commit refused ({}); pending commit discarded, retry after the missed events",
+                "commit refused ({}); pending commit discarded, retrying after the missed events",
                 error.details.get("state").cloned().unwrap_or_default()
             )
         })])
+    }
+
+    /// A sent operation the store remembers, for an ack after a restart:
+    /// its channel, operation bytes and epoch.
+    fn stored_sent(&self, command_id: &[u8]) -> Result<Option<StoredSent>, ClientError> {
+        Ok(self
+            .store
+            .meta_get(&sent_key(command_id))?
+            .as_deref()
+            .and_then(parse_sent))
     }
 
     /// Feeds channel events the gateway applied. The events themselves are
@@ -822,6 +904,19 @@ impl DmEngine {
             }
             out.extend(self.record(&ev, payload, result)?);
         }
+        if self.retry_after_refusal.contains(channel_id) {
+            // The losing side of two concurrent commits (spec section 12):
+            // now on the winner's epoch, reconcile again; what the winner
+            // already did is a no-op here, so nothing is proposed twice.
+            self.retry_after_refusal.remove(channel_id);
+            let retried = self.reconcile_members(channel_id).await?;
+            out.push(Outcome::Print(if retried.is_empty() {
+                "retrying after the refusal: the other commit covered it; nothing to commit".into()
+            } else {
+                "retrying after the refusal on the new epoch".into()
+            }));
+            out.extend(retried);
+        }
         Ok(out)
     }
 
@@ -835,7 +930,12 @@ impl DmEngine {
         payload: &EncryptedPayload,
     ) -> Result<(), ClientError> {
         let is_control = payload.kind == EncryptedKind::Control as i32;
-        let sent = self.sent.remove(&ev.command_id);
+        let sent = match self.sent.remove(&ev.command_id) {
+            Some(sent) => Some(sent),
+            None => self
+                .stored_sent(&ev.command_id)?
+                .map(|(_, op, epoch)| (op, epoch)),
+        };
         let me = self.me.clone();
         self.store.transaction(|store| {
             let provider = Provider::new(store);
@@ -857,6 +957,7 @@ impl DmEngine {
                         bytes: op,
                     },
                 )?;
+                store.set_meta(&sent_key(&ev.command_id), "")?;
             }
             store.set_meta(&processed_key(channel_id), &ev.seq.to_string())?;
             Ok::<_, ClientError>(())
@@ -895,7 +996,8 @@ impl DmEngine {
     ) -> Result<Result<Incoming, MlsError>, ClientError> {
         let keys = self.keys_for(&ev.channel_id);
         let lookup = move |i: &[u8], d: &[u8]| keys.get(&(i.to_vec(), d.to_vec())).cloned();
-        let is_control = payload.kind == EncryptedKind::Control as i32;
+        let is_control = payload.kind == EncryptedKind::Control as i32
+            || payload.kind == EncryptedKind::Welcome as i32;
         self.store
             .transaction(|store| {
                 let provider = Provider::new(store);
@@ -1013,7 +1115,10 @@ impl DmEngine {
                 self.set_processed(&channel, ev.seq)?;
                 return Ok(out);
             }
-            Err(_) if payload.kind == EncryptedKind::Control as i32 => {
+            Err(_)
+                if payload.kind == EncryptedKind::Control as i32
+                    || payload.kind == EncryptedKind::Welcome as i32 =>
+            {
                 // A welcome for another device, or a commit from before we
                 // joined: nothing for us.
                 self.set_processed(&channel, ev.seq)?;
@@ -1344,6 +1449,52 @@ impl DmEngine {
             .decode(stored)
             .map_err(|e| ClientError::State(e.to_string()))?;
         Ok(HistoryManifestBody::decode(bytes.as_slice())?)
+    }
+
+    /// Re-wraps every chunk key in this device's manifest on this instance
+    /// under the backup key now held, after a root rotation (identity spec
+    /// 4.5, e2ee spec section 9): the chunks are not touched; the manifest
+    /// is written again with a bumped version. A no-op when backup is off
+    /// or nothing was written here.
+    ///
+    /// # Errors
+    /// Without a backup key, when a chunk key does not unwrap under
+    /// `old_backup_key`, or on a store, crypto or API failure.
+    pub async fn rewrap_backup(
+        &mut self,
+        old_backup_key: &[u8],
+    ) -> Result<Vec<Outcome>, ClientError> {
+        let Some(backup_key) = self.backup_key.clone() else {
+            return Err(ClientError::State("this device holds no backup key".into()));
+        };
+        let mut manifest = self.manifest_body()?;
+        if !self.backup_enabled()? || manifest.chunks.is_empty() {
+            return Ok(Vec::new());
+        }
+        for entry in &mut manifest.chunks {
+            let chunk_key = open(old_backup_key, &entry.wrap_nonce, &entry.wrapped_key)?;
+            let (wrap_nonce, wrapped_key) = seal(&backup_key, &chunk_key)?;
+            entry.wrap_nonce = wrap_nonce;
+            entry.wrapped_key = wrapped_key;
+        }
+        let n = manifest.chunks.len();
+        manifest.version += 1;
+        manifest.written_at = Some(now_ts());
+        let body = manifest.encode_to_vec();
+        let key = signing_key(&self.seed)?;
+        let signed = SignedHistoryManifest {
+            body: body.clone(),
+            signature: Some(device_signature(&self.me.device_id, &key, &body)),
+        };
+        self.api.put_history_manifest(signed).await?;
+        self.store.set_meta(
+            "history:manifest",
+            &base64::engine::general_purpose::STANDARD.encode(&body),
+        )?;
+        Ok(vec![Outcome::Print(format!(
+            "re-wrapped {n} chunk key(s) under the new backup key (manifest v{})",
+            manifest.version
+        ))])
     }
 
     /// Writes one chunk per conversation with operations not yet backed up,

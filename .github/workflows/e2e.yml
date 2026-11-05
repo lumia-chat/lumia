@@ -95,6 +95,8 @@ jobs:
           echo "the instance did not come up" >&2; tail -50 /tmp/phx.log; exit 1
       - run: bun run e2e -- chromium
         working-directory: apps/web
+      # The e2ee fault cases, with the CLI as every device (apps/core/scripts/dm-faults.sh).
+      - run: apps/core/scripts/dm-faults.sh http://localhost:4000
         env:
           DEBUG: "pw:browser"
         # A passing run takes about two minutes; a hang should not wait longer than this.

@@ -40,6 +40,7 @@ defmodule Lumia.V1.EncryptedKind do
   field :ENCRYPTED_KIND_UNSPECIFIED, 0
   field :APPLICATION, 1
   field :CONTROL, 2
+  field :WELCOME, 3
 end
 
 defmodule Lumia.V1.DmRequestState do

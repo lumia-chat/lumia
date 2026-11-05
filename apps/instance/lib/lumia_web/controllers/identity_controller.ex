@@ -26,12 +26,23 @@ defmodule LumiaWeb.IdentityController do
     end
   end
 
+  # The held roster whose current root is `root` (base64url), for a device
+  # recovering from a phrase after a rotation: the phrase derives the
+  # current root, not the first one the identity id is the hash of
+  # (identity spec 4.3).
+  def get_roster_by_root(conn, %{"root" => root}) do
+    with {:ok, root} <- Base.url_decode64(root, padding: false) |> or_invalid(),
+         %{signed: signed} <- Identity.held_roster_by_root(root) || {:error, :not_found} do
+      ProtoConn.render(conn, %V1.GetRosterResponse{roster: signed})
+    end
+  end
+
   def sign_in(conn, _params) do
     with :ok <- policy(:identity_proof_sign_in),
          {:ok, %V1.IdentityProofSignInRequest{proof: %V1.IdentityProof{} = proof}} <-
            ProtoConn.decode(conn, V1.IdentityProofSignInRequest),
          {:ok, verified, device} <- Identity.verify_proof(proof, :SIGN_IN),
-         account when not is_nil(account) <-
+         %Lumia.Accounts.Account{} = account <-
            Identity.account_for(verified.identity_id) || {:error, :not_found},
          {:ok, _session, tokens} <-
            Auth.create_session(account.id, Proto.from_uuid(device.cert.device_id),

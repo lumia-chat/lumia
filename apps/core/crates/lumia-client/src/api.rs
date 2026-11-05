@@ -864,6 +864,19 @@ impl Api {
             .await
     }
 
+    /// `GET /identity/rosters/by-root/{root}` (public): the roster whose
+    /// current root public key is `root`, for recovery after a rotation.
+    ///
+    /// # Errors
+    /// On transport failure or an API error (`NOT_FOUND` when no identity
+    /// here has that root).
+    pub async fn roster_by_root(&self, root: &[u8]) -> Result<GetRosterResponse, ClientError> {
+        use base64::Engine as _;
+        let root = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(root);
+        self.get(&format!("/api/v1/identity/rosters/by-root/{root}"))
+            .await
+    }
+
     /// `POST /mls/key-packages`.
     ///
     /// # Errors

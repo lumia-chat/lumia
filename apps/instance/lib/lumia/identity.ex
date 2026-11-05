@@ -376,6 +376,14 @@ defmodule Lumia.Identity do
     Repo.one(from a in Account, where: a.identity_id == ^identity_id and is_nil(a.deleted_at))
   end
 
+  @doc "The held roster whose current root public key is `root`, or nil."
+  def held_roster_by_root(root) when is_binary(root) do
+    case Repo.one(from r in HeldRoster, where: r.root_public_key == ^root) do
+      nil -> nil
+      %HeldRoster{identity_id: identity_id} -> held_roster(identity_id)
+    end
+  end
+
   # ---- Reauth (section 10) -------------------------------------------------------
 
   @doc "Issues a reauth token for a session after the caller verified a credential."

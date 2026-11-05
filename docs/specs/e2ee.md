@@ -48,11 +48,11 @@ A leaf that fails is rejected and the group is not advanced. A client that holds
 
 ## 4. Group lifecycle
 
-**Creation.** On an accepted DM request the recipient's client creates the group (architecture 6.4): it claims one key package per device of the sender, adds its own other devices from their key packages, commits, and sends the welcome as a `CONTROL` event. `POST /dms/personal` for a pair is served only across an accepted request (or an existing personal channel), answering `FAILED_PRECONDITION{state: "request"}` otherwise, and the acceptance itself opens the channel, so the accepter finds it existing and creates the group. A personal group DM is created by its creator the same way with every member's devices; the creator needs an accepted request (or a personal channel) with each member. The creator publishes GroupInfo (section 6) after the first commit.
+**Creation.** On an accepted DM request the recipient's client creates the group (architecture 6.4): it claims one key package per device of the sender, adds its own other devices from their key packages, commits, and sends the welcome as a `WELCOME` event. `POST /dms/personal` for a pair is served only across an accepted request (or an existing personal channel), answering `FAILED_PRECONDITION{state: "request"}` otherwise, and the acceptance itself opens the channel, so the accepter finds it existing and creates the group. A personal group DM is created by its creator the same way with every member's devices; the creator needs an accepted request (or a personal channel) with each member. The creator publishes GroupInfo (section 6) after the first commit.
 
-**Commits.** Any member device may commit. `EncryptedPayload.epoch` on a `CONTROL` event is the epoch the commit **produces**; the instance accepts it only when it equals the conversation's current epoch plus one, answering `FAILED_PRECONDITION{state: "epoch"}` otherwise. A client whose commit is refused discards its pending commit, processes the events it missed, and tries again. A `CONTROL` event that is not a commit (a welcome, which carries the epoch its commit produced, or a proposal, which carries the current epoch) states the **current** epoch and advances nothing; the instance accepts exactly those two values. A committer therefore sends its commit first and the welcome after the ack. Application messages carry the epoch they were encrypted in and are accepted for any epoch.
+**Commits.** Any member device may commit. A commit travels as a `CONTROL` event whose `EncryptedPayload.epoch` is the epoch the commit **produces**; the instance accepts it only when it equals the conversation's current epoch plus one, answering `FAILED_PRECONDITION{state: "epoch"}` otherwise. Two commits for the same epoch therefore serialize: the second finds the conversation already there. A client whose commit is refused discards its pending commit, processes the events it missed, and reconciles again at once; what the winning commit already did is a no-op for it, so nothing is proposed twice. A welcome travels as a `WELCOME` event carrying the epoch its commit produced, which must be the **current** one, and advances nothing; a committer sends its commit first and the welcome after the ack. Standalone proposals are not used: every change is an inline proposal in a commit. Application messages carry the epoch they were encrypted in and are accepted for any epoch.
 
-**Welcomes** travel as `CONTROL` events in the conversation's log; a joining device learns of the conversation from its account log (`ChannelJoined` for the `PERSONAL_*` channel) and reads the welcome from the channel log. Welcomes are addressed to specific key packages, so only the intended device can open one.
+**Welcomes** travel as `WELCOME` events in the conversation's log; a joining device learns of the conversation from its account log (`ChannelJoined` for the `PERSONAL_*` channel) and reads the welcome from the channel log. Welcomes are addressed to specific key packages, so only the intended device can open one.
 
 **Adding a device.** After a device approves a link (identity spec 4.2) and publishes the new roster, it claims the new device's key packages on every instance and adds the leaf to every group it is a member of there, one commit per group. The signal is `RosterUpdated` on its own account log, which every accepted version raises, additions included; a device that connects later does the same reconciliation on connect, and a participant that learns of the addition through `ContactRosterUpdated` may add the leaf first. Until that commit lands, the new device sees the conversation but cannot read it and says so. Application messages a device cannot decrypt from an epoch before the one it joined in are `sent before this device joined`, which also covers a sender that had not yet processed the commit that admitted the device.
 
@@ -146,7 +146,7 @@ The instance, in Elixir with no MLS library:
 
 - Stores key packages per device as opaque bytes with their expiry, and one last-resort package; claims and deletes per section 3.
 - Keeps the newest GroupInfo per conversation (section 6).
-- Reads `EncryptedPayload.epoch` on `CONTROL` events: current plus one advances the conversation's epoch, current is accepted as a non-advancing control message, anything else is refused.
+- Reads `EncryptedPayload.epoch`: on a `CONTROL` event, current plus one advances the conversation's epoch and anything else is refused; on a `WELCOME` event, the current epoch is accepted and anything else refused.
 - Stores and serves history chunks and manifests as opaque bytes with quotas.
 - Purges a revoked device's key packages, and a deleted account's packages, chunks, manifests, and ciphertext.
 
@@ -170,10 +170,11 @@ Two members commit concurrently; verify the instance accepts one, answers
   FAILED_PRECONDITION{state: "epoch"} to the other, and the loser retries
   onto the new epoch with no duplicated proposal.
 Send an application message, kill the client between MLS state persist and
-  the network send; restart; verify the outbox resends the identical bytes
-  and the receiver decrypts exactly one message.
-Epoch moves before an unacked send is retried; verify the sender re-encrypts
-  under a new command id and the receiver sees one message.
+  the network send; restart; verify the outbox resends the identical bytes,
+  the receiver decrypts exactly one message, and the sender records its own.
+Epoch moves before an unacked send is retried; verify the outbox resends the
+  identical bytes, the receiver decrypts them under the past epoch and sees one
+  message, and a device added in between marks it as sent before its join.
 Present a key package whose device is not in the identity's roster; verify
   the adder rejects it and the group does not advance.
 Exhaust a device's key packages; verify the last-resort package is served,

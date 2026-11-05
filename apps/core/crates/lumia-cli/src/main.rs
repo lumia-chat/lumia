@@ -148,7 +148,14 @@ enum DmCmd {
         message_id: String,
     },
     /// Send a text message.
-    Send { channel_id: String, body: String },
+    Send {
+        channel_id: String,
+        body: String,
+        /// Fault injection: persist the encrypted message and the outbox
+        /// entry, then exit before the send (e2ee spec section 12).
+        #[arg(long, hide = true)]
+        crash_after_persist: bool,
+    },
     /// Follow a personal DM, decrypting as events arrive; ctrl-c to stop.
     Tail { channel_id: String },
     /// Show the conversation as this device projects it.
@@ -233,6 +240,13 @@ enum IdentityCmd {
         password: Option<String>,
         #[arg(long)]
         all: bool,
+    },
+    /// Rotate the root: a new phrase, the roster re-signed under its root,
+    /// chunk keys re-wrapped and the identity backup rewritten on every
+    /// instance this device knows (identity spec 4.5).
+    Rotate {
+        #[arg(long)]
+        phrase: String,
     },
     /// Recover with no device left: from the phrase, revoke every device the
     /// instance holds, add this one, and sign in (identity spec 4.3).
@@ -593,18 +607,24 @@ enum DmMode {
 }
 
 fn dm_engine(ctx: &mut Ctx, api: &Api) -> Result<DmEngine, ClientError> {
+    let host = ctx.host.clone();
+    dm_engine_at(ctx, &host, api)
+}
+
+/// The DM engine for one of this device's instances, by host.
+fn dm_engine_at(ctx: &mut Ctx, host: &str, api: &Api) -> Result<DmEngine, ClientError> {
     let roster = device(ctx).roster()?;
     let seed = ctx
         .identity_keys
         .get("device_key")?
         .ok_or_else(|| ClientError::State("no device key; create or claim an identity".into()))?;
-    let account = ctx
-        .store
+    let host_store = SqliteStore::open(&ctx.data_dir.join(host).join("store.sqlite"))?;
+    let account = host_store
         .meta_get("account_id")?
         .map(|h| hex::decode(h).unwrap_or_default())
         .unwrap_or_default();
     let backup_key = ctx.identity_keys.get("backup_key")?;
-    let store = SqliteStore::open(&ctx.data_dir.join(&ctx.host).join("store.sqlite"))?;
+    let store = SqliteStore::open(&ctx.data_dir.join(host).join("store.sqlite"))?;
     DmEngine::new(
         api.clone(),
         store,
@@ -692,10 +712,15 @@ async fn dm_cmd(mut ctx: Ctx, api: Api, action: DmCmd) -> Result<(), ClientError
                 vec![channel.clone()],
                 DmMode::Delete(channel, message),
                 false,
+                false,
             )
             .await
         }
-        DmCmd::Send { channel_id, body } => {
+        DmCmd::Send {
+            channel_id,
+            body,
+            crash_after_persist,
+        } => {
             let channel = parse_uuid(&channel_id)?;
             let mut engine = dm_engine(&mut ctx, &api)?;
             engine.load_participants(&channel)?;
@@ -706,6 +731,7 @@ async fn dm_cmd(mut ctx: Ctx, api: Api, action: DmCmd) -> Result<(), ClientError
                 vec![channel.clone()],
                 DmMode::Send(channel, body),
                 false,
+                crash_after_persist,
             )
             .await
         }
@@ -714,7 +740,7 @@ async fn dm_cmd(mut ctx: Ctx, api: Api, action: DmCmd) -> Result<(), ClientError
             let mut engine = dm_engine(&mut ctx, &api)?;
             engine.load_participants(&channel)?;
             println!("tailing {channel_id}; ctrl-c to stop");
-            dm_loop(ctx, api, engine, vec![channel], DmMode::Tail, false).await
+            dm_loop(ctx, api, engine, vec![channel], DmMode::Tail, false, false).await
         }
         DmCmd::Messages { channel_id } => {
             let channel = parse_uuid(&channel_id)?;
@@ -755,7 +781,7 @@ async fn dm_cmd(mut ctx: Ctx, api: Api, action: DmCmd) -> Result<(), ClientError
         }
         DmCmd::Setup => {
             let engine = dm_engine(&mut ctx, &api)?;
-            dm_loop(ctx, api, engine, Vec::new(), DmMode::Setup, false).await
+            dm_loop(ctx, api, engine, Vec::new(), DmMode::Setup, false, false).await
         }
         DmCmd::Rejoin { channel_id } => {
             let channel = parse_uuid(&channel_id)?;
@@ -767,6 +793,7 @@ async fn dm_cmd(mut ctx: Ctx, api: Api, action: DmCmd) -> Result<(), ClientError
                 engine,
                 vec![channel.clone()],
                 DmMode::Rejoin(channel),
+                false,
                 false,
             )
             .await
@@ -846,6 +873,7 @@ async fn open_dm(
         vec![channel.channel_id.clone()],
         DmMode::Open(channel.channel_id),
         create,
+        false,
     )
     .await
 }
@@ -859,6 +887,7 @@ async fn dm_loop(
     channels: Vec<Vec<u8>>,
     mode: DmMode,
     create: bool,
+    crash_after_persist: bool,
 ) -> Result<(), ClientError> {
     let (tx, rx) = mpsc::unbounded();
     let (etx, mut erx) = mpsc::unbounded();
@@ -945,9 +974,14 @@ async fn dm_loop(
             for outcome in outcomes {
                 match outcome {
                     Outcome::Print(s) => println!("-- {s}"),
-                    Outcome::Send(cmd) => tx
-                        .unbounded_send(GatewayCommand::Send(cmd))
-                        .map_err(|e| ClientError::Transport(e.to_string()))?,
+                    Outcome::Send(cmd) => {
+                        if crash_after_persist && matches!(mode, DmMode::Send(..)) {
+                            println!("-- crashing between the persist and the send");
+                            std::process::exit(3);
+                        }
+                        tx.unbounded_send(GatewayCommand::Send(cmd))
+                            .map_err(|e| ClientError::Transport(e.to_string()))?;
+                    }
                     Outcome::Subscribe(ch) => {
                         println!("-- personal DM {} added", wire::display(&ch));
                         tx.unbounded_send(GatewayCommand::Subscribe(ch))
@@ -1194,6 +1228,32 @@ async fn identity_cmd(ctx: &mut Ctx, api: &Api, action: IdentityCmd) -> Result<(
             if all {
                 publish_everywhere(ctx).await?;
             }
+            Ok(())
+        }
+        IdentityCmd::Rotate { phrase } => {
+            let rotated = device(ctx).rotate(api, &phrase).await?;
+            println!("root rotated: roster v{} on {}", rotated.version, ctx.host);
+            // The roster everywhere, then every instance's manifests under
+            // the new backup key and its identity backup rewritten.
+            publish_everywhere(ctx).await?;
+            if !rotated.old_backup_key.is_empty() {
+                for (host, base, tokens) in instances(ctx)? {
+                    let api = Api::new(&base).with_tokens(tokens);
+                    let mut engine = dm_engine_at(ctx, &host, &api)?;
+                    match engine.rewrap_backup(&rotated.old_backup_key).await {
+                        Ok(outcomes) => {
+                            for o in outcomes {
+                                if let Outcome::Print(s) = o {
+                                    println!("  {host}: {s}");
+                                }
+                            }
+                        }
+                        Err(e) => println!("  {host}: history not re-wrapped ({e})"),
+                    }
+                }
+            }
+            println!("new recovery phrase (shown once, write it down):");
+            println!("{}", rotated.phrase);
             Ok(())
         }
         IdentityCmd::Recover { phrase, label } => {

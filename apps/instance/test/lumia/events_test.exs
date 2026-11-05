@@ -219,7 +219,8 @@ defmodule Lumia.Events.EncryptedTest do
     assert Repo.get!(Channel, ctx.channel.id).last_seq == 0
   end
 
-  test "CONTROL advances the epoch by exactly one; APPLICATION passes at any epoch", ctx do
+  test "CONTROL advances the epoch by exactly one, WELCOME states the current one, APPLICATION passes at any epoch",
+       ctx do
     assert {:error, {:failed_precondition, "epoch"}} =
              Events.append(ctx.channel.id, ctx.actor, send_encrypted(ctx.channel.id, :CONTROL, 2))
 
@@ -233,13 +234,21 @@ defmodule Lumia.Events.EncryptedTest do
 
     assert Repo.get!(Channel, ctx.channel.id).mls_epoch == 1
 
-    # A welcome or proposal at the current epoch passes without advancing.
-    assert {:ok, %{seq: 2}} =
+    # The loser of two concurrent commits: the same epoch, the conversation
+    # already there (e2ee spec section 12).
+    assert {:error, {:failed_precondition, "epoch"}} =
              Events.append(ctx.channel.id, ctx.actor, send_encrypted(ctx.channel.id, :CONTROL, 1))
+
+    # A welcome at the current epoch passes without advancing; at any other, not.
+    assert {:ok, %{seq: 2}} =
+             Events.append(ctx.channel.id, ctx.actor, send_encrypted(ctx.channel.id, :WELCOME, 1))
+
+    assert {:error, {:failed_precondition, "epoch"}} =
+             Events.append(ctx.channel.id, ctx.actor, send_encrypted(ctx.channel.id, :WELCOME, 2))
 
     assert Repo.get!(Channel, ctx.channel.id).mls_epoch == 1
 
-    # The loser of a concurrent commit targets an epoch already two behind.
+    # A stale commit, two behind.
     assert {:error, {:failed_precondition, "epoch"}} =
              Events.append(ctx.channel.id, ctx.actor, send_encrypted(ctx.channel.id, :CONTROL, 0))
 
