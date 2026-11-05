@@ -244,6 +244,22 @@ fn notify(n: Notice) -> JsValue {
                 f64::from(w.heartbeat_interval_seconds).into(),
             ),
         ]),
+        Notice::PresenceDiff(d) => obj(&[
+            ("kind", "presenceDiff".into()),
+            ("serverId", bytes(&d.server_id)),
+            (
+                "joined",
+                f64::from(u32::try_from(d.joined.len()).unwrap_or(u32::MAX)).into(),
+            ),
+            (
+                "updated",
+                f64::from(u32::try_from(d.updated.len()).unwrap_or(u32::MAX)).into(),
+            ),
+            (
+                "left",
+                f64::from(u32::try_from(d.left_account_ids.len()).unwrap_or(u32::MAX)).into(),
+            ),
+        ]),
         Notice::Acked { command_id, seq } => obj(&[
             ("kind", "acked".into()),
             ("commandId", bytes(&command_id)),

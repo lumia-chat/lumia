@@ -20,7 +20,7 @@ import {
   type ChannelItem,
 } from "../design/components";
 import { ClientError, type ChannelSummary, type InviteSummary, type MessageSummary, type ServerSummary } from "../client/bridge";
-import { checkPush, client, connection, enableNotifications, membersQuery, messagesQuery, pushState, queryClient, snapshotQuery, startGateway } from "../client/state";
+import { checkPush, client, connection, enableNotifications, membersQuery, messagesQuery, presence, presenceOf, pushState, queryClient, snapshotQuery, startGateway, watchPresence } from "../client/state";
 import { useNames } from "../client/names";
 import { ConversationAside, HomeMain, HomeSidebar, type HomeView } from "./home";
 
@@ -126,6 +126,8 @@ export function App() {
       if (!list.some((c) => c.channelId === channelId())) setChannelId(list[0]?.channelId);
     }),
   );
+  // The server on screen is the one whose presence this client wants (protocol 6.7).
+  createEffect(on([() => (home() ? undefined : serverId()), connection], ([id]) => watchPresence(id)));
   void checkPush();
 
   const send = async () => {
@@ -420,17 +422,27 @@ export function App() {
 function MembersAside(props: { serverId: string; me: string }) {
   const [tab, setTab] = createSignal("members");
   const members = membersQuery(() => props.serverId || undefined);
-  const entries = createMemo(() =>
-    (members.data ?? [])
+  const entries = createMemo(() => {
+    void presence();
+    return (members.data ?? [])
       .map((m) => {
         const name = m.displayName || m.nickname || m.handle || m.accountId.slice(0, 8);
-        return { name, initials: initialsOf(name), tone: toneFor(m.accountId), subtitle: m.handle ? "@" + m.handle : undefined, tag: m.accountId === props.me ? "You" : undefined };
+        return { name, initials: initialsOf(name), tone: toneFor(m.accountId), status: presenceOf(props.serverId, m.accountId), subtitle: m.handle ? "@" + m.handle : undefined, tag: m.accountId === props.me ? "You" : undefined };
       })
-      .sort((a, b) => a.name.localeCompare(b.name)),
-  );
+      .sort((a, b) => a.name.localeCompare(b.name));
+  });
+  // Grouped by presence, as the design's member list is: those here, then the rest.
+  const sections = createMemo(() => {
+    const here = entries().filter((e) => e.status);
+    const away = entries().filter((e) => !e.status);
+    const out = [];
+    if (here.length) out.push({ title: "Online · " + here.length, members: here });
+    if (away.length) out.push({ title: (here.length ? "Offline · " : "Members · ") + away.length, members: away });
+    return out;
+  });
   return (
     <SidePanel tabs={[{ id: "members", label: "Members", count: entries().length }]} value={tab()} onChange={setTab}>
-      <MemberList sections={[{ title: "Members · " + entries().length, members: entries() }]} total={entries().length} />
+      <MemberList sections={sections()} total={entries().length} />
     </SidePanel>
   );
 }

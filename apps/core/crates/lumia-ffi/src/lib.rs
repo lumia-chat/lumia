@@ -540,6 +540,30 @@ pub enum ClientEvent {
     DmDelivered {
         operation_id: String,
     },
+    PresenceDiff {
+        server_id: String,
+        joined: Vec<PresenceSummary>,
+        updated: Vec<PresenceSummary>,
+        left_account_ids: Vec<String>,
+    },
+}
+
+/// One account's presence in a server.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct PresenceSummary {
+    pub account_id: String,
+    pub status: String,
+    pub custom_status: String,
+}
+
+impl From<app::PresenceSummary> for PresenceSummary {
+    fn from(p: app::PresenceSummary) -> Self {
+        Self {
+            account_id: p.account_id,
+            status: p.status,
+            custom_status: p.custom_status,
+        }
+    }
 }
 
 impl From<app::AppEvent> for ClientEvent {
@@ -605,6 +629,17 @@ impl From<app::AppEvent> for ClientEvent {
             },
             E::DmReady { channel_id } => Self::DmReady { channel_id },
             E::DmDelivered { operation_id } => Self::DmDelivered { operation_id },
+            E::PresenceDiff {
+                server_id,
+                joined,
+                updated,
+                left_account_ids,
+            } => Self::PresenceDiff {
+                server_id,
+                joined: joined.into_iter().map(Into::into).collect(),
+                updated: updated.into_iter().map(Into::into).collect(),
+                left_account_ids,
+            },
         }
     }
 }
@@ -761,6 +796,11 @@ impl Client {
         Ok(self
             .runtime
             .block_on(self.app.revoke_invite(&link_or_code))?)
+    }
+
+    /// This client's status and the servers it has on screen (protocol 6.7).
+    pub fn set_presence(&self, status: String, watch_server_ids: Vec<String>) -> Res<()> {
+        Ok(self.app.set_presence(&status, &watch_server_ids)?)
     }
 
     /// `POST /servers`: a server this account owns.

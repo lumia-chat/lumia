@@ -75,6 +75,8 @@ pub enum GatewayCommand {
     Subscribe(Vec<u8>),
     /// The app came to the foreground: ask for every head.
     Foreground,
+    /// This client's status and the servers it wants presence for.
+    Presence(lumia_core::proto::PresenceUpdate),
 }
 
 /// How one connection ended.
@@ -461,6 +463,7 @@ fn on_command<S: Store>(
             pending.extend(session.subscribe(channel_id, cursor));
         }
         GatewayCommand::Foreground => pending.push_back(session.high_water_mark()),
+        GatewayCommand::Presence(update) => pending.push_back(session.presence(update)),
     }
     Ok(())
 }

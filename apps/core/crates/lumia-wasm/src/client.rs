@@ -227,6 +227,21 @@ impl Client {
         self.app.revoke_invite(&link_or_code).await.map_err(js)
     }
 
+    /// This client's status and the servers it has on screen (protocol 6.7).
+    ///
+    /// # Errors
+    /// When not started or an id is malformed.
+    #[wasm_bindgen(js_name = setPresence)]
+    pub fn set_presence(
+        &self,
+        status: String,
+        watch_server_ids: Vec<String>,
+    ) -> Result<(), JsError> {
+        self.app
+            .set_presence(&status, &watch_server_ids)
+            .map_err(js)
+    }
+
     /// `POST /servers`: a server this account owns.
     ///
     /// # Errors

@@ -52,6 +52,13 @@ struct ShellView: View {
             PushRegistrar.shared.register()
         }
         .task(id: PushRegistrar.shared.token) { await PushRegistrar.shared.subscribe(session) }
+        // The server on screen is the one whose presence this client wants (protocol 6.7).
+        .onChange(of: place, initial: true) { _, place in
+            if case let .server(id) = place { session.watchPresence(serverIDs: [id]) } else { session.watchPresence(serverIDs: []) }
+        }
+        .onChange(of: session.connection) { _, state in
+            if state == .connected, case let .server(id) = place { session.watchPresence(serverIDs: [id]) }
+        }
         .onChange(of: servers.map(\.serverId)) { _, ids in
             // With no conversation yet, a first server is the better place to land.
             if case .home = place, let first = ids.first, snapshot?.channels.contains(where: { personalKinds.contains($0.kind) }) == false {

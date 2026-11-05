@@ -60,6 +60,67 @@ defmodule LumiaWeb.Gateway.SessionChannelTest do
 
   defp event_seq({:event_bytes, bytes}), do: V1.Event.decode(bytes).seq
 
+  describe "presence" do
+    test "watching a server lists who is there, and their comings and goings follow", ctx do
+      {_welcome, a} = join!(ctx.socket)
+      other = account("other")
+      {:ok, _} = Servers.add_member(ctx.server.id, other.id, ctx.account.id)
+      other_device = Ecto.UUID.generate()
+      {:ok, _session, tokens} = Auth.create_session(other.id, other_device)
+      {:ok, b_socket} = connect(Socket, %{}, connect_info: %{auth_token: tokens.access_token})
+      {_welcome, b} = join!(b_socket)
+
+      watch = %V1.PresenceUpdate{status: :ONLINE, watch_server_ids: [Proto.uuid(ctx.server.id)]}
+      send_frame(a, {:presence, watch})
+      me = Proto.uuid(ctx.account.id)
+
+      assert_push "frame", %V1.ServerFrame{
+        frame:
+          {:presence_diff,
+           %V1.PresenceDiff{joined: [%V1.Presence{account_id: ^me, status: :ONLINE}]}}
+      }
+
+      # B arrives in the server's topic: A hears it; B's own first diff names both.
+      send_frame(b, {:presence, watch})
+      them = Proto.uuid(other.id)
+
+      assert_push "frame", %V1.ServerFrame{
+        frame: {:presence_diff, %V1.PresenceDiff{joined: [%V1.Presence{account_id: ^them}]}}
+      }
+
+      # B goes away: A hears the update.
+      send_frame(b, {:presence, %{watch | status: :AWAY}})
+
+      assert_push "frame", %V1.ServerFrame{
+        frame:
+          {:presence_diff,
+           %V1.PresenceDiff{updated: [%V1.Presence{account_id: ^them, status: :AWAY}]}}
+      }
+
+      # B stops watching (nothing of the server on screen): A hears it leave.
+      send_frame(b, {:presence, %{watch | watch_server_ids: []}})
+
+      assert_push "frame", %V1.ServerFrame{
+        frame: {:presence_diff, %V1.PresenceDiff{left_account_ids: [^them]}}
+      }
+    end
+
+    test "a server the account is not in is never watched", ctx do
+      {_welcome, a} = join!(ctx.socket)
+      stranger = account("stranger")
+      {:ok, theirs} = Servers.create_server(stranger.id, "Theirs")
+
+      send_frame(
+        a,
+        {:presence,
+         %V1.PresenceUpdate{status: :ONLINE, watch_server_ids: [Proto.uuid(theirs.id)]}}
+      )
+
+      refute_push "frame", %V1.ServerFrame{frame: {:presence_diff, _}}
+      assert LumiaWeb.Presence.list("presence:server:" <> theirs.id) == %{}
+    end
+  end
+
   describe "connect and join" do
     test "rejects a bad token" do
       assert :error = connect(Socket, %{}, connect_info: %{auth_token: "nope"})

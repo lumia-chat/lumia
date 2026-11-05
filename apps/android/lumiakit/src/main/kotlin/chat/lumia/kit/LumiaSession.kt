@@ -320,7 +320,12 @@ class LumiaSession(val client: LumiaClient) {
 
     private suspend fun handle(event: ClientEvent) {
         when (event) {
-            is ClientEvent.Welcomed -> { connection = ConnectionState.Connected; refreshSnapshot() }
+            is ClientEvent.Welcomed -> {
+                connection = ConnectionState.Connected
+                refreshSnapshot()
+                serverPresence.clear()
+                watchPresence(watchingServerIds)
+            }
             is ClientEvent.Applied -> refreshMessages(event.channelId)
             is ClientEvent.SnapshotTaken -> refreshMessages(event.channelId)
             is ClientEvent.AccountApplied -> { refreshSnapshot(); refreshDmChannels() }
@@ -332,7 +337,29 @@ class LumiaSession(val client: LumiaClient) {
             is ClientEvent.DmOperation -> refreshDmLog(event.channelId)
             is ClientEvent.DmDelivered -> for (id in dmLogs.keys.toList()) refreshDmLog(id)
             is ClientEvent.DmError -> lastError = event.message
+            is ClientEvent.PresenceDiff -> {
+                val server = (serverPresence[event.serverId] ?: emptyMap()).toMutableMap()
+                for (p in event.joined + event.updated) server[p.accountId] = p.status
+                for (id in event.leftAccountIds) server.remove(id)
+                serverPresence[event.serverId] = server
+            }
             is ClientEvent.Acked, is ClientEvent.Error, is ClientEvent.SubscriptionFailed, is ClientEvent.DmNote -> Unit
         }
     }
+
+    // Presence (protocol 6.7)
+
+    /** Who is present in the servers on screen, by server then account: ONLINE, AWAY or DO_NOT_DISTURB. */
+    val serverPresence = mutableStateMapOf<String, Map<String, String>>()
+    private var watchingServerIds: List<String> = emptyList()
+
+    /** The servers on screen, whose presence this client wants; none for Home. Re-sent on every welcome. */
+    fun watchPresence(serverIds: List<String>) {
+        watchingServerIds = serverIds
+        if (connection != ConnectionState.Connected) return
+        scope.launch { runCatching { client.call { setPresence("ONLINE", serverIds) } } }
+    }
+
+    /** An account's presence in a server, or null when it is not there. */
+    fun presenceOf(accountId: String, serverId: String): String? = serverPresence[serverId]?.get(accountId)
 }

@@ -367,6 +367,34 @@ pub enum AppEvent {
     DmDelivered {
         operation_id: String,
     },
+    /// Who is present in a watched server changed: a first diff lists
+    /// everyone there as joined.
+    PresenceDiff {
+        server_id: String,
+        joined: Vec<PresenceSummary>,
+        updated: Vec<PresenceSummary>,
+        left_account_ids: Vec<String>,
+    },
+}
+
+/// One account's presence in a server.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PresenceSummary {
+    pub account_id: String,
+    /// `ONLINE`, `AWAY` or `DO_NOT_DISTURB`.
+    pub status: String,
+    pub custom_status: String,
+}
+
+fn presence_summary(p: &lumia_core::proto::Presence) -> PresenceSummary {
+    PresenceSummary {
+        account_id: wire::display(&p.account_id),
+        status: lumia_core::proto::PresenceStatus::try_from(p.status)
+            .map(|s| s.as_str_name().to_string())
+            .unwrap_or_else(|_| "ONLINE".into()),
+        custom_status: p.custom_status.clone(),
+    }
 }
 
 // ---- Conversions --------------------------------------------------------------
@@ -472,6 +500,16 @@ fn app_event(ev: GatewayEvent) -> AppEvent {
                 message: error.map(|e| e.message).unwrap_or_default(),
             }
         }
+        GatewayEvent::Notice(Notice::PresenceDiff(d)) => AppEvent::PresenceDiff {
+            server_id: wire::display(&d.server_id),
+            joined: d.joined.iter().map(presence_summary).collect(),
+            updated: d.updated.iter().map(presence_summary).collect(),
+            left_account_ids: d
+                .left_account_ids
+                .iter()
+                .map(|id| wire::display(id))
+                .collect(),
+        },
         GatewayEvent::Notice(Notice::Disconnected(d)) => AppEvent::Disconnected {
             reason: lumia_core::proto::DisconnectReason::try_from(d.reason)
                 .map(|r| r.as_str_name().to_string())
@@ -1217,6 +1255,35 @@ impl App {
     /// When not started or the id is malformed.
     pub fn subscribe(&self, channel_id: &str) -> Result<(), ClientError> {
         self.send_command(GatewayCommand::Subscribe(parse_uuid(channel_id)?))
+    }
+
+    /// This client's status (`ONLINE`, `AWAY` or `DO_NOT_DISTURB`) and the
+    /// servers it has on screen, whose presence it then receives as
+    /// `PresenceDiff` events; the set replaces the last one.
+    ///
+    /// # Errors
+    /// When not started or an id is malformed.
+    pub fn set_presence(
+        &self,
+        status: &str,
+        watch_server_ids: &[String],
+    ) -> Result<(), ClientError> {
+        let status = match status {
+            "AWAY" => lumia_core::proto::PresenceStatus::Away,
+            "DO_NOT_DISTURB" => lumia_core::proto::PresenceStatus::DoNotDisturb,
+            _ => lumia_core::proto::PresenceStatus::Online,
+        };
+        let mut ids = Vec::with_capacity(watch_server_ids.len());
+        for id in watch_server_ids {
+            ids.push(parse_uuid(id)?);
+        }
+        self.send_command(GatewayCommand::Presence(
+            lumia_core::proto::PresenceUpdate {
+                status: status.into(),
+                custom_status: String::new(),
+                watch_server_ids: ids,
+            },
+        ))
     }
 
     /// Sends a message; returns the client-minted message id.

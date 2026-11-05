@@ -111,6 +111,10 @@ fun Shell(store: AppStore, session: LumiaSession, devScreen: String?) {
             }
         }
     }
+    // The server on screen is the one whose presence this client wants (protocol 6.7).
+    LaunchedEffect(place, session.connection) {
+        session.watchPresence((place as? Place.Server)?.let { listOf(it.id) } ?: emptyList())
+    }
     BackHandler(enabled = stack.isNotEmpty()) { pop() }
 
     when (val top = stack.lastOrNull()) {

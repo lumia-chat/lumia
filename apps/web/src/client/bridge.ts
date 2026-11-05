@@ -19,6 +19,12 @@ export interface ServerSummary {
   serverId: string;
   name: string;
 }
+/** One account's presence in a server (`ONLINE`, `AWAY`, `DO_NOT_DISTURB`). */
+export interface PresenceSummary {
+  accountId: string;
+  status: string;
+  customStatus: string;
+}
 /** What an invite shows before joining (`GET /invites/{code}`). */
 export interface InvitePreviewSummary {
   code: string;
@@ -136,6 +142,7 @@ export type ClientEvent =
   | { kind: "acked"; commandId: string; seq: number }
   | { kind: "error"; code: string; message: string; commandId: string }
   | { kind: "subscriptionFailed"; channelId: string; message: string }
+  | { kind: "presenceDiff"; serverId: string; joined: PresenceSummary[]; updated: PresenceSummary[]; leftAccountIds: string[] }
   | { kind: "snapshotTaken"; channelId: string; seq: number }
   | { kind: "disconnected"; reason: string; reconnectAfterSeconds: number }
   | { kind: "reconnecting"; attempt: number; delayMillis: number; reason: string }
@@ -221,6 +228,10 @@ export class Bridge {
   /** Joins the invite's server; resolves to its id. */
   acceptInvite(linkOrCode: string): Promise<string> {
     return this.call("acceptInvite", linkOrCode);
+  }
+  /** This client's status and the servers it has on screen (protocol 6.7). */
+  setPresence(status: string, watchServerIds: string[]): Promise<void> {
+    return this.call("setPresence", status, watchServerIds);
   }
   invites(serverId: string): Promise<InviteSummary[]> {
     return this.call("invites", serverId);

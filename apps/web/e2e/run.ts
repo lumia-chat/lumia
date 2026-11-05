@@ -391,6 +391,10 @@ async function create(which: string, handle: string, stamp: number) {
     await page.getByLabel("Channel name").fill("ops");
     await page.getByRole("button", { name: "Create channel" }).click();
     await page.getByPlaceholder("Message #ops").waitFor();
+    // Presence (protocol 6.7): the page watches the server on screen and
+    // sees itself in the members aside as online.
+    phase("presence");
+    await page.getByText("Online · 1").waitFor();
     // An invite link from the sidebar, limited to one use, then revoked:
     // the instance stops answering for it.
     phase("invite");
@@ -409,7 +413,7 @@ async function create(which: string, handle: string, stamp: number) {
   } finally {
     await ctx.close();
   }
-  console.log(`  ${which}: made a server, its first channel and a one-use invite from the app, then revoked it, in ${Date.now() - t0} ms`);
+  console.log(`  ${which}: made a server and its first channel from the app, saw itself online there, made a one-use invite and revoked it, in ${Date.now() - t0} ms`);
 }
 
 // Web Push end to end (architecture 15.5), with a push service of the

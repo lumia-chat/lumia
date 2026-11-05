@@ -146,12 +146,45 @@ export async function startGateway(channelIds: string[]): Promise<void> {
   }
 }
 
+// Presence (protocol 6.7): who is present in the servers on screen, by
+// server then account, fed by the gateway's diffs. `watchPresence` names
+// the server on screen (none for Home); the set is re-sent on every
+// welcome, since a connection starts with nothing watched.
+const [presence, setPresence] = createSignal<Map<string, Map<string, string>>>(new Map());
+export { presence };
+let watching: string[] = [];
+
+export function watchPresence(serverId: string | undefined): void {
+  watching = serverId ? [serverId] : [];
+  if (connection() !== "connected") return;
+  client()
+    .setPresence("ONLINE", watching)
+    .catch((e) => console.warn("presence:", e));
+}
+
+/** The status of an account in a server, as the design's `Status`, or undefined when away from it. */
+export function presenceOf(serverId: string | undefined, accountId: string): "online" | "away" | "dnd" | undefined {
+  const status = serverId ? presence().get(serverId)?.get(accountId) : undefined;
+  return status === "ONLINE" ? "online" : status === "AWAY" ? "away" : status === "DO_NOT_DISTURB" ? "dnd" : undefined;
+}
+
 function onGatewayEvent(e: ClientEvent): void {
   switch (e.kind) {
     case "welcomed":
       setConnection("connected");
       void queryClient.invalidateQueries({ queryKey: ["snapshot"] });
+      setPresence(new Map());
+      watchPresence(watching[0]);
       break;
+    case "presenceDiff": {
+      const next = new Map(presence());
+      const server = new Map(next.get(e.serverId) ?? []);
+      for (const p of [...e.joined, ...e.updated]) server.set(p.accountId, p.status);
+      for (const id of e.leftAccountIds) server.delete(id);
+      next.set(e.serverId, server);
+      setPresence(next);
+      break;
+    }
     case "applied":
       void queryClient.invalidateQueries({ queryKey: ["messages", e.channelId] });
       break;

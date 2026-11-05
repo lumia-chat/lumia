@@ -97,6 +97,8 @@ pub enum Notice {
     },
     /// The server is closing the connection.
     Disconnected(crate::proto::Disconnect),
+    /// Who is present in a watched server changed (protocol 6.7).
+    PresenceDiff(crate::proto::PresenceDiff),
 }
 
 /// Per-log replay state.
@@ -255,6 +257,13 @@ impl Session {
         )))
     }
 
+    /// This client's presence and the servers whose presence it wants
+    /// (protocol 6.7): the set replaces the last one.
+    #[must_use]
+    pub fn presence(&self, update: crate::proto::PresenceUpdate) -> Effect {
+        Effect::Send(frame(client_frame::Frame::Presence(update)))
+    }
+
     /// Feeds a server frame and returns what to do.
     pub fn handle(&mut self, frame: ServerFrame) -> Vec<Effect> {
         let Some(frame) = frame.frame else {
@@ -280,9 +289,10 @@ impl Session {
             server_frame::Frame::Disconnect(disconnect) => {
                 vec![Effect::Notify(Notice::Disconnected(disconnect))]
             }
-            server_frame::Frame::Heartbeat(_)
-            | server_frame::Frame::PresenceDiff(_)
-            | server_frame::Frame::Typing(_) => Vec::new(),
+            server_frame::Frame::PresenceDiff(diff) => {
+                vec![Effect::Notify(Notice::PresenceDiff(diff))]
+            }
+            server_frame::Frame::Heartbeat(_) | server_frame::Frame::Typing(_) => Vec::new(),
         }
     }
 

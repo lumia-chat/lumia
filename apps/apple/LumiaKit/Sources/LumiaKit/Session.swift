@@ -44,6 +44,10 @@ public final class LumiaSession {
     public private(set) var people: [String: MemberSummary] = [:]
     /// A server's members, by server id, for the members aside.
     public private(set) var serverMembers: [String: [MemberSummary]] = [:]
+    /// Who is present in the servers on screen (protocol 6.7), by server
+    /// then account: `ONLINE`, `AWAY` or `DO_NOT_DISTURB`.
+    public private(set) var serverPresence: [String: [String: String]] = [:]
+    private var watchingServerIDs: [String] = []
     /// Public profiles looked up one at a time; nil once the instance refused one.
     private var profiles: [String: MemberSummary?] = [:]
     private var profilesInFlight: Set<String> = []
@@ -341,6 +345,8 @@ public final class LumiaSession {
     private func handle(_ event: LumiaEvent) async {
         switch event {
         case .welcomed:
+            serverPresence = [:]
+            watchPresence(serverIDs: watchingServerIDs)
             connection = .connected
             await refreshSnapshot()
         case let .applied(channelId, _), let .snapshotTaken(channelId, _):
@@ -364,8 +370,28 @@ public final class LumiaSession {
             for id in dmLogs.keys { await refreshDmLog(channelID: id) }
         case let .dmError(message):
             lastError = message
+        case let .presenceDiff(serverId, joined, updated, leftAccountIds):
+            var server = serverPresence[serverId] ?? [:]
+            for p in joined + updated { server[p.accountId] = p.status }
+            for id in leftAccountIds { server.removeValue(forKey: id) }
+            serverPresence[serverId] = server
         case .acked, .error, .subscriptionFailed, .dmNote:
             break
         }
+    }
+
+    // MARK: Presence
+
+    /// The servers on screen, whose presence this client wants (protocol
+    /// 6.7); none for Home. Re-sent on every welcome.
+    public func watchPresence(serverIDs: [String]) {
+        watchingServerIDs = serverIDs
+        guard connection == .connected else { return }
+        Task { try? await client.setPresence(status: "ONLINE", watchServerIDs: serverIDs) }
+    }
+
+    /// An account's presence in a server, or nil when it is not there.
+    public func presence(of accountID: String, in serverID: String) -> String? {
+        serverPresence[serverID]?[accountID]
     }
 }

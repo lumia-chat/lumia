@@ -72,6 +72,13 @@ struct ShellView: View {
         }
         .background(LumiaTokens.bg.color)
         .task { await session.load() }
+        // The server on screen is the one whose presence this client wants (protocol 6.7).
+        .onChange(of: place, initial: true) { _, place in
+            if case let .server(id) = place { session.watchPresence(serverIDs: [id]) } else { session.watchPresence(serverIDs: []) }
+        }
+        .onChange(of: session.connection) { _, state in
+            if state == .connected, case let .server(id) = place { session.watchPresence(serverIDs: [id]) }
+        }
         .onChange(of: channels.map(\.channelId)) { _, ids in
             if channelID == nil || !ids.contains(channelID ?? "") { channelID = ids.first }
         }
@@ -495,10 +502,22 @@ struct MembersAside: View {
             .padding(.bottom, LumiaTokens.space6)
             ScrollView {
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("Members · \(members.count)").font(LumiaTokens.textSection.font).foregroundStyle(LumiaTokens.inkMuted.color)
-                        .padding(.horizontal, LumiaTokens.space10).padding(.top, LumiaTokens.space8).padding(.bottom, LumiaTokens.space6)
-                    ForEach(members, id: \.accountId) { m in
-                        LumiaMemberRow(name: name(of: m), subtitle: m.handle.isEmpty ? nil : "@\(m.handle)", tone: .of(m.accountId), tag: m.accountId == session.me ? "You" : nil)
+                    // Grouped by presence, as the design's member list is: those here, then the rest.
+                    let here = members.filter { session.presence(of: $0.accountId, in: server.serverId) != nil }
+                    let away = members.filter { session.presence(of: $0.accountId, in: server.serverId) == nil }
+                    if !here.isEmpty {
+                        Text("Online · \(here.count)").font(LumiaTokens.textSection.font).foregroundStyle(LumiaTokens.inkMuted.color)
+                            .padding(.horizontal, LumiaTokens.space10).padding(.top, LumiaTokens.space8).padding(.bottom, LumiaTokens.space6)
+                        ForEach(here, id: \.accountId) { m in
+                            LumiaMemberRow(name: name(of: m), subtitle: m.handle.isEmpty ? nil : "@\(m.handle)", tone: .of(m.accountId), tag: m.accountId == session.me ? "You" : nil, status: session.presence(of: m.accountId, in: server.serverId))
+                        }
+                    }
+                    if !away.isEmpty {
+                        Text("\(here.isEmpty ? "Members" : "Offline") · \(away.count)").font(LumiaTokens.textSection.font).foregroundStyle(LumiaTokens.inkMuted.color)
+                            .padding(.horizontal, LumiaTokens.space10).padding(.top, LumiaTokens.space8).padding(.bottom, LumiaTokens.space6)
+                        ForEach(away, id: \.accountId) { m in
+                            LumiaMemberRow(name: name(of: m), subtitle: m.handle.isEmpty ? nil : "@\(m.handle)", tone: .of(m.accountId), tag: m.accountId == session.me ? "You" : nil)
+                        }
                     }
                 }
                 .padding(.horizontal, LumiaTokens.space8)

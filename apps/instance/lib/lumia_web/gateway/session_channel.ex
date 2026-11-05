@@ -63,7 +63,8 @@ defmodule LumiaWeb.Gateway.SessionChannel do
       assign(socket,
         subscriptions: %{},
         account_seq: nil,
-        hello: hello
+        hello: hello,
+        presence: %{status: "ONLINE", custom_status: "", watching: MapSet.new()}
       )
 
     welcome = %V1.Welcome{
@@ -175,7 +176,63 @@ defmodule LumiaWeb.Gateway.SessionChannel do
     {:noreply, push_frame(socket, {:high_water_mark, response})}
   end
 
-  defp handle_frame(:presence, %V1.PresenceUpdate{}, socket), do: {:noreply, socket}
+  # Presence (protocol 6.7, architecture 3): one Phoenix.Presence topic per
+  # server, and this session is tracked in a server's topic only while the
+  # client says it has that server on screen; the update replaces the
+  # watched set. The topic's diffs come back as PresenceDiff frames, and a
+  # newly watched server first gets everyone present as "joined".
+  defp handle_frame(:presence, %V1.PresenceUpdate{} = update, socket) do
+    current = socket.assigns.presence
+    status = presence_status(update.status)
+    account_id = socket.assigns.account_id
+
+    wanted =
+      update.watch_server_ids
+      |> Enum.map(&Proto.from_uuid/1)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.filter(&Lumia.Servers.member_for(&1, account_id))
+      |> MapSet.new()
+
+    meta = %{
+      status: status,
+      custom_status: update.custom_status,
+      device_id: socket.assigns.device_id
+    }
+
+    changed = status != current.status or update.custom_status != current.custom_status
+
+    for server_id <- MapSet.difference(current.watching, wanted) do
+      LumiaWeb.Presence.untrack(self(), presence_topic(server_id), account_id)
+      Phoenix.PubSub.unsubscribe(Lumia.PubSub, presence_topic(server_id))
+    end
+
+    if changed do
+      for server_id <- MapSet.intersection(current.watching, wanted) do
+        {:ok, _} = LumiaWeb.Presence.update(self(), presence_topic(server_id), account_id, meta)
+      end
+    end
+
+    socket =
+      Enum.reduce(MapSet.difference(wanted, current.watching), socket, fn server_id, socket ->
+        topic = presence_topic(server_id)
+        :ok = Phoenix.PubSub.subscribe(Lumia.PubSub, topic)
+        {:ok, _} = LumiaWeb.Presence.track(self(), topic, account_id, meta)
+
+        joined =
+          topic
+          |> LumiaWeb.Presence.list()
+          |> Enum.map(fn {id, %{metas: metas}} -> presence_entry(id, metas) end)
+
+        push_frame(
+          socket,
+          {:presence_diff, %V1.PresenceDiff{server_id: Proto.uuid(server_id), joined: joined}}
+        )
+      end)
+
+    presence = %{status: status, custom_status: update.custom_status, watching: wanted}
+    {:noreply, assign(socket, presence: presence)}
+  end
+
   defp handle_frame(:typing, %V1.Typing{}, socket), do: {:noreply, socket}
 
   defp handle_frame(_tag, _body, socket) do
@@ -332,6 +389,41 @@ defmodule LumiaWeb.Gateway.SessionChannel do
     disconnect(socket, :DISCONNECT_SLOW_CONSUMER)
   end
 
+  def handle_info(
+        %Phoenix.Socket.Broadcast{
+          event: "presence_diff",
+          topic: "presence:server:" <> server_id = topic,
+          payload: %{joins: joins, leaves: leaves}
+        },
+        socket
+      ) do
+    present = LumiaWeb.Presence.list(topic)
+
+    {updated, joined} =
+      joins
+      |> Enum.map(fn {id, %{metas: metas}} -> presence_entry(id, metas) end)
+      |> Enum.split_with(fn entry -> Map.has_key?(leaves, Proto.from_uuid(entry.account_id)) end)
+
+    left =
+      leaves
+      |> Map.keys()
+      |> Enum.reject(&(Map.has_key?(joins, &1) or Map.has_key?(present, &1)))
+      |> Enum.map(&Proto.uuid/1)
+
+    diff = %V1.PresenceDiff{
+      server_id: Proto.uuid(server_id),
+      joined: joined,
+      updated: updated,
+      left_account_ids: left
+    }
+
+    if joined == [] and updated == [] and left == [] do
+      {:noreply, socket}
+    else
+      {:noreply, push_frame(socket, {:presence_diff, diff})}
+    end
+  end
+
   def handle_info(_other, socket), do: {:noreply, socket}
 
   defp handle_live(socket, channel_id, sub, event, bytes) do
@@ -459,6 +551,29 @@ defmodule LumiaWeb.Gateway.SessionChannel do
   end
 
   # ---- Pushing -----------------------------------------------------------------
+
+  defp presence_topic(server_id), do: "presence:server:" <> server_id
+
+  defp presence_status(:PRESENCE_STATUS_UNSPECIFIED), do: "ONLINE"
+  defp presence_status(:OFFLINE), do: "ONLINE"
+  defp presence_status(status) when is_atom(status), do: Atom.to_string(status)
+  defp presence_status(_), do: "ONLINE"
+
+  # One entry per account: the most present of its devices' statuses.
+  defp presence_entry(account_id, metas) do
+    rank = %{"ONLINE" => 0, "AWAY" => 1, "DO_NOT_DISTURB" => 2}
+
+    best =
+      Enum.min_by(metas, &Map.get(rank, &1.status, 3), fn ->
+        %{status: "ONLINE", custom_status: ""}
+      end)
+
+    %V1.Presence{
+      account_id: Proto.uuid(account_id),
+      status: String.to_existing_atom(best.status),
+      custom_status: best.custom_status || ""
+    }
+  end
 
   defp push_frame(socket, {tag, body}) do
     push_raw(socket, %V1.ServerFrame{frame: {tag, body}})

@@ -247,14 +247,33 @@ public struct LumiaMemberRow: View {
     let subtitle: String?
     let tone: AvatarTone
     let tag: String?
+    /// `ONLINE`, `AWAY` or `DO_NOT_DISTURB`, shown as a dot; nil for not here.
+    let status: String?
 
-    public init(name: String, subtitle: String? = nil, tone: AvatarTone, tag: String? = nil) {
-        self.name = name; self.subtitle = subtitle; self.tone = tone; self.tag = tag
+    public init(name: String, subtitle: String? = nil, tone: AvatarTone, tag: String? = nil, status: String? = nil) {
+        self.name = name; self.subtitle = subtitle; self.tone = tone; self.tag = tag; self.status = status
+    }
+
+    private var dot: Color? {
+        switch status {
+        case "ONLINE": LumiaTokens.online.color
+        case "AWAY": LumiaTokens.away.color
+        case "DO_NOT_DISTURB": LumiaTokens.unread.color
+        default: nil
+        }
     }
 
     public var body: some View {
         HStack(spacing: LumiaTokens.space12) {
             LumiaAvatar(initials: initials(of: name), tone: tone, size: LumiaTokens.avatarMd)
+                .overlay(alignment: .bottomTrailing) {
+                    if let dot {
+                        Circle().fill(dot).frame(width: 10, height: 10)
+                            .overlay(Circle().stroke(LumiaTokens.surface.color, lineWidth: 2))
+                            .offset(x: 1, y: 1)
+                    }
+                }
+                .opacity(status == nil ? 0.6 : 1)
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: LumiaTokens.space6) {
                     Text(name).font(LumiaTokens.textMember.font).foregroundStyle(LumiaTokens.ink.color).lineLimit(1)

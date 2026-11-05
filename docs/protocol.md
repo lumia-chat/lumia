@@ -124,7 +124,7 @@ The client sends `Heartbeat` every `heartbeat_interval_seconds`; the server echo
 
 ### 6.7 Presence and typing
 
-`PresenceUpdate` sets the client's own status and **replaces** the set of servers whose presence the client wants to receive. Clients include a server only while its member list or a channel in it is on screen. `PresenceDiff` frames arrive scoped to one server, or to the friends topic when `server_id` is empty.
+`PresenceUpdate` sets the client's own status and **replaces** the set of servers whose presence the client wants to receive. Clients include a server only while its member list or a channel in it is on screen; a server the account is not a member of is ignored. A newly watched server answers first with a `PresenceDiff` whose `joined` lists everyone present (one entry per account, the most present of its devices' statuses), and then with the diffs as they happen: `joined` for an account that arrived, `updated` for one whose status changed, `left_account_ids` for one whose last device stopped watching or disconnected. `OFFLINE` and the unspecified status are taken as `ONLINE`. `PresenceDiff` frames arrive scoped to one server, or to the friends topic when `server_id` is empty (the friends topic is not served yet).
 
 `Typing` is sent at most once per 5 seconds while the user is typing in a channel. Servers fan it out as `TypingIndicator` with an `until` about 8 seconds ahead; clients stop showing it at `until` without needing a stop message. Typing is never sent for `PERSONAL_*` channels over the gateway in plaintext; clients that want typing in E2EE DMs send it inside an MLS application message.
 
