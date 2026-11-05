@@ -48,8 +48,11 @@ defmodule LumiaWeb.IdentityController do
          {:ok, invite} <- invite(req.invite_code),
          {:ok, verified, device} <- Identity.verify_proof(proof, :CREATE_ACCOUNT),
          :ok <- no_account_yet(verified.identity_id),
+         {:ok, imported} <- imported_profile(req.profile, verified),
          {:ok, account} <-
-           Accounts.create_account(%{handle: req.handle, identity_id: verified.identity_id}),
+           Accounts.create_account(
+             Map.merge(imported, %{handle: req.handle, identity_id: verified.identity_id})
+           ),
          {:ok, _} <- LumiaWeb.AuthController.join(invite, account.id),
          {:ok, _session, tokens} <-
            Auth.create_session(account.id, Proto.from_uuid(device.cert.device_id),
@@ -232,6 +235,25 @@ defmodule LumiaWeb.IdentityController do
   defp no_account_yet(identity_id) do
     if Identity.account_for(identity_id), do: {:error, :already_exists}, else: :ok
   end
+
+  # The profile the identity carries (architecture 6.2, "profile imported"):
+  # its display name and avatar become the account's, once the roster
+  # vouches for the signature. None is fine; a bad one is refused.
+  defp imported_profile(nil, _verified), do: {:ok, %{}}
+
+  defp imported_profile(%V1.SignedProfile{} = signed, verified) do
+    with {:ok, body} <- Identity.verify_profile(signed, verified) do
+      {:ok,
+       %{
+         display_name: blank_to_nil(body.display_name),
+         avatar_url: blank_to_nil(body.avatar_url),
+         profile: V1.SignedProfile.encode(signed)
+       }}
+    end
+  end
+
+  defp blank_to_nil(""), do: nil
+  defp blank_to_nil(v), do: v
 
   # The invite that led here, when the request names one: the account
   # joins its server. Identity-proof creation has its own policy, so a

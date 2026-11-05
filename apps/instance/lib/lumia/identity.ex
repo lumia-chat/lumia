@@ -142,6 +142,34 @@ defmodule Lumia.Identity do
 
   # ---- Rosters (sections 3.3, 4.4, 5) -------------------------------------------
 
+  @doc """
+  Verifies a signed profile against a verified roster (architecture 6.2,
+  "profile imported"): the body names the roster's identity, and its
+  signature is by a device of that roster, not revoked. Returns the body.
+  """
+  def verify_profile(%V1.SignedProfile{body: bytes, signature: %V1.Signature{} = sig}, verified)
+      when is_binary(bytes) do
+    with {:ok, body} <- decode_profile(bytes),
+         true <- body.identity_id == verified.identity_id || {:error, :identity_proof_invalid},
+         true <- sig.signer_kind == :DEVICE || {:error, :identity_proof_invalid},
+         {:ok, device} <- Map.fetch(verified.devices, sig.signer_id) |> or_invalid(),
+         true <-
+           is_nil(Map.get(verified.revoked, sig.signer_id)) || {:error, :identity_proof_invalid},
+         true <-
+           Crypto.verify(bytes, sig.signature, device.cert.public_key.ed25519) ||
+             {:error, :identity_proof_invalid} do
+      {:ok, body}
+    end
+  end
+
+  def verify_profile(_, _), do: {:error, :identity_proof_invalid}
+
+  defp decode_profile(bytes) do
+    {:ok, V1.ProfileBody.decode(bytes)}
+  rescue
+    _ -> {:error, :identity_proof_invalid}
+  end
+
   @doc "The roster this instance holds for an identity, verified, or nil."
   def held_roster(identity_id) do
     case Repo.get(HeldRoster, identity_id) do

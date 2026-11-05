@@ -78,6 +78,23 @@ defmodule Lumia.Auth.OidcTest do
     assert Repo.get!(Account, account_id).email == nil
   end
 
+  test "a second subject with the same username gets a handle of its own" do
+    first =
+      run_flow(%{
+        "sub" => "a-#{System.unique_integer([:positive])}",
+        "preferred_username" => "Same.Name"
+      })
+
+    second =
+      run_flow(%{
+        "sub" => "b-#{System.unique_integer([:positive])}",
+        "preferred_username" => "Same.Name"
+      })
+
+    refute first == second
+    assert String.starts_with?(Repo.get!(Account, second).handle, "samename")
+  end
+
   test "a return outside the instance and its web origins is refused, and a stale state is sent back with an error" do
     assert {:error, :invalid_argument} = Oidc.start("https://evil.example/sign-in")
     assert {:error, nil} = Oidc.callback(%{"code" => "x", "state" => "unknown"})

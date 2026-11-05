@@ -139,6 +139,30 @@ pub struct InviteSummary {
     pub uses: u32,
 }
 
+/// The identity's signed profile, as this device keeps it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileSummary {
+    pub version: u64,
+    pub display_name: String,
+    pub pronouns: String,
+    pub bio: String,
+    pub avatar_url: String,
+}
+
+fn profile_summary(
+    signed: &lumia_core::proto::SignedProfile,
+) -> Result<ProfileSummary, ClientError> {
+    let body = lumia_core::proto::ProfileBody::decode(signed.body.as_slice())?;
+    Ok(ProfileSummary {
+        version: body.version,
+        display_name: body.display_name,
+        pronouns: body.pronouns,
+        bio: body.bio,
+        avatar_url: body.avatar_url,
+    })
+}
+
 /// A WebAuthn ceremony's start: the challenge's id and the options as the
 /// browser's JSON, for the platform's own call.
 #[derive(Debug, Clone, Serialize)]
@@ -1698,6 +1722,46 @@ impl App {
         let mut stores = self.identity.lock().await;
         let created = device(&mut stores, &self.device_id).create(label)?;
         Ok((created.identity_id.to_string(), created.phrase))
+    }
+
+    /// The identity's signed profile, if one was set on this device.
+    ///
+    /// # Errors
+    /// On a store failure.
+    pub async fn identity_profile(&self) -> Result<Option<ProfileSummary>, ClientError> {
+        let mut stores = self.identity.lock().await;
+        match device(&mut stores, &self.device_id).profile()? {
+            Some(signed) => Ok(Some(profile_summary(&signed)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Signs a new profile with this device's key, keeps it, and when
+    /// signed in to this instance sends it as the account's profile.
+    ///
+    /// # Errors
+    /// When this device holds no identity, on a store failure, or when the
+    /// instance refuses it.
+    pub async fn identity_set_profile(
+        &self,
+        display_name: &str,
+        pronouns: &str,
+        bio: &str,
+        avatar_url: &str,
+    ) -> Result<ProfileSummary, ClientError> {
+        let signed = {
+            let mut stores = self.identity.lock().await;
+            device(&mut stores, &self.device_id).set_profile(
+                display_name,
+                pronouns,
+                bio,
+                avatar_url,
+            )?
+        };
+        if self.signed_in() {
+            self.api.put_profile(signed.clone()).await?;
+        }
+        profile_summary(&signed)
     }
 
     /// Binds the signed-in password account to this device's identity.

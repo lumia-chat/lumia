@@ -50,7 +50,7 @@ defmodule Lumia.Snapshots do
       |> Enum.map(&Proto.channel/1)
 
     %V1.AccountSnapshot{
-      account: Proto.account(account),
+      account: Proto.account(account, own: true),
       seq: seq,
       servers: Enum.map(servers, &Proto.server/1),
       memberships: Enum.map(memberships, &Proto.member(&1, Map.get(role_ids, &1.server_id, []))),

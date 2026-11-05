@@ -52,8 +52,10 @@ defmodule Lumia.Accounts do
       :kind,
       :handle,
       :display_name,
+      :avatar_url,
       :email,
-      :instance_role
+      :instance_role,
+      :profile
     ])
     |> Ecto.Changeset.validate_required([:handle])
     |> Ecto.Changeset.validate_inclusion(:kind, ~w(human bot))
@@ -62,6 +64,51 @@ defmodule Lumia.Accounts do
     |> Ecto.Changeset.unique_constraint(:email, name: :accounts_email_index)
     |> Repo.insert()
   end
+
+  @doc """
+  Takes a new signed profile for an identity-bound account: verified against
+  the identity's held roster, newer than the one held, then the account's
+  display name and avatar, with `ProfileUpdated` on its log.
+  """
+  def put_profile(%Account{identity_id: identity_id} = account, %V1.SignedProfile{} = signed)
+      when is_binary(identity_id) do
+    with verified when not is_nil(verified) <- Lumia.Identity.held_roster(identity_id),
+         {:ok, body} <- Lumia.Identity.verify_profile(signed, verified),
+         :ok <- newer_than_held(account, body) do
+      Tx.transact(fn ->
+        with {:ok, updated} <-
+               account
+               |> Ecto.Changeset.change(
+                 display_name: blank_to_nil(body.display_name),
+                 avatar_url: blank_to_nil(body.avatar_url),
+                 profile: V1.SignedProfile.encode(signed)
+               )
+               |> Repo.update(),
+             {:ok, _} <-
+               append_event(
+                 account.id,
+                 {:profile_updated, %V1.ProfileUpdated{account: Lumia.Proto.account(updated)}}
+               ) do
+          {:ok, updated}
+        end
+      end)
+    else
+      nil -> {:error, :identity_proof_invalid}
+      other -> other
+    end
+  end
+
+  def put_profile(_, _), do: {:error, :failed_precondition}
+
+  defp newer_than_held(%Account{profile: nil}, _body), do: :ok
+
+  defp newer_than_held(%Account{profile: bytes}, body) do
+    held = V1.SignedProfile.decode(bytes).body |> V1.ProfileBody.decode()
+    if body.version > held.version, do: :ok, else: {:error, :conflict}
+  end
+
+  defp blank_to_nil(""), do: nil
+  defp blank_to_nil(v), do: v
 
   @doc "Creates an account with a password (Argon2id)."
   def register(%{password: password} = attrs) when is_binary(password) do

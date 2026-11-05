@@ -189,8 +189,9 @@ defmodule Lumia.Auth.Oidc do
 
   defp account_for(_, _), do: {:error, :unauthenticated}
 
-  # A handle from the claims, made unique with a suffix; the email only
-  # when no account has it.
+  # A handle from the claims, made unique with a suffix before the insert
+  # (a refused insert would abort the transaction); the email only when no
+  # account has it.
   defp create_account(claims) do
     base =
       [claims["preferred_username"], claims["email"] |> to_string() |> String.split("@") |> hd()]
@@ -213,19 +214,23 @@ defmodule Lumia.Auth.Oidc do
           nil
       end
 
-    Enum.reduce_while(0..20, {:error, :already_exists}, fn attempt, _ ->
-      handle = if attempt == 0, do: base, else: base <> Integer.to_string(:rand.uniform(9999))
+    handle =
+      Enum.find_value(0..50, fn attempt ->
+        candidate =
+          if attempt == 0, do: base, else: base <> Integer.to_string(:rand.uniform(9999))
 
-      case Accounts.create_account(%{handle: handle, email: email, display_name: claims["name"]}) do
-        {:ok, account} ->
-          {:halt, {:ok, account}}
+        if Repo.exists?(from a in Account, where: fragment("lower(?)", a.handle) == ^candidate),
+          do: nil,
+          else: candidate
+      end)
 
-        {:error, %Ecto.Changeset{errors: errors}} ->
-          if Keyword.has_key?(errors, :handle),
-            do: {:cont, {:error, :already_exists}},
-            else: {:halt, {:error, :invalid_argument}}
-      end
-    end)
+    case handle do
+      nil ->
+        {:error, :already_exists}
+
+      handle ->
+        Accounts.create_account(%{handle: handle, email: email, display_name: claims["name"]})
+    end
   end
 
   defp with_query(url, query) do

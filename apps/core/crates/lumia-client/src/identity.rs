@@ -5,7 +5,9 @@
 
 use base64::Engine;
 use ed25519_dalek::SigningKey;
-use lumia_core::identity::keys::{generate_signing_key, open, seal, signing_key, ts_nanos};
+use lumia_core::identity::keys::{
+    device_signature, generate_signing_key, open, seal, signing_key, ts_nanos,
+};
 use lumia_core::identity::link::{seal_bundle, LinkRequester};
 use lumia_core::identity::phrase::Phrase;
 use lumia_core::identity::proof::build_proof;
@@ -16,7 +18,7 @@ use lumia_core::identity::roster::{
 use lumia_core::keystore::Keystore;
 use lumia_core::proto::{
     ChallengePurpose, CreateLinkBundleRequest, DeviceKind, HostAccount, IdentityBackupBody,
-    LinkBundleBody, LinkRequest, SignedRoster, TokenPair,
+    LinkBundleBody, LinkRequest, ProfileBody, SignedProfile, SignedRoster, TokenPair,
 };
 use lumia_core::store::Store;
 use lumia_core::wire;
@@ -106,6 +108,61 @@ impl<S: Store, K: Keystore> Device<'_, S, K> {
         })
     }
 
+    /// The signed profile this identity carries, if one was set.
+    ///
+    /// # Errors
+    /// On a store failure or bytes that do not decode.
+    pub fn profile(&self) -> Result<Option<SignedProfile>, ClientError> {
+        match self.store.meta_get("profile")? {
+            None => Ok(None),
+            Some(b64) => {
+                let bytes = B64
+                    .decode(b64)
+                    .map_err(|e| ClientError::State(e.to_string()))?;
+                Ok(Some(SignedProfile::decode(bytes.as_slice())?))
+            }
+        }
+    }
+
+    /// Signs a new version of the profile with this device's key and keeps
+    /// it (`ProfileBody`: display name, pronouns, bio, avatar). The version
+    /// follows the last one. An instance takes it at account creation by
+    /// identity proof and on `PUT /account/profile`.
+    ///
+    /// # Errors
+    /// When this device holds no identity, or on a store failure.
+    pub fn set_profile(
+        &mut self,
+        display_name: &str,
+        pronouns: &str,
+        bio: &str,
+        avatar_url: &str,
+    ) -> Result<SignedProfile, ClientError> {
+        let verified = self.roster()?;
+        let key = self.device_key()?;
+        let version = match self.profile()? {
+            Some(previous) => ProfileBody::decode(previous.body.as_slice())?.version + 1,
+            None => 1,
+        };
+        let body = ProfileBody {
+            identity_id: verified.identity_id.clone(),
+            version,
+            display_name: display_name.trim().into(),
+            pronouns: pronouns.trim().into(),
+            bio: bio.trim().into(),
+            avatar_url: avatar_url.trim().into(),
+            issued_at: Some(now()),
+        }
+        .encode_to_vec();
+        let signed = SignedProfile {
+            signature: Some(device_signature(&self.device_id, &key, &body)),
+            body,
+        };
+        self.store
+            .meta_set("profile", &B64.encode(signed.encode_to_vec()))?;
+        Ok(signed)
+    }
+
     /// The verified current roster, or an error when this device has none.
     ///
     /// # Errors
@@ -157,12 +214,16 @@ impl<S: Store, K: Keystore> Device<'_, S, K> {
         api: &Api,
         handle: &str,
     ) -> Result<TokenPair, ClientError> {
+        let profile = self.profile()?;
         let proof = self.prove(api, ChallengePurpose::CreateAccount).await?;
-        match api.create_account_by_identity(handle, proof).await {
+        match api
+            .create_account_by_identity(handle, proof, profile.clone())
+            .await
+        {
             Err(e) if held_in(&e).is_some() => {
                 self.reconcile(&e)?;
                 let proof = self.prove(api, ChallengePurpose::CreateAccount).await?;
-                api.create_account_by_identity(handle, proof).await
+                api.create_account_by_identity(handle, proof, profile).await
             }
             other => other,
         }

@@ -12,6 +12,20 @@ defmodule LumiaWeb.AccountController do
     ProtoConn.render(conn, Snapshots.account(conn.assigns.current_account_id))
   end
 
+  @doc """
+  `PUT /account/profile`: a new signed profile for the caller's account,
+  vouched for by the identity's held roster; the display name and avatar
+  follow, and the account log says so (`ProfileUpdated`).
+  """
+  def put_profile(conn, _params) do
+    account = Lumia.Repo.get!(Lumia.Accounts.Account, conn.assigns.current_account_id)
+
+    with {:ok, signed} <- ProtoConn.decode(conn, Lumia.V1.SignedProfile),
+         {:ok, updated} <- Lumia.Accounts.put_profile(account, signed) do
+      ProtoConn.render(conn, Lumia.Proto.account(updated, own: true))
+    end
+  end
+
   @doc "Another account's public profile, when the caller may see it (`Lumia.Accounts.visible_to?/2`)."
   def show(conn, %{"account_id" => account_id}) do
     caller = conn.assigns.current_account_id

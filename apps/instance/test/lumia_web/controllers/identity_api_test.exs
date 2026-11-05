@@ -40,6 +40,97 @@ defmodule LumiaWeb.IdentityApiTest do
     }
   end
 
+  defp signed_profile(identity, device, version, display_name) do
+    body =
+      V1.ProfileBody.encode(%V1.ProfileBody{
+        identity_id: identity.identity_id,
+        version: version,
+        display_name: display_name,
+        issued_at: Proto.timestamp(DateTime.utc_now())
+      })
+
+    %V1.SignedProfile{
+      body: body,
+      signature: %V1.Signature{
+        signer_kind: :DEVICE,
+        signer_id: device.id,
+        signature: Crypto.sign(body, device.priv)
+      }
+    }
+  end
+
+  test "a signed profile is imported at creation and replaced by a newer one", %{conn: conn} do
+    %{identity: identity, device: phone, roster: v1} = bootstrap()
+    handle = "pat#{System.unique_integer([:positive])}"
+
+    created =
+      post_proto(conn, "/api/v1/accounts/by-identity", %V1.CreateAccountRequest{
+        handle: handle,
+        proof: proof(conn, identity, phone, v1, :CREATE_ACCOUNT),
+        profile: signed_profile(identity, phone, 1, "Pat Doe")
+      })
+
+    assert created.status == 201
+    %V1.TokenPair{access_token: access} = V1.TokenPair.decode(created.resp_body)
+    account = Lumia.Repo.get_by!(Lumia.Accounts.Account, handle: handle)
+    assert account.display_name == "Pat Doe"
+
+    authed = put_req_header(conn, "authorization", "Bearer " <> access)
+    snap = get(authed, "/api/v1/account/snapshot")
+
+    assert %V1.AccountSnapshot{
+             account: %V1.Account{display_name: "Pat Doe", profile: %V1.SignedProfile{}}
+           } =
+             Protobuf.JSON.decode!(snap.resp_body, V1.AccountSnapshot)
+
+    # A newer version replaces it; an older one or a stranger's signature does not.
+    newer = signed_profile(identity, phone, 2, "Pat D.")
+
+    put =
+      authed
+      |> put_req_header("content-type", @proto)
+      |> put("/api/v1/account/profile", V1.SignedProfile.encode(newer))
+
+    assert put.status == 200
+    assert Lumia.Repo.get!(Lumia.Accounts.Account, account.id).display_name == "Pat D."
+
+    stale =
+      authed
+      |> put_req_header("content-type", @proto)
+      |> put(
+        "/api/v1/account/profile",
+        V1.SignedProfile.encode(signed_profile(identity, phone, 1, "Old"))
+      )
+
+    assert stale.status == 409
+
+    stranger = device("stranger")
+
+    forged =
+      authed
+      |> put_req_header("content-type", @proto)
+      |> put(
+        "/api/v1/account/profile",
+        V1.SignedProfile.encode(signed_profile(identity, stranger, 3, "Forged"))
+      )
+
+    assert forged.status == 401
+  end
+
+  test "a profile the roster does not vouch for refuses the creation", %{conn: conn} do
+    %{identity: identity, device: phone, roster: v1} = bootstrap()
+    stranger = device("stranger")
+
+    refused =
+      post_proto(conn, "/api/v1/accounts/by-identity", %V1.CreateAccountRequest{
+        handle: "nope#{System.unique_integer([:positive])}",
+        proof: proof(conn, identity, phone, v1, :CREATE_ACCOUNT),
+        profile: signed_profile(identity, stranger, 1, "Forged")
+      })
+
+    assert refused.status == 401
+  end
+
   test "create an account by identity proof, then sign in by proof, then publish a roster", %{
     conn: conn
   } do

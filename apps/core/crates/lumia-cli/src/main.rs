@@ -199,6 +199,15 @@ enum IdentityCmd {
     },
     /// Show the identity and its roster.
     Show,
+    /// Sign a new profile for the identity (and send it when signed in).
+    Profile {
+        #[arg(long)]
+        display_name: String,
+        #[arg(long, default_value = "")]
+        pronouns: String,
+        #[arg(long, default_value = "")]
+        bio: String,
+    },
     /// Bind the signed-in password account to this device's identity.
     LinkAccount {
         #[arg(long)]
@@ -1077,9 +1086,27 @@ async fn identity_cmd(ctx: &mut Ctx, api: &Api, action: IdentityCmd) -> Result<(
             println!("{}", created.phrase);
             Ok(())
         }
+        IdentityCmd::Profile {
+            display_name,
+            pronouns,
+            bio,
+        } => {
+            let signed = device(ctx).set_profile(&display_name, &pronouns, &bio, "")?;
+            if api.tokens().access.is_some() {
+                api.put_profile(signed).await?;
+                println!("profile signed and sent");
+            } else {
+                println!("profile signed; it goes with the next account made by identity proof");
+            }
+            Ok(())
+        }
         IdentityCmd::Show => {
             let verified = device(ctx).roster()?;
             println!("identity {}", hex::encode(&verified.identity_id));
+            if let Some(signed) = device(ctx).profile()? {
+                let body = lumia_core::proto::ProfileBody::decode(signed.body.as_slice())?;
+                println!("profile v{}: {}", body.version, body.display_name);
+            }
             println!(
                 "roster v{} root_signed={}",
                 verified.version, verified.root_signed

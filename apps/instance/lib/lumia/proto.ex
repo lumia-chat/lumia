@@ -136,7 +136,8 @@ defmodule Lumia.Proto do
   def dm_request_state("declined"), do: :DECLINED
   def dm_request_state("blocked"), do: :BLOCKED
 
-  def account(%Lumia.Accounts.Account{} = a) do
+  @doc "An account; with `own: true`, the caller's, carrying its signed profile."
+  def account(%Lumia.Accounts.Account{} = a, opts \\ []) do
     %V1.Account{
       account_id: uuid(a.id),
       identity_id: a.identity_id || "",
@@ -144,7 +145,12 @@ defmodule Lumia.Proto do
       handle: a.handle,
       display_name: a.display_name || "",
       avatar_url: a.avatar_url || "",
-      created_at: timestamp(a.inserted_at)
+      created_at: timestamp(a.inserted_at),
+      profile:
+        if(Keyword.get(opts, :own, false) and is_binary(a.profile),
+          do: V1.SignedProfile.decode(a.profile),
+          else: nil
+        )
     }
   end
 

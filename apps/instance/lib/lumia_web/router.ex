@@ -56,6 +56,7 @@ defmodule LumiaWeb.Router do
     delete "/sessions/:session_id", AuthController, :revoke_session
 
     get "/account/snapshot", AccountController, :snapshot
+    put "/account/profile", AccountController, :put_profile
     get "/account/events", AccountController, :events
     get "/accounts/:account_id", AccountController, :show
 

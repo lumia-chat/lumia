@@ -552,6 +552,28 @@ pub enum ClientEvent {
     },
 }
 
+/// The identity's signed profile, as this device keeps it.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ProfileSummary {
+    pub version: u64,
+    pub display_name: String,
+    pub pronouns: String,
+    pub bio: String,
+    pub avatar_url: String,
+}
+
+impl From<app::ProfileSummary> for ProfileSummary {
+    fn from(p: app::ProfileSummary) -> Self {
+        Self {
+            version: p.version,
+            display_name: p.display_name,
+            pronouns: p.pronouns,
+            bio: p.bio,
+            avatar_url: p.avatar_url,
+        }
+    }
+}
+
 /// A WebAuthn ceremony's start: the challenge's id and the options JSON.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct PasskeyChallengeSummary {
@@ -1037,6 +1059,31 @@ impl Client {
     }
 
     /// Binds the signed-in password account to this device's identity.
+    /// The identity's signed profile, if one was set on this device.
+    pub fn identity_profile(&self) -> Res<Option<ProfileSummary>> {
+        Ok(self
+            .runtime
+            .block_on(self.app.identity_profile())?
+            .map(Into::into))
+    }
+
+    /// Signs a new profile with this device's key and, when signed in, sends it.
+    pub fn identity_set_profile(
+        &self,
+        display_name: String,
+        pronouns: String,
+        bio: String,
+        avatar_url: String,
+    ) -> Res<ProfileSummary> {
+        Ok(self
+            .runtime
+            .block_on(
+                self.app
+                    .identity_set_profile(&display_name, &pronouns, &bio, &avatar_url),
+            )?
+            .into())
+    }
+
     pub fn identity_link_account(&self, password: String) -> Res<()> {
         Ok(self
             .runtime

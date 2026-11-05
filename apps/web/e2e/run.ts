@@ -721,7 +721,12 @@ async function oidc(which: string) {
     await trustCard(page);
     await page.getByRole("button", { name: info.oidcName }).click();
     phase("back");
-    await page.getByRole("button", { name: "Create, join or discover servers" }).waitFor();
+    try {
+      await page.getByRole("button", { name: "Create, join or discover servers" }).waitFor();
+    } catch (e) {
+      console.log(`  [${which}] oidc: at ${page.url()}: ${(await page.textContent("body"))?.replace(/\s+/g, " ").slice(0, 300)}`);
+      throw e;
+    }
     await page.screenshot({ path: `${out}/${which}-oidc.png` });
   } finally {
     await ctx.close();

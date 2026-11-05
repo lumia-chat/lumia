@@ -188,6 +188,7 @@ Base path `/api/v1`. All endpoints require `Authorization: Bearer <access_token>
 | `POST /auth/reauth` | `ReauthRequest` → `ReauthResponse` | Five-minute token for revoke and link. |
 | `GET /identity/roster` | → `GetRosterResponse` | The newest roster this instance holds for the caller's identity. |
 | `GET /accounts/{account_id}` | → `Account` | Another account's public profile (handle, display name, avatar); `NOT_FOUND` unless the caller is it, shares a server or a `PERSONAL_*` channel with it, or has a DM request waiting between them. |
+| `PUT /account/profile` | `SignedProfile` → `Account` | The caller's new profile, signed by a device of its identity's held roster (`IDENTITY_PROOF_INVALID` otherwise), with a version above the one held (`CONFLICT` otherwise); the display name and avatar follow, and `ProfileUpdated` goes on the account log. `FAILED_PRECONDITION` for an account with no identity. `CreateAccountRequest.profile` imports one the same way at creation by identity proof. |
 | `GET /accounts/{account_id}/roster` | → `GetRosterResponse` | Another account's roster, for validating its MLS leaves; `NOT_FOUND` unless the caller shares a `PERSONAL_*` channel with it. |
 | `POST /identity/roster` | `PublishRosterRequest` → 204 | Verified per specs/identity.md 3.3. `CONFLICT` carries the held roster in `details.held`. Rosters that add revocations are refused here with `POLICY_DENIED`. |
 | `POST /identity/devices/revoke` | `RevokeDeviceRequest` → 204 | The only non-root path that may add revocations. Requires `reauth_token`. |

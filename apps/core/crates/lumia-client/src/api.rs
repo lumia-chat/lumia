@@ -25,7 +25,7 @@ use lumia_core::proto::{
 use lumia_core::proto::{
     CreateInviteRequest, Invite, InvitePreview, ListInvitesResponse, ListPasskeysResponse,
     MagicLinkCompleteRequest, MagicLinkRequest, Member, PasskeyAssertFinishRequest,
-    PasskeyAssertStartRequest, PasskeyChallenge, PasskeyRegisterFinishRequest,
+    PasskeyAssertStartRequest, PasskeyChallenge, PasskeyRegisterFinishRequest, SignedProfile,
 };
 use lumia_core::proto::{
     DmRequest, DmRequestState, GetHistoryChunkResponse, GetIdentityBackupResponse,
@@ -197,13 +197,28 @@ impl Api {
         &self,
         handle: &str,
         proof: IdentityProof,
+        profile: Option<SignedProfile>,
     ) -> Result<TokenPair, ClientError> {
         let req = CreateAccountRequest {
             handle: handle.into(),
             proof: Some(proof),
+            profile,
             ..Default::default()
         };
         self.post("/api/v1/accounts/by-identity", &req).await
+    }
+
+    /// `PUT /account/profile`: a new signed profile for the caller's account.
+    ///
+    /// # Errors
+    /// `IDENTITY_PROOF_INVALID` for a profile the roster does not vouch for; transport failure.
+    pub async fn put_profile(&self, profile: SignedProfile) -> Result<(), ClientError> {
+        self.empty(
+            reqwest::Method::PUT,
+            "/api/v1/account/profile",
+            Some(profile.encode_to_vec()),
+        )
+        .await
     }
 
     /// `POST /auth/sign-in/identity`.

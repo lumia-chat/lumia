@@ -505,6 +505,36 @@ impl Client {
     ///
     /// # Errors
     /// When there is none.
+    /// The identity's signed profile, if one was set on this device.
+    ///
+    /// # Errors
+    /// On a store failure.
+    #[wasm_bindgen(js_name = identityProfile)]
+    pub async fn identity_profile(&self) -> Result<JsValue, JsError> {
+        to_js(&self.app.identity_profile().await.map_err(js)?)
+    }
+
+    /// Signs a new profile with this device's key and, when signed in, sends it.
+    ///
+    /// # Errors
+    /// When this device holds no identity, or when the instance refuses it.
+    #[wasm_bindgen(js_name = identitySetProfile)]
+    pub async fn identity_set_profile(
+        &self,
+        display_name: String,
+        pronouns: String,
+        bio: String,
+        avatar_url: String,
+    ) -> Result<JsValue, JsError> {
+        to_js(
+            &self
+                .app
+                .identity_set_profile(&display_name, &pronouns, &bio, &avatar_url)
+                .await
+                .map_err(js)?,
+        )
+    }
+
     #[wasm_bindgen(js_name = identityShow)]
     pub async fn identity_show(&self) -> Result<JsValue, JsError> {
         to_js(&self.app.identity_show().await.map_err(js)?)
