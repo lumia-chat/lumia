@@ -21,6 +21,7 @@ config :lumia, Lumia.Repo,
 
 # Oban runs inline in tests; workers are exercised directly.
 config :lumia, Oban, testing: :manual
+config :lumia, :push_loopback_endpoints, true
 
 # We don't run a server during test. If one is required,
 # you can enable the server option below.

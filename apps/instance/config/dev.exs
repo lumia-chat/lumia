@@ -42,6 +42,9 @@ config :lumia, LumiaWeb.Endpoint,
 # the API from the browser and link web devices (identity §7).
 config :lumia, :identity, web_origins: ["http://localhost:5173"]
 
+# The browser suite's fake push service runs on this machine over plain http.
+config :lumia, :push_loopback_endpoints, true
+
 # ## SSL Support
 #
 # In order to use HTTPS in development, a self-signed

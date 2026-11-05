@@ -32,10 +32,28 @@ defmodule Lumia.Push.Subscription do
       "web_push" ->
         changeset
         |> Ecto.Changeset.validate_required([:p256dh, :auth])
-        |> Ecto.Changeset.validate_format(:endpoint, ~r{^https://})
+        |> Ecto.Changeset.validate_change(:endpoint, fn :endpoint, endpoint ->
+          if push_service?(endpoint), do: [], else: [endpoint: "must be an https push service"]
+        end)
 
       _ ->
         changeset
+    end
+  end
+
+  # A push service is reached over https; a fake one on this machine, over
+  # plain http on a loopback address, only where the configuration says so
+  # (development and test, for the browser suite's push service).
+  defp push_service?(endpoint) do
+    case URI.parse(endpoint) do
+      %URI{scheme: "https", host: host} when is_binary(host) and host != "" ->
+        true
+
+      %URI{scheme: "http", host: host} when host in ["localhost", "127.0.0.1", "::1"] ->
+        Application.get_env(:lumia, :push_loopback_endpoints, false)
+
+      _ ->
+        false
     end
   end
 end

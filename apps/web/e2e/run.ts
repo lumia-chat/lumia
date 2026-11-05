@@ -188,7 +188,7 @@ async function signInSteps(which: string, page: Page, handle: string) {
   // Playwright's WebKit has no service workers; the subscription itself
   // needs a push service, which a headless browser has no account with).
   if (which === "chromium") {
-    await page.context().grantPermissions(["notifications"]);
+    await page.context().grantPermissions(["notifications"], { origin: base });
     await page.getByRole("button", { name: "Turn on notifications" }).click();
     const sw = await page.evaluate(() =>
       Promise.race([
@@ -367,6 +367,143 @@ async function invite(which: string, dataDir: string, server: string) {
   console.log(`  ${which}: opened an invite, created an account from it and landed in the server in ${Date.now() - t0} ms`);
 }
 
+// Web Push end to end (architecture 15.5), with a push service of the
+// suite's own: a headless browser has no account with a real one, so the
+// subscription's keys are made here and registered with the instance
+// through the page's own client, with this server as the endpoint. The
+// browser then goes away, a member mentions its account, and the instance
+// posts the notice here, encrypted for those keys (RFC 8291) and signed
+// with its VAPID key (RFC 8292); the test decrypts it. The service worker's
+// own `push` event cannot be raised from outside, so the content it would
+// show is what is checked.
+const pushPort = 4919;
+const pushes = new Map<string, { resolve: (r: { headers: Headers; body: Uint8Array }) => void }>();
+const pushService = Bun.serve({
+  port: pushPort,
+  hostname: "127.0.0.1",
+  async fetch(req) {
+    const id = new URL(req.url).pathname.split("/").pop() ?? "";
+    const waiter = pushes.get(id);
+    if (!waiter) return new Response("unknown subscription", { status: 404 });
+    waiter.resolve({ headers: req.headers, body: new Uint8Array(await req.arrayBuffer()) });
+    return new Response(null, { status: 201 });
+  },
+});
+
+function base64url(bytes: ArrayBuffer | Uint8Array): string {
+  return Buffer.from(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)).toString("base64url");
+}
+
+async function hkdf(salt: Uint8Array, ikm: Uint8Array, info: Uint8Array, length: number): Promise<Uint8Array> {
+  const key = await crypto.subtle.importKey("raw", ikm, "HKDF", false, ["deriveBits"]);
+  return new Uint8Array(await crypto.subtle.deriveBits({ name: "HKDF", hash: "SHA-256", salt, info }, key, length * 8));
+}
+
+// RFC 8291 for one record: salt(16) | rs(4) | idlen(1) | as_public | ciphertext+tag.
+async function decryptPush(body: Uint8Array, uaPrivate: CryptoKey, uaPublic: Uint8Array, auth: Uint8Array): Promise<string> {
+  const salt = body.slice(0, 16);
+  const idlen = body[20];
+  const asPublic = body.slice(21, 21 + idlen);
+  const ciphertext = body.slice(21 + idlen);
+  const asKey = await crypto.subtle.importKey("raw", asPublic, { name: "ECDH", namedCurve: "P-256" }, false, []);
+  const shared = new Uint8Array(await crypto.subtle.deriveBits({ name: "ECDH", public: asKey }, uaPrivate, 256));
+  const text = new TextEncoder();
+  const ikm = await hkdf(auth, shared, new Uint8Array([...text.encode("WebPush: info\0"), ...uaPublic, ...asPublic]), 32);
+  const cek = await hkdf(salt, ikm, text.encode("Content-Encoding: aes128gcm\0"), 16);
+  const nonce = await hkdf(salt, ikm, text.encode("Content-Encoding: nonce\0"), 12);
+  const aes = await crypto.subtle.importKey("raw", cek, "AES-GCM", false, ["decrypt"]);
+  const padded = new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: nonce }, aes, ciphertext));
+  let end = padded.length;
+  while (end > 0 && padded[end - 1] === 0) end--;
+  if (padded[end - 1] !== 2) throw new Error("the record's padding delimiter is missing");
+  return new TextDecoder().decode(padded.slice(0, end - 1));
+}
+
+async function webPush(which: string, handle: string, inviterDir: string, server: string, channel: string, account: string) {
+  if (which !== "chromium") {
+    console.log(`  ${which}: Playwright's build has no service workers; push is checked in Chromium`);
+    return;
+  }
+  const t0 = Date.now();
+  // This browser's subscription: its own keys, this suite's service as the endpoint.
+  const uaKeys = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"]);
+  const uaPublic = new Uint8Array(await crypto.subtle.exportKey("raw", uaKeys.publicKey));
+  const auth = crypto.getRandomValues(new Uint8Array(16));
+  const id = `${which}-${Date.now()}`;
+  const endpoint = `http://127.0.0.1:${pushPort}/push/${id}`;
+  const arrived = new Promise<{ headers: Headers; body: Uint8Array }>((resolve) => pushes.set(id, { resolve }));
+  // A profile of its own: the sign-in step's prompt left a denial behind.
+  const { ctx, page: first } = await open(which, "push");
+  const warnings: string[] = [];
+  try {
+    phase("subscribe");
+    // The browser's push manager stands in: `subscribe` answers with this
+    // suite's endpoint and keys, and everything else is the app's own path
+    // (the service worker registered, the subscription sent to the instance).
+    await ctx.addInitScript(
+      ({ endpoint, p256dh, auth }) => {
+        const bytes = (s: string) => {
+          const raw = atob(s.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - (s.length % 4)) % 4));
+          const out = new Uint8Array(raw.length);
+          for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+          return out.buffer;
+        };
+        const subscription = { endpoint, getKey: (name: string) => bytes(name === "p256dh" ? p256dh : auth), unsubscribe: async () => true };
+        // The headless shell answers every permission with a denial; the
+        // grant is this suite's, not the browser's.
+        Object.defineProperty(Notification, "permission", { configurable: true, get: () => "granted" });
+        Notification.requestPermission = async () => "granted" as NotificationPermission;
+        Object.defineProperty(ServiceWorkerRegistration.prototype, "pushManager", {
+          configurable: true,
+          get: () => ({ getSubscription: async () => null, subscribe: async () => subscription }),
+        });
+      },
+      { endpoint, p256dh: base64url(uaPublic), auth: base64url(auth) },
+    );
+    await ctx.grantPermissions(["notifications"], { origin: base });
+    const page = await ctx.newPage();
+    live.page = page;
+    page.on("console", (m) => {
+      if (m.type() === "warning" || m.type() === "error") warnings.push(m.text());
+    });
+    await first.close();
+    await trustCard(page);
+    await page.getByLabel("Email or handle").fill(handle);
+    await page.getByRole("textbox", { name: "Password" }).fill(password);
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    phase("composer");
+    await page.getByPlaceholder(/^Message #/).waitFor();
+    phase("turn on");
+    await page.getByRole("button", { name: "Turn on notifications" }).click();
+    phase("subscribed");
+    try {
+      await page.getByText("notifications on").waitFor();
+    } catch (e) {
+      await page.screenshot({ path: `${out}/${which}-push-failed.png` });
+      const permission = await page.evaluate(() => Notification.permission);
+      console.log(`  [${which}] push: permission ${permission}; ${warnings.join(" | ").slice(0, 300)}`);
+      throw e;
+    }
+  } finally {
+    await ctx.close();
+  }
+  // The browser is away now; a member's mention is pushed to it.
+  phase("mention");
+  const joiner = resolve(work, `cli-push-${which}`);
+  const code = lumia(inviterDir, "invite-create", server).trim().split(/\s+/)[0];
+  lumia(joiner, "instance", "add", instance);
+  lumia(joiner, "account", "create", "--handle", `pusher${which}${Date.now()}`, "--password", password, "--invite", code);
+  lumia(joiner, "send", channel, `Are you there, ${which}?`, "--mention", account);
+  phase("waiting for the push");
+  const push = await Promise.race([arrived, Bun.sleep(60_000).then(() => Promise.reject(new Error("the instance did not post the push within a minute")))]);
+  pushes.delete(id);
+  if (!(push.headers.get("authorization") ?? "").startsWith("vapid t=")) throw new Error("the push carries no VAPID authorization");
+  if (push.headers.get("content-encoding") !== "aes128gcm") throw new Error(`the push is ${push.headers.get("content-encoding")}, not aes128gcm`);
+  const notice = JSON.parse(await decryptPush(push.body, uaKeys.privateKey, uaPublic, auth)) as { title?: string; body?: string };
+  if (notice.title !== "Lumia" || notice.body !== "New message") throw new Error(`the notice reads ${JSON.stringify(notice)}`);
+  console.log(`  ${which}: subscribed, went away, and the mention came as a push the suite's service decrypted in ${Date.now() - t0} ms`);
+}
+
 if (!existsSync(cli)) run(["cargo", "build", "--release", "-p", "lumia-cli"], resolve(web, "../core"));
 rmSync(work, { recursive: true, force: true });
 mkdirSync(out, { recursive: true });
@@ -379,7 +516,9 @@ lumia(passwordDir, "instance", "add", instance);
 lumia(passwordDir, "account", "create", "--handle", `web${stamp}`, "--password", password);
 const server = lumia(passwordDir, "server-create", "Web suite").match(/[0-9a-f-]{36}/)?.[0];
 if (!server) throw new Error("no server id");
-lumia(passwordDir, "channel-create", server, "general");
+const general = lumia(passwordDir, "channel-create", server, "general").match(/[0-9a-f-]{36}/)?.[0];
+if (!general) throw new Error("no channel id");
+const webAccount = lumia(passwordDir, "whoami").trim();
 lumia(identityDir, "instance", "add", instance);
 lumia(identityDir, "account", "create", "--handle", `link${stamp}`, "--password", password);
 lumia(identityDir, "identity", "create", "--label", "laptop");
@@ -424,6 +563,7 @@ try {
       ["link", () => link(which, identityDir)],
       ["dm", () => dm(which, aDir, bAccount, aHandle)],
       ["invite", () => invite(which, passwordDir, server)],
+      ["push", () => webPush(which, `web${stamp}`, passwordDir, server, general, webAccount)],
     ] as const) {
       // A heartbeat while the step runs (CI shows a step's log only once it
       // ends) and a hard bound, so a hang names itself instead of the job
@@ -454,4 +594,5 @@ try {
   process.exitCode = failed ? 1 : 0;
 } finally {
   vite?.kill();
+  pushService.stop(true);
 }

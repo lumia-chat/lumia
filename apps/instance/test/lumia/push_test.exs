@@ -109,7 +109,18 @@ defmodule Lumia.PushTest do
       assert {:error, :invalid_argument} =
                Push.put(a.id, device, %V1.PushSubscription{
                  kind: :WEB_PUSH,
-                 endpoint: "http://plain"
+                 endpoint: "http://plain",
+                 p256dh: "a",
+                 auth: "b"
+               })
+
+      # A fake push service on this machine, where the configuration allows it.
+      assert :ok =
+               Push.put(a.id, device, %V1.PushSubscription{
+                 kind: :WEB_PUSH,
+                 endpoint: "http://localhost:4919/push/#{device}",
+                 p256dh: "a",
+                 auth: "b"
                })
 
       :ok = Push.delete(device, "web_push")
