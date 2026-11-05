@@ -210,6 +210,34 @@ impl Client {
         self.app.accept_invite(&link_or_code).await.map_err(js)
     }
 
+    /// `POST /servers`: a server this account owns.
+    ///
+    /// # Errors
+    /// `INVALID_ARGUMENT` for an empty name; transport failure.
+    #[wasm_bindgen(js_name = createServer)]
+    pub async fn create_server(&self, name: String) -> Result<JsValue, JsError> {
+        to_js(&self.app.create_server(&name).await.map_err(js)?)
+    }
+
+    /// `POST /channels`: a text channel in a server this account may manage channels in.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` without `manage_channels` there; transport failure.
+    #[wasm_bindgen(js_name = createChannel)]
+    pub async fn create_channel(
+        &self,
+        server_id: String,
+        name: String,
+    ) -> Result<JsValue, JsError> {
+        to_js(
+            &self
+                .app
+                .create_channel(&server_id, &name)
+                .await
+                .map_err(js)?,
+        )
+    }
+
     /// Signs in with a password, and a TOTP code when the account requires one.
     ///
     /// # Errors

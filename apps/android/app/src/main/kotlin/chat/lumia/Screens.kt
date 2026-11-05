@@ -284,19 +284,36 @@ fun NewMessageScreen(session: LumiaSession, back: () -> Unit, replace: (List<Scr
     }
 }
 
-// Join a server
+// Add a server
 
 /**
- * Joining from an invite link or code: what the link leads to first, on
- * which instance, then the join (architecture 6.1).
+ * A server of your own, or joining one from an invite link or code: what
+ * the link leads to first, on which instance, then the join (architecture 6.1).
  */
 @Composable
-fun JoinServerScreen(session: LumiaSession, back: () -> Unit, joined: (String) -> Unit) {
+fun AddServerScreen(session: LumiaSession, back: () -> Unit, opened: (String) -> Unit) {
     val scope = rememberCoroutineScope()
+    var name by rememberSaveable { mutableStateOf("") }
+    var creating by remember { mutableStateOf(false) }
+    var createError by rememberSaveable { mutableStateOf("") }
     var text by rememberSaveable { mutableStateOf("") }
     var preview by remember { mutableStateOf<InvitePreviewSummary?>(null) }
     var error by rememberSaveable { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
+
+    fun create() {
+        scope.launch {
+            creating = true
+            createError = ""
+            try {
+                opened(session.createServer(name))
+            } catch (e: Exception) {
+                createError = e.lumiaMessage
+            } finally {
+                creating = false
+            }
+        }
+    }
 
     fun look() {
         scope.launch {
@@ -318,7 +335,7 @@ fun JoinServerScreen(session: LumiaSession, back: () -> Unit, joined: (String) -
             busy = true
             error = ""
             try {
-                joined(session.acceptInvite(p.code))
+                opened(session.acceptInvite(p.code))
             } catch (e: Exception) {
                 error = e.lumiaMessage
             } finally {
@@ -327,21 +344,64 @@ fun JoinServerScreen(session: LumiaSession, back: () -> Unit, joined: (String) -
         }
     }
 
-    PanelScreen(back = "Home", onBack = back, title = "Join a server", subtitle = "Paste the invite link someone sent you") {
-        LazyColumn(Modifier.fillMaxSize().imePadding().navigationBarsPadding(), contentPadding = androidx.compose.foundation.layout.PaddingValues(LumiaTokens.space16), verticalArrangement = Arrangement.spacedBy(LumiaTokens.space12)) {
-            item { LumiaField("Invite link or code", text, { text = it }, placeholder = "https://chat.example.com/invite/…") }
-            if (error.isNotEmpty()) item { LumiaErrorText(error) }
-            item { LumiaPrimaryButton("Look it up", Modifier.fillMaxWidth(), enabled = !busy && text.isNotBlank()) { look() } }
-            preview?.let { p ->
-                item {
-                    LumiaCard(p.serverName, "${p.memberCount} ${if (p.memberCount == 1u) "member" else "members"} on ${p.host}${if (p.asGuest) " · you would join as a guest" else ""}") {
-                        Column(verticalArrangement = Arrangement.spacedBy(LumiaTokens.space12)) {
-                            Text("Run by ${p.operatorName.ifEmpty { "an unnamed operator" }}. Your account on this instance joins it; nothing else is shared.", style = LumiaTokens.textMeta.style, color = LumiaTokens.inkSecondary.color)
+    PanelScreen(back = "Home", onBack = back, title = "Add a server", subtitle = "Your own, or one you were invited to") {
+        LazyColumn(Modifier.fillMaxSize().imePadding().navigationBarsPadding(), contentPadding = androidx.compose.foundation.layout.PaddingValues(LumiaTokens.space16), verticalArrangement = Arrangement.spacedBy(LumiaTokens.space16)) {
+            item {
+                LumiaCard("Create a server", "You own it; invite people once it exists.") {
+                    Column(verticalArrangement = Arrangement.spacedBy(LumiaTokens.space12)) {
+                        LumiaField("Name", name, { name = it }, placeholder = "Our place")
+                        if (createError.isNotEmpty()) LumiaErrorText(createError)
+                        LumiaPrimaryButton("Create", Modifier.fillMaxWidth(), enabled = !creating && name.isNotBlank()) { create() }
+                    }
+                }
+            }
+            item {
+                LumiaCard("Join with an invite", "Paste the link someone sent you; what it leads to shows first.") {
+                    Column(verticalArrangement = Arrangement.spacedBy(LumiaTokens.space12)) {
+                        LumiaField("Invite link or code", text, { text = it }, placeholder = "https://chat.example.com/invite/…")
+                        if (error.isNotEmpty()) LumiaErrorText(error)
+                        LumiaPrimaryButton("Look it up", Modifier.fillMaxWidth(), enabled = !busy && text.isNotBlank()) { look() }
+                        preview?.let { p ->
+                            Text("${p.serverName} · ${p.memberCount} ${if (p.memberCount == 1u) "member" else "members"} on ${p.host}, run by ${p.operatorName.ifEmpty { "an unnamed operator" }}${if (p.asGuest) " · you would join as a guest" else ""}. Your account on this instance joins it; nothing else is shared.", style = LumiaTokens.textMeta.style, color = LumiaTokens.inkSecondary.color)
                             LumiaPrimaryButton("Join ${p.serverName}", Modifier.fillMaxWidth(), enabled = !busy) { join(p) }
                         }
                     }
                 }
             }
+        }
+    }
+}
+
+// New channel
+
+/** A text channel in the server; it opens once made. */
+@Composable
+fun NewChannelScreen(session: LumiaSession, server: ServerSummary?, back: () -> Unit, opened: (String) -> Unit) {
+    val scope = rememberCoroutineScope()
+    var name by rememberSaveable { mutableStateOf("") }
+    var error by rememberSaveable { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+
+    fun create() {
+        val id = server?.serverId ?: return
+        scope.launch {
+            busy = true
+            error = ""
+            try {
+                opened(session.createChannel(id, name))
+            } catch (e: Exception) {
+                error = if (e.lumiaCode == "PERMISSION_DENIED") "You cannot add channels to this server." else e.lumiaMessage
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    PanelScreen(back = server?.name ?: "Server", onBack = back, title = "New channel", subtitle = "A text channel everyone in ${server?.name ?: "the server"} can see") {
+        LazyColumn(Modifier.fillMaxSize().imePadding().navigationBarsPadding(), contentPadding = androidx.compose.foundation.layout.PaddingValues(LumiaTokens.space16), verticalArrangement = Arrangement.spacedBy(LumiaTokens.space12)) {
+            item { LumiaField("Name", name, { name = it }, placeholder = "general") }
+            if (error.isNotEmpty()) item { LumiaErrorText(error) }
+            item { LumiaPrimaryButton("Create", Modifier.fillMaxWidth(), enabled = !busy && name.isNotBlank()) { create() } }
         }
     }
 }

@@ -39,6 +39,10 @@ public actor LumiaClient {
     }
     /// Joins the invite's server; returns its id.
     public func acceptInvite(_ linkOrCode: String) throws -> String { try inner.acceptInvite(linkOrCode: linkOrCode) }
+    /// A server this account owns.
+    public func createServer(name: String) throws -> ServerSummary { try inner.createServer(name: name) }
+    /// A text channel in a server this account may manage channels in.
+    public func createChannel(serverID: String, name: String) throws -> ChannelSummary { try inner.createChannel(serverId: serverID, name: name) }
     public func signIn(handle: String, password: String, totpCode: String? = nil) throws {
         try inner.signIn(handle: handle, password: password, totpCode: totpCode)
     }

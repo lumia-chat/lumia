@@ -367,6 +367,32 @@ async function invite(which: string, dataDir: string, server: string) {
   console.log(`  ${which}: opened an invite, created an account from it and landed in the server in ${Date.now() - t0} ms`);
 }
 
+// A server and a channel from the app: the rail's "+" makes a server the
+// account owns, the server sidebar's "New channel" its first channel.
+async function create(which: string, stamp: number) {
+  const { ctx, page } = await open(which, "sign-in", true);
+  const t0 = Date.now();
+  try {
+    await goto(page, `${base}/app`);
+    await page.getByPlaceholder(/^Message #/).waitFor();
+    phase("server");
+    await page.getByRole("button", { name: "Create, join or discover servers" }).click();
+    await page.getByLabel("Name").fill(`Made ${stamp}`);
+    await page.getByRole("button", { name: "Create", exact: true }).click();
+    await page.getByText("No channel yet").waitFor();
+    if ((await page.getByText(`Made ${stamp}`).count()) === 0) throw new Error("the new server is not shown");
+    phase("channel");
+    await page.getByRole("button", { name: "New channel" }).click();
+    await page.getByLabel("Channel name").fill("ops");
+    await page.getByRole("button", { name: "Create channel" }).click();
+    await page.getByPlaceholder("Message #ops").waitFor();
+    await page.screenshot({ path: `${out}/${which}-created.png` });
+  } finally {
+    await ctx.close();
+  }
+  console.log(`  ${which}: made a server and its first channel from the app in ${Date.now() - t0} ms`);
+}
+
 // Web Push end to end (architecture 15.5), with a push service of the
 // suite's own: a headless browser has no account with a real one, so the
 // subscription's keys are made here and registered with the instance
@@ -377,7 +403,8 @@ async function invite(which: string, dataDir: string, server: string) {
 // own `push` event cannot be raised from outside, so the content it would
 // show is what is checked.
 const pushPort = 4919;
-const pushes = new Map<string, { resolve: (r: { headers: Headers; body: Uint8Array }) => void }>();
+type Bytes = Uint8Array<ArrayBuffer>;
+const pushes = new Map<string, { resolve: (r: { headers: Headers; body: Bytes }) => void }>();
 const pushService = Bun.serve({
   port: pushPort,
   hostname: "127.0.0.1",
@@ -394,15 +421,15 @@ function base64url(bytes: ArrayBuffer | Uint8Array): string {
   return Buffer.from(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)).toString("base64url");
 }
 
-async function hkdf(salt: Uint8Array, ikm: Uint8Array, info: Uint8Array, length: number): Promise<Uint8Array> {
+async function hkdf(salt: Bytes, ikm: Bytes, info: Bytes, length: number): Promise<Bytes> {
   const key = await crypto.subtle.importKey("raw", ikm, "HKDF", false, ["deriveBits"]);
   return new Uint8Array(await crypto.subtle.deriveBits({ name: "HKDF", hash: "SHA-256", salt, info }, key, length * 8));
 }
 
 // RFC 8291 for one record: salt(16) | rs(4) | idlen(1) | as_public | ciphertext+tag.
-async function decryptPush(body: Uint8Array, uaPrivate: CryptoKey, uaPublic: Uint8Array, auth: Uint8Array): Promise<string> {
+async function decryptPush(body: Bytes, uaPrivate: CryptoKey, uaPublic: Bytes, auth: Bytes): Promise<string> {
   const salt = body.slice(0, 16);
-  const idlen = body[20];
+  const idlen = body[20] ?? 0;
   const asPublic = body.slice(21, 21 + idlen);
   const ciphertext = body.slice(21 + idlen);
   const asKey = await crypto.subtle.importKey("raw", asPublic, { name: "ECDH", namedCurve: "P-256" }, false, []);
@@ -431,7 +458,7 @@ async function webPush(which: string, handle: string, inviterDir: string, server
   const auth = crypto.getRandomValues(new Uint8Array(16));
   const id = `${which}-${Date.now()}`;
   const endpoint = `http://127.0.0.1:${pushPort}/push/${id}`;
-  const arrived = new Promise<{ headers: Headers; body: Uint8Array }>((resolve) => pushes.set(id, { resolve }));
+  const arrived = new Promise<{ headers: Headers; body: Bytes }>((resolve) => pushes.set(id, { resolve }));
   // A profile of its own: the sign-in step's prompt left a denial behind.
   const { ctx, page: first } = await open(which, "push");
   const warnings: string[] = [];
@@ -491,6 +518,7 @@ async function webPush(which: string, handle: string, inviterDir: string, server
   phase("mention");
   const joiner = resolve(work, `cli-push-${which}`);
   const code = lumia(inviterDir, "invite-create", server).trim().split(/\s+/)[0];
+  if (!code) throw new Error("no invite code");
   lumia(joiner, "instance", "add", instance);
   lumia(joiner, "account", "create", "--handle", `pusher${which}${Date.now()}`, "--password", password, "--invite", code);
   lumia(joiner, "send", channel, `Are you there, ${which}?`, "--mention", account);
@@ -563,6 +591,7 @@ try {
       ["link", () => link(which, identityDir)],
       ["dm", () => dm(which, aDir, bAccount, aHandle)],
       ["invite", () => invite(which, passwordDir, server)],
+      ["create", () => create(which, stamp)],
       ["push", () => webPush(which, `web${stamp}`, passwordDir, server, general, webAccount)],
     ] as const) {
       // A heartbeat while the step runs (CI shows a step's log only once it

@@ -236,30 +236,40 @@ struct RequestRow: View {
 
 // MARK: New message
 
-// MARK: Join a server
+// MARK: Add a server
 
-/// Joining from an invite link or code: what the link leads to first, on
-/// which instance, then the join (architecture 6.1).
-struct JoinServerScreen: View {
+/// A server of your own, or joining one from an invite link or code:
+/// what the link leads to first, on which instance, then the join
+/// (architecture 6.1).
+struct AddServerScreen: View {
     let session: LumiaSession
-    let joined: (String) -> Void
+    let opened: (String) -> Void
+    @State private var name = ""
+    @State private var creating = false
+    @State private var createError = ""
     @State private var text = ""
     @State private var preview: InvitePreviewSummary?
     @State private var error = ""
     @State private var busy = false
 
     var body: some View {
-        PanelScreen(back: "Home", title: "Join a server", subtitle: "Paste the invite link someone sent you") {
+        PanelScreen(back: "Home", title: "Add a server", subtitle: "Your own, or one you were invited to") {
             ScrollView {
-                VStack(alignment: .leading, spacing: LumiaTokens.space12) {
-                    LumiaField("Invite link or code", text: $text, placeholder: "https://chat.example.com/invite/…")
-                        .textInputAutocapitalization(.never).autocorrectionDisabled()
-                    if !error.isEmpty { LumiaErrorText(error) }
-                    Button("Look it up") { Task { await look() } }
-                        .buttonStyle(.lumiaPrimary).disabled(busy || text.trimmingCharacters(in: .whitespaces).isEmpty)
-                    if let p = preview {
-                        LumiaCard(title: p.serverName, subtitle: "\(p.memberCount) \(p.memberCount == 1 ? "member" : "members") on \(p.host)\(p.asGuest ? " · you would join as a guest" : "")", width: nil) {
-                            Text("Run by \(p.operatorName.isEmpty ? "an unnamed operator" : p.operatorName). Your account on this instance joins it; nothing else is shared.")
+                VStack(alignment: .leading, spacing: LumiaTokens.space16) {
+                    LumiaCard(title: "Create a server", subtitle: "You own it; invite people once it exists.", width: nil) {
+                        LumiaField("Name", text: $name, placeholder: "Our place")
+                        if !createError.isEmpty { LumiaErrorText(createError) }
+                        Button("Create") { Task { await create() } }
+                            .buttonStyle(.lumiaPrimary).disabled(creating || name.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
+                    LumiaCard(title: "Join with an invite", subtitle: "Paste the link someone sent you; what it leads to shows first.", width: nil) {
+                        LumiaField("Invite link or code", text: $text, placeholder: "https://chat.example.com/invite/…")
+                            .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        if !error.isEmpty { LumiaErrorText(error) }
+                        Button("Look it up") { Task { await look() } }
+                            .buttonStyle(.lumiaPrimary).disabled(busy || text.trimmingCharacters(in: .whitespaces).isEmpty)
+                        if let p = preview {
+                            Text("\(p.serverName) · \(p.memberCount) \(p.memberCount == 1 ? "member" : "members") on \(p.host), run by \(p.operatorName.isEmpty ? "an unnamed operator" : p.operatorName)\(p.asGuest ? " · you would join as a guest" : ""). Your account on this instance joins it; nothing else is shared.")
                                 .font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkSecondary.color)
                             Button("Join \(p.serverName)") { Task { await join(p) } }
                                 .buttonStyle(.lumiaPrimary).disabled(busy)
@@ -268,6 +278,17 @@ struct JoinServerScreen: View {
                 }
                 .padding(LumiaTokens.space16)
             }
+        }
+    }
+
+    private func create() async {
+        creating = true
+        createError = ""
+        defer { creating = false }
+        do {
+            opened(try await session.createServer(name: name))
+        } catch {
+            createError = error.lumiaMessage
         }
     }
 
@@ -288,9 +309,48 @@ struct JoinServerScreen: View {
         error = ""
         defer { busy = false }
         do {
-            joined(try await session.acceptInvite(p.code))
+            opened(try await session.acceptInvite(p.code))
         } catch {
             self.error = error.lumiaMessage
+        }
+    }
+}
+
+// MARK: New channel
+
+/// A text channel in the server; it opens once made.
+struct NewChannelScreen: View {
+    let session: LumiaSession
+    let server: ServerSummary?
+    let opened: (String) -> Void
+    @State private var name = ""
+    @State private var error = ""
+    @State private var busy = false
+
+    var body: some View {
+        PanelScreen(back: server?.name ?? "Server", title: "New channel", subtitle: "A text channel everyone in \(server?.name ?? "the server") can see") {
+            ScrollView {
+                VStack(alignment: .leading, spacing: LumiaTokens.space12) {
+                    LumiaField("Name", text: $name, placeholder: "general")
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    if !error.isEmpty { LumiaErrorText(error) }
+                    Button("Create") { Task { await create() } }
+                        .buttonStyle(.lumiaPrimary).disabled(busy || name.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+                .padding(LumiaTokens.space16)
+            }
+        }
+    }
+
+    private func create() async {
+        guard let server else { return }
+        busy = true
+        error = ""
+        defer { busy = false }
+        do {
+            opened(try await session.createChannel(serverID: server.serverId, name: name))
+        } catch {
+            self.error = error.lumiaCode == "PERMISSION_DENIED" ? "You cannot add channels to this server." : error.lumiaMessage
         }
     }
 }

@@ -73,7 +73,7 @@ struct HomeSidebar: View {
                             .buttonStyle(.plain)
                         }
                     }
-                    Button("Join a server") { view = .join }
+                    Button("Add a server") { view = .add }
                         .buttonStyle(.lumiaLink)
                         .padding(.horizontal, LumiaTokens.space10).padding(.top, LumiaTokens.space8)
                 }
@@ -108,29 +108,39 @@ struct HomeSidebar: View {
     }
 }
 
-// MARK: Join a server
+// MARK: Add a server
 
-/// Joining from an invite link or code: what the link leads to first, on
-/// which instance, then the join (architecture 6.1).
-struct JoinServerView: View {
+/// A server of your own, or joining one from an invite link or code:
+/// what the link leads to first, on which instance, then the join
+/// (architecture 6.1).
+struct AddServerView: View {
     let session: LumiaSession
-    let joined: (String) -> Void
+    let opened: (String) -> Void
+    @State private var name = ""
+    @State private var creating = false
+    @State private var createError = ""
     @State private var text = ""
     @State private var preview: InvitePreviewSummary?
     @State private var error = ""
     @State private var busy = false
 
     var body: some View {
-        PageHeader(title: "Join a server", topic: "Paste the invite link someone sent you")
+        PageHeader(title: "Add a server", topic: "Your own, or one you were invited to")
         ScrollView {
-            VStack(alignment: .leading, spacing: LumiaTokens.space12) {
-                LumiaField("Invite link or code", text: $text, placeholder: "https://chat.example.com/invite/…")
-                if !error.isEmpty { LumiaErrorText(error) }
-                Button("Look it up") { Task { await look() } }
-                    .buttonStyle(.lumiaPrimary).disabled(busy || text.trimmingCharacters(in: .whitespaces).isEmpty)
-                if let p = preview {
-                    LumiaCard(title: p.serverName, subtitle: "\(p.memberCount) \(p.memberCount == 1 ? "member" : "members") on \(p.host)\(p.asGuest ? " · you would join as a guest" : "")", width: nil) {
-                        Text("Run by \(p.operatorName.isEmpty ? "an unnamed operator" : p.operatorName). Your account on this instance joins it; nothing else is shared.")
+            VStack(alignment: .leading, spacing: LumiaTokens.space16) {
+                LumiaCard(title: "Create a server", subtitle: "You own it; invite people once it exists.", width: nil) {
+                    LumiaField("Name", text: $name, placeholder: "Our place")
+                    if !createError.isEmpty { LumiaErrorText(createError) }
+                    Button("Create") { Task { await create() } }
+                        .buttonStyle(.lumiaPrimary).disabled(creating || name.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+                LumiaCard(title: "Join with an invite", subtitle: "Paste the link someone sent you; what it leads to shows first.", width: nil) {
+                    LumiaField("Invite link or code", text: $text, placeholder: "https://chat.example.com/invite/…")
+                    if !error.isEmpty { LumiaErrorText(error) }
+                    Button("Look it up") { Task { await look() } }
+                        .buttonStyle(.lumiaPrimary).disabled(busy || text.trimmingCharacters(in: .whitespaces).isEmpty)
+                    if let p = preview {
+                        Text("\(p.serverName) · \(p.memberCount) \(p.memberCount == 1 ? "member" : "members") on \(p.host), run by \(p.operatorName.isEmpty ? "an unnamed operator" : p.operatorName)\(p.asGuest ? " · you would join as a guest" : ""). Your account on this instance joins it; nothing else is shared.")
                             .font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkSecondary.color)
                         Button("Join \(p.serverName)") { Task { await join(p) } }
                             .buttonStyle(.lumiaPrimary).disabled(busy)
@@ -139,6 +149,17 @@ struct JoinServerView: View {
             }
             .padding(LumiaTokens.space16)
             .frame(maxWidth: 520, alignment: .leading)
+        }
+    }
+
+    private func create() async {
+        creating = true
+        createError = ""
+        defer { creating = false }
+        do {
+            opened(try await session.createServer(name: name))
+        } catch {
+            createError = error.lumiaMessage
         }
     }
 
@@ -159,7 +180,7 @@ struct JoinServerView: View {
         error = ""
         defer { busy = false }
         do {
-            joined(try await session.acceptInvite(p.code))
+            opened(try await session.acceptInvite(p.code))
         } catch {
             self.error = error.lumiaMessage
         }
@@ -174,8 +195,8 @@ struct HomeMain: View {
     let openServer: (String) -> Void
 
     var body: some View {
-        if view == .join {
-            JoinServerView(session: session, joined: openServer)
+        if view == .add {
+            AddServerView(session: session, opened: openServer)
         } else if !session.hasIdentity {
             NoIdentityView()
         } else {
@@ -183,7 +204,7 @@ struct HomeMain: View {
             case .requests: RequestsView(session: session, go: go)
             case .devices: DevicesView(session: session)
             case .new: NewMessageView(session: session, go: go)
-            case .join: EmptyView()
+            case .add: EmptyView()
             case .dm:
                 if let dmID, let channel = session.snapshot?.channels.first(where: { $0.channelId == dmID }) {
                     ConversationView(session: session, channel: channel)

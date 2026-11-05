@@ -30,7 +30,7 @@ import { client, dmChannelsQuery, dmMessagesQuery, enableNotifications, hasIdent
 import { useNames } from "../client/names";
 import { initialsOf, timeOf, toneFor } from "./app";
 
-export type HomeView = "dm" | "requests" | "devices" | "new" | "join";
+export type HomeView = "dm" | "requests" | "devices" | "new" | "add";
 
 export interface HomeProps {
   snapshot: SnapshotSummary | undefined;
@@ -93,16 +93,35 @@ export function HomeSidebar(props: HomeProps) {
       <Show when={sections().length > 0} fallback={<p class="app__empty app__empty--side">No conversations yet.</p>}>
         <ChannelList sections={sections()} />
       </Show>
-      <button type="button" class="lu-link app__push" onClick={() => props.go("join")}>
-        Join a server
+      <button type="button" class="lu-link app__push" onClick={() => props.go("add")}>
+        Add a server
       </button>
     </>
   );
 }
 
-// Joining a server from an invite link or code: the preview first (what
-// the link leads to, on which instance), then the join (architecture 6.1).
-function JoinServer(props: HomeProps) {
+// A server of your own, or joining one from an invite link or code: the
+// preview first (what the link leads to, on which instance), then the
+// join (architecture 6.1).
+function AddServer(props: HomeProps) {
+  const [name, setName] = createSignal("");
+  const [creating, setCreating] = createSignal(false);
+  const [createError, setCreateError] = createSignal("");
+  const create = async (e: Event) => {
+    e.preventDefault();
+    if (!name().trim()) return;
+    setCreating(true);
+    setCreateError("");
+    try {
+      const server = await client().createServer(name());
+      await queryClient.invalidateQueries({ queryKey: ["snapshot"] });
+      props.toServer(server.serverId);
+    } catch (err) {
+      setCreateError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCreating(false);
+    }
+  };
   const [text, setText] = createSignal("");
   const [preview, setPreview] = createSignal<InvitePreviewSummary | null>(null);
   const [error, setError] = createSignal("");
@@ -139,9 +158,22 @@ function JoinServer(props: HomeProps) {
   };
   return (
     <>
-      <ChannelHeader kind="page" name="Join a server" topic="Paste the invite link someone sent you" actions={[]} />
+      <ChannelHeader kind="page" name="Add a server" topic="Your own, or one you were invited to" actions={[]} />
       <div class="lu-page">
-        <Card title="Invite" subtitle="A link such as https://chat.example.com/invite/abc23xyz, or just its code.">
+        <Card title="Create a server" subtitle="You own it; invite people once it exists.">
+          <form class="auth__form" onSubmit={(e) => void create(e)}>
+            <TextField label="Name" value={name()} onInput={(e) => setName(e.currentTarget.value)} placeholder="Our place" autocomplete="off" />
+            <Show when={createError()}>
+              <p class="auth__error" role="alert">
+                {createError()}
+              </p>
+            </Show>
+            <Button variant="primary" type="submit" block disabled={creating() || !name().trim()}>
+              Create
+            </Button>
+          </form>
+        </Card>
+        <Card title="Join with an invite" subtitle="A link such as https://chat.example.com/invite/abc23xyz, or just its code.">
           <form class="auth__form" onSubmit={(e) => void look(e)}>
             <TextField label="Invite link or code" value={text()} onInput={(e) => setText(e.currentTarget.value)} placeholder="https://chat.example.com/invite/…" autocomplete="off" />
             <Show when={error()}>
@@ -174,8 +206,10 @@ function JoinServer(props: HomeProps) {
 export function HomeMain(props: HomeProps) {
   const identity = hasIdentityQuery();
   return (
-    <Show when={identity.data !== false} fallback={<NoIdentity toLink={props.toLink} />}>
-      {props.view === "requests" ? <Requests {...props} /> : props.view === "devices" ? <Devices {...props} /> : props.view === "new" ? <NewMessage {...props} /> : props.view === "join" ? <JoinServer {...props} /> : <Conversation {...props} />}
+    <Show when={props.view !== "add"} fallback={<AddServer {...props} />}>
+      <Show when={identity.data !== false} fallback={<NoIdentity toLink={props.toLink} />}>
+        {props.view === "requests" ? <Requests {...props} /> : props.view === "devices" ? <Devices {...props} /> : props.view === "new" ? <NewMessage {...props} /> : <Conversation {...props} />}
+      </Show>
     </Show>
   );
 }

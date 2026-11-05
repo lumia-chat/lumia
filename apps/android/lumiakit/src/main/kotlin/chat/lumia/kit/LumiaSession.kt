@@ -96,6 +96,22 @@ class LumiaSession(val client: LumiaClient) {
         return serverId
     }
 
+    // Servers and channels
+
+    /** A server this account owns, listed once the snapshot is refreshed; returns its id. */
+    suspend fun createServer(name: String): String {
+        val server = client.call { createServer(name) }
+        refreshSnapshot()
+        return server.serverId
+    }
+
+    /** A text channel in the server, listed once the snapshot is refreshed; returns its id. */
+    suspend fun createChannel(serverId: String, name: String): String {
+        val channel = client.call { createChannel(serverId, name) }
+        refreshSnapshot()
+        return channel.channelId
+    }
+
     suspend fun signOut() {
         stop()
         runCatching { client.call { signOut() } }

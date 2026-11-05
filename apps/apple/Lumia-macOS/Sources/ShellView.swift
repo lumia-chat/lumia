@@ -14,7 +14,7 @@ enum Place: Hashable {
 }
 
 enum HomeView: Hashable {
-    case dm, requests, devices, new, join
+    case dm, requests, devices, new, add
 }
 
 struct ShellView: View {
@@ -29,6 +29,11 @@ struct ShellView: View {
     @State private var invite: InviteSummary?
     @State private var inviteError = ""
     @State private var inviteCopied = false
+    // A new channel in the server, named in a popover and opened once made.
+    @State private var channelShown = false
+    @State private var channelName = ""
+    @State private var channelError = ""
+    @State private var channelBusy = false
 
     private var snapshot: SnapshotSummary? { session.snapshot }
     private var servers: [ServerSummary] { snapshot?.servers ?? [] }
@@ -93,6 +98,12 @@ struct ShellView: View {
                         .font(server?.serverId == s.serverId ? LumiaTokens.titleMonogram.font : LumiaTokens.textAuthor.font)
                         .foregroundStyle(server?.serverId == s.serverId ? LumiaTokens.inkSelected.color : LumiaTokens.ink.color)
                 }
+            }
+            railButton(current: false, badge: 0, label: "Add a server", rounded: false) {
+                place = .home
+                homeView = .add
+            } label: {
+                Image(systemName: "plus").font(.system(size: 16, weight: .medium)).foregroundStyle(LumiaTokens.inkSecondary.color)
             }
             Spacer()
             LumiaAvatar(initials: initials(of: session.selfName), tone: .of(session.me), size: LumiaTokens.avatarSelf)
@@ -168,13 +179,17 @@ struct ShellView: View {
                             ChannelRow(name: c.name, active: channelID == c.channelId) { channelID = c.channelId }
                         }
                         if channels.isEmpty {
-                            Text("Create a channel with the CLI and it appears here.")
+                            Text("No channels yet. Add one with New channel below.")
                                 .font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkQuiet.color)
                                 .padding(LumiaTokens.space10)
                         }
-                        Button("Invite people") { inviteShown = true }
+                        Button("New channel") { channelShown = true }
                             .buttonStyle(.lumiaLink)
                             .padding(.horizontal, LumiaTokens.space10).padding(.top, LumiaTokens.space8)
+                            .popover(isPresented: $channelShown, arrowEdge: .bottom) { channelPopover }
+                        Button("Invite people") { inviteShown = true }
+                            .buttonStyle(.lumiaLink)
+                            .padding(.horizontal, LumiaTokens.space10).padding(.top, LumiaTokens.space4)
                             .popover(isPresented: $inviteShown, arrowEdge: .bottom) { invitePopover }
                     }
                 }
@@ -183,6 +198,36 @@ struct ShellView: View {
             .padding(.top, LumiaTokens.space14)
             .padding(.leading, LumiaTokens.space12)
             .padding(.trailing, LumiaTokens.space10)
+        }
+    }
+
+    // MARK: New channel
+
+    /// A text channel in the server; it opens once made.
+    private var channelPopover: some View {
+        VStack(alignment: .leading, spacing: LumiaTokens.space12) {
+            Text("New channel").font(LumiaTokens.titleAuth.font).foregroundStyle(LumiaTokens.ink.color)
+            Text("A text channel everyone in \(server?.name ?? "the server") can see.").font(LumiaTokens.textSubtitle.font).foregroundStyle(LumiaTokens.inkSecondary.color)
+            LumiaField("Name", text: $channelName, placeholder: "general")
+            if !channelError.isEmpty { LumiaErrorText(channelError) }
+            Button("Create") { Task { await createChannel() } }
+                .buttonStyle(.lumiaPrimary).disabled(channelBusy || channelName.trimmingCharacters(in: .whitespaces).isEmpty)
+        }
+        .padding(LumiaTokens.space16)
+        .frame(width: 320)
+    }
+
+    private func createChannel() async {
+        guard case let .server(id) = place else { return }
+        channelBusy = true
+        channelError = ""
+        defer { channelBusy = false }
+        do {
+            channelID = try await session.createChannel(serverID: id, name: channelName)
+            channelName = ""
+            channelShown = false
+        } catch {
+            channelError = error.lumiaCode == "PERMISSION_DENIED" ? "You cannot add channels to this server." : error.lumiaMessage
         }
     }
 
@@ -247,7 +292,7 @@ struct ShellView: View {
             VStack(spacing: 0) {
                 LumiaPaneHeader(title: server?.name ?? "Lumia")
                 LumiaEmptyState(icon: "number", title: "No channel yet") {
-                    Text("Create a server with the CLI and it appears here.")
+                    Text("Add a channel with New channel in the sidebar, or a server with the rail's plus.")
                 }
                 Spacer()
             }

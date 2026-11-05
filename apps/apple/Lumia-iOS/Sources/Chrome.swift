@@ -18,13 +18,15 @@ enum Screen: Hashable {
     case requests
     case devices
     case newMessage
-    case joinServer
+    case addServer
+    case newChannel(serverID: String)
     case invite(serverID: String)
 }
 
 struct PhoneRail: View {
     let session: LumiaSession
     @Binding var place: Place
+    let add: () -> Void
 
     private var servers: [ServerSummary] { session.snapshot?.servers ?? [] }
 
@@ -42,6 +44,9 @@ struct PhoneRail: View {
                 } content: {
                     Text(initials(of: s.name)).font(LumiaTokens.titleMonogram.font).foregroundStyle(LumiaTokens.ink.color)
                 }
+            }
+            tile(current: false, badge: 0, label: "Add a server", action: add) {
+                Image(systemName: "plus").font(.system(size: 18, weight: .medium)).foregroundStyle(LumiaTokens.inkSecondary.color)
             }
             Spacer()
             LumiaAvatar(initials: initials(of: session.selfName), tone: .of(session.me), size: LumiaTokens.avatarSelf)

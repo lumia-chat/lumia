@@ -19,7 +19,7 @@ struct ShellView: View {
     var body: some View {
         NavigationStack(path: $path) {
             HStack(spacing: 0) {
-                PhoneRail(session: session, place: $place)
+                PhoneRail(session: session, place: $place) { path = [.addServer] }
                 switch place {
                 case .home:
                     HomeScreen(session: session, path: $path)
@@ -41,7 +41,8 @@ struct ShellView: View {
                 case .requests: RequestsScreen(session: session, path: $path)
                 case .devices: DevicesScreen(session: session)
                 case .newMessage: NewMessageScreen(session: session, path: $path)
-                case .joinServer: JoinServerScreen(session: session) { id in path = []; place = .server(id: id) }
+                case .addServer: AddServerScreen(session: session) { id in path = []; place = .server(id: id) }
+                case let .newChannel(serverID): NewChannelScreen(session: session, server: servers.first { $0.serverId == serverID }) { id in path = [.channel(id: id)] }
                 case let .invite(serverID): InviteScreen(session: session, server: servers.first { $0.serverId == serverID })
                 }
             }
@@ -68,7 +69,8 @@ struct ShellView: View {
                 case "requests": place = .home; path = [.requests]
                 case "devices": place = .home; path = [.devices]
                 case "new": place = .home; path = [.newMessage]
-                case "join": place = .home; path = [.joinServer]
+                case "add": place = .home; path = [.addServer]
+                case "newchannel": place = .server(id: first); path = [.newChannel(serverID: first)]
                 case "invite": place = .server(id: first); path = [.invite(serverID: first)]
                 default: break
                 }
@@ -150,7 +152,7 @@ struct HomeScreen: View {
                             }
                         }
                     }
-                    Button("Join a server") { path.append(.joinServer) }
+                    Button("Add a server") { path.append(.addServer) }
                         .buttonStyle(.lumiaLink)
                         .padding(.horizontal, LumiaTokens.space10).padding(.top, LumiaTokens.space8)
                 }
@@ -227,7 +229,7 @@ struct ServerScreen: View {
                 VStack(alignment: .leading, spacing: LumiaTokens.space2) {
                     SectionTitle("Channels")
                     if channels.isEmpty {
-                        Text("Create a channel with the CLI and it appears here.")
+                        Text("No channels yet. Add one with New channel below.")
                             .font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkQuiet.color)
                             .padding(LumiaTokens.space10)
                     }
@@ -244,9 +246,12 @@ struct ServerScreen: View {
                         }
                         .buttonStyle(.plain)
                     }
-                    Button("Invite people") { path.append(.invite(serverID: server.serverId)) }
+                    Button("New channel") { path.append(.newChannel(serverID: server.serverId)) }
                         .buttonStyle(.lumiaLink)
                         .padding(.horizontal, LumiaTokens.space10).padding(.top, LumiaTokens.space8)
+                    Button("Invite people") { path.append(.invite(serverID: server.serverId)) }
+                        .buttonStyle(.lumiaLink)
+                        .padding(.horizontal, LumiaTokens.space10).padding(.top, LumiaTokens.space4)
                 }
                 .padding(.horizontal, LumiaTokens.space12)
                 .padding(.bottom, LumiaTokens.space24)

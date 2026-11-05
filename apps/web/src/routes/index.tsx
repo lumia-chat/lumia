@@ -91,7 +91,7 @@ const appRoute = createRoute({
   beforeLoad: requireSession,
   validateSearch: (s: Record<string, unknown>): AppSearch => ({
     place: s.place === "home" ? "home" : undefined,
-    view: s.view === "requests" || s.view === "devices" || s.view === "new" || s.view === "join" || s.view === "dm" ? s.view : undefined,
+    view: s.view === "requests" || s.view === "devices" || s.view === "new" || s.view === "add" || s.view === "dm" ? s.view : undefined,
     dm: typeof s.dm === "string" ? s.dm : undefined,
     server: typeof s.server === "string" ? s.server : undefined,
   }),

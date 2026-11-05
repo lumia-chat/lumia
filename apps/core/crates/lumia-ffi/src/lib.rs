@@ -746,6 +746,19 @@ impl Client {
             .block_on(self.app.accept_invite(&link_or_code))?)
     }
 
+    /// `POST /servers`: a server this account owns.
+    pub fn create_server(&self, name: String) -> Res<ServerSummary> {
+        Ok(self.runtime.block_on(self.app.create_server(&name))?.into())
+    }
+
+    /// `POST /channels`: a text channel in a server this account may manage channels in.
+    pub fn create_channel(&self, server_id: String, name: String) -> Res<ChannelSummary> {
+        Ok(self
+            .runtime
+            .block_on(self.app.create_channel(&server_id, &name))?
+            .into())
+    }
+
     /// Signs in with a password, and a TOTP code when the account requires one.
     pub fn sign_in(&self, handle: String, password: String, totp_code: Option<String>) -> Res<()> {
         Ok(self

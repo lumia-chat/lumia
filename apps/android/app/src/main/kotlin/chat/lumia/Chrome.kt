@@ -25,6 +25,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -57,12 +58,13 @@ sealed class Screen {
     data object Requests : Screen()
     data object Devices : Screen()
     data object NewMessage : Screen()
-    data object JoinServer : Screen()
+    data object AddServer : Screen()
+    data class NewChannel(val serverId: String) : Screen()
     data class Invite(val serverId: String) : Screen()
 }
 
 @Composable
-fun PhoneRail(session: LumiaSession, place: Place, onPlace: (Place) -> Unit) {
+fun PhoneRail(session: LumiaSession, place: Place, onAdd: () -> Unit, onPlace: (Place) -> Unit) {
     val servers = session.snapshot?.servers ?: emptyList()
     Column(
         modifier = Modifier.width(LumiaTokens.railWidth).fillMaxHeight().background(LumiaTokens.rail.color).statusBarsPadding().padding(top = LumiaTokens.space8, bottom = LumiaTokens.space12),
@@ -77,6 +79,9 @@ fun PhoneRail(session: LumiaSession, place: Place, onPlace: (Place) -> Unit) {
             RailTile(current = place == Place.Server(s.serverId), badge = 0, label = s.name, onClick = { onPlace(Place.Server(s.serverId)) }) {
                 Text(initialsOf(s.name), style = LumiaTokens.titleMonogram.style, color = LumiaTokens.ink.color)
             }
+        }
+        RailTile(current = false, badge = 0, label = "Add a server", onClick = onAdd) {
+            Icon(Icons.Filled.Add, contentDescription = null, tint = LumiaTokens.inkSecondary.color, modifier = Modifier.size(20.dp))
         }
         Spacer(Modifier.weight(1f))
         LumiaAvatar(initialsOf(session.selfName), AvatarTone.of(session.me), LumiaTokens.avatarSelf)

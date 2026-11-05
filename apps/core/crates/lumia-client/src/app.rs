@@ -806,6 +806,48 @@ impl App {
         self.save_tokens(&pair)
     }
 
+    /// `POST /servers`: a server this account owns, with its `@everyone`
+    /// role and the owner's membership. The next snapshot lists it.
+    ///
+    /// # Errors
+    /// `INVALID_ARGUMENT` for an empty name; transport failure.
+    pub async fn create_server(&self, name: &str) -> Result<ServerSummary, ClientError> {
+        let s = self.api.create_server(name.trim()).await?;
+        Ok(ServerSummary {
+            server_id: wire::display(&s.server_id),
+            name: s.name,
+        })
+    }
+
+    /// `POST /channels`: a text channel in a server this account may
+    /// manage channels in. The next snapshot lists it.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` without `manage_channels` there; transport failure.
+    pub async fn create_channel(
+        &self,
+        server_id: &str,
+        name: &str,
+    ) -> Result<ChannelSummary, ClientError> {
+        let id = uuid::Uuid::parse_str(server_id)
+            .map_err(|_| ClientError::Transport(format!("not a uuid: {server_id}")))?;
+        let c = self
+            .api
+            .create_channel(wire::uuid_bytes(id), name.trim())
+            .await?;
+        Ok(ChannelSummary {
+            channel_id: wire::display(&c.channel_id),
+            server_id: wire::display(&c.server_id),
+            name: c.name,
+            kind: lumia_core::proto::ChannelKind::try_from(c.kind)
+                .map(|k| k.as_str_name().to_string())
+                .unwrap_or_default(),
+            last_seq: 0,
+            participant_account_ids: Vec::new(),
+            host: String::new(),
+        })
+    }
+
     /// `GET /invites/{code}`: what an invite link or code shows before
     /// joining. Public: no sign-in needed.
     ///

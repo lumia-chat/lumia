@@ -92,6 +92,22 @@ public final class LumiaSession {
         return serverID
     }
 
+    // MARK: Servers and channels
+
+    /// A server this account owns, listed once the snapshot is refreshed; returns its id.
+    public func createServer(name: String) async throws -> String {
+        let server = try await client.createServer(name: name)
+        await refreshSnapshot()
+        return server.serverId
+    }
+
+    /// A text channel in the server, listed once the snapshot is refreshed; returns its id.
+    public func createChannel(serverID: String, name: String) async throws -> String {
+        let channel = try await client.createChannel(serverID: serverID, name: name)
+        await refreshSnapshot()
+        return channel.channelId
+    }
+
     public func signInIdentity() async throws {
         try await client.signInIdentity()
         signedIn = true

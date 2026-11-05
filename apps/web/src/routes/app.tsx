@@ -189,6 +189,29 @@ export function App() {
     }
   };
 
+  // A new channel in the current server, named in the sidebar and opened once made.
+  const [naming, setNaming] = createSignal(false);
+  const [channelName, setChannelName] = createSignal("");
+  const [channelError, setChannelError] = createSignal("");
+  createEffect(on(serverId, () => { setNaming(false); setChannelName(""); setChannelError(""); }));
+  const createChannel = async (e: Event) => {
+    e.preventDefault();
+    const id = serverId();
+    const name = channelName().trim();
+    if (!id || !name) return;
+    setChannelError("");
+    try {
+      const channel = await client().createChannel(id, name);
+      await queryClient.invalidateQueries({ queryKey: ["snapshot"] });
+      setChannelId(channel.channelId);
+      setNaming(false);
+      setChannelName("");
+    } catch (err) {
+      const ce = err instanceof ClientError ? err : null;
+      setChannelError(ce?.code === "PERMISSION_DENIED" ? "You cannot add channels to this server." : err instanceof Error ? err.message : String(err));
+    }
+  };
+
   return (
     <AppShell
       height="100vh"
@@ -198,6 +221,7 @@ export function App() {
           homeCurrent={home()}
           homeUnread={snapshot.data?.pendingRequests.length || undefined}
           onHome={() => goHome("dm")}
+          onAddServer={() => goHome("add")}
           servers={servers().map((s) => ({
             name: s.name,
             initials: initialsOf(s.name),
@@ -212,6 +236,23 @@ export function App() {
           <ServerHeader name={server()?.name ?? "Lumia"} />
           <SearchTrigger label={`Search ${server()?.name ?? ""}`} />
           <ChannelList sections={[{ title: "Channels", items: items() }]} />
+          <Show when={naming()} fallback={
+            <button type="button" class="lu-link app__push app__push--first" onClick={() => setNaming(true)}>
+              New channel
+            </button>
+          }>
+            <form class="app__invite" onSubmit={(e) => void createChannel(e)}>
+              <input class="app__invite-url" type="text" value={channelName()} onInput={(e) => setChannelName(e.currentTarget.value)} placeholder="Channel name" aria-label="Channel name" autocomplete="off" />
+              <Show when={channelError()}>
+                <p class="auth__error app__status" role="alert">
+                  {channelError()}
+                </p>
+              </Show>
+              <button type="submit" class="lu-link app__push" disabled={!channelName().trim()}>
+                Create channel
+              </button>
+            </form>
+          </Show>
           <Show when={invite()} fallback={
             <button type="button" class="lu-link app__push" onClick={() => void makeInvite()}>
               Invite people
@@ -245,7 +286,7 @@ export function App() {
       }
       main={
         <Show when={!home()} fallback={<HomeMain {...homeProps()} />}>
-          <Show when={current()} fallback={<div class="app__empty">No channel yet. Create a server with the CLI and it appears here.</div>}>
+          <Show when={current()} fallback={<div class="app__empty">No channel yet. Add one with New channel in the sidebar.</div>}>
             {(ch) => (
               <>
                 <ChannelHeader name={ch().name} />
