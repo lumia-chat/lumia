@@ -20,6 +20,18 @@ export interface ServerSummary {
   serverId: string;
   name: string;
 }
+/** A WebAuthn ceremony's start: the challenge's id and the options as the browser's JSON. */
+export interface PasskeyChallengeSummary {
+  challengeId: string;
+  optionsJson: string;
+}
+/** One of the account's passkeys. */
+export interface PasskeySummary {
+  passkeyId: string;
+  label: string;
+  createdAtMicros: number | null;
+  lastUsedAtMicros: number | null;
+}
 /** One account's presence in a server (`ONLINE`, `AWAY`, `DO_NOT_DISTURB`). */
 export interface PresenceSummary {
   accountId: string;
@@ -245,6 +257,24 @@ export class Bridge {
   }
   createChannel(serverId: string, name: string): Promise<ChannelSummary> {
     return this.call("createChannel", serverId, name);
+  }
+  passkeyRegisterStart(): Promise<PasskeyChallengeSummary> {
+    return this.call("passkeyRegisterStart");
+  }
+  passkeyRegisterFinish(challengeId: string, credentialJson: string, label: string): Promise<void> {
+    return this.call("passkeyRegisterFinish", challengeId, credentialJson, label);
+  }
+  passkeyAssertStart(handleOrEmail: string): Promise<PasskeyChallengeSummary> {
+    return this.call("passkeyAssertStart", handleOrEmail);
+  }
+  signInPasskey(challengeId: string, credentialJson: string): Promise<void> {
+    return this.call("signInPasskey", challengeId, credentialJson);
+  }
+  passkeys(): Promise<PasskeySummary[]> {
+    return this.call("passkeys");
+  }
+  removePasskey(passkeyId: string): Promise<void> {
+    return this.call("removePasskey", passkeyId);
   }
   /** Asks the instance to mail a sign-in link to `email`. */
   requestMagicLink(email: string): Promise<void> {

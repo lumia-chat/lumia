@@ -122,6 +122,52 @@ message MagicLinkCompleteRequest {
   bytes device_id = 2;
 }
 
+// ---- Passkeys (WebAuthn, architecture 6.3) ---------------------------------
+// The ceremonies carry the browser's own JSON: the options the instance
+// makes (PublicKeyCredentialCreationOptions or RequestOptions, binary
+// fields base64url) and the credential the browser answers with
+// (PublicKeyCredential.toJSON()). A challenge is kept by the instance for
+// five minutes, single use, and named by its id.
+
+// POST /auth/passkey/register/start (signed in) and
+// POST /auth/passkey/assert/start (public) both answer with this.
+message PasskeyChallenge {
+  string challenge_id = 1;
+  string options_json = 2;
+}
+
+// POST /auth/passkey/register/finish (signed in) → 204.
+message PasskeyRegisterFinishRequest {
+  string challenge_id = 1;
+  string credential_json = 2;
+  string label = 3;
+}
+
+// POST /auth/passkey/assert/start — the account's passkeys go into
+// allowCredentials when a handle is given; a discoverable passkey needs none.
+message PasskeyAssertStartRequest {
+  string handle_or_email = 1;
+}
+
+// POST /auth/passkey/assert/finish → TokenPair.
+message PasskeyAssertFinishRequest {
+  string challenge_id = 1;
+  string credential_json = 2;
+  bytes device_id = 3;
+}
+
+message Passkey {
+  string passkey_id = 1;
+  string label = 2;
+  google.protobuf.Timestamp created_at = 3;
+  google.protobuf.Timestamp last_used_at = 4;
+}
+
+// GET /auth/passkeys (signed in); DELETE /auth/passkeys/{passkey_id} → 204.
+message ListPasskeysResponse {
+  repeated Passkey passkeys = 1;
+}
+
 // ---- Push (architecture 15.5, docs/specs/deployment.md) --------------------
 
 enum PushKind {

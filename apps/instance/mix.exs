@@ -54,6 +54,8 @@ defmodule Lumia.MixProject do
       {:postgrex, ">= 0.0.0"},
       {:phoenix_live_dashboard, "~> 0.8.3"},
       {:swoosh, "~> 1.16"},
+      # WebAuthn for passkeys (architecture 6.3).
+      {:wax_, "~> 0.7.0"},
       {:req, "~> 0.5"},
       {:telemetry_metrics, "~> 1.0"},
       {:telemetry_metrics_prometheus_core, "~> 1.2"},

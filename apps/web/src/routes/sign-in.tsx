@@ -8,6 +8,7 @@ import { useNavigate, useSearch } from "@tanstack/solid-router";
 import { Button, Card, Divider, TextField } from "../design/components";
 import { ClientError, type InstanceSummary } from "../client/bridge";
 import { SERVED_BY_INSTANCE, client, inShell, openInstance, savedInstance } from "../client/state";
+import { passkeysAvailable, signInWithPasskey } from "../client/passkeys";
 import type { SignInSearch } from "./index";
 
 type Mode = "signIn" | "create";
@@ -40,6 +41,19 @@ export function SignIn() {
       navigate({ to: "/app", search: { server: serverId } });
     } else {
       navigate({ to: "/app" });
+    }
+  };
+  const passkey = async () => {
+    setError("");
+    setBusy(true);
+    try {
+      await signInWithPasskey(handle());
+      await land();
+    } catch (err) {
+      const ce = err instanceof ClientError ? err : null;
+      setError(ce?.code === "UNAUTHENTICATED" ? "That passkey was not accepted." : err instanceof Error && err.name === "NotAllowedError" ? "No passkey was offered." : err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
     }
   };
   const requestMagicLink = async () => {
@@ -208,6 +222,11 @@ export function SignIn() {
               <Button variant="primary" type="submit" block disabled={busy()}>
                 {mode() === "create" ? "Create account" : "Sign in"}
               </Button>
+              <Show when={mode() === "signIn" && passkeysAvailable()}>
+                <Button icon="key" block type="button" disabled={busy()} onClick={() => void passkey()}>
+                  Sign in with a passkey
+                </Button>
+              </Show>
               <Show when={mode() === "signIn" && i().magicLinkEnabled}>
                 <Show
                   when={magicSent()}

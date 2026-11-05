@@ -22,6 +22,8 @@ defmodule LumiaWeb.Router do
     post "/auth/sign-in/password", AuthController, :sign_in_password
     post "/auth/sign-in/magic-link", AuthController, :magic_link
     post "/auth/sign-in/magic-link/complete", AuthController, :magic_link_complete
+    post "/auth/passkey/assert/start", PasskeyController, :assert_start
+    post "/auth/passkey/assert/finish", PasskeyController, :assert_finish
     post "/auth/sign-in/identity", IdentityController, :sign_in
     post "/auth/challenge", IdentityController, :challenge
     post "/auth/refresh", AuthController, :refresh
@@ -35,6 +37,10 @@ defmodule LumiaWeb.Router do
     post "/auth/sign-out", AuthController, :sign_out
     post "/auth/totp/enroll", AuthController, :totp_enroll
     post "/auth/totp/confirm", AuthController, :totp_confirm
+    post "/auth/passkey/register/start", PasskeyController, :register_start
+    post "/auth/passkey/register/finish", PasskeyController, :register_finish
+    get "/auth/passkeys", PasskeyController, :index
+    delete "/auth/passkeys/:passkey_id", PasskeyController, :delete
     post "/auth/reauth", IdentityController, :reauth
     get "/identity/roster", IdentityController, :get_roster
     get "/accounts/:account_id/roster", IdentityController, :get_account_roster

@@ -137,6 +137,25 @@ pub struct InviteSummary {
     pub uses: u32,
 }
 
+/// A WebAuthn ceremony's start: the challenge's id and the options as the
+/// browser's JSON, for the platform's own call.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PasskeyChallengeSummary {
+    pub challenge_id: String,
+    pub options_json: String,
+}
+
+/// One of the account's passkeys.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PasskeySummary {
+    pub passkey_id: String,
+    pub label: String,
+    pub created_at_micros: Option<i64>,
+    pub last_used_at_micros: Option<i64>,
+}
+
 /// The token inside a magic-link mail's link, or the text itself when it
 /// is the bare code: `https://host/sign-in?magic=abc` and `abc` both give `abc`.
 #[must_use]
@@ -853,6 +872,97 @@ impl App {
     /// `POLICY_DENIED` when the instance sends no mail, `RATE_LIMITED`; transport failure.
     pub async fn request_magic_link(&self, email: &str) -> Result<(), ClientError> {
         self.api.magic_link_request(email.trim()).await
+    }
+
+    /// `POST /auth/passkey/register/start` (architecture 6.3): the creation
+    /// options for a new passkey of this account.
+    ///
+    /// # Errors
+    /// On transport or API failure.
+    pub async fn passkey_register_start(&self) -> Result<PasskeyChallengeSummary, ClientError> {
+        let c = self.api.passkey_register_start().await?;
+        Ok(PasskeyChallengeSummary {
+            challenge_id: c.challenge_id,
+            options_json: c.options_json,
+        })
+    }
+
+    /// `POST /auth/passkey/register/finish`: the credential the platform
+    /// made (`PublicKeyCredential.toJSON()`), kept under `label`.
+    ///
+    /// # Errors
+    /// `UNAUTHENTICATED` for a spent challenge, `ALREADY_EXISTS`; transport failure.
+    pub async fn passkey_register_finish(
+        &self,
+        challenge_id: &str,
+        credential_json: &str,
+        label: &str,
+    ) -> Result<(), ClientError> {
+        self.api
+            .passkey_register_finish(challenge_id, credential_json, label.trim())
+            .await
+    }
+
+    /// `POST /auth/passkey/assert/start`: the request options to sign in
+    /// with a passkey, for a handle when given.
+    ///
+    /// # Errors
+    /// On transport or API failure.
+    pub async fn passkey_assert_start(
+        &self,
+        handle_or_email: &str,
+    ) -> Result<PasskeyChallengeSummary, ClientError> {
+        let c = self
+            .api
+            .passkey_assert_start(handle_or_email.trim())
+            .await?;
+        Ok(PasskeyChallengeSummary {
+            challenge_id: c.challenge_id,
+            options_json: c.options_json,
+        })
+    }
+
+    /// `POST /auth/passkey/assert/finish`: the assertion signs this device in
+    /// and the session is kept.
+    ///
+    /// # Errors
+    /// `UNAUTHENTICATED`; transport failure.
+    pub async fn sign_in_passkey(
+        &self,
+        challenge_id: &str,
+        credential_json: &str,
+    ) -> Result<(), ClientError> {
+        let pair = self
+            .api
+            .passkey_assert_finish(challenge_id, credential_json, self.device_id.clone())
+            .await?;
+        self.save_tokens(&pair)
+    }
+
+    /// `GET /auth/passkeys`: this account's passkeys.
+    ///
+    /// # Errors
+    /// On transport or API failure.
+    pub async fn passkeys(&self) -> Result<Vec<PasskeySummary>, ClientError> {
+        let list = self.api.passkeys().await?;
+        Ok(list
+            .passkeys
+            .into_iter()
+            .map(|p| PasskeySummary {
+                passkey_id: p.passkey_id,
+                label: p.label,
+                created_at_micros: wire::micros(p.created_at.as_ref()),
+                last_used_at_micros: wire::micros(p.last_used_at.as_ref()),
+            })
+            .collect())
+    }
+
+    /// `DELETE /auth/passkeys/{id}`.
+    ///
+    /// # Errors
+    /// `NOT_FOUND`; transport failure.
+    pub async fn remove_passkey(&self, passkey_id: &str) -> Result<(), ClientError> {
+        self.api.delete_passkey(passkey_id).await
     }
 
     /// Signs in with the token from a magic-link mail (pasted as a code, or

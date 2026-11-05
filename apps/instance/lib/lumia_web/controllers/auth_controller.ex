@@ -139,7 +139,8 @@ defmodule LumiaWeb.AuthController do
     end
   end
 
-  defp token_pair(tokens) do
+  @doc false
+  def token_pair(tokens) do
     now = DateTime.utc_now()
 
     %V1.TokenPair{

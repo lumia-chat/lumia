@@ -23,8 +23,9 @@ use lumia_core::proto::{
     ReauthResponse, RefreshRequest, RevokeDeviceRequest, Server, SignedRoster, TokenPair,
 };
 use lumia_core::proto::{
-    CreateInviteRequest, Invite, InvitePreview, ListInvitesResponse, MagicLinkCompleteRequest,
-    MagicLinkRequest, Member,
+    CreateInviteRequest, Invite, InvitePreview, ListInvitesResponse, ListPasskeysResponse,
+    MagicLinkCompleteRequest, MagicLinkRequest, Member, PasskeyAssertFinishRequest,
+    PasskeyAssertStartRequest, PasskeyChallenge, PasskeyRegisterFinishRequest,
 };
 use lumia_core::proto::{
     DmRequest, DmRequestState, GetHistoryChunkResponse, GetIdentityBackupResponse,
@@ -498,6 +499,102 @@ impl Api {
                 token: token.into(),
                 device_id,
             },
+        )
+        .await
+    }
+
+    /// `POST /auth/passkey/register/start`: the creation options for the caller.
+    ///
+    /// # Errors
+    /// On transport failure or an API error.
+    pub async fn passkey_register_start(&self) -> Result<PasskeyChallenge, ClientError> {
+        let (status, bytes) = self
+            .send(
+                reqwest::Method::POST,
+                "/api/v1/auth/passkey/register/start",
+                None,
+                None,
+            )
+            .await?;
+        decoded(status, &bytes)
+    }
+
+    /// `POST /auth/passkey/register/finish`: the credential the platform made.
+    ///
+    /// # Errors
+    /// `UNAUTHENTICATED` for a spent challenge, `ALREADY_EXISTS`; transport failure.
+    pub async fn passkey_register_finish(
+        &self,
+        challenge_id: &str,
+        credential_json: &str,
+        label: &str,
+    ) -> Result<(), ClientError> {
+        self.post_empty(
+            "/api/v1/auth/passkey/register/finish",
+            &PasskeyRegisterFinishRequest {
+                challenge_id: challenge_id.into(),
+                credential_json: credential_json.into(),
+                label: label.into(),
+            },
+        )
+        .await
+    }
+
+    /// `POST /auth/passkey/assert/start`: the request options, for a handle when given.
+    ///
+    /// # Errors
+    /// On transport failure or an API error.
+    pub async fn passkey_assert_start(
+        &self,
+        handle_or_email: &str,
+    ) -> Result<PasskeyChallenge, ClientError> {
+        self.post(
+            "/api/v1/auth/passkey/assert/start",
+            &PasskeyAssertStartRequest {
+                handle_or_email: handle_or_email.into(),
+            },
+        )
+        .await
+    }
+
+    /// `POST /auth/passkey/assert/finish`: the assertion signs the device in.
+    ///
+    /// # Errors
+    /// `UNAUTHENTICATED`; transport failure.
+    pub async fn passkey_assert_finish(
+        &self,
+        challenge_id: &str,
+        credential_json: &str,
+        device_id: Vec<u8>,
+    ) -> Result<TokenPair, ClientError> {
+        self.post(
+            "/api/v1/auth/passkey/assert/finish",
+            &PasskeyAssertFinishRequest {
+                challenge_id: challenge_id.into(),
+                credential_json: credential_json.into(),
+                device_id,
+            },
+        )
+        .await
+    }
+
+    /// `GET /auth/passkeys`.
+    ///
+    /// # Errors
+    /// On transport failure or an API error.
+    pub async fn passkeys(&self) -> Result<ListPasskeysResponse, ClientError> {
+        self.get("/api/v1/auth/passkeys").await
+    }
+
+    /// `DELETE /auth/passkeys/{id}`.
+    ///
+    /// # Errors
+    /// `NOT_FOUND`; transport failure.
+    pub async fn delete_passkey(&self, passkey_id: &str) -> Result<(), ClientError> {
+        self.empty(
+            reqwest::Method::DELETE,
+            &format!("/api/v1/auth/passkeys/{}", url_encode(passkey_id)),
+            None,
         )
         .await
     }

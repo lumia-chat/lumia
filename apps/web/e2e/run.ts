@@ -591,6 +591,64 @@ async function magicLink(which: string) {
   console.log(`  ${which}: asked for a magic link, took its token from the mailbox, and the link signed the browser in, in ${Date.now() - t0} ms`);
 }
 
+// Passkeys (architecture 6.3), with Chromium's virtual authenticator over
+// the DevTools protocol: signed in with a password, the Devices page makes
+// a passkey; the sign-in page then signs in with it.
+async function passkey(which: string, handle: string) {
+  if (which !== "chromium") {
+    console.log(`  ${which}: no virtual authenticator; passkeys are checked in Chromium`);
+    return;
+  }
+  const { ctx, page } = await open(which, "passkey");
+  const t0 = Date.now();
+  try {
+    const cdp = await ctx.newCDPSession(page);
+    await cdp.send("WebAuthn.enable");
+    await cdp.send("WebAuthn.addVirtualAuthenticator", {
+      options: { protocol: "ctap2", transport: "internal", hasResidentKey: true, hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true },
+    });
+    phase("sign in");
+    await trustCard(page);
+    await page.getByLabel("Email or handle").fill(handle);
+    await page.getByRole("textbox", { name: "Password" }).fill(password);
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await page.getByPlaceholder(/^Message #/).waitFor();
+    phase("register");
+    await goto(page, `${base}/app?place=home&view=devices`);
+    await page.getByLabel("Name for the new passkey").fill("Suite key");
+    await page.getByRole("button", { name: "Add a passkey" }).click();
+    await page.getByText("Suite key · added").waitFor();
+    await page.screenshot({ path: `${out}/${which}-passkey.png` });
+    phase("assert");
+    // Straight to the sign-in page (the root would send a signed-in browser
+    // to the app); it reaches the instance once asked, as a fresh visit would.
+    await goto(page, `${base}/sign-in`);
+    await page.locator(".lu-card").waitFor();
+    const field = page.getByLabel("Instance");
+    if ((await field.count()) > 0) {
+      await field.fill(instance);
+      await page.getByRole("button", { name: "Continue" }).click();
+    }
+    await page.getByText("run by").waitFor();
+    await page.getByLabel("Email or handle").fill(handle);
+    await page.getByRole("button", { name: "Sign in with a passkey" }).click();
+    try {
+      await page.getByPlaceholder(/^Message #/).waitFor();
+    } catch (e) {
+      console.log(`  [${which}] passkey: ${(await page.locator(".auth__error").allTextContents()).join(" | ") || "no error shown"}; ${(await page.textContent("body"))?.replace(/\s+/g, " ").slice(0, 160)}`);
+      throw e;
+    }
+    phase("remove");
+    await goto(page, `${base}/app?place=home&view=devices`);
+    await page.getByText("Suite key · added").waitFor();
+    await page.getByRole("button", { name: "Remove" }).first().click();
+    await page.getByText("Suite key · added").waitFor({ state: "detached" });
+  } finally {
+    await ctx.close();
+  }
+  console.log(`  ${which}: made a passkey, signed in with it, and removed it in ${Date.now() - t0} ms`);
+}
+
 if (!existsSync(cli)) run(["cargo", "build", "--release", "-p", "lumia-cli"], resolve(web, "../core"));
 rmSync(work, { recursive: true, force: true });
 mkdirSync(out, { recursive: true });
@@ -653,6 +711,7 @@ try {
       ["create", () => create(which, `web${stamp}`, stamp)],
       ["push", () => webPush(which, `web${stamp}`, passwordDir, server, general, webAccount)],
       ["magic link", () => magicLink(which)],
+      ["passkey", () => passkey(which, `web${stamp}`)],
     ] as const) {
       // A heartbeat while the step runs (CI shows a step's log only once it
       // ends) and a hard bound, so a hang names itself instead of the job

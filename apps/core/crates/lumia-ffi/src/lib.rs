@@ -550,6 +550,42 @@ pub enum ClientEvent {
     },
 }
 
+/// A WebAuthn ceremony's start: the challenge's id and the options JSON.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct PasskeyChallengeSummary {
+    pub challenge_id: String,
+    pub options_json: String,
+}
+
+impl From<app::PasskeyChallengeSummary> for PasskeyChallengeSummary {
+    fn from(c: app::PasskeyChallengeSummary) -> Self {
+        Self {
+            challenge_id: c.challenge_id,
+            options_json: c.options_json,
+        }
+    }
+}
+
+/// One of the account's passkeys.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct PasskeySummary {
+    pub passkey_id: String,
+    pub label: String,
+    pub created_at_micros: Option<i64>,
+    pub last_used_at_micros: Option<i64>,
+}
+
+impl From<app::PasskeySummary> for PasskeySummary {
+    fn from(p: app::PasskeySummary) -> Self {
+        Self {
+            passkey_id: p.passkey_id,
+            label: p.label,
+            created_at_micros: p.created_at_micros,
+            last_used_at_micros: p.last_used_at_micros,
+        }
+    }
+}
+
 /// One account's presence in a server.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct PresenceSummary {
@@ -816,6 +852,60 @@ impl Client {
             .runtime
             .block_on(self.app.create_channel(&server_id, &name))?
             .into())
+    }
+
+    /// The creation options for a new passkey of this account (architecture 6.3).
+    pub fn passkey_register_start(&self) -> Res<PasskeyChallengeSummary> {
+        Ok(self
+            .runtime
+            .block_on(self.app.passkey_register_start())?
+            .into())
+    }
+
+    /// The credential the platform made, kept under `label`.
+    pub fn passkey_register_finish(
+        &self,
+        challenge_id: String,
+        credential_json: String,
+        label: String,
+    ) -> Res<()> {
+        Ok(self.runtime.block_on(self.app.passkey_register_finish(
+            &challenge_id,
+            &credential_json,
+            &label,
+        ))?)
+    }
+
+    /// The request options to sign in with a passkey, for a handle when given.
+    pub fn passkey_assert_start(&self, handle_or_email: String) -> Res<PasskeyChallengeSummary> {
+        Ok(self
+            .runtime
+            .block_on(self.app.passkey_assert_start(&handle_or_email))?
+            .into())
+    }
+
+    /// The assertion signs this device in.
+    pub fn sign_in_passkey(&self, challenge_id: String, credential_json: String) -> Res<()> {
+        Ok(self
+            .runtime
+            .block_on(self.app.sign_in_passkey(&challenge_id, &credential_json))?)
+    }
+
+    /// This account's passkeys.
+    pub fn passkeys(&self) -> Res<Vec<PasskeySummary>> {
+        Ok(self
+            .runtime
+            .block_on(self.app.passkeys())?
+            .into_iter()
+            .map(Into::into)
+            .collect())
+    }
+
+    /// Removes one of this account's passkeys.
+    pub fn remove_passkey(&self, passkey_id: String) -> Res<()> {
+        Ok(self
+            .runtime
+            .block_on(self.app.remove_passkey(&passkey_id))?)
     }
 
     /// Asks the instance to mail a sign-in link to `email`.

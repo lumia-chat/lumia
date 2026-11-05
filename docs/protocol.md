@@ -173,7 +173,12 @@ Base path `/api/v1`. All endpoints require `Authorization: Bearer <access_token>
 | `POST /auth/sign-in/magic-link` | `MagicLinkRequest` → 202 | Public. 202 whether or not the address has an account; the mail is sent only when it does, with the link `https://{host}/sign-in?magic={token}` and the token as a code. Five an hour per address (`RATE_LIMITED`); `POLICY_DENIED` when `InstanceInfo.magic_link_enabled` is off. |
 | `POST /auth/sign-in/magic-link/complete` | `MagicLinkCompleteRequest` → `TokenPair` | Public. The token, once, within fifteen minutes; `UNAUTHENTICATED` otherwise. |
 | `GET /auth/oidc/start`, `/auth/oidc/callback` | | Public. Standard code flow. |
-| `POST /auth/passkey/*` | | WebAuthn registration and assertion ceremonies. |
+| `POST /auth/passkey/register/start` | → `PasskeyChallenge` | The creation options for the caller, as the browser's JSON (binary fields base64url); the challenge is kept five minutes, single use. |
+| `POST /auth/passkey/register/finish` | `PasskeyRegisterFinishRequest` → 204 | The credential `PublicKeyCredential.toJSON()` made; `ALREADY_EXISTS` for a credential id already stored, `UNAUTHENTICATED` for a spent or unknown challenge. Attestation is not required. |
+| `POST /auth/passkey/assert/start` | `PasskeyAssertStartRequest` → `PasskeyChallenge` | Public. With a handle or email, the account's passkeys fill `allowCredentials` (an unknown one gets an empty list); without one, a discoverable passkey is expected. |
+| `POST /auth/passkey/assert/finish` | `PasskeyAssertFinishRequest` → `TokenPair` | Public. A signature count that did not move on an authenticator that counts is a clone and `UNAUTHENTICATED`. |
+| `GET /auth/passkeys` | → `ListPasskeysResponse` | |
+| `DELETE /auth/passkeys/{passkey_id}` | → 204 | |
 | `POST /accounts` | `CreateAccountRequest` → `TokenPair` | Public. `POLICY_DENIED` if registration or identity-proof creation is off. |
 | `POST /auth/refresh` | `RefreshRequest` → `TokenPair` | Rotates the refresh token. The old one is invalid after use. |
 | `POST /auth/sign-out` | → 204 | Revokes the current session and closes its gateway connection. |

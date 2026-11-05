@@ -25,9 +25,10 @@ import {
   type ChannelItem,
   type DeviceEntry,
 } from "../design/components";
-import { ClientError, type ChannelSummary, type DeviceSummary, type DmMessageSummary, type InvitePreviewSummary, type MemberSummary, type SnapshotSummary } from "../client/bridge";
+import { ClientError, type ChannelSummary, type DeviceSummary, type DmMessageSummary, type InvitePreviewSummary, type MemberSummary, type PasskeySummary, type SnapshotSummary } from "../client/bridge";
 import { client, dmChannelsQuery, dmMessagesQuery, enableNotifications, hasIdentityQuery, peopleQuery, pushState, queryClient, rosterQuery } from "../client/state";
 import { useNames } from "../client/names";
+import { addPasskey, passkeysAvailable } from "../client/passkeys";
 import { initialsOf, timeOf, toneFor } from "./app";
 
 export type HomeView = "dm" | "requests" | "devices" | "new" | "add";
@@ -206,9 +207,9 @@ function AddServer(props: HomeProps) {
 export function HomeMain(props: HomeProps) {
   const identity = hasIdentityQuery();
   return (
-    <Show when={props.view !== "add"} fallback={<AddServer {...props} />}>
+    <Show when={props.view !== "add" && props.view !== "devices"} fallback={props.view === "add" ? <AddServer {...props} /> : <Devices {...props} />}>
       <Show when={identity.data !== false} fallback={<NoIdentity toLink={props.toLink} />}>
-        {props.view === "requests" ? <Requests {...props} /> : props.view === "devices" ? <Devices {...props} /> : props.view === "new" ? <NewMessage {...props} /> : <Conversation {...props} />}
+        {props.view === "requests" ? <Requests {...props} /> : props.view === "new" ? <NewMessage {...props} /> : <Conversation {...props} />}
       </Show>
     </Show>
   );
@@ -534,10 +535,75 @@ function Devices(props: HomeProps) {
       setBusy(false);
     }
   };
+  // Passkeys (architecture 6.3): the account's sign-in keys, made here and removable.
+  const [passkeys, setPasskeys] = createSignal<PasskeySummary[]>([]);
+  const [passkeyLabel, setPasskeyLabel] = createSignal("");
+  const [passkeyError, setPasskeyError] = createSignal("");
+  const [passkeyBusy, setPasskeyBusy] = createSignal(false);
+  const loadPasskeys = async () => {
+    try {
+      setPasskeys(await client().passkeys());
+    } catch (e) {
+      setPasskeyError(e instanceof Error ? e.message : String(e));
+    }
+  };
+  void loadPasskeys();
+  const makePasskey = async (e: Event) => {
+    e.preventDefault();
+    setPasskeyBusy(true);
+    setPasskeyError("");
+    try {
+      await addPasskey(passkeyLabel().trim() || "Passkey");
+      setPasskeyLabel("");
+      await loadPasskeys();
+    } catch (err) {
+      const ce = err instanceof ClientError ? err : null;
+      setPasskeyError(ce?.code === "ALREADY_EXISTS" ? "That passkey is already registered." : err instanceof Error && err.name === "NotAllowedError" ? "The passkey was not made." : err instanceof Error ? err.message : String(err));
+    } finally {
+      setPasskeyBusy(false);
+    }
+  };
+  const removePasskey = async (p: PasskeySummary) => {
+    setPasskeyError("");
+    try {
+      await client().removePasskey(p.passkeyId);
+      await loadPasskeys();
+    } catch (err) {
+      setPasskeyError(err instanceof Error ? err.message : String(err));
+    }
+  };
+  const when = (micros: number | null) => (micros ? new Date(micros / 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "never");
   return (
     <>
       <ChannelHeader kind="page" name="Devices" topic="Everything that holds your identity" actions={[]} />
       <div class="lu-page">
+        <Show when={passkeysAvailable()}>
+          <Card title="Passkeys" subtitle="Sign in to this instance with a key this browser or your phone keeps, instead of a password.">
+            <For each={passkeys()}>
+              {(p) => (
+                <p class="app__status app__invite-row">
+                  <span>
+                    {p.label || "Passkey"} · added {when(p.createdAtMicros)} · last used {when(p.lastUsedAtMicros)}
+                  </span>
+                  <button type="button" class="lu-link" onClick={() => void removePasskey(p)}>
+                    Remove
+                  </button>
+                </p>
+              )}
+            </For>
+            <form class="auth__form" onSubmit={(e) => void makePasskey(e)}>
+              <TextField label="Name for the new passkey" value={passkeyLabel()} onInput={(e) => setPasskeyLabel(e.currentTarget.value)} placeholder="This laptop" autocomplete="off" />
+              <Show when={passkeyError()}>
+                <p class="auth__error" role="alert">
+                  {passkeyError()}
+                </p>
+              </Show>
+              <Button variant="primary" size="md" type="submit" disabled={passkeyBusy()}>
+                Add a passkey
+              </Button>
+            </form>
+          </Card>
+        </Show>
         <Notice icon="shield" action={{ label: "Link a device", onClick: props.toLink }}>
           Your identity lives on these devices, not on any instance. Revoking one takes effect on every instance that holds your roster.
         </Notice>

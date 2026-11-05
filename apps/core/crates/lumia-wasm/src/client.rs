@@ -270,6 +270,80 @@ impl Client {
         )
     }
 
+    /// The creation options for a new passkey of this account (architecture 6.3).
+    ///
+    /// # Errors
+    /// On transport or API failure.
+    #[wasm_bindgen(js_name = passkeyRegisterStart)]
+    pub async fn passkey_register_start(&self) -> Result<JsValue, JsError> {
+        to_js(&self.app.passkey_register_start().await.map_err(js)?)
+    }
+
+    /// The credential the browser made, kept under `label`.
+    ///
+    /// # Errors
+    /// `UNAUTHENTICATED` for a spent challenge, `ALREADY_EXISTS`; transport failure.
+    #[wasm_bindgen(js_name = passkeyRegisterFinish)]
+    pub async fn passkey_register_finish(
+        &self,
+        challenge_id: String,
+        credential_json: String,
+        label: String,
+    ) -> Result<(), JsError> {
+        self.app
+            .passkey_register_finish(&challenge_id, &credential_json, &label)
+            .await
+            .map_err(js)
+    }
+
+    /// The request options to sign in with a passkey, for a handle when given.
+    ///
+    /// # Errors
+    /// On transport or API failure.
+    #[wasm_bindgen(js_name = passkeyAssertStart)]
+    pub async fn passkey_assert_start(&self, handle_or_email: String) -> Result<JsValue, JsError> {
+        to_js(
+            &self
+                .app
+                .passkey_assert_start(&handle_or_email)
+                .await
+                .map_err(js)?,
+        )
+    }
+
+    /// The assertion signs this browser in.
+    ///
+    /// # Errors
+    /// `UNAUTHENTICATED`; transport failure.
+    #[wasm_bindgen(js_name = signInPasskey)]
+    pub async fn sign_in_passkey(
+        &self,
+        challenge_id: String,
+        credential_json: String,
+    ) -> Result<(), JsError> {
+        self.app
+            .sign_in_passkey(&challenge_id, &credential_json)
+            .await
+            .map_err(js)
+    }
+
+    /// This account's passkeys.
+    ///
+    /// # Errors
+    /// On transport or API failure.
+    pub async fn passkeys(&self) -> Result<JsValue, JsError> {
+        to_js(&self.app.passkeys().await.map_err(js)?)
+    }
+
+    /// Removes one of this account's passkeys.
+    ///
+    /// # Errors
+    /// `NOT_FOUND`; transport failure.
+    #[wasm_bindgen(js_name = removePasskey)]
+    pub async fn remove_passkey(&self, passkey_id: String) -> Result<(), JsError> {
+        self.app.remove_passkey(&passkey_id).await.map_err(js)
+    }
+
     /// Asks the instance to mail a sign-in link to `email`.
     ///
     /// # Errors

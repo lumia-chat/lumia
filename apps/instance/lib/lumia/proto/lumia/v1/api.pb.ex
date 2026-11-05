@@ -204,6 +204,80 @@ defmodule Lumia.V1.MagicLinkCompleteRequest do
   field :device_id, 2, type: :bytes, json_name: "deviceId"
 end
 
+defmodule Lumia.V1.PasskeyChallenge do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.PasskeyChallenge",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :challenge_id, 1, type: :string, json_name: "challengeId"
+  field :options_json, 2, type: :string, json_name: "optionsJson"
+end
+
+defmodule Lumia.V1.PasskeyRegisterFinishRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.PasskeyRegisterFinishRequest",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :challenge_id, 1, type: :string, json_name: "challengeId"
+  field :credential_json, 2, type: :string, json_name: "credentialJson"
+  field :label, 3, type: :string
+end
+
+defmodule Lumia.V1.PasskeyAssertStartRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.PasskeyAssertStartRequest",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :handle_or_email, 1, type: :string, json_name: "handleOrEmail"
+end
+
+defmodule Lumia.V1.PasskeyAssertFinishRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.PasskeyAssertFinishRequest",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :challenge_id, 1, type: :string, json_name: "challengeId"
+  field :credential_json, 2, type: :string, json_name: "credentialJson"
+  field :device_id, 3, type: :bytes, json_name: "deviceId"
+end
+
+defmodule Lumia.V1.Passkey do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.Passkey",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :passkey_id, 1, type: :string, json_name: "passkeyId"
+  field :label, 2, type: :string
+  field :created_at, 3, type: Google.Protobuf.Timestamp, json_name: "createdAt"
+  field :last_used_at, 4, type: Google.Protobuf.Timestamp, json_name: "lastUsedAt"
+end
+
+defmodule Lumia.V1.ListPasskeysResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.ListPasskeysResponse",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :passkeys, 1, repeated: true, type: Lumia.V1.Passkey
+end
+
 defmodule Lumia.V1.PushSubscription do
   @moduledoc false
 
