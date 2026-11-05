@@ -22,6 +22,7 @@ use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
 use lumia_client::api::{Api, Tokens};
+use lumia_client::app::invite_code_of;
 use lumia_client::dm::{DmEngine, Outcome};
 use lumia_client::futures_channel::mpsc;
 use lumia_client::futures_util::StreamExt as _;
@@ -83,6 +84,20 @@ enum Cmd {
     ServerCreate { name: String },
     /// Create a channel in a server.
     ChannelCreate { server_id: String, name: String },
+    /// Mint an invite link for a server (unlimited unless `--max-uses`, open-ended unless `--hours`).
+    InviteCreate {
+        server_id: String,
+        #[arg(long, default_value_t = 0)]
+        max_uses: u32,
+        #[arg(long)]
+        hours: Option<u32>,
+    },
+    /// Show what an invite link or code leads to, without signing in.
+    Invite { link_or_code: String },
+    /// Join the server an invite link or code names.
+    Join { link_or_code: String },
+    /// Revoke an invite you made (or any, with manage_server).
+    InviteRevoke { link_or_code: String },
     /// List channels in a server you can view.
     Channels { server_id: String },
     /// Send a message; `--mention <account-id>` (repeatable) mentions an account.
@@ -149,12 +164,14 @@ enum InstanceCmd {
 
 #[derive(Subcommand, Debug)]
 enum AccountCmd {
-    /// Create an account with a password and sign in.
+    /// Create an account with a password and sign in; `--invite` joins a server too.
     Create {
         #[arg(long)]
         handle: String,
         #[arg(long)]
         password: String,
+        #[arg(long)]
+        invite: Option<String>,
     },
     /// Create an account bound to this device's identity and sign in.
     CreateByIdentity {
@@ -266,9 +283,15 @@ async fn run(cli: Cli) -> Result<(), ClientError> {
     match cli.command {
         Cmd::Instance { .. } => Ok(()),
         Cmd::Account {
-            action: AccountCmd::Create { handle, password },
+            action:
+                AccountCmd::Create {
+                    handle,
+                    password,
+                    invite,
+                },
         } => {
-            let tokens = api.create_account(&handle, &password).await?;
+            let code = invite.as_deref().map(invite_code_of).unwrap_or_default();
+            let tokens = api.create_account(&handle, &password, &code).await?;
             save_tokens(&mut ctx, &tokens)?;
             println!("created and signed in as {handle}");
             Ok(())
@@ -314,6 +337,57 @@ async fn run(cli: Cli) -> Result<(), ClientError> {
         Cmd::ChannelCreate { server_id, name } => {
             let c = api.create_channel(parse_uuid(&server_id)?, &name).await?;
             println!("{}  #{}", wire::display(&c.channel_id), c.name);
+            Ok(())
+        }
+        Cmd::InviteCreate {
+            server_id,
+            max_uses,
+            hours,
+        } => {
+            let expires_at = hours.map(|h| {
+                prost_types::Timestamp::from(
+                    std::time::SystemTime::now()
+                        + std::time::Duration::from_secs(u64::from(h) * 3600),
+                )
+            });
+            let req = lumia_core::proto::CreateInviteRequest {
+                server_id: parse_uuid(&server_id)?,
+                max_uses,
+                expires_at,
+                ..Default::default()
+            };
+            let invite = api.create_invite(&req).await?;
+            println!(
+                "{}  {}/invite/{}",
+                invite.code,
+                api.base().trim_end_matches('/'),
+                invite.code
+            );
+            Ok(())
+        }
+        Cmd::Invite { link_or_code } => {
+            let p = api.invite_preview(&invite_code_of(&link_or_code)).await?;
+            let server = p.server.unwrap_or_default();
+            let instance = p.instance.unwrap_or_default();
+            println!(
+                "{}  {}  {} members  on {}{}",
+                wire::display(&server.server_id),
+                server.name,
+                p.member_count,
+                instance.host,
+                if p.as_guest { "  (as a guest)" } else { "" }
+            );
+            Ok(())
+        }
+        Cmd::Join { link_or_code } => {
+            let member = api.accept_invite(&invite_code_of(&link_or_code)).await?;
+            println!("joined {}", wire::display(&member.server_id));
+            Ok(())
+        }
+        Cmd::InviteRevoke { link_or_code } => {
+            let code = invite_code_of(&link_or_code);
+            api.delete_invite(&code).await?;
+            println!("revoked {code}");
             Ok(())
         }
         Cmd::Channels { server_id } => {

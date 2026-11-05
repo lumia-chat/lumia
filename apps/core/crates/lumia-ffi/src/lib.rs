@@ -116,6 +116,62 @@ impl From<app::ServerSummary> for ServerSummary {
     }
 }
 
+/// What an invite shows before joining.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct InvitePreviewSummary {
+    pub code: String,
+    pub server_id: String,
+    pub server_name: String,
+    pub channel_name: String,
+    pub member_count: u32,
+    pub as_guest: bool,
+    pub host: String,
+    pub operator_name: String,
+    pub open_registration: bool,
+    pub identity_proof_create_enabled: bool,
+}
+
+impl From<app::InvitePreviewSummary> for InvitePreviewSummary {
+    fn from(p: app::InvitePreviewSummary) -> Self {
+        Self {
+            code: p.code,
+            server_id: p.server_id,
+            server_name: p.server_name,
+            channel_name: p.channel_name,
+            member_count: p.member_count,
+            as_guest: p.as_guest,
+            host: p.host,
+            operator_name: p.operator_name,
+            open_registration: p.open_registration,
+            identity_proof_create_enabled: p.identity_proof_create_enabled,
+        }
+    }
+}
+
+/// An invite this account minted: the code and the link that carries it.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct InviteSummary {
+    pub code: String,
+    pub url: String,
+    pub server_id: String,
+    pub expires_at_micros: Option<i64>,
+    pub max_uses: u32,
+    pub uses: u32,
+}
+
+impl From<app::InviteSummary> for InviteSummary {
+    fn from(i: app::InviteSummary) -> Self {
+        Self {
+            code: i.code,
+            url: i.url,
+            server_id: i.server_id,
+            expires_at_micros: i.expires_at_micros,
+            max_uses: i.max_uses,
+            uses: i.uses,
+        }
+    }
+}
+
 /// A channel the account can view.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct ChannelSummary {
@@ -645,11 +701,49 @@ impl Client {
         Ok(self.runtime.block_on(self.app.instance_info())?.into())
     }
 
-    /// Creates an account with a password and signs in.
-    pub fn create_account(&self, handle: String, password: String) -> Res<()> {
+    /// Creates an account with a password and signs in; with an invite link
+    /// or code, joins its server too (and is admitted when registration is closed).
+    pub fn create_account(
+        &self,
+        handle: String,
+        password: String,
+        invite: Option<String>,
+    ) -> Res<()> {
+        Ok(self.runtime.block_on(
+            self.app
+                .create_account(&handle, &password, invite.as_deref()),
+        )?)
+    }
+
+    /// `GET /invites/{code}`: what an invite link or code shows before joining. Public.
+    pub fn invite_preview(&self, link_or_code: String) -> Res<InvitePreviewSummary> {
         Ok(self
             .runtime
-            .block_on(self.app.create_account(&handle, &password))?)
+            .block_on(self.app.invite_preview(&link_or_code))?
+            .into())
+    }
+
+    /// `POST /invites`: an invite link for a server (0 uses is unlimited).
+    pub fn create_invite(
+        &self,
+        server_id: String,
+        max_uses: u32,
+        expires_in_hours: Option<u32>,
+    ) -> Res<InviteSummary> {
+        Ok(self
+            .runtime
+            .block_on(
+                self.app
+                    .create_invite(&server_id, max_uses, expires_in_hours),
+            )?
+            .into())
+    }
+
+    /// `POST /invites/{code}/accept`: joins the invite's server; returns its id.
+    pub fn accept_invite(&self, link_or_code: String) -> Res<String> {
+        Ok(self
+            .runtime
+            .block_on(self.app.accept_invite(&link_or_code))?)
     }
 
     /// Signs in with a password, and a TOTP code when the account requires one.

@@ -44,6 +44,7 @@ import chat.lumia.kit.AppStore
 import chat.lumia.kit.AvatarTone
 import chat.lumia.kit.LumiaAvatar
 import chat.lumia.kit.LumiaEmptyState
+import chat.lumia.kit.LumiaLinkButton
 import chat.lumia.kit.LumiaNotice
 import chat.lumia.kit.LumiaSession
 import chat.lumia.kit.LumiaTokens
@@ -104,6 +105,8 @@ fun Shell(store: AppStore, session: LumiaSession, devScreen: String?) {
                 "requests" -> { place = Place.Home; stack = listOf(Screen.Requests) }
                 "devices" -> { place = Place.Home; stack = listOf(Screen.Devices) }
                 "new" -> { place = Place.Home; stack = listOf(Screen.NewMessage) }
+                "join" -> { place = Place.Home; stack = listOf(Screen.JoinServer) }
+                "invite" -> { place = Place.Server(first); stack = listOf(Screen.Invite(first)) }
             }
         }
     }
@@ -125,6 +128,8 @@ fun Shell(store: AppStore, session: LumiaSession, devScreen: String?) {
         Screen.Requests -> RequestsScreen(session, pop, replace)
         Screen.Devices -> DevicesScreen(store, session, pop)
         Screen.NewMessage -> NewMessageScreen(session, pop, replace)
+        Screen.JoinServer -> JoinServerScreen(session, pop) { id -> replace(emptyList()); place = Place.Server(id) }
+        is Screen.Invite -> InviteScreen(session, servers.firstOrNull { it.serverId == top.serverId }, pop)
     }
 }
 
@@ -174,6 +179,7 @@ fun HomeScreen(store: AppStore, session: LumiaSession, push: (Screen) -> Unit) {
                 item { SectionTitle(host) }
                 items(channels, key = { it.channelId }) { c -> ConversationRow(session, c) { push(Screen.Conversation(c.channelId)) } }
             }
+            item { LumiaLinkButton("Join a server", Modifier.padding(horizontal = LumiaTokens.space10, vertical = LumiaTokens.space8)) { push(Screen.JoinServer) } }
         }
         Text(session.connection.label, style = LumiaTokens.textMeta.style, color = LumiaTokens.inkQuiet.color, modifier = Modifier.navigationBarsPadding().padding(horizontal = LumiaTokens.space16, vertical = LumiaTokens.space6))
     }
@@ -235,6 +241,7 @@ fun ServerScreen(session: LumiaSession, server: ServerSummary, push: (Screen) ->
                     Spacer(Modifier.weight(1f))
                 }
             }
+            item { LumiaLinkButton("Invite people", Modifier.padding(horizontal = LumiaTokens.space10, vertical = LumiaTokens.space8)) { push(Screen.Invite(server.serverId)) } }
         }
         Text(session.connection.label, style = LumiaTokens.textMeta.style, color = LumiaTokens.inkQuiet.color, modifier = Modifier.navigationBarsPadding().padding(horizontal = LumiaTokens.space16, vertical = LumiaTokens.space6))
     }

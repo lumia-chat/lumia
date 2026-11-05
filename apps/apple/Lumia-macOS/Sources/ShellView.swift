@@ -14,7 +14,7 @@ enum Place: Hashable {
 }
 
 enum HomeView: Hashable {
-    case dm, requests, devices, new
+    case dm, requests, devices, new, join
 }
 
 struct ShellView: View {
@@ -24,6 +24,11 @@ struct ShellView: View {
     @State private var channelID: String?
     @State private var homeView: HomeView = .dm
     @State private var dmID: String?
+    // The server's invite link, made when the popover opens.
+    @State private var inviteShown = false
+    @State private var invite: InviteSummary?
+    @State private var inviteError = ""
+    @State private var inviteCopied = false
 
     private var snapshot: SnapshotSummary? { session.snapshot }
     private var servers: [ServerSummary] { snapshot?.servers ?? [] }
@@ -167,6 +172,10 @@ struct ShellView: View {
                                 .font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkQuiet.color)
                                 .padding(LumiaTokens.space10)
                         }
+                        Button("Invite people") { inviteShown = true }
+                            .buttonStyle(.lumiaLink)
+                            .padding(.horizontal, LumiaTokens.space10).padding(.top, LumiaTokens.space8)
+                            .popover(isPresented: $inviteShown, arrowEdge: .bottom) { invitePopover }
                     }
                 }
                 Spacer(minLength: 0)
@@ -174,6 +183,49 @@ struct ShellView: View {
             .padding(.top, LumiaTokens.space14)
             .padding(.leading, LumiaTokens.space12)
             .padding(.trailing, LumiaTokens.space10)
+        }
+    }
+
+    // MARK: Invite people
+
+    /// The server's invite link, made when the popover opens, to copy.
+    private var invitePopover: some View {
+        VStack(alignment: .leading, spacing: LumiaTokens.space12) {
+            Text("Invite people").font(LumiaTokens.titleAuth.font).foregroundStyle(LumiaTokens.ink.color)
+            Text("Anyone with the link can join.").font(LumiaTokens.textSubtitle.font).foregroundStyle(LumiaTokens.inkSecondary.color)
+            if let invite {
+                Text(invite.url)
+                    .font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.ink.color)
+                    .textSelection(.enabled)
+                    .padding(LumiaTokens.space10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(LumiaTokens.inset.color, in: RoundedRectangle(cornerRadius: LumiaTokens.radius10))
+                Button(inviteCopied ? "Copied" : "Copy link") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(invite.url, forType: .string)
+                    inviteCopied = true
+                }
+                .buttonStyle(.lumiaPrimary)
+            } else if !inviteError.isEmpty {
+                LumiaErrorText(inviteError)
+            } else {
+                Text("Making the link…").font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkQuiet.color)
+            }
+        }
+        .padding(LumiaTokens.space16)
+        .frame(width: 360)
+        .task(id: inviteShown) {
+            guard inviteShown, invite == nil, case let .server(id) = place else { return }
+            do {
+                invite = try await session.createInvite(serverID: id)
+            } catch {
+                inviteError = error.lumiaCode == "PERMISSION_DENIED" ? "You cannot invite people to this server." : error.lumiaMessage
+            }
+        }
+        .onChange(of: place) { _, _ in
+            invite = nil
+            inviteError = ""
+            inviteCopied = false
         }
     }
 
@@ -185,6 +237,9 @@ struct ShellView: View {
             HomeMain(session: session, view: homeView, dmID: $dmID, go: { view, id in
                 homeView = view
                 if let id { dmID = id }
+            }, openServer: { id in
+                homeView = .dm
+                place = .server(id: id)
             })
         } else if let channel = channels.first(where: { $0.channelId == channelID }) {
             ChannelView(session: session, channel: channel)

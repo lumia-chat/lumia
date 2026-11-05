@@ -644,7 +644,13 @@ defmodule Lumia.Servers do
   # The actor's standing for management checks: server-level permissions
   # are resolved with no channel overwrites, which is what "at the server
   # level" means in the spec.
-  defp actor(server_id, account_id) do
+  @doc """
+  The account as an actor in the server: whether it owns the server, its
+  resolved server-level permissions and its highest role position;
+  `{:error, :permission_denied}` when it is not a member. Invites check
+  their permission through this.
+  """
+  def actor(server_id, account_id) do
     case member_for(server_id, account_id) do
       nil ->
         {:error, :permission_denied}

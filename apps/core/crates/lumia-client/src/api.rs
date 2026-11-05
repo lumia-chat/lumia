@@ -22,6 +22,7 @@ use lumia_core::proto::{
     PublishKeyPackagesRequest, PublishRosterRequest, PushSubscription, ReauthRequest,
     ReauthResponse, RefreshRequest, RevokeDeviceRequest, Server, SignedRoster, TokenPair,
 };
+use lumia_core::proto::{CreateInviteRequest, Invite, InvitePreview, Member};
 use lumia_core::proto::{
     DmRequest, DmRequestState, GetHistoryChunkResponse, GetIdentityBackupResponse,
     HistoryUsageResponse, ListHistoryManifestsResponse, PutHistoryChunkRequest,
@@ -397,13 +398,61 @@ impl Api {
         &self,
         handle: &str,
         password: &str,
+        invite_code: &str,
     ) -> Result<TokenPair, ClientError> {
         let req = CreateAccountRequest {
             handle: handle.into(),
             password: password.into(),
+            invite_code: invite_code.into(),
             ..Default::default()
         };
         self.post("/api/v1/accounts", &req).await
+    }
+
+    /// `GET /invites/{code}`: what an invite shows before joining. Public.
+    ///
+    /// # Errors
+    /// `NOT_FOUND` for an unknown, expired or spent code; transport failure.
+    pub async fn invite_preview(&self, code: &str) -> Result<InvitePreview, ClientError> {
+        self.get(&format!("/api/v1/invites/{}", url_encode(code)))
+            .await
+    }
+
+    /// `POST /invites`.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` without `CREATE_INVITES`; transport failure.
+    pub async fn create_invite(&self, req: &CreateInviteRequest) -> Result<Invite, ClientError> {
+        self.post("/api/v1/invites", req).await
+    }
+
+    /// `POST /invites/{code}/accept`: joins the caller to the invite's server.
+    ///
+    /// # Errors
+    /// `NOT_FOUND` for an unknown, expired or spent code; transport failure.
+    pub async fn accept_invite(&self, code: &str) -> Result<Member, ClientError> {
+        let (status, bytes) = self
+            .send(
+                reqwest::Method::POST,
+                &format!("/api/v1/invites/{}/accept", url_encode(code)),
+                None,
+                None,
+            )
+            .await?;
+        decoded(status, &bytes)
+    }
+
+    /// `DELETE /invites/{code}`.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` unless the creator or a manager; transport failure.
+    pub async fn delete_invite(&self, code: &str) -> Result<(), ClientError> {
+        self.empty(
+            reqwest::Method::DELETE,
+            &format!("/api/v1/invites/{}", url_encode(code)),
+            None,
+        )
+        .await
     }
 
     /// `POST /auth/sign-in/password`.

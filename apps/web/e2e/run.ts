@@ -336,6 +336,37 @@ async function dmSteps(which: string, page: Page, aDir: string, bAccount: string
   await again.screenshot({ path: `${out}/${which}-dm.png` });
 }
 
+// An invite link (architecture 6.1): the CLI mints one for its server, a
+// fresh browser opens it, sees the server and the instance before anything
+// is sent, creates an account from it and lands in the server.
+async function invite(which: string, dataDir: string, server: string) {
+  const { ctx, page } = await open(which, "invite");
+  const t0 = Date.now();
+  try {
+    const code = lumia(dataDir, "invite-create", server).trim().split(/\s+/)[0];
+    if (!code) throw new Error("no invite code");
+    phase("preview");
+    await goto(page, `${base}/invite/${code}?instance=${encodeURIComponent(instance)}`);
+    await page.getByText("Web suite").waitFor();
+    await page.getByText("run by").waitFor();
+    await page.screenshot({ path: `${out}/${which}-invite.png` });
+    phase("create");
+    await page.getByRole("button", { name: "Create an account" }).click();
+    await page.getByText("run by").waitFor();
+    await page.getByRole("button", { name: "Create an account" }).click();
+    await page.getByLabel("Handle").fill(`joined${which}${Date.now()}`);
+    await page.getByRole("textbox", { name: "Password" }).fill(password);
+    await page.getByRole("button", { name: "Create account", exact: true }).click();
+    phase("joined");
+    await page.getByPlaceholder(/^Message #general/).waitFor();
+    if ((await page.getByText("Web suite").count()) === 0) throw new Error("the joined server is not shown");
+    await page.screenshot({ path: `${out}/${which}-joined.png` });
+  } finally {
+    await ctx.close();
+  }
+  console.log(`  ${which}: opened an invite, created an account from it and landed in the server in ${Date.now() - t0} ms`);
+}
+
 if (!existsSync(cli)) run(["cargo", "build", "--release", "-p", "lumia-cli"], resolve(web, "../core"));
 rmSync(work, { recursive: true, force: true });
 mkdirSync(out, { recursive: true });
@@ -392,6 +423,7 @@ try {
       ["served", () => instanceServed(which)],
       ["link", () => link(which, identityDir)],
       ["dm", () => dm(which, aDir, bAccount, aHandle)],
+      ["invite", () => invite(which, passwordDir, server)],
     ] as const) {
       // A heartbeat while the step runs (CI shows a step's log only once it
       // ends) and a hard bound, so a hang names itself instead of the job

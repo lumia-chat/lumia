@@ -160,11 +160,54 @@ impl Client {
     /// # Errors
     /// On API failure (`ALREADY_EXISTS`, `INVALID_ARGUMENT`).
     #[wasm_bindgen(js_name = createAccount)]
-    pub async fn create_account(&self, handle: String, password: String) -> Result<(), JsError> {
+    pub async fn create_account(
+        &self,
+        handle: String,
+        password: String,
+        invite: Option<String>,
+    ) -> Result<(), JsError> {
         self.app
-            .create_account(&handle, &password)
+            .create_account(&handle, &password, invite.as_deref())
             .await
             .map_err(js)
+    }
+
+    /// `GET /invites/{code}`: what an invite link or code shows before joining. Public.
+    ///
+    /// # Errors
+    /// `NOT_FOUND` for an unknown, expired or spent code; transport failure.
+    #[wasm_bindgen(js_name = invitePreview)]
+    pub async fn invite_preview(&self, link_or_code: String) -> Result<JsValue, JsError> {
+        to_js(&self.app.invite_preview(&link_or_code).await.map_err(js)?)
+    }
+
+    /// `POST /invites`: an invite link for a server (0 uses is unlimited).
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` without `create_invites` there; transport failure.
+    #[wasm_bindgen(js_name = createInvite)]
+    pub async fn create_invite(
+        &self,
+        server_id: String,
+        max_uses: u32,
+        expires_in_hours: Option<u32>,
+    ) -> Result<JsValue, JsError> {
+        to_js(
+            &self
+                .app
+                .create_invite(&server_id, max_uses, expires_in_hours)
+                .await
+                .map_err(js)?,
+        )
+    }
+
+    /// `POST /invites/{code}/accept`: joins the invite's server; returns its id.
+    ///
+    /// # Errors
+    /// `NOT_FOUND` for an unknown, expired or spent code; transport failure.
+    #[wasm_bindgen(js_name = acceptInvite)]
+    pub async fn accept_invite(&self, link_or_code: String) -> Result<String, JsError> {
+        self.app.accept_invite(&link_or_code).await.map_err(js)
     }
 
     /// Signs in with a password, and a TOTP code when the account requires one.

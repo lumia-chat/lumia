@@ -55,13 +55,12 @@ shoot home 10
 alive=$("$adb" shell pidof "$bundle" 2>/dev/null || true)
 # The app sends nothing; the CLI's message lands in its view when the gateway is up.
 "$cli" --data-dir "$data" send "$channel" "Still here?" >/dev/null
-for screen in server channel requests devices new signin link; do shoot "$screen" 7; done
+for screen in server channel requests devices new join invite signin link; do shoot "$screen" 7; done
 "$adb" shell am force-stop "$bundle" >/dev/null 2>&1 || true
 [ -n "$alive" ] || { echo "FAIL: the app was not running after launch"; exit 1; }
 
-# Push (architecture 15.5): a second account, made a member of the server
-# (there is no invite yet, so the instance's own context does it from mix
-# on the same database), mentions the phone's account while the app is
+# Push (architecture 15.5): a second account, joined through an invite
+# the phone's account mints, mentions the phone's account while the app is
 # away. The receivers' stand-in, a launch with LUMIA_DEV_SCREEN=notify,
 # makes the same call under the same lock as a push would and posts the
 # notification, its content recorded in notification.txt; then the
@@ -70,9 +69,9 @@ other="$work/other"
 me=$("$cli" --data-dir "$data" whoami)
 "$cli" --data-dir "$other" instance add "$instance" >/dev/null
 "$cli" --data-dir "$other" account create --handle "mention$stamp" --password "$password" >/dev/null
-other_id=$("$cli" --data-dir "$other" whoami)
-(cd "$root/apps/instance" && mix run -e "{:ok, _} = Lumia.Servers.add_member(\"$server\", \"$other_id\", \"$me\")" >"$work/add-member.log" 2>&1) \
-  || { echo "FAIL: the second account could not join the server; see $work/add-member.log"; exit 1; }
+invite=$("$cli" --data-dir "$data" invite-create "$server" --max-uses 1 | cut -d' ' -f1)
+"$cli" --data-dir "$other" join "$invite" >/dev/null \
+  || { echo "FAIL: the second account could not join the server through the invite $invite"; exit 1; }
 body="Hey, this is for you on the phone $stamp"
 "$cli" --data-dir "$other" send "$channel" "$body" --mention "$me" >/dev/null
 "$adb" shell pm grant "$bundle" android.permission.POST_NOTIFICATIONS >/dev/null 2>&1 || true

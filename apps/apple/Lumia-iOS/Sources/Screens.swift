@@ -236,6 +236,118 @@ struct RequestRow: View {
 
 // MARK: New message
 
+// MARK: Join a server
+
+/// Joining from an invite link or code: what the link leads to first, on
+/// which instance, then the join (architecture 6.1).
+struct JoinServerScreen: View {
+    let session: LumiaSession
+    let joined: (String) -> Void
+    @State private var text = ""
+    @State private var preview: InvitePreviewSummary?
+    @State private var error = ""
+    @State private var busy = false
+
+    var body: some View {
+        PanelScreen(back: "Home", title: "Join a server", subtitle: "Paste the invite link someone sent you") {
+            ScrollView {
+                VStack(alignment: .leading, spacing: LumiaTokens.space12) {
+                    LumiaField("Invite link or code", text: $text, placeholder: "https://chat.example.com/invite/…")
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    if !error.isEmpty { LumiaErrorText(error) }
+                    Button("Look it up") { Task { await look() } }
+                        .buttonStyle(.lumiaPrimary).disabled(busy || text.trimmingCharacters(in: .whitespaces).isEmpty)
+                    if let p = preview {
+                        LumiaCard(title: p.serverName, subtitle: "\(p.memberCount) \(p.memberCount == 1 ? "member" : "members") on \(p.host)\(p.asGuest ? " · you would join as a guest" : "")", width: nil) {
+                            Text("Run by \(p.operatorName.isEmpty ? "an unnamed operator" : p.operatorName). Your account on this instance joins it; nothing else is shared.")
+                                .font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkSecondary.color)
+                            Button("Join \(p.serverName)") { Task { await join(p) } }
+                                .buttonStyle(.lumiaPrimary).disabled(busy)
+                        }
+                    }
+                }
+                .padding(LumiaTokens.space16)
+            }
+        }
+    }
+
+    private func look() async {
+        busy = true
+        error = ""
+        preview = nil
+        defer { busy = false }
+        do {
+            preview = try await session.invitePreview(text)
+        } catch {
+            self.error = error.lumiaCode == "NOT_FOUND" ? "That invite is unknown, expired or used up." : error.lumiaMessage
+        }
+    }
+
+    private func join(_ p: InvitePreviewSummary) async {
+        busy = true
+        error = ""
+        defer { busy = false }
+        do {
+            joined(try await session.acceptInvite(p.code))
+        } catch {
+            self.error = error.lumiaMessage
+        }
+    }
+}
+
+// MARK: Invite people
+
+/// An invite link for the server, made on arrival and ready to copy or share.
+struct InviteScreen: View {
+    let session: LumiaSession
+    let server: ServerSummary?
+    @State private var invite: InviteSummary?
+    @State private var error = ""
+    @State private var copied = false
+
+    var body: some View {
+        PanelScreen(back: server?.name ?? "Server", title: "Invite people", subtitle: "Anyone with the link can join") {
+            ScrollView {
+                VStack(alignment: .leading, spacing: LumiaTokens.space12) {
+                    if let invite {
+                        Text(invite.url)
+                            .font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.ink.color)
+                            .textSelection(.enabled)
+                            .padding(LumiaTokens.space12)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(LumiaTokens.surface.color, in: RoundedRectangle(cornerRadius: LumiaTokens.radius10))
+                        HStack(spacing: LumiaTokens.space8) {
+                            Button(copied ? "Copied" : "Copy link") {
+                                UIPasteboard.general.string = invite.url
+                                copied = true
+                            }
+                            .buttonStyle(.lumiaPrimary)
+                            if let url = URL(string: invite.url) {
+                                ShareLink(item: url) { Text("Share") }.buttonStyle(.lumiaSecondary)
+                            }
+                        }
+                        Text("The link does not expire and has no use limit; revoke it with the CLI if it leaks.")
+                            .font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkQuiet.color)
+                    } else if !error.isEmpty {
+                        LumiaNotice(icon: "lock") { Text(error) }
+                    } else {
+                        Text("Making the link…").font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkQuiet.color)
+                    }
+                }
+                .padding(LumiaTokens.space16)
+            }
+        }
+        .task {
+            guard let server, invite == nil else { return }
+            do {
+                invite = try await session.createInvite(serverID: server.serverId)
+            } catch {
+                self.error = error.lumiaCode == "PERMISSION_DENIED" ? "You cannot invite people to this server." : error.lumiaMessage
+            }
+        }
+    }
+}
+
 struct NewMessageScreen: View {
     let session: LumiaSession
     @Binding var path: [Screen]

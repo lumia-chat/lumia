@@ -19,6 +19,28 @@ export interface ServerSummary {
   serverId: string;
   name: string;
 }
+/** What an invite shows before joining (`GET /invites/{code}`). */
+export interface InvitePreviewSummary {
+  code: string;
+  serverId: string;
+  serverName: string;
+  channelName: string;
+  memberCount: number;
+  asGuest: boolean;
+  host: string;
+  operatorName: string;
+  openRegistration: boolean;
+  identityProofCreateEnabled: boolean;
+}
+/** An invite this account minted: the code and the link that carries it. */
+export interface InviteSummary {
+  code: string;
+  url: string;
+  serverId: string;
+  expiresAtMicros: number | null;
+  maxUses: number;
+  uses: number;
+}
 export interface ChannelSummary {
   channelId: string;
   serverId: string;
@@ -186,8 +208,19 @@ export class Bridge {
   instanceInfo(): Promise<InstanceSummary> {
     return this.call("instanceInfo");
   }
-  createAccount(handle: string, password: string): Promise<void> {
-    return this.call("createAccount", handle, password);
+  /** With an invite link or code, the account joins its server too. */
+  createAccount(handle: string, password: string, invite?: string): Promise<void> {
+    return this.call("createAccount", handle, password, invite ?? null);
+  }
+  invitePreview(linkOrCode: string): Promise<InvitePreviewSummary> {
+    return this.call("invitePreview", linkOrCode);
+  }
+  createInvite(serverId: string, maxUses = 0, expiresInHours?: number): Promise<InviteSummary> {
+    return this.call("createInvite", serverId, maxUses, expiresInHours ?? null);
+  }
+  /** Joins the invite's server; resolves to its id. */
+  acceptInvite(linkOrCode: string): Promise<string> {
+    return this.call("acceptInvite", linkOrCode);
   }
   signIn(handle: string, password: string, totpCode?: string): Promise<void> {
     return this.call("signIn", handle, password, totpCode ?? null);

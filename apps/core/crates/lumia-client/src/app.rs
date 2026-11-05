@@ -102,6 +102,54 @@ pub struct ServerSummary {
     pub name: String,
 }
 
+/// What an invite shows before joining (`GET /invites/{code}`): the
+/// server, the instance's trust card in short, and what joining means.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InvitePreviewSummary {
+    pub code: String,
+    pub server_id: String,
+    pub server_name: String,
+    /// The channel a connected-channel invite names; empty otherwise.
+    pub channel_name: String,
+    pub member_count: u32,
+    pub as_guest: bool,
+    pub host: String,
+    pub operator_name: String,
+    pub open_registration: bool,
+    pub identity_proof_create_enabled: bool,
+}
+
+/// An invite this account minted: its code and the link that carries it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InviteSummary {
+    pub code: String,
+    /// `https://{host}/invite/{code}`, on the instance's own address.
+    pub url: String,
+    pub server_id: String,
+    /// Unix microseconds; `None` for an invite that does not expire.
+    pub expires_at_micros: Option<i64>,
+    /// 0 is unlimited.
+    pub max_uses: u32,
+    pub uses: u32,
+}
+
+/// The code inside an invite link, or the text itself when it is a bare
+/// code: `https://host/invite/abc` and `abc` both give `abc`.
+#[must_use]
+pub fn invite_code_of(text: &str) -> String {
+    let text = text.trim();
+    match text.rsplit_once("/invite/") {
+        Some((_, rest)) => rest
+            .split(['/', '?', '#'])
+            .next()
+            .unwrap_or_default()
+            .to_string(),
+        None => text.trim_matches('/').to_string(),
+    }
+}
+
 /// A channel the account can view.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -747,9 +795,99 @@ impl App {
     ///
     /// # Errors
     /// On API failure (`ALREADY_EXISTS`, `INVALID_ARGUMENT`).
-    pub async fn create_account(&self, handle: &str, password: &str) -> Result<(), ClientError> {
-        let pair = self.api.create_account(handle, password).await?;
+    pub async fn create_account(
+        &self,
+        handle: &str,
+        password: &str,
+        invite: Option<&str>,
+    ) -> Result<(), ClientError> {
+        let code = invite.map(invite_code_of).unwrap_or_default();
+        let pair = self.api.create_account(handle, password, &code).await?;
         self.save_tokens(&pair)
+    }
+
+    /// `GET /invites/{code}`: what an invite link or code shows before
+    /// joining. Public: no sign-in needed.
+    ///
+    /// # Errors
+    /// `NOT_FOUND` for an unknown, expired or spent code; transport failure.
+    pub async fn invite_preview(
+        &self,
+        link_or_code: &str,
+    ) -> Result<InvitePreviewSummary, ClientError> {
+        let code = invite_code_of(link_or_code);
+        let p = self.api.invite_preview(&code).await?;
+        let server = p.server.unwrap_or_default();
+        let instance = p.instance.unwrap_or_default();
+        Ok(InvitePreviewSummary {
+            code,
+            server_id: wire::display(&server.server_id),
+            server_name: server.name,
+            channel_name: p.channel.map(|c| c.name).unwrap_or_default(),
+            member_count: p.member_count,
+            as_guest: p.as_guest,
+            host: instance.host,
+            operator_name: instance.operator_name,
+            open_registration: instance.open_registration,
+            identity_proof_create_enabled: instance.identity_proof_create_enabled,
+        })
+    }
+
+    /// `POST /invites`: an invite link for a server, unlimited unless
+    /// `max_uses` is set, open-ended unless `expires_in_hours` is.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` without `create_invites` there; transport failure.
+    pub async fn create_invite(
+        &self,
+        server_id: &str,
+        max_uses: u32,
+        expires_in_hours: Option<u32>,
+    ) -> Result<InviteSummary, ClientError> {
+        let expires_at = expires_in_hours.map(|h| {
+            let at =
+                std::time::SystemTime::now() + std::time::Duration::from_secs(u64::from(h) * 3600);
+            prost_types::Timestamp::from(at)
+        });
+        let req = lumia_core::proto::CreateInviteRequest {
+            server_id: wire::uuid_bytes(
+                uuid::Uuid::parse_str(server_id)
+                    .map_err(|_| ClientError::Transport(format!("not a uuid: {server_id}")))?,
+            ),
+            max_uses,
+            expires_at,
+            ..Default::default()
+        };
+        let invite = self.api.create_invite(&req).await?;
+        Ok(self.invite_summary(&invite))
+    }
+
+    /// `POST /invites/{code}/accept`: joins this account to the invite's
+    /// server. Returns the server's id; the next snapshot lists it.
+    ///
+    /// # Errors
+    /// `NOT_FOUND` for an unknown, expired or spent code; transport failure.
+    pub async fn accept_invite(&self, link_or_code: &str) -> Result<String, ClientError> {
+        let member = self
+            .api
+            .accept_invite(&invite_code_of(link_or_code))
+            .await?;
+        Ok(wire::display(&member.server_id))
+    }
+
+    fn invite_summary(&self, invite: &lumia_core::proto::Invite) -> InviteSummary {
+        InviteSummary {
+            code: invite.code.clone(),
+            url: format!(
+                "{}/invite/{}",
+                self.api.base().trim_end_matches('/'),
+                invite.code
+            ),
+            server_id: wire::display(&invite.server_id),
+            expires_at_micros: wire::micros(invite.expires_at.as_ref()),
+            max_uses: invite.max_uses,
+            uses: invite.uses,
+        }
     }
 
     /// Signs in with a password, and a TOTP code when the account requires one.
@@ -1717,4 +1855,28 @@ fn writer_generation(store: &SqliteStore) -> Result<u64, ClientError> {
         .meta_get("writer_generation")?
         .and_then(|s| s.parse().ok())
         .unwrap_or(0))
+}
+
+#[cfg(test)]
+mod invite_tests {
+    use super::invite_code_of;
+
+    #[test]
+    fn a_link_or_a_code_gives_the_code() {
+        assert_eq!(invite_code_of("abc23xyz"), "abc23xyz");
+        assert_eq!(invite_code_of("  abc23xyz\n"), "abc23xyz");
+        assert_eq!(
+            invite_code_of("https://chat.example.com/invite/abc23xyz"),
+            "abc23xyz"
+        );
+        assert_eq!(
+            invite_code_of("https://chat.example.com/invite/abc23xyz/"),
+            "abc23xyz"
+        );
+        assert_eq!(
+            invite_code_of("http://10.0.2.2:4000/invite/abc23xyz?x=1"),
+            "abc23xyz"
+        );
+        assert_eq!(invite_code_of("/invite/abc23xyz#top"), "abc23xyz");
+    }
 }

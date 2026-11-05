@@ -18,6 +18,8 @@ enum Screen: Hashable {
     case requests
     case devices
     case newMessage
+    case joinServer
+    case invite(serverID: String)
 }
 
 struct PhoneRail: View {

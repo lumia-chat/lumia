@@ -8,9 +8,14 @@ defmodule LumiaWeb.InstanceController do
   alias LumiaWeb.ProtoConn
 
   def show(conn, _params) do
+    ProtoConn.render(conn, info())
+  end
+
+  @doc "The trust card's contents; an invite's preview carries them too."
+  def info do
     config = Application.get_env(:lumia, :instance, [])
 
-    info = %V1.InstanceInfo{
+    %V1.InstanceInfo{
       host: LumiaWeb.Endpoint.host(),
       operator_name: Keyword.get(config, :operator_name, ""),
       operator_url: Keyword.get(config, :operator_url, ""),
@@ -33,8 +38,6 @@ defmodule LumiaWeb.InstanceController do
         end),
       recovery_generation: Instance.recovery_generation()
     }
-
-    ProtoConn.render(conn, info)
   end
 
   # The built-in reaction registry (architecture 6.6).

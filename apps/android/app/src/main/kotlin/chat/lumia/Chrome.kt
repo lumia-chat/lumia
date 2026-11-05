@@ -57,6 +57,8 @@ sealed class Screen {
     data object Requests : Screen()
     data object Devices : Screen()
     data object NewMessage : Screen()
+    data object JoinServer : Screen()
+    data class Invite(val serverId: String) : Screen()
 }
 
 @Composable

@@ -66,7 +66,13 @@ import chat.lumia.kit.timeOfMicros
 import kotlinx.coroutines.launch
 import uniffi.lumia_ffi.DeviceSummary
 import uniffi.lumia_ffi.DmRequestSummary
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.RoundedCornerShape
+import uniffi.lumia_ffi.InvitePreviewSummary
+import uniffi.lumia_ffi.InviteSummary
 import uniffi.lumia_ffi.MemberSummary
+import uniffi.lumia_ffi.ServerSummary
+import chat.lumia.kit.LumiaCard
 
 // Conversation
 
@@ -273,6 +279,121 @@ fun NewMessageScreen(session: LumiaSession, back: () -> Unit, replace: (List<Scr
                         LumiaSecondaryButton("Message", enabled = busy != p.accountId) { message(p) }
                     }
                 }
+            }
+        }
+    }
+}
+
+// Join a server
+
+/**
+ * Joining from an invite link or code: what the link leads to first, on
+ * which instance, then the join (architecture 6.1).
+ */
+@Composable
+fun JoinServerScreen(session: LumiaSession, back: () -> Unit, joined: (String) -> Unit) {
+    val scope = rememberCoroutineScope()
+    var text by rememberSaveable { mutableStateOf("") }
+    var preview by remember { mutableStateOf<InvitePreviewSummary?>(null) }
+    var error by rememberSaveable { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+
+    fun look() {
+        scope.launch {
+            busy = true
+            error = ""
+            preview = null
+            try {
+                preview = session.invitePreview(text)
+            } catch (e: Exception) {
+                error = if (e.lumiaCode == "NOT_FOUND") "That invite is unknown, expired or used up." else e.lumiaMessage
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    fun join(p: InvitePreviewSummary) {
+        scope.launch {
+            busy = true
+            error = ""
+            try {
+                joined(session.acceptInvite(p.code))
+            } catch (e: Exception) {
+                error = e.lumiaMessage
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    PanelScreen(back = "Home", onBack = back, title = "Join a server", subtitle = "Paste the invite link someone sent you") {
+        LazyColumn(Modifier.fillMaxSize().imePadding().navigationBarsPadding(), contentPadding = androidx.compose.foundation.layout.PaddingValues(LumiaTokens.space16), verticalArrangement = Arrangement.spacedBy(LumiaTokens.space12)) {
+            item { LumiaField("Invite link or code", text, { text = it }, placeholder = "https://chat.example.com/invite/…") }
+            if (error.isNotEmpty()) item { LumiaErrorText(error) }
+            item { LumiaPrimaryButton("Look it up", Modifier.fillMaxWidth(), enabled = !busy && text.isNotBlank()) { look() } }
+            preview?.let { p ->
+                item {
+                    LumiaCard(p.serverName, "${p.memberCount} ${if (p.memberCount == 1u) "member" else "members"} on ${p.host}${if (p.asGuest) " · you would join as a guest" else ""}") {
+                        Column(verticalArrangement = Arrangement.spacedBy(LumiaTokens.space12)) {
+                            Text("Run by ${p.operatorName.ifEmpty { "an unnamed operator" }}. Your account on this instance joins it; nothing else is shared.", style = LumiaTokens.textMeta.style, color = LumiaTokens.inkSecondary.color)
+                            LumiaPrimaryButton("Join ${p.serverName}", Modifier.fillMaxWidth(), enabled = !busy) { join(p) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Invite people
+
+/** An invite link for the server, made on arrival and ready to copy or share. */
+@Composable
+fun InviteScreen(session: LumiaSession, server: ServerSummary?, back: () -> Unit) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var invite by remember { mutableStateOf<InviteSummary?>(null) }
+    var error by rememberSaveable { mutableStateOf("") }
+    var copied by remember { mutableStateOf(false) }
+
+    LaunchedEffect(server?.serverId) {
+        val id = server?.serverId ?: return@LaunchedEffect
+        if (invite != null) return@LaunchedEffect
+        try {
+            invite = session.createInvite(id)
+        } catch (e: Exception) {
+            error = if (e.lumiaCode == "PERMISSION_DENIED") "You cannot invite people to this server." else e.lumiaMessage
+        }
+    }
+
+    PanelScreen(back = server?.name ?: "Server", onBack = back, title = "Invite people", subtitle = "Anyone with the link can join") {
+        LazyColumn(Modifier.fillMaxSize().navigationBarsPadding(), contentPadding = androidx.compose.foundation.layout.PaddingValues(LumiaTokens.space16), verticalArrangement = Arrangement.spacedBy(LumiaTokens.space12)) {
+            val link = invite
+            if (link != null) {
+                item {
+                    Text(link.url, style = LumiaTokens.textMeta.style, color = LumiaTokens.ink.color, modifier = Modifier.fillMaxWidth().background(LumiaTokens.surface.color, RoundedCornerShape(LumiaTokens.radius10)).padding(LumiaTokens.space12))
+                }
+                item {
+                    Row(horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space8)) {
+                        LumiaPrimaryButton(if (copied) "Copied" else "Copy link") {
+                            val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                            clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Lumia invite", link.url))
+                            copied = true
+                        }
+                        LumiaSecondaryButton("Share") {
+                            val send = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(android.content.Intent.EXTRA_TEXT, link.url)
+                            }
+                            context.startActivity(android.content.Intent.createChooser(send, "Invite people"))
+                        }
+                    }
+                }
+                item { Text("The link does not expire and has no use limit; revoke it with the CLI if it leaks.", style = LumiaTokens.textMeta.style, color = LumiaTokens.inkQuiet.color) }
+            } else if (error.isNotEmpty()) {
+                item { LumiaNotice(Icons.Filled.Lock, text = error) }
+            } else {
+                item { Text("Making the link…", style = LumiaTokens.textMeta.style, color = LumiaTokens.inkQuiet.color) }
             }
         }
     }

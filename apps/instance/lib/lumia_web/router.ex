@@ -24,6 +24,7 @@ defmodule LumiaWeb.Router do
     post "/auth/challenge", IdentityController, :challenge
     post "/auth/refresh", AuthController, :refresh
     get "/identity/link-bundles/:code", IdentityController, :get_link_bundle
+    get "/invites/:code", InviteController, :show
   end
 
   scope "/api/v1", LumiaWeb do
@@ -59,6 +60,10 @@ defmodule LumiaWeb.Router do
     post "/servers/:server_id/roles", ServerController, :create_role
     put "/servers/:server_id/roles/:role_id", ServerController, :update_role
     delete "/servers/:server_id/roles/:role_id", ServerController, :delete_role
+
+    post "/invites", InviteController, :create
+    post "/invites/:code/accept", InviteController, :accept
+    delete "/invites/:code", InviteController, :delete
 
     post "/channels", ChannelController, :create
     put "/channels/:channel_id/overwrites", ServerController, :set_overwrite

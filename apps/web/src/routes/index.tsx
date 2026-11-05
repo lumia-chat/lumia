@@ -8,6 +8,7 @@ import { Button, Card } from "../design/components";
 import { ensureOwner, openInstance, opened, refreshSignedIn, savedInstance } from "../client/state";
 import { App, type AppSearch } from "./app";
 import { DesignGallery } from "./design";
+import { Invite } from "./invite";
 import { Link } from "./link";
 import { SignIn } from "./sign-in";
 
@@ -68,7 +69,20 @@ const indexRoute = createRoute({
   },
 });
 
-const signInRoute = createRoute({ getParentRoute: () => rootRoute, path: "/sign-in", component: SignIn });
+// An invite carries the sign-in page the code to join with, and the
+// instance the link named when the page is not served by one.
+export interface SignInSearch {
+  invite?: string;
+  instance?: string;
+}
+const signInSearch = (s: Record<string, unknown>): SignInSearch => ({
+  invite: typeof s.invite === "string" && s.invite ? s.invite : undefined,
+  instance: typeof s.instance === "string" && s.instance ? s.instance : undefined,
+});
+const signInRoute = createRoute({ getParentRoute: () => rootRoute, path: "/sign-in", component: SignIn, validateSearch: signInSearch });
+// The link an invite is: `/invite/{code}` on the instance (architecture
+// 6.1: the trust card and what the link leads to, before anything is sent).
+const inviteRoute = createRoute({ getParentRoute: () => rootRoute, path: "/invite/$code", component: Invite, validateSearch: signInSearch });
 const linkRoute = createRoute({ getParentRoute: () => rootRoute, path: "/link", component: Link });
 const appRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -77,11 +91,11 @@ const appRoute = createRoute({
   beforeLoad: requireSession,
   validateSearch: (s: Record<string, unknown>): AppSearch => ({
     place: s.place === "home" ? "home" : undefined,
-    view: s.view === "requests" || s.view === "devices" || s.view === "new" || s.view === "dm" ? s.view : undefined,
+    view: s.view === "requests" || s.view === "devices" || s.view === "new" || s.view === "join" || s.view === "dm" ? s.view : undefined,
     dm: typeof s.dm === "string" ? s.dm : undefined,
     server: typeof s.server === "string" ? s.server : undefined,
   }),
 });
 const designRoute = createRoute({ getParentRoute: () => rootRoute, path: "/design", component: DesignGallery });
 
-export const routeTree = rootRoute.addChildren([indexRoute, signInRoute, linkRoute, appRoute, designRoute]);
+export const routeTree = rootRoute.addChildren([indexRoute, signInRoute, inviteRoute, linkRoute, appRoute, designRoute]);

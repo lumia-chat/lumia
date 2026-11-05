@@ -15,20 +15,39 @@ defmodule LumiaWeb.AuthController do
 
   action_fallback LumiaWeb.FallbackController
 
+  # An invite code is a way in when registration is closed (architecture
+  # 6.2, "an email invite that creates a new identity"); the account joins
+  # the invite's server in the same request.
   def create_account(conn, _params) do
     with {:ok, req} <- ProtoConn.decode(conn, V1.CreateAccountRequest),
-         :ok <- registration_open(),
+         {:ok, invite} <- admitted(req.invite_code),
          {:ok, account} <-
            Accounts.register(%{
              handle: req.handle,
              email: blank_to_nil(req.email),
              password: req.password
            }),
+         {:ok, _} <- join(invite, account.id),
          {:ok, _session, tokens} <-
            Auth.create_session(account.id, device_id(req), client: client(conn)) do
       ProtoConn.render(conn, 201, token_pair(tokens))
     end
   end
+
+  @doc false
+  def admitted(""), do: with(:ok <- registration_open(), do: {:ok, nil})
+  def admitted(nil), do: admitted("")
+
+  def admitted(code) do
+    case Lumia.Invites.valid(code) do
+      {:ok, invite} -> {:ok, invite}
+      {:error, :not_found} -> {:error, :not_found}
+    end
+  end
+
+  @doc false
+  def join(nil, _account_id), do: {:ok, nil}
+  def join(invite, account_id), do: Lumia.Invites.accept(invite.code, account_id)
 
   def sign_in_password(conn, _params) do
     with {:ok, req} <- ProtoConn.decode(conn, V1.PasswordSignInRequest),

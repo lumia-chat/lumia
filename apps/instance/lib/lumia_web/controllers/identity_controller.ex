@@ -45,10 +45,12 @@ defmodule LumiaWeb.IdentityController do
     with :ok <- policy(:identity_proof_create),
          {:ok, %V1.CreateAccountRequest{proof: %V1.IdentityProof{} = proof} = req} <-
            ProtoConn.decode(conn, V1.CreateAccountRequest),
+         {:ok, invite} <- invite(req.invite_code),
          {:ok, verified, device} <- Identity.verify_proof(proof, :CREATE_ACCOUNT),
          :ok <- no_account_yet(verified.identity_id),
          {:ok, account} <-
            Accounts.create_account(%{handle: req.handle, identity_id: verified.identity_id}),
+         {:ok, _} <- LumiaWeb.AuthController.join(invite, account.id),
          {:ok, _session, tokens} <-
            Auth.create_session(account.id, Proto.from_uuid(device.cert.device_id),
              client: client(conn)
@@ -230,6 +232,13 @@ defmodule LumiaWeb.IdentityController do
   defp no_account_yet(identity_id) do
     if Identity.account_for(identity_id), do: {:error, :already_exists}, else: :ok
   end
+
+  # The invite that led here, when the request names one: the account
+  # joins its server. Identity-proof creation has its own policy, so a
+  # code here only joins; an unknown one is refused before anything is made.
+  defp invite(""), do: {:ok, nil}
+  defp invite(nil), do: {:ok, nil}
+  defp invite(code), do: Lumia.Invites.valid(code)
 
   defp policy(key) do
     if Application.get_env(:lumia, :instance, []) |> Keyword.get(key, true),

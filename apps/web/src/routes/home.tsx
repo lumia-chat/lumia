@@ -25,12 +25,12 @@ import {
   type ChannelItem,
   type DeviceEntry,
 } from "../design/components";
-import { ClientError, type ChannelSummary, type DeviceSummary, type DmMessageSummary, type MemberSummary, type SnapshotSummary } from "../client/bridge";
+import { ClientError, type ChannelSummary, type DeviceSummary, type DmMessageSummary, type InvitePreviewSummary, type MemberSummary, type SnapshotSummary } from "../client/bridge";
 import { client, dmChannelsQuery, dmMessagesQuery, enableNotifications, hasIdentityQuery, peopleQuery, pushState, queryClient, rosterQuery } from "../client/state";
 import { useNames } from "../client/names";
 import { initialsOf, timeOf, toneFor } from "./app";
 
-export type HomeView = "dm" | "requests" | "devices" | "new";
+export type HomeView = "dm" | "requests" | "devices" | "new" | "join";
 
 export interface HomeProps {
   snapshot: SnapshotSummary | undefined;
@@ -38,6 +38,7 @@ export interface HomeProps {
   channelId: string | undefined;
   go: (view: HomeView, channelId?: string) => void;
   toLink: () => void;
+  toServer: (serverId: string) => void;
 }
 
 const PERSONAL = new Set(["PERSONAL_DM", "PERSONAL_GROUP_DM"]);
@@ -92,6 +93,80 @@ export function HomeSidebar(props: HomeProps) {
       <Show when={sections().length > 0} fallback={<p class="app__empty app__empty--side">No conversations yet.</p>}>
         <ChannelList sections={sections()} />
       </Show>
+      <button type="button" class="lu-link app__push" onClick={() => props.go("join")}>
+        Join a server
+      </button>
+    </>
+  );
+}
+
+// Joining a server from an invite link or code: the preview first (what
+// the link leads to, on which instance), then the join (architecture 6.1).
+function JoinServer(props: HomeProps) {
+  const [text, setText] = createSignal("");
+  const [preview, setPreview] = createSignal<InvitePreviewSummary | null>(null);
+  const [error, setError] = createSignal("");
+  const [busy, setBusy] = createSignal(false);
+  const look = async (e: Event) => {
+    e.preventDefault();
+    if (!text().trim()) return;
+    setBusy(true);
+    setError("");
+    setPreview(null);
+    try {
+      setPreview(await client().invitePreview(text()));
+    } catch (err) {
+      const ce = err instanceof ClientError ? err : null;
+      setError(ce?.code === "NOT_FOUND" ? "That invite is unknown, expired or used up." : err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const join = async () => {
+    const p = preview();
+    if (!p) return;
+    setBusy(true);
+    setError("");
+    try {
+      const serverId = await client().acceptInvite(p.code);
+      await queryClient.invalidateQueries({ queryKey: ["snapshot"] });
+      props.toServer(serverId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      <ChannelHeader kind="page" name="Join a server" topic="Paste the invite link someone sent you" actions={[]} />
+      <div class="lu-page">
+        <Card title="Invite" subtitle="A link such as https://chat.example.com/invite/abc23xyz, or just its code.">
+          <form class="auth__form" onSubmit={(e) => void look(e)}>
+            <TextField label="Invite link or code" value={text()} onInput={(e) => setText(e.currentTarget.value)} placeholder="https://chat.example.com/invite/…" autocomplete="off" />
+            <Show when={error()}>
+              <p class="auth__error" role="alert">
+                {error()}
+              </p>
+            </Show>
+            <Button variant="primary" type="submit" block disabled={busy() || !text().trim()}>
+              Look it up
+            </Button>
+          </form>
+        </Card>
+        <Show when={preview()}>
+          {(p) => (
+            <Card title={p().serverName} subtitle={`${p().memberCount} ${p().memberCount === 1 ? "member" : "members"} on ${p().host}${p().asGuest ? " · you would join as a guest" : ""}`}>
+              <div class="auth__form">
+                <p class="auth__note">Run by {p().operatorName || "an unnamed operator"}. Your account on this instance joins it; nothing else is shared.</p>
+                <Button variant="primary" type="button" block disabled={busy()} onClick={() => void join()}>
+                  Join {p().serverName}
+                </Button>
+              </div>
+            </Card>
+          )}
+        </Show>
+      </div>
     </>
   );
 }
@@ -100,7 +175,7 @@ export function HomeMain(props: HomeProps) {
   const identity = hasIdentityQuery();
   return (
     <Show when={identity.data !== false} fallback={<NoIdentity toLink={props.toLink} />}>
-      {props.view === "requests" ? <Requests {...props} /> : props.view === "devices" ? <Devices {...props} /> : props.view === "new" ? <NewMessage {...props} /> : <Conversation {...props} />}
+      {props.view === "requests" ? <Requests {...props} /> : props.view === "devices" ? <Devices {...props} /> : props.view === "new" ? <NewMessage {...props} /> : props.view === "join" ? <JoinServer {...props} /> : <Conversation {...props} />}
     </Show>
   );
 }

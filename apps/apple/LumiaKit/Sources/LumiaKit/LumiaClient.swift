@@ -27,7 +27,18 @@ public actor LumiaClient {
     public var dmAvailable: Bool { inner.dmAvailable() }
 
     public func instanceInfo() throws -> InstanceSummary { try inner.instanceInfo() }
-    public func createAccount(handle: String, password: String) throws { try inner.createAccount(handle: handle, password: password) }
+    /// With an invite link or code, the account joins its server too.
+    public func createAccount(handle: String, password: String, invite: String? = nil) throws {
+        try inner.createAccount(handle: handle, password: password, invite: invite)
+    }
+    /// What an invite link or code shows before joining. Public.
+    public func invitePreview(_ linkOrCode: String) throws -> InvitePreviewSummary { try inner.invitePreview(linkOrCode: linkOrCode) }
+    /// An invite link for a server (0 uses is unlimited).
+    public func createInvite(serverID: String, maxUses: UInt32 = 0, expiresInHours: UInt32? = nil) throws -> InviteSummary {
+        try inner.createInvite(serverId: serverID, maxUses: maxUses, expiresInHours: expiresInHours)
+    }
+    /// Joins the invite's server; returns its id.
+    public func acceptInvite(_ linkOrCode: String) throws -> String { try inner.acceptInvite(linkOrCode: linkOrCode) }
     public func signIn(handle: String, password: String, totpCode: String? = nil) throws {
         try inner.signIn(handle: handle, password: password, totpCode: totpCode)
     }

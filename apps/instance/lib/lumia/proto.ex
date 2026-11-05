@@ -58,6 +58,20 @@ defmodule Lumia.Proto do
     }
   end
 
+  def invite(%Lumia.Invites.Invite{} = i) do
+    %V1.Invite{
+      code: i.code,
+      server_id: uuid(i.server_id),
+      channel_id: uuid(i.channel_id),
+      created_by: uuid(i.created_by),
+      expires_at: timestamp(i.expires_at),
+      max_uses: i.max_uses,
+      uses: i.uses,
+      as_guest: i.as_guest,
+      guest_expires_at: nil
+    }
+  end
+
   def member(%Lumia.Servers.Member{} = m, role_ids \\ []) do
     %V1.Member{
       server_id: uuid(m.server_id),

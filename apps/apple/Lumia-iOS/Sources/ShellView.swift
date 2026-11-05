@@ -41,6 +41,8 @@ struct ShellView: View {
                 case .requests: RequestsScreen(session: session, path: $path)
                 case .devices: DevicesScreen(session: session)
                 case .newMessage: NewMessageScreen(session: session, path: $path)
+                case .joinServer: JoinServerScreen(session: session) { id in path = []; place = .server(id: id) }
+                case let .invite(serverID): InviteScreen(session: session, server: servers.first { $0.serverId == serverID })
                 }
             }
         }
@@ -66,6 +68,8 @@ struct ShellView: View {
                 case "requests": place = .home; path = [.requests]
                 case "devices": place = .home; path = [.devices]
                 case "new": place = .home; path = [.newMessage]
+                case "join": place = .home; path = [.joinServer]
+                case "invite": place = .server(id: first); path = [.invite(serverID: first)]
                 default: break
                 }
             }
@@ -146,6 +150,9 @@ struct HomeScreen: View {
                             }
                         }
                     }
+                    Button("Join a server") { path.append(.joinServer) }
+                        .buttonStyle(.lumiaLink)
+                        .padding(.horizontal, LumiaTokens.space10).padding(.top, LumiaTokens.space8)
                 }
                 .padding(.horizontal, LumiaTokens.space12)
                 .padding(.bottom, LumiaTokens.space24)
@@ -237,6 +244,9 @@ struct ServerScreen: View {
                         }
                         .buttonStyle(.plain)
                     }
+                    Button("Invite people") { path.append(.invite(serverID: server.serverId)) }
+                        .buttonStyle(.lumiaLink)
+                        .padding(.horizontal, LumiaTokens.space10).padding(.top, LumiaTokens.space8)
                 }
                 .padding(.horizontal, LumiaTokens.space12)
                 .padding(.bottom, LumiaTokens.space24)

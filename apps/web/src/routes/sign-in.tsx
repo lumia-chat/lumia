@@ -4,16 +4,21 @@
 // field and trust card are the additions this product needs before the
 // card the board shows.
 import { Show, createResource, createSignal, onMount } from "solid-js";
-import { useNavigate } from "@tanstack/solid-router";
+import { useNavigate, useSearch } from "@tanstack/solid-router";
 import { Button, Card, Divider, TextField } from "../design/components";
 import { ClientError, type InstanceSummary } from "../client/bridge";
 import { SERVED_BY_INSTANCE, client, inShell, openInstance, savedInstance } from "../client/state";
+import type { SignInSearch } from "./index";
 
 type Mode = "signIn" | "create";
 
 export function SignIn() {
   const navigate = useNavigate();
-  const [instance, setInstance] = createSignal(savedInstance() ?? "");
+  // From an invite link: the code to join with once signed in (or to
+  // create the account with), and the instance the link named.
+  const search = useSearch({ from: "/sign-in" }) as () => SignInSearch;
+  const invite = () => search().invite;
+  const [instance, setInstance] = createSignal(search().instance ?? savedInstance() ?? "");
   const [opened, setOpened] = createSignal<string | null>(null);
   const [info, setInfo] = createSignal<InstanceSummary | null>(null);
   const [mode, setMode] = createSignal<Mode>("signIn");
@@ -28,6 +33,7 @@ export function SignIn() {
   const fixed = () => SERVED_BY_INSTANCE && !inShell();
   onMount(() => {
     if (fixed()) setOpened(location.origin);
+    else if (search().instance) setOpened(search().instance ?? null);
   });
 
   const [trust, { refetch }] = createResource(opened, async (url) => {
@@ -56,9 +62,17 @@ export function SignIn() {
     setBusy(true);
     try {
       const b = client();
-      if (mode() === "create") await b.createAccount(handle(), password());
+      const code = invite();
+      if (mode() === "create") await b.createAccount(handle(), password(), code);
       else await b.signIn(handle(), password(), needsTotp() ? totp() : undefined);
-      navigate({ to: "/app" });
+      // Signed in with an invite in hand: join its server and land there.
+      // A new account joined at creation; its code resolves to the same server.
+      if (code) {
+        const serverId = await b.acceptInvite(code);
+        navigate({ to: "/app", search: { server: serverId } });
+      } else {
+        navigate({ to: "/app" });
+      }
     } catch (err) {
       const ce = err instanceof ClientError ? err : null;
       if (ce?.code === "FAILED_PRECONDITION" && !needsTotp()) {
@@ -125,7 +139,7 @@ export function SignIn() {
         }
       >
         {(i) => (
-          <Card title={mode() === "create" ? "Create an account" : "Welcome back"} subtitle={mode() === "create" ? `A new account on ${i().host}.` : "Sign in to pick up your conversations."}>
+          <Card title={mode() === "create" ? "Create an account" : "Welcome back"} subtitle={invite() ? (mode() === "create" ? `A new account on ${i().host}, in the server you were invited to.` : "Sign in to join the server you were invited to.") : mode() === "create" ? `A new account on ${i().host}.` : "Sign in to pick up your conversations."}>
             <div class="auth__trust">
               <span class="auth__trust-host">{i().host}</span>
               <span class="auth__trust-op">
@@ -162,7 +176,7 @@ export function SignIn() {
             <p class="auth__foot">
               <Show when={mode() === "signIn"} fallback={<>Already have an account? <button type="button" class="lu-link auth__switch" onClick={() => setMode("signIn")}>Sign in</button></>}>
                 New to Lumia?{" "}
-                <Show when={i().openRegistration} fallback={<span>This instance is not open for new accounts.</span>}>
+                <Show when={i().openRegistration || invite()} fallback={<span>This instance is not open for new accounts.</span>}>
                   <button type="button" class="lu-link auth__switch" onClick={() => setMode("create")}>
                     Create an account
                   </button>

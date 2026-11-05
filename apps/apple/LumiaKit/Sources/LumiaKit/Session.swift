@@ -67,9 +67,29 @@ public final class LumiaSession {
         signedIn = true
     }
 
-    public func createAccount(handle: String, password: String) async throws {
-        try await client.createAccount(handle: handle, password: password)
+    /// With an invite link or code, the account joins its server at creation.
+    public func createAccount(handle: String, password: String, invite: String? = nil) async throws {
+        try await client.createAccount(handle: handle, password: password, invite: invite)
         signedIn = true
+    }
+
+    // MARK: Invites (architecture 6.1)
+
+    /// What an invite link or code leads to, before anything is sent.
+    public func invitePreview(_ linkOrCode: String) async throws -> InvitePreviewSummary {
+        try await client.invitePreview(linkOrCode)
+    }
+
+    /// An invite link for a server this account can invite to.
+    public func createInvite(serverID: String) async throws -> InviteSummary {
+        try await client.createInvite(serverID: serverID)
+    }
+
+    /// Joins the invite's server and refreshes the snapshot so it is listed; returns its id.
+    public func acceptInvite(_ linkOrCode: String) async throws -> String {
+        let serverID = try await client.acceptInvite(linkOrCode)
+        await refreshSnapshot()
+        return serverID
     }
 
     public func signInIdentity() async throws {

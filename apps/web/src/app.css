@@ -117,3 +117,7 @@ a { color: var(--link); }
 .app__row { display: flex; flex-wrap: wrap; gap: var(--space-8); }
 .app__push { margin: auto 0 0; padding: var(--space-8) var(--space-12); font: inherit; font-size: 12.5px; text-align: left; background: none; border: 0; cursor: pointer; }
 .app__push + .app__status { margin-top: 0; }
+.app__invite { display: flex; flex-direction: column; margin-top: auto; }
+.app__invite .app__status { margin: 0; padding-bottom: var(--space-4); }
+.app__invite .app__push { margin: 0; }
+.app__invite-url { margin: 0 var(--space-12); padding: var(--space-6) var(--space-8); font: inherit; font-size: 12px; color: var(--ink); background: var(--bg-sunken, var(--bg)); border: 1px solid var(--line); border-radius: var(--radius-sm, 6px); }

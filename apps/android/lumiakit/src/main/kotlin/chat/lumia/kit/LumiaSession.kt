@@ -17,6 +17,8 @@ import uniffi.lumia_ffi.ClientEvent
 import uniffi.lumia_ffi.DmChannelSummary
 import uniffi.lumia_ffi.DmLogSummary
 import uniffi.lumia_ffi.DmResponse
+import uniffi.lumia_ffi.InvitePreviewSummary
+import uniffi.lumia_ffi.InviteSummary
 import uniffi.lumia_ffi.InstanceSummary
 import uniffi.lumia_ffi.LumiaException
 import uniffi.lumia_ffi.MemberSummary
@@ -73,9 +75,25 @@ class LumiaSession(val client: LumiaClient) {
         signedIn = true
     }
 
-    suspend fun createAccount(handle: String, password: String) {
-        client.call { createAccount(handle, password) }
+    /** With an invite link or code, the account joins its server at creation. */
+    suspend fun createAccount(handle: String, password: String, invite: String? = null) {
+        client.call { createAccount(handle, password, invite) }
         signedIn = true
+    }
+
+    // Invites (architecture 6.1)
+
+    /** What an invite link or code leads to, before anything is sent. */
+    suspend fun invitePreview(linkOrCode: String): InvitePreviewSummary = client.call { invitePreview(linkOrCode) }
+
+    /** An invite link for a server this account can invite to. */
+    suspend fun createInvite(serverId: String): InviteSummary = client.call { createInvite(serverId, 0u, null) }
+
+    /** Joins the invite's server and refreshes the snapshot so it is listed; returns its id. */
+    suspend fun acceptInvite(linkOrCode: String): String {
+        val serverId = client.call { acceptInvite(linkOrCode) }
+        refreshSnapshot()
+        return serverId
     }
 
     suspend fun signOut() {

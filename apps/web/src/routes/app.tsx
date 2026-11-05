@@ -19,7 +19,7 @@ import {
   ServerRail,
   type ChannelItem,
 } from "../design/components";
-import type { ChannelSummary, MessageSummary, ServerSummary } from "../client/bridge";
+import { ClientError, type ChannelSummary, type InviteSummary, type MessageSummary, type ServerSummary } from "../client/bridge";
 import { checkPush, client, connection, enableNotifications, membersQuery, messagesQuery, pushState, queryClient, snapshotQuery, startGateway } from "../client/state";
 import { useNames } from "../client/names";
 import { ConversationAside, HomeMain, HomeSidebar, type HomeView } from "./home";
@@ -159,7 +159,35 @@ export function App() {
     channelId: search().dm,
     go: goHome,
     toLink: () => void navigate({ to: "/link" }),
+    toServer: goServer,
   });
+
+  // An invite link for the current server, made on demand and shown to copy.
+  const [invite, setInvite] = createSignal<InviteSummary | null>(null);
+  const [inviteError, setInviteError] = createSignal("");
+  const [copied, setCopied] = createSignal(false);
+  createEffect(on(serverId, () => { setInvite(null); setInviteError(""); setCopied(false); }));
+  const makeInvite = async () => {
+    const id = serverId();
+    if (!id) return;
+    setInviteError("");
+    try {
+      setInvite(await client().createInvite(id));
+    } catch (e) {
+      const ce = e instanceof ClientError ? e : null;
+      setInviteError(ce?.code === "PERMISSION_DENIED" ? "You cannot invite people to this server." : e instanceof Error ? e.message : String(e));
+    }
+  };
+  const copyInvite = async () => {
+    const url = invite()?.url;
+    if (!url) return;
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+    } catch {
+      setCopied(false);
+    }
+  };
 
   return (
     <AppShell
@@ -184,6 +212,26 @@ export function App() {
           <ServerHeader name={server()?.name ?? "Lumia"} />
           <SearchTrigger label={`Search ${server()?.name ?? ""}`} />
           <ChannelList sections={[{ title: "Channels", items: items() }]} />
+          <Show when={invite()} fallback={
+            <button type="button" class="lu-link app__push" onClick={() => void makeInvite()}>
+              Invite people
+            </button>
+          }>
+            {(i) => (
+              <div class="app__invite">
+                <p class="app__status">Anyone with this link can join.</p>
+                <input class="app__invite-url" type="text" readonly value={i().url} aria-label="Invite link" onFocus={(e) => e.currentTarget.select()} />
+                <button type="button" class="lu-link app__push" onClick={() => void copyInvite()}>
+                  {copied() ? "Copied" : "Copy link"}
+                </button>
+              </div>
+            )}
+          </Show>
+          <Show when={inviteError()}>
+            <p class="auth__error app__status" role="alert">
+              {inviteError()}
+            </p>
+          </Show>
           <Show when={pushState() === "off" || pushState() === "failed"}>
             <button type="button" class="lu-link app__push" onClick={() => void enableNotifications()}>
               Turn on notifications
