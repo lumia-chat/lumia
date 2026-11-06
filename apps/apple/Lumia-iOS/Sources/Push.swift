@@ -7,6 +7,7 @@
 import LumiaKit
 import SwiftUI
 import UserNotifications
+import os
 
 /// Where a tapped notification points: the extension put the channel and
 /// the kind (`dm` or `mention`) in the content; the generic notice has
@@ -79,8 +80,11 @@ final class PushDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCen
     /// In the foreground the banner still shows: the person may be in
     /// another conversation, and the extension's rewrite is what it says.
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
-        [.banner, .list, .sound]
+        Self.log.info("presenting \(notification.request.content.title, privacy: .public) in the foreground")
+        return [.banner, .list, .sound]
     }
+
+    private static let log = Logger(subsystem: "chat.lumia", category: "push")
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
         guard response.actionIdentifier == UNNotificationDefaultActionIdentifier else { return }

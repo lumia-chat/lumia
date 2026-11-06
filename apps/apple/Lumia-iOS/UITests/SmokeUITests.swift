@@ -45,8 +45,13 @@ final class SmokeUITests: XCTestCase {
         // The banner is found by what it says (its identifier differs between iOS versions).
         let banner = springboard.descendants(matching: .any)
             .matching(NSPredicate(format: "label CONTAINS[c] %@", expected)).firstMatch
-        if !banner.waitForExistence(timeout: 90) {
-            print(springboard.debugDescription)
+        // The smoke pushes a few seconds after the ready file; a dump while
+        // the banner should be on screen says what is there instead.
+        if !banner.waitForExistence(timeout: 10) {
+            print("springboard 10 s after ready:\n" + springboard.debugDescription)
+            print("the app 10 s after ready:\n" + app.debugDescription)
+        }
+        if !banner.waitForExistence(timeout: 80) {
             XCTFail("no banner arrived")
         }
         banner.tap()
