@@ -18,7 +18,7 @@ defmodule LumiaWeb.ApiTest do
   defp post_proto(conn, path, struct, :json) do
     conn
     |> put_req_header("content-type", @json)
-    |> post(path, Protobuf.JSON.encode!(struct))
+    |> post(path, Lumia.ProtoJSON.encode!(struct))
   end
 
   defp post_proto(conn, path, struct, :proto) do
@@ -31,7 +31,7 @@ defmodule LumiaWeb.ApiTest do
   defp decode(conn, module) do
     case get_resp_header(conn, "content-type") do
       [ct] when ct == @proto <> "; charset=utf-8" or ct == @proto -> module.decode(conn.resp_body)
-      _ -> Protobuf.JSON.decode!(conn.resp_body, module)
+      _ -> Lumia.ProtoJSON.decode!(conn.resp_body, module)
     end
   end
 
@@ -377,7 +377,7 @@ defmodule LumiaWeb.ApiTest do
         |> put_req_header("content-type", @json)
         |> put(
           "/api/v1/servers/#{ctx.server.id}/roles/#{rid}",
-          Protobuf.JSON.encode!(%V1.UpsertRoleRequest{role: %{role | name: "moderators"}})
+          Lumia.ProtoJSON.encode!(%V1.UpsertRoleRequest{role: %{role | name: "moderators"}})
         )
 
       assert %V1.Role{name: "moderators"} = decode(updated, V1.Role)
@@ -439,7 +439,7 @@ defmodule LumiaWeb.ApiTest do
         |> put_req_header("content-type", @json)
         |> patch(
           "/api/v1/servers/#{ctx.server.id}/members/#{alice.id}",
-          Protobuf.JSON.encode!(%V1.UpdateMemberRequest{role_ids: [Proto.uuid(role.id)]})
+          Lumia.ProtoJSON.encode!(%V1.UpdateMemberRequest{role_ids: [Proto.uuid(role.id)]})
         )
 
       assert %V1.Member{role_ids: [rid]} = decode(patched, V1.Member)
@@ -464,7 +464,7 @@ defmodule LumiaWeb.ApiTest do
         |> put_req_header("content-type", @json)
         |> put(
           "/api/v1/channels/#{ctx.general.id}/overwrites",
-          Protobuf.JSON.encode!(%V1.Overwrite{
+          Lumia.ProtoJSON.encode!(%V1.Overwrite{
             target: {:role_id, Proto.uuid(everyone.id)},
             deny: [:VIEW_CHANNEL]
           })

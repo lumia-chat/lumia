@@ -22,7 +22,7 @@ defmodule LumiaWeb.ProtoConn do
       nil -> {:ok, struct(module)}
       {_, ""} -> {:ok, struct(module)}
       {"x-protobuf", body} -> safe(fn -> module.decode(body) end)
-      {"json", body} -> safe(fn -> Protobuf.JSON.decode!(body, module) end)
+      {"json", body} -> safe(fn -> Lumia.ProtoJSON.decode!(body, module) end)
     end
   end
 
@@ -41,7 +41,7 @@ defmodule LumiaWeb.ProtoConn do
     else
       conn
       |> put_resp_content_type(@json)
-      |> send_resp(status, Protobuf.JSON.encode!(struct))
+      |> send_resp(status, Lumia.ProtoJSON.encode!(struct))
     end
   end
 

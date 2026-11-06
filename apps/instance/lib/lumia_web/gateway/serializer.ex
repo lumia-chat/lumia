@@ -5,7 +5,7 @@ defmodule LumiaWeb.Gateway.Serializer do
   the wire.
 
     * A binary WebSocket frame is a serialized `Lumia.V1.ClientFrame`; a
-      text frame is its ProtoJSON form. The encoding of the first frame the
+      text frame is its JSON form (docs/protocol.md section 2). The encoding of the first frame the
       socket receives is the encoding for the connection.
     * `Hello` is presented to Phoenix as the join of topic `session`.
       Every other client frame is the `frame` event on that topic.
@@ -39,7 +39,7 @@ defmodule LumiaWeb.Gateway.Serializer do
     frame =
       case encoding do
         :proto -> V1.ClientFrame.decode(raw)
-        :json -> Protobuf.JSON.decode!(raw, V1.ClientFrame)
+        :json -> Lumia.ProtoJSON.decode!(raw, V1.ClientFrame)
       end
 
     case frame do
@@ -117,7 +117,7 @@ defmodule LumiaWeb.Gateway.Serializer do
   defp push(%V1.ServerFrame{} = frame) do
     case encoding() do
       :proto -> {:socket_push, :binary, V1.ServerFrame.encode(frame)}
-      :json -> {:socket_push, :text, Protobuf.JSON.encode!(frame)}
+      :json -> {:socket_push, :text, Lumia.ProtoJSON.encode!(frame)}
     end
   end
 

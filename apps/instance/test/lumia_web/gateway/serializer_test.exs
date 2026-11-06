@@ -36,7 +36,9 @@ defmodule LumiaWeb.Gateway.SerializerTest do
     end
 
     test "a text frame selects JSON for the connection" do
-      json = Protobuf.JSON.encode!(%V1.ClientFrame{frame: {:heartbeat, %V1.Heartbeat{nonce: 1}}})
+      json =
+        Lumia.ProtoJSON.encode!(%V1.ClientFrame{frame: {:heartbeat, %V1.Heartbeat{nonce: 1}}})
+
       assert %Message{event: "frame"} = Serializer.decode!(json, opcode: :text)
 
       assert {:socket_push, :text, _} =

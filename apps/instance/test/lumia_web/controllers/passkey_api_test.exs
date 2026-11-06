@@ -12,10 +12,10 @@ defmodule LumiaWeb.PasskeyApiTest do
   defp post_proto(conn, path, struct) do
     conn
     |> put_req_header("content-type", @json)
-    |> post(path, Protobuf.JSON.encode!(struct))
+    |> post(path, Lumia.ProtoJSON.encode!(struct))
   end
 
-  defp decode(conn, module), do: Protobuf.JSON.decode!(conn.resp_body, module)
+  defp decode(conn, module), do: Lumia.ProtoJSON.decode!(conn.resp_body, module)
 
   defp authed(conn, account) do
     {:ok, _session, tokens} = Auth.create_session(account.id, Ecto.UUID.generate())

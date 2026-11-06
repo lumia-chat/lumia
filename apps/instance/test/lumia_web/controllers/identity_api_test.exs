@@ -81,7 +81,7 @@ defmodule LumiaWeb.IdentityApiTest do
     assert %V1.AccountSnapshot{
              account: %V1.Account{display_name: "Pat Doe", profile: %V1.SignedProfile{}}
            } =
-             Protobuf.JSON.decode!(snap.resp_body, V1.AccountSnapshot)
+             Lumia.ProtoJSON.decode!(snap.resp_body, V1.AccountSnapshot)
 
     # A newer version replaces it; an older one or a stranger's signature does not.
     newer = signed_profile(identity, phone, 2, "Pat D.")

@@ -27,7 +27,7 @@ Two encodings, one schema.
 
 **JSON** follows ProtoJSON with four Lumia rules that override it:
 
-1. **UUIDs are strings.** Every `bytes` field whose name ends in `_id`, plus `content_address`, `nonce`, and `identity_id`, is a canonical lowercase UUID string (or lowercase hex for the non-UUID ones: `content_address`, `nonce`), never base64.
+1. **Ids are strings a person can read.** Every `bytes` field whose name ends in `_id` or `_ids`, plus `content_address` and `nonce`, is a canonical lowercase UUID string when it holds sixteen bytes (account, channel, message, device and the other ids) and lowercase hex otherwise (an identity id is a 32-byte hash, a content address a 32-byte digest, a nonce 24 bytes), never base64. A server reading JSON still takes base64 in such a field, so a client written against stock ProtoJSON keeps working.
 2. **64-bit integers are decimal strings.** Every `uint64` and `int64`, which includes every `seq`, `version`, `epoch`, and `size_bytes`. JavaScript cannot hold them otherwise.
 3. **Enums are their symbolic names** (`"PERSONAL_DM"`), never integers. An unknown name is treated as the `_UNSPECIFIED` value.
 4. **Other `bytes` fields are base64** per ProtoJSON: signatures, public keys, `mls_message`, `key_packages`, `group_info`, `challenge`, `body` on signed structures.
