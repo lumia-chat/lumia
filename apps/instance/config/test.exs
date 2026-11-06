@@ -54,3 +54,7 @@ config :lumia, :push_sender, Lumia.Push.Sender.Test
 
 # The mailbox is local here, so magic links can be tried.
 config :lumia, :instance, magic_link: true
+
+# The gateway's reconciler ticks by hand in the tests (a timed tick would
+# race their checks and runs outside the SQL sandbox).
+config :lumia, reconciler_tick_ms: :timer.minutes(10)

@@ -15,7 +15,9 @@ defmodule LumiaWeb.Gateway.Reconciler do
   alias Lumia.Accounts
   alias Lumia.Events
 
-  @tick_ms 5_000
+  # The tick's period (delivery spec section 5). The tests tick by hand
+  # and set it long, so a timed tick never races a check.
+  @tick_ms Application.compile_env(:lumia, :reconciler_tick_ms, 5_000)
   @overlap_seconds 1
 
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
