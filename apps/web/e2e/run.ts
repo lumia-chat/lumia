@@ -395,11 +395,15 @@ async function dmSteps(which: string, page: Page, aDir: string, bAccount: string
   // then read, until the message is there.
   phase("cli read");
   let seen = "";
-  for (let i = 0; i < 10 && !seen.includes(hello); i++) {
-    Bun.spawnSync([cli, "--data-dir", aDir, "dm", "tail", channel], { cwd: web, timeout: 4_000 });
+  let tailed = "";
+  // Twenty tries: the macOS runner's WebKit has taken most of a minute
+  // over the group alone, and the CLI's store follows the channel log.
+  for (let i = 0; i < 20 && !seen.includes(hello); i++) {
+    const tail = Bun.spawnSync([cli, "--data-dir", aDir, "dm", "tail", channel], { cwd: web, timeout: 4_000 });
+    tailed = tail.stdout.toString() + tail.stderr.toString();
     seen = lumia(aDir, "dm", "messages", channel);
   }
-  if (!seen.includes(hello)) throw new Error(`the CLI did not read the browser's message:\n${seen}`);
+  if (!seen.includes(hello)) throw new Error(`the CLI did not read the browser's message; its last tail said:\n${tailed.slice(-600)}\nand it holds:\n${seen}`);
   const reply = `reply from the cli ${Date.now()}`;
   phase("cli send");
   lumia(aDir, "dm", "send", channel, reply);
