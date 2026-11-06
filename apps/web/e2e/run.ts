@@ -59,13 +59,22 @@ async function open(which: string, name: string, keep = false): Promise<{ ctx: B
   const engine = which === "webkit" ? webkit : chromium;
   // Bounded as a whole: a browser that launches but never serves a page
   // would otherwise hang the suite with nothing printed.
-  const launched = engine.launchPersistentContext(profile, { viewport: { width: 1440, height: 960 }, timeout: 60_000 }).then(async (ctx) => ({ ctx, page: await ctx.newPage() }));
+  // `LUMIA_E2E_CHANNEL=chromium` runs the full build instead of the headless
+  // shell; Chromium's own log goes to stderr, which `DEBUG=pw:browser` shows.
+  const options: Parameters<typeof engine.launchPersistentContext>[1] = { viewport: { width: 1440, height: 960 }, timeout: 60_000 };
+  if (which === "chromium") {
+    options.args = ["--enable-logging=stderr", "--v=0"];
+    if (process.env.LUMIA_E2E_CHANNEL) options.channel = process.env.LUMIA_E2E_CHANNEL;
+  }
+  const launched = engine.launchPersistentContext(profile, options).then(async (ctx) => ({ ctx, page: await ctx.newPage() }));
   const { ctx, page } = await Promise.race([launched, Bun.sleep(90_000).then(() => Promise.reject(new Error(`${which} did not open a page within 90 s`)))]);
   console.log(`  [${which}] browser ${ctx.browser()?.version() ?? "?"} up`);
   live.page = page;
   // WebKit's first navigation of a run on Linux CI takes well over the default 30 s.
   page.setDefaultNavigationTimeout(90_000);
   page.on("pageerror", (e) => console.log(`  [${which}] page error: ${e.message}`));
+  page.on("crash", () => console.log(`  [${which}] the page crashed`));
+  page.on("worker", (w) => w.on("close", () => console.log(`  [${which}] worker closed: ${w.url().split("/").pop()}`)));
   page.on("console", (m) => {
     if (m.type() === "error") console.log(`  [${which}] console: ${m.text()}`);
   });
@@ -88,6 +97,34 @@ async function clearStores(which: string, page: Page, origin: string) {
   });
   const outcome = await Promise.race([cleared.catch((e: unknown) => `failed: ${e instanceof Error ? e.message : String(e)}`), Bun.sleep(15_000).then(() => "timed out")]);
   if (outcome !== true) console.log(`  [${which}] clearing storage at ${origin} ${outcome}`);
+}
+
+// What a failed step leaves: whether the page's main thread, each of its
+// workers and the CDP session still answer, a screenshot, and the body's
+// text. Each probe has its own bound, so a wedged renderer names itself
+// instead of hanging the report (the plan's Linux wedge).
+async function diagnose(which: string, page: Page, shot: string) {
+  const bounded = async (label: string, work: () => Promise<string>, ms: number) => {
+    const outcome = await Promise.race([work().catch((e: unknown) => `failed: ${e instanceof Error ? e.message.split("\n")[0] : String(e)}`), Bun.sleep(ms).then(() => `no answer in ${ms / 1000} s`)]);
+    console.log(`  [${which}] ${label}: ${outcome}`);
+  };
+  console.log(`  [${which}] at ${page.url()}, ${page.isClosed() ? "closed" : "open"}, ${page.workers().length} workers`);
+  await bounded("main thread", () => page.evaluate(() => "answers"), 5_000);
+  for (const w of page.workers()) await bounded(`worker ${w.url().split("/").pop()}`, () => w.evaluate(() => "answers"), 5_000);
+  if (which === "chromium") {
+    await bounded(
+      "cdp Runtime.evaluate",
+      async () => {
+        const cdp = await page.context().newCDPSession(page);
+        const r = (await cdp.send("Runtime.evaluate", { expression: "1 + 1" })) as { result?: { value?: unknown } };
+        await cdp.detach();
+        return `answers ${String(r.result?.value)}`;
+      },
+      5_000,
+    );
+  }
+  await bounded("screenshot", () => page.screenshot({ path: `${out}/${shot}.png`, timeout: 10_000 }).then(() => "ok"), 12_000);
+  await bounded("body", async () => (await page.textContent("body", { timeout: 5_000 }))?.replace(/\s+/g, " ").slice(0, 300) ?? "empty", 6_000);
 }
 
 // WebKit on Linux CI sometimes never finishes a profile's first navigation;
@@ -810,15 +847,7 @@ try {
       } catch (e) {
         failed++;
         console.log(`  ${which}: ${name} FAILED: ${e instanceof Error ? e.message.split("\n")[0] : String(e)}`);
-        try {
-          const page = live.page;
-          if (page) {
-            await page.screenshot({ path: `${out}/${which}-${name.replace(/\s+/g, "-")}-failed.png`, timeout: 10_000 });
-            console.log(`  [${which}] at ${page.url()}: ${(await page.textContent("body", { timeout: 5_000 }))?.replace(/\s+/g, " ").slice(0, 200)}`);
-          }
-        } catch {
-          /* the page may be gone */
-        }
+        if (live.page) await diagnose(which, live.page, `${which}-${name.replace(/\s+/g, "-")}-failed`);
       } finally {
         clearInterval(beat);
       }

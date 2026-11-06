@@ -6,6 +6,11 @@ on:
     paths: ["apps/web/**", "apps/core/**", "apps/instance/**", "assets/**", "proto/**", ".github/workflows/e2e.yml"]
   pull_request:
     paths: ["apps/web/**", "apps/core/**", "apps/instance/**", "assets/**", "proto/**", ".github/workflows/e2e.yml"]
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: "Chromium channel for the suite (empty: the headless shell; chromium: the full build)"
+        default: ""
 
 permissions:
   contents: read
@@ -95,6 +100,10 @@ jobs:
           echo "the instance did not come up" >&2; tail -50 /tmp/phx.log; exit 1
       - run: bun run e2e -- chromium
         working-directory: apps/web
+        env:
+          # Chromium's stderr in the log, and the step's own diagnosis of a hang.
+          DEBUG: "pw:browser"
+          LUMIA_E2E_CHANNEL: ${{ github.event.inputs.channel || '' }}
       # The e2ee fault cases, with the CLI as every device (apps/core/scripts/dm-faults.sh).
       - run: apps/core/scripts/dm-faults.sh http://localhost:4000
         env:
