@@ -49,12 +49,15 @@ defmodule Mix.Tasks.Lumia.Spike.Gateway do
 
     Mix.Task.run("app.start")
 
-    Mix.shell().info("gateway spike: subscribers=#{subscribers} messages=#{messages} rate=#{rate}/s")
+    Mix.shell().info(
+      "gateway spike: subscribers=#{subscribers} messages=#{messages} rate=#{rate}/s"
+    )
 
     {channel_id, tokens} = setup(subscribers + 1)
     [sender_token | subscriber_tokens] = tokens
 
     coordinator = self()
+
     clients =
       subscriber_tokens
       |> Enum.chunk_every(50)
@@ -63,6 +66,7 @@ defmodule Mix.Tasks.Lumia.Spike.Gateway do
         Process.sleep(100)
         started
       end)
+
     sender = start_client(sender_token, channel_id, coordinator)
     wait_ready(length(clients) + 1)
     Mix.shell().info("all #{length(clients) + 1} clients subscribed")
@@ -86,13 +90,17 @@ defmodule Mix.Tasks.Lumia.Spike.Gateway do
   # ---- Setup -------------------------------------------------------------------------
 
   defp setup(n) do
-    {:ok, owner} = Accounts.create_account(%{handle: "spike-owner-#{System.unique_integer([:positive])}"})
+    {:ok, owner} =
+      Accounts.create_account(%{handle: "spike-owner-#{System.unique_integer([:positive])}"})
+
     {:ok, server} = Servers.create_server(owner.id, "Spike")
     {:ok, channel} = Servers.create_channel(server.id, owner.id, "general")
 
     tokens =
       for i <- 1..n do
-        {:ok, account} = Accounts.create_account(%{handle: "spike-#{i}-#{System.unique_integer([:positive])}"})
+        {:ok, account} =
+          Accounts.create_account(%{handle: "spike-#{i}-#{System.unique_integer([:positive])}"})
+
         {:ok, _} = Servers.add_member(server.id, account.id, owner.id)
         {:ok, _, tokens} = Auth.create_session(account.id, Ecto.UUID.generate())
         tokens.access_token
@@ -117,13 +125,28 @@ defmodule Mix.Tasks.Lumia.Spike.Gateway do
 
   defp client(token, channel_id, coordinator) do
     conn = connect(5)
-    path = "/gateway/websocket?access_token=#{token}&vsn=1.0.0"
-    {:ok, conn, ref} = Mint.WebSocket.upgrade(:ws, conn, path, [])
+    # The token travels as a subprotocol (protocol section 6.1), the way
+    # every client sends it.
+    protocols = "phoenix, base64url.bearer.phx." <> Base.encode64(token, padding: false)
+    headers = [{"sec-websocket-protocol", protocols}]
+    {:ok, conn, ref} = Mint.WebSocket.upgrade(:ws, conn, "/gateway/websocket?vsn=1.0.0", headers)
 
     {conn, websocket} = await_upgrade(conn, ref)
-    state = %{conn: conn, ref: ref, ws: websocket, coordinator: coordinator, channel_id: channel_id}
 
-    state = send_frame(state, {:hello, %V1.Hello{client: "spike", device_id: Proto.uuid(Ecto.UUID.generate())}})
+    state = %{
+      conn: conn,
+      ref: ref,
+      ws: websocket,
+      coordinator: coordinator,
+      channel_id: channel_id
+    }
+
+    state =
+      send_frame(
+        state,
+        {:hello, %V1.Hello{client: "spike", device_id: Proto.uuid(Ecto.UUID.generate())}}
+      )
+
     loop(state)
   end
 
@@ -131,9 +154,14 @@ defmodule Mix.Tasks.Lumia.Spike.Gateway do
   # reset; retry with a short backoff rather than fail the run.
   defp connect(attempts) do
     case Mint.HTTP.connect(:http, "127.0.0.1", @port, protocols: [:http1]) do
-      {:ok, conn} -> conn
-      {:error, _} when attempts > 1 -> Process.sleep(50 + :rand.uniform(100)) && connect(attempts - 1)
-      {:error, reason} -> exit({:connect_failed, reason})
+      {:ok, conn} ->
+        conn
+
+      {:error, _} when attempts > 1 ->
+        Process.sleep(50 + :rand.uniform(100)) && connect(attempts - 1)
+
+      {:error, reason} ->
+        exit({:connect_failed, reason})
     end
   end
 
@@ -189,7 +217,8 @@ defmodule Mix.Tasks.Lumia.Spike.Gateway do
         send(state.coordinator, :ready)
         state
 
-      %V1.ServerFrame{frame: {:event, %V1.Event{command_id: command_id}}} when byte_size(command_id) == 16 ->
+      %V1.ServerFrame{frame: {:event, %V1.Event{command_id: command_id}}}
+      when byte_size(command_id) == 16 ->
         send(state.coordinator, {:delivered, command_id, now})
         state
 
@@ -227,10 +256,14 @@ defmodule Mix.Tasks.Lumia.Spike.Gateway do
 
   defp collect(n, sent, acc) do
     receive do
-      {:delivered, command_id, at} -> collect(n - 1, sent, [at - Map.fetch!(sent, command_id) | acc])
-      {:acked, _, _} = ack -> send(self(), ack) |> then(fn _ -> collect(n, sent, acc) end)
+      {:delivered, command_id, at} ->
+        collect(n - 1, sent, [at - Map.fetch!(sent, command_id) | acc])
+
+      {:acked, _, _} = ack ->
+        send(self(), ack) |> then(fn _ -> collect(n, sent, acc) end)
     after
-      10_000 -> Mix.raise("timed out waiting for deliveries; #{n} outstanding of #{length(acc) + n}")
+      10_000 ->
+        Mix.raise("timed out waiting for deliveries; #{n} outstanding of #{length(acc) + n}")
     end
   end
 
@@ -238,7 +271,8 @@ defmodule Mix.Tasks.Lumia.Spike.Gateway do
 
   defp collect_acks(n, sent, acc) do
     receive do
-      {:acked, command_id, at} -> collect_acks(n - 1, sent, [at - Map.fetch!(sent, command_id) | acc])
+      {:acked, command_id, at} ->
+        collect_acks(n - 1, sent, [at - Map.fetch!(sent, command_id) | acc])
     after
       5_000 -> Mix.raise("timed out waiting for acks; #{n} outstanding")
     end

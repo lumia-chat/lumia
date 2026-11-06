@@ -52,6 +52,16 @@ mix lumia.spike.gateway --subscribers 200 --messages 300 --rate 50
 
 Both write to the dev database; `mix ecto.reset` clears it. The gateway spike starts the endpoint on port 4799.
 
+The load test of architecture section 17 ([docs/spikes/2026-11-06-load.md](../../docs/spikes/2026-11-06-load.md)) seeds a fixture once (10M events is 27 GB and a minute and a half) and measures every row the instance can, on port 4798:
+
+```sh
+LUMIA_CODE_RELOADER=false mix lumia.load --channels 1000 --events 10000000
+LUMIA_CODE_RELOADER=false mix lumia.load --channels 1000 --events 10000000 --connections 10000
+LUMIA_CODE_RELOADER=false mix lumia.load --ci   # a small fixture, the budgets checked; what CI runs
+```
+
+The reloader must be compiled out (the variable is read by `config/dev.exs`): its plug costs about 8 ms per request, which would be most of the scrollback row. The connections run wants `ulimit -n 65536`.
+
 ## The web UI
 
 An instance serves the web app from `priv/static/ui` when a build is installed there, so its web origin is itself (architecture 11.4):

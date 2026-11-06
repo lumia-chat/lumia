@@ -282,7 +282,7 @@ Guests start from an empty permission set rather than `@everyone`, and gain acce
 - **Member-level changes** (roles assigned, a kick, a guest expiring) do not bump `acl_version`; they append to the affected member's account log, whose `seq` and reconciliation give the same guarantee. The member's sessions re-resolve or unsubscribe on receipt.
 - **Writes** are checked against Postgres on every request.
 - **Partition healing.** After a node rejoins the cluster, every session on it re-resolves all subscriptions before delivering anything.
-- **Bounded staleness.** A subscription not re-resolved in ten minutes is re-resolved before its next delivery.
+- **Bounded staleness.** A subscription not re-resolved in ten minutes is re-resolved before its next delivery. Ten minutes and the 5-second reconciler tick were confirmed by measurement ([spikes/2026-11-06-load.md](spikes/2026-11-06-load.md)): a re-resolution is under a millisecond and is paid per stale delivery, a tick about 2 µs per channel written in its window.
 
 **Rejected.** *Bumping `acl_version` on member-level changes.* Correct but a re-resolution storm across every session in a large server on every role assignment.
 
@@ -568,7 +568,7 @@ A limit resolves as **min(operator hard limit, max(applicable plan allowances))*
 
 Proposed. Adjust the numbers; keep the section and the workload spec. Each budget is meaningless without its workload, and CI fails on regressions against the ones that can be measured in CI.
 
-Measured so far, on a laptop: the write transaction commits in under 1 ms and sustains about 10k writes/s across 100 channels with p99 around 6 ms ([spikes/2026-11-01-event-log.md](spikes/2026-11-01-event-log.md)). Through the real gateway, send to delivered is 7 ms p50 and 22 ms p99 with 200 subscribers on one channel, and 13 ms p50 and 32 ms p99 with 1,000, against the 100 ms budget ([spikes/2026-11-01-gateway.md](spikes/2026-11-01-gateway.md)).
+Measured so far, on a laptop: the write transaction commits in under 1 ms and sustains about 10k writes/s across 100 channels with p99 around 6 ms ([spikes/2026-11-01-event-log.md](spikes/2026-11-01-event-log.md)). Through the real gateway, send to delivered is 7 ms p50 and 22 ms p99 with 200 subscribers on one channel, and 13 ms p50 and 32 ms p99 with 1,000, against the 100 ms budget ([spikes/2026-11-01-gateway.md](spikes/2026-11-01-gateway.md)). The first load test ([spikes/2026-11-06-load.md](spikes/2026-11-06-load.md), `mix lumia.load`, 2026-11-06) ran the rows below against a database of 10 million events: send to delivered 6 ms p50 and 18 ms p99 on the row's workload; connect, authenticate and resume 50 channels with presence 66 ms p99; scrollback 3 ms p99; MLS encrypt and decrypt under 0.1 ms; the frame at 177 bytes, which corrected the budget. The connections row misses: 585 KB of server memory per connection against the 80 KB that 100,000 in 8 GB implies, and about 100 connects a second with 50 subscriptions each before the database pool drops queries; the plan carries both. CI runs the instance rows at a small scale (`mix lumia.load --ci`) and the MLS row in release, each p99 against its budget.
 
 | Budget | Target | Workload |
 |---|---|---|
@@ -578,8 +578,8 @@ Measured so far, on a laptop: the write transaction commits in under 1 ms and su
 | Idle desktop client RSS, 5 instances connected | 150 MB | After 10 minutes idle, GC settled |
 | Linux desktop (WebKitGTK): scroll a 10k-message channel at 60 fps, cold start, idle RSS | Same budgets as other desktops | Measured separately because WebKitGTK is the weakest webview; a miss here triggers the Qt desktop shell for Windows and Linux together (section 13) |
 | Idle mobile client RSS | 80 MB | Same |
-| Concurrent gateway connections per node (4 vCPU, 8 GB) | 100,000 | 50 subscriptions each, 10% in presence, 1 msg/s per 1,000 connections, p99 delivery still under budget |
-| Protobuf frame for a plain text message, excluding body | 64 bytes | Transport only; E2EE application message overhead budgeted separately once MLS framing is pinned |
+| Concurrent gateway connections per node (4 vCPU, 8 GB) | 100,000 | 50 subscriptions each, 10% in presence, 1 msg/s per 1,000 connections, p99 delivery still under budget. Measured 2026-11-06 at 10,000: delivery p99 28 ms, 585 KB per connection, which misses (see the spike) |
+| Protobuf frame for a plain text message, excluding body | 200 bytes | Transport only: the event envelope and the message inside it, each with its ids and timestamp (measured at 177; a reply's `parent_id` adds 18). The MLS ciphertext of a 1 KB operation measured 188 bytes over the plaintext |
 | MLS encrypt or decrypt of a message on device | 1 ms | 10-member group, desktop |
 | Scrollback fetch of 50 messages, p99 | 50 ms | Same database, cold cache |
 
@@ -616,10 +616,8 @@ Out of scope: a hosted-only feature that cannot run self-hosted; a second editio
 
 ## 20. Open questions and proof obligations
 
-- Exact numbers in section 17, after a first load test.
 - Whether the Tauri shell ships the Rust core in-process from day one or starts as WASM for parity with web. Moot if the Linux budget sends desktop to Qt (section 13).
 - Link unfurling: server-fetched versus client-fetched, and whether it exists at all in personal DMs.
-- The reconciliation interval and the bounded-staleness interval (7.4), to be set from measurements.
 
 ## 21. Repository layout
 

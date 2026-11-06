@@ -170,7 +170,7 @@ One place to tune them.
 |---|---|
 | `Hello` deadline after upgrade | 5 s |
 | Heartbeat interval | 30 s; disconnect after 2 missed |
-| Reconciler tick | 5 s, with a 1 s overlap |
+| Reconciler tick | 5 s, with a 1 s overlap (measured: about 2 µs per channel moved in the window, [spikes/2026-11-06-load.md](../spikes/2026-11-06-load.md)) |
 | Replay page | 200 events |
 | Replay cap at subscribe | 1,000 events, else `SNAPSHOT_REQUIRED` |
 | Live gap cap | 1,000 events, else `Nudge` |

@@ -166,7 +166,7 @@ System constants:
 
 | Constant | Value |
 |---|---|
-| Bounded-staleness interval | 10 minutes |
+| Bounded-staleness interval | 10 minutes (measured: a re-resolution is 0.3 ms p50, 0.7 ms p99, paid per stale delivery; [spikes/2026-11-06-load.md](../spikes/2026-11-06-load.md)) |
 | Viewer-diff debounce | 30 seconds per server |
 | Snapshot cache TTL | 10 minutes |
 | `AclChanged` batch size for server-wide bumps | 100 channels per job |

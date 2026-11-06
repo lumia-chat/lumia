@@ -15,7 +15,8 @@ end
 config :lumia, Lumia.Repo,
   stacktrace: true,
   show_sensitive_data_on_connection_error: true,
-  pool_size: 10
+  # `DB_POOL_SIZE`, as in production, for the load test's server VM.
+  pool_size: String.to_integer(System.get_env("DB_POOL_SIZE", "10"))
 
 # For development, we disable any cache and enable
 # debugging and code reloading.
@@ -31,7 +32,10 @@ config :lumia, LumiaWeb.Endpoint,
   http: [ip: {127, 0, 0, 1}, port: String.to_integer(System.get_env("PORT") || "4000")],
   url: [host: System.get_env("LUMIA_HOST") || "localhost"],
   check_origin: false,
-  code_reloader: true,
+  # Compiled into the endpoint. `LUMIA_CODE_RELOADER=false` leaves the
+  # reloader plug out, which `mix lumia.load` wants: the plug's check costs
+  # about 8 ms on every request, with nothing to reload.
+  code_reloader: System.get_env("LUMIA_CODE_RELOADER", "true") == "true",
   debug_errors: true,
   secret_key_base:
     System.get_env("SECRET_KEY_BASE") ||

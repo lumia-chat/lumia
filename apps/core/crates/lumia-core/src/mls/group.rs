@@ -638,6 +638,90 @@ mod tests {
             .0
     }
 
+    /// Architecture section 17's MLS row: encrypt or decrypt of a message
+    /// in a 10-member group on a desktop, 1 ms. Timed, so it runs only
+    /// when asked for, in release:
+    ///
+    ///     cargo test -p lumia-core --release mls_budget -- --ignored --nocapture
+    ///
+    /// Ten devices join one group, one of them encrypts a thousand
+    /// 1 KB operations and another decrypts each; the budget is checked
+    /// at p99, in a release build only (debug builds are many times
+    /// slower and say nothing about the budget).
+    #[test]
+    #[ignore = "a timed budget; run explicitly in release"]
+    fn mls_budget() {
+        let devs: Vec<Dev> = (1..=10).map(|i| dev(i, 10 + i)).collect();
+        let rosters = rosters(&devs.iter().collect::<Vec<_>>());
+        let look = lookup(&rosters);
+        let channel = vec![7; 16];
+
+        let creator = &devs[0];
+        let mut creator_group =
+            Conversation::create(&creator.provider, &creator.signer, &creator.me, &channel)
+                .unwrap();
+        let packages: Vec<KeyPackage> = devs[1..]
+            .iter()
+            .map(|d| key_package(d, &look, creator))
+            .collect();
+        let commit = creator_group
+            .add(&creator.provider, &creator.signer, &packages)
+            .unwrap();
+        creator_group.merge_pending(&creator.provider).unwrap();
+        let welcome = commit.welcome.unwrap();
+        let sender = &devs[1];
+        let mut sender_group = Conversation::join(&sender.provider, &welcome, &look).unwrap();
+        assert_eq!(sender_group.members().len(), 10);
+
+        let body = "x".repeat(1_024);
+        let mut encrypts = Vec::with_capacity(1_000);
+        let mut decrypts = Vec::with_capacity(1_000);
+        let mut wire_bytes = 0;
+        for _ in 0..1_000 {
+            let op = send_op(&body);
+            let started = std::time::Instant::now();
+            let out = sender_group
+                .encrypt(&sender.provider, &sender.signer, &op)
+                .unwrap();
+            encrypts.push(started.elapsed());
+            wire_bytes = out.bytes.len();
+
+            let started = std::time::Instant::now();
+            let incoming = creator_group
+                .handle(&creator.provider, &out.bytes, &look)
+                .unwrap();
+            decrypts.push(started.elapsed());
+            assert!(matches!(incoming, Incoming::Operation { .. }));
+        }
+
+        let report = |label: &str, samples: &mut Vec<std::time::Duration>| {
+            samples.sort();
+            let at = |p: f64| samples[((samples.len() as f64 * p) as usize).min(samples.len() - 1)];
+            println!(
+                "{label}: p50 {:?} p95 {:?} p99 {:?} max {:?}",
+                at(0.5),
+                at(0.95),
+                at(0.99),
+                samples[samples.len() - 1],
+            );
+            at(0.99)
+        };
+        println!("ciphertext: {wire_bytes} bytes for a 1,024-byte body");
+        let encrypt_p99 = report("encrypt, 10 members, 1 KB", &mut encrypts);
+        let decrypt_p99 = report("decrypt, 10 members, 1 KB", &mut decrypts);
+        if !cfg!(debug_assertions) {
+            let budget = std::time::Duration::from_millis(1);
+            assert!(
+                encrypt_p99 < budget,
+                "encrypt p99 {encrypt_p99:?} over the 1 ms budget"
+            );
+            assert!(
+                decrypt_p99 < budget,
+                "decrypt p99 {decrypt_p99:?} over the 1 ms budget"
+            );
+        }
+    }
+
     #[test]
     fn create_add_welcome_and_message_round_trip_across_three_devices() {
         let b = dev(2, 20);

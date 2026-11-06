@@ -14,7 +14,10 @@ defmodule LumiaWeb.Telemetry do
       {:telemetry_poller, measurements: periodic_measurements(), period: 10_000},
       # The Prometheus text served at /metrics (docs/specs/deployment.md
       # section 7) when LUMIA_METRICS is on; LumiaWeb.Plugs.Metrics scrapes it.
-      {TelemetryMetricsPrometheus.Core, metrics: prometheus_metrics()}
+      {TelemetryMetricsPrometheus.Core, metrics: prometheus_metrics()},
+      # Folds the pending distribution samples into their buckets every 30
+      # seconds, so the sample table stays bounded when nothing scrapes.
+      LumiaWeb.Telemetry.Aggregator
     ]
 
     Supervisor.init(children, strategy: :one_for_one)

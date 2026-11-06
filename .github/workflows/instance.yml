@@ -75,6 +75,15 @@ jobs:
       - run: mix credo --strict
       - run: mix test
       - run: mix test.failure_injection
+      # The load test's CI mode (architecture section 17): a small fixture
+      # on a database of its own, every row the instance can measure, the
+      # budgets checked. bench/ compiles in dev only.
+      - name: Load test, CI mode
+        env:
+          MIX_ENV: dev
+          LUMIA_CODE_RELOADER: "false"
+          DB_URL: postgres://postgres:postgres@localhost:5432/lumia_load
+        run: mix do ecto.create + ecto.migrate + lumia.load --ci
 
   # Two instances side by side (deployment.md section 2.3): the image built
   # here, the cross-instance cases run with the release CLI.

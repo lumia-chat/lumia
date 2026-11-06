@@ -97,7 +97,8 @@ defmodule Mix.Tasks.Lumia.Spike.Events do
       op: {:send_message, %Lumia.V1.SendMessage{body: body}}
     }
 
-    {:ok, _ack} = Events.append(channel_id, %{account_id: @actor, device_id: nil}, command, broadcast: false)
+    {:ok, _ack} =
+      Events.append(channel_id, %{account_id: @actor, device_id: nil}, command, broadcast: false)
   end
 
   defp explain_all(channel_id) do
@@ -151,12 +152,17 @@ defmodule Mix.Tasks.Lumia.Spike.Events do
 
         re = checks[:expect] ->
           cond do
-            plan =~ re -> "OK, index used"
+            plan =~ re ->
+              "OK, index used"
+
             # On a near-empty table the planner prefers a sequential scan,
             # which says nothing about the index. Only fail when it would
             # have mattered.
-            small_table?(checks[:table]) -> "SKIPPED, table too small for the planner to use the index"
-            true -> "FAIL, no index scan"
+            small_table?(checks[:table]) ->
+              "SKIPPED, table too small for the planner to use the index"
+
+            true ->
+              "FAIL, no index scan"
           end
       end
 

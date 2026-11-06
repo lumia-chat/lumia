@@ -39,6 +39,8 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+      # The MLS row of architecture section 17, timed in release.
+      - run: cargo test -p lumia-core --release mls_budget -- --ignored --nocapture
       # SQLite is compiled to wasm by the cc crate, which needs an archiver
       # that understands wasm objects (docs/spikes/2026-11-02-web-store.md).
       - run: rustup component add llvm-tools

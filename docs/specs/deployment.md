@@ -106,7 +106,7 @@ Rolling upgrade: with DNS clustering, replace nodes one at a time; sessions on a
 
 ## 7. Observability
 
-`/metrics` serves Prometheus text when `LUMIA_METRICS` is `true`; it is meant for the operator's network, not the public one, and the guide shows how to keep it off the proxy. The metrics are the ones `LumiaWeb.Telemetry` defines (request and query durations, VM memory and run queues) plus the instance's own: gateway connections, sessions, commands acknowledged, events applied, reconciler ticks and the heads they found behind.
+`/metrics` serves Prometheus text when `LUMIA_METRICS` is `true`; it is meant for the operator's network, not the public one, and the guide shows how to keep it off the proxy. The metrics are the ones `LumiaWeb.Telemetry` defines (request and query durations, VM memory and run queues) plus the instance's own: gateway connections, sessions, commands acknowledged, events applied, reconciler ticks and the heads they found behind. The distributions are aggregated into their buckets every 30 seconds by the instance itself, not only at a scrape, so the samples stay bounded on an instance nothing scrapes (the load test found 300,000 pending rows after a thousand sessions; [spikes/2026-11-06-load.md](../spikes/2026-11-06-load.md)).
 
 OpenTelemetry traces and opt-in update checks and anonymous statistics are later; hard rule 3 of the architecture applies to all of them.
 
