@@ -101,8 +101,10 @@ async function clearStores(which: string, page: Page, origin: string) {
 
 // What a failed step leaves: whether the page's main thread, each of its
 // workers and the CDP session still answer, a screenshot, and the body's
-// text. Each probe has its own bound, so a wedged renderer names itself
-// instead of hanging the report (the plan's Linux wedge).
+// text. Each probe has its own bound, so a browser that answers nothing
+// names itself instead of hanging the report. (Written for the Linux
+// runner's "wedge", which these probes showed was no renderer hang: the
+// browser had exited, its DevTools pipe cut by Bun 1.3.x, oven-sh/bun#47956.)
 async function diagnose(which: string, page: Page, shot: string) {
   const bounded = async (label: string, work: () => Promise<string>, ms: number) => {
     const outcome = await Promise.race([work().catch((e: unknown) => `failed: ${e instanceof Error ? e.message.split("\n")[0] : String(e)}`), Bun.sleep(ms).then(() => `no answer in ${ms / 1000} s`)]);
@@ -353,14 +355,9 @@ async function dmSteps(which: string, page: Page, aDir: string, bAccount: string
   lumia(aDir, "dm", "send", channel, reply);
   phase("wait for the reply");
   await page.getByText(reply).waitFor();
-  // Back from disk: a fresh page in the same profile. Not on the Linux
-  // runner: tearing this page down there wedges the whole browser (the
-  // plan records it); the sign-in step covers the store coming back from
-  // disk on Linux, and this check runs on macOS.
-  if (process.platform === "linux") {
-    console.log(`  [${which}] the conversation's return from disk is checked on macOS, not here`);
-    return;
-  }
+  // Back from disk: a fresh page in the same profile. (This once wedged
+  // the browser on the Linux runner; that was Bun 1.3.x cutting the
+  // DevTools pipe, oven-sh/bun#47956, not the page's teardown.)
   phase("reopen");
   const url = page.url();
   const again = await page.context().newPage();
@@ -859,4 +856,7 @@ try {
   vite?.kill();
   pushService.stop(true);
   oidcService.stop(true);
+  // A browser that went away mid-step leaves calls that never settle;
+  // they must not hold the process (and a CI job) open after the report.
+  process.exit();
 }

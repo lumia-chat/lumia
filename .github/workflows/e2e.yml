@@ -23,6 +23,10 @@ permissions:
 jobs:
   browsers:
     runs-on: ubuntu-24.04
+    # A passing job takes about ten minutes. The suite once sat for the
+    # six-hour default after a browser went away under it; nothing here
+    # may run that long.
+    timeout-minutes: 30
     env:
       MIX_ENV: dev
       DB_URL: postgres://postgres:postgres@localhost:5432/lumia_dev
@@ -44,9 +48,13 @@ jobs:
         with:
           elixir-version: "1.20.4"
           otp-version: "29"
+      # 1.4 or later: Bun 1.3.x on Linux closes a finished child's extra
+      # stdio descriptors by number after garbage collection, which cuts the
+      # next browser's DevTools pipe (oven-sh/bun#47956); the suite then
+      # hung on its fourth browser in every run.
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: "1.3.11"
+          bun-version: "1.4.4"
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.96.0"
@@ -104,6 +112,9 @@ jobs:
           # Chromium's stderr in the log, and the step's own diagnosis of a hang.
           DEBUG: "pw:browser"
           LUMIA_E2E_CHANNEL: ${{ github.event.inputs.channel || '' }}
+        # A passing suite takes about three minutes; every step is bounded
+        # at four, and a run that trips several must still end here.
+        timeout-minutes: 15
       # The e2ee fault cases, with the CLI as every device (apps/core/scripts/dm-faults.sh).
       - run: apps/core/scripts/dm-faults.sh http://localhost:4000
         env:
