@@ -555,12 +555,15 @@ struct ProfileScreen: View {
     @State private var busy = false
     @State private var error = ""
     @State private var saved = false
+    // The form waits for the profile held: fields shown before it lands
+    // would be overwritten by it, typing and all.
+    @State private var loaded = false
 
     var body: some View {
         PanelScreen(back: "Home", title: "Profile", subtitle: "How people see you", actions: []) {
             ScrollView {
                 VStack(alignment: .leading, spacing: LumiaTokens.space12) {
-                    if session.hasIdentity {
+                    if session.hasIdentity, loaded {
                         LumiaCard(title: handleTitle, subtitle: subtitle, width: nil) {
                             VStack(alignment: .leading, spacing: LumiaTokens.space12) {
                                 LumiaField("Display name", text: $displayName, placeholder: "How people see you")
@@ -576,7 +579,7 @@ struct ProfileScreen: View {
                                     .buttonStyle(.lumiaPrimary).disabled(busy)
                             }
                         }
-                    } else {
+                    } else if !session.hasIdentity {
                         LumiaNotice(icon: "shield", tone: .accent, action: ("Link this phone", { store.route = .link })) {
                             Text("Your profile travels with your identity, signed by its devices. This phone holds no device key yet; a device you already use approves it.")
                         }
@@ -602,6 +605,7 @@ struct ProfileScreen: View {
         displayName = profile?.displayName ?? ""
         pronouns = profile?.pronouns ?? ""
         bio = profile?.bio ?? ""
+        loaded = true
     }
 
     private func save() async {

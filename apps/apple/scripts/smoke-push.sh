@@ -71,7 +71,14 @@ for _ in $(seq 1 90); do
   if [ -n "$f" ]; then request=$(cat "$f"); break; fi
   sleep 1
 done
-[ -n "$request" ] || { echo "FAIL: the app wrote no link request"; exit 1; }
+[ -n "$request" ] || {
+  echo "FAIL: the app wrote no link request"
+  # What the app was doing instead, for the artifact.
+  xcrun simctl io "$udid" screenshot "$work/nolink.png" >/dev/null 2>&1 || true
+  xcrun simctl spawn "$udid" log show --last 3m --style compact --predicate 'subsystem == "chat.lumia" OR process == "Lumia"' > "$work/sim.log" 2>&1 || true
+  tail -20 "$work/uitest.log"
+  exit 1
+}
 data=$(dirname "$f")
 code=$("$cli" --data-dir "$x" identity approve "$request" | grep -oE "code [A-Za-z0-9]+" | cut -d' ' -f2)
 echo "$code" > "$data/link-code.txt"

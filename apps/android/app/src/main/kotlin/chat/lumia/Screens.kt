@@ -559,12 +559,16 @@ fun ProfileScreen(store: AppStore, session: LumiaSession, back: () -> Unit) {
     var busy by rememberSaveable { mutableStateOf(false) }
     var error by rememberSaveable { mutableStateOf("") }
     var saved by rememberSaveable { mutableStateOf(false) }
+    // The form waits for the profile held: fields shown before it lands
+    // would be overwritten by it, typing and all.
+    var loaded by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         profile = runCatching { session.profile() }.getOrNull()
         displayName = profile?.displayName ?: ""
         pronouns = profile?.pronouns ?: ""
         bio = profile?.bio ?: ""
+        loaded = true
     }
 
     val handleTitle = session.snapshot?.handle?.takeIf { it.isNotEmpty() }?.let { "@$it" } ?: "You"
@@ -572,7 +576,7 @@ fun ProfileScreen(store: AppStore, session: LumiaSession, back: () -> Unit) {
 
     PanelScreen(back = "Home", onBack = back, title = "Profile", subtitle = "How people see you") {
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).navigationBarsPadding().imePadding().padding(LumiaTokens.space16), verticalArrangement = Arrangement.spacedBy(LumiaTokens.space12)) {
-            if (session.hasIdentity) {
+            if (session.hasIdentity && loaded) {
                 LumiaCard(handleTitle, subtitle) {
                     Column(verticalArrangement = Arrangement.spacedBy(LumiaTokens.space12)) {
                         LumiaField("Display name", displayName, { displayName = it }, placeholder = "How people see you")
@@ -601,7 +605,7 @@ fun ProfileScreen(store: AppStore, session: LumiaSession, back: () -> Unit) {
                         }
                     }
                 }
-            } else {
+            } else if (!session.hasIdentity) {
                 LumiaNotice(Icons.Filled.Shield, NoticeTone.ACCENT, action = "Link this phone" to { store.route = Route.LINK }, text = "Your profile travels with your identity, signed by its devices. This phone holds no device key yet; a device you already use approves it.")
             }
         }

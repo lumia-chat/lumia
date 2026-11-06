@@ -511,6 +511,9 @@ function Profile(props: HomeProps) {
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal("");
   const [saved, setSaved] = createSignal(false);
+  // The form waits for the profile held: fields shown before it lands
+  // would be overwritten by it, typing and all.
+  const [loaded, setLoaded] = createSignal(false);
   void (async () => {
     try {
       const p = await client().identityProfile();
@@ -520,6 +523,8 @@ function Profile(props: HomeProps) {
       setBio(p?.bio ?? "");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoaded(true);
     }
   })();
   const save = async (e: Event) => {
@@ -559,7 +564,8 @@ function Profile(props: HomeProps) {
             </Notice>
           }
         >
-          <Card title={snapshot.data?.handle ? `@${snapshot.data.handle}` : "You"} subtitle={profile() ? `Version ${profile()?.version}, signed by this browser's device key; every instance you sign in to takes it.` : "Nothing set yet: people see your handle."}>
+          <Card title={snapshot.data?.handle ? `@${snapshot.data.handle}` : "You"} subtitle={!loaded() ? "Looking…" : profile() ? `Version ${profile()?.version}, signed by this browser's device key; every instance you sign in to takes it.` : "Nothing set yet: people see your handle."}>
+            <Show when={loaded()}>
             <form class="auth__form" onSubmit={(e) => void save(e)}>
               <TextField label="Display name" value={displayName()} onInput={(e) => setDisplayName(e.currentTarget.value)} placeholder="How people see you" autocomplete="nickname" />
               <TextField label="Pronouns" value={pronouns()} onInput={(e) => setPronouns(e.currentTarget.value)} placeholder="they/them" autocomplete="off" />
@@ -576,6 +582,7 @@ function Profile(props: HomeProps) {
                 Save
               </Button>
             </form>
+            </Show>
           </Card>
         </Show>
       </div>
