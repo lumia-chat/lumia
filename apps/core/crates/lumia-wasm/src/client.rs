@@ -362,6 +362,16 @@ impl Client {
         self.app.sign_in_magic_link(&token).await.map_err(js)
     }
 
+    /// A one-time sign-in token for this account, for a native app that
+    /// signed in through this page to take back by its return URL.
+    ///
+    /// # Errors
+    /// On transport or API failure.
+    #[wasm_bindgen(js_name = handoffToken)]
+    pub async fn handoff_token(&self) -> Result<String, JsError> {
+        self.app.handoff_token().await.map_err(js)
+    }
+
     /// Signs in with a password, and a TOTP code when the account requires one.
     ///
     /// # Errors

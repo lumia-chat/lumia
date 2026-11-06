@@ -14,7 +14,7 @@ enum Place: Hashable {
 }
 
 enum HomeView: Hashable {
-    case dm, requests, devices, new, add
+    case dm, requests, devices, profile, new, add
 }
 
 struct ShellView: View {
@@ -118,15 +118,22 @@ struct ShellView: View {
                 Image(systemName: "plus").font(.system(size: 16, weight: .medium)).foregroundStyle(LumiaTokens.inkSecondary.color)
             }
             Spacer()
-            LumiaAvatar(initials: initials(of: session.selfName), tone: .of(session.me), size: LumiaTokens.avatarSelf)
-                .overlay(alignment: .bottomTrailing) {
-                    Circle().fill(session.connection == .connected ? LumiaTokens.online.color : LumiaTokens.inkMuted.color)
-                        .frame(width: 12, height: 12)
-                        .overlay(Circle().stroke(LumiaTokens.rail.color, lineWidth: 2))
-                        .offset(x: 2, y: 2)
-                }
-                .help(session.selfName + " · " + session.connection.label)
-                .padding(.bottom, LumiaTokens.space12)
+            Button {
+                place = .home
+                homeView = .profile
+            } label: {
+                LumiaAvatar(initials: initials(of: session.selfName), tone: .of(session.me), size: LumiaTokens.avatarSelf)
+                    .overlay(alignment: .bottomTrailing) {
+                        Circle().fill(session.connection == .connected ? LumiaTokens.online.color : LumiaTokens.inkMuted.color)
+                            .frame(width: 12, height: 12)
+                            .overlay(Circle().stroke(LumiaTokens.rail.color, lineWidth: 2))
+                            .offset(x: 2, y: 2)
+                    }
+            }
+            .buttonStyle(.plain)
+            .help(session.selfName + " · " + session.connection.label + " — open profile")
+            .accessibilityLabel(session.selfName + ", open profile")
+            .padding(.bottom, LumiaTokens.space12)
         }
         .padding(.top, LumiaTokens.space16)
         .frame(width: LumiaTokens.railWidth)

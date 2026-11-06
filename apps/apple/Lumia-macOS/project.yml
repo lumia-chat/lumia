@@ -36,6 +36,11 @@ targets:
         # count the scripts pass as CURRENT_PROJECT_VERSION.
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        # The browser sheet's way back (a sign-in through the instance's
+        # web page or its OIDC provider returns on it with a one-time token).
+        CFBundleURLTypes:
+          - CFBundleURLName: chat.lumia
+            CFBundleURLSchemes: [lumia]
         LSMinimumSystemVersion: "14.0"
         NSHumanReadableCopyright: ""
         # The macOS app is a direct download (dist.sh), not a store

@@ -8,8 +8,11 @@ defmodule LumiaWeb.AuthController do
   use Phoenix.Controller, formats: []
 
   alias Lumia.Accounts
+  alias Lumia.Accounts.Account
   alias Lumia.Auth
+  alias Lumia.Auth.MagicLink
   alias Lumia.Proto
+  alias Lumia.Repo
   alias Lumia.V1
   alias LumiaWeb.ProtoConn
 
@@ -51,7 +54,7 @@ defmodule LumiaWeb.AuthController do
 
   def magic_link(conn, _params) do
     with {:ok, req} <- ProtoConn.decode(conn, V1.MagicLinkRequest),
-         :ok <- Lumia.Auth.MagicLink.request(req.email) do
+         :ok <- MagicLink.request(req.email) do
       send_resp(conn, 202, "")
     end
   end
@@ -59,7 +62,7 @@ defmodule LumiaWeb.AuthController do
   def magic_link_complete(conn, _params) do
     with {:ok, req} <- ProtoConn.decode(conn, V1.MagicLinkCompleteRequest),
          {:ok, _session, tokens} <-
-           Lumia.Auth.MagicLink.complete(
+           MagicLink.complete(
              req.token,
              Proto.from_uuid(req.device_id) || Ecto.UUID.generate(),
              client: client(conn)
@@ -100,6 +103,22 @@ defmodule LumiaWeb.AuthController do
     with {:ok, req} <- ProtoConn.decode(conn, V1.RefreshRequest),
          {:ok, _session, tokens} <- Auth.refresh(req.refresh_token) do
       ProtoConn.render(conn, token_pair(tokens))
+    end
+  end
+
+  # POST /auth/handoff: a one-time sign-in token for the caller's account,
+  # for another device of the person's (a native app's browser sheet, or
+  # the app itself) to complete as a magic-link token.
+  def handoff(conn, _params) do
+    account = Repo.get!(Account, conn.assigns.current_account_id)
+
+    with {:ok, token} <- MagicLink.mint(account) do
+      expires_at = DateTime.add(DateTime.utc_now(), MagicLink.ttl_seconds(), :second)
+
+      ProtoConn.render(conn, %V1.HandoffResponse{
+        token: token,
+        expires_at: Proto.timestamp(expires_at)
+      })
     end
   end
 

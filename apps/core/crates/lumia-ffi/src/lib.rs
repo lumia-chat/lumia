@@ -942,6 +942,30 @@ impl Client {
         Ok(self.runtime.block_on(self.app.sign_in_magic_link(&token))?)
     }
 
+    /// A one-time sign-in token for this account, for the instance's web
+    /// page to sign in as it (a passkey is made there) or for another device.
+    pub fn handoff_token(&self) -> Res<String> {
+        Ok(self.runtime.block_on(self.app.handoff_token())?)
+    }
+
+    /// Where the system browser signs in with the instance's OIDC provider;
+    /// it comes back to `return_to` with `magic={token}`.
+    pub fn oidc_start_url(&self, return_to: String) -> String {
+        self.app.oidc_start_url(&return_to)
+    }
+
+    /// Where the system browser signs in through the instance's web page
+    /// (a passkey, say); it comes back to `return_to` with `magic={token}`.
+    pub fn web_sign_in_url(&self, return_to: String) -> String {
+        self.app.web_sign_in_url(&return_to)
+    }
+
+    /// Where the system browser lands signed in as this account by `token`
+    /// (from `handoff_token`), on `next` (`devices` for the passkeys there).
+    pub fn web_handoff_url(&self, token: String, next: String) -> String {
+        self.app.web_handoff_url(&token, &next)
+    }
+
     /// Signs in with a password, and a TOTP code when the account requires one.
     pub fn sign_in(&self, handle: String, password: String, totp_code: Option<String>) -> Res<()> {
         Ok(self

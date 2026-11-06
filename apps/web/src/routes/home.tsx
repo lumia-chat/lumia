@@ -25,13 +25,13 @@ import {
   type ChannelItem,
   type DeviceEntry,
 } from "../design/components";
-import { ClientError, type ChannelSummary, type DeviceSummary, type DmMessageSummary, type InvitePreviewSummary, type MemberSummary, type PasskeySummary, type SnapshotSummary } from "../client/bridge";
-import { client, dmChannelsQuery, dmMessagesQuery, enableNotifications, hasIdentityQuery, peopleQuery, pushState, queryClient, rosterQuery } from "../client/state";
+import { ClientError, type ChannelSummary, type DeviceSummary, type DmMessageSummary, type InvitePreviewSummary, type MemberSummary, type PasskeySummary, type ProfileSummary, type SnapshotSummary } from "../client/bridge";
+import { client, dmChannelsQuery, dmMessagesQuery, enableNotifications, hasIdentityQuery, peopleQuery, pushState, queryClient, rosterQuery, snapshotQuery } from "../client/state";
 import { useNames } from "../client/names";
 import { addPasskey, passkeysAvailable } from "../client/passkeys";
 import { initialsOf, timeOf, toneFor } from "./app";
 
-export type HomeView = "dm" | "requests" | "devices" | "new" | "add";
+export type HomeView = "dm" | "requests" | "devices" | "profile" | "new" | "add";
 
 export interface HomeProps {
   snapshot: SnapshotSummary | undefined;
@@ -207,7 +207,7 @@ function AddServer(props: HomeProps) {
 export function HomeMain(props: HomeProps) {
   const identity = hasIdentityQuery();
   return (
-    <Show when={props.view !== "add" && props.view !== "devices"} fallback={props.view === "add" ? <AddServer {...props} /> : <Devices {...props} />}>
+    <Show when={props.view !== "add" && props.view !== "devices" && props.view !== "profile"} fallback={props.view === "add" ? <AddServer {...props} /> : props.view === "profile" ? <Profile {...props} /> : <Devices {...props} />}>
       <Show when={identity.data !== false} fallback={<NoIdentity toLink={props.toLink} />}>
         {props.view === "requests" ? <Requests {...props} /> : props.view === "new" ? <NewMessage {...props} /> : <Conversation {...props} />}
       </Show>
@@ -491,6 +491,92 @@ function NewMessage(props: HomeProps) {
               )}
             </For>
           </ul>
+        </Show>
+      </div>
+    </>
+  );
+}
+
+// The person's own profile (architecture 6.4): the signed profile the
+// identity carries, display name, pronouns and bio, signed by this
+// browser's device key and sent to the instance as the account's. The
+// same screen on every client.
+function Profile(props: HomeProps) {
+  const snapshot = snapshotQuery();
+  const hasIdentity = hasIdentityQuery();
+  const [profile, setProfile] = createSignal<ProfileSummary | null>(null);
+  const [displayName, setDisplayName] = createSignal("");
+  const [pronouns, setPronouns] = createSignal("");
+  const [bio, setBio] = createSignal("");
+  const [busy, setBusy] = createSignal(false);
+  const [error, setError] = createSignal("");
+  const [saved, setSaved] = createSignal(false);
+  void (async () => {
+    try {
+      const p = await client().identityProfile();
+      setProfile(p);
+      setDisplayName(p?.displayName || "");
+      setPronouns(p?.pronouns ?? "");
+      setBio(p?.bio ?? "");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  })();
+  const save = async (e: Event) => {
+    e.preventDefault();
+    setBusy(true);
+    setError("");
+    setSaved(false);
+    try {
+      const p = await client().identitySetProfile(displayName().trim(), pronouns().trim(), bio().trim(), profile()?.avatarUrl ?? "");
+      setProfile(p);
+      setSaved(true);
+      void queryClient.invalidateQueries({ queryKey: ["snapshot"] });
+    } catch (err) {
+      const ce = err instanceof ClientError ? err : null;
+      setError(
+        ce?.code === "FAILED_PRECONDITION"
+          ? "This account is not linked to your identity, so the instance keeps the profile it has."
+          : ce?.code === "CONFLICT"
+            ? "A newer profile is already held. Reload and try again."
+            : err instanceof Error
+              ? err.message
+              : String(err),
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      <ChannelHeader kind="page" name="Profile" topic="How people see you" actions={[]} />
+      <div class="lu-page">
+        <Show
+          when={hasIdentity.data !== false}
+          fallback={
+            <Notice icon="shield" action={{ label: "Link this browser", onClick: props.toLink }}>
+              Your profile travels with your identity, signed by its devices. This browser holds no device key yet; a device you already use approves it.
+            </Notice>
+          }
+        >
+          <Card title={snapshot.data?.handle ? `@${snapshot.data.handle}` : "You"} subtitle={profile() ? `Version ${profile()?.version}, signed by this browser's device key; every instance you sign in to takes it.` : "Nothing set yet: people see your handle."}>
+            <form class="auth__form" onSubmit={(e) => void save(e)}>
+              <TextField label="Display name" value={displayName()} onInput={(e) => setDisplayName(e.currentTarget.value)} placeholder="How people see you" autocomplete="nickname" />
+              <TextField label="Pronouns" value={pronouns()} onInput={(e) => setPronouns(e.currentTarget.value)} placeholder="they/them" autocomplete="off" />
+              <TextField label="Bio" value={bio()} onInput={(e) => setBio(e.currentTarget.value)} placeholder="A line about you" autocomplete="off" />
+              <Show when={error()}>
+                <p class="auth__error" role="alert">
+                  {error()}
+                </p>
+              </Show>
+              <Show when={saved()}>
+                <p class="auth__note">Saved. This instance shows it now.</p>
+              </Show>
+              <Button variant="primary" size="md" type="submit" disabled={busy()}>
+                Save
+              </Button>
+            </form>
+          </Card>
         </Show>
       </div>
     </>

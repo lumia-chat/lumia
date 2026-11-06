@@ -541,6 +541,87 @@ struct NewMessageScreen: View {
 
 // MARK: Devices
 
+// The person's own profile (architecture 6.4): the signed profile the
+// identity carries, display name, pronouns and bio, signed by this
+// phone's device key and sent to the instance as the account's. The same
+// screen as the web's and the macOS app's.
+struct ProfileScreen: View {
+    @Environment(AppStore.self) private var store
+    let session: LumiaSession
+    @State private var profile: ProfileSummary?
+    @State private var displayName = ""
+    @State private var pronouns = ""
+    @State private var bio = ""
+    @State private var busy = false
+    @State private var error = ""
+    @State private var saved = false
+
+    var body: some View {
+        PanelScreen(back: "Home", title: "Profile", subtitle: "How people see you", actions: []) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: LumiaTokens.space12) {
+                    if session.hasIdentity {
+                        LumiaCard(title: handleTitle, subtitle: subtitle, width: nil) {
+                            VStack(alignment: .leading, spacing: LumiaTokens.space12) {
+                                LumiaField("Display name", text: $displayName, placeholder: "How people see you")
+                                    .textContentType(.nickname)
+                                LumiaField("Pronouns", text: $pronouns, placeholder: "they/them")
+                                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                                LumiaField("Bio", text: $bio, placeholder: "A line about you")
+                                if !error.isEmpty { LumiaErrorText(error) }
+                                if saved {
+                                    Text("Saved. This instance shows it now.").font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkSecondary.color)
+                                }
+                                Button { Task { await save() } } label: { Text("Save").frame(maxWidth: .infinity) }
+                                    .buttonStyle(.lumiaPrimary).disabled(busy)
+                            }
+                        }
+                    } else {
+                        LumiaNotice(icon: "shield", tone: .accent, action: ("Link this phone", { store.route = .link })) {
+                            Text("Your profile travels with your identity, signed by its devices. This phone holds no device key yet; a device you already use approves it.")
+                        }
+                    }
+                }
+                .padding(LumiaTokens.space16)
+            }
+        }
+        .scrollDismissesKeyboard(.interactively)
+        .task { await load() }
+    }
+
+    private var handleTitle: String {
+        (session.snapshot?.handle).flatMap { $0.isEmpty ? nil : "@\($0)" } ?? "You"
+    }
+
+    private var subtitle: String {
+        profile.map { "Version \($0.version), signed by this phone's device key; every instance you sign in to takes it." } ?? "Nothing set yet: people see your handle."
+    }
+
+    private func load() async {
+        profile = try? await session.profile()
+        displayName = profile?.displayName ?? ""
+        pronouns = profile?.pronouns ?? ""
+        bio = profile?.bio ?? ""
+    }
+
+    private func save() async {
+        busy = true
+        error = ""
+        saved = false
+        defer { busy = false }
+        do {
+            profile = try await session.setProfile(displayName: displayName, pronouns: pronouns, bio: bio)
+            saved = true
+        } catch {
+            switch error.lumiaCode {
+            case "FAILED_PRECONDITION": self.error = "This account is not linked to your identity, so the instance keeps the profile it has."
+            case "CONFLICT": self.error = "A newer profile is already held. Reload and try again."
+            default: self.error = error.lumiaMessage
+            }
+        }
+    }
+}
+
 struct DevicesScreen: View {
     @Environment(AppStore.self) private var store
     let session: LumiaSession
@@ -548,6 +629,11 @@ struct DevicesScreen: View {
     @State private var password = ""
     @State private var busy = false
     @State private var error = ""
+    // Passkeys (architecture 6.3): the account's sign-in keys, listed and
+    // removable here, made on the instance's web page in a browser sheet.
+    @State private var passkeys: [PasskeySummary] = []
+    @State private var passkeyBusy = false
+    @State private var passkeyError = ""
 
     private var devices: [DeviceSummary] { session.roster?.devices ?? [] }
     private var active: [DeviceSummary] { devices.filter { !$0.revoked } }
@@ -578,6 +664,22 @@ struct DevicesScreen: View {
                     LumiaNotice(icon: "shield") {
                         Text("Your identity lives on these devices, not on any instance. Revoking one takes effect on every instance that holds your roster.")
                     }
+                    LumiaCard(title: "Passkeys", subtitle: "Sign in to this instance with a key this phone keeps, instead of a password.", width: nil) {
+                        VStack(alignment: .leading, spacing: LumiaTokens.space8) {
+                            ForEach(passkeys, id: \.passkeyId) { p in
+                                HStack {
+                                    Text(passkeyLine(p)).font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkSecondary.color)
+                                    Spacer()
+                                    Button("Remove") { Task { await removePasskey(p) } }.buttonStyle(.lumiaLink)
+                                }
+                            }
+                            if !passkeyError.isEmpty { LumiaErrorText(passkeyError) }
+                            Button { Task { await addPasskey() } } label: { Label("Add a passkey", systemImage: "key").frame(maxWidth: .infinity) }
+                                .buttonStyle(.lumiaSecondary).disabled(passkeyBusy)
+                            Text("Made on the instance's web page, in a browser sheet signed in as you.")
+                                .font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkQuiet.color)
+                        }
+                    }
                     if session.roster != nil {
                         ForEach(active, id: \.deviceId) { d in
                             LumiaDeviceRow(device: d, label: label(d), meta: meta(d)) { revoking = d; password = ""; error = "" }
@@ -602,7 +704,10 @@ struct DevicesScreen: View {
                 .padding(LumiaTokens.space16)
             }
         }
-        .task { await session.refreshRoster() }
+        .task {
+            await session.refreshRoster()
+            await loadPasskeys()
+        }
         .sheet(item: Binding(get: { revoking }, set: { if $0 == nil { revoking = nil } })) { d in
             revokeSheet(d)
                 .presentationDetents([.medium])
@@ -631,6 +736,38 @@ struct DevicesScreen: View {
         }
         .padding(LumiaTokens.space24)
         .padding(.top, LumiaTokens.space8)
+    }
+
+    private func passkeyLine(_ p: PasskeySummary) -> String {
+        let added = p.createdAtMicros.map { day(ofMicros: $0) } ?? "—"
+        let used = p.lastUsedAtMicros.map { day(ofMicros: $0) } ?? "never"
+        return "\(p.label.isEmpty ? "Passkey" : p.label) · added \(added) · last used \(used)"
+    }
+
+    private func loadPasskeys() async {
+        passkeys = (try? await session.passkeys()) ?? []
+    }
+
+    private func removePasskey(_ p: PasskeySummary) async {
+        passkeyError = ""
+        do {
+            try await session.removePasskey(id: p.passkeyId)
+            await loadPasskeys()
+        } catch {
+            passkeyError = error.lumiaMessage
+        }
+    }
+
+    private func addPasskey() async {
+        passkeyBusy = true
+        passkeyError = ""
+        defer { passkeyBusy = false }
+        do {
+            try await session.openWebSignedIn(next: "devices")
+            await loadPasskeys()
+        } catch {
+            passkeyError = error.lumiaMessage
+        }
     }
 
     private func revoke(_ d: DeviceSummary) async {

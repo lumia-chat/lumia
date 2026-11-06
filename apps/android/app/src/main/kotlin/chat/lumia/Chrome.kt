@@ -57,6 +57,7 @@ sealed class Screen {
     data class Channel(val id: String) : Screen()
     data object Requests : Screen()
     data object Devices : Screen()
+    data object Profile : Screen()
     data object NewMessage : Screen()
     data object AddServer : Screen()
     data class NewChannel(val serverId: String) : Screen()
@@ -64,7 +65,7 @@ sealed class Screen {
 }
 
 @Composable
-fun PhoneRail(session: LumiaSession, place: Place, onAdd: () -> Unit, onPlace: (Place) -> Unit) {
+fun PhoneRail(session: LumiaSession, place: Place, onAdd: () -> Unit, onProfile: () -> Unit, onPlace: (Place) -> Unit) {
     val servers = session.snapshot?.servers ?: emptyList()
     Column(
         modifier = Modifier.width(LumiaTokens.railWidth).fillMaxHeight().background(LumiaTokens.rail.color).statusBarsPadding().padding(top = LumiaTokens.space8, bottom = LumiaTokens.space12),
@@ -84,7 +85,9 @@ fun PhoneRail(session: LumiaSession, place: Place, onAdd: () -> Unit, onPlace: (
             Icon(Icons.Filled.Add, contentDescription = null, tint = LumiaTokens.inkSecondary.color, modifier = Modifier.size(20.dp))
         }
         Spacer(Modifier.weight(1f))
-        LumiaAvatar(initialsOf(session.selfName), AvatarTone.of(session.me), LumiaTokens.avatarSelf)
+        Box(Modifier.clip(CircleShape).clickable(onClick = onProfile).semantics { contentDescription = session.selfName + ", open profile" }) {
+            LumiaAvatar(initialsOf(session.selfName), AvatarTone.of(session.me), LumiaTokens.avatarSelf)
+        }
     }
 }
 

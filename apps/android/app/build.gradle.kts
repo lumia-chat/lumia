@@ -82,6 +82,9 @@ dependencies {
     implementation(libs.androidx.activity.compose)
     implementation(libs.coroutines.android)
     implementation(libs.compose.icons.extended)
+    // A sign-in through the system browser (a Custom Tab): the instance's
+    // OIDC provider, or its web page for a passkey (architecture 6.3).
+    implementation(libs.androidx.browser)
     // Push (architecture 15.5): UnifiedPush through any installed
     // distributor, FCM through the relay otherwise.
     implementation(libs.unifiedpush.connector)

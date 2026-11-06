@@ -1125,7 +1125,7 @@ async fn identity_cmd(ctx: &mut Ctx, api: &Api, action: IdentityCmd) -> Result<(
             pronouns,
             bio,
         } => {
-            let signed = device(ctx).set_profile(&display_name, &pronouns, &bio, "")?;
+            let signed = device(ctx).set_profile(&display_name, &pronouns, &bio, "", None)?;
             if api.tokens().access.is_some() {
                 api.put_profile(signed).await?;
                 println!("profile signed and sent");

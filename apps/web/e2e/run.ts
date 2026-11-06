@@ -286,6 +286,56 @@ async function linkSteps(which: string, page: Page, dataDir: string) {
   await page.getByPlaceholder(/^Message #/).waitFor();
   const roster = lumia(dataDir, "identity", "show");
   if (!/Web/.test(roster)) throw new Error(`no web device in the roster:\n${roster}`);
+  // The profile (architecture 6.4): set here, signed by this browser's
+  // device key, shown by the rail once the snapshot has it.
+  phase("profile");
+  await page.getByRole("button", { name: /open profile/ }).click();
+  await page.getByLabel("Display name").fill("Linked Browser");
+  await page.getByLabel("Pronouns").fill("they/them");
+  await page.getByLabel("Bio").fill("Signed in by identity proof.");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await page.getByText("Saved.").waitFor();
+  await page.getByRole("button", { name: /^Linked Browser, / }).waitFor();
+  await page.screenshot({ path: `${out}/${which}-profile.png` });
+}
+
+// A sign-in handed to another device (the native apps' browser sheet):
+// the page signs in for a return URL, mints a one-time token and leaves
+// with it; a fresh profile completes it and lands where `next` says.
+async function handoff(which: string, handle: string) {
+  const { ctx, page } = await open(which, "handoff");
+  const t0 = Date.now();
+  try {
+    phase("sign in for a return");
+    await goto(page, `${base}/sign-in?instance=${encodeURIComponent(instance)}&return=${encodeURIComponent(`${base}/design`)}`);
+    await page.getByText("run by").waitFor();
+    await page.getByLabel("Email or handle").fill(handle);
+    await page.getByRole("textbox", { name: "Password" }).fill(password);
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await page.waitForURL(/\/design\?magic=/);
+    const token = new URL(page.url()).searchParams.get("magic") ?? "";
+    if (token.length < 32) throw new Error(`no handoff token in ${page.url()}`);
+    phase("complete elsewhere");
+    const again = await ctx.newPage();
+    live.page = again;
+    await page.close();
+    await goto(again, `${base}/sign-in?instance=${encodeURIComponent(instance)}&magic=${encodeURIComponent(token)}&next=devices`);
+    await again.getByText("Everything that holds your identity").waitFor();
+    phase("spent");
+    const dir = resolve(work, `cli-handoff-${which}`);
+    rmSync(dir, { recursive: true, force: true });
+    lumia(dir, "instance", "add", instance);
+    let refused = "";
+    try {
+      lumia(dir, "login", "--magic", token);
+    } catch (e) {
+      refused = e instanceof Error ? e.message : String(e);
+    }
+    if (!/UNAUTHENTICATED/.test(refused)) throw new Error(`the spent token signed the CLI in, or failed another way: ${refused || "no error"}`);
+  } finally {
+    await ctx.close();
+  }
+  console.log(`  ${which}: signed in for a return URL, took the one-time token to a fresh page, which landed on Devices, and the token was spent, in ${Date.now() - t0} ms`);
 }
 
 // A personal DM between the linked browser (B) and the CLI (A): A asks, B
@@ -831,11 +881,16 @@ try {
       ["push", () => webPush(which, `web${stamp}`, passwordDir, server, general, webAccount)],
       ["magic link", () => magicLink(which)],
       ["passkey", () => passkey(which, `web${stamp}`)],
+      ["handoff", () => handoff(which, `web${stamp}`)],
       ["oidc", () => oidc(which)],
     ] as const) {
       // A heartbeat while the step runs (CI shows a step's log only once it
       // ends) and a hard bound, so a hang names itself instead of the job
       // timing out.
+      // LUMIA_E2E_ONLY names the steps to run (comma-separated), for one
+      // step's turnaround while it is written; the rest are skipped.
+      const only = (process.env.LUMIA_E2E_ONLY ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+      if (only.length && !only.includes(name)) continue;
       const started = Date.now();
       live.phase = "start";
       const beat = setInterval(() => console.log(`  [${which}] ${name}: ${Math.round((Date.now() - started) / 1000)} s, ${live.phase}, at ${live.page?.url() ?? "no page"}`), 30_000);

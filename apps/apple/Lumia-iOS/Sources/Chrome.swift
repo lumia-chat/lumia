@@ -17,6 +17,7 @@ enum Screen: Hashable {
     case channel(id: String)
     case requests
     case devices
+    case profile
     case newMessage
     case addServer
     case newChannel(serverID: String)
@@ -27,6 +28,7 @@ struct PhoneRail: View {
     let session: LumiaSession
     @Binding var place: Place
     let add: () -> Void
+    let profile: () -> Void
 
     private var servers: [ServerSummary] { session.snapshot?.servers ?? [] }
 
@@ -49,8 +51,11 @@ struct PhoneRail: View {
                 Image(systemName: "plus").font(.system(size: 18, weight: .medium)).foregroundStyle(LumiaTokens.inkSecondary.color)
             }
             Spacer()
-            LumiaAvatar(initials: initials(of: session.selfName), tone: .of(session.me), size: LumiaTokens.avatarSelf)
-                .accessibilityLabel(session.selfName)
+            Button(action: profile) {
+                LumiaAvatar(initials: initials(of: session.selfName), tone: .of(session.me), size: LumiaTokens.avatarSelf)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(session.selfName + ", open profile")
         }
         .padding(.top, LumiaTokens.space8)
         .padding(.bottom, LumiaTokens.space12)

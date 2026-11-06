@@ -164,6 +164,54 @@ public final class LumiaSession {
         roster = try await client.identityRevoke(deviceID: deviceID, password: password)
     }
 
+    // MARK: Passkeys, and sign-in through the browser (architecture 6.3)
+
+    public func passkeys() async throws -> [PasskeySummary] { try await client.passkeys() }
+    public func removePasskey(id: String) async throws { try await client.removePasskey(id: id) }
+
+    /// Signs in through the system browser: `oidc` to the provider, else
+    /// the instance's web sign-in page (a passkey there, or any method it
+    /// offers); the sheet comes back with a one-time token this session
+    /// completes as a magic-link token.
+    public func signInThroughBrowser(oidc: Bool) async throws {
+        let url = oidc
+            ? await client.oidcStartURL(returnTo: BrowserSheet.signInReturn)
+            : await client.webSignInURL(returnTo: BrowserSheet.signInReturn)
+        guard let parsed = URL(string: url) else { throw BrowserSheetError.badURL }
+        let back = try await BrowserSheet().run(parsed, ephemeral: !oidc)
+        try await client.signInMagicLink(token: back.absoluteString)
+        signedIn = true
+    }
+
+    /// Opens the instance's web page signed in as this account by a
+    /// one-time token (a passkey is made on its Devices page); returns
+    /// when the person closes the sheet.
+    public func openWebSignedIn(next: String) async throws {
+        let token = try await client.handoffToken()
+        let url = await client.webHandoffURL(token: token, next: next)
+        guard let parsed = URL(string: url) else { throw BrowserSheetError.badURL }
+        do {
+            _ = try await BrowserSheet().run(parsed, ephemeral: true)
+        } catch BrowserSheetError.cancelled {
+            // Closed by the person once done: the only way out of the page.
+        }
+    }
+
+    // MARK: Profile (architecture 6.4)
+
+    /// The signed profile this identity carries: this device's, else the
+    /// one the instance holds from another device of the identity.
+    public func profile() async throws -> ProfileSummary? { try await client.identityProfile() }
+
+    /// A new version, signed by this device and sent to the instance; the
+    /// snapshot follows, so the name on screen does.
+    public func setProfile(displayName: String, pronouns: String, bio: String) async throws -> ProfileSummary {
+        let current = try? await client.identityProfile()
+        let p = try await client.identitySetProfile(displayName: displayName, pronouns: pronouns, bio: bio, avatarURL: current?.avatarUrl ?? "")
+        await refreshSnapshot()
+        return p
+    }
+
     public func refreshRoster() async {
         hasIdentity = await client.hasIdentity
         guard hasIdentity else { roster = nil; return }

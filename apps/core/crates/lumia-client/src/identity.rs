@@ -127,8 +127,10 @@ impl<S: Store, K: Keystore> Device<'_, S, K> {
 
     /// Signs a new version of the profile with this device's key and keeps
     /// it (`ProfileBody`: display name, pronouns, bio, avatar). The version
-    /// follows the last one. An instance takes it at account creation by
-    /// identity proof and on `PUT /account/profile`.
+    /// follows the last one this device kept, and `held` when an instance
+    /// holds a later one (set by another device of the identity). An
+    /// instance takes it at account creation by identity proof and on
+    /// `PUT /account/profile`.
     ///
     /// # Errors
     /// When this device holds no identity, or on a store failure.
@@ -138,13 +140,15 @@ impl<S: Store, K: Keystore> Device<'_, S, K> {
         pronouns: &str,
         bio: &str,
         avatar_url: &str,
+        held: Option<u64>,
     ) -> Result<SignedProfile, ClientError> {
         let verified = self.roster()?;
         let key = self.device_key()?;
-        let version = match self.profile()? {
-            Some(previous) => ProfileBody::decode(previous.body.as_slice())?.version + 1,
-            None => 1,
+        let last = match self.profile()? {
+            Some(previous) => ProfileBody::decode(previous.body.as_slice())?.version,
+            None => 0,
         };
+        let version = last.max(held.unwrap_or(0)) + 1;
         let body = ProfileBody {
             identity_id: verified.identity_id.clone(),
             version,

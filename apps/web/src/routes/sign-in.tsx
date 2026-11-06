@@ -35,10 +35,21 @@ export function SignIn() {
   const [magicSent, setMagicSent] = createSignal(false);
   const [magicCode, setMagicCode] = createSignal("");
   const land = async () => {
+    // Signing in for a native app: the session made here is handed to it
+    // as a one-time token on its return URL, and this page keeps nothing.
+    const back = search().return;
+    if (back) {
+      const token = await client().handoffToken();
+      await client().signOut();
+      location.assign(`${back}${back.includes("?") ? "&" : "?"}magic=${encodeURIComponent(token)}`);
+      return;
+    }
     const code = invite();
     if (code) {
       const serverId = await client().acceptInvite(code);
       navigate({ to: "/app", search: { server: serverId } });
+    } else if (search().next === "devices") {
+      navigate({ to: "/app", search: { place: "home", view: "devices" } });
     } else {
       navigate({ to: "/app" });
     }
@@ -121,14 +132,9 @@ export function SignIn() {
       const code = invite();
       if (mode() === "create") await b.createAccount(handle(), password(), code);
       else await b.signIn(handle(), password(), needsTotp() ? totp() : undefined);
-      // Signed in with an invite in hand: join its server and land there.
-      // A new account joined at creation; its code resolves to the same server.
-      if (code) {
-        const serverId = await b.acceptInvite(code);
-        navigate({ to: "/app", search: { server: serverId } });
-      } else {
-        navigate({ to: "/app" });
-      }
+      // With an invite in hand, the landing joins its server (a new
+      // account joined at creation; its code resolves to the same server).
+      await land();
     } catch (err) {
       const ce = err instanceof ClientError ? err : null;
       if (ce?.code === "FAILED_PRECONDITION" && !needsTotp()) {
@@ -195,7 +201,7 @@ export function SignIn() {
         }
       >
         {(i) => (
-          <Card title={mode() === "create" ? "Create an account" : "Welcome back"} subtitle={invite() ? (mode() === "create" ? `A new account on ${i().host}, in the server you were invited to.` : "Sign in to join the server you were invited to.") : mode() === "create" ? `A new account on ${i().host}.` : "Sign in to pick up your conversations."}>
+          <Card title={mode() === "create" ? "Create an account" : "Welcome back"} subtitle={search().return?.startsWith("lumia://") ? "Sign in here for the Lumia app; it takes over once you are in." : invite() ? (mode() === "create" ? `A new account on ${i().host}, in the server you were invited to.` : "Sign in to join the server you were invited to.") : mode() === "create" ? `A new account on ${i().host}.` : "Sign in to pick up your conversations."}>
             <div class="auth__trust">
               <span class="auth__trust-host">{i().host}</span>
               <span class="auth__trust-op">
@@ -224,10 +230,13 @@ export function SignIn() {
               </Button>
               <Show when={mode() === "signIn" && i().oidcName}>
                 <Button icon="key" block type="button" disabled={busy()} onClick={() => {
-                  // Off to the provider; the instance brings the browser back here with a sign-in token.
+                  // Off to the provider; the instance brings the browser back here
+                  // with a sign-in token, the invite and return in hand still.
                   const instanceUrl = opened() ?? location.origin;
-                  const back = `${location.origin}/sign-in?instance=${encodeURIComponent(instanceUrl)}`;
-                  location.assign(`${instanceUrl}/api/v1/auth/oidc/start?return=${encodeURIComponent(back)}`);
+                  const q = new URLSearchParams({ instance: instanceUrl });
+                  if (invite()) q.set("invite", invite() ?? "");
+                  if (search().return) q.set("return", search().return ?? "");
+                  location.assign(`${instanceUrl}/api/v1/auth/oidc/start?return=${encodeURIComponent(`${location.origin}/sign-in?${q}`)}`);
                 }}>
                   {i().oidcName}
                 </Button>

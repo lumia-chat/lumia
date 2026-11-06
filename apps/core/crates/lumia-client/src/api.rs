@@ -23,9 +23,10 @@ use lumia_core::proto::{
     ReauthResponse, RefreshRequest, RevokeDeviceRequest, Server, SignedRoster, TokenPair,
 };
 use lumia_core::proto::{
-    CreateInviteRequest, Invite, InvitePreview, ListInvitesResponse, ListPasskeysResponse,
-    MagicLinkCompleteRequest, MagicLinkRequest, Member, PasskeyAssertFinishRequest,
-    PasskeyAssertStartRequest, PasskeyChallenge, PasskeyRegisterFinishRequest, SignedProfile,
+    CreateInviteRequest, HandoffResponse, Invite, InvitePreview, ListInvitesResponse,
+    ListPasskeysResponse, MagicLinkCompleteRequest, MagicLinkRequest, Member,
+    PasskeyAssertFinishRequest, PasskeyAssertStartRequest, PasskeyChallenge,
+    PasskeyRegisterFinishRequest, SignedProfile,
 };
 use lumia_core::proto::{
     DmRequest, DmRequestState, GetHistoryChunkResponse, GetIdentityBackupResponse,
@@ -516,6 +517,17 @@ impl Api {
             },
         )
         .await
+    }
+
+    /// `POST /auth/handoff`: a one-time sign-in token for the caller's account.
+    ///
+    /// # Errors
+    /// On transport failure or an API error.
+    pub async fn handoff(&self) -> Result<HandoffResponse, ClientError> {
+        let (status, bytes) = self
+            .send(reqwest::Method::POST, "/api/v1/auth/handoff", None, None)
+            .await?;
+        decoded(status, &bytes)
     }
 
     /// `POST /auth/passkey/register/start`: the creation options for the caller.

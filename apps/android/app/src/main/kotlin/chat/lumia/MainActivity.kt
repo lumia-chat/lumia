@@ -40,6 +40,7 @@ class MainActivity : ComponentActivity() {
         store = AppStore(applicationContext)
         pushSetup = PushSetup(this)
         PushTarget.of(intent)?.let { PushRegistrar.target = it }
+        browserReturn(intent)?.let { store.browserReturn = it }
         // A debug build signs in from the launch intent's extras, for the
         // smoke run (scripts/smoke.sh): LUMIA_DEV_INSTANCE, _HANDLE, _PASSWORD, _SCREEN.
         val dev = if (BuildConfig.DEBUG) {
@@ -58,7 +59,12 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         PushTarget.of(intent)?.let { PushRegistrar.target = it }
+        browserReturn(intent)?.let { store.browserReturn = it }
     }
+
+    /** The `lumia:` URL the system browser came back on, if this intent is one (architecture 6.3). */
+    private fun browserReturn(intent: Intent): String? =
+        intent.data?.takeIf { it.scheme == "lumia" }?.toString()
 
     override fun onResume() {
         super.onResume()

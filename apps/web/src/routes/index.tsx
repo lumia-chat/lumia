@@ -76,11 +76,23 @@ export interface SignInSearch {
   instance?: string;
   /** The token from a magic-link mail's link. */
   magic?: string;
+  /**
+   * Where a sign-in made here is handed to: a native app's own `lumia:`
+   * URL (its browser sheet comes back to it with a one-time token), or a
+   * page of this origin. Nothing else: the token signs a device in.
+   */
+  return?: string;
+  /** Where to land once signed in: the Devices page, for a passkey made there. */
+  next?: "devices";
 }
+const returnOf = (value: unknown): string | undefined =>
+  typeof value === "string" && (value.startsWith("lumia://") || value.startsWith(location.origin + "/")) ? value : undefined;
 const signInSearch = (s: Record<string, unknown>): SignInSearch => ({
   invite: typeof s.invite === "string" && s.invite ? s.invite : undefined,
   instance: typeof s.instance === "string" && s.instance ? s.instance : undefined,
   magic: typeof s.magic === "string" && s.magic ? s.magic : undefined,
+  return: returnOf(s.return),
+  next: s.next === "devices" ? "devices" : undefined,
 });
 const signInRoute = createRoute({ getParentRoute: () => rootRoute, path: "/sign-in", component: SignIn, validateSearch: signInSearch });
 // The link an invite is: `/invite/{code}` on the instance (architecture
@@ -94,7 +106,7 @@ const appRoute = createRoute({
   beforeLoad: requireSession,
   validateSearch: (s: Record<string, unknown>): AppSearch => ({
     place: s.place === "home" ? "home" : undefined,
-    view: s.view === "requests" || s.view === "devices" || s.view === "new" || s.view === "add" || s.view === "dm" ? s.view : undefined,
+    view: s.view === "requests" || s.view === "devices" || s.view === "profile" || s.view === "new" || s.view === "add" || s.view === "dm" ? s.view : undefined,
     dm: typeof s.dm === "string" ? s.dm : undefined,
     server: typeof s.server === "string" ? s.server : undefined,
   }),

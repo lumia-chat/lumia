@@ -205,6 +205,18 @@ defmodule Lumia.V1.MagicLinkCompleteRequest do
   field :device_id, 2, type: :bytes, json_name: "deviceId"
 end
 
+defmodule Lumia.V1.HandoffResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.HandoffResponse",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :token, 1, type: :string
+  field :expires_at, 2, type: Google.Protobuf.Timestamp, json_name: "expiresAt"
+end
+
 defmodule Lumia.V1.PasskeyChallenge do
   @moduledoc false
 

@@ -95,6 +95,23 @@ public actor LumiaClient {
         try inner.identityRevoke(deviceId: deviceID, password: password)
     }
 
+    /// The account's passkeys (architecture 6.3), and one removed.
+    public func passkeys() throws -> [PasskeySummary] { try inner.passkeys() }
+    public func removePasskey(id: String) throws { try inner.removePasskey(passkeyId: id) }
+    /// A one-time sign-in token for this account, for the instance's web page to sign in as it.
+    public func handoffToken() throws -> String { try inner.handoffToken() }
+    /// Where the system browser signs in with the instance's OIDC provider; back to `returnTo` with the token.
+    public func oidcStartURL(returnTo: String) -> String { inner.oidcStartUrl(returnTo: returnTo) }
+    /// Where the system browser signs in through the instance's web page (a passkey); back to `returnTo` with the token.
+    public func webSignInURL(returnTo: String) -> String { inner.webSignInUrl(returnTo: returnTo) }
+    /// Where the system browser lands signed in as this account by `token`, on `next`.
+    public func webHandoffURL(token: String, next: String) -> String { inner.webHandoffUrl(token: token, next: next) }
+    /// The signed profile this identity carries (architecture 6.4), and a new version of it.
+    public func identityProfile() throws -> ProfileSummary? { try inner.identityProfile() }
+    public func identitySetProfile(displayName: String, pronouns: String, bio: String, avatarURL: String) throws -> ProfileSummary {
+        try inner.identitySetProfile(displayName: displayName, pronouns: pronouns, bio: bio, avatarUrl: avatarURL)
+    }
+
     public func pushSubscribe(platform: String, token: String) throws { try inner.pushSubscribe(platform: platform, token: token) }
     public func pushUnsubscribe(platform: String) throws { try inner.pushUnsubscribe(platform: platform) }
 

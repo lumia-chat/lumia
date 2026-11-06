@@ -80,6 +80,14 @@ struct SignInView: View {
                     .disabled(busy)
                     .frame(maxWidth: .infinity)
                     .keyboardShortcut(.defaultAction)
+                if !creating, !info.oidcName.isEmpty {
+                    Button { Task { await browserSignIn(oidc: true) } } label: { Label(info.oidcName, systemImage: "key") }
+                        .buttonStyle(.lumiaSecondary).disabled(busy).frame(maxWidth: .infinity)
+                }
+                if !creating {
+                    Button { Task { await browserSignIn(oidc: false) } } label: { Label("Sign in with a passkey", systemImage: "key") }
+                        .buttonStyle(.lumiaSecondary).disabled(busy).frame(maxWidth: .infinity)
+                }
                 if !creating, info.magicLinkEnabled {
                     if magicSent {
                         LumiaNotice(icon: "envelope") { Text("A link is on its way to \(handle.trimmingCharacters(in: .whitespaces)) if it has an account here. Open it on this device, or paste its code below.") }
@@ -170,6 +178,24 @@ struct SignInView: View {
             store.route = .app
         } catch {
             self.error = error.lumiaCode == "UNAUTHENTICATED" ? "That code is unknown, used or expired. Ask for a new link." : error.lumiaMessage
+        }
+    }
+
+    // Through the system browser (architecture 6.3): the provider, or the
+    // instance's web sign-in page for a passkey; the sheet comes back with
+    // a one-time token.
+    private func browserSignIn(oidc: Bool) async {
+        guard let session = store.session else { return }
+        error = ""
+        busy = true
+        defer { busy = false }
+        do {
+            try await session.signInThroughBrowser(oidc: oidc)
+            store.route = .app
+        } catch BrowserSheetError.cancelled {
+            // Dismissed: nothing to say.
+        } catch {
+            self.error = error.lumiaCode == "UNAUTHENTICATED" ? "That sign-in was not accepted." : error.lumiaMessage
         }
     }
 

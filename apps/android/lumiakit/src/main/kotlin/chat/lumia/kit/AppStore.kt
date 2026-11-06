@@ -33,6 +33,8 @@ class AppStore(context: Context) {
         private set
     var openError by mutableStateOf<String?>(null)
         private set
+    /** The `lumia:` URL the system browser came back on, for the screen that sent it (architecture 6.3). */
+    var browserReturn by mutableStateOf<String?>(null)
     /** Whether the activity is resumed: then the app shows messages itself. */
     var foregrounded = false
 

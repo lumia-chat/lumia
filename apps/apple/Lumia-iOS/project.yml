@@ -42,6 +42,11 @@ targets:
         CFBundleName: Lumia
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        # The browser sheet's way back (a sign-in through the instance's
+        # web page or its OIDC provider returns on it with a one-time token).
+        CFBundleURLTypes:
+          - CFBundleURLName: chat.lumia
+            CFBundleURLSchemes: [lumia]
         LSApplicationCategoryType: public.app-category.social-networking
         # Export compliance: the app ships its own encryption (the
         # end-to-end encrypted DMs, the encrypted store), so it is not

@@ -104,6 +104,7 @@ fun Shell(store: AppStore, session: LumiaSession, devScreen: String?) {
                 "channel" -> { place = Place.Server(first); if (channel != null) stack = listOf(Screen.Channel(channel.channelId)) }
                 "requests" -> { place = Place.Home; stack = listOf(Screen.Requests) }
                 "devices" -> { place = Place.Home; stack = listOf(Screen.Devices) }
+                "profile" -> { place = Place.Home; stack = listOf(Screen.Profile) }
                 "new" -> { place = Place.Home; stack = listOf(Screen.NewMessage) }
                 "add" -> { place = Place.Home; stack = listOf(Screen.AddServer) }
                 "newchannel" -> { place = Place.Server(first); stack = listOf(Screen.NewChannel(first)) }
@@ -119,7 +120,7 @@ fun Shell(store: AppStore, session: LumiaSession, devScreen: String?) {
 
     when (val top = stack.lastOrNull()) {
         null -> Row(Modifier.fillMaxSize().background(LumiaTokens.bg.color)) {
-            PhoneRail(session, place, onAdd = { push(Screen.AddServer) }) { place = it }
+            PhoneRail(session, place, onAdd = { push(Screen.AddServer) }, onProfile = { push(Screen.Profile) }) { place = it }
             when (val p = place) {
                 Place.Home -> HomeScreen(store, session, push)
                 is Place.Server -> {
@@ -132,6 +133,7 @@ fun Shell(store: AppStore, session: LumiaSession, devScreen: String?) {
         is Screen.Channel -> ChannelScreen(session, top.id, pop)
         Screen.Requests -> RequestsScreen(session, pop, replace)
         Screen.Devices -> DevicesScreen(store, session, pop)
+        Screen.Profile -> ProfileScreen(store, session, pop)
         Screen.NewMessage -> NewMessageScreen(session, pop, replace)
         Screen.AddServer -> AddServerScreen(session, pop) { id -> replace(emptyList()); place = Place.Server(id) }
         is Screen.NewChannel -> NewChannelScreen(session, servers.firstOrNull { it.serverId == top.serverId }, pop) { id -> place = Place.Server(top.serverId); replace(listOf(Screen.Channel(id))) }

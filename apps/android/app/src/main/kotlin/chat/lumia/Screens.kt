@@ -4,6 +4,15 @@
 package chat.lumia
 
 import android.os.Build
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import uniffi.lumia_ffi.ProfileSummary
+import uniffi.lumia_ffi.PasskeySummary
+import androidx.compose.runtime.DisposableEffect
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -536,14 +545,90 @@ fun InviteScreen(session: LumiaSession, server: ServerSummary?, back: () -> Unit
 
 // Devices
 
+// The person's own profile (architecture 6.4): the signed profile the
+// identity carries, display name, pronouns and bio, signed by this phone's
+// device key and sent to the instance as the account's. The same screen
+// as the web's and the iOS app's.
+@Composable
+fun ProfileScreen(store: AppStore, session: LumiaSession, back: () -> Unit) {
+    val scope = rememberCoroutineScope()
+    var profile by remember { mutableStateOf<ProfileSummary?>(null) }
+    var displayName by rememberSaveable { mutableStateOf("") }
+    var pronouns by rememberSaveable { mutableStateOf("") }
+    var bio by rememberSaveable { mutableStateOf("") }
+    var busy by rememberSaveable { mutableStateOf(false) }
+    var error by rememberSaveable { mutableStateOf("") }
+    var saved by rememberSaveable { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        profile = runCatching { session.profile() }.getOrNull()
+        displayName = profile?.displayName ?: ""
+        pronouns = profile?.pronouns ?: ""
+        bio = profile?.bio ?: ""
+    }
+
+    val handleTitle = session.snapshot?.handle?.takeIf { it.isNotEmpty() }?.let { "@$it" } ?: "You"
+    val subtitle = profile?.let { "Version ${it.version}, signed by this phone's device key; every instance you sign in to takes it." } ?: "Nothing set yet: people see your handle."
+
+    PanelScreen(back = "Home", onBack = back, title = "Profile", subtitle = "How people see you") {
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).navigationBarsPadding().imePadding().padding(LumiaTokens.space16), verticalArrangement = Arrangement.spacedBy(LumiaTokens.space12)) {
+            if (session.hasIdentity) {
+                LumiaCard(handleTitle, subtitle) {
+                    Column(verticalArrangement = Arrangement.spacedBy(LumiaTokens.space12)) {
+                        LumiaField("Display name", displayName, { displayName = it }, placeholder = "How people see you")
+                        LumiaField("Pronouns", pronouns, { pronouns = it }, placeholder = "they/them")
+                        LumiaField("Bio", bio, { bio = it }, placeholder = "A line about you")
+                        if (error.isNotEmpty()) LumiaErrorText(error)
+                        if (saved) Text("Saved. This instance shows it now.", style = LumiaTokens.textMeta.style, color = LumiaTokens.inkSecondary.color)
+                        LumiaPrimaryButton("Save", enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+                            scope.launch {
+                                busy = true
+                                error = ""
+                                saved = false
+                                try {
+                                    profile = session.setProfile(displayName, pronouns, bio)
+                                    saved = true
+                                } catch (e: Exception) {
+                                    error = when (e.lumiaCode) {
+                                        "FAILED_PRECONDITION" -> "This account is not linked to your identity, so the instance keeps the profile it has."
+                                        "CONFLICT" -> "A newer profile is already held. Reload and try again."
+                                        else -> e.lumiaMessage
+                                    }
+                                } finally {
+                                    busy = false
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                LumiaNotice(Icons.Filled.Shield, NoticeTone.ACCENT, action = "Link this phone" to { store.route = Route.LINK }, text = "Your profile travels with your identity, signed by its devices. This phone holds no device key yet; a device you already use approves it.")
+            }
+        }
+    }
+}
+
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 fun DevicesScreen(store: AppStore, session: LumiaSession, back: () -> Unit) {
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    val lifecycle = LocalLifecycleOwner.current
     var revoking by remember { mutableStateOf<DeviceSummary?>(null) }
     var password by rememberSaveable { mutableStateOf("") }
     var busy by rememberSaveable { mutableStateOf(false) }
     var error by rememberSaveable { mutableStateOf("") }
+    // Passkeys (architecture 6.3): the account's sign-in keys, listed and
+    // removable here, made on the instance's web page in a browser tab.
+    var passkeys by remember { mutableStateOf<List<PasskeySummary>>(emptyList()) }
+    var passkeyError by rememberSaveable { mutableStateOf("") }
+    suspend fun loadPasskeys() { passkeys = runCatching { session.passkeys() }.getOrDefault(emptyList()) }
+    // Back from the tab (a passkey made there): the list again.
+    DisposableEffect(lifecycle) {
+        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_RESUME) scope.launch { loadPasskeys() } }
+        lifecycle.lifecycle.addObserver(observer)
+        onDispose { lifecycle.lifecycle.removeObserver(observer) }
+    }
     val devices = session.roster?.devices ?: emptyList()
     val active = devices.filter { !it.revoked }
 
@@ -571,7 +656,7 @@ fun DevicesScreen(store: AppStore, session: LumiaSession, back: () -> Unit) {
         else -> Icons.Filled.VpnKey
     }
 
-    LaunchedEffect(Unit) { session.refreshRoster() }
+    LaunchedEffect(Unit) { session.refreshRoster(); loadPasskeys() }
 
     PanelScreen(
         back = "Home", onBack = back, title = "Devices",
@@ -580,6 +665,33 @@ fun DevicesScreen(store: AppStore, session: LumiaSession, back: () -> Unit) {
     ) {
         LazyColumn(Modifier.fillMaxSize().navigationBarsPadding(), contentPadding = androidx.compose.foundation.layout.PaddingValues(LumiaTokens.space16), verticalArrangement = Arrangement.spacedBy(LumiaTokens.space12)) {
             item { LumiaNotice(Icons.Filled.Shield, text = "Your identity lives on these devices, not on any instance. Revoking one takes effect on every instance that holds your roster.") }
+            item {
+                LumiaCard("Passkeys", "Sign in to this instance with a key this phone keeps, instead of a password.") {
+                    Column(verticalArrangement = Arrangement.spacedBy(LumiaTokens.space8)) {
+                        passkeys.forEach { p ->
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                val added = p.createdAtMicros?.let { dayOfMicros(it) } ?: "—"
+                                val used = p.lastUsedAtMicros?.let { dayOfMicros(it) } ?: "never"
+                                Text("${p.label.ifEmpty { "Passkey" }} · added $added · last used $used", style = LumiaTokens.textMeta.style, color = LumiaTokens.inkSecondary.color, modifier = Modifier.weight(1f))
+                                LumiaLinkButton("Remove") {
+                                    scope.launch {
+                                        passkeyError = ""
+                                        try { session.removePasskey(p.passkeyId); loadPasskeys() } catch (e: Exception) { passkeyError = e.lumiaMessage }
+                                    }
+                                }
+                            }
+                        }
+                        if (passkeyError.isNotEmpty()) LumiaErrorText(passkeyError)
+                        LumiaSecondaryButton("Add a passkey", modifier = Modifier.fillMaxWidth()) {
+                            scope.launch {
+                                passkeyError = ""
+                                try { openInBrowser(context, session.webHandoffUrl("devices")) } catch (e: Exception) { passkeyError = e.lumiaMessage }
+                            }
+                        }
+                        Text("Made on the instance's web page, in a browser tab signed in as you.", style = LumiaTokens.textMeta.style, color = LumiaTokens.inkQuiet.color)
+                    }
+                }
+            }
             if (session.roster != null) {
                 items(active, key = { it.deviceId }) { d -> LumiaDeviceRow(d, label(d), meta(d), icon(d)) { revoking = d; password = ""; error = "" } }
                 val revoked = devices.filter { it.revoked }

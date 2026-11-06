@@ -268,7 +268,7 @@ export function App() {
             current: !home() && s.serverId === serverId(),
             onClick: () => goServer(s.serverId),
           }))}
-          self={{ name: selfName(), initials: initialsOf(selfName()), tone: toneFor(accountId()), status: "online" }}
+          self={{ name: selfName(), initials: initialsOf(selfName()), tone: toneFor(accountId()), status: "online", onClick: () => goHome("profile") }}
         />
       }
       sidebar={

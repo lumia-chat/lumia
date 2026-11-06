@@ -34,6 +34,14 @@ export interface PasskeySummary {
   createdAtMicros: number | null;
   lastUsedAtMicros: number | null;
 }
+/** The signed profile this device's identity carries (architecture 6.4). */
+export interface ProfileSummary {
+  version: number;
+  displayName: string;
+  pronouns: string;
+  bio: string;
+  avatarUrl: string;
+}
 /** One account's presence in a server (`ONLINE`, `AWAY`, `DO_NOT_DISTURB`). */
 export interface PresenceSummary {
   accountId: string;
@@ -277,6 +285,18 @@ export class Bridge {
   }
   removePasskey(passkeyId: string): Promise<void> {
     return this.call("removePasskey", passkeyId);
+  }
+  /** A one-time sign-in token for this account, for a native app that signed in through this page to take back. */
+  handoffToken(): Promise<string> {
+    return this.call("handoffToken");
+  }
+  /** The signed profile this browser's identity holds, if any. */
+  identityProfile(): Promise<ProfileSummary | null> {
+    return this.call("identityProfile");
+  }
+  /** Signs a new profile with this browser's device key and, signed in, sends it as the account's. */
+  identitySetProfile(displayName: string, pronouns: string, bio: string, avatarUrl: string): Promise<ProfileSummary> {
+    return this.call("identitySetProfile", displayName, pronouns, bio, avatarUrl);
   }
   /** Asks the instance to mail a sign-in link to `email`. */
   requestMagicLink(email: string): Promise<void> {

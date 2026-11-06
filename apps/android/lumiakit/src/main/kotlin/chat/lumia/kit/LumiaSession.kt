@@ -22,6 +22,8 @@ import uniffi.lumia_ffi.InviteSummary
 import uniffi.lumia_ffi.InstanceSummary
 import uniffi.lumia_ffi.LumiaException
 import uniffi.lumia_ffi.MemberSummary
+import uniffi.lumia_ffi.PasskeySummary
+import uniffi.lumia_ffi.ProfileSummary
 import uniffi.lumia_ffi.MessageSummary
 import uniffi.lumia_ffi.RosterSummary
 import uniffi.lumia_ffi.SnapshotSummary
@@ -37,6 +39,9 @@ sealed class ConnectionState(val label: String) {
 }
 
 val personalKinds = setOf("PERSONAL_DM", "PERSONAL_GROUP_DM")
+
+/** Where a sign-in through the system browser returns to, with `magic={token}` (architecture 6.3). */
+const val BROWSER_SIGN_IN_RETURN = "lumia://sign-in"
 
 class LumiaSession(val client: LumiaClient) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -150,6 +155,43 @@ class LumiaSession(val client: LumiaClient) {
 
     suspend fun identityRevoke(deviceId: String, password: String) {
         roster = client.call { identityRevoke(deviceId, password) }
+    }
+
+    // Passkeys, and sign-in through the browser (architecture 6.3)
+
+    suspend fun passkeys(): List<PasskeySummary> = client.call { passkeys() }
+    suspend fun removePasskey(id: String) { client.call { removePasskey(id) } }
+
+    /**
+     * Where the system browser signs in: [oidc] to the provider, else the
+     * instance's web sign-in page (a passkey there, or any method it
+     * offers). It comes back to [BROWSER_SIGN_IN_RETURN] with a one-time
+     * token, which [completeBrowserSignIn] takes.
+     */
+    suspend fun browserSignInUrl(oidc: Boolean): String = client.call {
+        if (oidc) oidcStartUrl(BROWSER_SIGN_IN_RETURN) else webSignInUrl(BROWSER_SIGN_IN_RETURN)
+    }
+
+    /** The `lumia:` URL the browser came back on, completed as a magic-link token. */
+    suspend fun completeBrowserSignIn(returnUrl: String) {
+        client.call { signInMagicLink(returnUrl) }
+        signedIn = true
+    }
+
+    /** Where the instance's web page opens signed in as this account by a one-time token, on [next] (`devices` for a passkey). */
+    suspend fun webHandoffUrl(next: String): String = client.call { webHandoffUrl(handoffToken(), next) }
+
+    // Profile (architecture 6.4)
+
+    /** The signed profile this identity carries: this device's, else the one the instance holds from another device. */
+    suspend fun profile(): ProfileSummary? = client.call { identityProfile() }
+
+    /** A new version, signed by this device and sent to the instance; the snapshot follows, so the name on screen does. */
+    suspend fun setProfile(displayName: String, pronouns: String, bio: String): ProfileSummary {
+        val current = runCatching { client.call { identityProfile() } }.getOrNull()
+        val p = client.call { identitySetProfile(displayName, pronouns, bio, current?.avatarUrl ?: "") }
+        refreshSnapshot()
+        return p
     }
 
     suspend fun refreshRoster() {

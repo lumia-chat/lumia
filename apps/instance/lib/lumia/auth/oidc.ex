@@ -129,14 +129,21 @@ defmodule Lumia.Auth.Oidc do
     ]
   end
 
+  # The native apps take the token back by their own URL scheme (the system
+  # browser sheet returns to the app on it); the token is one-time and
+  # short-lived, which is what bounds a stranger's app claiming the scheme.
+  @app_scheme "lumia"
+
   defp check_return(return_to) when is_binary(return_to) do
     %URI{scheme: scheme, host: host, port: port} = URI.parse(return_to)
     origin = "#{scheme}://#{host}#{port_suffix(scheme, port)}"
     allowed = [LumiaWeb.Endpoint.url() | Lumia.Identity.web_origins()]
 
-    if scheme in ["http", "https"] and origin in allowed,
-      do: :ok,
-      else: {:error, :invalid_argument}
+    cond do
+      scheme == @app_scheme -> :ok
+      scheme in ["http", "https"] and origin in allowed -> :ok
+      true -> {:error, :invalid_argument}
+    end
   end
 
   defp check_return(_), do: {:error, :invalid_argument}

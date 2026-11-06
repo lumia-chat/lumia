@@ -65,7 +65,7 @@ shoot home 8
 alive=$(xcrun simctl spawn "$udid" launchctl list 2>/dev/null | grep -c "$bundle" || true)
 # The app sends nothing; the CLI's message lands in its view when the gateway is up.
 "$cli" --data-dir "$data" send "$channel" "Still here?" >/dev/null
-for screen in server channel requests devices new add newchannel invite signin link; do shoot "$screen" 6; done
+for screen in server channel requests devices profile new add newchannel invite signin link; do shoot "$screen" 6; done
 xcrun simctl terminate "$udid" "$bundle" 2>/dev/null || true
 [ "$alive" -gt 0 ] || { echo "FAIL: the app was not running after launch"; exit 1; }
 echo "smoke-ios: ok (launched signed in, every screen screenshotted under $work)"

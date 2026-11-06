@@ -17,6 +17,15 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- The browser's way back: a sign-in through the instance's web
+                 page or its OIDC provider returns on lumia://sign-in with a
+                 one-time token (architecture 6.3). -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="lumia" />
+            </intent-filter>
         </activity>
         <!-- Push (architecture 15.5): the UnifiedPush distributor's events, and FCM's. -->
         <service

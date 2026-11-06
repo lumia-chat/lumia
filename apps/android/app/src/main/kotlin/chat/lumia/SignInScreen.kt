@@ -32,6 +32,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
@@ -57,6 +58,7 @@ import uniffi.lumia_ffi.InstanceSummary
 @Composable
 fun SignInScreen(store: AppStore) {
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     var instance by rememberSaveable { mutableStateOf(store.savedInstance ?: "") }
     var info by rememberSaveable { mutableStateOf<InstanceSummary?>(null) }
     var reaching by rememberSaveable { mutableStateOf(false) }
@@ -121,6 +123,32 @@ fun SignInScreen(store: AppStore) {
             store.route = Route.APP
         } catch (e: Exception) {
             error = if (e.lumiaCode == "UNAUTHENTICATED") "That code is unknown, used or expired. Ask for a new link." else e.lumiaMessage
+        } finally {
+            busy = false
+        }
+    }
+
+    suspend fun browserSignIn(oidc: Boolean) {
+        val session = store.session ?: return
+        error = ""
+        try {
+            openInBrowser(context, session.browserSignInUrl(oidc))
+        } catch (e: Exception) {
+            error = e.lumiaMessage
+        }
+    }
+
+    // Back from the browser with a one-time token on the app's own scheme.
+    LaunchedEffect(store.browserReturn) {
+        val back = store.browserReturn ?: return@LaunchedEffect
+        store.browserReturn = null
+        val session = store.session ?: return@LaunchedEffect
+        busy = true
+        try {
+            session.completeBrowserSignIn(back)
+            store.route = Route.APP
+        } catch (e: Exception) {
+            error = if (e.lumiaCode == "UNAUTHENTICATED") "That sign-in was not accepted." else e.lumiaMessage
         } finally {
             busy = false
         }
@@ -195,6 +223,15 @@ fun SignInScreen(store: AppStore) {
                     if (needsTotp) LumiaField("Verification code", totp, { totp = it }, placeholder = "6 digits from your authenticator", keyboard = KeyboardOptions(keyboardType = KeyboardType.Number))
                     if (error.isNotEmpty()) LumiaErrorText(error)
                     LumiaPrimaryButton(if (creating) "Create account" else "Sign in", enabled = !busy, modifier = Modifier.fillMaxWidth()) { scope.launch { submit() } }
+                    // Through the system browser (architecture 6.3): the provider,
+                    // or the instance's web sign-in page for a passkey; the tab
+                    // comes back with a one-time token, taken below.
+                    if (!creating && current.oidcName.isNotEmpty()) {
+                        LumiaSecondaryButton(current.oidcName, enabled = !busy, modifier = Modifier.fillMaxWidth()) { scope.launch { browserSignIn(oidc = true) } }
+                    }
+                    if (!creating) {
+                        LumiaSecondaryButton("Sign in with a passkey", enabled = !busy, modifier = Modifier.fillMaxWidth()) { scope.launch { browserSignIn(oidc = false) } }
+                    }
                     if (!creating && current.magicLinkEnabled) {
                         if (magicSent) {
                             LumiaNotice(Icons.Filled.Email, text = "A link is on its way to ${handle.trim()} if it has an account here. Open it on this device, or paste its code below.")

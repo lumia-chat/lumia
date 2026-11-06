@@ -55,7 +55,7 @@ shoot home 10
 alive=$("$adb" shell pidof "$bundle" 2>/dev/null || true)
 # The app sends nothing; the CLI's message lands in its view when the gateway is up.
 "$cli" --data-dir "$data" send "$channel" "Still here?" >/dev/null
-for screen in server channel requests devices new add newchannel invite signin link; do shoot "$screen" 7; done
+for screen in server channel requests devices profile new add newchannel invite signin link; do shoot "$screen" 7; done
 "$adb" shell am force-stop "$bundle" >/dev/null 2>&1 || true
 [ -n "$alive" ] || { echo "FAIL: the app was not running after launch"; exit 1; }
 

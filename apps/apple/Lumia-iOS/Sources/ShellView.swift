@@ -19,7 +19,7 @@ struct ShellView: View {
     var body: some View {
         NavigationStack(path: $path) {
             HStack(spacing: 0) {
-                PhoneRail(session: session, place: $place) { path = [.addServer] }
+                PhoneRail(session: session, place: $place, add: { path = [.addServer] }, profile: { path = [.profile] })
                 switch place {
                 case .home:
                     HomeScreen(session: session, path: $path)
@@ -40,6 +40,7 @@ struct ShellView: View {
                 case let .channel(id): ChannelScreen(session: session, channelID: id)
                 case .requests: RequestsScreen(session: session, path: $path)
                 case .devices: DevicesScreen(session: session)
+                case .profile: ProfileScreen(session: session)
                 case .newMessage: NewMessageScreen(session: session, path: $path)
                 case .addServer: AddServerScreen(session: session) { id in path = []; place = .server(id: id) }
                 case let .newChannel(serverID): NewChannelScreen(session: session, server: servers.first { $0.serverId == serverID }) { id in path = [.channel(id: id)] }
@@ -66,7 +67,7 @@ struct ShellView: View {
             }
             #if DEBUG
             // The smoke run (scripts/smoke-ios.sh) opens one screen per launch
-            // through LUMIA_DEV_SCREEN: home, server, channel, requests, devices, new.
+            // through LUMIA_DEV_SCREEN: home, server, channel, requests, devices, profile, new.
             if let first = ids.first, let screen = ProcessInfo.processInfo.environment["LUMIA_DEV_SCREEN"] {
                 let channel = snapshot?.channels.first { $0.serverId == first && !personalKinds.contains($0.kind) }
                 switch screen {
@@ -75,6 +76,7 @@ struct ShellView: View {
                 case "channel": place = .server(id: first); if let channel { path = [.channel(id: channel.channelId)] }
                 case "requests": place = .home; path = [.requests]
                 case "devices": place = .home; path = [.devices]
+                case "profile": place = .home; path = [.profile]
                 case "new": place = .home; path = [.newMessage]
                 case "add": place = .home; path = [.addServer]
                 case "newchannel": place = .server(id: first); path = [.newChannel(serverID: first)]

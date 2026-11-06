@@ -182,6 +182,21 @@ pub struct PasskeySummary {
     pub last_used_at_micros: Option<i64>,
 }
 
+/// `text` as a URL query value: everything but the unreserved characters
+/// percent-encoded.
+fn query_escape(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for byte in text.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(char::from(byte));
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
+
 /// The token inside a magic-link mail's link, or the text itself when it
 /// is the bare code: `https://host/sign-in?magic=abc` and `abc` both give `abc`.
 #[must_use]
@@ -1006,6 +1021,56 @@ impl App {
         self.save_tokens(&pair)
     }
 
+    /// A one-time sign-in token for this account (`POST /auth/handoff`),
+    /// completed as a magic-link token is: the native apps hand their
+    /// session to the instance's web page with it (to make a passkey
+    /// there), and the page hands a sign-in back to an app the same way.
+    ///
+    /// # Errors
+    /// On transport or API failure.
+    pub async fn handoff_token(&self) -> Result<String, ClientError> {
+        Ok(self.api.handoff().await?.token)
+    }
+
+    /// Where a native app sends the system browser to sign in with the
+    /// instance's OIDC provider. The sheet comes back to `return_to` (the
+    /// app's own `lumia:` URL) with `magic={token}`, which
+    /// [`Self::sign_in_magic_link`] takes whole.
+    #[must_use]
+    pub fn oidc_start_url(&self, return_to: &str) -> String {
+        format!(
+            "{}/api/v1/auth/oidc/start?return={}",
+            self.api.base(),
+            query_escape(return_to)
+        )
+    }
+
+    /// Where a native app sends the system browser to sign in through the
+    /// instance's web page, with a passkey or any method the page offers:
+    /// the page signs in, mints a handoff token and returns to `return_to`
+    /// with it as `magic`.
+    #[must_use]
+    pub fn web_sign_in_url(&self, return_to: &str) -> String {
+        format!(
+            "{}/sign-in?return={}",
+            self.api.base(),
+            query_escape(return_to)
+        )
+    }
+
+    /// Where a native app sends the system browser signed in as this
+    /// account, by a token from [`Self::handoff_token`], landing on `next`
+    /// (`devices` for the passkeys there).
+    #[must_use]
+    pub fn web_handoff_url(&self, token: &str, next: &str) -> String {
+        format!(
+            "{}/sign-in?magic={}&next={}",
+            self.api.base(),
+            query_escape(token),
+            query_escape(next)
+        )
+    }
+
     /// Creates an account with a password and signs in.
     ///
     /// # Errors
@@ -1729,11 +1794,28 @@ impl App {
     /// # Errors
     /// On a store failure.
     pub async fn identity_profile(&self) -> Result<Option<ProfileSummary>, ClientError> {
-        let mut stores = self.identity.lock().await;
-        match device(&mut stores, &self.device_id).profile()? {
+        let local = {
+            let mut stores = self.identity.lock().await;
+            device(&mut stores, &self.device_id).profile()?
+        };
+        match local {
             Some(signed) => Ok(Some(profile_summary(&signed)?)),
-            None => Ok(None),
+            // Another device of the identity may have set one: the account
+            // holds it, and this device shows it until it signs its own.
+            None => match self.held_profile().await {
+                Some(signed) => Ok(Some(profile_summary(&signed)?)),
+                None => Ok(None),
+            },
         }
+    }
+
+    /// The signed profile the instance holds for this account, when signed in.
+    async fn held_profile(&self) -> Option<lumia_core::proto::SignedProfile> {
+        if !self.signed_in() {
+            return None;
+        }
+        let snap = self.api.account_snapshot().await.ok()?;
+        snap.account?.profile
     }
 
     /// Signs a new profile with this device's key, keeps it, and when
@@ -1749,6 +1831,12 @@ impl App {
         bio: &str,
         avatar_url: &str,
     ) -> Result<ProfileSummary, ClientError> {
+        // The version must pass the one the instance holds, which another
+        // device of the identity may have set.
+        let held = match self.held_profile().await {
+            Some(signed) => Some(profile_summary(&signed)?.version),
+            None => None,
+        };
         let signed = {
             let mut stores = self.identity.lock().await;
             device(&mut stores, &self.device_id).set_profile(
@@ -1756,6 +1844,7 @@ impl App {
                 pronouns,
                 bio,
                 avatar_url,
+                held,
             )?
         };
         if self.signed_in() {

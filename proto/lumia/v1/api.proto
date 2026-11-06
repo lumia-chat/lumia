@@ -126,6 +126,16 @@ message MagicLinkCompleteRequest {
   bytes device_id = 2;
 }
 
+// POST /auth/handoff — a one-time sign-in token for the caller's own
+// account, completed as a magic-link token is: for a native app that signs
+// in through the instance's web page (a passkey, say) and takes the token
+// back by its return URL, or hands its own session to that page. Fifteen
+// minutes, once.
+message HandoffResponse {
+  string token = 1;
+  google.protobuf.Timestamp expires_at = 2;
+}
+
 // ---- Passkeys (WebAuthn, architecture 6.3) ---------------------------------
 // The ceremonies carry the browser's own JSON: the options the instance
 // makes (PublicKeyCredentialCreationOptions or RequestOptions, binary

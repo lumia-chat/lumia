@@ -79,6 +79,9 @@ defmodule Lumia.Auth.MagicLink do
     end
   end
 
+  @doc "How long a token lives, in seconds."
+  def ttl_seconds, do: @ttl_seconds
+
   @doc "Signs `device_id` in with a token from the mail: once, within its lifetime."
   def complete(token, device_id, opts \\ []) when is_binary(token) do
     hash = hash(String.trim(token))

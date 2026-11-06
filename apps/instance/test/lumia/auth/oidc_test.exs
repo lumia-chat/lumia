@@ -97,6 +97,8 @@ defmodule Lumia.Auth.OidcTest do
 
   test "a return outside the instance and its web origins is refused, and a stale state is sent back with an error" do
     assert {:error, :invalid_argument} = Oidc.start("https://evil.example/sign-in")
+    # The apps' own scheme is a return: the sheet comes back to the app on it.
+    assert {:ok, _} = Oidc.start("lumia://sign-in")
     assert {:error, nil} = Oidc.callback(%{"code" => "x", "state" => "unknown"})
   end
 
