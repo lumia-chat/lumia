@@ -180,65 +180,72 @@ defmodule Lumia.Auth.Oidc do
     issuer = Keyword.fetch!(settings, :issuer)
 
     case Repo.get_by(Identity, issuer: issuer, subject: subject) do
-      %Identity{account_id: id} ->
-        {:ok, Repo.get!(Account, id)}
-
-      nil ->
-        Lumia.Tx.transact(fn ->
-          with {:ok, account} <- create_account(claims),
-               {:ok, _} <-
-                 Repo.insert(%Identity{issuer: issuer, subject: subject, account_id: account.id}) do
-            {:ok, account}
-          end
-        end)
+      %Identity{account_id: id} -> {:ok, Repo.get!(Account, id)}
+      nil -> Lumia.Tx.transact(fn -> bind_new_account(issuer, subject, claims) end)
     end
   end
 
   defp account_for(_, _), do: {:error, :unauthenticated}
 
+  defp bind_new_account(issuer, subject, claims) do
+    with {:ok, account} <- create_account(claims),
+         {:ok, _} <-
+           Repo.insert(%Identity{issuer: issuer, subject: subject, account_id: account.id}) do
+      {:ok, account}
+    end
+  end
+
   # A handle from the claims, made unique with a suffix before the insert
   # (a refused insert would abort the transaction); the email only when no
   # account has it.
   defp create_account(claims) do
-    base =
-      [claims["preferred_username"], claims["email"] |> to_string() |> String.split("@") |> hd()]
-      |> Enum.find("user", &(is_binary(&1) and &1 != ""))
-      |> String.downcase()
-      |> String.replace(~r/[^a-z0-9_]/, "")
-      |> String.slice(0, 24)
-      |> then(&if(&1 == "", do: "user", else: &1))
-
-    email =
-      case claims["email"] do
-        e when is_binary(e) and e != "" ->
-          if Repo.exists?(
-               from a in Account, where: fragment("lower(?)", a.email) == ^String.downcase(e)
-             ),
-             do: nil,
-             else: e
-
-        _ ->
-          nil
-      end
-
-    handle =
-      Enum.find_value(0..50, fn attempt ->
-        candidate =
-          if attempt == 0, do: base, else: base <> Integer.to_string(:rand.uniform(9999))
-
-        if Repo.exists?(from a in Account, where: fragment("lower(?)", a.handle) == ^candidate),
-          do: nil,
-          else: candidate
-      end)
-
-    case handle do
+    case free_handle(handle_base(claims)) do
       nil ->
         {:error, :already_exists}
 
       handle ->
-        Accounts.create_account(%{handle: handle, email: email, display_name: claims["name"]})
+        Accounts.create_account(%{
+          handle: handle,
+          email: free_email(claims["email"]),
+          display_name: claims["name"]
+        })
     end
   end
+
+  # The handle's base: the preferred username, else the email's local part,
+  # else "user"; lowercase, `[a-z0-9_]`, at most 24 characters.
+  defp handle_base(claims) do
+    [claims["preferred_username"], claims["email"] |> to_string() |> String.split("@") |> hd()]
+    |> Enum.find("user", &(is_binary(&1) and &1 != ""))
+    |> String.downcase()
+    |> String.replace(~r/[^a-z0-9_]/, "")
+    |> String.slice(0, 24)
+    |> then(&if(&1 == "", do: "user", else: &1))
+  end
+
+  # The base itself, else with a random suffix; nil when none is free.
+  defp free_handle(base) do
+    Enum.find_value(0..50, fn attempt ->
+      candidate =
+        if attempt == 0, do: base, else: base <> Integer.to_string(:rand.uniform(9999))
+
+      if Repo.exists?(from a in Account, where: fragment("lower(?)", a.handle) == ^candidate),
+        do: nil,
+        else: candidate
+    end)
+  end
+
+  # The claimed email, only when no account has it.
+  defp free_email(email) when is_binary(email) and email != "" do
+    taken =
+      Repo.exists?(
+        from a in Account, where: fragment("lower(?)", a.email) == ^String.downcase(email)
+      )
+
+    if taken, do: nil, else: email
+  end
+
+  defp free_email(_), do: nil
 
   defp with_query(url, query) do
     if String.contains?(url, "?"), do: url <> "&" <> query, else: url <> "?" <> query

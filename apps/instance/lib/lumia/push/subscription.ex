@@ -32,13 +32,15 @@ defmodule Lumia.Push.Subscription do
       "web_push" ->
         changeset
         |> Ecto.Changeset.validate_required([:p256dh, :auth])
-        |> Ecto.Changeset.validate_change(:endpoint, fn :endpoint, endpoint ->
-          if push_service?(endpoint), do: [], else: [endpoint: "must be an https push service"]
-        end)
+        |> Ecto.Changeset.validate_change(:endpoint, &endpoint_error/2)
 
       _ ->
         changeset
     end
+  end
+
+  defp endpoint_error(:endpoint, endpoint) do
+    if push_service?(endpoint), do: [], else: [endpoint: "must be an https push service"]
   end
 
   # A push service is reached over https; a fake one on this machine, over

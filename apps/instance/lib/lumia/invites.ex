@@ -102,9 +102,8 @@ defmodule Lumia.Invites do
   def accept(code, account_id) do
     Tx.transact(fn ->
       with :ok <- within(:accept_per_hour, accepted_last_hour(account_id)),
-           {:ok, invite} <- lock(code),
-           {:ok, member} <- join(invite, account_id) do
-        {:ok, member}
+           {:ok, invite} <- lock(code) do
+        join(invite, account_id)
       end
     end)
   end

@@ -10,9 +10,10 @@ defmodule LumiaWeb.OidcController do
 
   # GET /auth/oidc/start?return={url}: off to the provider.
   def start(conn, params) do
-    with {:ok, url} <- Oidc.start(params["return"] || "") do
-      redirect(conn, external: url)
-    else
+    case Oidc.start(params["return"] || "") do
+      {:ok, url} ->
+        redirect(conn, external: url)
+
       {:error, {:provider, message}} ->
         ProtoConn.render_error(conn, :internal, %{"provider" => message})
 

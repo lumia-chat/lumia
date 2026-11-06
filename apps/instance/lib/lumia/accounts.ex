@@ -75,23 +75,7 @@ defmodule Lumia.Accounts do
     with verified when not is_nil(verified) <- Lumia.Identity.held_roster(identity_id),
          {:ok, body} <- Lumia.Identity.verify_profile(signed, verified),
          :ok <- newer_than_held(account, body) do
-      Tx.transact(fn ->
-        with {:ok, updated} <-
-               account
-               |> Ecto.Changeset.change(
-                 display_name: blank_to_nil(body.display_name),
-                 avatar_url: blank_to_nil(body.avatar_url),
-                 profile: V1.SignedProfile.encode(signed)
-               )
-               |> Repo.update(),
-             {:ok, _} <-
-               append_event(
-                 account.id,
-                 {:profile_updated, %V1.ProfileUpdated{account: Lumia.Proto.account(updated)}}
-               ) do
-          {:ok, updated}
-        end
-      end)
+      Tx.transact(fn -> store_profile(account, body, signed) end)
     else
       nil -> {:error, :identity_proof_invalid}
       other -> other
@@ -99,6 +83,24 @@ defmodule Lumia.Accounts do
   end
 
   def put_profile(_, _), do: {:error, :failed_precondition}
+
+  defp store_profile(account, body, signed) do
+    with {:ok, updated} <-
+           account
+           |> Ecto.Changeset.change(
+             display_name: blank_to_nil(body.display_name),
+             avatar_url: blank_to_nil(body.avatar_url),
+             profile: V1.SignedProfile.encode(signed)
+           )
+           |> Repo.update(),
+         {:ok, _} <-
+           append_event(
+             account.id,
+             {:profile_updated, %V1.ProfileUpdated{account: Lumia.Proto.account(updated)}}
+           ) do
+      {:ok, updated}
+    end
+  end
 
   defp newer_than_held(%Account{profile: nil}, _body), do: :ok
 
