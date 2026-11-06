@@ -893,7 +893,14 @@ try {
       if (only.length && !only.includes(name)) continue;
       const started = Date.now();
       live.phase = "start";
-      const beat = setInterval(() => console.log(`  [${which}] ${name}: ${Math.round((Date.now() - started) / 1000)} s, ${live.phase}, at ${live.page?.url() ?? "no page"}`), 30_000);
+      // Every 30 s: a line, and a screenshot of the page as it is then (a
+      // step that closes its own browser in `finally` leaves nothing to
+      // shoot once it has failed).
+      const beat = setInterval(() => {
+        const secs = Math.round((Date.now() - started) / 1000);
+        console.log(`  [${which}] ${name}: ${secs} s, ${live.phase}, at ${live.page?.url() ?? "no page"}`);
+        void live.page?.screenshot({ path: `${out}/${which}-${name.replace(/\s+/g, "-")}-${secs}s.png`, timeout: 5_000 }).catch(() => {});
+      }, 30_000);
       try {
         await Promise.race([step(), Bun.sleep(240_000).then(() => Promise.reject(new Error(`${name} did not finish within 4 minutes`)))]);
       } catch (e) {

@@ -1802,20 +1802,22 @@ impl App {
             Some(signed) => Ok(Some(profile_summary(&signed)?)),
             // Another device of the identity may have set one: the account
             // holds it, and this device shows it until it signs its own.
-            None => match self.held_profile().await {
+            None => match self.held_profile().await? {
                 Some(signed) => Ok(Some(profile_summary(&signed)?)),
                 None => Ok(None),
             },
         }
     }
 
-    /// The signed profile the instance holds for this account, when signed in.
-    async fn held_profile(&self) -> Option<lumia_core::proto::SignedProfile> {
+    /// The signed profile the instance holds for this account, when signed
+    /// in: none when it holds none, an error when it could not be asked
+    /// (a new version must pass the held one, so a guess will not do).
+    async fn held_profile(&self) -> Result<Option<lumia_core::proto::SignedProfile>, ClientError> {
         if !self.signed_in() {
-            return None;
+            return Ok(None);
         }
-        let snap = self.api.account_snapshot().await.ok()?;
-        snap.account?.profile
+        let snap = self.api.account_snapshot().await?;
+        Ok(snap.account.and_then(|a| a.profile))
     }
 
     /// Signs a new profile with this device's key, keeps it, and when
@@ -1833,7 +1835,7 @@ impl App {
     ) -> Result<ProfileSummary, ClientError> {
         // The version must pass the one the instance holds, which another
         // device of the identity may have set.
-        let held = match self.held_profile().await {
+        let held = match self.held_profile().await? {
             Some(signed) => Some(profile_summary(&signed)?.version),
             None => None,
         };
