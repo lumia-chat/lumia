@@ -26,11 +26,7 @@ defmodule Lumia.ProtoJSONTest do
     assert map["kind"] == "ACCOUNT_HUMAN"
     assert map["createdAt"] == "2026-11-06T12:00:00Z"
 
-    assert map["profile"] == %{
-             "body" => Base.encode64("body"),
-             "signature" => Base.encode64("sig")
-           }
-
+    assert map["profile"] == %{"body" => Base.encode64("body")}
     assert ProtoJSON.decode!(ProtoJSON.encode!(account), V1.Account) == account
 
     nonce = :crypto.strong_rand_bytes(24)
