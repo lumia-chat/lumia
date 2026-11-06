@@ -123,15 +123,21 @@ esac
 # expects the conversation's panel, titled with the other side's handle.
 host=$(printf '%s' "$instance" | sed -E 's#^https?://##; s#/$##')
 printf '{"aps":{"alert":{"title":"cli%s","body":"%s"},"mutable-content":1,"sound":"default"},"instance":"%s","channel_id":"%s","kind":"dm"}\n' "$stamp" "$body" "$host" "$channel" > "$work/push.json"
-TEST_RUNNER_LUMIA_DEV_INSTANCE="$instance" TEST_RUNNER_LUMIA_DEV_HANDLE="phone$stamp" TEST_RUNNER_LUMIA_DEV_PASSWORD="$password" TEST_RUNNER_LUMIA_UITEST_EXPECT="cli$stamp" \
+rm -f "$work/ready.txt"
+TEST_RUNNER_LUMIA_DEV_INSTANCE="$instance" TEST_RUNNER_LUMIA_DEV_HANDLE="phone$stamp" TEST_RUNNER_LUMIA_DEV_PASSWORD="$password" TEST_RUNNER_LUMIA_UITEST_EXPECT="cli$stamp" TEST_RUNNER_LUMIA_UITEST_READY="$work/ready.txt" \
   xcodebuild test-without-building -project "$project/Lumia.xcodeproj" -scheme Lumia -destination "id=$udid" -derivedDataPath "$project/.build" \
   -only-testing:LumiaUITests/SmokeUITests/testOpenNotification > "$work/uitest-open.log" 2>&1 &
 uitest=$!
-sleep 20
+# The push waits for the test's word that the app is in the foreground: on
+# the runner the test takes well over the 20 s this once slept, and a
+# banner delivered to the home screen is gone before the test looks.
+for _ in $(seq 1 150); do [ -f "$work/ready.txt" ] && break; sleep 1; done
+[ -f "$work/ready.txt" ] || { echo "FAIL: the UI test never had the app in the foreground; see $work/uitest-open.log"; tail -20 "$work/uitest-open.log"; exit 1; }
+sleep 3
 xcrun simctl push "$udid" "$bundle" "$work/push.json" >/dev/null
 sleep 2
 xcrun simctl io "$udid" screenshot "$work/push.png" >/dev/null 2>&1
 sleep 6
 xcrun simctl io "$udid" screenshot "$work/opened.png" >/dev/null 2>&1
-wait $uitest || { echo "FAIL: the tap did not open the conversation; see $work/uitest-open.log and $work/opened.png"; grep -E 'error|failed' "$work/uitest-open.log" | head -5; exit 1; }
+wait $uitest || { echo "FAIL: the tap did not open the conversation; see $work/uitest-open.log and $work/opened.png"; grep -E 'error|failed' "$work/uitest-open.log" | head -5; tail -20 "$work/uitest-open.log"; exit 1; }
 echo "smoke-push: ok (the phone joined the group and decrypted the message for the notice; the banner is in $work/push.png, the conversation it opened in $work/opened.png)"

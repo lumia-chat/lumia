@@ -35,6 +35,13 @@ final class SmokeUITests: XCTestCase {
         let app = launch()
         let expected = ProcessInfo.processInfo.environment["LUMIA_UITEST_EXPECT"] ?? ""
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        // The smoke must not push before the app is up: a banner that
+        // arrives on the home screen is gone by the time this looks. The
+        // app in the foreground is announced through LUMIA_UITEST_READY.
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 90), "the app did not come to the foreground")
+        if let ready = ProcessInfo.processInfo.environment["LUMIA_UITEST_READY"] {
+            try? "ready".write(toFile: ready, atomically: true, encoding: .utf8)
+        }
         // The banner is found by what it says (its identifier differs between iOS versions).
         let banner = springboard.descendants(matching: .any)
             .matching(NSPredicate(format: "label CONTAINS[c] %@", expected)).firstMatch

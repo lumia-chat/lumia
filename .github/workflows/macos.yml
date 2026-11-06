@@ -132,6 +132,7 @@ jobs:
             apps/apple/.build/smoke-ios/*.png
             apps/apple/.build/smoke-push/*.png
             apps/apple/.build/smoke-push/uitest.log
+            apps/apple/.build/smoke-push/uitest-open.log
           if-no-files-found: ignore
       - run: bun run e2e -- webkit
         working-directory: apps/web
