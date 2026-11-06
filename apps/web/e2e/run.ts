@@ -909,7 +909,10 @@ try {
         await Promise.race([step(), Bun.sleep(240_000).then(() => Promise.reject(new Error(`${name} did not finish within 4 minutes`)))]);
       } catch (e) {
         failed++;
-        console.log(`  ${which}: ${name} FAILED: ${e instanceof Error ? e.message.split("\n")[0] : String(e)}`);
+        // The whole message: a step's error may carry what it saw.
+        const lines = (e instanceof Error ? e.message : String(e)).split("\n");
+        console.log(`  ${which}: ${name} FAILED: ${lines[0]}`);
+        for (const line of lines.slice(1, 40)) console.log(`      ${line}`);
         if (live.page) await diagnose(which, live.page, `${which}-${name.replace(/\s+/g, "-")}-failed`);
       } finally {
         clearInterval(beat);
