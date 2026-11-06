@@ -25,11 +25,18 @@ defmodule LumiaWeb.HandoffApiTest do
   test "a handoff token signs another device in once, as a magic-link token does", %{conn: conn} do
     account = account("handoff")
     minted = post(authed(conn, account), "/api/v1/auth/handoff")
-    assert %V1.HandoffResponse{token: token, expires_at: expires_at} = decode(minted, V1.HandoffResponse)
+
+    assert %V1.HandoffResponse{token: token, expires_at: expires_at} =
+             decode(minted, V1.HandoffResponse)
+
     assert byte_size(token) >= 32
     assert DateTime.compare(Proto.from_timestamp(expires_at), DateTime.utc_now()) == :gt
 
-    complete = %V1.MagicLinkCompleteRequest{token: token, device_id: Proto.uuid(Ecto.UUID.generate())}
+    complete = %V1.MagicLinkCompleteRequest{
+      token: token,
+      device_id: Proto.uuid(Ecto.UUID.generate())
+    }
+
     signed = post_proto(build_conn(), "/api/v1/auth/sign-in/magic-link/complete", complete)
     assert %V1.TokenPair{access_token: access} = decode(signed, V1.TokenPair)
     assert {:ok, session} = Auth.verify_access(access)
