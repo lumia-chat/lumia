@@ -20,6 +20,10 @@ jobs:
     env:
       MIX_ENV: test
       DB_URL: postgres://postgres:postgres@localhost:5432/lumia_test
+      # The dev build here is for the load test, which refuses the code
+      # reloader (a compile-time switch of the endpoint): every dev compile
+      # in this job, and the cached build, must agree with it.
+      LUMIA_CODE_RELOADER: "false"
       # The runner's pg_wrapper picks its preinstalled client; the backup
       # commands take the server's major from here.
       PG_BIN: /usr/lib/postgresql/18/bin
