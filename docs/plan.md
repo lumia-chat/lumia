@@ -322,3 +322,4 @@ From architecture §20, plus ones raised while specifying:
 - Tauri core in-process versus WASM (moot if the Linux budget sends desktop to Qt, architecture §13).
 - Link unfurling.
 - Whether `commands` retention of 30 days is acceptable for non-message operations (delivery §9 states the consequence).
+- The connections row of architecture §17, to look into later: 585 KB of server memory per connection (about 250 KB of it unattributed) and about 100 connects a second before the pool drops queries, measured 2026-11-06 ([spikes/2026-11-06-load.md](spikes/2026-11-06-load.md)); the step 8 checkbox has the numbers and what to change.
