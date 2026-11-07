@@ -44,6 +44,19 @@ defmodule LumiaWeb.InviteController do
     end
   end
 
+  # Architecture 6.2: the invite as a mail to an address, one use, a week.
+  def email(conn, _params) do
+    with {:ok, req} <- ProtoConn.decode(conn, V1.EmailInviteRequest),
+         server_id = Proto.from_uuid(req.server_id),
+         {:ok, invite} <-
+           Invites.email(server_id, conn.assigns.current_account_id, req.email, %{
+             as_guest: req.as_guest,
+             guest_days: req.guest_days
+           }) do
+      ProtoConn.render(conn, 201, Proto.invite(invite))
+    end
+  end
+
   def accept(conn, %{"code" => code}) do
     with {:ok, member} <- Invites.accept(code, conn.assigns.current_account_id) do
       ProtoConn.render(conn, Proto.member(member))

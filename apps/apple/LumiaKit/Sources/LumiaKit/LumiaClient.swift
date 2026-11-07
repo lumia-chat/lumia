@@ -34,6 +34,7 @@ public actor LumiaClient {
     /// What an invite link or code shows before joining. Public.
     public func invitePreview(_ linkOrCode: String) throws -> InvitePreviewSummary { try inner.invitePreview(linkOrCode: linkOrCode) }
     /// An invite link for a server (0 uses is unlimited).
+    public func emailInvite(serverID: String, email: String) throws -> InviteSummary { try inner.emailInvite(serverId: serverID, email: email) }
     public func createInvite(serverID: String, maxUses: UInt32 = 0, expiresInHours: UInt32? = nil) throws -> InviteSummary {
         try inner.createInvite(serverId: serverID, maxUses: maxUses, expiresInHours: expiresInHours)
     }

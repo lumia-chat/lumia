@@ -103,6 +103,11 @@ public final class LumiaSession {
         try await client.createInvite(serverID: serverID, maxUses: maxUses, expiresInHours: expiresInHours)
     }
 
+    /// A one-use invite good for a week, mailed to the address as a link (architecture 6.2).
+    public func emailInvite(serverID: String, email: String) async throws -> InviteSummary {
+        try await client.emailInvite(serverID: serverID, email: email)
+    }
+
     /// The server's invites, newest first, for a member who may invite.
     public func invites(serverID: String) async throws -> [InviteSummary] {
         try await client.invites(serverID: serverID)

@@ -31,6 +31,8 @@ struct ShellView: View {
     @State private var invites: [InviteSummary] = []
     @State private var inviteExpiresInHours: UInt32 = 0
     @State private var inviteMaxUses: UInt32 = 0
+    @State private var inviteEmail = ""
+    @State private var inviteEmailed = ""
     @State private var inviteError = ""
     @State private var inviteBusy = false
     @State private var inviteCopied = false
@@ -273,6 +275,13 @@ struct ShellView: View {
             if !inviteError.isEmpty { LumiaErrorText(inviteError) }
             Button("Make a link") { Task { await makeInvite() } }
                 .buttonStyle(.lumiaPrimary).disabled(inviteBusy)
+            // The invite as a mail (architecture 6.2): one use, a week, to the address.
+            LumiaField("Email", text: $inviteEmail, placeholder: "pat@example.com")
+            Button("Send by email") { Task { await emailInvite() } }
+                .buttonStyle(.lumiaSecondary).disabled(inviteBusy || inviteEmail.trimmingCharacters(in: .whitespaces).isEmpty)
+            if !inviteEmailed.isEmpty {
+                Text("Sent to \(inviteEmailed); it works once, within a week.").font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkSecondary.color)
+            }
             if let invite {
                 Text(invite.url)
                     .font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.ink.color)
@@ -321,7 +330,7 @@ struct ShellView: View {
     }
 
     private func describeInvite(_ i: InviteSummary) -> String {
-        let uses = i.maxUses == 0 ? "\(i.uses) uses" : "\(i.uses)/\(i.maxUses) uses"
+        let uses = (i.email.isEmpty ? "" : "to \(i.email) · ") + (i.maxUses == 0 ? "\(i.uses) uses" : "\(i.uses)/\(i.maxUses) uses")
         guard let micros = i.expiresAtMicros else { return "\(uses) · no expiry" }
         let at = Date(timeIntervalSince1970: TimeInterval(micros) / 1_000_000)
         return "\(uses) · expires \(at.formatted(date: .abbreviated, time: .shortened))"
@@ -339,6 +348,22 @@ struct ShellView: View {
             invites.insert(made, at: 0)
         } catch {
             inviteError = error.lumiaCode == "PERMISSION_DENIED" ? "You cannot invite people to this server." : error.lumiaCode == "RATE_LIMITED" ? "Too many links in the last hour; try later." : error.lumiaMessage
+        }
+    }
+
+    private func emailInvite() async {
+        guard case let .server(id) = place else { return }
+        inviteBusy = true
+        inviteError = ""
+        inviteEmailed = ""
+        defer { inviteBusy = false }
+        do {
+            let made = try await session.emailInvite(serverID: id, email: inviteEmail)
+            invites.insert(made, at: 0)
+            inviteEmailed = made.email
+            inviteEmail = ""
+        } catch {
+            inviteError = error.lumiaCode == "FAILED_PRECONDITION" ? "This instance sends no mail; make a link instead." : error.lumiaCode == "INVALID_ARGUMENT" ? "That is not an email address." : error.lumiaCode == "RATE_LIMITED" ? "Too many invites in the last hour; try later." : error.lumiaMessage
         }
     }
 

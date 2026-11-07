@@ -104,6 +104,9 @@ class LumiaSession(val client: LumiaClient) {
     /** An invite link for a server this account can invite to: unlimited unless [maxUses], open-ended unless [expiresInHours]. */
     suspend fun createInvite(serverId: String, maxUses: UInt = 0u, expiresInHours: UInt? = null): InviteSummary = client.call { createInvite(serverId, maxUses, expiresInHours) }
 
+    /** A one-use invite good for a week, mailed to the address as a link (architecture 6.2). */
+    suspend fun emailInvite(serverId: String, email: String): InviteSummary = client.call { emailInvite(serverId, email) }
+
     /** The server's invites, newest first, for a member who may invite. */
     suspend fun invites(serverId: String): List<InviteSummary> = client.call { invites(serverId) }
 

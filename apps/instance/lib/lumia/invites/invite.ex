@@ -17,6 +17,7 @@ defmodule Lumia.Invites.Invite do
     field :uses, :integer, default: 0
     field :as_guest, :boolean, default: false
     field :guest_days, :integer
+    field :email, :string
     timestamps()
   end
 end

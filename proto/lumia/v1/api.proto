@@ -513,6 +513,18 @@ message Invite {
   // Joiners become guests (connected channels, contractors).
   bool as_guest = 8;
   google.protobuf.Timestamp guest_expires_at = 9;
+  // The address an email invite went to (POST /invites/email); empty for a link.
+  string email = 10;
+}
+
+// POST /invites/email — a one-use invite, good for a week, mailed to the
+// address as a link; the Invite comes back as for a link. FAILED_PRECONDITION
+// with state "mail" when the instance sends no mail (InstanceInfo.magic_link_enabled).
+message EmailInviteRequest {
+  bytes server_id = 1;
+  string email = 2;
+  bool as_guest = 3;
+  uint32 guest_days = 4;
 }
 
 message CreateInviteRequest {

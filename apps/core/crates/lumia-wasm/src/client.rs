@@ -201,6 +201,22 @@ impl Client {
         )
     }
 
+    /// `POST /invites/email`: a one-use invite good for a week, mailed to
+    /// the address as a link (architecture 6.2).
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED`, `FAILED_PRECONDITION` (no mail), `INVALID_ARGUMENT`; transport failure.
+    #[wasm_bindgen(js_name = emailInvite)]
+    pub async fn email_invite(&self, server_id: String, email: String) -> Result<JsValue, JsError> {
+        to_js(
+            &self
+                .app
+                .email_invite(&server_id, &email)
+                .await
+                .map_err(js)?,
+        )
+    }
+
     /// `POST /invites/{code}/accept`: joins the invite's server; returns its id.
     ///
     /// # Errors

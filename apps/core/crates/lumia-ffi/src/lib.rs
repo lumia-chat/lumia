@@ -161,6 +161,8 @@ pub struct InviteSummary {
     pub expires_at_micros: Option<i64>,
     pub max_uses: u32,
     pub uses: u32,
+    /// The address an email invite went to; empty for a link.
+    pub email: String,
 }
 
 impl From<app::InviteSummary> for InviteSummary {
@@ -172,6 +174,7 @@ impl From<app::InviteSummary> for InviteSummary {
             expires_at_micros: i.expires_at_micros,
             max_uses: i.max_uses,
             uses: i.uses,
+            email: i.email,
         }
     }
 }
@@ -854,6 +857,15 @@ impl Client {
                 self.app
                     .create_invite(&server_id, max_uses, expires_in_hours),
             )?
+            .into())
+    }
+
+    /// `POST /invites/email`: a one-use invite good for a week, mailed to
+    /// the address as a link (architecture 6.2).
+    pub fn email_invite(&self, server_id: String, email: String) -> Res<InviteSummary> {
+        Ok(self
+            .runtime
+            .block_on(self.app.email_invite(&server_id, &email))?
             .into())
     }
 

@@ -54,7 +54,8 @@ defmodule Lumia.Invites do
                expires_at: Map.get(attrs, :expires_at),
                max_uses: Map.get(attrs, :max_uses, 0) || 0,
                as_guest: Map.get(attrs, :as_guest, false) || false,
-               guest_days: guest_days
+               guest_days: guest_days,
+               email: Map.get(attrs, :email)
              }),
            {:ok, _} <-
              Audit.record({:server, server_id}, actor_id, "invite.create",
@@ -63,6 +64,56 @@ defmodule Lumia.Invites do
         {:ok, invite}
       end
     end)
+  end
+
+  @doc """
+  Emails an invite (architecture 6.2): one use, good for a week, to
+  `email`, as a link to this instance's web page. The same permission,
+  limit and `as_guest`/`guest_days` as `create/3`; the address stays on
+  the invite, for the list. `{:error, {:failed_precondition, "mail"}}`
+  when the instance sends no mail.
+  """
+  def email(server_id, actor_id, email, attrs \\ %{}) do
+    email = String.trim(email || "")
+
+    cond do
+      not Lumia.Auth.MagicLink.enabled?() ->
+        {:error, {:failed_precondition, "mail"}}
+
+      not Regex.match?(~r/^[^@\s]+@[^@\s]+\.[^@\s]+$/, email) or String.length(email) > 254 ->
+        {:error, :invalid_argument}
+
+      true ->
+        attrs =
+          attrs
+          |> Map.put(:max_uses, 1)
+          |> Map.put(:expires_at, DateTime.add(DateTime.utc_now(), 7, :day))
+          |> Map.put(:email, email)
+
+        with {:ok, invite} <- create(server_id, actor_id, attrs) do
+          {:ok, _} = Lumia.Mailer.deliver(invite_mail(invite))
+          {:ok, invite}
+        end
+    end
+  end
+
+  defp invite_mail(invite) do
+    import Swoosh.Email, except: [from: 2]
+    host = Lumia.Identity.host()
+    server = Repo.get!(Lumia.Servers.Server, invite.server_id)
+    url = LumiaWeb.Endpoint.url() <> "/invite/" <> invite.code
+
+    new()
+    |> to(invite.email)
+    |> Swoosh.Email.from({"Lumia on " <> host, "no-reply@" <> host})
+    |> subject("You are invited to " <> server.name <> " on " <> host)
+    |> text_body("""
+    Someone on #{host} invited you to #{server.name}. Open this link to join:
+
+    #{url}
+
+    It works once, within a week. If you were not expecting it, ignore it; nothing happens without the link.
+    """)
   end
 
   @doc """

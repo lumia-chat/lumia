@@ -69,6 +69,8 @@ export interface InviteSummary {
   expiresAtMicros: number | null;
   maxUses: number;
   uses: number;
+  /** The address an email invite went to; empty for a link. */
+  email: string;
 }
 export interface ChannelSummary {
   channelId: string;
@@ -254,6 +256,10 @@ export class Bridge {
   }
   createInvite(serverId: string, maxUses = 0, expiresInHours?: number): Promise<InviteSummary> {
     return this.call("createInvite", serverId, maxUses, expiresInHours ?? null);
+  }
+  /** A one-use invite good for a week, mailed to the address as a link (architecture 6.2). */
+  emailInvite(serverId: string, email: string): Promise<InviteSummary> {
+    return this.call("emailInvite", serverId, email);
   }
   /** Joins the invite's server; resolves to its id. */
   acceptInvite(linkOrCode: string): Promise<string> {

@@ -369,6 +369,8 @@ struct InviteScreen: View {
     @State private var error = ""
     @State private var busy = false
     @State private var copied = false
+    @State private var email = ""
+    @State private var emailed = ""
 
     var body: some View {
         PanelScreen(back: server?.name ?? "Server", title: "Invite people", subtitle: "A link to join \(server?.name ?? "the server")") {
@@ -391,6 +393,14 @@ struct InviteScreen: View {
                     if !error.isEmpty { LumiaErrorText(error) }
                     Button("Make a link") { Task { await make() } }
                         .buttonStyle(.lumiaPrimary).disabled(busy)
+                    // The invite as a mail (architecture 6.2): one use, a week, to the address.
+                    LumiaField("Email", text: $email, placeholder: "pat@example.com")
+                        .textContentType(.emailAddress).keyboardType(.emailAddress).textInputAutocapitalization(.never).autocorrectionDisabled()
+                    Button("Send by email") { Task { await sendByEmail() } }
+                        .buttonStyle(.lumiaSecondary).disabled(busy || email.trimmingCharacters(in: .whitespaces).isEmpty)
+                    if !emailed.isEmpty {
+                        Text("Sent to \(emailed); it works once, within a week.").font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkSecondary.color)
+                    }
                     if let invite {
                         Text(invite.url)
                             .font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.ink.color)
@@ -432,7 +442,7 @@ struct InviteScreen: View {
     }
 
     private func describe(_ i: InviteSummary) -> String {
-        let uses = i.maxUses == 0 ? "\(i.uses) uses" : "\(i.uses)/\(i.maxUses) uses"
+        let uses = (i.email.isEmpty ? "" : "to \(i.email) · ") + (i.maxUses == 0 ? "\(i.uses) uses" : "\(i.uses)/\(i.maxUses) uses")
         guard let micros = i.expiresAtMicros else { return "\(uses) · no expiry" }
         let at = Date(timeIntervalSince1970: TimeInterval(micros) / 1_000_000)
         return "\(uses) · expires \(at.formatted(date: .abbreviated, time: .shortened))"
@@ -459,6 +469,22 @@ struct InviteScreen: View {
             invites.insert(made, at: 0)
         } catch {
             self.error = error.lumiaCode == "PERMISSION_DENIED" ? "You cannot invite people to this server." : error.lumiaCode == "RATE_LIMITED" ? "Too many links in the last hour; try later." : error.lumiaMessage
+        }
+    }
+
+    private func sendByEmail() async {
+        guard let server else { return }
+        busy = true
+        error = ""
+        emailed = ""
+        defer { busy = false }
+        do {
+            let made = try await session.emailInvite(serverID: server.serverId, email: email)
+            invites.insert(made, at: 0)
+            emailed = made.email
+            email = ""
+        } catch {
+            self.error = error.lumiaCode == "FAILED_PRECONDITION" ? "This instance sends no mail; make a link instead." : error.lumiaCode == "INVALID_ARGUMENT" ? "That is not an email address." : error.lumiaCode == "RATE_LIMITED" ? "Too many invites in the last hour; try later." : error.lumiaMessage
         }
     }
 

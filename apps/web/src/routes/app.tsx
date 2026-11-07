@@ -175,7 +175,7 @@ export function App() {
   const [copied, setCopied] = createSignal(false);
   createEffect(on(serverId, () => { setInviting(false); setInvite(null); setInvites([]); setInviteError(""); setCopied(false); }));
   const describeInvite = (i: InviteSummary) => {
-    const uses = i.maxUses === 0 ? `${i.uses} uses` : `${i.uses}/${i.maxUses} uses`;
+    const uses = (i.email ? `to ${i.email} · ` : "") + (i.maxUses === 0 ? `${i.uses} uses` : `${i.uses}/${i.maxUses} uses`);
     if (i.expiresAtMicros === null) return `${uses} · no expiry`;
     return `${uses} · expires ${new Date(i.expiresAtMicros / 1000).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`;
   };
@@ -204,6 +204,24 @@ export function App() {
       const made = await client().createInvite(id, inviteUses(), inviteHours() || undefined);
       setInvite(made);
       setInvites([made, ...invites()]);
+    } catch (err) {
+      inviteFailed(err);
+    }
+  };
+  // The invite as a mail (architecture 6.2): one use, a week, to the address.
+  const [inviteEmail, setInviteEmail] = createSignal("");
+  const [emailed, setEmailed] = createSignal("");
+  const emailInvite = async () => {
+    const id = serverId();
+    const to = inviteEmail().trim();
+    if (!id || !to) return;
+    setInviteError("");
+    setEmailed("");
+    try {
+      const made = await client().emailInvite(id, to);
+      setInvites([made, ...invites()]);
+      setEmailed(to);
+      setInviteEmail("");
     } catch (err) {
       inviteFailed(err);
     }
@@ -318,6 +336,16 @@ export function App() {
               <button type="submit" class="lu-link app__push">
                 Make a link
               </button>
+              <label class="app__status">
+                Email
+                <input class="app__invite-url" type="email" value={inviteEmail()} onInput={(e) => setInviteEmail(e.currentTarget.value)} placeholder="pat@example.com" aria-label="Email an invite to" />
+              </label>
+              <button type="button" class="lu-link app__push" onClick={() => void emailInvite()}>
+                Send by email
+              </button>
+              <Show when={emailed()}>
+                <p class="app__status">Sent to {emailed()}; it works once, within a week.</p>
+              </Show>
               <Show when={invite()}>
                 {(i) => (
                   <>

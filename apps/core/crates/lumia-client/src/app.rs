@@ -137,6 +137,8 @@ pub struct InviteSummary {
     /// 0 is unlimited.
     pub max_uses: u32,
     pub uses: u32,
+    /// The address an email invite went to; empty for a link.
+    pub email: String,
 }
 
 /// The status this person chose and their custom status text (protocol 6.7).
@@ -1253,7 +1255,32 @@ impl App {
             expires_at_micros: wire::micros(invite.expires_at.as_ref()),
             max_uses: invite.max_uses,
             uses: invite.uses,
+            email: invite.email.clone(),
         }
+    }
+
+    /// `POST /invites/email`: a one-use invite good for a week, mailed to
+    /// `email` as a link (architecture 6.2).
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` without `create_invites` there, `FAILED_PRECONDITION`
+    /// when the instance sends no mail, `INVALID_ARGUMENT` for a malformed
+    /// address; transport failure.
+    pub async fn email_invite(
+        &self,
+        server_id: &str,
+        email: &str,
+    ) -> Result<InviteSummary, ClientError> {
+        let req = lumia_core::proto::EmailInviteRequest {
+            server_id: wire::uuid_bytes(
+                uuid::Uuid::parse_str(server_id)
+                    .map_err(|_| ClientError::Transport(format!("not a uuid: {server_id}")))?,
+            ),
+            email: email.trim().to_string(),
+            ..Default::default()
+        };
+        let invite = self.api.email_invite(&req).await?;
+        Ok(self.invite_summary(&invite))
     }
 
     /// Signs in with a password, and a TOTP code when the account requires one.

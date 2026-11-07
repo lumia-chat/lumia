@@ -435,9 +435,11 @@ fun InviteScreen(session: LumiaSession, server: ServerSummary?, back: () -> Unit
     var error by rememberSaveable { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var copied by remember { mutableStateOf(false) }
+    var email by rememberSaveable { mutableStateOf("") }
+    var emailed by rememberSaveable { mutableStateOf("") }
 
     fun describe(i: InviteSummary): String {
-        val uses = if (i.maxUses == 0u) "${i.uses} uses" else "${i.uses}/${i.maxUses} uses"
+        val uses = (if (i.email.isEmpty()) "" else "to ${i.email} · ") + (if (i.maxUses == 0u) "${i.uses} uses" else "${i.uses}/${i.maxUses} uses")
         val at = i.expiresAtMicros ?: return "$uses · no expiry"
         return "$uses · expires ${java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.MEDIUM, java.text.DateFormat.SHORT).format(java.util.Date(at / 1000))}"
     }
@@ -448,6 +450,30 @@ fun InviteScreen(session: LumiaSession, server: ServerSummary?, back: () -> Unit
             invites = session.invites(id)
         } catch (e: Exception) {
             error = if (e.lumiaCode == "PERMISSION_DENIED") "You cannot invite people to this server." else e.lumiaMessage
+        }
+    }
+
+    fun sendByEmail() {
+        val id = server?.serverId ?: return
+        scope.launch {
+            busy = true
+            error = ""
+            emailed = ""
+            try {
+                val made = session.emailInvite(id, email)
+                invites = listOf(made) + invites
+                emailed = made.email
+                email = ""
+            } catch (e: Exception) {
+                error = when (e.lumiaCode) {
+                    "FAILED_PRECONDITION" -> "This instance sends no mail; make a link instead."
+                    "INVALID_ARGUMENT" -> "That is not an email address."
+                    "RATE_LIMITED" -> "Too many invites in the last hour; try later."
+                    else -> e.lumiaMessage
+                }
+            } finally {
+                busy = false
+            }
         }
     }
 
@@ -507,6 +533,10 @@ fun InviteScreen(session: LumiaSession, server: ServerSummary?, back: () -> Unit
             item { Choice("Uses", listOf("Unlimited" to 0, "Once" to 1, "Ten" to 10), maxUses) { maxUses = it } }
             if (error.isNotEmpty()) item { LumiaErrorText(error) }
             item { LumiaPrimaryButton("Make a link", Modifier.fillMaxWidth(), enabled = !busy) { make() } }
+            // The invite as a mail (architecture 6.2): one use, a week, to the address.
+            item { LumiaField("Email", email, { email = it }, placeholder = "pat@example.com") }
+            item { LumiaSecondaryButton("Send by email", Modifier.fillMaxWidth(), enabled = !busy && email.isNotBlank()) { sendByEmail() } }
+            if (emailed.isNotEmpty()) item { Text("Sent to $emailed; it works once, within a week.", style = LumiaTokens.textMeta.style, color = LumiaTokens.inkSecondary.color) }
             val link = invite
             if (link != null) {
                 item {

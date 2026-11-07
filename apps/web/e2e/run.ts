@@ -503,10 +503,27 @@ async function create(which: string, handle: string, stamp: number) {
     await page.getByRole("button", { name: "Revoke" }).click();
     await page.getByText(`${code} · 0/1 uses`).waitFor({ state: "detached" });
     if ((await fetch(`${instance}/api/v1/invites/${code}`)).status !== 404) throw new Error("the revoked link still answers");
+    // The invite as a mail (architecture 6.2): sent to an address, its
+    // link in the dev mailbox, listed with the address, then revoked.
+    await page.getByLabel("Email an invite to").fill(`guest${stamp}@example.test`);
+    await page.getByRole("button", { name: "Send by email" }).click();
+    await page.getByText(/^Sent to guest/).waitFor();
+    let mailed = "";
+    for (let i = 0; i < 20 && !mailed; i++) {
+      const box = (await (await fetch(`${instance}/dev/mailbox/json`)).json()) as { data?: { to?: unknown[]; text_body?: string }[] };
+      for (const m of box.data ?? []) {
+        const hit = /\/invite\/([A-Za-z0-9_-]+)/.exec(m.text_body ?? "");
+        if (hit && JSON.stringify(m.to ?? []).includes(`guest${stamp}@example.test`)) mailed = hit[1] ?? "";
+      }
+      if (!mailed) await new Promise((r) => setTimeout(r, 250));
+    }
+    if (!mailed) throw new Error("no invite mail in the dev mailbox");
+    if ((await fetch(`${instance}/api/v1/invites/${mailed}`)).status !== 200) throw new Error("the instance does not know the mailed link");
+    await page.locator("span", { hasText: `to guest${stamp}@example.test` }).first().waitFor();
   } finally {
     await ctx.close();
   }
-  console.log(`  ${which}: made a server and its first channel from the app, saw itself online there, made a one-use invite and revoked it, in ${Date.now() - t0} ms`);
+  console.log(`  ${which}: made a server and its first channel from the app, saw itself online there, made a one-use invite and revoked it, and emailed one that landed in the mailbox, in ${Date.now() - t0} ms`);
 }
 
 // Web Push end to end (architecture 15.5), with a push service of the

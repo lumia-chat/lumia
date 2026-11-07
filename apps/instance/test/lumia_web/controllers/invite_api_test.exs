@@ -44,6 +44,44 @@ defmodule LumiaWeb.InviteApiTest do
       assert String.length(code) == 10
     end
 
+    test "an invite by email is one use for a week, mailed as a link, and listed with its address",
+         ctx do
+      conn =
+        post_proto(authed(ctx.conn, ctx.owner), "/api/v1/invites/email", %V1.EmailInviteRequest{
+          server_id: Proto.uuid(ctx.server.id),
+          email: "pat@example.test"
+        })
+
+      assert conn.status == 201
+      invite = decode(conn, V1.Invite)
+      assert invite.max_uses == 1
+      assert invite.email == "pat@example.test"
+
+      assert DateTime.diff(Proto.from_timestamp(invite.expires_at), DateTime.utc_now(), :day) in 6..7
+
+      Swoosh.TestAssertions.assert_email_sent(fn mail ->
+        assert mail.to == [{"", "pat@example.test"}]
+        assert mail.subject =~ "Acme"
+        assert mail.text_body =~ "/invite/" <> invite.code
+      end)
+
+      listed = get(authed(ctx.conn, ctx.owner), "/api/v1/servers/#{ctx.server.id}/invites")
+
+      assert Enum.any?(
+               decode(listed, V1.ListInvitesResponse).invites,
+               &(&1.email == "pat@example.test")
+             )
+
+      bad =
+        post_proto(authed(ctx.conn, ctx.owner), "/api/v1/invites/email", %V1.EmailInviteRequest{
+          server_id: Proto.uuid(ctx.server.id),
+          email: "not an address"
+        })
+
+      assert bad.status == 400
+      assert %{"code" => "INVALID_ARGUMENT"} = Jason.decode!(bad.resp_body)
+    end
+
     test "a member without create_invites is refused", ctx do
       member = account("member")
       {:ok, _} = Servers.add_member(ctx.server.id, member.id, ctx.owner.id)

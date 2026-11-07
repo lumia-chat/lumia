@@ -77,6 +77,7 @@ defmodule LumiaWeb.Router do
 
     get "/servers/:server_id/invites", InviteController, :index
     post "/invites", InviteController, :create
+    post "/invites/email", InviteController, :email
     post "/invites/:code/accept", InviteController, :accept
     delete "/invites/:code", InviteController, :delete
 

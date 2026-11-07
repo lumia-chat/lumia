@@ -296,6 +296,7 @@ Chunks and manifests are opaque to the instance; the caller must be bound to the
 |---|---|
 | `GET /invites/{code}` | → `InvitePreview` (public) |
 | `POST /invites` | `CreateInviteRequest` → `Invite` |
+| `POST /invites/email` | `EmailInviteRequest` → `Invite` (architecture 6.2): a one-use invite good for a week, mailed to the address as a link to this instance's web page; the same permission and limit as a link; `FAILED_PRECONDITION` with `state` `mail` when the instance sends no mail (`InstanceInfo.magic_link_enabled`), `INVALID_ARGUMENT` for a malformed address. The address stays on the `Invite` as `email`. |
 | `GET /servers/{server_id}/invites` | → `ListInvitesResponse`, newest first; `CREATE_INVITES` |
 | `POST /invites/{code}/accept` | → `Member` |
 | `DELETE /invites/{code}` | → 204 |

@@ -918,6 +918,21 @@ defmodule Lumia.V1.Invite do
   field :uses, 7, type: :uint32
   field :as_guest, 8, type: :bool, json_name: "asGuest"
   field :guest_expires_at, 9, type: Google.Protobuf.Timestamp, json_name: "guestExpiresAt"
+  field :email, 10, type: :string
+end
+
+defmodule Lumia.V1.EmailInviteRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.EmailInviteRequest",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :server_id, 1, type: :bytes, json_name: "serverId"
+  field :email, 2, type: :string
+  field :as_guest, 3, type: :bool, json_name: "asGuest"
+  field :guest_days, 4, type: :uint32, json_name: "guestDays"
 end
 
 defmodule Lumia.V1.CreateInviteRequest do

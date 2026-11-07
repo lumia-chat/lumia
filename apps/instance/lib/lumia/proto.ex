@@ -68,7 +68,8 @@ defmodule Lumia.Proto do
       max_uses: i.max_uses,
       uses: i.uses,
       as_guest: i.as_guest,
-      guest_expires_at: nil
+      guest_expires_at: nil,
+      email: i.email || ""
     }
   end
 

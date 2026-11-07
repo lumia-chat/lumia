@@ -24,8 +24,8 @@ use lumia_core::proto::{
     TokenPair,
 };
 use lumia_core::proto::{
-    CreateInviteRequest, HandoffResponse, Invite, InvitePreview, ListInvitesResponse,
-    ListPasskeysResponse, MagicLinkCompleteRequest, MagicLinkRequest, Member,
+    CreateInviteRequest, EmailInviteRequest, HandoffResponse, Invite, InvitePreview,
+    ListInvitesResponse, ListPasskeysResponse, MagicLinkCompleteRequest, MagicLinkRequest, Member,
     PasskeyAssertFinishRequest, PasskeyAssertStartRequest, PasskeyChallenge,
     PasskeyRegisterFinishRequest, SignedProfile,
 };
@@ -464,6 +464,14 @@ impl Api {
     ///
     /// # Errors
     /// `PERMISSION_DENIED` without `CREATE_INVITES`; transport failure.
+    /// `POST /invites/email`: an invite mailed to an address.
+    ///
+    /// # Errors
+    /// On transport failure or an API error.
+    pub async fn email_invite(&self, req: &EmailInviteRequest) -> Result<Invite, ClientError> {
+        self.post("/api/v1/invites/email", req).await
+    }
+
     pub async fn create_invite(&self, req: &CreateInviteRequest) -> Result<Invite, ClientError> {
         self.post("/api/v1/invites", req).await
     }
