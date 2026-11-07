@@ -15,6 +15,7 @@ pub mod link;
 pub mod phrase;
 pub mod proof;
 pub mod roster;
+pub mod safety;
 
 /// Errors from identity operations other than roster verification.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]

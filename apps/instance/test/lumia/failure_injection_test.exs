@@ -30,7 +30,9 @@ defmodule Lumia.FailureInjectionTest do
     {:identity, 3} =>
       "lumia-core identity::roster::tests (the merge), lumia-client identity::tests::a_held_fork_at_the_same_version_is_merged_and_a_newer_successor_adopted, deploy/two-instances.sh (the convergence)",
     {:identity, 11} =>
-      "lumia-cli scenario device-revoke (the phrase); lumia-core mls::group::tests::future_epoch_messages_are_held_and_group_info_admits_an_external_join (the rejoin)"
+      "lumia-cli scenario device-revoke (the phrase); lumia-core mls::group::tests::future_epoch_messages_are_held_and_group_info_admits_an_external_join (the rejoin)",
+    {:identity, 12} =>
+      "lumia-core identity::safety::tests::a_root_rotation_changes_the_safety_number (the safety number); the verifier and the instance's acceptance are tagged"
   }
 
   # Cases with no test yet, each with the reason. Shrinking this map is the
@@ -38,13 +40,11 @@ defmodule Lumia.FailureInjectionTest do
   @pending %{
     {:authorization, 7} => "bot tokens and their scopes (authorization section 8) are not built",
     {:authorization, 8} =>
-      "the NOT_FOUND half is covered; the override endpoints (authorization section 7) are not built",
-    {:identity, 12} =>
-      "the verifier and the instance's acceptance are covered; the client's safety-number change has no test (plan, step 8)"
+      "the NOT_FOUND half is covered; the override endpoints (authorization section 7) are not built"
   }
 
   # The pending cases whose instance half is covered and tagged anyway.
-  @partly_covered [{:authorization, 8}, {:identity, 12}]
+  @partly_covered [{:authorization, 8}]
 
   test "every listed case has a tagged test, or is named as pending with its reason" do
     cases = FailureInjection.cases()
