@@ -44,6 +44,23 @@ defmodule Lumia.Push.Sender do
       post(sub.endpoint, headers, body)
     end
 
+    def send(%Subscription{kind: "relay_" <> platform} = sub, notice) do
+      case Application.get_env(:lumia, :push_relay_url) do
+        nil ->
+          {:error, :no_relay}
+
+        relay ->
+          payload = %{
+            platform: platform,
+            token: sub.endpoint,
+            instance: Lumia.Identity.host(),
+            notice: notice
+          }
+
+          post(relay <> "/push", [{"content-type", "application/json"}], Jason.encode!(payload))
+      end
+    end
+
     @doc """
     What goes to a UnifiedPush endpoint: the notice, naming the instance
     so the app's receiver knows which to sync (as the relay's payload does
@@ -69,23 +86,6 @@ defmodule Lumia.Push.Sender do
     end
 
     defp named(notice), do: Map.put(notice, "instance", Lumia.Identity.host())
-
-    def send(%Subscription{kind: "relay_" <> platform} = sub, notice) do
-      case Application.get_env(:lumia, :push_relay_url) do
-        nil ->
-          {:error, :no_relay}
-
-        relay ->
-          payload = %{
-            platform: platform,
-            token: sub.endpoint,
-            instance: Lumia.Identity.host(),
-            notice: notice
-          }
-
-          post(relay <> "/push", [{"content-type", "application/json"}], Jason.encode!(payload))
-      end
-    end
 
     defp post(url, headers, body) do
       case Req.post(url, headers: headers, body: body, retry: false, receive_timeout: 10_000) do
