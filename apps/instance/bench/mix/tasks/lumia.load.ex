@@ -32,6 +32,13 @@ defmodule Mix.Tasks.Lumia.Load do
 
       LUMIA_CODE_RELOADER=false mix lumia.load --server            # prints its pid, then its memory every 5 s
       LUMIA_CODE_RELOADER=false mix lumia.load --client-only --connections 10000 --server-pid <pid>
+          [--ramp 200] [--subscriptions 50] [--no-presence]
+
+  The server VM prints, every five seconds, where its memory is by owner:
+  the VM's totals, one session and what it links to, the largest tables,
+  the allocator's blocks by origin (start it with `ERL_FLAGS="+Muatags
+  true"` for the origins), who references binaries of 256 KB and more,
+  the TCP ports' buffers and output queues, and carriers against blocks.
 
   Seeding writes `--events` message events spread over `--channels`
   channels of one server, straight into the tables (no gateway), and is
@@ -81,7 +88,9 @@ defmodule Mix.Tasks.Lumia.Load do
     server: :boolean,
     client_only: :boolean,
     server_pid: :integer,
-    ramp: :integer
+    ramp: :integer,
+    subscriptions: :integer,
+    presence: :boolean
   ]
   @port 4798
   @owner_handle "load-owner"
@@ -160,16 +169,275 @@ defmodule Mix.Tasks.Lumia.Load do
     info("server pid #{System.pid()}")
 
     Stream.interval(5_000)
-    |> Enum.each(fn _ ->
+    |> Enum.each(fn tick ->
+      if rem(tick, 4) == 3 do
+        before = :erlang.memory(:binary)
+        Enum.each(Process.list(), &:erlang.garbage_collect/1)
+        info("collected every process: binary #{mb(before)} → #{mb(:erlang.memory(:binary))} MB")
+      end
+
       memory = :erlang.memory()
 
       info(
         "server: rss #{div(rss_kb(System.pid()), 1_024)} MB, vm total #{mb(memory[:total])} MB, " <>
           "processes #{mb(memory[:processes])} MB, binary #{mb(memory[:binary])} MB, " <>
           "ets #{mb(memory[:ets])} MB, #{length(Process.list())} processes" <>
-          sample_session() <> ets_tables()
+          sample_session() <> ets_tables() <> allocations() <> ports() <> big_binaries()
       )
     end)
+  end
+
+  # Who holds the refc binaries of 256 KB and more: the processes, by
+  # label or initial call, and every row of every ETS table (a socket read
+  # buffer stays whole while any slice of it is referenced).
+  defp big_binaries do
+    threshold = 262_144
+
+    by_holder =
+      Process.list()
+      |> Enum.flat_map(fn pid ->
+        case Process.info(pid, [:binary, :initial_call, :dictionary]) do
+          [binary: refs, initial_call: call, dictionary: dict] ->
+            big = Enum.filter(refs, fn {_id, size, _count} -> size >= threshold end)
+            label = Keyword.get(dict, :"$initial_call", call)
+
+            if big == [],
+              do: [],
+              else: [{inspect(label), length(big), Enum.sum(Enum.map(big, &elem(&1, 1)))}]
+
+          _ ->
+            []
+        end
+      end)
+      |> Enum.group_by(&elem(&1, 0))
+      |> Enum.map(fn {label, rows} ->
+        {label, Enum.sum(Enum.map(rows, &elem(&1, 1))), Enum.sum(Enum.map(rows, &elem(&1, 2)))}
+      end)
+      |> Enum.sort_by(&elem(&1, 2), :desc)
+      |> Enum.take(5)
+      |> Enum.map_join("", fn {label, n, bytes} ->
+        "; #{n} big binaries #{div(bytes, 1_048_576)} MB held by #{label}"
+      end)
+
+    # A slice in a table keeps its whole block alive: count the blocks by
+    # their referenced size, not the slice's.
+    in_ets =
+      :ets.all()
+      |> Enum.flat_map(fn table ->
+        try do
+          blocks =
+            table
+            |> :ets.tab2list()
+            |> slices([])
+            |> Enum.filter(&(:binary.referenced_byte_size(&1) >= threshold))
+
+          if blocks == [],
+            do: [],
+            else: [
+              {:ets.info(table, :name), length(blocks),
+               blocks |> Enum.map(&:binary.referenced_byte_size/1) |> Enum.sum()}
+            ]
+        rescue
+          _ -> []
+        end
+      end)
+      |> Enum.map_join("", fn {name, n, bytes} ->
+        "; ets #{inspect(name)} holds #{n} slices of big blocks (#{div(bytes, 1_048_576)} MB referenced)"
+      end)
+
+    by_holder <> in_ets <> referenced() <> allocator_sizes() <> carriers()
+  end
+
+  # Carriers against the blocks in them, for the allocators a connection
+  # burst grows: the difference is memory the VM holds for itself (and the
+  # OS counts) with nothing in it, the high-water mark a burst leaves.
+  defp carriers do
+    [:eheap_alloc, :binary_alloc, :ets_alloc, :driver_alloc, :temp_alloc, :sl_alloc, :std_alloc]
+    |> Enum.map(fn allocator ->
+      {carriers, blocks} =
+        case :erlang.system_info({:allocator_sizes, allocator}) do
+          instances when is_list(instances) ->
+            Enum.reduce(instances, {0, 0}, fn
+              {:instance, _, info}, {c, b} ->
+                Enum.reduce([:mbcs, :sbcs], {c, b}, fn kind, {c, b} ->
+                  {c + carrier_size(info[kind]),
+                   b + Enum.sum(Enum.map(block_types(info[kind]), &elem(&1, 1)))}
+                end)
+
+              _, acc ->
+                acc
+            end)
+
+          _ ->
+            {0, 0}
+        end
+
+      {allocator, carriers, blocks}
+    end)
+    |> Enum.sort_by(&elem(&1, 1), :desc)
+    |> Enum.take(4)
+    |> Enum.map_join("", fn {allocator, carriers, blocks} ->
+      "; #{allocator} carriers #{div(carriers, 1_048_576)} MB holding #{div(blocks, 1_048_576)} MB of blocks"
+    end)
+  end
+
+  defp carrier_size(nil), do: 0
+
+  defp carrier_size(carriers) do
+    Enum.find_value(carriers, 0, fn
+      {:carriers_size, current, _max, _max_ever} -> current
+      {:carriers_size, current} -> current
+      _ -> nil
+    end)
+  end
+
+  # Every process's referenced refc binaries, each block once, and the
+  # five holders (by label or initial call) that reference the most.
+  defp referenced do
+    refs =
+      Process.list()
+      |> Enum.flat_map(fn pid ->
+        case Process.info(pid, [:binary, :initial_call, :dictionary]) do
+          [binary: refs, initial_call: call, dictionary: dict] ->
+            label = inspect(Keyword.get(dict, :"$initial_call", call))
+            Enum.map(refs, fn {id, size, _} -> {id, size, label} end)
+
+          _ ->
+            []
+        end
+      end)
+
+    unique = refs |> Map.new(fn {id, size, _} -> {id, size} end) |> Map.values() |> Enum.sum()
+
+    holders =
+      refs
+      |> Enum.group_by(&elem(&1, 2), &elem(&1, 1))
+      |> Enum.map(fn {label, sizes} -> {label, Enum.sum(sizes)} end)
+      |> Enum.sort_by(&elem(&1, 1), :desc)
+      |> Enum.take(5)
+      |> Enum.map_join(", ", fn {label, bytes} -> "#{label} #{div(bytes, 1_048_576)} MB" end)
+
+    "; processes reference #{div(unique, 1_048_576)} MB of binaries (#{holders})"
+  end
+
+  # The binary allocator's blocks by type, exact: `binary` (made by
+  # processes) and `drv_binary` (made by a driver, the sockets' read
+  # buffers and queued output).
+  defp allocator_sizes do
+    case :erlang.system_info({:allocator_sizes, :binary_alloc}) do
+      instances when is_list(instances) ->
+        instances
+        |> Enum.flat_map(fn
+          {:instance, _, info} -> Enum.flat_map([:mbcs, :sbcs], &block_types(info[&1]))
+          _ -> []
+        end)
+        |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+        |> Enum.map_join("", fn {type, sizes} ->
+          "; #{type} blocks #{div(Enum.sum(sizes), 1_048_576)} MB"
+        end)
+
+      _ ->
+        ""
+    end
+  end
+
+  defp block_types(nil), do: []
+
+  defp block_types(carriers) do
+    case carriers[:blocks] do
+      blocks when is_list(blocks) ->
+        for {type, info} <- blocks, {:size, current, _, _} <- info, do: {type, current}
+
+      _ ->
+        []
+    end
+  end
+
+  # The TCP ports: how many, the bytes queued in their output queues (what
+  # a client has not read yet, copied into driver binaries), and the port
+  # structures' own memory.
+  defp ports do
+    tcp =
+      :erlang.ports()
+      |> Enum.filter(&(:erlang.port_info(&1, :name) == {:name, ~c"tcp_inet"}))
+
+    queued =
+      Enum.map(tcp, fn p ->
+        case :erlang.port_info(p, :queue_size) do
+          {:queue_size, n} -> n
+          _ -> 0
+        end
+      end)
+
+    memory =
+      Enum.map(tcp, fn p ->
+        case :erlang.port_info(p, :memory) do
+          {:memory, n} -> n
+          _ -> 0
+        end
+      end)
+
+    buffers =
+      tcp
+      |> Enum.map(fn p ->
+        case :inet.getopts(p, [:buffer, :recbuf, :sndbuf]) do
+          {:ok, opts} -> {opts[:buffer], opts[:recbuf], opts[:sndbuf]}
+          _ -> :closed
+        end
+      end)
+      |> Enum.frequencies()
+      |> Enum.sort_by(&elem(&1, 1), :desc)
+      |> Enum.take(4)
+      |> Enum.map_join(", ", fn {opts, n} -> "#{n} × #{inspect(opts)}" end)
+
+    "; #{length(tcp)} tcp ports, output queues #{div(Enum.sum(queued), 1_024)} KB " <>
+      "(largest #{div(Enum.max(queued, fn -> 0 end), 1_024)} KB, " <>
+      "#{Enum.count(queued, &(&1 > 0))} non-empty), port memory #{div(Enum.sum(memory), 1_024)} KB, " <>
+      "{buffer, recbuf, sndbuf}: #{buffers}"
+  end
+
+  # Carrier blocks by the allocation's origin and type, the eight largest
+  # (`+Muatags true` on the server VM, or every origin is "system"): what a
+  # binary that no process and no table holds belongs to, a socket's
+  # driver buffer (`drv_binary` from `inet_drv`) among the suspects. A
+  # histogram bucket holds blocks between one power of two and the next;
+  # the estimate takes the midpoint.
+  defp allocations do
+    case :instrument.allocations() do
+      {:ok, {start, _unscanned, by_origin}} ->
+        by_origin
+        |> Enum.flat_map(fn {origin, types} ->
+          Enum.map(types, fn {type, hist} ->
+            {origin, type, histogram_bytes(start, hist), hist}
+          end)
+        end)
+        |> Enum.sort_by(&elem(&1, 2), :desc)
+        |> Enum.take(8)
+        |> Enum.map_join("", fn {origin, type, bytes, hist} ->
+          "; alloc #{origin}/#{type} #{div(bytes, 1_048_576)} MB (#{buckets(start, hist)})"
+        end)
+
+      _ ->
+        ""
+    end
+  end
+
+  # The three fullest buckets: "count × from-size".
+  defp buckets(start, hist) do
+    hist
+    |> Tuple.to_list()
+    |> Enum.with_index()
+    |> Enum.sort_by(fn {count, i} -> count * start * Integer.pow(2, i) end, :desc)
+    |> Enum.take(3)
+    |> Enum.map_join(", ", fn {count, i} -> "#{count} × #{start * Integer.pow(2, i)} B" end)
+  end
+
+  defp histogram_bytes(start, hist) do
+    hist
+    |> Tuple.to_list()
+    |> Enum.with_index()
+    |> Enum.reduce(0, fn {count, i}, sum -> sum + count * start * Integer.pow(2, i) * 3 / 2 end)
+    |> trunc()
   end
 
   # The five largest ETS tables, with the binary bytes inside a sample of
@@ -191,6 +459,13 @@ defmodule Mix.Tasks.Lumia.Load do
     end)
   end
 
+  defp slices(bin, acc) when is_binary(bin), do: [bin | acc]
+  defp slices([head | tail], acc), do: slices(tail, slices(head, acc))
+  defp slices([], acc), do: acc
+  defp slices(tuple, acc) when is_tuple(tuple), do: tuple |> Tuple.to_list() |> slices(acc)
+  defp slices(%{} = map, acc), do: map |> Map.to_list() |> slices(acc)
+  defp slices(_other, acc), do: acc
+
   defp binary_bytes(term) do
     walk(term, {0, 0})
   end
@@ -198,7 +473,8 @@ defmodule Mix.Tasks.Lumia.Load do
   defp walk(bin, {sum, max}) when is_binary(bin),
     do: {sum + byte_size(bin), max(max, byte_size(bin))}
 
-  defp walk(list, acc) when is_list(list), do: Enum.reduce(list, acc, &walk/2)
+  defp walk([head | tail], acc), do: walk(tail, walk(head, acc))
+  defp walk([], acc), do: acc
   defp walk(tuple, acc) when is_tuple(tuple), do: tuple |> Tuple.to_list() |> walk(acc)
   defp walk(%{} = map, acc), do: map |> Map.to_list() |> walk(acc)
   defp walk(_other, acc), do: acc
@@ -247,7 +523,10 @@ defmodule Mix.Tasks.Lumia.Load do
     fixture = seed(Keyword.get(opts, :channels, 1_000), Keyword.get(opts, :events, 1_000_000))
     n = Keyword.get(opts, :connections, 1_000)
     server_pid = Keyword.get(opts, :server_pid) || Mix.raise("--server-pid is needed")
-    result = connections(fixture, body(), n, server_pid, Keyword.get(opts, :ramp, 200))
+
+    result =
+      connections(fixture, body(), n, server_pid, Keyword.get(opts, :ramp, 200), shape(opts))
+
     info("\n#{n} connections: #{div(result.server_bytes, 1_024)} KB of server RSS each")
   end
 
@@ -277,7 +556,14 @@ defmodule Mix.Tasks.Lumia.Load do
           Map.put(
             results,
             :connections,
-            connections(fixture, body, n, System.pid(), Keyword.get(opts, :ramp, 200))
+            connections(
+              fixture,
+              body,
+              n,
+              System.pid(),
+              Keyword.get(opts, :ramp, 200),
+              shape(opts)
+            )
           )
 
         _ ->
@@ -736,19 +1022,27 @@ defmodule Mix.Tasks.Lumia.Load do
   # one message a second per thousand connections to random channels. The
   # clients share the VM, so the per-connection memory subtracts their own
   # processes; the sockets' kernel buffers on both ends stay in the RSS.
-  # `ramp` connections a second: a subscribe to 50 channels is 150 queries
-  # today (one access, head and page per channel), and a ramp past what
-  # the pool serves makes DBConnection drop queued queries, which crashes
-  # the session mid-subscribe; the spike records the rate at which that
-  # happens.
-  defp connections(fixture, body, n, server_pid, ramp) do
+  # `ramp` connections a second: a ramp past what the pool serves makes
+  # DBConnection drop queued queries, which crashes the session
+  # mid-subscribe; the spike records the rate at which that happens.
+  # `--subscriptions N` (50) and `--presence` (on): the shape of each
+  # connection, so a memory reading can be taken with less of it.
+  defp shape(opts) do
+    %{
+      subscriptions: Keyword.get(opts, :subscriptions, @resume_channels),
+      presence: Keyword.get(opts, :presence, true)
+    }
+  end
+
+  defp connections(fixture, body, n, server_pid, ramp, shape) do
     coordinator = self()
     channel_ids = fixture.channel_ids
     account = member(fixture)
     same_vm? = server_pid == System.pid()
 
     info(
-      "\nconnections: #{n} sessions × #{@resume_channels} subscriptions, #{div(n, 10)} in presence, #{ramp}/s" <>
+      "\nconnections: #{n} sessions × #{shape.subscriptions} subscriptions, " <>
+        "#{if shape.presence, do: div(n, 10), else: 0} in presence, #{ramp}/s" <>
         if(same_vm?, do: ", clients in the server's VM", else: ", server pid #{server_pid}")
     )
 
@@ -761,7 +1055,9 @@ defmodule Mix.Tasks.Lumia.Load do
       1..n
       |> Enum.chunk_every(max(div(ramp, 4), 1))
       |> Enum.flat_map(fn batch ->
-        started = Enum.map(batch, &connection(&1, fixture, heads, token(account), coordinator))
+        started =
+          Enum.map(batch, &connection(&1, fixture, heads, token(account), coordinator, shape))
+
         Process.sleep(250)
         started
       end)
@@ -814,13 +1110,13 @@ defmodule Mix.Tasks.Lumia.Load do
 
   # The i-th connection: 50 random channels at their heads, every tenth
   # watching the server's presence.
-  defp connection(i, fixture, heads, token, coordinator) do
+  defp connection(i, fixture, heads, token, coordinator, shape) do
     subs =
       fixture.channel_ids
-      |> Enum.take_random(@resume_channels)
+      |> Enum.take_random(shape.subscriptions)
       |> Enum.map(&{&1, heads[&1]})
 
-    presence = if rem(i, 10) == 0, do: fixture.server_id
+    presence = if shape.presence and rem(i, 10) == 0, do: fixture.server_id
     {start_client(token, coordinator, subscribe: subs, presence: presence), subs}
   end
 

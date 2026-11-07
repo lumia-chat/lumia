@@ -14,6 +14,14 @@ config :lumia,
 # Every table gets UUID keys and microsecond UTC timestamps. IDs are minted
 # app-side as monotonic UUIDv7 (see Lumia.Schema); migrations declare the
 # column type only and never a database default.
+# The Postgres sockets' user-level read buffer. Left alone, Postgrex sets
+# it to the kernel's receive buffer size (hundreds of KB), and the inet
+# driver hands freed read buffers to whichever socket next asks, whatever
+# its size: an idle gateway socket then keeps a buffer a Postgres result
+# filled, which was most of the memory a connection cost (the load spike
+# of 2026-11-06). A result larger than this arrives in several reads.
+config :lumia, Lumia.Repo, socket_options: [buffer: 32_768]
+
 config :lumia, Lumia.Repo,
   migration_primary_key: [type: :binary_id],
   migration_foreign_key: [type: :binary_id],

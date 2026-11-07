@@ -313,6 +313,18 @@ defmodule Lumia.Dms do
     )
   end
 
+  @doc "Of `channel_ids`, the ones the account participates in, as a set; one query."
+  def participant_of([], _account_id), do: MapSet.new()
+
+  def participant_of(channel_ids, account_id) do
+    Repo.all(
+      from p in Participant,
+        where: p.channel_id in ^channel_ids and p.account_id == ^account_id,
+        select: p.channel_id
+    )
+    |> MapSet.new()
+  end
+
   @doc """
   Whether two accounts share a `PERSONAL_*` channel: the gate for claiming
   key packages (e2ee spec section 3).

@@ -24,7 +24,11 @@ defmodule LumiaWeb.Gateway.SessionChannel do
   crashes the session.
   """
 
-  use Phoenix.Channel
+  # A session idle for this long hibernates (Phoenix's own default is
+  # 15 s). The connect burst leaves a watcher of a busy server's presence
+  # with hundreds of KB of heap, and nothing a session does needs it kept
+  # warm: a wake costs one collection of a small heap.
+  use Phoenix.Channel, hibernate_after: 5_000
 
   alias Lumia.Accounts
   alias Lumia.Auth
@@ -100,8 +104,11 @@ defmodule LumiaWeb.Gateway.SessionChannel do
     if map_size(socket.assigns.subscriptions) + length(cursors) > @max_subscriptions do
       {:noreply, push_error(socket, :RATE_LIMITED, "too many subscriptions")}
     else
-      {results, socket} = Enum.map_reduce(cursors, socket, &subscribe_one/2)
-      {:noreply, push_frame(socket, {:subscribe_result, %V1.SubscribeResult{results: results}})}
+      {results, socket} = subscribe_all(cursors, socket)
+      socket = push_frame(socket, {:subscribe_result, %V1.SubscribeResult{results: results}})
+      # The burst leaves garbage behind that would otherwise be most of
+      # what the session costs until it hibernates on its own.
+      {:noreply, socket, :hibernate}
     end
   end
 
@@ -246,35 +253,68 @@ defmodule LumiaWeb.Gateway.SessionChannel do
 
   # ---- Subscribe and replay ----------------------------------------------------
 
-  defp subscribe_one(%V1.Cursor{log_id: id_bytes, seq: cursor}, socket) do
-    case Proto.from_uuid(id_bytes) do
-      nil -> {subscribe_error(id_bytes, :invalid_argument), socket}
-      channel_id -> subscribe_channel(channel_id, id_bytes, cursor, socket)
+  # The whole frame is resolved at once (one channel read, one membership
+  # read per server), and the head comes from the channel row that read
+  # brought, so a subscribe at the head costs no page read. The topics are
+  # subscribed before the heads are read: an event committed in between is
+  # in the head and its broadcast a duplicate, so nothing is missed; the
+  # topics of channels that end up refused are dropped again.
+  defp subscribe_all(cursors, socket) do
+    parsed = Enum.map(cursors, &{&1, Proto.from_uuid(&1.log_id)})
+    ids = for {_, id} <- parsed, id != nil, do: id
+    new_ids = Enum.uniq(ids -- Map.keys(socket.assigns.subscriptions))
+    Enum.each(new_ids, &Phoenix.PubSub.subscribe(Lumia.PubSub, Events.topic(&1)))
+    access = Access.require_many(socket.assigns.account_id, ids, :read_history)
+
+    {results, socket} =
+      Enum.map_reduce(parsed, socket, fn
+        {%V1.Cursor{log_id: bytes}, nil}, socket ->
+          {subscribe_error(bytes, :invalid_argument), socket}
+
+        {%V1.Cursor{log_id: bytes, seq: cursor}, id}, socket ->
+          case access[id] do
+            {:ok, a} -> subscribe_channel(id, bytes, cursor, subscription(a), socket)
+            {:error, reason} -> {subscribe_error(bytes, reason), socket}
+          end
+      end)
+
+    for id <- new_ids, not Map.has_key?(socket.assigns.subscriptions, id) do
+      Phoenix.PubSub.unsubscribe(Lumia.PubSub, Events.topic(id))
+    end
+
+    {results, socket}
+  end
+
+  defp subscribe_channel(channel_id, id_bytes, cursor, sub, socket) do
+    head = sub.head
+
+    result = %V1.ChannelSubscribeResult{
+      channel_id: id_bytes,
+      last_seq: head,
+      acl_version: sub.acl_version
+    }
+
+    sub = Map.delete(sub, :head)
+
+    cond do
+      head - cursor > @replay_cap ->
+        socket = store_subscription(socket, channel_id, %{sub | delivered_seq: head})
+        {%{result | status: :SNAPSHOT_REQUIRED}, socket}
+
+      cursor >= head ->
+        # Nothing to read; the live rule covers what arrives from here.
+        socket = store_subscription(socket, channel_id, %{sub | delivered_seq: cursor})
+        {%{result | status: :RESUMED}, socket}
+
+      true ->
+        socket = store_subscription(socket, channel_id, %{sub | delivered_seq: cursor})
+        {%{result | status: :RESUMED}, replay(socket, channel_id)}
     end
   end
 
-  defp subscribe_channel(channel_id, id_bytes, cursor, socket) do
-    case authorize_read(socket, channel_id) do
-      {:ok, sub} ->
-        {head, _} = Events.head(channel_id)
-
-        result = %V1.ChannelSubscribeResult{
-          channel_id: id_bytes,
-          last_seq: head,
-          acl_version: sub.acl_version
-        }
-
-        if head - cursor > @replay_cap do
-          socket = put_subscription(socket, channel_id, %{sub | delivered_seq: head})
-          {%{result | status: :SNAPSHOT_REQUIRED}, socket}
-        else
-          socket = put_subscription(socket, channel_id, %{sub | delivered_seq: cursor})
-          {%{result | status: :RESUMED}, replay(socket, channel_id)}
-        end
-
-      {:error, reason} ->
-        {subscribe_error(id_bytes, reason), socket}
-    end
+  # The topic is already subscribed (subscribe_all); only the record is kept.
+  defp store_subscription(socket, channel_id, sub) do
+    assign(socket, :subscriptions, Map.put(socket.assigns.subscriptions, channel_id, sub))
   end
 
   defp subscribe_error(id_bytes, reason) do
@@ -422,17 +462,18 @@ defmodule LumiaWeb.Gateway.SessionChannel do
         },
         socket
       ) do
-    present = LumiaWeb.Presence.list(topic)
-
     {updated, joined} =
       joins
       |> Enum.map(fn {id, %{metas: metas}} -> presence_entry(id, metas) end)
       |> Enum.split_with(fn entry -> Map.has_key?(leaves, Proto.from_uuid(entry.account_id)) end)
 
+    # An account has left only when none of its devices remains: one
+    # lookup per leaving key, never a listing of the topic, which every
+    # watcher would otherwise build on every diff of a connect burst.
     left =
       leaves
       |> Map.keys()
-      |> Enum.reject(&(Map.has_key?(joins, &1) or Map.has_key?(present, &1)))
+      |> Enum.reject(&(Map.has_key?(joins, &1) or LumiaWeb.Presence.get_by_key(topic, &1) != []))
       |> Enum.map(&Proto.uuid/1)
 
     diff = %V1.PresenceDiff{
@@ -565,13 +606,16 @@ defmodule LumiaWeb.Gateway.SessionChannel do
 
   defp authorize_write(_socket, _channel_id, %V1.Command{}), do: {:error, :invalid_argument}
 
+  # `head` is the channel row's last_seq at resolution, read by the
+  # subscribe and not kept.
   defp subscription(access) do
     %{
       server_id: access.server_id,
       acl_version: access.acl_version,
       permissions: access.permissions,
       delivered_seq: 0,
-      resolved_at: System.monotonic_time(:millisecond)
+      resolved_at: System.monotonic_time(:millisecond),
+      head: access.channel.last_seq
     }
   end
 

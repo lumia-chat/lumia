@@ -60,6 +60,19 @@ defmodule LumiaWeb.Gateway.SessionChannelTest do
 
   defp event_seq({:event_bytes, bytes}), do: V1.Event.decode(bytes).seq
 
+  defp cursors(channels),
+    do: Enum.map(channels, &%V1.Cursor{log_id: Proto.uuid(&1.id), seq: 0})
+
+  def count_query(_event, _measurements, %{source: source}, pid), do: send(pid, {:query, source})
+
+  defp flush_queries(count \\ 0) do
+    receive do
+      {:query, _} -> flush_queries(count + 1)
+    after
+      0 -> count
+    end
+  end
+
   describe "presence" do
     test "watching a server lists who is there, and their comings and goings follow", ctx do
       {_welcome, a} = join!(ctx.socket)
@@ -246,6 +259,102 @@ defmodule LumiaWeb.Gateway.SessionChannelTest do
       assert Reconciler.tick(DateTime.add(DateTime.utc_now(), -10, :second)) >= 1
       assert_push "frame", {:event_bytes, bytes}
       assert V1.Event.decode(bytes).seq == 1
+    end
+
+    test "one frame resolves many channels in order, each with its own answer", ctx do
+      actor = %{account_id: ctx.account.id, device_id: ctx.device_id}
+      {:ok, second} = Servers.create_channel(ctx.server.id, ctx.account.id, "second")
+      %{channel: dm} = personal_dm(ctx.account, nil)
+      %{channel: not_mine, a: stranger} = personal_dm()
+      {:ok, _} = Events.append(second.id, actor, send_message(second.id, "m1"))
+
+      {_, socket} = join!(ctx.socket)
+
+      cursors = [
+        %V1.Cursor{log_id: Proto.uuid(ctx.channel.id), seq: 0},
+        %V1.Cursor{log_id: "short", seq: 0},
+        %V1.Cursor{log_id: Proto.uuid(second.id), seq: 0},
+        %V1.Cursor{log_id: Proto.uuid(dm.id), seq: 0},
+        %V1.Cursor{log_id: Proto.uuid(not_mine.id), seq: 0},
+        %V1.Cursor{log_id: Proto.uuid(Ecto.UUID.generate()), seq: 0}
+      ]
+
+      send_frame(socket, {:subscribe, %V1.Subscribe{cursors: cursors}})
+
+      assert_push "frame", %V1.ServerFrame{
+        frame: {:subscribe_result, %V1.SubscribeResult{results: results}}
+      }
+
+      assert Enum.map(results, & &1.channel_id) == Enum.map(cursors, & &1.log_id)
+
+      assert [
+               %{status: :RESUMED, last_seq: 0},
+               %{status: :ERROR, error: %V1.Error{code: :INVALID_ARGUMENT}},
+               %{status: :RESUMED, last_seq: 1},
+               %{status: :RESUMED, last_seq: 0},
+               %{status: :ERROR, error: %V1.Error{code: :NOT_FOUND}},
+               %{status: :ERROR, error: %V1.Error{code: :NOT_FOUND}}
+             ] = results
+
+      # The second channel's one event replays; the others have nothing.
+      assert_push "frame", {:event_bytes, bytes}
+      assert V1.Event.decode(bytes).seq == 1
+      refute_push "frame", _
+
+      # Every accepted channel is live, the refused ones are not.
+      {:ok, _} = Events.append(dm.id, actor, send_encrypted(dm.id, :APPLICATION, 0))
+      assert_push "frame", {:event_bytes, dm_bytes}
+      assert V1.Event.decode(dm_bytes).channel_id == Proto.uuid(dm.id)
+      other = %{account_id: stranger.id, device_id: ctx.device_id}
+      {:ok, _} = Events.append(not_mine.id, other, send_encrypted(not_mine.id, :APPLICATION, 0))
+      refute_push "frame", _
+    end
+
+    test "a subscribe at the head reads no page and still delivers what comes next", ctx do
+      actor = %{account_id: ctx.account.id, device_id: ctx.device_id}
+      {:ok, _} = Events.append(ctx.channel.id, actor, send_message(ctx.channel.id, "m1"))
+      {_, socket} = join!(ctx.socket)
+      :telemetry.attach(ctx.test, [:lumia, :repo, :query], &__MODULE__.count_query/4, self())
+
+      assert %V1.ChannelSubscribeResult{status: :RESUMED, last_seq: 1} =
+               subscribe(socket, ctx.channel.id, 1)
+
+      refute_push "frame", _
+      refute_received {:query, "events"}
+
+      {:ok, _} = Events.append(ctx.channel.id, actor, send_message(ctx.channel.id, "m2"))
+      assert_push "frame", {:event_bytes, bytes}
+      assert V1.Event.decode(bytes).seq == 2
+    end
+
+    test "a subscribe costs the same queries for two channels of a server as for six", ctx do
+      channels =
+        for name <- ~w(c1 c2 c3 c4 c5 c6) do
+          {:ok, channel} = Servers.create_channel(ctx.server.id, ctx.account.id, name)
+          channel
+        end
+
+      # Warm the ACL cache as a running instance's would be.
+      {_, warm} = join!(ctx.socket)
+      send_frame(warm, {:subscribe, %V1.Subscribe{cursors: cursors(channels)}})
+      assert_push "frame", %V1.ServerFrame{frame: {:subscribe_result, _}}
+
+      :telemetry.attach(ctx.test, [:lumia, :repo, :query], &__MODULE__.count_query/4, self())
+      {:ok, _, tokens} = Auth.create_session(ctx.account.id, Ecto.UUID.generate())
+      {:ok, socket} = connect(Socket, %{}, connect_info: %{auth_token: tokens.access_token})
+      {_, socket} = join!(socket)
+      flush_queries()
+
+      send_frame(socket, {:subscribe, %V1.Subscribe{cursors: cursors(Enum.take(channels, 2))}})
+      assert_push "frame", %V1.ServerFrame{frame: {:subscribe_result, _}}
+      two = flush_queries()
+
+      send_frame(socket, {:subscribe, %V1.Subscribe{cursors: cursors(Enum.drop(channels, 2))}})
+      assert_push "frame", %V1.ServerFrame{frame: {:subscribe_result, _}}
+      four = flush_queries()
+
+      assert two == four
+      assert two <= 4
     end
 
     test "a non-member cannot subscribe and learns nothing", ctx do

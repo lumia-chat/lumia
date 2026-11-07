@@ -62,10 +62,65 @@ defmodule Lumia.Authz.Access do
 
   @doc "`{:ok, access}` when the account holds `permission` in the channel, else an error."
   def require(account_id, channel_id, permission) do
-    with {:ok, access} <- viewable_channel(account_id, channel_id) do
-      if Permission.has?(access.permissions, permission),
-        do: {:ok, access},
-        else: {:error, :permission_denied}
+    with {:ok, access} <- channel(account_id, channel_id), do: check(access, permission)
+  end
+
+  @doc """
+  `require/3` for many channels at once: a map from each channel id to
+  its result. The channel rows come in one query, each server's
+  membership is read once, and the personal channels' participation in
+  one query, so a subscribe to fifty channels of one server costs two
+  reads rather than fifty of each. A nil id maps to `{:error, :not_found}`.
+  """
+  def require_many(account_id, channel_ids, permission) do
+    import Ecto.Query
+
+    ids = channel_ids |> Enum.reject(&is_nil/1) |> Enum.uniq()
+    rows = Repo.all(from c in Channel, where: c.id in ^ids and is_nil(c.deleted_at))
+    by_id = Map.new(rows, &{&1.id, &1})
+
+    personal =
+      for %Channel{server_id: nil, kind: kind, id: id} <- rows,
+          Dms.personal_kind?(kind),
+          do: id
+
+    participant = Dms.participant_of(personal, account_id)
+
+    members =
+      rows
+      |> Enum.map(& &1.server_id)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+      |> Map.new(&{&1, Servers.member_for(&1, account_id)})
+
+    Map.new(channel_ids, fn id ->
+      access = access_of(by_id[id], participant, members)
+      {id, with({:ok, access} <- access, do: check(access, permission))}
+    end)
+  end
+
+  defp access_of(nil, _participant, _members), do: {:error, :not_found}
+
+  defp access_of(%Channel{server_id: nil, kind: kind} = channel, participant, _members) do
+    if not Dms.personal_kind?(kind) or MapSet.member?(participant, channel.id),
+      do: {:ok, full_access(channel)},
+      else: {:error, :not_found}
+  end
+
+  defp access_of(%Channel{server_id: server_id} = channel, _participant, members) do
+    case members[server_id] do
+      nil -> {:error, :not_found}
+      member -> resolve_in_server(member, channel)
+    end
+  end
+
+  # A view the account cannot see is not found; one it can see without
+  # the permission is denied.
+  defp check(access, permission) do
+    cond do
+      not Permission.has?(access.permissions, :view_channel) -> {:error, :not_found}
+      not Permission.has?(access.permissions, permission) -> {:error, :permission_denied}
+      true -> {:ok, access}
     end
   end
 

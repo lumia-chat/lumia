@@ -178,7 +178,9 @@ pub async fn run_forever<S: Store>(
             Err(e) => (e.to_string(), Duration::ZERO),
         };
         attempt += 1;
-        let delay = backoff(attempt).max(wait);
+        // The server's wait is a floor, not the delay: a whole node's
+        // clients told the same number would come back in one instant.
+        let delay = backoff(attempt).max(wait + jitter(Duration::from_secs(1)));
         if events
             .unbounded_send(GatewayEvent::Reconnecting {
                 attempt,
@@ -215,16 +217,29 @@ pub fn retryable(reason: DisconnectReason) -> bool {
     )
 }
 
-/// Exponential backoff with up to a quarter of jitter, capped.
+/// Exponential backoff, capped, drawn from the upper half of each step:
+/// between half the step and the whole of it. Clients that dropped
+/// together then spread over half the window rather than a quarter of
+/// it, and no attempt is immediate.
 #[must_use]
 pub fn backoff(attempt: u32) -> Duration {
     let exp = attempt.saturating_sub(1).min(16);
-    let base = BASE_BACKOFF.saturating_mul(1u32 << exp).min(MAX_BACKOFF);
-    let jitter_nanos =
-        u64::try_from(crate::time::now_micros().rem_euclid(1_000_000) * 1000).unwrap_or(0);
-    let quarter = base.as_nanos() / 4;
-    let jitter = u64::try_from(quarter).map_or(0, |q| if q == 0 { 0 } else { jitter_nanos % q });
-    base + Duration::from_nanos(jitter)
+    let step = BASE_BACKOFF.saturating_mul(1u32 << exp).min(MAX_BACKOFF);
+    let half = step / 2;
+    half + jitter(half)
+}
+
+/// A duration below `span`, from the clock's sub-second part: the
+/// spread a reconnecting herd needs, not a random number anyone relies on.
+fn jitter(span: Duration) -> Duration {
+    let nanos = u64::try_from(crate::time::now_micros().rem_euclid(1_000_000) * 1000).unwrap_or(0);
+    u64::try_from(span.as_nanos()).map_or(Duration::ZERO, |span| {
+        if span == 0 {
+            Duration::ZERO
+        } else {
+            Duration::from_nanos(nanos % span)
+        }
+    })
 }
 
 /// Runs one connection until it closes. Subscribes to `channels` from the
@@ -477,11 +492,11 @@ mod tests {
         let a = backoff(1);
         let b = backoff(2);
         let c = backoff(3);
-        assert!(a >= Duration::from_secs(1) && a < Duration::from_millis(1250));
-        assert!(b >= Duration::from_secs(2) && b < Duration::from_millis(2500));
-        assert!(c >= Duration::from_secs(4) && c < Duration::from_millis(5000));
+        assert!(a >= Duration::from_millis(500) && a < Duration::from_secs(1));
+        assert!(b >= Duration::from_secs(1) && b < Duration::from_secs(2));
+        assert!(c >= Duration::from_secs(2) && c < Duration::from_secs(4));
         let far = backoff(40);
-        assert!(far >= MAX_BACKOFF && far <= MAX_BACKOFF + MAX_BACKOFF / 4);
+        assert!(far >= MAX_BACKOFF / 2 && far < MAX_BACKOFF);
     }
 
     #[test]
