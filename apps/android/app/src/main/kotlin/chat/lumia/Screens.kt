@@ -109,7 +109,8 @@ fun ConversationScreen(session: LumiaSession, channelId: String, back: () -> Uni
 
     PanelScreen(
         back = "Home", onBack = back, title = title,
-        subtitle = channel?.host?.ifEmpty { null }?.let { "on $it" },
+        // The other side's pronouns, from their verified profile, then the host.
+        subtitle = listOf(others.map { session.pronounsOf(it) }.filter { it.isNotEmpty() }.joinToString(", "), channel?.host?.ifEmpty { null }?.let { "on $it" } ?: "").filter { it.isNotEmpty() }.joinToString(" · ").ifEmpty { null },
         lead = { LumiaAvatar(initialsOf(title), AvatarTone.of(others.firstOrNull() ?: channelId), LumiaTokens.avatarMd) },
     ) {
         Column(Modifier.fillMaxSize().imePadding().navigationBarsPadding()) {

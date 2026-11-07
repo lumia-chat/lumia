@@ -20,7 +20,7 @@ struct ConversationScreen: View {
     private var title: String { channel.map { session.conversationName($0) } ?? "Conversation" }
 
     var body: some View {
-        PanelScreen(back: "Home", title: title, subtitle: (channel?.host).flatMap { $0.isEmpty ? nil : "on \($0)" }, lead: {
+        PanelScreen(back: "Home", title: title, subtitle: [others.map { session.pronouns(of: $0) }.filter { !$0.isEmpty }.joined(separator: ", "), (channel?.host).flatMap { $0.isEmpty ? nil : "on \($0)" } ?? ""].filter { !$0.isEmpty }.joined(separator: " · ").nilIfEmpty, lead: {
             LumiaAvatar(initials: initials(of: title), tone: .of(others.first ?? channelID), size: LumiaTokens.avatarMd)
         }) {
             ScrollViewReader { proxy in

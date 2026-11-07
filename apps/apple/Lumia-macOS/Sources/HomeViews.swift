@@ -253,7 +253,8 @@ struct ConversationView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PageHeader(title: title, topic: channel.host.isEmpty ? nil : "on \(channel.host)")
+            // The other side's pronouns, from their verified profile, then the host.
+            PageHeader(title: title, topic: [others.map { session.pronouns(of: $0) }.filter { !$0.isEmpty }.joined(separator: ", "), channel.host.isEmpty ? "" : "on \(channel.host)"].filter { !$0.isEmpty }.joined(separator: " · ").nilIfEmpty)
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: LumiaTokens.space8) {

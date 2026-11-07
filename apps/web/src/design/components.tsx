@@ -432,6 +432,8 @@ export interface MemberEntry {
   tone?: Tone;
   status?: Status;
   subtitle?: string;
+  /** A second line under the subtitle, such as a bio. */
+  detail?: string;
   tag?: string;
   href?: string;
 }
@@ -469,6 +471,9 @@ export function MemberList(props: MemberListProps) {
                         </span>
                         <Show when={m.subtitle}>
                           <span class="lu-member__sub">{m.subtitle}</span>
+                        </Show>
+                        <Show when={m.detail}>
+                          <span class="lu-member__sub">{m.detail}</span>
                         </Show>
                       </span>
                     </a>

@@ -257,6 +257,9 @@ pub struct MemberSummary {
     pub handle: String,
     pub display_name: String,
     pub nickname: String,
+    /// From the account's verified profile, as the display name is.
+    pub pronouns: String,
+    pub bio: String,
 }
 
 impl From<app::MemberSummary> for MemberSummary {
@@ -266,6 +269,8 @@ impl From<app::MemberSummary> for MemberSummary {
             handle: m.handle,
             display_name: m.display_name,
             nickname: m.nickname,
+            pronouns: m.pronouns,
+            bio: m.bio,
         }
     }
 }

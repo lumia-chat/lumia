@@ -16,6 +16,8 @@ defmodule Lumia.Accounts.Account do
     field :handle, :string
     field :display_name, :string
     field :avatar_url, :string
+    field :pronouns, :string
+    field :bio, :string
     # The identity's signed profile (`SignedProfile` bytes), when it gave one.
     field :profile, :binary
     field :email, :string

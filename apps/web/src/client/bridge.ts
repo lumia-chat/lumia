@@ -100,6 +100,9 @@ export interface MemberSummary {
   handle: string;
   displayName: string;
   nickname: string;
+  /** From the account's verified profile, as the display name is. */
+  pronouns: string;
+  bio: string;
 }
 export interface DmChannelSummary {
   channelId: string;

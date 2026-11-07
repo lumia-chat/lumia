@@ -105,6 +105,8 @@ defmodule Lumia.V1.Account do
   field :avatar_url, 6, type: :string, json_name: "avatarUrl"
   field :created_at, 7, type: Google.Protobuf.Timestamp, json_name: "createdAt"
   field :profile, 8, type: Lumia.V1.SignedProfile
+  field :pronouns, 9, type: :string
+  field :bio, 10, type: :string
 end
 
 defmodule Lumia.V1.Server do

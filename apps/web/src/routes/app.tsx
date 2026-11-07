@@ -427,7 +427,9 @@ function MembersAside(props: { serverId: string; me: string }) {
     return (members.data ?? [])
       .map((m) => {
         const name = m.displayName || m.nickname || m.handle || m.accountId.slice(0, 8);
-        return { name, initials: initialsOf(name), tone: toneFor(m.accountId), status: presenceOf(props.serverId, m.accountId), subtitle: m.handle ? "@" + m.handle : undefined, tag: m.accountId === props.me ? "You" : undefined };
+        // The handle and, from the verified profile, the pronouns.
+        const subtitle = [m.handle ? "@" + m.handle : "", m.pronouns].filter(Boolean).join(" · ") || undefined;
+        return { name, initials: initialsOf(name), tone: toneFor(m.accountId), status: presenceOf(props.serverId, m.accountId), subtitle, tag: m.accountId === props.me ? "You" : undefined };
       })
       .sort((a, b) => a.name.localeCompare(b.name));
   });

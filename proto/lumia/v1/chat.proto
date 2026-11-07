@@ -76,6 +76,10 @@ message Account {
   google.protobuf.Timestamp created_at = 7;
   // Present only for the caller's own account.
   SignedProfile profile = 8;
+  // From the verified profile, as display_name and avatar_url are: shown to
+  // anyone who may see the account.
+  string pronouns = 9;
+  string bio = 10;
 }
 
 message Server {

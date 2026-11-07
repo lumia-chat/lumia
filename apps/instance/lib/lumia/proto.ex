@@ -145,6 +145,8 @@ defmodule Lumia.Proto do
       handle: a.handle,
       display_name: a.display_name || "",
       avatar_url: a.avatar_url || "",
+      pronouns: a.pronouns || "",
+      bio: a.bio || "",
       created_at: timestamp(a.inserted_at),
       profile:
         if(Keyword.get(opts, :own, false) and is_binary(a.profile),

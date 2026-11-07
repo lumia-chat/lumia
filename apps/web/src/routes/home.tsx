@@ -343,7 +343,7 @@ function ChooseConversation(props: HomeProps) {
 }
 
 export function ConversationAside(props: HomeProps) {
-  const { nameOf } = useNames(() => props.snapshot);
+  const { nameOf, profile } = useNames(() => props.snapshot);
   const me = () => props.snapshot?.accountId ?? "";
   const channel = createMemo(() => props.snapshot?.channels.find((c) => c.channelId === props.channelId));
   return (
@@ -354,11 +354,13 @@ export function ConversationAside(props: HomeProps) {
             sections={[
               {
                 title: "In this conversation",
+                // Each person with the pronouns and bio of their verified profile.
                 members: ch().participantAccountIds.map((id) => ({
                   name: nameOf(id),
                   initials: initialsOf(nameOf(id)),
                   tone: toneFor(id),
-                  subtitle: id === me() ? "you" : undefined,
+                  subtitle: [id === me() ? "you" : "", profile(id)?.pronouns ?? ""].filter(Boolean).join(" · ") || undefined,
+                  detail: profile(id)?.bio || undefined,
                   tag: id === me() ? "You" : undefined,
                 })),
               },

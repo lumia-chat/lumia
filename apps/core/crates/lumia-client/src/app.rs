@@ -275,6 +275,9 @@ pub struct MemberSummary {
     pub handle: String,
     pub display_name: String,
     pub nickname: String,
+    /// From the account's verified profile, as the display name is.
+    pub pronouns: String,
+    pub bio: String,
 }
 
 /// A message as the local store holds it.
@@ -1334,6 +1337,8 @@ impl App {
             handle: a.handle,
             display_name: a.display_name,
             nickname: String::new(),
+            pronouns: a.pronouns,
+            bio: a.bio,
         })
     }
 
@@ -1358,6 +1363,8 @@ impl App {
                     handle: account.map(|a| a.handle.clone()).unwrap_or_default(),
                     display_name: account.map(|a| a.display_name.clone()).unwrap_or_default(),
                     nickname: m.nickname.clone(),
+                    pronouns: account.map(|a| a.pronouns.clone()).unwrap_or_default(),
+                    bio: account.map(|a| a.bio.clone()).unwrap_or_default(),
                 }
             })
             .collect())

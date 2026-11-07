@@ -328,6 +328,12 @@ class LumiaSession(val client: LumiaClient) {
         return null
     }
 
+    /** A person's pronouns, from the verified profile the instance showed; empty when none. */
+    fun pronounsOf(accountId: String): String {
+        if (accountId.isEmpty()) return ""
+        return (people[accountId] ?: profileOf(accountId))?.pronouns ?: ""
+    }
+
     fun conversationName(channel: ChannelSummary): String {
         val others = channel.participantAccountIds.filter { it != me }
         if (others.isEmpty()) return "Just you"

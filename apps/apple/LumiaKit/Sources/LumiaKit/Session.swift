@@ -348,6 +348,12 @@ public final class LumiaSession {
         return nil
     }
 
+    /// A person's pronouns, from the verified profile the instance showed; empty when none.
+    public func pronouns(of accountID: String) -> String {
+        if accountID.isEmpty { return "" }
+        return (people[accountID] ?? profile(of: accountID))?.pronouns ?? ""
+    }
+
     public func conversationName(_ channel: ChannelSummary) -> String {
         let others = channel.participantAccountIds.filter { $0 != me }
         if others.isEmpty { return "Just you" }
@@ -453,4 +459,9 @@ public final class LumiaSession {
     public func presence(of accountID: String, in serverID: String) -> String? {
         serverPresence[serverID]?[accountID]
     }
+}
+
+public extension String {
+    /// nil for the empty string, for optional subtitles built from parts.
+    var nilIfEmpty: String? { isEmpty ? nil : self }
 }

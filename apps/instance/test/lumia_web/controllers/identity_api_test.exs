@@ -46,6 +46,8 @@ defmodule LumiaWeb.IdentityApiTest do
         identity_id: identity.identity_id,
         version: version,
         display_name: display_name,
+        pronouns: "they/them",
+        bio: "Here for the #{display_name} channel.",
         issued_at: Proto.timestamp(DateTime.utc_now())
       })
 
@@ -74,12 +76,20 @@ defmodule LumiaWeb.IdentityApiTest do
     %V1.TokenPair{access_token: access} = V1.TokenPair.decode(created.resp_body)
     account = Lumia.Repo.get_by!(Lumia.Accounts.Account, handle: handle)
     assert account.display_name == "Pat Doe"
+    # Pronouns and bio come out of the verified profile as the display name does.
+    assert account.pronouns == "they/them"
+    assert account.bio == "Here for the Pat Doe channel."
 
     authed = put_req_header(conn, "authorization", "Bearer " <> access)
     snap = get(authed, "/api/v1/account/snapshot")
 
     assert %V1.AccountSnapshot{
-             account: %V1.Account{display_name: "Pat Doe", profile: %V1.SignedProfile{}}
+             account: %V1.Account{
+               display_name: "Pat Doe",
+               pronouns: "they/them",
+               bio: "Here for the Pat Doe channel.",
+               profile: %V1.SignedProfile{}
+             }
            } =
              Lumia.ProtoJSON.decode!(snap.resp_body, V1.AccountSnapshot)
 

@@ -280,6 +280,8 @@ defmodule LumiaWeb.IdentityController do
        %{
          display_name: blank_to_nil(body.display_name),
          avatar_url: blank_to_nil(body.avatar_url),
+         pronouns: blank_to_nil(body.pronouns),
+         bio: blank_to_nil(body.bio),
          profile: V1.SignedProfile.encode(signed)
        }}
     end

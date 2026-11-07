@@ -492,6 +492,11 @@ struct MembersAside: View {
         return String(m.accountId.prefix(8))
     }
 
+    /// The handle and, from the verified profile, the pronouns.
+    private func subtitle(of m: MemberSummary) -> String? {
+        [m.handle.isEmpty ? "" : "@\(m.handle)", m.pronouns].filter { !$0.isEmpty }.joined(separator: " · ").nilIfEmpty
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             LumiaSegmentedTabs(tabs: [.init(id: "members", label: "Members", count: (session.serverMembers[server.serverId] ?? []).count)], selected: $tab)
@@ -516,14 +521,14 @@ struct MembersAside: View {
                         Text("Online · \(here.count)").font(LumiaTokens.textSection.font).foregroundStyle(LumiaTokens.inkMuted.color)
                             .padding(.horizontal, LumiaTokens.space10).padding(.top, LumiaTokens.space8).padding(.bottom, LumiaTokens.space6)
                         ForEach(here, id: \.accountId) { m in
-                            LumiaMemberRow(name: name(of: m), subtitle: m.handle.isEmpty ? nil : "@\(m.handle)", tone: .of(m.accountId), tag: m.accountId == session.me ? "You" : nil, status: session.presence(of: m.accountId, in: server.serverId))
+                            LumiaMemberRow(name: name(of: m), subtitle: subtitle(of: m), tone: .of(m.accountId), tag: m.accountId == session.me ? "You" : nil, status: session.presence(of: m.accountId, in: server.serverId))
                         }
                     }
                     if !away.isEmpty {
                         Text("\(here.isEmpty ? "Members" : "Offline") · \(away.count)").font(LumiaTokens.textSection.font).foregroundStyle(LumiaTokens.inkMuted.color)
                             .padding(.horizontal, LumiaTokens.space10).padding(.top, LumiaTokens.space8).padding(.bottom, LumiaTokens.space6)
                         ForEach(away, id: \.accountId) { m in
-                            LumiaMemberRow(name: name(of: m), subtitle: m.handle.isEmpty ? nil : "@\(m.handle)", tone: .of(m.accountId), tag: m.accountId == session.me ? "You" : nil)
+                            LumiaMemberRow(name: name(of: m), subtitle: subtitle(of: m), tone: .of(m.accountId), tag: m.accountId == session.me ? "You" : nil)
                         }
                     }
                 }
