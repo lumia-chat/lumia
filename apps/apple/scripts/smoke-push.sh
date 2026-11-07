@@ -129,7 +129,12 @@ esac
 # UI test holds the app in the foreground; the test taps the banner and
 # expects the conversation's panel, titled with the other side's handle.
 host=$(printf '%s' "$instance" | sed -E 's#^https?://##; s#/$##')
-printf '{"aps":{"alert":{"title":"cli%s","body":"%s"},"mutable-content":1,"sound":"default"},"instance":"%s","channel_id":"%s","kind":"dm"}\n' "$stamp" "$body" "$host" "$channel" > "$work/push.json"
+# No mutable-content here, unlike the relay's payload: the simulator cannot
+# launch the service extension, and the flag makes SpringBoard wait the
+# extension's whole 30 s budget before it presents anything, which was
+# most of why the banner missed the test's window on the runner. The
+# extension's rewrite is what the stand-in above checked.
+printf '{"aps":{"alert":{"title":"cli%s","body":"%s"},"sound":"default"},"instance":"%s","channel_id":"%s","kind":"dm"}\n' "$stamp" "$body" "$host" "$channel" > "$work/push.json"
 rm -f "$work/ready.txt"
 TEST_RUNNER_LUMIA_DEV_INSTANCE="$instance" TEST_RUNNER_LUMIA_DEV_HANDLE="phone$stamp" TEST_RUNNER_LUMIA_DEV_PASSWORD="$password" TEST_RUNNER_LUMIA_UITEST_EXPECT="cli$stamp" TEST_RUNNER_LUMIA_UITEST_READY="$work/ready.txt" \
   xcodebuild test-without-building -project "$project/Lumia.xcodeproj" -scheme Lumia -destination "id=$udid" -derivedDataPath "$project/.build" \
