@@ -75,7 +75,7 @@ done
   echo "FAIL: the app wrote no link request"
   # What the app was doing instead, for the artifact.
   xcrun simctl io "$udid" screenshot "$work/nolink.png" >/dev/null 2>&1 || true
-  xcrun simctl spawn "$udid" log show --last 3m --style compact --predicate 'subsystem == "chat.lumia" OR process == "Lumia"' > "$work/sim.log" 2>&1 || true
+  xcrun simctl spawn "$udid" log show --info --last 3m --style compact --predicate 'subsystem == "chat.lumia" OR process == "Lumia"' > "$work/sim.log" 2>&1 || true
   tail -20 "$work/uitest.log"
   exit 1
 }
@@ -152,7 +152,7 @@ wait $uitest || {
   echo "FAIL: the tap did not open the conversation; see $work/uitest-open.log and $work/opened.png"
   grep -E 'error|failed' "$work/uitest-open.log" | head -5
   # The app's and the notification system's log around the push, for the artifact.
-  xcrun simctl spawn "$udid" log show --last 4m --style compact --predicate 'subsystem == "chat.lumia" OR process == "Lumia" OR subsystem CONTAINS "usernotifications"' > "$work/sim.log" 2>&1 || true
+  xcrun simctl spawn "$udid" log show --info --last 4m --style compact --predicate 'subsystem == "chat.lumia" OR process == "Lumia" OR subsystem CONTAINS "usernotifications"' > "$work/sim.log" 2>&1 || true
   exit 1
 }
 echo "smoke-push: ok (the phone joined the group and decrypted the message for the notice; the banner is in $work/push.png, the conversation it opened in $work/opened.png)"

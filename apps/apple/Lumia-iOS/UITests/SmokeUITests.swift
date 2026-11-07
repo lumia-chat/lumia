@@ -52,6 +52,10 @@ final class SmokeUITests: XCTestCase {
             print("the app 10 s after ready:\n" + app.debugDescription)
         }
         if !banner.waitForExistence(timeout: 80) {
+            // What SpringBoard shows once the wait has run out, after the
+            // notification has long been created: the banner under another
+            // label, or nothing at all.
+            print("springboard when the wait ran out:\n" + springboard.debugDescription)
             XCTFail("no banner arrived")
         }
         banner.tap()
