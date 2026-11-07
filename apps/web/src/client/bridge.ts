@@ -197,10 +197,18 @@ type Pending = { resolve: (v: unknown) => void; reject: (e: Error) => void };
 /** The API error envelope as the worker reports it: `code: message`. */
 export class ClientError extends Error {
   readonly code: string;
+  /** `Error.details` as the protocol documents them per code (`mfa`, `state`, ...). */
+  readonly details: Record<string, string>;
   constructor(text: string) {
     super(text);
     const m = /^api error ([A-Z_]+): /.exec(text);
     this.code = m?.[1] ?? "";
+    this.details = {};
+    const d = / details=(.*)$/.exec(text);
+    for (const pair of d?.[1]?.split(",") ?? []) {
+      const eq = pair.indexOf("=");
+      if (eq > 0) this.details[pair.slice(0, eq)] = pair.slice(eq + 1);
+    }
   }
 }
 
@@ -300,6 +308,17 @@ export class Bridge {
   }
   signInPasskey(challengeId: string, credentialJson: string): Promise<void> {
     return this.call("signInPasskey", challengeId, credentialJson);
+  }
+  /** A password sign-in with the passkey factor: the assertion made for an assert challenge. */
+  signInWithPasskey(handle: string, password: string, challengeId: string, credentialJson: string): Promise<void> {
+    return this.call("signInWithPasskey", handle, password, challengeId, credentialJson);
+  }
+  /** Whether a password sign-in must also present one of this account's passkeys. */
+  passkeyRequired(): Promise<boolean> {
+    return this.call("passkeyRequired");
+  }
+  setPasskeyRequired(required: boolean): Promise<void> {
+    return this.call("setPasskeyRequired", required);
   }
   passkeys(): Promise<PasskeySummary[]> {
     return this.call("passkeys");

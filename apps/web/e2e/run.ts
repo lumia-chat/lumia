@@ -729,6 +729,25 @@ async function passkey(which: string, handle: string) {
     await page.getByRole("button", { name: "Add a passkey" }).click();
     await page.getByText("Suite key · added").waitFor();
     await page.screenshot({ path: `${out}/${which}-passkey.png` });
+    // The passkey as the second factor (protocol 6.1's details.mfa): required
+    // from Devices, a password sign-in then asks the authenticator for it.
+    phase("require");
+    const require = page.getByLabel("Require a passkey when signing in with a password");
+    await require.check();
+    await goto(page, `${base}/sign-in`);
+    await page.locator(".lu-card").waitFor();
+    if ((await page.getByLabel("Instance").count()) > 0) {
+      await page.getByLabel("Instance").fill(instance);
+      await page.getByRole("button", { name: "Continue" }).click();
+    }
+    await page.getByText("run by").waitFor();
+    await page.getByLabel("Email or handle").fill(handle);
+    await page.getByRole("textbox", { name: "Password" }).fill(password);
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await page.getByPlaceholder(/^Message #/).waitFor();
+    await goto(page, `${base}/app?place=home&view=devices`);
+    await page.getByLabel("Require a passkey when signing in with a password").waitFor();
+    await page.getByLabel("Require a passkey when signing in with a password").uncheck();
     phase("assert");
     // Straight to the sign-in page (the root would send a signed-in browser
     // to the app); it reaches the instance once asked, as a fresh visit would.
@@ -756,7 +775,7 @@ async function passkey(which: string, handle: string) {
   } finally {
     await ctx.close();
   }
-  console.log(`  ${which}: made a passkey, signed in with it, and removed it in ${Date.now() - t0} ms`);
+  console.log(`  ${which}: made a passkey, required it beside the password and signed in that way, signed in with it alone, and removed it in ${Date.now() - t0} ms`);
 }
 
 // OIDC sign-in (architecture 6.3), with a provider of the suite's own: the

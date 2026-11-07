@@ -670,9 +670,22 @@ function Devices(props: HomeProps) {
   const [passkeyLabel, setPasskeyLabel] = createSignal("");
   const [passkeyError, setPasskeyError] = createSignal("");
   const [passkeyBusy, setPasskeyBusy] = createSignal(false);
+  // The passkey as the second factor of a password sign-in (protocol 6.1).
+  const [passkeyRequired, setPasskeyRequiredState] = createSignal(false);
+  const toggleRequired = async (required: boolean) => {
+    setPasskeyError("");
+    try {
+      await client().setPasskeyRequired(required);
+      setPasskeyRequiredState(required);
+    } catch (e) {
+      const ce = e instanceof ClientError ? e : null;
+      setPasskeyError(ce?.code === "FAILED_PRECONDITION" ? "Add a passkey first." : e instanceof Error ? e.message : String(e));
+    }
+  };
   const loadPasskeys = async () => {
     try {
       setPasskeys(await client().passkeys());
+      setPasskeyRequiredState(await client().passkeyRequired());
     } catch (e) {
       setPasskeyError(e instanceof Error ? e.message : String(e));
     }
@@ -721,6 +734,9 @@ function Devices(props: HomeProps) {
                 </p>
               )}
             </For>
+            <label class="app__status">
+              <input type="checkbox" checked={passkeyRequired()} disabled={passkeys().length === 0} onChange={(e) => void toggleRequired(e.currentTarget.checked)} aria-label="Require a passkey when signing in with a password" /> Require a passkey when signing in with a password
+            </label>
             <form class="auth__form" onSubmit={(e) => void makePasskey(e)}>
               <TextField label="Name for the new passkey" value={passkeyLabel()} onInput={(e) => setPasskeyLabel(e.currentTarget.value)} placeholder="This laptop" autocomplete="off" />
               <Show when={passkeyError()}>

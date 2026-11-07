@@ -42,6 +42,8 @@ defmodule Lumia.V1.PasswordSignInRequest do
   field :device_id, 3, type: :bytes, json_name: "deviceId"
   field :roster, 4, type: Lumia.V1.SignedRoster
   field :totp_code, 5, type: :string, json_name: "totpCode"
+  field :passkey_challenge_id, 6, type: :string, json_name: "passkeyChallengeId"
+  field :passkey_credential_json, 7, type: :string, json_name: "passkeyCredentialJson"
 end
 
 defmodule Lumia.V1.IdentityProofSignInRequest do
@@ -289,6 +291,18 @@ defmodule Lumia.V1.ListPasskeysResponse do
     syntax: :proto3
 
   field :passkeys, 1, repeated: true, type: Lumia.V1.Passkey
+  field :required_for_password, 2, type: :bool, json_name: "requiredForPassword"
+end
+
+defmodule Lumia.V1.PasskeyRequirementRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.PasskeyRequirementRequest",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :required, 1, type: :bool
 end
 
 defmodule Lumia.V1.PushSubscription do

@@ -18,10 +18,10 @@ use lumia_core::proto::{
     ErrorCode, GetGroupInfoResponse, GetLinkBundleResponse, GetRosterResponse, IdentityProof,
     IdentityProofSignInRequest, ListAccountEventsResponse, ListChannelsResponse,
     ListEventsResponse, ListMembersResponse, ListServersResponse, OpenPersonalDmRequest,
-    OpenPersonalDmResponse, PasswordSignInRequest, PublishBackupKeyHandoffRequest,
-    PublishGroupInfoRequest, PublishKeyPackagesRequest, PublishRosterRequest, PushSubscription,
-    ReauthRequest, ReauthResponse, RefreshRequest, RevokeDeviceRequest, Server, SignedRoster,
-    TokenPair,
+    OpenPersonalDmResponse, PasskeyRequirementRequest, PasswordSignInRequest,
+    PublishBackupKeyHandoffRequest, PublishGroupInfoRequest, PublishKeyPackagesRequest,
+    PublishRosterRequest, PushSubscription, ReauthRequest, ReauthResponse, RefreshRequest,
+    RevokeDeviceRequest, Server, SignedRoster, TokenPair,
 };
 use lumia_core::proto::{
     CreateInviteRequest, EmailInviteRequest, HandoffResponse, Invite, InvitePreview,
@@ -404,6 +404,44 @@ impl Api {
     /// # Errors
     /// On transport failure or an API error (`FAILED_PRECONDITION{mfa}`
     /// without the code, `UNAUTHENTICATED` with a wrong one).
+    /// `POST /auth/sign-in/password` with the passkey factor: an assertion
+    /// made for an assert challenge by one of the account's passkeys.
+    ///
+    /// # Errors
+    /// On transport failure or an API error.
+    pub async fn sign_in_with_passkey(
+        &self,
+        handle_or_email: &str,
+        password: &str,
+        device_id: Vec<u8>,
+        challenge_id: &str,
+        credential_json: &str,
+    ) -> Result<TokenPair, ClientError> {
+        let req = PasswordSignInRequest {
+            handle_or_email: handle_or_email.into(),
+            password: password.into(),
+            device_id,
+            passkey_challenge_id: challenge_id.into(),
+            passkey_credential_json: credential_json.into(),
+            ..Default::default()
+        };
+        self.post("/api/v1/auth/sign-in/password", &req).await
+    }
+
+    /// `PUT /auth/passkeys/required`: the passkey as the second factor of a
+    /// password sign-in.
+    ///
+    /// # Errors
+    /// On transport failure or an API error.
+    pub async fn set_passkey_required(&self, required: bool) -> Result<(), ClientError> {
+        self.empty(
+            reqwest::Method::PUT,
+            "/api/v1/auth/passkeys/required",
+            Some(PasskeyRequirementRequest { required }.encode_to_vec()),
+        )
+        .await
+    }
+
     pub async fn sign_in_with_totp(
         &self,
         handle_or_email: &str,

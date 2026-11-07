@@ -141,14 +141,20 @@ private final class StreamListener: Listener, @unchecked Sendable {
 public extension Error {
     /// The API error's code, when the failure was one (`UNAUTHENTICATED`, `NOT_FOUND`, ...).
     var lumiaCode: String? {
-        if case let LumiaError.Api(code, _)? = self as? LumiaError { return code }
+        if case let LumiaError.Api(code, _, _)? = self as? LumiaError { return code }
         return nil
+    }
+
+    /// The API error's `details`, as the protocol documents them per code (`mfa`, `state`, ...).
+    var lumiaDetails: [String: String] {
+        if case let LumiaError.Api(_, _, details)? = self as? LumiaError { return details }
+        return [:]
     }
 
     /// What to show for the failure.
     var lumiaMessage: String {
         switch self as? LumiaError {
-        case let .Api(_, message)?: message
+        case let .Api(_, message, _)?: message
         case let .DeviceRevoked(version)?: "This device was revoked (roster v\(version))."
         case .NotSignedIn?: "Not signed in."
         case let .Other(message)?: message

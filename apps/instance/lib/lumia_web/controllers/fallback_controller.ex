@@ -26,6 +26,9 @@ defmodule LumiaWeb.FallbackController do
   def call(conn, {:error, {:failed_precondition, :mfa}}),
     do: ProtoConn.render_error(conn, :failed_precondition, %{"mfa" => "totp"})
 
+  def call(conn, {:error, {:failed_precondition, :passkey}}),
+    do: ProtoConn.render_error(conn, :failed_precondition, %{"mfa" => "passkey"})
+
   def call(conn, {:error, :resource_exhausted}),
     do:
       ProtoConn.render_error(conn, :resource_exhausted, %{

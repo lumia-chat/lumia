@@ -246,6 +246,8 @@ struct SignInView: View {
             store.route = .app
         } catch {
             switch error.lumiaCode {
+            // The passkey factor needs the browser's ceremony (architecture 6.3): the web sign-in does it.
+            case "FAILED_PRECONDITION" where error.lumiaDetails["mfa"] == "passkey": self.error = "This account asks for its passkey at sign-in; use \"Sign in through the browser\"."
             case "FAILED_PRECONDITION" where !needsTotp: needsTotp = true
             case "UNAUTHENTICATED": self.error = needsTotp ? "That code was not accepted." : "Wrong handle or password."
             case "ALREADY_EXISTS": self.error = "That handle is taken."

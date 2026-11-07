@@ -143,6 +143,17 @@ defmodule Lumia.Auth.Passkeys do
 
   @doc "Signs `device_id` in with the assertion the browser made for the challenge."
   def assert_finish(challenge_id, credential_json, device_id, opts \\ []) do
+    with {:ok, account_id} <- verify_assertion(challenge_id, credential_json) do
+      Auth.create_session(account_id, device_id, opts)
+    end
+  end
+
+  @doc """
+  Checks an assertion against its challenge and the passkey it names, and
+  counts the use: `{:ok, account_id}` for the passkey's account. The
+  second factor of a password sign-in goes through here too.
+  """
+  def verify_assertion(challenge_id, credential_json) do
     with {:ok, challenge} <- take(challenge_id, "assert", nil),
          {:ok, cred} <- decode_credential(credential_json),
          {:ok, raw_id} <- b64_field(cred, ["rawId"]),
@@ -164,7 +175,7 @@ defmodule Lumia.Auth.Passkeys do
              last_used_at: DateTime.utc_now()
            )
            |> Repo.update() do
-      Auth.create_session(passkey.account_id, device_id, opts)
+      {:ok, passkey.account_id}
     else
       _ -> {:error, :unauthenticated}
     end

@@ -210,11 +210,53 @@ defmodule Lumia.Accounts do
   code is valid; `{:error, {:failed_precondition, :mfa}}` when one is
   required and no code was given; `{:error, :unauthenticated}` for a bad code.
   """
-  def check_second_factor(%Account{totp_enabled_at: nil}, _code), do: :ok
-  def check_second_factor(%Account{}, ""), do: {:error, {:failed_precondition, :mfa}}
+  def check_second_factor(account, totp_code, passkey \\ nil) do
+    with :ok <- check_totp(account, totp_code) do
+      check_passkey(account, passkey)
+    end
+  end
 
-  def check_second_factor(%Account{totp_secret: secret}, code) do
+  defp check_totp(%Account{totp_enabled_at: nil}, _code), do: :ok
+  defp check_totp(%Account{}, ""), do: {:error, {:failed_precondition, :mfa}}
+
+  defp check_totp(%Account{totp_secret: secret}, code) do
     if Totp.valid?(secret, code), do: :ok, else: {:error, :unauthenticated}
+  end
+
+  # The passkey as the second factor (protocol 6.1's details.mfa): the
+  # assertion made for an assert challenge, by one of this account's keys.
+  defp check_passkey(%Account{passkey_required_at: nil}, _assertion), do: :ok
+  defp check_passkey(%Account{}, nil), do: {:error, {:failed_precondition, :passkey}}
+
+  defp check_passkey(%Account{id: id}, {challenge_id, credential_json}) do
+    case Lumia.Auth.Passkeys.verify_assertion(challenge_id, credential_json) do
+      {:ok, ^id} -> :ok
+      _ -> {:error, :unauthenticated}
+    end
+  end
+
+  @doc """
+  Whether a password sign-in must also present one of the account's
+  passkeys. Turning it on needs a passkey to exist (`{:error,
+  {:failed_precondition, "no_passkey"}}` otherwise).
+  """
+  def set_passkey_required(account_id, required?) do
+    account = Repo.get!(Account, account_id)
+
+    cond do
+      required? and Lumia.Auth.Passkeys.passkeys(account_id) == [] ->
+        {:error, {:failed_precondition, "no_passkey"}}
+
+      required? ->
+        account
+        |> Ecto.Changeset.change(
+          passkey_required_at: account.passkey_required_at || DateTime.utc_now()
+        )
+        |> Repo.update()
+
+      true ->
+        account |> Ecto.Changeset.change(passkey_required_at: nil) |> Repo.update()
+    end
   end
 
   defp validate_password(password) do

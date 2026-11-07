@@ -14,6 +14,7 @@ use std::sync::Arc;
 use js_sys::Function;
 use lumia_client::app::{App, EventSink, Opener, Place, StoreName};
 use lumia_client::sqlite::SqliteStore;
+use lumia_client::ClientError;
 use lumia_core::proto::PushKind;
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
@@ -45,6 +46,19 @@ async fn ensure_vfs() -> Result<(), JsError> {
 }
 
 fn js<E: std::fmt::Display>(e: E) -> JsError {
+    JsError::new(&e.to_string())
+}
+
+/// An API error with its details on the text, after the message, so the
+/// page can read `details.mfa` and the like (bridge.ts parses them).
+fn js_api(e: ClientError) -> JsError {
+    if let ClientError::Api { details, .. } = &e {
+        if !details.is_empty() {
+            let mut pairs: Vec<String> = details.iter().map(|(k, v)| format!("{k}={v}")).collect();
+            pairs.sort();
+            return JsError::new(&format!("{e} details={}", pairs.join(",")));
+        }
+    }
     JsError::new(&e.to_string())
 }
 
@@ -365,6 +379,45 @@ impl Client {
         to_js(&self.app.passkeys().await.map_err(js)?)
     }
 
+    /// `POST /auth/sign-in/password` with the passkey factor (protocol 6.1).
+    ///
+    /// # Errors
+    /// `UNAUTHENTICATED`; transport failure.
+    #[wasm_bindgen(js_name = signInWithPasskey)]
+    pub async fn sign_in_with_passkey(
+        &self,
+        handle: String,
+        password: String,
+        challenge_id: String,
+        credential_json: String,
+    ) -> Result<(), JsError> {
+        self.app
+            .sign_in_with_passkey(&handle, &password, &challenge_id, &credential_json)
+            .await
+            .map_err(js_api)
+    }
+
+    /// Whether a password sign-in must also present one of the account's passkeys.
+    ///
+    /// # Errors
+    /// On transport or API failure.
+    #[wasm_bindgen(js_name = passkeyRequired)]
+    pub async fn passkey_required(&self) -> Result<bool, JsError> {
+        self.app.passkey_required().await.map_err(js)
+    }
+
+    /// `PUT /auth/passkeys/required`.
+    ///
+    /// # Errors
+    /// `FAILED_PRECONDITION` with `state` `no_passkey`; transport failure.
+    #[wasm_bindgen(js_name = setPasskeyRequired)]
+    pub async fn set_passkey_required(&self, required: bool) -> Result<(), JsError> {
+        self.app
+            .set_passkey_required(required)
+            .await
+            .map_err(js_api)
+    }
+
     /// Removes one of this account's passkeys.
     ///
     /// # Errors
@@ -417,7 +470,7 @@ impl Client {
         self.app
             .sign_in(&handle, &password, totp_code.as_deref())
             .await
-            .map_err(js)
+            .map_err(js_api)
     }
 
     /// Signs out: revokes the session and forgets the tokens.

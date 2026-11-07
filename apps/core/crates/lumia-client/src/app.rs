@@ -1004,6 +1004,51 @@ impl App {
         self.save_tokens(&pair)
     }
 
+    /// Signs in with a password and the passkey factor (protocol 6.1's
+    /// `details.mfa` of `passkey`): the assertion the browser made for an
+    /// assert challenge, by one of the account's passkeys.
+    ///
+    /// # Errors
+    /// `UNAUTHENTICATED` for a wrong password or assertion; transport failure.
+    pub async fn sign_in_with_passkey(
+        &self,
+        handle: &str,
+        password: &str,
+        challenge_id: &str,
+        credential_json: &str,
+    ) -> Result<(), ClientError> {
+        let pair = self
+            .api
+            .sign_in_with_passkey(
+                handle,
+                password,
+                self.device_id.clone(),
+                challenge_id,
+                credential_json,
+            )
+            .await?;
+        self.save_tokens(&pair)
+    }
+
+    /// Whether a password sign-in must also present one of this account's
+    /// passkeys.
+    ///
+    /// # Errors
+    /// On transport or API failure.
+    pub async fn passkey_required(&self) -> Result<bool, ClientError> {
+        Ok(self.api.passkeys().await?.required_for_password)
+    }
+
+    /// `PUT /auth/passkeys/required`: requires (or stops requiring) one of
+    /// this account's passkeys at a password sign-in.
+    ///
+    /// # Errors
+    /// `FAILED_PRECONDITION` with `state` `no_passkey` when there is none to
+    /// require; transport failure.
+    pub async fn set_passkey_required(&self, required: bool) -> Result<(), ClientError> {
+        self.api.set_passkey_required(required).await
+    }
+
     /// `GET /auth/passkeys`: this account's passkeys.
     ///
     /// # Errors

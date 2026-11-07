@@ -56,6 +56,10 @@ class LumiaClient(val baseUrl: String, dataDirectory: File) {
 val Throwable.lumiaCode: String?
     get() = (this as? LumiaException.Api)?.code
 
+/** The API error's `details`, as the protocol documents them per code (`mfa`, `state`, ...). */
+val Throwable.lumiaDetails: Map<String, String>
+    get() = (this as? LumiaException.Api)?.details ?: emptyMap()
+
 /** What to show for the failure. */
 val Throwable.lumiaMessage: String
     get() = when (this) {

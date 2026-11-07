@@ -27,3 +27,12 @@ export async function signInWithPasskey(handleOrEmail: string): Promise<void> {
   if (!credential) throw new Error("no passkey was offered");
   await client().signInPasskey(start.challengeId, JSON.stringify(credential.toJSON()));
 }
+
+/** The passkey as the second factor of a password sign-in: the ceremony alone, for the sign-in call to carry. */
+export async function assertForPasswordSignIn(handleOrEmail: string): Promise<{ challengeId: string; credentialJson: string }> {
+  const start = await client().passkeyAssertStart(handleOrEmail);
+  const options = PublicKeyCredential.parseRequestOptionsFromJSON(JSON.parse(start.optionsJson) as PublicKeyCredentialRequestOptionsJSON);
+  const credential = (await navigator.credentials.get({ publicKey: options })) as Credential | null;
+  if (!credential) throw new Error("no passkey was offered");
+  return { challengeId: start.challengeId, credentialJson: JSON.stringify(credential.toJSON()) };
+}

@@ -50,10 +50,21 @@ defmodule LumiaWeb.PasskeyController do
     end
   end
 
+  # The passkey as the second factor of a password sign-in.
+  def set_required(conn, _params) do
+    with {:ok, req} <- ProtoConn.decode(conn, V1.PasskeyRequirementRequest),
+         {:ok, _} <-
+           Lumia.Accounts.set_passkey_required(conn.assigns.current_account_id, req.required) do
+      ProtoConn.no_content(conn)
+    end
+  end
+
   def index(conn, _params) do
     passkeys = Passkeys.passkeys(conn.assigns.current_account_id)
+    account = Lumia.Repo.get!(Lumia.Accounts.Account, conn.assigns.current_account_id)
 
     ProtoConn.render(conn, %V1.ListPasskeysResponse{
+      required_for_password: account.passkey_required_at != nil,
       passkeys:
         Enum.map(passkeys, fn p ->
           %V1.Passkey{

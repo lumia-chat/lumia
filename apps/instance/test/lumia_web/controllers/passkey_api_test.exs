@@ -85,6 +85,95 @@ defmodule LumiaWeb.PasskeyApiTest do
            }).status == 401
   end
 
+  test "a passkey can be required as the second factor of a password sign-in", %{conn: conn} do
+    {:ok, account} =
+      Lumia.Accounts.register(%{
+        handle: "second#{System.unique_integer([:positive])}",
+        password: "correct-horse-battery-staple"
+      })
+
+    # Nothing to require yet.
+    none =
+      conn
+      |> authed(account)
+      |> put_req_header("content-type", "application/json")
+      |> put(
+        "/api/v1/auth/passkeys/required",
+        Lumia.ProtoJSON.encode!(%V1.PasskeyRequirementRequest{required: true})
+      )
+
+    assert none.status == 400
+
+    assert %{"code" => "FAILED_PRECONDITION", "details" => %{"state" => "no_passkey"}} =
+             Jason.decode!(none.resp_body)
+
+    {:ok, _} =
+      Lumia.Repo.insert(%Passkeys.Passkey{
+        account_id: account.id,
+        credential_id: :crypto.strong_rand_bytes(16),
+        public_key: :erlang.term_to_binary(%{}),
+        label: "Phone"
+      })
+
+    on =
+      conn
+      |> authed(account)
+      |> put_req_header("content-type", "application/json")
+      |> put(
+        "/api/v1/auth/passkeys/required",
+        Lumia.ProtoJSON.encode!(%V1.PasskeyRequirementRequest{required: true})
+      )
+
+    assert on.status == 204
+
+    assert %V1.ListPasskeysResponse{required_for_password: true} =
+             decode(get(authed(conn, account), "/api/v1/auth/passkeys"), V1.ListPasskeysResponse)
+
+    sign_in = fn extra ->
+      post_proto(
+        conn,
+        "/api/v1/auth/sign-in/password",
+        struct(
+          %V1.PasswordSignInRequest{
+            handle_or_email: account.handle,
+            password: "correct-horse-battery-staple"
+          },
+          extra
+        )
+      )
+    end
+
+    asked = sign_in.(%{})
+    assert asked.status == 400
+
+    assert %{"code" => "FAILED_PRECONDITION", "details" => %{"mfa" => "passkey"}} =
+             Jason.decode!(asked.resp_body)
+
+    start =
+      post_proto(conn, "/api/v1/auth/passkey/assert/start", %V1.PasskeyAssertStartRequest{
+        handle_or_email: account.handle
+      })
+
+    %V1.PasskeyChallenge{challenge_id: challenge} = decode(start, V1.PasskeyChallenge)
+
+    assert sign_in.(%{
+             passkey_challenge_id: challenge,
+             passkey_credential_json: "{\"rawId\":\"AAAA\"}"
+           }).status == 401
+
+    off =
+      conn
+      |> authed(account)
+      |> put_req_header("content-type", "application/json")
+      |> put(
+        "/api/v1/auth/passkeys/required",
+        Lumia.ProtoJSON.encode!(%V1.PasskeyRequirementRequest{required: false})
+      )
+
+    assert off.status == 204
+    assert sign_in.(%{}).status == 200
+  end
+
   test "a passkey is listed and removed", %{conn: conn} do
     account = account("pk")
 

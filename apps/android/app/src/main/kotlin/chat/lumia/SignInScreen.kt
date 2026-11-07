@@ -51,6 +51,7 @@ import chat.lumia.kit.LumiaTokens
 import chat.lumia.kit.Route
 import chat.lumia.kit.initialsOf
 import chat.lumia.kit.lumiaCode
+import chat.lumia.kit.lumiaDetails
 import chat.lumia.kit.lumiaMessage
 import kotlinx.coroutines.launch
 import uniffi.lumia_ffi.InstanceSummary
@@ -164,6 +165,8 @@ fun SignInScreen(store: AppStore) {
             store.route = Route.APP
         } catch (e: Exception) {
             when {
+                // The passkey factor needs the browser's ceremony (architecture 6.3): the web sign-in does it.
+                e.lumiaCode == "FAILED_PRECONDITION" && e.lumiaDetails["mfa"] == "passkey" -> error = "This account asks for its passkey at sign-in; use \"Sign in through the browser\"."
                 e.lumiaCode == "FAILED_PRECONDITION" && !needsTotp -> needsTotp = true
                 e.lumiaCode == "UNAUTHENTICATED" -> error = if (needsTotp) "That code was not accepted." else "Wrong handle or password."
                 e.lumiaCode == "ALREADY_EXISTS" -> error = "That handle is taken."

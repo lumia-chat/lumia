@@ -35,6 +35,9 @@ pub enum LumiaError {
         code: String,
         /// The server's message.
         detail: String,
+        /// `Error.details`, keyed as docs/protocol.md documents per code
+        /// (`mfa`, `state`, ...).
+        details: std::collections::HashMap<String, String>,
     },
     /// This device is revoked in the roster it now holds.
     #[error("this device was revoked (roster v{roster_version})")]
@@ -53,9 +56,15 @@ pub enum LumiaError {
 impl From<ClientError> for LumiaError {
     fn from(e: ClientError) -> Self {
         match e {
-            ClientError::Api { code, message, .. } => Self::Api {
+            ClientError::Api {
+                code,
+                message,
+                details,
+                ..
+            } => Self::Api {
                 code,
                 detail: message,
+                details,
             },
             ClientError::DeviceRevoked { roster_version } => Self::DeviceRevoked { roster_version },
             ClientError::NotSignedIn => Self::NotSignedIn,
@@ -1017,6 +1026,37 @@ impl Client {
         Ok(self
             .runtime
             .block_on(self.app.sign_in(&handle, &password, totp_code.as_deref()))?)
+    }
+
+    /// Signs in with a password and the passkey factor: the assertion the
+    /// platform made for an assert challenge (protocol 6.1, `details.mfa`
+    /// of `passkey`).
+    pub fn sign_in_with_passkey(
+        &self,
+        handle: String,
+        password: String,
+        challenge_id: String,
+        credential_json: String,
+    ) -> Res<()> {
+        Ok(self.runtime.block_on(self.app.sign_in_with_passkey(
+            &handle,
+            &password,
+            &challenge_id,
+            &credential_json,
+        ))?)
+    }
+
+    /// Whether a password sign-in must also present one of the account's passkeys.
+    pub fn passkey_required(&self) -> Res<bool> {
+        Ok(self.runtime.block_on(self.app.passkey_required())?)
+    }
+
+    /// Requires, or stops requiring, one of the account's passkeys at a
+    /// password sign-in.
+    pub fn set_passkey_required(&self, required: bool) -> Res<()> {
+        Ok(self
+            .runtime
+            .block_on(self.app.set_passkey_required(required))?)
     }
 
     /// Signs out: revokes the session and forgets the tokens.

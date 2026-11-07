@@ -8,7 +8,7 @@ import { useNavigate, useSearch } from "@tanstack/solid-router";
 import { Button, Card, Divider, TextField } from "../design/components";
 import { ClientError, type InstanceSummary } from "../client/bridge";
 import { SERVED_BY_INSTANCE, client, inShell, openInstance, savedInstance } from "../client/state";
-import { passkeysAvailable, signInWithPasskey } from "../client/passkeys";
+import { assertForPasswordSignIn, passkeysAvailable, signInWithPasskey } from "../client/passkeys";
 import type { SignInSearch } from "./index";
 
 type Mode = "signIn" | "create";
@@ -137,7 +137,18 @@ export function SignIn() {
       await land();
     } catch (err) {
       const ce = err instanceof ClientError ? err : null;
-      if (ce?.code === "FAILED_PRECONDITION" && !needsTotp()) {
+      if (ce?.code === "FAILED_PRECONDITION" && ce.details.mfa === "passkey") {
+        // The passkey as the second factor: the browser's ceremony, then
+        // the same sign-in carrying its answer.
+        try {
+          const assertion = await assertForPasswordSignIn(handle());
+          await client().signInWithPasskey(handle(), password(), assertion.challengeId, assertion.credentialJson);
+          await land();
+        } catch (e2) {
+          const c2 = e2 instanceof ClientError ? e2 : null;
+          setError(c2?.code === "UNAUTHENTICATED" ? "That passkey was not accepted." : e2 instanceof Error && e2.name === "NotAllowedError" ? "This account asks for its passkey; none was offered." : e2 instanceof Error ? e2.message : String(e2));
+        }
+      } else if (ce?.code === "FAILED_PRECONDITION" && !needsTotp()) {
         setNeedsTotp(true);
         setError("");
       } else if (ce?.code === "UNAUTHENTICATED") {

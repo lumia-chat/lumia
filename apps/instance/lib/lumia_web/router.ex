@@ -44,6 +44,7 @@ defmodule LumiaWeb.Router do
     post "/auth/passkey/register/start", PasskeyController, :register_start
     post "/auth/passkey/register/finish", PasskeyController, :register_finish
     get "/auth/passkeys", PasskeyController, :index
+    put "/auth/passkeys/required", PasskeyController, :set_required
     delete "/auth/passkeys/:passkey_id", PasskeyController, :delete
     post "/auth/reauth", IdentityController, :reauth
     get "/identity/roster", IdentityController, :get_roster

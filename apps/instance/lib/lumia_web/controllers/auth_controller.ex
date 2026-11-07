@@ -74,7 +74,7 @@ defmodule LumiaWeb.AuthController do
   def sign_in_password(conn, _params) do
     with {:ok, req} <- ProtoConn.decode(conn, V1.PasswordSignInRequest),
          {:ok, account} <- Accounts.authenticate(req.handle_or_email, req.password),
-         :ok <- Accounts.check_second_factor(account, req.totp_code),
+         :ok <- Accounts.check_second_factor(account, req.totp_code, passkey_factor(req)),
          {:ok, _session, tokens} <-
            Auth.create_session(account.id, Proto.from_uuid(req.device_id) || Ecto.UUID.generate(),
              client: client(conn)
@@ -82,6 +82,15 @@ defmodule LumiaWeb.AuthController do
       ProtoConn.render(conn, token_pair(tokens))
     end
   end
+
+  defp passkey_factor(%V1.PasswordSignInRequest{
+         passkey_challenge_id: "",
+         passkey_credential_json: ""
+       }),
+       do: nil
+
+  defp passkey_factor(%V1.PasswordSignInRequest{} = req),
+    do: {req.passkey_challenge_id, req.passkey_credential_json}
 
   def totp_enroll(conn, _params) do
     with {:ok, enrolment} <- Accounts.enroll_totp(conn.assigns.current_account_id) do

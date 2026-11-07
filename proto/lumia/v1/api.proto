@@ -34,6 +34,10 @@ message PasswordSignInRequest {
   // Second factor when required; the first attempt returns FAILED_PRECONDITION
   // with details.mfa = "totp" | "passkey".
   string totp_code = 5;
+  // The passkey factor: an assertion made for POST /auth/passkey/assert/start's
+  // challenge, by one of the account's passkeys.
+  string passkey_challenge_id = 6;
+  string passkey_credential_json = 7;
 }
 
 message IdentityProofSignInRequest {
@@ -180,7 +184,13 @@ message Passkey {
 // GET /auth/passkeys (signed in); DELETE /auth/passkeys/{passkey_id} → 204.
 message ListPasskeysResponse {
   repeated Passkey passkeys = 1;
+  // Whether a password sign-in must also present one of them (PUT /auth/passkeys/required).
+  bool required_for_password = 2;
 }
+
+// PUT /auth/passkeys/required — the passkey as the second factor of a password
+// sign-in; FAILED_PRECONDITION with state "no_passkey" when the account has none.
+message PasskeyRequirementRequest { bool required = 1; }
 
 // ---- Push (architecture 15.5, docs/specs/deployment.md) --------------------
 

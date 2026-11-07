@@ -178,7 +178,8 @@ Base path `/api/v1`. All endpoints require `Authorization: Bearer <access_token>
 | `POST /auth/passkey/register/finish` | `PasskeyRegisterFinishRequest` → 204 | The credential `PublicKeyCredential.toJSON()` made; `ALREADY_EXISTS` for a credential id already stored, `UNAUTHENTICATED` for a spent or unknown challenge. Attestation is not required. |
 | `POST /auth/passkey/assert/start` | `PasskeyAssertStartRequest` → `PasskeyChallenge` | Public. With a handle or email, the account's passkeys fill `allowCredentials` (an unknown one gets an empty list); without one, a discoverable passkey is expected. |
 | `POST /auth/passkey/assert/finish` | `PasskeyAssertFinishRequest` → `TokenPair` | Public. A signature count that did not move on an authenticator that counts is a clone and `UNAUTHENTICATED`. |
-| `GET /auth/passkeys` | → `ListPasskeysResponse` | |
+| `GET /auth/passkeys` | → `ListPasskeysResponse` | `required_for_password` says whether a password sign-in must also present one of them. |
+| `PUT /auth/passkeys/required` | `PasskeyRequirementRequest` → 204 | The passkey as the second factor: a password sign-in then answers `FAILED_PRECONDITION` with `details.mfa` `passkey` until the request carries an assertion (`passkey_challenge_id` and `passkey_credential_json`, from `POST /auth/passkey/assert/start` and the browser's ceremony) by one of the account's passkeys; a wrong one is `UNAUTHENTICATED`. `FAILED_PRECONDITION` with `state` `no_passkey` when the account has none to require. |
 | `DELETE /auth/passkeys/{passkey_id}` | → 204 | |
 | `POST /accounts` | `CreateAccountRequest` → `TokenPair` | Public. `POLICY_DENIED` if registration or identity-proof creation is off. |
 | `POST /auth/refresh` | `RefreshRequest` → `TokenPair` | Rotates the refresh token. The old one is invalid after use. |
