@@ -220,6 +220,30 @@ message PinnedKey {
   google.protobuf.Timestamp pinned_at = 5;
 }
 
+// The new backup key after a root rotation (specs/identity.md 4.5 step 5),
+// sealed to each native device of the identity but the rotating one:
+// XChaCha20-Poly1305 under a key agreed between the sender's ephemeral
+// X25519 key and the device's Ed25519 key read as X25519, carried to the
+// devices on the account log (events.proto BackupKeyHandedOff).
+message SealedBackupKey {
+  bytes device_id = 1;
+  bytes sender_ephemeral_public_key = 2;  // X25519, 32 bytes
+  bytes nonce = 3;                         // 24 bytes
+  bytes ciphertext = 4;                    // the 32-byte backup key
+}
+
+message BackupKeyHandoffBody {
+  bytes identity_id = 1;
+  uint64 roster_version = 2;  // the version the new root signed
+  repeated SealedBackupKey keys = 3;
+  google.protobuf.Timestamp issued_at = 4;
+}
+
+message BackupKeyHandoff {
+  Signature signature = 1;  // ROOT: the root the roster at roster_version names
+  bytes body = 2;           // serialized BackupKeyHandoffBody
+}
+
 // Plaintext of the identity backup (specs/identity.md 8).
 message IdentityBackupBody {
   uint64 version = 1;

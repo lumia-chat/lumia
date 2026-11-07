@@ -702,6 +702,17 @@ defmodule Lumia.V1.PublishRosterRequest do
   field :roster, 1, type: Lumia.V1.SignedRoster
 end
 
+defmodule Lumia.V1.PublishBackupKeyHandoffRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.PublishBackupKeyHandoffRequest",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :handoff, 1, type: Lumia.V1.BackupKeyHandoff
+end
+
 defmodule Lumia.V1.RevokeDeviceRequest do
   @moduledoc false
 

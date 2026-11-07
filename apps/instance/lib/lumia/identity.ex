@@ -354,6 +354,55 @@ defmodule Lumia.Identity do
     :ok
   end
 
+  @doc """
+  The new backup key after a root rotation, sealed to the identity's other
+  devices (spec 4.5 step 5): accepted when its body names this identity and
+  the roster version held here, and its signature is the held root's; then
+  put on the log of every account bound to the identity as
+  `BackupKeyHandedOff`, where each device opens its own copy. The instance
+  never sees the key.
+  """
+  def accept_backup_key_handoff(%V1.BackupKeyHandoff{} = handoff, identity_id) do
+    with {:ok, body} <- decode_handoff(handoff.body),
+         true <- body.identity_id == identity_id || {:error, :permission_denied},
+         %Roster{} = held <-
+           held_roster(identity_id) || {:error, {:failed_precondition, "no_roster"}},
+         true <-
+           held.version == body.roster_version ||
+             {:error, {:failed_precondition, "roster_version"}},
+         true <-
+           root_signed?(handoff.signature, handoff.body, held.root_public_key) ||
+             {:error, {:identity_proof_invalid, :handoff, :signature}} do
+      accounts =
+        Repo.all(from a in Account, where: a.identity_id == ^identity_id, select: a.id)
+
+      for account_id <- accounts do
+        {:ok, _} =
+          Accounts.append_event(
+            account_id,
+            {:backup_key_handed_off, %V1.BackupKeyHandedOff{handoff: handoff}}
+          )
+      end
+
+      :ok
+    end
+  end
+
+  defp decode_handoff(bytes) do
+    {:ok, V1.BackupKeyHandoffBody.decode(bytes)}
+  rescue
+    _ -> {:error, {:identity_proof_invalid, :handoff, :body}}
+  end
+
+  defp root_signed?(
+         %V1.Signature{signer_kind: :ROOT, signer_id: root, signature: sig},
+         bytes,
+         root
+       ),
+       do: Lumia.Crypto.verify(bytes, sig, root)
+
+  defp root_signed?(_signature, _bytes, _root), do: false
+
   @doc "Binds an account to an identity. Requires the account to be unbound or already bound to it."
   def link_account(account_id, identity_id) do
     case Repo.get(Account, account_id) do

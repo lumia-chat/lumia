@@ -163,6 +163,7 @@ message AccountEvent {
     ProfileUpdated profile_updated = 30;
     SessionRevoked session_revoked = 31;
     BlockListUpdated block_list_updated = 32;
+    BackupKeyHandedOff backup_key_handed_off = 33;  // a root rotation's new backup key, sealed to this device among others
   }
 }
 
@@ -216,3 +217,4 @@ message ContactRosterUpdated {
 message ProfileUpdated { Account account = 1; }
 message SessionRevoked { bytes session_id = 1; bytes device_id = 2; }
 message BlockListUpdated { repeated bytes blocked_identity_ids = 1; }
+message BackupKeyHandedOff { BackupKeyHandoff handoff = 1; }

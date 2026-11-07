@@ -44,6 +44,7 @@ pub const NAMES: &[&str] = &[
     "stale-roster",
     "device-revoke",
     "roster-rules",
+    "rotate-handoff",
     "last-resort",
     "reconnect",
 ];
@@ -101,6 +102,7 @@ async fn run_one(name: &str, env: &Env) -> Result<(), ClientError> {
         "stale-roster" => stale_roster(env).await,
         "device-revoke" => device_revoke(env).await,
         "roster-rules" => roster_rules(env).await,
+        "rotate-handoff" => rotate_handoff(env).await,
         "last-resort" => last_resort(env).await,
         "reconnect" => reconnect(env).await,
         other => Err(ClientError::State(format!(
@@ -463,6 +465,81 @@ async fn device_revoke(env: &Env) -> Result<(), ClientError> {
         other => return Err(fail(format!("expected DeviceRevoked at v3, got {other:?}"))),
     }
     println!("   a revoked b with its device key and a password reauth; b is out");
+    Ok(())
+}
+
+/// A root rotation hands the new backup key to the other device (identity
+/// spec 4.5 step 5): a and b share an identity; a rotates from the
+/// phrase and publishes the handoff; b finds it on its account log,
+/// accepts it against the rotated roster it adopted, and holds the same
+/// backup key as a. A third device added later finds no copy.
+async fn rotate_handoff(env: &Env) -> Result<(), ClientError> {
+    let base = env.api.base().to_string();
+    let anon = Api::new(&base);
+    let mut a = Throwaway::open(&env.scratch, "rotate-a")?;
+    let mut b = Throwaway::open(&env.scratch, "rotate-b")?;
+    let password = "correct horse battery staple";
+
+    let tokens = anon
+        .create_account(&handle("rotate"), "", password, "")
+        .await?;
+    let api_a = Api::new(&base).with_tokens(pair(&tokens));
+    let created = a.device().create("a")?;
+    a.device().link_account(&api_a, password).await?;
+    link(&mut a, &mut b, &api_a, &anon).await?;
+    let tokens_b = b.device().sign_in(&anon).await?;
+    let api_b = Api::new(&base).with_tokens(pair(&tokens_b));
+    let before = b.keys.get("backup_key")?.unwrap_or_default();
+
+    let rotated = a.device().rotate(&api_a, &created.phrase).await?;
+    let handoff = rotated
+        .handoff
+        .ok_or_else(|| fail("the rotation made no handoff for b"))?;
+    api_a.publish_backup_key_handoff(handoff).await?;
+    println!(
+        "   a rotated the root to v{} and handed the backup key over",
+        rotated.version
+    );
+
+    // b adopts the rotated roster first, as the app does on RosterUpdated,
+    // then takes the handoff that follows it on the log.
+    let held = api_b.get_roster().await?;
+    let held_b64 = held
+        .roster
+        .map(|r| {
+            base64::Engine::encode(
+                &base64::engine::general_purpose::STANDARD,
+                prost::Message::encode_to_vec(&r),
+            )
+        })
+        .ok_or_else(|| fail("no roster held for b"))?;
+    b.device().adopt_held(&held_b64)?;
+    let events = api_b.account_events(0).await?.events;
+    let handed = events
+        .iter()
+        .find_map(|ev| match &ev.payload {
+            Some(lumia_core::proto::account_event::Payload::BackupKeyHandedOff(h)) => {
+                h.handoff.clone()
+            }
+            _ => None,
+        })
+        .ok_or_else(|| fail("no BackupKeyHandedOff on b's account log"))?;
+    let key = b
+        .device()
+        .accept_handoff(&handed)?
+        .ok_or_else(|| fail("the handoff carried no copy for b"))?;
+    let a_key = a.keys.get("backup_key")?.unwrap_or_default();
+    if key != a_key || key == before {
+        return Err(fail("b did not end with a's new backup key"));
+    }
+    println!("   b opened its copy: the same new backup key as a, not the old one");
+
+    let mut c = Throwaway::open(&env.scratch, "rotate-c")?;
+    link(&mut a, &mut c, &api_a, &anon).await?;
+    if c.device().accept_handoff(&handed)?.is_some() {
+        return Err(fail("a device added after the rotation found a copy"));
+    }
+    println!("   a device linked afterwards finds no copy (it got the key through its link)");
     Ok(())
 }
 

@@ -356,6 +356,11 @@ defmodule Lumia.V1.AccountEvent do
     type: Lumia.V1.BlockListUpdated,
     json_name: "blockListUpdated",
     oneof: 0
+
+  field :backup_key_handed_off, 33,
+    type: Lumia.V1.BackupKeyHandedOff,
+    json_name: "backupKeyHandedOff",
+    oneof: 0
 end
 
 defmodule Lumia.V1.MembershipAdded do
@@ -522,4 +527,15 @@ defmodule Lumia.V1.BlockListUpdated do
     syntax: :proto3
 
   field :blocked_identity_ids, 1, repeated: true, type: :bytes, json_name: "blockedIdentityIds"
+end
+
+defmodule Lumia.V1.BackupKeyHandedOff do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.BackupKeyHandedOff",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :handoff, 1, type: Lumia.V1.BackupKeyHandoff
 end

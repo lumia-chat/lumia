@@ -10,6 +10,7 @@
 //!   existing device encrypts for it.
 //! * [`proof`]: signing a host's challenge with a device key.
 
+pub mod handoff;
 pub mod keys;
 pub mod link;
 pub mod phrase;

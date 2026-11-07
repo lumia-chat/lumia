@@ -307,6 +307,46 @@ defmodule Lumia.V1.PinnedKey do
   field :pinned_at, 5, type: Google.Protobuf.Timestamp, json_name: "pinnedAt"
 end
 
+defmodule Lumia.V1.SealedBackupKey do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.SealedBackupKey",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :device_id, 1, type: :bytes, json_name: "deviceId"
+  field :sender_ephemeral_public_key, 2, type: :bytes, json_name: "senderEphemeralPublicKey"
+  field :nonce, 3, type: :bytes
+  field :ciphertext, 4, type: :bytes
+end
+
+defmodule Lumia.V1.BackupKeyHandoffBody do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.BackupKeyHandoffBody",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :identity_id, 1, type: :bytes, json_name: "identityId"
+  field :roster_version, 2, type: :uint64, json_name: "rosterVersion"
+  field :keys, 3, repeated: true, type: Lumia.V1.SealedBackupKey
+  field :issued_at, 4, type: Google.Protobuf.Timestamp, json_name: "issuedAt"
+end
+
+defmodule Lumia.V1.BackupKeyHandoff do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.BackupKeyHandoff",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :signature, 1, type: Lumia.V1.Signature
+  field :body, 2, type: :bytes
+end
+
 defmodule Lumia.V1.IdentityBackupBody do
   @moduledoc false
 

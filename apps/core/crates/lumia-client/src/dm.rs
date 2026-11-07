@@ -10,6 +10,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use base64::Engine as _;
+use lumia_core::identity::handoff::open_handoff;
 use lumia_core::identity::keys::{
     device_signature, open, random, seal, signing_key, ts_nanos, verify,
 };
@@ -24,10 +25,10 @@ use lumia_core::mls::{
     KEY_PACKAGE_TOP_UP_BELOW,
 };
 use lumia_core::proto::{
-    account_event, command, dm_operation, event, AccountEvent, Channel, ChannelKind, Command,
-    DmDelete, DmOperation, DmSend, EncryptedKind, EncryptedPayload, Event, HistoryChunkBody,
-    HistoryEntry, HistoryManifestBody, HistoryManifestEntry, SendEncrypted, SignedHistoryManifest,
-    Welcome,
+    account_event, command, dm_operation, event, AccountEvent, BackupKeyHandoff, Channel,
+    ChannelKind, Command, DmDelete, DmOperation, DmSend, EncryptedKind, EncryptedPayload, Event,
+    HistoryChunkBody, HistoryEntry, HistoryManifestBody, HistoryManifestEntry, SendEncrypted,
+    SignedHistoryManifest, Welcome,
 };
 use lumia_core::store::{OutboxEntry, Store as _};
 use lumia_core::sync::Notice;
@@ -43,6 +44,10 @@ use crate::ClientError;
 pub enum Outcome {
     /// Something to show.
     Print(String),
+    /// A root rotation's new backup key arrived on the account log, sealed
+    /// to this device among others: the app opens it with the identity's
+    /// stores and keeps it.
+    BackupKeyHandoff(BackupKeyHandoff),
     /// Send this command on the gateway (it is already in the outbox).
     Send(Command),
     /// Subscribe to this channel: a personal DM the account can now see.
@@ -265,6 +270,36 @@ impl DmEngine {
 
     /// Records this device's account id on the instance (from `Welcome`),
     /// so its own participant entry resolves without a roster fetch.
+    /// Opens this device's copy of a root rotation's backup-key handoff
+    /// (identity spec 4.5 step 5) against the roster this engine holds for
+    /// its identity, the rotated one once `RosterUpdated` came before it
+    /// on the log, and keeps the key here; the caller stores it. `None`
+    /// when the handoff carries no copy for this device.
+    ///
+    /// # Errors
+    /// When the handoff is not by the held root or for the held version,
+    /// or the copy does not open.
+    pub fn accept_backup_key_handoff(
+        &mut self,
+        handoff: &BackupKeyHandoff,
+    ) -> Result<Option<Vec<u8>>, ClientError> {
+        let held = self
+            .rosters
+            .get(&self.me.identity_id)
+            .ok_or_else(|| ClientError::State("no roster held for this identity".into()))?;
+        let key = open_handoff(
+            handoff,
+            &held.root_public_key,
+            held.version,
+            &self.me.device_id,
+            &signing_key(&self.seed)?,
+        )?;
+        if let Some(key) = &key {
+            self.backup_key = Some(key.clone());
+        }
+        Ok(key)
+    }
+
     pub fn set_account(&mut self, account_id: Vec<u8>) {
         self.account_identity
             .insert(account_id.clone(), self.me.identity_id.clone());
@@ -330,6 +365,12 @@ impl DmEngine {
                 }
                 Ok(Vec::new())
             }
+            Some(account_event::Payload::BackupKeyHandedOff(handed)) => Ok(handed
+                .handoff
+                .clone()
+                .map(Outcome::BackupKeyHandoff)
+                .into_iter()
+                .collect()),
             Some(account_event::Payload::ContactRosterUpdated(_)) => {
                 // A participant's roster changed: forget cached rosters other
                 // than our own so the next event re-fetches them.

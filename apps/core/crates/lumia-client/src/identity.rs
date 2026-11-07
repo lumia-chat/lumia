@@ -5,6 +5,7 @@
 
 use base64::Engine;
 use ed25519_dalek::SigningKey;
+use lumia_core::identity::handoff::{open_handoff, seal_handoff};
 use lumia_core::identity::keys::{
     device_signature, generate_signing_key, open, seal, signing_key, ts_nanos,
 };
@@ -17,9 +18,9 @@ use lumia_core::identity::roster::{
 };
 use lumia_core::keystore::Keystore;
 use lumia_core::proto::{
-    ChallengePurpose, CreateLinkBundleRequest, DeviceKind, GetRosterResponse, HostAccount,
-    IdentityBackupBody, LinkBundleBody, LinkRequest, ProfileBody, SignedProfile, SignedRoster,
-    TokenPair,
+    BackupKeyHandoff, ChallengePurpose, CreateLinkBundleRequest, DeviceKind, GetRosterResponse,
+    HostAccount, IdentityBackupBody, LinkBundleBody, LinkRequest, ProfileBody, SignedProfile,
+    SignedRoster, TokenPair,
 };
 use lumia_core::store::Store;
 use lumia_core::wire;
@@ -684,11 +685,60 @@ impl<S: Store, K: Keystore> Device<'_, S, K> {
         let old_backup_key = self.keystore.get("backup_key")?.unwrap_or_default();
         self.keystore.put("backup_key", &new.backup_key)?;
         self.save_roster(&verified.identity_id, &roster)?;
+        // Step 5: the new backup key for the identity's other native
+        // devices, sealed to each and signed by the new root while this
+        // device still holds it; the caller publishes it to every instance.
+        let others: Vec<(Vec<u8>, Vec<u8>)> = rotated
+            .devices
+            .iter()
+            .filter(|(id, info)| **id != self.device_id && info.kind != DeviceKind::Web)
+            .map(|(id, info)| (id.clone(), info.public_key.clone()))
+            .collect();
+        let handoff = if others.is_empty() {
+            None
+        } else {
+            Some(seal_handoff(
+                &verified.identity_id,
+                rotated.version,
+                &new.root,
+                &new.backup_key,
+                &others,
+                now(),
+            )?)
+        };
         Ok(Rotated {
             phrase: new_phrase.words(),
             version: rotated.version,
             old_backup_key,
+            handoff,
         })
+    }
+
+    /// Takes the backup key a root rotation handed to this device (spec
+    /// 4.5 step 5), from the account log: verified against the held
+    /// roster's root and version, opened with this device's key, kept in
+    /// the keystore. `None` when the handoff carries no copy for this
+    /// device (a web device, or one added after it was made).
+    ///
+    /// # Errors
+    /// When the handoff is not by the held roster's root, is for another
+    /// version than the one held, or this device's copy does not open.
+    pub fn accept_handoff(
+        &mut self,
+        handoff: &BackupKeyHandoff,
+    ) -> Result<Option<Vec<u8>>, ClientError> {
+        let verified = self.roster()?;
+        let key = open_handoff(
+            handoff,
+            &verified.root_public_key,
+            verified.version,
+            &self.device_id,
+            &self.device_key()?,
+        )?;
+        if let Some(key) = &key {
+            self.keystore.put("backup_key", key)?;
+        }
+        Ok(key)
     }
 
     /// Revokes a device with the root, from the phrase (spec 4.3 and 4.4's
@@ -865,6 +915,10 @@ pub struct Rotated {
     /// The backup key the old phrase derived, for re-wrapping what it
     /// sealed; empty when this device held none.
     pub old_backup_key: Vec<u8>,
+    /// The new backup key sealed to the identity's other native devices
+    /// (spec 4.5 step 5), to publish to every instance; `None` when there
+    /// is no other native device.
+    pub handoff: Option<BackupKeyHandoff>,
 }
 
 /// The held roster a `CONFLICT` carries, when it does.

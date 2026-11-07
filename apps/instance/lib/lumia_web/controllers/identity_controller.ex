@@ -149,6 +149,28 @@ defmodule LumiaWeb.IdentityController do
     end
   end
 
+  # Identity spec 4.5 step 5: the rotating device hands the new backup key
+  # to the identity's other devices; verified here against the held roster
+  # and put on every account of the identity's log, where each device opens
+  # its own copy.
+  def publish_backup_key_handoff(conn, _params) do
+    with {:ok, identity_id} <- bound_identity(conn),
+         {:ok, %V1.PublishBackupKeyHandoffRequest{handoff: %V1.BackupKeyHandoff{} = handoff}} <-
+           ProtoConn.decode(conn, V1.PublishBackupKeyHandoffRequest),
+         :ok <- Identity.accept_backup_key_handoff(handoff, identity_id) do
+      ProtoConn.no_content(conn)
+    else
+      {:error, {:identity_proof_invalid, step, reason}} ->
+        ProtoConn.render_error(conn, :identity_proof_invalid, %{
+          "step" => to_string(step),
+          "reason" => to_string(reason)
+        })
+
+      other ->
+        other
+    end
+  end
+
   def revoke_device(conn, _params) do
     account_id = conn.assigns.current_account_id
 

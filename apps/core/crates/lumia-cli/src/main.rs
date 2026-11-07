@@ -881,7 +881,7 @@ async fn open_dm(
 /// Runs the gateway with the DM engine attached until `mode` is satisfied.
 /// `create` means this device opened the channel and creates the group.
 async fn dm_loop(
-    ctx: Ctx,
+    mut ctx: Ctx,
     api: Api,
     mut engine: DmEngine,
     channels: Vec<Vec<u8>>,
@@ -974,6 +974,16 @@ async fn dm_loop(
             for outcome in outcomes {
                 match outcome {
                     Outcome::Print(s) => println!("-- {s}"),
+                    Outcome::BackupKeyHandoff(handoff) => {
+                        match engine.accept_backup_key_handoff(&handoff) {
+                            Ok(Some(key)) => {
+                                ctx.keystore.put("backup_key", &key)?;
+                                println!("-- the backup key of a root rotation arrived");
+                            }
+                            Ok(None) => {}
+                            Err(e) => println!("-- backup key handoff refused: {e}"),
+                        }
+                    }
                     Outcome::Send(cmd) => {
                         if crash_after_persist && matches!(mode, DmMode::Send(..)) {
                             println!("-- crashing between the persist and the send");
@@ -1236,6 +1246,17 @@ async fn identity_cmd(ctx: &mut Ctx, api: &Api, action: IdentityCmd) -> Result<(
             // The roster everywhere, then every instance's manifests under
             // the new backup key and its identity backup rewritten.
             publish_everywhere(ctx).await?;
+            // The new backup key to the identity's other native devices,
+            // through their account logs on every instance (spec 4.5 step 5).
+            if let Some(handoff) = &rotated.handoff {
+                for (host, base, tokens) in instances(ctx)? {
+                    let api = Api::new(&base).with_tokens(tokens);
+                    match api.publish_backup_key_handoff(handoff.clone()).await {
+                        Ok(()) => println!("  {host}: backup key handed to the other devices"),
+                        Err(e) => println!("  {host}: backup key not handed over ({e})"),
+                    }
+                }
+            }
             if !rotated.old_backup_key.is_empty() {
                 for (host, base, tokens) in instances(ctx)? {
                     let api = Api::new(&base).with_tokens(tokens);

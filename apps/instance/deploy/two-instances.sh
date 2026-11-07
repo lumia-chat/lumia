@@ -110,7 +110,7 @@ for url in "$flagship" "$community"; do
   d="$work/scenario-$(echo "$url" | tr -c 'a-z0-9' '_')"
   "$cli" --data-dir "$d" instance add "$url" >/dev/null
   "$cli" --data-dir "$d" account create --handle "sc$stamp$(date +%N | cut -c1-4)" --password "$password" >/dev/null
-  for name in token-rotation reconnect stale-roster device-revoke roster-rules; do
+  for name in token-rotation reconnect stale-roster device-revoke roster-rules rotate-handoff; do
     "$cli" --data-dir "$d" scenario "$name" >"$work/$name.log" 2>&1 || { echo "FAIL: scenario $name on $url; see $work/$name.log"; exit 1; }
   done
   echo "scenarios pass on $url"

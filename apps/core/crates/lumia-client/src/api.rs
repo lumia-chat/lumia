@@ -11,16 +11,17 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use lumia_core::proto::InstanceInfo;
 use lumia_core::proto::{
-    reauth_request, Account, AccountSnapshot, Ack, ChallengePurpose, ChallengeRequest,
-    ChallengeResponse, Channel, ChannelSnapshot, ClaimKeyPackageRequest, ClaimKeyPackageResponse,
-    Command, CreateAccountRequest, CreateChannelRequest, CreateLinkBundleRequest,
-    CreateLinkBundleResponse, CreateServerRequest, Error as ApiError, ErrorCode,
-    GetGroupInfoResponse, GetLinkBundleResponse, GetRosterResponse, IdentityProof,
+    reauth_request, Account, AccountSnapshot, Ack, BackupKeyHandoff, ChallengePurpose,
+    ChallengeRequest, ChallengeResponse, Channel, ChannelSnapshot, ClaimKeyPackageRequest,
+    ClaimKeyPackageResponse, Command, CreateAccountRequest, CreateChannelRequest,
+    CreateLinkBundleRequest, CreateLinkBundleResponse, CreateServerRequest, Error as ApiError,
+    ErrorCode, GetGroupInfoResponse, GetLinkBundleResponse, GetRosterResponse, IdentityProof,
     IdentityProofSignInRequest, ListAccountEventsResponse, ListChannelsResponse,
     ListEventsResponse, ListMembersResponse, ListServersResponse, OpenPersonalDmRequest,
-    OpenPersonalDmResponse, PasswordSignInRequest, PublishGroupInfoRequest,
-    PublishKeyPackagesRequest, PublishRosterRequest, PushSubscription, ReauthRequest,
-    ReauthResponse, RefreshRequest, RevokeDeviceRequest, Server, SignedRoster, TokenPair,
+    OpenPersonalDmResponse, PasswordSignInRequest, PublishBackupKeyHandoffRequest,
+    PublishGroupInfoRequest, PublishKeyPackagesRequest, PublishRosterRequest, PushSubscription,
+    ReauthRequest, ReauthResponse, RefreshRequest, RevokeDeviceRequest, Server, SignedRoster,
+    TokenPair,
 };
 use lumia_core::proto::{
     CreateInviteRequest, HandoffResponse, Invite, InvitePreview, ListInvitesResponse,
@@ -258,6 +259,25 @@ impl Api {
             "/api/v1/identity/roster",
             &PublishRosterRequest {
                 roster: Some(roster),
+            },
+        )
+        .await
+    }
+
+    /// `POST /identity/backup-key-handoff`: the new backup key after a root
+    /// rotation, sealed to the identity's other devices, for their account
+    /// logs here.
+    ///
+    /// # Errors
+    /// On transport failure or an API error.
+    pub async fn publish_backup_key_handoff(
+        &self,
+        handoff: BackupKeyHandoff,
+    ) -> Result<(), ClientError> {
+        self.post_empty(
+            "/api/v1/identity/backup-key-handoff",
+            &PublishBackupKeyHandoffRequest {
+                handoff: Some(handoff),
             },
         )
         .await

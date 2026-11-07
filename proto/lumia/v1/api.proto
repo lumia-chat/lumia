@@ -392,6 +392,10 @@ message UpdateBlockListRequest {
 
 message PublishRosterRequest { SignedRoster roster = 1; }
 
+// POST /identity/backup-key-handoff: the rotating device hands the new backup key
+// to the identity's other devices through their account logs (specs/identity.md 4.5).
+message PublishBackupKeyHandoffRequest { BackupKeyHandoff handoff = 1; }
+
 message RevokeDeviceRequest {
   // New roster with the device in `revoked`.
   SignedRoster roster = 1;

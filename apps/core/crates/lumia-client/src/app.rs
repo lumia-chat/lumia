@@ -625,6 +625,9 @@ fn dispatch(
     for outcome in outcomes {
         match outcome {
             Outcome::Print(message) => emit(AppEvent::DmNote { message }),
+            // Taken by the gateway task before dispatch, where the
+            // identity's stores are at hand.
+            Outcome::BackupKeyHandoff(_) => {}
             Outcome::Send(cmd) => {
                 if let Some(tx) = commands {
                     let _ = tx.unbounded_send(GatewayCommand::Send(cmd));
@@ -1466,7 +1469,41 @@ impl App {
                     };
                     drop(e);
                     match outcomes {
-                        Ok(out) => dispatch(out, Some(&dtx), Some(&task_sink)),
+                        Ok(mut out) => {
+                            let handoffs: Vec<_> = out
+                                .iter()
+                                .filter_map(|o| match o {
+                                    Outcome::BackupKeyHandoff(h) => Some(h.clone()),
+                                    _ => None,
+                                })
+                                .collect();
+                            out.retain(|o| !matches!(o, Outcome::BackupKeyHandoff(_)));
+                            for handoff in handoffs {
+                                let opened =
+                                    engine.lock().await.accept_backup_key_handoff(&handoff);
+                                match opened {
+                                    Ok(Some(key)) => {
+                                        let stored =
+                                            app.identity.lock().await.keys.put("backup_key", &key);
+                                        task_sink(match stored {
+                                            Ok(()) => AppEvent::DmNote {
+                                                message:
+                                                    "the backup key of a root rotation arrived"
+                                                        .into(),
+                                            },
+                                            Err(err) => AppEvent::DmError {
+                                                message: err.to_string(),
+                                            },
+                                        });
+                                    }
+                                    Ok(None) => {}
+                                    Err(err) => task_sink(AppEvent::DmError {
+                                        message: err.to_string(),
+                                    }),
+                                }
+                            }
+                            dispatch(out, Some(&dtx), Some(&task_sink));
+                        }
                         Err(err) => task_sink(AppEvent::DmError {
                             message: err.to_string(),
                         }),

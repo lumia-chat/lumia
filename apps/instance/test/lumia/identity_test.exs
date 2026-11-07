@@ -321,6 +321,72 @@ defmodule Lumia.IdentityTest do
       assert verified.root_public_key == new.root_pub
     end
 
+    test "after a rotation the new root hands the backup key to the devices through their account logs",
+         ctx do
+      new = identity()
+
+      v2 =
+        roster(ctx.identity, :root,
+          version: 2,
+          rotations: [rotation(ctx.identity, new.root_pub)],
+          root_pub: new.root_pub,
+          root_priv: new.root_priv,
+          devices: [cert(ctx.identity, ctx.phone)]
+        )
+
+      {:ok, _} = Identity.accept_roster(v2, :publish)
+
+      handoff = fn version, root ->
+        body =
+          V1.BackupKeyHandoffBody.encode(%V1.BackupKeyHandoffBody{
+            identity_id: ctx.identity.identity_id,
+            roster_version: version,
+            keys: [
+              %V1.SealedBackupKey{
+                device_id: ctx.phone.id,
+                sender_ephemeral_public_key: :crypto.strong_rand_bytes(32),
+                nonce: :crypto.strong_rand_bytes(24),
+                ciphertext: :crypto.strong_rand_bytes(48)
+              }
+            ]
+          })
+
+        %V1.BackupKeyHandoff{
+          body: body,
+          signature: %V1.Signature{
+            signer_kind: :ROOT,
+            signer_id: root.root_pub,
+            signature: Crypto.sign(body, root.root_priv)
+          }
+        }
+      end
+
+      # The old root cannot hand anything over once rotated away.
+      assert {:error, {:identity_proof_invalid, :handoff, :signature}} =
+               Identity.accept_backup_key_handoff(
+                 handoff.(2, ctx.identity),
+                 ctx.identity.identity_id
+               )
+
+      # A handoff for a version this instance does not hold waits for the roster.
+      assert {:error, {:failed_precondition, "roster_version"}} =
+               Identity.accept_backup_key_handoff(handoff.(3, new), ctx.identity.identity_id)
+
+      # Another identity's device cannot put one on this identity's log.
+      assert {:error, :permission_denied} =
+               Identity.accept_backup_key_handoff(handoff.(2, new), identity().identity_id)
+
+      accepted = handoff.(2, new)
+      assert :ok = Identity.accept_backup_key_handoff(accepted, ctx.identity.identity_id)
+
+      assert Enum.any?(Accounts.events_after(ctx.account.id, 0), fn event ->
+               match?(
+                 {:backup_key_handed_off, %V1.BackupKeyHandedOff{handoff: ^accepted}},
+                 event.payload
+               )
+             end)
+    end
+
     @tag failure_injection: [identity: 4]
     test "a roster that drops a revocation names the step", ctx do
       laptop = device("laptop")
