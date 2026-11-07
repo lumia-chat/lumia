@@ -63,7 +63,12 @@ defmodule LumiaWeb.Gateway.SessionChannelTest do
   defp cursors(channels),
     do: Enum.map(channels, &%V1.Cursor{log_id: Proto.uuid(&1.id), seq: 0})
 
-  def count_query(_event, _measurements, %{source: source}, pid), do: send(pid, {:query, source})
+  # Only the session's own queries count: the other tests of the suite run
+  # their own in the same VM (and the handler must not raise on a query
+  # without a source, which would detach it).
+  def count_query(_event, _measurements, metadata, {pid, session}) do
+    if self() == session, do: send(pid, {:query, Map.get(metadata, :source)})
+  end
 
   defp flush_queries(count \\ 0) do
     receive do
@@ -314,7 +319,13 @@ defmodule LumiaWeb.Gateway.SessionChannelTest do
       actor = %{account_id: ctx.account.id, device_id: ctx.device_id}
       {:ok, _} = Events.append(ctx.channel.id, actor, send_message(ctx.channel.id, "m1"))
       {_, socket} = join!(ctx.socket)
-      :telemetry.attach(ctx.test, [:lumia, :repo, :query], &__MODULE__.count_query/4, self())
+
+      :telemetry.attach(
+        ctx.test,
+        [:lumia, :repo, :query],
+        &__MODULE__.count_query/4,
+        {self(), socket.channel_pid}
+      )
 
       assert %V1.ChannelSubscribeResult{status: :RESUMED, last_seq: 1} =
                subscribe(socket, ctx.channel.id, 1)
@@ -339,10 +350,17 @@ defmodule LumiaWeb.Gateway.SessionChannelTest do
       send_frame(warm, {:subscribe, %V1.Subscribe{cursors: cursors(channels)}})
       assert_push "frame", %V1.ServerFrame{frame: {:subscribe_result, _}}
 
-      :telemetry.attach(ctx.test, [:lumia, :repo, :query], &__MODULE__.count_query/4, self())
       {:ok, _, tokens} = Auth.create_session(ctx.account.id, Ecto.UUID.generate())
       {:ok, socket} = connect(Socket, %{}, connect_info: %{auth_token: tokens.access_token})
       {_, socket} = join!(socket)
+
+      :telemetry.attach(
+        ctx.test,
+        [:lumia, :repo, :query],
+        &__MODULE__.count_query/4,
+        {self(), socket.channel_pid}
+      )
+
       flush_queries()
 
       send_frame(socket, {:subscribe, %V1.Subscribe{cursors: cursors(Enum.take(channels, 2))}})

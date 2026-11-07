@@ -174,7 +174,7 @@ defmodule Lumia.PushTest do
       cek = hkdf(prk, "Content-Encoding: aes128gcm" <> <<0>>, 16)
       nonce = hkdf(prk, "Content-Encoding: nonce" <> <<0>>, 12)
       size = byte_size(rest) - 16
-      <<ciphertext::binary-size(size), tag::binary-16>> = rest
+      <<ciphertext::binary-size(^size), tag::binary-16>> = rest
       padded = :crypto.crypto_one_time_aead(:aes_128_gcm, cek, nonce, ciphertext, "", tag, false)
       String.trim_trailing(padded, <<2>>)
     end
