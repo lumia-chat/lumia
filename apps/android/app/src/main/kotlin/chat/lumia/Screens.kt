@@ -83,6 +83,7 @@ import uniffi.lumia_ffi.InviteSummary
 import uniffi.lumia_ffi.MemberSummary
 import uniffi.lumia_ffi.ServerSummary
 import chat.lumia.kit.LumiaCard
+import chat.lumia.kit.LumiaChoice
 
 // Conversation
 
@@ -560,11 +561,16 @@ fun ProfileScreen(store: AppStore, session: LumiaSession, back: () -> Unit) {
     var busy by rememberSaveable { mutableStateOf(false) }
     var error by rememberSaveable { mutableStateOf("") }
     var saved by rememberSaveable { mutableStateOf(false) }
+    // The status (protocol 6.7): chosen here, kept by the core, sent with the servers watched.
+    var status by rememberSaveable { mutableStateOf("ONLINE") }
+    var customStatus by rememberSaveable { mutableStateOf("") }
+    var statusSaved by rememberSaveable { mutableStateOf(false) }
     // The form waits for the profile held: fields shown before it lands
     // would be overwritten by it, typing and all.
     var loaded by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
+        session.status()?.let { status = it.status; customStatus = it.customStatus }
         profile = runCatching { session.profile() }.getOrNull()
         displayName = profile?.displayName ?: ""
         pronouns = profile?.pronouns ?: ""
@@ -577,6 +583,20 @@ fun ProfileScreen(store: AppStore, session: LumiaSession, back: () -> Unit) {
 
     PanelScreen(back = "Home", onBack = back, title = "Profile", subtitle = "How people see you") {
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).navigationBarsPadding().imePadding().padding(LumiaTokens.space16), verticalArrangement = Arrangement.spacedBy(LumiaTokens.space12)) {
+            LumiaCard("Status", "What people see beside your name in a server's member list.") {
+                Column(verticalArrangement = Arrangement.spacedBy(LumiaTokens.space12)) {
+                    LumiaChoice(listOf("ONLINE" to "Online", "AWAY" to "Away", "DO_NOT_DISTURB" to "Do not disturb"), status, { status = it })
+                    LumiaField("Custom status", customStatus, { customStatus = it }, placeholder = "At lunch")
+                    if (statusSaved) Text("Status saved.", style = LumiaTokens.textMeta.style, color = LumiaTokens.inkSecondary.color)
+                    LumiaPrimaryButton("Save status", modifier = Modifier.fillMaxWidth()) {
+                        scope.launch {
+                            statusSaved = false
+                            runCatching { session.setStatus(status, customStatus) }
+                            statusSaved = true
+                        }
+                    }
+                }
+            }
             if (session.hasIdentity && loaded) {
                 LumiaCard(handleTitle, subtitle) {
                     Column(verticalArrangement = Arrangement.spacedBy(LumiaTokens.space12)) {

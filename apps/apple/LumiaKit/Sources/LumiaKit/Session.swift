@@ -47,6 +47,8 @@ public final class LumiaSession {
     /// Who is present in the servers on screen (protocol 6.7), by server
     /// then account: `ONLINE`, `AWAY` or `DO_NOT_DISTURB`.
     public private(set) var serverPresence: [String: [String: String]] = [:]
+    /// Custom status by server then account, beside the presence.
+    public private(set) var serverCustomStatus: [String: [String: String]] = [:]
     private var watchingServerIDs: [String] = []
     /// Public profiles looked up one at a time; nil once the instance refused one.
     private var profiles: [String: MemberSummary?] = [:]
@@ -411,6 +413,7 @@ public final class LumiaSession {
         switch event {
         case .welcomed:
             serverPresence = [:]
+            serverCustomStatus = [:]
             watchPresence(serverIDs: watchingServerIDs)
             connection = .connected
             await refreshSnapshot()
@@ -437,9 +440,17 @@ public final class LumiaSession {
             lastError = message
         case let .presenceDiff(serverId, joined, updated, leftAccountIds):
             var server = serverPresence[serverId] ?? [:]
-            for p in joined + updated { server[p.accountId] = p.status }
-            for id in leftAccountIds { server.removeValue(forKey: id) }
+            var custom = serverCustomStatus[serverId] ?? [:]
+            for p in joined + updated {
+                server[p.accountId] = p.status
+                custom[p.accountId] = p.customStatus
+            }
+            for id in leftAccountIds {
+                server.removeValue(forKey: id)
+                custom.removeValue(forKey: id)
+            }
             serverPresence[serverId] = server
+            serverCustomStatus[serverId] = custom
         case .acked, .error, .subscriptionFailed, .dmNote:
             break
         }
@@ -452,7 +463,21 @@ public final class LumiaSession {
     public func watchPresence(serverIDs: [String]) {
         watchingServerIDs = serverIDs
         guard connection == .connected else { return }
-        Task { try? await client.setPresence(status: "ONLINE", watchServerIDs: serverIDs) }
+        Task { try? await client.watchPresence(serverIDs: serverIDs) }
+    }
+
+    /// The status this person chose and their custom status text.
+    public func status() async throws -> StatusSummary { try await client.status() }
+
+    /// Chooses the status (`ONLINE`, `AWAY`, `DO_NOT_DISTURB`) and custom
+    /// text; the core keeps it and sends it with the servers watched.
+    public func setStatus(status: String, customStatus: String) async throws {
+        try await client.setStatus(status: status, customStatus: customStatus)
+    }
+
+    /// The custom status an account set, as its presence in a server carries it; empty when none or away.
+    public func customStatus(of accountID: String, in serverID: String) -> String {
+        serverCustomStatus[serverID]?[accountID] ?? ""
     }
 
     /// An account's presence in a server, or nil when it is not there.

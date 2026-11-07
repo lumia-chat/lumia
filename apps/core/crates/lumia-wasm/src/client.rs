@@ -227,19 +227,33 @@ impl Client {
         self.app.revoke_invite(&link_or_code).await.map_err(js)
     }
 
-    /// This client's status and the servers it has on screen (protocol 6.7).
+    /// The servers this client has on screen, whose presence it wants
+    /// (protocol 6.7); sent with the chosen status.
     ///
     /// # Errors
     /// When not started or an id is malformed.
-    #[wasm_bindgen(js_name = setPresence)]
-    pub fn set_presence(
-        &self,
-        status: String,
-        watch_server_ids: Vec<String>,
-    ) -> Result<(), JsError> {
-        self.app
-            .set_presence(&status, &watch_server_ids)
-            .map_err(js)
+    #[wasm_bindgen(js_name = watchPresence)]
+    pub fn watch_presence(&self, watch_server_ids: Vec<String>) -> Result<(), JsError> {
+        self.app.watch_presence(&watch_server_ids).map_err(js)
+    }
+
+    /// The status this person chose and their custom status text.
+    ///
+    /// # Errors
+    /// On a store failure.
+    #[wasm_bindgen(js_name = status)]
+    pub fn status(&self) -> Result<JsValue, JsError> {
+        to_js(&self.app.status().map_err(js)?)
+    }
+
+    /// Chooses the status (`ONLINE`, `AWAY`, `DO_NOT_DISTURB`) and custom
+    /// text; sent at once when the gateway is up, and on every welcome.
+    ///
+    /// # Errors
+    /// On a store failure.
+    #[wasm_bindgen(js_name = setStatus)]
+    pub fn set_status(&self, status: String, custom_status: String) -> Result<(), JsError> {
+        self.app.set_status(&status, &custom_status).map_err(js)
     }
 
     /// `POST /servers`: a server this account owns.

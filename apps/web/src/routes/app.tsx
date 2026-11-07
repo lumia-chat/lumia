@@ -20,7 +20,7 @@ import {
   type ChannelItem,
 } from "../design/components";
 import { ClientError, type ChannelSummary, type InviteSummary, type MessageSummary, type ServerSummary } from "../client/bridge";
-import { checkPush, client, connection, enableNotifications, membersQuery, messagesQuery, presence, presenceOf, pushState, queryClient, snapshotQuery, startGateway, watchPresence } from "../client/state";
+import { checkPush, client, connection, enableNotifications, membersQuery, messagesQuery, presence, customStatusOf, presenceOf, pushState, queryClient, snapshotQuery, startGateway, watchPresence } from "../client/state";
 import { useNames } from "../client/names";
 import { ConversationAside, HomeMain, HomeSidebar, type HomeView } from "./home";
 
@@ -427,8 +427,8 @@ function MembersAside(props: { serverId: string; me: string }) {
     return (members.data ?? [])
       .map((m) => {
         const name = m.displayName || m.nickname || m.handle || m.accountId.slice(0, 8);
-        // The handle and, from the verified profile, the pronouns.
-        const subtitle = [m.handle ? "@" + m.handle : "", m.pronouns].filter(Boolean).join(" · ") || undefined;
+        // The handle, the pronouns of the verified profile, and the custom status while here.
+        const subtitle = [m.handle ? "@" + m.handle : "", m.pronouns, customStatusOf(props.serverId, m.accountId)].filter(Boolean).join(" · ") || undefined;
         return { name, initials: initialsOf(name), tone: toneFor(m.accountId), status: presenceOf(props.serverId, m.accountId), subtitle, tag: m.accountId === props.me ? "You" : undefined };
       })
       .sort((a, b) => a.name.localeCompare(b.name));

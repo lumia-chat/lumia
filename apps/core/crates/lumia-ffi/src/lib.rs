@@ -559,6 +559,22 @@ pub enum ClientEvent {
 
 /// The identity's signed profile, as this device keeps it.
 #[derive(Debug, Clone, uniffi::Record)]
+pub struct StatusSummary {
+    pub status: String,
+    pub custom_status: String,
+}
+
+impl From<app::StatusSummary> for StatusSummary {
+    fn from(s: app::StatusSummary) -> Self {
+        Self {
+            status: s.status,
+            custom_status: s.custom_status,
+        }
+    }
+}
+
+/// The identity's signed profile, as this device keeps it.
+#[derive(Debug, Clone, uniffi::Record)]
 pub struct ProfileSummary {
     pub version: u64,
     pub display_name: String,
@@ -865,9 +881,22 @@ impl Client {
             .block_on(self.app.revoke_invite(&link_or_code))?)
     }
 
-    /// This client's status and the servers it has on screen (protocol 6.7).
-    pub fn set_presence(&self, status: String, watch_server_ids: Vec<String>) -> Res<()> {
-        Ok(self.app.set_presence(&status, &watch_server_ids)?)
+    /// The servers this client has on screen, whose presence it wants
+    /// (protocol 6.7); sent with the chosen status.
+    pub fn watch_presence(&self, watch_server_ids: Vec<String>) -> Res<()> {
+        Ok(self.app.watch_presence(&watch_server_ids)?)
+    }
+
+    /// The status this person chose and their custom status text, kept
+    /// across launches.
+    pub fn status(&self) -> Res<StatusSummary> {
+        Ok(self.app.status()?.into())
+    }
+
+    /// Chooses the status (`ONLINE`, `AWAY`, `DO_NOT_DISTURB`) and custom
+    /// text; sent at once when the gateway is up, and on every welcome.
+    pub fn set_status(&self, status: String, custom_status: String) -> Res<()> {
+        Ok(self.app.set_status(&status, &custom_status)?)
     }
 
     /// `POST /servers`: a server this account owns.

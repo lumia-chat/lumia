@@ -5,6 +5,7 @@
 package chat.lumia.kit
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -279,6 +280,33 @@ fun LumiaTag(text: String) {
             .background(LumiaTokens.chip.color, RoundedCornerShape(LumiaTokens.radiusPill))
             .padding(horizontal = LumiaTokens.space6, vertical = LumiaTokens.space2),
     )
+}
+
+/** A row of pills with one chosen: the design's segmented tabs at a form's width. */
+@Composable
+fun LumiaChoice(options: List<Pair<String, String>>, value: String, onChange: (String) -> Unit, modifier: Modifier = Modifier) {
+    Row(
+        modifier
+            .fillMaxWidth()
+            .background(LumiaTokens.chip.color, RoundedCornerShape(LumiaTokens.radiusPill))
+            .padding(LumiaTokens.space2),
+        horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space2),
+    ) {
+        for ((id, label) in options) {
+            val chosen = id == value
+            Text(
+                label,
+                style = LumiaTokens.textTag.style,
+                color = if (chosen) LumiaTokens.ink.color else LumiaTokens.inkSecondary.color,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                modifier = Modifier
+                    .weight(1f)
+                    .background(if (chosen) LumiaTokens.tabActive.color else androidx.compose.ui.graphics.Color.Transparent, RoundedCornerShape(LumiaTokens.radiusPill))
+                    .clickable { onChange(id) }
+                    .padding(vertical = LumiaTokens.space8),
+            )
+        }
+    }
 }
 
 /** The auth card: title, subtitle, a form; the width it is given. */

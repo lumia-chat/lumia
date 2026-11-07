@@ -139,6 +139,18 @@ pub struct InviteSummary {
     pub uses: u32,
 }
 
+/// The status this person chose and their custom status text (protocol 6.7).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatusSummary {
+    /// `ONLINE`, `AWAY` or `DO_NOT_DISTURB`.
+    pub status: String,
+    pub custom_status: String,
+}
+
+const STATUS_META: &str = "presence:status";
+const CUSTOM_STATUS_META: &str = "presence:custom_status";
+
 /// The identity's signed profile, as this device keeps it.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -739,6 +751,8 @@ struct Inner {
     /// The store's writer generation as last seen by this process; another
     /// process bumping it means its writes must be reloaded.
     writer_generation: u64,
+    /// The servers whose presence is watched, re-sent with a status change.
+    watching: Vec<Vec<u8>>,
 }
 
 /// The identity's stores: their own lock, so an identity flow that awaits
@@ -860,6 +874,7 @@ impl App {
                 sink: None,
                 writer_guard,
                 writer_generation,
+                watching: Vec::new(),
             }),
             identity: AsyncMutex::new(IdentityStores {
                 store: identity_store,
@@ -1543,31 +1558,82 @@ impl App {
         self.send_command(GatewayCommand::Subscribe(parse_uuid(channel_id)?))
     }
 
-    /// This client's status (`ONLINE`, `AWAY` or `DO_NOT_DISTURB`) and the
-    /// servers it has on screen, whose presence it then receives as
-    /// `PresenceDiff` events; the set replaces the last one.
+    /// The status this person chose (`ONLINE`, `AWAY` or `DO_NOT_DISTURB`)
+    /// and their custom status text (protocol 6.7), kept in the store
+    /// across launches.
+    ///
+    /// # Errors
+    /// On a store failure.
+    pub fn status(&self) -> Result<StatusSummary, ClientError> {
+        let inner = self.lock();
+        Ok(StatusSummary {
+            status: inner
+                .reader
+                .meta_get(STATUS_META)?
+                .unwrap_or_else(|| "ONLINE".into()),
+            custom_status: inner
+                .reader
+                .meta_get(CUSTOM_STATUS_META)?
+                .unwrap_or_default(),
+        })
+    }
+
+    /// Chooses the status and custom text: kept, and sent at once with the
+    /// servers watched when the gateway is up (every welcome re-sends it).
+    ///
+    /// # Errors
+    /// On a store failure.
+    pub fn set_status(&self, status: &str, custom_status: &str) -> Result<(), ClientError> {
+        let status = match status {
+            "AWAY" => "AWAY",
+            "DO_NOT_DISTURB" => "DO_NOT_DISTURB",
+            _ => "ONLINE",
+        };
+        let custom_status: String = custom_status.trim().chars().take(100).collect();
+        let watching = {
+            let inner = self.lock();
+            inner.reader.set_meta(STATUS_META, status)?;
+            inner.reader.set_meta(CUSTOM_STATUS_META, &custom_status)?;
+            inner.watching.clone()
+        };
+        if self.started() {
+            self.send_presence(status, &custom_status, watching)?;
+        }
+        Ok(())
+    }
+
+    /// The servers this client has on screen, whose presence it then
+    /// receives as `PresenceDiff` events; the set replaces the last one
+    /// and goes with the chosen status.
     ///
     /// # Errors
     /// When not started or an id is malformed.
-    pub fn set_presence(
+    pub fn watch_presence(&self, watch_server_ids: &[String]) -> Result<(), ClientError> {
+        let mut ids = Vec::with_capacity(watch_server_ids.len());
+        for id in watch_server_ids {
+            ids.push(parse_uuid(id)?);
+        }
+        self.lock().watching.clone_from(&ids);
+        let choice = self.status()?;
+        self.send_presence(&choice.status, &choice.custom_status, ids)
+    }
+
+    fn send_presence(
         &self,
         status: &str,
-        watch_server_ids: &[String],
+        custom_status: &str,
+        watch_server_ids: Vec<Vec<u8>>,
     ) -> Result<(), ClientError> {
         let status = match status {
             "AWAY" => lumia_core::proto::PresenceStatus::Away,
             "DO_NOT_DISTURB" => lumia_core::proto::PresenceStatus::DoNotDisturb,
             _ => lumia_core::proto::PresenceStatus::Online,
         };
-        let mut ids = Vec::with_capacity(watch_server_ids.len());
-        for id in watch_server_ids {
-            ids.push(parse_uuid(id)?);
-        }
         self.send_command(GatewayCommand::Presence(
             lumia_core::proto::PresenceUpdate {
                 status: status.into(),
-                custom_status: String::new(),
-                watch_server_ids: ids,
+                custom_status: custom_status.to_string(),
+                watch_server_ids,
             },
         ))
     }

@@ -24,6 +24,7 @@ import uniffi.lumia_ffi.LumiaException
 import uniffi.lumia_ffi.MemberSummary
 import uniffi.lumia_ffi.PasskeySummary
 import uniffi.lumia_ffi.ProfileSummary
+import uniffi.lumia_ffi.StatusSummary
 import uniffi.lumia_ffi.MessageSummary
 import uniffi.lumia_ffi.RosterSummary
 import uniffi.lumia_ffi.SnapshotSummary
@@ -414,7 +415,15 @@ class LumiaSession(val client: LumiaClient) {
     fun watchPresence(serverIds: List<String>) {
         watchingServerIds = serverIds
         if (connection != ConnectionState.Connected) return
-        scope.launch { runCatching { client.call { setPresence("ONLINE", serverIds) } } }
+        scope.launch { runCatching { client.call { watchPresence(serverIds) } } }
+    }
+
+    /** The status this person chose and their custom status text. */
+    suspend fun status(): StatusSummary? = runCatching { client.call { status() } }.getOrNull()
+
+    /** Chooses the status (ONLINE, AWAY, DO_NOT_DISTURB) and custom text; the core keeps it and sends it with the servers watched. */
+    suspend fun setStatus(status: String, customStatus: String) {
+        client.call { setStatus(status, customStatus) }
     }
 
     /** An account's presence in a server, or null when it is not there. */

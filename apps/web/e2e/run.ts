@@ -296,6 +296,11 @@ async function linkSteps(which: string, page: Page, dataDir: string) {
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await page.getByText("Saved.").waitFor();
   await page.getByRole("button", { name: /^Linked Browser, / }).waitFor();
+  // The status (protocol 6.7): chosen here, sent with the servers watched.
+  await page.getByRole("tab", { name: "Away" }).click();
+  await page.getByLabel("Custom status").fill("At lunch");
+  await page.getByRole("button", { name: "Save status" }).click();
+  await page.getByText("Status saved.").waitFor();
   await page.screenshot({ path: `${out}/${which}-profile.png` });
 }
 

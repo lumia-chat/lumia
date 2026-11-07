@@ -21,6 +21,7 @@ import {
   SearchField,
   ServerHeader,
   SidePanel,
+  SegmentedTabs,
   TextField,
   type ChannelItem,
   type DeviceEntry,
@@ -513,6 +514,28 @@ function Profile(props: HomeProps) {
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal("");
   const [saved, setSaved] = createSignal(false);
+  // The status (protocol 6.7): chosen here, kept by the core, sent with the
+  // servers watched and on every welcome.
+  const [status, setStatus] = createSignal("ONLINE");
+  const [customStatus, setCustomStatus] = createSignal("");
+  const [statusSaved, setStatusSaved] = createSignal(false);
+  void client()
+    .status()
+    .then((s) => {
+      setStatus(s.status);
+      setCustomStatus(s.customStatus);
+    })
+    .catch(() => {});
+  const saveStatus = async (e: Event) => {
+    e.preventDefault();
+    setStatusSaved(false);
+    try {
+      await client().setStatus(status(), customStatus().trim());
+      setStatusSaved(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
   // The form waits for the profile held: fields shown before it lands
   // would be overwritten by it, typing and all.
   const [loaded, setLoaded] = createSignal(false);
@@ -558,6 +581,18 @@ function Profile(props: HomeProps) {
     <>
       <ChannelHeader kind="page" name="Profile" topic="How people see you" actions={[]} />
       <div class="lu-page">
+        <Card title="Status" subtitle="What people see beside your name in a server's member list.">
+          <form class="auth__form" onSubmit={(e) => void saveStatus(e)}>
+            <SegmentedTabs label="Status" tabs={[{ id: "ONLINE", label: "Online" }, { id: "AWAY", label: "Away" }, { id: "DO_NOT_DISTURB", label: "Do not disturb" }]} value={status()} onChange={setStatus} />
+            <TextField label="Custom status" value={customStatus()} onInput={(e) => setCustomStatus(e.currentTarget.value)} placeholder="At lunch" autocomplete="off" />
+            <Show when={statusSaved()}>
+              <p class="lu-help">Status saved.</p>
+            </Show>
+            <Button variant="primary" size="md" type="submit">
+              Save status
+            </Button>
+          </form>
+        </Card>
         <Show
           when={hasIdentity.data !== false}
           fallback={

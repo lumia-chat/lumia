@@ -555,6 +555,10 @@ struct ProfileScreen: View {
     @State private var busy = false
     @State private var error = ""
     @State private var saved = false
+    // The status (protocol 6.7): chosen here, kept by the core, sent with the servers watched.
+    @State private var status = "ONLINE"
+    @State private var customStatus = ""
+    @State private var statusSaved = false
     // The form waits for the profile held: fields shown before it lands
     // would be overwritten by it, typing and all.
     @State private var loaded = false
@@ -563,6 +567,16 @@ struct ProfileScreen: View {
         PanelScreen(back: "Home", title: "Profile", subtitle: "How people see you", actions: []) {
             ScrollView {
                 VStack(alignment: .leading, spacing: LumiaTokens.space12) {
+                    LumiaCard(title: "Status", subtitle: "What people see beside your name in a server's member list.", width: nil) {
+                        VStack(alignment: .leading, spacing: LumiaTokens.space12) {
+                            LumiaSegmentedTabs(tabs: [.init(id: "ONLINE", label: "Online"), .init(id: "AWAY", label: "Away"), .init(id: "DO_NOT_DISTURB", label: "Do not disturb")], selected: $status)
+                            LumiaField("Custom status", text: $customStatus, placeholder: "At lunch")
+                            if statusSaved {
+                                Text("Status saved.").font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkSecondary.color)
+                            }
+                            Button("Save status") { Task { await saveStatus() } }.buttonStyle(.lumiaPrimary)
+                        }
+                    }
                     if session.hasIdentity, loaded {
                         LumiaCard(title: handleTitle, subtitle: subtitle, width: nil) {
                             VStack(alignment: .leading, spacing: LumiaTokens.space12) {
@@ -600,7 +614,17 @@ struct ProfileScreen: View {
         profile.map { "Version \($0.version), signed by this phone's device key; every instance you sign in to takes it." } ?? "Nothing set yet: people see your handle."
     }
 
+    private func saveStatus() async {
+        statusSaved = false
+        try? await session.setStatus(status: status, customStatus: customStatus)
+        statusSaved = true
+    }
+
     private func load() async {
+        if let s = try? await session.status() {
+            status = s.status
+            customStatus = s.customStatus
+        }
         profile = try? await session.profile()
         displayName = profile?.displayName ?? ""
         pronouns = profile?.pronouns ?? ""

@@ -494,7 +494,7 @@ struct MembersAside: View {
 
     /// The handle and, from the verified profile, the pronouns.
     private func subtitle(of m: MemberSummary) -> String? {
-        [m.handle.isEmpty ? "" : "@\(m.handle)", m.pronouns].filter { !$0.isEmpty }.joined(separator: " · ").nilIfEmpty
+        [m.handle.isEmpty ? "" : "@\(m.handle)", m.pronouns, session.customStatus(of: m.accountId, in: server.serverId)].filter { !$0.isEmpty }.joined(separator: " · ").nilIfEmpty
     }
 
     var body: some View {

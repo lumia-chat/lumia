@@ -95,6 +95,10 @@ export interface SnapshotSummary {
   channels: ChannelSummary[];
   pendingRequests: DmRequestSummary[];
 }
+export interface StatusSummary {
+  status: string;
+  customStatus: string;
+}
 export interface MemberSummary {
   accountId: string;
   handle: string;
@@ -256,8 +260,16 @@ export class Bridge {
     return this.call("acceptInvite", linkOrCode);
   }
   /** This client's status and the servers it has on screen (protocol 6.7). */
-  setPresence(status: string, watchServerIds: string[]): Promise<void> {
-    return this.call("setPresence", status, watchServerIds);
+  watchPresence(watchServerIds: string[]): Promise<void> {
+    return this.call("watchPresence", watchServerIds);
+  }
+  /** The status this person chose and their custom status text, kept across launches. */
+  status(): Promise<StatusSummary> {
+    return this.call("status");
+  }
+  /** Chooses the status (ONLINE, AWAY, DO_NOT_DISTURB) and custom text; sent at once when connected, and on every welcome. */
+  setStatus(status: string, customStatus: string): Promise<void> {
+    return this.call("setStatus", status, customStatus);
   }
   invites(serverId: string): Promise<InviteSummary[]> {
     return this.call("invites", serverId);
