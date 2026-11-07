@@ -40,11 +40,35 @@ defmodule Lumia.Push.Sender do
     end
 
     def send(%Subscription{kind: "unified_push"} = sub, notice) do
-      # The app's push receiver learns which instance to sync from the
-      # notice, as the relay's payload tells it for APNs and FCM.
-      body = Jason.encode!(Map.put(notice, "instance", Lumia.Identity.host()))
-      post(sub.endpoint, [{"content-type", "application/json"}], body)
+      {headers, body} = unified_push_request(sub, notice)
+      post(sub.endpoint, headers, body)
     end
+
+    @doc """
+    What goes to a UnifiedPush endpoint: the notice, naming the instance
+    so the app's receiver knows which to sync (as the relay's payload does
+    for APNs and FCM), encrypted as Web Push (RFC 8291) when the
+    distributor gave the app keys, which every current one does, and the
+    plain JSON when it did not. No VAPID: the endpoint is the person's
+    distributor, not a push service that knows this instance's key.
+    """
+    def unified_push_request(%Subscription{p256dh: p256dh, auth: auth}, notice)
+        when is_binary(p256dh) and is_binary(auth) do
+      body = WebPush.encrypt(Jason.encode!(named(notice)), p256dh, auth)
+
+      {[
+         {"content-encoding", "aes128gcm"},
+         {"content-type", "application/octet-stream"},
+         {"ttl", "86400"},
+         {"urgency", "normal"}
+       ], body}
+    end
+
+    def unified_push_request(%Subscription{}, notice) do
+      {[{"content-type", "application/json"}], Jason.encode!(named(notice))}
+    end
+
+    defp named(notice), do: Map.put(notice, "instance", Lumia.Identity.host())
 
     def send(%Subscription{kind: "relay_" <> platform} = sub, notice) do
       case Application.get_env(:lumia, :push_relay_url) do

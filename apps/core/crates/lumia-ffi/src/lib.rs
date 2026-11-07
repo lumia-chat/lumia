@@ -1154,9 +1154,17 @@ impl Client {
 
     // ---- Push ----
 
-    /// Registers this device's push token with the instance, to be
-    /// reached through the relay: `platform` is `apns` or `fcm`.
-    pub fn push_subscribe(&self, platform: String, token: String) -> Res<()> {
+    /// Registers this device's push token with the instance: `platform`
+    /// is `apns` or `fcm` (through the relay) or `unified_push` (the
+    /// distributor's endpoint, with its Web Push keys when it gave any,
+    /// base64url; empty otherwise).
+    pub fn push_subscribe(
+        &self,
+        platform: String,
+        token: String,
+        p256dh: String,
+        auth: String,
+    ) -> Res<()> {
         let kind = match platform.as_str() {
             "apns" => PushKind::RelayApns,
             "fcm" => PushKind::RelayFcm,
@@ -1169,7 +1177,7 @@ impl Client {
         };
         Ok(self
             .runtime
-            .block_on(self.app.push_subscribe(kind, &token, "", ""))?)
+            .block_on(self.app.push_subscribe(kind, &token, &p256dh, &auth))?)
     }
 
     /// Removes this device's push subscription of a platform (`apns`,

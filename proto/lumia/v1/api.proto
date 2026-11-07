@@ -187,7 +187,7 @@ message ListPasskeysResponse {
 enum PushKind {
   PUSH_KIND_UNSPECIFIED = 0;
   WEB_PUSH = 1;       // RFC 8030/8291/8292, served by the instance itself
-  UNIFIED_PUSH = 2;   // a plain POST to the endpoint, served by the instance itself
+  UNIFIED_PUSH = 2;   // a POST to the distributor's endpoint, served by the instance itself
   RELAY_APNS = 3;     // through the relay, with the device's APNs token
   RELAY_FCM = 4;      // through the relay, with the device's FCM token
 }
@@ -200,6 +200,8 @@ message PushSubscription {
   // WEB_PUSH and UNIFIED_PUSH: the push service URL. RELAY_*: the device token.
   string endpoint = 2;
   // WEB_PUSH: the subscription's keys, base64url without padding.
+  // UNIFIED_PUSH: the same keys when the distributor gave them (RFC 8291
+  // over the endpoint); without them the notice is posted as plain JSON.
   string p256dh = 3;
   string auth = 4;
 }

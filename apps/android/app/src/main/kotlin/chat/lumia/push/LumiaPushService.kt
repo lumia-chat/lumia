@@ -20,7 +20,13 @@ class LumiaPushService : PushService() {
 
     override fun onNewEndpoint(endpoint: PushEndpoint, instance: String) {
         val context = applicationContext
-        scope.launch { PushRegistrar.subscribe(context, "unified_push", endpoint.url) }
+        // The keys the connector made for this endpoint: the instance
+        // encrypts the notice under them (Web Push, RFC 8291), so the
+        // distributor and its server carry ciphertext.
+        val keys = endpoint.pubKeySet
+        scope.launch {
+            PushRegistrar.subscribe(context, "unified_push", endpoint.url, keys?.pubKey ?: "", keys?.auth ?: "")
+        }
     }
 
     override fun onMessage(message: PushMessage, instance: String) {

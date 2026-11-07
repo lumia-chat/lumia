@@ -128,6 +128,61 @@ defmodule Lumia.PushTest do
     end
   end
 
+  describe "UnifiedPush" do
+    # The RFC 8291 receiver: what the distributor gives the app, and the
+    # private key only the app holds.
+    @ua_public "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4"
+    @ua_private "q1dXpw3UpT5VOmu_cf_v6ih07Aems3njxI-JWgLcM94"
+    @auth "BTBZMqHH6r4Tts7J_aSIgg"
+
+    test "with the distributor's keys the notice is Web Push ciphertext the app can open" do
+      sub = %Push.Subscription{
+        kind: "unified_push",
+        endpoint: "https://ntfy.example/topic?up=1",
+        p256dh: @ua_public,
+        auth: @auth
+      }
+
+      {headers, body} = Push.Sender.Http.unified_push_request(sub, %{"title" => "Lumia"})
+
+      assert {"content-encoding", "aes128gcm"} in headers
+      assert {"content-type", "application/octet-stream"} in headers
+      refute List.keymember?(headers, "authorization", 0)
+
+      assert body |> decrypt(@ua_private, @auth) |> Jason.decode!() == %{
+               "title" => "Lumia",
+               "instance" => "localhost"
+             }
+    end
+
+    test "without keys the notice goes as it is" do
+      sub = %Push.Subscription{kind: "unified_push", endpoint: "https://ntfy.example/topic?up=1"}
+      {headers, body} = Push.Sender.Http.unified_push_request(sub, %{"title" => "Lumia"})
+      assert headers == [{"content-type", "application/json"}]
+      assert Jason.decode!(body) == %{"title" => "Lumia", "instance" => "localhost"}
+    end
+
+    # RFC 8188 aes128gcm, one record, undone with the receiver's private key.
+    defp decrypt(body, ua_private, auth) do
+      <<salt::binary-16, _rs::32, 65, as_public::binary-65, rest::binary>> = body
+      ua_private = Base.url_decode64!(ua_private, padding: false)
+      ua_public = Base.url_decode64!(@ua_public, padding: false)
+      auth = Base.url_decode64!(auth, padding: false)
+      shared = :crypto.compute_key(:ecdh, as_public, ua_private, :prime256v1)
+      ikm = hkdf(hmac(auth, shared), "WebPush: info" <> <<0>> <> ua_public <> as_public, 32)
+      prk = hmac(salt, ikm)
+      cek = hkdf(prk, "Content-Encoding: aes128gcm" <> <<0>>, 16)
+      nonce = hkdf(prk, "Content-Encoding: nonce" <> <<0>>, 12)
+      size = byte_size(rest) - 16
+      <<ciphertext::binary-size(size), tag::binary-16>> = rest
+      padded = :crypto.crypto_one_time_aead(:aes_128_gcm, cek, nonce, ciphertext, "", tag, false)
+      String.trim_trailing(padded, <<2>>)
+    end
+
+    defp hmac(key, data), do: :crypto.mac(:hmac, :sha256, key, data)
+    defp hkdf(prk, info, length), do: binary_part(hmac(prk, info <> <<1>>), 0, length)
+  end
+
   describe "Web Push" do
     # RFC 8291 appendix A: fixed keys and salt give the published ciphertext.
     test "encrypts the RFC 8291 test vector" do

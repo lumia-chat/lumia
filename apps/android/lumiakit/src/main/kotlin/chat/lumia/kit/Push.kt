@@ -48,19 +48,20 @@ object PushRegistrar {
 
     /**
      * Sends a subscription to the instance once per value: `unified_push`
-     * with the endpoint, `fcm` with the token. Through the live session
-     * when the app is up, else through a client of its own.
+     * with the endpoint and the distributor's Web Push keys (the instance
+     * encrypts the notice under them), `fcm` with the token. Through the
+     * live session when the app is up, else through a client of its own.
      */
-    suspend fun subscribe(context: Context, platform: String, value: String) {
+    suspend fun subscribe(context: Context, platform: String, value: String, p256dh: String = "", auth: String = "") {
         val prefs = context.getSharedPreferences(SUBSCRIPTION_PREFS, Context.MODE_PRIVATE)
         val saved = AppStore.savedInstance(context) ?: return
-        if (prefs.getString(platform, null) == value + saved) return
+        if (prefs.getString(platform, null) == value + p256dh + saved) return
         val session = AppStore.current?.session
         val ok = runCatching {
-            if (session != null) session.client.call { pushSubscribe(platform, value) }
-            else LumiaClient(saved, AppStore.dataDirectory(context)).call { pushSubscribe(platform, value) }
+            if (session != null) session.client.call { pushSubscribe(platform, value, p256dh, auth) }
+            else LumiaClient(saved, AppStore.dataDirectory(context)).call { pushSubscribe(platform, value, p256dh, auth) }
         }.isSuccess
-        if (ok) prefs.edit().putString(platform, value + saved).apply()
+        if (ok) prefs.edit().putString(platform, value + p256dh + saved).apply()
     }
 
     /**

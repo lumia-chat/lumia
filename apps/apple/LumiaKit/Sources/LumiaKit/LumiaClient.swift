@@ -112,7 +112,7 @@ public actor LumiaClient {
         try inner.identitySetProfile(displayName: displayName, pronouns: pronouns, bio: bio, avatarUrl: avatarURL)
     }
 
-    public func pushSubscribe(platform: String, token: String) throws { try inner.pushSubscribe(platform: platform, token: token) }
+    public func pushSubscribe(platform: String, token: String) throws { try inner.pushSubscribe(platform: platform, token: token, p256dh: "", auth: "") }
     public func pushUnsubscribe(platform: String) throws { try inner.pushUnsubscribe(platform: platform) }
 
     public func dmChannels() throws -> [DmChannelSummary] { try inner.dmChannels() }

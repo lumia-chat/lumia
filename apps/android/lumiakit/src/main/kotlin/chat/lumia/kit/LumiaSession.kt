@@ -287,8 +287,8 @@ class LumiaSession(val client: LumiaClient) {
         return (r as? DmResponse.Opened)?.opened?.channelId
     }
 
-    suspend fun pushSubscribe(platform: String, token: String) {
-        runCatching { client.call { pushSubscribe(platform, token) } }
+    suspend fun pushSubscribe(platform: String, token: String, p256dh: String = "", auth: String = "") {
+        runCatching { client.call { pushSubscribe(platform, token, p256dh, auth) } }
     }
 
     // Names
