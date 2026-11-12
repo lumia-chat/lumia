@@ -1469,10 +1469,19 @@ impl App {
             let mut inner = self.lock();
             let access = inner.keys.delete("access_token");
             let refresh = inner.keys.delete("refresh_token");
-            // What was kept of the account for an offline launch goes with it.
+            // What was kept of the account for an offline launch goes with
+            // it, and its account log and unsent commands: the next account
+            // to sign in here starts its own log from the beginning, and
+            // sends nothing of this one's. On the store the loop holds when
+            // it is back, or through the reader on the same file.
             let snapshot = inner.reader.meta_set(KEPT_SNAPSHOT, "");
             let members = inner.reader.meta_set(KEPT_MEMBERS, "");
-            (access.and(refresh), snapshot.and(members))
+            let log = inner
+                .store
+                .as_ref()
+                .unwrap_or(&inner.reader)
+                .forget_account();
+            (access.and(refresh), snapshot.and(members).and(log))
         };
         self.api.clear_tokens();
         tokens?;
@@ -1737,7 +1746,6 @@ impl App {
             inner.sink = None;
         });
         let app = Arc::clone(self);
-        let dtx = tx.clone();
         let task_sink = Arc::clone(&sink);
         spawn(async move {
             while let Some(ev) = erx.next().await {
@@ -1745,7 +1753,7 @@ impl App {
                     let _ = app
                         .lock()
                         .reader
-                        .meta_set("account_id", &hex::encode(&w.account_id));
+                        .meta_set(gateway::ACCOUNT_META, &hex::encode(&w.account_id));
                 }
                 let engine = app
                     .dm
@@ -1799,7 +1807,11 @@ impl App {
                                     }),
                                 }
                             }
-                            dispatch(out, Some(&dtx), Some(&task_sink));
+                            // The loop's sender is the application's alone:
+                            // a copy held here kept the loop running after
+                            // `stop`, on a session being signed out.
+                            let commands = app.lock().commands.clone();
+                            dispatch(out, commands.as_ref(), Some(&task_sink));
                         }
                         Err(err) => task_sink(AppEvent::DmError {
                             message: err.to_string(),
@@ -2559,7 +2571,7 @@ impl App {
         let account = self
             .lock()
             .reader
-            .meta_get("account_id")?
+            .meta_get(gateway::ACCOUNT_META)?
             .map(|h| hex::decode(h).unwrap_or_default())
             .unwrap_or_default();
         let store = (self.opener)(StoreName::Instance)?;
@@ -2794,17 +2806,21 @@ impl App {
 
     // ---- Plumbing ----
 
-    /// A sign-in's pair becomes this client's session. One it already held
-    /// is revoked first: linking a phone that had signed in with a password,
+    /// A sign-in's pair becomes this client's session, and one it already
+    /// held is revoked: linking a phone that had signed in with a password,
     /// or signing in again without signing out, used to leave the earlier
     /// session alive on the instance with nothing holding its tokens, where
-    /// signing out later could not reach it. A refusal is ignored, as when
-    /// signing out.
+    /// signing out later could not reach it. The new pair is kept first, so
+    /// a gateway loop running on the old session, told it was revoked,
+    /// finds the new one and comes back on it. A refusal is ignored, as
+    /// when signing out.
     async fn take_session(&self, pair: &TokenPair) -> Result<(), ClientError> {
-        if self.api.tokens().access.is_some() {
-            let _ = self.api.sign_out().await;
+        let held = self.api.tokens();
+        self.save_tokens(pair)?;
+        if held.access.is_some() {
+            let _ = self.api.revoke(held).await;
         }
-        self.save_tokens(pair)
+        Ok(())
     }
 
     fn save_tokens(&self, pair: &TokenPair) -> Result<(), ClientError> {
@@ -2817,7 +2833,7 @@ impl App {
                 .keys
                 .put("refresh_token", pair.refresh_token.as_bytes())?;
         }
-        self.api.set_tokens(pair);
+        self.api.take_pair(pair);
         Ok(())
     }
 

@@ -246,6 +246,34 @@ impl SqliteStore {
             .map_err(backend)
     }
 
+    /// Forgets what an account that signed out leaves here: its account log
+    /// (the cursor with the events, so the next account starts from the
+    /// beginning of its own) and the commands it had not sent, which would
+    /// otherwise go out at the next welcome as whoever signs in next. The
+    /// channels' logs stay: they are the channels', not the account's, and a
+    /// personal conversation's decrypted history could not be fetched again.
+    ///
+    /// # Errors
+    /// On a database failure.
+    pub fn forget_account(&self) -> Result<(), StoreError> {
+        let account = kind_code(LogKind::Account);
+        self.transaction(|store: &Self| {
+            store
+                .conn
+                .execute("DELETE FROM cursors WHERE kind = ?1", params![account])
+                .map_err(backend)?;
+            store
+                .conn
+                .execute("DELETE FROM events WHERE kind = ?1", params![account])
+                .map_err(backend)?;
+            store
+                .conn
+                .execute("DELETE FROM outbox", [])
+                .map_err(backend)?;
+            Ok::<_, StoreError>(())
+        })
+    }
+
     /// Adds to the outbox through a shared reference.
     ///
     /// # Errors
@@ -1029,5 +1057,45 @@ mod tests {
         assert_eq!(store.outbox().unwrap(), vec![entry.clone()]);
         store.outbox_remove(&entry.command_id).unwrap();
         assert!(store.outbox().unwrap().is_empty());
+    }
+
+    /// An account signs out on a device another account then signs in on.
+    /// Its account log's cursor used to stay, and the next account's
+    /// gateway resumed its own log from it: the events after it were
+    /// refused as a gap, for ever.
+    #[test]
+    fn forgetting_an_account_leaves_the_channels_and_nothing_of_the_account() {
+        let mut store = SqliteStore::in_memory().unwrap();
+        let (account, channel) = (vec![4u8; 16], vec![5u8; 16]);
+        let ev = |seq: u64| StoredEvent {
+            seq,
+            bytes: vec![seq as u8],
+        };
+        store
+            .apply(LogKind::Account, &account, &[ev(1), ev(2)])
+            .unwrap();
+        store
+            .apply(LogKind::Channel, &channel, &[created(&channel, 1, "kept")])
+            .unwrap();
+        store
+            .outbox_push(&OutboxEntry {
+                command_id: vec![1; 16],
+                channel_id: channel.clone(),
+                bytes: vec![3],
+            })
+            .unwrap();
+
+        store.forget_account().unwrap();
+
+        assert!(store.cursors(LogKind::Account).unwrap().is_empty());
+        assert!(store.account_events().unwrap().is_empty());
+        assert!(store.outbox().unwrap().is_empty());
+        assert_eq!(
+            store.cursors(LogKind::Channel).unwrap(),
+            vec![(channel.clone(), 1)]
+        );
+        assert_eq!(store.messages(&channel, 10).unwrap().len(), 1);
+        // The next account's log starts at its beginning.
+        store.apply(LogKind::Account, &[6u8; 16], &[ev(1)]).unwrap();
     }
 }

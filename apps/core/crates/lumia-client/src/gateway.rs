@@ -5,7 +5,15 @@
 //! exponential backoff, re-subscribing from the store's cursors each time,
 //! and stops only when the application drops its command sender or the
 //! server says not to come back (`SESSION_REVOKED`, `DEVICE_REVOKED`,
-//! `PROTOCOL_ERROR`, or a refresh that the instance refuses).
+//! `PROTOCOL_ERROR`, or a refresh that the instance refuses). A revoked
+//! session the client has already left for a new one (a sign-in over a held
+//! session revokes the held one) is not a reason to stop: the loop comes
+//! back at once on the new one.
+//!
+//! The account log's cursor is the account's. A device another account
+//! signed in on before holds that account's cursor; the loop resumes from
+//! the cursor of the account the store last followed (`ACCOUNT_META`), and
+//! a welcome that names another account starts that one's log afresh.
 //!
 //! Effects are carried out in the order the session returns them: a
 //! fetched page yields one `Apply` per contiguous run of events and the
@@ -23,7 +31,7 @@ use lumia_core::sync::{decode_frame, encode_frame, Cursors, Effect, Notice, Sess
 use lumia_core::wire;
 use prost::Message as _;
 
-use crate::api::Api;
+use crate::api::{Api, REQUEST_TIMEOUT};
 use crate::time::sleep;
 use crate::transport::{connect, Frame};
 use crate::ClientError;
@@ -36,6 +44,10 @@ const DEFAULT_HEARTBEAT: Duration = Duration::from_secs(30);
 const BASE_BACKOFF: Duration = Duration::from_secs(1);
 /// The longest wait between attempts.
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
+
+/// Where the store records the account whose account log it follows, as
+/// hex: written at every welcome.
+pub(crate) const ACCOUNT_META: &str = "account_id";
 
 /// What the application receives from the gateway loop.
 #[derive(Debug, Clone)]
@@ -112,8 +124,9 @@ pub async fn run_forever<S: Store>(
     events: mpsc::UnboundedSender<GatewayEvent>,
 ) -> S {
     let mut attempt = 0u32;
-    let mut stash: Option<GatewayCommand> = None;
+    let mut stash: Vec<GatewayCommand> = Vec::new();
     loop {
+        let signed_in = api.sign_ins();
         let outcome = run(
             &api,
             &mut store,
@@ -121,12 +134,25 @@ pub async fn run_forever<S: Store>(
             &device_id,
             &mut channels,
             &mut commands,
-            stash.take(),
+            std::mem::take(&mut stash),
             &events,
         )
         .await;
+        // The session this connection was made for was revoked because the
+        // client signed in again over it: the new one is held already.
+        let left_for_another = || api.sign_ins() != signed_in && api.tokens().access.is_some();
         let (reason, wait) = match outcome {
             Ok(Exit::Done) => return store,
+            Ok(Exit::Closed {
+                disconnect: Some(DisconnectReason::DisconnectSessionRevoked),
+                ..
+            })
+            | Err(ClientError::Api { .. })
+                if left_for_another() =>
+            {
+                attempt = 0;
+                continue;
+            }
             Ok(Exit::Closed {
                 reason,
                 disconnect: Some(d),
@@ -204,19 +230,45 @@ pub async fn run_forever<S: Store>(
         {
             return store;
         }
-        sleep(delay).await;
-        // A connection that never reached the command loop cannot see the
-        // application drop its sender: look before trying again, keeping
-        // any command that arrived meanwhile for the next connection.
-        // `try_next` is deprecated in favour of `try_recv`, whose error
-        // does not distinguish "empty" from "closed" in this version.
-        #[allow(deprecated)]
-        match commands.try_next() {
-            Ok(None) => return store,
-            Ok(Some(command)) => stash = Some(command),
-            Err(_) => {}
+        // The wait watches the application: one that lets go meanwhile
+        // (signing out, going to the background) ends the loop then and
+        // not after the wait, and what it sends is kept, in order, for the
+        // next connection.
+        let mut waited = Box::pin(sleep(delay).fuse());
+        loop {
+            futures_util::select! {
+                () = waited => break,
+                command = commands.next().fuse() => match command {
+                    Some(command) => stash.push(command),
+                    None => return store,
+                },
+            }
         }
     }
+}
+
+/// The account whose account log the store follows, and its cursor there:
+/// the account last welcomed, or for a store from before that was written
+/// down, the one account it has a cursor for. A cursor of another account
+/// is no cursor of this one.
+fn followed_account<S: Store>(store: &S) -> Result<(Option<Vec<u8>>, u64), ClientError> {
+    let cursors = store.cursors(LogKind::Account)?;
+    let recorded = store
+        .meta_get(ACCOUNT_META)?
+        .and_then(|account| hex::decode(account).ok());
+    Ok(match recorded {
+        Some(account) => {
+            let seq = cursors
+                .iter()
+                .find(|(log, _)| *log == account)
+                .map_or(0, |(_, seq)| *seq);
+            (Some(account), seq)
+        }
+        None => match cursors.as_slice() {
+            [(account, seq)] => (Some(account.clone()), *seq),
+            _ => (None, 0),
+        },
+    })
 }
 
 /// Whether a server-initiated disconnect invites a reconnect.
@@ -271,16 +323,14 @@ pub async fn run<S: Store>(
     device_id: &[u8],
     channels: &mut Vec<Vec<u8>>,
     commands: &mut mpsc::UnboundedReceiver<GatewayCommand>,
-    stash: Option<GatewayCommand>,
+    stash: Vec<GatewayCommand>,
     events: &mpsc::UnboundedSender<GatewayEvent>,
 ) -> Result<Exit, ClientError> {
     let stored = store.cursors(LogKind::Channel)?;
+    let (followed, account_cursor) = followed_account(store)?;
     let cursors = Cursors {
         channels: stored.clone(),
-        account: store
-            .cursors(LogKind::Account)?
-            .first()
-            .map_or(0, |(_, s)| *s),
+        account: account_cursor,
         generation: store.generation()?,
     };
     let mut session = Session::new(client_name, device_id.to_vec(), cursors);
@@ -289,12 +339,25 @@ pub async fn run<S: Store>(
         session.subscribe(id.clone(), cursor);
     }
 
-    let socket = connect(&api.gateway_url(), &api.gateway_subprotocols()?).await?;
+    // An upgrade nobody answers would otherwise be waited on as long as
+    // TCP waits, with the application's commands, a stop among them,
+    // unread meanwhile.
+    let (url, subprotocols) = (api.gateway_url(), api.gateway_subprotocols()?);
+    let socket = {
+        let mut connecting = Box::pin(connect(&url, &subprotocols).fuse());
+        let mut gave_up = Box::pin(sleep(REQUEST_TIMEOUT).fuse());
+        futures_util::select! {
+            socket = connecting => socket?,
+            () = gave_up => {
+                return Err(ClientError::Transport("the gateway did not answer".into()));
+            }
+        }
+    };
     let (mut sink, mut stream) = socket.split();
 
     // A queue, not a stack: effects run in the order the session returns them.
     let mut pending: VecDeque<Effect> = VecDeque::from([session.hello()]);
-    if let Some(command) = stash {
+    for command in stash {
         on_command(command, store, &mut session, channels, &mut pending)?;
     }
     let mut heartbeat_period = DEFAULT_HEARTBEAT;
@@ -405,6 +468,23 @@ pub async fn run<S: Store>(
                     }
                     match &notice {
                         Notice::Welcomed(welcome) => {
+                            store.meta_set(ACCOUNT_META, &hex::encode(&welcome.account_id))?;
+                            if followed.as_ref().is_some_and(|f| *f != welcome.account_id) {
+                                // The store last followed another account. Its
+                                // unsent commands are not this one's to send,
+                                // and the account log was resumed from its
+                                // cursor: start again from this account's.
+                                for entry in store.outbox()? {
+                                    store.outbox_remove(&entry.command_id)?;
+                                }
+                                if account_cursor > 0 {
+                                    return Ok(closed(
+                                        "the store followed another account".into(),
+                                        &disconnect,
+                                        true,
+                                    ));
+                                }
+                            }
                             welcomed = true;
                             server_ahead = wire::micros(welcome.server_time.as_ref())
                                 .map_or(0, |server| server - crate::time::now_micros());
@@ -525,6 +605,34 @@ fn typing_until(until_micros: i64, server_ahead: i64, now_micros: i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn the_cursor_resumed_is_the_followed_accounts() {
+        use crate::sqlite::SqliteStore;
+
+        let mut store = SqliteStore::in_memory().unwrap();
+        let (one, two) = (vec![1u8; 16], vec![2u8; 16]);
+        let ev = |seq: u64| StoredEvent {
+            seq,
+            bytes: vec![seq as u8],
+        };
+        // Nothing yet: from the start, following nobody in particular.
+        assert_eq!(followed_account(&store).unwrap(), (None, 0));
+        // A store from before the account was written down: its one cursor.
+        store
+            .apply(LogKind::Account, &one, &[ev(1), ev(2)])
+            .unwrap();
+        assert_eq!(followed_account(&store).unwrap(), (Some(one.clone()), 2));
+        // Written down: that account's cursor, and none of another's.
+        store.meta_set(ACCOUNT_META, &hex::encode(&two)).unwrap();
+        assert_eq!(followed_account(&store).unwrap(), (Some(two.clone()), 0));
+        store.apply(LogKind::Account, &two, &[ev(1)]).unwrap();
+        assert_eq!(followed_account(&store).unwrap(), (Some(two), 1));
+        store.meta_set(ACCOUNT_META, &hex::encode(&one)).unwrap();
+        assert_eq!(followed_account(&store).unwrap(), (Some(one), 2));
+    }
 
     #[test]
     fn backoff_doubles_and_caps() {

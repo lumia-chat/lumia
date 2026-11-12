@@ -25,6 +25,7 @@
 //! call that runs out fails as any transport failure does.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -76,16 +77,17 @@ const UPLOAD_BYTES_PER_SECOND: usize = 16 * 1024;
 /// answer that is large, and the phone asking for it may be on a slow link.
 const CHUNK_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// What the farewell is allowed at most. Signing out goes ahead whether the
-/// instance hears of it or not, so nobody waits long for it.
-const SIGN_OUT_TIMEOUT: Duration = Duration::from_secs(8);
+/// What a farewell is allowed at most: the sign-out, and taking the push
+/// subscription back before it. Signing out goes ahead whether the instance
+/// hears of either or not, so nobody waits long for them.
+const FAREWELL_TIMEOUT: Duration = Duration::from_secs(8);
 
 /// The time one request has, given the client's own allowance, where it
 /// goes and how many bytes it sends.
 fn time_allowed(base: Duration, path: &str, sent: usize) -> Duration {
     let upload = Duration::from_secs((sent / UPLOAD_BYTES_PER_SECOND) as u64);
-    if path.starts_with("/api/v1/auth/sign-out") {
-        base.min(SIGN_OUT_TIMEOUT)
+    if path.starts_with("/api/v1/auth/sign-out") || path.starts_with("/api/v1/push/subscription") {
+        base.min(FAREWELL_TIMEOUT)
     } else if path.starts_with("/api/v1/history/chunks") {
         base.max(CHUNK_TIMEOUT) + upload
     } else {
@@ -121,6 +123,11 @@ pub struct Api {
     stored: Option<StoredHook>,
     /// What a request is allowed before what it carries is counted in.
     timeout: Duration,
+    /// How many sign-ins have given this client a pair: a rotation keeps
+    /// the session and does not count. The gateway loop reads it to tell a
+    /// revocation of the session it holds from one of a session this
+    /// client has already left for another.
+    sign_ins: Arc<AtomicU64>,
 }
 
 impl std::fmt::Debug for Api {
@@ -144,6 +151,7 @@ impl Api {
             on_rotate: None,
             stored: None,
             timeout: REQUEST_TIMEOUT,
+            sign_ins: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -177,7 +185,6 @@ impl Api {
         self
     }
 
-    /// Forgets the pair, as after a sign-out.
     /// Where to read the pair again before a refresh token is presented.
     #[must_use]
     pub fn stored(mut self, hook: StoredHook) -> Self {
@@ -185,6 +192,7 @@ impl Api {
         self
     }
 
+    /// Forgets the pair, as after a sign-out.
     pub fn clear_tokens(&self) {
         *self.tokens.lock().unwrap_or_else(PoisonError::into_inner) = Tokens::default();
     }
@@ -198,7 +206,68 @@ impl Api {
             .clone()
     }
 
-    /// Replaces the pair, as after a sign-in.
+    /// Takes the pair a sign-in brought: a session of its own, which the
+    /// gateway loop can tell from the one it was holding.
+    pub fn take_pair(&self, pair: &TokenPair) {
+        self.set_tokens(pair);
+        self.sign_ins.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// How many sign-ins have given this client a pair (see [`Api::take_pair`]).
+    #[must_use]
+    pub fn sign_ins(&self) -> u64 {
+        self.sign_ins.load(Ordering::SeqCst)
+    }
+
+    /// Ends a session this client held and has already left for another,
+    /// by that session's own pair, without touching the one held now. An
+    /// access token that has run out is rotated once with the session's
+    /// refresh token, then the session is signed out.
+    ///
+    /// # Errors
+    /// On transport failure, or when the instance refuses both the access
+    /// token and the refresh.
+    pub async fn revoke(&self, held: Tokens) -> Result<(), ClientError> {
+        const SIGN_OUT: &str = "/api/v1/auth/sign-out";
+        let Some(access) = held.access else {
+            return Ok(());
+        };
+        let (status, bytes) = self
+            .send_once(reqwest::Method::POST, SIGN_OUT, None, None, Some(access))
+            .await?;
+        if status != StatusCode::UNAUTHORIZED {
+            return answered(status, &bytes);
+        }
+        let Some(refresh) = held.refresh else {
+            return Err(api_error(status, &bytes));
+        };
+        let body = RefreshRequest {
+            refresh_token: refresh,
+        }
+        .encode_to_vec();
+        let (status, bytes) = self
+            .send_once(
+                reqwest::Method::POST,
+                "/api/v1/auth/refresh",
+                Some(body),
+                None,
+                None,
+            )
+            .await?;
+        let pair: TokenPair = decoded(status, &bytes)?;
+        let (status, bytes) = self
+            .send_once(
+                reqwest::Method::POST,
+                SIGN_OUT,
+                None,
+                None,
+                Some(pair.access_token),
+            )
+            .await?;
+        answered(status, &bytes)
+    }
+
+    /// Replaces the pair, as after a sign-in or a rotation.
     pub fn set_tokens(&self, pair: &TokenPair) {
         *self.tokens.lock().unwrap_or_else(PoisonError::into_inner) = Tokens {
             access: Some(pair.access_token.clone()),
@@ -259,7 +328,7 @@ impl Api {
                 "/api/v1/auth/refresh",
                 Some(body),
                 None,
-                false,
+                None,
             )
             .await?;
         let pair: TokenPair = decoded(status, &bytes)?;
@@ -582,7 +651,7 @@ impl Api {
     /// On transport failure or an API error.
     pub async fn instance_info(&self) -> Result<InstanceInfo, ClientError> {
         let (status, bytes) = self
-            .send_once(reqwest::Method::GET, "/api/v1/instance", None, None, false)
+            .send_once(reqwest::Method::GET, "/api/v1/instance", None, None, None)
             .await?;
         decoded(status, &bytes)
     }
@@ -1437,7 +1506,13 @@ impl Api {
         // changed by then, someone else has rotated it and the retry takes theirs.
         let mut sent_with = self.tokens().refresh;
         let mut answer = self
-            .send_once(method.clone(), path, body.clone(), extra, true)
+            .send_once(
+                method.clone(),
+                path,
+                body.clone(),
+                extra,
+                self.tokens().access,
+            )
             .await?;
         // Twice at most: a pair taken from another call or another process
         // may itself have run out, and then it is this call's to rotate.
@@ -1452,7 +1527,13 @@ impl Api {
                     self.refresh_after(sent_with.as_deref()).await?;
                     sent_with = self.tokens().refresh;
                     answer = self
-                        .send_once(method.clone(), path, body.clone(), extra, true)
+                        .send_once(
+                            method.clone(),
+                            path,
+                            body.clone(),
+                            extra,
+                            self.tokens().access,
+                        )
                         .await?;
                 }
                 _ => break,
@@ -1467,7 +1548,7 @@ impl Api {
         path: &str,
         body: Option<Vec<u8>>,
         extra: Option<(&str, &str)>,
-        authenticated: bool,
+        bearer: Option<String>,
     ) -> Result<(StatusCode, Vec<u8>), ClientError> {
         let sent = body.as_ref().map_or(0, Vec::len);
         let mut builder = self
@@ -1485,15 +1566,22 @@ impl Api {
         if let Some((name, value)) = extra.filter(|_| typed.is_none()) {
             builder = builder.header(name, value);
         }
-        if authenticated {
-            if let Some(token) = self.tokens().access {
-                builder = builder.header(AUTHORIZATION, format!("Bearer {token}"));
-            }
+        if let Some(token) = bearer {
+            builder = builder.header(AUTHORIZATION, format!("Bearer {token}"));
         }
         let response = builder.send().await?;
         let status = response.status();
         let bytes = response.bytes().await?;
         Ok((status, bytes.to_vec()))
+    }
+}
+
+/// An answer with nothing in it to decode: success, or the error it carries.
+fn answered(status: StatusCode, bytes: &[u8]) -> Result<(), ClientError> {
+    if status.is_success() {
+        Ok(())
+    } else {
+        Err(api_error(status, bytes))
     }
 }
 
@@ -1754,6 +1842,11 @@ mod tests {
         assert_eq!(
             time_allowed(Duration::from_secs(1), "/api/v1/auth/sign-out", 0),
             Duration::from_secs(1)
+        );
+        // So is taking the push subscription back before it.
+        assert_eq!(
+            time_allowed(base, "/api/v1/push/subscription?kind=relay_apns", 0),
+            Duration::from_secs(8)
         );
     }
 

@@ -344,7 +344,8 @@ List endpoints take `page_size` (1 to 200, default 50) and an opaque `cursor`, a
 - **Bot tokens**: long-lived, scoped, sent as bearer. Scopes are permission names from `chat.proto`; a bot's effective permissions are the intersection of its scopes and its roles.
 - **OAuth 2.1** with PKCE for user-authorized integrations, standard endpoints under `/oauth/`.
 - A session is bound to a `device_id`. If the device is revoked in the roster the instance holds, every call fails with `DEVICE_REVOKED` and the gateway disconnects.
-- A client holds one session. A sign-in made while it holds one (linking a device that had signed in with a password, signing in again without signing out) revokes the held session once the new pair has arrived, so nothing is left alive on the instance that no client can sign out of.
+- A client holds one session. A sign-in made while it holds one (linking a device that had signed in with a password, signing in again without signing out) keeps the new pair and then revokes the held session, by that session's own tokens, so nothing is left alive on the instance that no client can sign out of. A gateway connection on the held session is closed with `SESSION_REVOKED` by that; a client that has already taken the new pair connects again on it instead of ending.
+- The account log's cursor belongs to the account. A client that signs out forgets its account log and its unsent commands, and a client whose `Welcome` names another account than the one its store last followed starts that account's log from the beginning and sends nothing of the other's.
 - A client gives every request a time to be answered in (the core: 20 seconds, more for what carries a picture or a chunk of history, 8 for the sign-out itself) and treats one that runs out as a transport failure. A refresh that ran out is the answer that never arrived, which the grace above is for.
 
 ## 13. Identity proof
