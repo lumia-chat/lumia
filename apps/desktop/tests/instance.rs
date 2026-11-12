@@ -162,11 +162,11 @@ fn a_headless_run_holds_the_directory_without_listening() {
 
 #[test]
 fn each_data_directory_is_an_app_of_its_own() {
-    let usual = PathBuf::from("/home/ada/.local/share/chat.lumia.desktop");
-    assert_eq!(instance::app_id(&usual, true), "chat.lumia.desktop");
+    let usual = PathBuf::from("/home/ada/.local/share/chat.lumia");
+    assert_eq!(instance::app_id(&usual, true), "chat.lumia");
     let (one, two) = (PathBuf::from("/tmp/one"), PathBuf::from("/tmp/two"));
     let id = instance::app_id(&one, false);
-    assert!(id.starts_with("chat.lumia.desktop.") && id.len() == "chat.lumia.desktop.".len() + 16);
+    assert!(id.starts_with("chat.lumia.") && id.len() == "chat.lumia.".len() + 16);
     assert_eq!(id, instance::app_id(&one, false), "the same every launch");
     assert_ne!(id, instance::app_id(&two, false));
 }

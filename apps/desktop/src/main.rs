@@ -4,8 +4,9 @@
 //!
 //! Around the window, `platform` makes it an app: one running copy per data directory, the
 //! `lumia:` links the system hands it, the Account menu, the frame remembered between
-//! launches and notifications. `scripts/bundle-macos.sh` makes `Lumia.app` of the binary,
-//! which is what gives it an icon, the URL scheme and the right to post notifications.
+//! launches, notifications and updates. `scripts/bundle-macos.sh` makes `Lumia.app` of the
+//! binary, which is what gives it an icon, the URL scheme, the right to post notifications
+//! and the updater.
 
 use lumia_shell::platform::instance::{self, Claim, Launch};
 use lumia_shell::{app, platform, scenes, settings, tokens, ui};

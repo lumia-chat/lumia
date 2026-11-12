@@ -1,0 +1,30 @@
+# The shell's bridge to Sparkle, the updater of the macOS app (architecture section 13,
+# "Distribution"). It is the one crate of this workspace where `unsafe` is allowed: sending
+# Objective-C messages to a framework loaded at run time cannot be written without it. The
+# shell's own manifest still denies `unsafe`, so everything that needs it stays in here,
+# behind a safe surface of five functions, and every block says why it is sound (the lints
+# below refuse one that does not).
+[package]
+name = "lumia-sparkle"
+version = "0.2.1"
+edition = "2024"
+rust-version = "1.99"
+license = "Apache-2.0"
+description = "The Lumia desktop shell's bridge to Sparkle: the updater, loaded at run time from the app bundle"
+publish = false
+
+# Only on macOS; elsewhere the crate is the same surface doing nothing and depends on
+# nothing. The versions are the ones Rune already brings into Cargo.lock.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.5"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSBundle", "NSError", "NSString"] }
+
+[lints.rust]
+unsafe_code = "allow"
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "deny"
+multiple_unsafe_ops_per_block = "deny"
+unwrap_used = "deny"
+expect_used = "deny"

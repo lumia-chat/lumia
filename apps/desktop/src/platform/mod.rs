@@ -13,6 +13,9 @@
 //!   `x-scheme-handler/lumia`).
 //! - **Menus.** Only macOS has a menu bar; elsewhere [`sync_menu`] finds none and the
 //!   same actions are on screen.
+//! - **Updates.** On macOS the bundled app updates itself with Sparkle ([`updates`]),
+//!   which adds two items to the application menu; a bare binary has neither. Windows and
+//!   Linux have no updater yet.
 //! - **The frame.** AppKit saves and restores it (`rune-mac`); Windows and Linux open at
 //!   the default size and need their own saved frame in `settings.json`.
 //! - **Notifications.** `rune-notify` posts on macOS from a bundled app and on Windows
@@ -24,6 +27,7 @@
 //!   Elsewhere closing the window quits, until there is a tray icon to come back from.
 
 pub mod instance;
+pub mod updates;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock, PoisonError};
@@ -34,8 +38,9 @@ use rune_notify::{Click, Notification};
 use crate::app::{self, Route, State, menu};
 
 /// The app's reverse-DNS name: the bundle identifier on macOS, and the data directory's
-/// name. Not the SwiftUI app's `chat.lumia` while both exist.
-pub const APP_ID: &str = "chat.lumia.desktop";
+/// name. The one Lumia has always had on the Mac, so an installed app's preferences, its
+/// notification settings and its update feed carry over to this shell.
+pub const APP_ID: &str = "chat.lumia";
 
 /// The window's size at a first launch: the sign-in card with every way in an instance can
 /// offer fits without scrolling, and the Quiet Split has room for its aside. Later launches
@@ -59,8 +64,11 @@ static HANDLE: OnceLock<AppHandle<State>> = OnceLock::new();
 /// is no frame to remember.
 static WINDOWED: AtomicBool = AtomicBool::new(false);
 static FRAMED: AtomicBool = AtomicBool::new(false);
-/// What the menu bar's items were last enabled for.
-static MENU: Mutex<Option<(bool, bool)>> = Mutex::new(None);
+/// What decides the menu bar's items: where the app stands (`menu::standing`), and what
+/// the updater says when there is one.
+type MenuFor = ((bool, bool), Option<menu::Updates>);
+/// What the menu bar's items were last made for.
+static MENU: Mutex<Option<MenuFor>> = Mutex::new(None);
 /// The notifications posted and not yet taken back, by id.
 static POSTED: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
@@ -79,7 +87,8 @@ pub fn window_size(headless: bool) -> (f32, f32) {
 /// process that outlives its window.
 pub fn install(app: App<State>) -> App<State> {
     let mut app = app.on_open_url(open_url).on_focus(focus);
-    for item in menu::items((false, false)) {
+    // The update items join when the updater has started, which needs the app running.
+    for item in menu::items((false, false), None) {
         app = app.menu_item(item);
     }
     if cfg!(target_os = "macos") {
@@ -133,6 +142,12 @@ pub fn attach(
         }
     }
     dev_browser(&handle);
+    // The updater is Sparkle's, and Sparkle's objects are the main thread's: started from
+    // inside the loop, where the application object exists. Its items join the menu then.
+    handle.update(|state, _| {
+        updates::start();
+        sync_menu(state);
+    });
     trace(|| format!("notifications can_post={}", rune_notify::available()));
     let _ = HANDLE.set(handle);
 }
@@ -157,7 +172,8 @@ fn dev_browser(handle: &AppHandle<State>) {
 
 /// A debug build with `LUMIA_DEV_TRACE=FILE` appends a line to FILE for what it does with
 /// the system that leaves nothing to see from outside: whether it may post notifications,
-/// and each notice it hands over.
+/// each notice it hands over, whether the updater started, and what the menu bar's items
+/// were made for.
 fn trace(line: impl FnOnce() -> String) {
     use std::io::Write;
 
@@ -216,6 +232,7 @@ pub fn settle(state: &mut State, tx: &mut Tx) -> bool {
     notify(state);
     remember_frame();
     sync_menu(state);
+    updates::follow(tx);
     changed
 }
 
@@ -304,17 +321,22 @@ fn remember_frame() {
     }
 }
 
-/// Enables the menu bar's items for where the app stands, when that changed.
+/// Makes the menu bar's items for where the app stands and what the updater says, when
+/// either changed.
 fn sync_menu(state: &State) {
     let Some(handle) = HANDLE.get() else { return };
-    let standing = menu::standing(state);
+    let standing = (menu::standing(state), updates::standing());
     let mut last = MENU.lock().unwrap_or_else(PoisonError::into_inner);
     if *last == Some(standing) {
         return;
     }
-    match handle.set_menu(menu::items(standing)) {
+    let updater = standing.1.map(|updates| (updates, updates::ACTIONS));
+    match handle.set_menu(menu::items(standing.0, updater)) {
         // No menu bar on this platform: nothing to keep in step.
-        Ok(()) | Err(MenuError::Unsupported) => *last = Some(standing),
+        Ok(()) | Err(MenuError::Unsupported) => {
+            trace(|| format!("menu account={:?} updates={:?}", standing.0, standing.1));
+            *last = Some(standing);
+        }
         // Not running yet; asked again at the next poll.
         Err(_) => {}
     }

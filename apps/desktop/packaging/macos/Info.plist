@@ -2,8 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- The Info.plist of Lumia.app, the Rune desktop shell on macOS. scripts/bundle-macos.sh
      fills in the @NAMES@: the bundle identifier, the version from Cargo.toml (or the
-     release tag) and the build number (the commit count, as apps/apple/scripts/dist.sh
-     counts it). -->
+     release tag), the build number (the commit count) and the update feed with its
+     key. -->
 <plist version="1.0">
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
@@ -12,9 +12,10 @@
 	<string>Lumia</string>
 	<key>CFBundleName</key>
 	<string>Lumia</string>
-	<!-- chat.lumia.desktop while the SwiftUI app, chat.lumia, still exists: two apps with
-	     one identifier would share preferences, notification settings and the URL scheme's
-	     registration. The shell's data directory has the same name (src/settings.rs). -->
+	<!-- chat.lumia, the identifier Lumia has always had on the Mac: an installed app's
+	     preferences, notification settings and URL scheme registration carry over, and it
+	     is what its update feed is for. LUMIA_BUNDLE_ID makes a scratch bundle that stays
+	     apart from all of that. -->
 	<key>CFBundleIdentifier</key>
 	<string>@BUNDLE_ID@</string>
 	<key>CFBundleExecutable</key>
@@ -45,7 +46,8 @@
 			</array>
 		</dict>
 	</array>
-	<!-- The SwiftUI app's floor. The binary itself is built for macOS 11. -->
+	<!-- The floor Lumia on macOS has had since its first release. The binary itself is
+	     built for macOS 11. -->
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
 	<key>LSApplicationCategoryType</key>
@@ -59,6 +61,36 @@
 	<true/>
 	<key>NSHumanReadableCopyright</key>
 	<string></string>
+	<!-- Updates (architecture section 13, "Distribution"), by Sparkle, which is in
+	     Contents/Frameworks and loaded at run time (crates/sparkle). The feed is the
+	     appcast of the latest GitHub release and the key is the Ed25519 public half of the
+	     one that signs it; the private half is a secret of the release (scripts/dist-macos.sh).
+	     Both are the bundle script's LUMIA_UPDATE_FEED and LUMIA_UPDATE_KEY, so a fork
+	     points its builds at its own releases; a bundle built with no feed has none of
+	     these keys and no updater. -->
+	<key>SUFeedURL</key>
+	<string>@UPDATE_FEED@</string>
+	<key>SUPublicEDKey</key>
+	<string>@UPDATE_KEY@</string>
+	<!-- The feed itself must be signed with that key, not only each download: a download
+	     host that was taken over can then neither offer an old signed build as the newest
+	     nor change what the update window says. Sparkle asks that archives be verified
+	     before they are unpacked whenever feeds are signed. -->
+	<key>SURequireSignedFeed</key>
+	<true/>
+	<key>SUVerifyUpdateBeforeExtraction</key>
+	<true/>
+	<!-- Checks are on without asking, once a day; the person turns
+	     them off in the Lumia menu ("Check for updates automatically"). It is the one
+	     request the app makes to anything but their instances. Nothing is downloaded or
+	     installed without their say unless they tick Sparkle's own box for that. -->
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUScheduledCheckInterval</key>
+	<integer>86400</integer>
+	<!-- Not here, on purpose: SUEnableInstallerLauncherService and SUEnableDownloaderService
+	     (and the mach-lookup entitlements that go with them) are for a sandboxed app, which
+	     this is not. -->
 	<!-- No usage descriptions: the shell asks for no microphone, camera, contacts or
 	     location. Notifications need no key (the system asks at the first one). Voice
 	     (architecture 14) brings NSMicrophoneUsageDescription with it. -->

@@ -1,6 +1,10 @@
 //! The Account menu: which of its items can be chosen in each state, what they do, and the
 //! items reaching the real binary. The last runs `lumia` headless with a script, as Rune's
 //! tooling fires a menu item through the same lookup the menu bar uses.
+//!
+//! And the application menu's two update items: what they say for what the updater says,
+//! and that a binary with no updater (this one: no bundle, no Sparkle) does not have them.
+//! Sparkle itself updating a bundled app is `scripts/update-check.sh`'s to show.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
@@ -108,4 +112,65 @@ fn the_binary_has_the_items_and_enables_them_for_its_state() {
         r#"[{"t": 0.3, "menu": "change-instance"}, {"t": 0.6, "type": "mark", "name": "end"}]"#,
     );
     assert!(!ok && said.contains("disabled"), "{said}");
+}
+
+/// Where an update item's choice would go, were this an app with an updater.
+fn nothing(_: &mut State, _: &mut rune::Tx) {}
+
+#[test]
+fn the_update_items_say_what_the_updater_says() {
+    // The two items, in their order, in sentence case with a real ellipsis.
+    let [check, automatic] = menu::Updates {
+        can_check: true,
+        automatic: true,
+    }
+    .items();
+    assert_eq!(
+        (check.id, check.title),
+        (menu::CHECK_FOR_UPDATES, "Check for updates…")
+    );
+    assert_eq!(
+        (automatic.id, automatic.title),
+        (menu::CHECK_AUTOMATICALLY, "Check for updates automatically")
+    );
+    assert!(check.enabled && !check.checked);
+    assert!(automatic.enabled && automatic.checked);
+
+    // While a check is under way another cannot be asked for; the switch can still be
+    // thrown, and shows which way it is.
+    let [check, automatic] = menu::Updates {
+        can_check: false,
+        automatic: false,
+    }
+    .items();
+    assert!(!check.enabled);
+    assert!(automatic.enabled && !automatic.checked);
+}
+
+#[test]
+fn the_update_items_are_there_only_with_an_updater() {
+    let actions = menu::UpdateActions {
+        check: nothing,
+        toggle_automatic: nothing,
+    };
+    let updates = menu::Updates {
+        can_check: true,
+        automatic: true,
+    };
+    assert_eq!(menu::items((true, true), None).len(), 2);
+    assert_eq!(menu::items((true, true), Some((updates, actions))).len(), 4);
+}
+
+#[test]
+fn a_bare_binary_has_no_update_items() {
+    // No bundle, no Sparkle, no updater: the menu does not offer a check it cannot make.
+    let dir = data_dir();
+    std::fs::create_dir_all(&dir).unwrap();
+    for id in [menu::CHECK_FOR_UPDATES, menu::CHECK_AUTOMATICALLY] {
+        let events = format!(
+            r#"[{{"t": 0.3, "menu": "{id}"}}, {{"t": 0.6, "type": "mark", "name": "end"}}]"#
+        );
+        let (ok, said) = run_script(&dir, id, &events);
+        assert!(!ok && said.contains("unknown menu item"), "{said}");
+    }
 }

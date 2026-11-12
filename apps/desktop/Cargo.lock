@@ -3036,6 +3036,7 @@ dependencies = [
  "chrono",
  "getrandom 0.4.3",
  "lumia-client",
+ "lumia-sparkle",
  "pulldown-cmark",
  "rune",
  "rune-kit",
@@ -3045,6 +3046,14 @@ dependencies = [
  "serde_json",
  "tokio",
  "wuff",
+]
+
+[[package]]
+name = "lumia-sparkle"
+version = "0.2.1"
+dependencies = [
+ "objc2 0.6.5",
+ "objc2-foundation 0.3.2",
 ]
 
 [[package]]
