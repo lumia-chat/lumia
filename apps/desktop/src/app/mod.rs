@@ -291,40 +291,6 @@ pub fn init() -> State {
     state
 }
 
-/// The `live` scene, for a headless picture of the real thing (`--snap out.png --scene live`
-/// with the `LUMIA_DEV_*` environment): waits, on the wall clock, until the instance has
-/// answered and the open channel has its messages, or ten seconds. A headless run has a
-/// virtual clock and one frame, so nothing else would give the network time to answer.
-pub fn scene_live(state: &mut State) {
-    use std::time::{Duration, Instant};
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let mut settled = None;
-    while Instant::now() < deadline {
-        if state.drain() {
-            settled = None;
-        }
-        let loaded = state.route == Route::Shell
-            && state.session.connection == crate::session::Connection::Connected
-            && state.session.snapshot.as_ref().is_some_and(|snap| {
-                snap.servers
-                    .iter()
-                    .all(|x| state.session.members.contains_key(&x.server_id))
-            });
-        // Loaded, and quiet for a moment: the channel's replay has landed.
-        match (loaded, settled) {
-            (true, Some(since)) if Instant::now() - since > Duration::from_millis(600) => return,
-            (true, None) => settled = Some(Instant::now()),
-            (false, _) => settled = None,
-            _ => {}
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    eprintln!(
-        "lumia: the live scene gave up waiting; connection {:?}, error {:?}",
-        state.session.connection, state.session.last_error
-    );
-}
-
 /// `AppSpec::setup`: the session's runtime threads wake the window through `waker`.
 pub fn setup(state: &mut State, waker: Waker) {
     state.session.set_wake(Arc::clone(&waker));

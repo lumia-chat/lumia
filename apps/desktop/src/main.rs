@@ -2,7 +2,7 @@
 //! renderer and no window: `-- --snap out.png [--scene NAME] [--theme dark]`, `--tree
 //! tree.json`, `--script FILE --video out.mp4`.
 
-use lumia_shell::{app, tokens, ui};
+use lumia_shell::{app, scenes, tokens, ui};
 use rune::{AppSpec, Chrome};
 
 fn main() {
@@ -12,7 +12,7 @@ fn main() {
         families: tokens::FAMILIES,
         setup: Some(app::setup),
         poll: Some(app::poll),
-        scenes: &[("live", app::scene_live)],
+        scenes: scenes::SCENES,
         ..AppSpec::new("Lumia", (1180.0, 760.0), app::init, ui::view)
     };
     rune::App::new(spec)
