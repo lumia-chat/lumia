@@ -49,6 +49,10 @@ pub fn tone(id: &str, c: &Colors) -> (Color, Color) {
 // it. Where the tokens cannot make the number, the nearest token stands in and the comment
 // says so. All of them are gaps in `tokens.json`.
 
+/// A dot of the typing hint under the composer (4), and the room between two (3): the
+/// Quiet Split's `qs-typing`.
+pub const TYPING_DOT: f32 = SPACE_4;
+pub const TYPING_DOT_GAP: f32 = (SPACE_2 + SPACE_4) / 2.0;
 /// A card's primary button (48): `control-height`'s usage line, "primary 48px".
 pub const CONTROL_PRIMARY: f32 = CONTROL_HEIGHT + SPACE_2;
 /// A button in a pane or a popover (40): the profile card's "Message" on the Quiet Split.

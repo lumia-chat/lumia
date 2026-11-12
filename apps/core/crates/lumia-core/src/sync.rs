@@ -99,6 +99,9 @@ pub enum Notice {
     Disconnected(crate::proto::Disconnect),
     /// Who is present in a watched server changed (protocol 6.7).
     PresenceDiff(crate::proto::PresenceDiff),
+    /// Someone is typing in a subscribed channel, until `until` on the
+    /// server's clock (protocol 6.7).
+    Typing(crate::proto::TypingIndicator),
 }
 
 /// Per-log replay state.
@@ -264,6 +267,25 @@ impl Session {
         Effect::Send(frame(client_frame::Frame::Presence(update)))
     }
 
+    /// Says this person is typing in a channel (protocol 6.7), or nothing
+    /// when the channel is not subscribed on this connection yet: the
+    /// server takes typing only from a subscriber, and a hint that would
+    /// arrive late is not worth queuing. The caller spaces these out, and
+    /// never asks for a personal conversation, where the server is not to
+    /// learn who is writing.
+    #[must_use]
+    pub fn typing(&self, channel_id: &[u8]) -> Option<Effect> {
+        let subscribed = self
+            .channels
+            .get(channel_id)
+            .is_some_and(|c| c.state != LogState::Pending);
+        (self.welcomed && subscribed).then(|| {
+            Effect::Send(frame(client_frame::Frame::Typing(crate::proto::Typing {
+                channel_id: channel_id.to_vec(),
+            })))
+        })
+    }
+
     /// Feeds a server frame and returns what to do.
     pub fn handle(&mut self, frame: ServerFrame) -> Vec<Effect> {
         let Some(frame) = frame.frame else {
@@ -292,7 +314,8 @@ impl Session {
             server_frame::Frame::PresenceDiff(diff) => {
                 vec![Effect::Notify(Notice::PresenceDiff(diff))]
             }
-            server_frame::Frame::Heartbeat(_) | server_frame::Frame::Typing(_) => Vec::new(),
+            server_frame::Frame::Typing(typing) => vec![Effect::Notify(Notice::Typing(typing))],
+            server_frame::Frame::Heartbeat(_) => Vec::new(),
         }
     }
 
@@ -1055,6 +1078,36 @@ mod tests {
             &s.handle(bye)[0],
             Effect::Notify(Notice::Disconnected(_))
         ));
+    }
+
+    #[test]
+    fn typing_is_sent_for_a_subscribed_channel_and_someone_elses_is_a_notice() {
+        let mut s = Session::new("c", vec![9; 16], Cursors::default());
+        assert!(s.typing(&chan()).is_none(), "nothing before the welcome");
+        s.subscribe(chan(), 0);
+        s.handle(welcome(1));
+        assert!(
+            s.typing(&chan()).is_none(),
+            "nor before the server has said the channel is subscribed"
+        );
+        s.handle(resumed(&chan(), 0));
+        match s.typing(&chan()) {
+            Some(Effect::Send(ClientFrame {
+                frame: Some(client_frame::Frame::Typing(t)),
+            })) => assert_eq!(t.channel_id, chan()),
+            other => panic!("{other:?}"),
+        }
+        assert!(s.typing(&[2; 16]).is_none(), "a channel never subscribed");
+
+        let indicator = crate::proto::TypingIndicator {
+            channel_id: chan(),
+            account_id: vec![3; 16],
+            until: None,
+        };
+        let heard = s.handle(ServerFrame {
+            frame: Some(server_frame::Frame::Typing(indicator.clone())),
+        });
+        assert_eq!(heard, vec![Effect::Notify(Notice::Typing(indicator))]);
     }
 
     #[test]

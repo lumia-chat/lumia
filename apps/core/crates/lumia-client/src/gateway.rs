@@ -77,6 +77,9 @@ pub enum GatewayCommand {
     Foreground,
     /// This client's status and the servers it wants presence for.
     Presence(lumia_core::proto::PresenceUpdate),
+    /// This person is typing in a channel. Sent only once the channel is
+    /// subscribed, and dropped otherwise.
+    Typing(Vec<u8>),
 }
 
 /// How one connection ended.
@@ -289,6 +292,8 @@ pub async fn run<S: Store>(
     let mut nonce = 0u64;
     let mut account_id: Vec<u8> = Vec::new();
     let mut welcomed = false;
+    // How far the server's clock ran ahead of this one at the welcome.
+    let mut server_ahead = 0i64;
     let mut disconnect: Option<(DisconnectReason, Duration)> = None;
 
     let closed = |reason: String, disconnect: &Option<(DisconnectReason, Duration)>, welcomed| {
@@ -380,10 +385,19 @@ pub async fn run<S: Store>(
                     store.discard_all()?;
                     store.set_generation(generation)?;
                 }
-                Effect::Notify(notice) => {
+                Effect::Notify(mut notice) => {
+                    // What is reported is in this device's clock.
+                    if let Notice::Typing(typing) = &mut notice {
+                        let now = crate::time::now_micros();
+                        let until = wire::micros(typing.until.as_ref()).unwrap_or(now);
+                        typing.until =
+                            Some(crate::time::ts(typing_until(until, server_ahead, now)));
+                    }
                     match &notice {
                         Notice::Welcomed(welcome) => {
                             welcomed = true;
+                            server_ahead = wire::micros(welcome.server_time.as_ref())
+                                .map_or(0, |server| server - crate::time::now_micros());
                             account_id.clone_from(&welcome.account_id);
                             store.set_generation(welcome.recovery_generation)?;
                             if welcome.heartbeat_interval_seconds > 0 {
@@ -479,8 +493,23 @@ fn on_command<S: Store>(
         }
         GatewayCommand::Foreground => pending.push_back(session.high_water_mark()),
         GatewayCommand::Presence(update) => pending.push_back(session.presence(update)),
+        GatewayCommand::Typing(channel_id) => pending.extend(session.typing(&channel_id)),
     }
     Ok(())
+}
+
+/// How long a typing indicator is shown at most, whatever its `until` says.
+/// Servers set `until` about 8 seconds ahead (protocol 6.7).
+const TYPING_MAX: Duration = Duration::from_secs(10);
+
+/// A typing indicator's `until` on this device's clock, in microseconds.
+/// The server stamped it by its own clock; `server_ahead` is how far that
+/// ran ahead of this one at the welcome. Never further off than
+/// [`TYPING_MAX`], so a clock that jumped cannot leave someone typing for
+/// an hour.
+fn typing_until(until_micros: i64, server_ahead: i64, now_micros: i64) -> i64 {
+    let max = i64::try_from(TYPING_MAX.as_micros()).unwrap_or(i64::MAX);
+    now_micros + (until_micros - server_ahead - now_micros).clamp(0, max)
 }
 
 #[cfg(test)]
@@ -497,6 +526,32 @@ mod tests {
         assert!(c >= Duration::from_secs(2) && c < Duration::from_secs(4));
         let far = backoff(40);
         assert!(far >= MAX_BACKOFF / 2 && far < MAX_BACKOFF);
+    }
+
+    #[test]
+    fn a_typing_indicator_ends_by_this_devices_clock() {
+        const SECOND: i64 = 1_000_000;
+        let now = 1_000 * SECOND;
+        // Clocks agree: eight seconds ahead is eight seconds ahead.
+        assert_eq!(typing_until(now + 8 * SECOND, 0, now), now + 8 * SECOND);
+        // The server's clock runs a minute ahead, or five behind: still eight.
+        let ahead = 60 * SECOND;
+        assert_eq!(
+            typing_until(now + ahead + 8 * SECOND, ahead, now),
+            now + 8 * SECOND
+        );
+        let behind = -300 * SECOND;
+        assert_eq!(
+            typing_until(now + behind + 8 * SECOND, behind, now),
+            now + 8 * SECOND
+        );
+        // One that arrives after its time is over at once; one from a clock
+        // that has moved since the welcome lasts ten seconds, not an hour.
+        assert_eq!(typing_until(now - SECOND, 0, now), now);
+        assert_eq!(
+            typing_until(now + 3_600 * SECOND, 0, now),
+            now + 10 * SECOND
+        );
     }
 
     #[test]

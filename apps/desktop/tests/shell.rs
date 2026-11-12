@@ -362,6 +362,102 @@ fn messages_one_person_sends_close_together_are_one_block() {
     assert_eq!(below("k2", "k3"), 8.0);
 }
 
+/// The instance's word that `who` is typing in `channel` for `seconds` more.
+fn typing(channel: &str, who: &str, seconds: i64) -> Update {
+    Update::Gateway(lumia_client::app::AppEvent::Typing {
+        channel_id: channel.into(),
+        account_id: who.into(),
+        until_micros: chrono::Utc::now().timestamp_micros() + seconds * 1_000_000,
+    })
+}
+
+#[test]
+fn who_is_typing_is_named_under_the_composer_until_their_time_runs_out() {
+    let mut rt = runtime(signed_in());
+    assert!(rt.find("typing").is_none());
+    assert!(words(&rt).contains("Return to send"));
+
+    rt.update(|s, _| {
+        s.receive(&typing("general", "grace", 8));
+        // Another channel's typing is that channel's, and one's own is never shown.
+        s.receive(&typing("design", "stranger", 30));
+        s.receive(&typing("general", "me", 8));
+    });
+    settle(&mut rt);
+    assert!(rt.find("typing").is_some());
+    let shown = words(&rt);
+    assert!(shown.contains("Grace Hopper is typing…"), "{shown}");
+    assert!(shown.contains("Return to send"), "the hint keeps its end");
+    let dots = rt.elements().into_iter().filter(|e| {
+        e.path.contains("/typing/") && e.key.as_deref().is_some_and(|k| k.starts_with("dot"))
+    });
+    assert_eq!(
+        dots.filter(|dot| dot.loop_phase.is_some()).count(),
+        3,
+        "three dots, each on its loop"
+    );
+
+    // A second person, then a third; whoever began first is named first.
+    rt.update(|s, _| {
+        s.receive(&Update::Members {
+            server_id: "acme".into(),
+            members: vec![
+                member("me", "ada", "Ada Lovelace"),
+                member("grace", "grace", "Grace Hopper"),
+                member("alan", "alan", "Alan Turing"),
+                member("edsger", "edsger", "Edsger Dijkstra"),
+            ],
+        });
+        s.receive(&typing("general", "alan", 20));
+    });
+    settle(&mut rt);
+    assert!(words(&rt).contains("Grace Hopper and Alan Turing are typing…"));
+    rt.update(|s, _| s.receive(&typing("general", "edsger", 20)));
+    settle(&mut rt);
+    assert!(words(&rt).contains("Several people are typing…"));
+
+    // Nothing says someone stopped: their time runs out. Grace's is the first to.
+    let now = chrono::Utc::now().timestamp_micros();
+    let ends = rt.state.session.typing_ends().expect("someone is typing");
+    assert!((ends - now - 8_000_000).abs() < 1_000_000, "{}", ends - now);
+    rt.update(move |s, _| {
+        assert!(!s.tick(now), "nobody's time is up yet");
+        assert!(s.tick(now + 9_000_000));
+    });
+    settle(&mut rt);
+    assert!(words(&rt).contains("Alan Turing and Edsger Dijkstra are typing…"));
+
+    // A message from someone typing ends theirs at once.
+    rt.update(|s, _| {
+        s.receive(&Update::Gateway(lumia_client::app::AppEvent::Applied {
+            channel_id: "general".into(),
+            events: vec![lumia_client::app::EventSummary {
+                seq: 4,
+                kind: "message_created".into(),
+                message: Some(lumia_client::app::MessageSummary {
+                    message_id: "m4".into(),
+                    channel_id: "general".into(),
+                    seq: 4,
+                    author_account_id: "alan".into(),
+                    body: "Done.".into(),
+                    created_at_micros: 0,
+                    deleted: false,
+                }),
+            }],
+        }));
+    });
+    settle(&mut rt);
+    assert!(words(&rt).contains("Edsger Dijkstra is typing…"));
+
+    // In the other channel, its own.
+    press(&mut rt, "channel-design");
+    let shown = words(&rt);
+    assert!(shown.contains("stranger is typing…"), "{shown}");
+    rt.update(|s, _| assert!(s.tick(chrono::Utc::now().timestamp_micros() + 60_000_000)));
+    settle(&mut rt);
+    assert!(rt.find("typing").is_none() && rt.state.session.typing_ends().is_none());
+}
+
 #[test]
 fn return_in_the_composer_sends_and_a_send_that_cannot_be_queued_keeps_the_draft() {
     let mut rt = runtime(signed_in());

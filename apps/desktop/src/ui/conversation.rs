@@ -1,7 +1,7 @@
 //! The conversation panel: a header, the timeline and the composer. A server's channel and a
 //! personal conversation are both drawn by it; [`Chrome`] is what differs between them.
 
-use rune::{Cursor, El, Icon, col, el, icon, row, text, text_input};
+use rune::{Cursor, Cycle, El, Icon, Span, col, el, icon, rich, row, text, text_input};
 
 use super::components::{Look, empty_state, error_text, panel, title_rule, topic as topic_line};
 use super::timeline;
@@ -177,19 +177,88 @@ fn composer_off(reason: &str, look: Look) -> El {
         .child(frame)
 }
 
-/// The line under the composer. The board has who is typing at its start, which the
-/// protocol does not carry; its end says what Return does.
-fn composer_hint(look: Look) -> El {
+/// The typing hint's dots, as the board's `qsDot` keyframes: each brightens and dims in
+/// turn, the second and third 0.15 s behind the one before. Still, and whole, under
+/// Reduce Motion.
+const DOT_STOPS: &[(f32, f32)] = &[(0.0, 0.3), (0.4, 1.0), (0.8, 0.3), (1.0, 0.3)];
+const DOT_PERIOD: f32 = 1.2;
+const DOT_LAG: f32 = 0.15;
+
+/// What the hint says of those typing, and how much of it from its start is their names.
+fn typing_words(names: &[String]) -> (String, usize) {
+    match names {
+        [] => (String::new(), 0),
+        [one] => (format!("{one} is typing…"), one.len()),
+        [one, other] => {
+            let both = format!("{one} and {other}");
+            let named = both.len();
+            (format!("{both} are typing…"), named)
+        }
+        _ => ("Several people are typing…".into(), 0),
+    }
+}
+
+/// Who is typing: three dots and the words, the names in stronger ink. Protocol 6.7; a
+/// personal conversation never has one (the session says why).
+fn typing_hint(names: &[String], look: Look) -> El {
+    let c = look.c;
+    let mut dots = row().gap(t::TYPING_DOT_GAP).a11y_hidden();
+    for n in 0..3u8 {
+        dots = dots.child(
+            el().key(format!("dot{n}"))
+                .size(t::TYPING_DOT, t::TYPING_DOT)
+                .radius(t::TYPING_DOT / 2.0)
+                .fill(c.ink_muted)
+                .cycle(Cycle {
+                    period: DOT_PERIOD,
+                    phase: f32::from(n) * DOT_LAG / DOT_PERIOD,
+                    stops: DOT_STOPS,
+                    still: 1.0,
+                    fps: 30.0,
+                }),
+        );
+    }
+    let (words, named) = typing_words(names);
+    let names = Span::new(0, named)
+        .weight(t::TEXT_SECTION.weight)
+        .color(c.ink_emphasis);
     row()
+        .key("typing")
+        .grow(1.0)
+        .min_w(0.0)
+        .gap(t::SPACE_8)
+        .items_center()
+        .child(dots)
+        .child(
+            rich(words, vec![names])
+                .font(t::TEXT_META)
+                .color(c.ink_muted)
+                .truncate()
+                .grow(1.0)
+                .min_w(0.0),
+        )
+}
+
+/// The line under the composer: who is typing at its start, as the board has it, and
+/// what Return does at its end.
+fn composer_hint(s: &State, look: Look) -> El {
+    let typing = s.session.typing_here();
+    let mut line = row()
         .w_full()
         .px(t::SPACE_8)
         .pt(t::SPACE_8)
-        .justify_end()
-        .child(
-            text("Return to send")
-                .font(t::TEXT_META)
-                .color(look.c.ink_muted),
-        )
+        .gap(t::SPACE_12)
+        .items_center();
+    line = if typing.is_empty() {
+        line.child(el().grow(1.0))
+    } else {
+        line.child(typing_hint(&typing, look))
+    };
+    line.child(
+        text("Return to send")
+            .font(t::TEXT_META)
+            .color(look.c.ink_muted),
+    )
 }
 
 fn composer(s: &State, placeholder: &str, look: Look) -> El {
@@ -260,5 +329,5 @@ fn composer(s: &State, placeholder: &str, look: Look) -> El {
         .pt(t::SPACE_4)
         .pb(t::SPACE_14)
         .child(frame)
-        .child(composer_hint(look))
+        .child(composer_hint(s, look))
 }

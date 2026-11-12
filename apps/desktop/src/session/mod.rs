@@ -241,6 +241,10 @@ pub struct Session {
     /// Whether this device holds an identity, as last read from the stores.
     holds_identity: bool,
     watching: Vec<String>,
+    /// Who is typing in the servers' channels (protocol 6.7), by channel, whoever began
+    /// first at the front: the account, and when its word runs out in microseconds on this
+    /// computer's clock. Never this account.
+    typing: HashMap<String, Vec<(String, i64)>>,
 
     /// The instance's base URL, as opened.
     pub base_url: String,
@@ -310,6 +314,7 @@ impl Session {
             reach: Reach::default(),
             holds_identity: false,
             watching: Vec::new(),
+            typing: HashMap::new(),
             base_url: String::new(),
             host: String::new(),
             info: None,
@@ -457,6 +462,7 @@ impl Session {
         self.people.clear();
         self.members.clear();
         self.presence.clear();
+        self.typing.clear();
         self.profiles.clear();
         self.conversation = None;
         self.reach = Reach::default();
@@ -780,6 +786,51 @@ impl Session {
         }
     }
 
+    /// This person changed what the composer holds: says so to the channel on screen
+    /// (protocol 6.7). The core sends it at most once in five seconds, and never for a
+    /// personal conversation, where the instance is not to learn who is writing; whether
+    /// typing travels inside one is an open item of the E2EE spec (section 13).
+    pub fn typed(&self) {
+        if let (Some(Conversation::Channel(channel)), Some(app), Connection::Connected) =
+            (&self.conversation, &self.app, &self.connection)
+        {
+            let _ = app.typing(channel);
+        }
+    }
+
+    /// The names of those typing in the conversation on screen, whoever began first at
+    /// the front.
+    pub fn typing_here(&self) -> Vec<String> {
+        let here = self.conversation.as_ref().map(Conversation::id);
+        here.and_then(|id| self.typing.get(id))
+            .map(|typing| typing.iter().map(|(who, _)| self.name_of(who)).collect())
+            .unwrap_or_default()
+    }
+
+    /// When the first of those typing on screen stops being shown, in microseconds on
+    /// this computer's clock; none when nobody is.
+    pub fn typing_ends(&self) -> Option<i64> {
+        let here = self.conversation.as_ref().map(Conversation::id)?;
+        self.typing.get(here)?.iter().map(|(_, until)| *until).min()
+    }
+
+    /// Stops showing whoever's typing has run out by `now_micros`: nothing says that
+    /// someone stopped, their last word of it only ends. True when someone was dropped.
+    pub fn expire_typing(&mut self, now_micros: i64) -> bool {
+        let before: usize = self.typing.values().map(Vec::len).sum();
+        self.typing.retain(|_, typing| {
+            typing.retain(|(_, until)| *until > now_micros);
+            !typing.is_empty()
+        });
+        before != self.typing.values().map(Vec::len).sum::<usize>()
+    }
+
+    fn stop_typing(&mut self, channel_id: &str, account_id: &str) {
+        if let Some(typing) = self.typing.get_mut(channel_id) {
+            typing.retain(|(who, _)| who != account_id);
+        }
+    }
+
     // ---- Reading ------------------------------------------------------------------
 
     /// The instance as a person would write it: the base URL without its scheme.
@@ -975,10 +1026,34 @@ impl Session {
                 self.send_watch();
                 self.load();
             }
-            AppEvent::Applied { channel_id, .. } | AppEvent::SnapshotTaken { channel_id, .. } => {
+            AppEvent::Applied { channel_id, events } => {
+                // Whoever's message arrived has finished typing it.
+                for message in events.iter().filter_map(|e| e.message.as_ref()) {
+                    self.stop_typing(channel_id, &message.author_account_id);
+                }
                 if self.channel() == Some(channel_id.as_str()) {
                     self.read_entries();
                 }
+            }
+            AppEvent::SnapshotTaken { channel_id, .. } => {
+                if self.channel() == Some(channel_id.as_str()) {
+                    self.read_entries();
+                }
+            }
+            AppEvent::Typing {
+                channel_id,
+                account_id,
+                until_micros,
+            } => {
+                if account_id == self.me() {
+                    return;
+                }
+                let typing = self.typing.entry(channel_id.clone()).or_default();
+                match typing.iter_mut().find(|(who, _)| who == account_id) {
+                    Some((_, until)) => *until = *until_micros,
+                    None => typing.push((account_id.clone(), *until_micros)),
+                }
+                self.look_up(account_id);
             }
             AppEvent::AccountApplied { .. } => self.load(),
             AppEvent::Error {

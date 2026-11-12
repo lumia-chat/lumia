@@ -41,9 +41,10 @@ cargo run -p lumia-cli -- server-create Acme
 cargo run -p lumia-cli -- channel-create <server-id> general
 cargo run -p lumia-cli -- send <channel-id> "hello"
 cargo run -p lumia-cli -- tail <channel-id>
+cargo run -p lumia-cli -- typing <channel-id>    # say this account is typing there, once
 ```
 
-`tail` subscribes from the store's cursor, so a second run replays only what it missed, and reconnects with backoff when the connection drops. An access token the instance refuses is refreshed once and the new pair persisted. The CLI's keystore is a plaintext file at mode 0600 and is for development only.
+`tail` subscribes from the store's cursor, so a second run replays only what it missed, and reconnects with backoff when the connection drops; it prints who is typing as a `Typing` notice. An access token the instance refuses is refreshed once and the new pair persisted. The CLI's keystore is a plaintext file at mode 0600 and is for development only.
 
 Identity (specs/identity.md) lives under `<data-dir>/identity/`, shared by every instance the data directory knows:
 

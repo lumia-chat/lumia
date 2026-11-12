@@ -28,7 +28,12 @@ pub fn now_micros() -> i64 {
 /// The wall clock as a protobuf timestamp.
 #[must_use]
 pub fn now_ts() -> prost_types::Timestamp {
-    let micros = now_micros();
+    ts(now_micros())
+}
+
+/// Microseconds since the Unix epoch as a protobuf timestamp.
+#[must_use]
+pub fn ts(micros: i64) -> prost_types::Timestamp {
     prost_types::Timestamp {
         seconds: micros.div_euclid(1_000_000),
         nanos: i32::try_from(micros.rem_euclid(1_000_000) * 1000).unwrap_or(0),

@@ -469,6 +469,26 @@ pub enum AppEvent {
         updated: Vec<PresenceSummary>,
         left_account_ids: Vec<String>,
     },
+    /// Someone else is typing in a server's channel (protocol 6.7), until
+    /// `until_micros` on this device's clock; they are no longer shown
+    /// then, nor once a message of theirs arrives. Sent again while they
+    /// go on.
+    Typing {
+        channel_id: String,
+        account_id: String,
+        until_micros: i64,
+    },
+}
+
+/// How often typing is sent while someone types in a channel (protocol 6.7).
+pub const TYPING_EVERY: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Whether typing in `channel` is due to be sent at `now_micros`, given
+/// when it last was and where: once in [`TYPING_EVERY`] for a channel, and
+/// at once for another.
+fn typing_due(last: Option<&(Vec<u8>, i64)>, channel: &[u8], now_micros: i64) -> bool {
+    let every = i64::try_from(TYPING_EVERY.as_micros()).unwrap_or(i64::MAX);
+    last.is_none_or(|(last_channel, at)| last_channel != channel || now_micros - at >= every)
 }
 
 /// One account's presence in a server.
@@ -625,6 +645,11 @@ fn app_event(ev: GatewayEvent) -> AppEvent {
                 .map(|id| wire::display(id))
                 .collect(),
         },
+        GatewayEvent::Notice(Notice::Typing(t)) => AppEvent::Typing {
+            channel_id: wire::display(&t.channel_id),
+            account_id: wire::display(&t.account_id),
+            until_micros: wire::micros(t.until.as_ref()).unwrap_or(0),
+        },
         GatewayEvent::Notice(Notice::Disconnected(d)) => AppEvent::Disconnected {
             reason: lumia_core::proto::DisconnectReason::try_from(d.reason)
                 .map(|r| r.as_str_name().to_string())
@@ -776,6 +801,8 @@ struct Inner {
     writer_generation: u64,
     /// The servers whose presence is watched, re-sent with a status change.
     watching: Vec<Vec<u8>>,
+    /// The channel typing was last sent for and when, in microseconds.
+    typed: Option<(Vec<u8>, i64)>,
 }
 
 /// The identity's stores: their own lock, so an identity flow that awaits
@@ -898,6 +925,7 @@ impl App {
                 writer_guard,
                 writer_generation,
                 watching: Vec::new(),
+                typed: None,
             }),
             identity: AsyncMutex::new(IdentityStores {
                 store: identity_store,
@@ -1826,6 +1854,38 @@ impl App {
         ))
     }
 
+    /// Says this person is typing in a server's channel (protocol 6.7).
+    /// Call it on every edit of the composer: it is sent at most once in
+    /// [`TYPING_EVERY`] for a channel, and not at all for a personal
+    /// conversation (where the instance is not to learn who is writing)
+    /// or a channel the kept snapshot does not list as a server's. Nothing
+    /// is said when typing stops; the last one runs out.
+    ///
+    /// # Errors
+    /// When not started or the id is malformed.
+    pub fn typing(&self, channel_id: &str) -> Result<(), ClientError> {
+        let channel = parse_uuid(channel_id)?;
+        let now = crate::time::now_micros();
+        {
+            let mut inner = self.lock();
+            if !typing_due(inner.typed.as_ref(), &channel, now) {
+                return Ok(());
+            }
+            inner.typed = Some((channel.clone(), now));
+        }
+        let in_a_server = self.kept_snapshot()?.is_some_and(|snapshot| {
+            snapshot.channels.iter().any(|c| {
+                parse_uuid(&c.channel_id).is_ok_and(|id| id == channel)
+                    && !c.server_id.is_empty()
+                    && !c.kind.starts_with("PERSONAL")
+            })
+        });
+        if !in_a_server {
+            return Ok(());
+        }
+        self.send_command(GatewayCommand::Typing(channel))
+    }
+
     /// Sends a message; returns the client-minted message id.
     ///
     /// # Errors
@@ -2734,6 +2794,49 @@ mod kept_tests {
             .meta_set(KEPT_SNAPSHOT, "{not json")
             .unwrap();
         assert!(app.kept_snapshot().unwrap().is_none());
+    }
+
+    #[test]
+    fn typing_is_spaced_out_and_never_sent_for_a_personal_conversation() {
+        const SECOND: i64 = 1_000_000;
+        let (here, there) = (vec![1u8; 16], vec![2u8; 16]);
+        assert!(typing_due(None, &here, 0));
+        let last = (here.clone(), 100 * SECOND);
+        assert!(!typing_due(Some(&last), &here, 104 * SECOND));
+        assert!(typing_due(Some(&last), &here, 105 * SECOND));
+        assert!(typing_due(Some(&last), &there, 101 * SECOND));
+
+        let app = app();
+        let channel = |id: &str, server: &str, kind: &str| ChannelSummary {
+            channel_id: id.into(),
+            server_id: server.into(),
+            kind: kind.into(),
+            ..snapshot().channels[0].clone()
+        };
+        let general = "018f0000-0000-7000-8000-000000000001";
+        let personal = "018f0000-0000-7000-8000-000000000002";
+        let unlisted = "018f0000-0000-7000-8000-000000000003";
+        let server = "018f0000-0000-7000-8000-0000000000aa";
+        app.keep(
+            KEPT_SNAPSHOT,
+            &SnapshotSummary {
+                channels: vec![
+                    channel(general, server, "TEXT"),
+                    channel(personal, "", "PERSONAL_DM"),
+                ],
+                ..snapshot()
+            },
+        );
+        // No gateway loop runs behind this client, so what would be sent is refused
+        // and what is held back is not.
+        assert!(app.typing(personal).is_ok());
+        assert!(app.typing(unlisted).is_ok());
+        assert!(matches!(app.typing(general), Err(ClientError::State(_))));
+        assert!(
+            app.typing(general).is_ok(),
+            "a second within five seconds is not sent at all"
+        );
+        assert!(app.typing("not an id").is_err());
     }
 
     #[test]

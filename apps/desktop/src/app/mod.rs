@@ -90,6 +90,10 @@ pub struct State {
     /// What "Find a member" holds; the side panel lists the members it matches.
     pub member_filter: TextEdit,
     pub draft: TextEdit,
+    /// What the draft held when [`State::tick`] last looked: a change since is typing.
+    draft_seen: String,
+    /// The moment the window has asked to be woken at, to stop showing someone typing.
+    typing_wake: Option<i64>,
     pub home: home::Home,
     pub server_forms: server::ServerForms,
     pub account: account::Account,
@@ -121,6 +125,8 @@ impl State {
             person: None,
             member_filter: TextEdit::new(""),
             draft: TextEdit::new(""),
+            draft_seen: String::new(),
+            typing_wake: None,
             home: home::Home::default(),
             server_forms: server::ServerForms::default(),
             account: account::Account::default(),
@@ -250,6 +256,21 @@ impl State {
             self.draft.clear();
             tx.scroll_to_bottom("messages");
         }
+    }
+
+    /// What the passing of time does, apart from anything the session reports: says this
+    /// person is typing when the draft has changed since the last look (the composer has
+    /// no hook of its own for an edit), and stops showing those whose typing has run out
+    /// by `now_micros`. True when that changed what is on screen.
+    pub fn tick(&mut self, now_micros: i64) -> bool {
+        if self.draft.text != self.draft_seen {
+            self.draft_seen.clone_from(&self.draft.text);
+            // Emptied is not typing: a send, or another channel.
+            if !self.draft.text.trim().is_empty() {
+                self.session.typed();
+            }
+        }
+        self.session.expire_typing(now_micros)
     }
 
     /// Enters the shell for a session the stores already hold, at launch: with what the
@@ -415,6 +436,17 @@ pub fn setup(state: &mut State, waker: Waker) {
 }
 
 /// `AppSpec::poll`: before every frame, on the window's thread.
-pub fn poll(state: &mut State, _now: f64, _tx: &mut Tx) -> bool {
-    state.drain()
+pub fn poll(state: &mut State, _now: f64, tx: &mut Tx) -> bool {
+    let drained = state.drain();
+    let now = chrono::Utc::now().timestamp_micros();
+    let ticked = state.tick(now);
+    // Nothing arrives when someone stops typing, so the window asks to be woken when the
+    // first of them runs out, once for each such moment.
+    let ends = state.session.typing_ends();
+    if let Some(ends) = ends.filter(|ends| state.typing_wake != Some(*ends)) {
+        let left = u64::try_from(ends - now).unwrap_or(0);
+        tx.wake_after(std::time::Duration::from_micros(left));
+    }
+    state.typing_wake = ends;
+    drained || ticked
 }

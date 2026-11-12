@@ -175,6 +175,8 @@ export type ClientEvent =
   | { kind: "error"; code: string; message: string; commandId: string }
   | { kind: "subscriptionFailed"; channelId: string; message: string }
   | { kind: "presenceDiff"; serverId: string; joined: PresenceSummary[]; updated: PresenceSummary[]; leftAccountIds: string[] }
+  /** Someone else is typing in a server's channel, until `untilMicros` on this device's clock. Not drawn on the web yet. */
+  | { kind: "typing"; channelId: string; accountId: string; untilMicros: number }
   | { kind: "snapshotTaken"; channelId: string; seq: number }
   | { kind: "disconnected"; reason: string; reconnectAfterSeconds: number }
   | { kind: "reconnecting"; attempt: number; delayMillis: number; reason: string }

@@ -259,6 +259,16 @@ impl Client {
         self.app.watch_presence(&watch_server_ids).map_err(js)
     }
 
+    /// Says this person is typing in a server's channel (protocol 6.7);
+    /// call it on every edit of the composer, the core spaces them out.
+    ///
+    /// # Errors
+    /// When not started or the id is malformed.
+    #[wasm_bindgen(js_name = typing)]
+    pub fn typing(&self, channel_id: &str) -> Result<(), JsError> {
+        self.app.typing(channel_id).map_err(js)
+    }
+
     /// The status this person chose and their custom status text.
     ///
     /// # Errors

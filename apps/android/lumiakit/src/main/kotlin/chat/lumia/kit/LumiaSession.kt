@@ -404,7 +404,8 @@ class LumiaSession(val client: LumiaClient) {
                 for (id in event.leftAccountIds) server.remove(id)
                 serverPresence[event.serverId] = server
             }
-            is ClientEvent.Acked, is ClientEvent.Error, is ClientEvent.SubscriptionFailed, is ClientEvent.DmNote -> Unit
+            // Who is typing (protocol 6.7) is not drawn on Android yet.
+            is ClientEvent.Acked, is ClientEvent.Error, is ClientEvent.SubscriptionFailed, is ClientEvent.DmNote, is ClientEvent.Typing -> Unit
         }
     }
 

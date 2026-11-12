@@ -590,8 +590,10 @@ pub const BODIES: &[&str] = &[
 /// The `blocks` scene: a channel where people send several messages close together, with no
 /// instance behind it. What one person sends within minutes is one block under one name; a
 /// longer pause, another person or a send still on its way each show what they do to it.
+/// Under the composer, someone is typing.
 pub fn blocks(state: &mut State) {
     use crate::session::{Entry, Pending};
+    use lumia_client::app::AppEvent;
     servers_sample(state);
     let now = chrono::Utc::now().timestamp_micros();
     let minutes_ago = |minutes: i64| now - minutes * 60_000_000;
@@ -628,6 +630,11 @@ pub fn blocks(state: &mut State) {
         failed: None,
     }];
     state.session.revision += 1;
+    state.receive(&Update::Gateway(AppEvent::Typing {
+        channel_id: "general".into(),
+        account_id: "grace".into(),
+        until_micros: now + 8_000_000,
+    }));
 }
 
 /// The `bodies` scene: a channel whose messages are [`BODIES`], with no instance behind it.

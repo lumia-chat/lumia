@@ -456,7 +456,8 @@ public final class LumiaSession {
             }
             serverPresence[serverId] = server
             serverCustomStatus[serverId] = custom
-        case .acked, .error, .subscriptionFailed, .dmNote:
+        // Who is typing (protocol 6.7) is not drawn on iOS yet.
+        case .acked, .error, .subscriptionFailed, .dmNote, .typing:
             break
         }
     }

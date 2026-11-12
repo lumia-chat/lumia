@@ -567,6 +567,11 @@ pub enum ClientEvent {
         updated: Vec<PresenceSummary>,
         left_account_ids: Vec<String>,
     },
+    Typing {
+        channel_id: String,
+        account_id: String,
+        until_micros: i64,
+    },
 }
 
 /// The identity's signed profile, as this device keeps it.
@@ -734,6 +739,15 @@ impl From<app::AppEvent> for ClientEvent {
                 joined: joined.into_iter().map(Into::into).collect(),
                 updated: updated.into_iter().map(Into::into).collect(),
                 left_account_ids,
+            },
+            E::Typing {
+                channel_id,
+                account_id,
+                until_micros,
+            } => Self::Typing {
+                channel_id,
+                account_id,
+                until_micros,
             },
         }
     }
@@ -906,6 +920,12 @@ impl Client {
     /// (protocol 6.7); sent with the chosen status.
     pub fn watch_presence(&self, watch_server_ids: Vec<String>) -> Res<()> {
         Ok(self.app.watch_presence(&watch_server_ids)?)
+    }
+
+    /// Says this person is typing in a server's channel (protocol 6.7);
+    /// call it on every edit of the composer, the core spaces them out.
+    pub fn typing(&self, channel_id: String) -> Res<()> {
+        Ok(self.app.typing(&channel_id)?)
     }
 
     /// The status this person chose and their custom status text, kept

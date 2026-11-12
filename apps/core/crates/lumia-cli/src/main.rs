@@ -118,6 +118,8 @@ enum Cmd {
     Whoami,
     /// Follow a channel, printing events as they arrive; reconnects.
     Tail { channel_id: String },
+    /// Say this account is typing in a server's channel, once (protocol 6.7).
+    Typing { channel_id: String },
     /// Run a failure-injection scenario against the instance (`all` for every one).
     Scenario { name: String },
     /// End-to-end encrypted personal DMs.
@@ -575,6 +577,58 @@ async fn run(cli: Cli) -> Result<(), ClientError> {
                         None => break,
                     },
                     _ = tokio::signal::ctrl_c() => break,
+                }
+            }
+            drop(tx);
+            gw.abort();
+            Ok(())
+        }
+        Cmd::Typing { channel_id } => {
+            let channel = parse_uuid(&channel_id)?;
+            let (tx, rx) = mpsc::unbounded();
+            let (etx, mut erx) = mpsc::unbounded();
+            let gw = tokio::spawn(gateway::run_forever(
+                api,
+                ctx.store,
+                "lumia-cli",
+                ctx.device_id,
+                vec![channel.clone()],
+                rx,
+                etx,
+            ));
+            // The instance takes typing only from a subscriber, and the loop does not
+            // say when the channel has become one: ask a few times over two seconds.
+            // The first that can go does, and the instance drops the rest as too soon.
+            let mut tick = tokio::time::interval(std::time::Duration::from_millis(200));
+            let (mut welcomed, mut asked) = (false, 0);
+            loop {
+                tokio::select! {
+                    ev = erx.next() => match ev {
+                        Some(GatewayEvent::Notice(Notice::Welcomed(_))) => welcomed = true,
+                        Some(GatewayEvent::Notice(Notice::Error(e))) => {
+                            eprintln!("error: {} {}", e.code, e.message);
+                            break;
+                        }
+                        Some(GatewayEvent::Notice(Notice::SubscriptionFailed { error, .. })) => {
+                            eprintln!("not subscribed: {}", error.map(|e| e.message).unwrap_or_default());
+                            break;
+                        }
+                        Some(GatewayEvent::Closed(reason)) => {
+                            eprintln!("closed: {reason}");
+                            break;
+                        }
+                        Some(_) => {}
+                        None => break,
+                    },
+                    _ = tick.tick() => if welcomed {
+                        if asked == 10 {
+                            println!("typing in {channel_id}");
+                            break;
+                        }
+                        asked += 1;
+                        tx.unbounded_send(GatewayCommand::Typing(channel.clone()))
+                            .map_err(|e| ClientError::Transport(e.to_string()))?;
+                    },
                 }
             }
             drop(tx);

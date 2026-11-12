@@ -260,6 +260,11 @@ fn notify(n: Notice) -> JsValue {
                 f64::from(u32::try_from(d.left_account_ids.len()).unwrap_or(u32::MAX)).into(),
             ),
         ]),
+        Notice::Typing(t) => obj(&[
+            ("kind", "typing".into()),
+            ("channelId", bytes(&t.channel_id)),
+            ("accountId", bytes(&t.account_id)),
+        ]),
         Notice::Acked { command_id, seq } => obj(&[
             ("kind", "acked".into()),
             ("commandId", bytes(&command_id)),
