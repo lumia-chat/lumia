@@ -1008,6 +1008,18 @@ impl Session {
                 for id in left_account_ids {
                     server.remove(id);
                 }
+                // Someone present whom the member list does not have joined since it was
+                // read: read it again.
+                let listed = self.members.get(server_id);
+                let stranger = joined.iter().any(|p| {
+                    listed.is_some_and(|all| all.iter().all(|m| m.account_id != p.account_id))
+                });
+                if stranger {
+                    let server = self.servers().iter().find(|s| s.server_id == *server_id);
+                    if let Some(server) = server.cloned() {
+                        self.load_members(&[server]);
+                    }
+                }
             }
             AppEvent::DmError { .. }
             | AppEvent::DmNote { .. }
