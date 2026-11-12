@@ -39,6 +39,10 @@ kill_signal = 'SIGTERM'
   DNS_CLUSTER_QUERY = 'lumia-instance.internal'
   ECTO_IPV6 = 'true'
   DB_SSL = 'true'
+  # Closed here, so a deploy from this file does not open an instance to
+  # the world by itself. An operator who wants it open sets a secret of the
+  # same name, which Fly puts ahead of this value:
+  #   fly secrets set LUMIA_OPEN_REGISTRATION=true
   LUMIA_OPEN_REGISTRATION = 'false'
   # The push relay (apps/relay/fly.toml) for the iOS and Android apps.
   LUMIA_PUSH_RELAY_URL = 'https://lumia-relay.fly.dev'
