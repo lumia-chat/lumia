@@ -513,6 +513,37 @@ impl Client {
         to_js(&snapshot)
     }
 
+    /// `PUT /account/avatar`: `picture` is a file's bytes as chosen (PNG,
+    /// JPEG, WebP or GIF, at most 8 MB); the instance keeps its own square
+    /// of it. Resolves to the snapshot as it then is.
+    ///
+    /// # Errors
+    /// `INVALID_ARGUMENT` for what is not a picture it takes,
+    /// `FAILED_PRECONDITION` on an instance that keeps none.
+    #[wasm_bindgen(js_name = setAvatar)]
+    pub async fn set_avatar(
+        &self,
+        picture: Vec<u8>,
+        media_type: String,
+    ) -> Result<JsValue, JsError> {
+        to_js(
+            &self
+                .app
+                .set_avatar(picture, &media_type)
+                .await
+                .map_err(js)?,
+        )
+    }
+
+    /// `DELETE /account/avatar`. Resolves to the snapshot as it then is.
+    ///
+    /// # Errors
+    /// On transport or API failure.
+    #[wasm_bindgen(js_name = removeAvatar)]
+    pub async fn remove_avatar(&self) -> Result<JsValue, JsError> {
+        to_js(&self.app.remove_avatar().await.map_err(js)?)
+    }
+
     /// `GET /accounts/{id}`: a public profile, when visible.
     ///
     /// # Errors

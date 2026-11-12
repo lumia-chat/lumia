@@ -17,7 +17,7 @@ use lumia_client::app::ChannelSummary;
 use rune::{Cursor, El, Icon, ScrollSpec, col, el, icon, row, text};
 
 use super::components::{
-    Look, action_button, avatar, empty_state, hover_layer, icon_button, link_button, panel,
+    Look, action_button, avatar_of, empty_state, hover_layer, icon_button, link_button, panel,
     section_label, shadowed,
 };
 use super::conversation;
@@ -224,7 +224,7 @@ fn conversation_row(s: &State, channel: &ChannelSummary, look: Look) -> El {
         .focusable(true)
         .focus_ring(2.0, 0.0, c.focus)
         .on_press(move |s: &mut State| s.open_dm(&id))
-        .child(avatar(&name, tone, t::AVATAR_XS, look))
+        .child(avatar_of(s, &name, tone, t::AVATAR_XS, look))
         .child(
             text(name)
                 .font(if active {
@@ -325,6 +325,7 @@ fn no_identity(look: Look) -> El {
 /// A person as a row's start, in a member row's metrics: the avatar, the name with `mark`
 /// beside it (a tag), and a quieter line under it.
 fn person(
+    s: &State,
     name: &str,
     subtitle: &str,
     account_id: &str,
@@ -364,7 +365,7 @@ fn person(
         .min_w(0.0)
         .gap(t::SPACE_12)
         .items_center()
-        .child(avatar(name, account_id, size, look))
+        .child(avatar_of(s, name, account_id, size, look))
         .child(words)
 }
 

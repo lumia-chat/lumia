@@ -5,7 +5,7 @@
 use lumia_client::app::{MemberSummary, ServerSummary};
 use rune::{Cursor, El, ScrollSpec, col, el, icon, row, text, text_input};
 
-use super::components::{Look, avatar, icon_button, panel, section_label, status_dot, tag};
+use super::components::{Look, avatar_of, icon_button, panel, section_label, status_dot, tag};
 use super::conversation::{self, Chrome};
 use super::shell::{ASIDE_WIDTH, sidebar_frame};
 use crate::app::{HomeView, State};
@@ -309,7 +309,7 @@ fn member_row(s: &State, server: &ServerSummary, member: &MemberSummary, look: L
         "DO_NOT_DISTURB" => c.dnd,
         _ => c.online,
     });
-    let mut picture = el().child(avatar(&name, &member.account_id, t::AVATAR_MD, look));
+    let mut picture = el().child(avatar_of(s, &name, &member.account_id, t::AVATAR_MD, look));
     if let Some(dot) = dot {
         picture = picture.child(status_dot(t::AVATAR_MD, dot, c.surface));
     }

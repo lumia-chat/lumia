@@ -118,6 +118,7 @@ pub const SCENES: &[Scene] = &[
     ("devices-none", account::devices_none),
     ("devices-live", account::devices_live),
     ("profile", account::profile),
+    ("profile-photo", account::profile_photo),
     ("profile-none", account::profile_none),
     ("profile-live", account::profile_live),
     ("live-dm", live_dm),
@@ -155,12 +156,14 @@ fn servers_sample(state: &mut State) {
         nickname: String::new(),
         pronouns: pronouns.into(),
         bio: bio.into(),
+        avatar_url: String::new(),
     };
     state.receive(&Update::SignedIn(Ok(())));
     state.receive(&Update::Snapshot(Ok(SnapshotSummary {
         account_id: "me".into(),
         handle: "ada".into(),
         display_name: "Ada Lovelace".into(),
+        avatar_url: String::new(),
         servers: vec![
             ServerSummary {
                 server_id: "acme".into(),
@@ -362,6 +365,7 @@ mod staged {
             nickname: String::new(),
             pronouns: pronouns.into(),
             bio: bio.into(),
+            avatar_url: String::new(),
         }
     }
 
@@ -398,6 +402,7 @@ mod staged {
             account_id: ME.into(),
             handle: ME.into(),
             display_name: "Ada Lovelace".into(),
+            avatar_url: String::new(),
             servers: vec![ServerSummary {
                 server_id: "acme".into(),
                 name: "Acme Works".into(),
@@ -648,6 +653,7 @@ pub fn bodies(state: &mut State) {
         account_id: "me".into(),
         handle: "ada".into(),
         display_name: "Ada Lovelace".into(),
+        avatar_url: String::new(),
         servers: vec![ServerSummary {
             server_id: "acme".into(),
             name: "Acme Works".into(),
@@ -670,6 +676,7 @@ pub fn bodies(state: &mut State) {
         nickname: String::new(),
         pronouns: String::new(),
         bio: String::new(),
+        avatar_url: String::new(),
     };
     state.receive(&Update::Members {
         server_id: "acme".into(),

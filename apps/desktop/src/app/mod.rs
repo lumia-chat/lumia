@@ -12,6 +12,7 @@ pub mod home;
 pub mod links;
 pub mod menu;
 pub mod notices;
+pub mod pictures;
 pub mod server;
 pub mod sign_in;
 
@@ -101,6 +102,8 @@ pub struct State {
     pub links: links::Links,
     /// Whether the window is in front, and the notices owed the system.
     pub notices: notices::Notices,
+    /// The avatars the session holds, decoded for drawing.
+    pub pictures: pictures::Pictures,
 }
 
 impl State {
@@ -132,6 +135,7 @@ impl State {
             account: account::Account::default(),
             links: links::Links::default(),
             notices: notices::Notices::default(),
+            pictures: pictures::Pictures::default(),
         }
     }
 
@@ -270,7 +274,9 @@ impl State {
                 self.session.typed();
             }
         }
-        self.session.expire_typing(now_micros)
+        let expired = self.session.expire_typing(now_micros);
+        let pictured = self.pictures.sync(&self.session.avatars);
+        expired || pictured
     }
 
     /// Enters the shell for a session the stores already hold, at launch: with what the
@@ -378,6 +384,7 @@ impl State {
             Update::Identity(update) => self.react_identity(update),
             Update::Browser(update) => self.react_browser(update),
             Update::Notice(update) => self.react_notice(update),
+            Update::Avatar(update) => self.react_avatar(update),
             Update::Gateway(event) => self.react_gateway(event),
             Update::Members { .. }
             | Update::Older { .. }
@@ -435,6 +442,7 @@ pub fn init() -> State {
 /// `AppSpec::setup`: the session's runtime threads wake the window through `waker`.
 pub fn setup(state: &mut State, waker: Waker) {
     state.session.set_wake(Arc::clone(&waker));
+    state.pictures.start(Arc::clone(&waker));
     // Anything that finished between `init` and here is already queued.
     waker();
 }

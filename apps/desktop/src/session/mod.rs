@@ -12,6 +12,7 @@
 //! [`dms`] (personal conversations), [`servers`] (making and joining servers, channels,
 //! invites) and [`identity`] (devices, linking, the profile and status).
 
+pub mod avatars;
 pub mod browser;
 pub mod dms;
 pub mod identity;
@@ -120,6 +121,7 @@ pub enum Update {
     Identity(identity::IdentityUpdate),
     Browser(browser::BrowserUpdate),
     Notice(notices::NoticeUpdate),
+    Avatar(avatars::AvatarUpdate),
 }
 
 /// What is on screen to read and write: a server's channel, or a personal conversation.
@@ -283,6 +285,8 @@ pub struct Session {
     pub pending: Vec<Pending>,
     /// Bumped whenever `entries` or `pending` change, for a list that caches rows.
     pub revision: u64,
+    /// The pictures of the people on screen, as bytes ([`avatars`]).
+    pub avatars: avatars::Avatars,
     /// Personal conversations.
     pub dm: dms::DmState,
     /// This device's identity, its roster and profile.
@@ -341,6 +345,7 @@ impl Session {
             entries: Vec::new(),
             pending: Vec::new(),
             revision: 0,
+            avatars: avatars::Avatars::default(),
             dm: dms::DmState::default(),
             identity: identity::IdentityState::default(),
             last_error: None,
@@ -444,6 +449,7 @@ impl Session {
         }
         let channels = server_channels(&snapshot);
         self.snapshot = Some(snapshot);
+        self.want_pictures();
         self.start(&channels);
     }
 
@@ -475,6 +481,7 @@ impl Session {
         self.members.clear();
         self.presence.clear();
         self.typing.clear();
+        self.forget_pictures();
         self.profiles.clear();
         self.conversation = None;
         self.reach = Reach::default();
@@ -973,6 +980,7 @@ impl Session {
                     self.load_members(&snapshot.servers);
                 }
                 self.dm_snapshot_applied();
+                self.want_pictures();
             }
             Update::Snapshot(Err(failure)) => {
                 if failure.signed_out() {
@@ -1001,12 +1009,14 @@ impl Session {
                         .insert(member.account_id.clone(), member.clone());
                 }
                 self.members.insert(server_id.clone(), members.clone());
+                self.want_pictures();
             }
             Update::Profile {
                 account_id,
                 profile,
             } => {
                 self.profiles.insert(account_id.clone(), profile.clone());
+                self.want_pictures();
             }
             Update::Older { channel_id, page } => {
                 if self.channel() != Some(channel_id.as_str()) {
@@ -1035,6 +1045,7 @@ impl Session {
             Update::Identity(update) => self.apply_identity(update),
             Update::Browser(update) => self.apply_browser(update),
             Update::Notice(_) => {}
+            Update::Avatar(update) => self.apply_avatar(update),
         }
     }
 

@@ -259,6 +259,66 @@ impl Api {
         decoded(status, &bytes)
     }
 
+    /// `PUT /account/avatar`: `picture` is a file's bytes as chosen; the
+    /// instance keeps its own square of it and names it in the account.
+    ///
+    /// # Errors
+    /// `INVALID_ARGUMENT` (`details.reason`: `unsupported`, `too_large`,
+    /// `invalid`), `FAILED_PRECONDITION` (`details.state`: `blobs`) on an
+    /// instance that keeps none, `RATE_LIMITED`; transport failure.
+    pub async fn put_avatar(
+        &self,
+        picture: Vec<u8>,
+        media_type: &str,
+    ) -> Result<Account, ClientError> {
+        let (status, bytes) = self
+            .send(
+                reqwest::Method::PUT,
+                "/api/v1/account/avatar",
+                Some(picture),
+                Some((CONTENT_TYPE.as_str(), media_type)),
+            )
+            .await?;
+        decoded(status, &bytes)
+    }
+
+    /// `DELETE /account/avatar`.
+    ///
+    /// # Errors
+    /// On transport failure or an API error.
+    pub async fn delete_avatar(&self) -> Result<Account, ClientError> {
+        let (status, bytes) = self
+            .send(
+                reqwest::Method::DELETE,
+                "/api/v1/account/avatar",
+                None,
+                None,
+            )
+            .await?;
+        decoded(status, &bytes)
+    }
+
+    /// `GET /avatars/{address}`: a picture's bytes, at most `limit` of
+    /// them. `path` is an `Account.avatar_url` of this instance. Asked for
+    /// without the session: the address is the way in, and the answer is
+    /// the same for everyone.
+    ///
+    /// # Errors
+    /// `NOT_FOUND` for an address nothing is at; a picture over `limit`;
+    /// transport failure.
+    pub async fn avatar(&self, path: &str, limit: usize) -> Result<Vec<u8>, ClientError> {
+        let response = self.http.get(format!("{}{path}", self.base)).send().await?;
+        let status = response.status();
+        let bytes = response.bytes().await?;
+        if !status.is_success() {
+            return Err(api_error(status, &bytes));
+        }
+        if bytes.len() > limit {
+            return Err(ClientError::State("the picture is too large".into()));
+        }
+        Ok(bytes.to_vec())
+    }
+
     /// `PUT /account/profile`: a new signed profile for the caller's account.
     ///
     /// # Errors
@@ -1326,10 +1386,14 @@ impl Api {
             .http
             .request(method, format!("{}{path}", self.base))
             .header(ACCEPT, PROTO);
+        // A body is protobuf unless the extra header says what else it is.
+        let typed = extra.filter(|(name, _)| name.eq_ignore_ascii_case(CONTENT_TYPE.as_str()));
         if let Some(body) = body {
-            builder = builder.header(CONTENT_TYPE, PROTO).body(body);
+            builder = builder
+                .header(CONTENT_TYPE, typed.map_or(PROTO, |(_, value)| value))
+                .body(body);
         }
-        if let Some((name, value)) = extra {
+        if let Some((name, value)) = extra.filter(|_| typed.is_none()) {
             builder = builder.header(name, value);
         }
         if authenticated {

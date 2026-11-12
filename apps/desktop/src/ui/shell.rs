@@ -12,7 +12,7 @@
 use lumia_client::app::ServerSummary;
 use rune::{Cursor, El, col, el, icon, row, text};
 
-use super::components::{Look, avatar, initials, shadowed, status_dot};
+use super::components::{Look, avatar_of, initials, shadowed, status_dot};
 use super::menus::{SELF_AVATAR, SERVER_TITLE};
 use super::{home, server};
 use crate::app::{HomeView, Place, Popover, State};
@@ -190,7 +190,8 @@ fn rail(s: &State, current: Option<&ServerSummary>, look: Look) -> El {
         .radius(t::AVATAR_SELF / 2.0)
         .no_window_drag()
         .on_press(State::open_account_menu)
-        .child(avatar(
+        .child(avatar_of(
+            s,
             s.session.self_name(),
             s.session.me(),
             t::AVATAR_SELF,

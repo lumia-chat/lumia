@@ -244,6 +244,8 @@ pub struct SnapshotSummary {
     pub account_id: String,
     pub handle: String,
     pub display_name: String,
+    /// The account's picture, as `MemberSummary.avatar_url`; empty for none.
+    pub avatar_url: String,
     pub servers: Vec<ServerSummary>,
     pub channels: Vec<ChannelSummary>,
     pub pending_requests: Vec<DmRequestSummary>,
@@ -255,6 +257,7 @@ impl From<app::SnapshotSummary> for SnapshotSummary {
             account_id: s.account_id,
             handle: s.handle,
             display_name: s.display_name,
+            avatar_url: s.avatar_url,
             servers: s.servers.into_iter().map(Into::into).collect(),
             channels: s.channels.into_iter().map(Into::into).collect(),
             pending_requests: s.pending_requests.into_iter().map(Into::into).collect(),
@@ -272,6 +275,10 @@ pub struct MemberSummary {
     /// From the account's verified profile, as the display name is.
     pub pronouns: String,
     pub bio: String,
+    /// The account's picture: a path on this instance (`/api/v1/avatars/…`,
+    /// to resolve against the instance's address), an absolute URL from a
+    /// signed profile issued elsewhere (not to be fetched unasked), or empty.
+    pub avatar_url: String,
 }
 
 impl From<app::MemberSummary> for MemberSummary {
@@ -283,6 +290,7 @@ impl From<app::MemberSummary> for MemberSummary {
             nickname: m.nickname,
             pronouns: m.pronouns,
             bio: m.bio,
+            avatar_url: m.avatar_url,
         }
     }
 }
@@ -937,6 +945,21 @@ impl Client {
                     .update_account(handle.as_deref(), display_name.as_deref()),
             )?
             .into())
+    }
+
+    /// `PUT /account/avatar`: `picture` is a file's bytes as chosen (PNG,
+    /// JPEG, WebP or GIF, at most 8 MB); the instance keeps its own square
+    /// of it. Returns the snapshot as it then is.
+    pub fn set_avatar(&self, picture: Vec<u8>, media_type: String) -> Res<SnapshotSummary> {
+        Ok(self
+            .runtime
+            .block_on(self.app.set_avatar(picture, &media_type))?
+            .into())
+    }
+
+    /// `DELETE /account/avatar`.
+    pub fn remove_avatar(&self) -> Res<SnapshotSummary> {
+        Ok(self.runtime.block_on(self.app.remove_avatar())?.into())
     }
 
     /// Says this person is typing in a server's channel (protocol 6.7);

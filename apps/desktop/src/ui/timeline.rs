@@ -28,7 +28,7 @@ use chrono::{DateTime, Local, NaiveDate};
 use rune::{Cursor, El, GrowthSpec, ScrollSpec, col, el, row, text};
 
 use super::body;
-use super::components::{Look, avatar};
+use super::components::{Look, avatar_of};
 use super::scroll::WithScrollBar;
 use crate::app::State;
 use crate::session::{Entry, Pending};
@@ -211,7 +211,14 @@ struct Head<'a> {
 
 /// A message's row. The first of a block is an avatar beside a name, a time and the
 /// message; the ones after it are the message alone under those, in the same column.
-fn message_frame(key: &str, head: Head<'_>, content: El, place: Place, look: Look) -> El {
+fn message_frame(
+    s: &State,
+    key: &str,
+    head: Head<'_>,
+    content: El,
+    place: Place,
+    look: Look,
+) -> El {
     let c = look.c;
     let Head {
         author,
@@ -264,7 +271,7 @@ fn message_frame(key: &str, head: Head<'_>, content: El, place: Place, look: Loo
     };
     // The avatar opens its person's card, as the board's does. The name stays text: it is
     // part of what a selection copies, and a press on it starts one.
-    let mut picture = el().child(avatar(author, author_id, t::AVATAR_LG, look));
+    let mut picture = el().child(avatar_of(s, author, author_id, t::AVATAR_LG, look));
     if !author_id.is_empty() {
         let anchor = format!("avatar-{key}");
         let (id, at) = (author_id.to_string(), anchor.clone());
@@ -310,7 +317,7 @@ fn stored_row(s: &State, i: usize, entry: &Entry, place: Place, look: Look) -> E
         short_time: short_clock(entry.at_micros),
         selectable: true,
     };
-    let row = message_frame(&entry.id, head, content.key("body"), place, look);
+    let row = message_frame(s, &entry.id, head, content.key("body"), place, look);
     // The divider lives in the first row of its day: a row of its own would vanish when the
     // list unmounts it. So does the word that older messages are on their way, in the
     // oldest row.
@@ -392,5 +399,5 @@ fn pending_row(s: &State, pending: &Pending, place: Place, look: Look) -> El {
         short_time: short_clock(pending.sent_at_micros),
         selectable: false,
     };
-    slot(place).child(message_frame(&pending.id, head, content, place, look))
+    slot(place).child(message_frame(s, &pending.id, head, content, place, look))
 }

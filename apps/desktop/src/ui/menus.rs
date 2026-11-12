@@ -12,8 +12,8 @@ use lumia_client::app::MemberSummary;
 use rune::{Align, Cursor, El, Side, col, el, icon, row, text};
 
 use super::components::{
-    CARD_WIDTH, Look, action_button, avatar, menu, menu_glyph, menu_item, menu_rule, section_label,
-    shadowed, tag,
+    CARD_WIDTH, Look, action_button, avatar_of, menu, menu_glyph, menu_item, menu_rule,
+    section_label, shadowed, tag,
 };
 use crate::app::{HomeView, State};
 use crate::session::{Connection, display_name};
@@ -90,7 +90,8 @@ pub fn account(s: &State, look: Look) -> Option<El> {
         .gap(t::SPACE_10)
         .items_center()
         .child(
-            el().child(avatar(
+            el().child(avatar_of(
+                s,
                 s.session.self_name(),
                 s.session.me(),
                 t::AVATAR_LG,
@@ -220,7 +221,7 @@ pub fn person(s: &State, look: Look) -> Option<El> {
         .radius(t::AVATAR_CARD / 2.0)
         .fill(c.surface)
         .center()
-        .child(avatar(&name, &open.account_id, inner, look));
+        .child(avatar_of(s, &name, &open.account_id, inner, look));
     let dot = presence.map(|(status, _)| match status.as_str() {
         "AWAY" => c.away,
         "DO_NOT_DISTURB" => c.dnd,

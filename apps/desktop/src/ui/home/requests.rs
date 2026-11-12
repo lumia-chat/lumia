@@ -8,7 +8,7 @@ use super::{action_button, at, no_identity, page};
 use crate::app::State;
 use crate::session::dms::Answer;
 use crate::tokens::{self as t, icons};
-use crate::ui::components::{Look, avatar, empty_state, error_text, notice, secondary_button};
+use crate::ui::components::{Look, avatar_of, empty_state, error_text, notice, secondary_button};
 
 pub fn view(s: &State, look: Look) -> El {
     if !s.session.has_identity() {
@@ -119,7 +119,13 @@ fn card(s: &State, request: &DmRequestSummary, look: Look) -> El {
         .min_w(0.0)
         .gap(t::SPACE_14)
         .items_center()
-        .child(avatar(&name, &request.from_account_id, t::AVATAR_LG, look))
+        .child(avatar_of(
+            s,
+            &name,
+            &request.from_account_id,
+            t::AVATAR_LG,
+            look,
+        ))
         .child(words);
     row()
         .key(format!("request-{}", request.request_id))

@@ -49,6 +49,7 @@ fn signed_in(s: &mut State) {
         account_id: "me".into(),
         handle: "ada".into(),
         display_name: "Ada Lovelace".into(),
+        avatar_url: String::new(),
         servers: Vec::new(),
         channels: Vec::new(),
         pending_requests: Vec::new(),
@@ -157,6 +158,27 @@ pub fn devices_revoke(s: &mut State) {
 pub fn devices_none(s: &mut State) {
     signed_in(s);
     s.go_home(HomeView::Devices);
+}
+
+/// The `profile-photo` scene: the profile of an account with a picture, which the rail,
+/// the account card and the member list all draw. The picture is a drawing kept beside
+/// this file; no instance is asked for it.
+pub fn profile_photo(s: &mut State) {
+    use crate::session::avatars::AvatarUpdate;
+    signed_in(s);
+    let url = format!("/api/v1/avatars/{}", "5c".repeat(32));
+    let Some(mut snapshot) = s.session.snapshot.clone() else {
+        return;
+    };
+    snapshot.avatar_url.clone_from(&url);
+    s.receive(&Update::Avatar(AvatarUpdate::Saved(Ok(snapshot))));
+    s.receive(&Update::Avatar(AvatarUpdate::Fetched {
+        url,
+        bytes: Ok(std::sync::Arc::from(&include_bytes!("portrait.jpg")[..])),
+    }));
+    s.go_home(HomeView::Profile);
+    s.tick(chrono::Utc::now().timestamp_micros());
+    s.pictures.wait();
 }
 
 pub fn profile(s: &mut State) {

@@ -76,6 +76,7 @@ pub fn view(s: &State, look: Look) -> El {
                     .role("listitem")
                     .label(name.clone())
                     .child(person(
+                        s,
                         &name,
                         &at(&p.handle),
                         &p.account_id,

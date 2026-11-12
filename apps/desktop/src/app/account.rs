@@ -3,9 +3,12 @@
 //! The counterpart of the `@State` in the iOS app's `LinkView.swift` and `Screens.swift`,
 //! with their wording for each refusal.
 
-use rune::{TextEdit, Tx};
+use std::path::Path;
+
+use rune::{FileDialogOptions, TextEdit, Tx};
 
 use super::{HomeView, Place, Popover, Route, State};
+use crate::session::avatars::AvatarUpdate;
 use crate::session::identity::IdentityUpdate;
 
 /// The label this computer's device carries in a link request, as the other desktop
@@ -73,10 +76,20 @@ pub struct AccountForm {
     pub error: String,
 }
 
+/// The account card's photo: choosing one, or taking it away.
+#[derive(Debug, Default)]
+pub struct PhotoForm {
+    /// Waiting for the instance's answer.
+    pub busy: bool,
+    pub saved: bool,
+    pub error: String,
+}
+
 /// The profile screen: the account card, the status card and the signed profile's form.
 #[derive(Debug)]
 pub struct Profile {
     pub account: AccountForm,
+    pub photo: PhotoForm,
     /// `ONLINE`, `AWAY` or `DO_NOT_DISTURB` (protocol 6.7).
     pub status: String,
     pub custom_status: TextEdit,
@@ -98,6 +111,7 @@ impl Default for Profile {
     fn default() -> Self {
         Self {
             account: AccountForm::default(),
+            photo: PhotoForm::default(),
             status: "ONLINE".into(),
             custom_status: TextEdit::default(),
             status_saved: false,
@@ -300,6 +314,80 @@ impl State {
             &form.handle.text,
             names.then_some(form.display_name.text.as_str()),
         );
+    }
+
+    /// Asks for a picture file and makes it this account's photo.
+    pub fn choose_photo(&mut self, tx: &mut Tx) {
+        if self.account.profile.photo.busy {
+            return;
+        }
+        let options = FileDialogOptions {
+            title: "Choose a photo".into(),
+            ..FileDialogOptions::default()
+        }
+        .filter("Pictures", &["png", "jpg", "jpeg", "webp", "gif"]);
+        tx.open_file(options, |s: &mut State, answer, _| match answer {
+            Ok(Some(path)) => s.set_photo(&path),
+            Ok(None) => {}
+            Err(error) => {
+                s.account.profile.photo.error = format!("The file dialog could not open: {error}");
+            }
+        });
+    }
+
+    /// Sends the file at `path` to be this account's photo.
+    pub fn set_photo(&mut self, path: &Path) {
+        let form = &mut self.account.profile.photo;
+        if form.busy {
+            return;
+        }
+        *form = PhotoForm {
+            busy: true,
+            ..PhotoForm::default()
+        };
+        self.session.set_avatar(path);
+    }
+
+    /// Takes this account's photo away.
+    pub fn remove_photo(&mut self) {
+        let form = &mut self.account.profile.photo;
+        if form.busy {
+            return;
+        }
+        *form = PhotoForm {
+            busy: true,
+            ..PhotoForm::default()
+        };
+        self.session.remove_avatar();
+    }
+
+    pub(super) fn react_avatar(&mut self, update: &AvatarUpdate) {
+        let AvatarUpdate::Saved(answer) = update else {
+            return;
+        };
+        let form = &mut self.account.profile.photo;
+        *form = PhotoForm::default();
+        match answer {
+            Ok(_) => form.saved = true,
+            Err(failure) => {
+                let reason = failure.details.get("reason").map(String::as_str);
+                form.error = match (failure.code.as_str(), reason) {
+                    ("INVALID_ARGUMENT", Some("too_large")) => {
+                        "That picture is too large. Choose one under 8 MB.".into()
+                    }
+                    ("INVALID_ARGUMENT", Some("unsupported")) => {
+                        "That file is not a picture Lumia can read. Choose a PNG, JPEG, WebP or GIF.".into()
+                    }
+                    ("INVALID_ARGUMENT", Some("unreadable")) => {
+                        format!("That file could not be read: {}.", failure.message)
+                    }
+                    ("INVALID_ARGUMENT", _) => "That picture could not be read.".into(),
+                    ("FAILED_PRECONDITION", _) => "This instance does not keep pictures.".into(),
+                    ("RATE_LIMITED", _) => "The instance is busy. Try again in a moment.".into(),
+                    _ => failure.message.clone(),
+                };
+            }
+        }
     }
 
     /// Signs the form as a new profile version and sends it.

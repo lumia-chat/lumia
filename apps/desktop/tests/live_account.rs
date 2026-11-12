@@ -568,6 +568,137 @@ fn a_password_account_changes_its_handle_and_display_name() {
     assert_eq!(state.session.self_name(), "Ada Lovelace");
 }
 
+/// A photo chosen on this computer: the instance makes its own picture of the file, the
+/// account names it, its bytes come back and are kept on disk for the next launch, someone
+/// else in a server with this account sees it, and removing it leaves none.
+#[test]
+fn a_photo_is_set_seen_by_someone_else_kept_for_the_next_launch_and_removed() {
+    let Some((instance, _cli)) = environment() else {
+        return;
+    };
+    let fixtures =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../instance/test/support/fixtures/media");
+    let dir = scratch("photo");
+    let mut state = opened(&instance, dir.clone());
+    state.sign_in.creating = true;
+    state.sign_in.handle = TextEdit::new(unique("pic").as_str());
+    state.sign_in.password.replace_text(PASSWORD);
+    state.submit();
+    wait(&mut state, "the shell", |s| s.route == Route::Shell);
+    wait(&mut state, "the first snapshot", |s| {
+        s.session.snapshot.is_some()
+    });
+    let me = state.session.me().to_string();
+    assert_eq!(state.session.avatar_url_of(&me), "");
+
+    // What is not a picture is refused in words, and nothing changes.
+    state.go_home(HomeView::Profile);
+    state.set_photo(&fixtures.join("not-a-picture.txt"));
+    wait(&mut state, "the refusal", |s| !s.account.profile.photo.busy);
+    assert_eq!(
+        state.account.profile.photo.error,
+        "That file is not a picture Lumia can read. Choose a PNG, JPEG, WebP or GIF."
+    );
+    assert_eq!(state.session.avatar_url_of(&me), "");
+
+    // A photograph: saved, named by the account, and its bytes here.
+    let chosen = fixtures.join("sideways.jpg");
+    state.set_photo(&chosen);
+    wait(&mut state, "the photo to be saved", |s| {
+        !s.account.profile.photo.busy
+    });
+    let form = &state.account.profile.photo;
+    assert!(form.saved, "{}", form.error);
+    let url = state.session.avatar_url_of(&me).to_string();
+    assert!(url.starts_with("/api/v1/avatars/"), "{url}");
+    wait(&mut state, "the picture's bytes", |s| {
+        s.session.picture_of(&me).is_some()
+    });
+    let held = state
+        .session
+        .avatars
+        .held()
+        .find(|(held, _)| *held == url)
+        .map(|(_, bytes)| bytes.to_vec())
+        .expect("the bytes are held by URL");
+    let uploaded = std::fs::read(&chosen).unwrap();
+    assert!(
+        held.starts_with(&[0xFF, 0xD8]),
+        "a JPEG of the instance's own"
+    );
+    assert_ne!(held, uploaded);
+    let needle = b"LumiaTestCam";
+    assert!(uploaded.windows(needle.len()).any(|w| w == needle));
+    assert!(
+        !held.windows(needle.len()).any(|w| w == needle),
+        "the camera's name did not come back"
+    );
+    let kept = dir
+        .join(lumia_client::app::host_of(&instance))
+        .join("avatars")
+        .join(url.rsplit('/').next().unwrap());
+    assert_eq!(
+        std::fs::read(&kept).unwrap(),
+        held,
+        "kept for the next launch"
+    );
+
+    // Someone who shares a server with this account sees the picture on it.
+    let made = unique("Photo");
+    state.go_home(HomeView::AddServer);
+    state.server_forms.add.name.replace_text(&made);
+    state.create_server();
+    wait(&mut state, "the new server", |s| s.server_id().is_some());
+    state.open_invites();
+    state.make_invite();
+    wait(&mut state, "the invite", |s| {
+        s.server_forms.invite.made.is_some()
+    });
+    let link = state.server_forms.invite.made.clone().unwrap().url;
+    state.close_popover();
+    let mut other = opened(&instance, scratch("photo-other"));
+    other.sign_in.creating = true;
+    other.sign_in.handle = TextEdit::new(unique("see").as_str());
+    other.sign_in.password.replace_text(PASSWORD);
+    other.submit();
+    wait(&mut other, "the other's shell", |s| s.route == Route::Shell);
+    wait(&mut other, "the other's snapshot", |s| {
+        s.session.snapshot.is_some()
+    });
+    other.go_home(HomeView::AddServer);
+    other.server_forms.add.invite.replace_text(&link);
+    other.look_up_invite();
+    wait(&mut other, "the invite's preview", |s| {
+        s.server_forms.add.preview.is_some()
+    });
+    other.join_invite();
+    wait(&mut other, "the picture at the other account", |s| {
+        s.session.picture_of(&me).is_some()
+    });
+    assert_eq!(other.session.avatar_url_of(&me), url);
+
+    // A second launch has the picture from disk before the instance is heard from.
+    drop(state);
+    let mut again = opened(&instance, dir);
+    assert!(again.session.signed_in);
+    assert_eq!(
+        again.session.picture_of(&me),
+        Some(url.as_str()),
+        "from the directory it was kept in, with nothing drained"
+    );
+
+    // Removed: the account names none.
+    wait(&mut again, "the second launch's snapshot", |s| {
+        s.session.connection == Connection::Connected
+    });
+    again.go_home(HomeView::Profile);
+    again.remove_photo();
+    wait(&mut again, "the removal", |s| !s.account.profile.photo.busy);
+    assert!(again.account.profile.photo.saved);
+    assert_eq!(again.session.avatar_url_of(&me), "");
+    assert!(again.session.picture_of(&me).is_none());
+}
+
 /// `GET path` on the instance, for the dev mailbox (plain HTTP on a dev instance).
 fn http_get(instance: &str, path: &str) -> String {
     let authority = instance

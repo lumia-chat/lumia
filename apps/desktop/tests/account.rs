@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use common::*;
 use lumia_client::app::{DeviceSummary, PasskeySummary, ProfileSummary, RosterSummary};
 use lumia_shell::app::{HomeView, Place, Route, State};
+use lumia_shell::session::avatars::AvatarUpdate;
 use lumia_shell::session::identity::IdentityUpdate;
 use lumia_shell::session::{Failure, Update};
 use lumia_shell::ui;
@@ -670,6 +671,131 @@ fn a_computer_that_holds_the_identity_names_the_account_in_its_signed_profile() 
         "the handle in the account card, the name in the signed profile's"
     );
     assert!(rt.find("account-name").is_none(), "and not twice");
+}
+
+/// The instance's answer to setting or removing the photo.
+fn photo_saved(answer: Result<&str, Failure>) -> Update {
+    Update::Avatar(AvatarUpdate::Saved(answer.map(|url| {
+        let mut snapshot = snapshot();
+        snapshot.avatar_url = url.into();
+        snapshot
+    })))
+}
+
+fn refused_photo(code: &str, reason: &[(&str, &str)]) -> Failure {
+    Failure {
+        code: code.into(),
+        message: format!("{code} from the instance"),
+        details: reason
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect(),
+    }
+}
+
+#[test]
+fn a_photo_is_chosen_changed_and_removed_and_each_refusal_is_worded() {
+    let url = format!("/api/v1/avatars/{}", "ab".repeat(32));
+    let mut rt = at_profile();
+    let shown = words(&rt);
+    assert!(
+        shown.contains("Choose a photo…")
+            && shown.contains(
+                "A PNG, JPEG, WebP or GIF up to 8 MB. People see its middle, as a circle."
+            ),
+        "{shown}"
+    );
+    assert!(rt.find("remove-photo").is_none(), "there is none to remove");
+
+    // A file is on its way: the button waits.
+    rt.update(|s, _| s.set_photo(std::path::Path::new("/nowhere/me.png")));
+    settle(&mut rt);
+    assert!(rt.state.account.profile.photo.busy);
+    assert!(words(&rt).contains("Sending…"));
+
+    for (failure, said) in [
+        (
+            refused_photo("INVALID_ARGUMENT", &[("reason", "too_large")]),
+            "That picture is too large. Choose one under 8 MB.",
+        ),
+        (
+            refused_photo("INVALID_ARGUMENT", &[("reason", "unsupported")]),
+            "That file is not a picture Lumia can read. Choose a PNG, JPEG, WebP or GIF.",
+        ),
+        (
+            refused_photo("INVALID_ARGUMENT", &[("reason", "invalid")]),
+            "That picture could not be read.",
+        ),
+        (
+            refused_photo("FAILED_PRECONDITION", &[("state", "blobs")]),
+            "This instance does not keep pictures.",
+        ),
+        (
+            refused_photo("RATE_LIMITED", &[]),
+            "The instance is busy. Try again in a moment.",
+        ),
+    ] {
+        receive(&mut rt, photo_saved(Err(failure)));
+        assert!(!rt.state.account.profile.photo.busy);
+        assert!(words(&rt).contains(said), "{said}");
+    }
+
+    // Saved: the account names its picture everywhere it is listed, and can now remove it.
+    receive(&mut rt, photo_saved(Ok(&url)));
+    let shown = words(&rt);
+    assert!(
+        shown.contains("Saved.") && shown.contains("Change photo…"),
+        "{shown}"
+    );
+    assert_eq!(rt.state.session.avatar_url_of("me"), url);
+    assert_eq!(rt.state.session.people["me"].avatar_url, url);
+    assert!(
+        rt.state.session.picture_of("me").is_none(),
+        "its bytes are not here yet"
+    );
+
+    // The bytes arrive: held by URL, for whoever draws this person.
+    receive(
+        &mut rt,
+        Update::Avatar(AvatarUpdate::Fetched {
+            url: url.clone(),
+            bytes: Ok(std::sync::Arc::from(&b"the instance's own bytes"[..])),
+        }),
+    );
+    assert_eq!(rt.state.session.picture_of("me"), Some(url.as_str()));
+    assert!(rt.state.session.picture_of("grace").is_none());
+
+    press(&mut rt, "remove-photo");
+    assert!(rt.state.account.profile.photo.busy);
+    receive(&mut rt, photo_saved(Ok("")));
+    assert_eq!(rt.state.session.avatar_url_of("me"), "");
+    assert!(rt.find("remove-photo").is_none());
+    assert!(words(&rt).contains("Choose a photo…"));
+}
+
+#[test]
+fn a_picture_on_another_host_is_never_asked_for() {
+    let mut rt = at_profile();
+    rt.update(|s, _| {
+        let mut elsewhere = member("grace", "grace", "Grace Hopper");
+        elsewhere.avatar_url = format!(
+            "https://elsewhere.example/api/v1/avatars/{}",
+            "cd".repeat(32)
+        );
+        s.receive(&Update::Members {
+            server_id: "acme".into(),
+            members: vec![member("me", "ada", "Ada Lovelace"), elsewhere],
+        });
+    });
+    settle(&mut rt);
+    assert!(
+        rt.state
+            .session
+            .avatar_url_of("grace")
+            .starts_with("https://elsewhere.example/")
+    );
+    assert!(rt.state.session.picture_of("grace").is_none());
+    assert_eq!(rt.state.session.avatars.held().count(), 0);
 }
 
 #[test]

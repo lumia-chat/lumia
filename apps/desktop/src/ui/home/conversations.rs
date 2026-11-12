@@ -275,6 +275,7 @@ fn participant(s: &State, account_id: &str, look: Look) -> El {
         .collect::<Vec<_>>()
         .join(" · ");
     let top = row().w_full().items_center().child(person(
+        s,
         &name,
         &subtitle,
         account_id,

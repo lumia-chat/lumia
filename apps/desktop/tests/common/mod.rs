@@ -150,6 +150,7 @@ pub fn snapshot() -> SnapshotSummary {
         account_id: "me".into(),
         handle: "ada".into(),
         display_name: "Ada Lovelace".into(),
+        avatar_url: String::new(),
         servers: vec![
             ServerSummary {
                 server_id: "acme".into(),
@@ -177,6 +178,7 @@ pub fn member(id: &str, handle: &str, name: &str) -> MemberSummary {
         nickname: String::new(),
         pronouns: String::new(),
         bio: String::new(),
+        avatar_url: String::new(),
     }
 }
 

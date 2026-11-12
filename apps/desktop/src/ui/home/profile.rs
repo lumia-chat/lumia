@@ -11,15 +11,18 @@
 //! Sign out is at the foot of this page, and in the Account menu with "Change instance"
 //! (`app::menu`); the page keeps it because a menu bar is macOS only.
 //!
-//! Not here: the avatar (no shell sets one yet; a save keeps the one the profile names).
+//! The account card also has the photo: a file chosen through the system's dialog becomes
+//! the instance's own square of it (architecture 12, "Avatars"). The signed profile does
+//! not name that picture yet (a save keeps whatever avatar the held profile names), so it
+//! is this instance's alone and does not travel with the identity.
 
-use rune::{El, Tx, text};
+use rune::{El, Tx, col, row, text};
 
 use super::devices::{action, link_notice, page, page_column};
 use crate::app::State;
 use crate::tokens::{self as t, icons};
 use crate::ui::components::{
-    Look, card, error_text, field, notice, primary_button, segmented, small_button,
+    Look, avatar_of, card, error_text, field, notice, primary_button, segmented, small_button,
 };
 
 pub fn view(s: &State, look: Look) -> El {
@@ -60,6 +63,60 @@ fn save_account(s: &mut State, _: &mut Tx) {
     s.save_account();
 }
 
+/// The account's photo: what it is now, a way to choose another, and a way to have none.
+/// The instance makes its own square of the file (architecture 12), so nothing of the
+/// file is passed on but what it shows.
+fn photo(s: &State, look: Look) -> El {
+    let form = &s.account.profile.photo;
+    let has = !s.session.avatar_url_of(s.session.me()).is_empty();
+    let mut buttons = row().gap(t::SPACE_8).items_center().child(small_button(
+        "choose-photo",
+        if form.busy {
+            "Sending…"
+        } else if has {
+            "Change photo…"
+        } else {
+            "Choose a photo…"
+        },
+        !form.busy,
+        |s, tx| s.choose_photo(tx),
+        look,
+    ));
+    if has {
+        buttons = buttons.child(small_button(
+            "remove-photo",
+            "Remove",
+            !form.busy,
+            |s, _| s.remove_photo(),
+            look,
+        ));
+    }
+    let mut words = col().grow(1.0).min_w(0.0).gap(t::SPACE_6).child(buttons);
+    words = words.child(if !form.error.is_empty() {
+        error_text(&form.error, look)
+    } else if form.saved {
+        quiet("Saved.", look)
+    } else {
+        quiet(
+            "A PNG, JPEG, WebP or GIF up to 8 MB. People see its middle, as a circle.",
+            look,
+        )
+    });
+    row()
+        .key("photo")
+        .w_full()
+        .gap(t::SPACE_14)
+        .items_center()
+        .child(avatar_of(
+            s,
+            s.session.self_name(),
+            s.session.me(),
+            t::AVATAR_CARD,
+            look,
+        ))
+        .child(words)
+}
+
 /// The account on this instance: the handle people find and mention it by, and the name
 /// they see where no signed profile gives one from this computer.
 fn account_card(s: &State, look: Look) -> El {
@@ -71,6 +128,7 @@ fn account_card(s: &State, look: Look) -> El {
     )
     .key("account-form")
     .w_full()
+    .child(photo(s, look))
     .child(field(
         "handle",
         "Handle",

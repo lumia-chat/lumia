@@ -10,7 +10,8 @@
 //! that cannot be used is drawn at half strength; the boards draw no disabled state.
 
 use rune::{
-    Align, Color, Cursor, El, Icon, Side, TextEdit, Tx, col, el, icon, row, text, text_input,
+    Align, Color, Cursor, El, Icon, Side, SurfaceFit, TextEdit, Tx, col, el, icon, row, text,
+    text_input,
 };
 
 use crate::app::State;
@@ -58,6 +59,23 @@ pub fn avatar(name: &str, id: &str, size: f32, look: Look) -> El {
         .center()
         .a11y_hidden()
         .child(text(initials(name)).font(t::initials(size)).color(ink))
+}
+
+/// [`avatar`] for someone the state knows: their picture over their initials when this
+/// computer holds it. The initials stay underneath, since a picture that is still decoding
+/// paints nothing.
+pub fn avatar_of(s: &State, name: &str, id: &str, size: f32, look: Look) -> El {
+    let initials = avatar(name, id, size, look);
+    match s.picture_of(id) {
+        Some(picture) => initials.child(
+            el().key("picture")
+                .absolute(0.0, 0.0)
+                .size(size, size)
+                .radius(size / 2.0)
+                .pixels_fit(picture.pixels(), SurfaceFit::Fill),
+        ),
+        None => initials,
+    }
 }
 
 /// The status dot at the foot of an avatar `size` across: it overhangs the avatar's corner,

@@ -276,6 +276,9 @@ pub struct SnapshotSummary {
     pub account_id: String,
     pub handle: String,
     pub display_name: String,
+    /// The account's picture, as [`MemberSummary::avatar_url`]; empty for none.
+    #[serde(default)]
+    pub avatar_url: String,
     pub servers: Vec<ServerSummary>,
     pub channels: Vec<ChannelSummary>,
     pub pending_requests: Vec<DmRequestSummary>,
@@ -292,6 +295,13 @@ pub struct MemberSummary {
     /// From the account's verified profile, as the display name is.
     pub pronouns: String,
     pub bio: String,
+    /// The account's picture: a path on this instance (`/api/v1/avatars/…`,
+    /// which [`App::avatar`] fetches and a browser resolves against the
+    /// instance), an absolute URL when a signed profile issued elsewhere
+    /// names one (not fetched: it would tell that host who is looking), or
+    /// empty for none.
+    #[serde(default)]
+    pub avatar_url: String,
 }
 
 /// A message as the local store holds it.
@@ -478,6 +488,21 @@ pub enum AppEvent {
         account_id: String,
         until_micros: i64,
     },
+}
+
+/// The most bytes [`App::avatar`] takes: several times what a 512-pixel
+/// square encodes to.
+const AVATAR_MAX_BYTES: usize = 2 * 1024 * 1024;
+
+/// Whether `avatar_url` is a picture this instance serves: its avatar path
+/// and a name of 64 lowercase hexadecimal digits, and nothing else.
+#[must_use]
+pub fn is_own_avatar(avatar_url: &str) -> bool {
+    avatar_url
+        .strip_prefix("/api/v1/avatars/")
+        .is_some_and(|name| {
+            name.len() == 64 && name.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+        })
 }
 
 /// How often typing is sent while someone types in a channel (protocol 6.7).
@@ -1436,6 +1461,7 @@ impl App {
             account_id: wire::display(&account.account_id),
             handle: account.handle,
             display_name: account.display_name,
+            avatar_url: account.avatar_url,
             servers: snap
                 .servers
                 .iter()
@@ -1511,6 +1537,7 @@ impl App {
             nickname: String::new(),
             pronouns: a.pronouns,
             bio: a.bio,
+            avatar_url: a.avatar_url,
         })
     }
 
@@ -1538,6 +1565,7 @@ impl App {
                     nickname: m.nickname.clone(),
                     pronouns: account.map(|a| a.pronouns.clone()).unwrap_or_default(),
                     bio: account.map(|a| a.bio.clone()).unwrap_or_default(),
+                    avatar_url: account.map(|a| a.avatar_url.clone()).unwrap_or_default(),
                 }
             }));
             cursor = page.page.map(|p| p.next_cursor).unwrap_or_default();
@@ -1876,6 +1904,53 @@ impl App {
             .update_account(trimmed(handle), trimmed(display_name))
             .await?;
         self.snapshot().await
+    }
+
+    /// Makes `picture`, a file's bytes as the person chose it (PNG, JPEG,
+    /// WebP or GIF, at most 8 MB), this account's picture on the instance
+    /// (`PUT /account/avatar`). The instance keeps its own square of it,
+    /// so nothing of the file is passed on but what it shows. `media_type`
+    /// is what the shell believes the file is and is not relied on.
+    /// Returns the account's snapshot as it then is.
+    ///
+    /// # Errors
+    /// `INVALID_ARGUMENT` with `details.reason` `unsupported`, `too_large`
+    /// or `invalid`; `FAILED_PRECONDITION` with `details.state` `blobs` on
+    /// an instance that keeps no pictures; `RATE_LIMITED` when it is busy.
+    pub async fn set_avatar(
+        &self,
+        picture: Vec<u8>,
+        media_type: &str,
+    ) -> Result<SnapshotSummary, ClientError> {
+        self.api.put_avatar(picture, media_type).await?;
+        self.snapshot().await
+    }
+
+    /// Takes this account's picture away (`DELETE /account/avatar`).
+    ///
+    /// # Errors
+    /// On transport or API failure.
+    pub async fn remove_avatar(&self) -> Result<SnapshotSummary, ClientError> {
+        self.api.delete_avatar().await?;
+        self.snapshot().await
+    }
+
+    /// The bytes of the picture an `avatar_url` names, when it is one of
+    /// this instance's (protocol: `/api/v1/avatars/` and 64 hexadecimal
+    /// digits): JPEG or PNG the instance encoded itself, at most 512 pixels
+    /// a side. They never change under a URL, so a shell may keep them for
+    /// good. For a shell that draws its own pictures; a browser or a
+    /// platform image view can ask the instance directly.
+    ///
+    /// # Errors
+    /// `State` for a URL that is not this instance's picture (another
+    /// host's is not fetched: that would tell it who is looking);
+    /// `NOT_FOUND` when the picture is gone; transport failure.
+    pub async fn avatar(&self, avatar_url: &str) -> Result<Vec<u8>, ClientError> {
+        if !is_own_avatar(avatar_url) {
+            return Err(ClientError::State("not a picture of this instance".into()));
+        }
+        self.api.avatar(avatar_url, AVATAR_MAX_BYTES).await
     }
 
     /// Says this person is typing in a server's channel (protocol 6.7).
@@ -2784,6 +2859,7 @@ mod kept_tests {
             account_id: "a".into(),
             handle: "ada".into(),
             display_name: "Ada".into(),
+            avatar_url: String::new(),
             servers: vec![ServerSummary {
                 server_id: "s".into(),
                 name: "Acme".into(),
@@ -2864,6 +2940,23 @@ mod kept_tests {
     }
 
     #[test]
+    fn only_this_instances_pictures_are_fetched() {
+        let name = "0123456789abcdef".repeat(4);
+        assert!(is_own_avatar(&format!("/api/v1/avatars/{name}")));
+        for other in [
+            String::new(),
+            format!("https://elsewhere.example/api/v1/avatars/{name}"),
+            format!("//elsewhere.example/api/v1/avatars/{name}"),
+            format!("/api/v1/avatars/{name}/../../account/snapshot"),
+            format!("/api/v1/avatars/{}", name.to_uppercase()),
+            "/api/v1/avatars/short".to_string(),
+            format!("/api/v1/avatars/{name}?x=1"),
+        ] {
+            assert!(!is_own_avatar(&other), "{other}");
+        }
+    }
+
+    #[test]
     fn kept_members_are_per_server() {
         let app = app();
         assert!(app.kept_members("s").unwrap().is_empty());
@@ -2874,6 +2967,7 @@ mod kept_tests {
             nickname: String::new(),
             pronouns: "she/her".into(),
             bio: String::new(),
+            avatar_url: String::new(),
         };
         let all: HashMap<String, Vec<MemberSummary>> =
             HashMap::from([("s".to_string(), vec![member])]);
