@@ -131,8 +131,9 @@ public struct LumiaMessageRow: View {
             VStack(alignment: .leading, spacing: LumiaTokens.space4) {
                 if place.opens {
                     HStack(alignment: .firstTextBaseline, spacing: LumiaTokens.space8) {
-                        Text(author).font(LumiaTokens.textAuthor.font).foregroundStyle(LumiaTokens.inkEmphasis.color)
-                        Text(time).font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkSecondary.color)
+                        // The boards' inks, as the desktop shell's row has them.
+                        Text(author).font(LumiaTokens.textAuthor.font).foregroundStyle(LumiaTokens.ink.color)
+                        Text(time).font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkMuted.color)
                     }
                 }
                 Text(said)

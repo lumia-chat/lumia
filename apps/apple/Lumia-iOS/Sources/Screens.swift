@@ -78,10 +78,14 @@ struct ConversationScreen: View {
         }
     }
 
-    /// Whose a message is, for its block and its avatar's tone: the
-    /// account, or the identity when the instance named no account.
+    /// Whose a message is, for its block and its avatar's tone:
+    /// the account. A message that names none is the other person's when
+    /// there is only one, so their rows wear the tone the header and Home
+    /// give them; in a group it is left to its identity.
     private func authorID(of m: DmMessageSummary) -> String {
-        m.mine ? session.me : (m.senderAccountId.isEmpty ? m.senderIdentityId : m.senderAccountId)
+        if m.mine { return session.me }
+        if !m.senderAccountId.isEmpty { return m.senderAccountId }
+        return others.count == 1 ? others[0] : m.senderIdentityId
     }
 
     private func send() async {
