@@ -26,6 +26,9 @@ use crate::app::State;
 use crate::session::{Entry, Pending};
 use crate::tokens::{self as t};
 
+/// How close to the oldest row on screen the reader gets before the page before it is read.
+const OLDER_WITHIN: usize = 20;
+
 /// A message row's height before it is measured: an avatar and its padding.
 const ROW_ESTIMATE: f32 = t::AVATAR_LG + t::SPACE_24;
 
@@ -65,7 +68,9 @@ pub fn view(s: &State, label: String, look: Look) -> El {
                 }
             },
         )
-        .virtual_rows_version(s.session.revision);
+        .virtual_rows_version(s.session.revision)
+        // Reading up to the oldest rows on screen asks for the page before them.
+        .on_visible_rows(|s: &mut State, visible| visible.start < OLDER_WITHIN && s.load_older());
     col()
         .key("messages")
         .w_full()
@@ -191,14 +196,27 @@ fn stored_row(s: &State, i: usize, entry: &Entry, look: Look) -> El {
         .checked_sub(1)
         .and_then(|p| s.session.entries.get(p))
         .map(|e| local(e.at_micros).date_naive());
-    if previous == Some(day) {
+    // So does the word that older messages are on their way, in the oldest row.
+    let fetching = i == 0 && s.session.loading_older();
+    if previous == Some(day) && !fetching {
         return row;
     }
-    col()
-        .key(format!("day-{}", entry.id))
-        .w_full()
-        .child(day_divider(day_label(day), look))
-        .child(row)
+    let mut above = col().key(format!("day-{}", entry.id)).w_full();
+    if fetching {
+        above = above.child(
+            text("Loading earlier messages…")
+                .font(t::TEXT_META)
+                .color(c.ink_muted)
+                .w_full()
+                .align(rune::Align::Center)
+                .py(t::SPACE_8)
+                .role("status"),
+        );
+    }
+    if previous != Some(day) {
+        above = above.child(day_divider(day_label(day), look));
+    }
+    above.child(row)
 }
 
 /// A send the store does not hold yet: dimmed until it does, with the refusal when there was one.

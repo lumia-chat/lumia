@@ -49,9 +49,16 @@ pub struct IdentityState {
 }
 
 impl Session {
-    /// Whether this device holds an identity (which personal conversations need).
+    /// Whether this device holds an identity (which personal conversations need). Read
+    /// from the stores when the instance is opened and when a link is claimed, not on every
+    /// call: the views ask each frame.
     pub fn has_identity(&self) -> bool {
-        self.client().is_some_and(|app| app.has_identity())
+        self.holds_identity
+    }
+
+    /// Reads from the stores whether this device holds an identity.
+    pub(super) fn check_identity(&mut self) {
+        self.holds_identity = self.client().is_some_and(|app| app.has_identity());
     }
 
     // ---- Linking ------------------------------------------------------------------------
@@ -222,6 +229,7 @@ impl Session {
         match update {
             IdentityUpdate::Linked(Ok(roster)) => {
                 self.identity.roster = Some(roster.clone());
+                self.check_identity();
                 self.signed_in = true;
                 self.load();
             }

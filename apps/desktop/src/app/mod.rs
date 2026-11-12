@@ -184,9 +184,12 @@ impl State {
         self.session.load();
     }
 
-    /// Reads a page further back in the open conversation.
-    pub fn load_older(&mut self) {
+    /// Reads a page further back in the open conversation; true when that changed what is
+    /// on screen (a page came from the local store, or one is now on its way).
+    pub fn load_older(&mut self) -> bool {
+        let before = (self.session.entries.len(), self.session.loading_older());
         self.session.load_older();
+        before != (self.session.entries.len(), self.session.loading_older())
     }
 
     /// Forgets where the shell was, on the way out of it.

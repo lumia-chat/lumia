@@ -9,7 +9,8 @@ use std::time::{Duration, Instant};
 
 use lumia_shell::app::{Route, State};
 use lumia_shell::session::Connection;
-use rune::TextEdit;
+use lumia_shell::ui;
+use rune::{Env, Runtime, TextEdit};
 
 fn wait(state: &mut State, what: &str, done: impl Fn(&State) -> bool) {
     let deadline = Instant::now() + Duration::from_secs(15);
@@ -217,4 +218,32 @@ fn older_history_pages_in_from_the_store_and_then_the_instance() {
     }
     assert!(steps >= 2, "it took more than one page: {steps}");
     println!("{SENT} messages: {first_page} at first, the rest in {steps} steps");
+    drop(reader);
+
+    // The same from the window: scrolling up through the list asks for each page as the
+    // reader nears the oldest row on screen, until the channel's first message is there.
+    let mut scroller = sign_in("scroller");
+    scroller.select_channel(&channel);
+    wait(&mut scroller, "the channel's newest messages", |s| {
+        !s.session.entries.is_empty()
+    });
+    let mut rt = Runtime::new(scroller, ui::view, (1180.0, 760.0), Env::new(false, 2.0));
+    rt.frame(0.0);
+    let (x, y) = rt.find("messages").expect("the list is on screen");
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !rt.state.session.at_beginning() {
+        assert!(
+            Instant::now() < deadline,
+            "scrolling does not reach the beginning: {} entries",
+            rt.state.session.entries.len()
+        );
+        rt.wheel(x, y, 3000.0);
+        rt.frame(1.0 / 60.0);
+        rt.update(|s, _| {
+            s.drain();
+        });
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(rt.state.session.entries.len(), SENT);
+    assert_eq!(rt.state.session.entries[0].body, "history 0");
 }

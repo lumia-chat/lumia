@@ -59,10 +59,14 @@ run --scene live --script "$here/send.json" --tree "$work/sent.json" --at 4.0 2>
 grep -q "Typed into the" "$work/sent.json" || fail "the message typed into the composer is not on screen"
 $b channels "$server" | grep "#general" | grep -q "head=4" || fail "the typed message did not reach the instance"
 
-# The session without a window: a send goes from pending into the store, and a second launch
-# reads it back from SQLite (tests/live.rs).
-(cd "$here/.." && LUMIA_DEV_INSTANCE="$instance" LUMIA_DEV_HANDLE="$one" LUMIA_DEV_PASSWORD="$password" cargo test --quiet --test live >"$work/live.log" 2>&1) \
-  || { cat "$work/live.log"; fail "the live test"; }
-grep -q "skipped" "$work/live.log" && fail "the live test skipped itself"
+# Every test, the live ones included (tests/live*.rs): sending and reading back, history
+# paged from the store and the instance and scrolled to in the real list, linking this
+# computer to an identity, personal conversations with CLI devices, the account screens,
+# servers and invites. Each live test skips itself without this environment, which here
+# would be a failure.
+(cd "$here/.." && LUMIA_DEV_INSTANCE="$instance" LUMIA_DEV_HANDLE="$one" LUMIA_DEV_PASSWORD="$password" LUMIA_CLI="$cli" cargo test >"$work/live.log" 2>&1) \
+  || { grep -E "panicked|FAILED|^error" -A12 "$work/live.log" | head -80; fail "the tests"; }
+grep -q "skipped" "$work/live.log" && fail "a live test skipped itself"
 echo "  window: $work/shell.png, $work/shell-dark.png"
-echo "smoke: ok (signed in, snapshot loaded, gateway connected, messages and members on screen, a send stored)"
+echo "  tests: $(grep -c '^test .* ok$' "$work/live.log") passed"
+echo "smoke: ok (signed in, snapshot loaded, gateway connected, messages and members on screen, a send stored, every test passed)"

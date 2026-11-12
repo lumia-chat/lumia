@@ -234,6 +234,8 @@ pub struct Session {
     /// was kept.
     members_fresh: bool,
     reach: Reach,
+    /// Whether this device holds an identity, as last read from the stores.
+    holds_identity: bool,
     watching: Vec<String>,
 
     /// The instance's base URL, as opened.
@@ -302,6 +304,7 @@ impl Session {
             load_failures: 0,
             members_fresh: false,
             reach: Reach::default(),
+            holds_identity: false,
             watching: Vec::new(),
             base_url: String::new(),
             host: String::new(),
@@ -393,6 +396,7 @@ impl Session {
         self.host = app.host();
         self.signed_in = app.signed_in();
         self.app = Some(Arc::clone(&app));
+        self.check_identity();
         if self.signed_in {
             self.restore();
         }
@@ -434,6 +438,7 @@ impl Session {
         }
         self.subscribed.clear();
         self.members_fresh = false;
+        self.holds_identity = false;
         self.watching.clear();
         self.base_url.clear();
         self.host.clear();

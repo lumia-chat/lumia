@@ -567,4 +567,6 @@ pub fn bodies(state: &mut State) {
         })
         .collect();
     state.session.revision += 1;
+    // The sample ids are not real ones, and the store said so when the channel opened.
+    state.session.last_error = None;
 }
