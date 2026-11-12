@@ -11,23 +11,6 @@ Personal DMs are end-to-end encrypted. Server content is readable by the people 
   </picture>
 </p>
 
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/ios-home-dark.png">
-    <img src="docs/screenshots/ios-home-light.png" alt="The iOS design: Home, with personal conversations" width="30%">
-  </picture>
-  &nbsp;
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/ios-channel-dark.png">
-    <img src="docs/screenshots/ios-channel-light.png" alt="The iOS design: a channel" width="30%">
-  </picture>
-  &nbsp;
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/ios-conversation-dark.png">
-    <img src="docs/screenshots/ios-conversation-light.png" alt="The iOS design: an end-to-end encrypted personal conversation" width="30%">
-  </picture>
-</p>
-
 <p align="center"><sub>The design the apps are drawn to, with made-up people in it. It runs ahead of the apps: see Status.</sub></p>
 
 ## Status
