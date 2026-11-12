@@ -553,7 +553,7 @@ pub fn menu(
             .radius(t::RADIUS_14)
             .fill(c.surface)
             .border(1.0, c.line_strong),
-        look.shadows.popover,
+        look.shadows.floating,
     )
     .anchored_fit(anchor, side, align, t::SPACE_6)
     .modal(true, State::close_popover)
@@ -740,7 +740,7 @@ pub fn popover(
             .radius(t::RADIUS_18)
             .fill(c.surface)
             .border(1.0, c.line_strong),
-        look.shadows.popover,
+        look.shadows.floating,
     )
     .anchored_fit(anchor, Side::Bottom, Align::Start, t::SPACE_6)
     .modal(true, State::close_popover)

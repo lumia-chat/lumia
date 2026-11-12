@@ -313,7 +313,7 @@ pub fn person(s: &State, look: Look) -> Option<El> {
                 .radius(t::RADIUS_18)
                 .fill(c.surface)
                 .border(1.0, c.line_strong),
-            look.shadows.popover,
+            look.shadows.floating,
         )
         .clip_rounded(t::RADIUS_18)
         .anchored_fit(open.anchor.clone(), Side::Left, Align::Start, t::SPACE_8)
