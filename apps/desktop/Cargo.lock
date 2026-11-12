@@ -2979,6 +2979,7 @@ dependencies = [
  "reqwest",
  "rusqlite",
  "serde",
+ "serde_json",
  "sqlite-wasm-rs",
  "sqlite-wasm-vfs",
  "thiserror 2.0.21",

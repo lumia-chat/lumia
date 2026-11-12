@@ -160,6 +160,7 @@ pub fn member(id: &str, handle: &str, name: &str) -> MemberSummary {
 pub fn message(id: &str, author: &str, body: &str, micros: i64) -> Entry {
     Entry {
         id: id.into(),
+        seq: 0,
         author_account_id: author.into(),
         body: body.into(),
         at_micros: micros,

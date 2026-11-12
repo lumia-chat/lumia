@@ -29,9 +29,9 @@ use lumia_client::app::{
 };
 use lumia_client::sqlite::SqliteStore;
 
-/// How many of a channel's newest messages the list holds. The core reads the newest N and
-/// has no page before a sequence number yet, so older history is out of reach from here.
-pub const MESSAGE_WINDOW: u32 = 1000;
+/// How many messages a page of a conversation is: what is read from the local store when it
+/// opens, and each step further back, from the store and then from the instance.
+pub const MESSAGE_PAGE: u32 = 200;
 
 const PERSONAL_KINDS: [&str; 2] = ["PERSONAL_DM", "PERSONAL_GROUP_DM"];
 
@@ -93,6 +93,12 @@ pub enum Update {
         account_id: String,
         profile: Option<MemberSummary>,
     },
+    /// A page of a channel's history from the instance, older than the local store holds,
+    /// and whether still older messages remain.
+    Older {
+        channel_id: String,
+        page: Result<(Vec<Entry>, bool), Failure>,
+    },
     Gateway(AppEvent),
     SignedOut,
     Dm(dms::DmUpdate),
@@ -121,6 +127,8 @@ impl Conversation {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
     pub id: String,
+    /// Its place in the conversation's log; what a page further back is asked from.
+    pub seq: u64,
     pub author_account_id: String,
     pub body: String,
     pub at_micros: i64,
@@ -131,6 +139,7 @@ impl From<MessageSummary> for Entry {
     fn from(m: MessageSummary) -> Self {
         Self {
             id: m.message_id,
+            seq: m.seq,
             author_account_id: m.author_account_id,
             body: m.body,
             at_micros: m.created_at_micros,
@@ -160,6 +169,21 @@ impl Connection {
             Self::Closed { reason } => format!("closed: {reason}"),
         }
     }
+}
+
+/// How far back the open conversation has been read.
+#[derive(Debug, Default)]
+struct Reach {
+    /// How many of the local store's newest messages are on screen.
+    window: u32,
+    /// The local store has nothing above what is on screen.
+    local_done: bool,
+    /// The instance said nothing older remains, or would not say.
+    remote_done: bool,
+    /// A page from the instance is on its way.
+    loading: bool,
+    /// The pages the instance gave, oldest first: what lies above the local store.
+    history: Vec<Entry>,
 }
 
 /// A message this device sent that the store does not hold yet.
@@ -206,6 +230,10 @@ pub struct Session {
     subscribed: HashSet<String>,
     /// Snapshot requests that failed in a row, which spaces the next one out.
     load_failures: u32,
+    /// Whether the members shown came from the instance since this launch, not from what
+    /// was kept.
+    members_fresh: bool,
+    reach: Reach,
     watching: Vec<String>,
 
     /// The instance's base URL, as opened.
@@ -272,6 +300,8 @@ impl Session {
             app: None,
             subscribed: HashSet::new(),
             load_failures: 0,
+            members_fresh: false,
+            reach: Reach::default(),
             watching: Vec::new(),
             base_url: String::new(),
             host: String::new(),
@@ -363,8 +393,33 @@ impl Session {
         self.host = app.host();
         self.signed_in = app.signed_in();
         self.app = Some(Arc::clone(&app));
+        if self.signed_in {
+            self.restore();
+        }
         self.task(async move { Update::Info(app.instance_info().await.map_err(Failure::from)) });
         Ok(())
+    }
+
+    /// Puts back what the core kept of the account at its last snapshot (architecture 13,
+    /// "Local-first"): the servers, the channels and the members' names, and starts the
+    /// gateway from the store's cursors. The window has its last state before the instance
+    /// answers, and without it answering at all. A fresh snapshot is still asked for.
+    fn restore(&mut self) {
+        let Some(app) = self.app.clone() else { return };
+        let Ok(Some(snapshot)) = app.kept_snapshot() else {
+            return;
+        };
+        for server in &snapshot.servers {
+            let members = app.kept_members(&server.server_id).unwrap_or_default();
+            for member in &members {
+                self.people
+                    .insert(member.account_id.clone(), member.clone());
+            }
+            self.members.insert(server.server_id.clone(), members);
+        }
+        let channels = server_channels(&snapshot);
+        self.snapshot = Some(snapshot);
+        self.start(&channels);
     }
 
     /// Whether an instance is open.
@@ -378,6 +433,7 @@ impl Session {
             app.stop();
         }
         self.subscribed.clear();
+        self.members_fresh = false;
         self.watching.clear();
         self.base_url.clear();
         self.host.clear();
@@ -394,6 +450,7 @@ impl Session {
         self.presence.clear();
         self.profiles.clear();
         self.conversation = None;
+        self.reach = Reach::default();
         self.entries.clear();
         self.pending.clear();
         self.dm = dms::DmState::default();
@@ -506,9 +563,13 @@ impl Session {
         };
         let read = match &conversation {
             Conversation::Channel(id) => match &self.app {
+                // What the instance gave of older history sits above the local window.
                 Some(app) => app
-                    .messages(id, MESSAGE_WINDOW)
-                    .map(|rows| rows.into_iter().map(Entry::from).collect())
+                    .messages(id, self.reach.window.max(MESSAGE_PAGE))
+                    .map(|rows| {
+                        let local = rows.into_iter().map(Entry::from);
+                        self.reach.history.iter().cloned().chain(local).collect()
+                    })
                     .map_err(|e| e.to_string()),
                 None => return,
             },
@@ -577,13 +638,69 @@ impl Session {
         }
         self.conversation = Some(conversation);
         self.entries.clear();
+        self.reach = Reach {
+            window: MESSAGE_PAGE,
+            ..Reach::default()
+        };
         self.read_entries();
+    }
+
+    /// Reads a page further back in the open channel: from the local store while it has
+    /// more, then from the instance (which is not stored; it is history from before this
+    /// device's store begins). Does nothing while a page is on its way, at the beginning
+    /// of the channel, or in a personal conversation, whose whole log is already read.
+    pub fn load_older(&mut self) {
+        let Some(Conversation::Channel(channel)) = self.conversation.clone() else {
+            return;
+        };
+        if self.reach.loading {
+            return;
+        }
+        if !self.reach.local_done {
+            let before = self.entries.len();
+            self.reach.window += MESSAGE_PAGE;
+            self.read_entries();
+            let local = self.entries.len() - self.reach.history.len();
+            self.reach.local_done = local < self.reach.window as usize;
+            if self.entries.len() > before {
+                return;
+            }
+        }
+        let (Some(app), Some(first), false) =
+            (self.client(), self.entries.first(), self.reach.remote_done)
+        else {
+            return;
+        };
+        let before_seq = first.seq;
+        self.reach.loading = true;
+        self.task(async move {
+            let page = app
+                .older_messages(&channel, before_seq, MESSAGE_PAGE)
+                .await
+                .map(|(rows, more)| (rows.into_iter().map(Entry::from).collect(), more))
+                .map_err(Failure::from);
+            Update::Older {
+                channel_id: channel,
+                page,
+            }
+        });
+    }
+
+    /// Whether a page of older messages is being fetched from the instance.
+    pub fn loading_older(&self) -> bool {
+        self.reach.loading
+    }
+
+    /// Whether the open conversation is known to begin at its first message on screen.
+    pub fn at_beginning(&self) -> bool {
+        self.reach.local_done && self.reach.remote_done
     }
 
     /// Takes the conversation off screen.
     pub fn close_conversation(&mut self) {
         if self.conversation.take().is_some() {
             self.entries.clear();
+            self.reach = Reach::default();
             self.revision += 1;
         }
     }
@@ -766,13 +883,9 @@ impl Session {
             }
             Update::SignedIn(Err(_)) => {}
             Update::Snapshot(Ok(snapshot)) => {
-                let channels: Vec<String> = snapshot
-                    .channels
-                    .iter()
-                    .filter(|c| !PERSONAL_KINDS.contains(&c.kind.as_str()))
-                    .map(|c| c.channel_id.clone())
-                    .collect();
-                // Members are asked for again only when the servers changed.
+                let channels = server_channels(snapshot);
+                // Members are asked for again only when the servers changed, and once
+                // after a launch that began from what was kept.
                 let servers_changed = self.snapshot.as_ref().is_none_or(|old| {
                     old.servers
                         .iter()
@@ -783,7 +896,8 @@ impl Session {
                 self.load_failures = 0;
                 self.last_error = None;
                 self.start(&channels);
-                if servers_changed {
+                if servers_changed || !self.members_fresh {
+                    self.members_fresh = true;
                     self.load_members(&snapshot.servers);
                 }
             }
@@ -792,8 +906,8 @@ impl Session {
                 if failure.code == "UNAUTHENTICATED" {
                     self.signed_in = false;
                 } else if self.snapshot.is_none() {
-                    // Nothing to show until one arrives (the core keeps no channel list
-                    // locally), so ask again: after 2 s, then 4, up to 30.
+                    // Nothing was kept from an earlier launch, so there is nothing to
+                    // show until one arrives: ask again after 2 s, then 4, up to 30.
                     self.load_failures += 1;
                     self.load_after(std::time::Duration::from_secs(
                         (1u64 << self.load_failures.min(5)).min(30),
@@ -812,6 +926,26 @@ impl Session {
                 profile,
             } => {
                 self.profiles.insert(account_id.clone(), profile.clone());
+            }
+            Update::Older { channel_id, page } => {
+                if self.channel() != Some(channel_id.as_str()) {
+                    return;
+                }
+                self.reach.loading = false;
+                match page {
+                    Ok((older, more)) => {
+                        self.reach.remote_done = !*more || older.is_empty();
+                        let mut history = older.clone();
+                        history.append(&mut self.reach.history);
+                        self.reach.history = history;
+                        self.read_entries();
+                    }
+                    Err(failure) => {
+                        // Not asked again for this channel until it is reopened.
+                        self.reach.remote_done = true;
+                        self.last_error = Some(failure.message.clone());
+                    }
+                }
             }
             Update::Gateway(event) => self.on_gateway(event),
             Update::SignedOut => {}
@@ -892,6 +1026,17 @@ impl Drop for Session {
             app.stop();
         }
     }
+}
+
+/// The channels of a snapshot that belong to servers: what the gateway subscribes to from
+/// the start (personal conversations are the DM engine's to subscribe).
+fn server_channels(snapshot: &SnapshotSummary) -> Vec<String> {
+    snapshot
+        .channels
+        .iter()
+        .filter(|c| !PERSONAL_KINDS.contains(&c.kind.as_str()))
+        .map(|c| c.channel_id.clone())
+        .collect()
 }
 
 /// The name a person goes by: display name, else nickname, else handle, else the id's start.

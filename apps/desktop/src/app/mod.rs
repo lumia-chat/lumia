@@ -166,6 +166,22 @@ impl State {
         }
     }
 
+    /// Enters the shell for a session the stores already hold, at launch: with what the
+    /// core kept of the account on screen at once when it kept anything, and a fresh
+    /// snapshot asked for either way.
+    pub fn resume(&mut self) {
+        self.route = Route::Shell;
+        if self.session.snapshot.is_some() {
+            self.settle();
+        }
+        self.session.load();
+    }
+
+    /// Reads a page further back in the open conversation.
+    pub fn load_older(&mut self) {
+        self.session.load_older();
+    }
+
     /// Forgets where the shell was, on the way out of it.
     pub(crate) fn leave_shell(&mut self) {
         self.place = Place::Home;
@@ -235,6 +251,7 @@ impl State {
             Update::Server(update) => self.react_server(update),
             Update::Identity(update) => self.react_identity(update),
             Update::Members { .. }
+            | Update::Older { .. }
             | Update::Profile { .. }
             | Update::Gateway(_)
             | Update::SignedOut => {}
@@ -272,8 +289,7 @@ pub fn init() -> State {
         state.sign_in.instance = TextEdit::new(&instance);
         state.connect();
         if state.session.signed_in {
-            state.route = Route::Shell;
-            state.session.load();
+            state.resume();
         } else {
             state.sign_in.handle = TextEdit::new(&handle);
             state.sign_in.password.replace_text(&password);
@@ -284,8 +300,7 @@ pub fn init() -> State {
     if state.settings.instance.is_some() {
         state.connect();
         if state.session.signed_in {
-            state.route = Route::Shell;
-            state.session.load();
+            state.resume();
         }
     }
     state
