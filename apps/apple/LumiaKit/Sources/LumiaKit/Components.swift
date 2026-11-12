@@ -23,6 +23,31 @@ public struct LumiaAvatar: View {
     }
 }
 
+/// A picture the instance keeps (a server's) drawn over what stands for it,
+/// as people's avatars are on the web and the desktop: what is under shows
+/// while the picture loads, and in its place when there is none or it
+/// cannot be had. Fills the frame it is given; whoever draws it clips it to
+/// its shape.
+public struct LumiaPictureOver<Under: View>: View {
+    let url: URL?
+    @ViewBuilder let under: () -> Under
+
+    public init(url: URL?, @ViewBuilder under: @escaping () -> Under) {
+        self.url = url; self.under = under
+    }
+
+    public var body: some View {
+        ZStack {
+            under()
+            if let url {
+                AsyncImage(url: url) { phase in
+                    if let image = phase.image { image.resizable().scaledToFill() } else { Color.clear }
+                }
+            }
+        }
+    }
+}
+
 public enum NoticeTone { case neutral, accent }
 
 public struct LumiaNotice<Content: View>: View {
@@ -551,16 +576,18 @@ public struct LumiaField: View {
     @Binding var text: String
     var placeholder = ""
     var secure = false
+    /// What assistive technology calls the field; its placeholder when nil, as before.
+    var spoken: String?
 
-    public init(_ label: String, text: Binding<String>, placeholder: String = "", secure: Bool = false) {
-        self.label = label; self._text = text; self.placeholder = placeholder; self.secure = secure
+    public init(_ label: String, text: Binding<String>, placeholder: String = "", secure: Bool = false, spoken: String? = nil) {
+        self.label = label; self._text = text; self.placeholder = placeholder; self.secure = secure; self.spoken = spoken
     }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: LumiaTokens.space4) {
             Text(label).font(LumiaTokens.textLabel.font).foregroundStyle(LumiaTokens.inkSecondary.color)
             Group {
-                if secure { SecureField(placeholder, text: $text) } else { TextField(placeholder, text: $text) }
+                if secure { SecureField(placeholder, text: $text) } else if let spoken { TextField(placeholder, text: $text).accessibilityLabel(spoken) } else { TextField(placeholder, text: $text) }
             }
             .textFieldStyle(.plain)
             .font(LumiaTokens.textBody.font)

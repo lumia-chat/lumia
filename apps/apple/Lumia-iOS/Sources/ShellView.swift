@@ -46,6 +46,7 @@ struct ShellView: View {
                 case .addServer: AddServerScreen(session: session) { id in path = []; place = .server(id: id) }
                 case let .newChannel(serverID): NewChannelScreen(session: session, server: servers.first { $0.serverId == serverID }) { id in path = [.channel(id: id)] }
                 case let .invite(serverID): InviteScreen(session: session, server: servers.first { $0.serverId == serverID })
+                case let .serverSettings(serverID): ServerSettingsScreen(session: session, serverID: serverID)
                 }
             }
         }
@@ -72,7 +73,7 @@ struct ShellView: View {
             #if DEBUG
             // The smoke run (scripts/smoke-ios.sh) opens one screen per launch
             // through LUMIA_DEV_SCREEN: home, server, channel, requests, devices, profile,
-            // preferences, new; the push smoke opens the account's first personal
+            // preferences, new, add, newchannel, invite, serversettings; the push smoke opens the account's first personal
             // conversation with `conversation`. (LUMIA_DEV_APPEARANCE and LUMIA_DEV_DENSITY
             // choose how that launch looks: `Preferences` in LumiaKit reads them.)
             if let first = ids.first, let screen = ProcessInfo.processInfo.environment["LUMIA_DEV_SCREEN"] {
@@ -91,6 +92,7 @@ struct ShellView: View {
                 case "add": place = .home; path = [.addServer]
                 case "newchannel": place = .server(id: first); path = [.newChannel(serverID: first)]
                 case "invite": place = .server(id: first); path = [.invite(serverID: first)]
+                case "serversettings": place = .server(id: first); path = [.serverSettings(serverID: first)]
                 default: break
                 }
             }
@@ -271,6 +273,13 @@ struct ServerScreen: View {
                     Button("Invite people") { path.append(.invite(serverID: server.serverId)) }
                         .buttonStyle(.lumiaLink)
                         .padding(.horizontal, LumiaTokens.space10).padding(.top, LumiaTokens.space4)
+                    // Offered to whoever may change them (architecture 6.7): the
+                    // account's own permission there, from the snapshot.
+                    if server.canManage {
+                        Button("Server settings") { path.append(.serverSettings(serverID: server.serverId)) }
+                            .buttonStyle(.lumiaLink)
+                            .padding(.horizontal, LumiaTokens.space10).padding(.top, LumiaTokens.space4)
+                    }
                 }
                 .padding(.horizontal, LumiaTokens.space12)
                 .padding(.bottom, LumiaTokens.space24)

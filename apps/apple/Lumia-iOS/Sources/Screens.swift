@@ -3,6 +3,7 @@
 // states, wording and error handling as the web's and the desktop shell's.
 import LumiaFFI
 import LumiaKit
+import PhotosUI
 import SwiftUI
 
 // MARK: Conversation
@@ -532,6 +533,200 @@ struct InviteScreen: View {
             if invite?.code == i.code { invite = nil }
         } catch {
             self.error = error.lumiaMessage
+        }
+    }
+}
+
+// MARK: Server settings
+
+/// A server's name, picture and how long it keeps messages (architecture
+/// 6.7), for whoever may change them: offered under the server's channels
+/// when the snapshot says this account may. The words, states and errors
+/// are the web's and the desktop shell's; the Profile screen's cards, and
+/// the photo's picker and refusals.
+struct ServerSettingsScreen: View {
+    let session: LumiaSession
+    let serverID: String
+    @State private var name = ""
+    @State private var nameBusy = false
+    @State private var nameError = ""
+    @State private var nameSaved = false
+    @State private var picked: PhotosPickerItem?
+    @State private var pictureBusy = false
+    @State private var pictureError = ""
+    @State private var pictureSaved = false
+    @State private var retention: UInt32 = 0
+    @State private var retentionBusy = false
+    @State private var retentionError = ""
+    @State private var retentionSaved = false
+    // The form waits for the server: fields shown before it would be overwritten by it.
+    @State private var loaded = false
+
+    private var server: ServerSummary? { session.snapshot?.servers.first { $0.serverId == serverID } }
+
+    var body: some View {
+        PanelScreen(back: server?.name ?? "Server", title: "Server settings", subtitle: server?.name) {
+            ScrollView {
+                if let server, loaded {
+                    VStack(alignment: .leading, spacing: LumiaTokens.space12) {
+                        overview(server)
+                        history(server)
+                    }
+                    .padding(LumiaTokens.space16)
+                }
+            }
+            .scrollDismissesKeyboard(.interactively)
+        }
+        .task(id: server?.serverId) {
+            guard let server, !loaded else { return }
+            name = server.name
+            retention = server.retentionDays
+            loaded = true
+        }
+        .onChange(of: picked) { _, item in
+            guard let item else { return }
+            picked = nil
+            Task { await choose(item) }
+        }
+    }
+
+    private func overview(_ server: ServerSummary) -> some View {
+        let url = session.pictureURL(server.iconUrl)
+        return LumiaCard(title: "Overview", width: nil) {
+            VStack(alignment: .leading, spacing: LumiaTokens.space16) {
+                HStack(spacing: LumiaTokens.space14) {
+                    // As the rail draws the server: its picture over its initials.
+                    LumiaPictureOver(url: url) {
+                        Text(initials(of: server.name)).font(LumiaTokens.titleMonogram.font).foregroundStyle(LumiaTokens.ink.color)
+                    }
+                    .frame(width: LumiaTokens.tileSize, height: LumiaTokens.tileSize)
+                    .background(LumiaTokens.tile.color, in: RoundedRectangle(cornerRadius: LumiaTokens.radius14))
+                    .clipShape(RoundedRectangle(cornerRadius: LumiaTokens.radius14))
+                    // The card is the tile's colour in light: its edge says where it is.
+                    .overlay(RoundedRectangle(cornerRadius: LumiaTokens.radius14).stroke(LumiaTokens.line.color))
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(url == nil ? "No server picture" : "Server picture")
+                    .accessibilityAddTraits(.isImage)
+                    VStack(alignment: .leading, spacing: LumiaTokens.space6) {
+                        // Side by side where they fit on one line each, else one over the other.
+                        ViewThatFits(in: .horizontal) {
+                            HStack(spacing: LumiaTokens.space8) { pictureButtons(has: url != nil) }
+                            VStack(alignment: .leading, spacing: LumiaTokens.space8) { pictureButtons(has: url != nil) }
+                        }
+                        if !pictureError.isEmpty {
+                            LumiaErrorText(pictureError)
+                        } else {
+                            Text(pictureSaved ? "Saved." : "A PNG, JPEG, WebP or GIF up to 8 MB. People see its middle.")
+                                .font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkSecondary.color)
+                        }
+                    }
+                }
+                LumiaField("Name", text: $name, placeholder: "Our place", spoken: "Name")
+                if !nameError.isEmpty { LumiaErrorText(nameError) }
+                if nameSaved { Text("Saved.").font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkSecondary.color) }
+                Button { Task { await saveName(server) } } label: { Text("Save").frame(maxWidth: .infinity) }
+                    .buttonStyle(.lumiaPrimary).disabled(nameBusy || !ServerName.canSave(name, current: server.name))
+                    .accessibilityHint("Saves the server's name")
+                    .accessibilityIdentifier("save-name")
+            }
+        }
+        .onChange(of: name) { _, _ in nameSaved = false; nameError = "" }
+    }
+
+    @ViewBuilder private func pictureButtons(has: Bool) -> some View {
+        PhotosPicker(selection: $picked, matching: .images, preferredItemEncoding: .compatible) {
+            Text(pictureBusy ? "Sending…" : "Choose a picture…").lineLimit(1).fixedSize()
+        }
+        .buttonStyle(.lumiaSecondary).disabled(pictureBusy)
+        if has {
+            Button { Task { await removePicture() } } label: { Text("Remove").lineLimit(1).fixedSize() }
+                .buttonStyle(.lumiaSecondary).disabled(pictureBusy)
+                .accessibilityHint("Takes the server's picture away")
+        }
+    }
+
+    private func history(_ server: ServerSummary) -> some View {
+        LumiaCard(title: "Message history", subtitle: "How long this server keeps its messages.", width: nil) {
+            VStack(alignment: .leading, spacing: LumiaTokens.space12) {
+                LumiaSegmentedTabs("Message history", tabs: Retention.choices(current: server.retentionDays).map { .init(id: $0, label: Retention.label($0)) }, selected: $retention)
+                // Nothing is deleted until Save; this says what Save will do.
+                if let warning = Retention.warning(chosen: retention, current: server.retentionDays) { LumiaErrorText(warning) }
+                if !retentionError.isEmpty { LumiaErrorText(retentionError) }
+                if retentionSaved { Text("Saved.").font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkSecondary.color) }
+                Button { Task { await saveRetention(server) } } label: { Text("Save").frame(maxWidth: .infinity) }
+                    .buttonStyle(.lumiaPrimary).disabled(retentionBusy || retention == server.retentionDays)
+                    .accessibilityHint("Saves how long this server keeps its messages")
+                    .accessibilityIdentifier("save-retention")
+            }
+        }
+        .onChange(of: retention) { _, _ in retentionSaved = false; retentionError = "" }
+    }
+
+    private func saveName(_ server: ServerSummary) async {
+        nameError = ""
+        nameSaved = false
+        // What the instance would refuse is not sent.
+        guard ServerName.isValid(name) else { nameError = ServerName.refusal; return }
+        // The field shows what is sent; an edit after this clears the line under it.
+        name = ServerName.trimmed(name)
+        nameBusy = true
+        defer { nameBusy = false }
+        do {
+            try await session.updateServer(serverID: server.serverId, name: name, retentionDays: nil)
+            nameSaved = true
+        } catch {
+            nameError = ServerSettingsRefusal.settings(code: error.lumiaCode, details: error.lumiaDetails, message: error.lumiaMessage)
+        }
+    }
+
+    private func saveRetention(_ server: ServerSummary) async {
+        retentionError = ""
+        retentionSaved = false
+        retentionBusy = true
+        defer { retentionBusy = false }
+        do {
+            try await session.updateServer(serverID: server.serverId, name: nil, retentionDays: retention)
+            retentionSaved = true
+        } catch {
+            retentionError = ServerSettingsRefusal.settings(code: error.lumiaCode, details: error.lumiaDetails, message: error.lumiaMessage)
+        }
+    }
+
+    /// The picture chosen, as the photo library gives it in a form the
+    /// instance reads (`.compatible` turns a HEIC into a JPEG).
+    private func choose(_ item: PhotosPickerItem) async {
+        pictureError = ""
+        pictureSaved = false
+        pictureBusy = true
+        defer { pictureBusy = false }
+        do {
+            guard let data = try await item.loadTransferable(type: Data.self) else {
+                pictureError = "That picture could not be read."
+                return
+            }
+            // What the instance would refuse for its size is not sent at all.
+            guard data.count <= ServerSettingsRefusal.largestPicture else {
+                pictureError = ServerSettingsRefusal.tooLarge
+                return
+            }
+            let mediaType = item.supportedContentTypes.first?.preferredMIMEType ?? "application/octet-stream"
+            try await session.setServerIcon(serverID: serverID, picture: data, mediaType: mediaType)
+            pictureSaved = true
+        } catch {
+            pictureError = ServerSettingsRefusal.picture(code: error.lumiaCode, details: error.lumiaDetails, message: error.lumiaMessage)
+        }
+    }
+
+    private func removePicture() async {
+        pictureError = ""
+        pictureSaved = false
+        pictureBusy = true
+        defer { pictureBusy = false }
+        do {
+            try await session.removeServerIcon(serverID: serverID)
+            pictureSaved = true
+        } catch {
+            pictureError = ServerSettingsRefusal.picture(code: error.lumiaCode, details: error.lumiaDetails, message: error.lumiaMessage)
         }
     }
 }

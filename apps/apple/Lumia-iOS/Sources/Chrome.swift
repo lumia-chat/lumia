@@ -23,6 +23,7 @@ enum Screen: Hashable {
     case addServer
     case newChannel(serverID: String)
     case invite(serverID: String)
+    case serverSettings(serverID: String)
 }
 
 struct PhoneRail: View {
@@ -47,7 +48,10 @@ struct PhoneRail: View {
                 tile(current: place == .server(id: s.serverId), badge: 0, label: s.name) {
                     place = .server(id: s.serverId)
                 } content: {
-                    Text(initials(of: s.name)).font(LumiaTokens.titleMonogram.font).foregroundStyle(LumiaTokens.ink.color)
+                    // The server's picture over its initials, when it has one (architecture 6.7).
+                    LumiaPictureOver(url: session.pictureURL(s.iconUrl)) {
+                        Text(initials(of: s.name)).font(LumiaTokens.titleMonogram.font).foregroundStyle(LumiaTokens.ink.color)
+                    }
                 }
             }
             tile(current: false, badge: 0, label: "Add a server", action: add) {
@@ -91,6 +95,8 @@ struct PhoneRail: View {
             content()
                 .frame(width: LumiaTokens.tileSize, height: LumiaTokens.tileSize)
                 .background(current ? LumiaTokens.tabActive.color : LumiaTokens.tile.color, in: RoundedRectangle(cornerRadius: current ? LumiaTokens.radius14 : LumiaTokens.radiusRound))
+                // A server's picture takes the tile's shape.
+                .clipShape(RoundedRectangle(cornerRadius: current ? LumiaTokens.radius14 : LumiaTokens.radiusRound))
                 .overlay(RoundedRectangle(cornerRadius: current ? LumiaTokens.radius14 : LumiaTokens.radiusRound).stroke(current ? LumiaTokens.accent.color : .clear, lineWidth: 2))
                 .overlay(alignment: .topTrailing) {
                     if badge > 0 { CountBadge(badge).offset(x: 4, y: -4) }

@@ -52,6 +52,16 @@ public actor LumiaClient {
     public func revokeInvite(_ linkOrCode: String) throws { try inner.revokeInvite(linkOrCode: linkOrCode) }
     /// A server this account owns.
     public func createServer(name: String) throws -> ServerSummary { try inner.createServer(name: name) }
+    /// A server's settings (architecture 6.7): its name, how long it keeps
+    /// messages in days (0 for ever), or both, nil leaving one as it is; its
+    /// picture, a file's bytes as chosen, or none. Each returns the snapshot as it then is.
+    public func updateServer(serverID: String, name: String?, retentionDays: UInt32?) throws -> SnapshotSummary {
+        try inner.updateServer(serverId: serverID, name: name, retentionDays: retentionDays)
+    }
+    public func setServerIcon(serverID: String, picture: Data, mediaType: String) throws -> SnapshotSummary {
+        try inner.setServerIcon(serverId: serverID, picture: picture, mediaType: mediaType)
+    }
+    public func removeServerIcon(serverID: String) throws -> SnapshotSummary { try inner.removeServerIcon(serverId: serverID) }
     /// A text channel in a server this account may manage channels in.
     public func createChannel(serverID: String, name: String) throws -> ChannelSummary { try inner.createChannel(serverId: serverID, name: name) }
     /// Asks the instance to mail a sign-in link to `email`.

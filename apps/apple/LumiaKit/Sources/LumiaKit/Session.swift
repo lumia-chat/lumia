@@ -222,6 +222,31 @@ public final class LumiaSession {
         return channel.channelId
     }
 
+    // MARK: Server settings (architecture 6.7)
+
+    /// Changes a server's name, how long it keeps messages (0 for ever), or
+    /// both; nil leaves one as it is. The snapshot the instance answers with
+    /// is held, so the rail and the screen show the change at once; other
+    /// members hear of it through their account logs.
+    public func updateServer(serverID: String, name: String?, retentionDays: UInt32?) async throws {
+        snapshot = try await client.updateServer(serverID: serverID, name: name.map(ServerName.trimmed), retentionDays: retentionDays)
+    }
+
+    /// Makes a file's bytes, as chosen, the server's picture; the instance makes its own square of it.
+    public func setServerIcon(serverID: String, picture: Data, mediaType: String) async throws {
+        snapshot = try await client.setServerIcon(serverID: serverID, picture: picture, mediaType: mediaType)
+    }
+
+    /// Takes the server's picture away.
+    public func removeServerIcon(serverID: String) async throws {
+        snapshot = try await client.removeServerIcon(serverID: serverID)
+    }
+
+    /// Where a picture this instance names is (`pictureURL(_:base:)`); nil for none.
+    public func pictureURL(_ path: String) -> URL? {
+        LumiaKit.pictureURL(path, base: client.baseURL)
+    }
+
     public func signInIdentity() async throws {
         try await client.signInIdentity()
         signedIn = true

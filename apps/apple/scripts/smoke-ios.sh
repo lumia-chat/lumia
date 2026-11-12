@@ -4,10 +4,11 @@
 # two messages with the release CLI, installs the debug app, launches it
 # signed in as that account (the LUMIA_DEV_* environment a debug build
 # honours, passed through simctl's SIMCTL_CHILD_ prefix), and screenshots
-# each screen the LUMIA_DEV_SCREEN switch can open. Three are drawn again
-# as Preferences can make them (LUMIA_DEV_APPEARANCE and LUMIA_DEV_DENSITY,
-# which choose for one launch and store nothing): Preferences and sign-in
-# dark, and the channel compact, light and dark.
+# each screen the LUMIA_DEV_SCREEN switch can open (Server settings among
+# them, since the account owns its server). Four are drawn again as
+# Preferences can make them (LUMIA_DEV_APPEARANCE and LUMIA_DEV_DENSITY,
+# which choose for one launch and store nothing): Preferences, Server
+# settings and sign-in dark, and the channel compact, light and dark.
 #
 #   scripts/smoke-ios.sh            # expects the app built for the simulator (xcodebuild, see AGENTS.md) and the CLI
 #   LUMIA_INSTANCE=http://host:4000 LUMIA_SIMULATOR="iPhone 15 Pro" scripts/smoke-ios.sh
@@ -72,9 +73,10 @@ shoot home 8
 alive=$(xcrun simctl spawn "$udid" launchctl list 2>/dev/null | grep -c "$bundle" || true)
 # The app sends nothing; the CLI's message lands in its view when the gateway is up.
 "$cli" --data-dir "$data" send "$channel" "Still here?" >/dev/null
-for screen in server channel requests devices profile preferences new add newchannel invite signin link; do shoot "$screen" 6; done
+for screen in server channel requests devices profile preferences new add newchannel invite serversettings signin link; do shoot "$screen" 6; done
 # As Preferences can make them: dark, and the channel's messages compact.
 shoot preferences 6 dark
+shoot serversettings 6 dark
 shoot signin 6 dark
 shoot channel 6 "" compact
 shoot channel 6 dark compact

@@ -3,8 +3,8 @@
 // composer, make a choice in Preferences, sign out from the account menu,
 // look into Notification Center, and read a screen as assistive technology
 // does. scripts/smoke-push.sh,
-// scripts/smoke-typing.sh, scripts/smoke-preferences.sh and
-// scripts/smoke-signout.sh run these tests with the app signed in
+// scripts/smoke-typing.sh, scripts/smoke-preferences.sh,
+// scripts/smoke-signout.sh and scripts/smoke-server-settings.sh run these tests with the app signed in
 // (the LUMIA_DEV_* environment, passed through xcodebuild's TEST_RUNNER_
 // prefix).
 import XCTest
@@ -292,6 +292,107 @@ final class SmokeUITests: XCTestCase {
         XCTAssertLessThan(try XCTUnwrap(railGone, "the rail was there until the sign-in screen"), 5, "the account stayed on screen while the sign-out waited")
         XCTAssertFalse(account.exists)
         reached("quiet-out", under: steps, saying: String(format: "%.0f", took))
+    }
+
+    /// Server settings by hand (scripts/smoke-server-settings.sh), signed in
+    /// as the server's owner on the server, LUMIA_UITEST_SERVER: "Server
+    /// settings" under its channels leads to the screen, whose words, field
+    /// and choices are checked as assistive technology reads them; the name
+    /// becomes LUMIA_UITEST_RENAME and 30 days is chosen, which says what it
+    /// will delete before Save and nothing after. The smoke then gives the
+    /// server a picture from elsewhere, which the screen and the rail draw.
+    /// Steps (each waits for `<step>.seen`): `open`, `warning`, `saved`
+    /// (the smoke reads the server from the instance and sets the picture),
+    /// `picture`, and `rail`, which carries where the server's tile is, as
+    /// fractions of the window: "x y width height".
+    func testServerSettingsAreChangedHere() throws {
+        let env = ProcessInfo.processInfo.environment
+        let steps = try XCTUnwrap(env["LUMIA_UITEST_STEPS"])
+        let serverName = try XCTUnwrap(env["LUMIA_UITEST_SERVER"])
+        let rename = try XCTUnwrap(env["LUMIA_UITEST_RENAME"])
+        let app = launch(screen: "server")
+        let anything = app.descendants(matching: .any)
+        let settings = app.buttons["Server settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 90), "no Server settings for the server's owner")
+        settings.tap()
+
+        for words in ["Server settings", serverName, "Overview", "Choose a picture…", "Name", "Message history", "How long this server keeps its messages."] {
+            XCTAssertTrue(anything.matching(NSPredicate(format: "label == %@", words)).firstMatch.waitForExistence(timeout: 10), "the screen does not say \"\(words)\"")
+        }
+        XCTAssertTrue(app.images["No server picture"].exists || anything.matching(NSPredicate(format: "label == %@", "No server picture")).firstMatch.exists, "the picture is not labelled")
+        XCTAssertFalse(app.buttons["Remove"].exists, "Remove is offered for a server with no picture")
+        let field = app.textFields["Name"]
+        XCTAssertTrue(field.exists, "no field called Name")
+        XCTAssertEqual(field.value as? String, serverName)
+        let saveName = app.buttons["save-name"]
+        let saveRetention = app.buttons["save-retention"]
+        XCTAssertEqual(saveName.label, "Save")
+        XCTAssertFalse(saveName.isEnabled, "Save is offered for the name unchanged")
+        XCTAssertFalse(saveRetention.isEnabled, "Save is offered for the retention unchanged")
+        let choices = ["Forever", "1 year", "90 days", "30 days"]
+        let choice = { (label: String) in anything.matching(NSPredicate(format: "label == %@", "Message history")).buttons[label] }
+        for label in choices { XCTAssertTrue(choice(label).exists, "no \(label) under Message history") }
+        XCTAssertEqual(choices.filter { choice($0).isSelected }, ["Forever"], "a new server keeps its messages for ever")
+        reached("open", under: steps)
+
+        // The name, trimmed.
+        // Past the end of the name puts the caret after it; then it is deleted.
+        field.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.5)).tap()
+        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: serverName.count + 2))
+        XCTAssertFalse(saveName.isEnabled, "Save is offered for an empty name")
+        field.typeText("  \(rename) ")
+        XCTAssertTrue(saveName.isEnabled)
+        saveName.tap()
+        let renamed = anything.matching(NSPredicate(format: "label == %@", rename)).firstMatch
+        XCTAssertTrue(renamed.waitForExistence(timeout: 20), "the header does not say the new name")
+        XCTAssertFalse(saveName.isEnabled, "Save is still offered once the name is saved")
+        XCTAssertEqual(field.value as? String, rename, "the field does not show the name trimmed")
+        XCTAssertTrue(app.staticTexts["Saved."].waitForExistence(timeout: 5), "nothing says the name was saved")
+        // Return puts the keyboard away, so the rest of the screen is in view.
+        field.typeText("\n")
+
+        // 30 days, shorter than for ever: Save says first what it will delete.
+        let warning = anything.matching(NSPredicate(format: "label == %@", "Messages older than 30 days will be deleted for everyone. This cannot be undone.")).firstMatch
+        XCTAssertFalse(warning.exists, "a warning before anything shorter is chosen")
+        app.swipeUp()
+        choice("30 days").tap()
+        XCTAssertEqual(choices.filter { choice($0).isSelected }, ["30 days"])
+        XCTAssertTrue(warning.waitForExistence(timeout: 5), "nothing says what 30 days will delete")
+        XCTAssertTrue(saveRetention.isEnabled)
+        reached("warning", under: steps)
+        saveRetention.tap()
+        let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: warning)
+        XCTAssertEqual(XCTWaiter().wait(for: [gone], timeout: 20), .completed, "the warning is still there once 30 days is saved")
+        XCTAssertFalse(saveRetention.isEnabled, "Save is still offered once the retention is saved")
+        XCTAssertEqual(choices.filter { choice($0).isSelected }, ["30 days"])
+        reached("saved", under: steps)
+
+        // The smoke has given the server a picture from elsewhere; the
+        // account event brings it here.
+        app.swipeDown()
+        let remove = app.buttons["Remove"]
+        XCTAssertTrue(remove.waitForExistence(timeout: 30), "the picture set elsewhere did not reach the screen")
+        XCTAssertTrue(anything.matching(NSPredicate(format: "label == %@", "Server picture")).firstMatch.exists, "the picture is not labelled")
+        reached("picture", under: steps)
+
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Back to ")).firstMatch.tap()
+        let tile = app.buttons[rename]
+        XCTAssertTrue(tile.waitForExistence(timeout: 10), "no \(rename) on the rail")
+        XCTAssertTrue(tile.isSelected)
+        let window = app.windows.firstMatch.frame
+        let f = tile.frame
+        reached("rail", under: steps, saying: String(format: "%.4f %.4f %.4f %.4f", (f.minX - window.minX) / window.width, (f.minY - window.minY) / window.height, f.width / window.width, f.height / window.height))
+    }
+
+    /// A member whose roles do not let them change the server's settings is
+    /// not offered them (scripts/smoke-server-settings.sh signs in as one).
+    /// Step `member`.
+    func testServerSettingsAreNotOfferedToAMember() throws {
+        let steps = try XCTUnwrap(ProcessInfo.processInfo.environment["LUMIA_UITEST_STEPS"])
+        let app = launch(screen: "server")
+        XCTAssertTrue(app.buttons["Invite people"].waitForExistence(timeout: 90), "the server did not open")
+        XCTAssertFalse(app.buttons["Server settings"].exists, "Server settings is offered to a member who may not change them")
+        reached("member", under: steps)
     }
 
     /// Announces a step to the smoke and waits until it says it has looked.
