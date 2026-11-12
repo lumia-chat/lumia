@@ -89,6 +89,22 @@ public actor LumiaClient {
     /// The same, blocking, for the notification extension's one call.
     public nonisolated func notificationContentSync(timeoutMs: UInt64 = 3000) throws -> NotificationContent? { try inner.notificationContent(timeoutMs: timeoutMs) }
 
+    /// What a push that has reached this phone becomes, blocking (the
+    /// notification extension's one call, architecture 15.5). Nothing at all
+    /// when this client is not signed in or the instance no longer takes its
+    /// session: the push is for an account the phone does not hold, and a
+    /// stale subscription must not tell whoever has the phone that it has
+    /// mail. The message when one could be read; otherwise the generic
+    /// notice it came as.
+    public nonisolated func notice(timeoutMs: UInt64 = 3000) -> PushNotice {
+        guard inner.signedIn() else { return .nothing }
+        do {
+            return try inner.notificationContent(timeoutMs: timeoutMs).map(PushNotice.message) ?? .generic
+        } catch {
+            return error.lumiaSignedOut ? .nothing : .generic
+        }
+    }
+
     public func identityCreate(label: String) throws -> IdentityCreated { try inner.identityCreate(label: label) }
     public func identityLinkAccount(password: String) throws { try inner.identityLinkAccount(password: password) }
     public func identityLinkRequest(label: String) throws -> String { try inner.identityLinkRequest(label: label) }
@@ -128,6 +144,16 @@ public actor LumiaClient {
     public func dmDelete(channelID: String, messageID: String) throws { try inner.dmDelete(channelId: channelID, messageId: messageID) }
     public func dmRejoin(channelID: String) throws { try inner.dmRejoin(channelId: channelID) }
     public func dmMessages(channelID: String) throws -> DmLogSummary { try inner.dmMessages(channelId: channelID) }
+}
+
+/// What a push becomes on this phone (`LumiaClient.notice`).
+public enum PushNotice: Equatable, Sendable {
+    /// The message, read and decrypted: the notice is rewritten to it.
+    case message(NotificationContent)
+    /// The instance's generic notice, as it came.
+    case generic
+    /// No notice: the phone holds no session of the account it is for.
+    case nothing
 }
 
 /// Feeds the listener's events into an `AsyncStream`.

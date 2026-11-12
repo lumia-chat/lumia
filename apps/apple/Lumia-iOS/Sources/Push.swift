@@ -33,6 +33,10 @@ final class PushRegistrar {
     private(set) var token: String?
     /// The notification the person tapped last, until the shell opens it.
     var target: PushTarget?
+    /// Whether the app holds a signed-in session now: a push that arrives
+    /// in the foreground without one is for an account the phone does not
+    /// hold, and is not shown (`PushDelegate`'s `willPresent`).
+    var signedIn = false
 
     /// Asks for permission and a token; both are best effort.
     func register() {
@@ -68,11 +72,17 @@ final class PushRegistrar {
     /// subscription beside the instance's. The token is forgotten with it:
     /// the next sign-in registers again and subscribes with what the system
     /// then gives. A notification tapped for the account opens nothing for
-    /// whoever signs in next.
+    /// whoever signs in next, and those already delivered go from
+    /// Notification Center: each names a conversation, and after the
+    /// extension's rewrite who wrote and what, of an account this phone no
+    /// longer holds. All of them, since the phone holds one account and
+    /// every notification the app has is that account's; the app schedules
+    /// none of its own, so there are none waiting to be removed.
     func signedOut() {
         target = nil
         token = nil
         UIApplication.shared.unregisterForRemoteNotifications()
+        UNUserNotificationCenter.current().removeAllDeliveredNotifications()
     }
 }
 
@@ -94,7 +104,14 @@ final class PushDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCen
 
     /// In the foreground the banner still shows: the person may be in
     /// another conversation, and the extension's rewrite is what it says.
+    /// Not while signed out (on the sign-in screen, or signing out): the
+    /// push is for an account the phone no longer holds, so nothing is
+    /// shown, listed or sounded, as the extension posts nothing then.
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
+        guard await PushRegistrar.shared.signedIn else {
+            Self.log.info("not presenting a notification: signed out")
+            return []
+        }
         Self.log.info("presenting \(notification.request.content.title, privacy: .public) in the foreground")
         return [.banner, .list, .sound]
     }

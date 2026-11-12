@@ -71,8 +71,14 @@ public final class AppStore {
                 if !s.signedIn { try await s.signIn(handle: handle, password: password, totpCode: nil) }
                 // LUMIA_DEV_LINK=1 links this device through files in the data
                 // directory: the request goes to link-request.txt, and the code
-                // the approving device gives is read from link-code.txt.
+                // the approving device gives is read from link-code.txt. The
+                // app is on screen meanwhile, as it is for someone who signed
+                // in with a password and links from Devices: the gateway loop
+                // is running on the password's session when the claim signs
+                // in by identity proof and that session is revoked.
                 if env["LUMIA_DEV_LINK"] == "1", !s.hasIdentity {
+                    route = .app
+                    opening = false
                     let request = try await s.identityLinkRequest(label: "phone")
                     let dir = Self.dataDirectory
                     try request.write(to: dir.appendingPathComponent("link-request.txt"), atomically: true, encoding: .utf8)
@@ -89,11 +95,17 @@ public final class AppStore {
                 // extension, which the simulator's push injection never
                 // launches: the writer lock is released as in the background,
                 // the extension's call runs here, and its answer goes to
-                // notification.txt in the data directory.
+                // notification.txt in the data directory ("none" for the
+                // generic notice, "nothing" for no notice at all).
                 if env["LUMIA_DEV_SCREEN"] == "notify" {
                     await s.client.background()
-                    let content = try? await s.client.notificationContent(timeoutMs: 3000)
-                    let text = content.map { "\($0.title)\n\($0.body)\n\($0.channelId)\n\($0.kind)" } ?? "none"
+                    let client = s.client
+                    let notice = await Task.detached { client.notice(timeoutMs: 3000) }.value
+                    let text = switch notice {
+                    case let .message(c): "\(c.title)\n\(c.body)\n\(c.channelId)\n\(c.kind)"
+                    case .generic: "none"
+                    case .nothing: "nothing"
+                    }
                     try? text.write(to: Self.dataDirectory.appendingPathComponent("notification.txt"), atomically: true, encoding: .utf8)
                 }
                 route = .app

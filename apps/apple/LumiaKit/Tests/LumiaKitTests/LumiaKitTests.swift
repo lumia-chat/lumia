@@ -246,6 +246,95 @@ final class LumiaKitTests: XCTestCase {
         await session.signOut()
     }
 
+    // A push that reaches a phone holding no session of the account becomes
+    // no notice at all, whatever the instance: the extension's decision.
+    func testAPushForNoSessionIsNoNotice() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lumia-kit-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let client = try LumiaClient(baseURL: URL(string: "http://127.0.0.1:1")!, dataDirectory: dir)
+        XCTAssertEqual(client.notice(timeoutMs: 500), .nothing)
+    }
+
+    // Against a running instance (`LUMIA_TEST_INSTANCE`, as above): a push
+    // for a signed-in phone with nothing new is the generic notice, and one
+    // that arrives after the instance ended the session (a subscription that
+    // outlived it) is none, though the phone has not yet heard of the end.
+    @MainActor
+    func testAPushAfterTheSessionEndedIsNoNotice() async throws {
+        guard let instance = ProcessInfo.processInfo.environment["LUMIA_TEST_INSTANCE"], let base = URL(string: instance) else {
+            throw XCTSkip("LUMIA_TEST_INSTANCE names no instance")
+        }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lumia-kit-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let handle = "stale\(UInt64(Date().timeIntervalSince1970 * 1000))"
+        let password = "a password for the kit's test"
+        let client = try LumiaClient(baseURL: base, dataDirectory: dir)
+        try await client.createAccount(handle: handle, password: password)
+        let signedIn = await Task.detached { client.notice(timeoutMs: 3000) }.value
+        XCTAssertEqual(signedIn, .generic)
+
+        let token = try await signInBeside(instance, handle: handle, password: password)
+        for other in try await otherSessions(instance, token: token) {
+            let status = try await call(instance, "DELETE", "/sessions/\(other)", token: token).1
+            XCTAssertEqual(status, 204)
+        }
+        let held = await client.signedIn
+        XCTAssertTrue(held, "the client still holds the tokens of the ended session")
+        let ended = await Task.detached { client.notice(timeoutMs: 3000) }.value
+        XCTAssertEqual(ended, .nothing)
+    }
+
+    // Against a running instance (`LUMIA_TEST_INSTANCE`, as above): a
+    // sign-in made while a session is held, which is what linking a phone
+    // that signed in with a password is, leaves the instance with one
+    // session for the phone, and the gateway carries on: the held session's
+    // socket is told it was revoked, and the session here ends up connected
+    // on the new one, neither sent back to sign-in nor left with a loop
+    // that has ended. Both right after the loop began and well into it.
+    @MainActor
+    func testASignInOverAHeldSessionLeavesOneAndTheGatewayCarriesOn() async throws {
+        guard let instance = ProcessInfo.processInfo.environment["LUMIA_TEST_INSTANCE"], let base = URL(string: instance) else {
+            throw XCTSkip("LUMIA_TEST_INSTANCE names no instance")
+        }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lumia-kit-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let handle = "swap\(UInt64(Date().timeIntervalSince1970 * 1000))"
+        let password = "a password for the kit's test"
+        let session = await LumiaSession(client: try LumiaClient(baseURL: base, dataDirectory: dir))
+        try await session.createAccount(handle: handle, password: password)
+        let server = try await session.createServer(name: "Swap")
+        let channel = try await session.createChannel(serverID: server, name: "general")
+        await session.load()
+        try await wait(for: "the gateway's welcome") { session.connection == .connected }
+        let token = try await signInBeside(instance, handle: handle, password: password)
+        var held = try await otherSessions(instance, token: token)
+        XCTAssertEqual(held.count, 1)
+
+        for (round, pause) in [Duration.zero, .seconds(11)].enumerated() {
+            try await Task.sleep(for: pause)
+            try await session.signIn(handle: handle, password: password, totpCode: nil)
+            let now = try await otherSessions(instance, token: token)
+            XCTAssertEqual(now.count, 1, "round \(round): the phone has not one session but \(now.count)")
+            XCTAssertNotEqual(now, held, "round \(round): the held session was not replaced")
+            held = now
+            // Whatever the old socket was told has arrived by now.
+            try await Task.sleep(for: .seconds(3))
+            XCTAssertTrue(session.signedIn, "round \(round): sent back to sign-in")
+            XCTAssertNil(session.takeEndedNotice())
+            try await wait(for: "round \(round): the gateway on the new session") { session.connection == .connected }
+            // Connected is not said of a loop that has ended: a message goes
+            // out through it and comes back with the instance's sequence.
+            let body = "after the swap, round \(round)"
+            try await session.sendMessage(channelID: channel, body: body)
+            try await wait(for: "round \(round): the message to come back") {
+                session.messages[channel]?.contains { $0.body == body && $0.seq > 0 } == true
+            }
+        }
+        await session.signOut()
+        let left = try await otherSessions(instance, token: token)
+        XCTAssertEqual(left, [], "signed out, the instance still has a session of the phone")
+    }
+
     /// One call to the instance's API as JSON, beside the client under test.
     private func call(_ instance: String, _ method: String, _ path: String, token: String? = nil, body: [String: String]? = nil) async throws -> (Data, Int) {
         var request = URLRequest(url: URL(string: "\(instance)/api/v1\(path)")!)

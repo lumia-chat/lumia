@@ -100,6 +100,9 @@ public final class LumiaSession {
     public private(set) var lastError: String?
 
     private var events: Task<Void, Never>?
+    /// A gateway loop is being started: a second asking meanwhile (the
+    /// shell's first load and a return to the foreground, say) starts none.
+    private var starting = false
 
     /// The platform this phone's pushes come through: APNs, by the relay.
     public static let pushPlatform = "apns"
@@ -145,6 +148,11 @@ public final class LumiaSession {
     public func requestMagicLink(email: String) async throws {
         try await client.requestMagicLink(email: email)
     }
+
+    // A sign-in made while a session is held (linking a phone that signed
+    // in with a password) replaces that session in the core, which keeps the
+    // new pair and revokes the old one, and a gateway loop running on the
+    // old one comes back on the new one by itself (`App::take_session`).
 
     /// Signs in with the token from a magic-link mail (the code, or the whole link).
     public func signInMagicLink(token: String) async throws {
@@ -289,10 +297,13 @@ public final class LumiaSession {
 
     public func identityLinkRequest(label: String) async throws -> String { try await client.identityLinkRequest(label: label) }
 
+    /// Claims the code an approving device gave, which makes this phone a
+    /// device of the identity and signs it in by identity proof: the core's
+    /// claim does both, so nothing signs in a second time here (that made a
+    /// session only to revoke it).
     public func identityClaim(code: String) async throws {
         _ = try await client.identityClaim(code: code)
         hasIdentity = true
-        try await client.signInIdentity()
         signedIn = true
     }
 
@@ -364,7 +375,9 @@ public final class LumiaSession {
             hasIdentity = await client.hasIdentity
             await refreshPeople(serverIDs: snap.servers.map(\.serverId))
             await refreshDmChannels()
-            if events == nil {
+            if events == nil, !starting {
+                starting = true
+                defer { starting = false }
                 try await start(channelIDs: snap.channels.filter { !personalKinds.contains($0.kind) }.map(\.channelId))
             }
         } catch {

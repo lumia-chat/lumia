@@ -63,5 +63,10 @@ struct RootView: View {
         .onChange(of: store.session?.signedIn) { _, signedIn in
             if signedIn == false { PushRegistrar.shared.signedOut() }
         }
+        // What a push arriving in the foreground is shown by; from launch
+        // on, so one that lands before any session is opened is not shown.
+        .onChange(of: store.session?.signedIn == true && !store.signingOut, initial: true) { _, held in
+            PushRegistrar.shared.signedIn = held
+        }
     }
 }

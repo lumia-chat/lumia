@@ -9,6 +9,12 @@
 # shows the message. Screenshots land in .build/smoke-push/, the last of
 # them the conversation with a few more messages in it.
 #
+# Linking signs the phone in a second time, over the password's session,
+# while the app is on screen: the script asks the instance for the
+# account's sessions and expects one of the phone's device afterwards, not
+# the password's, and the UI test expects the phone still in the app with
+# its gateway connected.
+#
 #   scripts/smoke-push.sh            # expects the app built for the simulator and the release CLI
 #   LUMIA_CLI=/path/to/lumia-cli scripts/smoke-push.sh   # a CLI built elsewhere (another worktree)
 set -eu
@@ -42,6 +48,23 @@ xacct=$("$cli" --data-dir "$x" dm setup | grep -oE "account [0-9a-f-]{36}" | cut
 "$cli" --data-dir "$y" identity link-account --password "$password" >/dev/null
 "$cli" --data-dir "$y" dm setup >/dev/null
 echo "seeded phone$stamp ($xacct) and cli$stamp"
+
+# The phone's account as this script asks the instance: signed in beside
+# it, the account's other sessions as "<session> <device>" lines, and those
+# of them the laptop made before the phone was there.
+field() { python3 -c "import sys, json; d = json.load(sys.stdin); print($1)"; }
+token=$(curl -s -H "content-type: application/json" -H "accept: application/json" -d "{\"handleOrEmail\":\"phone$stamp\",\"password\":\"$password\"}" "$instance/api/v1/auth/sign-in/password" | field 'd["accessToken"]')
+sessions() {
+  curl -s -H "accept: application/json" -H "authorization: Bearer $token" "$instance/api/v1/sessions" |
+    field '"\n".join(s["sessionId"] + " " + s.get("deviceId", "") for s in d.get("sessions", []) if not s.get("current"))'
+}
+before=$(sessions | cut -d' ' -f1 | tr '\n' ' ')
+# The sessions listed now that the laptop did not make: the phone's.
+phones() {
+  sessions | while read -r id device; do
+    case " $before " in *" $id "*) ;; *) [ -z "$id" ] || echo "$id $device" ;; esac
+  done
+}
 
 udid=$(xcrun simctl list devices available -j | python3 -c "
 import json,sys
@@ -82,13 +105,28 @@ done
   exit 1
 }
 data=$(dirname "$f")
+# The phone has signed in with the password by now, and is in the app on
+# that session: the one the link's sign-in is to replace.
+first=$(phones)
+[ "$(printf '%s\n' "$first" | grep -c .)" = 1 ] || { echo "FAIL: before linking the phone has not one session but: $first"; exit 1; }
+device=${first#* }
+first=${first%% *}
 code=$("$cli" --data-dir "$x" identity approve "$request" | grep -oE "code [A-Za-z0-9]+" | cut -d' ' -f2)
 echo "$code" > "$data/link-code.txt"
 sleep 12
 xcrun simctl io "$udid" screenshot "$work/linked.png" >/dev/null 2>&1
-wait $uitest || { echo "FAIL: the UI test did not pass; see $work/uitest.log"; tail -20 "$work/uitest.log"; exit 1; }
+# The test holds the app through the link and then expects it still in the
+# app, its gateway connected: on the new session, the old one's socket
+# having been told not to come back.
+wait $uitest || { echo "FAIL: the UI test did not pass; see $work/uitest.log"; grep -E "error|failed|XCTAssert" "$work/uitest.log" | head -10; tail -20 "$work/uitest.log"; exit 1; }
 [ "$("$cli" --data-dir "$x" identity show | grep -c "^  device ")" -ge 2 ] || { echo "FAIL: the phone is not in the roster"; "$cli" --data-dir "$x" identity show; exit 1; }
-echo "linked: the phone is a device of phone$stamp's identity"
+# Linking signed the phone in again, by identity proof: the core revokes
+# the session it held, so the phone's device has one and not two.
+linked=$(phones)
+[ "$(printf '%s\n' "$linked" | grep -c .)" = 1 ] || { echo "FAIL: linked, the phone has not one session but: $linked"; exit 1; }
+[ "${linked#* }" = "$device" ] || { echo "FAIL: linked, the phone's session is of device ${linked#* }, not $device"; exit 1; }
+[ "${linked%% *}" != "$first" ] || { echo "FAIL: linked, the phone still has the password's session $first and no other"; exit 1; }
+echo "linked: the phone is a device of phone$stamp's identity, with one session (${linked%% *}; the password's, $first, is gone) and its gateway connected on it"
 
 # The conversation: the other side asks, the laptop accepts (the group gets
 # the phone as a leaf), the other side joins and sends.

@@ -1,7 +1,8 @@
 // The things the simulator cannot do from the command line: answer the
 // notification permission prompt, tap a notification, type into a
 // composer, make a choice in Preferences, sign out from the account menu,
-// and read a screen as assistive technology does. scripts/smoke-push.sh,
+// look into Notification Center, and read a screen as assistive technology
+// does. scripts/smoke-push.sh,
 // scripts/smoke-typing.sh, scripts/smoke-preferences.sh and
 // scripts/smoke-signout.sh run these tests with the app signed in
 // (the LUMIA_DEV_* environment, passed through xcodebuild's TEST_RUNNER_
@@ -102,27 +103,39 @@ final class SmokeUITests: XCTestCase {
     /// Sign out by hand (scripts/smoke-signout.sh). The account menu ends
     /// with Sign out under its rule, a button by that name; tapping it
     /// shows the sign-in screen on the instance the phone knows, without
-    /// the line for someone the instance sent back. Typing the password
-    /// there signs in again, in the same run of the app, and signing out a
-    /// second time works as the first did; the launch after that names no
-    /// account and opens on sign-in. The smoke looks at the screen and at
-    /// the instance at each step announced under LUMIA_UITEST_STEPS, and
-    /// the test goes on once the smoke says it has (`<step>.seen`): `in`,
-    /// `menu-light`, `menu-dark`, `out`, `back`, `out-again`, `next-launch`.
+    /// the line for someone the instance sent back, and takes the account's
+    /// notifications out of Notification Center. Typing another account's
+    /// password there signs in as that account, in the same run of the app:
+    /// its name on the rail, its server and channel, and nothing of the
+    /// first's. That one signs out as the first did, the first signs in
+    /// again by hand, and then the instance ends its session from outside:
+    /// the sign-in screen with its line, and again no notification left.
+    /// The launch after that names no account and opens on sign-in. The
+    /// smoke looks at the screen and at the instance at each step announced
+    /// under LUMIA_UITEST_STEPS, and the test goes on once the smoke says it
+    /// has (`<step>.seen`): `in`, `menu-light`, `menu-dark`, `out`, `other`,
+    /// `out-other`, `back`, `noticed`, `ended`, `next-launch`.
     func testSignOutFromTheAccountMenu() throws {
         let env = ProcessInfo.processInfo.environment
         let steps = try XCTUnwrap(env["LUMIA_UITEST_STEPS"])
         let handle = try XCTUnwrap(env["LUMIA_DEV_HANDLE"])
         let password = try XCTUnwrap(env["LUMIA_DEV_PASSWORD"])
         let host = try XCTUnwrap(env["LUMIA_UITEST_HOST"])
-        let reached = { (step: String) in
-            try? step.write(toFile: "\(steps)/\(step)", atomically: true, encoding: .utf8)
-            for _ in 0..<1200 where !FileManager.default.fileExists(atPath: "\(steps)/\(step).seen") { usleep(100_000) }
-            XCTAssertTrue(FileManager.default.fileExists(atPath: "\(steps)/\(step).seen"), "the smoke never looked at \"\(step)\"")
-        }
+        // The first account's server and channel, the second account and
+        // its own, and what the two notifications the smoke delivers say.
+        let server = try XCTUnwrap(env["LUMIA_UITEST_SERVER"])
+        let channel = try XCTUnwrap(env["LUMIA_UITEST_CHANNEL"])
+        let other = try XCTUnwrap(env["LUMIA_UITEST_OTHER"])
+        let otherServer = try XCTUnwrap(env["LUMIA_UITEST_OTHER_SERVER"])
+        let otherChannel = try XCTUnwrap(env["LUMIA_UITEST_OTHER_CHANNEL"])
+        let notice = try XCTUnwrap(env["LUMIA_UITEST_NOTICE"])
+        let lastNotice = try XCTUnwrap(env["LUMIA_UITEST_LAST_NOTICE"])
+        let strayNotice = try XCTUnwrap(env["LUMIA_UITEST_STRAY_NOTICE"])
+        let reached = { (step: String) in self.reached(step, under: steps) }
         var app = XCUIApplication()
         let account = { app.descendants(matching: .any).matching(NSPredicate(format: "label ENDSWITH %@", ", account")).firstMatch }
         let signOut = { app.collectionViews.buttons["Sign out"] }
+        let endedLine = { app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "You were signed out")).firstMatch }
         /// Opens the account menu: the web's and the desktop shell's items from the top, Sign out last.
         func openMenu() {
             XCTAssertTrue(account().waitForExistence(timeout: 90), "no account menu on the rail")
@@ -135,23 +148,62 @@ final class SmokeUITests: XCTestCase {
             XCTAssertEqual(signOut().label, "Sign out")
             XCTAssertTrue(signOut().isEnabled)
         }
-        /// The sign-in screen on the instance the phone knows, with nothing said about why.
-        func expectSignIn(_ when: String) {
+        /// The sign-in screen on the instance the phone knows: with nothing
+        /// said about why after a sign-out the person chose, and with its
+        /// line when the instance ended the session.
+        func expectSignIn(_ when: String, ended: Bool = false) {
             XCTAssertTrue(app.staticTexts["Welcome back"].waitForExistence(timeout: 60), "no sign-in screen \(when)")
             XCTAssertTrue(app.staticTexts[host].waitForExistence(timeout: 10), "the sign-in screen \(when) is not on \(host)")
-            XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "You were signed out")).firstMatch.exists, "the sign-in screen \(when) says the instance ended the session")
+            if ended {
+                XCTAssertTrue(endedLine().waitForExistence(timeout: 10), "the sign-in screen \(when) does not say the instance ended the session")
+            } else {
+                XCTAssertFalse(endedLine().exists, "the sign-in screen \(when) says the instance ended the session")
+            }
             XCTAssertFalse(account().exists, "the rail is still there \(when)")
+        }
+        /// Signs in by typing into the sign-in screen, and expects that account's name on the rail.
+        func signIn(as who: String) {
+            let name = app.textFields["you@example.com"]
+            XCTAssertTrue(name.waitForExistence(timeout: 10), "no field for the handle")
+            name.tap()
+            name.typeText(who)
+            let secret = app.secureTextFields["Your password"]
+            secret.tap()
+            secret.typeText(password + "\n")
+            // The system may offer to keep the password; the rail is behind its sheet.
+            let later = XCUIApplication(bundleIdentifier: "com.apple.springboard").buttons["Not Now"]
+            for _ in 0..<60 where !account().exists {
+                if later.exists { later.tap() }
+                if app.buttons["Not Now"].exists { app.buttons["Not Now"].tap() }
+                sleep(1)
+            }
+            XCTAssertTrue(account().exists, "typing \(who)'s password did not sign in")
+            XCTAssertEqual(account().label, "\(who), account", "the rail is not \(who)'s")
+        }
+        /// The rail and the sidebar are one account's: its server and
+        /// channel, and nothing that names the other's.
+        func expectOnly(_ mine: (server: String, channel: String), not theirs: (server: String, channel: String), _ when: String) {
+            XCTAssertTrue(app.buttons[mine.server].waitForExistence(timeout: 30), "no \(mine.server) on the rail \(when)")
+            app.buttons[mine.server].tap()
+            XCTAssertTrue(app.staticTexts[mine.channel].waitForExistence(timeout: 10), "no #\(mine.channel) in \(mine.server) \(when)")
+            for words in [theirs.server, theirs.channel] {
+                XCTAssertFalse(app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", words)).firstMatch.exists, "something says \(words) \(when)")
+            }
         }
 
         // Signed in from the runner's environment, as the other smokes are,
         // in an appearance named for the launch: the menu in each.
         app = launch(screen: "home", appearance: "light")
         XCTAssertTrue(account().waitForExistence(timeout: 90), "the app did not sign in")
+        XCTAssertEqual(account().label, "\(handle), account")
         // A new phone asks about notifications once; allowed, the system
         // gives the app a token where it can, and the phone is subscribed.
         let allow = XCUIApplication(bundleIdentifier: "com.apple.springboard").buttons["Allow"]
         if allow.waitForExistence(timeout: 30) { allow.tap() }
+        // The smoke delivers a notification for this account before it says it has looked.
         reached("in")
+        XCTAssertTrue(listed(notice, over: app, within: 30), "the notification delivered while signed in is not in Notification Center")
+        expectOnly((server, channel), not: (otherServer, otherChannel), "signed in as \(handle)")
         openMenu()
         reached("menu-light")
         app.terminate()
@@ -161,31 +213,41 @@ final class SmokeUITests: XCTestCase {
 
         signOut().tap()
         expectSignIn("after signing out")
+        XCTAssertFalse(listed(notice, over: app, within: 0), "signed out, the account's notification is still in Notification Center")
         reached("out")
+        // The smoke has pushed once more, to the signed-out phone with the
+        // app in the foreground: nothing is shown and nothing is listed.
+        let stray = XCUIApplication(bundleIdentifier: "com.apple.springboard").descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS %@", strayNotice)).firstMatch
+        XCTAssertFalse(stray.waitForExistence(timeout: 8), "a push to the signed-out phone was shown")
+        XCTAssertFalse(listed(strayNotice, over: app, within: 0), "a push to the signed-out phone is in Notification Center")
 
-        // In again by hand, in the same run of the app: what it forgot of
-        // the account at sign-out, it asks the instance again.
-        let name = app.textFields["you@example.com"]
-        XCTAssertTrue(name.waitForExistence(timeout: 10), "no field for the handle")
-        name.tap()
-        name.typeText(handle)
-        let secret = app.secureTextFields["Your password"]
-        secret.tap()
-        secret.typeText(password + "\n")
-        // The system may offer to keep the password; the rail is behind its sheet.
-        let later = XCUIApplication(bundleIdentifier: "com.apple.springboard").buttons["Not Now"]
-        for _ in 0..<60 where !account().exists {
-            if later.exists { later.tap() }
-            if app.buttons["Not Now"].exists { app.buttons["Not Now"].tap() }
-            sleep(1)
-        }
-        XCTAssertTrue(account().exists, "typing the password did not sign in")
-        reached("back")
+        // Another account, by hand, in the same run of the app: what the
+        // phone shows is that account's and nothing of the one before.
+        signIn(as: other)
+        expectOnly((otherServer, otherChannel), not: (server, channel), "signed in as \(other)")
+        reached("other")
 
         openMenu()
         signOut().tap()
-        expectSignIn("after signing out a second time")
-        reached("out-again")
+        expectSignIn("after the second account signed out")
+        reached("out-other")
+
+        // The first again, by hand: what the phone forgot of the account at
+        // sign-out, it asks the instance again. The smoke delivers another
+        // notification before it says it has looked.
+        signIn(as: handle)
+        expectOnly((server, channel), not: (otherServer, otherChannel), "signed in as \(handle) again")
+        reached("back")
+        XCTAssertTrue(listed(lastNotice, over: app, within: 30), "the second notification is not in Notification Center")
+
+        // The smoke revokes the session over HTTP once it reads this: the
+        // instance sends the phone back to sign-in, which says so, and the
+        // notification goes as it does at a sign-out the person chose.
+        reached("noticed")
+        expectSignIn("after the instance ended the session", ended: true)
+        XCTAssertFalse(listed(lastNotice, over: app, within: 0), "sent back to sign-in, the account's notification is still in Notification Center")
+        reached("ended")
 
         // The next launch names no account: what it shows is what the phone kept.
         app.terminate()
@@ -195,8 +257,86 @@ final class SmokeUITests: XCTestCase {
         reached("next-launch")
     }
 
+    /// Signing out of an instance that takes the connection and answers
+    /// nothing (scripts/smoke-signout.sh, whose listener stands between the
+    /// phone and the instance and goes quiet once this is signed in): the
+    /// core gives each request a time limit, so the sign-in screen is there
+    /// well within a minute, with nothing of the account on screen
+    /// meanwhile. Steps: `quiet-in`, and `quiet-out`, which carries the
+    /// seconds from the tap to the sign-in screen.
+    func testSignOutWhenTheInstanceDoesNotAnswer() throws {
+        let steps = try XCTUnwrap(ProcessInfo.processInfo.environment["LUMIA_UITEST_STEPS"])
+        let app = launch(screen: "home")
+        let account = app.descendants(matching: .any).matching(NSPredicate(format: "label ENDSWITH %@", ", account")).firstMatch
+        XCTAssertTrue(account.waitForExistence(timeout: 90), "the app did not sign in through the listener")
+        // A moment for what the shell asks as it appears to be answered.
+        sleep(5)
+        reached("quiet-in", under: steps)
+
+        account.tap()
+        let signOut = app.collectionViews.buttons["Sign out"]
+        XCTAssertTrue(signOut.waitForExistence(timeout: 10), "no Sign out in the account menu")
+        signOut.tap()
+        let tapped = Date()
+        // Reaching the instance fails as well, so the screen asks which
+        // instance ("Welcome") where it would otherwise say "Welcome back".
+        let signIn = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Welcome")).firstMatch
+        var railGone: TimeInterval?
+        while !signIn.exists, Date().timeIntervalSince(tapped) < 90 {
+            if railGone == nil, !account.exists { railGone = Date().timeIntervalSince(tapped) }
+            usleep(200_000)
+        }
+        let took = Date().timeIntervalSince(tapped)
+        XCTAssertTrue(signIn.exists, "no sign-in screen \(Int(took)) s after Sign out")
+        XCTAssertLessThan(took, 45, "signing out of an instance that does not answer took \(Int(took)) s")
+        XCTAssertLessThan(try XCTUnwrap(railGone, "the rail was there until the sign-in screen"), 5, "the account stayed on screen while the sign-out waited")
+        XCTAssertFalse(account.exists)
+        reached("quiet-out", under: steps, saying: String(format: "%.0f", took))
+    }
+
+    /// Announces a step to the smoke and waits until it says it has looked.
+    private func reached(_ step: String, under steps: String, saying words: String? = nil) {
+        try? (words ?? step).write(toFile: "\(steps)/\(step)", atomically: true, encoding: .utf8)
+        for _ in 0..<1200 where !FileManager.default.fileExists(atPath: "\(steps)/\(step).seen") { usleep(100_000) }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: "\(steps)/\(step).seen"), "the smoke never looked at \"\(step)\"")
+    }
+
+    /// Whether Notification Center lists a notification that says `words`,
+    /// looked at as a person does: pulled down from the top edge over the
+    /// app, read, and pushed back up. `within` is how long one that is on
+    /// its way is waited for.
+    private func listed(_ words: String, over app: XCUIApplication, within seconds: TimeInterval) -> Bool {
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let said = springboard.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", words)).firstMatch
+        // What the pulled-down sheet shows over its list, there whether or
+        // not anything is listed: without it nothing was looked at.
+        let sheet = springboard.descendants(matching: .any)["lockscreen-date-view"]
+        let until = Date().addingTimeInterval(seconds)
+        // A banner over the app says the same words and is not the list: it
+        // is gone in a few seconds.
+        for _ in 0..<15 where said.exists { sleep(1) }
+        var found = false
+        repeat {
+            springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.0))
+                .press(forDuration: 0.1, thenDragTo: springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.85)))
+            XCTAssertTrue(sheet.waitForExistence(timeout: 10), "Notification Center did not open")
+            found = said.waitForExistence(timeout: 3)
+            if ProcessInfo.processInfo.environment["LUMIA_UITEST_DUMP"] == "1" { print("notification center, looking for \(words):\n" + springboard.debugDescription) }
+            springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.99))
+                .press(forDuration: 0.1, thenDragTo: springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)))
+            app.activate()
+            _ = app.wait(for: .runningForeground, timeout: 10)
+        } while !found && Date() < until
+        return found
+    }
+
     /// Accepts the prompt and keeps the app running while the link
-    /// completes and the gateway publishes key packages.
+    /// completes and the gateway publishes key packages. The app is on
+    /// screen from the password's sign-in on, its gateway loop running, so
+    /// the link's sign-in replaces a session in use: afterwards the phone is
+    /// still in the app, not sent back to sign-in, and the sidebar's line
+    /// says the gateway is connected, which it says of the new session's
+    /// loop only, the old one having been told not to come back.
     func testAllowNotificationsAndHold() {
         let app = launch()
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
@@ -207,6 +347,11 @@ final class SmokeUITests: XCTestCase {
         let hold = UInt32(ProcessInfo.processInfo.environment["LUMIA_UITEST_HOLD"] ?? "") ?? 20
         sleep(hold)
         XCTAssertEqual(app.state, .runningForeground)
+        XCTAssertTrue(app.descendants(matching: .any).matching(NSPredicate(format: "label ENDSWITH %@", ", account")).firstMatch.exists, "the rail is gone after linking")
+        XCTAssertFalse(app.staticTexts["Welcome back"].exists, "linking sent the phone back to sign-in")
+        let connected = app.staticTexts["connected"]
+        if !connected.waitForExistence(timeout: 30) { print("the app without a connected gateway:\n" + app.debugDescription) }
+        XCTAssertTrue(connected.exists, "the gateway is not connected after linking")
     }
 
     /// With the app in the foreground, the smoke delivers a push naming a
