@@ -172,6 +172,25 @@ public final class LumiaSession {
         scheduleTypingExpiry()
     }
 
+    /// What the sign-in screen says to someone the instance sent back to it.
+    public static let signedOutNotice = "You were signed out of this phone. Sign in again to carry on."
+    private var endedNotice: String?
+
+    /// The line for the sign-in screen, taken: the next one opens without it.
+    public func takeEndedNotice() -> String? {
+        defer { endedNotice = nil }
+        return endedNotice
+    }
+
+    /// The instance no longer takes this session (it was revoked, or ran
+    /// out): the gateway stops and what was held of the account goes, as on
+    /// signing out, and the sign-in screen says what happened.
+    private func sessionEnded() async {
+        guard signedIn else { return }
+        endedNotice = Self.signedOutNotice
+        await signOut()
+    }
+
     // MARK: Identity
 
     public func identityLinkRequest(label: String) async throws -> String { try await client.identityLinkRequest(label: label) }
@@ -255,15 +274,31 @@ public final class LumiaSession {
                 try await start(channelIDs: snap.channels.filter { !personalKinds.contains($0.kind) }.map(\.channelId))
             }
         } catch {
-            lastError = error.lumiaMessage
-            if case LumiaError.NotSignedIn = error { signedIn = false }
+            await loadFailed(error)
         }
     }
 
     public func refreshSnapshot() async {
-        if let snap = try? await client.snapshot() {
+        do {
+            let snap = try await client.snapshot()
             snapshot = snap
             await refreshPeople(serverIDs: snap.servers.map(\.serverId))
+        } catch {
+            await loadFailed(error)
+        }
+    }
+
+    /// The snapshot did not come (or, in `load`, the gateway loop did not
+    /// start under it). A session the instance no longer takes leaves
+    /// nothing here that works: back to sign-in, which says why. With nothing
+    /// held yet the failure is what there is to say; a refresh of a snapshot
+    /// that is held (every welcome and account event asks for one) fails
+    /// without a word, and what is held stays on screen.
+    private func loadFailed(_ error: Error) async {
+        if error.lumiaSignedOut {
+            await sessionEnded()
+        } else if snapshot == nil {
+            lastError = error.lumiaMessage
         }
     }
 
@@ -388,12 +423,27 @@ public final class LumiaSession {
     private func start(channelIDs: [String]) async throws {
         let stream = try await client.start(channelIDs: channelIDs)
         connection = .connecting
+        let started = ContinuousClock.now
         events = Task { [weak self] in
             for await event in stream {
                 guard let self else { return }
                 await self.handle(event)
             }
-            self?.events = nil
+            // `stop()` cancels this task, and by now another loop may have started.
+            guard let self, !Task.isCancelled else { return }
+            self.events = nil
+            // The loop has ended and will not come back by itself. Why is in
+            // words only, so the snapshot is asked, once: a session the
+            // instance has revoked answers so there and the app goes to
+            // sign-in. Anything else starts the loop again with the snapshot,
+            // unless this one ended as soon as it began: what ended it would
+            // end the next as soon, so that is left to the next time the app
+            // comes to the foreground.
+            if ContinuousClock.now - started < .seconds(10) {
+                await self.refreshSnapshot()
+            } else {
+                await self.load()
+            }
         }
     }
 
@@ -411,13 +461,16 @@ public final class LumiaSession {
     }
 
     /// Back in the foreground: the lock is taken again; when the extension
-    /// wrote meanwhile, the gateway loop restarts from the store's cursors,
-    /// otherwise it is asked for every head.
+    /// wrote meanwhile, the gateway loop restarts from the store's cursors;
+    /// a loop that had ended is started again; otherwise it is asked for
+    /// every head.
     public func foreground() {
         Task {
             let wrote = (try? await client.resume()) ?? false
             if wrote {
                 stop()
+                await load()
+            } else if events == nil {
                 await load()
             } else {
                 try? await client.foreground()

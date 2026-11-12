@@ -46,6 +46,8 @@ struct SignInView: View {
         .scrollDismissesKeyboard(.interactively)
         .task {
             if let saved = store.savedInstance { instance = saved }
+            // Sent back here by the instance (a revoked session), the card opens saying so.
+            if let notice = store.session?.takeEndedNotice() { error = notice }
             if store.session != nil { await reach() }
         }
     }

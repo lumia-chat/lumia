@@ -153,6 +153,19 @@ public extension Error {
         return [:]
     }
 
+    /// Whether the failure of a call made as the signed-in account says the
+    /// instance no longer takes this session (protocol 10 and 12): it does
+    /// not know the token, the refresh token ran out with it, or the session
+    /// or its device was revoked. Nothing but signing in again follows any
+    /// of them.
+    var lumiaSignedOut: Bool {
+        switch self as? LumiaError {
+        case let .Api(code, _, _)?: ["UNAUTHENTICATED", "TOKEN_EXPIRED", "SESSION_REVOKED", "DEVICE_REVOKED"].contains(code)
+        case .DeviceRevoked?, .NotSignedIn?: true
+        case .Other?, nil: false
+        }
+    }
+
     /// What to show for the failure.
     var lumiaMessage: String {
         switch self as? LumiaError {
