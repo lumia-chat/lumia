@@ -50,6 +50,18 @@ pub struct Failure {
     pub details: HashMap<String, String>,
 }
 
+impl Failure {
+    /// Whether the instance no longer takes this session (protocol 10 and 12): it does
+    /// not know the token, the refresh token ran out with it, or the session or its
+    /// device was revoked. Nothing but signing in again follows any of them.
+    pub fn signed_out(&self) -> bool {
+        matches!(
+            self.code.as_str(),
+            "UNAUTHENTICATED" | "TOKEN_EXPIRED" | "SESSION_REVOKED" | "DEVICE_REVOKED"
+        )
+    }
+}
+
 impl From<ClientError> for Failure {
     fn from(error: ClientError) -> Self {
         match error {
@@ -963,7 +975,7 @@ impl Session {
                 self.dm_snapshot_applied();
             }
             Update::Snapshot(Err(failure)) => {
-                if failure.code == "UNAUTHENTICATED" {
+                if failure.signed_out() {
                     self.last_error = Some(failure.message.clone());
                     self.signed_in = false;
                 } else {
@@ -1085,7 +1097,13 @@ impl Session {
             AppEvent::Closed { reason } => {
                 self.connection = Connection::Closed {
                     reason: reason.clone(),
-                }
+                };
+                // The loop has ended and will not come back by itself. Why is in words
+                // only, so the snapshot is asked: a session the instance has revoked
+                // answers so there and the shell goes to sign-in; anything else (the
+                // rotation it needed found no network) is a snapshot later, which
+                // starts the loop again.
+                self.load();
             }
             AppEvent::PresenceDiff {
                 server_id,

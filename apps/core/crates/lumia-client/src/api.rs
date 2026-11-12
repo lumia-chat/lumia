@@ -5,10 +5,17 @@
 //! URL. An `UNAUTHENTICATED` or `TOKEN_EXPIRED` answer with a refresh token
 //! on hand refreshes once and retries the call; the new pair goes to the
 //! rotation hook so the caller can persist it.
+//!
+//! A refresh token is single use, and presenting one that was already
+//! rotated revokes the whole session (protocol 12). So the clones rotate
+//! one at a time, and a call that waited its turn behind another's
+//! rotation takes the pair that one brought back instead of presenting
+//! the token it retired.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
+use futures_util::lock::Mutex as AsyncMutex;
 use lumia_core::proto::InstanceInfo;
 use lumia_core::proto::{
     reauth_request, Account, AccountSnapshot, Ack, BackupKeyHandoff, ChallengePurpose,
@@ -62,6 +69,8 @@ pub struct Api {
     http: reqwest::Client,
     base: String,
     tokens: Arc<Mutex<Tokens>>,
+    /// Held across a rotation, by whichever clone is making it.
+    rotating: Arc<AsyncMutex<()>>,
     on_rotate: Option<RotateHook>,
 }
 
@@ -82,6 +91,7 @@ impl Api {
             http: reqwest::Client::new(),
             base: base.trim_end_matches('/').to_string(),
             tokens: Arc::new(Mutex::new(Tokens::default())),
+            rotating: Arc::new(AsyncMutex::new(())),
             on_rotate: None,
         }
     }
@@ -152,7 +162,19 @@ impl Api {
     /// When there is no refresh token, or the instance refuses it
     /// (`TOKEN_EXPIRED`, `SESSION_REVOKED`).
     pub async fn refresh_now(&self) -> Result<(), ClientError> {
+        self.refresh_after(None).await
+    }
+
+    /// [`Api::refresh_now`] for a call that was refused: `sent_with` is the
+    /// refresh token held when that call went out. If the pair has been
+    /// rotated since (another call was refused first and has already been
+    /// to `/auth/refresh`), there is nothing to do but try again with it.
+    async fn refresh_after(&self, sent_with: Option<&str>) -> Result<(), ClientError> {
+        let _turn = self.rotating.lock().await;
         let refresh = self.tokens().refresh.ok_or(ClientError::NotSignedIn)?;
+        if sent_with.is_some_and(|sent| sent != refresh) {
+            return Ok(());
+        }
         let body = RefreshRequest {
             refresh_token: refresh,
         }
@@ -1272,17 +1294,20 @@ impl Api {
         body: Option<Vec<u8>>,
         extra: Option<(&str, &str)>,
     ) -> Result<(StatusCode, Vec<u8>), ClientError> {
+        // The pair this call goes out with: if it is refused and the pair has
+        // changed by then, someone else has rotated it and the retry takes theirs.
+        let sent_with = self.tokens().refresh;
         let (status, bytes) = self
             .send_once(method.clone(), path, body.clone(), extra, true)
             .await?;
-        if status != StatusCode::UNAUTHORIZED || self.tokens().refresh.is_none() {
+        if status != StatusCode::UNAUTHORIZED || sent_with.is_none() {
             return Ok((status, bytes));
         }
         match api_error(status, &bytes) {
             ClientError::Api { code, .. }
                 if code == "TOKEN_EXPIRED" || code == "UNAUTHENTICATED" =>
             {
-                self.refresh_now().await?;
+                self.refresh_after(sent_with.as_deref()).await?;
                 self.send_once(method, path, body, extra, true).await
             }
             _ => Ok((status, bytes)),
@@ -1369,8 +1394,136 @@ fn url_encode(value: &str) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use super::page_limit;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    use lumia_core::proto::{Error as ApiError, ErrorCode, RefreshRequest, TokenPair};
+    use prost::Message;
+
+    use super::{page_limit, Api, Tokens};
+
+    /// An instance as far as tokens go, on a local port: it knows one
+    /// session, whose pair is (`a1`, `r1`) with `a1` expired. A request
+    /// with `a1` is refused as expired; `r1` rotates to (`a2`, `r2`), slowly
+    /// enough for a second call to be refused meanwhile; `r1` presented
+    /// again is the reuse the protocol answers by revoking the session.
+    /// Returns its address and the refresh tokens presented to it, in order.
+    fn instance() -> (String, Arc<Mutex<Vec<String>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let presented = Arc::new(Mutex::new(Vec::new()));
+        let seen = Arc::clone(&presented);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let (mut stream, seen) = (stream.unwrap(), Arc::clone(&seen));
+                std::thread::spawn(move || {
+                    let mut request = Vec::new();
+                    let mut chunk = [0u8; 4096];
+                    let (head, body) = loop {
+                        let n = stream.read(&mut chunk).unwrap();
+                        request.extend_from_slice(&chunk[..n]);
+                        let Some(end) = request.windows(4).position(|w| w == b"\r\n\r\n") else {
+                            continue;
+                        };
+                        let head = String::from_utf8_lossy(&request[..end]).to_lowercase();
+                        let length = head
+                            .lines()
+                            .find_map(|l| l.strip_prefix("content-length: "))
+                            .map_or(0, |l| l.trim().parse::<usize>().unwrap());
+                        if request.len() >= end + 4 + length {
+                            break (head, request[end + 4..end + 4 + length].to_vec());
+                        }
+                    };
+                    let refused = |code: ErrorCode| {
+                        let error = ApiError {
+                            code: code as i32,
+                            message: code.as_str_name().to_lowercase(),
+                            ..Default::default()
+                        };
+                        (401, error.encode_to_vec())
+                    };
+                    let (status, answer) = if head.starts_with("post /api/v1/auth/refresh") {
+                        let token = RefreshRequest::decode(body.as_slice())
+                            .unwrap()
+                            .refresh_token;
+                        let first = {
+                            let mut seen = seen.lock().unwrap();
+                            seen.push(token.clone());
+                            seen.len() == 1
+                        };
+                        std::thread::sleep(Duration::from_millis(150));
+                        match token.as_str() {
+                            "r1" if first => {
+                                let pair = TokenPair {
+                                    access_token: "a2".into(),
+                                    refresh_token: "r2".into(),
+                                    ..Default::default()
+                                };
+                                (200, pair.encode_to_vec())
+                            }
+                            _ => refused(ErrorCode::SessionRevoked),
+                        }
+                    } else if head.contains("authorization: bearer a2") {
+                        (200, Vec::new())
+                    } else {
+                        refused(ErrorCode::TokenExpired)
+                    };
+                    let reason = if status == 200 { "OK" } else { "Unauthorized" };
+                    let head = format!(
+                        "HTTP/1.1 {status} {reason}\r\ncontent-type: application/x-protobuf\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                        answer.len()
+                    );
+                    stream.write_all(head.as_bytes()).unwrap();
+                    stream.write_all(&answer).unwrap();
+                });
+            }
+        });
+        (base, presented)
+    }
+
+    /// Two calls go out with an expired access token and both are refused.
+    /// Each used to present the refresh token, and the second, arriving
+    /// after the first had rotated it, was a reuse: the instance revoked
+    /// the session and the person was signed out for doing nothing.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn calls_refused_together_rotate_the_pair_once() {
+        let (base, presented) = instance();
+        let api = Api::new(&base).with_tokens(Tokens {
+            access: Some("a1".into()),
+            refresh: Some("r1".into()),
+        });
+        let (first, second) = (api.clone(), api.clone());
+        let (first, second) = tokio::join!(
+            tokio::spawn(async move { first.account_snapshot().await }),
+            tokio::spawn(async move { second.account_snapshot().await }),
+        );
+        first.unwrap().expect("the first call is answered");
+        second.unwrap().expect("and so is the second");
+        assert_eq!(*presented.lock().unwrap(), ["r1"]);
+        assert_eq!(api.tokens().refresh.as_deref(), Some("r2"));
+    }
+
+    /// The gateway loop rotates on its own account, with no call of its to
+    /// retry. Two rotations asked for outright take turns: the second
+    /// presents the pair the first brought back, never the one it retired.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn rotations_asked_for_outright_take_turns() {
+        let (base, presented) = instance();
+        let api = Api::new(&base).with_tokens(Tokens {
+            access: Some("a1".into()),
+            refresh: Some("r1".into()),
+        });
+        let (first, second) = (api.clone(), api.clone());
+        let _ = tokio::join!(
+            tokio::spawn(async move { first.refresh_now().await }),
+            tokio::spawn(async move { second.refresh_now().await }),
+        );
+        assert_eq!(*presented.lock().unwrap(), ["r1", "r2"]);
+    }
 
     #[test]
     fn the_upper_bound_becomes_the_limit() {

@@ -366,10 +366,11 @@ impl State {
                 self.open_made();
             }
             Update::Snapshot(Err(_)) => {
-                // The instance no longer knows this session.
+                // The instance no longer knows this session, or has revoked it.
                 if !self.session.signed_in && self.route == Route::Shell {
                     self.leave_shell();
                     self.route = Route::SignIn;
+                    self.sign_in.error = SIGNED_OUT.into();
                 }
             }
             Update::Dm(update) => self.react_dm(update),
@@ -400,6 +401,9 @@ impl State {
         self.react(update);
     }
 }
+
+/// What the sign-in card says to someone the instance has sent back to it.
+pub const SIGNED_OUT: &str = "You were signed out of this computer. Sign in again to carry on.";
 
 /// `AppSpec::init`: reopens the saved instance, straight into the shell when signed in.
 pub fn init() -> State {

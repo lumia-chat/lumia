@@ -232,6 +232,27 @@ export function typingIn(channelId: string | undefined): string[] {
   return channelId ? [...(typing().get(channelId)?.keys() ?? [])] : [];
 }
 
+// What the sign-in card says to someone the instance sent back to it:
+// set when a session turns out to be over, read once by the card.
+const [endedNotice, setEndedNotice] = createSignal("");
+
+/** The line for the sign-in card, taken: the next card starts without it. */
+export function takeEndedNotice(): string {
+  const notice = endedNotice();
+  if (notice) setEndedNotice("");
+  return notice;
+}
+
+/**
+ * The instance no longer takes this session (it was revoked, or ran out):
+ * what the page held of the account goes, as on signing out, and the
+ * sign-in card says what happened.
+ */
+export async function sessionEnded(): Promise<void> {
+  setEndedNotice("You were signed out of this browser. Sign in again to carry on.");
+  await signOut().catch((e) => console.warn("sign out:", e));
+}
+
 /**
  * Signs this browser out and forgets what the page held of the account:
  * its push subscription, the gateway loop, every query, presence and who
@@ -293,6 +314,11 @@ function onGatewayEvent(e: ClientEvent): void {
     case "closed":
       setConnection(`closed: ${e.reason}`);
       setStarted(false);
+      // The loop has ended and will not come back by itself. Why is in
+      // words only, so the snapshot is asked: a session the instance has
+      // revoked answers so there and the app goes to sign-in; anything
+      // else is a snapshot later, which starts the loop again.
+      void queryClient.invalidateQueries({ queryKey: ["snapshot"] });
       break;
     case "dmSubscribed":
     case "dmReady":

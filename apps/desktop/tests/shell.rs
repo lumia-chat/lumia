@@ -568,3 +568,26 @@ fn a_session_the_instance_no_longer_knows_goes_back_to_sign_in() {
     settle(&mut rt);
     assert_eq!(rt.state.route, Route::SignIn);
 }
+
+/// A session the instance revoked answers `SESSION_REVOKED`, not `UNAUTHENTICATED`, and a
+/// revoked device `DEVICE_REVOKED`. Either used to leave the person in the shell with the
+/// instance's two words in red over the composer and nothing that worked.
+#[test]
+fn a_revoked_session_goes_back_to_sign_in_and_says_why() {
+    for code in ["SESSION_REVOKED", "DEVICE_REVOKED", "TOKEN_EXPIRED"] {
+        let mut rt = runtime(signed_in());
+        rt.update(|s, _| {
+            s.receive(&Update::Snapshot(Err(Failure {
+                code: code.into(),
+                message: "session revoked".into(),
+                details: HashMap::new(),
+            })))
+        });
+        settle(&mut rt);
+        assert_eq!(rt.state.route, Route::SignIn, "{code}");
+        assert!(
+            words(&rt).contains("You were signed out of this computer"),
+            "{code}"
+        );
+    }
+}

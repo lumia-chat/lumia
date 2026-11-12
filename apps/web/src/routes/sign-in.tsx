@@ -8,7 +8,7 @@ import { useNavigate, useSearch } from "@tanstack/solid-router";
 import { Button, Card, Divider, TextField } from "../design/components";
 import { AuthPage, TrustCard } from "./auth-page";
 import { ClientError, type InstanceSummary } from "../client/bridge";
-import { SERVED_BY_INSTANCE, client, openInstance, savedInstance } from "../client/state";
+import { SERVED_BY_INSTANCE, client, openInstance, savedInstance, takeEndedNotice } from "../client/state";
 import { assertForPasswordSignIn, passkeysAvailable, signInWithPasskey } from "../client/passkeys";
 import type { SignInSearch } from "./index";
 
@@ -28,7 +28,8 @@ export function SignIn() {
   const [password, setPassword] = createSignal("");
   const [totp, setTotp] = createSignal("");
   const [needsTotp, setNeedsTotp] = createSignal(false);
-  const [error, setError] = createSignal("");
+  // Sent back here by the instance (a revoked session), the card opens saying so.
+  const [error, setError] = createSignal(takeEndedNotice());
   const [busy, setBusy] = createSignal(false);
   // Magic link (architecture 6.3): asked for with the address in the handle
   // field; completed by the link's `magic` query on this page, or by its

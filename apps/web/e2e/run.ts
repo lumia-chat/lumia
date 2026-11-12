@@ -520,6 +520,47 @@ async function invite(which: string, dataDir: string, server: string) {
   console.log(`  ${which}: opened an invite, created an account from it and landed in the server in ${Date.now() - t0} ms`);
 }
 
+// A session revoked from elsewhere (protocol 12), as "sign out everywhere"
+// or a reused refresh token does it: the gateway is told and its loop
+// ends, the page asks for the snapshot, is refused, and goes back to the
+// sign-in card, which says what happened. An account of its own, so no
+// other step's session goes with it.
+async function revoked(which: string, stamp: number) {
+  const dir = resolve(work, `cli-revoked-${which}`);
+  const handle = `gone${which}${stamp}`;
+  lumia(dir, "instance", "add", instance);
+  lumia(dir, "account", "create", "--handle", handle, "--password", password);
+  const { ctx, page } = await open(which, "revoked");
+  const t0 = Date.now();
+  try {
+    await trustCard(page);
+    await page.getByLabel("Email or handle").fill(handle);
+    await page.getByRole("textbox", { name: "Password" }).fill(password);
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    phase("connected");
+    await page.locator('.lu-rail__self[title$="connected"]').waitFor();
+    phase("revoke");
+    const json = { "content-type": "application/json", accept: "application/json" };
+    const pair = (await (await fetch(`${instance}/api/v1/auth/sign-in/password`, { method: "POST", headers: json, body: JSON.stringify({ handleOrEmail: handle, password }) })).json()) as { accessToken?: string };
+    if (!pair.accessToken) throw new Error("the suite could not sign in beside the browser");
+    const mine = { ...json, authorization: `Bearer ${pair.accessToken}` };
+    const list = (await (await fetch(`${instance}/api/v1/sessions`, { headers: mine })).json()) as { sessions?: { sessionId: string; current?: boolean }[] };
+    const others = (list.sessions ?? []).filter((s) => !s.current);
+    if (others.length === 0) throw new Error("the account has no session but the suite's");
+    for (const s of others) {
+      const answer = await fetch(`${instance}/api/v1/sessions/${s.sessionId}`, { method: "DELETE", headers: mine });
+      if (!answer.ok) throw new Error(`revoking a session answered ${answer.status}`);
+    }
+    phase("sent back");
+    await page.waitForURL(/\/sign-in/);
+    await page.getByText("You were signed out of this browser").waitFor();
+    await page.screenshot({ path: `${out}/${which}-revoked.png` });
+  } finally {
+    await ctx.close();
+  }
+  console.log(`  ${which}: its session revoked from elsewhere, the browser went back to sign-in and said so, in ${Date.now() - t0} ms`);
+}
+
 // A server and a channel from the app: the rail's "+" makes a server the
 // account owns, "New channel" in the menu under its name its first channel.
 async function create(which: string, handle: string, stamp: number) {
@@ -993,6 +1034,7 @@ try {
       ["dm", () => dm(which, aDir, bAccount, aHandle)],
       ["invite", () => invite(which, passwordDir, server)],
       ["create", () => create(which, `web${stamp}`, stamp)],
+      ["revoked", () => revoked(which, stamp)],
       ["push", () => webPush(which, `web${stamp}`, passwordDir, server, general, webAccount)],
       ["magic link", () => magicLink(which)],
       ["passkey", () => passkey(which, `web${stamp}`)],

@@ -163,8 +163,12 @@ pub async fn run_forever<S: Store>(
                 // same status for an expired token and a revoked session
                 // (see `transport::connect`), so rotate before trying again
                 // and stop only if the instance refuses the refresh too:
-                // that answer is what tells a revocation apart.
-                if let Err(e) = api.refresh_now().await {
+                // that answer is what tells a revocation apart. A refresh
+                // that got no answer at all refuses nothing: the loop
+                // waits and tries again, as for any other lost connection.
+                if let Err(e @ (ClientError::Api { .. } | ClientError::NotSignedIn)) =
+                    api.refresh_now().await
+                {
                     let _ = events.unbounded_send(GatewayEvent::Closed(e.to_string()));
                     return store;
                 }
@@ -172,9 +176,15 @@ pub async fn run_forever<S: Store>(
             }
             Err(ClientError::Transport(reason)) if cfg!(target_arch = "wasm32") => {
                 // The browser hides the status of a refused upgrade: rotate
-                // the token when one is on hand, then try again.
+                // the token when one is on hand, then try again. An instance
+                // that refuses the rotation as well has ended the session,
+                // and that is where the loop stops, as it does natively;
+                // a rotation that got no answer is tried again next time.
                 if api.tokens().refresh.is_some() {
-                    let _ = api.refresh_now().await;
+                    if let Err(e @ ClientError::Api { .. }) = api.refresh_now().await {
+                        let _ = events.unbounded_send(GatewayEvent::Closed(e.to_string()));
+                        return store;
+                    }
                 }
                 (reason, Duration::ZERO)
             }

@@ -214,6 +214,18 @@ export class ClientError extends Error {
   }
 }
 
+/**
+ * Whether a failure says the instance no longer takes this session
+ * (protocol 10 and 12): it does not know the token, the refresh token ran
+ * out with it, or the session or its device was revoked. Nothing but
+ * signing in again follows any of them.
+ */
+export function signedOut(e: unknown): boolean {
+  if (!(e instanceof Error)) return false;
+  if (e instanceof ClientError && ["UNAUTHENTICATED", "TOKEN_EXPIRED", "SESSION_REVOKED", "DEVICE_REVOKED"].includes(e.code)) return true;
+  return /\bnot signed in\b/i.test(e.message);
+}
+
 export class Bridge {
   private worker: Worker;
   private next = 1;

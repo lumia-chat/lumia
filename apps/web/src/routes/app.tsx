@@ -28,8 +28,8 @@ import {
   ServerRail,
   type ChannelItem,
 } from "../design/components";
-import type { ChannelSummary, MessageSummary, ServerSummary } from "../client/bridge";
-import { checkPush, client, connection, loadMyStatus, membersQuery, messagesQuery, presence, customStatusOf, presenceOf, queryClient, signOut, snapshotQuery, startGateway, typingIn, watchPresence } from "../client/state";
+import { signedOut, type ChannelSummary, type MessageSummary, type ServerSummary } from "../client/bridge";
+import { checkPush, client, connection, loadMyStatus, membersQuery, messagesQuery, presence, customStatusOf, presenceOf, queryClient, sessionEnded, signOut, snapshotQuery, startGateway, typingIn, watchPresence } from "../client/state";
 import { useNames } from "../client/names";
 import { ConversationAside, HomeMain, HomeSidebar, type HomeView } from "./home";
 import { Overlay, myStatusDot, type Over } from "./menus";
@@ -197,6 +197,14 @@ export function App() {
       if (!list.some((c) => c.channelId === channelId())) setChannelId(list[0]?.channelId);
     }),
   );
+  // A session the instance no longer takes (revoked, or run out) leaves
+  // nothing here that works: back to sign-in, which says why.
+  let ending = false;
+  createEffect(() => {
+    if (ending || !signedOut(snapshot.error)) return;
+    ending = true;
+    void sessionEnded().finally(() => void navigate({ to: "/sign-in" }));
+  });
   // The server on screen is the one whose presence this client wants (protocol 6.7).
   createEffect(on([() => (home() ? undefined : serverId()), connection], ([id]) => watchPresence(id)));
   void checkPush();
