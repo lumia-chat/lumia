@@ -151,6 +151,33 @@ class LumiaSession(
         return channel.channelId
     }
 
+    // Server settings (architecture 6.7): each call answers with the
+    // snapshot as it then is, which is taken as it comes; other members hear
+    // of the change through their account logs.
+
+    /** A server's name, how long it keeps its messages in days (0 for ever), or both; null leaves one as it is. */
+    suspend fun updateServer(serverId: String, name: String?, retentionDays: Int?) {
+        took(client.call { updateServer(serverId, name, retentionDays?.toUInt()) })
+    }
+
+    /** A file's bytes as chosen, made the server's picture by the instance. */
+    suspend fun setServerIcon(serverId: String, picture: ByteArray, mediaType: String) {
+        took(client.call { setServerIcon(serverId, picture, mediaType) })
+    }
+
+    /** The server goes back to having no picture. */
+    suspend fun removeServerIcon(serverId: String) {
+        took(client.call { removeServerIcon(serverId) })
+    }
+
+    private fun took(snap: SnapshotSummary) {
+        if (leaving || !signedIn) return
+        snapshot = snap
+    }
+
+    /** Where a picture this instance names is, to draw; none for none, or for one that is not the instance's own (`pictureAddress`). */
+    fun pictureOf(path: String): String? = pictureAddress(client.baseUrl, path)
+
     /**
      * Signs out because the person chose to: the phone's push subscription
      * removed, the session revoked on the instance, the tokens and what was

@@ -9,6 +9,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -58,6 +59,7 @@ import androidx.compose.ui.window.PopupProperties
 import chat.lumia.kit.AvatarTone
 import chat.lumia.kit.LumiaAvatar
 import chat.lumia.kit.LumiaIconButton
+import chat.lumia.kit.LumiaPicture
 import chat.lumia.kit.LumiaSession
 import chat.lumia.kit.LumiaTokens
 import chat.lumia.kit.initialsOf
@@ -80,6 +82,7 @@ sealed class Screen {
     data object AddServer : Screen()
     data class NewChannel(val serverId: String) : Screen()
     data class Invite(val serverId: String) : Screen()
+    data class ServerSettings(val serverId: String) : Screen()
 }
 
 // Where the shell is, as Android can keep it while the activity is made
@@ -107,6 +110,7 @@ private fun Screen.kept(): String = when (this) {
     Screen.AddServer -> "add-server"
     is Screen.NewChannel -> "new-channel $serverId"
     is Screen.Invite -> "invite $serverId"
+    is Screen.ServerSettings -> "server-settings $serverId"
 }
 
 /** The screen a kept word names; none for a word this build does not know, and the stack is that much shorter. */
@@ -123,6 +127,7 @@ private fun screenOf(kept: String): Screen? {
         "add-server" -> Screen.AddServer
         "new-channel" -> Screen.NewChannel(id)
         "invite" -> Screen.Invite(id)
+        "server-settings" -> Screen.ServerSettings(id)
         else -> null
     }
 }
@@ -144,7 +149,9 @@ fun PhoneRail(session: LumiaSession, place: Place, onAdd: () -> Unit, onAccount:
         Box(Modifier.width(24.dp).height(1.dp).background(LumiaTokens.railDivider.color))
         for (s in servers) {
             RailTile(current = place == Place.Server(s.serverId), badge = 0, label = s.name, onClick = { onPlace(Place.Server(s.serverId)) }) {
+                // The server's picture, when it has one, over its initials, as a person's is drawn.
                 Text(initialsOf(s.name), style = LumiaTokens.titleMonogram.style, color = LumiaTokens.ink.color)
+                LumiaPicture(session.pictureOf(s.iconUrl), Modifier.matchParentSize())
             }
         }
         RailTile(current = false, badge = 0, label = "Add a server", onClick = onAdd) {
@@ -233,19 +240,20 @@ private fun MenuItem(icon: ImageVector, label: String, onClick: () -> Unit) {
 }
 
 @Composable
-private fun RailTile(current: Boolean, badge: Int, label: String, onClick: () -> Unit, content: @Composable () -> Unit) {
+private fun RailTile(current: Boolean, badge: Int, label: String, onClick: () -> Unit, content: @Composable BoxScope.() -> Unit) {
     val shape = if (current) RoundedCornerShape(LumiaTokens.radius14) else CircleShape
     Box(
         modifier = Modifier
             .size(LumiaTokens.tileSize)
             .clip(shape)
             .background(if (current) LumiaTokens.tabActive.color else LumiaTokens.tile.color)
-            .border(2.dp, if (current) LumiaTokens.accent.color else LumiaTokens.tile.color, shape)
             .clickable(onClick = onClick)
             .semantics { contentDescription = label },
         contentAlignment = Alignment.Center,
     ) {
         content()
+        // The current one's ring, over what the tile holds, a picture too.
+        if (current) Box(Modifier.matchParentSize().border(2.dp, LumiaTokens.accent.color, shape))
         if (badge > 0) {
             Box(Modifier.align(Alignment.TopEnd)) { CountBadge(badge) }
         }

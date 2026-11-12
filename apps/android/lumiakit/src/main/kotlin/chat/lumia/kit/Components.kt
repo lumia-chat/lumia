@@ -350,7 +350,8 @@ fun LumiaField(
                 .padding(horizontal = LumiaTokens.space10),
             contentAlignment = Alignment.CenterStart,
         ) {
-            LumiaInput(text, onText, placeholder, secure = secure, keyboard = keyboard, modifier = Modifier.fillMaxWidth())
+            // The label above names the field to a screen reader too, read before what it holds.
+            LumiaInput(text, onText, placeholder, secure = secure, keyboard = keyboard, modifier = Modifier.fillMaxWidth().semantics { contentDescription = label })
         }
     }
 }

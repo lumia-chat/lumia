@@ -9,7 +9,10 @@
 # told to look (LUMIA_DEV_APPEARANCE, LUMIA_DEV_DENSITY), and by taps from
 # the account menu, the screen kept as the phone is turned, a choice kept
 # across a launch and put back, the screen kept as the phone goes dark.
-# Then the channel is read as assistive technology has it: each account's
+# Then Server settings, as the server's owner: renamed, a shorter history
+# saved after it says what it deletes, a picture set from elsewhere and
+# removed, and the rail drawing it (a plain member, at the very end, sees
+# the picture and is not offered the screen). Then the channel is read as assistive technology has it: each account's
 # messages in a row are one block, and the second account, typing through
 # the CLI, is named under the composer until it falls silent (protocol
 # 6.7), in light and dark. Then push. Then signing out from the account
@@ -175,6 +178,45 @@ for node in nodes:
         break
 ' "$2" "$3"
 }
+# The middle of the first thing reading <text> below the first reading
+# <above>: one of two buttons with the same name, told apart by what is over it.
+below() { # <text> <above>
+  ui | python3 -c '
+import re, sys
+want, above = sys.argv[1], sys.argv[2]
+nodes = re.findall(r"<node [^>]*>", sys.stdin.read())
+def box(node):
+    return tuple(int(n) for n in re.search(r"bounds=\"\[(\d+),(\d+)\]\[(\d+),(\d+)\]\"", node).groups())
+def reads(node, text):
+    return "text=\"%s\"" % text in node or "content-desc=\"%s\"" % text in node
+over = next((box(n)[1] for n in nodes if reads(n, above)), None)
+for node in nodes:
+    if over is not None and reads(node, want) and box(node)[1] > over:
+        x0, y0, x1, y1 = box(node)
+        print("%d %d" % ((x0 + x1) // 2, (y0 + y1) // 2))
+        break
+' "$1" "$2"
+}
+# The colour of the screen at the middle of the first thing reading
+# <text>, as red green blue: what is drawn there, a picture or not.
+colour() { # <text or description>
+  at=$(node "$1" middle)
+  [ -n "$at" ] || return 0
+  "$adb" exec-out screencap | python3 -c '
+import struct, sys
+data = sys.stdin.buffer.read()
+w, h = struct.unpack("<II", data[:8])
+head = len(data) - w * h * 4
+x, y = (int(n) for n in sys.argv[1].split())
+i = head + (y * w + x) * 4
+print("%d %d %d" % tuple(data[i:i + 3]))
+' "$at"
+}
+# Whether a colour is the magenta of the script's picture.
+magenta() { # <r g b>
+  set -- $1
+  [ "${1:-0}" -gt 200 ] && [ "${2:-255}" -lt 60 ] && [ "${3:-0}" -gt 200 ]
+}
 tap() { # <text or description>
   at=$(node "$1" middle)
   [ -n "$at" ] || { echo "FAIL: nothing on screen reads \"$1\" to tap"; exit 1; }
@@ -223,7 +265,7 @@ shot home
 alive=$(running)
 # The app sends nothing; the CLI's message lands in its view when the gateway is up.
 "$cli" --data-dir "$data" send "$channel" "Still here?" >/dev/null
-for screen in server channel requests devices profile preferences new add newchannel invite signin link; do shoot "$screen" 7; done
+for screen in server channel requests devices profile preferences new add newchannel invite serversettings signin link; do shoot "$screen" 7; done
 [ -n "$alive" ] || { echo "FAIL: the app was not running after launch"; exit 1; }
 
 # Preferences. First how a launch can be told to look, for the eye: the
@@ -296,6 +338,83 @@ seen=$(ui)
 "$adb" shell cmd uimode night "${night:-no}" >/dev/null
 case "$seen" in *"How Lumia looks on this phone"*) ;; *) echo "FAIL: the phone went dark and the app left the screen it was on; see $work/preferences-system-dark.png"; exit 1 ;; esac
 echo "  preferences: ok (dark and compact for a launch and not kept, $tight against $roomy; reached from the account menu; the screen kept as the phone was turned and turned back; a choice kept across a launch and put back; the screen kept as the phone went dark)"
+
+# Server settings (architecture 6.7), as the server's owner gets there:
+# under its channels, Server settings; the name changed and saved, and the
+# instance has it; a shorter history chosen, which says what it would
+# delete and changes nothing until Save, and then the instance has it. A
+# picture set from elsewhere (the CLI) reaches the open screen through the
+# account log, is removed there, and once set again the rail draws it. The
+# second account, a plain member, is not offered the screen: last, below.
+picture="$work/picture.png"
+python3 -c '
+import struct, sys, zlib
+side = 64
+rows = b"".join(b"\x00" + b"\xff\x00\xff" * side for _ in range(side))
+def chunk(kind, data):
+    return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xffffffff)
+png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", side, side, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b"")
+open(sys.argv[1], "wb").write(png)
+' "$picture"
+owner=$(sign_in)
+# One field of the server as the instance has it, or <default> when the field is at its default and so not sent.
+held() { # <field> <default>
+  curl -s -H "accept: application/json" -H "authorization: Bearer $owner" "$instance/api/v1/servers/$server" | field "d.get('$1', $2)"
+}
+until_held() { # <field> <default> <value>: within twenty seconds
+  for _ in $(seq 1 20); do
+    [ "$(held "$1" "$2")" = "$3" ] && return 0
+    sleep 1
+  done
+  return 1
+}
+renamed="Android smoke renamed"
+launch server 7
+[ "$(node "Server settings" button)" = yes ] || { echo "FAIL: the server's owner is not offered Server settings; see $work/server.png"; exit 1; }
+tap "Server settings"
+await "How long this server keeps its messages." || { echo "FAIL: Server settings did not open"; exit 1; }
+seen=$(ui)
+[ "$(fact "$seen" Forever chosen)" = yes ] || { echo "FAIL: a server that keeps its messages for ever does not show Forever as the choice"; exit 1; }
+case "$seen" in *'content-desc="Android smoke has no picture"'*) ;; *) echo "FAIL: the server's picture is not described as none"; exit 1 ;; esac
+case "$seen" in *'text="Remove"'*) echo "FAIL: Remove is offered for a server with no picture"; exit 1 ;; esac
+# The field is the one under its label that holds the name.
+at=$(below "Android smoke" Name)
+[ -n "$at" ] || { echo "FAIL: no Name field holding the server's name"; exit 1; }
+# shellcheck disable=SC2086
+"$adb" shell input tap $at
+"$adb" shell input keyevent KEYCODE_MOVE_END
+"$adb" shell input text "%srenamed"
+tap Save
+await 'text="Saved."' || { shot serversettings-name; echo "FAIL: the name was not saved; see $work/serversettings-name.png"; exit 1; }
+"$cli" --data-dir "$data" servers | grep -q "  $renamed\$" || { echo "FAIL: the instance does not have the name saved"; exit 1; }
+tap "30 days"
+await "Messages older than 30 days will be deleted for everyone. This cannot be undone." \
+  || { shot serversettings-shorter; echo "FAIL: choosing a shorter history did not say what it would delete; see $work/serversettings-shorter.png"; exit 1; }
+shot serversettings-shorter
+[ "$(held retentionDays 0)" = 0 ] || { echo "FAIL: choosing a shorter history changed the server before Save"; exit 1; }
+at=$(below Save "30 days")
+[ -n "$at" ] || { echo "FAIL: no Save under the history's choices"; exit 1; }
+# shellcheck disable=SC2086
+"$adb" shell input tap $at
+until_held retentionDays 0 30 || { echo "FAIL: the instance does not keep the server's messages for 30 days after Save"; exit 1; }
+"$cli" --data-dir "$data" server-update "$server" --icon "$picture" >/dev/null
+await 'text="Remove"' || { shot serversettings-picture; echo "FAIL: a picture set from elsewhere did not reach the open screen; see $work/serversettings-picture.png"; exit 1; }
+sleep 2
+shot serversettings-picture
+magenta "$(colour "$renamed's picture")" || { echo "FAIL: the screen does not draw the server's picture; see $work/serversettings-picture.png"; exit 1; }
+tap Remove
+until_held iconUrl '""' "" || { echo "FAIL: Remove did not take the server's picture away on the instance"; exit 1; }
+await "$renamed has no picture" || { echo "FAIL: the screen still shows a picture after Remove"; exit 1; }
+"$cli" --data-dir "$data" server-update "$server" --icon "$picture" >/dev/null
+launch server 7
+drawn=""
+for _ in $(seq 1 10); do magenta "$(colour "$renamed")" && { drawn=yes; break; }; sleep 1; done
+shot server-picture
+[ -n "$drawn" ] || { echo "FAIL: the rail does not draw the server's picture; see $work/server-picture.png"; exit 1; }
+launch serversettings 7 --es LUMIA_DEV_APPEARANCE dark
+shot serversettings-dark
+"$adb" shell am force-stop "$bundle" >/dev/null 2>&1 || true
+echo "  server settings: ok (offered to the owner; renamed and the instance has it; 30 days said what it would delete, changed nothing until Save, and then the instance had it; a picture set elsewhere reached the open screen, Remove took it away, and set again the rail drew it)"
 
 # Blocks, in the channel: the second account's two messages in a row are
 # under its name once, and the second says whose it is and when to a
@@ -626,4 +745,20 @@ await "Welcome back" || { echo "FAIL: the launch after a revoked session is not 
 case "$(ui)" in *"You were signed out"*) echo "FAIL: the launch after a revoked session said so a second time"; exit 1 ;; esac
 "$adb" shell am force-stop "$bundle" >/dev/null 2>&1 || true
 echo "  revoked: $work/revoked.png (sent back to sign-in, which said why; the next launch did not; the phone's preferences were kept and the subscription it had sent forgotten)"
-echo "smoke: ok (launched signed in, every screen screenshotted under $work; preferences reached from the account menu, kept across a launch and as the phone was turned, dark and compact drawn; messages in blocks and someone typing in the channel; a mention became a notification and its tap opened the channel; Sign out in the account menu ended the session and the push subscription and said nothing; another account signed in on the same phone was the only one it showed and was sent notices for; a session revoked from elsewhere took the subscription with it, and the app went back to sign-in and said so, opened afterwards or open at the time)"
+
+# A plain member is not offered Server settings, and sees the server's
+# picture: the second account, signed in on the phone, which holds no
+# session now.
+who=$other_handle
+launch server 0
+await 'text="connected"' || { shot member-server; echo "FAIL: signed in as $other_handle, the app did not connect; see $work/member-server.png"; exit 1; }
+tap "$renamed"
+await "Invite people" || { shot member-server; echo "FAIL: $other_handle could not open $renamed; see $work/member-server.png"; exit 1; }
+drawn=""
+for _ in $(seq 1 10); do magenta "$(colour "$renamed")" && { drawn=yes; break; }; sleep 1; done
+shot member-server
+case "$(ui)" in *"Server settings"*) echo "FAIL: $other_handle, a plain member, is offered Server settings; see $work/member-server.png"; exit 1 ;; esac
+[ -n "$drawn" ] || { echo "FAIL: the rail does not draw the server's picture for a member; see $work/member-server.png"; exit 1; }
+"$adb" shell am force-stop "$bundle" >/dev/null 2>&1 || true
+echo "  a member: $work/member-server.png ($other_handle is not offered Server settings, and the rail draws the server's picture)"
+echo "smoke: ok (launched signed in, every screen screenshotted under $work; server settings renamed the server, kept its messages 30 days after saying what that deletes, and a picture set and removed reached the screen and the rail, offered to the owner and not to a member; preferences reached from the account menu, kept across a launch and as the phone was turned, dark and compact drawn; messages in blocks and someone typing in the channel; a mention became a notification and its tap opened the channel; Sign out in the account menu ended the session and the push subscription and said nothing; another account signed in on the same phone was the only one it showed and was sent notices for; a session revoked from elsewhere took the subscription with it, and the app went back to sign-in and said so, opened afterwards or open at the time)"

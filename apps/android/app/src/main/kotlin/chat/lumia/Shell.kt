@@ -125,6 +125,7 @@ fun Shell(store: AppStore, session: LumiaSession, devScreen: String?) {
                 "add" -> { place = Place.Home; stack = listOf(Screen.AddServer) }
                 "newchannel" -> { place = Place.Server(first); stack = listOf(Screen.NewChannel(first)) }
                 "invite" -> { place = Place.Server(first); stack = listOf(Screen.Invite(first)) }
+                "serversettings" -> { place = Place.Server(first); stack = listOf(Screen.ServerSettings(first)) }
             }
         }
     }
@@ -139,6 +140,8 @@ fun Shell(store: AppStore, session: LumiaSession, devScreen: String?) {
                 is Screen.Channel -> channels.any { it.channelId == screen.id }
                 is Screen.NewChannel -> servers.any { it.serverId == screen.serverId }
                 is Screen.Invite -> servers.any { it.serverId == screen.serverId }
+                // And Server settings once this account may no longer change them.
+                is Screen.ServerSettings -> servers.any { it.serverId == screen.serverId && it.canManage }
                 else -> true
             }
         }
@@ -172,6 +175,7 @@ fun Shell(store: AppStore, session: LumiaSession, devScreen: String?) {
         Screen.AddServer -> AddServerScreen(session, pop) { id -> replace(emptyList()); place = Place.Server(id) }
         is Screen.NewChannel -> NewChannelScreen(session, servers.firstOrNull { it.serverId == top.serverId }, pop) { id -> place = Place.Server(top.serverId); replace(listOf(Screen.Channel(id))) }
         is Screen.Invite -> InviteScreen(session, servers.firstOrNull { it.serverId == top.serverId }, pop)
+        is Screen.ServerSettings -> ServerSettingsScreen(session, servers.firstOrNull { it.serverId == top.serverId }, pop)
     }
 }
 
@@ -285,6 +289,10 @@ fun ServerScreen(session: LumiaSession, server: ServerSummary, push: (Screen) ->
             }
             item { LumiaLinkButton("New channel", Modifier.padding(horizontal = LumiaTokens.space10, vertical = LumiaTokens.space8)) { push(Screen.NewChannel(server.serverId)) } }
             item { LumiaLinkButton("Invite people", Modifier.padding(horizontal = LumiaTokens.space10, vertical = LumiaTokens.space4)) { push(Screen.Invite(server.serverId)) } }
+            // Offered to whoever may change them: the owner, or a member whose roles grant MANAGE_SERVER (architecture 6.7).
+            if (server.canManage) {
+                item { LumiaLinkButton("Server settings", Modifier.padding(horizontal = LumiaTokens.space10, vertical = LumiaTokens.space4)) { push(Screen.ServerSettings(server.serverId)) } }
+            }
         }
         Text(session.connection.label, style = LumiaTokens.textMeta.style, color = LumiaTokens.inkQuiet.color, modifier = Modifier.navigationBarsPadding().padding(horizontal = LumiaTokens.space16, vertical = LumiaTokens.space6))
     }
