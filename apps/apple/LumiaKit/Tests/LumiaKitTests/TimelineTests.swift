@@ -213,6 +213,23 @@ final class TimelineTests: XCTestCase {
         XCTAssertEqual(session.typing, TypingRoster())
     }
 
+    /// Two views on screen naming the same stranger (Home's row and the
+    /// conversation opened over it at launch) each ask for the profile
+    /// while it is on its way. The asking must change nothing a view
+    /// watches: when it did, each view's asking redrew the other, and the
+    /// main thread never came back to take the answer.
+    @MainActor
+    func testAskingForAProfileOnItsWayRedrawsNothing() async throws {
+        let (session, dir) = try await session()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let redrawn = expectation(description: "asking again, with the answer not in yet, redrew the first to ask")
+        redrawn.isInverted = true
+        withObservationTracking { _ = session.name(of: "grace") } onChange: { redrawn.fulfill() }
+        XCTAssertEqual(session.name(of: "grace"), "grace")
+        // The change fired while the second was asking, or not at all.
+        await fulfillment(of: [redrawn], timeout: 0)
+    }
+
     @MainActor
     func testSilenceEndsTypingWhenItsTimeRunsOut() async throws {
         let (session, dir) = try await session()

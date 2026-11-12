@@ -62,7 +62,11 @@ public final class LumiaSession {
     var nowMicros: @MainActor () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1_000_000) }
     /// Public profiles looked up one at a time; nil once the instance refused one.
     private var profiles: [String: MemberSummary?] = [:]
-    private var profilesInFlight: Set<String> = []
+    /// The lookups on their way. Not something a view watches: a view asks
+    /// for a profile while drawing itself, and were the asking a change,
+    /// two views naming the same stranger would redraw each other without
+    /// end, the main thread never free to take the answer.
+    @ObservationIgnored private var profilesInFlight: Set<String> = []
     public private(set) var lastError: String?
 
     private var events: Task<Void, Never>?
