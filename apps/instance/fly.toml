@@ -44,8 +44,28 @@ kill_signal = 'SIGTERM'
   # same name, which Fly puts ahead of this value:
   #   fly secrets set LUMIA_OPEN_REGISTRATION=true
   LUMIA_OPEN_REGISTRATION = 'false'
+  # Pictures (and, later, attachments) need a blob store every machine
+  # shares and the master key they are encrypted under (deployment.md
+  # section 3); without both the instance keeps none and says so. Once:
+  #
+  #   fly storage create --app lumia-instance
+  #     (a Tigris bucket: it sets AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
+  #      AWS_ENDPOINT_URL_S3, AWS_REGION and BUCKET_NAME as secrets)
+  #   fly secrets set LUMIA_BLOB_STORE=s3://<that bucket's name> --app lumia-instance
+  #   fly secrets set LUMIA_MASTER_KEY="$(openssl rand -base64 32)" --app lumia-instance
+  #     (keep a copy of it somewhere else: nothing stored can be read without it)
+  #
+  # and then uncomment this line and the [[files]] section below, which
+  # writes that secret where the line says. Not before: a deploy that names
+  # a secret that is not there fails.
+  # LUMIA_MASTER_KEY_FILE = '/secrets/master.key'
   # The push relay (apps/relay/fly.toml) for the iOS and Android apps.
   LUMIA_PUSH_RELAY_URL = 'https://lumia-relay.fly.dev'
+
+# The master key, from the secret, as a file (see [env] above).
+# [[files]]
+#   guest_path = '/secrets/master.key'
+#   secret_name = 'LUMIA_MASTER_KEY'
 
 [http_service]
   internal_port = 4000

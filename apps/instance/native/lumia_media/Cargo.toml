@@ -1,0 +1,23 @@
+# The instance's one native library: image work for uploads (architecture 3
+# and 12). Its own workspace, built by Rustler when the instance compiles.
+[package]
+name = "lumia_media"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-only"
+
+[lib]
+name = "lumia_media"
+crate-type = ["cdylib"]
+
+[dependencies]
+rustler = "0.38"
+# Decoders in Rust only: no format here links C (architecture 3 sends those
+# through a Port worker instead, and none is needed yet).
+image = { version = "0.25.6", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[workspace]

@@ -27,3 +27,5 @@ lumia-*.tar
 
 # The web UI build (apps/web), installed by `bun run build:instance` there.
 /priv/static/ui/
+/native/*/target/
+/priv/native/

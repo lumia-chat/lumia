@@ -107,6 +107,76 @@ defmodule LumiaWeb.AccountControllerTest do
     end
   end
 
+  describe "the avatar" do
+    @photo File.read!(Path.expand("../../support/fixtures/media/sideways.jpg", __DIR__))
+
+    defp put_avatar(conn, account, bytes, type \\ "image/jpeg") do
+      conn
+      |> authed(account)
+      |> put_req_header("content-type", type)
+      |> put("/api/v1/account/avatar", bytes)
+    end
+
+    test "is put as the picture's bytes and served to anyone with its address", %{conn: conn} do
+      a = account("a")
+      put = put_avatar(conn, a, @photo)
+      assert put.status == 200
+
+      assert %V1.Account{avatar_url: "/api/v1/avatars/" <> _ = url} =
+               V1.Account.decode(put.resp_body)
+
+      # No session: the address is the way in. Cacheable for good, and inert.
+      got = get(build_conn(), url)
+      assert got.status == 200
+      assert <<0xFF, 0xD8, _::binary>> = got.resp_body
+      assert get_resp_header(got, "content-type") == ["image/jpeg"]
+      assert get_resp_header(got, "cache-control") == ["public, max-age=31536000, immutable"]
+      assert get_resp_header(got, "x-content-type-options") == ["nosniff"]
+
+      # Others see it on the account.
+      mate = account("m")
+      {:ok, server} = Servers.create_server(a.id, "Shared")
+      {:ok, _} = Servers.add_member(server.id, mate.id, a.id)
+      assert {200, %V1.Account{avatar_url: ^url}} = profile(conn, mate, a)
+
+      # Removed: the account names none and the address leads nowhere.
+      gone = conn |> authed(a) |> delete("/api/v1/account/avatar")
+      assert %V1.Account{avatar_url: ""} = V1.Account.decode(gone.resp_body)
+      assert get(build_conn(), url).status == 404
+    end
+
+    test "the content type is not believed, and what is not a picture is refused in words", %{
+      conn: conn
+    } do
+      a = account("a")
+      assert put_avatar(conn, a, @photo, "application/octet-stream").status == 200
+
+      refused = put_avatar(conn, a, "<svg onload=alert(1)/>", "image/png")
+      assert refused.status == 400
+
+      assert %V1.Error{
+               code: :INVALID_ARGUMENT,
+               details: %{"field" => "picture", "reason" => "unsupported"}
+             } =
+               V1.Error.decode(refused.resp_body)
+
+      over = :binary.copy(<<0>>, Lumia.Media.max_upload_bytes() + 1)
+      large = put_avatar(conn, a, over)
+      assert %V1.Error{details: %{"reason" => "too_large"}} = V1.Error.decode(large.resp_body)
+    end
+
+    test "needs a session to set, and an address that is not one is not found", %{conn: conn} do
+      anonymous =
+        conn
+        |> put_req_header("content-type", "image/jpeg")
+        |> put("/api/v1/account/avatar", @photo)
+
+      assert anonymous.status == 401
+      assert get(build_conn(), "/api/v1/avatars/nothing").status == 404
+      assert get(build_conn(), "/api/v1/avatars/" <> String.duplicate("0", 64)).status == 404
+    end
+  end
+
   test "a malformed id is not found", %{conn: conn} do
     conn = conn |> authed(account("a")) |> get("/api/v1/accounts/not-an-id")
     assert conn.status == 404

@@ -7,16 +7,23 @@ defmodule Lumia.Release do
   A backup is `database.dump` (`pg_dump`, custom format, one serializable
   snapshot) and `manifest.json`: the schema version, the recovery
   generation, the host, the time, the blob store kind, and the SHA-256
-  fingerprint of the master key, never the key. Blobs are listed as
-  `none` until attachments exist.
+  fingerprint of the master key, never the key; and `blobs/`, a copy of
+  the blob store's directory, for a `local` or `fs` store (an `s3` one is
+  the bucket's own versioning or replication to keep, and the manifest
+  says which it was).
 
   A restore refuses a manifest whose master-key fingerprint differs from
   the configured key's, or whose schema is newer than this release knows,
   or a database that is not empty unless told `replace: true`. It
-  restores, migrates up, and bumps the recovery generation so every
-  client takes the snapshot path on its next connect.
+  restores, migrates up, copies the blobs back for a `local` or `fs`
+  store and checks that every blob the database names is in the store
+  (failing with their names unless told `allow_missing_blobs: true`), and
+  bumps the recovery generation so every client takes the snapshot path
+  on its next connect.
   """
 
+  alias Lumia.Blobs
+  alias Lumia.Blobs.Store
   alias Lumia.Instance
   alias Lumia.Repo
 
@@ -66,9 +73,11 @@ defmodule Lumia.Release do
         "recovery_generation" => Instance.reload().recovery_generation,
         "host" => Lumia.Identity.host(),
         "taken_at" => DateTime.to_iso8601(DateTime.utc_now()),
-        "blob_store" => "none",
+        "blob_store" => Store.kind(),
         "master_key_fingerprint" => master_key_fingerprint()
       }
+
+      copy_blobs_out(dir)
 
       File.write!(Path.join(dir, "manifest.json"), Jason.encode!(manifest, pretty: true))
       {:ok, manifest}
@@ -78,7 +87,8 @@ defmodule Lumia.Release do
   @doc """
   Restores the set in `dir`. Options: `:url` for the target database
   (tests), `:replace` to overwrite a database that is not empty,
-  `:pg_bin` as for `backup/2`. Returns the new recovery generation.
+  `:allow_missing_blobs` to go on when the store lacks blobs the database
+  names, `:pg_bin` as for `backup/2`. Returns the new recovery generation.
   """
   def restore(dir, opts \\ []) do
     load()
@@ -100,13 +110,52 @@ defmodule Lumia.Release do
         Path.join(dir, "database.dump")
       ])
 
-      with_repo(url, fn pid ->
-        Ecto.Migrator.run(Repo, :up, all: true, dynamic_repo: pid)
-        Instance.reload()
-        generation = Instance.bump_recovery_generation()
-        {:ok, generation}
-      end)
+      copy_blobs_back(dir)
+
+      with_repo(url, &finish_restore(&1, opts[:allow_missing_blobs] == true))
     end
+  end
+
+  # After the dump: a blob written since is one the dump does not name,
+  # which costs its bytes; the other order could name one not copied.
+  defp copy_blobs_out(dir) do
+    with store when is_binary(store) <- Store.directory(),
+         true <- File.dir?(store) do
+      File.cp_r!(store, Path.join(dir, "blobs"))
+    end
+
+    :ok
+  end
+
+  # Over the restored database: migrated up, its blobs accounted for, and
+  # a new recovery generation.
+  defp finish_restore(repo, allow_missing_blobs?) do
+    Ecto.Migrator.run(Repo, :up, all: true, dynamic_repo: repo)
+
+    with :ok <- check_blobs(allow_missing_blobs?) do
+      Instance.reload()
+      {:ok, Instance.bump_recovery_generation()}
+    end
+  end
+
+  defp check_blobs(true), do: :ok
+
+  defp check_blobs(false) do
+    case Blobs.missing() do
+      [] -> :ok
+      missing -> {:error, {:missing_blobs, missing}}
+    end
+  end
+
+  defp copy_blobs_back(dir) do
+    with store when is_binary(store) <- Store.directory(),
+         from = Path.join(dir, "blobs"),
+         true <- File.dir?(from) do
+      File.mkdir_p!(store)
+      File.cp_r!(from, store)
+    end
+
+    :ok
   end
 
   # ---- Checks ----------------------------------------------------------------------
@@ -157,7 +206,8 @@ defmodule Lumia.Release do
   # itself, which would start the server).
   defp load do
     :ok = Application.ensure_loaded(@app)
-    {:ok, _} = Application.ensure_all_started([:ssl, :ecto_sql, :postgrex])
+    # :req for a restore's look into an S3 blob store.
+    {:ok, _} = Application.ensure_all_started([:ssl, :ecto_sql, :postgrex, :req])
     :ok
   end
 

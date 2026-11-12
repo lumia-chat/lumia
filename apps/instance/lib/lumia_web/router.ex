@@ -34,6 +34,12 @@ defmodule LumiaWeb.Router do
     get "/invites/:code", InviteController, :show
   end
 
+  # Pictures, by an address nobody can guess; a browser's <img> asks for
+  # them with no Accept the API's pipelines would take.
+  scope "/api/v1", LumiaWeb do
+    get "/avatars/:address", AvatarController, :show
+  end
+
   scope "/api/v1", LumiaWeb do
     pipe_through :api
 
@@ -61,6 +67,8 @@ defmodule LumiaWeb.Router do
 
     get "/account/snapshot", AccountController, :snapshot
     patch "/account", AccountController, :update
+    put "/account/avatar", AccountController, :put_avatar
+    delete "/account/avatar", AccountController, :delete_avatar
     put "/account/profile", AccountController, :put_profile
     get "/account/events", AccountController, :events
     get "/accounts/:account_id", AccountController, :show

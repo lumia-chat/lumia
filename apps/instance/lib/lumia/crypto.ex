@@ -12,7 +12,7 @@ defmodule Lumia.Crypto do
 
   @doc "Keyed BLAKE3-256 under a 32-byte key."
   def blake3_keyed(key, data) when byte_size(key) == 32 and is_binary(data),
-    do: B3.keyed_hash(key, data)
+    do: B3.keyed_hash(data, key)
 
   @doc "A fresh Ed25519 keypair as `{public, private}`."
   def generate_ed25519 do

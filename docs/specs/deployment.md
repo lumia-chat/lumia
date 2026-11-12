@@ -19,7 +19,7 @@ Two containers: the Lumia image and Postgres, plus three persistent volumes: the
 The same image on N nodes, all pointing at one Postgres and one **shared** blob store, clustered by DNS. Preconditions, enforced at boot:
 
 - `DNS_CLUSTER_QUERY` names a DNS record that resolves to every node (a Kubernetes headless service, a Fly app, a scaled Compose service). Each node polls it and connects to the others; no other discovery exists (decided in the step 7 grill: one DNS name with one record per node is what every supported deployment provides, and the nodes need nothing more).
-- The blob store is S3-compatible or a shared filesystem. **Local-disk blobs are refused when clustering is on**, because a blob written on one node would be missing on the next. Until attachments exist (architecture 12 is not built), this is a configuration rule with nothing to refuse; it is stated here so the code that adds blobs inherits it.
+- The blob store is S3-compatible or a shared filesystem. **Local-disk blobs are refused when clustering is on**, because a blob written on one node would be missing on the next: an instance given `LUMIA_BLOB_STORE=local:` and `DNS_CLUSTER_QUERY` does not start (`fs:` is the same store on a filesystem every node mounts, which the Compose example's named volume is for nodes on one machine).
 - Postgres availability (replicas, failover) and the per-node pool size are the operator's; the install guide recommends `DB_POOL_SIZE` of 10 per node per 4 vCPU and `max_connections` sized for N nodes plus the backup command.
 
 Nodes share nothing but the database and the blob store. Live delivery crosses nodes through the cluster's pub/sub; what pub/sub misses, each node's reconciler recovers from the database within one tick ([delivery.md](delivery.md) section 7). Section 8 lists the cross-node cases the tests must pass.
@@ -40,8 +40,10 @@ All configuration is environment variables read at boot (`config/runtime.exs`); 
 | `SECRET_KEY_BASE` | yes | Signs sessions and challenges; at least 64 bytes |
 | `PHX_HOST` | yes | The public host name; the instance's own web origin is `https://` plus this |
 | `PORT` | no | HTTP listener, default 4000; TLS terminates at the operator's proxy |
-| `LUMIA_MASTER_KEY_FILE` | with blobs | Path to the 32-byte instance master key (section 5) |
-| `LUMIA_BLOB_STORE` | with blobs | `local:<path>`, `s3://bucket` with the usual AWS variables, or `fs:<shared path>` |
+| `LUMIA_MASTER_KEY_FILE` | with blobs | Path to the 32-byte instance master key (section 5): the 32 bytes themselves (`openssl rand -out master.key 32`), or their base64 or hex |
+| `LUMIA_BLOB_STORE` | with blobs | `local:<path>`, `fs:<shared path>`, or `s3://bucket`. Unset, the instance keeps no blobs: no pictures, and people who try are told so. Set, it needs the master key, and does not start without it |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | with `s3://` | The bucket's credentials |
+| `AWS_REGION`, `AWS_ENDPOINT_URL_S3` | no | The region (default `us-east-1`) and, for anything that is not AWS, the service's URL (Tigris, R2, MinIO); requests are path-style, `<endpoint>/<bucket>/<name>` |
 | `DNS_CLUSTER_QUERY` | multi-node | The DNS name that resolves to every node |
 | `RELEASE_COOKIE` | multi-node | The Erlang distribution cookie, the same on every node. Each image build generates its own, so without this a rolling upgrade's new nodes cannot join the old ones (section 6) |
 | `DB_POOL_SIZE` | no | Database connections per node, default 10 |
@@ -67,7 +69,7 @@ bin/lumia restore <dir>
 
 - `database.dump`: `pg_dump` in custom format, taken with `--serializable-deferrable` so it is one consistent snapshot while the instance keeps running;
 - `blobs/`: the blob store's contents, for `local:` and `fs:` stores (an `s3://` store is backed up by the bucket's own versioning or replication, and the manifest says so);
-- `manifest.json`: the schema version (the last migration), the recovery generation, the blob store kind, the instance host, the time, and the **fingerprint of the master key** (BLAKE3 of the key), **never the key itself**. The key is the operator's to keep separately; a backup directory on its own cannot open an attachment.
+- `manifest.json`: the schema version (the last migration), the recovery generation, the blob store kind, the instance host, the time, and the **fingerprint of the master key** (SHA-256 of the key file), **never the key itself**. The key is the operator's to keep separately; a backup directory on its own cannot open an attachment.
 
 The image includes the Postgres client tools of the Postgres major it supports, so `backup` works inside the container.
 

@@ -36,8 +36,18 @@ services:
       # Shared by every node across image upgrades (deployment.md section 3).
       RELEASE_COOKIE: ${RELEASE_COOKIE:?set RELEASE_COOKIE in .env (openssl rand -base64 48)}
       LUMIA_METRICS: "false"
+      # Pictures (and, later, attachments) need a blob store and the master
+      # key they are encrypted under (deployment.md section 3). Without
+      # both the instance keeps none and tells whoever tries. To turn them
+      # on: `openssl rand -out master.key 32` beside this file, keep a copy
+      # of it somewhere that is not this machine (a backup cannot be read
+      # without it), and uncomment these two and the two mounts below.
+      # LUMIA_MASTER_KEY_FILE: /secrets/master.key
+      # LUMIA_BLOB_STORE: fs:/data/blobs
     volumes:
       - backups:/backups
+      # - blobs:/data/blobs
+      # - ./master.key:/secrets/master.key:ro
 
   proxy:
     image: caddy:2
@@ -51,3 +61,4 @@ services:
 volumes:
   pgdata:
   backups:
+  blobs:

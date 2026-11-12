@@ -81,6 +81,9 @@ defmodule Lumia.MixProject do
       {:b3, "~> 0.2.1"},
       {:nimble_totp, "~> 1.0"},
 
+      # Builds native/lumia_media, the image work for uploads (architecture 3, 12).
+      {:rustler, "~> 0.38.0", runtime: false},
+
       # Testing and development.
       {:benchee, "~> 1.3", only: :dev},
       {:mint_web_socket, "~> 1.0", only: :dev},

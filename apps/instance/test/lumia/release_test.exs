@@ -9,6 +9,8 @@ defmodule Lumia.ReleaseTest do
   use ExUnit.Case, async: false
 
   alias Ecto.Adapters.Postgres
+  alias Ecto.Adapters.SQL.Sandbox
+  alias Lumia.Blobs
   alias Lumia.Instance
   alias Lumia.Release
 
@@ -32,7 +34,7 @@ defmodule Lumia.ReleaseTest do
       _ = Postgres.storage_down(config)
       Application.delete_env(:lumia, :master_key_file)
       # The restore loaded the scratch database's settings into persistent_term.
-      Ecto.Adapters.SQL.Sandbox.checkout(Lumia.Repo)
+      Sandbox.checkout(Lumia.Repo)
       Instance.reload()
     end)
 
@@ -50,8 +52,27 @@ defmodule Lumia.ReleaseTest do
     File.write!(key, :crypto.strong_rand_bytes(32))
     Application.put_env(:lumia, :master_key_file, key)
 
+    # A picture, so the set has a blob to carry. Committed for real: the
+    # dump is another connection's view of the database.
+    Sandbox.checkout(Lumia.Repo, sandbox: false)
+
+    {:ok, owner} =
+      Lumia.Accounts.create_account(%{handle: "backup#{System.unique_integer([:positive])}"})
+
+    {:ok, blob} = Blobs.put("a picture's bytes", "avatar", "image/png", owner.id)
+    name = Blobs.name(blob.address)
+    stored = Path.join([Blobs.Store.directory(), String.slice(name, 0, 2), name])
+
+    on_exit(fn ->
+      Sandbox.checkout(Lumia.Repo, sandbox: false)
+      Blobs.delete(blob.address)
+      Lumia.Repo.delete(owner)
+    end)
+
     assert {:ok, manifest} = Release.backup(ctx.dir)
     assert File.regular?(Path.join(ctx.dir, "database.dump"))
+    assert manifest["blob_store"] == "local"
+    assert File.regular?(Path.join([ctx.dir, "blobs", String.slice(name, 0, 2), name]))
     assert manifest["schema_version"] == Release.schema_version()
     assert manifest["master_key_fingerprint"] == Release.master_key_fingerprint()
     assert is_integer(manifest["recovery_generation"])
@@ -67,12 +88,36 @@ defmodule Lumia.ReleaseTest do
       Jason.encode!(Map.put(manifest, "master_key_fingerprint", Release.master_key_fingerprint()))
     )
 
+    # The store lost the blob since: the restore puts it back from the set.
+    File.rm!(stored)
     assert {:ok, generation} = Release.restore(ctx.dir, url: ctx.scratch_url)
     assert generation == manifest["recovery_generation"] + 1
+    assert File.regular?(stored)
+
+    # A set without it, over a store without it: refused by name, unless told to go on.
+    File.rm!(stored)
+    File.rm_rf!(Path.join(ctx.dir, "blobs"))
+
+    assert {:error, {:missing_blobs, [^name]}} =
+             Release.restore(ctx.dir, url: ctx.scratch_url, replace: true)
+
+    assert {:ok, _} =
+             Release.restore(ctx.dir,
+               url: ctx.scratch_url,
+               replace: true,
+               allow_missing_blobs: true
+             )
 
     # The scratch database holds the restored settings; a second restore needs --replace.
     assert {:error, {:database_not_empty, _}} = Release.restore(ctx.dir, url: ctx.scratch_url)
-    assert {:ok, again} = Release.restore(ctx.dir, url: ctx.scratch_url, replace: true)
+
+    assert {:ok, again} =
+             Release.restore(ctx.dir,
+               url: ctx.scratch_url,
+               replace: true,
+               allow_missing_blobs: true
+             )
+
     assert again == manifest["recovery_generation"] + 1
 
     File.rm_rf!(ctx.dir)

@@ -42,6 +42,11 @@ config :lumia, LumiaWeb.Endpoint,
       "Sv9nCZibsH4wGxAYYffZKI8FMa/l//tidBXjWRMoCVkfntyVDEZn0uIZndMjN4g1",
   watchers: []
 
+# Blobs (architecture 12) on this machine's disk, under a master key that
+# is no secret: a development instance only. tmp/ is not in the repository.
+config :lumia, :blob_store, {:local, Path.expand("../tmp/blobs", __DIR__)}
+config :lumia, :master_key, :crypto.hash(:sha256, "lumia development master key")
+
 # The web app's dev server (apps/web) is a trusted web origin: it may call
 # the API from the browser and link web devices (identity §7).
 config :lumia, :identity, web_origins: ["http://localhost:5173"]

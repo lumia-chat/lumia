@@ -30,6 +30,13 @@ config :lumia, LumiaWeb.Endpoint,
   secret_key_base: "dNCbpZSB0RDU9Y8jHb+FOgVgEGt3XXKkSbL15veVNyEHo3I+Hjg9vN6tDBi2XMuF",
   server: false
 
+# Blobs in a directory of this run's own, under a key that is no secret.
+config :lumia,
+       :blob_store,
+       {:local, Path.join(System.tmp_dir!(), "lumia-test-blobs-#{System.pid()}")}
+
+config :lumia, :master_key, :crypto.hash(:sha256, "lumia test master key")
+
 # In test we don't send emails
 config :lumia, Lumia.Mailer, adapter: Swoosh.Adapters.Test
 

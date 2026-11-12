@@ -9,6 +9,7 @@ Early. The event log, gateway, HTTP API, sessions, authorization, identity, and 
 ## Requirements
 
 - Elixir 1.20 and OTP 29. The repo root has a `.tool-versions`, so `mise install` or `asdf install` gets the exact versions.
+- Rust, for `native/lumia_media` (the image work on uploaded pictures), which `mix compile` builds: rustup picks the version `native/lumia_media/rust-toolchain.toml` names.
 - Postgres 18. Either a local server or `docker compose up -d` in this directory, which works with Docker Desktop and OrbStack.
 
 Dev and test connect to `postgres:postgres@localhost` by default. Set `DB_URL` to override.

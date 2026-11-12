@@ -57,6 +57,58 @@ if path = System.get_env("LUMIA_MASTER_KEY_FILE") do
   config :lumia, :master_key_file, path
 end
 
+# The blob store (docs/specs/deployment.md section 3): where pictures, and
+# later attachments, are kept, encrypted under the master key above.
+# Without it the instance keeps none and says so to whoever tries.
+case System.get_env("LUMIA_BLOB_STORE") do
+  nil ->
+    :ok
+
+  "" ->
+    :ok
+
+  store ->
+    System.get_env("LUMIA_MASTER_KEY_FILE") ||
+      raise "LUMIA_BLOB_STORE needs LUMIA_MASTER_KEY_FILE: blobs are encrypted under the master key"
+
+    clustered? = System.get_env("DNS_CLUSTER_QUERY") not in [nil, ""]
+
+    blob_store =
+      case store do
+        "local:" <> path when path != "" ->
+          if clustered?,
+            do:
+              raise("""
+              LUMIA_BLOB_STORE=local: is refused when clustering is on (DNS_CLUSTER_QUERY):
+              a blob written on one node would be missing on the next. Use s3://bucket,
+              or fs:<path> for a filesystem every node mounts.
+              """)
+
+          {:local, path}
+
+        "fs:" <> path when path != "" ->
+          {:fs, path}
+
+        "s3://" <> bucket when bucket != "" ->
+          region =
+            System.get_env("AWS_REGION") || System.get_env("AWS_DEFAULT_REGION") || "us-east-1"
+
+          {:s3,
+           bucket: String.trim_trailing(bucket, "/"),
+           region: region,
+           endpoint:
+             System.get_env("AWS_ENDPOINT_URL_S3") || System.get_env("AWS_ENDPOINT_URL") ||
+               "https://s3.#{region}.amazonaws.com",
+           access_key_id: System.fetch_env!("AWS_ACCESS_KEY_ID"),
+           secret_access_key: System.fetch_env!("AWS_SECRET_ACCESS_KEY")}
+
+        other ->
+          raise "LUMIA_BLOB_STORE is local:<path>, fs:<shared path> or s3://bucket, not #{inspect(other)}"
+      end
+
+    config :lumia, :blob_store, blob_store
+end
+
 config :lumia, :metrics, System.get_env("LUMIA_METRICS") == "true"
 
 # Push (architecture 15.5): the relay for APNs and FCM, and the contact

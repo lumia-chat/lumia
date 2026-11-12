@@ -26,10 +26,17 @@ RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends build-e
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 ENV MIX_ENV=prod
+# The Rust toolchain of the stage above, for the instance's one native
+# library (native/lumia_media, built by Rustler as the instance compiles).
+# native/lumia_media/rust-toolchain.toml names the version that image carries.
+COPY --from=web /usr/local/rustup /usr/local/rustup
+COPY --from=web /usr/local/cargo /usr/local/cargo
+ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo PATH=/usr/local/cargo/bin:$PATH
 RUN mix local.hex --force && mix local.rebar --force
 COPY apps/instance/mix.exs apps/instance/mix.lock ./
 RUN mix deps.get --only prod && mix deps.compile
 COPY apps/instance/config config
+COPY apps/instance/native native
 COPY apps/instance/lib lib
 COPY apps/instance/priv priv
 COPY apps/instance/rel rel
@@ -46,9 +53,10 @@ RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends libstdc
     && apt-get purge -y -qq gnupg lsb-release && apt-get autoremove -y -qq && rm -rf /var/lib/apt/lists/* \
     && sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen && locale-gen
 ENV LANG=en_US.UTF-8 LANGUAGE=en_US:en LC_ALL=en_US.UTF-8 MIX_ENV=prod PHX_SERVER=true
-# The backup directory the compose example mounts a volume on; a named
-# volume takes the image's ownership on first use.
-RUN useradd --create-home --uid 1000 lumia && install -d -o lumia -g lumia /backups
+# The backup directory and the blob store's (LUMIA_BLOB_STORE=fs:/data/blobs)
+# that the compose example mounts volumes on; a named volume takes the
+# image's ownership on first use.
+RUN useradd --create-home --uid 1000 lumia && install -d -o lumia -g lumia /backups /data/blobs
 WORKDIR /app
 COPY --from=build --chown=lumia:lumia /app/_build/prod/rel/lumia ./
 USER lumia

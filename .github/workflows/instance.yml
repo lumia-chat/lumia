@@ -48,12 +48,19 @@ jobs:
           elixir-version: "1.20.4"
           otp-version: "29"
 
+      # native/lumia_media (the image work for uploads) is built by Rustler
+      # when the instance compiles; its rust-toolchain.toml names this version.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.96.1"
+
       - uses: actions/cache@v4
         with:
           path: |
             apps/instance/deps
             apps/instance/_build
-          key: mix-${{ runner.os }}-${{ hashFiles('apps/instance/mix.lock') }}
+            apps/instance/native/lumia_media/target
+          key: mix-${{ runner.os }}-${{ hashFiles('apps/instance/mix.lock', 'apps/instance/native/lumia_media/Cargo.lock') }}
           restore-keys: mix-${{ runner.os }}-
 
       # The backup and restore commands shell out to pg_dump and pg_restore
@@ -78,6 +85,9 @@ jobs:
       # bench/ (spike tasks, Benchee) only compiles in dev.
       - run: MIX_ENV=dev mix compile --warnings-as-errors
       - run: mix credo --strict
+      - name: The native library's own tests
+        run: cargo fmt --check && cargo test --release
+        working-directory: apps/instance/native/lumia_media
       - run: mix test
       - run: mix test.failure_injection
       # The load test's CI mode (architecture section 17): a small fixture

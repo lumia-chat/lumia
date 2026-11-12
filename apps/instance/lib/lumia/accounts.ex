@@ -120,6 +120,67 @@ defmodule Lumia.Accounts do
 
   # Whether nobody else holds `handle` from a rename of their own. A hold
   # that has run out, or the account's own, is dropped on the way.
+  @avatar_path "/api/v1/avatars/"
+
+  @doc """
+  Makes `upload` (a picture's bytes, as chosen) the account's avatar: the
+  instance turns it into a square of its own encoding (`Lumia.Media`),
+  keeps that as a blob (`Lumia.Blobs`) and names it in the account's
+  `avatar_url` as a path on this instance, `#{@avatar_path}<address>`.
+  The picture it replaces is removed, and `ProfileUpdated` goes on the
+  account's log.
+
+  `{:error, {:failed_precondition, "blobs"}}` on an instance that keeps
+  no blobs; `{:error, reason}` from `Lumia.Media.avatar/1` for a file
+  that is not a picture it takes.
+  """
+  def set_avatar(%Account{} = account, upload) when is_binary(upload) do
+    with true <- Lumia.Blobs.enabled?() || {:error, {:failed_precondition, "blobs"}},
+         {:ok, {media_type, bytes}} <- Lumia.Media.avatar(upload),
+         {:ok, blob} <- Lumia.Blobs.put(bytes, "avatar", media_type, account.id),
+         {:ok, updated} <- put_avatar_url(account, @avatar_path <> Lumia.Blobs.name(blob.address)) do
+      {:ok, updated}
+    else
+      {:error, :unavailable} -> {:error, {:failed_precondition, "blobs"}}
+      other -> other
+    end
+  end
+
+  @doc "Takes the account's avatar away; fine when it has none."
+  def remove_avatar(%Account{avatar_url: nil} = account), do: {:ok, account}
+  def remove_avatar(%Account{} = account), do: put_avatar_url(account, nil)
+
+  @doc "The address of the blob an `avatar_url` names on this instance, or nil for another's."
+  def avatar_address(@avatar_path <> name), do: Lumia.Blobs.address(name)
+  def avatar_address(_), do: nil
+
+  defp put_avatar_url(account, url) do
+    result =
+      Tx.transact(fn ->
+        with {:ok, updated} <- account |> Ecto.Changeset.change(avatar_url: url) |> Repo.update(),
+             {:ok, _} <-
+               append_event(
+                 account.id,
+                 {:profile_updated, %V1.ProfileUpdated{account: Lumia.Proto.account(updated)}}
+               ) do
+          {:ok, updated}
+        end
+      end)
+
+    with {:ok, updated} <- result do
+      drop_avatar(account.avatar_url, updated.avatar_url)
+      {:ok, updated}
+    end
+  end
+
+  # The picture an account no longer names is nobody's: its blob goes.
+  defp drop_avatar(same, same), do: :ok
+
+  defp drop_avatar(old, _new) do
+    if address = avatar_address(old), do: Lumia.Blobs.delete(address)
+    :ok
+  end
+
   defp free_for(handle, account_id) do
     now = DateTime.utc_now()
 
@@ -215,12 +276,15 @@ defmodule Lumia.Accounts do
 
   def put_profile(_, _), do: {:error, :failed_precondition}
 
+  # The avatar is the account's own (`set_avatar/2`) unless the profile
+  # names one: a profile signed before the picture was set, or by a device
+  # that knows of none, does not take it away.
   defp store_profile(account, body, signed) do
     with {:ok, updated} <-
            account
            |> Ecto.Changeset.change(
              display_name: blank_to_nil(body.display_name),
-             avatar_url: blank_to_nil(body.avatar_url),
+             avatar_url: blank_to_nil(body.avatar_url) || account.avatar_url,
              pronouns: blank_to_nil(body.pronouns),
              bio: blank_to_nil(body.bio),
              profile: V1.SignedProfile.encode(signed)
@@ -231,6 +295,7 @@ defmodule Lumia.Accounts do
              account.id,
              {:profile_updated, %V1.ProfileUpdated{account: Lumia.Proto.account(updated)}}
            ) do
+      Tx.after_commit(fn -> drop_avatar(account.avatar_url, updated.avatar_url) end)
       {:ok, updated}
     end
   end

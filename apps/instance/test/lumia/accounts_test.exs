@@ -118,6 +118,64 @@ defmodule Lumia.AccountsTest do
     end
   end
 
+  describe "set_avatar/2" do
+    @logo File.read!(Path.expand("../support/fixtures/media/logo.png", __DIR__))
+    @photo File.read!(Path.expand("../support/fixtures/media/sideways.jpg", __DIR__))
+
+    test "the account names the instance's own square of the picture, and says so on its log", %{
+      account: account
+    } do
+      Phoenix.PubSub.subscribe(Lumia.PubSub, Accounts.topic(account.id))
+      assert {:ok, pictured} = Accounts.set_avatar(account, @photo)
+      assert "/api/v1/avatars/" <> name = pictured.avatar_url
+      address = Lumia.Blobs.address(name)
+      assert Accounts.avatar_address(pictured.avatar_url) == address
+
+      assert {:ok, %{media_type: "image/jpeg", bytes: bytes}} =
+               Lumia.Blobs.fetch(address, "avatar")
+
+      refute bytes == @photo
+      refute bytes =~ "LumiaTestCam"
+      url = pictured.avatar_url
+
+      assert_receive {:account_event,
+                      %V1.AccountEvent{
+                        payload:
+                          {:profile_updated,
+                           %V1.ProfileUpdated{account: %V1.Account{avatar_url: ^url}}}
+                      }, _bytes}
+    end
+
+    test "a new picture replaces the old one's blob, and removing leaves none", %{
+      account: account
+    } do
+      {:ok, first} = Accounts.set_avatar(account, @photo)
+      {:ok, second} = Accounts.set_avatar(first, @logo)
+      assert second.avatar_url != first.avatar_url
+      old = Accounts.avatar_address(first.avatar_url)
+      assert {:error, :not_found} = Lumia.Blobs.fetch(old, "avatar")
+      new = Accounts.avatar_address(second.avatar_url)
+      assert {:ok, %{media_type: "image/png"}} = Lumia.Blobs.fetch(new, "avatar")
+
+      assert {:ok, none} = Accounts.remove_avatar(second)
+      assert none.avatar_url == nil
+      assert {:error, :not_found} = Lumia.Blobs.fetch(new, "avatar")
+      assert {:ok, ^none} = Accounts.remove_avatar(none)
+    end
+
+    test "what is not a picture is refused and changes nothing", %{account: account} do
+      assert {:error, :unsupported} = Accounts.set_avatar(account, "<svg/>")
+      assert Lumia.Repo.reload!(account).avatar_url == nil
+    end
+
+    test "an instance that keeps no blobs says so", %{account: account} do
+      store = Application.get_env(:lumia, :blob_store)
+      Application.put_env(:lumia, :blob_store, nil)
+      on_exit(fn -> Application.put_env(:lumia, :blob_store, store) end)
+      assert {:error, {:failed_precondition, "blobs"}} = Accounts.set_avatar(account, @photo)
+    end
+  end
+
   describe "append_event/3" do
     test "assigns dense, increasing seq per account", %{account: account} do
       seqs = for _ <- 1..3, do: elem(Accounts.append_event(account.id, profile_updated()), 1).seq
