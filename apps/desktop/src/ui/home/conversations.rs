@@ -18,6 +18,7 @@ use crate::ui::components::{
     Look, empty_state, error_text, notice, panel, section_label, small_button, tag,
 };
 use crate::ui::conversation::{self, Chrome, Extras};
+use crate::ui::scroll::WithScrollBar;
 use crate::ui::shell::ASIDE_WIDTH;
 
 /// The conversation on screen, when the snapshot lists it.
@@ -230,6 +231,7 @@ pub fn aside(s: &State, look: Look) -> Option<El> {
     Some(
         panel("aside", look).w(ASIDE_WIDTH).child(heading).child(
             col()
+                .key("participants")
                 .w_full()
                 .grow(1.0)
                 .min_h(0.0)
@@ -244,7 +246,8 @@ pub fn aside(s: &State, look: Look) -> Option<El> {
                         .pb(t::SPACE_14)
                         .child(section_label("In this conversation", t::SPACE_8, look))
                         .child(list),
-                ),
+                )
+                .with_scroll_bar(look),
         ),
     )
 }

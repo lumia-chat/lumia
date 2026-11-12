@@ -362,6 +362,58 @@ fn messages_one_person_sends_close_together_are_one_block() {
     assert_eq!(below("k2", "k3"), 8.0);
 }
 
+#[test]
+fn the_message_list_has_a_scroll_bar_that_shows_while_it_scrolls() {
+    let mut state = signed_in();
+    let now = chrono::Utc::now().timestamp_micros();
+    state.session.entries = (0..80)
+        .map(|i| {
+            let author = if i % 2 == 0 { "grace" } else { "me" };
+            message(
+                &format!("s{i}"),
+                author,
+                "A line.",
+                now - (80 - i) * 60_000_000,
+            )
+        })
+        .collect();
+    state.session.revision += 1;
+    let mut rt = runtime(state);
+    let part = |rt: &rune::Runtime<State>, key: &str| {
+        rt.elements()
+            .into_iter()
+            .find(|e| e.key.as_deref() == Some(key) && e.path.contains("messages-scroll-area"))
+            .unwrap_or_else(|| panic!("the message list has no {key}"))
+    };
+    // A headless run has the system's "When scrolling": out of the way at rest.
+    for _ in 0..120 {
+        rt.frame(1.0 / 60.0);
+    }
+    assert_eq!(part(&rt, "scroll-bar").opacity, 0.0);
+
+    let (x, y) = rt.find("messages").expect("the list is on screen");
+    rt.pointer_move(x, y);
+    rt.wheel(x, y, 300.0);
+    for _ in 0..10 {
+        rt.frame(1.0 / 60.0);
+    }
+    let (bar, thumb) = (part(&rt, "scroll-bar"), part(&rt, "thumb"));
+    assert!(bar.opacity > 0.5, "shown while scrolling: {}", bar.opacity);
+    assert!(
+        thumb.rect[3] > 20.0 && thumb.rect[3] < bar.rect[3] / 2.0,
+        "a thumb as long as the part of the list on screen: {:?} in {:?}",
+        thumb.rect,
+        bar.rect
+    );
+    let foot = |rect: [f32; 4]| rect[1] + rect[3];
+    assert!(
+        foot(thumb.rect) < foot(bar.rect) - 4.0,
+        "and it has left the foot of its track with the list: {:?} in {:?}",
+        thumb.rect,
+        bar.rect
+    );
+}
+
 /// The instance's word that `who` is typing in `channel` for `seconds` more.
 fn typing(channel: &str, who: &str, seconds: i64) -> Update {
     Update::Gateway(lumia_client::app::AppEvent::Typing {

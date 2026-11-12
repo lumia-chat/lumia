@@ -29,6 +29,7 @@ use rune::{Cursor, El, GrowthSpec, ScrollSpec, col, el, row, text};
 
 use super::body;
 use super::components::{Look, avatar};
+use super::scroll::WithScrollBar;
 use crate::app::State;
 use crate::session::{Entry, Pending};
 use crate::tokens::{self as t};
@@ -97,6 +98,7 @@ pub fn view(s: &State, label: String, look: Look) -> El {
         .scroll(ScrollSpec { stick_bottom: true })
         .child(el().grow(1.0))
         .child(rows)
+        .with_scroll_bar(look)
 }
 
 /// Whether the open conversation has anything to list.

@@ -12,6 +12,7 @@ use crate::app::State;
 use crate::tokens::{self as t};
 use crate::ui::components::{Look, card, error_text, field, panel, primary_button};
 use crate::ui::conversation;
+use crate::ui::scroll::WithScrollBar;
 
 /// The widest the page's column of cards gets.
 const PAGE_WIDTH: f32 = 520.0;
@@ -41,7 +42,8 @@ pub fn view(s: &State, look: Look) -> El {
             .scroll(ScrollSpec {
                 stick_bottom: false,
             })
-            .child(page),
+            .child(page)
+            .with_scroll_bar(look),
     )
 }
 

@@ -24,6 +24,7 @@ use super::conversation;
 use super::shell::{SIDEBAR_WIDTH, sidebar_frame};
 use crate::app::{HomeView, State};
 use crate::tokens::{self as t, icons};
+use crate::ui::scroll::WithScrollBar;
 
 /// Home's sidebar: the title with New message, the tiles, the conversations grouped by the
 /// instance that hosts them, and the way to add a server.
@@ -117,7 +118,8 @@ pub fn sidebar(s: &State, look: Look) -> El {
             .scroll(ScrollSpec {
                 stick_bottom: false,
             })
-            .child(list),
+            .child(list)
+            .with_scroll_bar(look),
     );
     let new_message = icon_button(
         "new-message",
@@ -290,7 +292,8 @@ fn page(title: &str, topic: &str, content: El, look: Look) -> El {
                         .pt(t::SPACE_16)
                         .pb(t::SPACE_24)
                         .gap(t::SPACE_12),
-                ),
+                )
+                .with_scroll_bar(look),
         )
 }
 

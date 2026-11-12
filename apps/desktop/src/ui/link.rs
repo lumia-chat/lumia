@@ -14,6 +14,7 @@ use super::components::{Look, card, error_text, field, primary_button, small_but
 use super::sign_in::foot_link;
 use crate::app::State;
 use crate::tokens::{self as t};
+use crate::ui::scroll::WithScrollBar;
 
 pub fn view(s: &State, look: Look) -> El {
     let c = look.c;
@@ -119,6 +120,7 @@ pub(super) fn screen(key: &'static str, content: El, look: Look) -> El {
         .child(room())
         .child(col().items_center().py(t::SPACE_40).child(content))
         .child(room())
+        .with_scroll_bar(look)
 }
 
 fn claim(s: &mut State, _: &mut Tx) {

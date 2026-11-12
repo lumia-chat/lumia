@@ -49,6 +49,14 @@ pub fn tone(id: &str, c: &Colors) -> (Color, Color) {
 // it. Where the tokens cannot make the number, the nearest token stands in and the comment
 // says so. All of them are gaps in `tokens.json`.
 
+/// A scroll bar's thumb, at rest and under the pointer or held. The design system names no
+/// colour for one (the boards have the browser's own): the composer's focused border at
+/// rest, which is the quietest line that still reads on `surface` and `bg`, and the ink of
+/// a timestamp while it is held.
+pub fn scroll_thumb(c: &Colors) -> (Color, Color) {
+    (c.border_active, c.ink_muted)
+}
+
 /// A dot of the typing hint under the composer (4), and the room between two (3): the
 /// Quiet Split's `qs-typing`.
 pub const TYPING_DOT: f32 = SPACE_4;

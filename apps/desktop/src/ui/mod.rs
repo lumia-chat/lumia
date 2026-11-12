@@ -7,6 +7,7 @@ mod conversation;
 mod home;
 mod link;
 mod menus;
+mod scroll;
 mod server;
 mod server_popovers;
 mod shell;

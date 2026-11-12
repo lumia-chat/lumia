@@ -24,6 +24,7 @@ use crate::ui::components::{
     section_label, small_button, wide_button,
 };
 use crate::ui::conversation;
+use crate::ui::scroll::WithScrollBar;
 
 pub fn view(s: &State, look: Look) -> El {
     let mut content = page_column();
@@ -66,7 +67,8 @@ pub(super) fn page(key: &'static str, title: &str, topic: &str, content: El, loo
             .scroll(ScrollSpec {
                 stick_bottom: false,
             })
-            .child(content),
+            .child(content)
+            .with_scroll_bar(look),
     )
 }
 

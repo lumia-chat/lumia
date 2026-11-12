@@ -11,6 +11,7 @@ use super::components::{
 use super::menus::SERVER_TITLE;
 use crate::app::State;
 use crate::tokens::{self as t};
+use crate::ui::scroll::WithScrollBar;
 
 const CHANNEL_WIDTH: f32 = 320.0;
 const INVITE_WIDTH: f32 = 380.0;
@@ -185,7 +186,8 @@ pub fn invite(s: &State, look: Look) -> Option<El> {
                 .scroll(ScrollSpec {
                     stick_bottom: false,
                 })
-                .child(body),
+                .child(body)
+                .with_scroll_bar(look),
         ),
     )
 }

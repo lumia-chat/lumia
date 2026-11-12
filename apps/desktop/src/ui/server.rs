@@ -11,6 +11,7 @@ use super::shell::{ASIDE_WIDTH, sidebar_frame};
 use crate::app::{HomeView, State};
 use crate::session::display_name;
 use crate::tokens::{self as t, icons};
+use crate::ui::scroll::WithScrollBar;
 
 /// The server's name and its channels.
 pub fn sidebar(s: &State, server: &ServerSummary, look: Look) -> El {
@@ -91,13 +92,15 @@ pub fn sidebar(s: &State, server: &ServerSummary, look: Look) -> El {
         );
     }
     let body = col()
+        .key("channels")
         .w_full()
         .grow(1.0)
         .min_h(0.0)
         .scroll(ScrollSpec {
             stick_bottom: false,
         })
-        .child(channels);
+        .child(channels)
+        .with_scroll_bar(look);
     // The board's control beside the name: a message to someone, which is Home's to start.
     let new_message = icon_button(
         "new-message",
@@ -273,13 +276,15 @@ pub fn members(s: &State, server: &ServerSummary, look: Look) -> El {
         )
         .child(
             col()
+                .key("members")
                 .w_full()
                 .grow(1.0)
                 .min_h(0.0)
                 .scroll(ScrollSpec {
                     stick_bottom: false,
                 })
-                .child(list),
+                .child(list)
+                .with_scroll_bar(look),
         )
 }
 
