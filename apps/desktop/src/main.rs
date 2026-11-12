@@ -8,6 +8,10 @@
 //! binary, which is what gives it an icon, the URL scheme, the right to post notifications
 //! and the updater.
 
+// A release build on Windows is a GUI program: no console window opens beside it. The
+// price is that the headless flags print nothing there; a debug build keeps its console.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 use lumia_shell::platform::instance::{self, Claim, Launch};
 use lumia_shell::{app, platform, scenes, settings, tokens, ui};
 use rune::{AppSpec, Chrome};

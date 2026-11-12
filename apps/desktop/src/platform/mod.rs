@@ -9,8 +9,10 @@
 //!   Rune turns into `on_open_url`; the bundle declares the scheme
 //!   (`scripts/bundle-macos.sh`). Windows and Linux pass a link to a new process as an
 //!   argument, which [`instance`] hands to the running one; each needs the scheme
-//!   registered at install (a registry key, a `.desktop` file with
-//!   `x-scheme-handler/lumia`).
+//!   registered at install. The Linux package's launcher entry does that
+//!   (`packaging/linux/chat.lumia.desktop`, `x-scheme-handler/lumia`), and nobody has
+//!   followed a link through it; on Windows it is a registry key an installer would
+//!   write, and there is no installer.
 //! - **Menus.** Only macOS has a menu bar; elsewhere [`sync_menu`] finds none and the
 //!   same actions are on screen.
 //! - **Updates.** On macOS the bundled app updates itself with Sparkle ([`updates`]),

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Lumia
+GenericName=Chat
+Comment=Chat on the instances you choose
+Exec=lumia %u
+Icon=chat.lumia
+Terminal=false
+Categories=Network;InstantMessaging;Chat;
+MimeType=x-scheme-handler/lumia;

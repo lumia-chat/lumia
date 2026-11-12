@@ -1,13 +1,16 @@
-# A release: on a v* tag, and only then, the Mac app and the Android
-# APK are built, signed and attached to one GitHub Release (architecture
-# section 13, "Distribution"), and the iOS app is uploaded to App Store
-# Connect for TestFlight, the only channel an iPhone has. The release
-# starts as a draft and is published only when every job that attaches an
-# asset succeeds, so the "latest" feed the app reads (Sparkle's
-# appcast.xml) never points at a half-built release; the iOS upload does
-# not gate it, since a TestFlight build can be re-sent without a new tag.
-# Windows and Linux have no job here until the desktop shell is packaged
-# for them (plan step 9).
+# A release: on a v* tag, and only then, every platform's app is built
+# (architecture section 13, "Distribution"). The Mac app and the Android
+# APK are signed and attached to one GitHub Release; the desktop shell for
+# Windows and Linux is attached beside them as previews; and the iOS app
+# is uploaded to App Store Connect for TestFlight, the only channel an
+# iPhone has. (The same tag deploys the instance: deploy.yml.)
+#
+# The release starts as a draft and is published once the Mac app and the
+# APK are on it, so the "latest" feed the Mac app reads (Sparkle's
+# appcast.xml) never points at a half-built release. Three jobs do not
+# gate it: the Windows and Linux previews, which nobody has run on those
+# systems and which are waited for but may fail, and the iOS upload,
+# which can be re-sent without a new tag (ios-upload.yml).
 #
 # The version is the tag without its v. Secrets: DEVELOPER_ID_P12 and
 # DEVELOPER_ID_P12_PASSWORD (the Developer ID Application certificate with
@@ -205,8 +208,83 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
+  # The desktop shell for Linux: a tarball and a .deb, both previews (the
+  # head of scripts/dist-linux.sh says why), one pair per architecture. Built
+  # on the oldest Ubuntu the runners offer, so the binary runs on a glibc as
+  # old as that one's. The script's steps ran in ubuntu:22.04 and 24.04
+  # containers on arm64 before this job was written; on x86-64 it has not
+  # run, and the frame is drawn by a software driver that may refuse the
+  # shell's shaders there (shell.yml says more), so that step may fail
+  # without failing the job.
+  linux:
+    needs: draft
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-22.04-arm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libwayland-dev imagemagick desktop-file-utils mesa-vulkan-drivers fonts-noto-cjk fonts-noto-color-emoji
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.1"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop
+          key: linux-release
+      - run: apps/desktop/scripts/dist-linux.sh "${GITHUB_REF_NAME#v}"
+      # The package installed as a person would install it, and its program
+      # drawing the first screen.
+      - name: Install the package and draw a frame
+        continue-on-error: true
+        timeout-minutes: 5
+        env:
+          LUMIA_DATA_DIR: ${{ runner.temp }}/lumia
+        run: |
+          sudo apt-get install -y ./apps/desktop/out/dist/Lumia-*-preview.deb
+          VK_ICD_FILENAMES=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -1) lumia --snap "$RUNNER_TEMP/sign-in.png"
+          test -s "$RUNNER_TEMP/sign-in.png"
+      - run: gh release upload "$GITHUB_REF_NAME" apps/desktop/out/dist/*
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  # The desktop shell for Windows: a zip holding Lumia.exe, a preview (the
+  # head of scripts/dist-windows.sh says why). Cross-built on Linux with
+  # MinGW-w64, which is what could be run before this job was written: in a
+  # container, to the same zip. Nothing has run the program.
+  windows:
+    needs: draft
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-mingw-w64-x86-64 zip
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.1"
+          targets: x86_64-pc-windows-gnu
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop
+          key: windows-release
+      - run: apps/desktop/scripts/dist-windows.sh "${GITHUB_REF_NAME#v}"
+      - run: gh release upload "$GITHUB_REF_NAME" apps/desktop/out/dist/*
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  # Waits for every job that attaches something, and publishes when the two
+  # that gate the release succeeded, whatever became of the previews.
   publish:
-    needs: [macos, android]
+    needs: [macos, android, linux, windows]
+    if: ${{ !cancelled() && needs.macos.result == 'success' && needs.android.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
