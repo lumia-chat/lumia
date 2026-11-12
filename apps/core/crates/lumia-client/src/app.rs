@@ -924,13 +924,38 @@ impl App {
             }
         };
         let rotate = Arc::clone(&opener);
+        let read = Arc::clone(&opener);
+        let held = tokens(&keys)?;
+        // The refresh token this process last saw in the store or put
+        // there. When the store holds another, someone else on these
+        // stores has rotated the pair (the notification extension, a
+        // second copy of a command), and theirs is the live one. A pair
+        // this process failed to write is not mistaken for that: the
+        // store still holds what was last seen.
+        let seen = Arc::new(Mutex::new(held.refresh.clone()));
+        let (wrote, looked) = (Arc::clone(&seen), Arc::clone(&seen));
         let api = Api::new(base_url)
-            .with_tokens(tokens(&keys)?)
+            .with_tokens(held)
             .on_rotate(Arc::new(move |pair| {
                 if let Ok(mut keys) = rotate(StoreName::Keys) {
                     let _ = keys.put("access_token", pair.access_token.as_bytes());
-                    let _ = keys.put("refresh_token", pair.refresh_token.as_bytes());
+                    if keys
+                        .put("refresh_token", pair.refresh_token.as_bytes())
+                        .is_ok()
+                    {
+                        *wrote.lock().unwrap_or_else(PoisonError::into_inner) =
+                            Some(pair.refresh_token.clone());
+                    }
                 }
+            }))
+            .stored(Arc::new(move || {
+                let stored = tokens(&read(StoreName::Keys).ok()?).ok()?;
+                let mut seen = looked.lock().unwrap_or_else(PoisonError::into_inner);
+                if stored.refresh.is_none() || stored.refresh == *seen {
+                    return None;
+                }
+                seen.clone_from(&stored.refresh);
+                Some(stored)
             }));
         // On the web the sink is not `Send` (it holds a JS function) and
         // the worker is single-threaded; natively everything inside is.

@@ -39,6 +39,7 @@ impl State {
             // Looking at the app: nothing more is owed.
             self.notices.to_post.clear();
             self.notices.looking.clear();
+            self.session.came_forward();
         }
     }
 

@@ -51,6 +51,9 @@ pub struct Failure {
     pub details: HashMap<String, String>,
 }
 
+/// A gateway loop that ends sooner than this after starting is not started again at once.
+const LOOP_TOO_BRIEF: std::time::Duration = std::time::Duration::from_secs(10);
+
 impl Failure {
     /// Whether the instance no longer takes this session (protocol 10 and 12): it does
     /// not know the token, the refresh token ran out with it, or the session or its
@@ -248,6 +251,11 @@ pub struct Session {
     subscribed: HashSet<String>,
     /// Snapshot requests that failed in a row, which spaces the next one out.
     load_failures: u32,
+    /// When the gateway loop was last started, and whether it is being held back:
+    /// one that ended within [`LOOP_TOO_BRIEF`] of starting is not started again by
+    /// the snapshot that follows, since what ended it would end the next as soon.
+    loop_started: Option<std::time::Instant>,
+    loop_held: bool,
     /// Whether the members shown came from the instance since this launch, not from what
     /// was kept.
     members_fresh: bool,
@@ -326,6 +334,8 @@ impl Session {
             app: None,
             subscribed: HashSet::new(),
             load_failures: 0,
+            loop_started: None,
+            loop_held: false,
             members_fresh: false,
             reach: Reach::default(),
             holds_identity: false,
@@ -540,6 +550,14 @@ impl Session {
 
     // ---- Loading ------------------------------------------------------------------
 
+    /// The window is being looked at again: a gateway loop that was held back after
+    /// ending as soon as it began gets another start, through the snapshot.
+    pub fn came_forward(&mut self) {
+        if std::mem::take(&mut self.loop_held) && self.signed_in {
+            self.load();
+        }
+    }
+
     /// Asks for the account snapshot ([`Update::Snapshot`]); applying it starts the gateway
     /// on every server channel and asks for each server's members.
     pub fn load(&self) {
@@ -573,6 +591,7 @@ impl Session {
             Ok(()) => {
                 self.subscribed = channels.iter().cloned().collect();
                 self.connection = Connection::Connecting;
+                self.loop_started = Some(std::time::Instant::now());
             }
             Err(error) => self.last_error = Some(error.to_string()),
         }
@@ -974,7 +993,9 @@ impl Session {
                 self.snapshot = Some(snapshot.clone());
                 self.load_failures = 0;
                 self.last_error = None;
-                self.start(&channels);
+                if !self.loop_held {
+                    self.start(&channels);
+                }
                 if servers_changed || !self.members_fresh {
                     self.members_fresh = true;
                     self.load_members(&snapshot.servers);
@@ -1113,7 +1134,14 @@ impl Session {
                 // only, so the snapshot is asked: a session the instance has revoked
                 // answers so there and the shell goes to sign-in; anything else (the
                 // rotation it needed found no network) is a snapshot later, which
-                // starts the loop again.
+                // starts the loop again. Unless the loop had only just begun: two
+                // clients on one session knock each other off (the instance closes the
+                // first connection for the second), and each starting again at once
+                // would go on for ever. The one that lasted is the one that comes back;
+                // the other waits for its window to be looked at.
+                self.loop_held = self
+                    .loop_started
+                    .is_some_and(|at| at.elapsed() < LOOP_TOO_BRIEF);
                 self.load();
             }
             AppEvent::PresenceDiff {

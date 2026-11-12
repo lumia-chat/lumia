@@ -123,6 +123,18 @@ export async function enableNotifications(): Promise<PushState> {
   return outcome;
 }
 
+// When the loop was last started, and whether it is being held back: one
+// that ends within ten seconds of starting is not started again by the
+// snapshot that follows. Two clients on one session knock each other off
+// (the instance closes the first connection for the second), and each
+// starting again at once would go on for ever; the one that lasted is the
+// one that comes back, and the other waits to be looked at.
+const LOOP_TOO_BRIEF_MS = 10_000;
+let gatewayStartedAt = 0;
+let gatewayHeld = false;
+// Set while this page is stopping the loop itself (signing out): that end is not one to hold a later start for.
+let gatewayStopping = false;
+
 // The one gateway listener, registered on the first start and kept: the
 // loop can end (`closed`) and start again, and the listener must not
 // accumulate with it.
@@ -136,13 +148,20 @@ let listening = false;
  * off, so the next snapshot can try again.
  */
 export async function startGateway(channelIds: string[]): Promise<void> {
-  if (started()) return;
+  if (started() || gatewayHeld) return;
   setStarted(true);
   setConnection("connecting");
+  gatewayStartedAt = Date.now();
   const b = client();
   if (!listening) {
     listening = true;
     b.onEvent(onGatewayEvent);
+    // Looked at again: a loop that was held back gets another start, through the snapshot.
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState !== "visible" || !gatewayHeld) return;
+      gatewayHeld = false;
+      void queryClient.invalidateQueries({ queryKey: ["snapshot"] });
+    });
   }
   try {
     await b.start(channelIds);
@@ -274,10 +293,12 @@ export async function signOut(): Promise<void> {
   const b = client();
   // While the session can still say so: a signed-out browser gets no more notices for the account.
   if (pushState() === "subscribed") await (await import("./push")).disablePush();
+  gatewayStopping = started();
   await b.stop().catch(() => {});
   await b.signOut();
   queryClient.clear();
   setStarted(false);
+  gatewayHeld = false;
   setConnection("idle");
   setPresence(new Map());
   setTypingAndWatch(new Map());
@@ -326,6 +347,8 @@ function onGatewayEvent(e: ClientEvent): void {
     case "closed":
       setConnection(`closed: ${e.reason}`);
       setStarted(false);
+      gatewayHeld = !gatewayStopping && Date.now() - gatewayStartedAt < LOOP_TOO_BRIEF_MS;
+      gatewayStopping = false;
       // The loop has ended and will not come back by itself. Why is in
       // words only, so the snapshot is asked: a session the instance has
       // revoked answers so there and the app goes to sign-in; anything

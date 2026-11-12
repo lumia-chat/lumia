@@ -11,6 +11,12 @@
 //! one at a time, and a call that waited its turn behind another's
 //! rotation takes the pair that one brought back instead of presenting
 //! the token it retired.
+//!
+//! The clones are not the only holders of the pair. Another process on
+//! the same stores (a phone's notification extension, a second copy of a
+//! command) rotates it too and writes the new one where this process
+//! would find it. So before a refresh token is presented, the stored pair
+//! is read again through a hook: if it has moved, it is taken as it is.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -63,6 +69,10 @@ pub struct Tokens {
 /// Called with every new pair after a refresh, so the caller can persist it.
 pub type RotateHook = Arc<dyn Fn(&TokenPair) + Send + Sync>;
 
+/// Reads the pair as the store now holds it, when someone other than this
+/// process has changed it there since this process last read or wrote it.
+pub type StoredHook = Arc<dyn Fn() -> Option<Tokens> + Send + Sync>;
+
 /// A client for one instance's HTTP API.
 #[derive(Clone)]
 pub struct Api {
@@ -72,6 +82,7 @@ pub struct Api {
     /// Held across a rotation, by whichever clone is making it.
     rotating: Arc<AsyncMutex<()>>,
     on_rotate: Option<RotateHook>,
+    stored: Option<StoredHook>,
 }
 
 impl std::fmt::Debug for Api {
@@ -93,6 +104,7 @@ impl Api {
             tokens: Arc::new(Mutex::new(Tokens::default())),
             rotating: Arc::new(AsyncMutex::new(())),
             on_rotate: None,
+            stored: None,
         }
     }
 
@@ -120,6 +132,13 @@ impl Api {
     }
 
     /// Forgets the pair, as after a sign-out.
+    /// Where to read the pair again before a refresh token is presented.
+    #[must_use]
+    pub fn stored(mut self, hook: StoredHook) -> Self {
+        self.stored = Some(hook);
+        self
+    }
+
     pub fn clear_tokens(&self) {
         *self.tokens.lock().unwrap_or_else(PoisonError::into_inner) = Tokens::default();
     }
@@ -174,6 +193,15 @@ impl Api {
         let refresh = self.tokens().refresh.ok_or(ClientError::NotSignedIn)?;
         if sent_with.is_some_and(|sent| sent != refresh) {
             return Ok(());
+        }
+        // Another process on these stores may have rotated the pair since
+        // this one last looked: its pair is the live one, and presenting
+        // the one held here would be the reuse that revokes the session.
+        if let Some(stored) = self.stored.as_ref().and_then(|read| read()) {
+            if stored.refresh.as_deref().is_some_and(|r| r != refresh) {
+                *self.tokens.lock().unwrap_or_else(PoisonError::into_inner) = stored;
+                return Ok(());
+            }
         }
         let body = RefreshRequest {
             refresh_token: refresh,
@@ -1356,22 +1384,30 @@ impl Api {
     ) -> Result<(StatusCode, Vec<u8>), ClientError> {
         // The pair this call goes out with: if it is refused and the pair has
         // changed by then, someone else has rotated it and the retry takes theirs.
-        let sent_with = self.tokens().refresh;
-        let (status, bytes) = self
+        let mut sent_with = self.tokens().refresh;
+        let mut answer = self
             .send_once(method.clone(), path, body.clone(), extra, true)
             .await?;
-        if status != StatusCode::UNAUTHORIZED || sent_with.is_none() {
-            return Ok((status, bytes));
-        }
-        match api_error(status, &bytes) {
-            ClientError::Api { code, .. }
-                if code == "TOKEN_EXPIRED" || code == "UNAUTHENTICATED" =>
-            {
-                self.refresh_after(sent_with.as_deref()).await?;
-                self.send_once(method, path, body, extra, true).await
+        // Twice at most: a pair taken from another call or another process
+        // may itself have run out, and then it is this call's to rotate.
+        for _ in 0..2 {
+            if answer.0 != StatusCode::UNAUTHORIZED || sent_with.is_none() {
+                break;
             }
-            _ => Ok((status, bytes)),
+            match api_error(answer.0, &answer.1) {
+                ClientError::Api { code, .. }
+                    if code == "TOKEN_EXPIRED" || code == "UNAUTHENTICATED" =>
+                {
+                    self.refresh_after(sent_with.as_deref()).await?;
+                    sent_with = self.tokens().refresh;
+                    answer = self
+                        .send_once(method.clone(), path, body.clone(), extra, true)
+                        .await?;
+                }
+                _ => break,
+            }
         }
+        Ok(answer)
     }
 
     async fn send_once(
@@ -1568,6 +1604,31 @@ mod tests {
         first.unwrap().expect("the first call is answered");
         second.unwrap().expect("and so is the second");
         assert_eq!(*presented.lock().unwrap(), ["r1"]);
+        assert_eq!(api.tokens().refresh.as_deref(), Some("r2"));
+    }
+
+    /// Another process on the same stores (a phone's notification
+    /// extension) has rotated the pair and written it where this one finds
+    /// it. This process still holds the retired pair in memory: it takes
+    /// the stored one instead of presenting its own, which the instance
+    /// would answer by revoking the session. Here the stored pair has run
+    /// out as well, so it is then rotated, once, as the live pair it is.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_pair_rotated_by_another_process_is_taken_from_the_store() {
+        let (base, presented) = instance();
+        let api = Api::new(&base)
+            .with_tokens(Tokens {
+                access: Some("a0".into()),
+                refresh: Some("r0".into()),
+            })
+            .stored(Arc::new(|| {
+                Some(Tokens {
+                    access: Some("a1".into()),
+                    refresh: Some("r1".into()),
+                })
+            }));
+        api.account_snapshot().await.expect("the call is answered");
+        assert_eq!(*presented.lock().unwrap(), ["r1"], "never `r0`");
         assert_eq!(api.tokens().refresh.as_deref(), Some("r2"));
     }
 
