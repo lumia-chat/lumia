@@ -37,8 +37,13 @@ use crate::app::{self, Route, State, menu};
 /// name. Not the SwiftUI app's `chat.lumia` while both exist.
 pub const APP_ID: &str = "chat.lumia.desktop";
 
-/// The size the window opens at before it has a remembered one.
-pub const DEFAULT_SIZE: (f32, f32) = (1180.0, 760.0);
+/// The window's size at a first launch: the sign-in card with every way in an instance can
+/// offer fits without scrolling, and the Quiet Split has room for its aside. Later launches
+/// open at the size the person left it.
+pub const DEFAULT_SIZE: (f32, f32) = (1280.0, 900.0);
+/// The size a headless run draws at, whatever was remembered: pictures and scripted runs
+/// stay comparable from one machine and one launch to the next.
+pub const HEADLESS_SIZE: (f32, f32) = (1180.0, 760.0);
 /// The smallest the window goes.
 pub const MIN_SIZE: (f32, f32) = (880.0, 560.0);
 
@@ -60,10 +65,10 @@ static MENU: Mutex<Option<(bool, bool)>> = Mutex::new(None);
 static POSTED: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 /// The size to open the window at: the one remembered from the last launch on macOS,
-/// else the default. A headless run always draws the default.
+/// else the default. A headless run always draws [`HEADLESS_SIZE`].
 pub fn window_size(headless: bool) -> (f32, f32) {
     if headless {
-        return DEFAULT_SIZE;
+        return HEADLESS_SIZE;
     }
     rune_mac::saved_size(FRAME).map_or(DEFAULT_SIZE, |(width, height)| {
         (width.max(MIN_SIZE.0), height.max(MIN_SIZE.1))
