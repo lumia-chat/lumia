@@ -46,26 +46,34 @@ kill_signal = 'SIGTERM'
   LUMIA_OPEN_REGISTRATION = 'false'
   # Pictures (and, later, attachments) need a blob store every machine
   # shares and the master key they are encrypted under (deployment.md
-  # section 3); without both the instance keeps none and says so. Once:
+  # section 3); without both the instance keeps none and says so. The
+  # bucket is any S3-compatible one, kept private (the instance serves the
+  # pictures; the bucket holds ciphertext). The flagship's is on Cloudflare
+  # R2, with a token that reads and writes that bucket's objects. Once,
+  # before the first deploy from this file:
   #
-  #   fly storage create --app lumia-instance
-  #     (a Tigris bucket: it sets AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
-  #      AWS_ENDPOINT_URL_S3, AWS_REGION and BUCKET_NAME as secrets)
-  #   fly secrets set LUMIA_BLOB_STORE=s3://<that bucket's name> --app lumia-instance
-  #   fly secrets set LUMIA_MASTER_KEY="$(openssl rand -base64 32)" --app lumia-instance
-  #     (keep a copy of it somewhere else: nothing stored can be read without it)
+  #   fly secrets set --app lumia-instance \
+  #     LUMIA_BLOB_STORE=s3://<bucket> \
+  #     AWS_ACCESS_KEY_ID=<key id> AWS_SECRET_ACCESS_KEY=<secret> \
+  #     AWS_ENDPOINT_URL_S3=https://<account id>.r2.cloudflarestorage.com \
+  #     AWS_REGION=auto \
+  #     LUMIA_MASTER_KEY="$(openssl rand -base64 32)"
+  #     (keep a copy of the key somewhere else: nothing stored can be read
+  #      without it)
   #
-  # and then uncomment this line and the [[files]] section below, which
-  # writes that secret where the line says. Not before: a deploy that names
+  # (`fly storage create` makes a Tigris bucket and sets the four AWS_
+  # secrets itself, for an operator who would rather.) The [[files]]
+  # section below writes the key where this line says; a deploy that names
   # a secret that is not there fails.
-  # LUMIA_MASTER_KEY_FILE = '/secrets/master.key'
+  LUMIA_MASTER_KEY_FILE = '/secrets/master.key'
   # The push relay (apps/relay/fly.toml) for the iOS and Android apps.
   LUMIA_PUSH_RELAY_URL = 'https://lumia-relay.fly.dev'
 
-# The master key, from the secret, as a file (see [env] above).
-# [[files]]
-#   guest_path = '/secrets/master.key'
-#   secret_name = 'LUMIA_MASTER_KEY'
+# The master key, from the secret, as a file (see [env] above). Fly decodes
+# the secret from base64, so the file is the 32 bytes themselves.
+[[files]]
+  guest_path = '/secrets/master.key'
+  secret_name = 'LUMIA_MASTER_KEY'
 
 [http_service]
   internal_port = 4000
