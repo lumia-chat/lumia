@@ -46,12 +46,12 @@ fn a_message_sent_from_the_shell_goes_from_pending_into_the_store() {
     state.submit();
     wait(&mut state, "the shell", |s| s.route == Route::Shell);
     wait(&mut state, "the gateway and a channel", |s| {
-        s.session.connection == Connection::Connected && s.session.channel.is_some()
+        s.session.connection == Connection::Connected && s.session.channel().is_some()
     });
     wait(&mut state, "the channel's history", |s| {
-        !s.session.messages.is_empty()
+        !s.session.entries.is_empty()
     });
-    let before = state.session.messages.len();
+    let before = state.session.entries.len();
 
     let body = format!("Sent from the shell's live test at {:?}", Instant::now());
     assert!(
@@ -71,13 +71,13 @@ fn a_message_sent_from_the_shell_goes_from_pending_into_the_store() {
     });
     let stored = state
         .session
-        .messages
+        .entries
         .iter()
-        .find(|m| m.message_id == id)
+        .find(|e| e.id == id)
         .expect("the store holds it under the id the send minted");
     assert_eq!(stored.body, body);
     assert_eq!(stored.author_account_id, state.session.me());
-    assert_eq!(state.session.messages.len(), before + 1);
+    assert_eq!(state.session.entries.len(), before + 1);
 
     // A second launch over the same stores is signed in and reads the channel from SQLite.
     drop(state);
@@ -90,10 +90,10 @@ fn a_message_sent_from_the_shell_goes_from_pending_into_the_store() {
     assert!(again.session.signed_in, "the tokens were kept");
     again.session.load();
     wait(&mut again, "the second launch's channel", |s| {
-        s.session.channel.is_some()
+        s.session.channel().is_some()
     });
     assert!(
-        again.session.messages.iter().any(|m| m.message_id == id),
+        again.session.entries.iter().any(|e| e.id == id),
         "read back from the local store"
     );
 }

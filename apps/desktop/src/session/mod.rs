@@ -6,6 +6,15 @@
 //! network run on the session's own runtime and come back as [`Update`]s in a queue; the
 //! shell drains the queue on its own thread with [`Session::poll`], woken through [`Wake`].
 //! Reads of the local store are synchronous: they are SQLite on this machine.
+//!
+//! This file is the account, its servers and the conversation on screen. What belongs to
+//! one part of the product lives beside it and reports through its own update type:
+//! [`dms`] (personal conversations), [`servers`] (making and joining servers, channels,
+//! invites) and [`identity`] (devices, linking, the profile and status).
+
+pub mod dms;
+pub mod identity;
+pub mod servers;
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
@@ -78,8 +87,56 @@ pub enum Update {
         server_id: String,
         members: Vec<MemberSummary>,
     },
+    /// A public profile looked up for someone the servers do not list; `None` when the
+    /// instance would not show it.
+    Profile {
+        account_id: String,
+        profile: Option<MemberSummary>,
+    },
     Gateway(AppEvent),
     SignedOut,
+    Dm(dms::DmUpdate),
+    Server(servers::ServerUpdate),
+    Identity(identity::IdentityUpdate),
+}
+
+/// What is on screen to read and write: a server's channel, or a personal conversation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Conversation {
+    Channel(String),
+    Dm(String),
+}
+
+impl Conversation {
+    /// The channel id, whichever kind it is.
+    pub fn id(&self) -> &str {
+        match self {
+            Self::Channel(id) | Self::Dm(id) => id,
+        }
+    }
+}
+
+/// A message of the conversation on screen, as the timeline draws it, whichever kind of
+/// conversation it came from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Entry {
+    pub id: String,
+    pub author_account_id: String,
+    pub body: String,
+    pub at_micros: i64,
+    pub deleted: bool,
+}
+
+impl From<MessageSummary> for Entry {
+    fn from(m: MessageSummary) -> Self {
+        Self {
+            id: m.message_id,
+            author_account_id: m.author_account_id,
+            body: m.body,
+            at_micros: m.created_at_micros,
+            deleted: m.deleted,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -166,13 +223,20 @@ pub struct Session {
     /// Who is present in the servers on screen (protocol 6.7), by server then account:
     /// the status (`ONLINE`, `AWAY`, `DO_NOT_DISTURB`) and the custom status text.
     pub presence: HashMap<String, HashMap<String, (String, String)>>,
-    /// The channel on screen.
-    pub channel: Option<String>,
+    /// Public profiles of people the servers do not list, by account id; `None` once the
+    /// instance refused one, so it is not asked again.
+    pub profiles: HashMap<String, Option<MemberSummary>>,
+    /// What is on screen to read and write.
+    pub conversation: Option<Conversation>,
     /// Its newest messages from the local store, oldest first.
-    pub messages: Vec<MessageSummary>,
+    pub entries: Vec<Entry>,
     pub pending: Vec<Pending>,
-    /// Bumped whenever `messages` or `pending` change, for a list that caches rows.
+    /// Bumped whenever `entries` or `pending` change, for a list that caches rows.
     pub revision: u64,
+    /// Personal conversations.
+    pub dm: dms::DmState,
+    /// This device's identity, its roster and profile.
+    pub identity: identity::IdentityState,
     pub last_error: Option<String>,
 }
 
@@ -218,10 +282,13 @@ impl Session {
             people: HashMap::new(),
             members: HashMap::new(),
             presence: HashMap::new(),
-            channel: None,
-            messages: Vec::new(),
+            profiles: HashMap::new(),
+            conversation: None,
+            entries: Vec::new(),
             pending: Vec::new(),
             revision: 0,
+            dm: dms::DmState::default(),
+            identity: identity::IdentityState::default(),
             last_error: None,
         })
     }
@@ -235,9 +302,15 @@ impl Session {
             .unwrap_or_else(PoisonError::into_inner) = Some(wake);
     }
 
-    fn task(&self, work: impl Future<Output = Update> + Send + 'static) {
+    /// Runs `work` on the session's runtime and queues what it returns.
+    pub(crate) fn task(&self, work: impl Future<Output = Update> + Send + 'static) {
         let mailbox = self.mailbox.clone();
         self.runtime.spawn(async move { mailbox.post(work.await) });
+    }
+
+    /// The open instance's client, for a call a submodule makes.
+    pub(crate) fn client(&self) -> Option<Arc<App>> {
+        self.app.clone()
     }
 
     // ---- Opening and signing in ---------------------------------------------------
@@ -306,9 +379,12 @@ impl Session {
         self.people.clear();
         self.members.clear();
         self.presence.clear();
-        self.channel = None;
-        self.messages.clear();
+        self.profiles.clear();
+        self.conversation = None;
+        self.entries.clear();
         self.pending.clear();
+        self.dm = dms::DmState::default();
+        self.identity = identity::IdentityState::default();
         self.revision += 1;
     }
 
@@ -367,7 +443,7 @@ impl Session {
     }
 
     fn load_after(&self, wait: std::time::Duration) {
-        let Some(app) = self.app.clone() else { return };
+        let Some(app) = self.client() else { return };
         self.task(async move {
             tokio::time::sleep(wait).await;
             Update::Snapshot(app.snapshot().await.map_err(Failure::from))
@@ -409,55 +485,120 @@ impl Session {
         }
     }
 
-    /// Reads the open channel's newest messages from the local store and drops the pending
-    /// sends it now holds.
-    fn read_messages(&mut self) {
-        let (Some(app), Some(channel)) = (&self.app, &self.channel) else {
+    /// Reads the open conversation's newest messages from the local store, drops the
+    /// pending sends it now holds, and looks up authors nobody has named yet.
+    pub(crate) fn read_entries(&mut self) {
+        let Some(conversation) = self.conversation.clone() else {
             return;
         };
-        match app.messages(channel, MESSAGE_WINDOW) {
-            Ok(messages) => {
-                self.pending.retain(|p| {
-                    p.channel_id != *channel || !messages.iter().any(|m| m.message_id == p.id)
-                });
-                self.messages = messages;
-            }
-            Err(error) => self.last_error = Some(error.to_string()),
+        let read = match &conversation {
+            Conversation::Channel(id) => match &self.app {
+                Some(app) => app
+                    .messages(id, MESSAGE_WINDOW)
+                    .map(|rows| rows.into_iter().map(Entry::from).collect())
+                    .map_err(|e| e.to_string()),
+                None => return,
+            },
+            Conversation::Dm(id) => self.read_dm_entries(id),
+        };
+        match read {
+            Ok(entries) => self.set_entries(entries),
+            Err(error) => self.last_error = Some(error),
         }
         self.revision += 1;
     }
 
-    // ---- What the screens do --------------------------------------------------------
-
-    /// Puts a channel on screen, from the local store.
-    pub fn open_channel(&mut self, channel_id: &str) {
-        if self.channel.as_deref() == Some(channel_id) {
-            return;
+    /// Replaces what the open conversation shows.
+    pub(crate) fn set_entries(&mut self, entries: Vec<Entry>) {
+        let here = self.conversation.as_ref().map(Conversation::id);
+        self.pending.retain(|p| {
+            Some(p.channel_id.as_str()) != here || !entries.iter().any(|e| e.id == p.id)
+        });
+        let strangers: HashSet<&str> = entries
+            .iter()
+            .map(|e| e.author_account_id.as_str())
+            .filter(|id| {
+                !id.is_empty() && !self.people.contains_key(*id) && !self.profiles.contains_key(*id)
+            })
+            .collect();
+        let strangers: Vec<String> = strangers.into_iter().map(str::to_string).collect();
+        self.entries = entries;
+        for id in strangers {
+            self.look_up(&id);
         }
-        self.channel = Some(channel_id.to_string());
-        self.messages.clear();
-        self.read_messages();
     }
 
-    /// Takes the channel off screen.
-    pub fn close_channel(&mut self) {
-        if self.channel.take().is_some() {
-            self.messages.clear();
+    /// Asks the instance for someone's public profile, once.
+    pub(crate) fn look_up(&mut self, account_id: &str) {
+        let Some(app) = self.app.clone() else { return };
+        if account_id.is_empty()
+            || account_id == self.me()
+            || self.people.contains_key(account_id)
+            || self.profiles.contains_key(account_id)
+        {
+            return;
+        }
+        // Held as refused until the answer says otherwise, so it is asked once.
+        self.profiles.insert(account_id.to_string(), None);
+        let account_id = account_id.to_string();
+        self.task(async move {
+            let profile = app.account(&account_id).await.ok();
+            Update::Profile {
+                account_id,
+                profile,
+            }
+        });
+    }
+
+    // ---- What the screens do --------------------------------------------------------
+
+    /// Puts a server's channel on screen, from the local store.
+    pub fn open_channel(&mut self, channel_id: &str) {
+        self.open_conversation(Conversation::Channel(channel_id.to_string()));
+    }
+
+    /// Puts a conversation on screen, from the local store.
+    pub fn open_conversation(&mut self, conversation: Conversation) {
+        if self.conversation.as_ref() == Some(&conversation) {
+            return;
+        }
+        self.conversation = Some(conversation);
+        self.entries.clear();
+        self.read_entries();
+    }
+
+    /// Takes the conversation off screen.
+    pub fn close_conversation(&mut self) {
+        if self.conversation.take().is_some() {
+            self.entries.clear();
             self.revision += 1;
         }
     }
 
-    /// Sends a message to the open channel; it shows as pending until the store holds it.
-    /// False when it could not even be queued (no channel, or the gateway loop is not
+    /// The server channel on screen, when that is what is on screen.
+    pub fn channel(&self) -> Option<&str> {
+        match &self.conversation {
+            Some(Conversation::Channel(id)) => Some(id),
+            _ => None,
+        }
+    }
+
+    /// Sends a message to the open conversation; it shows as pending until the store holds
+    /// it. False when it could not even be queued (nothing open, or the gateway loop is not
     /// running), so the caller keeps the draft.
     pub fn send(&mut self, body: &str, now_micros: i64) -> bool {
         let body = body.trim();
-        let (Some(app), Some(channel)) = (&self.app, self.channel.clone()) else {
-            return false;
-        };
         if body.is_empty() {
             return false;
         }
+        let channel = match self.conversation.clone() {
+            Some(Conversation::Channel(id)) => id,
+            Some(Conversation::Dm(id)) => return self.send_dm(&id, body, now_micros),
+            None => return false,
+        };
+        let Some(app) = &self.app else {
+            return false;
+        };
         self.revision += 1;
         match app.send_message(&channel, body) {
             Ok(id) => {
@@ -528,11 +669,18 @@ impl Session {
         if !account_id.is_empty() && account_id == self.me() {
             return self.self_name().to_string();
         }
-        match self.people.get(account_id) {
+        match self.person(account_id) {
             Some(person) => display_name(person),
             None if account_id.is_empty() => "Someone".into(),
             None => account_id.chars().take(8).collect(),
         }
+    }
+
+    /// What is known of someone: from the shared servers, else a looked-up profile.
+    pub fn person(&self, account_id: &str) -> Option<&MemberSummary> {
+        self.people
+            .get(account_id)
+            .or_else(|| self.profiles.get(account_id)?.as_ref())
     }
 
     pub fn servers(&self) -> &[ServerSummary] {
@@ -552,6 +700,16 @@ impl Session {
             .filter(move |c| c.server_id == server_id && !PERSONAL_KINDS.contains(&c.kind.as_str()))
     }
 
+    /// The personal conversations the snapshot lists, in its order.
+    pub fn personal_channels(&self) -> impl Iterator<Item = &ChannelSummary> {
+        let all = self
+            .snapshot
+            .as_ref()
+            .map_or(&[][..], |s| s.channels.as_slice());
+        all.iter()
+            .filter(|c| PERSONAL_KINDS.contains(&c.kind.as_str()))
+    }
+
     pub fn channel_summary(&self, channel_id: &str) -> Option<&ChannelSummary> {
         self.snapshot
             .as_ref()?
@@ -560,11 +718,12 @@ impl Session {
             .find(|c| c.channel_id == channel_id)
     }
 
-    /// The open channel's sends that the store does not hold yet.
+    /// The open conversation's sends that the store does not hold yet.
     pub fn pending_here(&self) -> impl Iterator<Item = &Pending> {
+        let here = self.conversation.as_ref().map(Conversation::id);
         self.pending
             .iter()
-            .filter(|p| Some(p.channel_id.as_str()) == self.channel.as_deref())
+            .filter(move |p| Some(p.channel_id.as_str()) == here)
     }
 
     /// An account's presence in a server, when it is there.
@@ -635,8 +794,17 @@ impl Session {
                 }
                 self.members.insert(server_id.clone(), members.clone());
             }
+            Update::Profile {
+                account_id,
+                profile,
+            } => {
+                self.profiles.insert(account_id.clone(), profile.clone());
+            }
             Update::Gateway(event) => self.on_gateway(event),
             Update::SignedOut => {}
+            Update::Dm(update) => self.apply_dm(update),
+            Update::Server(update) => self.apply_server(update),
+            Update::Identity(update) => self.apply_identity(update),
         }
     }
 
@@ -649,8 +817,8 @@ impl Session {
                 self.load();
             }
             AppEvent::Applied { channel_id, .. } | AppEvent::SnapshotTaken { channel_id, .. } => {
-                if self.channel.as_deref() == Some(channel_id.as_str()) {
-                    self.read_messages();
+                if self.channel() == Some(channel_id.as_str()) {
+                    self.read_entries();
                 }
             }
             AppEvent::AccountApplied { .. } => self.load(),
@@ -694,15 +862,13 @@ impl Session {
                     server.remove(id);
                 }
             }
-            AppEvent::DmError { message } => self.last_error = Some(message.clone()),
-            // Personal conversations are not on a screen of this shell yet.
-            AppEvent::Acked { .. }
-            | AppEvent::SubscriptionFailed { .. }
+            AppEvent::DmError { .. }
             | AppEvent::DmNote { .. }
             | AppEvent::DmSubscribed { .. }
             | AppEvent::DmOperation { .. }
             | AppEvent::DmReady { .. }
-            | AppEvent::DmDelivered { .. } => {}
+            | AppEvent::DmDelivered { .. } => self.on_dm_event(event),
+            AppEvent::Acked { .. } | AppEvent::SubscriptionFailed { .. } => {}
         }
     }
 }

@@ -2,19 +2,36 @@
 //! its methods; nothing here talks to the session's runtime or the network.
 
 pub mod components;
+mod conversation;
+mod home;
+mod server;
 mod shell;
 mod sign_in;
+mod timeline;
 
 use rune::{Cx, El};
 
-use crate::app::{Route, State};
+use crate::app::{Popover, Route, State};
 use components::Look;
 
 /// `AppSpec::view`.
 pub fn view(s: &State, cx: &mut Cx<State>) -> El {
     let look = Look::of(cx.system_dark());
-    match s.route {
+    let screen = match s.route {
         Route::SignIn => sign_in::view(s, look),
         Route::Shell => shell::view(s, look),
+    };
+    // A popover is a child of the root after everything else, so it draws above the shell
+    // and escapes its anchor's clipping.
+    match s.popover.and_then(|popover| overlay(s, popover, look)) {
+        Some(popover) => screen.child(popover),
+        None => screen,
+    }
+}
+
+/// The surface for the open popover. Each belongs to the part of the product that opens it.
+fn overlay(_s: &State, popover: Popover, _look: Look) -> Option<El> {
+    match popover {
+        Popover::NewChannel | Popover::Invite => None,
     }
 }

@@ -1,15 +1,25 @@
-//! The shell's state and what happens to it: the session, the route, the forms, and the
-//! reactions to what the session reports. The views in `ui` only read this and call back in.
+//! The shell's state and what happens to it: the session, the route, where the shell is,
+//! the forms, and the reactions to what the session reports. The views in `ui` only read
+//! this and call back in.
+//!
+//! This file is the frame: the route, the place, the conversation on screen. Each part of
+//! the product keeps its own state and reactions beside it: [`sign_in`], [`home`]
+//! (personal conversations), [`server`] (making and managing servers) and [`account`]
+//! (devices, profile, status).
+
+pub mod account;
+pub mod home;
+pub mod server;
+pub mod sign_in;
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use rune::{TextEdit, Tx, Waker};
-use rune_kit::MarkdownStyle;
 
-use crate::session::{Failure, Session, Update};
+use crate::session::{Session, Update};
 use crate::settings::{self, Settings};
-use crate::tokens;
+pub use sign_in::SignIn;
 
 /// What the window shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,51 +28,48 @@ pub enum Route {
     Shell,
 }
 
-/// The sign-in screen: the instance, then an account on it.
-#[derive(Debug)]
-pub struct SignIn {
-    pub instance: TextEdit,
-    pub handle: TextEdit,
-    pub password: TextEdit,
-    pub totp: TextEdit,
-    /// A new account instead of an existing one.
-    pub creating: bool,
-    /// The account asked for its second factor.
-    pub needs_totp: bool,
-    /// Waiting for the instance's trust card.
-    pub reaching: bool,
-    /// Waiting for the instance's answer to a sign-in.
-    pub busy: bool,
-    pub error: String,
+/// Where the shell is: Home, or a server.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Place {
+    Home,
+    Server(String),
 }
 
-impl SignIn {
-    fn new(instance: &str) -> Self {
-        Self {
-            instance: TextEdit::new(instance),
-            handle: TextEdit::new(""),
-            password: TextEdit::new("").secure(),
-            totp: TextEdit::new(""),
-            creating: false,
-            needs_totp: false,
-            reaching: false,
-            busy: false,
-            error: String::new(),
-        }
-    }
+/// What Home's main pane shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HomeView {
+    /// The personal conversation on screen, or the empty state when none is.
+    #[default]
+    Conversations,
+    Requests,
+    NewMessage,
+    Devices,
+    Profile,
+    AddServer,
+}
+
+/// A surface floating over the shell, anchored to the control that opened it. One at a time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Popover {
+    NewChannel,
+    Invite,
 }
 
 pub struct State {
     pub session: Session,
     pub settings: Settings,
-    data_dir: PathBuf,
+    pub(crate) data_dir: PathBuf,
     pub route: Route,
     pub sign_in: SignIn,
-    /// The server on screen.
-    pub server: Option<String>,
+    pub place: Place,
+    pub home_view: HomeView,
+    /// Whether the shell has chosen its first place from a snapshot.
+    placed: bool,
+    pub popover: Option<Popover>,
     pub draft: TextEdit,
-    /// Message-body styles for light and dark, built once.
-    pub markdown: [MarkdownStyle; 2],
+    pub home: home::Home,
+    pub server_forms: server::ServerForms,
+    pub account: account::Account,
 }
 
 impl State {
@@ -80,72 +87,33 @@ impl State {
             settings,
             data_dir,
             route: Route::SignIn,
-            server: None,
+            place: Place::Home,
+            home_view: HomeView::default(),
+            placed: false,
+            popover: None,
             draft: TextEdit::new(""),
-            markdown: [tokens::markdown(false), tokens::markdown(true)],
+            home: home::Home::default(),
+            server_forms: server::ServerForms::default(),
+            account: account::Account::default(),
         }
     }
 
-    // ---- Sign in ------------------------------------------------------------------
+    // ---- Where the shell is -----------------------------------------------------------
 
-    /// Opens the instance in the field and asks for its trust card.
-    pub fn connect(&mut self) {
-        self.sign_in.error.clear();
-        let url = self
-            .sign_in
-            .instance
-            .text
-            .trim()
-            .trim_end_matches('/')
-            .to_string();
-        match self.session.open(&url) {
-            Ok(()) => {
-                self.sign_in.reaching = true;
-                self.settings.instance = Some(url);
-                self.settings.save(&self.data_dir);
-            }
-            Err(error) => self.sign_in.error = error,
+    /// The server on screen, when the shell is in one.
+    pub fn server_id(&self) -> Option<&str> {
+        match &self.place {
+            Place::Server(id) => Some(id),
+            Place::Home => None,
         }
     }
 
-    /// Back to the instance field.
-    pub fn change_instance(&mut self) {
-        self.session.close();
-        self.sign_in.error.clear();
-        self.sign_in.needs_totp = false;
-        self.sign_in.busy = false;
-    }
-
-    /// Signs in, or creates the account, with what the form holds.
-    pub fn submit(&mut self) {
-        let form = &mut self.sign_in;
-        if form.busy || form.handle.text.trim().is_empty() || form.password.text.is_empty() {
-            return;
-        }
-        form.error.clear();
-        form.busy = true;
-        if form.creating {
-            self.session
-                .create_account(&form.handle.text, &form.password.text);
-        } else {
-            let code = form.needs_totp.then_some(form.totp.text.trim());
-            self.session
-                .sign_in(&form.handle.text, &form.password.text, code);
-        }
-    }
-
-    pub fn sign_out(&mut self) {
-        self.session.sign_out();
-        self.server = None;
-        self.draft.clear();
-        self.route = Route::SignIn;
-    }
-
-    // ---- The shell ------------------------------------------------------------------
-
-    /// Puts a server on screen with the channel it last had, else its first.
+    /// Puts a server on screen with its first channel.
     pub fn select_server(&mut self, server_id: &str) {
-        self.server = Some(server_id.to_string());
+        self.place = Place::Server(server_id.to_string());
+        self.placed = true;
+        self.popover = None;
+        self.draft.clear();
         self.session.watch_presence(&[server_id.to_string()]);
         let first = self
             .session
@@ -154,7 +122,7 @@ impl State {
             .map(|c| c.channel_id.clone());
         match first {
             Some(channel) => self.session.open_channel(&channel),
-            None => self.session.close_channel(),
+            None => self.session.close_conversation(),
         }
     }
 
@@ -163,7 +131,28 @@ impl State {
         self.draft.clear();
     }
 
-    /// Sends the draft to the open channel.
+    /// Goes to Home, showing `view`. No server is on screen there, so none is watched.
+    pub fn go_home(&mut self, view: HomeView) {
+        if self.place != Place::Home {
+            self.session.close_conversation();
+            self.draft.clear();
+        }
+        self.place = Place::Home;
+        self.home_view = view;
+        self.placed = true;
+        self.popover = None;
+        self.session.watch_presence(&[]);
+    }
+
+    pub fn open_popover(&mut self, popover: Popover) {
+        self.popover = Some(popover);
+    }
+
+    pub fn close_popover(&mut self) {
+        self.popover = None;
+    }
+
+    /// Sends the draft to the open conversation.
     pub fn send(&mut self, tx: &mut Tx) {
         if self.draft.is_composing() || self.draft.text.trim().is_empty() {
             return;
@@ -177,25 +166,49 @@ impl State {
         }
     }
 
-    /// Keeps the server and channel on screen ones the snapshot still has.
+    /// Forgets where the shell was, on the way out of it.
+    pub(crate) fn leave_shell(&mut self) {
+        self.place = Place::Home;
+        self.home_view = HomeView::default();
+        self.placed = false;
+        self.popover = None;
+        self.draft.clear();
+        self.home = home::Home::default();
+        self.server_forms = server::ServerForms::default();
+        self.account = account::Account::default();
+    }
+
+    /// Keeps the place and the channel on screen ones the snapshot still has. The first
+    /// snapshot chooses the place as the other shells do: the first server when there is
+    /// one and no personal conversation, Home otherwise.
     fn settle(&mut self) {
         let servers = self.session.servers();
-        let server = match &self.server {
-            Some(id) if servers.iter().any(|s| s.server_id == *id) => Some(id.clone()),
-            _ => servers.first().map(|s| s.server_id.clone()),
-        };
-        let Some(server) = server else {
-            self.server = None;
-            self.session.close_channel();
+        if !self.placed {
+            self.placed = true;
+            let personal = self.session.personal_channels().next().is_some();
+            if let (Some(first), false) = (servers.first(), personal) {
+                let first = first.server_id.clone();
+                self.select_server(&first);
+            }
+            return;
+        }
+        let Place::Server(server) = self.place.clone() else {
             return;
         };
-        let open = self.session.channel.clone();
-        let still_there = open.as_deref().is_some_and(|id| {
+        if !servers.iter().any(|s| s.server_id == server) {
+            // The server on screen is gone (left, or removed from).
+            match servers.first().map(|s| s.server_id.clone()) {
+                Some(first) => self.select_server(&first),
+                None => self.go_home(HomeView::default()),
+            }
+            return;
+        }
+        let still_there = self.session.channel().is_some_and(|id| {
             self.session
                 .channels_of(&server)
                 .any(|c| c.channel_id == id)
         });
-        if self.server.as_deref() != Some(server.as_str()) || !still_there {
+        if !still_there {
             self.select_server(&server);
         }
     }
@@ -209,47 +222,23 @@ impl State {
                 self.sign_in.reaching = false;
                 self.sign_in.error = format!("Could not reach that instance: {}", failure.message);
             }
-            Update::SignedIn(Ok(())) => {
-                self.sign_in.busy = false;
-                self.sign_in.password.clear();
-                self.sign_in.totp.clear();
-                self.sign_in.needs_totp = false;
-                self.route = Route::Shell;
-            }
-            Update::SignedIn(Err(failure)) => {
-                self.sign_in.busy = false;
-                self.refused(failure);
-            }
+            Update::SignedIn(answer) => self.signed_in(answer),
             Update::Snapshot(Ok(_)) => self.settle(),
             Update::Snapshot(Err(_)) => {
                 // The instance no longer knows this session.
                 if !self.session.signed_in && self.route == Route::Shell {
+                    self.leave_shell();
                     self.route = Route::SignIn;
                 }
             }
-            Update::Members { .. } | Update::Gateway(_) | Update::SignedOut => {}
+            Update::Dm(update) => self.react_dm(update),
+            Update::Server(update) => self.react_server(update),
+            Update::Identity(update) => self.react_identity(update),
+            Update::Members { .. }
+            | Update::Profile { .. }
+            | Update::Gateway(_)
+            | Update::SignedOut => {}
         }
-    }
-
-    /// The sign-in screen's wording for a refusal, as the other shells word it.
-    fn refused(&mut self, failure: &Failure) {
-        let form = &mut self.sign_in;
-        let mfa = failure.details.get("mfa").map(String::as_str);
-        form.error = match failure.code.as_str() {
-            // The passkey factor needs the browser's ceremony (architecture 6.3), which
-            // this shell does not hand off to yet.
-            "FAILED_PRECONDITION" if mfa == Some("passkey") => {
-                "This account asks for its passkey at sign-in, which this app cannot do yet. Sign in from the web for now.".into()
-            }
-            "FAILED_PRECONDITION" if !form.needs_totp && !form.creating => {
-                form.needs_totp = true;
-                String::new()
-            }
-            "UNAUTHENTICATED" if form.needs_totp => "That code was not accepted.".into(),
-            "UNAUTHENTICATED" => "Wrong handle or password.".into(),
-            "ALREADY_EXISTS" => "That handle is taken.".into(),
-            _ => failure.message.clone(),
-        };
     }
 
     /// Applies what the session finished and reacts to it; true when anything changed.
@@ -307,9 +296,10 @@ pub fn init() -> State {
 /// answered and the open channel has its messages, or ten seconds. A headless run has a
 /// virtual clock and one frame, so nothing else would give the network time to answer.
 pub fn scene_live(state: &mut State) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    use std::time::{Duration, Instant};
+    let deadline = Instant::now() + Duration::from_secs(10);
     let mut settled = None;
-    while std::time::Instant::now() < deadline {
+    while Instant::now() < deadline {
         if state.drain() {
             settled = None;
         }
@@ -322,16 +312,12 @@ pub fn scene_live(state: &mut State) {
             });
         // Loaded, and quiet for a moment: the channel's replay has landed.
         match (loaded, settled) {
-            (true, Some(since))
-                if std::time::Instant::now() - since > std::time::Duration::from_millis(600) =>
-            {
-                return;
-            }
-            (true, None) => settled = Some(std::time::Instant::now()),
+            (true, Some(since)) if Instant::now() - since > Duration::from_millis(600) => return,
+            (true, None) => settled = Some(Instant::now()),
             (false, _) => settled = None,
             _ => {}
         }
-        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::thread::sleep(Duration::from_millis(20));
     }
     eprintln!(
         "lumia: the live scene gave up waiting; connection {:?}, error {:?}",

@@ -2,7 +2,7 @@
 //! `Components.swift`: avatar, card, field, buttons, notices. Every colour, distance and type
 //! style is a token.
 
-use rune::{Cursor, El, Icon, TextEdit, col, el, icon, row, text, text_input};
+use rune::{Align, Cursor, El, Icon, Side, TextEdit, col, el, icon, row, text, text_input};
 
 use crate::app::State;
 use crate::tokens::{self as t, Colors, Shadows};
@@ -90,12 +90,12 @@ pub fn card(title: &str, subtitle: &str, look: Look) -> El {
 
 /// A labelled single-line field bound to a `TextEdit` in the state.
 pub fn field(
-    key: &'static str,
+    key: impl Into<String>,
     label: &str,
     edit: &TextEdit,
     placeholder: &str,
     access: impl for<'a> Fn(&'a mut State) -> &'a mut TextEdit + 'static,
-    submit: fn(&mut State, &mut rune::Tx),
+    submit: impl Fn(&mut State, &mut rune::Tx) + 'static,
     look: Look,
 ) -> El {
     let c = look.c;
@@ -133,10 +133,10 @@ pub fn field(
 
 /// The primary action of a card: the accent fill, full width.
 pub fn primary_button(
-    key: &'static str,
+    key: impl Into<String>,
     label: &str,
     enabled: bool,
-    press: fn(&mut State),
+    press: impl Fn(&mut State) + 'static,
     look: Look,
 ) -> El {
     let c = look.c;
@@ -165,7 +165,12 @@ pub fn primary_button(
 }
 
 /// A quiet text button: a link in the accent.
-pub fn link_button(key: &'static str, label: &str, press: fn(&mut State), look: Look) -> El {
+pub fn link_button(
+    key: impl Into<String>,
+    label: &str,
+    press: impl Fn(&mut State) + 'static,
+    look: Look,
+) -> El {
     let c = look.c;
     el().key(key)
         .role("button")
@@ -226,4 +231,190 @@ pub fn panel(key: &'static str, look: Look) -> El {
         look.shadows.panel,
     )
     .clip_rounded(t::RADIUS_18)
+}
+
+/// The second action of a card or a panel: an outlined button, as wide as its label.
+pub fn secondary_button(
+    key: impl Into<String>,
+    label: &str,
+    enabled: bool,
+    press: impl Fn(&mut State) + 'static,
+    look: Look,
+) -> El {
+    let c = look.c;
+    let button = row()
+        .key(key)
+        .h(t::CONTROL_HEIGHT - t::SPACE_8)
+        .px(t::SPACE_14)
+        .center()
+        .radius(t::RADIUS_10)
+        .fill(c.surface)
+        .border(1.0, c.border_form)
+        .role("button")
+        .label(label)
+        .disabled(!enabled)
+        .child(
+            text(label)
+                .font(t::TEXT_BUTTON_SECONDARY)
+                .color(c.ink_field),
+        );
+    if enabled {
+        button
+            .hover(c.hover_secondary)
+            .cursor(Cursor::Pointer)
+            .focusable(true)
+            .focus_ring(2.0, 2.0, c.focus)
+            .on_press(press)
+    } else {
+        button.opacity(0.5)
+    }
+}
+
+/// A button that is only a glyph, with a name for assistive technology and a tooltip.
+pub fn icon_button(
+    key: impl Into<String>,
+    glyph: &'static Icon,
+    label: &str,
+    press: impl Fn(&mut State) + 'static,
+    look: Look,
+) -> El {
+    let c = look.c;
+    el().key(key)
+        .size(t::ROW_HEIGHT + t::SPACE_2, t::ROW_HEIGHT + t::SPACE_2)
+        .radius(t::RADIUS_8)
+        .center()
+        .role("button")
+        .label(label)
+        .help(label)
+        .hover(c.hover_icon)
+        .cursor(Cursor::Pointer)
+        .focusable(true)
+        .focus_ring(2.0, 0.0, c.focus)
+        .no_window_drag()
+        .on_press(press)
+        .child(icon(glyph, t::SPACE_16).color(c.ink_quiet))
+}
+
+/// The small heading over a group of rows in a sidebar or a panel.
+pub fn section_label(label: impl Into<String>, look: Look) -> El {
+    text(label)
+        .font(t::TEXT_SECTION)
+        .color(look.c.ink_muted)
+        .px(t::SPACE_10)
+        .pt(t::SPACE_8)
+        .pb(t::SPACE_6)
+}
+
+/// A quiet note with a glyph: something to know, not something wrong.
+pub fn notice(glyph: &'static Icon, words: impl Into<String>, look: Look) -> El {
+    let c = look.c;
+    row()
+        .w_full()
+        .padding(t::SPACE_10)
+        .gap(t::SPACE_10)
+        .radius(t::RADIUS_10)
+        .fill(c.inset)
+        .child(icon(glyph, t::SPACE_16).color(c.ink_quiet))
+        .child(
+            text(words)
+                .font(t::TEXT_COMPACT)
+                .color(c.ink_secondary)
+                .wrap()
+                .grow(1.0)
+                .min_w(0.0),
+        )
+}
+
+/// A row of choices where one is chosen, as the design's segmented tabs: `options` are
+/// `(value, label)`, `pick` gets the value pressed.
+pub fn segmented<V: Copy + PartialEq + 'static>(
+    key: &str,
+    label: &str,
+    options: &[(V, &str)],
+    selected: V,
+    pick: impl Fn(&mut State, V) + Clone + 'static,
+    look: Look,
+) -> El {
+    let c = look.c;
+    let mut track = row()
+        .key(key)
+        .w_full()
+        .padding(t::SPACE_2)
+        .gap(t::SPACE_2)
+        .radius(t::RADIUS_10)
+        .fill(c.track)
+        .role("radiogroup")
+        .label(label);
+    for (i, (value, name)) in options.iter().enumerate() {
+        let (value, on) = (*value, *value == selected);
+        let pick = pick.clone();
+        let mut segment = row()
+            .key(format!("{key}-{i}"))
+            .grow(1.0)
+            .h(t::ROW_HEIGHT)
+            .center()
+            .radius(t::RADIUS_8)
+            .role("radio")
+            .label(*name)
+            .checked(on)
+            .cursor(Cursor::Pointer)
+            .focusable(true)
+            .focus_ring(2.0, 0.0, c.focus)
+            .on_press(move |s: &mut State| pick(s, value))
+            .child(
+                text(*name)
+                    .font(if on { t::TEXT_MEMBER } else { t::TEXT_COMPACT })
+                    .color(if on { c.ink } else { c.ink_secondary }),
+            );
+        if on {
+            segment = shadowed(segment.fill(c.tab_active), look.shadows.tab);
+        }
+        track = track.child(segment);
+    }
+    track
+}
+
+/// A surface floating beside the control keyed `anchor`, with a title, a line under it and
+/// whatever `content` adds. It traps focus, and Escape or a press outside closes it. Return
+/// it from `ui::overlay` so it is mounted at the root.
+pub fn popover(
+    key: &'static str,
+    anchor: &str,
+    title: &str,
+    subtitle: &str,
+    width: f32,
+    look: Look,
+) -> El {
+    let c = look.c;
+    shadowed(
+        col()
+            .key(key)
+            .w(width)
+            .padding(t::SPACE_16)
+            .gap(t::SPACE_12)
+            .radius(t::RADIUS_14)
+            .fill(c.surface)
+            .border(1.0, c.line_strong),
+        look.shadows.popover,
+    )
+    .anchored_fit(anchor, Side::Bottom, Align::Start, t::SPACE_6)
+    .modal(true, State::close_popover)
+    .role("dialog")
+    .label(title)
+    .child(
+        col()
+            .gap(t::SPACE_4)
+            .child(
+                text(title)
+                    .font(t::TITLE_SERVER)
+                    .color(c.ink)
+                    .role("heading"),
+            )
+            .child(
+                text(subtitle)
+                    .font(t::TEXT_SUBTITLE)
+                    .color(c.ink_secondary)
+                    .wrap(),
+            ),
+    )
 }

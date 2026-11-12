@@ -1,0 +1,130 @@
+//! The conversation panel: a header, the timeline and the composer. A server's channel and a
+//! personal conversation are both drawn by it; [`Chrome`] is what differs between them.
+
+use rune::{Cursor, El, Icon, col, el, icon, row, text, text_input};
+
+use super::components::{Look, empty_state, error_text, panel};
+use super::timeline;
+use crate::app::State;
+use crate::tokens::{self as t, icons};
+
+/// What a conversation's panel says around its messages.
+pub struct Chrome<'a> {
+    pub title: &'a str,
+    /// The glyph before the title: the hash of a channel, or none.
+    pub glyph: Option<&'static Icon>,
+    /// The list's name for assistive technology (`Messages in general`).
+    pub list_label: String,
+    /// The composer's placeholder and name (`Message #general`).
+    pub placeholder: String,
+    /// The title and line of the empty state, when there is nothing to list.
+    pub empty: (&'a str, &'a str),
+}
+
+/// The panel for the conversation on screen.
+pub fn view(s: &State, chrome: Chrome<'_>, look: Look) -> El {
+    let list = if timeline::is_empty(s) {
+        empty_state(&icons::HASH, chrome.empty.0, chrome.empty.1, look)
+    } else {
+        timeline::view(s, chrome.list_label, look)
+    };
+    let mut pane = panel("panel", look)
+        .w_full()
+        .child(header(chrome.title, chrome.glyph, look))
+        .child(list);
+    if let Some(error) = &s.session.last_error {
+        pane = pane.child(el().w_full().px(t::SPACE_24).child(error_text(error, look)));
+    }
+    pane.child(composer(s, &chrome.placeholder, look))
+}
+
+/// A panel with a header and an empty state, for a place with no conversation.
+pub fn vacant(title: &str, glyph: &'static Icon, empty: (&str, &str), look: Look) -> El {
+    panel("panel", look)
+        .w_full()
+        .child(header(title, None, look))
+        .child(empty_state(glyph, empty.0, empty.1, look))
+}
+
+/// The panel's header: an optional glyph and the title, over a hairline.
+pub fn header(title: &str, glyph: Option<&'static Icon>, look: Look) -> El {
+    let c = look.c;
+    let mut bar = row()
+        .key("header")
+        .w_full()
+        .h(t::HEADER_HEIGHT)
+        .pl(t::SPACE_24)
+        .pr(t::SPACE_14)
+        .gap(t::SPACE_8)
+        .items_center()
+        .border_sides([0.0, 0.0, 1.0, 0.0], c.line)
+        .window_drag();
+    if let Some(glyph) = glyph {
+        bar = bar.child(icon(glyph, t::SPACE_18).color(c.accent));
+    }
+    bar.child(
+        text(title)
+            .font(t::TITLE_CHANNEL)
+            .color(c.ink)
+            .truncate()
+            .role("heading"),
+    )
+}
+
+fn composer(s: &State, placeholder: &str, look: Look) -> El {
+    let c = look.c;
+    let accent = c.accent;
+    let can_send = !s.draft.text.trim().is_empty();
+    let input = text_input(&s.draft, t::TEXT_MESSAGE)
+        .key("composer")
+        .label(placeholder)
+        .placeholder(placeholder, c.ink_muted)
+        .color(c.ink_field)
+        .caret(accent, c.accent_soft)
+        .grow(1.0)
+        .min_h(t::SPACE_24)
+        .max_h(t::SPACE_24 * 8.0)
+        .on_edit(|s: &mut State| &mut s.draft)
+        .on_submit(|s: &mut State, tx| s.send(tx));
+    let mut send = el()
+        .key("send")
+        .size(t::SPACE_40, t::SPACE_40)
+        .radius(t::SPACE_40 / 2.0)
+        .fill(accent)
+        .center()
+        .role("button")
+        .label("Send")
+        .disabled(!can_send)
+        .child(icon(&icons::SEND, t::SPACE_18).color(c.on_accent));
+    send = if can_send {
+        send.cursor(Cursor::Pointer)
+            .focusable(true)
+            .focus_ring(2.0, 2.0, c.focus)
+            .on_press_tx(|s: &mut State, tx| s.send(tx))
+    } else {
+        send.opacity(0.5)
+    };
+    let mut frame = row()
+        .key("composer-box")
+        .w_full()
+        .items_end()
+        .gap(t::SPACE_8)
+        .pl(t::SPACE_16)
+        .pr(t::SPACE_8)
+        .py(t::SPACE_8)
+        .radius(t::RADIUS_16)
+        .fill(c.field)
+        .border(1.0, c.border_composer)
+        .focus_within_ring(1.0, 0.0, c.border_active)
+        .child(col().grow(1.0).min_w(0.0).py(t::SPACE_8).child(input))
+        .child(send);
+    for layer in look.shadows.composer {
+        frame = frame.box_shadow(*layer);
+    }
+    col()
+        .w_full()
+        .px(t::SPACE_24)
+        .pt(t::SPACE_4)
+        .pb(t::SPACE_16)
+        .child(frame)
+}

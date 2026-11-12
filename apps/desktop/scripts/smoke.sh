@@ -8,11 +8,12 @@
 #
 #   scripts/smoke.sh            # expects `cargo build` here and `cargo build --release -p lumia-cli` in apps/core
 #   LUMIA_INSTANCE=http://host:4000 scripts/smoke.sh
+#   LUMIA_CLI=/path/to/lumia-cli scripts/smoke.sh     # a CLI built elsewhere (another worktree)
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 root="$here/../../.."
 instance=${LUMIA_INSTANCE:-http://localhost:4000}
-cli="$root/apps/core/target/release/lumia-cli"
+cli=${LUMIA_CLI:-$root/apps/core/target/release/lumia-cli}
 shell="$here/../target/debug/lumia"
 work=${LUMIA_SMOKE_WORK:-$here/../out/smoke}
 rm -rf "$work" && mkdir -p "$work"

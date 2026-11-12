@@ -4,114 +4,16 @@
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+mod common;
+
 use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicU32, Ordering};
 
-use lumia_client::app::{
-    ChannelSummary, InstanceSummary, MemberSummary, MessageSummary, ServerSummary, SnapshotSummary,
-};
-use lumia_shell::app::{Route, State};
+use common::*;
+use lumia_client::app::ChannelSummary;
+use lumia_shell::app::State;
+use lumia_shell::app::{HomeView, Place, Route};
 use lumia_shell::session::{Failure, Pending, Update};
-use lumia_shell::ui;
-use rune::{Env, Key, KeyEvent, Mods, Runtime};
-
-fn data_dir() -> PathBuf {
-    static NEXT: AtomicU32 = AtomicU32::new(0);
-    let dir = std::env::temp_dir().join(format!(
-        "lumia-shell-test-{}-{}",
-        std::process::id(),
-        NEXT.fetch_add(1, Ordering::Relaxed)
-    ));
-    let _ = std::fs::remove_dir_all(&dir);
-    dir
-}
-
-fn runtime(state: State) -> Runtime<State> {
-    let mut rt = Runtime::new(state, ui::view, (1180.0, 760.0), Env::new(false, 2.0));
-    settle(&mut rt);
-    rt
-}
-
-fn settle(rt: &mut Runtime<State>) {
-    rt.frame(0.0);
-    for _ in 0..20 {
-        rt.frame(1.0 / 60.0);
-    }
-}
-
-fn press(rt: &mut Runtime<State>, key: &str) {
-    let (x, y) = rt
-        .find(key)
-        .unwrap_or_else(|| panic!("{key} is not on screen"));
-    rt.pointer_move(x, y);
-    rt.pointer_down(x, y);
-    rt.pointer_up(x, y);
-    settle(rt);
-}
-
-fn type_text(rt: &mut Runtime<State>, text: &str) {
-    for c in text.chars() {
-        rt.key(KeyEvent {
-            key: Key::Text(c.to_string()),
-            mods: Mods::default(),
-        });
-    }
-    settle(rt);
-}
-
-/// Every text and label on screen, to look for wording in.
-fn words(rt: &Runtime<State>) -> String {
-    rt.elements()
-        .into_iter()
-        .flat_map(|e| [e.text, e.label])
-        .flatten()
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn info() -> InstanceSummary {
-    InstanceSummary {
-        host: "chat.example.com".into(),
-        operator_name: "Example Co".into(),
-        operator_url: String::new(),
-        terms_url: String::new(),
-        privacy_url: String::new(),
-        software_version: "0.2.1".into(),
-        identity_proof_sign_in_enabled: false,
-        identity_proof_create_enabled: false,
-        open_registration: true,
-        web_push_public_key: String::new(),
-        magic_link_enabled: false,
-        oidc_name: String::new(),
-    }
-}
-
-/// A state with an instance open that nothing answers for, its trust card as given.
-fn opened() -> State {
-    let mut state = State::new(data_dir());
-    state.sign_in.instance.replace_text("http://127.0.0.1:9");
-    state.connect();
-    assert!(
-        state.session.is_open(),
-        "opening needs only the local stores: {}",
-        state.sign_in.error
-    );
-    state.receive(&Update::Info(Ok(info())));
-    state
-}
-
-fn refusal(code: &str, details: &[(&str, &str)]) -> Update {
-    let details: HashMap<String, String> = details
-        .iter()
-        .map(|(k, v)| (k.to_string(), v.to_string()))
-        .collect();
-    Update::SignedIn(Err(Failure {
-        code: code.into(),
-        message: format!("{code} from the instance"),
-        details,
-    }))
-}
+use rune::{Key, KeyEvent, Mods};
 
 #[test]
 fn the_first_screen_asks_for_an_instance_and_refuses_what_is_not_an_address() {
@@ -175,92 +77,12 @@ fn refusals_are_worded_and_a_second_factor_is_asked_for_once() {
     assert!(words(&rt).contains("asks for its passkey"));
 }
 
-fn snapshot() -> SnapshotSummary {
-    let channel = |id: &str, server: &str, name: &str, kind: &str| ChannelSummary {
-        channel_id: id.into(),
-        server_id: server.into(),
-        name: name.into(),
-        kind: kind.into(),
-        last_seq: 0,
-        participant_account_ids: Vec::new(),
-        host: String::new(),
-    };
-    SnapshotSummary {
-        account_id: "me".into(),
-        handle: "ada".into(),
-        display_name: "Ada Lovelace".into(),
-        servers: vec![
-            ServerSummary {
-                server_id: "acme".into(),
-                name: "Acme Works".into(),
-            },
-            ServerSummary {
-                server_id: "garden".into(),
-                name: "Garden".into(),
-            },
-        ],
-        channels: vec![
-            channel("general", "acme", "general", "TEXT"),
-            channel("design", "acme", "design", "TEXT"),
-            channel("plots", "garden", "plots", "TEXT"),
-            channel("dm", "", "", "PERSONAL_DM"),
-        ],
-        pending_requests: Vec::new(),
-    }
-}
-
-fn member(id: &str, handle: &str, name: &str) -> MemberSummary {
-    MemberSummary {
-        account_id: id.into(),
-        handle: handle.into(),
-        display_name: name.into(),
-        nickname: String::new(),
-        pronouns: String::new(),
-        bio: String::new(),
-    }
-}
-
-fn message(id: &str, author: &str, body: &str, micros: i64) -> MessageSummary {
-    MessageSummary {
-        message_id: id.into(),
-        channel_id: "general".into(),
-        seq: 0,
-        author_account_id: author.into(),
-        body: body.into(),
-        created_at_micros: micros,
-        deleted: false,
-    }
-}
-
-/// Signed in, with two servers and their members, and three messages in the open channel.
-fn signed_in() -> State {
-    let mut state = opened();
-    state.receive(&Update::SignedIn(Ok(())));
-    state.receive(&Update::Snapshot(Ok(snapshot())));
-    state.receive(&Update::Members {
-        server_id: "acme".into(),
-        members: vec![
-            member("me", "ada", "Ada Lovelace"),
-            member("grace", "grace", "Grace Hopper"),
-        ],
-    });
-    let now = chrono::Utc::now().timestamp_micros();
-    let day = 86_400_000_000;
-    state.session.messages = vec![
-        message("m1", "grace", "Shipped on **Friday**.", now - 3 * day),
-        message("m2", "me", "Reading it now.", now - 60_000_000),
-        message("m3", "stranger", "Who am I?", now),
-    ];
-    state.session.revision += 1;
-    state
-}
-
 #[test]
 fn the_shell_lands_on_the_first_server_and_its_first_channel() {
     let rt = runtime(signed_in());
     assert_eq!(rt.state.route, Route::Shell);
-    assert_eq!(rt.state.server.as_deref(), Some("acme"));
-    assert_eq!(rt.state.session.channel.as_deref(), Some("general"));
+    assert_eq!(rt.state.server_id(), Some("acme"));
+    assert_eq!(rt.state.session.channel(), Some("general"));
     for key in [
         "server-acme",
         "server-garden",
@@ -274,10 +96,6 @@ fn the_shell_lands_on_the_first_server_and_its_first_channel() {
     assert!(
         rt.find("channel-plots").is_none(),
         "another server's channel is not listed"
-    );
-    assert!(
-        rt.find("channel-dm").is_none(),
-        "a personal conversation is not a channel"
     );
     let shown = words(&rt);
     for expected in [
@@ -295,15 +113,64 @@ fn the_shell_lands_on_the_first_server_and_its_first_channel() {
 }
 
 #[test]
+fn the_rail_goes_home_to_adding_a_server_and_to_the_profile() {
+    let mut rt = runtime(signed_in());
+    press(&mut rt, "home");
+    assert_eq!(rt.state.place, Place::Home);
+    assert_eq!(rt.state.home_view, HomeView::Conversations);
+    assert!(
+        rt.state.session.conversation.is_none(),
+        "no channel stays open behind Home"
+    );
+    assert!(rt.find("channel-general").is_none() && rt.find("members").is_none());
+
+    press(&mut rt, "add-server");
+    assert_eq!(rt.state.home_view, HomeView::AddServer);
+    press(&mut rt, "self");
+    assert_eq!(rt.state.home_view, HomeView::Profile);
+
+    press(&mut rt, "server-acme");
+    assert_eq!(rt.state.server_id(), Some("acme"));
+    assert_eq!(rt.state.session.channel(), Some("general"));
+}
+
+#[test]
+fn an_account_with_a_personal_conversation_lands_on_home() {
+    let mut state = opened();
+    state.receive(&Update::SignedIn(Ok(())));
+    let mut snapshot = snapshot();
+    snapshot.channels.push(ChannelSummary {
+        channel_id: "dm".into(),
+        server_id: String::new(),
+        name: String::new(),
+        kind: "PERSONAL_DM".into(),
+        last_seq: 0,
+        participant_account_ids: vec!["me".into(), "grace".into()],
+        host: String::new(),
+    });
+    state.receive(&Update::Snapshot(Ok(snapshot)));
+    let rt = runtime(state);
+    assert_eq!(rt.state.place, Place::Home);
+    assert!(
+        rt.find("channel-dm").is_none(),
+        "a personal conversation is not a server's channel"
+    );
+    assert!(
+        rt.find("server-acme").is_some(),
+        "the servers are still on the rail"
+    );
+}
+
+#[test]
 fn a_press_changes_channel_and_server() {
     let mut rt = runtime(signed_in());
     press(&mut rt, "channel-design");
-    assert_eq!(rt.state.session.channel.as_deref(), Some("design"));
+    assert_eq!(rt.state.session.channel(), Some("design"));
     assert!(words(&rt).contains("Nothing here yet"));
 
     press(&mut rt, "server-garden");
-    assert_eq!(rt.state.server.as_deref(), Some("garden"));
-    assert_eq!(rt.state.session.channel.as_deref(), Some("plots"));
+    assert_eq!(rt.state.server_id(), Some("garden"));
+    assert_eq!(rt.state.session.channel(), Some("plots"));
     assert!(rt.find("channel-plots").is_some() && rt.find("channel-general").is_none());
 }
 
