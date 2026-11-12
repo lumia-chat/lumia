@@ -2959,7 +2959,7 @@ checksum = "4050469837a6ff301cd14c1f8f24f88549e6d548f24f64e2148eb0f72cebc51f"
 
 [[package]]
 name = "lumia-client"
-version = "0.2.1"
+version = "0.3.1"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek 3.0.0",
@@ -2994,7 +2994,7 @@ dependencies = [
 
 [[package]]
 name = "lumia-core"
-version = "0.2.1"
+version = "0.3.1"
 dependencies = [
  "bip39",
  "blake3",
@@ -3021,7 +3021,7 @@ dependencies = [
 
 [[package]]
 name = "lumia-proto"
-version = "0.2.1"
+version = "0.3.1"
 dependencies = [
  "prost",
  "prost-build",
@@ -3031,7 +3031,7 @@ dependencies = [
 
 [[package]]
 name = "lumia-shell"
-version = "0.2.1"
+version = "0.3.1"
 dependencies = [
  "chrono",
  "getrandom 0.4.3",
@@ -3050,7 +3050,7 @@ dependencies = [
 
 [[package]]
 name = "lumia-sparkle"
-version = "0.2.1"
+version = "0.3.1"
 dependencies = [
  "objc2 0.6.5",
  "objc2-foundation 0.3.2",
