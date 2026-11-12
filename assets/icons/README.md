@@ -7,4 +7,6 @@ The 37 stroke icons used across Lumia, 32 lifted from the product design (`back`
 - Reactions: `thumbs-up`, `check-circle`, `heart`, `sparkle`
 - Sign-in: `eye`, `eye-off`, `key`, `mail`
 - Menus and cards: `user`, `preferences`, `sign-out`, `check`, `close` (the account menu and the profile card)
+
+`sign-out` is not as the boards draw it. Theirs is an arrow going into a door, the picture every icon set calls log-in; this one is the same door mirrored with the arrow leaving (2026-11-12). The boards on the design canvas still carry the old one.
 - Devices and encryption: `globe`, `monitor`, `phone`, `shield`
