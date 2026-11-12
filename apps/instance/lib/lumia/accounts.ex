@@ -76,28 +76,33 @@ defmodule Lumia.Accounts do
   """
   def update_account(%Account{} = account, changes) when is_map(changes) do
     handle = changes |> Map.get(:handle, account.handle) |> to_string() |> String.trim()
-
-    name =
-      case Map.fetch(changes, :display_name) do
-        {:ok, name} -> name |> to_string() |> String.trim() |> blank_to_nil()
-        :error -> account.display_name
-      end
-
-    renamed? = String.downcase(handle) != String.downcase(account.handle)
+    name = new_name(account, changes)
 
     cond do
-      not valid_handle?(handle) ->
-        {:error, :invalid_argument}
-
-      is_binary(name) and String.length(name) > @display_name_max ->
+      not acceptable?(account, handle, name) ->
         {:error, :invalid_argument}
 
       handle == account.handle and name == account.display_name ->
         {:ok, account}
 
       true ->
+        renamed? = String.downcase(handle) != String.downcase(account.handle)
         Tx.transact(fn -> store_account(account, handle, name, renamed?) end)
     end
+  end
+
+  defp new_name(account, changes) do
+    case Map.fetch(changes, :display_name) do
+      {:ok, name} -> name |> to_string() |> String.trim() |> blank_to_nil()
+      :error -> account.display_name
+    end
+  end
+
+  # Only a handle being changed is held to the rule: an account made before
+  # there was one keeps what it has, and can still change its name.
+  defp acceptable?(account, handle, name) do
+    (handle == account.handle or valid_handle?(handle)) and
+      (is_nil(name) or String.length(name) <= @display_name_max)
   end
 
   defp store_account(account, handle, name, renamed?) do

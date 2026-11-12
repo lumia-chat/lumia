@@ -83,6 +83,21 @@ defmodule Lumia.AccountsTest do
       assert {:ok, _} = Accounts.create_account(%{handle: "unrelated"})
     end
 
+    test "an account whose handle predates the rule can still change its name, and its handle" do
+      {:ok, old} =
+        Lumia.Repo.insert(%Lumia.Accounts.Account{
+          handle: "Old Handle #{System.unique_integer([:positive])}"
+        })
+
+      assert {:ok, named} = Accounts.update_account(old, %{display_name: "Still Here"})
+      assert named.handle == old.handle and named.display_name == "Still Here"
+
+      assert {:error, :invalid_argument} =
+               Accounts.update_account(named, %{handle: "still not one"})
+
+      assert {:ok, %{handle: "fine_now"}} = Accounts.update_account(named, %{handle: "fine_now"})
+    end
+
     test "the handle left is held for the account that left it" do
       account = account("first")
       left = account.handle
