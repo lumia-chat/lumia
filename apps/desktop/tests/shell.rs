@@ -530,6 +530,31 @@ fn return_in_the_composer_sends_and_a_send_that_cannot_be_queued_keeps_the_draft
     assert!(words(&rt).contains("Not sent:"), "and the screen says so");
 }
 
+/// A refresh of the snapshot fails when the network drops for a moment. Nothing the person
+/// did went wrong, so nothing is said over the composer, where it would read as a message
+/// that was not sent; the shell keeps what it holds.
+#[test]
+fn a_refresh_that_fails_says_nothing_over_what_is_held() {
+    let mut rt = runtime(signed_in());
+    rt.update(|s, _| {
+        // The staged state opens a channel no store knows, which leaves a line of its own.
+        s.session.last_error = None;
+        s.receive(&Update::Snapshot(Err(Failure {
+            code: String::new(),
+            message: "transport: error sending request for url (https://chat.example/api/v1/account/snapshot)".into(),
+            details: HashMap::new(),
+        })))
+    });
+    settle(&mut rt);
+    assert_eq!(rt.state.route, Route::Shell);
+    assert!(rt.state.session.snapshot.is_some(), "what was held stays");
+    assert_eq!(rt.state.session.last_error, None);
+    assert!(
+        !words(&rt).contains("transport"),
+        "and the screen is as it was"
+    );
+}
+
 #[test]
 fn a_session_the_instance_no_longer_knows_goes_back_to_sign_in() {
     let mut rt = runtime(signed_in());

@@ -963,12 +963,20 @@ impl Session {
                 self.dm_snapshot_applied();
             }
             Update::Snapshot(Err(failure)) => {
-                self.last_error = Some(failure.message.clone());
                 if failure.code == "UNAUTHENTICATED" {
+                    self.last_error = Some(failure.message.clone());
                     self.signed_in = false;
-                } else if self.snapshot.is_none() {
-                    // Nothing was kept from an earlier launch, so there is nothing to
-                    // show until one arrives: ask again after 2 s, then 4, up to 30.
+                } else {
+                    // With nothing kept from an earlier launch there is nothing to show
+                    // until a snapshot arrives, so the failure is what the screen says.
+                    // A refresh of one that is held (every welcome and account event
+                    // asks for one) fails without a word: what is held stays on screen,
+                    // the rail's dot says when the gateway is away, and a line over the
+                    // composer would read as a message that was not sent.
+                    if self.snapshot.is_none() {
+                        self.last_error = Some(failure.message.clone());
+                    }
+                    // Either way it is asked for again after 2 s, then 4, up to 30.
                     self.load_failures += 1;
                     self.load_after(std::time::Duration::from_secs(
                         (1u64 << self.load_failures.min(5)).min(30),
