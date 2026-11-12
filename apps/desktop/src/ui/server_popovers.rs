@@ -7,7 +7,7 @@ use lumia_client::app::{InviteSummary, ServerSummary};
 use rune::{El, ScrollSpec, col, row, text};
 
 use super::components::{
-    Look, error_text, field, link_button, popover, primary_button, secondary_button, segmented,
+    Look, error_text, field, link_button, popover, primary_button, segmented, small_button,
 };
 use crate::app::State;
 use crate::tokens::{self as t};
@@ -62,7 +62,7 @@ pub fn invite(s: &State, look: Look) -> Option<El> {
     let mut body = col()
         .w_full()
         .padding(t::SPACE_4)
-        .gap(t::SPACE_12)
+        .gap(t::SPACE_14)
         .child(choice(
             "invite-expiry",
             "Expires",
@@ -97,8 +97,9 @@ pub fn invite(s: &State, look: Look) -> Option<El> {
                 row()
                     .key("invite-link-made")
                     .w_full()
-                    .padding(t::SPACE_10)
-                    .radius(t::RADIUS_10)
+                    .px(t::SPACE_12)
+                    .py(t::SPACE_10)
+                    .radius(t::RADIUS_12)
                     .fill(c.inset)
                     .child(
                         text(made.url.clone())
@@ -111,18 +112,13 @@ pub fn invite(s: &State, look: Look) -> Option<El> {
                             .label("Invite link"),
                     ),
             )
-            .child(
-                row().w_full().child(
-                    secondary_button(
-                        "copy-invite",
-                        if form.copied { "Copied" } else { "Copy link" },
-                        true,
-                        |_| {},
-                        look,
-                    )
-                    .on_press_tx(|s: &mut State, tx| s.copy_invite(tx)),
-                ),
-            );
+            .child(row().w_full().child(small_button(
+                "copy-invite",
+                if form.copied { "Copied" } else { "Copy link" },
+                true,
+                State::copy_invite,
+                look,
+            )));
     }
     body = body
         // The invite as a mail (architecture 6.2): one use, a week, to the address.
@@ -135,11 +131,11 @@ pub fn invite(s: &State, look: Look) -> Option<El> {
             |s, _| s.email_invite(),
             look,
         ))
-        .child(row().w_full().child(secondary_button(
+        .child(row().w_full().child(small_button(
             "email-invite",
             "Send by email",
             !form.busy && !form.email.text.trim().is_empty(),
-            State::email_invite,
+            |s, _| s.email_invite(),
             look,
         )));
     if !form.emailed.is_empty() {

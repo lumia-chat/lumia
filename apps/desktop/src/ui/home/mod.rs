@@ -17,17 +17,13 @@ use lumia_client::app::ChannelSummary;
 use rune::{Cursor, El, Icon, ScrollSpec, col, el, icon, row, text};
 
 use super::components::{
-    Look, avatar, empty_state, icon_button, link_button, panel, section_label,
+    Look, action_button, avatar, empty_state, hover_layer, icon_button, link_button, panel,
+    section_label, shadowed,
 };
 use super::conversation;
 use super::shell::{SIDEBAR_WIDTH, sidebar_frame};
 use crate::app::{HomeView, State};
 use crate::tokens::{self as t, icons};
-
-/// A quick tile's height, as the design draws it.
-const TILE_HEIGHT: f32 = t::ROW_HEIGHT + t::SPACE_24 + t::SPACE_2;
-/// A count badge's height and least width.
-const BADGE: f32 = t::SPACE_18;
 
 /// Home's sidebar: the title with New message, the tiles, the conversations grouped by the
 /// instance that hosts them, and the way to add a server.
@@ -81,7 +77,7 @@ pub fn sidebar(s: &State, look: Look) -> El {
             None => groups.push((host, vec![channel])),
         }
     }
-    let mut list = col().w_full().gap(t::SPACE_2);
+    let mut list = col().w_full();
     if groups.is_empty() {
         list = list.child(
             text("No conversations yet.")
@@ -90,7 +86,7 @@ pub fn sidebar(s: &State, look: Look) -> El {
                 .padding(t::SPACE_10),
         );
     }
-    for (host, channels) in groups {
+    for (n, (host, channels)) in groups.into_iter().enumerate() {
         let mut group = col()
             .key(format!("conversations-{host}"))
             .w_full()
@@ -100,7 +96,11 @@ pub fn sidebar(s: &State, look: Look) -> El {
         for channel in channels {
             group = group.child(conversation_row(s, channel, look));
         }
-        list = list.child(section_label(host, look)).child(group);
+        // Sections sit 12 apart, each under a label with 4 above it.
+        let label = section_label(host, t::SPACE_4, look);
+        list = list
+            .child(if n == 0 { label } else { label.mt(t::SPACE_12) })
+            .child(group);
     }
     list = list.child(el().px(t::SPACE_10).pt(t::SPACE_8).child(link_button(
         "home-add-server",
@@ -151,32 +151,36 @@ fn tile(
     let mut tile = col()
         .key(format!("tile-{}", label.to_lowercase()))
         .w(width)
-        .h(TILE_HEIGHT)
+        .h(t::QUICK_TILE_HEIGHT)
         .center()
         .gap(t::SPACE_4)
         .radius(t::RADIUS_14)
         .fill(c.surface)
-        .hover(c.hover_row)
+        .hover_group()
         .role("button")
         .label(name)
         .cursor(Cursor::Pointer)
         .focusable(true)
         .focus_ring(2.0, 2.0, c.focus)
-        .on_press(move |s: &mut State| s.go_home(view))
-        .child(icon(glyph, t::SPACE_16).color(ink))
-        .child(text(label).font(t::TEXT_SECTION).color(ink));
+        .on_press(move |s: &mut State| s.go_home(view));
     if current {
         tile = tile.border(1.0, c.accent);
     } else {
-        for ring in look.shadows.quick {
-            tile = tile.box_shadow(*ring);
-        }
+        // A ring at rest, and the darker ring with its shadow under the pointer: the tile
+        // again, under its glyph and word, drawn only then.
+        tile = shadowed(tile, look.shadows.quick).child(shadowed(
+            hover_layer(t::RADIUS_14).fill(c.surface),
+            look.shadows.quick_hover,
+        ));
     }
+    tile = tile
+        .child(icon(glyph, t::SPACE_18).color(ink))
+        .child(text(label).font(t::TEXT_SECTION).color(ink));
     if count > 0 {
         tile = tile.child(
             el().pin(None, Some(t::SPACE_6), Some(t::SPACE_6), None)
-                .h(BADGE)
-                .min_w(BADGE)
+                .h(t::BADGE_SMALL)
+                .min_w(t::BADGE_SMALL)
                 .px(t::SPACE_4)
                 .radius(t::RADIUS_PILL)
                 .fill(c.accent)
@@ -207,7 +211,7 @@ fn conversation_row(s: &State, channel: &ChannelSummary, look: Look) -> El {
     let mut button = row()
         .key(format!("dm-{}", channel.channel_id))
         .w_full()
-        .h(t::ROW_HEIGHT + t::SPACE_2)
+        .h(t::ROW_HEIGHT_PERSON)
         .px(t::SPACE_10)
         .gap(t::SPACE_10)
         .items_center()
@@ -221,7 +225,11 @@ fn conversation_row(s: &State, channel: &ChannelSummary, look: Look) -> El {
         .child(avatar(&name, tone, t::AVATAR_XS, look))
         .child(
             text(name)
-                .font(if active { t::TEXT_MEMBER } else { t::TEXT_NAV })
+                .font(if active {
+                    t::TEXT_NAV_ACTIVE
+                } else {
+                    t::TEXT_NAV
+                })
                 .color(if active { c.ink_selected } else { c.ink_quiet })
                 .truncate()
                 .grow(1.0)
@@ -311,55 +319,35 @@ fn no_identity(look: Look) -> El {
         )
 }
 
-/// The one thing to do next in a pane: the accent fill, as wide as its words.
-fn action_button(
-    key: impl Into<String>,
-    label: &str,
-    enabled: bool,
-    press: impl Fn(&mut State) + 'static,
+/// A person as a row's start, in a member row's metrics: the avatar, the name with `mark`
+/// beside it (a tag), and a quieter line under it.
+fn person(
+    name: &str,
+    subtitle: &str,
+    account_id: &str,
+    size: f32,
+    mark: Option<El>,
     look: Look,
 ) -> El {
     let c = look.c;
-    let button = row()
-        .key(key)
-        .h(t::CONTROL_HEIGHT - t::SPACE_8)
-        .px(t::SPACE_18)
-        .center()
-        .radius(t::RADIUS_10)
-        .fill(c.accent)
-        .role("button")
-        .label(label)
-        .disabled(!enabled)
+    let named = row()
+        .w_full()
+        .gap(t::SPACE_6)
+        .items_center()
         .child(
-            text(label)
-                .font(t::TEXT_BUTTON_SECONDARY)
-                .color(c.on_accent),
-        );
-    if enabled {
-        button
-            .hover(c.accent_hover)
-            .cursor(Cursor::Pointer)
-            .focusable(true)
-            .focus_ring(2.0, 2.0, c.focus)
-            .on_press(press)
-    } else {
-        button.opacity(0.5)
-    }
-}
-
-/// A person as a row's start: the avatar, the name, and a quieter line under it.
-fn person(name: &str, subtitle: &str, account_id: &str, size: f32, look: Look) -> El {
-    let c = look.c;
-    let mut words = col().grow(1.0).min_w(0.0).child(
-        text(name)
-            .font(if size >= t::AVATAR_LG {
-                t::TEXT_AUTHOR
-            } else {
-                t::TEXT_MEMBER
-            })
-            .color(c.ink)
-            .truncate(),
-    );
+            text(name)
+                .font(if size >= t::AVATAR_LG {
+                    t::TEXT_AUTHOR
+                } else {
+                    t::TEXT_MEMBER
+                })
+                .color(c.ink)
+                .truncate()
+                .shrink()
+                .min_w(0.0),
+        )
+        .children(mark);
+    let mut words = col().grow(1.0).min_w(0.0).child(named);
     if !subtitle.is_empty() {
         words = words.child(
             text(subtitle)
@@ -371,7 +359,7 @@ fn person(name: &str, subtitle: &str, account_id: &str, size: f32, look: Look) -
     row()
         .grow(1.0)
         .min_w(0.0)
-        .gap(t::SPACE_10)
+        .gap(t::SPACE_12)
         .items_center()
         .child(avatar(name, account_id, size, look))
         .child(words)

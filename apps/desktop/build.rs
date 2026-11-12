@@ -365,9 +365,75 @@ fn icons(assets: &Path, src: &mut String) {
             format!("{group}>{inner}</g>")
         );
     }
-    // The brand symbol keeps its own colours (gradients), so Rune draws it as full SVG. Its
-    // view box does not start at the origin, which an `Icon`'s square view does.
-    let path = assets.join("brand/lumia-original-icon.svg");
+    // The brand artwork keeps its own colours (gradients), so Rune draws it as full SVG.
+    brand(
+        assets,
+        "lumia-original-icon",
+        "LOGO",
+        "The Lumia symbol",
+        None,
+        src,
+    );
+    // The stacked logo (the symbol over the wordmark) through the sign-in boards' window on
+    // it, which trims the artwork's built-in clear space. The wordmark's ink is the file's,
+    // so there is one for each appearance.
+    for (file, name, ground) in [
+        ("lumia-original-light", "LOGO_STACKED_LIGHT", "light"),
+        ("lumia-original-dark", "LOGO_STACKED_DARK", "dark"),
+    ] {
+        brand(
+            assets,
+            file,
+            name,
+            &format!("The stacked Lumia logo for {ground} grounds, as the sign-in boards crop it"),
+            Some(STACKED),
+            src,
+        );
+    }
+    let _ = writeln!(
+        src,
+        "    /// The stacked logo's size on the sign-in boards. No token names it: the numbers\n    /// are the boards' own (`build.rs`).\n    pub const LOGO_STACKED_WIDTH: f32 = {:?};\n    pub const LOGO_STACKED_HEIGHT: f32 = {:?};",
+        STACKED.width, STACKED.height
+    );
+    src.push_str("}\n");
+}
+
+/// A window on a square piece of brand artwork, in the points a board draws it at.
+#[derive(Clone, Copy)]
+struct Window {
+    /// The side the whole artwork is drawn at.
+    drawn: f64,
+    /// Where the window starts inside it, and its size.
+    left: f64,
+    top: f64,
+    width: f64,
+    height: f64,
+}
+
+/// How the sign-in boards show the stacked logo (`SignInLight.dc.html`, and `.auth__logo` in
+/// `apps/web/src/app.css`): the artwork 246 points square, seen through a window 150 by 138
+/// that starts 49 in and 57 down. The design system has no token for any of these.
+const STACKED: Window = Window {
+    drawn: 246.0,
+    left: 49.0,
+    top: 57.0,
+    width: 150.0,
+    height: 138.0,
+};
+
+/// `assets/brand/<file>.svg` as an `Icon` named `name`. An `Icon`'s view is a square from the
+/// origin, which the artwork's view box need not be; `window` moves and narrows it to a part
+/// of the artwork, the `Icon` being as wide as the window (what falls under the window's
+/// height is the artwork's clear space).
+fn brand(
+    assets: &Path,
+    file: &str,
+    name: &str,
+    doc: &str,
+    window: Option<Window>,
+    src: &mut String,
+) {
+    let path = assets.join(format!("brand/{file}.svg"));
     println!("cargo:rerun-if-changed={}", path.display());
     let svg = read(&path);
     let (Some(open), Some(close)) = (svg.find("<svg"), svg.rfind("</svg>")) else {
@@ -382,9 +448,23 @@ fn icons(assets: &Path, src: &mut String) {
     let [x, y, side, _] = view[..] else {
         fail(&path, &"no viewBox")
     };
+    let (x, y, side) = match window {
+        Some(w) => {
+            // To a thousandth of the artwork's unit, which is all an `f32` view keeps.
+            let unit = side / w.drawn;
+            let round = |n: f64| (n * 1000.0).round() / 1000.0;
+            (
+                round(x + w.left * unit),
+                round(y + w.top * unit),
+                round(w.width * unit),
+            )
+        }
+        None => (x, y, side),
+    };
     let _ = writeln!(
         src,
-        "    /// The Lumia symbol (`assets/brand`, all rights reserved; see its LICENSE).\n    pub static LOGO: Icon = Icon {{ name: \"lumia-logo\", view: {side:?}, body: {:?} }};",
+        "    /// {doc} (`assets/brand`, all rights reserved; see its LICENSE).\n    pub static {name}: Icon = Icon {{ name: \"lumia-{}\", view: {side:?}, body: {:?} }};",
+        name.to_lowercase().replace('_', "-"),
         format!(
             "<g transform=\"translate({} {})\">{}</g>",
             -x,
@@ -392,5 +472,4 @@ fn icons(assets: &Path, src: &mut String) {
             &svg[open_end + 1..close]
         )
     );
-    src.push_str("}\n");
 }

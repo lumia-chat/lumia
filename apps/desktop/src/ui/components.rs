@@ -1,8 +1,17 @@
 //! The design system's pieces as Rune elements, the counterpart of LumiaKit's
 //! `Components.swift`: avatar, card, field, buttons, notices. Every colour, distance and type
 //! style is a token.
+//!
+//! The metrics are the design canvas's: the sign-in boards for the card, the field and the
+//! buttons, the Quiet Split for the rest. A state a fill cannot say (a border or a shadow
+//! that changes under the pointer) is a [`hover_layer`]. Two things the boards do are left
+//! out: a rail tile lifting a point on hover, and the primary button darkening by a filter
+//! in the profile card (it takes `accent-hover`, as the sign-in boards' does). A control
+//! that cannot be used is drawn at half strength; the boards draw no disabled state.
 
-use rune::{Align, Cursor, El, Icon, Side, TextEdit, col, el, icon, row, text, text_input};
+use rune::{
+    Align, Color, Cursor, El, Icon, Side, TextEdit, Tx, col, el, icon, row, text, text_input,
+};
 
 use crate::app::State;
 use crate::tokens::{self as t, Colors, Shadows};
@@ -43,44 +52,69 @@ pub fn initials(name: &str) -> String {
 /// A person's avatar: their initials on the tone their id hashes to.
 pub fn avatar(name: &str, id: &str, size: f32, look: Look) -> El {
     let (ground, ink) = t::tone(id, look.c);
-    let style = if size >= t::AVATAR_MD {
-        t::TEXT_AUTHOR
-    } else {
-        t::TEXT_TAG
-    };
     el().size(size, size)
         .radius(size / 2.0)
         .fill(ground)
         .center()
         .a11y_hidden()
-        .child(text(initials(name)).font(style).color(ink))
+        .child(text(initials(name)).font(t::initials(size)).color(ink))
 }
 
-fn shadowed(mut element: El, layers: &[rune::Shadow]) -> El {
+/// The status dot at the foot of an avatar `size` across: it overhangs the avatar's corner,
+/// ringed in the colour of what the avatar sits on. A sibling of the avatar in its box.
+pub fn status_dot(size: f32, color: Color, ring: Color) -> El {
+    let at = size - t::STATUS_DOT + t::SPACE_2;
+    el().absolute(at, at)
+        .size(t::STATUS_DOT, t::STATUS_DOT)
+        .radius(t::STATUS_DOT / 2.0)
+        .fill(color)
+        .border(2.0, ring)
+}
+
+/// A small tag beside a name, in the accent's tint: "You" in a member's row.
+pub fn tag(words: &str, look: Look) -> El {
+    el().px(t::SPACE_6)
+        .py(t::SPACE_2)
+        .radius(t::RADIUS_5)
+        .fill(look.c.accent_soft)
+        .child(text(words).font(t::TEXT_TAG_SMALL).color(look.c.accent_ink))
+}
+
+pub fn shadowed(mut element: El, layers: &[rune::Shadow]) -> El {
     for layer in layers {
         element = element.box_shadow(*layer);
     }
     element
 }
 
+/// What a control shows only under the pointer and a fill cannot say (another border,
+/// another shadow): a box over the whole of it, to be given that look. The control is its
+/// `hover_group`.
+pub fn hover_layer(radius: f32) -> El {
+    el().pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+        .radius(radius)
+        .group_opacity(0.0, 1.0)
+        .a11y_hidden()
+}
+
 /// The sign-in card: a title, a line under it, then the form.
 pub fn card(title: &str, subtitle: &str, look: Look) -> El {
     let c = look.c;
     let heading = col()
-        .gap(t::SPACE_4)
+        .gap(t::SPACE_6)
         .child(text(title).font(t::TITLE_AUTH).color(c.ink).role("heading"))
         .child(
             text(subtitle)
                 .font(t::TEXT_SUBTITLE)
-                .color(c.ink_secondary)
+                .color(c.ink_muted)
                 .wrap(),
         );
     shadowed(
         col()
             .w(t::AUTH_WIDTH)
-            .padding(t::SPACE_24)
-            .gap(t::SPACE_16)
-            .radius(t::RADIUS_16)
+            .padding(t::SPACE_28)
+            .gap(t::SPACE_18)
+            .radius(t::RADIUS_22)
             .fill(c.surface)
             .border(1.0, c.panel_edge),
         look.shadows.card,
@@ -109,16 +143,26 @@ pub fn field(
         .w_full()
         .on_edit(access)
         .on_submit(submit);
-    let frame = row()
+    // Focused, the border takes `border-focus` and the `ring-field` glow goes round it. An
+    // element draws one ring, so the border's is on a box that lies over the frame's border.
+    let inner = row()
+        .w_full()
+        .h_full()
+        .px(t::SPACE_14)
+        .items_center()
+        .radius(t::RADIUS_12)
+        .focus_within_ring(1.0, -1.0, c.border_focus)
+        .child(input);
+    let mut frame = row()
         .w_full()
         .h(t::CONTROL_HEIGHT)
-        .px(t::SPACE_12)
-        .items_center()
-        .radius(t::RADIUS_10)
+        .radius(t::RADIUS_12)
         .fill(c.field)
         .border(1.0, c.border_form)
-        .focus_within_ring(2.0, 0.0, c.border_focus)
-        .child(input);
+        .child(inner);
+    if let Some(glow) = look.shadows.ring_field.first() {
+        frame = frame.focus_within_ring(glow.spread, 0.0, glow.color);
+    }
     col()
         .w_full()
         .gap(t::SPACE_6)
@@ -143,7 +187,7 @@ pub fn primary_button(
     let mut button = row()
         .key(key)
         .w_full()
-        .h(t::CONTROL_HEIGHT)
+        .h(t::CONTROL_PRIMARY)
         .center()
         .radius(t::RADIUS_12)
         .fill(c.accent)
@@ -162,6 +206,39 @@ pub fn primary_button(
         button = button.opacity(0.5);
     }
     button
+}
+
+/// The one thing to do next in a pane or a row: the accent fill, as wide as its words, at
+/// the height of the profile card's primary button on the Quiet Split.
+pub fn action_button(
+    key: impl Into<String>,
+    label: &str,
+    enabled: bool,
+    press: impl Fn(&mut State) + 'static,
+    look: Look,
+) -> El {
+    let c = look.c;
+    let button = row()
+        .key(key)
+        .h(t::CONTROL_PANE)
+        .px(t::SPACE_18)
+        .center()
+        .radius(t::RADIUS_12)
+        .fill(c.accent)
+        .role("button")
+        .label(label)
+        .disabled(!enabled)
+        .child(text(label).font(t::TEXT_BUTTON_PANE).color(c.on_accent));
+    if enabled {
+        button
+            .hover(c.accent_hover)
+            .cursor(Cursor::Pointer)
+            .focusable(true)
+            .focus_ring(2.0, 2.0, c.focus)
+            .on_press(press)
+    } else {
+        button.opacity(0.5)
+    }
 }
 
 /// A quiet text button: a link in the accent.
@@ -207,7 +284,7 @@ pub fn empty_state(glyph: &'static Icon, title: &str, body: &str, look: Look) ->
                 .radius(t::RADIUS_14)
                 .fill(c.inset)
                 .center()
-                .child(icon(glyph, 20.0).color(c.ink_quiet)),
+                .child(icon(glyph, t::SPACE_18).color(c.ink_quiet)),
         )
         .child(text(title).font(t::TEXT_AUTHOR).color(c.ink))
         .child(
@@ -233,7 +310,105 @@ pub fn panel(key: &'static str, look: Look) -> El {
     .clip_rounded(t::RADIUS_18)
 }
 
-/// The second action of a card or a panel: an outlined button, as wide as its label.
+/// An outlined button's size: the boards draw three.
+#[derive(Clone, Copy)]
+enum Outlined {
+    /// The sign-in card's: `control-height`, as wide as the card, a glyph before its label.
+    Card,
+    /// Beside a pane's primary action: 40 high, as the one in the Quiet Split's profile card.
+    Pane,
+    /// In a row or a notice: 38 high at `radius-10`, as "View all members" in the side panel.
+    Small,
+}
+
+fn outlined(
+    key: impl Into<String>,
+    glyph: Option<&'static Icon>,
+    label: &str,
+    enabled: bool,
+    size: Outlined,
+    press: impl Fn(&mut State, &mut Tx) + 'static,
+    look: Look,
+) -> El {
+    let c = look.c;
+    let (height, pad, radius, edge, style, ink, hover) = match size {
+        Outlined::Card | Outlined::Pane => (
+            if matches!(size, Outlined::Card) {
+                t::CONTROL_HEIGHT
+            } else {
+                t::CONTROL_PANE
+            },
+            t::SPACE_18,
+            t::RADIUS_12,
+            c.border_form,
+            t::TEXT_BUTTON_SECONDARY,
+            c.ink_field,
+            c.hover_secondary,
+        ),
+        Outlined::Small => (
+            t::CONTROL_SMALL,
+            t::SPACE_14,
+            t::RADIUS_10,
+            c.border,
+            t::TEXT_LABEL,
+            c.ink_body,
+            c.hover_icon,
+        ),
+    };
+    let mut button = row()
+        .key(key)
+        .h(height)
+        .px(pad)
+        .gap(t::SPACE_10)
+        .center()
+        .radius(radius)
+        .fill(c.surface)
+        .border(1.0, edge)
+        .role("button")
+        .label(label)
+        .disabled(!enabled);
+    if matches!(size, Outlined::Card) {
+        button = button.w_full();
+    }
+    if let Some(glyph) = glyph {
+        button = button.child(icon(glyph, t::SPACE_18).color(ink));
+    }
+    // Under the pointer the label of a small one turns `ink-field`, and the border of the
+    // others `border-hover-form`: a second border over the first, shown with the hover.
+    let mut words = text(label).font(style).color(ink);
+    if matches!(size, Outlined::Small) {
+        words = words.group_color(c.ink_field);
+    }
+    button = button.child(words);
+    if enabled {
+        if !matches!(size, Outlined::Small) {
+            button = button.child(hover_layer(radius).border(1.0, c.border_hover_form));
+        }
+        button
+            .hover(hover)
+            .hover_group()
+            .cursor(Cursor::Pointer)
+            .focusable(true)
+            .focus_ring(2.0, 2.0, c.focus)
+            .on_press_tx(press)
+    } else {
+        button.opacity(0.5)
+    }
+}
+
+/// A secondary way through a card: outlined, as wide as the card, a glyph before its label.
+pub fn wide_button(
+    key: impl Into<String>,
+    glyph: Option<&'static Icon>,
+    label: &str,
+    enabled: bool,
+    press: impl Fn(&mut State, &mut Tx) + 'static,
+    look: Look,
+) -> El {
+    outlined(key, glyph, label, enabled, Outlined::Card, press, look)
+}
+
+/// The second action beside a pane's primary one: an outlined button, as wide as its label.
 pub fn secondary_button(
     key: impl Into<String>,
     label: &str,
@@ -241,33 +416,19 @@ pub fn secondary_button(
     press: impl Fn(&mut State) + 'static,
     look: Look,
 ) -> El {
-    let c = look.c;
-    let button = row()
-        .key(key)
-        .h(t::CONTROL_HEIGHT - t::SPACE_8)
-        .px(t::SPACE_14)
-        .center()
-        .radius(t::RADIUS_10)
-        .fill(c.surface)
-        .border(1.0, c.border_form)
-        .role("button")
-        .label(label)
-        .disabled(!enabled)
-        .child(
-            text(label)
-                .font(t::TEXT_BUTTON_SECONDARY)
-                .color(c.ink_field),
-        );
-    if enabled {
-        button
-            .hover(c.hover_secondary)
-            .cursor(Cursor::Pointer)
-            .focusable(true)
-            .focus_ring(2.0, 2.0, c.focus)
-            .on_press(press)
-    } else {
-        button.opacity(0.5)
-    }
+    let press = move |s: &mut State, _: &mut Tx| press(s);
+    outlined(key, None, label, enabled, Outlined::Pane, press, look)
+}
+
+/// A small outlined button, for a row or a notice.
+pub fn small_button(
+    key: impl Into<String>,
+    label: &str,
+    enabled: bool,
+    press: impl Fn(&mut State, &mut Tx) + 'static,
+    look: Look,
+) -> El {
+    outlined(key, None, label, enabled, Outlined::Small, press, look)
 }
 
 /// A button that is only a glyph, with a name for assistive technology and a tooltip.
@@ -280,29 +441,53 @@ pub fn icon_button(
 ) -> El {
     let c = look.c;
     el().key(key)
-        .size(t::ROW_HEIGHT + t::SPACE_2, t::ROW_HEIGHT + t::SPACE_2)
-        .radius(t::RADIUS_8)
+        .size(t::ICON_BUTTON, t::ICON_BUTTON)
+        .radius(t::RADIUS_9)
         .center()
         .role("button")
         .label(label)
         .help(label)
         .hover(c.hover_icon)
+        .hover_group()
         .cursor(Cursor::Pointer)
         .focusable(true)
         .focus_ring(2.0, 0.0, c.focus)
         .no_window_drag()
         .on_press(press)
-        .child(icon(glyph, t::SPACE_16).color(c.ink_quiet))
+        .child(
+            icon(glyph, t::SPACE_16)
+                .color(c.ink_quiet)
+                .group_color(c.ink_field),
+        )
 }
 
-/// The small heading over a group of rows in a sidebar or a panel.
-pub fn section_label(label: impl Into<String>, look: Look) -> El {
+/// The small heading over a group of rows. `top` is the room above it: 4 in the sidebar, 8
+/// over a side panel's first group and 14 over its later ones.
+pub fn section_label(label: impl Into<String>, top: f32, look: Look) -> El {
     text(label)
         .font(t::TEXT_SECTION)
         .color(look.c.ink_muted)
         .px(t::SPACE_10)
-        .pt(t::SPACE_8)
+        .pt(top)
         .pb(t::SPACE_6)
+}
+
+/// The rule after a title, before the quieter line that says what the place is about.
+pub fn title_rule(look: Look) -> El {
+    el().w(1.0)
+        .h(t::HEADER_GLYPH)
+        .mx(t::SPACE_6)
+        .fill(look.c.line_strong)
+}
+
+/// The quieter line beside a title: a channel's topic, what a page is about.
+pub fn topic(words: &str, look: Look) -> El {
+    text(words)
+        .font(t::TEXT_COMPACT)
+        .color(look.c.ink_muted)
+        .truncate()
+        .grow(1.0)
+        .min_w(0.0)
 }
 
 /// A quiet note with a glyph: something to know, not something wrong.
@@ -310,9 +495,10 @@ pub fn notice(glyph: &'static Icon, words: impl Into<String>, look: Look) -> El 
     let c = look.c;
     row()
         .w_full()
-        .padding(t::SPACE_10)
+        .px(t::SPACE_14)
+        .py(t::SPACE_10)
         .gap(t::SPACE_10)
-        .radius(t::RADIUS_10)
+        .radius(t::RADIUS_12)
         .fill(c.inset)
         .child(icon(glyph, t::SPACE_16).color(c.ink_quiet))
         .child(
@@ -339,9 +525,9 @@ pub fn segmented<V: Copy + PartialEq + 'static>(
     let mut track = row()
         .key(key)
         .w_full()
-        .padding(t::SPACE_2)
-        .gap(t::SPACE_2)
-        .radius(t::RADIUS_10)
+        .padding(t::SPACE_4)
+        .gap(t::SPACE_4)
+        .radius(t::RADIUS_12)
         .fill(c.track)
         .role("radiogroup")
         .label(label);
@@ -351,9 +537,9 @@ pub fn segmented<V: Copy + PartialEq + 'static>(
         let mut segment = row()
             .key(format!("{key}-{i}"))
             .grow(1.0)
-            .h(t::ROW_HEIGHT)
+            .h(t::SEGMENT_HEIGHT)
             .center()
-            .radius(t::RADIUS_8)
+            .radius(t::RADIUS_9)
             .role("radio")
             .label(*name)
             .checked(on)
@@ -363,8 +549,8 @@ pub fn segmented<V: Copy + PartialEq + 'static>(
             .on_press(move |s: &mut State| pick(s, value))
             .child(
                 text(*name)
-                    .font(if on { t::TEXT_MEMBER } else { t::TEXT_COMPACT })
-                    .color(if on { c.ink } else { c.ink_secondary }),
+                    .font(t::TEXT_TAB)
+                    .color(if on { c.ink } else { c.ink_quiet }),
             );
         if on {
             segment = shadowed(segment.fill(c.tab_active), look.shadows.tab);
@@ -377,6 +563,9 @@ pub fn segmented<V: Copy + PartialEq + 'static>(
 /// A surface floating beside the control keyed `anchor`, with a title, a line under it and
 /// whatever `content` adds. It traps focus, and Escape or a press outside closes it. Return
 /// it from `ui::overlay` so it is mounted at the root.
+///
+/// Its metrics are the profile card's on the Quiet Split, the boards' one dialog. Its shadow
+/// is `shadow-popover`: the card's own, deeper one has no token.
 pub fn popover(
     key: &'static str,
     anchor: &str,
@@ -390,9 +579,9 @@ pub fn popover(
         col()
             .key(key)
             .w(width)
-            .padding(t::SPACE_16)
-            .gap(t::SPACE_12)
-            .radius(t::RADIUS_14)
+            .padding(t::SPACE_18)
+            .gap(t::SPACE_14)
+            .radius(t::RADIUS_18)
             .fill(c.surface)
             .border(1.0, c.line_strong),
         look.shadows.popover,
@@ -413,7 +602,7 @@ pub fn popover(
             .child(
                 text(subtitle)
                     .font(t::TEXT_SUBTITLE)
-                    .color(c.ink_secondary)
+                    .color(c.ink_muted)
                     .wrap(),
             ),
     )

@@ -3,7 +3,7 @@
 
 use rune::{Cursor, El, Icon, col, el, icon, row, text, text_input};
 
-use super::components::{Look, empty_state, error_text, panel};
+use super::components::{Look, empty_state, error_text, panel, title_rule, topic as topic_line};
 use super::timeline;
 use crate::app::State;
 use crate::tokens::{self as t, icons};
@@ -112,7 +112,7 @@ pub fn header_with(
         .border_sides([0.0, 0.0, 1.0, 0.0], c.line)
         .window_drag();
     if let Some(glyph) = glyph {
-        bar = bar.child(icon(glyph, t::SPACE_18).color(c.accent));
+        bar = bar.child(icon(glyph, t::HEADER_GLYPH).color(c.accent));
     }
     bar = bar.child(
         text(title)
@@ -122,21 +122,7 @@ pub fn header_with(
             .role("heading"),
     );
     if let Some(topic) = topic.filter(|topic| !topic.is_empty()) {
-        bar = bar
-            .child(
-                el().w(1.0)
-                    .h(t::SPACE_18 + t::SPACE_2)
-                    .mx(t::SPACE_6)
-                    .fill(c.line_strong),
-            )
-            .child(
-                text(topic)
-                    .font(t::TEXT_BODY)
-                    .color(c.ink_secondary)
-                    .truncate()
-                    .grow(1.0)
-                    .min_w(0.0),
-            );
+        bar = bar.child(title_rule(look)).child(topic_line(topic, look));
     }
     bar
 }
@@ -149,13 +135,14 @@ fn composer_off(reason: &str, look: Look) -> El {
         .key("composer-box")
         .w_full()
         .items_center()
-        .gap(t::SPACE_8)
+        .gap(t::SPACE_6)
         .pl(t::SPACE_16)
-        .pr(t::SPACE_8)
-        .py(t::SPACE_8)
+        .pr(t::SPACE_6)
+        .py(t::SPACE_6)
         .radius(t::RADIUS_16)
         .fill(c.field)
         .border(1.0, c.border_composer)
+        .border_layout()
         .child(
             text(reason)
                 .key("composer")
@@ -169,22 +156,24 @@ fn composer_off(reason: &str, look: Look) -> El {
                 .disabled(true),
         )
         .child(
-            el().key("send")
-                .size(t::SPACE_40, t::SPACE_40)
-                .radius(t::SPACE_40 / 2.0)
-                .fill(c.accent)
-                .center()
-                .opacity(0.5)
-                .role("button")
-                .label("Send")
-                .disabled(true)
-                .child(icon(&icons::SEND, t::SPACE_18).color(c.on_accent)),
+            el().h(t::COMPOSER_LINE).center().child(
+                el().key("send")
+                    .size(t::SEND_SIZE, t::SEND_SIZE)
+                    .radius(t::SEND_SIZE / 2.0)
+                    .fill(c.accent)
+                    .center()
+                    .opacity(0.5)
+                    .role("button")
+                    .label("Send")
+                    .disabled(true)
+                    .child(icon(&icons::SEND, t::SPACE_18).color(c.on_accent)),
+            ),
         );
     col()
         .w_full()
         .px(t::SPACE_24)
         .pt(t::SPACE_4)
-        .pb(t::SPACE_16)
+        .pb(t::SPACE_14)
         .child(frame)
 }
 
@@ -198,15 +187,15 @@ fn composer(s: &State, placeholder: &str, look: Look) -> El {
         .placeholder(placeholder, c.ink_muted)
         .color(c.ink_field)
         .caret(accent, c.accent_soft)
-        .grow(1.0)
+        .w_full()
         .min_h(t::SPACE_24)
         .max_h(t::SPACE_24 * 8.0)
         .on_edit(|s: &mut State| &mut s.draft)
         .on_submit(|s: &mut State, tx| s.send(tx));
     let mut send = el()
         .key("send")
-        .size(t::SPACE_40, t::SPACE_40)
-        .radius(t::SPACE_40 / 2.0)
+        .size(t::SEND_SIZE, t::SEND_SIZE)
+        .radius(t::SEND_SIZE / 2.0)
         .fill(accent)
         .center()
         .role("button")
@@ -225,16 +214,27 @@ fn composer(s: &State, placeholder: &str, look: Look) -> El {
         .key("composer-box")
         .w_full()
         .items_end()
-        .gap(t::SPACE_8)
+        .gap(t::SPACE_6)
         .pl(t::SPACE_16)
-        .pr(t::SPACE_8)
-        .py(t::SPACE_8)
+        .pr(t::SPACE_6)
+        .py(t::SPACE_6)
         .radius(t::RADIUS_16)
         .fill(c.field)
         .border(1.0, c.border_composer)
-        .focus_within_ring(1.0, 0.0, c.border_active)
-        .child(col().grow(1.0).min_w(0.0).py(t::SPACE_8).child(input))
-        .child(send);
+        // The border takes room, as the board's does: 56 points with one line in it.
+        .border_layout()
+        .focus_within_ring(1.0, -1.0, c.border_active)
+        // One line is the board's 42 points with the words and the button centred in it; more
+        // lines grow the frame upwards from the button.
+        .child(
+            col()
+                .grow(1.0)
+                .min_w(0.0)
+                .min_h(t::COMPOSER_LINE)
+                .justify_center()
+                .child(input),
+        )
+        .child(el().h(t::COMPOSER_LINE).center().child(send));
     for layer in look.shadows.composer {
         frame = frame.box_shadow(*layer);
     }
@@ -242,6 +242,6 @@ fn composer(s: &State, placeholder: &str, look: Look) -> El {
         .w_full()
         .px(t::SPACE_24)
         .pt(t::SPACE_4)
-        .pb(t::SPACE_16)
+        .pb(t::SPACE_14)
         .child(frame)
 }

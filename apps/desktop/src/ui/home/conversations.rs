@@ -15,7 +15,7 @@ use super::{action_button, at, no_identity, person};
 use crate::app::{HomeView, State};
 use crate::tokens::{self as t, icons};
 use crate::ui::components::{
-    Look, empty_state, error_text, notice, panel, secondary_button, section_label,
+    Look, empty_state, error_text, notice, panel, section_label, small_button, tag,
 };
 use crate::ui::conversation::{self, Chrome, Extras};
 use crate::ui::shell::ASIDE_WIDTH;
@@ -171,7 +171,7 @@ fn rejoin_notice(s: &State, look: Look) -> El {
     if !s.home.rejoin_error.is_empty() {
         words = words.child(error_text(&s.home.rejoin_error, look));
     }
-    accent_notice(&icons::LOCK, words, look).child(secondary_button(
+    accent_notice(&icons::LOCK, words, look).child(small_button(
         "rejoin",
         if s.home.rejoining {
             "Rejoining…"
@@ -179,7 +179,7 @@ fn rejoin_notice(s: &State, look: Look) -> El {
             "Rejoin"
         },
         !s.home.rejoining,
-        State::rejoin_dm,
+        |s, _| s.rejoin_dm(),
         look,
     ))
 }
@@ -190,10 +190,11 @@ fn accent_notice(glyph: &'static Icon, words: El, look: Look) -> El {
     row()
         .key("rejoin-notice")
         .w_full()
-        .padding(t::SPACE_10)
+        .px(t::SPACE_14)
+        .py(t::SPACE_10)
         .gap(t::SPACE_10)
         .items_center()
-        .radius(t::RADIUS_10)
+        .radius(t::RADIUS_12)
         .fill(c.accent_soft)
         .child(icon(glyph, t::SPACE_16).color(c.accent_ink))
         .child(words)
@@ -214,7 +215,7 @@ pub fn aside(s: &State, look: Look) -> Option<El> {
         .border_sides([0.0, 0.0, 1.0, 0.0], c.line)
         .child(
             text("Details")
-                .font(t::TEXT_MEMBER)
+                .font(t::TEXT_TAB)
                 .color(c.ink)
                 .role("heading"),
         );
@@ -239,8 +240,9 @@ pub fn aside(s: &State, look: Look) -> Option<El> {
                     col()
                         .w_full()
                         .px(t::SPACE_8)
+                        .pt(t::SPACE_4)
                         .pb(t::SPACE_14)
-                        .child(section_label("In this conversation", look))
+                        .child(section_label("In this conversation", t::SPACE_8, look))
                         .child(list),
                 ),
         ),
@@ -269,27 +271,20 @@ fn participant(s: &State, account_id: &str, look: Look) -> El {
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>()
         .join(" · ");
-    let mut top = row().w_full().gap(t::SPACE_10).items_center().child(person(
+    let top = row().w_full().items_center().child(person(
         &name,
         &subtitle,
         account_id,
         t::AVATAR_MD,
+        me.then(|| tag("You", look)),
         look,
     ));
-    if me {
-        top = top.child(
-            el().px(t::SPACE_6)
-                .py(t::SPACE_2)
-                .radius(t::RADIUS_5)
-                .fill(c.accent_soft)
-                .child(text("You").font(t::TEXT_TAG).color(c.accent_ink)),
-        );
-    }
     let mut item = col()
         .key(format!("participant-{account_id}"))
         .w_full()
         .px(t::SPACE_10)
         .py(t::SPACE_6)
+        .mb(t::SPACE_2)
         .gap(t::SPACE_6)
         .radius(t::RADIUS_10)
         .hover(c.hover_member)

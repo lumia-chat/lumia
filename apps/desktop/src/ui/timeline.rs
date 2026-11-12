@@ -29,8 +29,8 @@ use crate::tokens::{self as t};
 /// How close to the oldest row on screen the reader gets before the page before it is read.
 const OLDER_WITHIN: usize = 20;
 
-/// A message row's height before it is measured: an avatar and its padding.
-const ROW_ESTIMATE: f32 = t::AVATAR_LG + t::SPACE_24;
+/// A message row's height before it is measured: an avatar, its padding and the gap under it.
+const ROW_ESTIMATE: f32 = t::AVATAR_LG + t::SPACE_24 + t::SPACE_2;
 
 /// The list, pinned to its newest message. `label` names it for assistive technology.
 /// Call it only when there is something to list.
@@ -40,7 +40,8 @@ pub fn view(s: &State, label: String, look: Look) -> El {
     let rows = col()
         .key("rows")
         .w_full()
-        .py(t::SPACE_14)
+        .pt(t::SPACE_14)
+        .pb(t::SPACE_8)
         .px(t::SPACE_14)
         .growth(GrowthSpec::default())
         .role("list")
@@ -112,6 +113,7 @@ fn day_divider(label: String, look: Look) -> El {
     let rule = || el().grow(1.0).h(1.0).fill(c.line);
     row()
         .w_full()
+        .px(t::SPACE_10)
         .py(t::SPACE_8)
         .gap(t::SPACE_12)
         .items_center()
@@ -142,10 +144,7 @@ fn message_frame(
             part
         }
     };
-    let name = text(author)
-        .key("author")
-        .font(t::TEXT_AUTHOR)
-        .color(c.ink_emphasis);
+    let name = text(author).key("author").font(t::TEXT_AUTHOR).color(c.ink);
     let time = text(time).key("time").font(t::TEXT_META).color(c.ink_muted);
     let head = row()
         .gap(t::SPACE_8)
@@ -157,6 +156,8 @@ fn message_frame(
         .w_full()
         .px(t::SPACE_12)
         .py(t::SPACE_8)
+        // The board's gap between one row and the next.
+        .mb(t::SPACE_2)
         .gap(t::SPACE_14)
         .radius(t::RADIUS_12)
         .hover(c.hover_message)
@@ -166,7 +167,7 @@ fn message_frame(
             col()
                 .grow(1.0)
                 .min_w(0.0)
-                .gap(t::SPACE_2)
+                .gap(t::SPACE_4)
                 .child(head)
                 .child(content),
         )

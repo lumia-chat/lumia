@@ -21,11 +21,12 @@ use crate::app::State;
 use crate::tokens::{self as t, icons};
 use crate::ui::components::{
     Look, card, empty_state, error_text, field, link_button, notice, panel, primary_button,
-    secondary_button, section_label,
+    section_label, small_button, wide_button,
 };
+use crate::ui::conversation;
 
 pub fn view(s: &State, look: Look) -> El {
-    let mut content = col().w_full().padding(t::SPACE_16).gap(t::SPACE_12);
+    let mut content = page_column();
     let roster = s.session.identity.roster.as_ref();
     if roster.is_some() {
         content = content.child(notice(
@@ -55,37 +56,7 @@ pub fn view(s: &State, look: Look) -> El {
 /// A Home page: the panel, its header with what the page is about, and the page's cards in
 /// a column that scrolls. Devices and Profile are both one.
 pub(super) fn page(key: &'static str, title: &str, topic: &str, content: El, look: Look) -> El {
-    let c = look.c;
-    let header = row()
-        .key("header")
-        .w_full()
-        .h(t::HEADER_HEIGHT)
-        .pl(t::SPACE_24)
-        .pr(t::SPACE_14)
-        .gap(t::SPACE_8)
-        .items_center()
-        .border_sides([0.0, 0.0, 1.0, 0.0], c.line)
-        .window_drag()
-        .child(
-            text(title)
-                .font(t::TITLE_CHANNEL)
-                .color(c.ink)
-                .role("heading"),
-        )
-        .child(
-            el().w(1.0)
-                .h(t::SPACE_18 + t::SPACE_2)
-                .mx(t::SPACE_6)
-                .fill(c.line_strong),
-        )
-        .child(
-            text(topic)
-                .font(t::TEXT_BODY)
-                .color(c.ink_secondary)
-                .truncate()
-                .grow(1.0)
-                .min_w(0.0),
-        );
+    let header = conversation::header_with(title, None, Some(topic), look);
     panel("panel", look).w_full().child(header).child(
         col()
             .key(key)
@@ -99,6 +70,16 @@ pub(super) fn page(key: &'static str, title: &str, topic: &str, content: El, loo
     )
 }
 
+/// The column a page's cards stand in: a conversation's side padding, 12 between cards.
+pub(super) fn page_column() -> El {
+    col()
+        .w_full()
+        .px(t::SPACE_24)
+        .pt(t::SPACE_16)
+        .pb(t::SPACE_24)
+        .gap(t::SPACE_12)
+}
+
 /// A card's primary action at the width of a button, not of the card.
 pub(super) fn action(button: El) -> El {
     row()
@@ -110,11 +91,11 @@ pub(super) fn action(button: El) -> El {
 pub(super) fn link_notice(key: &'static str, words: &str, look: Look) -> El {
     notice(&icons::SHIELD, words, look)
         .items_center()
-        .child(secondary_button(
+        .child(small_button(
             key,
             "Link this computer",
             true,
-            State::start_linking,
+            |s, _| s.start_linking(),
             look,
         ))
 }
@@ -123,7 +104,7 @@ pub(super) fn link_notice(key: &'static str, words: &str, look: Look) -> El {
 fn tag(words: &str, look: Look) -> El {
     el().px(t::SPACE_6)
         .py(t::SPACE_2)
-        .radius(t::RADIUS_PILL)
+        .radius(t::RADIUS_6)
         .fill(look.c.chip)
         .child(text(words).font(t::TEXT_TAG).color(look.c.ink_secondary))
 }
@@ -243,11 +224,11 @@ fn passkeys(s: &State, look: Look) -> El {
     if !s.links.handoff_error.is_empty() {
         card = card.child(error_text(&s.links.handoff_error, look));
     }
-    card.child(row().child(secondary_button(
+    card.child(row().child(small_button(
         "add-passkey",
         "Add a passkey",
         !s.links.handing_off,
-        |s| s.open_web_signed_in("devices"),
+        |s, _| s.open_web_signed_in("devices"),
         look,
     )))
     .child(quiet(
@@ -301,6 +282,7 @@ fn devices(mut content: El, s: &State, roster: &RosterSummary, look: Look) -> El
     let mut list = col()
         .key("devices-list")
         .w_full()
+        .gap(t::SPACE_8)
         .role("list")
         .label("Devices");
     for device in roster.devices.iter().filter(|d| !d.revoked) {
@@ -327,6 +309,7 @@ fn devices(mut content: El, s: &State, roster: &RosterSummary, look: Look) -> El
         let mut list = col()
             .key("revoked-list")
             .w_full()
+            .gap(t::SPACE_8)
             .role("list")
             .label("Revoked devices");
         for device in revoked {
@@ -338,7 +321,9 @@ fn devices(mut content: El, s: &State, roster: &RosterSummary, look: Look) -> El
                 look,
             ));
         }
-        content = content.child(section_label("Revoked", look)).child(list);
+        content = content
+            .child(section_label("Revoked", t::SPACE_8, look))
+            .child(list);
     }
     content
 }
@@ -351,19 +336,11 @@ fn device_row(
     look: Look,
 ) -> El {
     let c = look.c;
-    let mut title =
-        row()
-            .gap(t::SPACE_6)
-            .items_center()
-            .child(
-                text(name.clone())
-                    .font(t::TEXT_AUTHOR)
-                    .color(if device.revoked {
-                        c.ink_quiet
-                    } else {
-                        c.ink_emphasis
-                    }),
-            );
+    let mut title = row().gap(t::SPACE_6).items_center().child(
+        text(name.clone())
+            .font(t::TEXT_AUTHOR)
+            .color(if device.revoked { c.ink_quiet } else { c.ink }),
+    );
     let mut spoken = name.clone();
     if device.this_device {
         title = title.child(tag("This device", look));
@@ -377,36 +354,48 @@ fn device_row(
     if !meta.is_empty() {
         words = words.child(text(meta).font(t::TEXT_META).color(c.ink_quiet).truncate());
     }
+    // A bordered row with its glyph on a tile, as the web client's device list; this
+    // computer's is marked in the accent.
+    let (edge, ground, ink) = if device.this_device {
+        (c.accent, c.accent_soft, c.accent_ink)
+    } else {
+        (c.line, c.inset, c.ink_secondary)
+    };
     let mut item = row()
         .key(format!("device-{}", device.device_id))
         .w_full()
-        .py(t::SPACE_8)
-        .gap(t::SPACE_12)
+        .px(t::SPACE_14)
+        .py(t::SPACE_12)
+        .gap(t::SPACE_14)
         .items_center()
+        .radius(t::RADIUS_14)
+        .fill(c.surface)
+        .border(1.0, edge)
         .role("listitem")
         .label(spoken)
         .child(
-            el().w(t::SPACE_24)
+            el().size(t::GLYPH_TILE, t::GLYPH_TILE)
+                .radius(t::RADIUS_12)
+                .fill(ground)
                 .center()
-                .child(icon(glyph_of(device), t::SPACE_18).color(c.icon_strong)),
+                .child(icon(glyph_of(device), t::SPACE_18).color(ink)),
         )
         .child(words);
     if can_revoke && !device.this_device && !device.revoked {
         let id = device.device_id.clone();
         item = item.child(
-            secondary_button(
+            small_button(
                 format!("revoke-{}", device.device_id),
                 "Revoke",
                 true,
-                |_| {},
+                // The confirmation opens under the list, which may be below the fold.
+                move |s: &mut State, tx: &mut Tx| {
+                    s.ask_revoke(&id);
+                    tx.scroll_into_view("revoke-card");
+                },
                 look,
             )
-            .label(format!("Revoke {name}"))
-            // The confirmation opens under the list, which may be below the fold.
-            .on_press_tx(move |s: &mut State, tx: &mut Tx| {
-                s.ask_revoke(&id);
-                tx.scroll_into_view("revoke-card");
-            }),
+            .label(format!("Revoke {name}")),
         );
     }
     item
@@ -439,23 +428,24 @@ fn revoke_card(s: &State, device: &DeviceSummary, look: Look) -> El {
     if !form.error.is_empty() {
         card = card.child(error_text(&form.error, look));
     }
+    // The primary button over the other way out, as the sign-in card stacks them.
     card.child(
-        row()
+        col()
             .w_full()
             .gap(t::SPACE_8)
-            .items_center()
-            .child(col().grow(1.0).min_w(0.0).child(primary_button(
+            .child(primary_button(
                 "revoke-confirm",
                 &format!("Revoke {name}"),
                 !form.busy && !form.password.text.is_empty(),
                 State::revoke,
                 look,
-            )))
-            .child(secondary_button(
+            ))
+            .child(wide_button(
                 "revoke-keep",
+                None,
                 "Keep it",
                 true,
-                State::keep_device,
+                |s, _| s.keep_device(),
                 look,
             )),
     )

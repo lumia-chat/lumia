@@ -3,9 +3,9 @@
 //! and "Invite people" open their popovers (`server_popovers`).
 
 use lumia_client::app::{MemberSummary, ServerSummary};
-use rune::{Cursor, El, ScrollSpec, col, el, icon, row, text};
+use rune::{Cursor, El, ScrollSpec, col, el, row, text};
 
-use super::components::{Look, avatar, link_button, panel};
+use super::components::{Look, avatar, link_button, panel, section_label, status_dot, tag};
 use super::conversation::{self, Chrome};
 use super::shell::{ASIDE_WIDTH, sidebar_frame};
 use crate::app::State;
@@ -29,6 +29,13 @@ pub fn sidebar(s: &State, server: &ServerSummary, look: Look) -> El {
         any = true;
         let active = s.session.channel() == Some(channel.channel_id.as_str());
         let id = channel.channel_id.clone();
+        // The row's own type: 700 on the open channel. (The board's 600 is for a channel
+        // with unread messages, which the session does not count.)
+        let style = if active {
+            t::TEXT_NAV_ACTIVE
+        } else {
+            t::TEXT_NAV
+        };
         let mut item = row()
             .key(format!("channel-{}", channel.channel_id))
             .w_full()
@@ -43,16 +50,22 @@ pub fn sidebar(s: &State, server: &ServerSummary, look: Look) -> El {
             .focusable(true)
             .focus_ring(2.0, 0.0, c.focus)
             .on_press(move |s: &mut State| s.select_channel(&id))
-            .child(icon(&icons::HASH, t::SPACE_14).color(if active {
-                c.accent
-            } else {
-                c.ink_faint
-            }))
+            // The hash is a character of the row's type in a column of its own, as the
+            // board sets it.
+            .child(
+                text("#")
+                    .font(style)
+                    .color(if active { c.accent } else { c.ink_faint })
+                    .w(t::SPACE_10)
+                    .a11y_hidden(),
+            )
             .child(
                 text(channel.name.clone())
-                    .font(if active { t::TEXT_MEMBER } else { t::TEXT_NAV })
+                    .font(style)
                     .color(if active { c.ink_selected } else { c.ink_quiet })
-                    .truncate(),
+                    .truncate()
+                    .grow(1.0)
+                    .min_w(0.0),
             );
         if active {
             item = item.fill(c.raised);
@@ -64,13 +77,10 @@ pub fn sidebar(s: &State, server: &ServerSummary, look: Look) -> El {
         }
         list = list.child(item);
     }
-    let section = text("Channels")
-        .font(t::TEXT_SECTION)
-        .color(c.ink_muted)
-        .px(t::SPACE_10)
-        .pt(t::SPACE_4)
-        .pb(t::SPACE_6);
-    let mut channels = col().w_full().child(section).child(list);
+    let mut channels = col()
+        .w_full()
+        .child(section_label("Channels", t::SPACE_4, look))
+        .child(list);
     if !any {
         channels = channels.child(
             text("No channels yet. Add one with New channel below.")
@@ -162,41 +172,47 @@ pub fn members(s: &State, server: &ServerSummary, look: Look) -> El {
         .border_sides([0.0, 0.0, 1.0, 0.0], c.line)
         .child(
             text(format!("Members · {}", all.len()))
-                .font(t::TEXT_MEMBER)
+                .font(t::TEXT_TAB)
                 .color(c.ink)
                 .role("heading"),
         );
-    let section = |label: String| {
-        text(label)
-            .font(t::TEXT_SECTION)
-            .color(c.ink_muted)
-            .px(t::SPACE_10)
-            .pt(t::SPACE_8)
-            .pb(t::SPACE_6)
-    };
     let mut list = col()
         .key("members")
         .w_full()
         .px(t::SPACE_8)
+        .pt(t::SPACE_4)
         .pb(t::SPACE_14)
         .role("list")
         .label("Members");
     if !here.is_empty() {
-        list = list.child(section(format!("Online · {}", here.len())));
+        list = list.child(section_label(
+            format!("Online · {}", here.len()),
+            t::SPACE_8,
+            look,
+        ));
         for member in &here {
             list = list.child(member_row(s, server, member, look));
         }
     }
     if !away.is_empty() {
-        list = list.child(section(format!(
-            "{} · {}",
+        list = list.child(section_label(
+            format!(
+                "{} · {}",
+                if here.is_empty() {
+                    "Members"
+                } else {
+                    "Offline"
+                },
+                away.len()
+            ),
+            // More room over a group that follows another.
             if here.is_empty() {
-                "Members"
+                t::SPACE_8
             } else {
-                "Offline"
+                t::SPACE_14
             },
-            away.len()
-        )));
+            look,
+        ));
         for member in &away {
             list = list.child(member_row(s, server, member, look));
         }
@@ -236,20 +252,25 @@ fn member_row(s: &State, server: &ServerSummary, member: &MemberSummary, look: L
     });
     let mut picture = el().child(avatar(&name, &member.account_id, t::AVATAR_MD, look));
     if let Some(dot) = dot {
-        picture = picture.child(
-            el().absolute(t::AVATAR_MD - t::SPACE_8, t::AVATAR_MD - t::SPACE_8)
-                .size(t::SPACE_10, t::SPACE_10)
-                .radius(t::SPACE_10 / 2.0)
-                .fill(dot)
-                .border(2.0, c.surface),
-        );
+        picture = picture.child(status_dot(t::AVATAR_MD, dot, c.surface));
     }
-    let mut words = col().grow(1.0).min_w(0.0).child(
+    // The name, quieter for someone who is not here, with "You" beside this account's.
+    let mut named = row().w_full().gap(t::SPACE_6).items_center().child(
         text(name.clone())
             .font(t::TEXT_MEMBER)
-            .color(c.ink)
-            .truncate(),
+            .color(if presence.is_some() {
+                c.ink
+            } else {
+                c.ink_body
+            })
+            .truncate()
+            .shrink()
+            .min_w(0.0),
     );
+    if member.account_id == s.session.me() {
+        named = named.child(tag("You", look));
+    }
+    let mut words = col().grow(1.0).min_w(0.0).child(named);
     if !subtitle.is_empty() {
         words = words.child(
             text(subtitle.clone())
@@ -264,27 +285,18 @@ fn member_row(s: &State, server: &ServerSummary, member: &MemberSummary, look: L
         Some(_) => "online",
         None => "offline",
     };
-    let mut item = row()
+    row()
         .key(format!("member-{}", member.account_id))
         .w_full()
         .px(t::SPACE_10)
         .py(t::SPACE_6)
-        .gap(t::SPACE_10)
+        .mb(t::SPACE_2)
+        .gap(t::SPACE_12)
         .items_center()
         .radius(t::RADIUS_10)
         .hover(c.hover_member)
         .role("listitem")
         .label(format!("{name}, {status}"))
         .child(picture)
-        .child(words);
-    if member.account_id == s.session.me() {
-        item = item.child(
-            el().px(t::SPACE_6)
-                .py(t::SPACE_2)
-                .radius(t::RADIUS_5)
-                .fill(c.accent_soft)
-                .child(text("You").font(t::TEXT_TAG).color(c.accent_ink)),
-        );
-    }
-    item
+        .child(words)
 }

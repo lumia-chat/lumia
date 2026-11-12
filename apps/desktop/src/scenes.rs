@@ -468,7 +468,7 @@ mod staged {
     pub fn home(state: &mut State, identity: bool, view: HomeView, open: Option<&str>) {
         let dir = std::env::temp_dir().join(format!("lumia-scene-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        *state = State::new(dir);
+        *state = State::new(dir.clone());
         state.sign_in.instance.replace_text("http://127.0.0.1:9");
         state.connect();
         if identity && let Some(app) = state.session.client() {
@@ -483,6 +483,11 @@ mod staged {
             if let Err(error) = made {
                 eprintln!("lumia: the scene's identity: {error}");
             }
+            // The session reads whether the stores hold an identity when it opens them, so
+            // they are opened again now that they do.
+            *state = State::new(dir);
+            state.sign_in.instance.replace_text("http://127.0.0.1:9");
+            state.connect();
         }
         state.session.signed_in = true;
         state.route = Route::Shell;

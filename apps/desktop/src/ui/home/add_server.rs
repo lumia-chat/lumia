@@ -6,7 +6,7 @@
 //! account is on, whatever host the link names.
 
 use lumia_client::app::InvitePreviewSummary;
-use rune::{El, ScrollSpec, col, el, text};
+use rune::{El, ScrollSpec, col, text};
 
 use crate::app::State;
 use crate::tokens::{self as t};
@@ -17,25 +17,19 @@ use crate::ui::conversation;
 const PAGE_WIDTH: f32 = 520.0;
 
 pub fn view(s: &State, look: Look) -> El {
-    let c = look.c;
-    let header = conversation::header("Add a server", None, look)
-        .child(
-            el().w(1.0)
-                .h(t::SPACE_18 + t::SPACE_2)
-                .mx(t::SPACE_6)
-                .fill(c.line_strong),
-        )
-        .child(
-            text("Your own, or one you were invited to")
-                .font(t::TEXT_BODY)
-                .color(c.ink_secondary)
-                .truncate(),
-        );
+    let header = conversation::header_with(
+        "Add a server",
+        None,
+        Some("Your own, or one you were invited to"),
+        look,
+    );
     let page = col()
         .w_full()
         .max_w(PAGE_WIDTH)
-        .padding(t::SPACE_16)
-        .gap(t::SPACE_16)
+        .px(t::SPACE_24)
+        .pt(t::SPACE_16)
+        .pb(t::SPACE_24)
+        .gap(t::SPACE_12)
         .child(create(s, look))
         .child(join(s, look));
     panel("panel", look).w_full().child(header).child(

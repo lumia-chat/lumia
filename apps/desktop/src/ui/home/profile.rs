@@ -11,21 +11,17 @@
 //!
 //! Not here: the avatar (no shell sets one yet; a save keeps the one the profile names).
 
-use rune::{El, Tx, col, text};
+use rune::{El, Tx, text};
 
-use super::devices::{action, link_notice, page};
+use super::devices::{action, link_notice, page, page_column};
 use crate::app::State;
 use crate::tokens::{self as t, icons};
 use crate::ui::components::{
-    Look, card, error_text, field, notice, primary_button, secondary_button, segmented,
+    Look, card, error_text, field, notice, primary_button, segmented, small_button,
 };
 
 pub fn view(s: &State, look: Look) -> El {
-    let mut content = col()
-        .w_full()
-        .padding(t::SPACE_16)
-        .gap(t::SPACE_12)
-        .child(status(s, look));
+    let mut content = page_column().child(status(s, look));
     let form = &s.account.profile;
     content = if form.loaded || s.session.has_identity() {
         content.child(profile(s, look))
@@ -183,11 +179,11 @@ fn account(s: &State, look: Look) -> El {
     )
     .key("account")
     .items_center()
-    .child(secondary_button(
+    .child(small_button(
         "sign-out",
         "Sign out",
         true,
-        State::sign_out,
+        |s, _| s.sign_out(),
         look,
     ))
 }

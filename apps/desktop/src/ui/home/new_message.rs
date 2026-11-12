@@ -11,7 +11,7 @@ use super::{at, no_identity, page, person};
 use crate::app::State;
 use crate::session::display_name;
 use crate::tokens::{self as t, icons};
-use crate::ui::components::{Look, empty_state, field, notice, secondary_button};
+use crate::ui::components::{Look, empty_state, field, notice, small_button};
 
 /// Everyone the servers list but this account, narrowed by the search, by name.
 fn people(s: &State) -> Vec<&MemberSummary> {
@@ -70,8 +70,8 @@ pub fn view(s: &State, look: Look) -> El {
                 row()
                     .key(format!("person-{}", p.account_id))
                     .w_full()
-                    .py(t::SPACE_4)
-                    .gap(t::SPACE_10)
+                    .py(t::SPACE_6)
+                    .gap(t::SPACE_12)
                     .items_center()
                     .role("listitem")
                     .label(name.clone())
@@ -79,14 +79,15 @@ pub fn view(s: &State, look: Look) -> El {
                         &name,
                         &at(&p.handle),
                         &p.account_id,
-                        t::AVATAR_SM,
+                        t::AVATAR_MD,
+                        None,
                         look,
                     ))
-                    .child(secondary_button(
+                    .child(small_button(
                         format!("message-{}", p.account_id),
                         "Message",
                         free,
-                        move |s: &mut State| s.start_dm(&id),
+                        move |s: &mut State, _| s.start_dm(&id),
                         look,
                     )),
             );

@@ -8,11 +8,10 @@
 //! Not here: the request as a QR code (the other shells show its text too), and approving
 //! another device's request from this one, which only the CLI does today.
 
-use rune::{El, ScrollSpec, Tx, col, el, text};
+use rune::{El, ScrollSpec, Tx, col, el, row, text};
 
-use super::components::{
-    Look, card, error_text, field, link_button, primary_button, secondary_button,
-};
+use super::components::{Look, card, error_text, field, primary_button, small_button};
+use super::sign_in::foot_link;
 use crate::app::State;
 use crate::tokens::{self as t};
 
@@ -49,16 +48,13 @@ pub fn view(s: &State, look: Look) -> El {
                 "On a device that holds your identity, approve this request and enter the code it gives you.",
             ))
             .child(request(&form.request, look))
-            .child(
-                secondary_button(
-                    "copy-request",
-                    if form.copied { "Copied" } else { "Copy request" },
-                    true,
-                    |_| {},
-                    look,
-                )
-                .on_press_tx(State::copy_link_request),
-            )
+            .child(row().w_full().child(small_button(
+                "copy-request",
+                if form.copied { "Copied" } else { "Copy request" },
+                true,
+                State::copy_link_request,
+                look,
+            )))
             .child(field(
                 "link-code",
                 "Code from the approving device",
@@ -88,13 +84,19 @@ pub fn view(s: &State, look: Look) -> El {
     } else {
         "Back to sign in"
     };
-    card = card.child(col().w_full().items_center().child(link_button(
-        "link-back",
-        back,
-        State::close_link,
+    // Under the card, where the sign-in boards put the way to the other card.
+    let foot = row()
+        .no_window_drag()
+        .child(foot_link("link-back", back, State::close_link, look));
+    screen(
+        "link",
+        col()
+            .items_center()
+            .gap(t::SPACE_24)
+            .child(card)
+            .child(foot),
         look,
-    )));
-    screen("link", card, look)
+    )
 }
 
 /// A card's screen on the app ground: the content centred while the window has room for
@@ -115,7 +117,7 @@ pub(super) fn screen(key: &'static str, content: El, look: Look) -> El {
             stick_bottom: false,
         })
         .child(room())
-        .child(col().items_center().py(t::SPACE_24).child(content))
+        .child(col().items_center().py(t::SPACE_40).child(content))
         .child(room())
 }
 
@@ -130,8 +132,8 @@ fn request(request: &str, look: Look) -> El {
         .key("link-request")
         .w_full()
         .h(t::SPACE_24 * 4.0)
-        .padding(t::SPACE_6)
-        .radius(t::RADIUS_8)
+        .padding(t::SPACE_12)
+        .radius(t::RADIUS_12)
         .fill(c.field)
         .border(1.0, c.border_form)
         .scroll(ScrollSpec {

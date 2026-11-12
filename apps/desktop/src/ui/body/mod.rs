@@ -103,11 +103,14 @@ impl Body {
         let mut column = col().w_full();
         for (i, block) in blocks.iter().enumerate() {
             let lead = lead.filter(|_| i == 0);
+            // The board sets a message's paragraphs 4 points apart, and what is not a
+            // paragraph (its attachment card, there) 8 from the text around it.
+            let after_para = i > 0 && matches!(blocks[i - 1], Block::Para(_));
             let gap = match block {
                 _ if i == 0 => 0.0,
                 Block::List { .. } if in_item => t::SPACE_4,
-                _ if in_item => t::SPACE_8,
-                _ => t::SPACE_12,
+                Block::Para(_) if after_para && !in_item => t::SPACE_4,
+                _ => t::SPACE_8,
             };
             let drawn = self.block(block, lead, indent, in_item);
             column = column.child(drawn.key(format!("b{i}")).mt(gap));
@@ -129,7 +132,7 @@ impl Body {
                     .w_full()
                     .px(t::SPACE_12)
                     .py(t::SPACE_10)
-                    .radius(t::RADIUS_8)
+                    .radius(t::RADIUS_12)
                     .fill(c.inset)
                     .border(1.0, c.line)
                     .child(code.key("code"))

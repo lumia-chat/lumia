@@ -43,6 +43,104 @@ pub fn tone(id: &str, c: &Colors) -> (Color, Color) {
     tones[hash as usize % tones.len()]
 }
 
+// ---- What the boards draw that the design system names only in a usage line, or not at all --
+//
+// Each is arithmetic on tokens, so a view holds no literal; the board's own number is beside
+// it. Where the tokens cannot make the number, the nearest token stands in and the comment
+// says so. All of them are gaps in `tokens.json`.
+
+/// A card's primary button (48): `control-height`'s usage line, "primary 48px".
+pub const CONTROL_PRIMARY: f32 = CONTROL_HEIGHT + SPACE_2;
+/// A button in a pane or a popover (40): the profile card's "Message" on the Quiet Split.
+pub const CONTROL_PANE: f32 = AVATAR_LG;
+/// A small button (38): "View all members" in the side panel.
+pub const CONTROL_SMALL: f32 = ROW_HEIGHT + SPACE_6;
+/// The sidebar's title row (38), as tall as a small button.
+pub const TITLE_ROW_HEIGHT: f32 = CONTROL_SMALL;
+/// The icon button beside the sidebar's title (34), at `radius-9`.
+pub const ICON_BUTTON: f32 = ROW_HEIGHT + SPACE_2;
+/// A segment of a segmented control (34), at `radius-9`.
+pub const SEGMENT_HEIGHT: f32 = ROW_HEIGHT + SPACE_2;
+/// A person's row in the sidebar (34): `row-height`'s usage line, "DM rows 34px".
+pub const ROW_HEIGHT_PERSON: f32 = ROW_HEIGHT + SPACE_2;
+/// A quick tile's height (58).
+pub const QUICK_TILE_HEIGHT: f32 = ROW_HEIGHT + SPACE_24 + SPACE_2;
+/// A count badge on the rail (20 high, at least as wide), and inside a quick tile (18).
+pub const BADGE: f32 = SPACE_18 + SPACE_2;
+pub const BADGE_SMALL: f32 = SPACE_18;
+/// The status dot on an avatar (12), which overhangs it by 2 with a 2-point ring.
+pub const STATUS_DOT: f32 = SPACE_12;
+/// The glyph before a conversation's title, and the rule after it (20).
+pub const HEADER_GLYPH: f32 = SPACE_18 + SPACE_2;
+/// The send button (40), a circle.
+pub const SEND_SIZE: f32 = AVATAR_LG;
+/// One line of the composer (42), between the frame's 6 points of padding.
+pub const COMPOSER_LINE: f32 = CONTROL_HEIGHT - SPACE_4;
+/// The glyph tile of an empty state and of a device's row (40, at `radius-12`), as the web
+/// client's `.lu-device__glyph`.
+pub const GLYPH_TILE: f32 = AVATAR_LG;
+
+/// The active row of the sidebar: `text-nav`'s usage line, "700 when active".
+pub const TEXT_NAV_ACTIVE: TextStyle = TextStyle {
+    weight: TEXT_AUTHOR.weight,
+    ..TEXT_NAV
+};
+/// A button in a pane or a popover (14.5 at 700): the secondary label's size at the primary
+/// label's weight.
+pub const TEXT_BUTTON_PANE: TextStyle = TextStyle {
+    weight: TEXT_BUTTON.weight,
+    ..TEXT_BUTTON_SECONDARY
+};
+/// A segment of a segmented control: `text-label`'s usage line, "tabs use 700".
+pub const TEXT_TAB: TextStyle = TextStyle {
+    weight: TEXT_AUTHOR.weight,
+    ..TEXT_LABEL
+};
+/// The line under the sign-in card (14 at 400), and the link in it (14 at 700): the compact
+/// size without its reading line height, and the member size at the author's weight.
+pub const TEXT_FOOT: TextStyle = TextStyle {
+    line_height: TEXT_MEMBER.line_height,
+    ..TEXT_COMPACT
+};
+pub const TEXT_FOOT_LINK: TextStyle = TextStyle {
+    weight: TEXT_AUTHOR.weight,
+    ..TEXT_MEMBER
+};
+/// A small tag in a row ("You"; the boards' "New" is 10.5 at 700): the count style, half a
+/// point larger, is the nearest.
+pub const TEXT_TAG_SMALL: TextStyle = TEXT_COUNT;
+/// A server's monogram on the rail when it is not the current one (13 at 700): the small
+/// link's size at the author's weight.
+pub const TEXT_MONOGRAM_REST: TextStyle = TextStyle {
+    weight: TEXT_AUTHOR.weight,
+    ..TEXT_LINK_SM
+};
+
+/// The initials on an avatar `size` points across. The boards set them at 700 in a size per
+/// avatar that no token names: 14 on 40, 13 on 38, 12.5 on 34, 10 on 28, 9 on 22. Three of
+/// those are a text token's size at the author's weight; the two smallest are worked from
+/// the count style, 11 at 700 (28 takes it as it is, a point over the board).
+pub fn initials(size: f32) -> TextStyle {
+    let sized = if size >= AVATAR_LG {
+        TEXT_MEMBER
+    } else if size >= AVATAR_SELF {
+        TEXT_LINK_SM
+    } else if size >= AVATAR_MD {
+        TEXT_SECTION
+    } else if size >= AVATAR_SM {
+        TEXT_COUNT
+    } else {
+        TextStyle {
+            size: TEXT_COUNT.size - SPACE_2,
+            ..TEXT_COUNT
+        }
+    };
+    TextStyle {
+        weight: TEXT_AUTHOR.weight,
+        ..sized
+    }
+}
+
 // What a message body (`ui::body`) needs that the design system does not name yet: it has no
 // code style and no syntax palette. Derived here so the view holds no literal.
 
