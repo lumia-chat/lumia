@@ -49,33 +49,40 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        store = AppStore(applicationContext)
+        // The store is the application's: this activity may be the second
+        // over it (the phone was turned), and then finds the session as the
+        // first left it, a sign-out under way included.
+        store = (application as LumiaApp).store
         pushSetup = PushSetup(this)
-        PushTarget.of(intent)?.let { PushRegistrar.target = it }
-        browserReturn(intent)?.let { store.browserReturn = it }
+        // What the launch intent says is taken once: an activity made again
+        // is handed the same intent, and would open the notification's
+        // conversation, or take the browser's token, a second time.
+        val launched = savedInstanceState == null
+        if (launched) {
+            PushTarget.of(intent)?.let { PushRegistrar.target = it }
+            browserReturn(intent)?.let { store.browserReturn = it }
+        }
         // A debug build signs in from the launch intent's extras, for the
         // smoke run (scripts/smoke.sh): LUMIA_DEV_INSTANCE, _HANDLE, _PASSWORD, _SCREEN.
         // LUMIA_DEV_APPEARANCE (light, dark, system) and LUMIA_DEV_DENSITY
         // (comfortable, compact) are how that launch looks, and are not kept.
-        // LUMIA_DEV_PUSH is an endpoint the launch subscribes the phone with
-        // as `unified_push`, as a distributor handing one over would have it
-        // do, so the smoke can see a subscription held and then removed.
+        // LUMIA_DEV_PUSH is an endpoint that stands in for a distributor's:
+        // each sign-in's registration hands it over (`PushSetup.standIn`),
+        // so the smoke can see a subscription held, removed and made again.
         val dev = if (BuildConfig.DEBUG) {
             listOf("LUMIA_DEV_INSTANCE", "LUMIA_DEV_HANDLE", "LUMIA_DEV_PASSWORD", "LUMIA_DEV_SCREEN", "LUMIA_DEV_APPEARANCE", "LUMIA_DEV_DENSITY", "LUMIA_DEV_PUSH")
                 .mapNotNull { key -> intent.getStringExtra(key)?.let { key to it } }.toMap()
         } else emptyMap()
-        store.wear(Appearance.named(dev["LUMIA_DEV_APPEARANCE"]), Density.named(dev["LUMIA_DEV_DENSITY"]))
+        if (launched) {
+            store.wear(Appearance.named(dev["LUMIA_DEV_APPEARANCE"]), Density.named(dev["LUMIA_DEV_DENSITY"]))
+            dev["LUMIA_DEV_PUSH"]?.let { PushSetup.standIn = it }
+        }
         setContent {
             LaunchedEffect(Unit) {
+                // Once for the store; an activity made again waits for it or finds it done.
                 store.reopen(dev)
-                if (BuildConfig.DEBUG) dev["LUMIA_DEV_PUSH"]?.let { PushRegistrar.subscribe(applicationContext, "unified_push", it) }
-                if (BuildConfig.DEBUG && dev["LUMIA_DEV_SCREEN"] == "notify") notifyStandIn()
+                if (launched && dev["LUMIA_DEV_SCREEN"] == "notify") notifyStandIn()
             }
-            // Push is registered once per sign-in (the shell asks when it
-            // opens): a session that is over, by signing out or by the
-            // instance, lets the next one register again.
-            val signedIn = store.session?.signedIn == true
-            LaunchedEffect(signedIn) { if (!signedIn) pushSetup.signedOut() }
             // Preferences' appearance, for every screen: the one chosen, or
             // the phone's as it changes. The system bars' icons go with it,
             // dark on a light app and light on a dark one, which the first
@@ -112,7 +119,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onPause() {
         super.onPause()
-        if (::store.isInitialized) {
+        // Paused to be made again (the phone turned) is not the app going
+        // away: the session is not told it is in the background, and the
+        // activity that follows resumes over it.
+        if (::store.isInitialized && !isChangingConfigurations) {
             store.foregrounded = false
             store.session?.background()
         }

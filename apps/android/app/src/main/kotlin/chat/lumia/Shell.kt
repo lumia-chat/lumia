@@ -35,6 +35,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -57,13 +58,20 @@ import chat.lumia.kit.SectionTitle
 import chat.lumia.kit.initialsOf
 import chat.lumia.kit.personalKinds
 import chat.lumia.kit.rowTimeOfMicros
+import chat.lumia.push.PushSetup
 import uniffi.lumia_ffi.ChannelSummary
 import uniffi.lumia_ffi.ServerSummary
 
 @Composable
 fun Shell(store: AppStore, session: LumiaSession, devScreen: String?) {
-    var place by remember { mutableStateOf<Place>(Place.Home) }
-    var stack by remember { mutableStateOf<List<Screen>>(emptyList()) }
+    // Where the person is, kept when the activity is made again (the phone
+    // turned): the place and the screens over it come back as they were,
+    // over the session the store kept. A shell opened anew, after signing
+    // in, starts at Home.
+    var place by rememberSaveable(stateSaver = PlaceSaver) { mutableStateOf<Place>(Place.Home) }
+    var stack by rememberSaveable(stateSaver = StackSaver) { mutableStateOf<List<Screen>>(emptyList()) }
+    // Whether this shell has landed: on a first server, or on the screen a debug launch names. Once, not again after a turn.
+    var landed by rememberSaveable { mutableStateOf(false) }
     val servers = session.snapshot?.servers ?: emptyList()
     val push: (Screen) -> Unit = { stack = stack + it }
     val pop: () -> Unit = { stack = stack.dropLast(1) }
@@ -75,9 +83,11 @@ fun Shell(store: AppStore, session: LumiaSession, devScreen: String?) {
 
     LaunchedEffect(Unit) {
         session.load()
-        // Push registration once signed in; the smoke keeps the prompt away, and
-        // so does a load that found the session over: the sign-in screen is next.
-        if (devScreen == null && session.signedIn) activity?.pushSetup?.register()
+        // Push registration once signed in, and once per sign-in however often
+        // this shell is made (`PushSetup`). The smoke keeps the prompt away
+        // unless it gave an endpoint to stand in for a distributor's, and so
+        // does a load that found the session over: the sign-in screen is next.
+        if ((devScreen == null || PushSetup.standIn != null) && session.signedIn) activity?.pushSetup?.register()
     }
     LaunchedEffect(target, channels.map { it.channelId }) {
         // The conversation a tapped notification names, once the snapshot
@@ -96,6 +106,8 @@ fun Shell(store: AppStore, session: LumiaSession, devScreen: String?) {
     }
     LaunchedEffect(servers.map { it.serverId }) {
         val first = servers.firstOrNull()?.serverId ?: return@LaunchedEffect
+        if (landed) return@LaunchedEffect
+        landed = true
         val snapshot = session.snapshot
         // With no conversation yet, a first server is the better place to land.
         if (place == Place.Home && snapshot?.channels?.none { it.kind in personalKinds } == true) place = Place.Server(first)
@@ -115,6 +127,22 @@ fun Shell(store: AppStore, session: LumiaSession, devScreen: String?) {
                 "invite" -> { place = Place.Server(first); stack = listOf(Screen.Invite(first)) }
             }
         }
+    }
+    // A screen kept from before (the saved state outlasts the process) whose
+    // channel or server the account does not have, having left it since or
+    // being another account, is dropped once the snapshot says so.
+    LaunchedEffect(channels.map { it.channelId }, servers.map { it.serverId }) {
+        if (session.snapshot == null) return@LaunchedEffect
+        val kept = stack.filter { screen ->
+            when (screen) {
+                is Screen.Conversation -> channels.any { it.channelId == screen.id }
+                is Screen.Channel -> channels.any { it.channelId == screen.id }
+                is Screen.NewChannel -> servers.any { it.serverId == screen.serverId }
+                is Screen.Invite -> servers.any { it.serverId == screen.serverId }
+                else -> true
+            }
+        }
+        if (kept.size != stack.size) stack = kept
     }
     // The server on screen is the one whose presence this client wants (protocol 6.7).
     LaunchedEffect(place, session.connection) {

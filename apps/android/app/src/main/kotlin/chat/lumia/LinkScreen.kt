@@ -20,6 +20,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -49,7 +50,7 @@ fun LinkScreen(store: AppStore, session: LumiaSession) {
     var request by rememberSaveable { mutableStateOf("") }
     var code by rememberSaveable { mutableStateOf("") }
     var error by rememberSaveable { mutableStateOf("") }
-    var busy by rememberSaveable { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }
     var copied by rememberSaveable { mutableStateOf(false) }
 
     Column(
@@ -92,8 +93,9 @@ fun LinkScreen(store: AppStore, session: LumiaSession) {
                             error = ""
                             busy = true
                             try {
-                                session.identityClaim(code.trim())
-                                store.route = Route.APP
+                                // In the store's scope: a code the instance has taken is not left half-claimed by the phone being turned.
+                                val claimed = code.trim()
+                                store.signIn { identityClaim(claimed) }
                             } catch (e: Exception) {
                                 error = e.lumiaMessage
                             } finally {

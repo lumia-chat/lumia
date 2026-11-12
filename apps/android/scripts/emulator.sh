@@ -6,6 +6,11 @@
 #   scripts/emulator.sh         # boots and waits
 set -eu
 : "${ANDROID_HOME:?set ANDROID_HOME to the SDK}"
+# avdmanager is a Java program: JAVA_HOME names the JDK, or java is on the path.
+if [ -z "${JAVA_HOME:-}" ] && ! java -version >/dev/null 2>&1; then
+  echo "emulator: avdmanager needs Java; set JAVA_HOME to a JDK 17 or newer (Homebrew's openjdk@21 here)"
+  exit 1
+fi
 name=${LUMIA_AVD:-lumia}
 case "$(uname -m)" in arm64|aarch64) arch=arm64-v8a ;; *) arch=x86_64 ;; esac
 image="system-images;android-35;google_apis;$arch"

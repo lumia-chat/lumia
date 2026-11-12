@@ -27,6 +27,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -61,8 +62,15 @@ fun SignInScreen(store: AppStore) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     var instance by rememberSaveable { mutableStateOf(store.savedInstance ?: "") }
-    var info by rememberSaveable { mutableStateOf<InstanceSummary?>(null) }
-    var reaching by rememberSaveable { mutableStateOf(false) }
+    // Not kept with the rest when Android saves the screen: what the instance
+    // said of itself is not a value a saved state can hold (kept so, it
+    // stopped the app whenever it left this screen for another app, the
+    // browser a sign-in goes through included). A screen made again asks
+    // the instance again, below.
+    var info by remember { mutableStateOf<InstanceSummary?>(null) }
+    /** Whether the person asked for another instance ("Change"): a screen made again stays on that question. */
+    var choosing by rememberSaveable { mutableStateOf(false) }
+    var reaching by remember { mutableStateOf(false) }
     var creating by rememberSaveable { mutableStateOf(false) }
     var handle by rememberSaveable { mutableStateOf("") }
     var password by rememberSaveable { mutableStateOf("") }
@@ -71,13 +79,14 @@ fun SignInScreen(store: AppStore) {
     var error by rememberSaveable { mutableStateOf("") }
     var magicSent by rememberSaveable { mutableStateOf(false) }
     var magicCode by rememberSaveable { mutableStateOf("") }
-    var busy by rememberSaveable { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }
 
     suspend fun reach() {
         val session = store.session ?: return
         reaching = true
         try {
             info = session.instanceInfo()
+            choosing = false
         } catch (e: Exception) {
             error = "Could not reach that instance: ${e.lumiaMessage}"
         } finally {
@@ -115,13 +124,16 @@ fun SignInScreen(store: AppStore) {
         }
     }
 
+    // Each sign-in below is the store's to see through (`AppStore.signIn`):
+    // the phone turned while the instance answers makes this screen again,
+    // and the answer must still sign the session in and open the app.
+
     suspend fun completeMagicLink() {
-        val session = store.session ?: return
         error = ""
         busy = true
         try {
-            session.signInMagicLink(magicCode)
-            store.route = Route.APP
+            val code = magicCode
+            store.signIn { signInMagicLink(code) }
         } catch (e: Exception) {
             error = if (e.lumiaCode == "UNAUTHENTICATED") "That code is unknown, used or expired. Ask for a new link." else e.lumiaMessage
         } finally {
@@ -143,11 +155,9 @@ fun SignInScreen(store: AppStore) {
     LaunchedEffect(store.browserReturn) {
         val back = store.browserReturn ?: return@LaunchedEffect
         store.browserReturn = null
-        val session = store.session ?: return@LaunchedEffect
         busy = true
         try {
-            session.completeBrowserSignIn(back)
-            store.route = Route.APP
+            store.signIn { completeBrowserSignIn(back) }
         } catch (e: Exception) {
             error = if (e.lumiaCode == "UNAUTHENTICATED") "That sign-in was not accepted." else e.lumiaMessage
         } finally {
@@ -156,13 +166,15 @@ fun SignInScreen(store: AppStore) {
     }
 
     suspend fun submit() {
-        val session = store.session ?: return
         error = ""
         busy = true
         try {
-            if (creating) session.createAccount(handle, password)
-            else session.signIn(handle, password, if (needsTotp) totp else null)
-            store.route = Route.APP
+            // As typed when asked: the fields are this screen's, and it may not be the one there at the end.
+            val create = creating
+            val who = handle
+            val secret = password
+            val code = if (needsTotp) totp else null
+            store.signIn { if (create) createAccount(who, secret) else signIn(who, secret, code) }
         } catch (e: Exception) {
             when {
                 // The passkey factor needs the browser's ceremony (architecture 6.3): the web sign-in does it.
@@ -180,7 +192,7 @@ fun SignInScreen(store: AppStore) {
     LaunchedEffect(Unit) {
         // Sent back here by the instance (a session revoked or run out), the screen opens saying so.
         store.session?.takeEndedNotice()?.let { error = it }
-        if (store.session != null && info == null) reach()
+        if (store.session != null && info == null && !choosing) reach()
     }
 
     Column(
@@ -223,7 +235,7 @@ fun SignInScreen(store: AppStore) {
                                 style = LumiaTokens.textMeta.style, color = LumiaTokens.inkSecondary.color, maxLines = 1,
                             )
                         }
-                        LumiaLinkButton("Change") { info = null; error = "" }
+                        LumiaLinkButton("Change") { info = null; choosing = true; error = "" }
                     }
                     LumiaField(if (creating) "Handle" else "Email or handle", handle, { handle = it }, placeholder = if (creating) "yourname" else "you@example.com", keyboard = KeyboardOptions(keyboardType = KeyboardType.Email))
                     LumiaField("Password", password, { password = it }, placeholder = if (creating) "At least 12 characters" else "Your password", secure = true)

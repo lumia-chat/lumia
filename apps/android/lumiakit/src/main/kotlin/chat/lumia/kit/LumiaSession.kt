@@ -277,6 +277,10 @@ class LumiaSession(
     suspend fun load() {
         try {
             val snap = client.call { snapshot() }
+            // Answered while the session was being left (asked just before, by a
+            // screen made again or the app coming forward): nothing of the account
+            // is taken up again, and the gateway the leaving stopped stays stopped.
+            if (leaving || !signedIn) return
             snapshot = snap
             hasIdentity = client.hasIdentity
             refreshPeople(snap.servers.map { it.serverId })
@@ -303,6 +307,7 @@ class LumiaSession(
             if (e.endsSession) sessionEnded()
             return
         }
+        if (leaving || !signedIn) return
         snapshot = snap
         refreshPeople(snap.servers.map { it.serverId })
     }

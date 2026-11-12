@@ -2,6 +2,14 @@
 // at launch (state under the app's files directory), and the route the
 // session's state picks. And what Preferences chose for this phone, which
 // outlasts the session. The Swift AppStore's twin.
+//
+// One for the process, held by the application and not by the activity:
+// Android makes the activity again when the phone is turned (and on every
+// other change of configuration the manifest does not hand it), and a
+// second store would open the session a second time, with a gateway of
+// its own, under whatever the first was still doing. So what a screen
+// going away must not cut short is done in the store's scope: reopening,
+// signing in, signing out.
 package chat.lumia.kit
 
 import android.content.Context
@@ -11,7 +19,9 @@ import androidx.compose.runtime.setValue
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 
 /** What the app shows. */
@@ -19,7 +29,7 @@ enum class Route { SIGN_IN, LINK, APP }
 
 class AppStore(context: Context) {
     companion object {
-        /** The activity's store while one exists, for the push receivers. */
+        /** The process's store, once the app has been opened in it, for the push receivers. */
         var current: AppStore? = null
 
         fun savedInstance(context: Context): String? =
@@ -98,8 +108,19 @@ class AppStore(context: Context) {
      * Reopens the saved instance at launch, straight into the app when signed
      * in. A debug build signs in from `dev` (the activity's intent extras
      * LUMIA_DEV_INSTANCE, _HANDLE, _PASSWORD, for scripts/smoke.sh).
+     *
+     * Once for the store, in its own scope: an activity made again finds
+     * the session as it is, waits here for a reopening still under way,
+     * and stops nothing by going away while it waits.
      */
     suspend fun reopen(dev: Map<String, String> = emptyMap()) {
+        val job = reopening ?: scope.launch { reopenOnce(dev) }.also { reopening = it }
+        job.join()
+    }
+
+    private var reopening: Job? = null
+
+    private suspend fun reopenOnce(dev: Map<String, String>) {
         try {
             val instance = dev["LUMIA_DEV_INSTANCE"]
             val handle = dev["LUMIA_DEV_HANDLE"]
@@ -135,6 +156,22 @@ class AppStore(context: Context) {
         session = s
         savedInstance = url
         return s
+    }
+
+    /**
+     * Signs in, by whichever way the screen asked ([how], on the session
+     * held), and opens the app. In the store's own scope, as signing out
+     * is: a sign-in the instance has answered is taken whole, the session
+     * signed in and the app opened, even when the screen that asked is
+     * made again meanwhile (the phone turned). A failure is the caller's
+     * to show, if it is still there to show it.
+     */
+    suspend fun signIn(how: suspend LumiaSession.() -> Unit) {
+        val s = session ?: return
+        scope.async {
+            s.how()
+            if (session === s) route = Route.APP
+        }.await()
     }
 
     /**

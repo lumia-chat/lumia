@@ -631,7 +631,7 @@ fun ProfileScreen(store: AppStore, session: LumiaSession, back: () -> Unit) {
     var displayName by rememberSaveable { mutableStateOf("") }
     var pronouns by rememberSaveable { mutableStateOf("") }
     var bio by rememberSaveable { mutableStateOf("") }
-    var busy by rememberSaveable { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }
     var error by rememberSaveable { mutableStateOf("") }
     var saved by rememberSaveable { mutableStateOf(false) }
     // The status (protocol 6.7): chosen here, kept by the core, sent with the servers watched.
@@ -748,7 +748,7 @@ fun DevicesScreen(store: AppStore, session: LumiaSession, back: () -> Unit) {
     val lifecycle = LocalLifecycleOwner.current
     var revoking by remember { mutableStateOf<DeviceSummary?>(null) }
     var password by rememberSaveable { mutableStateOf("") }
-    var busy by rememberSaveable { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }
     var error by rememberSaveable { mutableStateOf("") }
     // Passkeys (architecture 6.3): the account's sign-in keys, listed and
     // removable here, made on the instance's web page in a browser tab.

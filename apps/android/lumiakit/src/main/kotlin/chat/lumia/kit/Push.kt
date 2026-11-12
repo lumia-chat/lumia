@@ -6,7 +6,8 @@
 // opens the conversation. The receivers themselves (UnifiedPush, FCM) and
 // the registration live in the app. A phone that is signed out subscribes
 // to nothing and shows nothing: leaving a session takes the subscription
-// back from the instance and forgets it here (`left`).
+// back from the instance, forgets it here and gives up the phone's own
+// registration with the distributor or FCM (`left`).
 package chat.lumia.kit
 
 import android.Manifest
@@ -52,6 +53,15 @@ object PushRegistrar {
     /** The notification the person tapped last, until the shell opens it. */
     var target by mutableStateOf<PushTarget?>(null)
 
+    /**
+     * How the phone's own registrations for push are given up: the one with
+     * the UnifiedPush distributor and FCM's token. The app's to say, the
+     * libraries being its (`app/.../push`, set by the application); `left`
+     * calls it for every session left.
+     */
+    @Volatile
+    var unregister: (suspend (Context) -> Unit)? = null
+
     /** One at a time: a subscription is not sent while a leaving takes the last one back. */
     private val sending = Mutex()
 
@@ -94,13 +104,19 @@ object PushRegistrar {
      * A session the instance ended can ask nothing. Either way, and whether
      * or not the instance was reached, what the phone remembered sending is
      * forgotten: the next sign-in, as this account or another, subscribes
-     * again, which replaces what the instance holds for this device. And
+     * again, which replaces what the instance holds for this device. Then
+     * the phone's own registrations go, the distributor's and FCM's
+     * (`unregister`), as the web drops the browser's own subscription: the
+     * endpoint or token the account's notices went to is not kept alive
+     * for nobody, and the next sign-in registers for one of its own. And
      * the notifications the phone is showing go, being the account's
      * messages, with the one tapped last if the shell had not opened it yet.
      *
      * A refusal or no network is left at that and stops nothing: a
-     * subscription the instance could not be asked to drop sends pushes
-     * that `received` shows nothing for.
+     * subscription the instance could not be asked to drop (the instance
+     * itself drops a device's when its last session ends) sends pushes
+     * that `received` shows nothing for. Nor does a distributor or FCM
+     * that cannot be told.
      */
     suspend fun left(context: Context, client: LumiaClient, chosen: Boolean) {
         sending.withLock {
@@ -112,6 +128,7 @@ object PushRegistrar {
             // Written before going on: a mark that outlived its subscription would keep the next sign-in from subscribing.
             withContext(Dispatchers.IO) { marks.edit().clear().commit() }
         }
+        runCatching { unregister?.invoke(context) }
         runCatching { context.getSystemService(NotificationManager::class.java).cancelAll() }
         target = null
     }

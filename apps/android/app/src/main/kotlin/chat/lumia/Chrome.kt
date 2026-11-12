@@ -25,7 +25,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.Login
+import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Shield
@@ -36,6 +36,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -79,6 +81,54 @@ sealed class Screen {
     data class NewChannel(val serverId: String) : Screen()
     data class Invite(val serverId: String) : Screen()
 }
+
+// Where the shell is, as Android can keep it while the activity is made
+// again (the phone turned) or the process is, in the background: a word
+// for the kind and the id it carries, if it carries one.
+
+private fun Place.kept(): String = when (this) {
+    Place.Home -> "home"
+    is Place.Server -> "server $id"
+}
+
+private fun placeOf(kept: String): Place = when {
+    kept.startsWith("server ") -> Place.Server(kept.removePrefix("server "))
+    else -> Place.Home
+}
+
+private fun Screen.kept(): String = when (this) {
+    is Screen.Conversation -> "conversation $id"
+    is Screen.Channel -> "channel $id"
+    Screen.Requests -> "requests"
+    Screen.Devices -> "devices"
+    Screen.Profile -> "profile"
+    Screen.Preferences -> "preferences"
+    Screen.NewMessage -> "new-message"
+    Screen.AddServer -> "add-server"
+    is Screen.NewChannel -> "new-channel $serverId"
+    is Screen.Invite -> "invite $serverId"
+}
+
+/** The screen a kept word names; none for a word this build does not know, and the stack is that much shorter. */
+private fun screenOf(kept: String): Screen? {
+    val id = kept.substringAfter(' ', "")
+    return when (kept.substringBefore(' ')) {
+        "conversation" -> Screen.Conversation(id)
+        "channel" -> Screen.Channel(id)
+        "requests" -> Screen.Requests
+        "devices" -> Screen.Devices
+        "profile" -> Screen.Profile
+        "preferences" -> Screen.Preferences
+        "new-message" -> Screen.NewMessage
+        "add-server" -> Screen.AddServer
+        "new-channel" -> Screen.NewChannel(id)
+        "invite" -> Screen.Invite(id)
+        else -> null
+    }
+}
+
+val PlaceSaver: Saver<Place, String> = Saver(save = { it.kept() }, restore = { placeOf(it) })
+val StackSaver: Saver<List<Screen>, Any> = listSaver(save = { stack -> stack.map { it.kept() } }, restore = { kept -> kept.mapNotNull(::screenOf) })
 
 @Composable
 fun PhoneRail(session: LumiaSession, place: Place, onAdd: () -> Unit, onAccount: (Screen) -> Unit, signingOut: Boolean, onSignOut: () -> Unit, onPlace: (Place) -> Unit) {
@@ -157,9 +207,7 @@ private fun AccountMenu(session: LumiaSession, onOpen: (Screen) -> Unit, signing
                     }
                     // The design's rule between a menu's groups (`.lu-menu__rule`).
                     Box(Modifier.fillMaxWidth().padding(horizontal = LumiaTokens.space6, vertical = LumiaTokens.space4).height(1.dp).background(LumiaTokens.line.color))
-                    // `assets/icons/sign-out.svg` is an arrow into a bracket at its right,
-                    // which among Material's glyphs is the one it names Login.
-                    MenuItem(Icons.AutoMirrored.Filled.Login, "Sign out") { open = false; onSignOut() }
+                    MenuItem(Icons.AutoMirrored.Filled.Logout, "Sign out") { open = false; onSignOut() }
                 }
             }
         }

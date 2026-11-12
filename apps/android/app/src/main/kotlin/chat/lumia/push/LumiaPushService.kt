@@ -41,7 +41,10 @@ class LumiaPushService : PushService() {
     }
 
     override fun onUnregistered(instance: String) {
-        // The distributor is gone; the instance's subscription answers 410
-        // on the next push and is forgotten there.
+        // The distributor dropped the registration by itself (it was removed,
+        // or the person took this app off it); the instance's subscription
+        // answers 410 on the next push and is forgotten there. Leaving a
+        // session unregisters from this side (`PushSetup.unregister`), and
+        // the instance was told or has dropped the subscription already.
     }
 }
