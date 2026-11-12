@@ -6,7 +6,8 @@
 # phone as a leaf), the other sends a message, and with the app
 # terminated a push with the generic notice is delivered through simctl;
 # the extension syncs and decrypts under the writer lock and the banner
-# shows the message. Screenshots land in .build/smoke-push/.
+# shows the message. Screenshots land in .build/smoke-push/, the last of
+# them the conversation with a few more messages in it.
 #
 #   scripts/smoke-push.sh            # expects the app built for the simulator and the release CLI
 set -eu
@@ -160,4 +161,19 @@ wait $uitest || {
   xcrun simctl spawn "$udid" log show --info --last 4m --style compact --predicate 'subsystem == "chat.lumia" OR process == "Lumia" OR subsystem CONTAINS "usernotifications"' > "$work/sim.log" 2>&1 || true
   exit 1
 }
-echo "smoke-push: ok (the phone joined the group and decrypted the message for the notice; the banner is in $work/push.png, the conversation it opened in $work/opened.png)"
+
+# The conversation as a list, for the eye: two more from the other side
+# make a block of three under one name, and one from the laptop a block of
+# this account's. A picture and not a check, so nothing here fails the run.
+{
+  "$cli" --data-dir "$y" dm send "$channel" "A second, a moment later." &&
+  "$cli" --data-dir "$y" dm send "$channel" "And a third, under the same name." &&
+  "$cli" --data-dir "$x" dm send "$channel" "Read on the laptop too."
+} >/dev/null 2>&1 || echo "note: the conversation's extra messages were not all sent"
+xcrun simctl terminate "$udid" "$bundle" 2>/dev/null || true
+SIMCTL_CHILD_LUMIA_DEV_INSTANCE="$instance" SIMCTL_CHILD_LUMIA_DEV_HANDLE="phone$stamp" SIMCTL_CHILD_LUMIA_DEV_PASSWORD="$password" SIMCTL_CHILD_LUMIA_DEV_SCREEN=conversation SIMCTL_CHILD_LUMIA_DEV_NO_PUSH=1 \
+  xcrun simctl launch "$udid" "$bundle" >/dev/null 2>&1 || true
+sleep 10
+xcrun simctl io "$udid" screenshot "$work/conversation.png" >/dev/null 2>&1 || true
+xcrun simctl terminate "$udid" "$bundle" 2>/dev/null || true
+echo "smoke-push: ok (the phone joined the group and decrypted the message for the notice; the banner is in $work/push.png, the conversation it opened in $work/opened.png, and the conversation with more in it in $work/conversation.png)"

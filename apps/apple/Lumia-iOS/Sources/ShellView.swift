@@ -67,13 +67,16 @@ struct ShellView: View {
             }
             #if DEBUG
             // The smoke run (scripts/smoke-ios.sh) opens one screen per launch
-            // through LUMIA_DEV_SCREEN: home, server, channel, requests, devices, profile, new.
+            // through LUMIA_DEV_SCREEN: home, server, channel, requests, devices, profile, new;
+            // the push smoke opens the account's first personal conversation with `conversation`.
             if let first = ids.first, let screen = ProcessInfo.processInfo.environment["LUMIA_DEV_SCREEN"] {
                 let channel = snapshot?.channels.first { $0.serverId == first && !personalKinds.contains($0.kind) }
+                let conversation = snapshot?.channels.first { personalKinds.contains($0.kind) }
                 switch screen {
                 case "home": place = .home
                 case "server": place = .server(id: first)
                 case "channel": place = .server(id: first); if let channel { path = [.channel(id: channel.channelId)] }
+                case "conversation": place = .home; if let conversation { path = [.conversation(id: conversation.channelId)] }
                 case "requests": place = .home; path = [.requests]
                 case "devices": place = .home; path = [.devices]
                 case "profile": place = .home; path = [.profile]

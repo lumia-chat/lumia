@@ -1,7 +1,9 @@
 // The things the simulator cannot do from the command line: answer the
-// notification permission prompt, and tap a notification. scripts/
-// smoke-push.sh runs these tests with the app signed in (the LUMIA_DEV_*
-// environment, passed through xcodebuild's TEST_RUNNER_ prefix).
+// notification permission prompt, tap a notification, type into a
+// composer, and read a screen as assistive technology does. scripts/
+// smoke-push.sh and scripts/smoke-typing.sh run these tests with the app
+// signed in (the LUMIA_DEV_* environment, passed through xcodebuild's
+// TEST_RUNNER_ prefix).
 import XCTest
 
 final class SmokeUITests: XCTestCase {
@@ -62,5 +64,59 @@ final class SmokeUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts[expected].waitForExistence(timeout: 30), "the conversation \(expected) did not open")
         // A moment for the smoke's screenshot of the opened panel.
         sleep(10)
+    }
+
+    /// A server's channel with someone else in it (scripts/smoke-typing.sh,
+    /// which launches the app on the channel through LUMIA_DEV_SCREEN). The
+    /// other person, LUMIA_UITEST_OTHER, has sent LUMIA_UITEST_ROWS messages
+    /// in a row, the last of them LUMIA_UITEST_LAST: one block, whose rows
+    /// under the first show no name and still say whose they are. Then the
+    /// smoke has them type, and the line under the composer says so; then
+    /// this types, which the smoke sees from the other side; then nobody
+    /// does, and the line empties by itself. Each step is announced through
+    /// a file under LUMIA_UITEST_STEPS.
+    func testBlocksAndTypingInAChannel() throws {
+        let env = ProcessInfo.processInfo.environment
+        let other = try XCTUnwrap(env["LUMIA_UITEST_OTHER"])
+        let rows = try XCTUnwrap(env["LUMIA_UITEST_ROWS"].flatMap(Int.init))
+        let last = try XCTUnwrap(env["LUMIA_UITEST_LAST"])
+        let steps = try XCTUnwrap(env["LUMIA_UITEST_STEPS"])
+        let reached = { (step: String) in try? step.write(toFile: "\(steps)/\(step)", atomically: true, encoding: .utf8) }
+        let app = launch()
+        let anything = app.descendants(matching: .any)
+
+        // Every message of theirs is one element that begins with their name
+        // and a time, whether or not its row draws them.
+        let theirs = anything.matching(NSPredicate(format: "label BEGINSWITH %@", "\(other), "))
+        let lastRow = theirs.matching(NSPredicate(format: "value == %@", last)).firstMatch
+        if !lastRow.waitForExistence(timeout: 90) { print("the app without the block's last row:\n" + app.debugDescription) }
+        XCTAssertTrue(lastRow.exists, "the block's last message does not say whose it is")
+        XCTAssertEqual(theirs.count, rows, "one element for each message of \(other)")
+        _ = reached("rows")
+
+        // The smoke has the other person type from here on.
+        let typing = anything.matching(NSPredicate(format: "label == %@", "\(other) is typing…")).firstMatch
+        if !typing.waitForExistence(timeout: 60) { print("the app with nobody said to be typing:\n" + app.debugDescription) }
+        XCTAssertTrue(typing.exists, "nothing says \(other) is typing")
+        // A moment for the smoke's screenshot of the line.
+        _ = reached("shown")
+        sleep(3)
+
+        // This person types: every edit says so to the core, which spaces
+        // what goes out; the smoke watches the channel as the other person.
+        let field = anything.matching(NSPredicate(format: "placeholderValue BEGINSWITH %@", "Message #")).firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 10), "no composer")
+        field.tap()
+        field.typeText("Typed on the phone")
+        _ = reached("typed")
+
+        // The smoke stops typing once it reads that. Nothing arrives to say
+        // so: the line empties when the last word of it runs out, about
+        // eight seconds later.
+        let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: typing)
+        XCTAssertEqual(XCTWaiter().wait(for: [gone], timeout: 40), .completed, "the line still says \(other) is typing")
+        _ = reached("quiet")
+        // A moment for the smoke's screenshot of the composer with nothing under it.
+        sleep(3)
     }
 }

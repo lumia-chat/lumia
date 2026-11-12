@@ -101,8 +101,9 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: chat.lumia.notifications
         TARGETED_DEVICE_FAMILY: "1,2"
-  # The UI test the push smoke runs to answer the notification prompt
-  # (scripts/smoke-push.sh); not a test suite.
+  # The UI tests the smokes drive (scripts/smoke-push.sh for the
+  # notification prompt and the tap, scripts/smoke-typing.sh for a channel
+  # with someone typing in it); not a test suite.
   LumiaUITests:
     type: bundle.ui-testing
     platform: iOS
