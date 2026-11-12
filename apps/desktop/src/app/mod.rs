@@ -25,6 +25,9 @@ pub use sign_in::SignIn;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Route {
     SignIn,
+    /// Linking this computer to an identity (identity spec 4.2), from sign-in or from a
+    /// signed-in account with no identity on this computer.
+    Link,
     Shell,
 }
 
@@ -133,12 +136,16 @@ impl State {
 
     /// Goes to Home, showing `view`. No server is on screen there, so none is watched.
     pub fn go_home(&mut self, view: HomeView) {
+        let arriving = self.place != Place::Home || self.home_view != view;
         if self.place != Place::Home {
             self.session.close_conversation();
             self.draft.clear();
         }
         self.place = Place::Home;
         self.home_view = view;
+        if arriving {
+            self.account_opened(view);
+        }
         self.placed = true;
         self.popover = None;
         self.session.watch_presence(&[]);

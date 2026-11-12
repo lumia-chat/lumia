@@ -21,6 +21,10 @@ pub struct SignIn {
     /// Waiting for the instance's answer to a sign-in.
     pub busy: bool,
     pub error: String,
+    /// A magic link was asked for (architecture 6.3): the card says where it went and
+    /// takes its code.
+    pub magic_sent: bool,
+    pub magic_code: TextEdit,
 }
 
 impl SignIn {
@@ -35,7 +39,15 @@ impl SignIn {
             reaching: false,
             busy: false,
             error: String::new(),
+            magic_sent: false,
+            magic_code: TextEdit::new(""),
         }
+    }
+
+    /// Forgets a magic link that was asked for.
+    fn forget_magic_link(&mut self) {
+        self.magic_sent = false;
+        self.magic_code.clear();
     }
 }
 
@@ -66,6 +78,7 @@ impl State {
         self.sign_in.error.clear();
         self.sign_in.needs_totp = false;
         self.sign_in.busy = false;
+        self.sign_in.forget_magic_link();
     }
 
     /// Signs in, or creates the account, with what the form holds.
@@ -100,6 +113,7 @@ impl State {
                 self.sign_in.password.clear();
                 self.sign_in.totp.clear();
                 self.sign_in.needs_totp = false;
+                self.sign_in.forget_magic_link();
                 self.route = Route::Shell;
             }
             Err(failure) => self.refused(failure),
@@ -125,5 +139,63 @@ impl State {
             "ALREADY_EXISTS" => "That handle is taken.".into(),
             _ => failure.message.clone(),
         };
+    }
+}
+
+/// The magic link (architecture 6.3): a sign-in link mailed to the address in the handle
+/// field, completed here by its code, or by the whole link pasted.
+impl State {
+    /// Asks the instance to mail a sign-in link to the address in the handle field.
+    pub fn request_magic_link(&mut self) {
+        let form = &mut self.sign_in;
+        if form.busy || form.handle.text.trim().is_empty() {
+            return;
+        }
+        form.error.clear();
+        form.busy = true;
+        self.session.request_magic_link(&form.handle.text);
+    }
+
+    /// Signs in with the code from the mail.
+    pub fn complete_magic_link(&mut self) {
+        let form = &mut self.sign_in;
+        if form.busy || form.magic_code.text.trim().is_empty() {
+            return;
+        }
+        form.error.clear();
+        form.busy = true;
+        self.session.sign_in_magic_link(&form.magic_code.text);
+    }
+
+    /// The instance answered a request for a link.
+    pub(super) fn magic_link_sent(&mut self, answer: &Result<(), Failure>) {
+        let form = &mut self.sign_in;
+        form.busy = false;
+        match answer {
+            Ok(()) => form.magic_sent = true,
+            Err(failure) => {
+                form.error = match failure.code.as_str() {
+                    "RATE_LIMITED" => "Too many links in the last hour; try later.".into(),
+                    _ => failure.message.clone(),
+                }
+            }
+        }
+    }
+
+    /// The instance answered a magic link's code.
+    pub(super) fn magic_link_signed_in(&mut self, answer: &Result<(), Failure>) {
+        match answer {
+            Ok(()) => self.signed_in(&Ok(())),
+            Err(failure) => {
+                let form = &mut self.sign_in;
+                form.busy = false;
+                form.error = match failure.code.as_str() {
+                    "UNAUTHENTICATED" => {
+                        "That code is unknown, used or expired. Ask for a new link.".into()
+                    }
+                    _ => failure.message.clone(),
+                };
+            }
+        }
     }
 }

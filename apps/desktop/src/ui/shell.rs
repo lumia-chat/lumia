@@ -6,7 +6,7 @@
 use lumia_client::app::ServerSummary;
 use rune::{Cursor, El, col, el, icon, row, text};
 
-use super::components::{Look, avatar, initials, link_button};
+use super::components::{Look, avatar, initials};
 use super::{home, server};
 use crate::app::{HomeView, Place, State};
 use crate::session::Connection;
@@ -219,8 +219,9 @@ fn rail(s: &State, current: Option<&ServerSummary>, look: Look) -> El {
 // ---- Sidebar ----------------------------------------------------------------------------
 
 /// The sidebar column both places share: a title row with an optional control at its end,
-/// whatever scrolls under it, and the account at its foot.
-pub fn sidebar_frame(s: &State, title: &str, trailing: Option<El>, body: El, look: Look) -> El {
+/// and whatever scrolls under it. Who is signed in, and Sign out, are on the profile page
+/// the rail's self avatar opens.
+pub fn sidebar_frame(_s: &State, title: &str, trailing: Option<El>, body: El, look: Look) -> El {
     let c = look.c;
     let mut title_row = row()
         .w_full()
@@ -251,36 +252,4 @@ pub fn sidebar_frame(s: &State, title: &str, trailing: Option<El>, body: El, loo
         .pr(t::SPACE_10)
         .child(title_row)
         .child(body)
-        .child(account_strip(s, look))
-}
-
-/// Who is signed in and where, with the way out. Stands in for the profile screen's own
-/// Sign out until that screen exists.
-fn account_strip(s: &State, look: Look) -> El {
-    let c = look.c;
-    row()
-        .key("account")
-        .w_full()
-        .px(t::SPACE_10)
-        .py(t::SPACE_8)
-        .gap(t::SPACE_8)
-        .items_center()
-        .child(
-            col()
-                .grow(1.0)
-                .min_w(0.0)
-                .child(
-                    text(s.session.self_name().to_string())
-                        .font(t::TEXT_MEMBER)
-                        .color(c.ink)
-                        .truncate(),
-                )
-                .child(
-                    text(s.session.address().to_string())
-                        .font(t::TEXT_META)
-                        .color(c.ink_muted)
-                        .truncate(),
-                ),
-        )
-        .child(link_button("sign-out", "Sign out", State::sign_out, look))
 }

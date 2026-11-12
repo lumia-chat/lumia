@@ -1,9 +1,10 @@
 //! Sign in: the instance with its trust card (architecture 6.1), then a password with a
 //! second factor when the account asks for one, or a new account. The same flow and wording
-//! as the web's sign-in screen and `SignInView.swift`.
+//! as the web's sign-in screen and `SignInView.swift`. With them, when the instance offers
+//! each: a sign-in link by mail, completed by its code ([`magic_link`]), and the way to
+//! linking this computer to an identity ([`link_identity`]).
 //!
-//! Not here yet: the magic link, the browser handoff for passkeys and OIDC (architecture
-//! 6.3), and linking this computer to an identity.
+//! Not here yet: the browser handoff for passkeys and OIDC (architecture 6.3).
 
 use lumia_client::app::InstanceSummary;
 use rune::{El, Tx, col, icon, row, text};
@@ -13,21 +14,21 @@ use crate::app::State;
 use crate::tokens::{self as t, icons};
 
 pub fn view(s: &State, look: Look) -> El {
-    let c = look.c;
     let body = match &s.session.info {
         Some(info) if s.session.is_open() => account_card(s, info, look),
         _ => instance_card(s, look),
     };
-    col()
-        .key("sign-in")
-        .w_full()
-        .h_full()
-        .center()
-        .gap(t::SPACE_24)
-        .fill(c.bg)
-        .window_drag()
-        .child(icon(&icons::LOGO, t::TILE_SIZE).label("Lumia"))
-        .child(body)
+    // Centred while the window has room, scrolling once the card has outgrown it (the
+    // account card with every way in the instance offers).
+    super::link::screen(
+        "sign-in",
+        col()
+            .items_center()
+            .gap(t::SPACE_24)
+            .child(icon(&icons::LOGO, t::TILE_SIZE).label("Lumia"))
+            .child(body),
+        look,
+    )
 }
 
 fn connect(s: &mut State, _: &mut Tx) {
@@ -182,6 +183,8 @@ fn account_card(s: &State, info: &InstanceSummary, look: Look) -> El {
         State::submit,
         look,
     ));
+    card = magic_link(card, s, info, look);
+    card = link_identity(card, s, info, look);
 
     let quiet = |words: &str| text(words).font(t::TEXT_META).color(c.ink_secondary);
     let footer = row().w_full().center().gap(t::SPACE_4);
@@ -214,4 +217,96 @@ fn account_card(s: &State, info: &InstanceSummary, look: Look) -> El {
         ))
     };
     card.child(footer)
+}
+
+// ---- The magic link, and linking this computer ------------------------------------------
+
+fn complete_magic_link(s: &mut State, _: &mut Tx) {
+    s.complete_magic_link();
+}
+
+/// The magic link (architecture 6.3), when the instance mails them: "Email me a sign-in
+/// link" for the address in the handle field, then where it went, the field for its code
+/// and "Sign in with the code". A refusal is worded in the card's one error line.
+fn magic_link(card: El, s: &State, info: &InstanceSummary, look: Look) -> El {
+    let c = look.c;
+    let form = &s.sign_in;
+    if form.creating || !info.magic_link_enabled {
+        return card;
+    }
+    let address = form.handle.text.trim();
+    if form.magic_sent {
+        return card
+            .child(super::components::notice(
+                &icons::MAIL,
+                format!(
+                    "A link is on its way to {address} if it has an account here. Open it on this device, or paste its code below."
+                ),
+                look,
+            ))
+            .child(field(
+                "magic-code",
+                "Code from the email",
+                &form.magic_code,
+                "Paste the code",
+                |s| &mut s.sign_in.magic_code,
+                complete_magic_link,
+                look,
+            ))
+            .child(primary_button(
+                "magic-sign-in",
+                "Sign in with the code",
+                !form.busy && !form.magic_code.text.trim().is_empty(),
+                State::complete_magic_link,
+                look,
+            ));
+    }
+    const LABEL: &str = "Email me a sign-in link";
+    let ask = if form.busy || address.is_empty() {
+        // Nothing to mail a link to yet: the link is there, and inert.
+        rune::el()
+            .key("magic-link")
+            .role("button")
+            .label(LABEL)
+            .disabled(true)
+            .opacity(0.5)
+            .child(text(LABEL).font(t::TEXT_LINK_SM).color(c.link))
+    } else {
+        link_button("magic-link", LABEL, State::request_magic_link, look)
+    };
+    card.child(col().w_full().items_center().child(ask))
+}
+
+/// "Link this computer to your identity", when the instance lets identity proof sign in:
+/// the way to the link screen (identity spec 4.2).
+fn link_identity(card: El, s: &State, info: &InstanceSummary, look: Look) -> El {
+    let c = look.c;
+    if s.sign_in.creating || !info.identity_proof_sign_in_enabled {
+        return card;
+    }
+    const LABEL: &str = "Link this computer to your identity";
+    card.child(
+        row()
+            .key("to-link")
+            .w_full()
+            .h(t::CONTROL_HEIGHT - t::SPACE_8)
+            .center()
+            .gap(t::SPACE_8)
+            .radius(t::RADIUS_10)
+            .fill(c.surface)
+            .border(1.0, c.border_form)
+            .hover(c.hover_secondary)
+            .role("button")
+            .label(LABEL)
+            .cursor(rune::Cursor::Pointer)
+            .focusable(true)
+            .focus_ring(2.0, 2.0, c.focus)
+            .on_press(State::open_link)
+            .child(icon(&icons::KEY, t::SPACE_16).color(c.ink_field))
+            .child(
+                text(LABEL)
+                    .font(t::TEXT_BUTTON_SECONDARY)
+                    .color(c.ink_field),
+            ),
+    )
 }

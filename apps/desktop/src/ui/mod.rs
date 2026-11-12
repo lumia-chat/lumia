@@ -4,6 +4,7 @@
 pub mod components;
 mod conversation;
 mod home;
+mod link;
 mod server;
 mod server_popovers;
 mod shell;
@@ -20,6 +21,7 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
     let look = Look::of(cx.system_dark());
     let screen = match s.route {
         Route::SignIn => sign_in::view(s, look),
+        Route::Link => link::view(s, look),
         Route::Shell => shell::view(s, look),
     };
     // A popover is a child of the root after everything else, so it draws above the shell

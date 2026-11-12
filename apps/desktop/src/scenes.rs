@@ -8,6 +8,8 @@ use lumia_client::app::{
     SnapshotSummary,
 };
 
+mod account;
+
 use crate::app::{HomeView, Route, State};
 use crate::session::servers::ServerUpdate;
 use crate::session::{Connection, Update};
@@ -93,6 +95,18 @@ pub const SCENES: &[Scene] = &[
         }));
         s.server_forms.invite.emailed = "pat@example.com".into();
     }),
+    // The account screens (`scenes/account.rs`).
+    ("sign-in", account::sign_in),
+    ("magic-sent", account::magic_sent),
+    ("link", account::link),
+    ("link-request", account::link_request),
+    ("devices", account::devices),
+    ("devices-revoke", account::devices_revoke),
+    ("devices-none", account::devices_none),
+    ("devices-live", account::devices_live),
+    ("profile", account::profile),
+    ("profile-none", account::profile_none),
+    ("profile-live", account::profile_live),
 ];
 
 /// A signed-in account with two servers, for the scenes that need no instance.
