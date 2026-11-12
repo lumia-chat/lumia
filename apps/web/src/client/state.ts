@@ -57,6 +57,18 @@ export async function ensureOwner(): Promise<boolean> {
  */
 export const SERVED_BY_INSTANCE = import.meta.env.MODE === "instance";
 
+/**
+ * Where a picture is, for an `<img>`: an account names its picture by a
+ * path on the instance, and only that path with a name of 64 hexadecimal
+ * digits is taken (the core's `is_own_avatar`), so nothing an instance
+ * says can make the page fetch from anywhere else.
+ */
+export function avatarSrc(avatarUrl: string | undefined): string | undefined {
+  if (!avatarUrl || !/^\/api\/v1\/avatars\/[0-9a-f]{64}$/.test(avatarUrl)) return undefined;
+  const base = SERVED_BY_INSTANCE ? location.origin : savedInstance();
+  return base ? base.replace(/\/+$/, "") + avatarUrl : undefined;
+}
+
 /** Opens the client for `baseUrl` and remembers it. */
 export async function openInstance(baseUrl: string): Promise<Opened> {
   const result = await client().open(baseUrl);

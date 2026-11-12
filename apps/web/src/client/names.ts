@@ -4,7 +4,7 @@
 // channel view and Home, so a sender is named the same everywhere.
 import { createMemo } from "solid-js";
 import type { MemberSummary, SnapshotSummary } from "./bridge";
-import { peopleQuery, profileOf } from "./state";
+import { avatarSrc, peopleQuery, profileOf } from "./state";
 
 /** The display name, else the nickname, else the handle; empty when there is no profile. */
 function nameOfProfile(p: MemberSummary | null | undefined): string {
@@ -20,5 +20,10 @@ export function useNames(snapshot: () => SnapshotSummary | undefined) {
     if (accountId && accountId === me?.accountId) return me?.displayName || me?.handle || "You";
     return nameOfProfile(profile(accountId)) || (accountId ? accountId.slice(0, 8) : "Someone");
   };
-  return { people, profile, nameOf };
+  /** The account's picture as an image address; undefined for none. */
+  const photoOf = (accountId: string): string | undefined => {
+    const me = snapshot();
+    return avatarSrc(accountId && accountId === me?.accountId ? me?.avatarUrl : profile(accountId)?.avatarUrl);
+  };
+  return { people, profile, nameOf, photoOf };
 }

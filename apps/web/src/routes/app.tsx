@@ -29,7 +29,7 @@ import {
   type ChannelItem,
 } from "../design/components";
 import { signedOut, type ChannelSummary, type MessageSummary, type ServerSummary } from "../client/bridge";
-import { checkPush, client, connection, loadMyStatus, membersQuery, messagesQuery, presence, customStatusOf, presenceOf, queryClient, sessionEnded, signOut, snapshotQuery, startGateway, typingIn, watchPresence } from "../client/state";
+import { avatarSrc, checkPush, client, connection, loadMyStatus, membersQuery, messagesQuery, presence, customStatusOf, presenceOf, queryClient, sessionEnded, signOut, snapshotQuery, startGateway, typingIn, watchPresence } from "../client/state";
 import { useNames } from "../client/names";
 import { ConversationAside, HomeMain, HomeSidebar, type HomeView } from "./home";
 import { Overlay, myStatusDot, type Over } from "./menus";
@@ -179,7 +179,7 @@ export function App() {
   const current = createMemo(() => channels().find((c) => c.channelId === channelId()));
   const accountId = createMemo(() => snapshot.data?.accountId ?? "");
   const selfName = () => snapshot.data?.displayName || snapshot.data?.handle || "You";
-  const { nameOf } = useNames(() => snapshot.data);
+  const { nameOf, photoOf } = useNames(() => snapshot.data);
 
   // The gateway starts on every server channel the account can view; the
   // engine adds the personal DMs it knows, the account log the rest.
@@ -299,6 +299,7 @@ export function App() {
             self={{
               name: selfName(),
               initials: initialsOf(selfName()),
+              src: photoOf(accountId()),
               tone: toneFor(accountId()),
               // The dot is the status chosen while the gateway is connected, and a quiet one while it is not.
               status: connection() === "connected" ? myStatusDot() : "offline",
@@ -357,6 +358,7 @@ export function App() {
                                   <Message
                                     author={author()}
                                     initials={initialsOf(author())}
+                                    src={photoOf(first.authorAccountId)}
                                     tone={toneFor(first.authorAccountId)}
                                     time={t.time}
                                     datetime={t.datetime}
@@ -444,7 +446,7 @@ function MembersAside(props: { serverId: string; me: string; openPerson: (accoun
         const name = m.displayName || m.nickname || m.handle || m.accountId.slice(0, 8);
         // The handle, the pronouns of the verified profile, and the custom status while here.
         const subtitle = [m.handle ? "@" + m.handle : "", m.pronouns, customStatusOf(props.serverId, m.accountId)].filter(Boolean).join(" · ") || undefined;
-        return { id: m.accountId, name, handle: m.handle, initials: initialsOf(name), tone: toneFor(m.accountId), status: presenceOf(props.serverId, m.accountId), subtitle, tag: m.accountId === props.me ? "You" : undefined };
+        return { id: m.accountId, name, handle: m.handle, initials: initialsOf(name), src: avatarSrc(m.avatarUrl), tone: toneFor(m.accountId), status: presenceOf(props.serverId, m.accountId), subtitle, tag: m.accountId === props.me ? "You" : undefined };
       })
       .sort((a, b) => a.name.localeCompare(b.name));
   });

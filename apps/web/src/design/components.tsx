@@ -7,7 +7,7 @@
 // instead of `className`, `for` instead of `htmlFor`, `style` objects with
 // CSS property names.
 
-import { For, Show, children, createSignal, createUniqueId, onCleanup, onMount, splitProps, type JSX } from "solid-js";
+import { For, Show, children, createEffect, createSignal, createUniqueId, on, onCleanup, onMount, splitProps, type JSX } from "solid-js";
 import { Dynamic, Portal } from "solid-js/web";
 import { ICONS } from "./icons";
 
@@ -17,6 +17,8 @@ export type IconName = keyof typeof ICONS;
 export interface Person {
   initials: string;
   tone?: Tone;
+  /** The person's picture; the initials stand in without one. */
+  src?: string;
 }
 
 const STATUS_WORD: Record<Status, string> = { online: "online", away: "away", dnd: "do not disturb" };
@@ -364,8 +366,22 @@ export function Composer(props: ComposerProps) {
 const AV_FONT: Record<number, number> = { 15: 6.5, 22: 9, 28: 10, 34: 12.5, 38: 13, 40: 14, 44: 14 };
 const AV_DOT: Record<number, number> = { 22: 9, 28: 10, 34: 12, 38: 12, 40: 12, 44: 12 };
 
+/** A person's picture filling its circle, or their initials where there is none or it will not load. */
+function Face(props: { initials: string; src?: string }) {
+  const [broken, setBroken] = createSignal(false);
+  // A new picture gets its own chance.
+  createEffect(on(() => props.src, () => setBroken(false), { defer: true }));
+  return (
+    <Show when={props.src && !broken()} fallback={props.initials}>
+      <img class="lu-avatar__photo" src={props.src} alt="" decoding="async" draggable={false} onError={() => setBroken(true)} />
+    </Show>
+  );
+}
+
 export interface AvatarProps {
   initials: string;
+  /** The person's picture; the initials stand in without one. */
+  src?: string;
   tone?: Tone;
   size?: 22 | 28 | 34 | 38 | 40 | 44;
   status?: Status | "offline";
@@ -387,7 +403,7 @@ export function Avatar(props: AvatarProps) {
       aria-label={props.label}
       aria-hidden={props.label ? undefined : "true"}
     >
-      {props.initials}
+      <Face initials={props.initials} src={props.src} />
       <Show when={props.status}>
         {(status) => <span class={cx("lu-avatar__status", "lu-status-" + status(), "lu-ring-" + (props.ring ?? "surface"))} style={{ width: dot() + "px", height: dot() + "px" }}></span>}
       </Show>
@@ -456,6 +472,7 @@ export function Tag(props: TagProps) {
 export interface MemberEntry {
   name: string;
   initials: string;
+  src?: string;
   tone?: Tone;
   status?: Status;
   subtitle?: string;
@@ -494,7 +511,7 @@ export function MemberList(props: MemberListProps) {
                 {(m) => (
                   <li>
                     <button type="button" aria-haspopup={props.onOpen ? "dialog" : undefined} onClick={(e) => props.onOpen?.(m, e.currentTarget)} class={cx("lu-member", m.status === "away" && "is-away")}>
-                      <Avatar initials={m.initials} tone={m.tone} size={34} status={m.status} ring="surface" />
+                      <Avatar initials={m.initials} src={m.src} tone={m.tone} size={34} status={m.status} ring="surface" />
                       <span class="lu-member__text">
                         <span class="lu-member__name">
                           {m.name}
@@ -556,7 +573,7 @@ export interface ServerRailProps {
    * someone who is not connected; `menuOpen` says the button's menu is up;
    * `hint` is what hovering it tells.
    */
-  self?: { name: string; initials: string; tone?: Tone; status?: Status | "offline"; menuOpen?: boolean; hint?: string; onClick?: (button: HTMLElement) => void };
+  self?: { name: string; initials: string; src?: string; tone?: Tone; status?: Status | "offline"; menuOpen?: boolean; hint?: string; onClick?: (button: HTMLElement) => void };
   onHome?: () => void;
   onAddServer?: () => void;
   class?: string;
@@ -606,7 +623,7 @@ export function ServerRail(props: ServerRailProps) {
       <Show when={props.self}>
         {(self) => (
           <button type="button" class="lu-rail__self" onClick={(e) => self().onClick?.(e.currentTarget)} aria-haspopup="menu" aria-expanded={!!self().menuOpen} aria-label={self().name + ", account menu"} title={self().hint}>
-            <Avatar initials={self().initials} tone={self().tone ?? "indigo"} size={38} status={self().status} ring="rail" />
+            <Avatar initials={self().initials} src={self().src} tone={self().tone ?? "indigo"} size={38} status={self().status} ring="rail" />
           </button>
         )}
       </Show>
@@ -682,6 +699,7 @@ export interface ChannelItem {
   href?: string;
   onClick?: () => void;
   initials?: string;
+  src?: string;
   tone?: Tone;
   status?: Status;
   people?: Person[];
@@ -701,12 +719,18 @@ function RowLead(props: { item: ChannelItem }) {
           }
         >
           <span aria-hidden="true" class="lu-row__pair">
-            <For each={(props.item.people ?? []).slice(0, 2)}>{(p) => <span class={cx("lu-avatar", "lu-tone-" + (p.tone ?? "blue"))}>{p.initials}</span>}</For>
+            <For each={(props.item.people ?? []).slice(0, 2)}>
+              {(p) => (
+                <span class={cx("lu-avatar", "lu-tone-" + (p.tone ?? "blue"))}>
+                  <Face initials={p.initials} src={p.src} />
+                </span>
+              )}
+            </For>
           </span>
         </Show>
       }
     >
-      <Avatar initials={props.item.initials ?? ""} tone={props.item.tone} size={22} status={props.item.status} ring="bg" />
+      <Avatar initials={props.item.initials ?? ""} src={props.item.src} tone={props.item.tone} size={22} status={props.item.status} ring="bg" />
     </Show>
   );
 }
@@ -862,6 +886,7 @@ export interface RequestCardProps {
   name: string;
   handle?: string;
   initials: string;
+  src?: string;
   tone?: Tone;
   /** What the two of you share, nothing else (architecture 6.4). */
   meta?: string;
@@ -876,7 +901,7 @@ export interface RequestCardProps {
 export function RequestCard(props: RequestCardProps) {
   return (
     <article class={cx("lu-request", props.class)} aria-label={"Request from " + props.name}>
-      <Avatar initials={props.initials} tone={props.tone} size={40} />
+      <Avatar initials={props.initials} src={props.src} tone={props.tone} size={40} />
       <div class="lu-request__text">
         <p class="lu-request__name">
           {props.name}
@@ -1094,6 +1119,8 @@ function Paras(props: { children?: JSX.Element | string[] }) {
 export interface MessageProps {
   author: string;
   initials: string;
+  /** The author's picture. */
+  src?: string;
   tone?: Tone;
   tag?: { label: string; tone?: "neutral" | "accent" };
   time?: string;
@@ -1130,7 +1157,7 @@ export interface MessagePart {
 export function Message(props: MessageProps) {
   const variant = () => props.variant ?? "default";
   const compact = () => variant() !== "default";
-  const avatar = () => <Avatar initials={props.initials} tone={props.tone ?? "blue"} size={compact() ? 28 : 40} />;
+  const avatar = () => <Avatar initials={props.initials} src={props.src} tone={props.tone ?? "blue"} size={compact() ? 28 : 40} />;
   return (
     <article class={cx("lu-msg", "lu-msg--" + variant(), props.highlighted && "is-highlighted", props.class)}>
       <Show when={props.onOpenProfile} fallback={avatar()}>
@@ -1593,10 +1620,10 @@ export function Menu(props: MenuProps) {
 }
 
 /** Who a menu belongs to, at its head. */
-export function MenuHead(props: { name: string; sub?: string; initials: string; tone?: Tone; status?: Status | "offline" }) {
+export function MenuHead(props: { name: string; sub?: string; initials: string; src?: string; tone?: Tone; status?: Status | "offline" }) {
   return (
     <div class="lu-menu__head">
-      <Avatar initials={props.initials} tone={props.tone ?? "indigo"} size={40} status={props.status} ring="surface" />
+      <Avatar initials={props.initials} src={props.src} tone={props.tone ?? "indigo"} size={40} status={props.status} ring="surface" />
       <span class="lu-menu__who">
         <span class="lu-menu__name">{props.name}</span>
         <Show when={props.sub}>
@@ -1666,6 +1693,8 @@ const PRESENCE_WORD: Record<Status, string> = { online: "Online", away: "Away", 
 export interface ProfileCardProps {
   name: string;
   initials: string;
+  /** The person's picture. */
+  src?: string;
   tone?: Tone;
   handle?: string;
   /** A word beside the name: "You", "New". */
@@ -1692,7 +1721,7 @@ export function ProfileCard(props: ProfileCardProps) {
       </div>
       <div class="lu-pcard__body">
         <div aria-hidden="true" class={cx("lu-pcard__avatar", tone())}>
-          {props.initials}
+          <Face initials={props.initials} src={props.src} />
           <Show when={props.status}>{(status) => <span class={cx("lu-pcard__dot", "lu-status-" + status())}></span>}</Show>
         </div>
         <div class="lu-pcard__who">

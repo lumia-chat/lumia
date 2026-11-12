@@ -93,6 +93,8 @@ export interface SnapshotSummary {
   accountId: string;
   handle: string;
   displayName: string;
+  /** The account's picture, as `MemberSummary.avatarUrl`; empty for none. */
+  avatarUrl: string;
   servers: ServerSummary[];
   channels: ChannelSummary[];
   pendingRequests: DmRequestSummary[];
@@ -109,6 +111,8 @@ export interface MemberSummary {
   /** From the account's verified profile, as the display name is. */
   pronouns: string;
   bio: string;
+  /** The account's picture: a path on this instance (`/api/v1/avatars/…`); empty for none. */
+  avatarUrl: string;
 }
 export interface DmChannelSummary {
   channelId: string;
@@ -365,6 +369,20 @@ export class Bridge {
    */
   updateAccount(handle?: string, displayName?: string): Promise<SnapshotSummary> {
     return this.call("updateAccount", handle, displayName);
+  }
+  /**
+   * `PUT /account/avatar`: this account's picture, from a file's bytes and
+   * its media type; the instance makes its own square of it. Resolves to
+   * the snapshot as it then is. `INVALID_ARGUMENT` with `details.reason`
+   * (`unsupported`, `too_large`, `invalid`), `FAILED_PRECONDITION` on an
+   * instance that keeps no pictures, `RATE_LIMITED`.
+   */
+  setAvatar(picture: Uint8Array, mediaType: string): Promise<SnapshotSummary> {
+    return this.call("setAvatar", picture, mediaType);
+  }
+  /** `DELETE /account/avatar`; resolves to the snapshot as it then is. */
+  removeAvatar(): Promise<SnapshotSummary> {
+    return this.call("removeAvatar");
   }
   requestMagicLink(email: string): Promise<void> {
     return this.call("requestMagicLink", email);

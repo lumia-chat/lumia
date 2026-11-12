@@ -126,6 +126,9 @@ a { color: var(--link); }
 .app__person { cursor: default; }
 .app__person .lu-member__text { flex: 1; min-width: 0; }
 .app__row { display: flex; flex-wrap: wrap; gap: var(--space-8); }
+/* The account's photo on the Profile page: the picture, what can be done about it, and a line under that. */
+.app__photo { display: flex; align-items: center; gap: var(--space-14); }
+.app__photo-words { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--space-6); }
 /* A line in a card with something to do at its end, and a checkbox line (the passkeys card). */
 .app__line { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-12); margin: 0; font-size: 13.5px; color: var(--ink-body); }
 .app__line > span { min-width: 0; overflow-wrap: anywhere; }

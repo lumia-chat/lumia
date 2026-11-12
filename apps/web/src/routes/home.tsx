@@ -29,7 +29,7 @@ import {
   type DeviceEntry,
 } from "../design/components";
 import { ClientError, type ChannelSummary, type DeviceSummary, type DmMessageSummary, type InvitePreviewSummary, type MemberSummary, type PasskeySummary, type ProfileSummary, type SnapshotSummary } from "../client/bridge";
-import { client, opened, dmChannelsQuery, dmMessagesQuery, enableNotifications, hasIdentityQuery, myStatus, peopleQuery, pushState, queryClient, rosterQuery, setMyStatus, snapshotQuery } from "../client/state";
+import { SERVED_BY_INSTANCE, avatarSrc, client, savedInstance, dmChannelsQuery, dmMessagesQuery, enableNotifications, hasIdentityQuery, myStatus, peopleQuery, pushState, queryClient, rosterQuery, setMyStatus, snapshotQuery } from "../client/state";
 import { useNames } from "../client/names";
 import { addPasskey, passkeysAvailable } from "../client/passkeys";
 import { byBlock, byDay, initialsOf, shortTimeOf, timeOf, toneFor } from "./app";
@@ -85,7 +85,7 @@ function conversationName(c: ChannelSummary, me: string, nameOf: (id: string) =>
 }
 
 export function HomeSidebar(props: HomeProps) {
-  const { nameOf } = useNames(() => props.snapshot);
+  const { nameOf, photoOf } = useNames(() => props.snapshot);
   const me = () => props.snapshot?.accountId ?? "";
   const byHost = createMemo(() => {
     const groups = new Map<string, ChannelSummary[]>();
@@ -106,8 +106,9 @@ export function HomeSidebar(props: HomeProps) {
           name,
           kind: others.length > 1 ? "group" : "dm",
           initials: initialsOf(name),
+          src: others.length === 1 ? photoOf(others[0] ?? "") : undefined,
           tone: toneFor(others[0] ?? c.channelId),
-          people: others.map((id) => ({ name: nameOf(id), initials: initialsOf(nameOf(id)), tone: toneFor(id) })),
+          people: others.map((id) => ({ name: nameOf(id), initials: initialsOf(nameOf(id)), src: photoOf(id), tone: toneFor(id) })),
           active: props.view === "dm" && c.channelId === props.channelId,
           onClick: () => props.go("dm", c.channelId),
         };
@@ -263,7 +264,7 @@ function NoIdentity(props: { toLink: () => void; back: () => void }) {
 }
 
 function Conversation(props: HomeProps) {
-  const { nameOf } = useNames(() => props.snapshot);
+  const { nameOf, photoOf } = useNames(() => props.snapshot);
   const me = () => props.snapshot?.accountId ?? "";
   const channel = createMemo(() => props.snapshot?.channels.find((c) => c.channelId === props.channelId));
   const dms = dmChannelsQuery(() => true);
@@ -350,6 +351,7 @@ function Conversation(props: HomeProps) {
                         <Message
                           author={who(first)}
                           initials={initialsOf(who(first))}
+                          src={account() ? photoOf(account()) : undefined}
                           tone={toneFor(first.mine ? me() : first.senderAccountId || first.senderIdentityId)}
                           time={t.time}
                           datetime={t.datetime}
@@ -405,7 +407,7 @@ function ChooseConversation(props: HomeProps) {
 }
 
 export function ConversationAside(props: HomeProps) {
-  const { nameOf, profile } = useNames(() => props.snapshot);
+  const { nameOf, profile, photoOf } = useNames(() => props.snapshot);
   const me = () => props.snapshot?.accountId ?? "";
   const channel = createMemo(() => props.snapshot?.channels.find((c) => c.channelId === props.channelId));
   return (
@@ -423,6 +425,7 @@ export function ConversationAside(props: HomeProps) {
                   id,
                   name: nameOf(id),
                   initials: initialsOf(nameOf(id)),
+                  src: photoOf(id),
                   tone: toneFor(id),
                   subtitle: [id === me() ? "you" : "", profile(id)?.pronouns ?? ""].filter(Boolean).join(" · ") || undefined,
                   detail: profile(id)?.bio || undefined,
@@ -439,7 +442,7 @@ export function ConversationAside(props: HomeProps) {
 }
 
 function Requests(props: HomeProps) {
-  const { nameOf, profile } = useNames(() => props.snapshot);
+  const { nameOf, profile, photoOf } = useNames(() => props.snapshot);
   const [busy, setBusy] = createSignal<string | null>(null);
   const [error, setError] = createSignal("");
   const respond = async (requestId: string, response: "accept" | "decline" | "block") => {
@@ -480,6 +483,7 @@ function Requests(props: HomeProps) {
                 name={nameOf(r.fromAccountId)}
                 handle={profile(r.fromAccountId)?.handle}
                 initials={initialsOf(nameOf(r.fromAccountId))}
+                src={photoOf(r.fromAccountId)}
                 tone={toneFor(r.fromAccountId)}
                 meta={meta(r)}
                 busy={busy() === r.requestId}
@@ -533,7 +537,7 @@ function NewMessage(props: HomeProps) {
             <For each={list()}>
               {(p) => (
                 <li class="lu-member app__person">
-                  <Avatar initials={initialsOf(p.displayName || p.handle)} tone={toneFor(p.accountId)} size={28} />
+                  <Avatar initials={initialsOf(p.displayName || p.handle)} src={avatarSrc(p.avatarUrl)} tone={toneFor(p.accountId)} size={28} />
                   <span class="lu-member__text">
                     <span class="lu-member__name">{p.displayName || p.handle}</span>
                     <span class="lu-member__sub">@{p.handle}</span>
@@ -608,6 +612,79 @@ function Profile(props: HomeProps) {
       setAccountBusy(false);
     }
   };
+  // The instance as a person names it: its address without the scheme.
+  const instanceAddress = () => {
+    try {
+      return SERVED_BY_INSTANCE ? location.host : new URL(savedInstance() ?? "").host;
+    } catch {
+      return "";
+    }
+  };
+  // The account's photo: what it is now, a way to choose another, and a way
+  // to have none. The instance makes its own square of the file
+  // (architecture 12), so nothing of the file is passed on but what it shows.
+  let photoInput: HTMLInputElement | undefined;
+  const [photoBusy, setPhotoBusy] = createSignal(false);
+  const [photoError, setPhotoError] = createSignal("");
+  const [photoSaved, setPhotoSaved] = createSignal(false);
+  const photo = () => avatarSrc(snapshot.data?.avatarUrl);
+  const selfName = () => snapshot.data?.displayName || snapshot.data?.handle || "You";
+  const photoFailed = (err: unknown) => {
+    const ce = err instanceof ClientError ? err : null;
+    setPhotoError(
+      ce?.code === "INVALID_ARGUMENT" && ce.details.reason === "too_large"
+        ? "That picture is too large. Choose one under 8 MB."
+        : ce?.code === "INVALID_ARGUMENT" && ce.details.reason === "unsupported"
+          ? "That file is not a picture Lumia can read. Choose a PNG, JPEG, WebP or GIF."
+          : ce?.code === "INVALID_ARGUMENT"
+            ? "That picture could not be read."
+            : ce?.code === "FAILED_PRECONDITION"
+              ? "This instance does not keep pictures."
+              : ce?.code === "RATE_LIMITED"
+                ? "The instance is busy. Try again in a moment."
+                : err instanceof Error
+                  ? err.message
+                  : String(err),
+    );
+  };
+  // The snapshot the call answers with is the account as it now is; the
+  // lists that name this account's picture are read again.
+  const photoChanged = (snap: SnapshotSummary) => {
+    queryClient.setQueryData(["snapshot"], snap);
+    void queryClient.invalidateQueries({ queryKey: ["people"] });
+    void queryClient.invalidateQueries({ queryKey: ["members"] });
+    setPhotoSaved(true);
+  };
+  const choosePhoto = async (file: File | undefined) => {
+    if (!file) return;
+    setPhotoError("");
+    setPhotoSaved(false);
+    // What the instance would refuse for its size is not sent at all.
+    if (file.size > 8 * 1024 * 1024) {
+      setPhotoError("That picture is too large. Choose one under 8 MB.");
+      return;
+    }
+    setPhotoBusy(true);
+    try {
+      photoChanged(await client().setAvatar(new Uint8Array(await file.arrayBuffer()), file.type));
+    } catch (err) {
+      photoFailed(err);
+    } finally {
+      setPhotoBusy(false);
+    }
+  };
+  const removePhoto = async () => {
+    setPhotoError("");
+    setPhotoSaved(false);
+    setPhotoBusy(true);
+    try {
+      photoChanged(await client().removeAvatar());
+    } catch (err) {
+      photoFailed(err);
+    } finally {
+      setPhotoBusy(false);
+    }
+  };
   // The status (protocol 6.7): chosen here, kept by the core, sent with the
   // servers watched and on every welcome.
   const [status, setStatus] = createSignal(myStatus().status);
@@ -675,7 +752,41 @@ function Profile(props: HomeProps) {
     <>
       <ChannelHeader kind="page" name="Profile" topic="How people see you" actions={[]} onBack={props.back} backLabel="Back to Home" />
       <div class="lu-page">
-        <Card title="Account" subtitle={`Who you are on ${opened()?.host || "this instance"}.`}>
+        <Card title="Account" subtitle={`Who you are on ${instanceAddress() || "this instance"}.`}>
+          <div class="app__photo">
+            <Avatar initials={initialsOf(selfName())} src={photo()} tone={toneFor(snapshot.data?.accountId ?? "")} size={44} />
+            <div class="app__photo-words">
+              <div class="app__row">
+                <input
+                  ref={photoInput}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/gif"
+                  class="lu-sr"
+                  tabindex={-1}
+                  aria-label="Photo"
+                  onChange={(e) => {
+                    const file = e.currentTarget.files?.[0];
+                    // The same file chosen again is a change too.
+                    e.currentTarget.value = "";
+                    void choosePhoto(file);
+                  }}
+                />
+                <Button size="sm" disabled={photoBusy()} onClick={() => photoInput?.click()}>
+                  {photoBusy() ? "Sending…" : photo() ? "Change photo…" : "Choose a photo…"}
+                </Button>
+                <Show when={photo()}>
+                  <Button size="sm" disabled={photoBusy()} onClick={() => void removePhoto()}>
+                    Remove
+                  </Button>
+                </Show>
+              </div>
+              <Show when={photoError()} fallback={<p class="auth__note" role="status">{photoSaved() ? "Saved." : "A PNG, JPEG, WebP or GIF up to 8 MB. People see its middle, as a circle."}</p>}>
+                <p class="auth__error" role="alert">
+                  {photoError()}
+                </p>
+              </Show>
+            </div>
+          </div>
           <form class="auth__form" onSubmit={(e) => void saveAccount(e)}>
             <TextField label="Handle" value={handle()} onInput={(e) => setHandle(e.currentTarget.value)} placeholder="yourname" autocomplete="username" autocapitalize="off" spellcheck={false} />
             <Show when={hasIdentity.data === false}>

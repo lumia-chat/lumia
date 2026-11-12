@@ -9,6 +9,7 @@
 import { chromium, webkit, type BrowserContext, type Page } from "playwright";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
+import { crc32, deflateSync } from "node:zlib";
 
 const web = resolve(import.meta.dir, "..");
 const cli = resolve(web, "../core/target/release/lumia-cli");
@@ -521,6 +522,26 @@ async function invite(which: string, dataDir: string, server: string) {
   console.log(`  ${which}: opened an invite, created an account from it and landed in the server in ${Date.now() - t0} ms`);
 }
 
+// A small PNG of one colour, for the photo step: the instance decodes
+// what it is given, so it has to be a real picture.
+function png(size: number, [r, g, b]: [number, number, number]): Buffer {
+  const chunk = (type: string, data: Buffer) => {
+    const body = Buffer.concat([Buffer.from(type, "ascii"), data]);
+    const length = Buffer.alloc(4);
+    length.writeUInt32BE(data.length);
+    const sum = Buffer.alloc(4);
+    sum.writeUInt32BE(crc32(body));
+    return Buffer.concat([length, body, sum]);
+  };
+  const head = Buffer.alloc(13);
+  head.writeUInt32BE(size, 0);
+  head.writeUInt32BE(size, 4);
+  head.set([8, 2, 0, 0, 0], 8); // eight bits a channel, RGB
+  const row = Buffer.concat([Buffer.from([0]), Buffer.alloc(size * 3, Buffer.from([r, g, b]))]);
+  const rows = Buffer.concat(Array.from({ length: size }, () => row));
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk("IHDR", head), chunk("IDAT", deflateSync(rows)), chunk("IEND", Buffer.alloc(0))]);
+}
+
 // The account's own handle and display name (`PATCH /account`), from the
 // Profile page's Account card, on a browser with no identity (one with an
 // identity keeps the name in its signed profile). An account of its own:
@@ -558,10 +579,33 @@ async function account(which: string, taken: string, stamp: number) {
     await page.getByLabel("Handle").fill("A b");
     await save.click();
     await card.getByText("A handle is 2 to 32 letters").waitFor();
+    // The photo (`PUT /account/avatar`): a file chosen on the same card is
+    // the picture on the rail once the instance has made its square of it,
+    // and it loads from the instance with no session; what is not a
+    // picture is refused in words; Remove brings the initials back.
+    phase("photo");
+    const photo = page.locator(".app__photo");
+    const file = page.getByLabel("Photo");
+    await file.setInputFiles({ name: "me.png", mimeType: "image/png", buffer: png(64, [48, 103, 252]) });
+    await photo.getByText("Saved.").waitFor();
+    const onRail = page.locator(".lu-rail__self img");
+    await onRail.waitFor();
+    const drawn = await onRail.evaluate(async (img: HTMLImageElement) => {
+      await img.decode();
+      return { src: img.src, width: img.naturalWidth };
+    });
+    if (!/\/api\/v1\/avatars\/[0-9a-f]{64}$/.test(drawn.src) || drawn.width === 0) throw new Error(`the rail's picture is ${drawn.src} at ${drawn.width} wide`);
+    if (!(await fetch(drawn.src)).ok) throw new Error("the picture does not load without a session");
+    await page.screenshot({ path: `${out}/${which}-photo.png` });
+    await file.setInputFiles({ name: "notes.txt", mimeType: "text/plain", buffer: Buffer.from("not a picture") });
+    await photo.getByText("That file is not a picture Lumia can read.").waitFor();
+    await photo.getByRole("button", { name: "Remove" }).click();
+    await onRail.waitFor({ state: "detached" });
+    await photo.getByRole("button", { name: "Choose a photo…" }).waitFor();
   } finally {
     await ctx.close();
   }
-  console.log(`  ${which}: renamed its account, was refused a taken handle and one that is not a handle, in ${Date.now() - t0} ms`);
+  console.log(`  ${which}: renamed its account, was refused a taken handle and one that is not a handle, set a photo that loads from the instance, was refused a file that is no picture, and removed the photo, in ${Date.now() - t0} ms`);
 }
 
 // A session revoked from elsewhere (protocol 12), as "sign out everywhere"

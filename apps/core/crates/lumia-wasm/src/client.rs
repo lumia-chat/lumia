@@ -531,7 +531,8 @@ impl Client {
                 .app
                 .set_avatar(picture, &media_type)
                 .await
-                .map_err(js)?,
+                // With its details: the page words the refusal by `details.reason`.
+                .map_err(js_api)?,
         )
     }
 

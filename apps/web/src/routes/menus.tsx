@@ -7,7 +7,7 @@
 import { For, Match, Show, Switch, createSignal } from "solid-js";
 import { Button, Choice, Menu, MenuHead, MenuItem, MenuLabel, MenuRadio, MenuRule, Pop, Popover, ProfileCard, TextField, type IconName, type Status } from "../design/components";
 import { ClientError, type InviteSummary, type ServerSummary, type SnapshotSummary } from "../client/bridge";
-import { client, connection, customStatusOf, myStatus, presenceOf, queryClient, setMyStatus } from "../client/state";
+import { avatarSrc, client, connection, customStatusOf, myStatus, presenceOf, queryClient, setMyStatus } from "../client/state";
 import { useNames } from "../client/names";
 import { initialsOf, toneFor } from "./app";
 import { messagePerson } from "./home";
@@ -263,7 +263,7 @@ function AccountMenu(props: OverlayProps) {
   return (
     <Popover anchor={props.over.anchor} placement="beside" onClose={props.close} closeLabel="Close menu">
       <Menu label="Your account">
-        <MenuHead name={name()} sub={[props.snapshot?.handle ? "@" + props.snapshot.handle : "", connection() === "connected" ? words() : "Not connected"].filter(Boolean).join(" · ")} initials={initialsOf(name())} tone={toneFor(props.snapshot?.accountId ?? "")} status={connection() === "connected" ? myStatusDot() : "offline"} />
+        <MenuHead src={avatarSrc(props.snapshot?.avatarUrl)} name={name()} sub={[props.snapshot?.handle ? "@" + props.snapshot.handle : "", connection() === "connected" ? words() : "Not connected"].filter(Boolean).join(" · ")} initials={initialsOf(name())} tone={toneFor(props.snapshot?.accountId ?? "")} status={connection() === "connected" ? myStatusDot() : "offline"} />
         <MenuRule />
         <MenuLabel>Status</MenuLabel>
         <For each={STATUSES}>
@@ -297,7 +297,7 @@ function AccountMenu(props: OverlayProps) {
 // Who someone is: the name, the handle, where they are in the server on
 // screen, what their verified profile says, and a way to write to them.
 function PersonCard(props: OverlayProps & { accountId: string }) {
-  const { nameOf, profile } = useNames(() => props.snapshot);
+  const { nameOf, profile, photoOf } = useNames(() => props.snapshot);
   const me = () => props.accountId === props.snapshot?.accountId;
   const name = () => nameOf(props.accountId);
   const handle = () => (me() ? props.snapshot?.handle : profile(props.accountId)?.handle) || undefined;
@@ -337,6 +337,7 @@ function PersonCard(props: OverlayProps & { accountId: string }) {
       <ProfileCard
         name={name()}
         initials={initialsOf(name())}
+        src={photoOf(props.accountId)}
         tone={toneFor(props.accountId)}
         handle={handle()}
         tag={me() ? "You" : undefined}
