@@ -72,6 +72,7 @@ fn the_binary_has_the_items_and_enables_them_for_its_state() {
     std::fs::create_dir_all(&dir).unwrap();
     Settings {
         instance: Some("http://127.0.0.1:9".into()),
+        ..Settings::default()
     }
     .save(&dir);
 

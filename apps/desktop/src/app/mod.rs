@@ -110,6 +110,11 @@ impl State {
         }
     }
 
+    /// Where this state keeps what it remembers between launches.
+    pub fn data_dir(&self) -> &std::path::Path {
+        &self.data_dir
+    }
+
     // ---- Where the shell is -----------------------------------------------------------
 
     /// The server on screen, when the shell is in one.
@@ -133,7 +138,10 @@ impl State {
             .next()
             .map(|c| c.channel_id.clone());
         match first {
-            Some(channel) => self.session.open_channel(&channel),
+            Some(channel) => {
+                self.session.open_channel(&channel);
+                self.remember_channel();
+            }
             None => self.session.close_conversation(),
         }
     }
@@ -141,6 +149,22 @@ impl State {
     pub fn select_channel(&mut self, channel_id: &str) {
         self.session.open_channel(channel_id);
         self.draft.clear();
+        self.remember_channel();
+    }
+
+    /// Keeps the channel on screen as the one a launch returns to.
+    fn remember_channel(&mut self) {
+        let (Some(server_id), Some(channel_id)) = (self.server_id(), self.session.channel()) else {
+            return;
+        };
+        let last = settings::LastChannel {
+            server_id: server_id.to_string(),
+            channel_id: channel_id.to_string(),
+        };
+        if self.settings.last_channel.as_ref() != Some(&last) {
+            self.settings.last_channel = Some(last);
+            self.settings.save(&self.data_dir);
+        }
     }
 
     /// Goes to Home, showing `view`. No server is on screen there, so none is watched.
@@ -220,6 +244,17 @@ impl State {
         let servers = self.session.servers();
         if !self.placed {
             self.placed = true;
+            // Back to the channel last on screen, when the account still has it.
+            if let Some(last) = self.settings.last_channel.clone()
+                && self
+                    .session
+                    .channels_of(&last.server_id)
+                    .any(|c| c.channel_id == last.channel_id)
+            {
+                self.select_server(&last.server_id);
+                self.select_channel(&last.channel_id);
+                return;
+            }
             let personal = self.session.personal_channels().next().is_some();
             if let (Some(first), false) = (servers.first(), personal) {
                 let first = first.server_id.clone();

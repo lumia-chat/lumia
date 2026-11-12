@@ -36,6 +36,16 @@ pub fn data_dir() -> PathBuf {
 pub struct Settings {
     /// The instance last opened, reopened at launch.
     pub instance: Option<String>,
+    /// The channel last on screen, which a launch returns to (architecture 17's cold start
+    /// is to the last-viewed channel).
+    pub last_channel: Option<LastChannel>,
+}
+
+/// A server's channel, by the ids the instance gave.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LastChannel {
+    pub server_id: String,
+    pub channel_id: String,
 }
 
 impl Settings {

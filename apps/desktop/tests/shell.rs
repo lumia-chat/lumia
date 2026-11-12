@@ -162,6 +162,38 @@ fn an_account_with_a_personal_conversation_lands_on_home() {
 }
 
 #[test]
+fn a_launch_returns_to_the_channel_last_on_screen() {
+    let dir = data_dir();
+    let mut first = State::new(dir.clone());
+    first.sign_in.instance.replace_text("http://127.0.0.1:9");
+    first.connect();
+    first.receive(&Update::SignedIn(Ok(())));
+    first.receive(&Update::Snapshot(Ok(snapshot())));
+    first.select_server("garden");
+    first.select_server("acme");
+    first.select_channel("design");
+    drop(first);
+
+    // Nothing but the settings file carries it over.
+    let mut again = State::new(dir);
+    again.connect();
+    again.receive(&Update::SignedIn(Ok(())));
+    again.receive(&Update::Snapshot(Ok(snapshot())));
+    assert_eq!(again.server_id(), Some("acme"));
+    assert_eq!(again.session.channel(), Some("design"));
+
+    // A channel the account no longer has is not returned to.
+    let mut without = snapshot();
+    without.channels.retain(|c| c.channel_id != "design");
+    let mut gone = State::new(again.data_dir().to_path_buf());
+    drop(again);
+    gone.connect();
+    gone.receive(&Update::SignedIn(Ok(())));
+    gone.receive(&Update::Snapshot(Ok(without)));
+    assert_eq!(gone.session.channel(), Some("general"));
+}
+
+#[test]
 fn a_press_changes_channel_and_server() {
     let mut rt = runtime(signed_in());
     press(&mut rt, "channel-design");

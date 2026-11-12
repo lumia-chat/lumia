@@ -80,6 +80,17 @@ pub fn install(app: App<State>) -> App<State> {
     if cfg!(target_os = "macos") {
         app = app.keep_running();
     }
+    // For measuring a launch (architecture 17's cold-start row): `LUMIA_FIRST_FRAME` set,
+    // the window's first frame on the GPU prints a line; set to `quit`, the app then exits.
+    if let Some(mode) = std::env::var_os("LUMIA_FIRST_FRAME") {
+        let quit = mode == "quit";
+        app = app.on_ready(move |_| {
+            println!("lumia-first-frame");
+            if quit {
+                std::process::exit(0);
+            }
+        });
+    }
     app
 }
 

@@ -82,6 +82,7 @@ fn data_dir(dir: &Path, instance: &str) -> PathBuf {
     std::fs::create_dir_all(dir).unwrap();
     Settings {
         instance: Some(instance.into()),
+        ..Settings::default()
     }
     .save(dir);
     dir.to_path_buf()

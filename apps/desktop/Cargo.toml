@@ -65,3 +65,13 @@ unsafe_code = "deny"
 [lints.clippy]
 unwrap_used = "deny"
 expect_used = "deny"
+
+# For measurements against architecture 17's budgets: release without incremental
+# compilation, which can move frame timings (Rune's own profile for its numbers).
+[profile.perf]
+inherits = "release"
+opt-level = 3
+codegen-units = 16
+lto = false
+debug = false
+incremental = false
