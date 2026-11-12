@@ -17,9 +17,16 @@
 //! command) rotates it too and writes the new one where this process
 //! would find it. So before a refresh token is presented, the stored pair
 //! is read again through a hook: if it has moved, it is taken as it is.
+//!
+//! Every request is given a time to be answered in ([`REQUEST_TIMEOUT`],
+//! longer for what carries more). Without one, a network that takes the
+//! packets and answers nothing held a call for as long as TCP waits, which
+//! is minutes, and whoever was signing out watched a spinner for them. A
+//! call that runs out fails as any transport failure does.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 use futures_util::lock::Mutex as AsyncMutex;
 use lumia_core::proto::InstanceInfo;
@@ -57,6 +64,35 @@ use crate::ClientError;
 const PROTO: &str = "application/x-protobuf";
 const REAUTH_HEADER: &str = "x-reauth-token";
 
+/// How long a request may take from being sent to its answer's last byte,
+/// before what it carries is counted in.
+pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// The least a request with a body is assumed to upload in a second: a
+/// picture or a chunk of history is allowed that much longer.
+const UPLOAD_BYTES_PER_SECOND: usize = 16 * 1024;
+
+/// What a download of history is allowed at least: a chunk is the one
+/// answer that is large, and the phone asking for it may be on a slow link.
+const CHUNK_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// What the farewell is allowed at most. Signing out goes ahead whether the
+/// instance hears of it or not, so nobody waits long for it.
+const SIGN_OUT_TIMEOUT: Duration = Duration::from_secs(8);
+
+/// The time one request has, given the client's own allowance, where it
+/// goes and how many bytes it sends.
+fn time_allowed(base: Duration, path: &str, sent: usize) -> Duration {
+    let upload = Duration::from_secs((sent / UPLOAD_BYTES_PER_SECOND) as u64);
+    if path.starts_with("/api/v1/auth/sign-out") {
+        base.min(SIGN_OUT_TIMEOUT)
+    } else if path.starts_with("/api/v1/history/chunks") {
+        base.max(CHUNK_TIMEOUT) + upload
+    } else {
+        base + upload
+    }
+}
+
 /// The current token pair for one instance.
 #[derive(Debug, Clone, Default)]
 pub struct Tokens {
@@ -83,6 +119,8 @@ pub struct Api {
     rotating: Arc<AsyncMutex<()>>,
     on_rotate: Option<RotateHook>,
     stored: Option<StoredHook>,
+    /// What a request is allowed before what it carries is counted in.
+    timeout: Duration,
 }
 
 impl std::fmt::Debug for Api {
@@ -105,7 +143,15 @@ impl Api {
             rotating: Arc::new(AsyncMutex::new(())),
             on_rotate: None,
             stored: None,
+            timeout: REQUEST_TIMEOUT,
         }
+    }
+
+    /// Allows each request this long instead of [`REQUEST_TIMEOUT`].
+    #[must_use]
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
     }
 
     /// Uses this access token for authenticated calls (no refresh possible).
@@ -335,7 +381,12 @@ impl Api {
     /// `NOT_FOUND` for an address nothing is at; a picture over `limit`;
     /// transport failure.
     pub async fn avatar(&self, path: &str, limit: usize) -> Result<Vec<u8>, ClientError> {
-        let response = self.http.get(format!("{}{path}", self.base)).send().await?;
+        let response = self
+            .http
+            .get(format!("{}{path}", self.base))
+            .timeout(time_allowed(self.timeout, path, 0))
+            .send()
+            .await?;
         let status = response.status();
         let bytes = response.bytes().await?;
         if !status.is_success() {
@@ -1418,9 +1469,11 @@ impl Api {
         extra: Option<(&str, &str)>,
         authenticated: bool,
     ) -> Result<(StatusCode, Vec<u8>), ClientError> {
+        let sent = body.as_ref().map_or(0, Vec::len);
         let mut builder = self
             .http
             .request(method, format!("{}{path}", self.base))
+            .timeout(time_allowed(self.timeout, path, sent))
             .header(ACCEPT, PROTO);
         // A body is protobuf unless the extra header says what else it is.
         let typed = extra.filter(|(name, _)| name.eq_ignore_ascii_case(CONTENT_TYPE.as_str()));
@@ -1504,7 +1557,7 @@ mod tests {
     use lumia_core::proto::{Error as ApiError, ErrorCode, RefreshRequest, TokenPair};
     use prost::Message;
 
-    use super::{page_limit, Api, Tokens};
+    use super::{page_limit, time_allowed, Api, Tokens, REQUEST_TIMEOUT};
 
     /// An instance as far as tokens go, on a local port: it knows one
     /// session, whose pair is (`a1`, `r1`) with `a1` expired. A request
@@ -1648,6 +1701,60 @@ mod tests {
             tokio::spawn(async move { second.refresh_now().await }),
         );
         assert_eq!(*presented.lock().unwrap(), ["r1", "r2"]);
+    }
+
+    /// An instance that takes a request and never answers it, as a network
+    /// that swallows packets looks from here. The call used to wait for as
+    /// long as TCP does; it now fails once its time is up.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_request_nobody_answers_fails_when_its_time_is_up() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            let mut held = Vec::new();
+            for stream in listener.incoming() {
+                held.push(stream.unwrap());
+            }
+        });
+        let api = Api::new(&base)
+            .with_token(Some("a1".into()))
+            .with_timeout(Duration::from_millis(200));
+        let started = std::time::Instant::now();
+        let answer = api.account_snapshot().await;
+        assert!(
+            matches!(answer, Err(crate::ClientError::Transport(_))),
+            "{answer:?}"
+        );
+        assert!(started.elapsed() < Duration::from_secs(5));
+        // Signing out is refused the same way and no slower.
+        let started = std::time::Instant::now();
+        assert!(api.sign_out().await.is_err());
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn what_a_request_carries_buys_it_time() {
+        let base = REQUEST_TIMEOUT;
+        assert_eq!(time_allowed(base, "/api/v1/account/snapshot", 0), base);
+        // A picture of two megabytes at the slowest link allowed for.
+        assert_eq!(
+            time_allowed(base, "/api/v1/account/avatar", 2 * 1024 * 1024),
+            base + Duration::from_secs(128)
+        );
+        // History is the large answer, coming or going.
+        assert_eq!(
+            time_allowed(base, "/api/v1/history/chunks/c1", 0),
+            Duration::from_secs(120)
+        );
+        // The farewell is short, and shorter still for a client told to be.
+        assert_eq!(
+            time_allowed(base, "/api/v1/auth/sign-out", 0),
+            Duration::from_secs(8)
+        );
+        assert_eq!(
+            time_allowed(Duration::from_secs(1), "/api/v1/auth/sign-out", 0),
+            Duration::from_secs(1)
+        );
     }
 
     #[test]

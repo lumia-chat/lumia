@@ -1100,7 +1100,7 @@ impl App {
             .api
             .passkey_assert_finish(challenge_id, credential_json, self.device_id.clone())
             .await?;
-        self.save_tokens(&pair)
+        self.take_session(&pair).await
     }
 
     /// Signs in with a password and the passkey factor (protocol 6.1's
@@ -1126,7 +1126,7 @@ impl App {
                 credential_json,
             )
             .await?;
-        self.save_tokens(&pair)
+        self.take_session(&pair).await
     }
 
     /// Whether a password sign-in must also present one of this account's
@@ -1185,7 +1185,7 @@ impl App {
             .api
             .magic_link_complete(&token, self.device_id.clone())
             .await?;
-        self.save_tokens(&pair)
+        self.take_session(&pair).await
     }
 
     /// A one-time sign-in token for this account (`POST /auth/handoff`),
@@ -1253,7 +1253,7 @@ impl App {
             .api
             .create_account(handle, "", password, &code, self.device_id.clone())
             .await?;
-        self.save_tokens(&pair)
+        self.take_session(&pair).await
     }
 
     /// `POST /servers`: a server this account owns, with its `@everyone`
@@ -1453,7 +1453,7 @@ impl App {
                     .await?
             }
         };
-        self.save_tokens(&pair)
+        self.take_session(&pair).await
     }
 
     /// Signs out: revokes the session and forgets the tokens.
@@ -1462,15 +1462,21 @@ impl App {
     /// On a store failure; an API refusal is ignored, the tokens go anyway.
     pub async fn sign_out(&self) -> Result<(), ClientError> {
         let _ = self.api.sign_out().await;
-        {
+        // Each is tried whatever became of the one before, and the client
+        // stops presenting the pair either way: a store that refuses one
+        // delete must not leave the other token to open the app signed in.
+        let (tokens, kept) = {
             let mut inner = self.lock();
-            inner.keys.delete("access_token")?;
-            inner.keys.delete("refresh_token")?;
+            let access = inner.keys.delete("access_token");
+            let refresh = inner.keys.delete("refresh_token");
             // What was kept of the account for an offline launch goes with it.
-            inner.reader.meta_set(KEPT_SNAPSHOT, "")?;
-            inner.reader.meta_set(KEPT_MEMBERS, "")?;
-        }
+            let snapshot = inner.reader.meta_set(KEPT_SNAPSHOT, "");
+            let members = inner.reader.meta_set(KEPT_MEMBERS, "");
+            (access.and(refresh), snapshot.and(members))
+        };
         self.api.clear_tokens();
+        tokens?;
+        kept?;
         Ok(())
     }
 
@@ -2415,7 +2421,7 @@ impl App {
         let roster = dev.claim(&api, code).await?;
         let pair = dev.sign_in(&api).await?;
         drop(stores);
-        self.save_tokens(&pair)?;
+        self.take_session(&pair).await?;
         self.announce_device().await;
         Ok(roster_summary(&roster, &self.device_id))
     }
@@ -2429,7 +2435,7 @@ impl App {
         let mut stores = self.identity.lock().await;
         let pair = device(&mut stores, &self.device_id).sign_in(&api).await?;
         drop(stores);
-        self.save_tokens(&pair)
+        self.take_session(&pair).await
     }
 
     /// The roster this device holds.
@@ -2788,6 +2794,19 @@ impl App {
 
     // ---- Plumbing ----
 
+    /// A sign-in's pair becomes this client's session. One it already held
+    /// is revoked first: linking a phone that had signed in with a password,
+    /// or signing in again without signing out, used to leave the earlier
+    /// session alive on the instance with nothing holding its tokens, where
+    /// signing out later could not reach it. A refusal is ignored, as when
+    /// signing out.
+    async fn take_session(&self, pair: &TokenPair) -> Result<(), ClientError> {
+        if self.api.tokens().access.is_some() {
+            let _ = self.api.sign_out().await;
+        }
+        self.save_tokens(pair)
+    }
+
     fn save_tokens(&self, pair: &TokenPair) -> Result<(), ClientError> {
         {
             let mut inner = self.lock();
@@ -2962,6 +2981,83 @@ mod kept_tests {
             "a second within five seconds is not sent at all"
         );
         assert!(app.typing("not an id").is_err());
+    }
+
+    /// An instance that answers every request with an empty success and
+    /// keeps what was asked of it: each request's first line and the token
+    /// it came with.
+    fn listening() -> (String, Arc<std::sync::Mutex<Vec<String>>>) {
+        use std::io::{Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = Arc::clone(&asked);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let mut stream = stream.unwrap();
+                let mut request = Vec::new();
+                let mut chunk = [0u8; 4096];
+                while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                    let n = stream.read(&mut chunk).unwrap();
+                    if n == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&chunk[..n]);
+                }
+                let head = String::from_utf8_lossy(&request).to_lowercase();
+                let line = head.lines().next().unwrap_or_default().to_string();
+                let token = head
+                    .lines()
+                    .find_map(|l| l.strip_prefix("authorization: bearer "))
+                    .unwrap_or("none");
+                seen.lock().unwrap().push(format!("{line} as {token}"));
+                stream
+                    .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")
+                    .unwrap();
+            }
+        });
+        (base, asked)
+    }
+
+    fn pair(access: &str, refresh: &str) -> TokenPair {
+        TokenPair {
+            access_token: access.into(),
+            refresh_token: refresh.into(),
+            ..Default::default()
+        }
+    }
+
+    /// A phone signs in with a password and is then linked, which signs it
+    /// in again: the first session used to stay alive on the instance with
+    /// no client holding it, and signing out revoked only the second.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_sign_in_over_a_held_session_revokes_the_held_one() {
+        let (base, asked) = listening();
+        let opener: Opener = Arc::new(|_| SqliteStore::in_memory());
+        let app = App::open(&base, Place::Native, opener).unwrap();
+        // The first sign-in holds nothing, so there is nothing to revoke.
+        app.take_session(&pair("a1", "r1")).await.unwrap();
+        assert!(asked.lock().unwrap().is_empty());
+        app.take_session(&pair("a2", "r2")).await.unwrap();
+        assert_eq!(
+            *asked.lock().unwrap(),
+            ["post /api/v1/auth/sign-out http/1.1 as a1"]
+        );
+        assert_eq!(app.api.tokens().access.as_deref(), Some("a2"));
+        assert_eq!(
+            tokens(&app.lock().keys).unwrap().refresh.as_deref(),
+            Some("r2")
+        );
+        // Signing out revokes the one that is left and holds nothing after.
+        app.sign_out().await.unwrap();
+        assert_eq!(
+            asked.lock().unwrap().last().map(String::as_str),
+            Some("post /api/v1/auth/sign-out http/1.1 as a2")
+        );
+        assert!(app.api.tokens().access.is_none());
+        let kept = tokens(&app.lock().keys).unwrap();
+        assert!(kept.access.is_none() && kept.refresh.is_none());
     }
 
     #[test]
