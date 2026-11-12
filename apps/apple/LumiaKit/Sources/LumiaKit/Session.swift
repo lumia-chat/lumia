@@ -50,6 +50,16 @@ public final class LumiaSession {
     /// Custom status by server then account, beside the presence.
     public private(set) var serverCustomStatus: [String: [String: String]] = [:]
     private var watchingServerIDs: [String] = []
+    /// Who is typing in the servers' channels (protocol 6.7). A personal
+    /// conversation never has anyone: the instance is not to learn who is
+    /// writing there, and whether typing travels inside one is an open
+    /// item of the E2EE spec (section 13).
+    public private(set) var typing = TypingRoster()
+    /// The wait for the first of those typing to run out, and the moment it waits for.
+    private var typingExpiry: Task<Void, Never>?
+    private var typingWake: Int64?
+    /// This device's clock, in microseconds since the epoch; a test's own.
+    var nowMicros: @MainActor () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1_000_000) }
     /// Public profiles looked up one at a time; nil once the instance refused one.
     private var profiles: [String: MemberSummary?] = [:]
     private var profilesInFlight: Set<String> = []
@@ -154,6 +164,8 @@ public final class LumiaSession {
         messages = [:]
         dmChannels = []
         dmLogs = [:]
+        typing.clear()
+        scheduleTypingExpiry()
     }
 
     // MARK: Identity
@@ -414,7 +426,7 @@ public final class LumiaSession {
         try? await client.pushSubscribe(platform: platform, token: token)
     }
 
-    private func handle(_ event: LumiaEvent) async {
+    func handle(_ event: LumiaEvent) async {
         switch event {
         case .welcomed:
             serverPresence = [:]
@@ -422,7 +434,14 @@ public final class LumiaSession {
             watchPresence(serverIDs: watchingServerIDs)
             connection = .connected
             await refreshSnapshot()
-        case let .applied(channelId, _), let .snapshotTaken(channelId, _):
+        case let .applied(channelId, events):
+            // Whoever's message arrived has finished typing it.
+            for message in events.compactMap(\.message) {
+                typing.stopped(channelID: channelId, accountID: message.authorAccountId)
+            }
+            scheduleTypingExpiry()
+            await refreshMessages(channelID: channelId)
+        case let .snapshotTaken(channelId, _):
             await refreshMessages(channelID: channelId)
         case .accountApplied:
             await refreshSnapshot()
@@ -456,9 +475,50 @@ public final class LumiaSession {
             }
             serverPresence[serverId] = server
             serverCustomStatus[serverId] = custom
-        // Who is typing (protocol 6.7) is not drawn on iOS yet.
-        case .acked, .error, .subscriptionFailed, .dmNote, .typing:
+        case let .typing(channelId, accountId, untilMicros):
+            typing.began(channelID: channelId, accountID: accountId, untilMicros: untilMicros, me: me)
+            scheduleTypingExpiry()
+        case .acked, .error, .subscriptionFailed, .dmNote:
             break
+        }
+    }
+
+    // MARK: Typing
+
+    /// This person changed what the composer holds and left something in
+    /// it: says so to a server's channel (protocol 6.7). The core sends it
+    /// at most once in five seconds, so every edit may call this; a
+    /// personal conversation is held back here as it is in the core.
+    public func typed(channelID: String) {
+        guard connection == .connected,
+              let channel = snapshot?.channels.first(where: { $0.channelId == channelID }),
+              !channel.serverId.isEmpty, !personalKinds.contains(channel.kind) else { return }
+        Task { try? await client.typing(channelID: channelID) }
+    }
+
+    /// The names of those typing in a channel, whoever began first at the front.
+    public func typingNames(in channelID: String) -> [String] {
+        typing.accountIDs(in: channelID).map { name(of: $0) }
+    }
+
+    /// Nothing arrives when someone stops typing, so the session wakes
+    /// itself when the first of those typing runs out, drops whoever has,
+    /// and waits for the next; it waits for nothing while nobody is.
+    private func scheduleTypingExpiry() {
+        let ends = typing.nextEnd
+        guard ends != typingWake else { return }
+        typingWake = ends
+        typingExpiry?.cancel()
+        typingExpiry = nil
+        guard let ends else { return }
+        typingExpiry = Task { [weak self] in
+            guard let wait = self.map({ max(0, ends - $0.nowMicros()) }) else { return }
+            try? await Task.sleep(for: .microseconds(wait))
+            guard !Task.isCancelled, let self else { return }
+            self.typingWake = nil
+            // Whoever ends at `ends` has ended, whatever the clock says of an early wake.
+            self.typing.expire(nowMicros: max(ends, self.nowMicros()))
+            self.scheduleTypingExpiry()
         }
     }
 

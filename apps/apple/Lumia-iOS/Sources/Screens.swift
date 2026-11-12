@@ -25,42 +25,49 @@ struct ConversationScreen: View {
         }) {
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: LumiaTokens.space8) {
-                        LumiaNotice(icon: "shield") {
-                            Text("Messages here are end-to-end encrypted. Only your devices and those of \(others.map { session.name(of: $0) }.joined(separator: ", ")) can read them.")
-                        }
-                        if let state, !state.member {
-                            LumiaNotice(icon: "lock", tone: .accent, action: ("Rejoin", { Task { await rejoin() } })) {
-                                Text("This device is not in the conversation's group yet. The device that created it sends a welcome; if that never comes, rejoin from the instance's group info.")
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        VStack(alignment: .leading, spacing: LumiaTokens.space8) {
+                            LumiaNotice(icon: "shield") {
+                                Text("Messages here are end-to-end encrypted. Only your devices and those of \(others.map { session.name(of: $0) }.joined(separator: ", ")) can read them.")
+                            }
+                            if let state, !state.member {
+                                LumiaNotice(icon: "lock", tone: .accent, action: ("Rejoin", { Task { await rejoin() } })) {
+                                    Text("This device is not in the conversation's group yet. The device that created it sends a welcome; if that never comes, rejoin from the instance's group info.")
+                                }
+                            }
+                            if let log, log.beforeJoin > 0 {
+                                LumiaNotice(icon: "lock") {
+                                    Text("\(log.beforeJoin) earlier \(log.beforeJoin == 1 ? "message was" : "messages were") sent before this device joined and cannot be read here.")
+                                }
+                            }
+                            if let log, log.undecryptable > 0 {
+                                LumiaNotice(icon: "lock") { Text("\(log.undecryptable) could not be decrypted.") }
                             }
                         }
-                        if let log, log.beforeJoin > 0 {
-                            LumiaNotice(icon: "lock") {
-                                Text("\(log.beforeJoin) earlier \(log.beforeJoin == 1 ? "message was" : "messages were") sent before this device joined and cannot be read here.")
-                            }
-                        }
-                        if let log, log.undecryptable > 0 {
-                            LumiaNotice(icon: "lock") { Text("\(log.undecryptable) could not be decrypted.") }
-                        }
-                        if let log, !log.messages.isEmpty {
-                            LumiaDayDivider(label: "Messages").padding(.horizontal, -LumiaTokens.space16)
-                        }
-                        ForEach(log?.messages ?? [], id: \.messageId) { m in
+                        .padding(.horizontal, LumiaTokens.space16)
+                        .padding(.bottom, LumiaTokens.space8)
+                        // The same blocks and day dividers as a server's channel.
+                        let sent = log?.messages ?? []
+                        let places = MessageBlocks.places(sent.map { MessageStamp(authorID: authorID(of: $0), atMicros: $0.sentAtMicros) })
+                        ForEach(Array(zip(sent, places)), id: \.0.messageId) { m, place in
                             let who = m.mine ? session.selfName : (!m.senderAccountId.isEmpty || others.count != 1 ? session.name(of: m.senderAccountId) : session.name(of: others[0]))
-                            let toneID = m.mine ? session.me : (m.senderAccountId.isEmpty ? m.senderIdentityId : m.senderAccountId)
-                            LumiaMessageRow(author: who, tone: .of(toneID), time: time(ofMicros: m.sentAtMicros), text: m.body, deleted: m.deleted)
-                                .padding(.horizontal, -LumiaTokens.space16)
+                            if place.startsDay { LumiaDayDivider(label: dayLabel(ofMicros: m.sentAtMicros)) }
+                            LumiaMessageRow(author: who, tone: .of(authorID(of: m)), time: time(ofMicros: m.sentAtMicros), text: m.body, deleted: m.deleted, place: place)
                                 .id(m.messageId)
                         }
-                        if !error.isEmpty { LumiaErrorText(error) }
+                        if !error.isEmpty { LumiaErrorText(error).padding(.horizontal, LumiaTokens.space16) }
                     }
-                    .padding(LumiaTokens.space16)
+                    .padding(.top, LumiaTokens.space16)
+                    .padding(.bottom, LumiaTokens.space8)
                 }
                 .scrollDismissesKeyboard(.interactively)
                 .onChange(of: log?.messages.count ?? 0) { _, _ in
                     if let last = log?.messages.last { proxy.scrollTo(last.messageId, anchor: .bottom) }
                 }
             }
+            // No one is said to be typing here, and this device says nothing of
+            // it either: the instance is not to learn who is writing in a
+            // personal conversation (protocol 6.7; an open item of the E2EE spec).
             LumiaComposer(text: $draft, placeholder: state?.member == true ? "Message \(title)" : "Setting up the encrypted group…", disabled: state?.member != true, hint: nil) {
                 Task { await send() }
             }
@@ -69,6 +76,12 @@ struct ConversationScreen: View {
             await session.refreshDmChannels()
             await session.refreshDmLog(channelID: channelID)
         }
+    }
+
+    /// Whose a message is, for its block and its avatar's tone: the
+    /// account, or the identity when the instance named no account.
+    private func authorID(of m: DmMessageSummary) -> String {
+        m.mine ? session.me : (m.senderAccountId.isEmpty ? m.senderIdentityId : m.senderAccountId)
     }
 
     private func send() async {
@@ -105,11 +118,13 @@ struct ChannelScreen: View {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         if messages.isEmpty {
                             LumiaEmptyState(icon: "bubble.left", title: "Nothing here yet") { Text("Say something.") }
-                        } else {
-                            LumiaDayDivider(label: "Today")
                         }
-                        ForEach(messages, id: \.messageId) { m in
-                            LumiaMessageRow(author: session.name(of: m.authorAccountId), tone: .of(m.authorAccountId), time: time(ofMicros: m.createdAtMicros), text: m.body, deleted: m.deleted)
+                        // What one person sends close together is one block, and
+                        // each day's first message carries the day's divider.
+                        let places = MessageBlocks.places(messages.map { MessageStamp(authorID: $0.authorAccountId, atMicros: $0.createdAtMicros) })
+                        ForEach(Array(zip(messages, places)), id: \.0.messageId) { m, place in
+                            if place.startsDay { LumiaDayDivider(label: dayLabel(ofMicros: m.createdAtMicros)) }
+                            LumiaMessageRow(author: session.name(of: m.authorAccountId), tone: .of(m.authorAccountId), time: time(ofMicros: m.createdAtMicros), text: m.body, deleted: m.deleted, place: place)
                                 .id(m.messageId)
                         }
                         if !error.isEmpty { LumiaErrorText(error).padding(.horizontal, LumiaTokens.space16) }
@@ -121,9 +136,15 @@ struct ChannelScreen: View {
                     if let last = messages.last { proxy.scrollTo(last.messageId, anchor: .bottom) }
                 }
             }
-            LumiaComposer(text: $draft, placeholder: "Message #\(name)", hint: nil) { Task { await send() } }
+            // Who is typing goes under the field, in a server's channel only (protocol 6.7).
+            LumiaComposer(text: $draft, placeholder: "Message #\(name)", hint: nil, typing: session.typingNames(in: channelID)) { Task { await send() } }
         }
         .task(id: channelID) { await session.refreshMessages(channelID: channelID) }
+        // Every edit that leaves something in the field is typing; emptied
+        // is not (a send). The core spaces what is sent.
+        .onChange(of: draft) { _, draft in
+            if !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { session.typed(channelID: channelID) }
+        }
     }
 
     private func send() async {

@@ -86,27 +86,56 @@ public struct LumiaEmptyState<Content: View>: View {
     }
 }
 
+/// A message's row. The first of a block is an avatar beside a name, a
+/// time and the message; the ones after it are the message alone under
+/// those, in the same column (`MessageBlocks` says which is which). A
+/// phone has no pointer to show a later row's time under, so it shows
+/// none; assistive technology hears whose each row is and when.
 public struct LumiaMessageRow: View {
     public let author: String
     public let tone: AvatarTone
     public let time: String
     public let text: String
     public var deleted = false
+    public var place = MessagePlace()
     @State private var hovering = false
 
-    public init(author: String, tone: AvatarTone, time: String, text: String, deleted: Bool = false) {
-        self.author = author; self.tone = tone; self.time = time; self.text = text; self.deleted = deleted
+    /// The room between one block and the next. The boards first drew 2
+    /// here, which read as crowded in the app (Ryan, 2026-11-12).
+    public static let blockGap = LumiaTokens.space8
+
+    /// Above and below a row inside its block. The boards draw a block's
+    /// messages as the paragraphs of one, 4 points between two line boxes;
+    /// a line box there has its leading in it and a `Text` here does not
+    /// (the leading is `lineSpacing`, between lines only), so two messages
+    /// stand that leading and the paragraph's 4 points apart, half from each.
+    static let within = (LumiaTokens.space4 + LumiaTokens.space4) / 2
+
+    public init(author: String, tone: AvatarTone, time: String, text: String, deleted: Bool = false, place: MessagePlace = MessagePlace()) {
+        self.author = author; self.tone = tone; self.time = time; self.text = text; self.deleted = deleted; self.place = place
     }
+
+    /// Whose a row is and when, as assistive technology hears it before the message.
+    public static func heading(author: String, time: String) -> String { "\(author), \(time)" }
+
+    private var said: String { deleted ? "(deleted)" : text }
 
     public var body: some View {
         HStack(alignment: .top, spacing: LumiaTokens.space14) {
-            LumiaAvatar(initials: initials(of: author), tone: tone, size: LumiaTokens.avatarLg)
+            if place.opens {
+                LumiaAvatar(initials: initials(of: author), tone: tone, size: LumiaTokens.avatarLg)
+            } else {
+                // The avatar's column, empty: the message lines up under the block's first.
+                Color.clear.frame(width: LumiaTokens.avatarLg, height: 0)
+            }
             VStack(alignment: .leading, spacing: LumiaTokens.space4) {
-                HStack(alignment: .firstTextBaseline, spacing: LumiaTokens.space8) {
-                    Text(author).font(LumiaTokens.textAuthor.font).foregroundStyle(LumiaTokens.inkEmphasis.color)
-                    Text(time).font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkSecondary.color)
+                if place.opens {
+                    HStack(alignment: .firstTextBaseline, spacing: LumiaTokens.space8) {
+                        Text(author).font(LumiaTokens.textAuthor.font).foregroundStyle(LumiaTokens.inkEmphasis.color)
+                        Text(time).font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkSecondary.color)
+                    }
                 }
-                Text(deleted ? "(deleted)" : text)
+                Text(said)
                     .font(LumiaTokens.textMessage.font)
                     .lineSpacing(LumiaTokens.space4)
                     .foregroundStyle(deleted ? LumiaTokens.inkQuiet.color : LumiaTokens.inkBody.color)
@@ -116,9 +145,16 @@ public struct LumiaMessageRow: View {
             }
         }
         .padding(.horizontal, LumiaTokens.space12)
-        .padding(.vertical, LumiaTokens.space8)
+        .padding(.top, place.opens ? LumiaTokens.space8 : Self.within)
+        .padding(.bottom, place.closes ? LumiaTokens.space8 : Self.within)
         .background(hovering ? LumiaTokens.hoverMessage.color : .clear, in: RoundedRectangle(cornerRadius: LumiaTokens.radius12))
         .onHover { hovering = $0 }
+        // One stop per message, the same whether or not the row shows its
+        // name and time: "Grace Hopper, 12:01 PM", then what was said.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Self.heading(author: author, time: time))
+        .accessibilityValue(said)
+        .padding(.bottom, place.closes ? Self.blockGap : 0)
     }
 }
 
@@ -136,15 +172,64 @@ public struct LumiaDayDivider: View {
     }
 }
 
+/// Who is typing (protocol 6.7): three dots and the words, the names in
+/// stronger ink. The dots brighten in turn; under Reduce Motion they are
+/// still and whole.
+public struct LumiaTypingHint: View {
+    let words: TypingWords
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// A dot (4 across) and the room between two (3), as the boards' `m-typing`.
+    static let dot = LumiaTokens.space4
+    static let dotGap = (LumiaTokens.space2 + LumiaTokens.space4) / 2
+
+    public init(words: TypingWords) { self.words = words }
+
+    public var body: some View {
+        HStack(spacing: LumiaTokens.space8) {
+            Group {
+                if reduceMotion {
+                    dots(at: nil)
+                } else {
+                    TimelineView(.animation(minimumInterval: 1 / TypingDots.framesPerSecond)) { frame in
+                        dots(at: frame.date.timeIntervalSinceReferenceDate)
+                    }
+                }
+            }
+            .accessibilityHidden(true)
+            (Text(words.names).fontWeight(LumiaTokens.textSection.fontWeight).foregroundStyle(LumiaTokens.inkEmphasis.color) + Text(words.rest))
+                .font(LumiaTokens.textMeta.font)
+                .foregroundStyle(LumiaTokens.inkMuted.color)
+                .lineLimit(1)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    /// The dots `seconds` into their cycle, or still and whole for nil.
+    private func dots(at seconds: Double?) -> some View {
+        HStack(spacing: Self.dotGap) {
+            ForEach(0..<TypingDots.count, id: \.self) { n in
+                Circle().fill(LumiaTokens.inkMuted.color).frame(width: Self.dot, height: Self.dot)
+                    .opacity(seconds.map { TypingDots.opacity(dot: n, at: $0) } ?? 1)
+            }
+        }
+    }
+}
+
 public struct LumiaComposer: View {
     @Binding var text: String
     let placeholder: String
     let disabled: Bool
     let hint: String?
+    let typing: [String]?
     let send: () -> Void
 
-    public init(text: Binding<String>, placeholder: String, disabled: Bool = false, hint: String? = "Return to send", send: @escaping () -> Void) {
-        self._text = text; self.placeholder = placeholder; self.disabled = disabled; self.hint = hint; self.send = send
+    /// `typing` names those typing in the conversation, for the line under
+    /// the field: nil where there is never such a line (a personal
+    /// conversation), and empty where nobody is typing just now, which
+    /// keeps the line's room so the field does not move when someone starts.
+    public init(text: Binding<String>, placeholder: String, disabled: Bool = false, hint: String? = "Return to send", typing: [String]? = nil, send: @escaping () -> Void) {
+        self._text = text; self.placeholder = placeholder; self.disabled = disabled; self.hint = hint; self.typing = typing; self.send = send
     }
 
     private var canSend: Bool { !disabled && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
@@ -183,10 +268,23 @@ public struct LumiaComposer: View {
             .background(LumiaTokens.field.color, in: RoundedRectangle(cornerRadius: LumiaTokens.radius16))
             .overlay(RoundedRectangle(cornerRadius: LumiaTokens.radius16).stroke(LumiaTokens.borderComposer.color))
             .shadow(color: .black.opacity(0.08), radius: 14, y: 8)
-            if let hint {
-                Text(hint).font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkMuted.color)
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-                    .padding(.horizontal, LumiaTokens.space8)
+            if typing != nil || hint != nil {
+                // The line under the field: who is typing at its start, as
+                // the boards have it, and what Return does at its end. A
+                // line of its type tall whether or not anyone is typing.
+                ZStack(alignment: .leading) {
+                    Text(verbatim: " ").font(LumiaTokens.textMeta.font).hidden().accessibilityHidden(true)
+                    HStack(spacing: LumiaTokens.space12) {
+                        if let words = typingWords(typing ?? []) {
+                            LumiaTypingHint(words: words)
+                        }
+                        Spacer(minLength: 0)
+                        if let hint {
+                            Text(hint).font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkMuted.color)
+                        }
+                    }
+                }
+                .padding(.horizontal, LumiaTokens.space8)
             }
         }
         .padding(.horizontal, LumiaTokens.space24)

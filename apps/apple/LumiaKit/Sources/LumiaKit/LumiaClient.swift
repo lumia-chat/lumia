@@ -42,6 +42,8 @@ public actor LumiaClient {
     public func acceptInvite(_ linkOrCode: String) throws -> String { try inner.acceptInvite(linkOrCode: linkOrCode) }
     /// This client's status and the servers it has on screen (protocol 6.7).
     public func watchPresence(serverIDs: [String]) throws { try inner.watchPresence(watchServerIds: serverIDs) }
+    /// Says this person is typing in a server's channel (protocol 6.7); the core spaces the sends out.
+    public func typing(channelID: String) throws { try inner.typing(channelId: channelID) }
     public func status() throws -> StatusSummary { try inner.status() }
     public func setStatus(status: String, customStatus: String) throws { try inner.setStatus(status: status, customStatus: customStatus) }
     /// The server's invites, newest first.

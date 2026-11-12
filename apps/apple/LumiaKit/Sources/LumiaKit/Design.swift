@@ -38,15 +38,19 @@ public struct LumiaType: Sendable, Hashable {
     public let size: CGFloat, weight: Int, display: Bool
     public init(size: CGFloat, weight: Int, display: Bool) { self.size = size; self.weight = weight; self.display = display }
 
-    public var font: Font {
-        let w: Font.Weight = switch weight {
+    /// The CSS weight as the system's nearest.
+    public var fontWeight: Font.Weight {
+        switch weight {
         case ..<450: .regular
         case ..<550: .medium
         case ..<650: .semibold
         case ..<750: .bold
         default: .heavy
         }
-        return display ? .system(size: size, weight: w, design: .rounded) : .system(size: size, weight: w)
+    }
+
+    public var font: Font {
+        display ? .system(size: size, weight: fontWeight, design: .rounded) : .system(size: size, weight: fontWeight)
     }
 }
 
