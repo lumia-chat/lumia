@@ -2,9 +2,9 @@
 //! and an aside panel. This file is the frame and the rail; what fills the frame is
 //! [`super::home`] at Home and [`super::server`] in a server.
 //!
-//! Where the frame leaves the board: the rail and the sidebar start lower, clear of the
-//! window's traffic lights, which the board (a page) does not have; and nothing lifts on
-//! hover. Of what the board's rail shows, the shell has no unread dot or mention count on a
+//! The board draws the window's traffic lights at the head of the rail, with the Home tile
+//! under them; [`TRAFFIC_LIGHTS`] is where the real ones are put to match. Where the frame
+//! leaves the board: nothing lifts on hover. Of what the board's rail shows, the shell has no unread dot or mention count on a
 //! server and no account menu, so none is drawn: the self avatar opens the profile page, and
 //! its dot says whether the gateway is connected.
 
@@ -17,12 +17,17 @@ use crate::app::{HomeView, Place, State};
 use crate::session::Connection;
 use crate::tokens::{self as t, icons};
 
-/// The rail's top inset, clear of the window's traffic lights under a full-size content view.
+/// Where the window's traffic lights go, from the window's top left corner to the close
+/// button's. The board draws three 12-point lights 7 points in and 12 down, filling the
+/// rail's width. AppKit's are 14 points, so they start a point higher to share the board's
+/// centre line, and at AppKit's own spacing the third ends a few points past the rail,
+/// over the sidebar's padding and clear of its title.
+pub const TRAFFIC_LIGHTS: (f32, f32) = (7.0, 11.0);
+/// The rail's top inset, which puts the Home tile where the board has it under the lights:
+/// 12 above them, their 12, 8 under them and the rail's gap of 12.
 const TITLEBAR: f32 = t::SPACE_40 + t::SPACE_4;
-/// The sidebar's top inset, which puts its title just under the traffic lights: they reach
-/// past the rail, over the sidebar's first points. (`--chrome` lists the title as within
-/// 4 points of them.)
-const SIDEBAR_TOP: f32 = t::SPACE_28 + t::SPACE_2;
+/// The sidebar's top inset, the board's.
+const SIDEBAR_TOP: f32 = t::SPACE_14;
 /// The sidebar column and the aside panel. The board gives the rail and the sidebar 304
 /// together and the aside's column 300, 8 of it either side of the panel; the design system
 /// has no token for either width.

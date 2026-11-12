@@ -72,12 +72,15 @@ pub fn view(s: &State, label: String, look: Look) -> El {
         .virtual_rows_version(s.session.revision)
         // Reading up to the oldest rows on screen asks for the page before them.
         .on_visible_rows(|s: &mut State, visible| visible.start < OLDER_WITHIN && s.load_older());
+    // A conversation shorter than the pane sits at its foot, against the composer, as the
+    // board's does: the space above the first message takes what the rows leave.
     col()
         .key("messages")
         .w_full()
         .grow(1.0)
         .min_h(0.0)
         .scroll(ScrollSpec { stick_bottom: true })
+        .child(el().grow(1.0))
         .child(rows)
 }
 

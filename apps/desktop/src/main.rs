@@ -52,7 +52,7 @@ fn main() {
         rune::App::new(spec)
             .chrome(Chrome {
                 full_size_content: true,
-                traffic_lights: Some((22.0, 22.0)),
+                traffic_lights: Some(ui::TRAFFIC_LIGHTS),
                 drag_regions: true,
             })
             .standard_menus(),

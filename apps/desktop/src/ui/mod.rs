@@ -16,6 +16,7 @@ use rune::{Cx, El};
 
 use crate::app::{Popover, Route, State};
 use components::Look;
+pub use shell::TRAFFIC_LIGHTS;
 
 /// `AppSpec::view`.
 pub fn view(s: &State, cx: &mut Cx<State>) -> El {
