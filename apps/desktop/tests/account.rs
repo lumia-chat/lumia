@@ -299,7 +299,10 @@ fn this_computer_is_linked_from_sign_in_with_a_request_and_a_code() {
         )))),
     );
     assert!(!rt.state.account.link.busy);
-    assert!(words(&rt).contains("no link bundle for that code"));
+    assert!(
+        words(&rt).contains("That code is unknown, used or expired."),
+        "the instance's bare words are not shown"
+    );
     assert_eq!(rt.state.route, Route::Link);
 
     receive(&mut rt, identity(IdentityUpdate::Linked(Ok(roster(false)))));

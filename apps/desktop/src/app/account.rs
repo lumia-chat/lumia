@@ -275,7 +275,15 @@ impl State {
             IdentityUpdate::Linked(Err(failure)) => {
                 let form = &mut self.account.link;
                 form.busy = false;
-                form.error = failure.message.clone();
+                // A code is eight characters, good once, for ten minutes, and gone after
+                // five wrong tries (identity spec 6); the instance says only "not found".
+                form.error = match failure.code.as_str() {
+                    "NOT_FOUND" => {
+                        "That code is unknown, used or expired. Approve the request again for a new one."
+                            .into()
+                    }
+                    _ => failure.message.clone(),
+                };
             }
             IdentityUpdate::Revoked(answer) => {
                 let form = &mut self.account.devices;
