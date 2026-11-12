@@ -125,10 +125,10 @@ impl State {
         let form = &mut self.sign_in;
         let mfa = failure.details.get("mfa").map(String::as_str);
         form.error = match failure.code.as_str() {
-            // The passkey factor needs the browser's ceremony (architecture 6.3), which
-            // this shell does not hand off to yet.
+            // The passkey factor needs the browser's ceremony (architecture 6.3): the
+            // card's passkey button sends the system browser to the instance's page for it.
             "FAILED_PRECONDITION" if mfa == Some("passkey") => {
-                "This account asks for its passkey at sign-in, which this app cannot do yet. Sign in from the web for now.".into()
+                "This account asks for its passkey at sign-in; use “Sign in with a passkey”.".into()
             }
             "FAILED_PRECONDITION" if !form.needs_totp && !form.creating => {
                 form.needs_totp = true;

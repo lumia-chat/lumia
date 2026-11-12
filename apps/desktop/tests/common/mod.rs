@@ -40,7 +40,12 @@ pub fn settle(rt: &mut Runtime<State>) {
     }
 }
 
+/// Presses the element keyed `key`, as a person does: scrolled to first when it is in a
+/// list or a card taller than the window.
 pub fn press(rt: &mut Runtime<State>, key: &str) {
+    let target = key.to_string();
+    rt.update(move |_, tx| tx.scroll_into_view(target));
+    settle(rt);
     let (x, y) = rt
         .find(key)
         .unwrap_or_else(|| panic!("{key} is not on screen"));

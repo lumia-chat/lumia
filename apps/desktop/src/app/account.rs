@@ -126,7 +126,7 @@ impl State {
 
     /// Shows the link screen, from sign-in or from a signed-in account with no identity
     /// on this computer.
-    pub fn open_link(&mut self) {
+    pub fn start_linking(&mut self) {
         self.account.link = Link::default();
         self.popover = None;
         self.route = Route::Link;

@@ -12,8 +12,10 @@
 //! [`dms`] (personal conversations), [`servers`] (making and joining servers, channels,
 //! invites) and [`identity`] (devices, linking, the profile and status).
 
+pub mod browser;
 pub mod dms;
 pub mod identity;
+pub mod notices;
 pub mod servers;
 
 use std::collections::{HashMap, HashSet};
@@ -104,6 +106,8 @@ pub enum Update {
     Dm(dms::DmUpdate),
     Server(servers::ServerUpdate),
     Identity(identity::IdentityUpdate),
+    Browser(browser::BrowserUpdate),
+    Notice(notices::NoticeUpdate),
 }
 
 /// What is on screen to read and write: a server's channel, or a personal conversation.
@@ -958,6 +962,8 @@ impl Session {
             Update::Dm(update) => self.apply_dm(update),
             Update::Server(update) => self.apply_server(update),
             Update::Identity(update) => self.apply_identity(update),
+            Update::Browser(update) => self.apply_browser(update),
+            Update::Notice(_) => {}
         }
     }
 

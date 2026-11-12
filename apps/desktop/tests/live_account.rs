@@ -179,7 +179,7 @@ fn linked(
             "signed in, and the page has no identity to show a profile for"
         );
     }
-    state.open_link();
+    state.start_linking();
     assert_eq!(state.route, Route::Link);
     state.start_link();
     wait(&mut state, "the link request", |s| {

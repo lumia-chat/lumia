@@ -4,7 +4,8 @@
 //! each: a sign-in link by mail, completed by its code ([`magic_link`]), and the way to
 //! linking this computer to an identity ([`link_identity`]).
 //!
-//! Not here yet: the browser handoff for passkeys and OIDC (architecture 6.3).
+//! A passkey and the instance's OIDC provider sign in through the system browser
+//! (architecture 6.3, [`browser_sign_in`]).
 
 use lumia_client::app::InstanceSummary;
 use rune::{El, Tx, col, icon, row, text};
@@ -183,6 +184,7 @@ fn account_card(s: &State, info: &InstanceSummary, look: Look) -> El {
         State::submit,
         look,
     ));
+    card = card.children(browser_sign_in(s, info, look));
     card = magic_link(card, s, info, look);
     card = link_identity(card, s, info, look);
 
@@ -301,7 +303,7 @@ fn link_identity(card: El, s: &State, info: &InstanceSummary, look: Look) -> El 
             .cursor(rune::Cursor::Pointer)
             .focusable(true)
             .focus_ring(2.0, 2.0, c.focus)
-            .on_press(State::open_link)
+            .on_press(State::start_linking)
             .child(icon(&icons::KEY, t::SPACE_16).color(c.ink_field))
             .child(
                 text(LABEL)
@@ -309,4 +311,78 @@ fn link_identity(card: El, s: &State, info: &InstanceSummary, look: Look) -> El 
                     .color(c.ink_field),
             ),
     )
+}
+
+/// Signing in through the system browser (architecture 6.3), for the account card: the
+/// instance's provider when it names one, then a passkey on the instance's own page, as
+/// `SignInView.swift` orders them. Nothing while a new account is being made. Once a
+/// button has sent the browser off, a note says where the sign-in went.
+fn browser_sign_in(s: &State, info: &InstanceSummary, look: Look) -> Option<El> {
+    if s.sign_in.creating {
+        return None;
+    }
+    let enabled = !s.sign_in.busy;
+    let mut ways = col().key("browser-sign-in").w_full().gap(t::SPACE_12);
+    if !info.oidc_name.is_empty() {
+        ways = ways.child(browser_button(
+            "oidc-sign-in",
+            &info.oidc_name,
+            enabled,
+            true,
+            look,
+        ));
+    }
+    ways = ways.child(browser_button(
+        "passkey-sign-in",
+        "Sign in with a passkey",
+        enabled,
+        false,
+        look,
+    ));
+    if s.links.waiting(&s.session.base_url) {
+        ways = ways.child(
+            super::components::notice(
+                &icons::GLOBE,
+                "Finish the sign-in in your browser. Lumia takes over once you are in.",
+                look,
+            )
+            .key("browser-waiting"),
+        );
+    }
+    Some(ways)
+}
+
+/// A full-width outlined button with the key glyph, which sends the system browser to
+/// sign in: the design's secondary button, as wide as the card.
+fn browser_button(key: &'static str, label: &str, enabled: bool, oidc: bool, look: Look) -> El {
+    let c = look.c;
+    let button = row()
+        .key(key)
+        .w_full()
+        .h(t::CONTROL_HEIGHT - t::SPACE_8)
+        .px(t::SPACE_14)
+        .gap(t::SPACE_8)
+        .center()
+        .radius(t::RADIUS_10)
+        .fill(c.surface)
+        .border(1.0, c.border_form)
+        .role("button")
+        .label(label)
+        .disabled(!enabled)
+        .child(icon(&icons::KEY, t::SPACE_16).color(c.ink_quiet))
+        .child(
+            text(label)
+                .font(t::TEXT_BUTTON_SECONDARY)
+                .color(c.ink_field),
+        );
+    if enabled {
+        button
+            .hover(c.hover_secondary)
+            .cursor(rune::Cursor::Pointer)
+            .focusable(true)
+            .focus_ring(2.0, 2.0, c.focus)
+            .on_press_tx(move |s: &mut State, tx| s.sign_in_through_browser(oidc, tx))
+    } else {
+        button.opacity(0.5)
+    }
 }

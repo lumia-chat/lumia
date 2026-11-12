@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The Info.plist of Lumia.app, the Rune desktop shell on macOS. scripts/bundle-macos.sh
+     fills in the @NAMES@: the bundle identifier, the version from Cargo.toml (or the
+     release tag) and the build number (the commit count, as apps/apple/scripts/dist.sh
+     counts it). -->
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>Lumia</string>
+	<key>CFBundleName</key>
+	<string>Lumia</string>
+	<!-- chat.lumia.desktop while the SwiftUI app, chat.lumia, still exists: two apps with
+	     one identifier would share preferences, notification settings and the URL scheme's
+	     registration. The shell's data directory has the same name (src/settings.rs). -->
+	<key>CFBundleIdentifier</key>
+	<string>@BUNDLE_ID@</string>
+	<key>CFBundleExecutable</key>
+	<string>lumia</string>
+	<key>CFBundleIconFile</key>
+	<string>Lumia</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleShortVersionString</key>
+	<string>@VERSION@</string>
+	<key>CFBundleVersion</key>
+	<string>@BUILD@</string>
+	<!-- The system browser's way back (architecture 6.3): a sign-in made on the instance's
+	     web page or with its OIDC provider returns on lumia://sign-in with a one-time token.
+	     Rune hands the link to App::on_open_url (src/platform, src/app/links.rs). -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>@BUNDLE_ID@</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>lumia</string>
+			</array>
+		</dict>
+	</array>
+	<!-- The SwiftUI app's floor. The binary itself is built for macOS 11. -->
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.social-networking</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<!-- Rune draws with Metal; a Mac with two GPUs need not wake the discrete one for it. -->
+	<key>NSSupportsAutomaticGraphicsSwitching</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string></string>
+	<!-- No usage descriptions: the shell asks for no microphone, camera, contacts or
+	     location. Notifications need no key (the system asks at the first one). Voice
+	     (architecture 14) brings NSMicrophoneUsageDescription with it. -->
+</dict>
+</plist>

@@ -9,6 +9,9 @@
 
 pub mod account;
 pub mod home;
+pub mod links;
+pub mod menu;
+pub mod notices;
 pub mod server;
 pub mod sign_in;
 
@@ -73,6 +76,10 @@ pub struct State {
     pub home: home::Home,
     pub server_forms: server::ServerForms,
     pub account: account::Account,
+    /// The system browser and the `lumia:` links it comes back on.
+    pub links: links::Links,
+    /// Whether the window is in front, and the notices owed the system.
+    pub notices: notices::Notices,
 }
 
 impl State {
@@ -98,6 +105,8 @@ impl State {
             home: home::Home::default(),
             server_forms: server::ServerForms::default(),
             account: account::Account::default(),
+            links: links::Links::default(),
+            notices: notices::Notices::default(),
         }
     }
 
@@ -264,10 +273,12 @@ impl State {
             Update::Dm(update) => self.react_dm(update),
             Update::Server(update) => self.react_server(update),
             Update::Identity(update) => self.react_identity(update),
+            Update::Browser(update) => self.react_browser(update),
+            Update::Notice(update) => self.react_notice(update),
+            Update::Gateway(event) => self.react_gateway(event),
             Update::Members { .. }
             | Update::Older { .. }
             | Update::Profile { .. }
-            | Update::Gateway(_)
             | Update::SignedOut => {}
         }
     }

@@ -66,7 +66,10 @@ $b channels "$server" | grep "#general" | grep -q "head=4" || fail "the typed me
 # would be a failure.
 (cd "$here/.." && LUMIA_DEV_INSTANCE="$instance" LUMIA_DEV_HANDLE="$one" LUMIA_DEV_PASSWORD="$password" LUMIA_CLI="$cli" cargo test >"$work/live.log" 2>&1) \
   || { grep -E "panicked|FAILED|^error" -A12 "$work/live.log" | head -80; fail "the tests"; }
-grep -q "skipped" "$work/live.log" && fail "a live test skipped itself"
+# One live test is left to skip itself: tests/live_app.rs launches the bundled app for real,
+# which registers the bundle with LaunchServices and so takes the `lumia:` scheme on this
+# Mac from whatever held it. Run it on purpose, with LUMIA_DEV_APP (see the README).
+grep "skipped" "$work/live.log" | grep -qv "LUMIA_DEV_APP" && fail "a live test skipped itself"
 echo "  window: $work/shell.png, $work/shell-dark.png"
 echo "  tests: $(grep -c '^test .* ok$' "$work/live.log") passed"
 echo "smoke: ok (signed in, snapshot loaded, gateway connected, messages and members on screen, a send stored, every test passed)"

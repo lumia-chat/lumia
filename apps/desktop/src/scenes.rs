@@ -115,6 +115,12 @@ pub const SCENES: &[Scene] = &[
     ("home-requests", home_requests),
     ("home-new-message", home_new_message),
     ("bodies", bodies),
+    ("sign-in-browser", sign_in_browser),
+    ("sign-in-waiting", |s| {
+        sign_in_browser(s);
+        // The passkey button pressed: the browser is out, and the card says so.
+        let _ = s.begin_browser_sign_in(false);
+    }),
 ];
 
 /// A signed-in account with two servers, for the scenes that need no instance.
@@ -165,6 +171,50 @@ fn servers_sample(state: &mut State) {
             member("grace", "grace", "Grace Hopper"),
         ],
     });
+}
+
+/// The account card of an instance that names an OIDC provider, with the buttons that sign
+/// in through the system browser (architecture 6.3). No instance is behind it: the state is
+/// replaced by one over a scratch directory, so the scene never touches the person's own
+/// data, and the trust card is given rather than asked for.
+fn sign_in_browser(state: &mut State) {
+    use std::time::{Duration, Instant};
+
+    use crate::session::Update;
+    use lumia_client::app::InstanceSummary;
+
+    let scratch = std::env::temp_dir().join(format!("lumia-scene-{}", std::process::id()));
+    *state = State::new(scratch);
+    // Nothing listens on the discard port. Its refusal is taken first, so it cannot
+    // arrive later and take the card away.
+    if let Err(error) = state.session.open("http://127.0.0.1:9") {
+        eprintln!("lumia: the sign-in scene could not open its scratch stores: {error}");
+        return;
+    }
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline
+        && !state
+            .session
+            .poll()
+            .iter()
+            .any(|update| matches!(update, Update::Info(_)))
+    {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    state.receive(&Update::Info(Ok(InstanceSummary {
+        host: "chat.example.com".into(),
+        operator_name: "Example Co".into(),
+        operator_url: String::new(),
+        terms_url: String::new(),
+        privacy_url: String::new(),
+        software_version: env!("CARGO_PKG_VERSION").into(),
+        identity_proof_sign_in_enabled: false,
+        identity_proof_create_enabled: false,
+        open_registration: true,
+        web_push_public_key: String::new(),
+        magic_link_enabled: false,
+        oidc_name: "Example SSO".into(),
+    })));
 }
 
 /// The `live` scene, for a headless picture of the real thing (`--snap out.png --scene live`

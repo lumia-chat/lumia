@@ -3034,10 +3034,13 @@ name = "lumia-shell"
 version = "0.2.1"
 dependencies = [
  "chrono",
+ "getrandom 0.4.3",
  "lumia-client",
  "pulldown-cmark",
  "rune",
  "rune-kit",
+ "rune-mac",
+ "rune-notify",
  "serde",
  "serde_json",
  "tokio",
@@ -4888,9 +4891,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "rune-mac"
+version = "0.0.1"
+source = "git+https://github.com/anomalyco/rune?rev=1f1b6c22c4476b06adc812c9abe3e37c97ffa398#1f1b6c22c4476b06adc812c9abe3e37c97ffa398"
+dependencies = [
+ "objc2 0.5.3",
+ "rune-notify",
+]
+
+[[package]]
 name = "rune-motion"
 version = "0.1.0"
 source = "git+https://github.com/anomalyco/rune?rev=1f1b6c22c4476b06adc812c9abe3e37c97ffa398#1f1b6c22c4476b06adc812c9abe3e37c97ffa398"
+
+[[package]]
+name = "rune-notify"
+version = "0.0.1"
+source = "git+https://github.com/anomalyco/rune?rev=1f1b6c22c4476b06adc812c9abe3e37c97ffa398#1f1b6c22c4476b06adc812c9abe3e37c97ffa398"
+dependencies = [
+ "block2 0.5.1",
+ "objc2 0.5.3",
+ "windows",
+ "windows-registry",
+]
 
 [[package]]
 name = "rune-staging"
@@ -6580,6 +6603,17 @@ checksum = "6e2e40844ac143cdb44aead537bbf727de9b044e107a0f1220392177d15b0f26"
 dependencies = [
  "windows-core",
  "windows-link",
+]
+
+[[package]]
+name = "windows-registry"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "02752bf7fbdcce7f2a27a742f798510f3e5ad88dbe84871e5168e2120c3d5720"
+dependencies = [
+ "windows-link",
+ "windows-result",
+ "windows-strings",
 ]
 
 [[package]]

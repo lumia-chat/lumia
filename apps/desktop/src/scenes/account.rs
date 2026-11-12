@@ -110,7 +110,7 @@ pub fn magic_sent(s: &mut State) {
 
 pub fn link(s: &mut State) {
     opened(s);
-    s.open_link();
+    s.start_linking();
 }
 
 pub fn link_request(s: &mut State) {

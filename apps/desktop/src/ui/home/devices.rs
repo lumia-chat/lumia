@@ -112,7 +112,7 @@ pub(super) fn link_notice(key: &'static str, words: &str, look: Look) -> El {
             key,
             "Link this computer",
             true,
-            State::open_link,
+            State::start_linking,
             look,
         ))
 }
@@ -148,7 +148,7 @@ fn no_identity(look: Look) -> El {
         "link-this-computer",
         "Link this computer",
         true,
-        State::open_link,
+        State::start_linking,
         look,
     )))
 }

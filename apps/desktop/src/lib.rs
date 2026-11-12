@@ -5,6 +5,7 @@
 //! Rune values.
 
 pub mod app;
+pub mod platform;
 pub mod scenes;
 pub mod session;
 pub mod settings;
