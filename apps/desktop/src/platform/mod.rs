@@ -24,11 +24,16 @@
 //!   once the process has registered an identity (`rune_notify::register`, not called
 //!   yet); on Linux it posts nothing, and the shell needs the desktop's notification
 //!   service over D-Bus.
+//! - **Preferences.** The window's own light or dark is the shell's on every platform;
+//!   on macOS the app's appearance follows it too, and the choice of when scroll bars
+//!   show is carried out through the system's setting ([`system`]). Elsewhere Rune shows
+//!   scroll bars one way and the choice is not offered.
 //! - **Staying open.** On macOS closing the window leaves the app running, as Mac apps
 //!   do, so messages keep arriving and a click on the Dock icon brings the window back.
 //!   Elsewhere closing the window quits, until there is a tray icon to come back from.
 
 pub mod instance;
+mod system;
 pub mod updates;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -174,8 +179,8 @@ fn dev_browser(handle: &AppHandle<State>) {
 
 /// A debug build with `LUMIA_DEV_TRACE=FILE` appends a line to FILE for what it does with
 /// the system that leaves nothing to see from outside: whether it may post notifications,
-/// each notice it hands over, whether the updater started, and what the menu bar's items
-/// were made for.
+/// each notice it hands over, whether the updater started, what the menu bar's items were
+/// made for, and which preferences the system was asked to carry out.
 fn trace(line: impl FnOnce() -> String) {
     use std::io::Write;
 
@@ -233,6 +238,9 @@ pub fn settle(state: &mut State, tx: &mut Tx) -> bool {
     }
     notify(state);
     remember_frame();
+    if WINDOWED.load(Ordering::Relaxed) {
+        system::follow(state);
+    }
     sync_menu(state);
     updates::follow(tx);
     changed

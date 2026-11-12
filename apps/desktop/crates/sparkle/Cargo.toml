@@ -2,8 +2,9 @@
 # "Distribution"). It is the one crate of this workspace where `unsafe` is allowed: sending
 # Objective-C messages to a framework loaded at run time cannot be written without it. The
 # shell's own manifest still denies `unsafe`, so everything that needs it stays in here,
-# behind a safe surface of five functions, and every block says why it is sound (the lints
-# below refuse one that does not).
+# behind a safe surface, and every block says why it is sound (the lints below refuse one
+# that does not). That is the updater's five functions and, because this is where `unsafe`
+# lives, the two Preferences settings macOS only takes through AppKit (`src/system.rs`).
 [package]
 name = "lumia-sparkle"
 version = "0.3.1"
@@ -17,7 +18,7 @@ publish = false
 # nothing. The versions are the ones Rune already brings into Cargo.lock.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.5"
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSBundle", "NSError", "NSString"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSBundle", "NSError", "NSNotification", "NSString", "NSUserDefaults"] }
 
 [lints.rust]
 unsafe_code = "allow"

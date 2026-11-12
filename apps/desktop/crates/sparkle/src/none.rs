@@ -4,7 +4,18 @@
 
 use std::convert::Infallible;
 
-use crate::Unavailable;
+use crate::{Appearance, ScrollBars, Unavailable};
+
+/// The system's settings are the Mac's; elsewhere there is nothing to set.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+pub(crate) fn set_appearance(_appearance: Appearance) -> bool {
+    false
+}
+
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+pub(crate) fn set_scroll_bars(_scroll_bars: ScrollBars) -> bool {
+    false
+}
 
 pub(crate) struct Updater(Infallible);
 

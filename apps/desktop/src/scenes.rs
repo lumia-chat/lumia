@@ -130,6 +130,17 @@ pub const SCENES: &[Scene] = &[
     ("home-new-message", home_new_message),
     ("bodies", bodies),
     ("blocks", blocks),
+    // The same conversation at the other density. Set on the state, not through
+    // `set_density`: a scene does not write the person's settings.
+    ("blocks-compact", |s| {
+        blocks(s);
+        s.settings.density = crate::settings::Density::Compact;
+        s.session.revision += 1;
+    }),
+    ("preferences", |s| {
+        servers_sample(s);
+        s.go_home(HomeView::Preferences);
+    }),
     ("sign-in-browser", sign_in_browser),
     ("sign-in-waiting", |s| {
         sign_in_browser(s);

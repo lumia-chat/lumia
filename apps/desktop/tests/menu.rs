@@ -157,8 +157,9 @@ fn the_update_items_are_there_only_with_an_updater() {
         can_check: true,
         automatic: true,
     };
-    assert_eq!(menu::items((true, true), None).len(), 2);
-    assert_eq!(menu::items((true, true), Some((updates, actions))).len(), 4);
+    // Preferences and the Account menu's two; with an updater, its two as well.
+    assert_eq!(menu::items((true, true), None).len(), 3);
+    assert_eq!(menu::items((true, true), Some((updates, actions))).len(), 5);
 }
 
 #[test]

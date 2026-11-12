@@ -52,6 +52,8 @@ pub enum HomeView {
     NewMessage,
     Devices,
     Profile,
+    /// How Lumia looks on this computer (`settings`: appearance, density, scroll bars).
+    Preferences,
     AddServer,
 }
 
@@ -246,6 +248,33 @@ impl State {
         };
         self.go_home(HomeView::NewMessage);
         self.start_dm(&person.account_id);
+    }
+
+    // ---- Preferences ------------------------------------------------------------------
+    //
+    // Each takes effect at once and is kept for the next launch. They are this computer's.
+
+    pub fn set_appearance(&mut self, appearance: settings::Appearance) {
+        if self.settings.appearance != appearance {
+            self.settings.appearance = appearance;
+            self.settings.save(&self.data_dir);
+        }
+    }
+
+    pub fn set_density(&mut self, density: settings::Density) {
+        if self.settings.density != density {
+            self.settings.density = density;
+            self.settings.save(&self.data_dir);
+            // The list keeps the rows it has built: these are of another size now.
+            self.session.revision += 1;
+        }
+    }
+
+    pub fn set_scroll_bars(&mut self, scroll_bars: settings::ScrollBars) {
+        if self.settings.scroll_bars != scroll_bars {
+            self.settings.scroll_bars = scroll_bars;
+            self.settings.save(&self.data_dir);
+        }
     }
 
     /// Sends the draft to the open conversation.

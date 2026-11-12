@@ -10,6 +10,7 @@ mod add_server;
 mod conversations;
 mod devices;
 mod new_message;
+mod preferences;
 mod profile;
 mod requests;
 
@@ -256,6 +257,7 @@ pub fn main(s: &State, look: Look) -> El {
         HomeView::NewMessage => new_message::view(s, look),
         HomeView::Devices => devices::view(s, look),
         HomeView::Profile => profile::view(s, look),
+        HomeView::Preferences => preferences::view(s, look),
         HomeView::AddServer => add_server::view(s, look),
     }
 }

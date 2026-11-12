@@ -15,6 +15,8 @@ use super::{Route, State};
 pub const SIGN_OUT: &str = "sign-out";
 /// The id of Account › Change instance.
 pub const CHANGE_INSTANCE: &str = "change-instance";
+/// The id of Lumia › Preferences….
+pub const PREFERENCES: &str = "preferences";
 /// The id of Lumia › Check for updates….
 pub const CHECK_FOR_UPDATES: &str = "check-for-updates";
 /// The id of Lumia › Check for updates automatically.
@@ -98,6 +100,17 @@ pub fn items(
             );
         }
     }
+    // In the application menu, where a Mac app keeps it, on the key a Mac app has it on.
+    // The page is one of the shell's, so there is nothing to open while signed out.
+    let preferences = MenuItem::new("Preferences…", |state: &mut State, _| {
+        state.go_home(super::HomeView::Preferences);
+    })
+    .id(PREFERENCES)
+    .enabled(signed_in);
+    items.push(match "mod+,".parse() {
+        Ok(keys) => preferences.key_equivalent(keys),
+        Err(_) => preferences,
+    });
     items.push(
         MenuItem::new("Sign out", |state: &mut State, _| state.sign_out())
             .id(SIGN_OUT)

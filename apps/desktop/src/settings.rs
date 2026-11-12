@@ -38,6 +38,57 @@ pub struct Settings {
     /// The channel last on screen, which a launch returns to (architecture 17's cold start
     /// is to the last-viewed channel).
     pub last_channel: Option<LastChannel>,
+    /// The Preferences page's three choices, which are this computer's and not the
+    /// account's: another computer, or another person at this one, chooses its own.
+    pub appearance: Appearance,
+    pub density: Density,
+    pub scroll_bars: ScrollBars,
+}
+
+/// Light, dark, or whichever the system is in.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Appearance {
+    Light,
+    Dark,
+    #[default]
+    System,
+}
+
+impl Appearance {
+    /// Whether the window is dark, given whether the system is.
+    pub fn dark(self, system_dark: bool) -> bool {
+        match self {
+            Self::Light => false,
+            Self::Dark => true,
+            Self::System => system_dark,
+        }
+    }
+}
+
+/// How much room a conversation's messages take.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Density {
+    /// The boards' measures.
+    #[default]
+    Comfortable,
+    /// Smaller avatars and less room around each message and between blocks: more of a
+    /// conversation in the same window.
+    Compact,
+}
+
+/// When a pane that scrolls shows its scroll bar.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ScrollBars {
+    /// As the system says: on a Mac, "Show scroll bars" in System Settings.
+    #[default]
+    Automatic,
+    /// Over the content while it scrolls, then gone.
+    WhenScrolling,
+    /// Whenever there is more than fits.
+    Always,
 }
 
 /// A server's channel, by the ids the instance gave.

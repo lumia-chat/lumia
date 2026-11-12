@@ -31,6 +31,10 @@
 //!
 //! Off macOS the same functions exist and [`Updater::start`] always answers
 //! [`Unavailable::Unsupported`].
+//!
+//! Two functions here are not Sparkle's: [`set_appearance`] and [`set_scroll_bars`], what
+//! the shell's Preferences ask of AppKit. They are here because this is the crate that may
+//! write the message sends, not because they have anything to do with updates.
 
 use std::fmt;
 use std::marker::PhantomData;
@@ -39,6 +43,10 @@ use std::marker::PhantomData;
 mod macos;
 #[cfg(target_os = "macos")]
 use macos as platform;
+#[cfg(target_os = "macos")]
+mod system;
+#[cfg(not(target_os = "macos"))]
+use none as system;
 
 #[cfg(not(target_os = "macos"))]
 mod none;
@@ -50,6 +58,40 @@ use none as platform;
 #[cfg(all(test, target_os = "macos"))]
 #[allow(dead_code)]
 mod none;
+
+/// The appearance the app wears, whatever the system's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Appearance {
+    /// As the system is, and as it changes.
+    System,
+    Light,
+    Dark,
+}
+
+/// When the app's scroll bars show, whatever the system's setting for everyone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScrollBars {
+    /// As System Settings says.
+    System,
+    WhenScrolling,
+    Always,
+}
+
+/// Dresses the whole app light or dark, or as the system is: its windows, and what the
+/// system draws for it (tooltips, sheets, menus). Call on the main thread, once the
+/// application object exists. False when nothing was done: not macOS, not the main thread,
+/// or a process with no application (a test).
+pub fn set_appearance(appearance: Appearance) -> bool {
+    system::set_appearance(appearance)
+}
+
+/// Says when this app's scroll bars show, by the system's own setting made for this app
+/// alone, and has whoever follows that setting read it again. It is kept in the app's
+/// preferences, as the system keeps its own. Call on the main thread. False when nothing
+/// was done: not macOS, or not the main thread.
+pub fn set_scroll_bars(scroll_bars: ScrollBars) -> bool {
+    system::set_scroll_bars(scroll_bars)
+}
 
 /// Why there is no updater. The first three are how most launches go and are nothing to
 /// report; the rest mean the bundle was put together wrong ([`Unavailable::is_fault`]).
@@ -176,6 +218,14 @@ mod tests {
             crate::none::Updater::start(),
             Err(Unavailable::Unsupported)
         ));
+    }
+
+    /// Tests run off the main thread, so neither setting is touched from one: this
+    /// machine's preferences are not a test's to write.
+    #[test]
+    fn a_test_changes_no_system_setting() {
+        assert!(!set_appearance(Appearance::Dark));
+        assert!(!set_scroll_bars(ScrollBars::Always));
     }
 
     #[test]

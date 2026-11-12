@@ -22,7 +22,8 @@ pub use shell::TRAFFIC_LIGHTS;
 
 /// `AppSpec::view`.
 pub fn view(s: &State, cx: &mut Cx<State>) -> El {
-    let look = Look::of(cx.system_dark());
+    // Light or dark as Preferences says, which may be "as the system is".
+    let look = Look::of(s.settings.appearance.dark(cx.system_dark()));
     let screen = match s.route {
         Route::SignIn => sign_in::view(s, look),
         Route::Link => link::view(s, look),

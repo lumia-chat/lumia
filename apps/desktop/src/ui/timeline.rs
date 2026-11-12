@@ -32,17 +32,61 @@ use super::components::{Look, avatar_of};
 use super::scroll::WithScrollBar;
 use crate::app::State;
 use crate::session::{Entry, Pending};
+use crate::settings::Density;
 use crate::tokens::{self as t};
 
 /// How close to the oldest row on screen the reader gets before the page before it is read.
 const OLDER_WITHIN: usize = 20;
 
-/// A message row's height before it is measured: an avatar, its padding and the gap under it.
-const ROW_ESTIMATE: f32 = t::AVATAR_LG + t::SPACE_24 + BLOCK_GAP;
+/// A row's measures, which the density chosen in Preferences decides. Comfortable is the
+/// boards'; compact is the same row with a smaller avatar and less room around it, so more
+/// of a conversation fits. The text is the same size in both.
+#[derive(Clone, Copy)]
+struct Measures {
+    avatar: f32,
+    /// The room over a block's first message and under its last, inside the row.
+    edge: f32,
+    /// The room between one block and the next. The board first drew 2 here, which read
+    /// as crowded in the app; Ryan asked for a little more (2026-11-12) and the boards
+    /// follow.
+    block_gap: f32,
+    /// Between the avatar and what is beside it.
+    beside: f32,
+    /// Between the name and the message under it.
+    under_name: f32,
+    /// Over and under a day's divider.
+    divider: f32,
+}
 
-/// The room between one block and the next. The board first drew 2 here, which read as
-/// crowded in the app; Ryan asked for a little more (2026-11-12) and the boards follow.
-const BLOCK_GAP: f32 = t::SPACE_8;
+impl Measures {
+    fn of(density: Density) -> Self {
+        match density {
+            Density::Comfortable => Self {
+                avatar: t::AVATAR_LG,
+                edge: t::SPACE_8,
+                block_gap: t::SPACE_8,
+                beside: t::SPACE_14,
+                under_name: t::SPACE_4,
+                divider: t::SPACE_8,
+            },
+            Density::Compact => Self {
+                avatar: t::AVATAR_SM,
+                edge: t::SPACE_4,
+                block_gap: t::SPACE_4,
+                beside: t::SPACE_10,
+                under_name: t::SPACE_2,
+                divider: t::SPACE_4,
+            },
+        }
+    }
+
+    /// A message row's height before it is measured: a name over one line of message,
+    /// or the avatar where that is taller, with the row's edges and the gap under it.
+    fn row_estimate(self) -> f32 {
+        let words = t::TEXT_MESSAGE.line_height * 2.0 + self.under_name;
+        words.max(self.avatar) + 2.0 * self.edge + self.block_gap
+    }
+}
 
 /// How long after a message another from the same person still goes in its block.
 const BLOCK_WITHIN_MICROS: i64 = 5 * 60 * 1_000_000;
@@ -64,7 +108,7 @@ pub fn view(s: &State, label: String, look: Look) -> El {
         .selection_group(true)
         .virtual_rows(
             count,
-            ROW_ESTIMATE,
+            Measures::of(s.settings.density).row_estimate(),
             |s: &State, i| match s.session.entries.get(i) {
                 Some(entry) => Cow::Borrowed(entry.id.as_str()),
                 None => s
@@ -182,13 +226,13 @@ fn day_label(day: NaiveDate) -> String {
     }
 }
 
-fn day_divider(label: String, look: Look) -> El {
+fn day_divider(label: String, m: Measures, look: Look) -> El {
     let c = look.c;
     let rule = || el().grow(1.0).h(1.0).fill(c.line);
     row()
         .w_full()
         .px(t::SPACE_10)
-        .py(t::SPACE_8)
+        .py(m.divider)
         .gap(t::SPACE_12)
         .items_center()
         .child(rule())
@@ -227,16 +271,17 @@ fn message_frame(
         short_time,
         selectable,
     } = head;
+    let m = Measures::of(s.settings.density);
     // A block's rows touch, and are a paragraph's distance apart between them: the board
     // draws a block's messages as the paragraphs of one.
-    let within = t::SPACE_4 / 2.0;
+    let within = m.under_name / 2.0;
     let frame = row()
         .key(key)
         .w_full()
         .px(t::SPACE_12)
-        .pt(if place.opens { t::SPACE_8 } else { within })
-        .pb(if place.closes { t::SPACE_8 } else { within })
-        .gap(t::SPACE_14)
+        .pt(if place.opens { m.edge } else { within })
+        .pb(if place.closes { m.edge } else { within })
+        .gap(m.beside)
         .radius(t::RADIUS_12)
         .hover(c.hover_message)
         .role("listitem");
@@ -244,7 +289,7 @@ fn message_frame(
         // The time of a message under the block's first, where the avatar would be: there
         // for assistive technology always, and for the eye while the pointer is on the row.
         let when = el()
-            .w(t::AVATAR_LG)
+            .w(m.avatar)
             .h(t::TEXT_MESSAGE.line_height)
             .center()
             .child(
@@ -271,13 +316,13 @@ fn message_frame(
     };
     // The avatar opens its person's card, as the board's does. The name stays text: it is
     // part of what a selection copies, and a press on it starts one.
-    let mut picture = el().child(avatar_of(s, author, author_id, t::AVATAR_LG, look));
+    let mut picture = el().child(avatar_of(s, author, author_id, m.avatar, look));
     if !author_id.is_empty() {
         let anchor = format!("avatar-{key}");
         let (id, at) = (author_id.to_string(), anchor.clone());
         picture = picture
             .key(anchor)
-            .radius(t::AVATAR_LG / 2.0)
+            .radius(m.avatar / 2.0)
             .role("button")
             .label(format!("{author}, profile"))
             .cursor(Cursor::Pointer)
@@ -296,7 +341,7 @@ fn message_frame(
         col()
             .grow(1.0)
             .min_w(0.0)
-            .gap(t::SPACE_4)
+            .gap(m.under_name)
             .child(head)
             .child(content),
     )
@@ -326,7 +371,8 @@ fn stored_row(s: &State, i: usize, entry: &Entry, place: Place, look: Look) -> E
         .checked_sub(1)
         .and_then(|p| s.session.entries.get(p))
         .map(|e| local(e.at_micros).date_naive());
-    let mut slot = slot(place);
+    let m = Measures::of(s.settings.density);
+    let mut slot = slot(place, m);
     if i == 0 && s.session.loading_older() {
         slot = slot.child(
             text("Loading earlier messages…")
@@ -339,7 +385,7 @@ fn stored_row(s: &State, i: usize, entry: &Entry, place: Place, look: Look) -> E
         );
     }
     if previous != Some(day) {
-        slot = slot.child(day_divider(day_label(day), look));
+        slot = slot.child(day_divider(day_label(day), m, look));
     }
     slot.child(row)
 }
@@ -347,10 +393,10 @@ fn stored_row(s: &State, i: usize, entry: &Entry, place: Place, look: Look) -> E
 /// What the list holds a message's row in: the row, with the room under a block's last.
 /// The room is the slot's padding and not the row's margin, which a virtual list does not
 /// lay out: the 2 points the rows asked for before this never showed.
-fn slot(place: Place) -> El {
+fn slot(place: Place, m: Measures) -> El {
     col()
         .w_full()
-        .pb(if place.closes { BLOCK_GAP } else { 0.0 })
+        .pb(if place.closes { m.block_gap } else { 0.0 })
 }
 
 /// A send the store does not hold yet: dimmed until it does, with the refusal when there was one.
@@ -399,5 +445,6 @@ fn pending_row(s: &State, pending: &Pending, place: Place, look: Look) -> El {
         short_time: short_clock(pending.sent_at_micros),
         selectable: false,
     };
-    slot(place).child(message_frame(s, &pending.id, head, content, place, look))
+    let m = Measures::of(s.settings.density);
+    slot(place, m).child(message_frame(s, &pending.id, head, content, place, look))
 }

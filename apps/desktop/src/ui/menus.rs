@@ -58,7 +58,7 @@ pub fn server(s: &State, look: Look) -> Option<El> {
 }
 
 /// The account menu: who is signed in, the status they show, and the ways to their
-/// profile, their devices and out.
+/// profile, the preferences, their devices and out.
 pub fn account(s: &State, look: Look) -> Option<El> {
     let c = look.c;
     let snapshot = s.session.snapshot.as_ref()?;
@@ -161,6 +161,14 @@ pub fn account(s: &State, look: Look) -> Option<El> {
             "View profile",
             None,
             |s: &mut State| s.go_home(HomeView::Profile),
+            look,
+        ))
+        .child(menu_item(
+            "menu-preferences",
+            Some(menu_glyph(&icons::PREFERENCES, look)),
+            "Preferences",
+            None,
+            |s: &mut State| s.go_home(HomeView::Preferences),
             look,
         ))
         .child(menu_item(
