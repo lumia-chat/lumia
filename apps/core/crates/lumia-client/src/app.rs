@@ -26,7 +26,7 @@ use lumia_core::store::{LogKind, Store, StoreError, StoredEvent};
 use lumia_core::sync::Notice;
 use lumia_core::wire;
 use prost::Message as _;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::api::{Api, Tokens};
 use crate::dm::{DmEngine, Outcome};
@@ -99,7 +99,7 @@ pub struct InstanceSummary {
 }
 
 /// A server the account belongs to.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerSummary {
     pub server_id: String,
@@ -242,7 +242,7 @@ pub fn invite_code_of(text: &str) -> String {
 }
 
 /// A channel the account can view.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChannelSummary {
     pub channel_id: String,
@@ -258,7 +258,7 @@ pub struct ChannelSummary {
 }
 
 /// A DM request waiting for an answer.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DmRequestSummary {
     pub request_id: String,
@@ -270,7 +270,7 @@ pub struct DmRequestSummary {
 }
 
 /// The account snapshot: who, which servers, which channels, what waits.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SnapshotSummary {
     pub account_id: String,
@@ -282,7 +282,7 @@ pub struct SnapshotSummary {
 }
 
 /// A person: a member of a server, or a public profile.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MemberSummary {
     pub account_id: String,
@@ -523,6 +523,23 @@ fn request_summary(r: &DmRequest) -> DmRequestSummary {
             .map(|id| wire::display(id))
             .collect(),
         mutual_friend_count: r.mutual_friend_count,
+    }
+}
+
+/// Where the last snapshot and the last member lists are kept in the
+/// instance store's meta area (`App::kept_snapshot`, `App::kept_members`).
+const KEPT_SNAPSHOT: &str = "kept_snapshot";
+const KEPT_MEMBERS: &str = "kept_members";
+
+fn stored_summary(m: &lumia_core::store::StoredMessage) -> MessageSummary {
+    MessageSummary {
+        message_id: wire::display(&m.message_id),
+        channel_id: wire::display(&m.channel_id),
+        seq: m.seq,
+        author_account_id: wire::display(&m.author_account_id),
+        body: m.body.clone(),
+        created_at_micros: m.created_at_micros,
+        deleted: m.deleted,
     }
 }
 
@@ -1364,6 +1381,9 @@ impl App {
             let mut inner = self.lock();
             inner.keys.delete("access_token")?;
             inner.keys.delete("refresh_token")?;
+            // What was kept of the account for an offline launch goes with it.
+            inner.reader.meta_set(KEPT_SNAPSHOT, "")?;
+            inner.reader.meta_set(KEPT_MEMBERS, "")?;
         }
         self.api.clear_tokens();
         Ok(())
@@ -1377,7 +1397,7 @@ impl App {
     pub async fn snapshot(&self) -> Result<SnapshotSummary, ClientError> {
         let snap = self.api.account_snapshot().await?;
         let account = snap.account.unwrap_or_default();
-        Ok(SnapshotSummary {
+        let summary = SnapshotSummary {
             account_id: wire::display(&account.account_id),
             handle: account.handle,
             display_name: account.display_name,
@@ -1409,7 +1429,37 @@ impl App {
                 })
                 .collect(),
             pending_requests: snap.pending_requests.iter().map(request_summary).collect(),
-        })
+        };
+        self.keep(KEPT_SNAPSHOT, &summary);
+        Ok(summary)
+    }
+
+    /// The last snapshot this device got, kept in the instance store so a
+    /// launch has the servers and channels before the instance answers, or
+    /// without it answering at all (architecture 13, "Local-first"). `None`
+    /// before the first one, and after signing out.
+    ///
+    /// # Errors
+    /// On a store failure.
+    pub fn kept_snapshot(&self) -> Result<Option<SnapshotSummary>, ClientError> {
+        self.kept(KEPT_SNAPSHOT)
+    }
+
+    /// Writes `value` under `key` in the instance store. Best effort: what
+    /// is kept is a copy of what the instance holds, so a failure to keep
+    /// it costs an offline launch and nothing else.
+    fn keep<T: Serialize>(&self, key: &str, value: &T) {
+        if let Ok(json) = serde_json::to_string(value) {
+            let _ = self.lock().reader.meta_set(key, &json);
+        }
+    }
+
+    fn kept<T: for<'de> Deserialize<'de>>(&self, key: &str) -> Result<Option<T>, ClientError> {
+        let json = self.lock().reader.meta_get(key)?;
+        // An empty or unreadable value is the same as none: the next answer replaces it.
+        Ok(json
+            .filter(|j| !j.is_empty())
+            .and_then(|j| serde_json::from_str(&j).ok()))
     }
 
     /// `GET /accounts/{id}`: another account's public profile, when
@@ -1440,7 +1490,7 @@ impl App {
         query: &str,
     ) -> Result<Vec<MemberSummary>, ClientError> {
         let page = self.api.members(server_id, query).await?;
-        Ok(page
+        let members: Vec<MemberSummary> = page
             .members
             .iter()
             .map(|m| {
@@ -1454,7 +1504,27 @@ impl App {
                     bio: account.map(|a| a.bio.clone()).unwrap_or_default(),
                 }
             })
-            .collect())
+            .collect();
+        // The unfiltered list is what an offline launch names people from.
+        if query.is_empty() {
+            let mut all: HashMap<String, Vec<MemberSummary>> =
+                self.kept(KEPT_MEMBERS).ok().flatten().unwrap_or_default();
+            all.insert(server_id.to_string(), members.clone());
+            self.keep(KEPT_MEMBERS, &all);
+        }
+        Ok(members)
+    }
+
+    /// The members last listed for a server, kept as [`App::kept_snapshot`]
+    /// is; empty when it was never listed.
+    ///
+    /// # Errors
+    /// On a store failure.
+    pub fn kept_members(&self, server_id: &str) -> Result<Vec<MemberSummary>, ClientError> {
+        let all: Option<HashMap<String, Vec<MemberSummary>>> = self.kept(KEPT_MEMBERS)?;
+        Ok(all
+            .and_then(|mut all| all.remove(server_id))
+            .unwrap_or_default())
     }
 
     /// The newest messages of a channel from the local store, oldest first.
@@ -1469,18 +1539,52 @@ impl App {
         let id = parse_uuid(channel_id)?;
         let inner = self.lock();
         let rows = inner.reader.messages(&id, limit as usize)?;
-        Ok(rows
-            .iter()
-            .map(|m| MessageSummary {
-                message_id: wire::display(&m.message_id),
-                channel_id: wire::display(&m.channel_id),
-                seq: m.seq,
-                author_account_id: wire::display(&m.author_account_id),
-                body: m.body.clone(),
-                created_at_micros: m.created_at_micros,
-                deleted: m.deleted,
-            })
-            .collect())
+        Ok(rows.iter().map(stored_summary).collect())
+    }
+
+    /// The page of a channel's local messages above one already read: the
+    /// newest `limit` with `seq` below `before_seq`, oldest first.
+    ///
+    /// # Errors
+    /// On a store failure or a malformed id.
+    pub fn messages_before(
+        &self,
+        channel_id: &str,
+        before_seq: u64,
+        limit: u32,
+    ) -> Result<Vec<MessageSummary>, ClientError> {
+        let id = parse_uuid(channel_id)?;
+        let inner = self.lock();
+        let rows = inner
+            .reader
+            .messages_before(&id, before_seq, limit as usize)?;
+        Ok(rows.iter().map(stored_summary).collect())
+    }
+
+    /// `GET /channels/{id}/messages`: scrollback from the instance, for
+    /// history older than the local store holds (a store starts at the
+    /// channel's snapshot or at the events since this device subscribed).
+    /// The newest `limit` messages below `before_seq`, oldest first, and
+    /// whether older ones remain. They are not written to the store: the
+    /// store's messages are the projection of its contiguous events, and
+    /// these lie below them.
+    ///
+    /// # Errors
+    /// On transport or API failure.
+    pub async fn older_messages(
+        &self,
+        channel_id: &str,
+        before_seq: u64,
+        limit: u32,
+    ) -> Result<(Vec<MessageSummary>, bool), ClientError> {
+        let page = self
+            .api
+            .list_messages(channel_id, before_seq, limit)
+            .await?;
+        Ok((
+            page.messages.iter().map(message_summary).collect(),
+            page.has_more,
+        ))
     }
 
     /// Starts the gateway loop, subscribing to `channel_ids` from the
@@ -2500,5 +2604,79 @@ mod invite_tests {
             "abc23xyz"
         );
         assert_eq!(invite_code_of("/invite/abc23xyz#top"), "abc23xyz");
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[allow(clippy::unwrap_used)]
+mod kept_tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use super::*;
+
+    fn app() -> Arc<App> {
+        let opener: Opener = Arc::new(|_| SqliteStore::in_memory());
+        App::open("http://127.0.0.1:9", Place::Native, opener).unwrap()
+    }
+
+    fn snapshot() -> SnapshotSummary {
+        SnapshotSummary {
+            account_id: "a".into(),
+            handle: "ada".into(),
+            display_name: "Ada".into(),
+            servers: vec![ServerSummary {
+                server_id: "s".into(),
+                name: "Acme".into(),
+            }],
+            channels: vec![ChannelSummary {
+                channel_id: "c".into(),
+                server_id: "s".into(),
+                name: "general".into(),
+                kind: "TEXT".into(),
+                last_seq: 7,
+                participant_account_ids: vec!["a".into()],
+                host: String::new(),
+            }],
+            pending_requests: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_kept_snapshot_reads_back_and_nothing_kept_is_none() {
+        let app = app();
+        assert!(app.kept_snapshot().unwrap().is_none());
+        app.keep(KEPT_SNAPSHOT, &snapshot());
+        let kept = app.kept_snapshot().unwrap().unwrap();
+        assert_eq!(kept.handle, "ada");
+        assert_eq!(kept.servers[0].name, "Acme");
+        assert_eq!(kept.channels[0].last_seq, 7);
+        // What signing out leaves, and anything unreadable, is none again.
+        app.lock().reader.meta_set(KEPT_SNAPSHOT, "").unwrap();
+        assert!(app.kept_snapshot().unwrap().is_none());
+        app.lock()
+            .reader
+            .meta_set(KEPT_SNAPSHOT, "{not json")
+            .unwrap();
+        assert!(app.kept_snapshot().unwrap().is_none());
+    }
+
+    #[test]
+    fn kept_members_are_per_server() {
+        let app = app();
+        assert!(app.kept_members("s").unwrap().is_empty());
+        let member = MemberSummary {
+            account_id: "a".into(),
+            handle: "ada".into(),
+            display_name: "Ada".into(),
+            nickname: String::new(),
+            pronouns: "she/her".into(),
+            bio: String::new(),
+        };
+        let all: HashMap<String, Vec<MemberSummary>> =
+            HashMap::from([("s".to_string(), vec![member])]);
+        app.keep(KEPT_MEMBERS, &all);
+        assert_eq!(app.kept_members("s").unwrap()[0].pronouns, "she/her");
+        assert!(app.kept_members("other").unwrap().is_empty());
     }
 }

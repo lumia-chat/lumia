@@ -99,6 +99,15 @@ pub trait Store {
     /// The newest messages in a channel, oldest first, up to `limit`.
     fn messages(&self, channel_id: &[u8], limit: usize) -> Result<Vec<StoredMessage>, StoreError>;
 
+    /// The messages of a channel with `seq` strictly below `before_seq`, the
+    /// newest `limit` of them, oldest first: the page above one already read.
+    fn messages_before(
+        &self,
+        channel_id: &[u8],
+        before_seq: u64,
+        limit: usize,
+    ) -> Result<Vec<StoredMessage>, StoreError>;
+
     /// Adds a command to the outbox.
     fn outbox_push(&mut self, entry: &OutboxEntry) -> Result<(), StoreError>;
     /// Removes an acknowledged command from the outbox.

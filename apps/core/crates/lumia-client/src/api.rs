@@ -17,11 +17,11 @@ use lumia_core::proto::{
     CreateLinkBundleRequest, CreateLinkBundleResponse, CreateServerRequest, Error as ApiError,
     ErrorCode, GetGroupInfoResponse, GetLinkBundleResponse, GetRosterResponse, IdentityProof,
     IdentityProofSignInRequest, ListAccountEventsResponse, ListChannelsResponse,
-    ListEventsResponse, ListMembersResponse, ListServersResponse, OpenPersonalDmRequest,
-    OpenPersonalDmResponse, PasskeyRequirementRequest, PasswordSignInRequest,
-    PublishBackupKeyHandoffRequest, PublishGroupInfoRequest, PublishKeyPackagesRequest,
-    PublishRosterRequest, PushSubscription, ReauthRequest, ReauthResponse, RefreshRequest,
-    RevokeDeviceRequest, Server, SignedRoster, TokenPair,
+    ListEventsResponse, ListMembersResponse, ListMessagesResponse, ListServersResponse,
+    OpenPersonalDmRequest, OpenPersonalDmResponse, PasskeyRequirementRequest,
+    PasswordSignInRequest, PublishBackupKeyHandoffRequest, PublishGroupInfoRequest,
+    PublishKeyPackagesRequest, PublishRosterRequest, PushSubscription, ReauthRequest,
+    ReauthResponse, RefreshRequest, RevokeDeviceRequest, Server, SignedRoster, TokenPair,
 };
 use lumia_core::proto::{
     CreateInviteRequest, EmailInviteRequest, HandoffResponse, Invite, InvitePreview,
@@ -835,6 +835,24 @@ impl Api {
         let limit = page_limit(after, before);
         self.get(&format!(
             "/api/v1/channels/{channel_id}/events?after_seq={after}&limit={limit}"
+        ))
+        .await
+    }
+
+    /// `GET /channels/{id}/messages`: scrollback, the newest `limit` messages
+    /// with `seq` strictly below `before_seq` (0 for the head), oldest first,
+    /// and whether older ones remain.
+    ///
+    /// # Errors
+    /// On transport failure or an API error.
+    pub async fn list_messages(
+        &self,
+        channel_id: &str,
+        before_seq: u64,
+        limit: u32,
+    ) -> Result<ListMessagesResponse, ClientError> {
+        self.get(&format!(
+            "/api/v1/channels/{channel_id}/messages?before_seq={before_seq}&limit={limit}"
         ))
         .await
     }

@@ -514,15 +514,26 @@ impl Store for SqliteStore {
     }
 
     fn messages(&self, channel_id: &[u8], limit: usize) -> Result<Vec<StoredMessage>, StoreError> {
+        self.messages_before(channel_id, u64::MAX, limit)
+    }
+
+    fn messages_before(
+        &self,
+        channel_id: &[u8],
+        before_seq: u64,
+        limit: usize,
+    ) -> Result<Vec<StoredMessage>, StoreError> {
         let mut stmt = self
             .conn
             .prepare(
                 "SELECT message_id, channel_id, seq, author_account_id, body, created_at_micros, deleted
-                 FROM messages WHERE channel_id = ?1 ORDER BY seq DESC LIMIT ?2",
+                 FROM messages WHERE channel_id = ?1 AND seq < ?2 ORDER BY seq DESC LIMIT ?3",
             )
             .map_err(backend)?;
+        // `seq` is stored as a signed integer; a bound past its range means "from the head".
+        let before = i64::try_from(before_seq).unwrap_or(i64::MAX);
         let rows = stmt
-            .query_map(params![channel_id, to_i64(limit as u64)], |row| {
+            .query_map(params![channel_id, before, to_i64(limit as u64)], |row| {
                 let seq: i64 = row.get(2)?;
                 Ok(StoredMessage {
                     message_id: row.get(0)?,
@@ -853,6 +864,28 @@ mod tests {
             .map(|m| m.body)
             .collect();
         assert_eq!(bodies, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn messages_before_pages_upward_from_a_seq() {
+        let mut store = SqliteStore::in_memory().unwrap();
+        let ch = vec![1u8; 16];
+        let events: Vec<_> = (1..=7)
+            .map(|seq| created(&ch, seq, &seq.to_string()))
+            .collect();
+        store.apply(LogKind::Channel, &ch, &events).unwrap();
+        let bodies =
+            |rows: Vec<StoredMessage>| rows.into_iter().map(|m| m.body).collect::<Vec<_>>();
+        // The newest three, then the three above them, then what is left; oldest first each time.
+        assert_eq!(bodies(store.messages(&ch, 3).unwrap()), vec!["5", "6", "7"]);
+        assert_eq!(
+            bodies(store.messages_before(&ch, 5, 3).unwrap()),
+            vec!["2", "3", "4"]
+        );
+        assert_eq!(bodies(store.messages_before(&ch, 2, 3).unwrap()), vec!["1"]);
+        assert!(store.messages_before(&ch, 1, 3).unwrap().is_empty());
+        // Another channel's rows are not this one's.
+        assert!(store.messages_before(&[2u8; 16], 9, 3).unwrap().is_empty());
     }
 
     #[test]
