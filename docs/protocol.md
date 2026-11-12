@@ -340,7 +340,7 @@ List endpoints take `page_size` (1 to 200, default 50) and an opaque `cursor`, a
 ## 12. Authentication tokens
 
 - **Access token**: opaque, 15 minutes. Sent as a bearer header. Validated against the session table on every request; a revoked session fails immediately with `SESSION_REVOKED`.
-- **Refresh token**: opaque, 30 days, single use. `POST /auth/refresh` returns a new pair and invalidates the old refresh token. Reuse of an old refresh token revokes the whole session.
+- **Refresh token**: opaque, 30 days, single use. `POST /auth/refresh` returns a new pair and invalidates the old refresh token. Reuse of an old refresh token revokes the whole session, with one grace: for 60 seconds after a rotation, the token it retired is answered with the same pair again and nothing else changes, because the first answer may never have arrived and a client must not lose its session to a dropped connection. A client still makes one rotation at a time and never presents a token it knows it has rotated; the grace is for the answer it did not get. A token retired longer ago than that, presented again, is the reuse that revokes.
 - **Bot tokens**: long-lived, scoped, sent as bearer. Scopes are permission names from `chat.proto`; a bot's effective permissions are the intersection of its scopes and its roles.
 - **OAuth 2.1** with PKCE for user-authorized integrations, standard endpoints under `/oauth/`.
 - A session is bound to a `device_id`. If the device is revoked in the roster the instance holds, every call fails with `DEVICE_REVOKED` and the gateway disconnects.

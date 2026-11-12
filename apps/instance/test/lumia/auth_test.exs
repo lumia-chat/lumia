@@ -49,8 +49,19 @@ defmodule Lumia.AuthTest do
     assert {:ok, _} = Auth.verify_access(newer.access_token)
   end
 
-  test "reusing a rotated refresh token revokes the whole session", ctx do
+  # The grace is over for the session's retired token: its rotation is
+  # moved back in time rather than waited for.
+  defp past_grace(session) do
+    long_ago = DateTime.add(DateTime.utc_now(), -(Auth.refresh_grace_seconds() + 1), :second)
+
+    Repo.update!(
+      Ecto.Changeset.change(Repo.reload!(session), previous_refresh_retired_at: long_ago)
+    )
+  end
+
+  test "reusing a rotated refresh token after the grace revokes the whole session", ctx do
     assert {:ok, _session, new} = Auth.refresh(ctx.tokens.refresh_token)
+    past_grace(ctx.session)
 
     # The retired token comes back: a leak. Everything the session issued dies.
     assert {:error, :session_revoked} = Auth.refresh(ctx.tokens.refresh_token)
@@ -63,10 +74,51 @@ defmodule Lumia.AuthTest do
     assert {:error, :unauthenticated} = Auth.refresh("never-issued")
   end
 
-  test "two refreshes racing on one token: only the first wins", ctx do
+  test "a rotation whose answer was lost is given again within the grace", ctx do
+    assert {:ok, _session, new} = Auth.refresh(ctx.tokens.refresh_token)
+    rotated = Repo.reload!(ctx.session)
+
+    # The client never saw `new` and asks again with what it holds: the
+    # same pair, and nothing about the session has moved.
+    assert {:ok, _session, again} = Auth.refresh(ctx.tokens.refresh_token)
+    assert again == new
+    assert Repo.reload!(ctx.session) == rotated
+    refute "session_revoked" in Accounts.event_kinds(ctx.account.id)
+
+    # And the pair works, once, like any other.
+    assert {:ok, _} = Auth.verify_access(again.access_token)
+    assert {:ok, _session, newer} = Auth.refresh(again.refresh_token)
+    refute newer.refresh_token == again.refresh_token
+  end
+
+  test "two refreshes racing on one token are given the same pair", ctx do
     # Simulate the race: rotate once, then present the same token again
     # through the conditional update path, which finds the hash retired.
+    assert {:ok, _, first} = Auth.refresh(ctx.tokens.refresh_token)
+    assert {:ok, _, second} = Auth.refresh(ctx.tokens.refresh_token)
+    assert first == second
+  end
+
+  test "the grace covers one rotation back and no further", ctx do
+    assert {:ok, _, second} = Auth.refresh(ctx.tokens.refresh_token)
+    assert {:ok, _, _third} = Auth.refresh(second.refresh_token)
+
+    # The first token is two rotations back: no row remembers it, so it is
+    # unknown, and the session is not revoked on its account.
+    assert {:error, :unauthenticated} = Auth.refresh(ctx.tokens.refresh_token)
+    refute Repo.reload!(ctx.session).revoked_at
+
+    # The second is the retired one: inside the grace it gets the third again.
+    assert {:ok, _, _} = Auth.refresh(second.refresh_token)
+  end
+
+  test "a retired token of a session rotated before the grace was kept is a reuse", ctx do
     assert {:ok, _, _} = Auth.refresh(ctx.tokens.refresh_token)
+
+    Repo.update!(
+      Ecto.Changeset.change(Repo.reload!(ctx.session), previous_refresh_retired_at: nil)
+    )
+
     assert {:error, :session_revoked} = Auth.refresh(ctx.tokens.refresh_token)
   end
 

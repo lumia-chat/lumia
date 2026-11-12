@@ -9,6 +9,16 @@ defmodule Lumia.Auth do
   single use: refreshing rotates both, and reuse of an old refresh token
   revokes the whole session.
 
+  One exception to "reuse revokes", for the client that did nothing wrong:
+  a rotation's answer can be lost on the way back, and the client then
+  holds a token this instance has already retired. So for a short grace
+  after a rotation, the retired token is answered with the same pair it
+  was rotated to. To be able to say that pair again without keeping it,
+  a rotation derives the new tokens from the one presented, under a key
+  of this instance's, instead of drawing them at random: the same token
+  presented twice computes the same answer. A session's first pair, made
+  at sign-in, is random.
+
   Revocation broadcasts on `session:<id>` so a live gateway process closes
   its socket (delivery section 5), and appends `SessionRevoked` to the
   account log.
@@ -18,6 +28,7 @@ defmodule Lumia.Auth do
 
   alias Lumia.Accounts
   alias Lumia.Auth.Session
+  alias Lumia.Crypto
   alias Lumia.Proto
   alias Lumia.Repo
   alias Lumia.Tx
@@ -25,6 +36,11 @@ defmodule Lumia.Auth do
 
   @access_ttl_seconds 15 * 60
   @refresh_ttl_seconds 30 * 24 * 60 * 60
+  # How long after a rotation its retired refresh token is still answered,
+  # with the same pair (protocol section 12): long enough for a client to
+  # come back from a lost answer, short enough that a stolen token replayed
+  # later is still the reuse that revokes the session.
+  @refresh_grace_seconds 60
 
   @doc """
   Creates a session for an account on a device. Returns the session and the
@@ -78,6 +94,10 @@ defmodule Lumia.Auth do
   token that was already rotated revokes the session and answers
   `:session_revoked`, since it means the token leaked (protocol section
   12): the retired hash is kept on the row so the reuse is recognised.
+
+  Within `refresh_grace_seconds/0` of its rotation, the retired token is
+  not a reuse: it gets the pair it was rotated to, again, and the session
+  is left as it is.
   """
   def refresh(refresh_token) when is_binary(refresh_token) do
     now = DateTime.utc_now()
@@ -85,7 +105,7 @@ defmodule Lumia.Auth do
 
     case Repo.get_by(Session, refresh_hash: presented) do
       nil ->
-        reuse(presented)
+        retired(refresh_token, presented, now)
 
       %Session{revoked_at: %DateTime{}} ->
         {:error, :session_revoked}
@@ -93,19 +113,27 @@ defmodule Lumia.Auth do
       %Session{} = session ->
         if expired?(session.refresh_expires_at, now),
           do: {:error, :token_expired},
-          else: rotate(session, presented, now)
+          else: rotate(session, refresh_token, presented, now)
     end
   end
 
   def refresh(_), do: {:error, :unauthenticated}
 
   # The token matches no live refresh hash. If it is the one a rotation
-  # retired, someone is replaying it: revoke the session it belonged to.
-  defp reuse(presented) do
+  # retired, either its answer was lost and the client is asking again
+  # (within the grace: the same answer), or someone is replaying it
+  # (after: revoke the session it belonged to).
+  defp retired(refresh_token, presented, now) do
     case Repo.get_by(Session, previous_refresh_hash: presented) do
-      %Session{revoked_at: nil, id: id} ->
-        _ = revoke(id)
-        {:error, :session_revoked}
+      %Session{revoked_at: nil} = session ->
+        case again(session, refresh_token, now) do
+          {:ok, tokens} ->
+            {:ok, session, tokens}
+
+          :error ->
+            _ = revoke(session.id)
+            {:error, :session_revoked}
+        end
 
       %Session{} ->
         {:error, :session_revoked}
@@ -115,12 +143,32 @@ defmodule Lumia.Auth do
     end
   end
 
-  # Conditional on the presented hash still being current, so two refreshes
-  # racing on one token cannot both succeed: the loser finds the hash
-  # retired and is treated as a reuse.
-  defp rotate(session, presented, now) do
-    {access, access_hash} = token()
-    {refresh, refresh_hash} = token()
+  # The pair `refresh_token` was rotated to, when it was retired within
+  # the grace and the session still holds that pair. Nothing is written:
+  # the answer is the one already given, expiries and all.
+  defp again(
+         %Session{previous_refresh_retired_at: %DateTime{} = at} = session,
+         refresh_token,
+         now
+       ) do
+    {access, _} = derived(session.id, refresh_token, "access")
+    {refresh, refresh_hash} = derived(session.id, refresh_token, "refresh")
+
+    if DateTime.diff(now, at, :second) < @refresh_grace_seconds and
+         Crypto.secure_compare(refresh_hash, session.refresh_hash),
+       do: {:ok, %{access_token: access, refresh_token: refresh}},
+       else: :error
+  end
+
+  # Retired before the grace was kept (an older row): a reuse.
+  defp again(%Session{}, _refresh_token, _now), do: :error
+
+  # Conditional on the presented hash still being current, so of two
+  # refreshes racing on one token only one writes: the loser finds the hash
+  # retired a moment ago and, inside the grace, is given the winner's pair.
+  defp rotate(session, refresh_token, presented, now) do
+    {access, access_hash} = derived(session.id, refresh_token, "access")
+    {refresh, refresh_hash} = derived(session.id, refresh_token, "refresh")
 
     query =
       from s in Session,
@@ -133,6 +181,7 @@ defmodule Lumia.Auth do
           access_hash: access_hash,
           refresh_hash: refresh_hash,
           previous_refresh_hash: presented,
+          previous_refresh_retired_at: now,
           access_expires_at: DateTime.add(now, @access_ttl_seconds, :second),
           refresh_expires_at: DateTime.add(now, @refresh_ttl_seconds, :second),
           last_seen_at: now
@@ -141,7 +190,7 @@ defmodule Lumia.Auth do
 
     case update do
       {1, [updated]} -> {:ok, updated, %{access_token: access, refresh_token: refresh}}
-      {0, _} -> reuse(presented)
+      {0, _} -> retired(refresh_token, presented, now)
     end
   end
 
@@ -206,12 +255,32 @@ defmodule Lumia.Auth do
   @doc "Access token lifetime, for Welcome and documentation."
   def access_ttl_seconds, do: @access_ttl_seconds
 
+  @doc "How long a rotated refresh token is still answered with the pair it was rotated to."
+  def refresh_grace_seconds, do: @refresh_grace_seconds
+
   # DateTime structs must not be compared with > or <; that is structural.
   defp expired?(expires_at, now), do: DateTime.compare(expires_at, now) != :gt
 
   defp token do
     plaintext = :crypto.strong_rand_bytes(32) |> Base.url_encode64(padding: false)
     {plaintext, hash(plaintext)}
+  end
+
+  # A token a rotation issues: as opaque as a random one to anyone without
+  # this instance's key, and the same every time for the same session and
+  # presented token, which is what lets a lost answer be given again.
+  defp derived(session_id, refresh_token, purpose) do
+    plaintext =
+      rotation_key()
+      |> Crypto.hmac([purpose, 0, session_id, 0, refresh_token])
+      |> Base.url_encode64(padding: false)
+
+    {plaintext, hash(plaintext)}
+  end
+
+  defp rotation_key do
+    secret = Application.get_env(:lumia, LumiaWeb.Endpoint)[:secret_key_base]
+    Plug.Crypto.KeyGenerator.generate(secret, "lumia/refresh-rotation/v1")
   end
 
   defp hash(plaintext), do: :crypto.hash(:sha256, plaintext)

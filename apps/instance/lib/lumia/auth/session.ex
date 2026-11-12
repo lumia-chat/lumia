@@ -9,6 +9,7 @@ defmodule Lumia.Auth.Session do
     field :access_hash, :binary, redact: true
     field :refresh_hash, :binary, redact: true
     field :previous_refresh_hash, :binary, redact: true
+    field :previous_refresh_retired_at, :utc_datetime_usec
     field :client, :string
     field :ip, :string
     field :access_expires_at, :utc_datetime_usec
