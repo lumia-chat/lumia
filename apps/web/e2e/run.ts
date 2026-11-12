@@ -608,6 +608,79 @@ async function account(which: string, taken: string, stamp: number) {
   console.log(`  ${which}: renamed its account, was refused a taken handle and one that is not a handle, set a photo that loads from the instance, was refused a file that is no picture, and removed the photo, in ${Date.now() - t0} ms`);
 }
 
+// Preferences, from the account menu: a chosen appearance holds whatever
+// the system is in and "System" follows it again; Compact draws the
+// small avatar and a block in less room; both are this browser's and are
+// still there after a reload. An account of its own with three quick
+// messages, so the channel is one block of known size.
+async function preferencesStep(which: string, stamp: number) {
+  const dir = resolve(work, `cli-preferences-${which}`);
+  const handle = `pref${which}${stamp}`;
+  lumia(dir, "instance", "add", instance);
+  lumia(dir, "account", "create", "--handle", handle, "--password", password);
+  const own = lumia(dir, "server-create", "Preferences").match(/[0-9a-f-]{36}/)?.[0];
+  if (!own) throw new Error("no server id");
+  const channel = lumia(dir, "channel-create", own, "general").match(/[0-9a-f-]{36}/)?.[0];
+  if (!channel) throw new Error("no channel id");
+  for (const line of ["One", "Two", "Three"]) lumia(dir, "send", channel, `${line} of ${stamp}`);
+  const { ctx, page } = await open(which, "preferences");
+  const t0 = Date.now();
+  try {
+    await page.emulateMedia({ colorScheme: "light" });
+    await trustCard(page);
+    await page.getByLabel("Email or handle").fill(handle);
+    await page.getByRole("textbox", { name: "Password" }).fill(password);
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await page.getByText(`Three of ${stamp}`).waitFor();
+    const block = () =>
+      page.evaluate(() => {
+        const message = document.querySelector(".lu-msglist .lu-msg");
+        return { avatar: message?.querySelector(".lu-avatar")?.getBoundingClientRect().width ?? 0, height: message?.getBoundingClientRect().height ?? 0 };
+      });
+    const comfortable = await block();
+    if (comfortable.avatar !== 40) throw new Error(`a comfortable message's avatar is ${comfortable.avatar} wide`);
+    phase("the page");
+    await page.getByRole("button", { name: /account menu/ }).click();
+    await page.getByRole("menuitem", { name: "Preferences" }).click();
+    await page.getByRole("heading", { name: "Appearance" }).waitFor();
+    await page.screenshot({ path: `${out}/${which}-preferences.png` });
+    phase("appearance");
+    const ground = () => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+    const DARK = "rgb(15, 18, 24)";
+    const LIGHT = "rgb(242, 244, 248)";
+    const appearance = page.getByRole("tablist", { name: "Appearance" });
+    await appearance.getByRole("tab", { name: "Dark" }).click();
+    if ((await ground()) !== DARK) throw new Error(`Dark under a light system draws the ground ${await ground()}`);
+    await page.screenshot({ path: `${out}/${which}-preferences-dark.png` });
+    await appearance.getByRole("tab", { name: "Light" }).click();
+    await page.emulateMedia({ colorScheme: "dark" });
+    if ((await ground()) !== LIGHT) throw new Error(`Light under a dark system draws the ground ${await ground()}`);
+    await appearance.getByRole("tab", { name: "System" }).click();
+    if ((await ground()) !== DARK) throw new Error(`System under a dark system draws the ground ${await ground()}`);
+    await page.emulateMedia({ colorScheme: "light" });
+    if ((await ground()) !== LIGHT) throw new Error(`System under a light system draws the ground ${await ground()}`);
+    phase("density");
+    await appearance.getByRole("tab", { name: "Dark" }).click();
+    await page.getByRole("tablist", { name: "Message density" }).getByRole("tab", { name: "Compact" }).click();
+    // A load from nothing: what is drawn now is what the browser kept.
+    await goto(page, `${base}/app`);
+    await page.getByText(`Three of ${stamp}`).waitFor();
+    if ((await ground()) !== DARK) throw new Error(`after a reload the ground is ${await ground()}: Dark was not kept`);
+    const compact = await block();
+    if (compact.avatar !== 28) throw new Error(`a compact message's avatar is ${compact.avatar} wide`);
+    if (compact.height >= comfortable.height) throw new Error(`a compact block is ${compact.height} tall and a comfortable one ${comfortable.height}`);
+    await page.screenshot({ path: `${out}/${which}-compact.png` });
+    phase("kept through sign-out");
+    await page.getByRole("button", { name: /account menu/ }).click();
+    await page.getByRole("menuitem", { name: "Sign out" }).click();
+    await page.waitForURL(/\/sign-in/);
+    if ((await ground()) !== DARK) throw new Error(`signed out, the ground is ${await ground()}: the appearance went with the account`);
+  } finally {
+    await ctx.close();
+  }
+  console.log(`  ${which}: opened Preferences from the account menu, chose each appearance against the system's, drew a block compact, and kept both through a reload and a sign-out, in ${Date.now() - t0} ms`);
+}
+
 // A session revoked from elsewhere (protocol 12), as "sign out everywhere"
 // or a reused refresh token does it: the gateway is told and its loop
 // ends, the page asks for the snapshot, is refused, and goes back to the
@@ -1124,6 +1197,7 @@ try {
       ["create", () => create(which, `web${stamp}`, stamp)],
       ["revoked", () => revoked(which, stamp)],
       ["account", () => account(which, `web${stamp}`, stamp)],
+      ["preferences", () => preferencesStep(which, stamp)],
       ["push", () => webPush(which, `web${stamp}`, passwordDir, server, general, webAccount)],
       ["magic link", () => magicLink(which)],
       ["passkey", () => passkey(which, `web${stamp}`)],

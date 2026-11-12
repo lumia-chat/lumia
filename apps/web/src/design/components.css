@@ -292,6 +292,15 @@ h1.lu-serverhead__name:hover { background: none; }
 /* ── MessageList ── */
 .lu-msglist { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column-reverse; }
 .lu-msglist__log { display: flex; flex-direction: column; gap: var(--space-8); padding: 14px 14px 8px; }
+/* Compact (Preferences): the small avatar, and half the room between blocks, inside one and around a day's divider. */
+.lu-msglist--compact .lu-msglist__log { gap: var(--space-4); }
+.lu-msglist--compact .lu-msg--default { gap: var(--space-10); padding: var(--space-4) 12px; }
+.lu-msglist--compact .lu-msg--default .lu-msg__main, .lu-msglist--compact .lu-msg--default .lu-msg__part { gap: var(--space-2); }
+.lu-msglist--compact .lu-msg--default .lu-avatar { font-size: 10px; }
+.lu-msglist--compact .lu-msg__parttime { width: var(--avatar-sm); margin-right: var(--space-10); font-size: 9.5px; }
+.lu-msglist--compact .lu-sysmsg { gap: var(--space-10); padding: 3px 12px; }
+.lu-msglist--compact .lu-sysmsg__icon { width: var(--avatar-sm); }
+.lu-msglist--compact .lu-divider { padding: var(--space-4) 10px; }
 
 /* ── ThreadPanel ── */
 .lu-thread { flex: 1; min-height: 0; display: flex; flex-direction: column; }

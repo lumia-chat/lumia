@@ -30,6 +30,7 @@ export interface OverlayProps {
   onChannelCreated: (channelId: string) => void;
   onConversation: (channelId: string) => void;
   toProfile: () => void;
+  toPreferences: () => void;
   toDevices: () => void;
   toLink: () => void;
   onSignOut: () => void;
@@ -281,6 +282,9 @@ function AccountMenu(props: OverlayProps) {
         <MenuRule />
         <MenuItem icon="user" onSelect={then(props.toProfile)}>
           View profile
+        </MenuItem>
+        <MenuItem icon="preferences" onSelect={then(props.toPreferences)}>
+          Preferences
         </MenuItem>
         <MenuItem icon="shield" onSelect={then(props.toDevices)}>
           Devices

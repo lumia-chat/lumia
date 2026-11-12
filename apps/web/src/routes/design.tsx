@@ -3,6 +3,7 @@
 // data, plus the smaller pieces in isolation. Theme and layout toggles at
 // the top. Not a product screen.
 import { For, Show, createSignal, onCleanup, onMount, type JSX } from "solid-js";
+import { applyPreferences } from "../client/preferences";
 import {
   AppShell,
   Avatar,
@@ -81,7 +82,8 @@ function useTheme() {
     }
     apply(saved === "dark" || saved === "light" ? saved : system(), false);
   });
-  onCleanup(() => delete document.documentElement.dataset.theme);
+  // Leaving the gallery gives the page back to the appearance Preferences holds.
+  onCleanup(applyPreferences);
   return { theme, apply };
 }
 
@@ -943,6 +945,14 @@ function Pieces() {
         </Message>
       </section>
       <section>
+        <h2>The same block, compact (a preference of this browser)</h2>
+        <div class="lu-msglist--compact">
+          <Message author={PEOPLE.leo.name} initials="LM" tone="sky" time="10:08 AM" datetime="2026-11-02T10:08" actions={false} density="compact" onOpenProfile={() => {}} parts={[{ time: "10:09", datetime: "2026-11-02T10:09", children: "Also: who do I ask about a desk by the windows?" }]}>
+            Thank you all, what a warm welcome! My calendar is open for coffee chats this week.
+          </Message>
+        </div>
+      </section>
+      <section>
         <h2>Over the frame: the account menu, a server's menu, the profile card, a popover</h2>
         <div class="pieces__row pieces__row--top">
           <Menu label="Your account">
@@ -960,6 +970,7 @@ function Pieces() {
             </MenuRadio>
             <MenuRule />
             <MenuItem icon="user">View profile</MenuItem>
+            <MenuItem icon="preferences">Preferences</MenuItem>
             <MenuItem icon="shield">Devices</MenuItem>
             <MenuRule />
             <MenuItem icon="sign-out">Sign out</MenuItem>

@@ -31,10 +31,11 @@ import {
 import { ClientError, type ChannelSummary, type DeviceSummary, type DmMessageSummary, type InvitePreviewSummary, type MemberSummary, type PasskeySummary, type ProfileSummary, type SnapshotSummary } from "../client/bridge";
 import { SERVED_BY_INSTANCE, avatarSrc, client, savedInstance, dmChannelsQuery, dmMessagesQuery, enableNotifications, hasIdentityQuery, myStatus, peopleQuery, pushState, queryClient, rosterQuery, setMyStatus, snapshotQuery } from "../client/state";
 import { useNames } from "../client/names";
+import { preferences, setAppearance, setDensity, type Appearance, type Density } from "../client/preferences";
 import { addPasskey, passkeysAvailable } from "../client/passkeys";
 import { byBlock, byDay, initialsOf, shortTimeOf, timeOf, toneFor } from "./app";
 
-export type HomeView = "dm" | "requests" | "devices" | "profile" | "new" | "add";
+export type HomeView = "dm" | "requests" | "devices" | "profile" | "preferences" | "new" | "add";
 
 export interface HomeProps {
   snapshot: SnapshotSummary | undefined;
@@ -242,7 +243,10 @@ function AddServer(props: HomeProps) {
 export function HomeMain(props: HomeProps) {
   const identity = hasIdentityQuery();
   return (
-    <Show when={props.view !== "add" && props.view !== "devices" && props.view !== "profile"} fallback={props.view === "add" ? <AddServer {...props} /> : props.view === "profile" ? <Profile {...props} /> : <Devices {...props} />}>
+    <Show
+      when={props.view !== "add" && props.view !== "devices" && props.view !== "profile" && props.view !== "preferences"}
+      fallback={props.view === "add" ? <AddServer {...props} /> : props.view === "profile" ? <Profile {...props} /> : props.view === "preferences" ? <Preferences {...props} /> : <Devices {...props} />}
+    >
       <Show when={identity.data !== false} fallback={<NoIdentity toLink={props.toLink} back={props.back} />}>
         {props.view === "requests" ? <Requests {...props} /> : props.view === "new" ? <NewMessage {...props} /> : <Conversation {...props} />}
       </Show>
@@ -320,7 +324,7 @@ function Conversation(props: HomeProps) {
       {(ch) => (
         <>
           <ChannelHeader kind="dm" name={title()} topic={ch().host ? `on ${ch().host}` : undefined} onBack={props.back} backLabel="Back to Home" actions={[{ icon: "members", label: "Details", narrow: true, pressed: props.asideOpen, onClick: props.toggleAside }]} />
-          <MessageList>
+          <MessageList density={preferences().density}>
             <Notice icon="shield">
               Messages here are end-to-end encrypted. Only your devices and those of {participants().filter((p) => p.id !== me()).map((p) => p.name).join(", ") || "the other participants"} can read them.
             </Notice>
@@ -356,6 +360,7 @@ function Conversation(props: HomeProps) {
                           time={t.time}
                           datetime={t.datetime}
                           actions={false}
+                          density={preferences().density}
                           onOpenProfile={account() ? (anchor) => props.openPerson(account(), anchor) : undefined}
                           parts={block.rest.map((m) => ({ time: shortTimeOf(m.sentAtMicros), datetime: timeOf(m.sentAtMicros).datetime, children: said(m) }))}
                         >
@@ -848,6 +853,42 @@ function Profile(props: HomeProps) {
             </Show>
           </Card>
         </Show>
+      </div>
+    </>
+  );
+}
+
+// How Lumia looks in this browser: the desktop shell's Preferences page
+// without its scroll bar choice, which a page cannot keep. Each choice
+// takes effect as it is made (`client/preferences.ts`).
+function Preferences(props: HomeProps) {
+  return (
+    <>
+      <ChannelHeader kind="page" name="Preferences" topic="How Lumia looks in this browser" actions={[]} onBack={props.back} backLabel="Back to Home" />
+      <div class="lu-page">
+        <Card title="Appearance" subtitle="Light, dark, or whichever this device is in.">
+          <SegmentedTabs
+            label="Appearance"
+            tabs={[
+              { id: "light", label: "Light" },
+              { id: "dark", label: "Dark" },
+              { id: "system", label: "System" },
+            ]}
+            value={preferences().appearance}
+            onChange={(id) => setAppearance(id as Appearance)}
+          />
+        </Card>
+        <Card title="Messages" subtitle="Comfortable gives each message room. Compact shows more of a conversation at once.">
+          <SegmentedTabs
+            label="Message density"
+            tabs={[
+              { id: "comfortable", label: "Comfortable" },
+              { id: "compact", label: "Compact" },
+            ]}
+            value={preferences().density}
+            onChange={(id) => setDensity(id as Density)}
+          />
+        </Card>
       </div>
     </>
   );

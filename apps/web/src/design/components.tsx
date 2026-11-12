@@ -1144,6 +1144,8 @@ export interface MessageProps {
    * column under the pointer.
    */
   parts?: MessagePart[];
+  /** Compact draws the small avatar; the list it is in closes the room around it. */
+  density?: "comfortable" | "compact";
   class?: string;
 }
 
@@ -1157,7 +1159,7 @@ export interface MessagePart {
 export function Message(props: MessageProps) {
   const variant = () => props.variant ?? "default";
   const compact = () => variant() !== "default";
-  const avatar = () => <Avatar initials={props.initials} src={props.src} tone={props.tone ?? "blue"} size={compact() ? 28 : 40} />;
+  const avatar = () => <Avatar initials={props.initials} src={props.src} tone={props.tone ?? "blue"} size={compact() || props.density === "compact" ? 28 : 40} />;
   return (
     <article class={cx("lu-msg", "lu-msg--" + variant(), props.highlighted && "is-highlighted", props.class)}>
       <Show when={props.onOpenProfile} fallback={avatar()}>
@@ -1273,6 +1275,8 @@ export function Divider(props: DividerProps) {
 
 export interface MessageListProps {
   label?: string;
+  /** Compact halves the room between blocks, inside one and around a day's divider. */
+  density?: "comfortable" | "compact";
   children?: JSX.Element;
   class?: string;
 }
@@ -1280,7 +1284,7 @@ export interface MessageListProps {
 /** Bottom-anchored scrolling log. */
 export function MessageList(props: MessageListProps) {
   return (
-    <div class={cx("lu-msglist", props.class)}>
+    <div class={cx("lu-msglist", props.density === "compact" && "lu-msglist--compact", props.class)}>
       <div role="log" aria-label={props.label ?? "Messages"} class="lu-msglist__log">
         {props.children}
       </div>

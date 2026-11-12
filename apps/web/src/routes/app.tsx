@@ -31,6 +31,7 @@ import {
 import { signedOut, type ChannelSummary, type MessageSummary, type ServerSummary } from "../client/bridge";
 import { avatarSrc, checkPush, client, connection, loadMyStatus, membersQuery, messagesQuery, presence, customStatusOf, presenceOf, queryClient, sessionEnded, signOut, snapshotQuery, startGateway, typingIn, watchPresence } from "../client/state";
 import { useNames } from "../client/names";
+import { preferences } from "../client/preferences";
 import { ConversationAside, HomeMain, HomeSidebar, type HomeView } from "./home";
 import { Overlay, myStatusDot, type Over } from "./menus";
 
@@ -343,7 +344,7 @@ export function App() {
                       </div>
                     }
                   >
-                    <MessageList label={`Messages in #${ch().name}`}>
+                    <MessageList label={`Messages in #${ch().name}`} density={preferences().density}>
                       <For each={days()}>
                         {(day) => (
                           <>
@@ -363,6 +364,7 @@ export function App() {
                                     time={t.time}
                                     datetime={t.datetime}
                                     actions={false}
+                                    density={preferences().density}
                                     onOpenProfile={(anchor) => openPerson(first.authorAccountId, anchor)}
                                     parts={block.rest.map((m) => ({ time: shortTimeOf(m.createdAtMicros), datetime: timeOf(m.createdAtMicros).datetime, children: said(m) }))}
                                   >
@@ -423,6 +425,7 @@ export function App() {
             }}
             onConversation={(id) => goHome("dm", id)}
             toProfile={() => goHome("profile")}
+            toPreferences={() => goHome("preferences")}
             toDevices={() => goHome("devices")}
             toLink={() => void navigate({ to: "/link" })}
             onSignOut={() => void leave()}
