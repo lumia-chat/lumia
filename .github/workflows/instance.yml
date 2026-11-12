@@ -52,7 +52,7 @@ jobs:
       # when the instance compiles; its rust-toolchain.toml names this version.
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.96.1"
+          toolchain: "1.96.0"
 
       - uses: actions/cache@v4
         with:

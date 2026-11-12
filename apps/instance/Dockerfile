@@ -28,7 +28,8 @@ WORKDIR /app
 ENV MIX_ENV=prod
 # The Rust toolchain of the stage above, for the instance's one native
 # library (native/lumia_media, built by Rustler as the instance compiles).
-# native/lumia_media/rust-toolchain.toml names the version that image carries.
+# native/lumia_media/rust-toolchain.toml names the core's version, which the
+# stage above installed to build the core.
 COPY --from=web /usr/local/rustup /usr/local/rustup
 COPY --from=web /usr/local/cargo /usr/local/cargo
 ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo PATH=/usr/local/cargo/bin:$PATH
