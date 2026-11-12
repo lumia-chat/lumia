@@ -60,6 +60,18 @@ val Throwable.lumiaCode: String?
 val Throwable.lumiaDetails: Map<String, String>
     get() = (this as? LumiaException.Api)?.details ?: emptyMap()
 
+/**
+ * Whether the failure says this session is over (`sessionOver`): the
+ * instance's refusal by its code, or the core saying so itself, with no
+ * tokens left to send or this device revoked in the roster it holds.
+ */
+val Throwable.endsSession: Boolean
+    get() = when (this) {
+        is LumiaException.Api -> sessionOver(code)
+        is LumiaException.DeviceRevoked, is LumiaException.NotSignedIn -> true
+        else -> false
+    }
+
 /** What to show for the failure. */
 val Throwable.lumiaMessage: String
     get() = when (this) {

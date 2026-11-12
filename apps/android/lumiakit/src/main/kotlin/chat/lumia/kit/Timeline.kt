@@ -3,6 +3,8 @@
 // and no client in them, so `src/test` checks them on the JVM; the same
 // rules as the desktop shell's (apps/desktop/src/ui/timeline.rs, `joins`
 // and `Place`; src/session/mod.rs and src/ui/conversation.rs for typing).
+// And, last, the one rule the session keeps that is no conversation's:
+// which of the instance's refusals mean the session is over.
 package chat.lumia.kit
 
 import java.time.Instant
@@ -107,3 +109,19 @@ fun typingWords(names: List<String>): TypingWords = when (names.size) {
     2 -> "${names[0]} and ${names[1]}".let { both -> TypingWords("$both are typing…", both.length) }
     else -> TypingWords("Several people are typing…", 0)
 }
+
+// The session's end (protocol 10 and 12)
+
+/**
+ * Whether a failure's code says the instance no longer takes this session:
+ * it does not know the token, the refresh token ran out with it, or the
+ * session or its device was revoked. Nothing but signing in again follows
+ * any of them. The same four as the desktop shell's `Failure::signed_out`
+ * and the web's `signedOut`; `Throwable.endsSession` (LumiaClient.kt) asks
+ * this of a failure.
+ */
+fun sessionOver(code: String?): Boolean =
+    code == "UNAUTHENTICATED" || code == "TOKEN_EXPIRED" || code == "SESSION_REVOKED" || code == "DEVICE_REVOKED"
+
+/** What the sign-in screen says to someone the instance has sent back to it. */
+const val SIGNED_OUT = "You were signed out of this phone. Sign in again to carry on."

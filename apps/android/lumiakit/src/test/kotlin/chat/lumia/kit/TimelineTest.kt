@@ -1,7 +1,8 @@
 // The rules a conversation draws by: which messages are one block, who is
 // typing and how that reads. The desktop shell's tests of the same rules
 // are `messages_one_person_sends_close_together_are_one_block` and the
-// typing tests in apps/desktop/tests/shell.rs.
+// typing tests in apps/desktop/tests/shell.rs. And which failures mean the
+// session is over, the desktop's `a_revoked_session_goes_back_to_sign_in_and_says_why`.
 package chat.lumia.kit
 
 import java.time.LocalDateTime
@@ -12,6 +13,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import uniffi.lumia_ffi.LumiaException
 
 class TimelineTest {
     private val zone = ZoneId.of("America/Halifax")
@@ -131,5 +133,36 @@ class TimelineTest {
         assertEquals(emptyList<String>(), none.inChannel("general"))
         assertNull(none.ends)
         assertEquals(Typing(), none)
+    }
+
+    // A session the instance revoked answers `SESSION_REVOKED`, not `UNAUTHENTICATED`,
+    // a revoked device `DEVICE_REVOKED`, a refresh token run out `TOKEN_EXPIRED`. Taking
+    // only the first for the end left the person in the shell with nothing that worked.
+    @Test
+    fun fourOfTheInstancesRefusalsMeanTheSessionIsOver() {
+        for (code in listOf("UNAUTHENTICATED", "TOKEN_EXPIRED", "SESSION_REVOKED", "DEVICE_REVOKED")) {
+            assertTrue(code, sessionOver(code))
+            assertTrue(code, LumiaException.Api(code, "session revoked", emptyMap()).endsSession)
+        }
+    }
+
+    @Test
+    fun noOtherRefusalEndsTheSession() {
+        // The fifth 401 of protocol 10 is a proof refused, not a session; the rest are a call that failed.
+        for (code in listOf("IDENTITY_PROOF_INVALID", "PERMISSION_DENIED", "NOT_FOUND", "FAILED_PRECONDITION", "RATE_LIMITED", "UNAVAILABLE", "INTERNAL", "session_revoked", "")) {
+            assertFalse(code, sessionOver(code))
+            assertFalse(code, LumiaException.Api(code, "no", emptyMap()).endsSession)
+        }
+        assertFalse(sessionOver(null))
+        // No answer at all (no network) is no refusal.
+        assertFalse(LumiaException.Other("error sending request").endsSession)
+        assertFalse(IllegalStateException("anything else").endsSession)
+    }
+
+    @Test
+    fun theCoreSayingSoItselfEndsTheSession() {
+        // No tokens left to send, and this device revoked in the roster it holds.
+        assertTrue(LumiaException.NotSignedIn().endsSession)
+        assertTrue(LumiaException.DeviceRevoked(4uL).endsSession)
     }
 }

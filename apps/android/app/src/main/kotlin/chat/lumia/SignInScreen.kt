@@ -177,7 +177,11 @@ fun SignInScreen(store: AppStore) {
         }
     }
 
-    LaunchedEffect(Unit) { if (store.session != null && info == null) reach() }
+    LaunchedEffect(Unit) {
+        // Sent back here by the instance (a session revoked or run out), the screen opens saying so.
+        store.session?.takeEndedNotice()?.let { error = it }
+        if (store.session != null && info == null) reach()
+    }
 
     Column(
         modifier = Modifier.fillMaxSize().systemBarsPadding().verticalScroll(rememberScrollState()).padding(LumiaTokens.space16),

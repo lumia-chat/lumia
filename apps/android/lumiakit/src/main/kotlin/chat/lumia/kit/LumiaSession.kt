@@ -5,6 +5,7 @@
 // Compose state, written on the main thread; every client call goes off it.
 package chat.lumia.kit
 
+import android.os.SystemClock
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -12,9 +13,11 @@ import androidx.compose.runtime.setValue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import uniffi.lumia_ffi.ClientEvent
 import uniffi.lumia_ffi.DmChannelSummary
 import uniffi.lumia_ffi.DmLogSummary
@@ -22,7 +25,6 @@ import uniffi.lumia_ffi.DmResponse
 import uniffi.lumia_ffi.InvitePreviewSummary
 import uniffi.lumia_ffi.InviteSummary
 import uniffi.lumia_ffi.InstanceSummary
-import uniffi.lumia_ffi.LumiaException
 import uniffi.lumia_ffi.MemberSummary
 import uniffi.lumia_ffi.PasskeySummary
 import uniffi.lumia_ffi.ProfileSummary
@@ -42,6 +44,9 @@ sealed class ConnectionState(val label: String) {
 }
 
 val personalKinds = setOf("PERSONAL_DM", "PERSONAL_GROUP_DM")
+
+/** How soon after a gateway loop's end another end does not start the loop again: the longest the desktop shell waits between its attempts. */
+private const val RESTART_EVERY_MS = 30_000L
 
 /** Where a sign-in through the system browser returns to, with `magic={token}` (architecture 6.3). */
 const val BROWSER_SIGN_IN_RETURN = "lumia://sign-in"
@@ -138,15 +143,48 @@ class LumiaSession(val client: LumiaClient) {
         return channel.channelId
     }
 
-    suspend fun signOut() {
-        stop()
-        runCatching { client.call { signOut() } }
-        signedIn = false
-        snapshot = null
-        messages.clear()
-        dmChannels = emptyList()
-        dmLogs.clear()
-        showTyping(Typing())
+    suspend fun signOut() = leave(notice = null)
+
+    /**
+     * The instance no longer takes this session (it was revoked, or ran
+     * out): what the phone held of the account goes, as on signing out, and
+     * the sign-in screen, which is what shows once `signedIn` is false, says
+     * what happened. Nothing for a session already over on this phone.
+     */
+    private suspend fun sessionEnded() {
+        if (signedIn) leave(notice = SIGNED_OUT)
+    }
+
+    /** The line for the sign-in screen, taken: the next one starts without it. */
+    fun takeEndedNotice(): String? = endedNotice.also { endedNotice = null }
+
+    private var endedNotice: String? = null
+    private var leaving = false
+
+    /**
+     * The gateway stopped, the tokens gone, the account's state cleared; the
+     * stores stay. One at a time: a call refused while this is under way
+     * (the snapshot, by the sign-out itself) does not start it again.
+     */
+    private suspend fun leave(notice: String?) {
+        if (leaving) return
+        leaving = true
+        try {
+            endedNotice = notice
+            stop()
+            // To the end even when the caller was cancelled, which `stop()` has
+            // just done to the gateway's job when the refusal arrived on it:
+            // tokens left behind would open the shell on a dead session next launch.
+            withContext(NonCancellable) { runCatching { client.call { signOut() } } }
+            signedIn = false
+            snapshot = null
+            messages.clear()
+            dmChannels = emptyList()
+            dmLogs.clear()
+            showTyping(Typing())
+        } finally {
+            leaving = false
+        }
     }
 
     // Identity
@@ -221,16 +259,26 @@ class LumiaSession(val client: LumiaClient) {
                 start(snap.channels.filter { it.kind !in personalKinds }.map { it.channelId })
             }
         } catch (e: Exception) {
-            lastError = e.lumiaMessage
-            if (e is LumiaException.NotSignedIn) signedIn = false
+            // A session that is over goes back to sign-in. Anything else is said
+            // only with nothing held to show; what is held stays on screen.
+            if (e.endsSession) sessionEnded() else if (snapshot == null) lastError = e.lumiaMessage
         }
     }
 
+    /**
+     * The snapshot again, after something that changed it. A refusal that
+     * says the session is over ends it here as it does in `load`; any other
+     * failure says nothing and leaves what is held on screen.
+     */
     suspend fun refreshSnapshot() {
-        runCatching { client.call { snapshot() } }.getOrNull()?.let { snap ->
-            snapshot = snap
-            refreshPeople(snap.servers.map { it.serverId })
+        val snap = try {
+            client.call { snapshot() }
+        } catch (e: Exception) {
+            if (e.endsSession) sessionEnded()
+            return
         }
+        snapshot = snap
+        refreshPeople(snap.servers.map { it.serverId })
     }
 
     suspend fun refreshMessages(channelId: String) {
@@ -355,8 +403,31 @@ class LumiaSession(val client: LumiaClient) {
         events = scope.launch {
             stream.collect { handle(it) }
             events = null
+            // The stream ends by itself only when the loop has (`Closed`; `stop()`
+            // cancels this job instead), so here and not in `handle`: the loop
+            // this may start is not the one `events` was just cleared for.
+            loopEnded()
         }
     }
+
+    /**
+     * The loop has ended and will not come back by itself. Why is in words
+     * only, so the snapshot is asked: a session the instance has revoked
+     * answers so there and the phone goes to sign-in; anything else is a
+     * snapshot later, which starts the loop again. Asked once and no more:
+     * a failure that is not the session's end is left at that, and a loop
+     * that ends again within [RESTART_EVERY_MS] of the last time is asked
+     * about but not started, so one that ends as soon as it starts does not
+     * go round.
+     */
+    private suspend fun loopEnded() {
+        val now = SystemClock.elapsedRealtime()
+        val before = loopEndedAt
+        loopEndedAt = now
+        if (before != null && now - before < RESTART_EVERY_MS) refreshSnapshot() else load()
+    }
+
+    private var loopEndedAt: Long? = null
 
     fun stop() {
         events?.cancel()

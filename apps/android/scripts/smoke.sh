@@ -8,8 +8,9 @@
 # switch can open. Then the channel is read as assistive technology has
 # it: each account's messages in a row are one block, and the second
 # account, typing through the CLI, is named under the composer until it
-# falls silent (protocol 6.7), in light and dark. Then push. The emulator
-# reaches the host's instance at 10.0.2.2.
+# falls silent (protocol 6.7), in light and dark. Then push. Last, the
+# phone's session is revoked from elsewhere, and the app must go back to
+# sign-in and say so. The emulator reaches the host's instance at 10.0.2.2.
 #
 #   scripts/smoke.sh            # expects the app built (gradle assembleDebug) and the CLI, and an emulator or device on adb
 #   LUMIA_INSTANCE=http://localhost:4000 scripts/smoke.sh
@@ -160,4 +161,37 @@ sleep 8
 ui | grep -q "# general" || { echo "FAIL: the tap did not open the channel; see $work/opened.png"; exit 1; }
 "$adb" shell am force-stop "$bundle" >/dev/null 2>&1 || true
 echo "  push: $work/notify.png (the notification), $work/opened.png (the channel it opened)"
-echo "smoke: ok (launched signed in, every screen screenshotted under $work; messages in blocks and someone typing in the channel; a mention became a notification and its tap opened the channel)"
+
+# A session revoked from elsewhere (protocol 12), as "sign out everywhere"
+# or a reused refresh token does it: the gateway is told and its loop ends,
+# the app asks for the snapshot, is refused, and goes back to the sign-in
+# screen, which says what happened. The tokens went with the session, so
+# the launch after that is the sign-in screen and says nothing. Last,
+# because the phone's account loses every session it had: the script signs
+# in beside them over HTTP and revokes each of the others.
+launch home 10
+case "$(ui)" in *'text="connected"'*) ;; *) echo "FAIL: the app was not connected before its session was revoked"; exit 1 ;; esac
+field() { python3 -c "import sys, json; d = json.load(sys.stdin); print($1)"; }
+token=$(curl -s -H "content-type: application/json" -H "accept: application/json" -d "{\"handleOrEmail\":\"$handle\",\"password\":\"$password\"}" "$instance/api/v1/auth/sign-in/password" | field 'd["accessToken"]')
+others=$(curl -s -H "accept: application/json" -H "authorization: Bearer $token" "$instance/api/v1/sessions" | field '" ".join(s["sessionId"] for s in d.get("sessions", []) if not s.get("current"))')
+[ -n "$others" ] || { echo "FAIL: the account has no session but the script's"; exit 1; }
+for id in $others; do
+  answer=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE -H "authorization: Bearer $token" "$instance/api/v1/sessions/$id")
+  [ "$answer" = 204 ] || { echo "FAIL: revoking a session answered $answer"; exit 1; }
+done
+said=""
+for _ in $(seq 1 20); do
+  case "$(ui)" in *"You were signed out of this phone"*) said=yes; break ;; esac
+  sleep 1
+done
+shot revoked
+[ -n "$said" ] || { echo "FAIL: the session was revoked and the app did not go back to sign-in and say so; see $work/revoked.png"; exit 1; }
+"$adb" shell am force-stop "$bundle" >/dev/null 2>&1 || true
+"$adb" shell am start -W -n "$bundle/.MainActivity" >/dev/null
+sleep 6
+seen=$(ui)
+case "$seen" in *"You were signed out"*) echo "FAIL: the launch after a revoked session said so a second time"; exit 1 ;; esac
+case "$seen" in *"Welcome back"*) ;; *) echo "FAIL: the launch after a revoked session is not the sign-in screen"; exit 1 ;; esac
+"$adb" shell am force-stop "$bundle" >/dev/null 2>&1 || true
+echo "  revoked: $work/revoked.png (sent back to sign-in, which said why; the next launch did not)"
+echo "smoke: ok (launched signed in, every screen screenshotted under $work; messages in blocks and someone typing in the channel; a mention became a notification and its tap opened the channel; a session revoked from elsewhere went back to sign-in and said so)"

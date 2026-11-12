@@ -73,8 +73,9 @@ fun Shell(store: AppStore, session: LumiaSession, devScreen: String?) {
 
     LaunchedEffect(Unit) {
         session.load()
-        // Push registration once signed in; the smoke keeps the prompt away.
-        if (devScreen == null) activity?.pushSetup?.register()
+        // Push registration once signed in; the smoke keeps the prompt away, and
+        // so does a load that found the session over: the sign-in screen is next.
+        if (devScreen == null && session.signedIn) activity?.pushSetup?.register()
     }
     LaunchedEffect(target, channels.map { it.channelId }) {
         // The conversation a tapped notification names, once the snapshot
