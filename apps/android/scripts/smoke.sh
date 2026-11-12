@@ -5,7 +5,11 @@
 # with two of its own; installs the debug build, launches it signed in as
 # the first account (the LUMIA_DEV_* extras a debug build honours, through
 # the launch intent) and screenshots each screen the LUMIA_DEV_SCREEN
-# switch can open. Then the channel is read as assistive technology has
+# switch can open. Then Preferences: dark and compact as a launch can be
+# told to look (LUMIA_DEV_APPEARANCE, LUMIA_DEV_DENSITY), and by taps from
+# the account menu, a choice kept across a launch and put back, the screen
+# kept as the phone goes dark. Then the
+# channel is read as assistive technology has
 # it: each account's messages in a row are one block, and the second
 # account, typing through the CLI, is named under the composer until it
 # falls silent (protocol 6.7), in light and dark. Then push. Last, the
@@ -14,12 +18,13 @@
 #
 #   scripts/smoke.sh            # expects the app built (gradle assembleDebug) and the CLI, and an emulator or device on adb
 #   LUMIA_INSTANCE=http://localhost:4000 scripts/smoke.sh
+#   LUMIA_CLI=/path/to/lumia-cli scripts/smoke.sh   # a CLI built elsewhere (a git worktree has none of its own)
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 root="$here/../../.."
 instance=${LUMIA_INSTANCE:-http://localhost:4000}
 emulated=$(printf '%s' "$instance" | sed 's#localhost#10.0.2.2#; s#127\.0\.0\.1#10.0.2.2#')
-cli="$root/apps/core/target/release/lumia-cli"
+cli=${LUMIA_CLI:-$root/apps/core/target/release/lumia-cli}
 apk="$here/../app/build/outputs/apk/debug/app-debug.apk"
 work=${LUMIA_SMOKE_WORK:-$here/../.build/smoke}
 rm -rf "$work" && mkdir -p "$work"
@@ -62,10 +67,12 @@ echo "seeded $handle and $other_handle, server $server, channel $channel"
 "$adb" uninstall "$bundle" >/dev/null 2>&1 || true
 "$adb" install -r "$apk" >/dev/null
 
-launch() { # <screen> <seconds>
+launch() { # <screen> <seconds> [more for am start: --es LUMIA_DEV_APPEARANCE dark, --es LUMIA_DEV_DENSITY compact]
+  screen=$1 seconds=$2
+  shift 2
   "$adb" shell am force-stop "$bundle" >/dev/null 2>&1 || true
-  "$adb" shell am start -W -n "$bundle/.MainActivity" --es LUMIA_DEV_INSTANCE "$emulated" --es LUMIA_DEV_HANDLE "$handle" --es LUMIA_DEV_PASSWORD "$password" --es LUMIA_DEV_SCREEN "$1" >/dev/null
-  sleep "$2"
+  "$adb" shell am start -W -n "$bundle/.MainActivity" --es LUMIA_DEV_INSTANCE "$emulated" --es LUMIA_DEV_HANDLE "$handle" --es LUMIA_DEV_PASSWORD "$password" --es LUMIA_DEV_SCREEN "$screen" "$@" >/dev/null
+  sleep "$seconds"
 }
 shot() { # <name>
   "$adb" exec-out screencap -p > "$work/$1.png"
@@ -83,12 +90,96 @@ ui() {
 count() { # <text> <pattern>: how many times
   printf '%s' "$1" | grep -o "$2" | wc -l | tr -d ' '
 }
+# One fact about the first thing on screen whose text or description is the
+# one named: where its middle is, whether it is the choice made (a radio
+# button that is checked), or how far down the screen it starts.
+node() { # <text or description> <middle|chosen|top>
+  ui | python3 -c '
+import re, sys
+want, fact = sys.argv[1], sys.argv[2]
+for node in re.findall(r"<node [^>]*>", sys.stdin.read()):
+    if "text=\"%s\"" % want in node or "content-desc=\"%s\"" % want in node:
+        x0, y0, x1, y1 = (int(n) for n in re.search(r"bounds=\"\[(\d+),(\d+)\]\[(\d+),(\d+)\]\"", node).groups())
+        print({"middle": "%d %d" % ((x0 + x1) // 2, (y0 + y1) // 2), "chosen": "yes" if "checked=\"true\"" in node else "no", "top": y0}[fact])
+        break
+' "$1" "$2"
+}
+tap() { # <text or description>
+  at=$(node "$1" middle)
+  [ -n "$at" ] || { echo "FAIL: nothing on screen reads \"$1\" to tap"; exit 1; }
+  # shellcheck disable=SC2086
+  "$adb" shell input tap $at
+  sleep 1
+}
+# What the app has stored on the phone beside the saved instance.
+stored() {
+  "$adb" shell run-as "$bundle" cat shared_prefs/lumia.xml 2>/dev/null || true
+}
+# The room the channel's first messages take: how far under the first the
+# one sent after the others starts.
+room() {
+  first=$(node "Hello from the CLI" top)
+  last=$(node "Still here?" top)
+  [ -n "$first" ] && [ -n "$last" ] || { echo "FAIL: the channel does not show the messages the script sent" >&2; exit 1; }
+  echo $((last - first))
+}
 shoot home 10
 alive=$("$adb" shell pidof "$bundle" 2>/dev/null || true)
 # The app sends nothing; the CLI's message lands in its view when the gateway is up.
 "$cli" --data-dir "$data" send "$channel" "Still here?" >/dev/null
-for screen in server channel requests devices profile new add newchannel invite signin link; do shoot "$screen" 7; done
+for screen in server channel requests devices profile preferences new add newchannel invite signin link; do shoot "$screen" 7; done
 [ -n "$alive" ] || { echo "FAIL: the app was not running after launch"; exit 1; }
+
+# Preferences. First how a launch can be told to look, for the eye: the
+# Preferences screen dark on a light phone, and the channel compact beside
+# channel.png, which is comfortable. Compact must give the same messages
+# less room, and none of it may be kept: the extras are that launch's, and
+# what is drawn after them is as the phone chose.
+launch channel 7
+roomy=$(room)
+launch preferences 7 --es LUMIA_DEV_APPEARANCE dark
+shot preferences-dark
+[ "$(node Dark chosen)" = yes ] || { echo "FAIL: a launch told to be dark does not show Dark as the choice; see $work/preferences-dark.png"; exit 1; }
+launch channel 7 --es LUMIA_DEV_DENSITY compact
+shot channel-compact
+tight=$(room)
+[ "$tight" -gt 0 ] && [ "$tight" -lt "$roomy" ] \
+  || { echo "FAIL: compact did not give the channel's messages less room ($tight against $roomy); see $work/channel-compact.png"; exit 1; }
+case "$(stored)" in *appearance*|*density*) echo "FAIL: a launch's LUMIA_DEV_APPEARANCE or LUMIA_DEV_DENSITY was kept on the phone"; exit 1 ;; esac
+# Then as a person gets there and chooses: the rail's own avatar opens the
+# account's menu, the menu leads to Preferences, each choice is the one
+# shown at the next launch, and then both are put back, so what follows is
+# drawn as it was before.
+launch home 7
+tap "$handle, your account"
+shot account
+tap Preferences
+case "$(ui)" in *"How Lumia looks on this phone"*) ;; *) echo "FAIL: the account menu did not lead to Preferences; see $work/account.png"; exit 1 ;; esac
+[ "$(node System chosen)" = yes ] && [ "$(node Comfortable chosen)" = yes ] \
+  || { echo "FAIL: a phone that has chosen nothing is not System and Comfortable"; exit 1; }
+tap Dark
+tap Compact
+launch preferences 7
+shot preferences-kept
+[ "$(node Dark chosen)" = yes ] && [ "$(node Compact chosen)" = yes ] \
+  || { echo "FAIL: Dark and Compact were chosen and the next launch does not have them; see $work/preferences-kept.png"; exit 1; }
+tap System
+tap Comfortable
+launch preferences 7
+[ "$(node System chosen)" = yes ] && [ "$(node Comfortable chosen)" = yes ] \
+  || { echo "FAIL: System and Comfortable were chosen again and the next launch does not have them"; exit 1; }
+# System is whichever the phone is in, as it changes: the phone goes dark
+# with the screen open, the picture is dark for the eye, and the screen is
+# still the one the person was on (a phone going dark at sunset does not
+# send anyone back to Home).
+night=$("$adb" shell cmd uimode night 2>/dev/null | grep -oE "yes|no|auto" | head -1)
+"$adb" shell cmd uimode night yes >/dev/null
+sleep 3
+shot preferences-system-dark
+seen=$(ui)
+"$adb" shell cmd uimode night "${night:-no}" >/dev/null
+case "$seen" in *"How Lumia looks on this phone"*) ;; *) echo "FAIL: the phone went dark and the app left the screen it was on; see $work/preferences-system-dark.png"; exit 1 ;; esac
+echo "  preferences: ok (dark and compact for a launch and not kept, $tight against $roomy; reached from the account menu; a choice kept across a launch and put back; the screen kept as the phone went dark)"
 
 # Blocks, in the channel: the second account's two messages in a row are
 # under its name once, and the second says whose it is and when to a
@@ -186,6 +277,10 @@ for _ in $(seq 1 20); do
 done
 shot revoked
 [ -n "$said" ] || { echo "FAIL: the session was revoked and the app did not go back to sign-in and say so; see $work/revoked.png"; exit 1; }
+# What Preferences chose is the phone's and not the session's: it is still there.
+kept=$(stored)
+case "$kept" in *'"appearance">system<'*) ;; *) echo "FAIL: the session's end took the phone's appearance with it"; exit 1 ;; esac
+case "$kept" in *'"density">comfortable<'*) ;; *) echo "FAIL: the session's end took the phone's message density with it"; exit 1 ;; esac
 "$adb" shell am force-stop "$bundle" >/dev/null 2>&1 || true
 "$adb" shell am start -W -n "$bundle/.MainActivity" >/dev/null
 sleep 6
@@ -193,5 +288,5 @@ seen=$(ui)
 case "$seen" in *"You were signed out"*) echo "FAIL: the launch after a revoked session said so a second time"; exit 1 ;; esac
 case "$seen" in *"Welcome back"*) ;; *) echo "FAIL: the launch after a revoked session is not the sign-in screen"; exit 1 ;; esac
 "$adb" shell am force-stop "$bundle" >/dev/null 2>&1 || true
-echo "  revoked: $work/revoked.png (sent back to sign-in, which said why; the next launch did not)"
-echo "smoke: ok (launched signed in, every screen screenshotted under $work; messages in blocks and someone typing in the channel; a mention became a notification and its tap opened the channel; a session revoked from elsewhere went back to sign-in and said so)"
+echo "  revoked: $work/revoked.png (sent back to sign-in, which said why; the next launch did not; the phone's preferences were kept)"
+echo "smoke: ok (launched signed in, every screen screenshotted under $work; preferences reached from the account menu, kept across a launch, dark and compact drawn; messages in blocks and someone typing in the channel; a mention became a notification and its tap opened the channel; a session revoked from elsewhere went back to sign-in and said so)"

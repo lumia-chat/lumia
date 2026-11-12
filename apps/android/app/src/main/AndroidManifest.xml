@@ -7,11 +7,14 @@
         android:icon="@mipmap/ic_launcher"
         android:theme="@style/Theme.Lumia"
         android:usesCleartextTraffic="true">
-        <!-- One task: a notification's tap reaches the running activity through onNewIntent. -->
+        <!-- One task: a notification's tap reaches the running activity through onNewIntent.
+             The phone going dark or light is the activity's own to take (uiMode): the
+             colours are drawn from it as it changes, and the screen a person is on stays. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTask"
+            android:configChanges="uiMode"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

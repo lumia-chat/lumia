@@ -13,7 +13,6 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.keyframes
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -29,17 +28,17 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Icon
-import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -49,6 +48,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -118,12 +118,10 @@ fun LumiaEmptyState(icon: ImageVector, title: String, text: String? = null, acti
 }
 
 // What the phone boards draw and `tokens.json` has no name for, made from
-// the nearest tokens (the desktop shell's `tokens.rs` does the same).
+// the nearest tokens (the desktop shell's `tokens.rs` does the same). A
+// message row's own are `Measures` (Preferences.kt), which the density
+// chosen in Preferences decides.
 
-/** The room between one block of messages and the next. The boards drew 2; Ryan asked for more (2026-11-12). */
-private val BlockGap = LumiaTokens.space8
-/** Between two messages of a block, and under its name: a paragraph's distance, as the boards draw a message of several. */
-private val BlockWithin = LumiaTokens.space4
 /** Under the line that says who is typing, to the panel's foot (20). */
 private val TypingFoot = LumiaTokens.space16 + LumiaTokens.space4
 /** Between two dots of the typing line (3). */
@@ -137,9 +135,18 @@ private val TypingDotGap = (LumiaTokens.space2 + LumiaTokens.space4) / 2
  * distance under the one before. A phone has no pointer to show such a
  * row's time under, so it is not drawn; a screen reader still hears whose
  * the message is and when, before it. Each row is one stop for it.
+ * [measures] are the density's: the avatar and the room around the row.
  */
 @Composable
-fun LumiaMessageRow(author: String, tone: AvatarTone, time: String, text: String, deleted: Boolean = false, place: BlockPlace = BlockPlace.Alone) {
+fun LumiaMessageRow(
+    author: String,
+    tone: AvatarTone,
+    time: String,
+    text: String,
+    deleted: Boolean = false,
+    place: BlockPlace = BlockPlace.Alone,
+    measures: Measures = Measures.Comfortable,
+) {
     val body = @Composable { modifier: Modifier ->
         Text(
             if (deleted) "(deleted)" else text,
@@ -154,20 +161,20 @@ fun LumiaMessageRow(author: String, tone: AvatarTone, time: String, text: String
         .padding(
             start = LumiaTokens.space16,
             end = LumiaTokens.space16,
-            top = if (place.opens) BlockGap + LumiaTokens.space8 else BlockWithin / 2,
-            bottom = if (place.closes) LumiaTokens.space8 else BlockWithin / 2,
+            top = if (place.opens) measures.blockGap + measures.edge else measures.within / 2,
+            bottom = if (place.closes) measures.edge else measures.within / 2,
         )
     if (!place.opens) {
         Box(frame) {
             Box(Modifier.matchParentSize().semantics { contentDescription = "$author, $time" })
-            body(Modifier.padding(start = LumiaTokens.avatarLg + LumiaTokens.space12))
+            body(Modifier.padding(start = measures.avatar + measures.beside))
         }
         return
     }
-    Row(modifier = frame, horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space12), verticalAlignment = Alignment.Top) {
+    Row(modifier = frame, horizontalArrangement = Arrangement.spacedBy(measures.beside), verticalAlignment = Alignment.Top) {
         // The name beside it says who; the initials would only be read out before it.
-        Box(Modifier.clearAndSetSemantics {}) { LumiaAvatar(initialsOf(author), tone, LumiaTokens.avatarLg) }
-        Column(verticalArrangement = Arrangement.spacedBy(BlockWithin), modifier = Modifier.weight(1f)) {
+        Box(Modifier.clearAndSetSemantics {}) { LumiaAvatar(initialsOf(author), tone, measures.avatar) }
+        Column(verticalArrangement = Arrangement.spacedBy(measures.within), modifier = Modifier.weight(1f)) {
             Row(horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space8), verticalAlignment = Alignment.Bottom) {
                 Text(author, style = LumiaTokens.textAuthor.style, color = LumiaTokens.inkEmphasis.color)
                 Text(time, style = LumiaTokens.textMeta.style, color = LumiaTokens.inkQuiet.color)
@@ -178,9 +185,9 @@ fun LumiaMessageRow(author: String, tone: AvatarTone, time: String, text: String
 }
 
 @Composable
-fun LumiaDayDivider(label: String) {
+fun LumiaDayDivider(label: String, measures: Measures = Measures.Comfortable) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = LumiaTokens.space16, vertical = LumiaTokens.space8),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = LumiaTokens.space16, vertical = measures.divider),
         horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space10),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -422,14 +429,19 @@ fun LumiaTag(text: String) {
     )
 }
 
-/** A row of pills with one chosen: the design's segmented tabs at a form's width. */
+/**
+ * A row of pills with one chosen: the design's segmented tabs at a form's
+ * width. One of a few, as radio buttons are: each pill is a stop that says
+ * its label, whether it is the one chosen, and where it is among the rest.
+ */
 @Composable
 fun LumiaChoice(options: List<Pair<String, String>>, value: String, onChange: (String) -> Unit, modifier: Modifier = Modifier) {
     Row(
         modifier
             .fillMaxWidth()
             .background(LumiaTokens.chip.color, RoundedCornerShape(LumiaTokens.radiusPill))
-            .padding(LumiaTokens.space2),
+            .padding(LumiaTokens.space2)
+            .selectableGroup(),
         horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space2),
     ) {
         for ((id, label) in options) {
@@ -442,7 +454,7 @@ fun LumiaChoice(options: List<Pair<String, String>>, value: String, onChange: (S
                 modifier = Modifier
                     .weight(1f)
                     .background(if (chosen) LumiaTokens.tabActive.color else androidx.compose.ui.graphics.Color.Transparent, RoundedCornerShape(LumiaTokens.radiusPill))
-                    .clickable { onChange(id) }
+                    .selectable(selected = chosen, role = Role.RadioButton) { onChange(id) }
                     .padding(vertical = LumiaTokens.space8),
             )
         }
@@ -516,12 +528,6 @@ fun LumiaIconButton(icon: ImageVector, label: String, onClick: () -> Unit) {
     androidx.compose.material3.IconButton(onClick = onClick, modifier = Modifier.size(44.dp)) {
         Icon(icon, contentDescription = label, tint = LumiaTokens.iconStrong.color)
     }
-}
-
-/** Content with the ink colour for text that sets none. */
-@Composable
-fun LumiaInk(content: @Composable () -> Unit) {
-    CompositionLocalProvider(LocalContentColor provides LumiaTokens.ink.color, content = content)
 }
 
 /** A section title in a list. */

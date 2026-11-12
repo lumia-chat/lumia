@@ -1,6 +1,7 @@
 // The app's one session and where the app is: the saved instance reopened
 // at launch (state under the app's files directory), and the route the
-// session's state picks. The Swift AppStore's twin.
+// session's state picks. And what Preferences chose for this phone, which
+// outlasts the session. The Swift AppStore's twin.
 package chat.lumia.kit
 
 import android.content.Context
@@ -45,6 +46,43 @@ class AppStore(context: Context) {
     var savedInstance: String?
         get() = prefs.getString("instance", null)
         set(value) { prefs.edit().putString("instance", value).apply() }
+
+    /**
+     * Preferences' two choices: how Lumia looks on this phone. They are the
+     * phone's and not the account's, kept beside the saved instance under
+     * the names the desktop keeps them by and sent nowhere; signing out and
+     * forgetting the instance leave them be, and a stored value this build
+     * does not know reads as the default.
+     */
+    var appearance by mutableStateOf(Appearance.of(stored("appearance")))
+        private set
+    var density by mutableStateOf(Density.of(stored("density")))
+        private set
+
+    private fun stored(key: String): String? = runCatching { prefs.getString(key, null) }.getOrNull()
+
+    /** Light, dark or as the phone is: at once, and at the next launch. */
+    fun choose(appearance: Appearance) {
+        this.appearance = appearance
+        prefs.edit().putString("appearance", appearance.stored).apply()
+    }
+
+    /** How much room messages take: at once, and at the next launch. */
+    fun choose(density: Density) {
+        this.density = density
+        prefs.edit().putString("density", density.stored).apply()
+    }
+
+    /**
+     * A look for this launch only, which a debug build takes from the
+     * launch intent's LUMIA_DEV_APPEARANCE and LUMIA_DEV_DENSITY
+     * (scripts/smoke.sh draws the dark theme and the compact channel so).
+     * Nothing is stored: the launch after it is as the phone chose.
+     */
+    fun wear(appearance: Appearance?, density: Density?) {
+        if (appearance != null) this.appearance = appearance
+        if (density != null) this.density = density
+    }
 
     /**
      * Reopens the saved instance at launch, straight into the app when signed

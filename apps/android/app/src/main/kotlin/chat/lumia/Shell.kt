@@ -1,7 +1,8 @@
 // The app shell on a phone: the rail beside a sidebar (Home's
 // conversations and tiles, or a server's channels) as the root, and every
 // other screen a floating panel pushed over it; a stack of screens the
-// back button pops. Mirrors the iOS ShellView.
+// back button pops. Mirrors the iOS ShellView. The rail's own avatar opens
+// the account's menu (profile, preferences, devices), as the web's does.
 package chat.lumia
 
 import androidx.activity.compose.BackHandler
@@ -106,6 +107,7 @@ fun Shell(store: AppStore, session: LumiaSession, devScreen: String?) {
                 "requests" -> { place = Place.Home; stack = listOf(Screen.Requests) }
                 "devices" -> { place = Place.Home; stack = listOf(Screen.Devices) }
                 "profile" -> { place = Place.Home; stack = listOf(Screen.Profile) }
+                "preferences" -> { place = Place.Home; stack = listOf(Screen.Preferences) }
                 "new" -> { place = Place.Home; stack = listOf(Screen.NewMessage) }
                 "add" -> { place = Place.Home; stack = listOf(Screen.AddServer) }
                 "newchannel" -> { place = Place.Server(first); stack = listOf(Screen.NewChannel(first)) }
@@ -121,7 +123,7 @@ fun Shell(store: AppStore, session: LumiaSession, devScreen: String?) {
 
     when (val top = stack.lastOrNull()) {
         null -> Row(Modifier.fillMaxSize().background(LumiaTokens.bg.color)) {
-            PhoneRail(session, place, onAdd = { push(Screen.AddServer) }, onProfile = { push(Screen.Profile) }) { place = it }
+            PhoneRail(session, place, onAdd = { push(Screen.AddServer) }, onAccount = push) { place = it }
             when (val p = place) {
                 Place.Home -> HomeScreen(store, session, push)
                 is Place.Server -> {
@@ -130,11 +132,13 @@ fun Shell(store: AppStore, session: LumiaSession, devScreen: String?) {
                 }
             }
         }
-        is Screen.Conversation -> ConversationScreen(session, top.id, pop)
-        is Screen.Channel -> ChannelScreen(session, top.id, pop)
+        // A conversation's messages take the room Preferences chose for them.
+        is Screen.Conversation -> ConversationScreen(session, top.id, store.density, pop)
+        is Screen.Channel -> ChannelScreen(session, top.id, store.density, pop)
         Screen.Requests -> RequestsScreen(session, pop, replace)
         Screen.Devices -> DevicesScreen(store, session, pop)
         Screen.Profile -> ProfileScreen(store, session, pop)
+        Screen.Preferences -> PreferencesScreen(store, pop)
         Screen.NewMessage -> NewMessageScreen(session, pop, replace)
         Screen.AddServer -> AddServerScreen(session, pop) { id -> replace(emptyList()); place = Place.Server(id) }
         is Screen.NewChannel -> NewChannelScreen(session, servers.firstOrNull { it.serverId == top.serverId }, pop) { id -> place = Place.Server(top.serverId); replace(listOf(Screen.Channel(id))) }

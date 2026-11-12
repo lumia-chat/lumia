@@ -1,5 +1,6 @@
 // The screens pushed over the rail and sidebar, each a floating panel: a
-// conversation, a channel, requests, a new message, devices. The same
+// conversation, a channel, requests, a new message, the person's profile,
+// preferences, devices. The same
 // states, wording and error handling as the web's and the Apple apps'.
 package chat.lumia
 
@@ -55,7 +56,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import chat.lumia.kit.AppStore
+import chat.lumia.kit.Appearance
 import chat.lumia.kit.AvatarTone
+import chat.lumia.kit.Density
 import chat.lumia.kit.LumiaAvatar
 import chat.lumia.kit.LumiaComposer
 import chat.lumia.kit.LumiaDayDivider
@@ -72,6 +75,7 @@ import chat.lumia.kit.LumiaSecondaryButton
 import chat.lumia.kit.LumiaSession
 import chat.lumia.kit.LumiaTokens
 import chat.lumia.kit.LumiaTypingLine
+import chat.lumia.kit.Measures
 import chat.lumia.kit.NoticeTone
 import chat.lumia.kit.Route
 import chat.lumia.kit.SectionTitle
@@ -98,8 +102,9 @@ import chat.lumia.kit.LumiaChoice
 // Conversation
 
 @Composable
-fun ConversationScreen(session: LumiaSession, channelId: String, back: () -> Unit) {
+fun ConversationScreen(session: LumiaSession, channelId: String, density: Density, back: () -> Unit) {
     val scope = rememberCoroutineScope()
+    val measures = Measures.of(density)
     var draft by rememberSaveable { mutableStateOf("") }
     var error by rememberSaveable { mutableStateOf("") }
     val channel = session.snapshot?.channels?.firstOrNull { it.channelId == channelId }
@@ -145,10 +150,10 @@ fun ConversationScreen(session: LumiaSession, channelId: String, back: () -> Uni
                         if (log != null && log.undecryptable > 0u) LumiaNotice(Icons.Filled.Lock, text = "${log.undecryptable} could not be decrypted.")
                     }
                 }
-                if (log != null && log.messages.isNotEmpty()) item { LumiaDayDivider("Messages") }
+                if (log != null && log.messages.isNotEmpty()) item { LumiaDayDivider("Messages", measures) }
                 itemsIndexed(sent, key = { _, m -> m.messageId }) { i, m ->
                     val who = if (m.mine) session.selfName else if (m.senderAccountId.isNotEmpty() || others.size != 1) session.nameOf(m.senderAccountId) else session.nameOf(others[0])
-                    LumiaMessageRow(who, AvatarTone.of(senderOf(m)), timeOfMicros(m.sentAtMicros), m.body, m.deleted, places[i])
+                    LumiaMessageRow(who, AvatarTone.of(senderOf(m)), timeOfMicros(m.sentAtMicros), m.body, m.deleted, places[i], measures)
                 }
                 if (error.isNotEmpty()) item { LumiaErrorText(error) }
             }
@@ -171,8 +176,9 @@ fun ConversationScreen(session: LumiaSession, channelId: String, back: () -> Uni
 // Channel
 
 @Composable
-fun ChannelScreen(session: LumiaSession, channelId: String, back: () -> Unit) {
+fun ChannelScreen(session: LumiaSession, channelId: String, density: Density, back: () -> Unit) {
     val scope = rememberCoroutineScope()
+    val measures = Measures.of(density)
     var draft by rememberSaveable { mutableStateOf("") }
     var error by rememberSaveable { mutableStateOf("") }
     val channel = session.snapshot?.channels?.firstOrNull { it.channelId == channelId }
@@ -189,9 +195,9 @@ fun ChannelScreen(session: LumiaSession, channelId: String, back: () -> Unit) {
         Column(Modifier.fillMaxSize().imePadding()) {
             LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth(), contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = LumiaTokens.space8)) {
                 if (messages.isEmpty()) item { LumiaEmptyState(Icons.Filled.ChatBubbleOutline, "Nothing here yet", "Say something.") }
-                else item { LumiaDayDivider("Today") }
+                else item { LumiaDayDivider("Today", measures) }
                 itemsIndexed(messages, key = { _, m -> m.messageId }) { i, m ->
-                    LumiaMessageRow(session.nameOf(m.authorAccountId), AvatarTone.of(m.authorAccountId), timeOfMicros(m.createdAtMicros), m.body, m.deleted, places[i])
+                    LumiaMessageRow(session.nameOf(m.authorAccountId), AvatarTone.of(m.authorAccountId), timeOfMicros(m.createdAtMicros), m.body, m.deleted, places[i], measures)
                 }
                 if (error.isNotEmpty()) item { LumiaErrorText(error) }
             }
@@ -695,6 +701,40 @@ fun ProfileScreen(store: AppStore, session: LumiaSession, back: () -> Unit) {
                 }
             } else if (!session.hasIdentity) {
                 LumiaNotice(Icons.Filled.Shield, NoticeTone.ACCENT, action = "Link this phone" to { store.route = Route.LINK }, text = "Your profile travels with your identity, signed by its devices. This phone holds no device key yet; a device you already use approves it.")
+            }
+        }
+    }
+}
+
+// Preferences
+
+/**
+ * How Lumia looks on this phone: light or dark (or as the phone is), and
+ * how much room messages take. Each choice takes effect as it is made and
+ * is there at the next launch; they are this phone's and not the
+ * account's, so nothing here is sent to the instance and signing out
+ * leaves them be (`AppStore`). The desktop's page (its scroll bar card is
+ * a Mac's alone: a phone's scroll indicators are the system's); no board
+ * draws it, so it is the Profile screen's cards with the choice Profile's
+ * status has.
+ */
+@Composable
+fun PreferencesScreen(store: AppStore, back: () -> Unit) {
+    PanelScreen(back = "Home", onBack = back, title = "Preferences", subtitle = "How Lumia looks on this phone") {
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).navigationBarsPadding().padding(LumiaTokens.space16), verticalArrangement = Arrangement.spacedBy(LumiaTokens.space12)) {
+            LumiaCard("Appearance", "Light, dark, or whichever this phone is in.") {
+                LumiaChoice(
+                    listOf(Appearance.LIGHT.stored to "Light", Appearance.DARK.stored to "Dark", Appearance.SYSTEM.stored to "System"),
+                    store.appearance.stored,
+                    { store.choose(Appearance.of(it)) },
+                )
+            }
+            LumiaCard("Messages", "Comfortable gives each message room. Compact shows more of a conversation at once.") {
+                LumiaChoice(
+                    listOf(Density.COMFORTABLE.stored to "Comfortable", Density.COMPACT.stored to "Compact"),
+                    store.density.stored,
+                    { store.choose(Density.of(it)) },
+                )
             }
         }
     }

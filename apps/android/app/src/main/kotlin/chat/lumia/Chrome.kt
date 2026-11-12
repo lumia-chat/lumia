@@ -26,18 +26,32 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import chat.lumia.kit.AvatarTone
 import chat.lumia.kit.LumiaAvatar
 import chat.lumia.kit.LumiaIconButton
@@ -58,6 +72,7 @@ sealed class Screen {
     data object Requests : Screen()
     data object Devices : Screen()
     data object Profile : Screen()
+    data object Preferences : Screen()
     data object NewMessage : Screen()
     data object AddServer : Screen()
     data class NewChannel(val serverId: String) : Screen()
@@ -65,7 +80,7 @@ sealed class Screen {
 }
 
 @Composable
-fun PhoneRail(session: LumiaSession, place: Place, onAdd: () -> Unit, onProfile: () -> Unit, onPlace: (Place) -> Unit) {
+fun PhoneRail(session: LumiaSession, place: Place, onAdd: () -> Unit, onAccount: (Screen) -> Unit, onPlace: (Place) -> Unit) {
     val servers = session.snapshot?.servers ?: emptyList()
     Column(
         modifier = Modifier.width(LumiaTokens.railWidth).fillMaxHeight().background(LumiaTokens.rail.color).statusBarsPadding().padding(top = LumiaTokens.space8, bottom = LumiaTokens.space12),
@@ -85,8 +100,69 @@ fun PhoneRail(session: LumiaSession, place: Place, onAdd: () -> Unit, onProfile:
             Icon(Icons.Filled.Add, contentDescription = null, tint = LumiaTokens.inkSecondary.color, modifier = Modifier.size(20.dp))
         }
         Spacer(Modifier.weight(1f))
-        Box(Modifier.clip(CircleShape).clickable(onClick = onProfile).semantics { contentDescription = session.selfName + ", open profile" }) {
+        AccountMenu(session, onAccount)
+    }
+}
+
+/** The design's compact menu is this wide (`.lu-menu--compact`); `tokens.json` has no name for it. */
+private val MenuWidth = 220.dp
+
+/**
+ * The rail's own avatar and the menu it opens: the account's own things, as
+ * the web's and the desktop's account menu has them and in their order.
+ * No board draws a phone's; it is the design's menu (a surface with a
+ * strong line, rows of a glyph and a label) beside the avatar as the web
+ * places it, its foot level with the avatar's or as near that as the
+ * system's bar lets a popup come. A tap elsewhere or the back button
+ * closes it.
+ */
+@Composable
+private fun AccountMenu(session: LumiaSession, onOpen: (Screen) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    val shape = RoundedCornerShape(LumiaTokens.radius14)
+    // Past the rail's edge: the avatar is in the middle of it.
+    val beside = with(LocalDensity.current) { (LumiaTokens.avatarSelf + (LumiaTokens.railWidth - LumiaTokens.avatarSelf) / 2 + LumiaTokens.space8).roundToPx() }
+    Box {
+        Box(
+            Modifier.clip(CircleShape).clickable(onClickLabel = "open the menu", role = Role.Button) { open = true }
+                .semantics { contentDescription = session.selfName + ", your account" },
+        ) {
             LumiaAvatar(initialsOf(session.selfName), AvatarTone.of(session.me), LumiaTokens.avatarSelf)
+        }
+        if (open) {
+            Popup(alignment = Alignment.BottomStart, offset = IntOffset(beside, 0), onDismissRequest = { open = false }, properties = PopupProperties(focusable = true)) {
+                Column(
+                    Modifier
+                        .width(MenuWidth)
+                        // A popup draws a shadow only so far past its own edge: a deeper one is cut off square.
+                        .shadow(LumiaTokens.space4, shape)
+                        .background(LumiaTokens.surface.color, shape)
+                        .border(1.dp, LumiaTokens.lineStrong.color, shape)
+                        .padding(LumiaTokens.space6)
+                        .semantics { paneTitle = "Your account" },
+                    verticalArrangement = Arrangement.spacedBy(LumiaTokens.space2),
+                ) {
+                    for ((icon, label, screen) in listOf(
+                        Triple(Icons.Filled.Person, "View profile", Screen.Profile),
+                        Triple(Icons.Filled.Tune, "Preferences", Screen.Preferences),
+                        Triple(Icons.Filled.Shield, "Devices", Screen.Devices),
+                    )) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(LumiaTokens.controlHeight)
+                                .clip(RoundedCornerShape(LumiaTokens.radius8))
+                                .clickable(role = Role.Button) { open = false; onOpen(screen) }
+                                .padding(horizontal = LumiaTokens.space10),
+                            horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space10),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(icon, contentDescription = null, tint = LumiaTokens.inkBody.color, modifier = Modifier.size(18.dp))
+                            Text(label, style = LumiaTokens.textCompact.style, color = LumiaTokens.inkBody.color)
+                        }
+                    }
+                }
+            }
         }
     }
 }

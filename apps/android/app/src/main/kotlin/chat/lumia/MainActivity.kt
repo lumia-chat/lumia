@@ -8,26 +8,38 @@
 package chat.lumia
 
 import android.content.Intent
+import android.graphics.Color
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import chat.lumia.kit.AppStore
-import chat.lumia.kit.LumiaInk
+import chat.lumia.kit.Appearance
+import chat.lumia.kit.Density
+import chat.lumia.kit.LumiaTheme
 import chat.lumia.kit.LumiaTokens
 import chat.lumia.kit.PushRegistrar
 import chat.lumia.kit.PushTarget
 import chat.lumia.kit.Route
 import chat.lumia.push.PushSetup
 import java.io.File
+
+// The scrims enableEdgeToEdge puts behind a navigation bar of three buttons
+// where the system draws none of its own: the activity library's defaults,
+// which it does not name for a caller that passes a style.
+private val BAR_SCRIM_LIGHT = Color.argb(0xe6, 0xFF, 0xFF, 0xFF)
+private val BAR_SCRIM_DARK = Color.argb(0x80, 0x1b, 0x1b, 0x1b)
 
 class MainActivity : ComponentActivity() {
     private lateinit var store: AppStore
@@ -43,16 +55,31 @@ class MainActivity : ComponentActivity() {
         browserReturn(intent)?.let { store.browserReturn = it }
         // A debug build signs in from the launch intent's extras, for the
         // smoke run (scripts/smoke.sh): LUMIA_DEV_INSTANCE, _HANDLE, _PASSWORD, _SCREEN.
+        // LUMIA_DEV_APPEARANCE (light, dark, system) and LUMIA_DEV_DENSITY
+        // (comfortable, compact) are how that launch looks, and are not kept.
         val dev = if (BuildConfig.DEBUG) {
-            listOf("LUMIA_DEV_INSTANCE", "LUMIA_DEV_HANDLE", "LUMIA_DEV_PASSWORD", "LUMIA_DEV_SCREEN")
+            listOf("LUMIA_DEV_INSTANCE", "LUMIA_DEV_HANDLE", "LUMIA_DEV_PASSWORD", "LUMIA_DEV_SCREEN", "LUMIA_DEV_APPEARANCE", "LUMIA_DEV_DENSITY")
                 .mapNotNull { key -> intent.getStringExtra(key)?.let { key to it } }.toMap()
         } else emptyMap()
+        store.wear(Appearance.named(dev["LUMIA_DEV_APPEARANCE"]), Density.named(dev["LUMIA_DEV_DENSITY"]))
         setContent {
             LaunchedEffect(Unit) {
                 store.reopen(dev)
                 if (BuildConfig.DEBUG && dev["LUMIA_DEV_SCREEN"] == "notify") notifyStandIn()
             }
-            LumiaInk { Root(store, devScreen = dev["LUMIA_DEV_SCREEN"]) }
+            // Preferences' appearance, for every screen: the one chosen, or
+            // the phone's as it changes. The system bars' icons go with it,
+            // dark on a light app and light on a dark one, which the first
+            // enableEdgeToEdge above took from the phone alone.
+            val dark = store.appearance.dark(isSystemInDarkTheme())
+            DisposableEffect(dark) {
+                enableEdgeToEdge(
+                    statusBarStyle = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT) { dark },
+                    navigationBarStyle = SystemBarStyle.auto(BAR_SCRIM_LIGHT, BAR_SCRIM_DARK) { dark },
+                )
+                onDispose {}
+            }
+            LumiaTheme(dark) { Root(store, devScreen = dev["LUMIA_DEV_SCREEN"]) }
         }
     }
 
