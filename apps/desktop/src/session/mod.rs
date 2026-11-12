@@ -308,6 +308,19 @@ impl Session {
         self.runtime.spawn(async move { mailbox.post(work.await) });
     }
 
+    /// [`Session::task`] for a call whose future is not `Send`: the core's identity and
+    /// personal-conversation calls hold a store connection across their awaits. `make`
+    /// builds the future on a blocking thread of the runtime, which then drives it there.
+    pub(crate) fn task_local<F: Future<Output = Update>>(
+        &self,
+        make: impl FnOnce() -> F + Send + 'static,
+    ) {
+        let mailbox = self.mailbox.clone();
+        let runtime = self.runtime.handle().clone();
+        self.runtime
+            .spawn_blocking(move || mailbox.post(runtime.block_on(make())));
+    }
+
     /// The open instance's client, for a call a submodule makes.
     pub(crate) fn client(&self) -> Option<Arc<App>> {
         self.app.clone()

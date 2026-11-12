@@ -12,6 +12,11 @@ pub struct Account {}
 
 impl State {
     pub(super) fn react_identity(&mut self, update: &IdentityUpdate) {
-        match *update {}
+        // No screen shows these yet.
+        match update {
+            IdentityUpdate::LinkRequested(_)
+            | IdentityUpdate::Linked(_)
+            | IdentityUpdate::Roster(_) => {}
+        }
     }
 }
