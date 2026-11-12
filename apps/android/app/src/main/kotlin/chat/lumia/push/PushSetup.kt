@@ -2,7 +2,9 @@
 // notification permission is asked for, then a UnifiedPush distributor is
 // used when one is installed (the saved one, else the system's default
 // through its picker), and FCM otherwise, when the build carries a
-// Firebase project. Each path ends in PushRegistrar.subscribe.
+// Firebase project. Each path ends in PushRegistrar.subscribe. Once per
+// sign-in: a session that is over lets the next one register again, which
+// hands the endpoint or token over again for PushRegistrar to send.
 package chat.lumia.push
 
 import android.Manifest
@@ -22,7 +24,17 @@ class PushSetup(private val activity: ComponentActivity) {
     private val permission = activity.registerForActivityResult(ActivityResultContracts.RequestPermission()) { registerTransport() }
     private var registered = false
 
-    /** Asks for permission (once) and registers a transport; best effort. */
+    /**
+     * The session is over, signed out of or ended by the instance: the
+     * next sign-in registers again. The distributor and FCM answer a
+     * second registration with the endpoint or token they already gave,
+     * and PushRegistrar, which forgot what it had sent, sends it again.
+     */
+    fun signedOut() {
+        registered = false
+    }
+
+    /** Asks for permission (once per sign-in) and registers a transport; best effort. */
     fun register() {
         if (registered) return
         registered = true

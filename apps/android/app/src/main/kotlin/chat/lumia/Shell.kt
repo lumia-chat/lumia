@@ -2,7 +2,8 @@
 // conversations and tiles, or a server's channels) as the root, and every
 // other screen a floating panel pushed over it; a stack of screens the
 // back button pops. Mirrors the iOS ShellView. The rail's own avatar opens
-// the account's menu (profile, preferences, devices), as the web's does.
+// the account's menu (profile, preferences, devices, and signing out), as
+// the web's does.
 package chat.lumia
 
 import androidx.activity.compose.BackHandler
@@ -123,7 +124,7 @@ fun Shell(store: AppStore, session: LumiaSession, devScreen: String?) {
 
     when (val top = stack.lastOrNull()) {
         null -> Row(Modifier.fillMaxSize().background(LumiaTokens.bg.color)) {
-            PhoneRail(session, place, onAdd = { push(Screen.AddServer) }, onAccount = push) { place = it }
+            PhoneRail(session, place, onAdd = { push(Screen.AddServer) }, onAccount = push, signingOut = store.signingOut, onSignOut = store::signOut) { place = it }
             when (val p = place) {
                 Place.Home -> HomeScreen(store, session, push)
                 is Place.Server -> {

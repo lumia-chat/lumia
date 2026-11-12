@@ -9,6 +9,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import java.io.File
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 /** What the app shows. */
 enum class Route { SIGN_IN, LINK, APP }
@@ -24,7 +28,10 @@ class AppStore(context: Context) {
         fun dataDirectory(context: Context): File = File(context.filesDir, "lumia")
     }
 
+    private val context = context.applicationContext
     private val prefs = context.getSharedPreferences("lumia", Context.MODE_PRIVATE)
+    /** The store's own: what is begun in it is not cut short by the screen that asked going away. */
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     val dataDirectory: File = dataDirectory(context)
 
     var session by mutableStateOf<LumiaSession?>(null)
@@ -38,6 +45,9 @@ class AppStore(context: Context) {
     var browserReturn by mutableStateOf<String?>(null)
     /** Whether the activity is resumed: then the app shows messages itself. */
     var foregrounded = false
+    /** Whether a sign-out the person chose is under way: the account menu is not offered on a session that is going. */
+    var signingOut by mutableStateOf(false)
+        private set
 
     init {
         current = this
@@ -119,15 +129,39 @@ class AppStore(context: Context) {
     fun open(url: String): LumiaSession {
         session?.stop()
         dataDirectory.mkdirs()
-        val s = LumiaSession(LumiaClient(url, dataDirectory))
+        val client = LumiaClient(url, dataDirectory)
+        // The phone's push subscription is kept in its preferences, which the store can reach.
+        val s = LumiaSession(client) { chosen -> PushRegistrar.left(context, client, chosen) }
         session = s
         savedInstance = url
         return s
     }
 
-    suspend fun signOut() {
-        session?.signOut()
-        route = Route.SIGN_IN
+    /**
+     * Signs out, as the account menu's last item does: this phone's push
+     * subscription is removed from the instance while the session can still
+     * ask, the session is revoked, its tokens and what was held of the
+     * account are forgotten (`LumiaSession.signOut`), and the sign-in
+     * screen is next, with no line: the person chose this. The saved
+     * instance stays, Preferences' choices stay, being the phone's, and so
+     * do the identity and this device's keys.
+     *
+     * Returns at once and happens in the store's own scope, so the menu
+     * closing or the shell going cannot stop it half-way. Once: nothing for
+     * a second tap while it is under way, or with no session signed in.
+     */
+    fun signOut() {
+        val s = session ?: return
+        if (signingOut || !s.signedIn) return
+        signingOut = true
+        scope.launch {
+            try {
+                s.signOut()
+                if (session === s) route = Route.SIGN_IN
+            } finally {
+                signingOut = false
+            }
+        }
     }
 
     fun forgetInstance() {

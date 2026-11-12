@@ -25,6 +25,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Login
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Shield
@@ -80,7 +81,7 @@ sealed class Screen {
 }
 
 @Composable
-fun PhoneRail(session: LumiaSession, place: Place, onAdd: () -> Unit, onAccount: (Screen) -> Unit, onPlace: (Place) -> Unit) {
+fun PhoneRail(session: LumiaSession, place: Place, onAdd: () -> Unit, onAccount: (Screen) -> Unit, signingOut: Boolean, onSignOut: () -> Unit, onPlace: (Place) -> Unit) {
     val servers = session.snapshot?.servers ?: emptyList()
     Column(
         modifier = Modifier.width(LumiaTokens.railWidth).fillMaxHeight().background(LumiaTokens.rail.color).statusBarsPadding().padding(top = LumiaTokens.space8, bottom = LumiaTokens.space12),
@@ -100,7 +101,7 @@ fun PhoneRail(session: LumiaSession, place: Place, onAdd: () -> Unit, onAccount:
             Icon(Icons.Filled.Add, contentDescription = null, tint = LumiaTokens.inkSecondary.color, modifier = Modifier.size(20.dp))
         }
         Spacer(Modifier.weight(1f))
-        AccountMenu(session, onAccount)
+        AccountMenu(session, onAccount, signingOut, onSignOut)
     }
 }
 
@@ -109,27 +110,32 @@ private val MenuWidth = 220.dp
 
 /**
  * The rail's own avatar and the menu it opens: the account's own things, as
- * the web's and the desktop's account menu has them and in their order.
- * No board draws a phone's; it is the design's menu (a surface with a
- * strong line, rows of a glyph and a label) beside the avatar as the web
- * places it, its foot level with the avatar's or as near that as the
- * system's bar lets a popup come. A tap elsewhere or the back button
- * closes it.
+ * the web's and the desktop's account menu has them and in their order,
+ * and under a rule the way out, "Sign out". No board draws a phone's; it
+ * is the design's menu (a surface with a strong line, rows of a glyph and
+ * a label) beside the avatar as the web places it, its foot level with the
+ * avatar's or as near that as the system's bar lets a popup come. A tap
+ * elsewhere or the back button closes it.
+ *
+ * Signing out asks nothing first, as on the web and the desktop: nothing
+ * goes that signing in does not bring back. The tap closes the menu, and
+ * the avatar opens none while the sign-out is under way: there is nothing
+ * to do with a session that is going.
  */
 @Composable
-private fun AccountMenu(session: LumiaSession, onOpen: (Screen) -> Unit) {
+private fun AccountMenu(session: LumiaSession, onOpen: (Screen) -> Unit, signingOut: Boolean, onSignOut: () -> Unit) {
     var open by remember { mutableStateOf(false) }
     val shape = RoundedCornerShape(LumiaTokens.radius14)
     // Past the rail's edge: the avatar is in the middle of it.
     val beside = with(LocalDensity.current) { (LumiaTokens.avatarSelf + (LumiaTokens.railWidth - LumiaTokens.avatarSelf) / 2 + LumiaTokens.space8).roundToPx() }
     Box {
         Box(
-            Modifier.clip(CircleShape).clickable(onClickLabel = "open the menu", role = Role.Button) { open = true }
+            Modifier.clip(CircleShape).clickable(enabled = !signingOut, onClickLabel = "open the menu", role = Role.Button) { open = true }
                 .semantics { contentDescription = session.selfName + ", your account" },
         ) {
             LumiaAvatar(initialsOf(session.selfName), AvatarTone.of(session.me), LumiaTokens.avatarSelf)
         }
-        if (open) {
+        if (open && !signingOut) {
             Popup(alignment = Alignment.BottomStart, offset = IntOffset(beside, 0), onDismissRequest = { open = false }, properties = PopupProperties(focusable = true)) {
                 Column(
                     Modifier
@@ -147,23 +153,34 @@ private fun AccountMenu(session: LumiaSession, onOpen: (Screen) -> Unit) {
                         Triple(Icons.Filled.Tune, "Preferences", Screen.Preferences),
                         Triple(Icons.Filled.Shield, "Devices", Screen.Devices),
                     )) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(LumiaTokens.controlHeight)
-                                .clip(RoundedCornerShape(LumiaTokens.radius8))
-                                .clickable(role = Role.Button) { open = false; onOpen(screen) }
-                                .padding(horizontal = LumiaTokens.space10),
-                            horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space10),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Icon(icon, contentDescription = null, tint = LumiaTokens.inkBody.color, modifier = Modifier.size(18.dp))
-                            Text(label, style = LumiaTokens.textCompact.style, color = LumiaTokens.inkBody.color)
-                        }
+                        MenuItem(icon, label) { open = false; onOpen(screen) }
                     }
+                    // The design's rule between a menu's groups (`.lu-menu__rule`).
+                    Box(Modifier.fillMaxWidth().padding(horizontal = LumiaTokens.space6, vertical = LumiaTokens.space4).height(1.dp).background(LumiaTokens.line.color))
+                    // `assets/icons/sign-out.svg` is an arrow into a bracket at its right,
+                    // which among Material's glyphs is the one it names Login.
+                    MenuItem(Icons.AutoMirrored.Filled.Login, "Sign out") { open = false; onSignOut() }
                 }
             }
         }
+    }
+}
+
+/** A row of the menu: a glyph and what it does, a button to TalkBack by its label. */
+@Composable
+private fun MenuItem(icon: ImageVector, label: String, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(LumiaTokens.controlHeight)
+            .clip(RoundedCornerShape(LumiaTokens.radius8))
+            .clickable(role = Role.Button, onClick = onClick)
+            .padding(horizontal = LumiaTokens.space10),
+        horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space10),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, contentDescription = null, tint = LumiaTokens.inkBody.color, modifier = Modifier.size(18.dp))
+        Text(label, style = LumiaTokens.textCompact.style, color = LumiaTokens.inkBody.color)
     }
 }
 

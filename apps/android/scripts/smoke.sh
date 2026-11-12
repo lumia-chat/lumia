@@ -12,9 +12,13 @@
 # channel is read as assistive technology has
 # it: each account's messages in a row are one block, and the second
 # account, typing through the CLI, is named under the composer until it
-# falls silent (protocol 6.7), in light and dark. Then push. Last, the
-# phone's session is revoked from elsewhere, and the app must go back to
-# sign-in and say so. The emulator reaches the host's instance at 10.0.2.2.
+# falls silent (protocol 6.7), in light and dark. Then push. Then signing
+# out from the account menu: the phone's push subscription and its session
+# must be gone from the instance, the sign-in screen must say nothing of
+# it, a push that still arrives must show nothing, and signing in again
+# must subscribe again. Last, the phone's session is revoked from
+# elsewhere, and the app must go back to sign-in and say so. The emulator
+# reaches the host's instance at 10.0.2.2.
 #
 #   scripts/smoke.sh            # expects the app built (gradle assembleDebug) and the CLI, and an emulator or device on adb
 #   LUMIA_INSTANCE=http://localhost:4000 scripts/smoke.sh
@@ -92,15 +96,24 @@ count() { # <text> <pattern>: how many times
 }
 # One fact about the first thing on screen whose text or description is the
 # one named: where its middle is, whether it is the choice made (a radio
-# button that is checked), or how far down the screen it starts.
-node() { # <text or description> <middle|chosen|top>
+# button that is checked), how far down the screen it starts, or whether a
+# screen reader has it as a button (Compose gives what takes the tap a node
+# of the Button class beside the text, inside the one that is clickable).
+node() { # <text or description> <middle|chosen|top|button>
   ui | python3 -c '
 import re, sys
 want, fact = sys.argv[1], sys.argv[2]
-for node in re.findall(r"<node [^>]*>", sys.stdin.read()):
+nodes = re.findall(r"<node [^>]*>", sys.stdin.read())
+def box(node):
+    return tuple(int(n) for n in re.search(r"bounds=\"\[(\d+),(\d+)\]\[(\d+),(\d+)\]\"", node).groups())
+def within(a, b):
+    return a[0] >= b[0] and a[1] >= b[1] and a[2] <= b[2] and a[3] <= b[3]
+for node in nodes:
     if "text=\"%s\"" % want in node or "content-desc=\"%s\"" % want in node:
-        x0, y0, x1, y1 = (int(n) for n in re.search(r"bounds=\"\[(\d+),(\d+)\]\[(\d+),(\d+)\]\"", node).groups())
-        print({"middle": "%d %d" % ((x0 + x1) // 2, (y0 + y1) // 2), "chosen": "yes" if "checked=\"true\"" in node else "no", "top": y0}[fact])
+        x0, y0, x1, y1 = box(node)
+        taps = sorted((box(n) for n in nodes if "clickable=\"true\"" in n and within(box(node), box(n))), key=lambda b: (b[2] - b[0]) * (b[3] - b[1]))
+        button = bool(taps) and any("class=\"android.widget.Button\"" in n and within(box(n), taps[0]) for n in nodes)
+        print({"middle": "%d %d" % ((x0 + x1) // 2, (y0 + y1) // 2), "chosen": "yes" if "checked=\"true\"" in node else "no", "top": y0, "button": "yes" if button else "no"}[fact])
         break
 ' "$1" "$2"
 }
@@ -114,6 +127,28 @@ tap() { # <text or description>
 # What the app has stored on the phone beside the saved instance.
 stored() {
   "$adb" shell run-as "$bundle" cat shared_prefs/lumia.xml 2>/dev/null || true
+}
+# What the phone remembers of the push subscriptions it has sent.
+marks() {
+  "$adb" shell run-as "$bundle" cat shared_prefs/push.xml 2>/dev/null || true
+}
+field() { python3 -c "import sys, json; d = json.load(sys.stdin); print($1)"; }
+# A session of the script's own beside the phone's, over HTTP: its token.
+sign_in() {
+  curl -s -H "content-type: application/json" -H "accept: application/json" -d "{\"handleOrEmail\":\"$handle\",\"password\":\"$password\"}" "$instance/api/v1/auth/sign-in/password" | field 'd["accessToken"]'
+}
+# The account's sessions as the instance lists them for <token>: an id and its device a line.
+sessions() { # <token>
+  curl -s -H "accept: application/json" -H "authorization: Bearer $1" "$instance/api/v1/sessions" | field '"\n".join(sorted(s["sessionId"] + " " + s.get("deviceId", "") for s in d.get("sessions", [])))'
+}
+# The lines of the first list that the second does not have.
+missing() { # <list> <list>
+  printf '%s\n' "$1" | while read -r line; do
+    [ -z "$line" ] || printf '%s\n' "$2" | grep -qxF "$line" || echo "$line"
+  done
+}
+lines() { # <list>: how many
+  printf '%s' "$1" | grep -c . || true
 }
 # The room the channel's first messages take: how far under the first the
 # one sent after the others starts.
@@ -153,6 +188,11 @@ case "$(stored)" in *appearance*|*density*) echo "FAIL: a launch's LUMIA_DEV_APP
 launch home 7
 tap "$handle, your account"
 shot account
+# The menu's last item is the way out, under the rest, and a button named "Sign out" to a screen reader.
+[ "$(node "Sign out" button)" = yes ] || { echo "FAIL: the account menu has no button named \"Sign out\"; see $work/account.png"; exit 1; }
+for item in "View profile" Preferences Devices; do
+  [ "$(node "Sign out" top)" -gt "$(node "$item" top)" ] || { echo "FAIL: Sign out is not under $item in the account menu; see $work/account.png"; exit 1; }
+done
 tap Preferences
 case "$(ui)" in *"How Lumia looks on this phone"*) ;; *) echo "FAIL: the account menu did not lead to Preferences; see $work/account.png"; exit 1 ;; esac
 [ "$(node System chosen)" = yes ] && [ "$(node Comfortable chosen)" = yes ] \
@@ -253,17 +293,157 @@ ui | grep -q "# general" || { echo "FAIL: the tap did not open the channel; see 
 "$adb" shell am force-stop "$bundle" >/dev/null 2>&1 || true
 echo "  push: $work/notify.png (the notification), $work/opened.png (the channel it opened)"
 
+# Signing out, from the account menu, as a person does it. For the script
+# to see the phone's push subscription held and then gone, the phone is
+# given an endpoint the script listens on (LUMIA_DEV_PUSH, a distributor's
+# stand-in): the instance posts its notice there for a mention while the
+# phone has no live session, and must stop once the phone has signed out.
+: > "$work/pushes.log"
+port=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+python3 -c '
+import sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+class Push(BaseHTTPRequestHandler):
+    def do_POST(self):
+        body = self.rfile.read(int(self.headers.get("content-length") or 0))
+        with open(sys.argv[2], "a") as log:
+            log.write(self.path + " " + body.decode("utf-8", "replace").replace("\n", " ") + "\n")
+        self.send_response(201)
+        self.end_headers()
+    def log_message(self, *args):
+        pass
+HTTPServer(("127.0.0.1", int(sys.argv[1])), Push).serve_forever()
+' "$port" "$work/pushes.log" &
+listener=$!
+hush() { kill "$listener" 2>/dev/null || true; wait "$listener" 2>/dev/null || true; }
+trap hush EXIT
+endpoint="http://127.0.0.1:$port/phone-$stamp"
+pushes() { wc -l < "$work/pushes.log" | tr -d ' '; }
+mention() { "$cli" --data-dir "$other" send "$channel" "$1" --mention "$me" >/dev/null; }
+subscribed() { # whether the phone remembers sending the endpoint, within ten seconds
+  for _ in $(seq 1 10); do
+    case "$(marks)" in *unified_push*"$endpoint"*) return 0 ;; esac
+    sleep 1
+  done
+  return 1
+}
+pushed() { # <count>: whether the instance has posted that many notices, within twenty seconds
+  for _ in $(seq 1 20); do
+    [ "$(pushes)" -ge "$1" ] && return 0
+    sleep 1
+  done
+  return 1
+}
+launch home 10 --es LUMIA_DEV_PUSH "$endpoint"
+subscribed || { echo "FAIL: a launch given an endpoint did not subscribe the phone with it"; exit 1; }
+"$adb" shell am force-stop "$bundle" >/dev/null 2>&1 || true
+sleep 2
+mention "Signed in and away, the phone is sent a notice $stamp"
+# An instance that cannot reach this machine's loopback (one that is not
+# on it) posts nowhere the script can see: then only the phone's side of
+# the subscription is checked, and the last line says so.
+held=""
+pushed 1 && held=yes
+token=$(sign_in)
+before=$(sessions "$token")
+# The menu in the dark theme, for the eye; the back button closes it and leaves the shell.
+launch home 7 --es LUMIA_DEV_APPEARANCE dark
+tap "$handle, your account"
+shot account-dark
+"$adb" shell input keyevent 4
+sleep 1
+seen=$(ui)
+case "$seen" in *'text="Sign out"'*) echo "FAIL: the back button did not close the account menu"; exit 1 ;; esac
+case "$seen" in *"$handle, your account"*) ;; *) echo "FAIL: the back button closed more than the account menu"; exit 1 ;; esac
+launch home 10
+case "$(ui)" in *'text="connected"'*) ;; *) echo "FAIL: the app was not connected before signing out"; exit 1 ;; esac
+tap "$handle, your account"
+tap "Sign out"
+out=""
+for _ in $(seq 1 20); do
+  seen=$(ui)
+  case "$seen" in *"Welcome back"*) out=yes; break ;; esac
+  sleep 1
+done
+shot signed-out
+[ -n "$out" ] || { echo "FAIL: Sign out did not lead to the sign-in screen; see $work/signed-out.png"; exit 1; }
+# The line is for a session the instance ended, not for one the person chose to end.
+case "$seen" in *"You were signed out"*) echo "FAIL: the sign-in screen after signing out says the phone was signed out; see $work/signed-out.png"; exit 1 ;; esac
+# On the instance: one session fewer, the phone's, and no other change.
+after=$(sessions "$token")
+gone=$(missing "$before" "$after")
+[ "$(lines "$gone")" = 1 ] && [ -z "$(missing "$after" "$before")" ] \
+  || { echo "FAIL: signing out did not end the phone's session on the instance, and only that (before: $before; after: $after)"; exit 1; }
+# On the phone: the subscription it sent is forgotten; the instance and the preferences are the phone's and stay.
+case "$(marks)" in *unified_push*) echo "FAIL: the phone signed out and still remembers the subscription it sent"; exit 1 ;; esac
+kept=$(stored)
+case "$kept" in *'"instance">'*) ;; *) echo "FAIL: signing out took the saved instance with it"; exit 1 ;; esac
+case "$kept" in *'"appearance">system<'*'"density">comfortable<'*|*'"density">comfortable<'*'"appearance">system<'*) ;; *) echo "FAIL: signing out took the phone's preferences with it"; exit 1 ;; esac
+# The launch after it is the sign-in screen, with nothing to say.
+"$adb" shell am force-stop "$bundle" >/dev/null 2>&1 || true
+"$adb" shell am start -W -n "$bundle/.MainActivity" >/dev/null
+sleep 6
+seen=$(ui)
+case "$seen" in *"You were signed out"*) echo "FAIL: the launch after signing out says the phone was signed out"; exit 1 ;; esac
+case "$seen" in *"Welcome back"*) ;; *) echo "FAIL: the launch after signing out is not the sign-in screen"; exit 1 ;; esac
+# The instance sends the signed-out phone nothing: the same mention as
+# before, and no notice for it in the time the first took several times over.
+sent=$(pushes)
+mention "Signed out, the phone is sent nothing $stamp"
+sleep 10
+[ "$(pushes)" = "$sent" ] || { echo "FAIL: the instance still sent the signed-out phone a notice; see $work/pushes.log"; exit 1; }
+# And a push that reaches it all the same (a subscription the instance
+# could not be asked to drop) shows nothing, the generic notice neither:
+# the receivers' stand-in again, signed out this time.
+"$adb" shell run-as "$bundle" rm -f files/lumia/notification.txt >/dev/null 2>&1 || true
+"$adb" shell am force-stop "$bundle" >/dev/null 2>&1 || true
+"$adb" shell am start -W -n "$bundle/.MainActivity" --es LUMIA_DEV_SCREEN notify >/dev/null
+content=""
+for _ in $(seq 1 20); do
+  content=$("$adb" shell run-as "$bundle" cat files/lumia/notification.txt 2>/dev/null || true)
+  [ -n "$content" ] && break
+  sleep 1
+done
+sleep 2
+[ "$content" = none ] || { echo "FAIL: a push for the signed-out phone found something to say: $content"; exit 1; }
+posted=$("$adb" shell dumpsys notification --noredact 2>/dev/null | grep -c "NotificationRecord.*pkg=$bundle " || true)
+[ "${posted:-0}" = 0 ] || { echo "FAIL: a push for the signed-out phone posted a notification"; exit 1; }
+case "$(ui)" in *"Welcome back"*) ;; *) echo "FAIL: a push for the signed-out phone took it off the sign-in screen"; exit 1 ;; esac
+# Signing in again subscribes again, with the endpoint the phone had sent
+# before and forgot having sent, from the device it was: the identity and
+# the device's keys stayed. And the instance sends it notices again.
+launch home 10 --es LUMIA_DEV_PUSH "$endpoint"
+subscribed || { echo "FAIL: the phone signed in again and did not subscribe again"; exit 1; }
+again=$(missing "$(sessions "$token")" "$after")
+[ "$(lines "$again")" = 1 ] && [ "${again#* }" = "${gone#* }" ] && [ -n "${gone#* }" ] \
+  || { echo "FAIL: the phone signed in again and is not the device it was (was: $gone; is: $again)"; exit 1; }
+"$adb" shell am force-stop "$bundle" >/dev/null 2>&1 || true
+sleep 2
+[ "$(pushes)" = "$sent" ] || { echo "FAIL: a notice for the signed-out phone arrived late; see $work/pushes.log"; exit 1; }
+mention "Signed in again and away, the phone is sent a notice $stamp"
+if [ -n "$held" ]; then
+  pushed $((sent + 1)) || { echo "FAIL: the phone signed in again and the instance sent it no notice; see $work/pushes.log"; exit 1; }
+  subscription="the instance sent the phone a notice before, none while it was signed out, and one after it signed in again"
+else
+  subscription="the instance did not reach the script's listener at $endpoint, so the subscription's removal was checked on the phone only"
+fi
+hush
+echo "  signed out: $work/account-dark.png (the menu, dark), $work/signed-out.png (the sign-in screen, which said nothing of it; the session was gone from the instance; $subscription; a push that still arrived showed nothing; the next launch was sign-in; the phone's preferences and its device were kept)"
+
 # A session revoked from elsewhere (protocol 12), as "sign out everywhere"
 # or a reused refresh token does it: the gateway is told and its loop ends,
 # the app asks for the snapshot, is refused, and goes back to the sign-in
 # screen, which says what happened. The tokens went with the session, so
 # the launch after that is the sign-in screen and says nothing. Last,
 # because the phone's account loses every session it had: the script signs
-# in beside them over HTTP and revokes each of the others.
+# in beside them over HTTP and revokes each of the others. The phone was
+# subscribed when it signed in again above; a session ended for it cannot
+# ask the instance to drop that, and what the phone remembered sending is
+# forgotten all the same, so the next sign-in sends it again.
 launch home 10
 case "$(ui)" in *'text="connected"'*) ;; *) echo "FAIL: the app was not connected before its session was revoked"; exit 1 ;; esac
-field() { python3 -c "import sys, json; d = json.load(sys.stdin); print($1)"; }
-token=$(curl -s -H "content-type: application/json" -H "accept: application/json" -d "{\"handleOrEmail\":\"$handle\",\"password\":\"$password\"}" "$instance/api/v1/auth/sign-in/password" | field 'd["accessToken"]')
+case "$(marks)" in *unified_push*) ;; *) echo "FAIL: the phone signed in again does not remember the subscription it sent"; exit 1 ;; esac
+token=$(sign_in)
 others=$(curl -s -H "accept: application/json" -H "authorization: Bearer $token" "$instance/api/v1/sessions" | field '" ".join(s["sessionId"] for s in d.get("sessions", []) if not s.get("current"))')
 [ -n "$others" ] || { echo "FAIL: the account has no session but the script's"; exit 1; }
 for id in $others; do
@@ -281,6 +461,7 @@ shot revoked
 kept=$(stored)
 case "$kept" in *'"appearance">system<'*) ;; *) echo "FAIL: the session's end took the phone's appearance with it"; exit 1 ;; esac
 case "$kept" in *'"density">comfortable<'*) ;; *) echo "FAIL: the session's end took the phone's message density with it"; exit 1 ;; esac
+case "$(marks)" in *unified_push*) echo "FAIL: the session ended and the phone still remembers the subscription it sent"; exit 1 ;; esac
 "$adb" shell am force-stop "$bundle" >/dev/null 2>&1 || true
 "$adb" shell am start -W -n "$bundle/.MainActivity" >/dev/null
 sleep 6
@@ -288,5 +469,5 @@ seen=$(ui)
 case "$seen" in *"You were signed out"*) echo "FAIL: the launch after a revoked session said so a second time"; exit 1 ;; esac
 case "$seen" in *"Welcome back"*) ;; *) echo "FAIL: the launch after a revoked session is not the sign-in screen"; exit 1 ;; esac
 "$adb" shell am force-stop "$bundle" >/dev/null 2>&1 || true
-echo "  revoked: $work/revoked.png (sent back to sign-in, which said why; the next launch did not; the phone's preferences were kept)"
-echo "smoke: ok (launched signed in, every screen screenshotted under $work; preferences reached from the account menu, kept across a launch, dark and compact drawn; messages in blocks and someone typing in the channel; a mention became a notification and its tap opened the channel; a session revoked from elsewhere went back to sign-in and said so)"
+echo "  revoked: $work/revoked.png (sent back to sign-in, which said why; the next launch did not; the phone's preferences were kept and the subscription it had sent forgotten)"
+echo "smoke: ok (launched signed in, every screen screenshotted under $work; preferences reached from the account menu, kept across a launch, dark and compact drawn; messages in blocks and someone typing in the channel; a mention became a notification and its tap opened the channel; Sign out in the account menu ended the session and the push subscription and said nothing; a session revoked from elsewhere went back to sign-in and said so)"

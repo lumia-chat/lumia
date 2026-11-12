@@ -57,16 +57,25 @@ class MainActivity : ComponentActivity() {
         // smoke run (scripts/smoke.sh): LUMIA_DEV_INSTANCE, _HANDLE, _PASSWORD, _SCREEN.
         // LUMIA_DEV_APPEARANCE (light, dark, system) and LUMIA_DEV_DENSITY
         // (comfortable, compact) are how that launch looks, and are not kept.
+        // LUMIA_DEV_PUSH is an endpoint the launch subscribes the phone with
+        // as `unified_push`, as a distributor handing one over would have it
+        // do, so the smoke can see a subscription held and then removed.
         val dev = if (BuildConfig.DEBUG) {
-            listOf("LUMIA_DEV_INSTANCE", "LUMIA_DEV_HANDLE", "LUMIA_DEV_PASSWORD", "LUMIA_DEV_SCREEN", "LUMIA_DEV_APPEARANCE", "LUMIA_DEV_DENSITY")
+            listOf("LUMIA_DEV_INSTANCE", "LUMIA_DEV_HANDLE", "LUMIA_DEV_PASSWORD", "LUMIA_DEV_SCREEN", "LUMIA_DEV_APPEARANCE", "LUMIA_DEV_DENSITY", "LUMIA_DEV_PUSH")
                 .mapNotNull { key -> intent.getStringExtra(key)?.let { key to it } }.toMap()
         } else emptyMap()
         store.wear(Appearance.named(dev["LUMIA_DEV_APPEARANCE"]), Density.named(dev["LUMIA_DEV_DENSITY"]))
         setContent {
             LaunchedEffect(Unit) {
                 store.reopen(dev)
+                if (BuildConfig.DEBUG) dev["LUMIA_DEV_PUSH"]?.let { PushRegistrar.subscribe(applicationContext, "unified_push", it) }
                 if (BuildConfig.DEBUG && dev["LUMIA_DEV_SCREEN"] == "notify") notifyStandIn()
             }
+            // Push is registered once per sign-in (the shell asks when it
+            // opens): a session that is over, by signing out or by the
+            // instance, lets the next one register again.
+            val signedIn = store.session?.signedIn == true
+            LaunchedEffect(signedIn) { if (!signedIn) pushSetup.signedOut() }
             // Preferences' appearance, for every screen: the one chosen, or
             // the phone's as it changes. The system bars' icons go with it,
             // dark on a light app and light on a dark one, which the first

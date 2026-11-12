@@ -13,11 +13,9 @@ import androidx.compose.runtime.setValue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import uniffi.lumia_ffi.ClientEvent
 import uniffi.lumia_ffi.DmChannelSummary
 import uniffi.lumia_ffi.DmLogSummary
@@ -51,7 +49,17 @@ private const val RESTART_EVERY_MS = 30_000L
 /** Where a sign-in through the system browser returns to, with `magic={token}` (architecture 6.3). */
 const val BROWSER_SIGN_IN_RETURN = "lumia://sign-in"
 
-class LumiaSession(val client: LumiaClient) {
+class LumiaSession(
+    val client: LumiaClient,
+    /**
+     * What leaving does about this phone's push subscription, which is
+     * remembered where the session cannot reach (the phone's preferences),
+     * so `AppStore` gives it: `chosen` when the person signed out, and the
+     * session can still ask the instance to drop it; not when the instance
+     * ended the session. A session made without one has none to see to.
+     */
+    private val pushLeft: suspend (chosen: Boolean) -> Unit = {},
+) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     val host: String = client.host
 
@@ -143,7 +151,17 @@ class LumiaSession(val client: LumiaClient) {
         return channel.channelId
     }
 
-    suspend fun signOut() = leave(notice = null)
+    /**
+     * Signs out because the person chose to: the phone's push subscription
+     * removed, the session revoked on the instance, the tokens and what was
+     * held of the account forgotten, and no line on the sign-in screen,
+     * which is for a session the instance ended. The identity and this
+     * device's keys stay on the phone, as on the web and the desktop.
+     * Nothing for a session already over or on its way out.
+     */
+    suspend fun signOut() {
+        if (signedIn) leave(notice = null)
+    }
 
     /**
      * The instance no longer takes this session (it was revoked, or ran
@@ -159,32 +177,40 @@ class LumiaSession(val client: LumiaClient) {
     fun takeEndedNotice(): String? = endedNotice.also { endedNotice = null }
 
     private var endedNotice: String? = null
-    private var leaving = false
+    private val departure = Leaving()
+
+    /** Whether the session is on its way out: nothing is subscribed or shown for it meanwhile. */
+    val leaving: Boolean get() = departure.underWay
 
     /**
-     * The gateway stopped, the tokens gone, the account's state cleared; the
-     * stores stay. One at a time: a call refused while this is under way
-     * (the snapshot, by the sign-out itself) does not start it again.
+     * Leaves the session, in `Leaving`'s order and by its rules: push seen
+     * to first, the gateway stopped, the tokens gone, the account's state
+     * cleared; the stores stay. One at a time: a call refused while this is
+     * under way (the snapshot, by the sign-out itself) does not start it
+     * again, and leaves the sign-out the person chose without a line.
      */
     private suspend fun leave(notice: String?) {
-        if (leaving) return
-        leaving = true
-        try {
-            endedNotice = notice
-            stop()
-            // To the end even when the caller was cancelled, which `stop()` has
-            // just done to the gateway's job when the refusal arrived on it:
-            // tokens left behind would open the shell on a dead session next launch.
-            withContext(NonCancellable) { runCatching { client.call { signOut() } } }
-            signedIn = false
-            snapshot = null
-            messages.clear()
-            dmChannels = emptyList()
-            dmLogs.clear()
-            showTyping(Typing())
-        } finally {
-            leaving = false
-        }
+        departure.leave(
+            push = { pushLeft(notice == null) },
+            stop = {
+                endedNotice = notice
+                stop()
+            },
+            revoke = { client.call { signOut() } },
+            forget = {
+                signedIn = false
+                snapshot = null
+                messages.clear()
+                dmChannels = emptyList()
+                dmLogs.clear()
+                roster = null
+                people = emptyMap()
+                profiles.clear()
+                serverPresence.clear()
+                lastError = null
+                showTyping(Typing())
+            },
+        )
     }
 
     // Identity
@@ -340,10 +366,6 @@ class LumiaSession(val client: LumiaClient) {
         refreshSnapshot()
         refreshDmChannels()
         return (r as? DmResponse.Opened)?.opened?.channelId
-    }
-
-    suspend fun pushSubscribe(platform: String, token: String, p256dh: String = "", auth: String = "") {
-        runCatching { client.call { pushSubscribe(platform, token, p256dh, auth) } }
     }
 
     // Names
