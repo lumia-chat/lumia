@@ -1,0 +1,4 @@
+/target
+/store
+# Converted from assets/fonts by scripts/fonts.sh.
+/fonts/*.ttf

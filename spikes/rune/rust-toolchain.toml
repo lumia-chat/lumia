@@ -1,0 +1,4 @@
+# Rune's pin (its rust-toolchain.toml at the rev in Cargo.toml); apps/core stays on its own.
+[toolchain]
+channel = "1.99.1"
+components = ["clippy", "rustfmt"]

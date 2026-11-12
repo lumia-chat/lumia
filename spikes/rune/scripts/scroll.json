@@ -1,0 +1,10 @@
+{"events": [
+  {"t": 0.20, "type": "scroll", "key": "messages", "dy": 1500, "dur": 1.5},
+  {"t": 2.00, "type": "scroll", "key": "messages", "dy": 60000, "dur": 2.0},
+  {"t": 3.00, "type": "mark", "name": "fling"},
+  {"t": 4.50, "type": "tap", "key": "composer", "hold": 0.03},
+  {"t": 4.70, "type": "type", "text": "Hello from the **Rune** spike, with `code` and 日本語 👋"},
+  {"t": 7.20, "type": "mark", "name": "typed"},
+  {"t": 7.40, "type": "key", "name": "Enter"},
+  {"t": 8.40, "type": "mark", "name": "end"}
+]}

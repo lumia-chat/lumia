@@ -1,0 +1,53 @@
+diff --git a/crates/rune-kit/src/markdown.rs b/crates/rune-kit/src/markdown.rs
+index 42af83c..c68ae3b 100644
+--- a/crates/rune-kit/src/markdown.rs
++++ b/crates/rune-kit/src/markdown.rs
+@@ -199,6 +199,7 @@ pub struct Markdown {
+     link_ring: Option<LinkRing>,
+     code_link: Option<CodeLink>,
+     selectable: bool,
++    selection_joined: bool,
+     copy_source: bool,
+     scroll_wide: bool,
+     highlighter: Highlighter,
+@@ -219,7 +220,7 @@ thread_local! {
+ impl Markdown {
+     pub fn new(src: impl Into<String>) -> Markdown {
+         Markdown { src: src.into(), style: None, block_keys: Vec::new(), highlights: Vec::new(), autolink: true, reveal: -1.0, streaming: false, on_link: None, on_link_secondary: None, link_look: None, link_help: None, link_ring: None, code_link: None,
+-            on_task: None, tasks_read_only: false, selectable: false, copy_source: false, scroll_wide: false, highlighter: Highlighter::builtin(),
++            on_task: None, tasks_read_only: false, selectable: false, selection_joined: false, copy_source: false, scroll_wide: false, highlighter: Highlighter::builtin(),
+             #[cfg(feature = "mermaid")]
+             diagram_frame: None, code_frame: None, quote_frame: None, link_favicon: None, images: None, on_image: None }
+     }
+@@ -330,6 +331,14 @@ impl Markdown {
+         self
+     }
+ 
++    /// With [`Self::selectable`], leaves this block out of a selection group of its own, so its
++    /// texts join the [`El::selection_group`] around it: a drag runs from one message's Markdown
++    /// into the next's. Cmd+A then selects that whole group.
++    pub fn selection_joined(mut self, on: bool) -> Self {
++        self.selection_joined = on;
++        self
++    }
++
+     /// With [`Self::selectable`], copying a selection copies the Markdown source instead of the
+     /// text as drawn ([`El::selection_copy`]), by whole top-level blocks: each block the
+     /// selection touches, from its first line to the next block, without trailing blank
+@@ -440,6 +449,7 @@ impl Markdown {
+                 self.reveal.to_bits(),
+                 self.tasks_read_only,
+                 self.selectable,
++                self.selection_joined,
+                 self.scroll_wide,
+             ));
+             return rune::memo::cached(h, || self.render_uncached(style));
+@@ -468,7 +478,7 @@ impl Markdown {
+             current_block_key: RefCell::new("b0".into()),
+             #[cfg(feature = "mermaid")]
+             diagram_frame: self.diagram_frame, code_frame: self.code_frame, quote_frame: self.quote_frame, link_favicon: self.link_favicon, images: self.images, on_image: self.on_image, flow: Cell::default() };
+-        let root = r.blocks(&blocks, &maps, &keys, true).selection_group(self.selectable);
++        let root = r.blocks(&blocks, &maps, &keys, true).selection_group(self.selectable && !self.selection_joined);
+         if !(self.selectable && self.copy_source) { return root; }
+         let names: Rc<[String]> = rendered_keys(blocks.len(), &keys).into();
+         let src: Rc<str> = self.src.into();

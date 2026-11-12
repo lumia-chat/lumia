@@ -1,0 +1,3 @@
+# The core's pin (apps/core/rust-toolchain.toml), for running `seed` from here.
+[toolchain]
+channel = "1.96.0"

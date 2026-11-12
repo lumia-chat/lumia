@@ -1,0 +1,44 @@
+# A spike, not a shell: can Rune carry Lumia's desktop app? (docs/spikes/2026-11-11-rune-desktop.md)
+# Its own workspace, since Rune pins a newer toolchain and edition than apps/core.
+[workspace]
+
+[package]
+name = "lumia-rune-spike"
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[features]
+# Phase clocks for `bench` (view, commit, layout, text, paint); ordinary builds carry none.
+profile = ["rune/frame-profile"]
+# Builds against a Rune checkout carrying `patches/kit-selection-joined.patch` (see the README):
+# kit Markdown bodies that join the list's selection group instead of each being its own.
+kit-patch = []
+
+[dependencies]
+# Rune is pre-release and asks for a pinned rev of `dev`.
+rune = { git = "https://github.com/anomalyco/rune", rev = "1f1b6c22c4476b06adc812c9abe3e37c97ffa398", default-features = false, features = ["accessibility", "dbus", "metal-backend", "svg"] }
+rune-kit = { git = "https://github.com/anomalyco/rune", rev = "1f1b6c22c4476b06adc812c9abe3e37c97ffa398", features = ["markdown"] }
+lumia-spike-data = { path = "../data" }
+lumia-client = { path = "../../apps/core/crates/lumia-client" }
+serde_json = "1"
+
+# Rune builds against its own patched wgpu-hal and winit, and a dependency's `[patch]` does not
+# reach the workspace that depends on it, so an app that builds Rune repeats them.
+[patch.crates-io]
+wgpu-hal = { git = "https://github.com/anomalyco/rune", rev = "1f1b6c22c4476b06adc812c9abe3e37c97ffa398" }
+winit = { git = "https://github.com/anomalyco/rune", rev = "1f1b6c22c4476b06adc812c9abe3e37c97ffa398" }
+
+[[bin]]
+name = "bench"
+required-features = ["profile"]
+
+# Rune's own profile for perf numbers: release without incremental, which can move frame timings.
+[profile.perf]
+inherits = "release"
+opt-level = 3
+codegen-units = 16
+lto = false
+debug = false
+incremental = false

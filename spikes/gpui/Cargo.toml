@@ -1,0 +1,38 @@
+# A spike, not a shell: the same workload as spikes/rune, on GPUI (docs/spikes/2026-11-11-gpui-desktop.md).
+[workspace]
+
+[package]
+name = "lumia-gpui-spike"
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[features]
+# The headless window `bench` drives and snapshots: GPUI's test platform with the real text
+# system and an offscreen renderer.
+headless = ["gpui-kit/test-support", "dep:libc"]
+
+[[bin]]
+name = "bench"
+required-features = ["headless"]
+
+[dependencies]
+libc = { version = "0.2", optional = true }
+# GPUI Kit pins the GPUI snapshot it was built with and re-exports it.
+gpui-kit = "=0.9.1"
+lumia-spike-data = { path = "../data" }
+lumia-client = { path = "../../apps/core/crates/lumia-client" }
+serde_json = "1"
+
+[dev-dependencies]
+gpui-kit = { version = "=0.9.1", features = ["test-support"] }
+
+# The profile the Rune spike measures with.
+[profile.perf]
+inherits = "release"
+opt-level = 3
+codegen-units = 16
+lto = false
+debug = false
+incremental = false
