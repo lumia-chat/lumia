@@ -31,6 +31,8 @@ export interface OverlayProps {
   onConversation: (channelId: string) => void;
   toProfile: () => void;
   toPreferences: () => void;
+  /** The settings of the server on screen (architecture 6.7). */
+  toServerSettings: () => void;
   toDevices: () => void;
   toLink: () => void;
   onSignOut: () => void;
@@ -49,6 +51,17 @@ export function Overlay(props: OverlayProps) {
               <MenuItem icon="hash" onSelect={() => props.open({ kind: "newChannel", anchor: props.over.anchor })}>
                 New channel
               </MenuItem>
+              <Show when={server().canManage}>
+                <MenuItem
+                  icon="settings"
+                  onSelect={() => {
+                    props.close();
+                    props.toServerSettings();
+                  }}
+                >
+                  Server settings
+                </MenuItem>
+              </Show>
             </Menu>
           </Popover>
         )}

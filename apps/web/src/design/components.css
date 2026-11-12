@@ -156,6 +156,7 @@
 .lu-rail__home:hover, .lu-rail__server:not(.is-current):hover, .lu-rail__add:hover { transform: translateY(-1px); }
 .lu-rail__home.is-current { box-shadow: var(--ring-current); }
 .lu-rail__server.is-current { background: var(--raised); color: var(--ink-selected); box-shadow: var(--ring-current); font-family: var(--font-display); font-size: 18px; font-weight: 800; }
+.lu-rail__server.has-photo { overflow: hidden; }
 .lu-tile-ink-default { color: var(--ink); }
 .lu-tile-ink-indigo { color: var(--tile-ink-indigo); }
 .lu-tile-ink-green { color: var(--tile-ink-green); }

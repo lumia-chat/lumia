@@ -554,6 +554,8 @@ export function MemberList(props: MemberListProps) {
 export interface RailServer {
   name: string;
   initials: string;
+  /** The server's picture; its initials stand in without one, or while it fails to load. */
+  src?: string;
   current?: boolean;
   ink?: "default" | "indigo" | "green" | "amber";
   unread?: boolean;
@@ -604,9 +606,9 @@ export function ServerRail(props: ServerRailProps) {
                   aria-label={s.name + extra()}
                   aria-current={s.current ? "true" : undefined}
                   onClick={() => s.onClick?.()}
-                  class={cx("lu-rail__server", s.current && "is-current", "lu-tile-ink-" + (s.ink ?? "default"))}
+                  class={cx("lu-rail__server", s.current && "is-current", s.src && "has-photo", "lu-tile-ink-" + (s.ink ?? "default"))}
                 >
-                  {s.initials}
+                  <Face initials={s.initials} src={s.src} />
                   <Show when={s.mentions} fallback={<Show when={s.unread}><Badge dot ring="rail" class="lu-rail__dot" /></Show>}>
                     <Badge count={s.mentions} ring="rail" aria-hidden="true" class="lu-rail__badge" />
                   </Show>

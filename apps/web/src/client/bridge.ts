@@ -21,6 +21,12 @@ export interface InstanceSummary {
 export interface ServerSummary {
   serverId: string;
   name: string;
+  /** The server's picture, a path of this instance (`avatarSrc` makes it a URL); empty for none. */
+  iconUrl: string;
+  /** How long the server keeps its messages, in days; 0 for ever. */
+  retentionDays: number;
+  /** Whether this account may change the server's settings (architecture 6.7). */
+  canManage: boolean;
 }
 /** A WebAuthn ceremony's start: the challenge's id and the options as the browser's JSON. */
 export interface PasskeyChallengeSummary {
@@ -383,6 +389,23 @@ export class Bridge {
   /** `DELETE /account/avatar`; resolves to the snapshot as it then is. */
   removeAvatar(): Promise<SnapshotSummary> {
     return this.call("removeAvatar");
+  }
+  /**
+   * `PATCH /servers/{id}`: a server's name, how long it keeps messages in
+   * days (0 for ever), or both; one left out stays. Resolves to the snapshot
+   * as it then is. `PERMISSION_DENIED` without `MANAGE_SERVER`,
+   * `INVALID_ARGUMENT` with `details.field` `name`.
+   */
+  updateServer(serverId: string, name?: string, retentionDays?: number): Promise<SnapshotSummary> {
+    return this.call("updateServer", serverId, name, retentionDays);
+  }
+  /** `PUT /servers/{id}/icon`: as `setAvatar`, for a server's picture. */
+  setServerIcon(serverId: string, picture: Uint8Array, mediaType: string): Promise<SnapshotSummary> {
+    return this.call("setServerIcon", serverId, picture, mediaType);
+  }
+  /** `DELETE /servers/{id}/icon`. */
+  removeServerIcon(serverId: string): Promise<SnapshotSummary> {
+    return this.call("removeServerIcon", serverId);
   }
   requestMagicLink(email: string): Promise<void> {
     return this.call("requestMagicLink", email);

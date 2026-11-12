@@ -978,6 +978,7 @@ function Pieces() {
           <Menu label="Acme" compact>
             <MenuItem icon="member-joined">Invite people</MenuItem>
             <MenuItem icon="hash">New channel</MenuItem>
+            <MenuItem icon="settings">Server settings</MenuItem>
           </Menu>
           <ProfileCard
             name={PEOPLE.maya.name}

@@ -29,7 +29,7 @@ import {
   type DeviceEntry,
 } from "../design/components";
 import { ClientError, type ChannelSummary, type DeviceSummary, type DmMessageSummary, type InvitePreviewSummary, type MemberSummary, type PasskeySummary, type ProfileSummary, type SnapshotSummary } from "../client/bridge";
-import { SERVED_BY_INSTANCE, avatarSrc, client, savedInstance, dmChannelsQuery, dmMessagesQuery, enableNotifications, hasIdentityQuery, myStatus, peopleQuery, pushState, queryClient, rosterQuery, setMyStatus, snapshotQuery } from "../client/state";
+import { SERVED_BY_INSTANCE, avatarSrc, client, pictureRefusal, savedInstance, dmChannelsQuery, dmMessagesQuery, enableNotifications, hasIdentityQuery, myStatus, peopleQuery, pushState, queryClient, rosterQuery, setMyStatus, snapshotQuery } from "../client/state";
 import { useNames } from "../client/names";
 import { preferences, setAppearance, setDensity, type Appearance, type Density } from "../client/preferences";
 import { addPasskey, passkeysAvailable } from "../client/passkeys";
@@ -634,24 +634,7 @@ function Profile(props: HomeProps) {
   const [photoSaved, setPhotoSaved] = createSignal(false);
   const photo = () => avatarSrc(snapshot.data?.avatarUrl);
   const selfName = () => snapshot.data?.displayName || snapshot.data?.handle || "You";
-  const photoFailed = (err: unknown) => {
-    const ce = err instanceof ClientError ? err : null;
-    setPhotoError(
-      ce?.code === "INVALID_ARGUMENT" && ce.details.reason === "too_large"
-        ? "That picture is too large. Choose one under 8 MB."
-        : ce?.code === "INVALID_ARGUMENT" && ce.details.reason === "unsupported"
-          ? "That file is not a picture Lumia can read. Choose a PNG, JPEG, WebP or GIF."
-          : ce?.code === "INVALID_ARGUMENT"
-            ? "That picture could not be read."
-            : ce?.code === "FAILED_PRECONDITION"
-              ? "This instance does not keep pictures."
-              : ce?.code === "RATE_LIMITED"
-                ? "The instance is busy. Try again in a moment."
-                : err instanceof Error
-                  ? err.message
-                  : String(err),
-    );
-  };
+  const photoFailed = (err: unknown) => setPhotoError(pictureRefusal(err));
   // The snapshot the call answers with is the account as it now is; the
   // lists that name this account's picture are read again.
   const photoChanged = (snap: SnapshotSummary) => {

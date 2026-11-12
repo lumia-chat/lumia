@@ -681,6 +681,91 @@ async function preferencesStep(which: string, stamp: number) {
   console.log(`  ${which}: opened Preferences from the account menu, chose each appearance against the system's, drew a block compact, and kept both through a reload and a sign-out, in ${Date.now() - t0} ms`);
 }
 
+// A server's settings (architecture 6.7): its owner renames it, keeps its
+// messages for 30 days after being told what that deletes, and gives it a
+// picture, from the menu under its name; the instance has all three. A
+// member is not offered them, sees the new name and picture, and sees a
+// rename made elsewhere arrive while the page is open.
+async function serverSettings(which: string, stamp: number) {
+  const ownerDir = resolve(work, `cli-settings-owner-${which}`);
+  const memberDir = resolve(work, `cli-settings-member-${which}`);
+  const owner = `own${which}${stamp}`;
+  const member = `mem${which}${stamp}`;
+  lumia(ownerDir, "instance", "add", instance);
+  lumia(ownerDir, "account", "create", "--handle", owner, "--password", password);
+  const server = lumia(ownerDir, "server-create", `Settings ${stamp}`).match(/[0-9a-f-]{36}/)?.[0];
+  if (!server) throw new Error("no server id");
+  lumia(ownerDir, "channel-create", server, "general");
+  const code = lumia(ownerDir, "invite-create", server).trim().split(/\s+/)[0];
+  if (!code) throw new Error("no invite code");
+  lumia(memberDir, "instance", "add", instance);
+  lumia(memberDir, "account", "create", "--handle", member, "--password", password, "--invite", code);
+  const signIn = async (page: Page, handle: string) => {
+    await trustCard(page);
+    await page.getByLabel("Email or handle").fill(handle);
+    await page.getByRole("textbox", { name: "Password" }).fill(password);
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await page.getByPlaceholder("Message #general").waitFor();
+  };
+  const t0 = Date.now();
+  {
+    const { ctx, page } = await open(which, "settings-owner");
+    try {
+      await signIn(page, owner);
+      phase("the page");
+      await page.getByRole("button", { name: /server menu/ }).click();
+      await page.getByRole("menuitem", { name: "Server settings" }).click();
+      await page.getByRole("heading", { name: "Overview" }).waitFor();
+      phase("name");
+      const overview = page.locator("section", { has: page.getByRole("heading", { name: "Overview" }) });
+      await overview.getByLabel("Name").fill(`Renamed ${stamp}`);
+      await overview.getByRole("button", { name: "Save", exact: true }).click();
+      await overview.getByText("Saved.").waitFor();
+      await page.getByRole("button", { name: new RegExp(`^Renamed ${stamp}`) }).first().waitFor();
+      phase("retention");
+      const history = page.locator("section", { has: page.getByRole("heading", { name: "Message history" }) });
+      await history.getByRole("tab", { name: "30 days" }).click();
+      await history.getByText("Messages older than 30 days will be deleted for everyone. This cannot be undone.").waitFor();
+      await page.screenshot({ path: `${out}/${which}-server-settings.png` });
+      await history.getByRole("button", { name: "Save", exact: true }).click();
+      await history.getByText("Saved.").waitFor();
+      phase("picture");
+      await page.getByLabel("Server picture").setInputFiles({ name: "logo.png", mimeType: "image/png", buffer: png(64, [240, 120, 40]) });
+      await overview.getByText("Saved.").waitFor();
+      const onRail = page.locator(".lu-rail__server img");
+      await onRail.waitFor();
+      if (!/\/api\/v1\/avatars\/[0-9a-f]{64}$/.test((await onRail.getAttribute("src")) ?? "")) throw new Error("the rail's picture is not the instance's");
+    } finally {
+      await ctx.close();
+    }
+  }
+  // The instance has all three, as a member asks for the server.
+  const json = { "content-type": "application/json", accept: "application/json" };
+  const pair = (await (await fetch(`${instance}/api/v1/auth/sign-in/password`, { method: "POST", headers: json, body: JSON.stringify({ handleOrEmail: member, password }) })).json()) as { accessToken?: string };
+  if (!pair.accessToken) throw new Error("the suite could not sign in as the member");
+  const held = (await (await fetch(`${instance}/api/v1/servers/${server}`, { headers: { ...json, authorization: `Bearer ${pair.accessToken}` } })).json()) as { name?: string; retentionDays?: number; iconUrl?: string };
+  if (held.name !== `Renamed ${stamp}` || held.retentionDays !== 30 || !held.iconUrl) throw new Error(`the instance holds ${JSON.stringify(held)}`);
+  {
+    const { ctx, page } = await open(which, "settings-member");
+    try {
+      await signIn(page, member);
+      phase("a member");
+      await page.getByRole("button", { name: new RegExp(`^Renamed ${stamp}`) }).first().waitFor();
+      await page.locator(".lu-rail__server img").waitFor();
+      await page.getByRole("button", { name: /server menu/ }).click();
+      await page.getByRole("menuitem", { name: "Invite people" }).waitFor();
+      if ((await page.getByRole("menuitem", { name: "Server settings" }).count()) !== 0) throw new Error("a member is offered the settings");
+      await page.keyboard.press("Escape");
+      phase("told");
+      lumia(ownerDir, "server-update", server, "--name", `Again ${stamp}`);
+      await page.getByRole("button", { name: new RegExp(`^Again ${stamp}`) }).first().waitFor({ timeout: 20_000 });
+    } finally {
+      await ctx.close();
+    }
+  }
+  console.log(`  ${which}: renamed a server, kept its messages for 30 days after the warning, gave it a picture, a member was not offered the settings and saw a rename arrive, in ${Date.now() - t0} ms`);
+}
+
 // A session revoked from elsewhere (protocol 12), as "sign out everywhere"
 // or a reused refresh token does it: the gateway is told and its loop
 // ends, the page asks for the snapshot, is refused, and goes back to the
@@ -1198,6 +1283,7 @@ try {
       ["revoked", () => revoked(which, stamp)],
       ["account", () => account(which, `web${stamp}`, stamp)],
       ["preferences", () => preferencesStep(which, stamp)],
+      ["server settings", () => serverSettings(which, stamp)],
       ["push", () => webPush(which, `web${stamp}`, passwordDir, server, general, webAccount)],
       ["magic link", () => magicLink(which)],
       ["passkey", () => passkey(which, `web${stamp}`)],

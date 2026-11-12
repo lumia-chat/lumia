@@ -69,6 +69,20 @@ export function avatarSrc(avatarUrl: string | undefined): string | undefined {
   return base ? base.replace(/\/+$/, "") + avatarUrl : undefined;
 }
 
+/**
+ * Why a picture was not taken, an account's or a server's, worded as every
+ * client words it.
+ */
+export function pictureRefusal(err: unknown): string {
+  const ce = err instanceof ClientError ? err : null;
+  if (ce?.code === "INVALID_ARGUMENT" && ce.details.reason === "too_large") return "That picture is too large. Choose one under 8 MB.";
+  if (ce?.code === "INVALID_ARGUMENT" && ce.details.reason === "unsupported") return "That file is not a picture Lumia can read. Choose a PNG, JPEG, WebP or GIF.";
+  if (ce?.code === "INVALID_ARGUMENT") return "That picture could not be read.";
+  if (ce?.code === "FAILED_PRECONDITION") return "This instance does not keep pictures.";
+  if (ce?.code === "RATE_LIMITED") return "The instance is busy. Try again in a moment.";
+  return err instanceof Error ? err.message : String(err);
+}
+
 /** Opens the client for `baseUrl` and remembers it. */
 export async function openInstance(baseUrl: string): Promise<Opened> {
   const result = await client().open(baseUrl);

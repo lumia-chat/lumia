@@ -34,6 +34,7 @@ import { useNames } from "../client/names";
 import { preferences } from "../client/preferences";
 import { ConversationAside, HomeMain, HomeSidebar, type HomeView } from "./home";
 import { Overlay, myStatusDot, type Over } from "./menus";
+import { ServerSettings } from "./server-settings";
 
 const TONES = ["peach", "blue", "purple", "mint", "amber", "sky", "stone", "green", "indigo"] as const;
 
@@ -163,12 +164,15 @@ export function App() {
   const [reading, setReading] = createSignal(!!(search().view || search().dm));
   // Where three columns do not fit, the aside comes over the conversation when asked for.
   const [asideOpen, setAsideOpen] = createSignal(false);
+  // The server's settings in its main pane, until a channel or another server is chosen.
+  const [settingsOpen, setSettingsOpen] = createSignal(false);
   const goHome = (view: HomeView, dm?: string, read = true) => {
     setReading(read);
     setAsideOpen(false);
     void navigate({ to: "/app", search: { place: "home", view, dm } });
   };
   const goServer = (id: string) => {
+    setSettingsOpen(false);
     setReading(false);
     setAsideOpen(false);
     void navigate({ to: "/app", search: { server: id } });
@@ -250,6 +254,7 @@ export function App() {
       active: c.channelId === channelId(),
       onClick: () => {
         setChannelId(c.channelId);
+        setSettingsOpen(false);
         setReading(true);
         setAsideOpen(false);
       },
@@ -294,6 +299,7 @@ export function App() {
             servers={servers().map((s) => ({
               name: s.name,
               initials: initialsOf(s.name),
+              src: avatarSrc(s.iconUrl),
               current: !home() && s.serverId === serverId(),
               onClick: () => goServer(s.serverId),
             }))}
@@ -321,84 +327,91 @@ export function App() {
         main={
           <Show when={!home()} fallback={<HomeMain {...homeProps()} />}>
             <Show
-              when={current()}
+              when={settingsOpen() ? server() : undefined}
               fallback={
-                <>
-                  <ChannelHeader kind="page" name={server()?.name ?? "Lumia"} actions={[]} onBack={() => setReading(false)} />
-                  <div class="lu-page">
-                    <EmptyState icon="hash" title="No channel yet">
-                      Add a channel from the menu under the server’s name, or a server with the rail’s plus.
-                    </EmptyState>
-                  </div>
-                </>
+              <Show
+                when={current()}
+                fallback={
+                  <>
+                    <ChannelHeader kind="page" name={server()?.name ?? "Lumia"} actions={[]} onBack={() => setReading(false)} />
+                    <div class="lu-page">
+                      <EmptyState icon="hash" title="No channel yet">
+                        Add a channel from the menu under the server’s name, or a server with the rail’s plus.
+                      </EmptyState>
+                    </div>
+                  </>
+                }
+              >
+                {(ch) => (
+                  <>
+                    <ChannelHeader name={ch().name} onBack={() => setReading(false)} backLabel={`Back to ${server()?.name ?? "the server"}`} actions={[{ icon: "members", label: "Members", narrow: true, pressed: asideOpen(), onClick: () => setAsideOpen((open) => !open) }]} />
+                    <Show
+                      when={!messages.data || days().length > 0}
+                      fallback={
+                        <div class="lu-page">
+                          <EmptyState title="Nothing here yet">Say something.</EmptyState>
+                        </div>
+                      }
+                    >
+                      <MessageList label={`Messages in #${ch().name}`} density={preferences().density}>
+                        <For each={days()}>
+                          {(day) => (
+                            <>
+                              <Divider variant="day" label={day.label} />
+                              <For each={day.blocks}>
+                                {(block) => {
+                                  const first = block.first;
+                                  const t = timeOf(first.createdAtMicros);
+                                  const author = () => nameOf(first.authorAccountId);
+                                  const said = (m: MessageSummary) => (m.deleted ? "(deleted)" : m.body);
+                                  return (
+                                    <Message
+                                      author={author()}
+                                      initials={initialsOf(author())}
+                                      src={photoOf(first.authorAccountId)}
+                                      tone={toneFor(first.authorAccountId)}
+                                      time={t.time}
+                                      datetime={t.datetime}
+                                      actions={false}
+                                      density={preferences().density}
+                                      onOpenProfile={(anchor) => openPerson(first.authorAccountId, anchor)}
+                                      parts={block.rest.map((m) => ({ time: shortTimeOf(m.createdAtMicros), datetime: timeOf(m.createdAtMicros).datetime, children: said(m) }))}
+                                    >
+                                      {said(first)}
+                                    </Message>
+                                  );
+                                }}
+                              </For>
+                            </>
+                          )}
+                        </For>
+                      </MessageList>
+                    </Show>
+                    <Show when={error()}>
+                      <p class="app__error" role="alert">
+                        {error()}
+                      </p>
+                    </Show>
+                    <Composer
+                      placeholder={`Message #${ch().name}`}
+                      tools={false}
+                      typing={typing()}
+                      value={draft()}
+                      onInput={(e) => typed(e.currentTarget.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+                          e.preventDefault();
+                          void send();
+                        }
+                      }}
+                      onSend={() => void send()}
+                    />
+                  </>
+                )}
+              </Show>
               }
             >
-              {(ch) => (
-                <>
-                  <ChannelHeader name={ch().name} onBack={() => setReading(false)} backLabel={`Back to ${server()?.name ?? "the server"}`} actions={[{ icon: "members", label: "Members", narrow: true, pressed: asideOpen(), onClick: () => setAsideOpen((open) => !open) }]} />
-                  <Show
-                    when={!messages.data || days().length > 0}
-                    fallback={
-                      <div class="lu-page">
-                        <EmptyState title="Nothing here yet">Say something.</EmptyState>
-                      </div>
-                    }
-                  >
-                    <MessageList label={`Messages in #${ch().name}`} density={preferences().density}>
-                      <For each={days()}>
-                        {(day) => (
-                          <>
-                            <Divider variant="day" label={day.label} />
-                            <For each={day.blocks}>
-                              {(block) => {
-                                const first = block.first;
-                                const t = timeOf(first.createdAtMicros);
-                                const author = () => nameOf(first.authorAccountId);
-                                const said = (m: MessageSummary) => (m.deleted ? "(deleted)" : m.body);
-                                return (
-                                  <Message
-                                    author={author()}
-                                    initials={initialsOf(author())}
-                                    src={photoOf(first.authorAccountId)}
-                                    tone={toneFor(first.authorAccountId)}
-                                    time={t.time}
-                                    datetime={t.datetime}
-                                    actions={false}
-                                    density={preferences().density}
-                                    onOpenProfile={(anchor) => openPerson(first.authorAccountId, anchor)}
-                                    parts={block.rest.map((m) => ({ time: shortTimeOf(m.createdAtMicros), datetime: timeOf(m.createdAtMicros).datetime, children: said(m) }))}
-                                  >
-                                    {said(first)}
-                                  </Message>
-                                );
-                              }}
-                            </For>
-                          </>
-                        )}
-                      </For>
-                    </MessageList>
-                  </Show>
-                  <Show when={error()}>
-                    <p class="app__error" role="alert">
-                      {error()}
-                    </p>
-                  </Show>
-                  <Composer
-                    placeholder={`Message #${ch().name}`}
-                    tools={false}
-                    typing={typing()}
-                    value={draft()}
-                    onInput={(e) => typed(e.currentTarget.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
-                        e.preventDefault();
-                        void send();
-                      }
-                    }}
-                    onSend={() => void send()}
-                  />
-                </>
-              )}
+              {(s) => <ServerSettings server={s()} back={() => setReading(false)} />}
             </Show>
           </Show>
         }
@@ -426,6 +439,10 @@ export function App() {
             onConversation={(id) => goHome("dm", id)}
             toProfile={() => goHome("profile")}
             toPreferences={() => goHome("preferences")}
+            toServerSettings={() => {
+              setSettingsOpen(true);
+              setReading(true);
+            }}
             toDevices={() => goHome("devices")}
             toLink={() => void navigate({ to: "/link" })}
             onSignOut={() => void leave()}
