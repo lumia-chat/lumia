@@ -17,6 +17,7 @@ defaults:
 jobs:
   check:
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     env:
       MIX_ENV: test
     steps:
