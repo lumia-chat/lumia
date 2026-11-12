@@ -526,6 +526,10 @@ fn request_summary(r: &DmRequest) -> DmRequestSummary {
     }
 }
 
+/// How many pages of 200 a member list is read to: a server of ten thousand.
+/// Past that a list is cut, and a shell wants a search, not a list.
+const MEMBER_PAGES: usize = 50;
+
 /// Where the last snapshot and the last member lists are kept in the
 /// instance store's meta area (`App::kept_snapshot`, `App::kept_members`).
 const KEPT_SNAPSHOT: &str = "kept_snapshot";
@@ -1483,7 +1487,8 @@ impl App {
     }
 
     /// `GET /servers/{id}/members`: a server's members with their
-    /// accounts, optionally filtered by a handle or nickname prefix.
+    /// accounts, optionally filtered by a handle or nickname prefix. Every
+    /// page is read, up to [`MEMBER_PAGES`] of them.
     ///
     /// # Errors
     /// On transport or API failure.
@@ -1492,11 +1497,11 @@ impl App {
         server_id: &str,
         query: &str,
     ) -> Result<Vec<MemberSummary>, ClientError> {
-        let page = self.api.members(server_id, query).await?;
-        let members: Vec<MemberSummary> = page
-            .members
-            .iter()
-            .map(|m| {
+        let mut members: Vec<MemberSummary> = Vec::new();
+        let mut cursor = String::new();
+        for _ in 0..MEMBER_PAGES {
+            let page = self.api.members(server_id, query, &cursor).await?;
+            members.extend(page.members.iter().map(|m| {
                 let account = page.accounts.iter().find(|a| a.account_id == m.account_id);
                 MemberSummary {
                     account_id: wire::display(&m.account_id),
@@ -1506,8 +1511,12 @@ impl App {
                     pronouns: account.map(|a| a.pronouns.clone()).unwrap_or_default(),
                     bio: account.map(|a| a.bio.clone()).unwrap_or_default(),
                 }
-            })
-            .collect();
+            }));
+            cursor = page.page.map(|p| p.next_cursor).unwrap_or_default();
+            if cursor.is_empty() {
+                break;
+            }
+        }
         // The unfiltered list is what an offline launch names people from.
         if query.is_empty() {
             let mut all: HashMap<String, Vec<MemberSummary>> =

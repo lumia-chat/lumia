@@ -791,7 +791,8 @@ impl Api {
     }
 
     /// `GET /servers/{id}/members`: a page of members with their accounts,
-    /// optionally those whose handle or nickname starts with `query`.
+    /// optionally those whose handle or nickname starts with `query`. `cursor`
+    /// is the last page's `next_cursor`, empty for the first page.
     ///
     /// # Errors
     /// On transport failure or an API error.
@@ -799,10 +800,11 @@ impl Api {
         &self,
         server_id: &str,
         query: &str,
+        cursor: &str,
     ) -> Result<ListMembersResponse, ClientError> {
-        let q = url_encode(query);
+        let (q, c) = (url_encode(query), url_encode(cursor));
         self.get(&format!(
-            "/api/v1/servers/{server_id}/members?page_size=100&query={q}"
+            "/api/v1/servers/{server_id}/members?page_size=200&query={q}&cursor={c}"
         ))
         .await
     }
