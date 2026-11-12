@@ -2178,7 +2178,7 @@ impl App {
         if !self.started() {
             return;
         }
-        let Ok(engine) = self.dm_engine() else {
+        let Ok(engine) = self.dm_engine_ready().await else {
             return;
         };
         let outcomes = engine
@@ -2319,25 +2319,51 @@ impl App {
     /// The engine, built on first use from this device's identity and its
     /// own connection to the instance store.
     fn dm_engine(&self) -> Result<Arc<AsyncMutex<DmEngine>>, ClientError> {
-        if let Some(engine) = self
-            .dm
+        if let Some(engine) = self.built_engine() {
+            return Ok(engine);
+        }
+        let mut stores = self
+            .identity
+            .try_lock()
+            .ok_or_else(|| ClientError::State("an identity flow is running".into()))?;
+        self.build_engine(&mut stores)
+    }
+
+    /// [`App::dm_engine`] for a caller that can wait: when the engine is not
+    /// built yet and an identity call holds the identity's stores (the roster
+    /// being read at launch, a link being claimed), this waits for it instead
+    /// of failing with "an identity flow is running".
+    async fn dm_engine_ready(&self) -> Result<Arc<AsyncMutex<DmEngine>>, ClientError> {
+        if let Some(engine) = self.built_engine() {
+            return Ok(engine);
+        }
+        let mut stores = self.identity.lock().await;
+        // Another caller may have built it while this one waited.
+        if let Some(engine) = self.built_engine() {
+            return Ok(engine);
+        }
+        self.build_engine(&mut stores)
+    }
+
+    fn built_engine(&self) -> Option<Arc<AsyncMutex<DmEngine>>> {
+        self.dm
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .as_ref()
-        {
-            return Ok(Arc::clone(engine));
-        }
+            .map(Arc::clone)
+    }
+
+    fn build_engine(
+        &self,
+        stores: &mut IdentityStores,
+    ) -> Result<Arc<AsyncMutex<DmEngine>>, ClientError> {
         let (roster, seed, backup_key) = {
-            let mut stores = self
-                .identity
-                .try_lock()
-                .ok_or_else(|| ClientError::State("an identity flow is running".into()))?;
             let seed = stores
                 .keys
                 .get("device_key")?
                 .ok_or_else(|| ClientError::State("no identity on this device".into()))?;
             let backup_key = stores.keys.get("backup_key")?;
-            let roster = device(&mut stores, &self.device_id).roster()?;
+            let roster = device(stores, &self.device_id).roster()?;
             (roster, seed, backup_key)
         };
         let account = self
@@ -2373,7 +2399,7 @@ impl App {
     /// # Errors
     /// Without an identity, or on a store failure.
     pub async fn dm_channels(&self) -> Result<Vec<DmChannelSummary>, ClientError> {
-        let engine = self.dm_engine()?;
+        let engine = self.dm_engine_ready().await?;
         let e = engine.lock().await;
         let mut out = Vec::new();
         let channels: &HashMap<Vec<u8>, Vec<Vec<u8>>> = e.channels();
@@ -2403,7 +2429,7 @@ impl App {
     }
 
     async fn open_dm(&self, others: Vec<Vec<u8>>, accepter: bool) -> Result<DmOpened, ClientError> {
-        let engine = self.dm_engine()?;
+        let engine = self.dm_engine_ready().await?;
         let opened = self.api.open_personal_dm(others).await?;
         let channel = opened
             .channel
@@ -2474,7 +2500,7 @@ impl App {
     /// Without the group for the conversation, or before the loop started.
     pub async fn dm_send(&self, channel_id: &str, body: &str) -> Result<String, ClientError> {
         let channel = parse_uuid(channel_id)?;
-        let engine = self.dm_engine()?;
+        let engine = self.dm_engine_ready().await?;
         let mut e = engine.lock().await;
         e.load_participants(&channel)?;
         let outcomes = e.send_text(&channel, body)?;
@@ -2498,7 +2524,7 @@ impl App {
     pub async fn dm_delete(&self, channel_id: &str, message_id: &str) -> Result<(), ClientError> {
         let channel = parse_uuid(channel_id)?;
         let message = parse_uuid(message_id)?;
-        let engine = self.dm_engine()?;
+        let engine = self.dm_engine_ready().await?;
         let mut e = engine.lock().await;
         e.load_participants(&channel)?;
         let outcomes = e.send_delete(&channel, message)?;
@@ -2513,7 +2539,7 @@ impl App {
     /// Without an identity, or when the instance holds no group info.
     pub async fn dm_rejoin(&self, channel_id: &str) -> Result<(), ClientError> {
         let channel = parse_uuid(channel_id)?;
-        let engine = self.dm_engine()?;
+        let engine = self.dm_engine_ready().await?;
         let mut e = engine.lock().await;
         e.load_participants(&channel)?;
         let outcomes = e.rejoin(&channel).await?;
@@ -2529,7 +2555,7 @@ impl App {
     /// Without an identity, or on a store failure.
     pub async fn dm_messages(&self, channel_id: &str) -> Result<DmLogSummary, ClientError> {
         let channel = parse_uuid(channel_id)?;
-        let engine = self.dm_engine()?;
+        let engine = self.dm_engine_ready().await?;
         let e = engine.lock().await;
         let me = e.me().identity_id.clone();
         let mut projection = Projection::default();
