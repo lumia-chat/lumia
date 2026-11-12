@@ -1,7 +1,7 @@
 // Home: personal DMs grouped by the instance that hosts them, message
 // requests, this identity's devices, and starting a conversation. From
 // the "Home", "Requests" and "Devices" boards in the gallery.
-import { For, Show, createMemo, createSignal } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal } from "solid-js";
 import {
   Avatar,
   Button,
@@ -29,7 +29,7 @@ import {
   type DeviceEntry,
 } from "../design/components";
 import { ClientError, type ChannelSummary, type DeviceSummary, type DmMessageSummary, type InvitePreviewSummary, type MemberSummary, type PasskeySummary, type ProfileSummary, type SnapshotSummary } from "../client/bridge";
-import { client, dmChannelsQuery, dmMessagesQuery, enableNotifications, hasIdentityQuery, myStatus, peopleQuery, pushState, queryClient, rosterQuery, setMyStatus, snapshotQuery } from "../client/state";
+import { client, opened, dmChannelsQuery, dmMessagesQuery, enableNotifications, hasIdentityQuery, myStatus, peopleQuery, pushState, queryClient, rosterQuery, setMyStatus, snapshotQuery } from "../client/state";
 import { useNames } from "../client/names";
 import { addPasskey, passkeysAvailable } from "../client/passkeys";
 import { byBlock, byDay, initialsOf, shortTimeOf, timeOf, toneFor } from "./app";
@@ -565,6 +565,49 @@ function Profile(props: HomeProps) {
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal("");
   const [saved, setSaved] = createSignal(false);
+  // The account on this instance (protocol 9, `PATCH /account`): its
+  // handle, and its display name where this browser holds no identity (one
+  // that does keeps the name in the signed profile below). The fields take
+  // the snapshot's values once, not again over what is being typed.
+  const [handle, setHandle] = createSignal("");
+  const [accountName, setAccountName] = createSignal("");
+  const [accountBusy, setAccountBusy] = createSignal(false);
+  const [accountError, setAccountError] = createSignal("");
+  const [accountSaved, setAccountSaved] = createSignal(false);
+  let seeded = false;
+  createEffect(() => {
+    const snap = snapshot.data;
+    if (!snap || seeded) return;
+    seeded = true;
+    setHandle(snap.handle);
+    setAccountName(snap.displayName);
+  });
+  const saveAccount = async (e: Event) => {
+    e.preventDefault();
+    setAccountBusy(true);
+    setAccountError("");
+    setAccountSaved(false);
+    try {
+      const wanted = handle().trim();
+      const snap = await client().updateAccount(wanted === snapshot.data?.handle ? undefined : wanted, hasIdentity.data === false ? accountName().trim() : undefined);
+      queryClient.setQueryData(["snapshot"], snap);
+      setHandle(snap.handle);
+      setAccountSaved(true);
+    } catch (err) {
+      const ce = err instanceof ClientError ? err : null;
+      setAccountError(
+        ce?.code === "ALREADY_EXISTS"
+          ? "That handle is taken."
+          : ce?.code === "INVALID_ARGUMENT"
+            ? "A handle is 2 to 32 letters, digits, _, . or -, and a display name at most 64 characters."
+            : err instanceof Error
+              ? err.message
+              : String(err),
+      );
+    } finally {
+      setAccountBusy(false);
+    }
+  };
   // The status (protocol 6.7): chosen here, kept by the core, sent with the
   // servers watched and on every welcome.
   const [status, setStatus] = createSignal(myStatus().status);
@@ -632,6 +675,27 @@ function Profile(props: HomeProps) {
     <>
       <ChannelHeader kind="page" name="Profile" topic="How people see you" actions={[]} onBack={props.back} backLabel="Back to Home" />
       <div class="lu-page">
+        <Card title="Account" subtitle={`Who you are on ${opened()?.host || "this instance"}.`}>
+          <form class="auth__form" onSubmit={(e) => void saveAccount(e)}>
+            <TextField label="Handle" value={handle()} onInput={(e) => setHandle(e.currentTarget.value)} placeholder="yourname" autocomplete="username" autocapitalize="off" spellcheck={false} />
+            <Show when={hasIdentity.data === false}>
+              <TextField label="Display name" value={accountName()} onInput={(e) => setAccountName(e.currentTarget.value)} placeholder="How people see you" autocomplete="nickname" />
+            </Show>
+            <Show when={accountError()}>
+              <p class="auth__error" role="alert">
+                {accountError()}
+              </p>
+            </Show>
+            <Show when={accountSaved()}>
+              <p class="auth__note" role="status">
+                Saved.
+              </p>
+            </Show>
+            <Button variant="primary" size="md" type="submit" disabled={accountBusy() || !handle().trim()}>
+              Save
+            </Button>
+          </form>
+        </Card>
         <Card title="Status" subtitle="What people see beside your name in a server's member list.">
           <form class="auth__form" onSubmit={(e) => void saveStatus(e)}>
             <SegmentedTabs label="Status" tabs={[{ id: "ONLINE", label: "Online" }, { id: "AWAY", label: "Away" }, { id: "DO_NOT_DISTURB", label: "Do not disturb" }]} value={status()} onChange={setStatus} />

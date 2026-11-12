@@ -344,8 +344,9 @@ async function linkSteps(which: string, page: Page, dataDir: string) {
   await page.getByLabel("Display name").fill("Linked Browser");
   await page.getByLabel("Pronouns").fill("they/them");
   await page.getByLabel("Bio").fill("Signed in by identity proof.");
-  await page.getByRole("button", { name: "Save", exact: true }).click();
-  await page.getByText("Saved.").waitFor();
+  // The signed profile's own Save: the account card over it has one too.
+  await page.locator("form", { has: page.getByLabel("Bio") }).getByRole("button", { name: "Save", exact: true }).click();
+  await page.getByText("Saved. This instance shows it now.").waitFor();
   await page.getByRole("button", { name: /^Linked Browser, / }).waitFor();
   // The status (protocol 6.7): chosen here, sent with the servers watched.
   await page.getByRole("tab", { name: "Away" }).click();
@@ -518,6 +519,49 @@ async function invite(which: string, dataDir: string, server: string) {
     await ctx.close();
   }
   console.log(`  ${which}: opened an invite, created an account from it and landed in the server in ${Date.now() - t0} ms`);
+}
+
+// The account's own handle and display name (`PATCH /account`), from the
+// Profile page's Account card, on a browser with no identity (one with an
+// identity keeps the name in its signed profile). An account of its own:
+// the others are signed in to by handle later.
+async function account(which: string, taken: string, stamp: number) {
+  const dir = resolve(work, `cli-account-${which}`);
+  const handle = `was${which}${stamp}`;
+  lumia(dir, "instance", "add", instance);
+  lumia(dir, "account", "create", "--handle", handle, "--password", password);
+  const { ctx, page } = await open(which, "account");
+  const t0 = Date.now();
+  try {
+    await trustCard(page);
+    await page.getByLabel("Email or handle").fill(handle);
+    await page.getByRole("textbox", { name: "Password" }).fill(password);
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await page.getByRole("button", { name: /account menu/ }).click();
+    await page.getByRole("menuitem", { name: "View profile" }).click();
+    const card = page.locator("form", { has: page.getByLabel("Handle") });
+    const save = card.getByRole("button", { name: "Save", exact: true });
+    phase("rename");
+    await page.getByLabel("Handle").fill(`now${which}${stamp}`);
+    await page.getByLabel("Display name").fill("Renamed Person");
+    await save.click();
+    await card.getByText("Saved.").waitFor();
+    await page.getByRole("button", { name: /^Renamed Person, / }).click();
+    await page.getByRole("menu").getByText(`@now${which}${stamp}`).waitFor();
+    await page.keyboard.press("Escape");
+    await page.screenshot({ path: `${out}/${which}-account.png` });
+    phase("taken");
+    await page.getByLabel("Handle").fill(taken);
+    await save.click();
+    await card.getByText("That handle is taken.").waitFor();
+    phase("not a handle");
+    await page.getByLabel("Handle").fill("A b");
+    await save.click();
+    await card.getByText("A handle is 2 to 32 letters").waitFor();
+  } finally {
+    await ctx.close();
+  }
+  console.log(`  ${which}: renamed its account, was refused a taken handle and one that is not a handle, in ${Date.now() - t0} ms`);
 }
 
 // A session revoked from elsewhere (protocol 12), as "sign out everywhere"
@@ -1035,6 +1079,7 @@ try {
       ["invite", () => invite(which, passwordDir, server)],
       ["create", () => create(which, `web${stamp}`, stamp)],
       ["revoked", () => revoked(which, stamp)],
+      ["account", () => account(which, `web${stamp}`, stamp)],
       ["push", () => webPush(which, `web${stamp}`, passwordDir, server, general, webAccount)],
       ["magic link", () => magicLink(which)],
       ["passkey", () => passkey(which, `web${stamp}`)],

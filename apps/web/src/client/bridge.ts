@@ -356,6 +356,16 @@ export class Bridge {
     return this.call("identitySetProfile", displayName, pronouns, bio, avatarUrl);
   }
   /** Asks the instance to mail a sign-in link to `email`. */
+  /**
+   * `PATCH /account`: this account's handle and display name on the
+   * instance. A value left out stays as it is and an empty display name
+   * clears it; resolves to the snapshot as it then is. `ALREADY_EXISTS`
+   * for a handle that is taken, `INVALID_ARGUMENT` for one that is not a
+   * handle or a name that is too long.
+   */
+  updateAccount(handle?: string, displayName?: string): Promise<SnapshotSummary> {
+    return this.call("updateAccount", handle, displayName);
+  }
   requestMagicLink(email: string): Promise<void> {
     return this.call("requestMagicLink", email);
   }
