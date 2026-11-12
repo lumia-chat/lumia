@@ -1,11 +1,4 @@
-This directory holds two desktop shells (architecture section 13). Read `../../docs/architecture.md` and `../../docs/plan.md` (steps 6 and 9) before changing anything here.
-
-- **The Rune shell**, the crate at this directory's root: the desktop app for macOS, Windows and Linux, in Rust on [Rune](https://github.com/anomalyco/rune) with the client core linked in. It has the SwiftUI macOS app's screens and bundles as a Mac app; nobody has used it by hand yet, and plan step 9 says what is open. macOS first.
-- **The Tauri shell**, `src-tauri/` with `package.json`: the web UI from `../web` on the system webview. It is what ships on Windows and Linux until the Rune shell reaches parity there, and is then removed.
-
-The two share nothing: separate Cargo workspaces, toolchains and lock files.
-
-# The Rune shell
+This is Lumia's desktop shell for macOS, Windows and Linux (architecture section 13): one Rust program on [Rune](https://github.com/anomalyco/rune) with the client core linked in. Read `../../docs/architecture.md` and `../../docs/plan.md` (step 9) before changing anything here. It has every screen the SwiftUI macOS app had and bundles as a Mac app; nobody has used it by hand yet, and there is no Windows or Linux package. Plan step 9 says what is open.
 
 ## Layout
 
@@ -36,18 +29,3 @@ The two share nothing: separate Cargo workspaces, toolchains and lock files.
 - A message is text someone else wrote. Its links open only as `http` or `https`, and the shell fetches nothing a message names (no images, no previews).
 - No `unwrap` or `expect` outside tests, and no `unsafe` (manifest lints). `cargo fmt`, `cargo clippy --all-targets -- -D warnings` and `cargo test` must pass, and `scripts/smoke.sh` against a dev instance after a change to a screen or the session.
 - What the shell does not do yet is listed in plan step 9. Say so in the screen's module comment when a flow is missing, and do not draw a control for it.
-
-# The Tauri shell
-
-## Layout
-
-- `src-tauri/`: the Rust crate, its own Cargo workspace so Tauri's dependency tree stays out of `apps/core`. `lib.rs` builds and runs the app; `main.rs` is the binary entry. `tauri.conf.json` points dev at vite on :5173 and production at `../web/dist`. `capabilities/default.json` is what the window may ask of the shell: `core:default` only. `icons/` is generated from `assets/brand/lumia-original-icon.png` by `tauri icon`.
-- Updates (architecture section 13, "Distribution"): `lib.rs` checks the release feed in `tauri.conf.json` (`plugins.updater`: GitHub's `latest.json`, the minisign public key) once at launch and asks before installing; `bundle.createUpdaterArtifacts` makes the signed archives, so a build needs `TAURI_SIGNING_PRIVATE_KEY` (CI's secret; `desktop.yml` turns the artifacts off instead). The version in `tauri.conf.json` is a placeholder; `.github/workflows/release.yml` writes the tag's on a release.
-- The UI, the bridge and the core are `../web`'s; nothing of the product lives here. The page knows it runs in the shell (`__TAURI_INTERNALS__`) and tells the worker, which makes the device NATIVE rather than WEB (identity spec).
-- The webview's origin is `tauri://localhost` on macOS and Linux and `https://tauri.localhost` on Windows; the instance accepts those for CORS and the gateway (`LumiaWeb.Plugs.Cors`), never as web-device origins.
-
-## Rules
-
-- Add a Tauri permission only with the feature that needs it, in `capabilities/default.json`, named in the commit.
-- `cargo fmt`, `cargo clippy -- -D warnings` in `src-tauri` must pass; CI builds the bundles on Linux and Windows.
-- Keep the shell thin: a feature that needs the shell's help (a tray, a notification, a file dialog) is a Tauri command here and a call through the bridge in `../web`, with the logic in the core.

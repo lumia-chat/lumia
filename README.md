@@ -33,7 +33,7 @@ apps/instance   Elixir (Phoenix); what one deployment runs
 apps/core       Rust client core: protocol, sync engine, local store, identity; lumia-cli
 apps/apple      SwiftUI: the iOS app, and the macOS app the desktop shell replaces
 apps/android    Jetpack Compose
-apps/desktop    The desktop shell for macOS, Windows and Linux, in Rust on Rune; and the Tauri shell it replaces
+apps/desktop    The desktop shell for macOS, Windows and Linux, in Rust on Rune
 apps/relay      Push relay for APNs and FCM
 apps/web        Web UI (SolidJS) for the browser
 assets/         Logo, icons, fonts and design tokens shared by every shell

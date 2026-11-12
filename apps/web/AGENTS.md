@@ -1,4 +1,4 @@
-This is the Lumia web UI (architecture section 13): SolidJS 1.9 with Vite, TanStack Solid Router, Solid Query and Solid Virtual, bun as package manager and script runner. It is the UI for the browser and for the Tauri shell in `apps/desktop`. Read `../../docs/architecture.md` and `../../docs/plan.md` (step 6) before changing anything here.
+This is the Lumia web UI (architecture section 13): SolidJS 1.9 with Vite, TanStack Solid Router, Solid Query and Solid Virtual, bun as package manager and script runner. It is the UI for the browser alone; the desktop apps are the native shell in `apps/desktop`. Read `../../docs/architecture.md` and `../../docs/plan.md` (step 6) before changing anything here.
 
 ## Layout
 

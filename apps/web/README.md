@@ -1,6 +1,6 @@
 # Lumia web
 
-The web UI, also the UI of the desktop shell. SolidJS and Vite, bun.
+The web UI, for the browser. SolidJS and Vite, bun.
 
 ```sh
 bun install

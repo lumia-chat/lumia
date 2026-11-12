@@ -15,7 +15,7 @@ if (file("google-services.json").exists()) {
 
 // A release's version is the tag's and its code the commit count, both
 // passed by scripts/release.sh; the values here are the development
-// build's placeholders, as tauri.conf.json's version is.
+// build's placeholders.
 val lumiaVersion = findProperty("lumiaVersion")?.toString() ?: "0.2.1"
 val lumiaBuild = findProperty("lumiaBuild")?.toString()?.toInt() ?: 3
 // The release key from the environment (scripts/release.sh names the

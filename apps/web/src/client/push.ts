@@ -3,7 +3,7 @@
 // to the instance through the worker client. Best effort: a browser
 // without push, a refused permission, or a push service that fails
 // (headless browsers) leave the app working without notifications.
-import { client, inShell } from "./state";
+import { client } from "./state";
 
 function keyBytes(base64url: string): Uint8Array<ArrayBuffer> {
   const padded = base64url.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - (base64url.length % 4)) % 4);
@@ -20,7 +20,7 @@ function encode(buffer: ArrayBuffer | null): string {
 
 /** Registers the service worker; resolves to the registration or null. */
 export async function registerServiceWorker(): Promise<ServiceWorkerRegistration | null> {
-  if (inShell() || typeof navigator === "undefined" || !("serviceWorker" in navigator)) return null;
+  if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return null;
   try {
     return await navigator.serviceWorker.register("/sw.js", { scope: "/" });
   } catch (e) {

@@ -6,7 +6,7 @@ import { Show, createResource, createSignal, onMount } from "solid-js";
 import { useNavigate, useParams, useSearch } from "@tanstack/solid-router";
 import { Button, Card } from "../design/components";
 import { ClientError, type InvitePreviewSummary } from "../client/bridge";
-import { SERVED_BY_INSTANCE, client, inShell, openInstance, opened, queryClient, refreshSignedIn, savedInstance } from "../client/state";
+import { SERVED_BY_INSTANCE, client, openInstance, opened, queryClient, refreshSignedIn, savedInstance } from "../client/state";
 import type { SignInSearch } from "./index";
 
 export function Invite() {
@@ -20,8 +20,7 @@ export function Invite() {
   // The instance the link is on: this page's origin when the instance
   // serves the UI, else the one the link named, else the saved one.
   onMount(() => {
-    const fixed = SERVED_BY_INSTANCE && !inShell();
-    setUrl(fixed ? location.origin : (search().instance ?? savedInstance()));
+    setUrl(SERVED_BY_INSTANCE ? location.origin : (search().instance ?? savedInstance()));
   });
 
   const [preview] = createResource(url, async (u): Promise<{ info: InvitePreviewSummary; signedIn: boolean }> => {

@@ -1,19 +1,19 @@
-# A release: on a v* tag, and only then, the desktop apps and the Android
+# A release: on a v* tag, and only then, the macOS app and the Android
 # APK are built, signed and attached to one GitHub Release (architecture
 # section 13, "Distribution"), and the iOS app is uploaded to App Store
 # Connect for TestFlight, the only channel an iPhone has. The release
 # starts as a draft and is published only when every job that attaches an
-# asset succeeds, so the "latest" feeds the apps read (Sparkle's
-# appcast.xml, Tauri's latest.json) never point at a half-built release;
-# the iOS upload does not gate it, since a TestFlight build can be re-sent
-# without a new tag.
+# asset succeeds, so the "latest" feed the app reads (Sparkle's
+# appcast.xml) never points at a half-built release; the iOS upload does
+# not gate it, since a TestFlight build can be re-sent without a new tag.
+# Windows and Linux have no job here until the desktop shell is packaged
+# for them (plan step 9).
 #
 # The version is the tag without its v. Secrets: DEVELOPER_ID_P12 and
 # DEVELOPER_ID_P12_PASSWORD (the Developer ID Application certificate with
 # its key, base64 of the .p12), ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_P8 (the
 # App Store Connect API key, base64 of the .p8; notarization and the iOS
 # upload), SPARKLE_PRIVATE_KEY (the appcast's EdDSA key),
-# TAURI_SIGNING_PRIVATE_KEY (the updater's minisign key),
 # ANDROID_KEYSTORE (the release keystore, base64 of the .jks),
 # ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD, and
 # GOOGLE_SERVICES_JSON (the Firebase project's file, for FCM; optional, the
@@ -178,61 +178,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
-  desktop:
-    needs: draft
-    strategy:
-      fail-fast: false
-      matrix:
-        # The oldest Ubuntu the runners offer, so the AppImage's glibc floor is low.
-        os: [ubuntu-22.04, windows-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.4.4"
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: "1.96.0"
-          targets: wasm32-unknown-unknown
-          components: llvm-tools
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: wasm-bindgen-cli@0.2.130
-      - if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            apps/core
-            apps/desktop/src-tauri
-          key: desktop
-      - run: bun install --frozen-lockfile
-        working-directory: apps/web
-      - run: bun install --frozen-lockfile
-        working-directory: apps/desktop
-      # The tag is the version; tauri.conf.json's is the development placeholder.
-      - run: bun -e 'const f = "src-tauri/tauri.conf.json"; const fs = require("fs"); const c = JSON.parse(fs.readFileSync(f)); c.version = process.env.GITHUB_REF_NAME.slice(1); fs.writeFileSync(f, JSON.stringify(c, null, 2) + "\n")'
-        working-directory: apps/desktop
-        shell: bash
-      # Builds ../web first (tauri.conf.json's beforeBuildCommand), then the
-      # bundles and the signed updater artifacts, and attaches them with
-      # latest.json to the draft release.
-      - uses: tauri-apps/tauri-action@v0
-        with:
-          projectPath: apps/desktop
-          tauriScript: bun tauri
-          tagName: ${{ github.ref_name }}
-          releaseDraft: true
-          includeUpdaterJson: true
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-
   publish:
-    needs: [macos, desktop, android]
+    needs: [macos, android]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4

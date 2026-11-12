@@ -22,21 +22,10 @@ defmodule LumiaWeb.Plugs.CorsTest do
     assert get_resp_header(conn, "vary") == ["origin"]
   end
 
-  test "the desktop shell's origin is allowed for the API and the gateway", %{conn: conn} do
-    conn =
-      conn
-      |> put_req_header("origin", "tauri://localhost")
-      |> put_req_header("access-control-request-method", "GET")
-      |> options(~p"/api/v1/account/snapshot")
-
-    assert conn.status == 204
-    assert get_resp_header(conn, "access-control-allow-origin") == ["tauri://localhost"]
-
-    assert Cors.socket_origin?(URI.parse("tauri://localhost"))
-    assert Cors.socket_origin?(URI.parse("https://tauri.localhost"))
-    assert Cors.socket_origin?(URI.parse("http://localhost:5173"))
+  test "the gateway takes the same origins as the API" do
+    assert Cors.socket_origin?(URI.parse(@allowed))
     assert Cors.socket_origin?(URI.parse(Lumia.Identity.own_origin()))
-    refute Cors.socket_origin?(URI.parse("https://evil.example"))
+    refute Cors.socket_origin?(URI.parse(@other))
   end
 
   test "a preflight from any other origin is refused", %{conn: conn} do

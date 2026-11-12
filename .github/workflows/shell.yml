@@ -5,9 +5,6 @@ on:
     branches: [master]
     paths:
       - "apps/desktop/**"
-      - "!apps/desktop/src-tauri/**"
-      - "!apps/desktop/package.json"
-      - "!apps/desktop/bun.lock"
       - "apps/core/crates/lumia-client/**"
       - "apps/core/crates/lumia-core/**"
       - "apps/core/crates/lumia-proto/**"
@@ -17,9 +14,6 @@ on:
   pull_request:
     paths:
       - "apps/desktop/**"
-      - "!apps/desktop/src-tauri/**"
-      - "!apps/desktop/package.json"
-      - "!apps/desktop/bun.lock"
       - "apps/core/crates/lumia-client/**"
       - "apps/core/crates/lumia-core/**"
       - "apps/core/crates/lumia-proto/**"

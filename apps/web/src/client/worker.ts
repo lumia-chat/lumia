@@ -23,11 +23,9 @@ async function dispatch(method: string, args: unknown[]): Promise<unknown> {
   await ensureInit();
   if (method === "open") {
     const baseUrl = String(args[0]);
-    const shell = args[1] === true;
-    const key = `${shell ? "shell" : "web"} ${baseUrl}`;
-    if (!client || openedFor !== key) {
-      client = await Client.open(baseUrl, await storeKey(), shell);
-      openedFor = key;
+    if (!client || openedFor !== baseUrl) {
+      client = await Client.open(baseUrl, await storeKey());
+      openedFor = baseUrl;
     }
     return { host: client.host(), deviceId: client.deviceId(), signedIn: client.signedIn() };
   }

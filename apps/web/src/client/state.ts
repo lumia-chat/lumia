@@ -57,14 +57,9 @@ export async function ensureOwner(): Promise<boolean> {
  */
 export const SERVED_BY_INSTANCE = import.meta.env.MODE === "instance";
 
-/** Whether the page runs inside the desktop shell (apps/desktop). */
-export function inShell(): boolean {
-  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-}
-
 /** Opens the client for `baseUrl` and remembers it. */
 export async function openInstance(baseUrl: string): Promise<Opened> {
-  const result = await client().open(baseUrl, inShell());
+  const result = await client().open(baseUrl);
   rememberInstance(baseUrl);
   setOpened(result);
   return result;
@@ -90,7 +85,7 @@ export { pushState };
 /** Whether this browser already registered the worker (and so asked before). */
 export async function checkPush(): Promise<void> {
   if (pushState() !== "unknown") return;
-  if (inShell() || typeof navigator === "undefined" || !("serviceWorker" in navigator) || !("PushManager" in window)) {
+  if (typeof navigator === "undefined" || !("serviceWorker" in navigator) || !("PushManager" in window)) {
     setPushState("unavailable");
     return;
   }

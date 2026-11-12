@@ -105,16 +105,12 @@ impl Client {
     /// Opens the client for the instance at `base_url`. The stores live in
     /// OPFS as `lumia-<host>-store.sqlite`, `lumia-<host>-keys.sqlite`,
     /// `lumia-identity-store.sqlite` and `lumia-identity-keys.sqlite`,
-    /// encrypted under `store_key` (32 bytes) when given. `shell` means
-    /// the desktop shell: the device is NATIVE, not origin-scoped WEB.
+    /// encrypted under `store_key` (32 bytes) when given. The device is a
+    /// WEB one, scoped to the page's origin.
     ///
     /// # Errors
     /// When the VFS cannot be installed or a store cannot be opened.
-    pub async fn open(
-        base_url: String,
-        store_key: Option<Vec<u8>>,
-        shell: bool,
-    ) -> Result<Client, JsError> {
+    pub async fn open(base_url: String, store_key: Option<Vec<u8>>) -> Result<Client, JsError> {
         ensure_vfs().await?;
         if let Some(k) = &store_key {
             if k.len() != 32 {
@@ -131,11 +127,7 @@ impl Client {
             };
             SqliteStore::open_on_vfs_keyed(&path, VFS, store_key.as_deref())
         });
-        let place = if shell {
-            Place::Native
-        } else {
-            Place::Web { origin: origin() }
-        };
+        let place = Place::Web { origin: origin() };
         let app = App::open(&base_url, place, opener).map_err(js)?;
         Ok(Self { app })
     }

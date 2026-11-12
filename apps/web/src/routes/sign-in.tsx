@@ -7,7 +7,7 @@ import { Show, createResource, createSignal, onMount } from "solid-js";
 import { useNavigate, useSearch } from "@tanstack/solid-router";
 import { Button, Card, Divider, TextField } from "../design/components";
 import { ClientError, type InstanceSummary } from "../client/bridge";
-import { SERVED_BY_INSTANCE, client, inShell, openInstance, savedInstance } from "../client/state";
+import { SERVED_BY_INSTANCE, client, openInstance, savedInstance } from "../client/state";
 import { assertForPasswordSignIn, passkeysAvailable, signInWithPasskey } from "../client/passkeys";
 import type { SignInSearch } from "./index";
 
@@ -95,9 +95,9 @@ export function SignIn() {
   };
 
   // Served by an instance, the instance is this page's origin: no address to ask for.
-  const fixed = () => SERVED_BY_INSTANCE && !inShell();
+  const fixed = SERVED_BY_INSTANCE;
   onMount(() => {
-    if (fixed()) setOpened(location.origin);
+    if (fixed) setOpened(location.origin);
     else if (search().instance) setOpened(search().instance ?? null);
   });
 
@@ -113,7 +113,7 @@ export function SignIn() {
 
   const connect = (e: Event) => {
     e.preventDefault();
-    if (fixed()) return;
+    if (fixed) return;
     setError("");
     const url = instance().trim().replace(/\/+$/, "");
     if (!/^https?:\/\//.test(url)) {
@@ -172,9 +172,9 @@ export function SignIn() {
       <Show
         when={info()}
         fallback={
-          <Card title="Welcome" subtitle={fixed() ? "Reaching this instance…" : "Which instance do you want to sign in to?"}>
+          <Card title="Welcome" subtitle={fixed ? "Reaching this instance…" : "Which instance do you want to sign in to?"}>
             <form class="auth__form" onSubmit={connect}>
-              <Show when={!fixed()}>
+              <Show when={!fixed}>
                 <TextField
                   label="Instance"
                   type="url"
@@ -189,7 +189,7 @@ export function SignIn() {
                   {error()}
                 </p>
               </Show>
-              <Show when={trust.loading && !fixed()}>
+              <Show when={trust.loading && !fixed}>
                 <p class="auth__note">Reaching the instance…</p>
               </Show>
               <Show when={trust.error}>
@@ -197,12 +197,12 @@ export function SignIn() {
                   Could not reach that instance: {String((trust.error as Error)?.message ?? trust.error)}
                 </p>
               </Show>
-              <Show when={!fixed()}>
+              <Show when={!fixed}>
                 <Button variant="primary" type="submit" block disabled={trust.loading}>
                   Continue
                 </Button>
               </Show>
-              <Show when={fixed() && trust.error}>
+              <Show when={fixed && trust.error}>
                 <Button variant="primary" type="button" block disabled={trust.loading} onClick={() => void refetch()}>
                   Try again
                 </Button>
@@ -219,7 +219,7 @@ export function SignIn() {
                 run by {i().operatorName || "an unnamed operator"}
                 {i().softwareVersion ? ` · Lumia ${i().softwareVersion}` : ""}
               </span>
-              <Show when={!fixed()}>
+              <Show when={!fixed}>
                 <button type="button" class="lu-link auth__change" onClick={() => { setInfo(null); setOpened(null); }}>
                   Change instance
                 </button>
