@@ -57,6 +57,27 @@ fn an_instance_shows_who_runs_it_before_asking_for_an_account() {
 }
 
 #[test]
+fn the_eye_in_the_password_field_shows_what_was_typed_and_hides_it_again() {
+    let mut rt = runtime(opened());
+    press(&mut rt, "password");
+    type_text(&mut rt, "correct horse");
+    assert!(!rt.state.sign_in.password.is_revealed());
+    assert!(
+        !words(&rt).contains("correct horse"),
+        "a password is not in the tree as typed"
+    );
+    assert!(words(&rt).contains("Show password"));
+
+    press(&mut rt, "show-password");
+    assert!(rt.state.sign_in.password.is_revealed());
+    assert!(words(&rt).contains("Hide password"));
+    assert_eq!(rt.state.sign_in.password.text, "correct horse");
+
+    press(&mut rt, "show-password");
+    assert!(!rt.state.sign_in.password.is_revealed());
+}
+
+#[test]
 fn refusals_are_worded_and_a_second_factor_is_asked_for_once() {
     let mut rt = runtime(opened());
     rt.update(|s, _| s.receive(&refusal("UNAUTHENTICATED", &[])));
@@ -102,7 +123,8 @@ fn the_shell_lands_on_the_first_server_and_its_first_channel() {
         "Messages in general",
         "Grace Hopper",
         "Ada Lovelace",
-        "Members · 2",
+        "Members",
+        "2 in this server",
         "Today",
         "Reading it now.",
     ] {
@@ -126,7 +148,7 @@ fn the_rail_goes_home_to_adding_a_server_and_to_the_profile() {
 
     press(&mut rt, "add-server");
     assert_eq!(rt.state.home_view, HomeView::AddServer);
-    press(&mut rt, "self");
+    open_profile(&mut rt);
     assert_eq!(rt.state.home_view, HomeView::Profile);
 
     press(&mut rt, "server-acme");

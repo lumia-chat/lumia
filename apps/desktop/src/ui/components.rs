@@ -80,8 +80,11 @@ pub fn tag(words: &str, look: Look) -> El {
         .child(text(words).font(t::TEXT_TAG_SMALL).color(look.c.accent_ink))
 }
 
+/// `element` with a token's shadow layers. The tokens list them as CSS does, the first on
+/// top, and Rune paints them in the order given, so they go on last first: the current
+/// server's ring is a gap in the rail's colour over a wider ring of the accent.
 pub fn shadowed(mut element: El, layers: &[rune::Shadow]) -> El {
-    for layer in layers {
+    for layer in layers.iter().rev() {
         element = element.box_shadow(*layer);
     }
     element
@@ -132,6 +135,60 @@ pub fn field(
     submit: impl Fn(&mut State, &mut rune::Tx) + 'static,
     look: Look,
 ) -> El {
+    field_with(key, label, edit, placeholder, None, access, submit, look)
+}
+
+/// The button at the end of a password field that shows what was typed, and hides it
+/// again: the board's eye, 38 points at `radius-9`.
+pub fn reveal_button(
+    key: impl Into<String>,
+    revealed: bool,
+    press: impl Fn(&mut State) + 'static,
+    look: Look,
+) -> El {
+    let c = look.c;
+    let label = if revealed {
+        "Hide password"
+    } else {
+        "Show password"
+    };
+    el().key(key)
+        .size(t::CONTROL_SMALL, t::CONTROL_SMALL)
+        .radius(t::RADIUS_9)
+        .center()
+        .role("button")
+        .label(label)
+        .help(label)
+        .hover(c.hover_icon)
+        .cursor(Cursor::Pointer)
+        .focusable(true)
+        .focus_ring(2.0, 0.0, c.focus)
+        .on_press(press)
+        .child(
+            icon(
+                if revealed {
+                    &t::icons::EYE_OFF
+                } else {
+                    &t::icons::EYE
+                },
+                t::SPACE_18,
+            )
+            .color(c.ink_quiet),
+        )
+}
+
+/// [`field`] with a control at its end, inside the frame.
+#[allow(clippy::too_many_arguments)]
+pub fn field_with(
+    key: impl Into<String>,
+    label: &str,
+    edit: &TextEdit,
+    placeholder: &str,
+    trail: Option<El>,
+    access: impl for<'a> Fn(&'a mut State) -> &'a mut TextEdit + 'static,
+    submit: impl Fn(&mut State, &mut rune::Tx) + 'static,
+    look: Look,
+) -> El {
     let c = look.c;
     let input = text_input(edit, t::TEXT_BODY)
         .key(key)
@@ -145,14 +202,23 @@ pub fn field(
         .on_submit(submit);
     // Focused, the border takes `border-focus` and the `ring-field` glow goes round it. An
     // element draws one ring, so the border's is on a box that lies over the frame's border.
-    let inner = row()
+    let mut inner = row()
         .w_full()
         .h_full()
-        .px(t::SPACE_14)
+        .pl(t::SPACE_14)
+        .pr(if trail.is_some() {
+            t::SPACE_4
+        } else {
+            t::SPACE_14
+        })
+        .gap(t::SPACE_4)
         .items_center()
         .radius(t::RADIUS_12)
         .focus_within_ring(1.0, -1.0, c.border_focus)
-        .child(input);
+        .child(input.grow(1.0).min_w(0.0));
+    if let Some(trail) = trail {
+        inner = inner.child(trail);
+    }
     let mut frame = row()
         .w_full()
         .h(t::CONTROL_HEIGHT)
@@ -459,6 +525,96 @@ pub fn icon_button(
                 .color(c.ink_quiet)
                 .group_color(c.ink_field),
         )
+}
+
+/// A menu and a profile card are this wide on the boards (260 and 300); the design system
+/// has no token for either.
+pub const MENU_WIDTH: f32 = 260.0;
+pub const CARD_WIDTH: f32 = 300.0;
+
+/// A menu floating beside the control keyed `anchor`, on the board's account menu's metrics.
+/// It traps focus, and Escape or a press outside closes it. Fill it with [`menu_item`]s and
+/// return it from `ui::overlay`.
+pub fn menu(
+    key: &'static str,
+    anchor: &str,
+    label: &str,
+    side: Side,
+    align: Align,
+    look: Look,
+) -> El {
+    let c = look.c;
+    shadowed(
+        col()
+            .key(key)
+            .w(MENU_WIDTH)
+            .padding(t::SPACE_6)
+            .gap(t::SPACE_2)
+            .radius(t::RADIUS_14)
+            .fill(c.surface)
+            .border(1.0, c.line_strong),
+        look.shadows.popover,
+    )
+    .anchored_fit(anchor, side, align, t::SPACE_6)
+    .modal(true, State::close_popover)
+    .role("menu")
+    .label(label)
+}
+
+/// A row of a [`menu`]: a glyph or whatever `lead` is, the words, and `trail` at the end.
+pub fn menu_item(
+    key: impl Into<String>,
+    lead: Option<El>,
+    label: &str,
+    trail: Option<El>,
+    press: impl Fn(&mut State) + 'static,
+    look: Look,
+) -> El {
+    let c = look.c;
+    let mut item = row()
+        .key(key)
+        .w_full()
+        .h(t::MENU_ITEM_HEIGHT)
+        .px(t::SPACE_10)
+        .gap(t::SPACE_10)
+        .items_center()
+        .radius(t::RADIUS_8)
+        .role("menuitem")
+        .label(label)
+        .hover(c.hover_member)
+        .cursor(Cursor::Pointer)
+        .focusable(true)
+        .focus_ring(2.0, 0.0, c.focus)
+        .on_press(press);
+    if let Some(lead) = lead {
+        item = item.child(lead);
+    }
+    item = item.child(
+        text(label)
+            .font(t::TEXT_MENU)
+            .color(c.ink_body)
+            .truncate()
+            .grow(1.0)
+            .min_w(0.0),
+    );
+    match trail {
+        Some(trail) => item.child(trail),
+        None => item,
+    }
+}
+
+/// The glyph a [`menu_item`] leads with.
+pub fn menu_glyph(glyph: &'static Icon, look: Look) -> El {
+    icon(glyph, t::SPACE_16).color(look.c.ink_body)
+}
+
+/// The rule between a [`menu`]'s groups.
+pub fn menu_rule(look: Look) -> El {
+    el().h(1.0)
+        .mx(t::SPACE_6)
+        .my(t::SPACE_2)
+        .fill(look.c.line)
+        .a11y_hidden()
 }
 
 /// The small heading over a group of rows. `top` is the room above it: 4 in the sidebar, 8

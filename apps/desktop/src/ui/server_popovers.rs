@@ -1,5 +1,5 @@
-//! The popovers a server's sidebar opens: "New channel" and "Invite people". Each is
-//! returned from `ui::overlay`, so it mounts at the window's root beside its link.
+//! The popovers the server's menu opens: "New channel" and "Invite people". Each is
+//! returned from `ui::overlay`, so it mounts at the window's root, under the server's name.
 
 use chrono::{DateTime, Local};
 use lumia_client::app::{InviteSummary, ServerSummary};
@@ -8,6 +8,7 @@ use rune::{El, ScrollSpec, col, row, text};
 use super::components::{
     Look, error_text, field, link_button, popover, primary_button, segmented, small_button,
 };
+use super::menus::SERVER_TITLE;
 use crate::app::State;
 use crate::tokens::{self as t};
 
@@ -25,7 +26,7 @@ pub fn new_channel(s: &State, look: Look) -> Option<El> {
     let form = &s.server_forms.channel;
     let mut surface = popover(
         "new-channel-popover",
-        "new-channel",
+        SERVER_TITLE,
         "New channel",
         &format!("A text channel everyone in {} can see.", server.name),
         CHANNEL_WIDTH,
@@ -168,7 +169,7 @@ pub fn invite(s: &State, look: Look) -> Option<El> {
     Some(
         popover(
             "invite-popover",
-            "invite-people",
+            SERVER_TITLE,
             "Invite people",
             &format!("A link to join {}.", server.name),
             INVITE_WIDTH,

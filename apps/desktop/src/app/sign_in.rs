@@ -104,6 +104,12 @@ impl State {
         }
     }
 
+    /// Shows the password as typed, or hides it again.
+    pub fn toggle_password(&mut self) {
+        let password = &mut self.sign_in.password;
+        password.set_revealed(!password.is_revealed());
+    }
+
     pub fn sign_out(&mut self) {
         self.session.sign_out();
         self.leave_shell();
@@ -116,6 +122,7 @@ impl State {
         match answer {
             Ok(()) => {
                 self.sign_in.password.clear();
+                self.sign_in.password.set_revealed(false);
                 self.sign_in.totp.clear();
                 self.sign_in.needs_totp = false;
                 self.sign_in.forget_magic_link();

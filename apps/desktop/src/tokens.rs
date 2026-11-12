@@ -57,6 +57,18 @@ pub const CONTROL_PANE: f32 = AVATAR_LG;
 pub const CONTROL_SMALL: f32 = ROW_HEIGHT + SPACE_6;
 /// The sidebar's title row (38), as tall as a small button.
 pub const TITLE_ROW_HEIGHT: f32 = CONTROL_SMALL;
+/// A menu's row (36), at `radius-8`: the account menu on the Quiet Split.
+pub const MENU_ITEM_HEIGHT: f32 = ROW_HEIGHT + SPACE_4;
+/// The avatar on a profile card (72), which rides half over the card's banner (64).
+pub const AVATAR_CARD: f32 = AVATAR_LG + ROW_HEIGHT;
+pub const CARD_BANNER: f32 = HEADER_HEIGHT;
+/// A line of a profile card (20): 13.5 at 400, the label's size at the body's weight.
+pub const CARD_LINE: f32 = SPACE_18 + SPACE_2;
+pub const TEXT_CARD_LINE: TextStyle = TextStyle {
+    weight: TEXT_BODY.weight,
+    line_height: CARD_LINE,
+    ..TEXT_LABEL
+};
 /// The icon button beside the sidebar's title (34), at `radius-9`.
 pub const ICON_BUTTON: f32 = ROW_HEIGHT + SPACE_2;
 /// A segment of a segmented control (34), at `radius-9`.
@@ -91,6 +103,17 @@ pub const TEXT_BUTTON_PANE: TextStyle = TextStyle {
     weight: TEXT_BUTTON.weight,
     ..TEXT_BUTTON_SECONDARY
 };
+/// A menu's row and a line of a profile card (14 at 400): the compact size on one line.
+pub const TEXT_MENU: TextStyle = TextStyle {
+    line_height: TEXT_MEMBER.line_height,
+    ..TEXT_COMPACT
+};
+/// The initials on a profile card's avatar (22 at 700): no token is near; the author's
+/// weight at the size the board draws.
+pub const TEXT_CARD_INITIALS: TextStyle = TextStyle {
+    size: 22.0,
+    ..TEXT_AUTHOR
+};
 /// A segment of a segmented control: `text-label`'s usage line, "tabs use 700".
 pub const TEXT_TAB: TextStyle = TextStyle {
     weight: TEXT_AUTHOR.weight,
@@ -121,7 +144,9 @@ pub const TEXT_MONOGRAM_REST: TextStyle = TextStyle {
 /// those are a text token's size at the author's weight; the two smallest are worked from
 /// the count style, 11 at 700 (28 takes it as it is, a point over the board).
 pub fn initials(size: f32) -> TextStyle {
-    let sized = if size >= AVATAR_LG {
+    let sized = if size >= AVATAR_CARD - SPACE_8 {
+        TEXT_CARD_INITIALS
+    } else if size >= AVATAR_LG {
         TEXT_MEMBER
     } else if size >= AVATAR_SELF {
         TEXT_LINK_SM

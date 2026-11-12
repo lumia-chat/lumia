@@ -10,14 +10,14 @@
 //! Drawn as the sign-in boards draw it: the stacked logo, the card, the line under it. Under
 //! the primary button an "or" rule, then every other way in as an outlined button with its
 //! glyph. Of what the boards show, the shell has no "Keep me signed in", no "Forgot
-//! password?", no show-password button and no Help, Privacy and Terms links, so none is
-//! drawn; the trust card and the instance field are the shell's own, in the boards' terms.
+//! password?" and no Help, Privacy and Terms links, so none is drawn; the trust card and the instance field are the shell's own, in the boards' terms.
 
 use lumia_client::app::InstanceSummary;
 use rune::{Cursor, El, Tx, col, el, icon, row, text};
 
 use super::components::{
-    Look, card, error_text, field, link_button, notice, primary_button, wide_button,
+    Look, card, error_text, field, field_with, link_button, notice, primary_button, reveal_button,
+    wide_button,
 };
 use crate::app::State;
 use crate::tokens::{self as t, icons};
@@ -202,11 +202,17 @@ fn account_card(s: &State, info: &InstanceSummary, look: Look) -> (El, El) {
             submit,
             look,
         ))
-        .child(field(
+        .child(field_with(
             "password",
             "Password",
             &form.password,
             password_hint,
+            Some(reveal_button(
+                "show-password",
+                form.password.is_revealed(),
+                State::toggle_password,
+                look,
+            )),
             |s| &mut s.sign_in.password,
             submit,
             look,

@@ -59,6 +59,19 @@ pub enum HomeView {
 pub enum Popover {
     NewChannel,
     Invite,
+    /// The menu under a server's name in the sidebar.
+    ServerMenu,
+    /// The menu the rail's self avatar opens.
+    Account,
+    /// Someone's profile card, for `State::person`.
+    Person,
+}
+
+/// Whose profile card is open, and the control it hangs from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Person {
+    pub account_id: String,
+    pub anchor: String,
 }
 
 pub struct State {
@@ -72,6 +85,10 @@ pub struct State {
     /// Whether the shell has chosen its first place from a snapshot.
     placed: bool,
     pub popover: Option<Popover>,
+    /// Whose card `Popover::Person` shows.
+    pub person: Option<Person>,
+    /// What "Find a member" holds; the side panel lists the members it matches.
+    pub member_filter: TextEdit,
     pub draft: TextEdit,
     pub home: home::Home,
     pub server_forms: server::ServerForms,
@@ -101,6 +118,8 @@ impl State {
             home_view: HomeView::default(),
             placed: false,
             popover: None,
+            person: None,
+            member_filter: TextEdit::new(""),
             draft: TextEdit::new(""),
             home: home::Home::default(),
             server_forms: server::ServerForms::default(),
@@ -131,6 +150,7 @@ impl State {
         self.placed = true;
         self.popover = None;
         self.draft.clear();
+        self.member_filter.clear();
         self.session.watch_presence(&[server_id.to_string()]);
         let first = self
             .session
@@ -190,6 +210,32 @@ impl State {
 
     pub fn close_popover(&mut self) {
         self.popover = None;
+    }
+
+    /// Opens the menu under the server's name.
+    pub fn open_server_menu(&mut self) {
+        if self.server_id().is_some() {
+            self.open_popover(Popover::ServerMenu);
+        }
+    }
+
+    /// Opens the profile card of `account_id` beside the control keyed `anchor`.
+    pub fn open_person(&mut self, account_id: &str, anchor: &str) {
+        self.person = Some(Person {
+            account_id: account_id.to_string(),
+            anchor: anchor.to_string(),
+        });
+        self.open_popover(Popover::Person);
+    }
+
+    /// The card's "Message": New message at Home, already asking for the conversation, so
+    /// it opens there or the page says a request went out.
+    pub fn message_person(&mut self) {
+        let Some(person) = self.person.take() else {
+            return;
+        };
+        self.go_home(HomeView::NewMessage);
+        self.start_dm(&person.account_id);
     }
 
     /// Sends the draft to the open conversation.

@@ -758,7 +758,7 @@ fn sign_out_is_on_the_profile_page_and_nowhere_in_the_sidebar() {
         "the sidebar's foot holds no account strip"
     );
 
-    press(&mut rt, "self");
+    open_profile(&mut rt);
     assert_eq!(rt.state.place, Place::Home);
     assert_eq!(rt.state.home_view, HomeView::Profile);
     assert!(words(&rt).contains("Signed in to 127.0.0.1:9 as Ada Lovelace."));
@@ -772,6 +772,6 @@ fn pressing_the_avatar_again_keeps_what_is_being_typed() {
     let mut rt = at_profile();
     press(&mut rt, "custom-status");
     type_text(&mut rt, "Brb");
-    press(&mut rt, "self");
+    open_profile(&mut rt);
     assert_eq!(rt.state.account.profile.custom_status.text, "Brb");
 }

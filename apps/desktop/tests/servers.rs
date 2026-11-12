@@ -142,7 +142,7 @@ fn adding() -> Runtime<State> {
 /// Signed in, in Acme Works, with "Invite people" open.
 fn inviting() -> Runtime<State> {
     let mut rt = runtime(signed_in());
-    press(&mut rt, "invite-people");
+    open_invites(&mut rt);
     assert_eq!(rt.state.popover, Some(Popover::Invite));
     rt
 }
@@ -415,15 +415,44 @@ fn an_invite_to_a_server_already_joined_opens_it_at_once() {
     assert_eq!(rt.state.server_id(), Some("garden"));
 }
 
-// ---- The sidebar's links ------------------------------------------------------------------
+// ---- The server's menu --------------------------------------------------------------------
 
 #[test]
-fn a_server_sidebar_offers_a_new_channel_and_inviting_people() {
-    let rt = runtime(signed_in());
-    assert!(rt.find("new-channel").is_some() && rt.find("invite-people").is_some());
+fn the_servers_name_opens_a_menu_with_inviting_people_and_a_new_channel() {
+    let mut rt = runtime(signed_in());
+    let shown = words(&rt);
+    assert!(
+        !shown.contains("New channel") && !shown.contains("Invite people"),
+        "the sidebar itself holds neither: {shown}"
+    );
+    assert!(rt.state.popover.is_none());
+
+    press(&mut rt, "server-title");
+    assert_eq!(rt.state.popover, Some(Popover::ServerMenu));
+    let menu = rt
+        .elements()
+        .into_iter()
+        .find(|e| e.key.as_deref() == Some("server-menu"))
+        .unwrap();
+    assert_eq!(menu.role, "menu");
+    assert_eq!(menu.label.as_deref(), Some("Acme Works"));
     let shown = words(&rt);
     assert!(shown.contains("New channel") && shown.contains("Invite people"));
-    assert!(rt.state.popover.is_none());
+    for behind in ["composer", "channel-design", "server-garden"] {
+        assert!(inert(&rt, behind), "{behind} is inert behind the menu");
+    }
+
+    key(&mut rt, Key::Escape);
+    assert!(rt.state.popover.is_none() && rt.find("server-menu").is_none());
+    assert_eq!(focused(&rt).as_deref(), Some("server-title"));
+}
+
+#[test]
+fn the_pencil_beside_a_servers_name_goes_to_a_new_message() {
+    let mut rt = runtime(signed_in());
+    press(&mut rt, "new-message");
+    assert_eq!(rt.state.place, Place::Home);
+    assert_eq!(rt.state.home_view, HomeView::NewMessage);
 }
 
 #[test]
@@ -439,16 +468,16 @@ fn a_server_with_no_channel_says_where_to_add_one() {
     press(&mut rt, "server-bare");
     let shown = words(&rt);
     assert!(
-        shown.contains("No channels yet. Add one with New channel below."),
+        shown.contains("No channels yet. Add one from the menu under the server’s name."),
         "{shown}"
     );
     assert!(
         shown.contains(
-            "Add a channel with New channel in the sidebar, or a server with the rail’s plus."
+            "Add a channel from the menu under the server’s name, or a server with the rail’s plus."
         ),
         "{shown}"
     );
-    assert!(rt.find("new-channel").is_some());
+    assert!(rt.find("server-title").is_some());
 }
 
 // ---- New channel --------------------------------------------------------------------------
@@ -456,7 +485,7 @@ fn a_server_with_no_channel_says_where_to_add_one() {
 #[test]
 fn the_new_channel_popover_opens_traps_focus_and_closes() {
     let mut rt = runtime(signed_in());
-    press(&mut rt, "new-channel");
+    open_new_channel(&mut rt);
     assert_eq!(rt.state.popover, Some(Popover::NewChannel));
     assert!(rt.find("new-channel-popover").is_some());
     let shown = words(&rt);
@@ -474,7 +503,12 @@ fn the_new_channel_popover_opens_traps_focus_and_closes() {
 
     // Focus starts in the name, and the shell behind is out of reach.
     assert_eq!(focused(&rt).as_deref(), Some("channel-name"));
-    for behind in ["composer", "channel-design", "server-garden", "new-channel"] {
+    for behind in [
+        "composer",
+        "channel-design",
+        "server-garden",
+        "server-title",
+    ] {
         assert!(inert(&rt, behind), "{behind} is inert behind the popover");
     }
     assert!(!inert(&rt, "channel-name"));
@@ -495,26 +529,26 @@ fn the_new_channel_popover_opens_traps_focus_and_closes() {
     );
     assert!(visited.iter().any(|k| k == "create-channel"), "{visited:?}");
 
-    // Escape closes it and gives focus back to the link that opened it.
+    // Escape closes it and gives focus back to the name it hangs from.
     key(&mut rt, Key::Escape);
     assert!(rt.state.popover.is_none());
     assert!(rt.find("new-channel-popover").is_none());
-    assert_eq!(focused(&rt).as_deref(), Some("new-channel"));
+    assert_eq!(focused(&rt).as_deref(), Some("server-title"));
     assert!(!inert(&rt, "composer"));
 
     // A press outside closes it too, and what was typed is still there on the way back.
-    press(&mut rt, "new-channel");
+    open_new_channel(&mut rt);
     assert_eq!(rt.state.popover, Some(Popover::NewChannel));
     press(&mut rt, "composer");
     assert!(rt.state.popover.is_none());
-    press(&mut rt, "new-channel");
+    open_new_channel(&mut rt);
     assert_eq!(rt.state.server_forms.channel.name.text, "planning");
 }
 
 #[test]
 fn a_channel_is_created_by_name_and_opens_once_the_snapshot_lists_it() {
     let mut rt = runtime(signed_in());
-    press(&mut rt, "new-channel");
+    open_new_channel(&mut rt);
     // Nothing is asked for without a name.
     rt.update(|s, _| s.create_channel());
     assert!(!rt.state.server_forms.channel.busy);
@@ -560,7 +594,7 @@ fn a_channel_is_created_by_name_and_opens_once_the_snapshot_lists_it() {
 #[test]
 fn the_create_button_makes_the_channel_too() {
     let mut rt = runtime(signed_in());
-    press(&mut rt, "new-channel");
+    open_new_channel(&mut rt);
     type_text(&mut rt, "planning");
     press(&mut rt, "create-channel");
     assert!(rt.state.server_forms.channel.busy);
@@ -569,7 +603,7 @@ fn the_create_button_makes_the_channel_too() {
 #[test]
 fn a_channel_the_instance_refuses_says_why_in_the_popover() {
     let mut rt = runtime(signed_in());
-    press(&mut rt, "new-channel");
+    open_new_channel(&mut rt);
     type_text(&mut rt, "planning");
     press(&mut rt, "create-channel");
     answer(
@@ -596,14 +630,14 @@ fn a_channel_the_instance_refuses_says_why_in_the_popover() {
 
     // The refusal is gone the next time the popover opens.
     key(&mut rt, Key::Escape);
-    press(&mut rt, "new-channel");
+    open_new_channel(&mut rt);
     assert!(!words(&rt).contains("a channel name has no spaces"));
 }
 
 #[test]
 fn a_channel_made_in_a_server_the_person_left_does_not_follow_them() {
     let mut rt = runtime(signed_in());
-    press(&mut rt, "new-channel");
+    open_new_channel(&mut rt);
     type_text(&mut rt, "planning");
     press(&mut rt, "create-channel");
     key(&mut rt, Key::Escape);
@@ -656,7 +690,7 @@ fn the_invite_popover_opens_traps_focus_and_closes() {
     assert_eq!(dialog.role, "dialog");
     // Focus starts at the top of the form, and the shell behind is out of reach.
     assert_eq!(focused(&rt).as_deref(), Some("invite-expiry-0"));
-    for behind in ["composer", "channel-general", "invite-people", "home"] {
+    for behind in ["composer", "channel-general", "server-title", "home"] {
         assert!(inert(&rt, behind), "{behind} is inert behind the popover");
     }
 
@@ -677,9 +711,9 @@ fn the_invite_popover_opens_traps_focus_and_closes() {
 
     key(&mut rt, Key::Escape);
     assert!(rt.state.popover.is_none() && rt.find("invite-popover").is_none());
-    assert_eq!(focused(&rt).as_deref(), Some("invite-people"));
+    assert_eq!(focused(&rt).as_deref(), Some("server-title"));
 
-    press(&mut rt, "invite-people");
+    open_invites(&mut rt);
     press(&mut rt, "member-grace");
     assert!(rt.state.popover.is_none(), "a press outside closes it");
 }
@@ -743,7 +777,7 @@ fn an_account_that_may_not_invite_is_told_so() {
 
     // Opening it again asks again, with the refusal cleared.
     key(&mut rt, Key::Escape);
-    press(&mut rt, "invite-people");
+    open_invites(&mut rt);
     assert_eq!(rt.state.server_forms.invite.error, "");
     answer(
         &mut rt,
@@ -1045,7 +1079,7 @@ fn one_servers_invites_are_not_shown_for_another() {
     key(&mut rt, Key::Escape);
 
     press(&mut rt, "server-garden");
-    press(&mut rt, "invite-people");
+    open_invites(&mut rt);
     assert!(words(&rt).contains("A link to join Garden."));
     assert!(rt.find("invites").is_none() && rt.find("copy-invite").is_none());
     assert_eq!(

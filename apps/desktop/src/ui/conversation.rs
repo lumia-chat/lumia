@@ -177,6 +177,21 @@ fn composer_off(reason: &str, look: Look) -> El {
         .child(frame)
 }
 
+/// The line under the composer. The board has who is typing at its start, which the
+/// protocol does not carry; its end says what Return does.
+fn composer_hint(look: Look) -> El {
+    row()
+        .w_full()
+        .px(t::SPACE_8)
+        .pt(t::SPACE_8)
+        .justify_end()
+        .child(
+            text("Return to send")
+                .font(t::TEXT_META)
+                .color(look.c.ink_muted),
+        )
+}
+
 fn composer(s: &State, placeholder: &str, look: Look) -> El {
     let c = look.c;
     let accent = c.accent;
@@ -202,14 +217,15 @@ fn composer(s: &State, placeholder: &str, look: Look) -> El {
         .label("Send")
         .disabled(!can_send)
         .child(icon(&icons::SEND, t::SPACE_18).color(c.on_accent));
-    send = if can_send {
-        send.cursor(Cursor::Pointer)
+    // The board draws the button at full strength over an empty field, so it is not
+    // dimmed here either; it is only inert until there is something to send.
+    if can_send {
+        send = send
+            .cursor(Cursor::Pointer)
             .focusable(true)
             .focus_ring(2.0, 2.0, c.focus)
-            .on_press_tx(|s: &mut State, tx| s.send(tx))
-    } else {
-        send.opacity(0.5)
-    };
+            .on_press_tx(|s: &mut State, tx| s.send(tx));
+    }
     let mut frame = row()
         .key("composer-box")
         .w_full()
@@ -244,4 +260,5 @@ fn composer(s: &State, placeholder: &str, look: Look) -> El {
         .pt(t::SPACE_4)
         .pb(t::SPACE_14)
         .child(frame)
+        .child(composer_hint(look))
 }

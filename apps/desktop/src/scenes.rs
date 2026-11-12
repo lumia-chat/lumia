@@ -95,6 +95,19 @@ pub const SCENES: &[Scene] = &[
         }));
         s.server_forms.invite.emailed = "pat@example.com".into();
     }),
+    // The menus and the profile card (`ui/menus.rs`).
+    ("server-menu", |s| {
+        servers_sample(s);
+        s.open_server_menu();
+    }),
+    ("account-menu", |s| {
+        servers_sample(s);
+        s.open_account_menu();
+    }),
+    ("person-card", |s| {
+        servers_sample(s);
+        s.open_person("grace", "member-grace");
+    }),
     // The account screens (`scenes/account.rs`).
     ("sign-in", account::sign_in),
     ("magic-sent", account::magic_sent),
@@ -134,13 +147,13 @@ fn servers_sample(state: &mut State) {
         participant_account_ids: Vec::new(),
         host: String::new(),
     };
-    let member = |id: &str, handle: &str, name: &str| MemberSummary {
+    let member = |id: &str, handle: &str, name: &str, pronouns: &str, bio: &str| MemberSummary {
         account_id: id.into(),
         handle: handle.into(),
         display_name: name.into(),
         nickname: String::new(),
-        pronouns: String::new(),
-        bio: String::new(),
+        pronouns: pronouns.into(),
+        bio: bio.into(),
     };
     state.receive(&Update::SignedIn(Ok(())));
     state.receive(&Update::Snapshot(Ok(SnapshotSummary {
@@ -167,8 +180,14 @@ fn servers_sample(state: &mut State) {
     state.receive(&Update::Members {
         server_id: "acme".into(),
         members: vec![
-            member("me", "ada", "Ada Lovelace"),
-            member("grace", "grace", "Grace Hopper"),
+            member("me", "ada", "Ada Lovelace", "", ""),
+            member(
+                "grace",
+                "grace",
+                "Grace Hopper",
+                "she/her",
+                "Compilers, and the nanosecond in my pocket.",
+            ),
         ],
     });
 }

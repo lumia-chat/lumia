@@ -1,19 +1,21 @@
-//! The app shell on the Quiet Split, as the design canvas draws it: the server rail, a sidebar on the ground, the main pane as a floating panel,
-//! and an aside panel. This file is the frame and the rail; what fills the frame is
-//! [`super::home`] at Home and [`super::server`] in a server.
+//! The app shell on the Quiet Split, as the design canvas draws it: the server rail, a
+//! sidebar on the ground, the main pane as a floating panel, and an aside panel. This file
+//! is the frame and the rail; what fills the frame is [`super::home`] at Home and
+//! [`super::server`] in a server.
 //!
 //! The board draws the window's traffic lights at the head of the rail, with the Home tile
 //! under them; [`TRAFFIC_LIGHTS`] is where the real ones are put to match. Where the frame
-//! leaves the board: nothing lifts on hover. Of what the board's rail shows, the shell has no unread dot or mention count on a
-//! server and no account menu, so none is drawn: the self avatar opens the profile page, and
-//! its dot says whether the gateway is connected.
+//! leaves the board: nothing lifts on hover, and the rail has no unread dot or mention
+//! count on a server, which the session does not count. The self avatar opens the account
+//! menu (`menus::account`), and its dot says whether the gateway is connected.
 
 use lumia_client::app::ServerSummary;
 use rune::{Cursor, El, col, el, icon, row, text};
 
-use super::components::{Look, avatar, initials, status_dot};
+use super::components::{Look, avatar, initials, shadowed, status_dot};
+use super::menus::{SELF_AVATAR, SERVER_TITLE};
 use super::{home, server};
-use crate::app::{HomeView, Place, State};
+use crate::app::{HomeView, Place, Popover, State};
 use crate::session::Connection;
 use crate::tokens::{self as t, icons};
 
@@ -85,13 +87,6 @@ fn rail_button(key: impl Into<String>, label: &str, look: Look) -> El {
         .focusable(true)
         .focus_ring(2.0, 2.0, look.c.focus)
         .no_window_drag()
-}
-
-fn shadowed(mut tile: El, layers: &[rune::Shadow]) -> El {
-    for layer in layers {
-        tile = tile.box_shadow(*layer);
-    }
-    tile
 }
 
 fn rail(s: &State, current: Option<&ServerSummary>, look: Look) -> El {
@@ -180,9 +175,10 @@ fn rail(s: &State, current: Option<&ServerSummary>, look: Look) -> El {
     );
     let connected = s.session.connection == Connection::Connected;
     let me = el()
-        .key("self")
+        .key(SELF_AVATAR)
         .role("button")
-        .label(format!("{}, open profile", s.session.self_name()))
+        .label(format!("{}, account menu", s.session.self_name()))
+        .expanded(s.popover == Some(Popover::Account))
         .help(format!(
             "{} · {}",
             s.session.self_name(),
@@ -193,7 +189,7 @@ fn rail(s: &State, current: Option<&ServerSummary>, look: Look) -> El {
         .focus_ring(2.0, 2.0, c.focus)
         .radius(t::AVATAR_SELF / 2.0)
         .no_window_drag()
-        .on_press(|s: &mut State| s.go_home(HomeView::Profile))
+        .on_press(State::open_account_menu)
         .child(avatar(
             s.session.self_name(),
             s.session.me(),
@@ -211,30 +207,56 @@ fn rail(s: &State, current: Option<&ServerSummary>, look: Look) -> El {
 // ---- Sidebar ----------------------------------------------------------------------------
 
 /// The sidebar column both places share: a title row with an optional control at its end,
-/// and whatever scrolls under it. Who is signed in, and Sign out, are on the profile page
-/// the rail's self avatar opens.
+/// and whatever scrolls under it.
 ///
-/// The board's title is a button that opens the server's menu, with a chevron; the shell
-/// has no such menu, so the title is a heading in the button's place and metrics.
-pub fn sidebar_frame(_s: &State, title: &str, trailing: Option<El>, body: El, look: Look) -> El {
+/// With `menu`, the title is the board's button: the name and a chevron, opening the menu
+/// `menu` opens. Without one it is a heading in the button's place and metrics.
+pub fn sidebar_frame(
+    s: &State,
+    title: &str,
+    menu: Option<fn(&mut State)>,
+    trailing: Option<El>,
+    body: El,
+    look: Look,
+) -> El {
     let c = look.c;
+    let name = text(title)
+        .font(t::TITLE_SERVER)
+        .color(c.ink)
+        .truncate()
+        .shrink()
+        .min_w(0.0)
+        .role("heading");
+    let mut titled = row()
+        .grow(1.0)
+        .min_w(0.0)
+        .h(t::TITLE_ROW_HEIGHT)
+        .px(t::SPACE_8)
+        .gap(t::SPACE_6)
+        .items_center()
+        .radius(t::RADIUS_9)
+        .child(name);
+    if let Some(open) = menu {
+        titled = titled
+            .key(SERVER_TITLE)
+            .role("button")
+            .label(format!("{title}, server menu"))
+            .expanded(s.popover == Some(Popover::ServerMenu))
+            .hover(c.hover_row)
+            .cursor(Cursor::Pointer)
+            .focusable(true)
+            .focus_ring(2.0, 0.0, c.focus)
+            .no_window_drag()
+            .on_press(open)
+            .child(icon(&icons::CHEVRON_DOWN, t::SPACE_14).color(c.ink_quiet));
+    }
     let mut title_row = row()
         .w_full()
-        .h(t::TITLE_ROW_HEIGHT)
-        .pl(t::SPACE_8)
         .mb(t::SPACE_10)
         .gap(t::SPACE_6)
         .items_center()
         .window_drag()
-        .child(
-            text(title)
-                .font(t::TITLE_SERVER)
-                .color(c.ink)
-                .truncate()
-                .grow(1.0)
-                .min_w(0.0)
-                .role("heading"),
-        );
+        .child(titled);
     if let Some(trailing) = trailing {
         title_row = title_row.child(trailing);
     }

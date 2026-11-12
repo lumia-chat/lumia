@@ -55,6 +55,24 @@ pub fn press(rt: &mut Runtime<State>, key: &str) {
     settle(rt);
 }
 
+/// "New channel", from the menu under the server's name.
+pub fn open_new_channel(rt: &mut Runtime<State>) {
+    press(rt, "server-title");
+    press(rt, "menu-new-channel");
+}
+
+/// "Invite people", from the menu under the server's name.
+pub fn open_invites(rt: &mut Runtime<State>) {
+    press(rt, "server-title");
+    press(rt, "menu-invite");
+}
+
+/// The profile page, from the account menu on the rail's self avatar.
+pub fn open_profile(rt: &mut Runtime<State>) {
+    press(rt, "self");
+    press(rt, "menu-profile");
+}
+
 pub fn type_text(rt: &mut Runtime<State>, text: &str) {
     for c in text.chars() {
         rt.key(KeyEvent {

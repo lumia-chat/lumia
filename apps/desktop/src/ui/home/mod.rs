@@ -126,7 +126,7 @@ pub fn sidebar(s: &State, look: Look) -> El {
         |s| s.go_home(HomeView::NewMessage),
         look,
     );
-    sidebar_frame(s, "Home", Some(new_message), body, look)
+    sidebar_frame(s, "Home", None, Some(new_message), body, look)
 }
 
 /// One of the three tiles under Home's title: a glyph over a word, with a count when

@@ -1,14 +1,14 @@
 //! A server on screen: its channels in the sidebar, the open channel as the conversation,
-//! and its members as the aside, grouped by presence. Under the channels, "New channel"
-//! and "Invite people" open their popovers (`server_popovers`).
+//! and its members as the aside, grouped by presence. The name opens the server's menu
+//! (`menus::server`), where "Invite people" and "New channel" are.
 
 use lumia_client::app::{MemberSummary, ServerSummary};
-use rune::{Cursor, El, ScrollSpec, col, el, row, text};
+use rune::{Cursor, El, ScrollSpec, col, el, icon, row, text, text_input};
 
-use super::components::{Look, avatar, link_button, panel, section_label, status_dot, tag};
+use super::components::{Look, avatar, icon_button, panel, section_label, status_dot, tag};
 use super::conversation::{self, Chrome};
 use super::shell::{ASIDE_WIDTH, sidebar_frame};
-use crate::app::State;
+use crate::app::{HomeView, State};
 use crate::session::display_name;
 use crate::tokens::{self as t, icons};
 
@@ -83,27 +83,13 @@ pub fn sidebar(s: &State, server: &ServerSummary, look: Look) -> El {
         .child(list);
     if !any {
         channels = channels.child(
-            text("No channels yet. Add one with New channel below.")
+            text("No channels yet. Add one from the menu under the server’s name.")
                 .font(t::TEXT_META)
                 .color(c.ink_quiet)
                 .wrap()
                 .padding(t::SPACE_10),
         );
     }
-    // Each link is the anchor of the popover it opens.
-    channels = channels
-        .child(row().px(t::SPACE_10).pt(t::SPACE_8).child(link_button(
-            "new-channel",
-            "New channel",
-            State::open_new_channel,
-            look,
-        )))
-        .child(row().px(t::SPACE_10).pt(t::SPACE_4).child(link_button(
-            "invite-people",
-            "Invite people",
-            State::open_invites,
-            look,
-        )));
     let body = col()
         .w_full()
         .grow(1.0)
@@ -112,7 +98,22 @@ pub fn sidebar(s: &State, server: &ServerSummary, look: Look) -> El {
             stick_bottom: false,
         })
         .child(channels);
-    sidebar_frame(s, &server.name, None, body, look)
+    // The board's control beside the name: a message to someone, which is Home's to start.
+    let new_message = icon_button(
+        "new-message",
+        &icons::COMPOSE,
+        "New message",
+        |s| s.go_home(HomeView::NewMessage),
+        look,
+    );
+    sidebar_frame(
+        s,
+        &server.name,
+        Some(State::open_server_menu),
+        Some(new_message),
+        body,
+        look,
+    )
 }
 
 /// The open channel, or what to say when there is none.
@@ -127,7 +128,7 @@ pub fn main(s: &State, server: &ServerSummary, look: Look) -> El {
             &icons::HASH,
             (
                 "No channel yet",
-                "Add a channel with New channel in the sidebar, or a server with the rail’s plus.",
+                "Add a channel from the menu under the server’s name, or a server with the rail’s plus.",
             ),
             look,
         );
@@ -148,7 +149,7 @@ pub fn main(s: &State, server: &ServerSummary, look: Look) -> El {
 
 // ---- Members ----------------------------------------------------------------------------
 
-/// The server's members.
+/// The server's members, the ones "Find a member" matches when it holds something.
 pub fn members(s: &State, server: &ServerSummary, look: Look) -> El {
     let c = look.c;
     let mut all: Vec<&MemberSummary> = s
@@ -158,23 +159,64 @@ pub fn members(s: &State, server: &ServerSummary, look: Look) -> El {
         .map(|m| m.iter().collect())
         .unwrap_or_default();
     all.sort_by_cached_key(|m| display_name(m).to_lowercase());
+    let total = all.len();
+    let wanted = s.member_filter.text.trim().to_lowercase();
+    if !wanted.is_empty() {
+        all.retain(|m| {
+            display_name(m).to_lowercase().contains(&wanted)
+                || m.handle.to_lowercase().contains(&wanted)
+        });
+    }
     let (here, away): (Vec<_>, Vec<_>) = all.iter().copied().partition(|m| {
         s.session
             .presence_of(&server.server_id, &m.account_id)
             .is_some()
     });
 
+    // The board's panel opens with two tabs, Members and Thread. The shell has no threads,
+    // so the first tab's words stand alone as the panel's heading.
     let heading = row()
         .w_full()
-        .h(t::HEADER_HEIGHT)
+        // As tall as the board's tab strip in its padding: a segment and 16 either side.
+        .h(t::SEGMENT_HEIGHT + t::SPACE_16 * 2.0)
         .px(t::SPACE_18)
+        .gap(t::SPACE_6)
         .items_center()
         .border_sides([0.0, 0.0, 1.0, 0.0], c.line)
         .child(
-            text(format!("Members · {}", all.len()))
+            text("Members")
                 .font(t::TEXT_TAB)
                 .color(c.ink)
                 .role("heading"),
+        )
+        .child(
+            text(total.to_string())
+                .font(t::TEXT_SECTION)
+                .color(c.ink_muted)
+                .label(format!("{total} in this server")),
+        );
+    let find = row()
+        .key("member-search")
+        .w_full()
+        .h(t::CONTROL_SMALL)
+        .px(t::SPACE_12)
+        .gap(t::SPACE_8)
+        .items_center()
+        .radius(t::RADIUS_10)
+        .fill(c.field)
+        .border(1.0, c.border_composer)
+        .focus_within_ring(1.0, -1.0, c.border_active)
+        .child(icon(&icons::SEARCH, t::SPACE_16).color(c.ink_quiet))
+        .child(
+            text_input(&s.member_filter, t::TEXT_MENU)
+                .key("find-member")
+                .label("Find a member")
+                .placeholder("Find a member", c.ink_muted)
+                .color(c.ink_field)
+                .caret(c.accent, c.accent_soft)
+                .grow(1.0)
+                .min_w(0.0)
+                .on_edit(|s: &mut State| &mut s.member_filter),
         );
     let mut list = col()
         .key("members")
@@ -195,38 +237,50 @@ pub fn members(s: &State, server: &ServerSummary, look: Look) -> El {
         }
     }
     if !away.is_empty() {
-        list = list.child(section_label(
-            format!(
-                "{} · {}",
-                if here.is_empty() {
-                    "Members"
-                } else {
-                    "Offline"
-                },
-                away.len()
-            ),
-            // More room over a group that follows another.
-            if here.is_empty() {
-                t::SPACE_8
-            } else {
-                t::SPACE_14
-            },
-            look,
-        ));
+        // With nobody known to be here the instance has said nothing about presence, and
+        // a group named for it would only repeat the heading.
+        if here.is_empty() {
+            list = list.child(el().h(t::SPACE_4));
+        } else {
+            list = list.child(section_label(
+                format!("Offline · {}", away.len()),
+                t::SPACE_14,
+                look,
+            ));
+        }
         for member in &away {
             list = list.child(member_row(s, server, member, look));
         }
     }
-    panel("aside", look).w(ASIDE_WIDTH).child(heading).child(
-        col()
-            .w_full()
-            .grow(1.0)
-            .min_h(0.0)
-            .scroll(ScrollSpec {
-                stick_bottom: false,
-            })
-            .child(list),
-    )
+    if all.is_empty() && !wanted.is_empty() {
+        list = list.child(
+            text("No member matches that.")
+                .font(t::TEXT_META)
+                .color(c.ink_quiet)
+                .wrap()
+                .padding(t::SPACE_10),
+        );
+    }
+    panel("aside", look)
+        .w(ASIDE_WIDTH)
+        .child(heading)
+        .child(
+            el().w_full()
+                .px(t::SPACE_14)
+                .pt(t::SPACE_12)
+                .pb(t::SPACE_6)
+                .child(find),
+        )
+        .child(
+            col()
+                .w_full()
+                .grow(1.0)
+                .min_h(0.0)
+                .scroll(ScrollSpec {
+                    stick_bottom: false,
+                })
+                .child(list),
+        )
 }
 
 fn member_row(s: &State, server: &ServerSummary, member: &MemberSummary, look: Look) -> El {
@@ -285,8 +339,10 @@ fn member_row(s: &State, server: &ServerSummary, member: &MemberSummary, look: L
         Some(_) => "online",
         None => "offline",
     };
+    let key = format!("member-{}", member.account_id);
+    let (id, anchor) = (member.account_id.clone(), key.clone());
     row()
-        .key(format!("member-{}", member.account_id))
+        .key(key)
         .w_full()
         .px(t::SPACE_10)
         .py(t::SPACE_6)
@@ -297,6 +353,11 @@ fn member_row(s: &State, server: &ServerSummary, member: &MemberSummary, look: L
         .hover(c.hover_member)
         .role("listitem")
         .label(format!("{name}, {status}"))
+        // The row opens the person's card, as the board's does.
+        .cursor(Cursor::Pointer)
+        .focusable(true)
+        .focus_ring(2.0, 0.0, c.focus)
+        .on_press(move |s: &mut State| s.open_person(&id, &anchor))
         .child(picture)
         .child(words)
 }

@@ -6,6 +6,7 @@ pub mod components;
 mod conversation;
 mod home;
 mod link;
+mod menus;
 mod server;
 mod server_popovers;
 mod shell;
@@ -39,5 +40,8 @@ fn overlay(s: &State, popover: Popover, look: Look) -> Option<El> {
     match popover {
         Popover::NewChannel => server_popovers::new_channel(s, look),
         Popover::Invite => server_popovers::invite(s, look),
+        Popover::ServerMenu => menus::server(s, look),
+        Popover::Account => menus::account(s, look),
+        Popover::Person => menus::person(s, look),
     }
 }

@@ -147,6 +147,22 @@ fn message_frame(
             part
         }
     };
+    // The avatar opens its person's card, as the board's does. The name stays text: it is
+    // part of what a selection copies, and a press on it starts one.
+    let mut picture = el().child(avatar(author, author_id, t::AVATAR_LG, look));
+    if !author_id.is_empty() {
+        let anchor = format!("avatar-{key}");
+        let (id, at) = (author_id.to_string(), anchor.clone());
+        picture = picture
+            .key(anchor)
+            .radius(t::AVATAR_LG / 2.0)
+            .role("button")
+            .label(format!("{author}, profile"))
+            .cursor(Cursor::Pointer)
+            .focusable(true)
+            .focus_ring(2.0, 2.0, c.focus)
+            .on_press(move |s: &mut State| s.open_person(&id, &at));
+    }
     let name = text(author).key("author").font(t::TEXT_AUTHOR).color(c.ink);
     let time = text(time).key("time").font(t::TEXT_META).color(c.ink_muted);
     let head = row()
@@ -165,7 +181,7 @@ fn message_frame(
         .radius(t::RADIUS_12)
         .hover(c.hover_message)
         .role("listitem")
-        .child(avatar(author, author_id, t::AVATAR_LG, look))
+        .child(picture)
         .child(
             col()
                 .grow(1.0)

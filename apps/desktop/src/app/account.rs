@@ -5,7 +5,7 @@
 
 use rune::{TextEdit, Tx};
 
-use super::{HomeView, Place, Route, State};
+use super::{HomeView, Place, Popover, Route, State};
 use crate::session::identity::IdentityUpdate;
 
 /// The label this computer's device carries in a link request, as the other desktop
@@ -18,6 +18,8 @@ pub struct Account {
     pub link: Link,
     pub devices: Devices,
     pub profile: Profile,
+    /// The status and custom text the account menu opened with, when the store had one.
+    pub menu_status: Option<(String, String)>,
 }
 
 /// The link screen (identity spec 4.2): the request to show, then the code to claim.
@@ -215,6 +217,28 @@ impl State {
     }
 
     // ---- Profile and status -------------------------------------------------------------
+
+    /// Opens the account menu with the status this person last chose.
+    pub fn open_account_menu(&mut self) {
+        let chosen = self.session.status();
+        self.account.menu_status = chosen.map(|c| (c.status, c.custom_status));
+        self.open_popover(Popover::Account);
+    }
+
+    /// The account menu's status rows: keeps `status` with the custom text already chosen,
+    /// and closes the menu. A refusal is the profile page's to show; the menu has no room.
+    pub fn choose_status(&mut self, status: &str) {
+        let custom = self
+            .account
+            .menu_status
+            .take()
+            .map(|(_, custom)| custom)
+            .unwrap_or_default();
+        if self.session.set_status(status, &custom).is_ok() {
+            self.account.profile.status = status.to_string();
+        }
+        self.close_popover();
+    }
 
     pub fn pick_status(&mut self, status: &str) {
         let form = &mut self.account.profile;
