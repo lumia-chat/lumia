@@ -1,12 +1,11 @@
 //! A server on screen: its channels in the sidebar, the open channel as the conversation,
-//! and its members as the aside, grouped by presence.
-//!
-//! Not here yet: a new channel and inviting people.
+//! and its members as the aside, grouped by presence. Under the channels, "New channel"
+//! and "Invite people" open their popovers (`server_popovers`).
 
 use lumia_client::app::{MemberSummary, ServerSummary};
 use rune::{Cursor, El, ScrollSpec, col, el, icon, row, text};
 
-use super::components::{Look, avatar, panel};
+use super::components::{Look, avatar, link_button, panel};
 use super::conversation::{self, Chrome};
 use super::shell::{ASIDE_WIDTH, sidebar_frame};
 use crate::app::State;
@@ -71,22 +70,38 @@ pub fn sidebar(s: &State, server: &ServerSummary, look: Look) -> El {
         .px(t::SPACE_10)
         .pt(t::SPACE_4)
         .pb(t::SPACE_6);
-    let mut body = col()
+    let mut channels = col().w_full().child(section).child(list);
+    if !any {
+        channels = channels.child(
+            text("No channels yet. Add one with New channel below.")
+                .font(t::TEXT_META)
+                .color(c.ink_quiet)
+                .wrap()
+                .padding(t::SPACE_10),
+        );
+    }
+    // Each link is the anchor of the popover it opens.
+    channels = channels
+        .child(row().px(t::SPACE_10).pt(t::SPACE_8).child(link_button(
+            "new-channel",
+            "New channel",
+            State::open_new_channel,
+            look,
+        )))
+        .child(row().px(t::SPACE_10).pt(t::SPACE_4).child(link_button(
+            "invite-people",
+            "Invite people",
+            State::open_invites,
+            look,
+        )));
+    let body = col()
         .w_full()
         .grow(1.0)
         .min_h(0.0)
         .scroll(ScrollSpec {
             stick_bottom: false,
         })
-        .child(col().w_full().child(section).child(list));
-    if !any {
-        body = body.child(
-            text("No channels yet.")
-                .font(t::TEXT_META)
-                .color(c.ink_quiet)
-                .padding(t::SPACE_10),
-        );
-    }
+        .child(channels);
     sidebar_frame(s, &server.name, None, body, look)
 }
 
@@ -100,7 +115,10 @@ pub fn main(s: &State, server: &ServerSummary, look: Look) -> El {
         return conversation::vacant(
             &server.name,
             &icons::HASH,
-            ("No channel yet", "This server has no channel you can see."),
+            (
+                "No channel yet",
+                "Add a channel with New channel in the sidebar, or a server with the rail’s plus.",
+            ),
             look,
         );
     };

@@ -239,7 +239,11 @@ impl State {
                 self.sign_in.error = format!("Could not reach that instance: {}", failure.message);
             }
             Update::SignedIn(answer) => self.signed_in(answer),
-            Update::Snapshot(Ok(_)) => self.settle(),
+            Update::Snapshot(Ok(_)) => {
+                self.settle();
+                // A server or a channel just made may be listed now.
+                self.open_made();
+            }
             Update::Snapshot(Err(_)) => {
                 // The instance no longer knows this session.
                 if !self.session.signed_in && self.route == Route::Shell {

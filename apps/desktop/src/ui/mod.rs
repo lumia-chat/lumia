@@ -5,6 +5,7 @@ pub mod components;
 mod conversation;
 mod home;
 mod server;
+mod server_popovers;
 mod shell;
 mod sign_in;
 mod timeline;
@@ -30,8 +31,9 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
 }
 
 /// The surface for the open popover. Each belongs to the part of the product that opens it.
-fn overlay(_s: &State, popover: Popover, _look: Look) -> Option<El> {
+fn overlay(s: &State, popover: Popover, look: Look) -> Option<El> {
     match popover {
-        Popover::NewChannel | Popover::Invite => None,
+        Popover::NewChannel => server_popovers::new_channel(s, look),
+        Popover::Invite => server_popovers::invite(s, look),
     }
 }
