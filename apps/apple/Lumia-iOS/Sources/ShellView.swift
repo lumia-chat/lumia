@@ -19,7 +19,7 @@ struct ShellView: View {
     var body: some View {
         NavigationStack(path: $path) {
             HStack(spacing: 0) {
-                PhoneRail(session: session, place: $place, add: { path = [.addServer] }, profile: { path = [.profile] })
+                PhoneRail(session: session, place: $place, add: { path = [.addServer] }, open: { path = [$0] })
                 switch place {
                 case .home:
                     HomeScreen(session: session, path: $path)
@@ -41,6 +41,7 @@ struct ShellView: View {
                 case .requests: RequestsScreen(session: session, path: $path)
                 case .devices: DevicesScreen(session: session)
                 case .profile: ProfileScreen(session: session)
+                case .preferences: PreferencesScreen()
                 case .newMessage: NewMessageScreen(session: session, path: $path)
                 case .addServer: AddServerScreen(session: session) { id in path = []; place = .server(id: id) }
                 case let .newChannel(serverID): NewChannelScreen(session: session, server: servers.first { $0.serverId == serverID }) { id in path = [.channel(id: id)] }
@@ -67,8 +68,10 @@ struct ShellView: View {
             }
             #if DEBUG
             // The smoke run (scripts/smoke-ios.sh) opens one screen per launch
-            // through LUMIA_DEV_SCREEN: home, server, channel, requests, devices, profile, new;
-            // the push smoke opens the account's first personal conversation with `conversation`.
+            // through LUMIA_DEV_SCREEN: home, server, channel, requests, devices, profile,
+            // preferences, new; the push smoke opens the account's first personal
+            // conversation with `conversation`. (LUMIA_DEV_APPEARANCE and LUMIA_DEV_DENSITY
+            // choose how that launch looks: `Preferences` in LumiaKit reads them.)
             if let first = ids.first, let screen = ProcessInfo.processInfo.environment["LUMIA_DEV_SCREEN"] {
                 let channel = snapshot?.channels.first { $0.serverId == first && !personalKinds.contains($0.kind) }
                 let conversation = snapshot?.channels.first { personalKinds.contains($0.kind) }
@@ -80,6 +83,7 @@ struct ShellView: View {
                 case "requests": place = .home; path = [.requests]
                 case "devices": place = .home; path = [.devices]
                 case "profile": place = .home; path = [.profile]
+                case "preferences": place = .home; path = [.preferences]
                 case "new": place = .home; path = [.newMessage]
                 case "add": place = .home; path = [.addServer]
                 case "newchannel": place = .server(id: first); path = [.newChannel(serverID: first)]

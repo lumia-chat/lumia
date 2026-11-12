@@ -4,16 +4,20 @@
 # two messages with the release CLI, installs the debug app, launches it
 # signed in as that account (the LUMIA_DEV_* environment a debug build
 # honours, passed through simctl's SIMCTL_CHILD_ prefix), and screenshots
-# each screen the LUMIA_DEV_SCREEN switch can open.
+# each screen the LUMIA_DEV_SCREEN switch can open. Three are drawn again
+# as Preferences can make them (LUMIA_DEV_APPEARANCE and LUMIA_DEV_DENSITY,
+# which choose for one launch and store nothing): Preferences and sign-in
+# dark, and the channel compact, light and dark.
 #
 #   scripts/smoke-ios.sh            # expects the app built for the simulator (xcodebuild, see AGENTS.md) and the CLI
 #   LUMIA_INSTANCE=http://host:4000 LUMIA_SIMULATOR="iPhone 15 Pro" scripts/smoke-ios.sh
+#   LUMIA_CLI=/path/to/lumia-cli scripts/smoke-ios.sh   # a CLI built elsewhere (another worktree)
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 root="$here/../../.."
 instance=${LUMIA_INSTANCE:-http://localhost:4000}
 simulator=${LUMIA_SIMULATOR:-iPhone 15 Pro}
-cli="$root/apps/core/target/release/lumia-cli"
+cli=${LUMIA_CLI:-$root/apps/core/target/release/lumia-cli}
 app="$here/../Lumia-iOS/.build/Build/Products/Debug-iphonesimulator/Lumia.app"
 work=${LUMIA_SMOKE_WORK:-$here/../.build/smoke-ios}
 rm -rf "$work" && mkdir -p "$work"
@@ -53,19 +57,27 @@ xcrun simctl terminate "$udid" "$bundle" 2>/dev/null || true
 xcrun simctl uninstall "$udid" "$bundle" 2>/dev/null || true
 xcrun simctl install "$udid" "$app"
 
-shoot() { # <screen> <seconds>
+shoot() { # <screen> <seconds> [<appearance> [<density>]]: the picture is named for all of them
   xcrun simctl terminate "$udid" "$bundle" 2>/dev/null || true
+  picture="$1${4:+-$4}${3:+-$3}"
+  # An appearance or a density left empty names none: the launch reads what the phone has kept, which is the defaults.
   SIMCTL_CHILD_LUMIA_DEV_INSTANCE="$instance" SIMCTL_CHILD_LUMIA_DEV_HANDLE="$handle" SIMCTL_CHILD_LUMIA_DEV_PASSWORD="$password" SIMCTL_CHILD_LUMIA_DEV_SCREEN="$1" SIMCTL_CHILD_LUMIA_DEV_NO_PUSH=1 \
+  SIMCTL_CHILD_LUMIA_DEV_APPEARANCE="${3:-}" SIMCTL_CHILD_LUMIA_DEV_DENSITY="${4:-}" \
     xcrun simctl launch "$udid" "$bundle" >/dev/null
   sleep "$2"
-  xcrun simctl io "$udid" screenshot "$work/$1.png" >/dev/null 2>&1
-  echo "  $1: $work/$1.png"
+  xcrun simctl io "$udid" screenshot "$work/$picture.png" >/dev/null 2>&1
+  echo "  $picture: $work/$picture.png"
 }
 shoot home 8
 alive=$(xcrun simctl spawn "$udid" launchctl list 2>/dev/null | grep -c "$bundle" || true)
 # The app sends nothing; the CLI's message lands in its view when the gateway is up.
 "$cli" --data-dir "$data" send "$channel" "Still here?" >/dev/null
-for screen in server channel requests devices profile new add newchannel invite signin link; do shoot "$screen" 6; done
+for screen in server channel requests devices profile preferences new add newchannel invite signin link; do shoot "$screen" 6; done
+# As Preferences can make them: dark, and the channel's messages compact.
+shoot preferences 6 dark
+shoot signin 6 dark
+shoot channel 6 "" compact
+shoot channel 6 dark compact
 xcrun simctl terminate "$udid" "$bundle" 2>/dev/null || true
 [ "$alive" -gt 0 ] || { echo "FAIL: the app was not running after launch"; exit 1; }
 echo "smoke-ios: ok (launched signed in, every screen screenshotted under $work)"

@@ -1,19 +1,99 @@
 // The things the simulator cannot do from the command line: answer the
 // notification permission prompt, tap a notification, type into a
-// composer, and read a screen as assistive technology does. scripts/
-// smoke-push.sh and scripts/smoke-typing.sh run these tests with the app
-// signed in (the LUMIA_DEV_* environment, passed through xcodebuild's
-// TEST_RUNNER_ prefix).
+// composer, make a choice in Preferences, and read a screen as assistive
+// technology does. scripts/smoke-push.sh, scripts/smoke-typing.sh and
+// scripts/smoke-preferences.sh run these tests with the app signed in
+// (the LUMIA_DEV_* environment, passed through xcodebuild's TEST_RUNNER_
+// prefix).
 import XCTest
 
 final class SmokeUITests: XCTestCase {
-    private func launch() -> XCUIApplication {
+    /// Launches the app with the runner's `LUMIA_DEV_*` environment, `screen`
+    /// in place of its `LUMIA_DEV_SCREEN` when given.
+    private func launch(screen: String? = nil) -> XCUIApplication {
         let app = XCUIApplication()
         for (key, value) in ProcessInfo.processInfo.environment where key.hasPrefix("LUMIA_DEV_") {
             app.launchEnvironment[key] = value
         }
+        if let screen { app.launchEnvironment["LUMIA_DEV_SCREEN"] = screen }
         app.launch()
         return app
+    }
+
+    /// Preferences by hand (scripts/smoke-preferences.sh): the account menu
+    /// on the rail's own avatar leads there, each choice is an element that
+    /// says whether it is the one selected, a choice takes effect as it is
+    /// made and is there at the next launch, which draws a channel by it.
+    /// The smoke looks at the screen at each step announced under
+    /// LUMIA_UITEST_STEPS: `menu`, `dark`, `kept` (a channel, dark and
+    /// compact from what was stored alone) and `system`.
+    func testPreferencesAreChosenAndKept() throws {
+        let steps = try XCTUnwrap(ProcessInfo.processInfo.environment["LUMIA_UITEST_STEPS"])
+        // A step is announced, then held for the smoke's screenshot of it.
+        let reached = { (step: String) in
+            try? step.write(toFile: "\(steps)/\(step)", atomically: true, encoding: .utf8)
+            sleep(4)
+        }
+        var app = launch(screen: "home")
+        /// Opens Preferences from the account menu, whose items are in the
+        /// web's and the desktop shell's order from the top.
+        func openPreferences() {
+            let account = app.descendants(matching: .any).matching(NSPredicate(format: "label ENDSWITH %@", ", account")).firstMatch
+            XCTAssertTrue(account.waitForExistence(timeout: 90), "no account menu on the rail")
+            account.tap()
+            // The system's menu is a collection of buttons (Home has a Devices of its own).
+            let items = ["View profile", "Preferences", "Devices"].map { app.collectionViews.buttons[$0] }
+            for item in items { XCTAssertTrue(item.waitForExistence(timeout: 10), "the account menu has no \(item)") }
+            XCTAssertEqual(items.map(\.frame.minY), items.map(\.frame.minY).sorted(), "View profile, Preferences, Devices from the top")
+        }
+        /// One of a card's choices, inside the group that says what is being chosen.
+        func choice(_ group: String, _ label: String) -> XCUIElement {
+            app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", group)).buttons[label]
+        }
+        /// Which of a group's choices say they are selected.
+        func selected(_ group: String, of labels: [String]) -> [String] {
+            labels.filter { choice(group, $0).isSelected }
+        }
+        let appearances = ["Light", "Dark", "System"]
+        let densities = ["Comfortable", "Compact"]
+
+        openPreferences()
+        _ = reached("menu")
+        app.collectionViews.buttons["Preferences"].tap()
+        for words in ["Preferences", "How Lumia looks on this phone", "Appearance", "Light, dark, or whichever this phone is in.", "Messages", "Comfortable gives each message room. Compact shows more of a conversation at once."] {
+            XCTAssertTrue(app.staticTexts[words].waitForExistence(timeout: 10), "the screen does not say \"\(words)\"")
+        }
+        for label in appearances { XCTAssertTrue(choice("Appearance", label).exists, "no \(label) under Appearance") }
+        for label in densities { XCTAssertTrue(choice("Message density", label).exists, "no \(label) under Message density") }
+        XCTAssertFalse(app.staticTexts["Scroll bars"].exists, "a phone's scroll indicators are the system's")
+        // As a new phone has them.
+        XCTAssertEqual(selected("Appearance", of: appearances), ["System"])
+        XCTAssertEqual(selected("Message density", of: densities), ["Comfortable"])
+
+        choice("Appearance", "Dark").tap()
+        XCTAssertEqual(selected("Appearance", of: appearances), ["Dark"])
+        choice("Message density", "Compact").tap()
+        XCTAssertEqual(selected("Message density", of: densities), ["Compact"])
+        _ = reached("dark")
+
+        // The next launch names neither choice: what it draws is what was kept.
+        app.terminate()
+        app = launch(screen: "channel")
+        XCTAssertTrue(app.descendants(matching: .any).matching(NSPredicate(format: "placeholderValue BEGINSWITH %@", "Message #")).firstMatch.waitForExistence(timeout: 90), "the channel did not open")
+        _ = reached("kept")
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Back to ")).firstMatch.tap()
+        openPreferences()
+        app.collectionViews.buttons["Preferences"].tap()
+        XCTAssertTrue(choice("Appearance", "Dark").waitForExistence(timeout: 10))
+        XCTAssertEqual(selected("Appearance", of: appearances), ["Dark"])
+        XCTAssertEqual(selected("Message density", of: densities), ["Compact"])
+
+        // And back, as it is made: the phone's own appearance again.
+        choice("Appearance", "System").tap()
+        choice("Message density", "Comfortable").tap()
+        XCTAssertEqual(selected("Appearance", of: appearances), ["System"])
+        XCTAssertEqual(selected("Message density", of: densities), ["Comfortable"])
+        _ = reached("system")
     }
 
     /// Accepts the prompt and keeps the app running while the link

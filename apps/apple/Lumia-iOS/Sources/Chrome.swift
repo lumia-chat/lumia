@@ -18,6 +18,7 @@ enum Screen: Hashable {
     case requests
     case devices
     case profile
+    case preferences
     case newMessage
     case addServer
     case newChannel(serverID: String)
@@ -28,7 +29,8 @@ struct PhoneRail: View {
     let session: LumiaSession
     @Binding var place: Place
     let add: () -> Void
-    let profile: () -> Void
+    /// Opens one of the account's own screens, from the menu on the avatar.
+    let open: (Screen) -> Void
 
     private var servers: [ServerSummary] { session.snapshot?.servers ?? [] }
 
@@ -51,11 +53,20 @@ struct PhoneRail: View {
                 Image(systemName: "plus").font(.system(size: 18, weight: .medium)).foregroundStyle(LumiaTokens.inkSecondary.color)
             }
             Spacer()
-            Button(action: profile) {
+            // The account menu, in the web's and the desktop shell's order.
+            // No board draws one for a phone, so it is the system's menu:
+            // the glyphs are the system's for the design's user, preferences
+            // and shield, and `fixed` keeps the order when it opens upwards.
+            Menu {
+                Button { open(.profile) } label: { Label("View profile", systemImage: "person") }
+                Button { open(.preferences) } label: { Label("Preferences", systemImage: "slider.horizontal.3") }
+                Button { open(.devices) } label: { Label("Devices", systemImage: "shield") }
+            } label: {
                 LumiaAvatar(initials: initials(of: session.selfName), tone: .of(session.me), size: LumiaTokens.avatarSelf)
             }
+            .menuOrder(.fixed)
             .buttonStyle(.plain)
-            .accessibilityLabel(session.selfName + ", open profile")
+            .accessibilityLabel(session.selfName + ", account")
         }
         .padding(.top, LumiaTokens.space8)
         .padding(.bottom, LumiaTokens.space12)

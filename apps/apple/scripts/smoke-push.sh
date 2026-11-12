@@ -10,12 +10,13 @@
 # them the conversation with a few more messages in it.
 #
 #   scripts/smoke-push.sh            # expects the app built for the simulator and the release CLI
+#   LUMIA_CLI=/path/to/lumia-cli scripts/smoke-push.sh   # a CLI built elsewhere (another worktree)
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 root="$here/../../.."
 instance=${LUMIA_INSTANCE:-http://localhost:4000}
 simulator=${LUMIA_SIMULATOR:-iPhone 15 Pro}
-cli="$root/apps/core/target/release/lumia-cli"
+cli=${LUMIA_CLI:-$root/apps/core/target/release/lumia-cli}
 app="$here/../Lumia-iOS/.build/Build/Products/Debug-iphonesimulator/Lumia.app"
 work=${LUMIA_SMOKE_WORK:-$here/../.build/smoke-push}
 rm -rf "$work" && mkdir -p "$work"

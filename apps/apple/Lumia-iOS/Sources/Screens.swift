@@ -8,10 +8,14 @@ import SwiftUI
 // MARK: Conversation
 
 struct ConversationScreen: View {
+    @Environment(Preferences.self) private var preferences
     let session: LumiaSession
     let channelID: String
     @State private var draft = ""
     @State private var error = ""
+
+    /// How much room the messages take: Preferences' density, here as in a channel.
+    private var measures: MessageMeasures { .of(preferences.density) }
 
     private var channel: ChannelSummary? { session.snapshot?.channels.first { $0.channelId == channelID } }
     private var state: DmChannelSummary? { session.dmChannels.first { $0.channelId == channelID } }
@@ -51,8 +55,8 @@ struct ConversationScreen: View {
                         let places = MessageBlocks.places(sent.map { MessageStamp(authorID: authorID(of: $0), atMicros: $0.sentAtMicros) })
                         ForEach(Array(zip(sent, places)), id: \.0.messageId) { m, place in
                             let who = m.mine ? session.selfName : (!m.senderAccountId.isEmpty || others.count != 1 ? session.name(of: m.senderAccountId) : session.name(of: others[0]))
-                            if place.startsDay { LumiaDayDivider(label: dayLabel(ofMicros: m.sentAtMicros)) }
-                            LumiaMessageRow(author: who, tone: .of(authorID(of: m)), time: time(ofMicros: m.sentAtMicros), text: m.body, deleted: m.deleted, place: place)
+                            if place.startsDay { LumiaDayDivider(label: dayLabel(ofMicros: m.sentAtMicros), measures: measures) }
+                            LumiaMessageRow(author: who, tone: .of(authorID(of: m)), time: time(ofMicros: m.sentAtMicros), text: m.body, deleted: m.deleted, place: place, measures: measures)
                                 .id(m.messageId)
                         }
                         if !error.isEmpty { LumiaErrorText(error).padding(.horizontal, LumiaTokens.space16) }
@@ -105,10 +109,15 @@ struct ConversationScreen: View {
 // MARK: Channel
 
 struct ChannelScreen: View {
+    @Environment(Preferences.self) private var preferences
     let session: LumiaSession
     let channelID: String
     @State private var draft = ""
     @State private var error = ""
+
+    /// How much room the messages take: Preferences' density. The list
+    /// only: the header, the composer and the typing line stay as they are.
+    private var measures: MessageMeasures { .of(preferences.density) }
 
     private var channel: ChannelSummary? { session.snapshot?.channels.first { $0.channelId == channelID } }
     private var server: ServerSummary? { session.snapshot?.servers.first { $0.serverId == channel?.serverId } }
@@ -127,8 +136,8 @@ struct ChannelScreen: View {
                         // each day's first message carries the day's divider.
                         let places = MessageBlocks.places(messages.map { MessageStamp(authorID: $0.authorAccountId, atMicros: $0.createdAtMicros) })
                         ForEach(Array(zip(messages, places)), id: \.0.messageId) { m, place in
-                            if place.startsDay { LumiaDayDivider(label: dayLabel(ofMicros: m.createdAtMicros)) }
-                            LumiaMessageRow(author: session.name(of: m.authorAccountId), tone: .of(m.authorAccountId), time: time(ofMicros: m.createdAtMicros), text: m.body, deleted: m.deleted, place: place)
+                            if place.startsDay { LumiaDayDivider(label: dayLabel(ofMicros: m.createdAtMicros), measures: measures) }
+                            LumiaMessageRow(author: session.name(of: m.authorAccountId), tone: .of(m.authorAccountId), time: time(ofMicros: m.createdAtMicros), text: m.body, deleted: m.deleted, place: place, measures: measures)
                                 .id(m.messageId)
                         }
                         if !error.isEmpty { LumiaErrorText(error).padding(.horizontal, LumiaTokens.space16) }
@@ -590,7 +599,7 @@ struct NewMessageScreen: View {
     }
 }
 
-// MARK: Devices
+// MARK: Profile
 
 // The person's own profile (architecture 6.4): the signed profile the
 // identity carries, display name, pronouns and bio, signed by this
@@ -620,7 +629,7 @@ struct ProfileScreen: View {
                 VStack(alignment: .leading, spacing: LumiaTokens.space12) {
                     LumiaCard(title: "Status", subtitle: "What people see beside your name in a server's member list.", width: nil) {
                         VStack(alignment: .leading, spacing: LumiaTokens.space12) {
-                            LumiaSegmentedTabs(tabs: [.init(id: "ONLINE", label: "Online"), .init(id: "AWAY", label: "Away"), .init(id: "DO_NOT_DISTURB", label: "Do not disturb")], selected: $status)
+                            LumiaSegmentedTabs("Status", tabs: [.init(id: "ONLINE", label: "Online"), .init(id: "AWAY", label: "Away"), .init(id: "DO_NOT_DISTURB", label: "Do not disturb")], selected: $status)
                             LumiaField("Custom status", text: $customStatus, placeholder: "At lunch")
                             if statusSaved {
                                 Text("Status saved.").font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkSecondary.color)
@@ -700,6 +709,38 @@ struct ProfileScreen: View {
         }
     }
 }
+
+// MARK: Preferences
+
+// How Lumia looks on this phone: light or dark (or as the phone is), and
+// how much room messages take. Each choice takes effect as it is made and
+// is kept on this phone (`Preferences` in LumiaKit); nothing here is the
+// account's or is sent to the instance. The desktop shell's page
+// (`apps/desktop/src/ui/home/preferences.rs`) without its scroll bars,
+// which on a phone are the system's. No board draws it, so it is the
+// Profile screen's cards with the design's segmented choice.
+struct PreferencesScreen: View {
+    @Environment(Preferences.self) private var preferences
+
+    var body: some View {
+        @Bindable var preferences = preferences
+        PanelScreen(back: "Home", title: "Preferences", subtitle: "How Lumia looks on this phone") {
+            ScrollView {
+                VStack(alignment: .leading, spacing: LumiaTokens.space12) {
+                    LumiaCard(title: "Appearance", subtitle: "Light, dark, or whichever this phone is in.", width: nil) {
+                        LumiaSegmentedTabs("Appearance", tabs: Appearance.allCases.map { .init(id: $0, label: $0.label) }, selected: $preferences.appearance)
+                    }
+                    LumiaCard(title: "Messages", subtitle: "Comfortable gives each message room. Compact shows more of a conversation at once.", width: nil) {
+                        LumiaSegmentedTabs("Message density", tabs: Density.allCases.map { .init(id: $0, label: $0.label) }, selected: $preferences.density)
+                    }
+                }
+                .padding(LumiaTokens.space16)
+            }
+        }
+    }
+}
+
+// MARK: Devices
 
 struct DevicesScreen: View {
     @Environment(AppStore.self) private var store

@@ -90,7 +90,8 @@ public struct LumiaEmptyState<Content: View>: View {
 /// time and the message; the ones after it are the message alone under
 /// those, in the same column (`MessageBlocks` says which is which). A
 /// phone has no pointer to show a later row's time under, so it shows
-/// none; assistive technology hears whose each row is and when.
+/// none; assistive technology hears whose each row is and when. How much
+/// room it takes is `measures`, which Preferences' density chooses.
 public struct LumiaMessageRow: View {
     public let author: String
     public let tone: AvatarTone
@@ -98,21 +99,11 @@ public struct LumiaMessageRow: View {
     public let text: String
     public var deleted = false
     public var place = MessagePlace()
+    public var measures = MessageMeasures.of(.standard)
     @State private var hovering = false
 
-    /// The room between one block and the next. The boards first drew 2
-    /// here, which read as crowded in the app (Ryan, 2026-11-12).
-    public static let blockGap = LumiaTokens.space8
-
-    /// Above and below a row inside its block. The boards draw a block's
-    /// messages as the paragraphs of one, 4 points between two line boxes;
-    /// a line box there has its leading in it and a `Text` here does not
-    /// (the leading is `lineSpacing`, between lines only), so two messages
-    /// stand that leading and the paragraph's 4 points apart, half from each.
-    static let within = (LumiaTokens.space4 + LumiaTokens.space4) / 2
-
-    public init(author: String, tone: AvatarTone, time: String, text: String, deleted: Bool = false, place: MessagePlace = MessagePlace()) {
-        self.author = author; self.tone = tone; self.time = time; self.text = text; self.deleted = deleted; self.place = place
+    public init(author: String, tone: AvatarTone, time: String, text: String, deleted: Bool = false, place: MessagePlace = MessagePlace(), measures: MessageMeasures = .of(.standard)) {
+        self.author = author; self.tone = tone; self.time = time; self.text = text; self.deleted = deleted; self.place = place; self.measures = measures
     }
 
     /// Whose a row is and when, as assistive technology hears it before the message.
@@ -121,14 +112,14 @@ public struct LumiaMessageRow: View {
     private var said: String { deleted ? "(deleted)" : text }
 
     public var body: some View {
-        HStack(alignment: .top, spacing: LumiaTokens.space14) {
+        HStack(alignment: .top, spacing: measures.beside) {
             if place.opens {
-                LumiaAvatar(initials: initials(of: author), tone: tone, size: LumiaTokens.avatarLg)
+                LumiaAvatar(initials: initials(of: author), tone: tone, size: measures.avatar)
             } else {
                 // The avatar's column, empty: the message lines up under the block's first.
-                Color.clear.frame(width: LumiaTokens.avatarLg, height: 0)
+                Color.clear.frame(width: measures.avatar, height: 0)
             }
-            VStack(alignment: .leading, spacing: LumiaTokens.space4) {
+            VStack(alignment: .leading, spacing: measures.underName) {
                 if place.opens {
                     HStack(alignment: .firstTextBaseline, spacing: LumiaTokens.space8) {
                         // The boards' inks, as the desktop shell's row has them.
@@ -138,7 +129,7 @@ public struct LumiaMessageRow: View {
                 }
                 Text(said)
                     .font(LumiaTokens.textMessage.font)
-                    .lineSpacing(LumiaTokens.space4)
+                    .lineSpacing(MessageMeasures.leading)
                     .foregroundStyle(deleted ? LumiaTokens.inkQuiet.color : LumiaTokens.inkBody.color)
                     .italic(deleted)
                     .textSelection(.enabled)
@@ -146,8 +137,8 @@ public struct LumiaMessageRow: View {
             }
         }
         .padding(.horizontal, LumiaTokens.space12)
-        .padding(.top, place.opens ? LumiaTokens.space8 : Self.within)
-        .padding(.bottom, place.closes ? LumiaTokens.space8 : Self.within)
+        .padding(.top, place.opens ? measures.edge : measures.within)
+        .padding(.bottom, place.closes ? measures.edge : measures.within)
         .background(hovering ? LumiaTokens.hoverMessage.color : .clear, in: RoundedRectangle(cornerRadius: LumiaTokens.radius12))
         .onHover { hovering = $0 }
         // One stop per message, the same whether or not the row shows its
@@ -155,13 +146,14 @@ public struct LumiaMessageRow: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Self.heading(author: author, time: time))
         .accessibilityValue(said)
-        .padding(.bottom, place.closes ? Self.blockGap : 0)
+        .padding(.bottom, place.closes ? measures.blockGap : 0)
     }
 }
 
 public struct LumiaDayDivider: View {
     public let label: String
-    public init(label: String) { self.label = label }
+    public var measures = MessageMeasures.of(.standard)
+    public init(label: String, measures: MessageMeasures = .of(.standard)) { self.label = label; self.measures = measures }
     public var body: some View {
         HStack(spacing: LumiaTokens.space12) {
             Rectangle().fill(LumiaTokens.line.color).frame(height: 1)
@@ -169,7 +161,7 @@ public struct LumiaDayDivider: View {
             Rectangle().fill(LumiaTokens.line.color).frame(height: 1)
         }
         .padding(.horizontal, LumiaTokens.space10)
-        .padding(.vertical, LumiaTokens.space8)
+        .padding(.vertical, measures.divider)
     }
 }
 
@@ -389,18 +381,25 @@ public struct LumiaMemberRow: View {
     }
 }
 
-/// The aside's tabs: one segment on a track, the current one raised.
-public struct LumiaSegmentedTabs: View {
+/// The design's segmented tabs: one segment each on a track, the current
+/// one raised. Also a row of choices where one is chosen (a status, an
+/// appearance): `label` names what is being chosen, and each segment is an
+/// element assistive technology reads with whether it is the one selected.
+public struct LumiaSegmentedTabs<ID: Hashable>: View {
     public struct Tab: Identifiable, Hashable {
-        public let id: String
+        public let id: ID
         public let label: String
         public let count: Int?
-        public init(id: String, label: String, count: Int? = nil) { self.id = id; self.label = label; self.count = count }
+        public init(id: ID, label: String, count: Int? = nil) { self.id = id; self.label = label; self.count = count }
     }
+    let label: String?
     let tabs: [Tab]
-    @Binding var selected: String
+    @Binding var selected: ID
 
-    public init(tabs: [Tab], selected: Binding<String>) { self.tabs = tabs; self._selected = selected }
+    public init(_ label: String? = nil, tabs: [Tab], selected: Binding<ID>) { self.label = label; self.tabs = tabs; self._selected = selected }
+
+    /// How far a label may shrink to fit its segment: to the tag's size from the button's.
+    static var narrowest: CGFloat { LumiaTokens.textTag.size / LumiaTokens.textButtonSecondary.size }
 
     public var body: some View {
         HStack(spacing: LumiaTokens.space4) {
@@ -408,18 +407,25 @@ public struct LumiaSegmentedTabs: View {
                 let on = tab.id == selected
                 Button { selected = tab.id } label: {
                     HStack(spacing: LumiaTokens.space6) {
-                        Text(tab.label).font(LumiaTokens.textButtonSecondary.font)
+                        // A label wider than its segment (a third of a phone's card
+                        // is narrower than "Do not disturb") is drawn smaller, not cut short.
+                        Text(tab.label).font(LumiaTokens.textButtonSecondary.font).lineLimit(1).minimumScaleFactor(Self.narrowest)
                         if let count = tab.count { Text("\(count)").font(LumiaTokens.textTag.font).foregroundStyle(LumiaTokens.inkSecondary.color) }
                     }
                     .foregroundStyle(on ? LumiaTokens.ink.color : LumiaTokens.inkQuiet.color)
                     .frame(maxWidth: .infinity).frame(height: 34)
                     .background(on ? LumiaTokens.tabActive.color : .clear, in: RoundedRectangle(cornerRadius: LumiaTokens.radius9))
+                    // The whole segment takes the tap, not only its word.
+                    .contentShape(RoundedRectangle(cornerRadius: LumiaTokens.radius9))
                 }
                 .buttonStyle(.plain)
+                .accessibilityAddTraits(on ? .isSelected : [])
             }
         }
         .padding(LumiaTokens.space4)
         .background(LumiaTokens.track.color, in: RoundedRectangle(cornerRadius: LumiaTokens.radius12))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(label ?? "")
     }
 }
 

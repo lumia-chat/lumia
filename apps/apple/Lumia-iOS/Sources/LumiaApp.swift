@@ -9,11 +9,15 @@ import SwiftUI
 struct LumiaApp: App {
     @UIApplicationDelegateAdaptor(PushDelegate.self) private var pushDelegate
     @State private var store = AppStore()
+    // This phone's choices (Preferences): outside the store, since they are
+    // not the account's and signing out leaves them be.
+    @State private var preferences = Preferences()
 
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environment(store)
+                .environment(preferences)
                 .background(LumiaTokens.bg.color)
         }
     }
@@ -21,6 +25,7 @@ struct LumiaApp: App {
 
 struct RootView: View {
     @Environment(AppStore.self) private var store
+    @Environment(Preferences.self) private var preferences
 
     #if DEBUG
     // The smoke run screenshots the sign-in and link screens past the
@@ -48,5 +53,9 @@ struct RootView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(LumiaTokens.bg.color)
+        // Light or dark for every screen, sign-in and linking included, and
+        // for what the system draws over them (a sheet, a menu, the
+        // keyboard); nil is the phone's own, followed as it changes.
+        .preferredColorScheme(preferences.appearance.colorScheme)
     }
 }
