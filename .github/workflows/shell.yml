@@ -1,0 +1,96 @@
+name: shell
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "apps/desktop/**"
+      - "!apps/desktop/src-tauri/**"
+      - "!apps/desktop/package.json"
+      - "!apps/desktop/bun.lock"
+      - "apps/core/crates/lumia-client/**"
+      - "apps/core/crates/lumia-core/**"
+      - "apps/core/crates/lumia-proto/**"
+      - "proto/**"
+      - "assets/**"
+      - ".github/workflows/shell.yml"
+  pull_request:
+    paths:
+      - "apps/desktop/**"
+      - "!apps/desktop/src-tauri/**"
+      - "!apps/desktop/package.json"
+      - "!apps/desktop/bun.lock"
+      - "apps/core/crates/lumia-client/**"
+      - "apps/core/crates/lumia-core/**"
+      - "apps/core/crates/lumia-proto/**"
+      - "proto/**"
+      - "assets/**"
+      - ".github/workflows/shell.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shell-${{ github.ref }}
+  cancel-in-progress: true
+
+# The desktop shell on Rune (the crate at the root of apps/desktop; architecture 13), on
+# Linux: format, lints, the screen tests through a windowless runtime, and one frame of the
+# real window drawn headlessly by a software Vulkan driver, kept as an artifact. The core is
+# a path dependency of the shell, so its crates start this job too.
+#
+# Linux only, because Linux minutes are the cheap ones. What it does not show: the Metal
+# build on macOS (run `cargo test` and `scripts/smoke.sh` there before a change lands; the
+# release workflow will build it) and anything on Windows (plan step 9).
+#
+# Run before this file was added, in ubuntu:24.04 containers: every step on arm64, and
+# every step but the drawing on x86-64 under emulation. There Mesa's software driver
+# offered no 16-bit floats in shaders and Rune's were refused (probably the emulated CPU's
+# missing instructions, which was not confirmed), so the drawing has not been seen to pass
+# on x86-64. Until a run on a real runner shows it does, that step may fail without failing
+# the job.
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - uses: actions/checkout@v4
+      # Rune links libxkbcommon and libwayland-client at build time. Drawing without a GPU
+      # needs Mesa's software Vulkan driver, and text beyond Latin needs fonts the image
+      # does not carry: the shell ships its own faces and falls back to the system's.
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libwayland-dev mesa-vulkan-drivers fonts-noto-cjk fonts-noto-color-emoji
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.1"
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop
+          key: shell
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked
+      - name: Draw the sign-in screen
+        timeout-minutes: 5
+        continue-on-error: true
+        env:
+          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.json
+          LUMIA_DATA_DIR: ${{ runner.temp }}/lumia
+        run: |
+          mkdir -p out
+          target/debug/lumia --snap out/sign-in.png --theme light
+          target/debug/lumia --snap out/sign-in-dark.png --theme dark
+          test -s out/sign-in.png && test -s out/sign-in-dark.png
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: shell-linux
+          path: apps/desktop/out/*.png
+          if-no-files-found: ignore
+          retention-days: 7
