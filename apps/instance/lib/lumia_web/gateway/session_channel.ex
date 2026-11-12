@@ -33,6 +33,7 @@ defmodule LumiaWeb.Gateway.SessionChannel do
   alias Lumia.Accounts
   alias Lumia.Auth
   alias Lumia.Authz.Access
+  alias Lumia.Authz.Permission
   alias Lumia.Events
   alias Lumia.Instance
   alias Lumia.Mls
@@ -47,6 +48,11 @@ defmodule LumiaWeb.Gateway.SessionChannel do
   # A subscription not re-resolved within this window is re-resolved before
   # its next delivery (authorization section 5).
   @staleness_ms :timer.minutes(10)
+  # Typing (protocol 6.7): how far ahead `until` is set, and how soon after
+  # one Typing frame the next for the same channel is fanned out. Clients
+  # send one every 5 s; a faster one is dropped.
+  @typing_seconds 8
+  @typing_spacing_ms 3_000
 
   # ---- Join ------------------------------------------------------------------
 
@@ -68,7 +74,8 @@ defmodule LumiaWeb.Gateway.SessionChannel do
         subscriptions: %{},
         account_seq: nil,
         hello: hello,
-        presence: %{status: "ONLINE", custom_status: "", watching: MapSet.new()}
+        presence: %{status: "ONLINE", custom_status: "", watching: MapSet.new()},
+        typing: nil
       )
 
     welcome = %V1.Welcome{
@@ -240,11 +247,46 @@ defmodule LumiaWeb.Gateway.SessionChannel do
     {:noreply, assign(socket, presence: presence)}
   end
 
-  defp handle_frame(:typing, %V1.Typing{}, socket), do: {:noreply, socket}
+  # Typing (protocol 6.7) is fanned out on the channel's topic to the other
+  # sessions subscribed to it, and is nothing else: no row, no event, no
+  # answer. It is taken only from a session subscribed to the channel, for
+  # an account that may post there, and never for a personal conversation,
+  # where the instance is not to learn who is writing to whom. The check is
+  # the subscription's cached view (at most the staleness window old), not
+  # a fresh resolve: what it guards is a hint that somebody is writing.
+  defp handle_frame(:typing, %V1.Typing{channel_id: id}, socket) do
+    channel_id = Proto.from_uuid(id)
+    now = System.monotonic_time(:millisecond)
+
+    with %{server_id: server_id, permissions: bits} when server_id != nil <-
+           socket.assigns.subscriptions[channel_id],
+         true <- Permission.has?(bits, :send_messages),
+         false <- typing_too_soon?(socket.assigns.typing, channel_id, now) do
+      indicator = %V1.TypingIndicator{
+        channel_id: id,
+        account_id: Proto.uuid(socket.assigns.account_id),
+        until: Proto.timestamp(DateTime.add(DateTime.utc_now(), @typing_seconds, :second))
+      }
+
+      Phoenix.PubSub.broadcast_from(
+        Lumia.PubSub,
+        self(),
+        Events.topic(channel_id),
+        {:typing, channel_id, socket.assigns.account_id, indicator}
+      )
+
+      {:noreply, assign(socket, :typing, {channel_id, now})}
+    else
+      _ -> {:noreply, socket}
+    end
+  end
 
   defp handle_frame(_tag, _body, socket) do
     {:noreply, push_error(socket, :INVALID_ARGUMENT, "unexpected frame")}
   end
+
+  defp typing_too_soon?({channel_id, at}, channel_id, now), do: now - at < @typing_spacing_ms
+  defp typing_too_soon?(_last, _channel_id, _now), do: false
 
   defp readable?(socket, channel_id) do
     Map.has_key?(socket.assigns.subscriptions, channel_id) or
@@ -402,6 +444,22 @@ defmodule LumiaWeb.Gateway.SessionChannel do
     case socket.assigns.subscriptions[channel_id] do
       %{delivered_seq: delivered} when head_seq > delivered ->
         {:noreply, replay(socket, channel_id)}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  # Someone is typing in a channel this session is subscribed to. Not shown
+  # to the account's own other devices, and not delivered on a subscription
+  # that is due a re-resolve: the next event settles whether the view is
+  # still held, and a hint is not worth a query.
+  def handle_info({:typing, channel_id, account_id, %V1.TypingIndicator{} = indicator}, socket) do
+    case socket.assigns.subscriptions[channel_id] do
+      %{} = sub when account_id != socket.assigns.account_id ->
+        if stale?(sub),
+          do: {:noreply, socket},
+          else: {:noreply, push_frame(socket, {:typing, indicator})}
 
       _ ->
         {:noreply, socket}

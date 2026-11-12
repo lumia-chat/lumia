@@ -139,6 +139,113 @@ defmodule LumiaWeb.Gateway.SessionChannelTest do
     end
   end
 
+  describe "typing" do
+    # A second member of the server, joined and subscribed to its channel.
+    defp second_member(ctx) do
+      other = account("other")
+      {:ok, _} = Servers.add_member(ctx.server.id, other.id, ctx.account.id)
+      {:ok, _session, tokens} = Auth.create_session(other.id, Ecto.UUID.generate())
+      {:ok, socket} = connect(Socket, %{}, connect_info: %{auth_token: tokens.access_token})
+      {_welcome, socket} = join!(socket)
+      subscribe(socket, ctx.channel.id, 0)
+      {other, socket}
+    end
+
+    defp typing(channel_id), do: {:typing, %V1.Typing{channel_id: Proto.uuid(channel_id)}}
+
+    test "is fanned out to the channel's other subscribers, until a few seconds ahead", ctx do
+      {_welcome, a} = join!(ctx.socket)
+      subscribe(a, ctx.channel.id, 0)
+      {_other, _b} = second_member(ctx)
+
+      send_frame(a, typing(ctx.channel.id))
+      channel_id = Proto.uuid(ctx.channel.id)
+      me = Proto.uuid(ctx.account.id)
+
+      assert_push "frame", %V1.ServerFrame{
+        frame:
+          {:typing, %V1.TypingIndicator{channel_id: ^channel_id, account_id: ^me, until: until}}
+      }
+
+      ahead = DateTime.diff(Proto.from_timestamp(until), DateTime.utc_now(), :millisecond)
+      assert ahead > 6_000 and ahead <= 8_000
+      # One push: to the other subscriber, and none back to the one typing.
+      refute_push "frame", %V1.ServerFrame{frame: {:typing, _}}
+    end
+
+    test "is not shown to the account's own other device", ctx do
+      {_welcome, a} = join!(ctx.socket)
+      subscribe(a, ctx.channel.id, 0)
+      {:ok, _session, tokens} = Auth.create_session(ctx.account.id, Ecto.UUID.generate())
+      {:ok, mine} = connect(Socket, %{}, connect_info: %{auth_token: tokens.access_token})
+      {_welcome, mine} = join!(mine)
+      subscribe(mine, ctx.channel.id, 0)
+
+      send_frame(a, typing(ctx.channel.id))
+      _ = :sys.get_state(mine.channel_pid)
+      refute_push "frame", %V1.ServerFrame{frame: {:typing, _}}
+    end
+
+    test "a second frame for the channel within three seconds is dropped", ctx do
+      {_welcome, a} = join!(ctx.socket)
+      subscribe(a, ctx.channel.id, 0)
+      {_other, _b} = second_member(ctx)
+
+      send_frame(a, typing(ctx.channel.id))
+      assert_push "frame", %V1.ServerFrame{frame: {:typing, _}}
+      send_frame(a, typing(ctx.channel.id))
+      refute_push "frame", %V1.ServerFrame{frame: {:typing, _}}
+
+      # Another channel is another matter: the person moved.
+      {:ok, design} = Servers.create_channel(ctx.server.id, ctx.account.id, "design")
+      send_frame(a, {:subscribe, %V1.Subscribe{cursors: cursors([design])}})
+      assert_push "frame", %V1.ServerFrame{frame: {:subscribe_result, _}}
+      Phoenix.PubSub.subscribe(Lumia.PubSub, Events.topic(design.id))
+      send_frame(a, typing(design.id))
+      assert_receive {:typing, _channel, _account, %V1.TypingIndicator{}}
+    end
+
+    test "is taken only from a subscriber who may post there", ctx do
+      {_welcome, a} = join!(ctx.socket)
+      {_other, b} = second_member(ctx)
+      Phoenix.PubSub.subscribe(Lumia.PubSub, Events.topic(ctx.channel.id))
+
+      # Not subscribed: nothing, and no error to tell a channel exists.
+      send_frame(a, typing(ctx.channel.id))
+      send_frame(a, typing(Ecto.UUID.generate()))
+      send_frame(a, {:typing, %V1.Typing{channel_id: "short"}})
+      _ = :sys.get_state(a.channel_pid)
+      refute_receive {:typing, _, _, _}, 50
+      refute_push "frame", %V1.ServerFrame{frame: {:error, _}}
+
+      # Subscribed, but posting is denied to everyone but the owner.
+      everyone =
+        Lumia.Repo.get_by!(Lumia.Servers.Role, server_id: ctx.server.id, is_everyone: true)
+
+      :ok =
+        Servers.set_overwrite(ctx.channel.id, ctx.account.id, {:role, everyone.id}, [], [
+          :send_messages
+        ])
+
+      # The change's own event is what makes the subscription resolve again.
+      assert_push "frame", {:event_bytes, _acl_changed}
+      send_frame(b, typing(ctx.channel.id))
+      _ = :sys.get_state(b.channel_pid)
+      refute_receive {:typing, _, _, _}, 50
+    end
+
+    test "is never fanned out for a personal conversation", ctx do
+      %{channel: dm} = personal_dm(ctx.account, nil)
+      {_welcome, a} = join!(ctx.socket)
+      subscribe(a, dm.id, 0)
+      Phoenix.PubSub.subscribe(Lumia.PubSub, Events.topic(dm.id))
+
+      send_frame(a, typing(dm.id))
+      _ = :sys.get_state(a.channel_pid)
+      refute_receive {:typing, _, _, _}, 50
+    end
+  end
+
   describe "connect and join" do
     test "rejects a bad token" do
       assert :error = connect(Socket, %{}, connect_info: %{auth_token: "nope"})

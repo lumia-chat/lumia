@@ -128,6 +128,8 @@ The client sends `Heartbeat` every `heartbeat_interval_seconds`; the server echo
 
 `Typing` is sent at most once per 5 seconds while the user is typing in a channel. Servers fan it out as `TypingIndicator` with an `until` about 8 seconds ahead; clients stop showing it at `until` without needing a stop message. Typing is never sent for `PERSONAL_*` channels over the gateway in plaintext; clients that want typing in E2EE DMs send it inside an MLS application message.
 
+The server takes `Typing` only from a session subscribed to the channel, for an account that holds `SEND_MESSAGES` there by the subscription's cached view, and fans it out to the channel's other subscribed sessions, never to the sender's own account. Anything else is dropped without an answer: a channel the session is not subscribed to, a `PERSONAL_*` channel, and a second `Typing` for the same channel within 3 seconds of the last. Nothing is stored and nothing is replayed; a client that connects while someone is typing learns of it at their next `Typing`. `until` is on the server's clock: a client measures it against `Welcome.server_time`, not against its own clock, shows no indicator for longer than 10 seconds whatever `until` says, never shows its own account, and stops showing an account when a message of theirs arrives in the channel.
+
 ### 6.8 Disconnect
 
 The server sends `Disconnect` before closing. `DISCONNECT_SERVER_SHUTDOWN` and `DISCONNECT_SLOW_CONSUMER` mean reconnect with the same cursors after `reconnect_after_seconds`. `DISCONNECT_SESSION_REVOKED` and `DISCONNECT_DEVICE_REVOKED` mean the client must not reconnect with that token or device key, and must wipe the local store for that instance (architecture 12).
