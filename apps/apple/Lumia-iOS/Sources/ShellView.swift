@@ -1,7 +1,7 @@
 // The app shell on a phone: the rail beside a sidebar (Home's
 // conversations and tiles, or a server's channels) as the root of a
 // navigation stack, and every other screen a floating panel pushed over
-// it. Mirrors the web's app.tsx and the macOS ShellView, folded.
+// it. Mirrors the web's app.tsx, folded.
 import LumiaFFI
 import LumiaKit
 import SwiftUI

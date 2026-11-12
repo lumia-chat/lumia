@@ -31,7 +31,7 @@ Design stage. The architecture and protocol are written; the server, client core
 ```
 apps/instance   Elixir (Phoenix); what one deployment runs
 apps/core       Rust client core: protocol, sync engine, local store, identity; lumia-cli
-apps/apple      SwiftUI: the iOS app, and the macOS app the desktop shell replaces
+apps/apple      SwiftUI: the iOS app
 apps/android    Jetpack Compose
 apps/desktop    The desktop shell for macOS, Windows and Linux, in Rust on Rune
 apps/relay      Push relay for APNs and FCM

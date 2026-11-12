@@ -34,7 +34,7 @@ host=$(cd "$core" && rustc -vV | sed -n 's/^host: //p')
 # from these, so they link into the apps without a newer-SDK warning.
 export MACOSX_DEPLOYMENT_TARGET=14.0 IPHONEOS_DEPLOYMENT_TARGET=17.0
 
-# macOS is universal (an archive links both slices) unless only this
+# macOS (where LumiaKit's tests run) is universal unless only this
 # machine's slice is asked for; iOS is arm64 on device and on the simulator.
 targets="aarch64-apple-darwin x86_64-apple-darwin"
 $host_only && targets="$host"

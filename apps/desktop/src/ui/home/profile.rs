@@ -2,12 +2,11 @@
 //! or do not disturb, with a custom line), the signed profile the identity carries
 //! (architecture 6.4: display name, pronouns and bio, signed by this computer's device key
 //! and sent to the instance as the account's), and, for an account with no identity on
-//! this computer, the way to linking it. The same states and wording as `ProfileView` in
-//! the SwiftUI app's `HomeViews.swift` and the web's `home.tsx`.
+//! this computer, the way to linking it. The same states and wording as the web's
+//! `home.tsx`.
 //!
-//! Sign out is at the foot of this page. The SwiftUI app keeps it in its Account menu,
-//! with "Change instance"; this shell has no menu of its own yet, and a menu bar is macOS
-//! only.
+//! Sign out is at the foot of this page, and in the Account menu with "Change instance"
+//! (`app::menu`); the page keeps it because a menu bar is macOS only.
 //!
 //! Not here: the avatar (no shell sets one yet; a save keeps the one the profile names).
 

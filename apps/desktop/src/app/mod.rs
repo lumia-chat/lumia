@@ -338,7 +338,7 @@ impl State {
 pub fn init() -> State {
     let mut state = State::new(settings::data_dir());
     // A debug build signs in from the environment, for the smoke run (scripts/smoke.sh):
-    // LUMIA_DEV_INSTANCE, _HANDLE, _PASSWORD, as the SwiftUI app's debug build does.
+    // LUMIA_DEV_INSTANCE, _HANDLE, _PASSWORD, as the iOS app's debug build does.
     if cfg!(debug_assertions)
         && let (Ok(instance), Ok(handle), Ok(password)) = (
             std::env::var("LUMIA_DEV_INSTANCE"),

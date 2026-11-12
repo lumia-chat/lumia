@@ -1,9 +1,8 @@
 #!/bin/sh
 # Archives the iOS app in Release and uploads it to App Store Connect for
 # TestFlight and the App Store (architecture section 13, "Distribution":
-# the store is the only channel a phone has). The macOS app ships as a
-# direct download instead (dist.sh); its App Store Connect record carries
-# only the iOS platform now.
+# the store is the only channel a phone has). The Mac app is the desktop
+# shell, a direct download (apps/desktop/scripts/dist-macos.sh).
 #
 #   scripts/release.sh                   # archive only; the archive lands in .build/release-ios
 #   scripts/release.sh 0.2.0 --upload    # the version is the tag without its v; archive and upload

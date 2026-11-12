@@ -1,6 +1,6 @@
 // The screens pushed over the rail and sidebar, each a floating panel:
 // a conversation, a channel, requests, a new message, devices. The same
-// states, wording and error handling as the web's and the macOS app's.
+// states, wording and error handling as the web's and the desktop shell's.
 import LumiaFFI
 import LumiaKit
 import SwiftUI
@@ -570,7 +570,7 @@ struct NewMessageScreen: View {
 // The person's own profile (architecture 6.4): the signed profile the
 // identity carries, display name, pronouns and bio, signed by this
 // phone's device key and sent to the instance as the account's. The same
-// screen as the web's and the macOS app's.
+// screen as the web's and the desktop shell's.
 struct ProfileScreen: View {
     @Environment(AppStore.self) private var store
     let session: LumiaSession

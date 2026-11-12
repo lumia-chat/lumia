@@ -201,6 +201,13 @@ codesign --verify --deep --strict "$stage" || { echo "bundle: the signature does
 if otool -L "$stage/Contents/MacOS/lumia" | grep -q Sparkle; then
   echo "bundle: the binary links Sparkle; it must load it at run time"; exit 1
 fi
+# Nor any other library by a run path: the binary carries no run path to find one by, so
+# such a slice stops at launch. An Intel build for a macOS older than the one
+# .cargo/config.toml names does this (libswiftCoreMedia), and the frame drawn below would
+# not show it, since it runs this machine's slice only.
+if otool -arch all -L "$stage/Contents/MacOS/lumia" | grep "@rpath/"; then
+  echo "bundle: the binary links the libraries above by a run path it does not have"; exit 1
+fi
 if [ -n "$feed" ]; then
   for arch in $(lipo -archs "$stage/Contents/MacOS/lumia"); do
     lipo -archs "$framework/Versions/B/Sparkle" | grep -qw "$arch" || { echo "bundle: Sparkle.framework has no $arch"; exit 1; }

@@ -1,8 +1,8 @@
 //! Devices: everything that holds this identity. The roster with this computer marked,
 //! revoking another device with the account password as reauth (identity spec 4.4), the
 //! account's passkeys with their removal, and, for an account with no identity on this
-//! computer, the way to linking it. The same states and wording as `DevicesView` in the
-//! SwiftUI app's `HomeViews.swift` and the web's `home.tsx`.
+//! computer, the way to linking it. The same states and wording as the web's
+//! `home.tsx`.
 //!
 //! A device is named by the label its person gave it when it was linked, and by its kind
 //! when it has none.

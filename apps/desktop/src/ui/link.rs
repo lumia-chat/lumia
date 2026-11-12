@@ -1,6 +1,6 @@
 //! Link this computer as a device of an identity (identity spec 4.2): show the request for
 //! a device that holds the identity to approve, then claim the code it gives and sign in by
-//! identity proof. The same card and wording as `LinkView.swift` and the web's `link.tsx`.
+//! identity proof. The same card and wording as the iOS app's `LinkView.swift` and the web's `link.tsx`.
 //!
 //! Reached from sign-in when the instance allows identity-proof sign-in, and from Devices
 //! and Profile when the account is signed in with no identity on this computer.

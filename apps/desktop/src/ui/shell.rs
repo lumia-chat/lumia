@@ -1,5 +1,4 @@
-//! The app shell on the Quiet Split, as the design canvas draws it and `ShellView.swift`
-//! builds it: the server rail, a sidebar on the ground, the main pane as a floating panel,
+//! The app shell on the Quiet Split, as the design canvas draws it: the server rail, a sidebar on the ground, the main pane as a floating panel,
 //! and an aside panel. This file is the frame and the rail; what fills the frame is
 //! [`super::home`] at Home and [`super::server`] in a server.
 //!

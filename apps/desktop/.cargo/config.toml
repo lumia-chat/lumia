@@ -1,0 +1,7 @@
+# The oldest macOS the shell is built for, the one packaging/macos/Info.plist declares
+# (LSMinimumSystemVersion); other platforms ignore it. Without it rustc targets 10.12 on
+# Intel, and for a system that old the linker names a Swift library the app would have to
+# carry (@rpath/libswiftCoreMedia.dylib): the Intel half of a universal build then stops at
+# launch, with nothing to load it from.
+[env]
+MACOSX_DEPLOYMENT_TARGET = "14.0"

@@ -2,7 +2,7 @@
 //!
 //! A passkey or the instance's OIDC provider signs in on the instance's own page in the
 //! system browser, which returns to the app at `lumia://sign-in` with a one-time token.
-//! The SwiftUI app does this in an authentication sheet that hands the return to the code
+//! The iOS app does this in an authentication sheet that hands the return to the code
 //! that opened it and to nobody else. A link opened with the app has no such tie: anything
 //! on the machine, and any web page, can open `lumia://sign-in?magic=…`. So every sign-in
 //! the shell starts carries a `state` it minted, and a link is taken only when it brings
@@ -232,7 +232,7 @@ impl State {
 }
 
 /// The sign-in screen's wording when the token the browser came back with was refused, as
-/// the SwiftUI app words it.
+/// the iOS app words it.
 fn browser_refusal(failure: &Failure) -> String {
     match failure.code.as_str() {
         "UNAUTHENTICATED" => "That sign-in was not accepted.".into(),

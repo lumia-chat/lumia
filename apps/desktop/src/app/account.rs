@@ -1,7 +1,7 @@
 //! The account screens' state and reactions: linking this computer to an identity, the
 //! devices with the revoke confirmation and the passkeys, and the profile with the status.
-//! The counterpart of the `@State` in `LinkView.swift` and in `HomeViews.swift`'s
-//! `DevicesView` and `ProfileView`, with their wording for each refusal.
+//! The counterpart of the `@State` in the iOS app's `LinkView.swift` and `Screens.swift`,
+//! with their wording for each refusal.
 
 use rune::{TextEdit, Tx};
 

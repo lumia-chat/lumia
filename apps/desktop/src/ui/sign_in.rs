@@ -1,6 +1,6 @@
 //! Sign in: the instance with its trust card (architecture 6.1), then a password with a
 //! second factor when the account asks for one, or a new account. The same flow and wording
-//! as the web's sign-in screen and `SignInView.swift`. With them, when the instance offers
+//! as the web's sign-in screen and the iOS app's `SignInView.swift`. With them, when the instance offers
 //! each: a sign-in link by mail, completed by its code ([`magic_link`]), and the way to
 //! linking this computer to an identity ([`link_identity`]).
 //!
@@ -376,7 +376,7 @@ fn link_identity(s: &State, info: &InstanceSummary, look: Look) -> Option<El> {
 
 /// Signing in through the system browser (architecture 6.3), for the account card: the
 /// instance's provider when it names one, then a passkey on the instance's own page, as
-/// `SignInView.swift` orders them. Nothing while a new account is being made. Once a
+/// the iOS app's `SignInView.swift` orders them. Nothing while a new account is being made. Once a
 /// button has sent the browser off, a note says where the sign-in went.
 fn browser_sign_in(s: &State, info: &InstanceSummary, look: Look) -> Option<El> {
     if s.sign_in.creating {

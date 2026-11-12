@@ -33,9 +33,9 @@ concurrency:
 # real window drawn headlessly by a software Vulkan driver, kept as an artifact. The core is
 # a path dependency of the shell, so its crates start this job too.
 #
-# Linux only, because Linux minutes are the cheap ones. What it does not show: the Metal
-# build on macOS (run `cargo test` and `scripts/smoke.sh` there before a change lands; the
-# release workflow will build it) and anything on Windows (plan step 9).
+# Linux only, because Linux minutes are the cheap ones. The Metal build on macOS, with the
+# tests and `scripts/smoke.sh` against an instance, is a step of macos.yml; nothing runs on
+# Windows (plan step 9).
 #
 # Run before this file was added, in ubuntu:24.04 containers: every step on arm64, and
 # every step but the drawing on x86-64 under emulation. There Mesa's software driver

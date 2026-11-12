@@ -1,6 +1,6 @@
-// The app's one session and where the app is, shared by the macOS and
-// iOS layouts: the saved instance reopened at launch (state under the
-// app's Application Support), and the route the session's state picks.
+// The app's one session and where the app is: the saved instance
+// reopened at launch (state under the app's Application Support), and
+// the route the session's state picks.
 import Foundation
 import Observation
 
@@ -61,8 +61,8 @@ public final class AppStore {
         defer { opening = false }
         #if DEBUG
         // A debug build signs in from the environment, for the smoke runs
-        // (apps/apple/scripts/smoke.sh, smoke-ios.sh): LUMIA_DEV_INSTANCE,
-        // _HANDLE, _PASSWORD.
+        // (apps/apple/scripts/smoke-ios.sh): LUMIA_DEV_INSTANCE, _HANDLE,
+        // _PASSWORD.
         let env = ProcessInfo.processInfo.environment
         if let instance = env["LUMIA_DEV_INSTANCE"], let url = URL(string: instance),
            let handle = env["LUMIA_DEV_HANDLE"], let password = env["LUMIA_DEV_PASSWORD"] {

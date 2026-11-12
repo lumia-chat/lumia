@@ -1,6 +1,5 @@
 # The Lumia desktop shell for macOS, Windows and Linux (architecture section 13): one Rust
-# program on Rune with the client core linked in. `src-tauri` beside this crate is the Tauri
-# shell it replaces on Windows and Linux; the two share nothing.
+# program on Rune with the client core linked in.
 #
 # Its own workspace: Rune pins a newer toolchain and edition than apps/core, and its
 # dependency tree stays out of the core's lock.
@@ -11,7 +10,6 @@
 [workspace]
 members = [".", "crates/sparkle"]
 default-members = [".", "crates/sparkle"]
-exclude = ["src-tauri"]
 
 [package]
 name = "lumia-shell"

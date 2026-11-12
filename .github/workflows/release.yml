@@ -1,4 +1,4 @@
-# A release: on a v* tag, and only then, the macOS app and the Android
+# A release: on a v* tag, and only then, the Mac app and the Android
 # APK are built, signed and attached to one GitHub Release (architecture
 # section 13, "Distribution"), and the iOS app is uploaded to App Store
 # Connect for TestFlight, the only channel an iPhone has. The release
@@ -30,29 +30,39 @@ permissions:
 jobs:
   draft:
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - run: gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "Lumia ${GITHUB_REF_NAME#v}" --generate-notes
         env:
           GH_TOKEN: ${{ github.token }}
 
+  # The Mac app is the desktop shell (apps/desktop): a universal binary,
+  # bundled with Sparkle, signed with the Developer ID, notarized, on a disk
+  # image, with the appcast installed apps read. scripts/dist-macos.sh does
+  # all of it and, with --release, stops rather than publish anything
+  # unsigned. Its bundle step draws a frame headlessly, so this job needs
+  # a runner whose GPU draws (macos.yml's smoke shows whether one does).
+  #
+  # Written on 2026-11-11 and not yet run: the signing and notarizing branch
+  # of the script has never had credentials, and no tag has been pushed
+  # since the shell replaced the SwiftUI app.
   macos:
     needs: draft
     runs-on: macos-26
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # the build number is the commit count
+          fetch-depth: 0 # the build number is the commit count, and it is what Sparkle compares
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.96.0"
+          toolchain: "1.99.1"
           targets: aarch64-apple-darwin,x86_64-apple-darwin
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: apps/core
-          key: macos
-      - run: brew install xcodegen
-      - run: echo "DEVELOPER_DIR=$(xcode-select -p)" >> "$GITHUB_ENV"
+          workspaces: apps/desktop
+          key: macos-release
       - name: Keys
         run: |
           echo "$ASC_KEY_P8" | base64 -d > "$RUNNER_TEMP/asc.p8"
@@ -61,8 +71,9 @@ jobs:
           ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
       # The Developer ID certificate goes into a keychain of its own, which
-      # xcodebuild's manual signing finds through the search list; the
-      # partition list lets Apple's tools use the key without a prompt.
+      # codesign finds through the search list; the partition list lets
+      # Apple's tools use the key without a prompt. The identity's name is
+      # read back from it for the scripts.
       - name: Developer ID certificate
         run: |
           keychain="$RUNNER_TEMP/release.keychain-db"
@@ -75,22 +86,37 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" >/dev/null
           security list-keychains -d user -s "$keychain" login.keychain-db
           rm "$RUNNER_TEMP/developer-id.p12"
-          security find-identity -v -p codesigning "$keychain" | grep -q "Developer ID Application" || { echo "no Developer ID identity"; exit 1; }
+          identity=$(security find-identity -v -p codesigning "$keychain" | sed -n 's/.*"\(Developer ID Application: [^"]*\)".*/\1/p' | head -1)
+          [ -n "$identity" ] || { echo "no Developer ID identity"; exit 1; }
+          echo "LUMIA_SIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
         env:
           DEVELOPER_ID_P12: ${{ secrets.DEVELOPER_ID_P12 }}
           DEVELOPER_ID_P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
-      # The previous release's DMG lets Sparkle publish a delta update too.
-      - run: gh release download --pattern 'Lumia-*.dmg' -D "$RUNNER_TEMP/previous" || true
+      # The previous release's image lets Sparkle publish a delta update
+      # too. Not from the releases up to 0.2.1: their image is the SwiftUI
+      # app this one replaced, and no delta is made between the two.
+      - name: Previous image
+        run: |
+          previous=$(gh release view --json tagName -q .tagName || true)
+          case "$previous" in
+            ""|v0.1.*|v0.2.0|v0.2.1) echo "no previous image of this app ($previous)" ;;
+            *) gh release download "$previous" --pattern 'Lumia-*.dmg' -D "$RUNNER_TEMP/previous" || true ;;
+          esac
         env:
           GH_TOKEN: ${{ github.token }}
-      - run: apps/apple/scripts/dist.sh "${GITHUB_REF_NAME#v}" --sign
+      - name: Universal binary
+        working-directory: apps/desktop
+        run: |
+          cargo build --release --locked --target aarch64-apple-darwin --target x86_64-apple-darwin
+          lipo -create target/aarch64-apple-darwin/release/lumia target/x86_64-apple-darwin/release/lumia -output "$RUNNER_TEMP/lumia"
+      - run: apps/desktop/scripts/dist-macos.sh "${GITHUB_REF_NAME#v}" --release --bin "$RUNNER_TEMP/lumia"
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           ASC_KEY_PATH: ${{ runner.temp }}/asc.p8
           SPARKLE_KEY_PATH: ${{ runner.temp }}/sparkle.key
           LUMIA_PREVIOUS_DIR: ${{ runner.temp }}/previous
-      - run: gh release upload "$GITHUB_REF_NAME" apps/apple/.build/dist/*
+      - run: gh release upload "$GITHUB_REF_NAME" apps/desktop/out/dist/*
         env:
           GH_TOKEN: ${{ github.token }}
 
@@ -101,6 +127,7 @@ jobs:
   ios:
     needs: draft
     runs-on: macos-26
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
@@ -181,6 +208,7 @@ jobs:
   publish:
     needs: [macos, android]
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - run: gh release edit "$GITHUB_REF_NAME" --draft=false --latest

@@ -1,6 +1,6 @@
 //! Home: the sidebar with the personal conversations and Home's tiles, and a main pane per
-//! [`HomeView`]. Each view is a module of its own. The counterpart of `HomeViews.swift`
-//! and the web's `routes/home.tsx`.
+//! [`HomeView`]. Each view is a module of its own. The counterpart of the web's
+//! `routes/home.tsx`.
 //!
 //! Personal conversations need this computer to hold an identity; without one the
 //! conversation, requests and new-message panes say so and point to Devices, where it is

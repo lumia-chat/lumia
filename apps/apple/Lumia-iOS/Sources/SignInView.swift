@@ -1,7 +1,7 @@
 // Sign in on a phone: the instance (with its trust card, architecture
 // 6.1), then a password with a second factor when the account asks for
 // one, or a new account, or linking this phone from a device that holds
-// the identity; the same flow as the web's and the macOS app's.
+// the identity; the same flow as the web's and the desktop shell's.
 import LumiaFFI
 import LumiaKit
 import SwiftUI

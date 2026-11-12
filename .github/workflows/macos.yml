@@ -3,19 +3,24 @@ name: macos
 on:
   push:
     branches: [master]
-    paths: ["apps/apple/**", "apps/web/**", "apps/core/**", "apps/instance/**", "assets/**", "proto/**", ".github/workflows/macos.yml"]
+    paths: ["apps/apple/**", "apps/desktop/**", "apps/web/**", "apps/core/**", "apps/instance/**", "assets/**", "proto/**", ".github/workflows/macos.yml"]
   pull_request:
-    paths: ["apps/apple/**", "apps/web/**", "apps/core/**", "apps/instance/**", "assets/**", "proto/**", ".github/workflows/macos.yml"]
+    paths: ["apps/apple/**", "apps/desktop/**", "apps/web/**", "apps/core/**", "apps/instance/**", "assets/**", "proto/**", ".github/workflows/macos.yml"]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 # Everything that needs a Mac, on one runner (macOS minutes are the dear
-# ones): LumiaKit's tests and the macOS app's build with the smoke run
-# against a dev instance, and the browser suite in WebKit, Safari's engine,
-# which the Linux job (e2e.yml) cannot run reliably. The instance, the
-# release CLI and the web build are shared by the smoke and the suite.
+# ones): LumiaKit's tests and the iOS app's build with its smoke runs
+# against a dev instance, the desktop shell (apps/desktop) built for Metal
+# with its tests and smoke against the same instance, and the browser suite
+# in WebKit, Safari's engine, which the Linux job (e2e.yml) cannot run
+# reliably. The instance and the release CLI are shared by all three.
+#
+# The desktop shell's steps were added on 2026-11-11 and have run on a
+# developer's Mac only: whether the runner's GPU draws the smoke's headless
+# frames is not known until the first run here.
 jobs:
   apple:
     runs-on: macos-26
@@ -60,9 +65,13 @@ jobs:
             apps/instance/deps
             apps/instance/_build
           key: mix-dev-${{ runner.os }}-${{ hashFiles('apps/instance/mix.lock') }}
+      # The desktop shell is a workspace of its own on Rune's toolchain.
+      - run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt,clippy
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: apps/core
+          workspaces: |
+            apps/core
+            apps/desktop
           key: macos-ci
           cache-on-failure: true
       - uses: actions/cache@v4
@@ -78,13 +87,6 @@ jobs:
       - run: swift test
         working-directory: apps/apple/LumiaKit
       - run: xcodegen generate
-        working-directory: apps/apple/Lumia-macOS
-      # Unsigned: no certificate on the runner, and the smoke run needs none.
-      - run: |
-          set -o pipefail
-          xcodebuild -project Lumia.xcodeproj -scheme Lumia -configuration Debug -derivedDataPath .build CODE_SIGNING_ALLOWED=NO build 2>&1 | grep -E "error:|warning: .*/(LumiaKit|Lumia-macOS)/|BUILD"
-        working-directory: apps/apple/Lumia-macOS
-      - run: xcodegen generate
         working-directory: apps/apple/Lumia-iOS
       # Signed to run locally, so the app-group entitlement the extension
       # needs is embedded; with the UI test the push smoke drives.
@@ -95,6 +97,8 @@ jobs:
 
       - run: cargo build --release -p lumia-cli
         working-directory: apps/core
+      - run: cargo build --locked
+        working-directory: apps/desktop
       - run: mix deps.get && mix ecto.setup
         working-directory: apps/instance
       - run: bun install --frozen-lockfile && bun run wasm
@@ -112,10 +116,19 @@ jobs:
             sleep 2
           done
           echo "the instance did not come up" >&2; tail -50 "$RUNNER_TEMP/phx.log"; exit 1
-      # The debug app signed in through LUMIA_DEV_*: a window, the snapshot,
-      # the gateway (the runner's session has a window server).
-      - run: apps/apple/scripts/smoke.sh
-        timeout-minutes: 5
+      # The desktop shell signed in through LUMIA_DEV_*: the snapshot, the
+      # gateway, frames drawn headlessly, a message sent, then every test
+      # of the shell with the live ones pointed at this instance.
+      - run: apps/desktop/scripts/smoke.sh
+        timeout-minutes: 15
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shell-smoke
+          path: |
+            apps/desktop/out/smoke/*.png
+            apps/desktop/out/smoke/*.log
+          if-no-files-found: ignore
       # The iOS app in whichever iPhone simulator the runner's Xcode ships,
       # one launch per screen, screenshots kept on failure.
       - run: apps/apple/scripts/smoke-ios.sh

@@ -1,5 +1,4 @@
-//! The popovers a server's sidebar opens: "New channel" and "Invite people", as
-//! `channelPopover` and `invitePopover` in the SwiftUI app's `ShellView.swift`. Each is
+//! The popovers a server's sidebar opens: "New channel" and "Invite people". Each is
 //! returned from `ui::overlay`, so it mounts at the window's root beside its link.
 
 use chrono::{DateTime, Local};

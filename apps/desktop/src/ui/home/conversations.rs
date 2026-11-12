@@ -5,8 +5,8 @@
 //! way to rejoin), how many messages were sent before this device joined, and how many it
 //! could not decrypt.
 //!
-//! Not here: editing and deleting a message, and the state of history backup (the SwiftUI
-//! aside says it is off, which nothing in the core can confirm from here).
+//! Not here: editing and deleting a message, and the state of history backup (nothing in the
+//! core can say from here whether it is on).
 
 use lumia_client::app::ChannelSummary;
 use rune::{El, Icon, ScrollSpec, col, el, icon, row, text};

@@ -1,6 +1,6 @@
 //! Adding a server: a server of your own, or joining one from an invite link or code, with
 //! what the invite leads to and on which instance shown before the join (architecture 6.1).
-//! One page with two cards, as `AddServerView` in the SwiftUI app's `HomeViews.swift`.
+//! One page with two cards, as the web's `home.tsx` has it.
 //!
 //! Not here yet: an invite to another instance. The code is looked up on the instance this
 //! account is on, whatever host the link names.

@@ -1,7 +1,7 @@
 //! The forms that make and manage servers: add a server (create one, or join by invite),
 //! a new channel, invite people. They hold what the person typed and chose, start the
 //! session's calls, and take the answers `session::servers` reports, worded as the other
-//! shells word them (`ShellView.swift` and `HomeViews.swift`, the web's `app.tsx`).
+//! shells word them (the iOS app's `Screens.swift`, the web's `app.tsx`).
 //!
 //! A server or a channel just made is not in the snapshot when the call answers; what to
 //! open is kept here until a snapshot lists it ([`State::open_made`]).

@@ -5,10 +5,9 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-/// The directory under the platform's place for application data. Not the SwiftUI macOS
-/// app's `Lumia`: while both shells exist they must not open one MLS store from two
-/// processes (architecture 15.5 says why a ratchet has one writer).
-const DIRECTORY: &str = "chat.lumia.desktop";
+/// The directory under the platform's place for application data, named as the app is
+/// (`platform::APP_ID`).
+const DIRECTORY: &str = "chat.lumia";
 
 /// The shell's data directory: `LUMIA_DATA_DIR` when set (the smoke script, a second
 /// profile), else under Application Support on macOS, `%APPDATA%` on Windows, and

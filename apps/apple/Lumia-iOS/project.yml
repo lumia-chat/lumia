@@ -1,6 +1,6 @@
 # The iOS app (architecture section 13): the SwiftUI layout for a phone
-# over LumiaKit, the package the macOS app shares, and its notification
-# service extension (architecture 15.5). `xcodegen generate` (xcodegen
+# over LumiaKit, and its notification service extension (architecture
+# 15.5). `xcodegen generate` (xcodegen
 # 2.45+) makes the project, which is not committed; `scripts/core.sh
 # --ios` must have run first (it adds the iOS device and simulator slices
 # to the XCFramework).
@@ -68,8 +68,9 @@ targets:
         com.apple.security.application-groups: [group.chat.lumia]
     settings:
       base:
-        # One bundle ID with the macOS app: one App Store Connect record
-        # carries both platforms.
+        # One bundle ID with the Mac app (apps/desktop), which is a direct
+        # download: the App Store Connect record carries a macOS platform too,
+        # with nothing submitted to it.
         PRODUCT_BUNDLE_IDENTIFIER: chat.lumia
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         TARGETED_DEVICE_FAMILY: "1,2"
