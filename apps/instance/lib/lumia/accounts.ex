@@ -123,8 +123,6 @@ defmodule Lumia.Accounts do
     end
   end
 
-  # Whether nobody else holds `handle` from a rename of their own. A hold
-  # that has run out, or the account's own, is dropped on the way.
   @avatar_path "/api/v1/avatars/"
 
   @doc """
@@ -143,7 +141,7 @@ defmodule Lumia.Accounts do
     with true <- Lumia.Blobs.enabled?() || {:error, {:failed_precondition, "blobs"}},
          {:ok, {media_type, bytes}} <- Lumia.Media.avatar(upload),
          {:ok, blob} <- Lumia.Blobs.put(bytes, "avatar", media_type, account.id),
-         {:ok, updated} <- put_avatar_url(account, @avatar_path <> Lumia.Blobs.name(blob.address)) do
+         {:ok, updated} <- put_avatar_url(account, picture_path(blob)) do
       {:ok, updated}
     else
       {:error, :unavailable} -> {:error, {:failed_precondition, "blobs"}}
@@ -154,6 +152,10 @@ defmodule Lumia.Accounts do
   @doc "Takes the account's avatar away; fine when it has none."
   def remove_avatar(%Account{avatar_url: nil} = account), do: {:ok, account}
   def remove_avatar(%Account{} = account), do: put_avatar_url(account, nil)
+
+  @doc "The path on this instance a picture kept as `blob` is served at: an account's, or a server's."
+  def picture_path(%Lumia.Blobs.Blob{address: address}),
+    do: @avatar_path <> Lumia.Blobs.name(address)
 
   @doc "The address of the blob an `avatar_url` names on this instance, or nil for another's."
   def avatar_address(@avatar_path <> name), do: Lumia.Blobs.address(name)
@@ -186,6 +188,8 @@ defmodule Lumia.Accounts do
     :ok
   end
 
+  # Whether nobody else holds `handle` from a rename of their own. A hold
+  # that has run out, or the account's own, is dropped on the way.
   defp free_for(handle, account_id) do
     now = DateTime.utc_now()
 

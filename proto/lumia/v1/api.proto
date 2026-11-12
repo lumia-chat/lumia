@@ -244,6 +244,15 @@ message ListServersResponse { repeated Server servers = 1; repeated Member membe
 
 message CreateServerRequest { string name = 1; }
 
+// PATCH /servers/{server_id}: the server's settings (architecture 6.7). A
+// field left out is left as it is.
+message UpdateServerRequest {
+  // 1 to 100 characters once trimmed.
+  optional string name = 1;
+  // Days the server keeps its messages; 0 keeps them for ever.
+  optional uint32 retention_days = 2;
+}
+
 message ListChannelsResponse { repeated Channel channels = 1; }
 
 message CreateChannelRequest {

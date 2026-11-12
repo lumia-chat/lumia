@@ -34,12 +34,57 @@ defmodule LumiaWeb.ServerController do
     with {:ok, req} <- ProtoConn.decode(conn, V1.CreateServerRequest),
          {:ok, server} <- Servers.create_server(conn.assigns.current_account_id, req.name) do
       ProtoConn.render(conn, 201, Proto.server(server))
+    else
+      {:error, {:invalid_argument, field}} ->
+        ProtoConn.render_error(conn, :invalid_argument, %{"field" => field})
+
+      other ->
+        other
     end
   end
 
   def show(conn, %{"server_id" => server_id}) do
     with {:ok, server} <- member_server(conn, server_id) do
       ProtoConn.render(conn, Proto.server(server))
+    end
+  end
+
+  @doc """
+  `PATCH /servers/{server_id}`: the server's name, its retention, either or
+  both (`Lumia.Servers.update_server/3`, architecture 6.7).
+  """
+  def update(conn, %{"server_id" => server_id}) do
+    with {:ok, _server} <- member_server(conn, server_id),
+         {:ok, req} <- ProtoConn.decode(conn, V1.UpdateServerRequest),
+         changes = Map.reject(Map.take(req, [:name, :retention_days]), fn {_, v} -> is_nil(v) end),
+         {:ok, updated} <-
+           Servers.update_server(server_id, conn.assigns.current_account_id, changes) do
+      ProtoConn.render(conn, Proto.server(updated))
+    else
+      {:error, {:invalid_argument, field}} ->
+        ProtoConn.render_error(conn, :invalid_argument, %{"field" => field})
+
+      other ->
+        other
+    end
+  end
+
+  @doc "`PUT /servers/{server_id}/icon`: the body is a picture, as chosen (`Lumia.Servers.set_icon/3`)."
+  def put_icon(conn, %{"server_id" => server_id}) do
+    with {:ok, _server} <- member_server(conn, server_id),
+         {:ok, upload, conn} <- LumiaWeb.Pictures.read(conn),
+         {:ok, updated} <- Servers.set_icon(server_id, conn.assigns.current_account_id, upload) do
+      ProtoConn.render(conn, Proto.server(updated))
+    else
+      other -> LumiaWeb.Pictures.refused(conn, other)
+    end
+  end
+
+  @doc "`DELETE /servers/{server_id}/icon`: the server goes back to having no picture."
+  def delete_icon(conn, %{"server_id" => server_id}) do
+    with {:ok, _server} <- member_server(conn, server_id),
+         {:ok, updated} <- Servers.remove_icon(server_id, conn.assigns.current_account_id) do
+      ProtoConn.render(conn, Proto.server(updated))
     end
   end
 

@@ -76,6 +76,9 @@ defmodule LumiaWeb.Router do
     get "/servers", ServerController, :index
     post "/servers", ServerController, :create
     get "/servers/:server_id", ServerController, :show
+    patch "/servers/:server_id", ServerController, :update
+    put "/servers/:server_id/icon", ServerController, :put_icon
+    delete "/servers/:server_id/icon", ServerController, :delete_icon
     get "/servers/:server_id/channels", ServerController, :channels
     get "/servers/:server_id/members", ServerController, :members
     patch "/servers/:server_id/members/:account_id", ServerController, :update_member

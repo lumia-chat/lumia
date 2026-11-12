@@ -91,6 +91,9 @@ message Server {
   // Trust card fields (architecture 6.1).
   string operator_name = 6;
   string host = 7;
+  // How long the server keeps its messages, in days; 0 keeps them for ever
+  // (architecture 6.6 and 6.7).
+  uint32 retention_days = 8;
 }
 
 message Role {
@@ -141,6 +144,11 @@ message Member {
   google.protobuf.Timestamp joined_at = 6;
   // GUEST only. Empty means no expiry.
   google.protobuf.Timestamp expires_at = 7;
+  // The member's server-level permissions, resolved (architecture 7.2 steps
+  // 1 and 2; the owner has ADMINISTRATOR). Filled in the caller's own
+  // memberships in AccountSnapshot, so a client knows what it may offer
+  // (architecture 6.7); empty everywhere else.
+  repeated Permission permissions = 8;
 }
 
 message Mention {

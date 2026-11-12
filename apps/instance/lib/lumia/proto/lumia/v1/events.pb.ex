@@ -361,6 +361,8 @@ defmodule Lumia.V1.AccountEvent do
     type: Lumia.V1.BackupKeyHandedOff,
     json_name: "backupKeyHandedOff",
     oneof: 0
+
+  field :server_updated, 34, type: Lumia.V1.ServerUpdated, json_name: "serverUpdated", oneof: 0
 end
 
 defmodule Lumia.V1.MembershipAdded do
@@ -418,6 +420,17 @@ defmodule Lumia.V1.ChannelRemoved do
     syntax: :proto3
 
   field :channel_id, 1, type: :bytes, json_name: "channelId"
+end
+
+defmodule Lumia.V1.ServerUpdated do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.ServerUpdated",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :server, 1, type: Lumia.V1.Server
 end
 
 defmodule Lumia.V1.DmRequest do

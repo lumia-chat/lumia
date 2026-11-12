@@ -114,6 +114,7 @@ The bump is `UPDATE channels SET acl_version = acl_version + 1 WHERE ...` in the
 | Change | Account-log event, to whom |
 |---|---|
 | Roles assigned or removed | `MembershipUpdated` to that member |
+| Server name, picture or retention changed (`MANAGE_SERVER`) | `ServerUpdated` to every member, by a job after the commit (architecture 6.7); no `acl_version` moves |
 | Kick, ban, leave, guest expiry, account deletion | `MembershipRemoved` to that member, plus `ChannelRemoved` for each channel they could view |
 | Join, guest added, guest promoted | `MembershipAdded` to that member, plus `ChannelAdded` for each channel they can view |
 

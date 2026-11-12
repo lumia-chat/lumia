@@ -31,6 +31,7 @@ defmodule Lumia.Servers do
   alias Lumia.Tx
   alias Lumia.V1
   alias Lumia.Workers.AclChanged
+  alias Lumia.Workers.ServerUpdated
   alias Lumia.Workers.ViewerDiff
 
   @everyone_defaults [
@@ -43,10 +44,33 @@ defmodule Lumia.Servers do
     :start_calls
   ]
 
+  @name_max 100
+
   # ---- Servers ---------------------------------------------------------------
+
+  @doc """
+  A server's name as kept: trimmed, 1 to #{@name_max} characters
+  (architecture 6.7), or `{:error, {:invalid_argument, "name"}}`.
+  """
+  def server_name(name) when is_binary(name) do
+    name = String.trim(name)
+    length = String.length(name)
+
+    if length > 0 and length <= @name_max,
+      do: {:ok, name},
+      else: {:error, {:invalid_argument, "name"}}
+  end
+
+  def server_name(_), do: {:error, {:invalid_argument, "name"}}
 
   @doc "Creates a server with its @everyone role and the owner's membership."
   def create_server(owner_account_id, name) do
+    with {:ok, name} <- server_name(name) do
+      insert_server(owner_account_id, name)
+    end
+  end
+
+  defp insert_server(owner_account_id, name) do
     Tx.transact(fn ->
       with {:ok, server} <- Repo.insert(%Server{name: name, owner_account_id: owner_account_id}),
            {:ok, _everyone} <-
@@ -434,23 +458,128 @@ defmodule Lumia.Servers do
   override it.
   """
   def set_retention(server_id, actor_id, days)
-      when is_nil(days) or (is_integer(days) and days > 0) do
+      when is_nil(days) or (is_integer(days) and days > 0),
+      do: update_server(server_id, actor_id, %{retention_days: days || 0})
+
+  # ---- Settings (architecture 6.7) --------------------------------------------
+
+  @doc """
+  Changes a server's settings: `:name`, `:retention_days` (0 keeps
+  messages for ever), either or both; a key left out is left as it is.
+  Needs `MANAGE_SERVER` (the owner and `ADMINISTRATOR` have it). Each
+  setting changed is audited, and every member is told (`ServerUpdated`).
+  """
+  def update_server(server_id, actor_id, changes) do
+    with {:ok, changes} <- settings(changes),
+         {:ok, {_before, updated}} <- change_server(server_id, actor_id, changes) do
+      {:ok, updated}
+    end
+  end
+
+  @doc """
+  Makes `upload` (a picture's bytes, as chosen) the server's picture, as
+  `Lumia.Accounts.set_avatar/2` does an account's: the instance's own
+  square, kept as a blob and named in `icon_url`. The picture it replaces
+  is removed. `MANAGE_SERVER`; every member is told.
+  """
+  def set_icon(server_id, actor_id, upload) when is_binary(upload) do
+    with :ok <- may_manage(server_id, actor_id),
+         true <- Lumia.Blobs.enabled?() || {:error, {:failed_precondition, "blobs"}},
+         {:ok, {media_type, bytes}} <- Lumia.Media.avatar(upload),
+         {:ok, blob} <- Lumia.Blobs.put(bytes, "avatar", media_type, actor_id) do
+      case put_icon(server_id, actor_id, Accounts.picture_path(blob)) do
+        {:ok, server} ->
+          {:ok, server}
+
+        error ->
+          Lumia.Blobs.delete(blob.address)
+          error
+      end
+    else
+      {:error, :unavailable} -> {:error, {:failed_precondition, "blobs"}}
+      other -> other
+    end
+  end
+
+  @doc "Takes the server's picture away; fine when it has none. `MANAGE_SERVER`."
+  def remove_icon(server_id, actor_id), do: put_icon(server_id, actor_id, nil)
+
+  defp put_icon(server_id, actor_id, url) do
+    with {:ok, {before, updated}} <- change_server(server_id, actor_id, %{icon_url: url}) do
+      drop_icon(before.icon_url, updated.icon_url)
+      {:ok, updated}
+    end
+  end
+
+  # The picture the server no longer names is nobody's.
+  defp drop_icon(same, same), do: :ok
+
+  defp drop_icon(old, _new) do
+    if address = Accounts.avatar_address(old), do: Lumia.Blobs.delete(address)
+    :ok
+  end
+
+  # The change, checked, made, audited and announced in one transaction:
+  # `{:ok, {before, after}}`.
+  defp change_server(server_id, actor_id, changes) do
     Tx.transact(fn ->
       with {:ok, server} <- fetch_server(server_id),
-           {:ok, actor} <- actor(server_id, actor_id),
-           true <-
-             (Permission.has?(actor.server_permissions, :manage_server) or actor.owner?) ||
-               {:error, :permission_denied},
-           {:ok, updated} <-
-             server |> Ecto.Changeset.change(retention_days: days) |> Repo.update(),
-           {:ok, _} <-
-             Audit.record({:server, server_id}, actor_id, "server.retention",
-               before: %{"retention_days" => server.retention_days},
-               after: %{"retention_days" => days}
-             ) do
-        {:ok, updated}
+           :ok <- may_manage(server_id, actor_id),
+           {:ok, updated} <- server |> Ecto.Changeset.change(changes) |> Repo.update(),
+           :ok <- announce(server, updated, actor_id) do
+        {:ok, {server, updated}}
       end
     end)
+  end
+
+  defp may_manage(server_id, actor_id) do
+    with {:ok, actor} <- actor(server_id, actor_id) do
+      if Permission.has?(actor.server_permissions, :manage_server) or actor.owner?,
+        do: :ok,
+        else: {:error, :permission_denied}
+    end
+  end
+
+  defp settings(changes) do
+    Enum.reduce_while(changes, {:ok, %{}}, fn
+      {:name, name}, {:ok, acc} ->
+        case server_name(name) do
+          {:ok, name} -> {:cont, {:ok, Map.put(acc, :name, name)}}
+          error -> {:halt, error}
+        end
+
+      {:retention_days, 0}, {:ok, acc} ->
+        {:cont, {:ok, Map.put(acc, :retention_days, nil)}}
+
+      {:retention_days, days}, {:ok, acc} when is_integer(days) and days > 0 ->
+        {:cont, {:ok, Map.put(acc, :retention_days, days)}}
+
+      {key, _}, _ ->
+        {:halt, {:error, {:invalid_argument, Atom.to_string(key)}}}
+    end)
+  end
+
+  # Each setting that changed is audited, and the members are to hear of it.
+  defp announce(before, after_change, actor_id) do
+    changed =
+      for {key, action} <- [
+            name: "server.name",
+            retention_days: "server.retention",
+            icon_url: "server.icon"
+          ],
+          Map.get(before, key) != Map.get(after_change, key),
+          do: {key, action}
+
+    Enum.each(changed, fn {key, action} ->
+      {:ok, _} =
+        Audit.record({:server, before.id}, actor_id, action,
+          before: %{Atom.to_string(key) => Map.get(before, key)},
+          after: %{Atom.to_string(key) => Map.get(after_change, key)}
+        )
+    end)
+
+    if changed != [], do: {:ok, _} = ServerUpdated.schedule(before.id)
+    :ok
   end
 
   # ---- Resolution helpers for callers -----------------------------------------

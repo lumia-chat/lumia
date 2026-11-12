@@ -34,18 +34,11 @@ defmodule LumiaWeb.AccountController do
   def put_avatar(conn, _params) do
     account = Lumia.Repo.get!(Lumia.Accounts.Account, conn.assigns.current_account_id)
 
-    with {:ok, upload, conn} <- read_upload(conn),
+    with {:ok, upload, conn} <- LumiaWeb.Pictures.read(conn),
          {:ok, updated} <- Lumia.Accounts.set_avatar(account, upload) do
       ProtoConn.render(conn, Lumia.Proto.account(updated, own: true))
     else
-      {:error, reason} when reason in [:too_large, :unsupported, :invalid] ->
-        ProtoConn.render_error(conn, :invalid_argument, %{
-          "field" => "picture",
-          "reason" => Atom.to_string(reason)
-        })
-
-      other ->
-        other
+      other -> LumiaWeb.Pictures.refused(conn, other)
     end
   end
 
@@ -55,15 +48,6 @@ defmodule LumiaWeb.AccountController do
 
     with {:ok, updated} <- Lumia.Accounts.remove_avatar(account) do
       ProtoConn.render(conn, Lumia.Proto.account(updated, own: true))
-    end
-  end
-
-  # The whole body, or `:too_large` past the most `Lumia.Media` takes.
-  defp read_upload(conn) do
-    case Plug.Conn.read_body(conn, length: Lumia.Media.max_upload_bytes()) do
-      {:ok, body, conn} -> {:ok, body, conn}
-      {:more, _partial, _conn} -> {:error, :too_large}
-      {:error, _reason} -> {:error, :invalid_argument}
     end
   end
 

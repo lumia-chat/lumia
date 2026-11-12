@@ -164,6 +164,7 @@ message AccountEvent {
     SessionRevoked session_revoked = 31;
     BlockListUpdated block_list_updated = 32;
     BackupKeyHandedOff backup_key_handed_off = 33;  // a root rotation's new backup key, sealed to this device among others
+    ServerUpdated server_updated = 34;      // a server this account is in changed its name, picture or retention
   }
 }
 
@@ -172,6 +173,8 @@ message MembershipRemoved { bytes server_id = 1; LeaveReason reason = 2; }
 message MembershipUpdated { Member member = 1; }
 message ChannelAdded { Channel channel = 1; }
 message ChannelRemoved { bytes channel_id = 1; }
+// The server as it now is (architecture 6.7).
+message ServerUpdated { Server server = 1; }
 
 message DmRequest {
   bytes request_id = 1;

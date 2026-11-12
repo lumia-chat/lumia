@@ -253,6 +253,14 @@ Edit keeps history server-side for server content (visible to moderators). Delet
 
 Deferred: read receipts, link unfurling, custom emoji in text, voice channels, video, screen share.
 
+### 6.7 Server settings
+
+**Decision** (2026-11-12). A server's **name**, its **picture** and **how long its messages are kept** are changed by its owner or by a member whose roles grant `MANAGE_SERVER` (or `ADMINISTRATOR`), from any client, each change written to the audit log. A name is 1 to 100 characters once trimmed, at creation too. The picture is made and kept as an account's is (section 12, "Avatars"): the instance's own square of the file chosen, a blob served at a public address, deleted when replaced. Retention is the per-server policy of section 6.6, kept for ever unless a number of days is set; shortening it deletes, at the next daily run and for everyone, what is older than the new limit, so a client says so before it is saved.
+
+Members hear of a change through their account logs: after the change commits, a job appends `ServerUpdated`, the server as it now is, to every member's log, in batches and once for a burst of edits, so the request never waits on a large server's fan-out and a member who was offline finds it on resume. A member who joins later gets the server as it is in `MembershipAdded`. A client knows whether to offer the settings from its own memberships in the account snapshot, which carry the member's resolved server-level permissions.
+
+**Rejected.** *Broadcasting the change over PubSub to the server's live sessions only.* Cheaper for a large server, but an offline member's cached name and picture would stay wrong until something else made it ask, and every other cached thing a client holds comes through a log.
+
 ## 7. Permissions, authorization, revocation
 
 Specified in full in [specs/authorization.md](specs/authorization.md), which owns storage, the resolution function and its reference implementation, the snapshot cache, the two propagation paths, instance administration, bot scopes, the audit log, limits, and tests. This section records the decisions and their rationale.

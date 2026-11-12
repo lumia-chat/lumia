@@ -54,7 +54,8 @@ defmodule Lumia.Proto do
       name: s.name,
       icon_url: s.icon_url || "",
       owner_account_id: uuid(s.owner_account_id),
-      created_at: timestamp(s.inserted_at)
+      created_at: timestamp(s.inserted_at),
+      retention_days: s.retention_days || 0
     }
   end
 
@@ -73,7 +74,12 @@ defmodule Lumia.Proto do
     }
   end
 
-  def member(%Lumia.Servers.Member{} = m, role_ids \\ []) do
+  @doc """
+  A membership on the wire. `permissions`, the member's resolved
+  server-level bitfield, is given only for the caller's own memberships in
+  its account snapshot (architecture 6.7).
+  """
+  def member(%Lumia.Servers.Member{} = m, role_ids \\ [], permissions \\ 0) do
     %V1.Member{
       server_id: uuid(m.server_id),
       account_id: uuid(m.account_id),
@@ -81,7 +87,8 @@ defmodule Lumia.Proto do
       role_ids: Enum.map(role_ids, &uuid/1),
       nickname: m.nickname || "",
       joined_at: timestamp(m.joined_at),
-      expires_at: timestamp(m.expires_at)
+      expires_at: timestamp(m.expires_at),
+      permissions: permissions |> Lumia.Authz.Permission.from_bits() |> Enum.map(&permission/1)
     }
   end
 
@@ -171,7 +178,8 @@ defmodule Lumia.Proto do
 
   @doc "Permission name atom to the wire enum (`:view_channel` → `:VIEW_CHANNEL`)."
   def permission(name),
-    do: name |> Atom.to_string() |> String.upcase() |> String.to_existing_atom()
+    do:
+      name |> Atom.to_string() |> String.upcase() |> V1.Permission.value() |> V1.Permission.key()
 
   @doc "Wire enum to the permission name atom. Unknown values are dropped by the caller."
   def from_permission(enum),

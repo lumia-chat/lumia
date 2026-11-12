@@ -368,6 +368,18 @@ defmodule Lumia.V1.CreateServerRequest do
   field :name, 1, type: :string
 end
 
+defmodule Lumia.V1.UpdateServerRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.UpdateServerRequest",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :name, 1, proto3_optional: true, type: :string
+  field :retention_days, 2, proto3_optional: true, type: :uint32, json_name: "retentionDays"
+end
+
 defmodule Lumia.V1.ListChannelsResponse do
   @moduledoc false
 

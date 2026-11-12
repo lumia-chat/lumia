@@ -142,7 +142,7 @@ A client's first connection to an instance, and any connection after a generatio
 2. `ResumeAccount{after_seq: snapshot.seq}` on the gateway.
 3. `Subscribe` with cursor 0 for every channel in the snapshot, which yields `SNAPSHOT_REQUIRED` for each; take the channel snapshot path for the ones the user opens first and lazily for the rest.
 
-Thereafter, the account log tells the client about every channel it gains (`ChannelAdded`, subscribe to it) or loses (`ChannelRemoved`, unsubscribe and drop).
+Thereafter, the account log tells the client about every channel it gains (`ChannelAdded`, subscribe to it) or loses (`ChannelRemoved`, unsubscribe and drop). A server it is in that changes its name, picture or retention comes as `ServerUpdated`, the server as it now is.
 
 ## 8. Idempotency
 
@@ -215,7 +215,9 @@ Base path `/api/v1`. All endpoints require `Authorization: Bearer <access_token>
 | `GET /servers` | → `ListServersResponse` |
 | `POST /servers` | `CreateServerRequest` → `Server` |
 | `GET /servers/{server_id}` | → `Server` |
-| `PATCH /servers/{server_id}` | `Server` (partial) → `Server` |
+| `PATCH /servers/{server_id}` | `UpdateServerRequest` → `Server` | The server's name, its retention, or both (architecture 6.7); a field left out is left as it is, and `retention_days` 0 keeps messages for ever. Needs `MANAGE_SERVER` (the owner and `ADMINISTRATOR` have it): `PERMISSION_DENIED` otherwise. `INVALID_ARGUMENT` with `details.field` `name` for a name that is empty or over 100 characters once trimmed. Every member gets `ServerUpdated` on its account log. |
+| `PUT /servers/{server_id}/icon` | a picture's bytes → `Server` | The server's picture, taken as `PUT /account/avatar` takes an account's (the same formats, limits and refusals) and named in `Server.icon_url`, a path under `/api/v1/avatars/`. `MANAGE_SERVER`; `ServerUpdated` to every member. |
+| `DELETE /servers/{server_id}/icon` | → `Server` | The server has no picture again. `MANAGE_SERVER`; `ServerUpdated` to every member. |
 | `GET /servers/{server_id}/channels` | → `ListChannelsResponse` |
 | `POST /channels` | `CreateChannelRequest` → `Channel`; needs `MANAGE_CHANNELS` in the server (`PERMISSION_DENIED` otherwise, also for a non-member) |
 | `PATCH /channels/{channel_id}` | `Channel` (partial) → `Channel` |

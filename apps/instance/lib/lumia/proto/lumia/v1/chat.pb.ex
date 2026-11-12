@@ -121,6 +121,7 @@ defmodule Lumia.V1.Server do
   field :created_at, 5, type: Google.Protobuf.Timestamp, json_name: "createdAt"
   field :operator_name, 6, type: :string, json_name: "operatorName"
   field :host, 7, type: :string
+  field :retention_days, 8, type: :uint32, json_name: "retentionDays"
 end
 
 defmodule Lumia.V1.Role do
@@ -192,6 +193,7 @@ defmodule Lumia.V1.Member do
   field :nickname, 5, type: :string
   field :joined_at, 6, type: Google.Protobuf.Timestamp, json_name: "joinedAt"
   field :expires_at, 7, type: Google.Protobuf.Timestamp, json_name: "expiresAt"
+  field :permissions, 8, repeated: true, type: Lumia.V1.Permission, enum: true
 end
 
 defmodule Lumia.V1.Mention do

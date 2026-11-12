@@ -53,10 +53,22 @@ defmodule Lumia.Snapshots do
       account: Proto.account(account, own: true),
       seq: seq,
       servers: Enum.map(servers, &Proto.server/1),
-      memberships: Enum.map(memberships, &Proto.member(&1, Map.get(role_ids, &1.server_id, []))),
+      memberships:
+        Enum.map(memberships, fn m ->
+          Proto.member(m, Map.get(role_ids, m.server_id, []), server_permissions(m))
+        end),
       channels: channels,
       pending_requests: Enum.map(Lumia.Dms.pending_requests_to(account_id), &Proto.dm_request/1)
     }
+  end
+
+  # What the account may do in a server as a whole, for the client to know
+  # what to offer (architecture 6.7).
+  defp server_permissions(%Member{server_id: server_id, account_id: account_id}) do
+    case Lumia.Servers.actor(server_id, account_id) do
+      {:ok, actor} -> actor.server_permissions
+      _ -> 0
+    end
   end
 
   @doc """
