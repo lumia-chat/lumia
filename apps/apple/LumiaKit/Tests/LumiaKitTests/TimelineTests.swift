@@ -181,10 +181,10 @@ final class TimelineTests: XCTestCase {
     // MARK: The session
 
     @MainActor
-    private func session() async throws -> (LumiaSession, URL) {
+    private func session(signedIn: Bool = false) async throws -> (LumiaSession, URL) {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lumia-kit-\(UUID().uuidString)")
         let client = try LumiaClient(baseURL: URL(string: "http://127.0.0.1:1")!, dataDirectory: dir)
-        return (await LumiaSession(client: client), dir)
+        return (LumiaSession(client: client, host: await client.host, signedIn: signedIn, hasIdentity: false), dir)
     }
 
     private func message(by author: String, in channel: String) -> EventSummary {
@@ -193,7 +193,7 @@ final class TimelineTests: XCTestCase {
 
     @MainActor
     func testTheSessionKeepsWhoIsTypingAndAMessageEndsIt() async throws {
-        let (session, dir) = try await session()
+        let (session, dir) = try await session(signedIn: true)
         defer { try? FileManager.default.removeItem(at: dir) }
         let later = session.nowMicros() + 60_000_000
         await session.handle(.typing(channelId: "general", accountId: "grace", untilMicros: later))

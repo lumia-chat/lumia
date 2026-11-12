@@ -60,6 +60,9 @@ struct ShellView: View {
         }
         .onChange(of: session.connection) { _, state in
             if state == .connected, case let .server(id) = place { session.watchPresence(serverIDs: [id]) }
+            // A token the instance did not take (no network when it was
+            // offered) is offered again at each welcome; one it holds is not sent.
+            if state == .connected { Task { await PushRegistrar.shared.subscribe(session) } }
         }
         .onChange(of: servers.map(\.serverId)) { _, ids in
             // With no conversation yet, a first server is the better place to land.

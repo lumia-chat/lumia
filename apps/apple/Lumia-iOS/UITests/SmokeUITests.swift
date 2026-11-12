@@ -1,21 +1,24 @@
 // The things the simulator cannot do from the command line: answer the
 // notification permission prompt, tap a notification, type into a
-// composer, make a choice in Preferences, and read a screen as assistive
-// technology does. scripts/smoke-push.sh, scripts/smoke-typing.sh and
-// scripts/smoke-preferences.sh run these tests with the app signed in
+// composer, make a choice in Preferences, sign out from the account menu,
+// and read a screen as assistive technology does. scripts/smoke-push.sh,
+// scripts/smoke-typing.sh, scripts/smoke-preferences.sh and
+// scripts/smoke-signout.sh run these tests with the app signed in
 // (the LUMIA_DEV_* environment, passed through xcodebuild's TEST_RUNNER_
 // prefix).
 import XCTest
 
 final class SmokeUITests: XCTestCase {
     /// Launches the app with the runner's `LUMIA_DEV_*` environment, `screen`
-    /// in place of its `LUMIA_DEV_SCREEN` when given.
-    private func launch(screen: String? = nil) -> XCUIApplication {
+    /// in place of its `LUMIA_DEV_SCREEN` and `appearance` in place of its
+    /// `LUMIA_DEV_APPEARANCE` when given.
+    private func launch(screen: String? = nil, appearance: String? = nil) -> XCUIApplication {
         let app = XCUIApplication()
         for (key, value) in ProcessInfo.processInfo.environment where key.hasPrefix("LUMIA_DEV_") {
             app.launchEnvironment[key] = value
         }
         if let screen { app.launchEnvironment["LUMIA_DEV_SCREEN"] = screen }
+        if let appearance { app.launchEnvironment["LUMIA_DEV_APPEARANCE"] = appearance }
         app.launch()
         return app
     }
@@ -94,6 +97,102 @@ final class SmokeUITests: XCTestCase {
         XCTAssertEqual(selected("Appearance", of: appearances), ["System"])
         XCTAssertEqual(selected("Message density", of: densities), ["Comfortable"])
         _ = reached("system")
+    }
+
+    /// Sign out by hand (scripts/smoke-signout.sh). The account menu ends
+    /// with Sign out under its rule, a button by that name; tapping it
+    /// shows the sign-in screen on the instance the phone knows, without
+    /// the line for someone the instance sent back. Typing the password
+    /// there signs in again, in the same run of the app, and signing out a
+    /// second time works as the first did; the launch after that names no
+    /// account and opens on sign-in. The smoke looks at the screen and at
+    /// the instance at each step announced under LUMIA_UITEST_STEPS, and
+    /// the test goes on once the smoke says it has (`<step>.seen`): `in`,
+    /// `menu-light`, `menu-dark`, `out`, `back`, `out-again`, `next-launch`.
+    func testSignOutFromTheAccountMenu() throws {
+        let env = ProcessInfo.processInfo.environment
+        let steps = try XCTUnwrap(env["LUMIA_UITEST_STEPS"])
+        let handle = try XCTUnwrap(env["LUMIA_DEV_HANDLE"])
+        let password = try XCTUnwrap(env["LUMIA_DEV_PASSWORD"])
+        let host = try XCTUnwrap(env["LUMIA_UITEST_HOST"])
+        let reached = { (step: String) in
+            try? step.write(toFile: "\(steps)/\(step)", atomically: true, encoding: .utf8)
+            for _ in 0..<1200 where !FileManager.default.fileExists(atPath: "\(steps)/\(step).seen") { usleep(100_000) }
+            XCTAssertTrue(FileManager.default.fileExists(atPath: "\(steps)/\(step).seen"), "the smoke never looked at \"\(step)\"")
+        }
+        var app = XCUIApplication()
+        let account = { app.descendants(matching: .any).matching(NSPredicate(format: "label ENDSWITH %@", ", account")).firstMatch }
+        let signOut = { app.collectionViews.buttons["Sign out"] }
+        /// Opens the account menu: the web's and the desktop shell's items from the top, Sign out last.
+        func openMenu() {
+            XCTAssertTrue(account().waitForExistence(timeout: 90), "no account menu on the rail")
+            account().tap()
+            let items = ["View profile", "Preferences", "Devices", "Sign out"].map { app.collectionViews.buttons[$0] }
+            for item in items { XCTAssertTrue(item.waitForExistence(timeout: 10), "the account menu has no \(item)") }
+            XCTAssertEqual(items.map(\.frame.minY), items.map(\.frame.minY).sorted(), "View profile, Preferences, Devices, Sign out from the top")
+            // As assistive technology has it: a button, by that name, that can be pressed.
+            XCTAssertEqual(signOut().elementType, .button)
+            XCTAssertEqual(signOut().label, "Sign out")
+            XCTAssertTrue(signOut().isEnabled)
+        }
+        /// The sign-in screen on the instance the phone knows, with nothing said about why.
+        func expectSignIn(_ when: String) {
+            XCTAssertTrue(app.staticTexts["Welcome back"].waitForExistence(timeout: 60), "no sign-in screen \(when)")
+            XCTAssertTrue(app.staticTexts[host].waitForExistence(timeout: 10), "the sign-in screen \(when) is not on \(host)")
+            XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "You were signed out")).firstMatch.exists, "the sign-in screen \(when) says the instance ended the session")
+            XCTAssertFalse(account().exists, "the rail is still there \(when)")
+        }
+
+        // Signed in from the runner's environment, as the other smokes are,
+        // in an appearance named for the launch: the menu in each.
+        app = launch(screen: "home", appearance: "light")
+        XCTAssertTrue(account().waitForExistence(timeout: 90), "the app did not sign in")
+        // A new phone asks about notifications once; allowed, the system
+        // gives the app a token where it can, and the phone is subscribed.
+        let allow = XCUIApplication(bundleIdentifier: "com.apple.springboard").buttons["Allow"]
+        if allow.waitForExistence(timeout: 30) { allow.tap() }
+        reached("in")
+        openMenu()
+        reached("menu-light")
+        app.terminate()
+        app = launch(screen: "home", appearance: "dark")
+        openMenu()
+        reached("menu-dark")
+
+        signOut().tap()
+        expectSignIn("after signing out")
+        reached("out")
+
+        // In again by hand, in the same run of the app: what it forgot of
+        // the account at sign-out, it asks the instance again.
+        let name = app.textFields["you@example.com"]
+        XCTAssertTrue(name.waitForExistence(timeout: 10), "no field for the handle")
+        name.tap()
+        name.typeText(handle)
+        let secret = app.secureTextFields["Your password"]
+        secret.tap()
+        secret.typeText(password + "\n")
+        // The system may offer to keep the password; the rail is behind its sheet.
+        let later = XCUIApplication(bundleIdentifier: "com.apple.springboard").buttons["Not Now"]
+        for _ in 0..<60 where !account().exists {
+            if later.exists { later.tap() }
+            if app.buttons["Not Now"].exists { app.buttons["Not Now"].tap() }
+            sleep(1)
+        }
+        XCTAssertTrue(account().exists, "typing the password did not sign in")
+        reached("back")
+
+        openMenu()
+        signOut().tap()
+        expectSignIn("after signing out a second time")
+        reached("out-again")
+
+        // The next launch names no account: what it shows is what the phone kept.
+        app.terminate()
+        app = XCUIApplication()
+        app.launch()
+        expectSignIn("at the next launch")
+        reached("next-launch")
     }
 
     /// Accepts the prompt and keeps the app running while the link

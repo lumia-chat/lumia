@@ -37,7 +37,10 @@ struct RootView: View {
 
     var body: some View {
         Group {
-            if store.opening {
+            // Opening, or signing out: once Sign out is tapped nothing of the
+            // account is on screen, so there is no second tap and nothing to
+            // ask of a session that is ending.
+            if store.opening || store.signingOut {
                 ProgressView().controlSize(.large)
             } else if devScreen == "signin" {
                 SignInView()
@@ -57,5 +60,8 @@ struct RootView: View {
         // for what the system draws over them (a sheet, a menu, the
         // keyboard); nil is the phone's own, followed as it changes.
         .preferredColorScheme(preferences.appearance.colorScheme)
+        .onChange(of: store.session?.signedIn) { _, signedIn in
+            if signedIn == false { PushRegistrar.shared.signedOut() }
+        }
     }
 }

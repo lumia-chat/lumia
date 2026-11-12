@@ -26,6 +26,36 @@ public enum ConnectionState: Equatable, Sendable {
 
 public let personalKinds: Set<String> = ["PERSONAL_DM", "PERSONAL_GROUP_DM"]
 
+/// What a session has told its instance of this phone's push token. A
+/// token goes once: the system hands the same one over at every launch
+/// and every return to the shell. It goes again when it changes, when the
+/// instance did not take it, and after signing out, which removes the
+/// subscription there: whoever signs in next, the same account or
+/// another, is subscribed again.
+public struct PushLedger: Equatable, Sendable {
+    private var token: String?
+
+    public init() {}
+
+    /// Whether `token` is still to be sent; it counts as sent from here, so
+    /// that asking twice while it is on its way sends it once.
+    public mutating func claim(_ token: String) -> Bool {
+        guard self.token != token else { return false }
+        self.token = token
+        return true
+    }
+
+    /// The instance did not take `token`: it is still to be sent.
+    public mutating func failed(_ token: String) {
+        if self.token == token { self.token = nil }
+    }
+
+    /// Signing out: nothing is held as sent.
+    public mutating func forget() {
+        token = nil
+    }
+}
+
 @MainActor
 @Observable
 public final class LumiaSession {
@@ -71,11 +101,40 @@ public final class LumiaSession {
 
     private var events: Task<Void, Never>?
 
-    public init(client: LumiaClient) async {
+    /// The platform this phone's pushes come through: APNs, by the relay.
+    public static let pushPlatform = "apns"
+    /// What the instance has been told of this phone's token.
+    private(set) var pushLedger = PushLedger()
+    /// The token on its way to the instance, which signing out waits for.
+    private var pushSending: Task<Void, Never>?
+    /// The session is on its way out, chosen or ended: neither starts twice.
+    private var leaving = false
+
+    /// The calls whose order signing out is about.
+    enum ClientCall: Hashable, Sendable {
+        case pushSubscribe(token: String), pushUnsubscribe, signOut
+    }
+
+    /// Makes one of them on the client; a test's own.
+    @ObservationIgnored var ask: @MainActor (ClientCall) async throws -> Void
+
+    public convenience init(client: LumiaClient) async {
+        await self.init(client: client, host: client.host, signedIn: client.signedIn, hasIdentity: client.hasIdentity)
+    }
+
+    /// A session as the client was found; a test names what it found.
+    init(client: LumiaClient, host: String, signedIn: Bool, hasIdentity: Bool) {
         self.client = client
-        self.host = await client.host
-        self.signedIn = await client.signedIn
-        self.hasIdentity = await client.hasIdentity
+        self.host = host
+        self.signedIn = signedIn
+        self.hasIdentity = hasIdentity
+        self.ask = { call in
+            switch call {
+            case let .pushSubscribe(token): try await client.pushSubscribe(platform: LumiaSession.pushPlatform, token: token)
+            case .pushUnsubscribe: try await client.pushUnsubscribe(platform: LumiaSession.pushPlatform)
+            case .signOut: try await client.signOut()
+            }
+        }
     }
 
     // MARK: Sign in
@@ -160,16 +219,48 @@ public final class LumiaSession {
         signedIn = true
     }
 
+    /// Signs out because the person chose to. First, while the session can
+    /// still say so, this phone's push subscription is removed: the instance
+    /// keeps subscriptions by device, not by session, so a signed-out phone
+    /// would otherwise go on getting notices for the account. A failure
+    /// there does not stop the rest: the session is revoked, and the tokens
+    /// and what was held of the account are forgotten. The identity and the
+    /// device keys stay on the phone, and the sign-in screen has no line to
+    /// say, since nobody was sent back to it. A second call, or one while
+    /// the session is already on its way out, does nothing.
     public func signOut() async {
+        guard signedIn, !leaving else { return }
+        leaving = true
+        defer { leaving = false }
+        // A token on its way must land before it can be taken back.
+        await pushSending?.value
+        try? await ask(.pushUnsubscribe)
+        await end()
+        endedNotice = nil
+    }
+
+    /// The gateway stops, the session is revoked where the instance still
+    /// knows it, and nothing of the account is held: whoever signs in next
+    /// starts from what the instance says.
+    private func end() async {
         stop()
-        try? await client.signOut()
+        try? await ask(.signOut)
         signedIn = false
         snapshot = nil
         messages = [:]
         dmChannels = []
         dmLogs = [:]
+        roster = nil
+        people = [:]
+        serverMembers = [:]
+        serverPresence = [:]
+        serverCustomStatus = [:]
+        watchingServerIDs = []
+        profiles = [:]
+        lastError = nil
         typing.clear()
         scheduleTypingExpiry()
+        pushLedger.forget()
     }
 
     /// What the sign-in screen says to someone the instance sent back to it.
@@ -184,11 +275,14 @@ public final class LumiaSession {
 
     /// The instance no longer takes this session (it was revoked, or ran
     /// out): the gateway stops and what was held of the account goes, as on
-    /// signing out, and the sign-in screen says what happened.
+    /// signing out, and the sign-in screen says what happened. Not while the
+    /// person is signing out themselves: that is theirs, and says nothing.
     private func sessionEnded() async {
-        guard signedIn else { return }
+        guard signedIn, !leaving else { return }
+        leaving = true
+        defer { leaving = false }
         endedNotice = Self.signedOutNotice
-        await signOut()
+        await end()
     }
 
     // MARK: Identity
@@ -478,9 +572,21 @@ public final class LumiaSession {
         }
     }
 
-    /// Registers this device for pushes through the relay (`apns`).
-    public func pushSubscribe(platform: String, token: String) async {
-        try? await client.pushSubscribe(platform: platform, token: token)
+    /// Hands this phone's APNs token to the instance, which pushes through
+    /// the relay. Once per token (`PushLedger`): asked again with one the
+    /// instance holds, nothing is sent; one it did not take is sent the
+    /// next time, and signing out starts over.
+    public func pushSubscribe(token: String) async {
+        guard signedIn, !leaving, pushLedger.claim(token) else { return }
+        let sending = Task {
+            do {
+                try await ask(.pushSubscribe(token: token))
+            } catch {
+                pushLedger.failed(token)
+            }
+        }
+        pushSending = sending
+        await sending.value
     }
 
     func handle(_ event: LumiaEvent) async {

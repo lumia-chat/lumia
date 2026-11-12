@@ -26,6 +26,7 @@ enum Screen: Hashable {
 }
 
 struct PhoneRail: View {
+    @Environment(AppStore.self) private var store
     let session: LumiaSession
     @Binding var place: Place
     let add: () -> Void
@@ -55,12 +56,22 @@ struct PhoneRail: View {
             Spacer()
             // The account menu, in the web's and the desktop shell's order.
             // No board draws one for a phone, so it is the system's menu:
-            // the glyphs are the system's for the design's user, preferences
-            // and shield, and `fixed` keeps the order when it opens upwards.
+            // the glyphs are the system's for the design's user, preferences,
+            // shield and sign-out, and `fixed` keeps the order when it opens
+            // upwards. Sign out is last, under a rule, as it is there, and
+            // asks nothing first, as there: signing in brings back all that
+            // goes. The system marks an item that ends something as
+            // destructive, which is how it draws its own Sign Out.
             Menu {
                 Button { open(.profile) } label: { Label("View profile", systemImage: "person") }
                 Button { open(.preferences) } label: { Label("Preferences", systemImage: "slider.horizontal.3") }
                 Button { open(.devices) } label: { Label("Devices", systemImage: "shield") }
+                Divider()
+                Button(role: .destructive) {
+                    Task { await store.signOut() }
+                } label: {
+                    Label("Sign out", systemImage: "rectangle.portrait.and.arrow.right")
+                }
             } label: {
                 LumiaAvatar(initials: initials(of: session.selfName), tone: .of(session.me), size: LumiaTokens.avatarSelf)
             }

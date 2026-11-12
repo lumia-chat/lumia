@@ -123,7 +123,17 @@ public final class AppStore {
         return s
     }
 
+    /// A sign-out the person chose is on its way: the app shows nothing of
+    /// the account meanwhile, so nothing can be asked of a session that is ending.
+    public private(set) var signingOut = false
+
+    /// Signs out (`LumiaSession.signOut`) and shows the sign-in screen. The
+    /// saved instance stays, so that screen opens on it. A second tap while
+    /// the first is on its way does nothing.
     public func signOut() async {
+        guard !signingOut else { return }
+        signingOut = true
+        defer { signingOut = false }
         await session?.signOut()
         route = .signIn
     }

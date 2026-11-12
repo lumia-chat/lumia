@@ -33,7 +33,6 @@ final class PushRegistrar {
     private(set) var token: String?
     /// The notification the person tapped last, until the shell opens it.
     var target: PushTarget?
-    private var subscribed: String?
 
     /// Asks for permission and a token; both are best effort.
     func register() {
@@ -53,11 +52,27 @@ final class PushRegistrar {
         token = deviceToken.map { String(format: "%02x", $0) }.joined()
     }
 
-    /// Sends the token to the instance once per token and session.
+    /// Offers the token to the session, which sends it to the instance once
+    /// per value and forgets that at sign-out (`PushLedger` in LumiaKit), so
+    /// this may be asked whenever there is a token and a session.
     func subscribe(_ session: LumiaSession) async {
-        guard let token, subscribed != token + session.host else { return }
-        subscribed = token + session.host
-        await session.pushSubscribe(platform: "apns", token: token)
+        guard let token else { return }
+        await session.pushSubscribe(token: token)
+    }
+
+    /// The account has left this phone, signed out or sent back to sign-in.
+    /// The session has taken the subscription back from the instance where
+    /// it still could (`LumiaSession.signOut`); here the phone stops taking
+    /// pushes at all, which also covers the times it could not (no network,
+    /// or a session the instance ended), as the web drops the browser's own
+    /// subscription beside the instance's. The token is forgotten with it:
+    /// the next sign-in registers again and subscribes with what the system
+    /// then gives. A notification tapped for the account opens nothing for
+    /// whoever signs in next.
+    func signedOut() {
+        target = nil
+        token = nil
+        UIApplication.shared.unregisterForRemoteNotifications()
     }
 }
 
