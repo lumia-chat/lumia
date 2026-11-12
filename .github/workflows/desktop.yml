@@ -3,13 +3,15 @@ name: desktop
 on:
   push:
     branches: [master]
-    paths: ["apps/desktop/**", ".github/workflows/desktop.yml"]
+    paths: ["apps/desktop/src-tauri/**", "apps/desktop/package.json", "apps/desktop/bun.lock", ".github/workflows/desktop.yml"]
   pull_request:
-    paths: ["apps/desktop/**", ".github/workflows/desktop.yml"]
+    paths: ["apps/desktop/src-tauri/**", "apps/desktop/package.json", "apps/desktop/bun.lock", ".github/workflows/desktop.yml"]
 
 permissions:
   contents: read
 
+# The Tauri shell only: the Rune shell beside it in apps/desktop has no job
+# yet (plan step 9), so its files do not start this one.
 # The Tauri shell's crate, linted on the two platforms it ships to. The
 # bundles are a release's (release.yml, on a v* tag), not a push's: the
 # web UI the shell carries has its own job (web.yml), and the shell's

@@ -1,4 +1,35 @@
-This is the Lumia desktop shell (architecture section 13): Tauri 2 around the web UI in `../web`. Read `../../docs/architecture.md` and `../../docs/plan.md` (step 6) before changing anything here.
+This directory holds two desktop shells (architecture section 13). Read `../../docs/architecture.md` and `../../docs/plan.md` (steps 6 and 9) before changing anything here.
+
+- **The Rune shell**, the crate at this directory's root: the desktop app for macOS, Windows and Linux, in Rust on [Rune](https://github.com/anomalyco/rune) with the client core linked in. It is being built, macOS first.
+- **The Tauri shell**, `src-tauri/` with `package.json`: the web UI from `../web` on the system webview. It is what ships on Windows and Linux until the Rune shell reaches parity there, and is then removed.
+
+The two share nothing: separate Cargo workspaces, toolchains and lock files.
+
+# The Rune shell
+
+## Layout
+
+- `Cargo.toml`: its own workspace on Rust 1.99.1 and edition 2024, Rune's pins. Rune and `rune-kit` are git dependencies at one pinned rev, and the manifest repeats Rune's two `[patch.crates-io]` entries (its patched `wgpu-hal` and `winit`), which a dependency cannot apply for the workspace that uses it. Bump the four revs together. The core is a path dependency on `../core/crates/lumia-client`; there is no binding layer.
+- `build.rs`: turns the shared design assets into what the shell compiles in, as `apps/apple/scripts/tokens.py` does for Swift. `assets/design/tokens.json` becomes `tokens.rs` in `OUT_DIR` (every colour for light and dark as linear `Color`s, the shadows as `Shadow` layers, spacing, radii and sizes as points, the type styles), the WOFF2 fonts the tokens list become TrueType (Rune reads no WOFF2), and `assets/icons` and the brand symbol become Rune `Icon`s. Nothing generated is committed.
+- `src/session.rs`: the client and the state the screens read, the counterpart of LumiaKit's `Session.swift`. It owns a tokio runtime; calls that reach the network run there and come back as `Update`s in a queue the window drains on its own thread (`Session::poll`), woken through a callback. Reads of the local store are synchronous. **No toolkit type appears in this file**: architecture 13 names GPUI as the fallback, and this is the part a move would keep.
+- `src/app.rs`: the window's state over the session (the route, the sign-in form, the server on screen, the draft) and its reactions to what the session reports; `init`, `setup` and `poll` for Rune's `AppSpec`. `State::receive` applies an update as if the instance had sent it, which is how tests stand in for one.
+- `src/ui/`: the views. `components.rs` is the design system's pieces (avatar, card, field, buttons, panel), `sign_in.rs` the instance and account cards, `shell.rs` the Quiet Split (rail, sidebar, conversation, members). Views read the state and call its methods; they never touch the runtime.
+- `src/tokens.rs`: includes the generated tokens and adds what is derived from them (the avatar tone an id hashes to, the Markdown style for message bodies).
+- `src/settings.rs`: the data directory (`LUMIA_DATA_DIR`, else `chat.lumia.desktop` under the platform's application-data directory) and `settings.json` (the instance to reopen). The stores under it follow `lumia-ffi`'s layout: `<host>/store.sqlite`, `<host>/keys.sqlite`, `identity/`. It is deliberately not the SwiftUI macOS app's directory: two processes must not open one MLS store.
+- `tests/shell.rs`: the screens through a windowless `rune::Runtime`, with no instance. `tests/live.rs`: the session against a real instance, run by the smoke script (it skips itself without the `LUMIA_DEV_*` environment).
+- `scripts/smoke.sh`: seeds a dev instance with the release CLI and checks the debug shell against it: signed in, snapshot loaded, gateway connected, messages and members in the tree, a send stored, a second launch reading from SQLite. It draws `out/smoke/shell.png` and `shell-dark.png` headlessly through Rune's `--snap`, which needs no window and no screen-recording permission; that is how a change to a screen is checked against the design canvas.
+
+## Rules
+
+- Logic lives in the Rust core. A call a screen needs goes on `lumia_client::app::App` first; `session.rs` holds state and the views hold layout.
+- Colours, distances, radii, shadows and type come from `tokens`; no literal values in views. Sentence case, typographic punctuation, no emoji in chrome.
+- The screens mirror the web's (`apps/web/src/routes`) and the SwiftUI app's: the same states, wording and error handling.
+- Every interactive element has a role, a label, a focus ring and a key; a list is a `list` of `listitem`s. The accessibility tree is part of the screen (`--tree out.json` shows it).
+- A message is text someone else wrote. Its links open only as `http` or `https`, and the shell fetches nothing a message names (no images, no previews).
+- No `unwrap` or `expect` outside tests, and no `unsafe` (manifest lints). `cargo fmt`, `cargo clippy --all-targets -- -D warnings` and `cargo test` must pass, and `scripts/smoke.sh` against a dev instance after a change to a screen or the session.
+- What the shell does not do yet is listed in plan step 9. Say so in the screen's module comment when a flow is missing, and do not draw a control for it.
+
+# The Tauri shell
 
 ## Layout
 
