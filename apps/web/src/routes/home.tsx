@@ -7,6 +7,7 @@ import {
   Button,
   Card,
   ChannelHeader,
+  Checkbox,
   ChannelList,
   Composer,
   DeviceList,
@@ -21,16 +22,17 @@ import {
   SearchField,
   ServerHeader,
   SidePanel,
+  SidePanelScroll,
   SegmentedTabs,
   TextField,
   type ChannelItem,
   type DeviceEntry,
 } from "../design/components";
 import { ClientError, type ChannelSummary, type DeviceSummary, type DmMessageSummary, type InvitePreviewSummary, type MemberSummary, type PasskeySummary, type ProfileSummary, type SnapshotSummary } from "../client/bridge";
-import { client, dmChannelsQuery, dmMessagesQuery, enableNotifications, hasIdentityQuery, peopleQuery, pushState, queryClient, rosterQuery, snapshotQuery } from "../client/state";
+import { client, dmChannelsQuery, dmMessagesQuery, enableNotifications, hasIdentityQuery, myStatus, peopleQuery, pushState, queryClient, rosterQuery, setMyStatus, snapshotQuery } from "../client/state";
 import { useNames } from "../client/names";
 import { addPasskey, passkeysAvailable } from "../client/passkeys";
-import { initialsOf, timeOf, toneFor } from "./app";
+import { byBlock, byDay, initialsOf, shortTimeOf, timeOf, toneFor } from "./app";
 
 export type HomeView = "dm" | "requests" | "devices" | "profile" | "new" | "add";
 
@@ -41,6 +43,37 @@ export interface HomeProps {
   go: (view: HomeView, channelId?: string) => void;
   toLink: () => void;
   toServer: (serverId: string) => void;
+  /** Back to the rail and the sidebar, where the frame is folded. */
+  back: () => void;
+  /** The aside over the conversation, where the window is too narrow for it in the row. */
+  asideOpen: boolean;
+  toggleAside: () => void;
+  /** The profile card of an account, against what was pressed. */
+  openPerson: (accountId: string, anchor: HTMLElement) => void;
+}
+
+/**
+ * Starts a conversation with someone, or asks for one where they have to
+ * agree first: the conversation's channel, or a line saying what happened
+ * instead. Shared by "New message" and the profile card's button.
+ */
+export async function messagePerson(accountId: string, name: string): Promise<{ channelId: string } | { note: string }> {
+  try {
+    const opened = await client().dmOpen([accountId]);
+    void queryClient.invalidateQueries({ queryKey: ["snapshot"] });
+    void queryClient.invalidateQueries({ queryKey: ["dmChannels"] });
+    return { channelId: opened.channelId };
+  } catch (e) {
+    const ce = e instanceof ClientError ? e : null;
+    if (ce?.code !== "FAILED_PRECONDITION") return { note: e instanceof Error ? e.message : String(e) };
+    try {
+      await client().dmRequest(accountId);
+      return { note: `Request sent to ${name}. The conversation opens when they accept.` };
+    } catch (err) {
+      const ce2 = err instanceof ClientError ? err : null;
+      return { note: ce2?.code === "ALREADY_EXISTS" ? "You already asked; waiting for their answer." : err instanceof Error ? err.message : String(err) };
+    }
+  }
 }
 
 const PERSONAL = new Set(["PERSONAL_DM", "PERSONAL_GROUP_DM"]);
@@ -95,9 +128,9 @@ export function HomeSidebar(props: HomeProps) {
       <Show when={sections().length > 0} fallback={<p class="app__empty app__empty--side">No conversations yet.</p>}>
         <ChannelList sections={sections()} />
       </Show>
-      <button type="button" class="lu-link app__push" onClick={() => props.go("add")}>
+      <Button size="sm" block class="app__foot" onClick={() => props.go("add")}>
         Add a server
-      </button>
+      </Button>
     </>
   );
 }
@@ -160,7 +193,7 @@ function AddServer(props: HomeProps) {
   };
   return (
     <>
-      <ChannelHeader kind="page" name="Add a server" topic="Your own, or one you were invited to" actions={[]} />
+      <ChannelHeader kind="page" name="Add a server" topic="Your own, or one you were invited to" actions={[]} onBack={props.back} backLabel="Back to Home" />
       <div class="lu-page">
         <Card title="Create a server" subtitle="You own it; invite people once it exists.">
           <form class="auth__form" onSubmit={(e) => void create(e)}>
@@ -209,17 +242,17 @@ export function HomeMain(props: HomeProps) {
   const identity = hasIdentityQuery();
   return (
     <Show when={props.view !== "add" && props.view !== "devices" && props.view !== "profile"} fallback={props.view === "add" ? <AddServer {...props} /> : props.view === "profile" ? <Profile {...props} /> : <Devices {...props} />}>
-      <Show when={identity.data !== false} fallback={<NoIdentity toLink={props.toLink} />}>
+      <Show when={identity.data !== false} fallback={<NoIdentity toLink={props.toLink} back={props.back} />}>
         {props.view === "requests" ? <Requests {...props} /> : props.view === "new" ? <NewMessage {...props} /> : <Conversation {...props} />}
       </Show>
     </Show>
   );
 }
 
-function NoIdentity(props: { toLink: () => void }) {
+function NoIdentity(props: { toLink: () => void; back: () => void }) {
   return (
     <>
-      <ChannelHeader kind="page" name="Home" actions={[]} />
+      <ChannelHeader kind="page" name="Home" actions={[]} onBack={props.back} backLabel="Back to Home" />
       <div class="lu-page">
         <EmptyState icon="shield" title="Link this browser to your identity" action={{ label: "Link this browser", onClick: props.toLink }}>
           Personal messages are end-to-end encrypted between your devices and theirs. This browser has no device key yet; a device you already use approves it.
@@ -240,6 +273,21 @@ function Conversation(props: HomeProps) {
   const [error, setError] = createSignal("");
   const title = createMemo(() => (channel() ? conversationName(channel() as ChannelSummary, me(), nameOf) : "Conversation"));
   const participants = createMemo(() => (channel()?.participantAccountIds ?? []).map((id) => ({ id, name: nameOf(id) })));
+  // A one-to-one conversation has one other sender, named even when the
+  // engine has not yet tied the identity to an account.
+  const others = () => participants().filter((p) => p.id !== me());
+  const who = (m: DmMessageSummary) => (m.mine ? nameOf(me()) : m.senderAccountId || others().length !== 1 ? nameOf(m.senderAccountId) : (others()[0]?.name ?? "Someone"));
+  // By day, and each day's by block: one person's quick messages under one name.
+  const days = createMemo(() =>
+    byDay(log.data?.messages ?? [], (m) => m.sentAtMicros).map((day) => ({
+      label: day.label,
+      blocks: byBlock(
+        day.messages,
+        (m) => (m.mine ? me() : m.senderAccountId || m.senderIdentityId),
+        (m) => m.sentAtMicros,
+      ),
+    })),
+  );
 
   const send = async () => {
     const id = props.channelId;
@@ -270,7 +318,7 @@ function Conversation(props: HomeProps) {
     <Show when={channel()} fallback={<ChooseConversation {...props} />}>
       {(ch) => (
         <>
-          <ChannelHeader kind="dm" name={title()} topic={ch().host ? `on ${ch().host}` : undefined} actions={[]} />
+          <ChannelHeader kind="dm" name={title()} topic={ch().host ? `on ${ch().host}` : undefined} onBack={props.back} backLabel="Back to Home" actions={[{ icon: "members", label: "Details", narrow: true, pressed: props.asideOpen, onClick: props.toggleAside }]} />
           <MessageList>
             <Notice icon="shield">
               Messages here are end-to-end encrypted. Only your devices and those of {participants().filter((p) => p.id !== me()).map((p) => p.name).join(", ") || "the other participants"} can read them.
@@ -288,22 +336,34 @@ function Conversation(props: HomeProps) {
             <Show when={(log.data?.undecryptable ?? 0) > 0}>
               <Notice icon="lock">{log.data?.undecryptable} could not be decrypted.</Notice>
             </Show>
-            <Show when={(log.data?.messages.length ?? 0) > 0}>
-              <Divider variant="day" label="Messages" />
-            </Show>
-            <For each={log.data?.messages ?? []}>
-              {(m: DmMessageSummary) => {
-                // A one-to-one conversation has one other sender, named even
-                // when the engine has not yet tied the identity to an account.
-                const others = () => participants().filter((p) => p.id !== me());
-                const who = () => (m.mine ? nameOf(me()) : m.senderAccountId || others().length !== 1 ? nameOf(m.senderAccountId) : (others()[0]?.name ?? "Someone"));
-                const t = timeOf(m.sentAtMicros);
-                return (
-                  <Message author={who()} initials={initialsOf(who())} tone={toneFor(m.mine ? me() : m.senderAccountId || m.senderIdentityId)} time={t.time} datetime={t.datetime} actions={false}>
-                    {m.deleted ? "(deleted)" : m.body}
-                  </Message>
-                );
-              }}
+            <For each={days()}>
+              {(day) => (
+                <>
+                  <Divider variant="day" label={day.label} />
+                  <For each={day.blocks}>
+                    {(block) => {
+                      const first = block.first;
+                      const t = timeOf(first.sentAtMicros);
+                      const said = (m: DmMessageSummary) => (m.deleted ? "(deleted)" : m.body);
+                      const account = () => (first.mine ? me() : first.senderAccountId);
+                      return (
+                        <Message
+                          author={who(first)}
+                          initials={initialsOf(who(first))}
+                          tone={toneFor(first.mine ? me() : first.senderAccountId || first.senderIdentityId)}
+                          time={t.time}
+                          datetime={t.datetime}
+                          actions={false}
+                          onOpenProfile={account() ? (anchor) => props.openPerson(account(), anchor) : undefined}
+                          parts={block.rest.map((m) => ({ time: shortTimeOf(m.sentAtMicros), datetime: timeOf(m.sentAtMicros).datetime, children: said(m) }))}
+                        >
+                          {said(first)}
+                        </Message>
+                      );
+                    }}
+                  </For>
+                </>
+              )}
             </For>
             <Show when={error()}>
               <p class="auth__error" role="alert">
@@ -313,11 +373,12 @@ function Conversation(props: HomeProps) {
           </MessageList>
           <Composer
             placeholder={state()?.member ? `Message ${title()}` : "Setting up the encrypted group…"}
+            tools={false}
             disabled={!state()?.member}
             value={draft()}
             onInput={(e) => setDraft(e.currentTarget.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
+              if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
                 e.preventDefault();
                 void send();
               }
@@ -333,7 +394,7 @@ function Conversation(props: HomeProps) {
 function ChooseConversation(props: HomeProps) {
   return (
     <>
-      <ChannelHeader kind="page" name="Home" actions={[]} />
+      <ChannelHeader kind="page" name="Home" actions={[]} onBack={props.back} backLabel="Back to Home" />
       <div class="lu-page">
         <EmptyState icon="lock" title="Your conversations" action={{ label: "New message", onClick: () => props.go("new") }}>
           Personal messages are end-to-end encrypted. Pick one on the left, or start one with someone you share a server with.
@@ -350,13 +411,16 @@ export function ConversationAside(props: HomeProps) {
   return (
     <Show when={channel()}>
       {(ch) => (
-        <SidePanel tabs={[{ id: "details", label: "Details" }]} value="details" onChange={() => {}}>
+        <SidePanel tabs={[{ id: "details", label: "Details" }]} value="details">
+          <SidePanelScroll>
           <MemberList
+            onOpen={(m, row) => m.id && props.openPerson(m.id, row)}
             sections={[
               {
                 title: "In this conversation",
                 // Each person with the pronouns and bio of their verified profile.
                 members: ch().participantAccountIds.map((id) => ({
+                  id,
                   name: nameOf(id),
                   initials: initialsOf(nameOf(id)),
                   tone: toneFor(id),
@@ -367,6 +431,7 @@ export function ConversationAside(props: HomeProps) {
               },
             ]}
           />
+          </SidePanelScroll>
         </SidePanel>
       )}
     </Show>
@@ -400,7 +465,7 @@ function Requests(props: HomeProps) {
   };
   return (
     <>
-      <ChannelHeader kind="page" name="Requests" topic="People who want to message you" actions={[]} />
+      <ChannelHeader kind="page" name="Requests" topic="People who want to message you" actions={[]} onBack={props.back} backLabel="Back to Home" />
       <div class="lu-page">
         <Notice icon="shield">A request shows who is asking and what you share, nothing else. Accepting opens an encrypted conversation; the sender cannot see that you looked.</Notice>
         <Show when={error()}>
@@ -448,30 +513,16 @@ function NewMessage(props: HomeProps) {
     setBusy(p.accountId);
     setNote("");
     try {
-      const opened = await client().dmOpen([p.accountId]);
-      void queryClient.invalidateQueries({ queryKey: ["snapshot"] });
-      void queryClient.invalidateQueries({ queryKey: ["dmChannels"] });
-      props.go("dm", opened.channelId);
-    } catch (e) {
-      const ce = e instanceof ClientError ? e : null;
-      if (ce?.code === "FAILED_PRECONDITION") {
-        try {
-          await client().dmRequest(p.accountId);
-          setNote(`Request sent to ${p.displayName || p.handle}. The conversation opens when they accept.`);
-        } catch (err) {
-          const ce2 = err instanceof ClientError ? err : null;
-          setNote(ce2?.code === "ALREADY_EXISTS" ? "You already asked; waiting for their answer." : err instanceof Error ? err.message : String(err));
-        }
-      } else {
-        setNote(e instanceof Error ? e.message : String(e));
-      }
+      const outcome = await messagePerson(p.accountId, p.displayName || p.handle);
+      if ("channelId" in outcome) props.go("dm", outcome.channelId);
+      else setNote(outcome.note);
     } finally {
       setBusy(null);
     }
   };
   return (
     <>
-      <ChannelHeader kind="page" name="New message" topic="Someone you share a server with" actions={[]} />
+      <ChannelHeader kind="page" name="New message" topic="Someone you share a server with" actions={[]} onBack={props.back} backLabel="Back to Home" />
       <div class="lu-page">
         <SearchField label="Find a person" placeholder="Name or handle" value={query()} onInput={(e) => setQuery(e.currentTarget.value)} />
         <Show when={note()}>
@@ -516,8 +567,8 @@ function Profile(props: HomeProps) {
   const [saved, setSaved] = createSignal(false);
   // The status (protocol 6.7): chosen here, kept by the core, sent with the
   // servers watched and on every welcome.
-  const [status, setStatus] = createSignal("ONLINE");
-  const [customStatus, setCustomStatus] = createSignal("");
+  const [status, setStatus] = createSignal(myStatus().status);
+  const [customStatus, setCustomStatus] = createSignal(myStatus().customStatus);
   const [statusSaved, setStatusSaved] = createSignal(false);
   void client()
     .status()
@@ -530,7 +581,7 @@ function Profile(props: HomeProps) {
     e.preventDefault();
     setStatusSaved(false);
     try {
-      await client().setStatus(status(), customStatus().trim());
+      await setMyStatus(status(), customStatus().trim());
       setStatusSaved(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -579,14 +630,14 @@ function Profile(props: HomeProps) {
   };
   return (
     <>
-      <ChannelHeader kind="page" name="Profile" topic="How people see you" actions={[]} />
+      <ChannelHeader kind="page" name="Profile" topic="How people see you" actions={[]} onBack={props.back} backLabel="Back to Home" />
       <div class="lu-page">
         <Card title="Status" subtitle="What people see beside your name in a server's member list.">
           <form class="auth__form" onSubmit={(e) => void saveStatus(e)}>
             <SegmentedTabs label="Status" tabs={[{ id: "ONLINE", label: "Online" }, { id: "AWAY", label: "Away" }, { id: "DO_NOT_DISTURB", label: "Do not disturb" }]} value={status()} onChange={setStatus} />
             <TextField label="Custom status" value={customStatus()} onInput={(e) => setCustomStatus(e.currentTarget.value)} placeholder="At lunch" autocomplete="off" />
             <Show when={statusSaved()}>
-              <p class="lu-help">Status saved.</p>
+              <p class="auth__note">Status saved.</p>
             </Show>
             <Button variant="primary" size="md" type="submit">
               Save status
@@ -718,25 +769,23 @@ function Devices(props: HomeProps) {
   const when = (micros: number | null) => (micros ? new Date(micros / 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "never");
   return (
     <>
-      <ChannelHeader kind="page" name="Devices" topic="Everything that holds your identity" actions={[]} />
+      <ChannelHeader kind="page" name="Devices" topic="Everything that holds your identity" actions={[]} onBack={props.back} backLabel="Back to Home" />
       <div class="lu-page">
         <Show when={passkeysAvailable()}>
           <Card title="Passkeys" subtitle="Sign in to this instance with a key this browser or your phone keeps, instead of a password.">
             <For each={passkeys()}>
               {(p) => (
-                <p class="app__status app__invite-row">
+                <p class="app__line">
                   <span>
                     {p.label || "Passkey"} · added {when(p.createdAtMicros)} · last used {when(p.lastUsedAtMicros)}
                   </span>
-                  <button type="button" class="lu-link" onClick={() => void removePasskey(p)}>
+                  <Button variant="text" aria-label={`Remove ${p.label || "passkey"}`} onClick={() => void removePasskey(p)}>
                     Remove
-                  </button>
+                  </Button>
                 </p>
               )}
             </For>
-            <label class="app__status">
-              <input type="checkbox" checked={passkeyRequired()} disabled={passkeys().length === 0} onChange={(e) => void toggleRequired(e.currentTarget.checked)} aria-label="Require a passkey when signing in with a password" /> Require a passkey when signing in with a password
-            </label>
+            <Checkbox label="Require a passkey when signing in with a password" checked={passkeyRequired()} disabled={passkeys().length === 0} onChange={(e) => void toggleRequired(e.currentTarget.checked)} />
             <form class="auth__form" onSubmit={(e) => void makePasskey(e)}>
               <TextField label="Name for the new passkey" value={passkeyLabel()} onInput={(e) => setPasskeyLabel(e.currentTarget.value)} placeholder="This laptop" autocomplete="off" />
               <Show when={passkeyError()}>

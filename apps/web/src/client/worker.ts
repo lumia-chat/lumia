@@ -19,12 +19,29 @@ function ensureInit(): Promise<void> {
   return ready;
 }
 
+// A reload opens the stores while the page before it may still hold
+// them: that page's worker goes with it, but the browser frees its OPFS
+// access handles a moment later, sooner or later by how busy the worker
+// was. Opening waits that moment out instead of failing, which the page
+// would take for a signed-out browser.
+async function openClient(baseUrl: string): Promise<Client> {
+  const key = await storeKey();
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await Client.open(baseUrl, key);
+    } catch (e) {
+      if (attempt >= 40 || !/Access Handle|NoModificationAllowedError/i.test(errorText(e))) throw e;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  }
+}
+
 async function dispatch(method: string, args: unknown[]): Promise<unknown> {
   await ensureInit();
   if (method === "open") {
     const baseUrl = String(args[0]);
     if (!client || openedFor !== baseUrl) {
-      client = await Client.open(baseUrl, await storeKey());
+      client = await openClient(baseUrl);
       openedFor = baseUrl;
     }
     return { host: client.host(), deviceId: client.deviceId(), signedIn: client.signedIn() };

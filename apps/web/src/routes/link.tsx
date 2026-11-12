@@ -5,6 +5,7 @@
 import { Show, createSignal } from "solid-js";
 import { useNavigate } from "@tanstack/solid-router";
 import { Button, Card, TextField } from "../design/components";
+import { AuthPage } from "./auth-page";
 import { client } from "../client/state";
 
 export function Link() {
@@ -38,7 +39,13 @@ export function Link() {
   };
 
   return (
-    <div class="auth">
+    <AuthPage
+      under={
+        <button type="button" class="lu-link auth__switch" onClick={() => navigate({ to: "/sign-in" })}>
+          Back to sign in
+        </button>
+      }
+    >
       <Card title="Link this browser" subtitle="A device you already use approves this one; the recovery phrase never enters the browser.">
         <Show
           when={request()}
@@ -65,12 +72,7 @@ export function Link() {
             </Button>
           </form>
         </Show>
-        <p class="auth__foot">
-          <button type="button" class="lu-link auth__switch" onClick={() => navigate({ to: "/sign-in" })}>
-            Back to sign in
-          </button>
-        </p>
       </Card>
-    </div>
+    </AuthPage>
   );
 }

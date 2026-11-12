@@ -2,7 +2,7 @@
 // design canvas, rebuilt from the ported components with the same sample
 // data, plus the smaller pieces in isolation. Theme and layout toggles at
 // the top. Not a product screen.
-import { For, Show, createSignal, onMount, type JSX } from "solid-js";
+import { For, Show, createSignal, onCleanup, onMount, type JSX } from "solid-js";
 import {
   AppShell,
   Avatar,
@@ -13,6 +13,7 @@ import {
   ChannelHeader,
   ChannelList,
   Checkbox,
+  Choice,
   Composer,
   DeviceList,
   Divider,
@@ -21,16 +22,27 @@ import {
   IconButton,
   MemberList,
   Mention,
+  Menu,
+  MenuHead,
+  MenuItem,
+  MenuLabel,
+  MenuRadio,
+  MenuRule,
   Message,
   MessageList,
   Notice,
+  Pop,
+  ProfileCard,
   QuickTiles,
   ReactionChip,
   RequestCard,
+  SearchField,
   SearchTrigger,
   ServerHeader,
   ServerRail,
   SidePanel,
+  SidePanelScroll,
+  SidePanelSearch,
   SystemMessage,
   Tag,
   TextField,
@@ -43,26 +55,33 @@ import {
 
 type Theme = "light" | "dark";
 
+// The gallery names a theme on the root so a board can be looked at in
+// either; the app names none and follows the system (tokens.css). The
+// one chosen here is kept for the next visit, and the root is left as it
+// was found when the gallery goes away.
 function useTheme() {
-  const [theme, setTheme] = createSignal<Theme>("light");
-  onMount(() => {
-    try {
-      const saved = localStorage.getItem("lumia:theme");
-      if (saved === "dark" || saved === "light") setTheme(saved);
-    } catch {
-      /* storage may be unavailable */
-    }
-  });
-  const apply = (t: Theme) => {
+  const system = (): Theme => (typeof matchMedia !== "undefined" && matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  const [theme, setTheme] = createSignal<Theme>(system());
+  const apply = (t: Theme, keep = true) => {
     setTheme(t);
     document.documentElement.dataset.theme = t;
+    if (!keep) return;
     try {
       localStorage.setItem("lumia:theme", t);
     } catch {
       /* ignore */
     }
   };
-  onMount(() => apply(theme()));
+  onMount(() => {
+    let saved: string | null = null;
+    try {
+      saved = localStorage.getItem("lumia:theme");
+    } catch {
+      /* storage may be unavailable */
+    }
+    apply(saved === "dark" || saved === "light" ? saved : system(), false);
+  });
+  onCleanup(() => delete document.documentElement.dataset.theme);
   return { theme, apply };
 }
 
@@ -99,7 +118,7 @@ function QuietSplit() {
       }
       sidebar={
         <>
-          <ServerHeader name="Acme" />
+          <ServerHeader name="Acme" onOpenMenu={() => {}} onNewMessage={() => {}} />
           <SearchTrigger label="Search Acme" />
           <QuickTiles
             items={[
@@ -180,6 +199,11 @@ function QuietSplit() {
         >
           {(id) =>
             id === "members" ? (
+              <>
+              <SidePanelSearch>
+                <SearchField label="Find a member" />
+              </SidePanelSearch>
+              <SidePanelScroll>
               <MemberList
                 sections={[
                   {
@@ -194,6 +218,8 @@ function QuietSplit() {
                 ]}
                 total={128}
               />
+              </SidePanelScroll>
+              </>
             ) : (
               <ThreadPanel
                 parent={entry(PEOPLE.devon, "9:11 AM", "Looks great. Can you check the copy on the second screen matches the tone guide?")}
@@ -215,7 +241,7 @@ function QuietSplit() {
 function HomeSidebar(props: { view: "dm" | "requests" | "devices" }) {
   return (
     <>
-      <ServerHeader name="Home" />
+      <ServerHeader name="Home" onNewMessage={() => {}} />
       <SearchTrigger label="Search messages" />
       <QuickTiles
         items={[
@@ -306,6 +332,7 @@ function DmConversation() {
 function DmAside() {
   return (
     <SidePanel tabs={[{ id: "details", label: "Details" }]} value="details" onChange={() => {}}>
+      <SidePanelScroll>
       <MemberList
         sections={[
           {
@@ -327,6 +354,7 @@ function DmAside() {
         ]}
       />
       <Notice icon="lock" class="gallery-aside-note">History backup is off for this identity. Messages live only on your devices.</Notice>
+      </SidePanelScroll>
     </SidePanel>
   );
 }
@@ -904,6 +932,64 @@ function Pieces() {
           <ReactionChip icon="heart" label="Heart" count={2} />
           <ReactionChip icon="check-circle" label="Done" count={5} defaultSelected />
           <TypingIndicator name="Maya Chen" />
+          <TypingIndicator name={["Maya Chen", "Devon Park"]} />
+          <TypingIndicator name={["Maya Chen", "Devon Park", "Sam Okafor"]} />
+        </div>
+      </section>
+      <section>
+        <h2>A block: one person's quick messages</h2>
+        <Message author={PEOPLE.leo.name} initials="LM" tone="sky" tag={{ label: "New", tone: "accent" }} time="10:08 AM" datetime="2026-11-02T10:08" actions={false} onOpenProfile={() => {}} parts={[{ time: "10:09", datetime: "2026-11-02T10:09", children: "Also: who do I ask about a desk by the windows?" }]}>
+          Thank you all, what a warm welcome! My calendar is open for coffee chats this week.
+        </Message>
+      </section>
+      <section>
+        <h2>Over the frame: the account menu, a server's menu, the profile card, a popover</h2>
+        <div class="pieces__row pieces__row--top">
+          <Menu label="Your account">
+            <MenuHead name={PEOPLE.self.name} sub="@ryan · Online" initials="RW" tone="indigo" status="online" />
+            <MenuRule />
+            <MenuLabel>Status</MenuLabel>
+            <MenuRadio status="online" checked>
+              Online
+            </MenuRadio>
+            <MenuRadio status="away" checked={false}>
+              Away
+            </MenuRadio>
+            <MenuRadio status="dnd" checked={false}>
+              Do not disturb
+            </MenuRadio>
+            <MenuRule />
+            <MenuItem icon="user">View profile</MenuItem>
+            <MenuItem icon="shield">Devices</MenuItem>
+            <MenuRule />
+            <MenuItem icon="sign-out">Sign out</MenuItem>
+          </Menu>
+          <Menu label="Acme" compact>
+            <MenuItem icon="member-joined">Invite people</MenuItem>
+            <MenuItem icon="hash">New channel</MenuItem>
+          </Menu>
+          <ProfileCard
+            name={PEOPLE.maya.name}
+            initials="MC"
+            tone="peach"
+            handle="maya"
+            status="online"
+            details={[
+              { icon: "emoji", label: "Status", text: "Heads down until 2 PM" },
+              { icon: "user", label: "Pronouns", text: "she/her" },
+              { icon: "mention", label: "About", text: "People Ops. Ask me about benefits." },
+            ]}
+            action={{ label: "Message Maya" }}
+          />
+          <Pop title="Invite people" subtitle="A link to join Acme.">
+            <div class="lu-pop__form">
+              <Choice label="Expires" value={24} options={[{ value: 0, label: "Never" }, { value: 24, label: "In a day" }, { value: 168, label: "In a week" }]} />
+              <Choice label="Uses" value={0} options={[{ value: 0, label: "Unlimited" }, { value: 1, label: "Once" }, { value: 10, label: "Ten" }]} />
+              <Button variant="primary" size="md" block>
+                Make a link
+              </Button>
+            </div>
+          </Pop>
         </div>
       </section>
     </div>

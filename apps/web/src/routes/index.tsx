@@ -7,6 +7,7 @@ import { Show, createResource } from "solid-js";
 import { Button, Card } from "../design/components";
 import { ensureOwner, openInstance, opened, refreshSignedIn, savedInstance } from "../client/state";
 import { App, type AppSearch } from "./app";
+import { AuthPage } from "./auth-page";
 import { DesignGallery } from "./design";
 import { Invite } from "./invite";
 import { Link } from "./link";
@@ -23,7 +24,7 @@ function Root() {
 
 function OtherTab() {
   return (
-    <div class="auth">
+    <AuthPage>
       <Card title="Lumia is open in another tab" subtitle="Only one tab can hold your conversations at a time.">
         <div class="auth__form">
           <Button variant="primary" block onClick={() => location.reload()}>
@@ -31,7 +32,7 @@ function OtherTab() {
           </Button>
         </div>
       </Card>
-    </div>
+    </AuthPage>
   );
 }
 
@@ -53,8 +54,9 @@ async function requireSession(): Promise<void> {
   if (url) {
     try {
       if ((await openInstance(url)).signedIn) return;
-    } catch {
-      /* the instance could not be opened; sign in again */
+    } catch (e) {
+      // The instance could not be opened; sign in again.
+      console.error("open:", e);
     }
   }
   throw redirect({ to: "/sign-in" });

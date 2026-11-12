@@ -223,11 +223,15 @@ async function signInSteps(which: string, page: Page, handle: string) {
   await page.reload();
   await page.getByText(body).waitFor();
   await page.screenshot({ path: `${out}/${which}-channel.png` });
+  await frameSteps(which, page);
   // Turning notifications on registers the service worker (Chromium:
   // Playwright's WebKit has no service workers; the subscription itself
   // needs a push service, which a headless browser has no account with).
+  // It is on the Devices page, reached from the account menu.
   if (which === "chromium") {
     await page.context().grantPermissions(["notifications"], { origin: base });
+    await page.getByRole("button", { name: /account menu/ }).click();
+    await page.getByRole("menuitem", { name: "Devices" }).click();
     await page.getByRole("button", { name: "Turn on notifications" }).click();
     const sw = await page.evaluate(() =>
       Promise.race([
@@ -256,6 +260,52 @@ async function signInSteps(which: string, page: Page, handle: string) {
     return found;
   });
   if (plain.length) throw new Error(`plaintext SQLite header in ${plain.join(", ")}`);
+  // Signing out from the account menu ends the session here: the sign-in
+  // card, and the app's address leads back to it.
+  phase("sign out");
+  await page.getByRole("button", { name: /account menu/ }).click();
+  await page.getByRole("menuitem", { name: "Sign out" }).click();
+  await page.waitForURL(/\/sign-in/);
+  await page.locator(".lu-card").waitFor();
+  await goto(page, `${base}/app`);
+  await page.waitForURL(/\/sign-in/);
+  await page.locator(".lu-card").waitFor();
+}
+
+// The frame (the Quiet Split board): the app follows the system's light
+// or dark setting, and a channel longer than its pane scrolls inside the
+// pane while the page itself stays the size of the window. One person's
+// quick messages are one block under one name.
+async function frameSteps(which: string, page: Page) {
+  phase("theme");
+  const ground = () => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+  await page.emulateMedia({ colorScheme: "dark" });
+  const dark = await ground();
+  await page.emulateMedia({ colorScheme: "light" });
+  const light = await ground();
+  if (dark !== "rgb(15, 18, 24)" || light !== "rgb(242, 244, 248)") throw new Error(`the ground is ${light} under a light system and ${dark} under a dark one`);
+  phase("scroll");
+  const composer = page.getByPlaceholder(/^Message #/);
+  const stamp = Date.now();
+  for (let i = 0; i < 40; i++) {
+    await composer.fill(`line ${i} of ${stamp}`);
+    await page.keyboard.press("Enter");
+  }
+  await page.getByText(`line 39 of ${stamp}`).waitFor();
+  const sizes = await page.evaluate(() => {
+    const list = document.querySelector(".lu-msglist");
+    return {
+      page: document.documentElement.scrollHeight,
+      window: innerHeight,
+      pane: list?.clientHeight ?? 0,
+      log: list?.scrollHeight ?? 0,
+      parts: document.querySelectorAll(".lu-msg__part").length,
+    };
+  });
+  if (sizes.page > sizes.window) throw new Error(`the page is ${sizes.page} tall in a window of ${sizes.window}: it scrolls`);
+  if (sizes.log <= sizes.pane) throw new Error(`the message list (${sizes.log}) does not overflow its pane (${sizes.pane})`);
+  if (sizes.parts < 39) throw new Error(`40 quick messages drew ${sizes.parts} under the first: not one block`);
+  await page.screenshot({ path: `${out}/${which}-scrolled.png` });
 }
 
 // Link this browser as a web device: the CLI approves, the browser claims
@@ -289,7 +339,8 @@ async function linkSteps(which: string, page: Page, dataDir: string) {
   // The profile (architecture 6.4): set here, signed by this browser's
   // device key, shown by the rail once the snapshot has it.
   phase("profile");
-  await page.getByRole("button", { name: /open profile/ }).click();
+  await page.getByRole("button", { name: /account menu/ }).click();
+  await page.getByRole("menuitem", { name: "View profile" }).click();
   await page.getByLabel("Display name").fill("Linked Browser");
   await page.getByLabel("Pronouns").fill("they/them");
   await page.getByLabel("Bio").fill("Signed in by identity proof.");
@@ -302,6 +353,14 @@ async function linkSteps(which: string, page: Page, dataDir: string) {
   await page.getByRole("button", { name: "Save status" }).click();
   await page.getByText("Status saved.").waitFor();
   await page.screenshot({ path: `${out}/${which}-profile.png` });
+  // The account menu has the same status, and changes it.
+  await page.getByRole("button", { name: /account menu/ }).click();
+  await page.getByRole("menuitemradio", { name: "Away", checked: true }).waitFor();
+  await page.getByRole("menuitemradio", { name: "Online" }).click();
+  await page.getByRole("menuitemradio", { name: "Online", checked: true }).waitFor();
+  await page.screenshot({ path: `${out}/${which}-account-menu.png` });
+  await page.keyboard.press("Escape");
+  await page.getByRole("menu").waitFor({ state: "detached" });
 }
 
 // A sign-in handed to another device (the native apps' browser sheet):
@@ -332,7 +391,8 @@ async function handoff(which: string, handle: string) {
     lumia(dir, "instance", "add", instance);
     let refused = "";
     try {
-      lumia(dir, "login", "--magic", token);
+      // As one argument: a token is base64url and may start with a dash, which read as an option on its own.
+      lumia(dir, "login", `--magic=${token}`);
     } catch (e) {
       refused = e instanceof Error ? e.message : String(e);
     }
@@ -461,7 +521,7 @@ async function invite(which: string, dataDir: string, server: string) {
 }
 
 // A server and a channel from the app: the rail's "+" makes a server the
-// account owns, the server sidebar's "New channel" its first channel.
+// account owns, "New channel" in the menu under its name its first channel.
 async function create(which: string, handle: string, stamp: number) {
   // A profile of its own, signed in here: WebKit does not carry a
   // profile's session from one step to the next.
@@ -480,19 +540,27 @@ async function create(which: string, handle: string, stamp: number) {
     await page.getByText("No channel yet").waitFor();
     if ((await page.getByText(`Made ${stamp}`).count()) === 0) throw new Error("the new server is not shown");
     phase("channel");
-    await page.getByRole("button", { name: "New channel" }).click();
-    await page.getByLabel("Channel name").fill("ops");
-    await page.getByRole("button", { name: "Create channel" }).click();
+    await page.getByRole("button", { name: /server menu/ }).click();
+    await page.getByRole("menuitem", { name: "New channel" }).click();
+    await page.getByLabel("Name", { exact: true }).fill("ops");
+    await page.getByRole("button", { name: "Create", exact: true }).click();
     await page.getByPlaceholder("Message #ops").waitFor();
     // Presence (protocol 6.7): the page watches the server on screen and
     // sees itself in the members aside as online.
     phase("presence");
     await page.getByText("Online · 1").waitFor();
-    // An invite link from the sidebar, limited to one use, then revoked:
-    // the instance stops answering for it.
+    // A member's row opens their profile card; this one is the account's own.
+    await page.getByRole("button", { name: /You/ }).first().click();
+    await page.getByRole("dialog").getByText("Online", { exact: true }).waitFor();
+    await page.screenshot({ path: `${out}/${which}-card.png` });
+    await page.getByRole("dialog").getByRole("button", { name: "Close profile" }).click();
+    await page.getByRole("dialog").waitFor({ state: "detached" });
+    // An invite link from the menu under the server's name, limited to one
+    // use, then revoked: the instance stops answering for it.
     phase("invite");
-    await page.getByRole("button", { name: "Invite people" }).click();
-    await page.getByLabel("Uses").selectOption("1");
+    await page.getByRole("button", { name: /server menu/ }).click();
+    await page.getByRole("menuitem", { name: "Invite people" }).click();
+    await page.getByRole("radio", { name: "Once" }).click();
     await page.getByRole("button", { name: "Make a link" }).click();
     const link = await page.getByLabel("Invite link").inputValue();
     const code = link.split("/invite/")[1] ?? "";
@@ -505,7 +573,7 @@ async function create(which: string, handle: string, stamp: number) {
     if ((await fetch(`${instance}/api/v1/invites/${code}`)).status !== 404) throw new Error("the revoked link still answers");
     // The invite as a mail (architecture 6.2): sent to an address, its
     // link in the dev mailbox, listed with the address, then revoked.
-    await page.getByLabel("Email an invite to").fill(`guest${stamp}@example.test`);
+    await page.getByLabel("Email", { exact: true }).fill(`guest${stamp}@example.test`);
     await page.getByRole("button", { name: "Send by email" }).click();
     await page.getByText(/^Sent to guest/).waitFor();
     let mailed = "";
@@ -634,10 +702,12 @@ async function webPush(which: string, handle: string, inviterDir: string, server
     phase("composer");
     await page.getByPlaceholder(/^Message #/).waitFor();
     phase("turn on");
+    await page.getByRole("button", { name: /account menu/ }).click();
+    await page.getByRole("menuitem", { name: "Devices" }).click();
     await page.getByRole("button", { name: "Turn on notifications" }).click();
     phase("subscribed");
     try {
-      await page.getByText("notifications on").waitFor();
+      await page.getByText("This browser gets a notification").waitFor();
     } catch (e) {
       await page.screenshot({ path: `${out}/${which}-push-failed.png` });
       const permission = await page.evaluate(() => Notification.permission);

@@ -4,7 +4,7 @@
 // bridge; nothing here renders.
 import { QueryClient, createQuery, useQueryClient } from "@tanstack/solid-query";
 import { createSignal } from "solid-js";
-import { Bridge, ClientError, claimOwnership, type ClientEvent, type MemberSummary, type Opened } from "./bridge";
+import { Bridge, ClientError, claimOwnership, type ClientEvent, type MemberSummary, type Opened, type StatusSummary } from "./bridge";
 
 export const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: Infinity, retry: false } },
@@ -168,6 +168,91 @@ export function customStatusOf(serverId: string | undefined, accountId: string):
   return (serverId ? presence().get(serverId)?.get(accountId)?.customStatus : undefined) ?? "";
 }
 
+// The status this person chose (protocol 6.7): kept by the core, read
+// once the page has a client, and set from the account menu or the
+// profile page. The rail's dot and the menu's check read it.
+const [myStatus, setMyStatusSignal] = createSignal<StatusSummary>({ status: "ONLINE", customStatus: "" });
+export { myStatus };
+
+export async function loadMyStatus(): Promise<void> {
+  try {
+    setMyStatusSignal(await client().status());
+  } catch {
+    /* the default stands until the core answers */
+  }
+}
+
+export async function setMyStatus(status: string, customStatus: string): Promise<void> {
+  await client().setStatus(status, customStatus);
+  setMyStatusSignal({ status, customStatus });
+}
+
+// Who is typing (protocol 6.7): by channel, each account with the time
+// theirs runs out on this device's clock. A message from someone ends
+// theirs at once; silence ends it when its time comes, for which a timer
+// is kept on the earliest.
+const [typing, setTyping] = createSignal<Map<string, Map<string, number>>>(new Map());
+let typingTimer: ReturnType<typeof setTimeout> | undefined;
+
+function setTypingAndWatch(next: Map<string, Map<string, number>>): void {
+  setTyping(next);
+  clearTimeout(typingTimer);
+  let earliest = Infinity;
+  for (const people of next.values()) for (const until of people.values()) earliest = Math.min(earliest, until);
+  if (earliest === Infinity) return;
+  typingTimer = setTimeout(() => {
+    const now = Date.now();
+    const kept = new Map<string, Map<string, number>>();
+    for (const [channelId, people] of typing()) {
+      const still = new Map([...people].filter(([, until]) => until > now));
+      if (still.size) kept.set(channelId, still);
+    }
+    setTypingAndWatch(kept);
+  }, Math.max(0, earliest - Date.now()) + 50);
+}
+
+function startTyping(channelId: string, accountId: string, untilMillis: number): void {
+  const next = new Map(typing());
+  next.set(channelId, new Map(next.get(channelId) ?? []).set(accountId, untilMillis));
+  setTypingAndWatch(next);
+}
+
+function stopTyping(channelId: string, accountId: string): void {
+  if (!typing().get(channelId)?.has(accountId)) return;
+  const next = new Map(typing());
+  const people = new Map(next.get(channelId) ?? []);
+  people.delete(accountId);
+  if (people.size) next.set(channelId, people);
+  else next.delete(channelId);
+  setTypingAndWatch(next);
+}
+
+/** The accounts typing in a channel, in the order they started. */
+export function typingIn(channelId: string | undefined): string[] {
+  return channelId ? [...(typing().get(channelId)?.keys() ?? [])] : [];
+}
+
+/**
+ * Signs this browser out and forgets what the page held of the account:
+ * its push subscription, the gateway loop, every query, presence and who
+ * was typing.
+ */
+export async function signOut(): Promise<void> {
+  const b = client();
+  // While the session can still say so: a signed-out browser gets no more notices for the account.
+  if (pushState() === "subscribed") await (await import("./push")).disablePush();
+  await b.stop().catch(() => {});
+  await b.signOut();
+  queryClient.clear();
+  setStarted(false);
+  setConnection("idle");
+  setPresence(new Map());
+  setTypingAndWatch(new Map());
+  setPushState("unknown");
+  const o = opened();
+  if (o) setOpened({ ...o, signedIn: false });
+}
+
 function onGatewayEvent(e: ClientEvent): void {
   switch (e.kind) {
     case "welcomed":
@@ -187,6 +272,10 @@ function onGatewayEvent(e: ClientEvent): void {
     }
     case "applied":
       void queryClient.invalidateQueries({ queryKey: ["messages", e.channelId] });
+      for (const event of e.events) if (event.message) stopTyping(e.channelId, event.message.authorAccountId);
+      break;
+    case "typing":
+      startTyping(e.channelId, e.accountId, e.untilMicros / 1000);
       break;
     case "accountApplied":
       void queryClient.invalidateQueries({ queryKey: ["snapshot"] });

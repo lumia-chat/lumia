@@ -6,6 +6,7 @@
 import { Show, createResource, createSignal, onMount } from "solid-js";
 import { useNavigate, useSearch } from "@tanstack/solid-router";
 import { Button, Card, Divider, TextField } from "../design/components";
+import { AuthPage, TrustCard } from "./auth-page";
 import { ClientError, type InstanceSummary } from "../client/bridge";
 import { SERVED_BY_INSTANCE, client, openInstance, savedInstance } from "../client/state";
 import { assertForPasswordSignIn, passkeysAvailable, signInWithPasskey } from "../client/passkeys";
@@ -163,136 +164,136 @@ export function SignIn() {
     }
   };
 
+  // The ways in other than a password, each an outlined button under the "or" rule.
+  const otherWays = (i: InstanceSummary) => mode() === "signIn" && (!!i.oidcName || passkeysAvailable() || i.magicLinkEnabled || i.identityProofSignInEnabled);
+
   return (
-    <div class="auth">
-      <div class="auth__logo" aria-hidden="true">
-        <img src="/brand/lumia-original-light.svg" alt="" class="lu-only-light" />
-        <img src="/brand/lumia-original-dark.svg" alt="" class="lu-only-dark" />
-      </div>
-      <Show
-        when={info()}
-        fallback={
-          <Card title="Welcome" subtitle={fixed ? "Reaching this instance…" : "Which instance do you want to sign in to?"}>
-            <form class="auth__form" onSubmit={connect}>
-              <Show when={!fixed}>
-                <TextField
-                  label="Instance"
-                  type="url"
-                  placeholder="https://chat.example.com"
-                  value={instance()}
-                  onInput={(e) => setInstance(e.currentTarget.value)}
-                  autocomplete="url"
-                />
-              </Show>
-              <Show when={error()}>
-                <p class="auth__error" role="alert">
-                  {error()}
-                </p>
-              </Show>
-              <Show when={trust.loading && !fixed}>
-                <p class="auth__note">Reaching the instance…</p>
-              </Show>
-              <Show when={trust.error}>
-                <p class="auth__error" role="alert">
-                  Could not reach that instance: {String((trust.error as Error)?.message ?? trust.error)}
-                </p>
-              </Show>
-              <Show when={!fixed}>
-                <Button variant="primary" type="submit" block disabled={trust.loading}>
-                  Continue
-                </Button>
-              </Show>
-              <Show when={fixed && trust.error}>
-                <Button variant="primary" type="button" block disabled={trust.loading} onClick={() => void refetch()}>
-                  Try again
-                </Button>
-              </Show>
-            </form>
-          </Card>
-        }
-      >
-        {(i) => (
-          <Card title={mode() === "create" ? "Create an account" : "Welcome back"} subtitle={search().return?.startsWith("lumia://") ? "Sign in here for the Lumia app; it takes over once you are in." : invite() ? (mode() === "create" ? `A new account on ${i().host}, in the server you were invited to.` : "Sign in to join the server you were invited to.") : mode() === "create" ? `A new account on ${i().host}.` : "Sign in to pick up your conversations."}>
-            <div class="auth__trust">
-              <span class="auth__trust-host">{i().host}</span>
-              <span class="auth__trust-op">
-                run by {i().operatorName || "an unnamed operator"}
-                {i().softwareVersion ? ` · Lumia ${i().softwareVersion}` : ""}
-              </span>
-              <Show when={!fixed}>
-                <button type="button" class="lu-link auth__change" onClick={() => { setInfo(null); setOpened(null); }}>
-                  Change instance
+    <AuthPage
+      under={
+        <Show when={info()}>
+          {(i) => (
+            <Show when={mode() === "signIn"} fallback={<>Already have an account? <button type="button" class="lu-link auth__switch" onClick={() => setMode("signIn")}>Sign in</button></>}>
+              New to Lumia?{" "}
+              <Show when={i().openRegistration || invite()} fallback={<span>This instance is not open for new accounts.</span>}>
+                <button type="button" class="lu-link auth__switch" onClick={() => setMode("create")}>
+                  Create an account
                 </button>
               </Show>
-            </div>
-            <form class="auth__form" onSubmit={(e) => void submit(e)}>
-              <TextField label={mode() === "create" ? "Handle" : "Email or handle"} value={handle()} onInput={(e) => setHandle(e.currentTarget.value)} autocomplete="username" placeholder={mode() === "create" ? "yourname" : "you@example.com"} />
-              <TextField label="Password" reveal value={password()} onInput={(e) => setPassword(e.currentTarget.value)} autocomplete={mode() === "create" ? "new-password" : "current-password"} placeholder={mode() === "create" ? "At least 12 characters" : "Your password"} />
-              <Show when={needsTotp()}>
-                <TextField label="Verification code" value={totp()} onInput={(e) => setTotp(e.currentTarget.value)} inputmode="numeric" autocomplete="one-time-code" placeholder="6 digits from your authenticator" />
-              </Show>
-              <Show when={error()}>
-                <p class="auth__error" role="alert">
-                  {error()}
-                </p>
-              </Show>
-              <Button variant="primary" type="submit" block disabled={busy()}>
-                {mode() === "create" ? "Create account" : "Sign in"}
-              </Button>
-              <Show when={mode() === "signIn" && i().oidcName}>
-                <Button icon="key" block type="button" disabled={busy()} onClick={() => {
-                  // Off to the provider; the instance brings the browser back here
-                  // with a sign-in token, the invite and return in hand still.
-                  const instanceUrl = opened() ?? location.origin;
-                  const q = new URLSearchParams({ instance: instanceUrl });
-                  if (invite()) q.set("invite", invite() ?? "");
-                  if (search().return) q.set("return", search().return ?? "");
-                  location.assign(`${instanceUrl}/api/v1/auth/oidc/start?return=${encodeURIComponent(`${location.origin}/sign-in?${q}`)}`);
-                }}>
-                  {i().oidcName}
-                </Button>
-              </Show>
-              <Show when={mode() === "signIn" && passkeysAvailable()}>
-                <Button icon="key" block type="button" disabled={busy()} onClick={() => void passkey()}>
-                  Sign in with a passkey
-                </Button>
-              </Show>
-              <Show when={mode() === "signIn" && i().magicLinkEnabled}>
-                <Show
-                  when={magicSent()}
-                  fallback={
-                    <button type="button" class="lu-link auth__switch" disabled={busy() || !handle().trim()} onClick={() => void requestMagicLink()}>
-                      Email me a sign-in link
-                    </button>
-                  }
-                >
-                  <p class="auth__note">A link is on its way to {handle().trim()} if it has an account here. Open it in this browser, or paste its code here.</p>
-                  <TextField label="Code from the email" value={magicCode()} onInput={(e) => setMagicCode(e.currentTarget.value)} autocomplete="one-time-code" placeholder="Paste the code" />
-                  <Button variant="primary" type="button" block disabled={busy() || !magicCode().trim()} onClick={() => void completeMagicLink(magicCode())}>
-                    Sign in with the code
-                  </Button>
-                </Show>
-              </Show>
-              <Show when={mode() === "signIn" && i().identityProofSignInEnabled}>
-                <Divider variant="or" />
-                <Button icon="key" block onClick={() => navigate({ to: "/link" })}>
-                  Link this browser to your identity
-                </Button>
-              </Show>
-            </form>
-            <p class="auth__foot">
-              <Show when={mode() === "signIn"} fallback={<>Already have an account? <button type="button" class="lu-link auth__switch" onClick={() => setMode("signIn")}>Sign in</button></>}>
-                New to Lumia?{" "}
-                <Show when={i().openRegistration || invite()} fallback={<span>This instance is not open for new accounts.</span>}>
-                  <button type="button" class="lu-link auth__switch" onClick={() => setMode("create")}>
-                    Create an account
-                  </button>
-                </Show>
-              </Show>
-            </p>
-          </Card>
-        )}
-      </Show>
-    </div>
+            </Show>
+          )}
+        </Show>
+      }
+      // What the instance says of itself: its privacy notice and its terms, where it names them.
+      footer={
+        <Show when={info()?.privacyUrl || info()?.termsUrl}>
+          <Show when={info()?.privacyUrl}>{(url) => <a href={url()} target="_blank" rel="noreferrer">Privacy</a>}</Show>
+          <Show when={info()?.termsUrl}>{(url) => <a href={url()} target="_blank" rel="noreferrer">Terms</a>}</Show>
+        </Show>
+      }
+    >
+          <Show
+            when={info()}
+            fallback={
+              <Card title="Welcome" subtitle={fixed ? "Reaching this instance…" : "Which instance do you want to sign in to?"}>
+                <form class="auth__form" onSubmit={connect}>
+                  <Show when={!fixed}>
+                    <TextField
+                      label="Instance"
+                      type="url"
+                      placeholder="https://chat.example.com"
+                      value={instance()}
+                      onInput={(e) => setInstance(e.currentTarget.value)}
+                      autocomplete="url"
+                    />
+                  </Show>
+                  <Show when={error()}>
+                    <p class="auth__error" role="alert">
+                      {error()}
+                    </p>
+                  </Show>
+                  <Show when={trust.loading && !fixed}>
+                    <p class="auth__note">Reaching the instance…</p>
+                  </Show>
+                  <Show when={trust.error}>
+                    <p class="auth__error" role="alert">
+                      Could not reach that instance: {String((trust.error as Error)?.message ?? trust.error)}
+                    </p>
+                  </Show>
+                  <Show when={!fixed}>
+                    <Button variant="primary" type="submit" block disabled={trust.loading}>
+                      Continue
+                    </Button>
+                  </Show>
+                  <Show when={fixed && trust.error}>
+                    <Button variant="primary" type="button" block disabled={trust.loading} onClick={() => void refetch()}>
+                      Try again
+                    </Button>
+                  </Show>
+                </form>
+              </Card>
+            }
+          >
+            {(i) => (
+                <Card title={mode() === "create" ? "Create an account" : "Welcome back"} subtitle={search().return?.startsWith("lumia://") ? "Sign in here for the Lumia app; it takes over once you are in." : invite() ? (mode() === "create" ? `A new account on ${i().host}, in the server you were invited to.` : "Sign in to join the server you were invited to.") : mode() === "create" ? `A new account on ${i().host}.` : "Sign in to pick up your conversations."}>
+                  <TrustCard host={i().host} operatorName={i().operatorName} softwareVersion={i().softwareVersion} onChange={fixed ? undefined : () => { setInfo(null); setOpened(null); }} />
+                  <form class="auth__form" onSubmit={(e) => void submit(e)}>
+                    <TextField label={mode() === "create" ? "Handle" : "Email or handle"} value={handle()} onInput={(e) => setHandle(e.currentTarget.value)} autocomplete="username" placeholder={mode() === "create" ? "yourname" : "you@example.com"} />
+                    <TextField label="Password" reveal value={password()} onInput={(e) => setPassword(e.currentTarget.value)} autocomplete={mode() === "create" ? "new-password" : "current-password"} placeholder={mode() === "create" ? "At least 12 characters" : "Your password"} />
+                    <Show when={needsTotp()}>
+                      <TextField label="Verification code" value={totp()} onInput={(e) => setTotp(e.currentTarget.value)} inputmode="numeric" autocomplete="one-time-code" placeholder="6 digits from your authenticator" />
+                    </Show>
+                    <Show when={error()}>
+                      <p class="auth__error" role="alert">
+                        {error()}
+                      </p>
+                    </Show>
+                    <Button variant="primary" type="submit" block disabled={busy()}>
+                      {mode() === "create" ? "Create account" : "Sign in"}
+                    </Button>
+                    <Show when={otherWays(i())}>
+                      <Divider variant="or" />
+                      <div class="auth__ways">
+                        <Show when={i().oidcName}>
+                          <Button icon="globe" block type="button" disabled={busy()} onClick={() => {
+                            // Off to the provider; the instance brings the browser back here
+                            // with a sign-in token, the invite and return in hand still.
+                            const instanceUrl = opened() ?? location.origin;
+                            const q = new URLSearchParams({ instance: instanceUrl });
+                            if (invite()) q.set("invite", invite() ?? "");
+                            if (search().return) q.set("return", search().return ?? "");
+                            location.assign(`${instanceUrl}/api/v1/auth/oidc/start?return=${encodeURIComponent(`${location.origin}/sign-in?${q}`)}`);
+                          }}>
+                            {i().oidcName}
+                          </Button>
+                        </Show>
+                        <Show when={passkeysAvailable()}>
+                          <Button icon="key" block type="button" disabled={busy()} onClick={() => void passkey()}>
+                            Sign in with a passkey
+                          </Button>
+                        </Show>
+                        <Show when={i().magicLinkEnabled && !magicSent()}>
+                          <Button icon="mail" block type="button" disabled={busy() || !handle().trim()} onClick={() => void requestMagicLink()}>
+                            Email me a sign-in link
+                          </Button>
+                        </Show>
+                        <Show when={i().identityProofSignInEnabled}>
+                          <Button icon="key" block type="button" onClick={() => navigate({ to: "/link" })}>
+                            Link this browser to your identity
+                          </Button>
+                        </Show>
+                      </div>
+                      <Show when={i().magicLinkEnabled && magicSent()}>
+                        <p class="auth__note">A link is on its way to {handle().trim()} if it has an account here. Open it in this browser, or paste its code here.</p>
+                        <TextField label="Code from the email" value={magicCode()} onInput={(e) => setMagicCode(e.currentTarget.value)} autocomplete="one-time-code" placeholder="Paste the code" />
+                        <Button type="button" block disabled={busy() || !magicCode().trim()} onClick={() => void completeMagicLink(magicCode())}>
+                          Sign in with the code
+                        </Button>
+                      </Show>
+                    </Show>
+                  </form>
+                </Card>
+            )}
+          </Show>
+    </AuthPage>
   );
 }

@@ -175,7 +175,7 @@ export type ClientEvent =
   | { kind: "error"; code: string; message: string; commandId: string }
   | { kind: "subscriptionFailed"; channelId: string; message: string }
   | { kind: "presenceDiff"; serverId: string; joined: PresenceSummary[]; updated: PresenceSummary[]; leftAccountIds: string[] }
-  /** Someone else is typing in a server's channel, until `untilMicros` on this device's clock. Not drawn on the web yet. */
+  /** Someone else is typing in a server's channel, until `untilMicros` on this device's clock. */
   | { kind: "typing"; channelId: string; accountId: string; untilMicros: number }
   | { kind: "snapshotTaken"; channelId: string; seq: number }
   | { kind: "disconnected"; reason: string; reconnectAfterSeconds: number }
@@ -279,6 +279,10 @@ export class Bridge {
     return this.call("watchPresence", watchServerIds);
   }
   /** The status this person chose and their custom status text, kept across launches. */
+  /** Says this person is typing in a server's channel (protocol 6.7); call it on every edit, the core spaces them out. */
+  typing(channelId: string): Promise<void> {
+    return this.call("typing", channelId);
+  }
   status(): Promise<StatusSummary> {
     return this.call("status");
   }

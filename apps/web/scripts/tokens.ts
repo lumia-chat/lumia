@@ -37,14 +37,18 @@ for (const font of tokens.type.fonts) {
 }
 const flat = [tokens.spacing, tokens.radius, tokens.size, tokens.shadow].flatMap((f) => f.tokens);
 lines.push(":root {");
+lines.push(`  color-scheme: ${first};`);
 for (const [name, stack] of Object.entries(tokens.type.families)) lines.push(`  --font-${name}: ${stack};`);
 for (const token of flat) lines.push(`  --${token.name}: ${value(token, first)};`);
 for (const token of tokens.color.tokens) lines.push(`  --${token.name}: ${value(token, first)};`);
 lines.push("}");
+// The other themes, twice: where the page names one (`data-theme` on the
+// root, which the gallery sets), and for the system's own setting where
+// the page names none, which is how the app follows the system.
 for (const theme of themes.slice(1)) {
-  lines.push(`:root[data-theme="${theme}"] {`);
-  for (const token of tokens.color.tokens) lines.push(`  --${token.name}: ${value(token, theme)};`);
-  lines.push("}");
+  const colours = (indent: string) => [`${indent}color-scheme: ${theme};`, ...tokens.color.tokens.map((token) => `${indent}--${token.name}: ${value(token, theme)};`)];
+  lines.push(`:root[data-theme="${theme}"] {`, ...colours("  "), "}");
+  lines.push(`@media (prefers-color-scheme: ${theme}) {`, "  :root:not([data-theme]) {", ...colours("    "), "  }", "}");
 }
 // Text styles as classes, for the screens that set type outside a component.
 for (const group of tokens.type.groups) {

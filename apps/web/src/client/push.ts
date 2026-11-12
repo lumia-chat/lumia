@@ -48,3 +48,20 @@ export async function enablePush(vapidPublicKey: string): Promise<"subscribed" |
     return "failed";
   }
 }
+
+/**
+ * Ends this browser's notifications for the account: the instance forgets
+ * the subscription and the browser drops it. Best effort, for signing out.
+ */
+export async function disablePush(): Promise<void> {
+  await client()
+    .pushUnsubscribe()
+    .catch((e) => console.warn("push:", e));
+  try {
+    const registration = await navigator.serviceWorker.getRegistration("/");
+    const subscription = registration && (await registration.pushManager.getSubscription());
+    await subscription?.unsubscribe();
+  } catch (e) {
+    console.warn("push:", e);
+  }
+}

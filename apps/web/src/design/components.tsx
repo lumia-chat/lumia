@@ -7,8 +7,8 @@
 // instead of `className`, `for` instead of `htmlFor`, `style` objects with
 // CSS property names.
 
-import { For, Show, children, createSignal, createUniqueId, splitProps, type JSX } from "solid-js";
-import { Dynamic } from "solid-js/web";
+import { For, Show, children, createSignal, createUniqueId, onCleanup, onMount, splitProps, type JSX } from "solid-js";
+import { Dynamic, Portal } from "solid-js/web";
 import { ICONS } from "./icons";
 
 export type Tone = "peach" | "blue" | "purple" | "mint" | "amber" | "sky" | "stone" | "green" | "indigo";
@@ -23,6 +23,16 @@ const STATUS_WORD: Record<Status, string> = { online: "online", away: "away", dn
 
 function cx(...a: (string | false | null | undefined)[]): string {
   return a.filter(Boolean).join(" ");
+}
+
+/**
+ * A row or a tile that is a link in the boards and a command in the app:
+ * with no address of its own the press is the handler's alone, so the
+ * page's address and history are left as they were.
+ */
+function pressed(e: MouseEvent, item: { href?: string; onClick?: () => void }) {
+  if (!item.href) e.preventDefault();
+  item.onClick?.();
 }
 
 function fieldId(id?: string): string {
@@ -99,13 +109,13 @@ export function Button(props: ButtonProps) {
   );
 }
 
-const ICON_FOR_SIZE: Record<number, number> = { 28: 15, 30: 17, 32: 16, 34: 16, 36: 18, 38: 18, 40: 17 };
+const ICON_FOR_SIZE: Record<number, number> = { 28: 15, 30: 17, 32: 16, 34: 16, 36: 18, 38: 18, 40: 17, 44: 22 };
 
 export interface IconButtonProps extends JSX.ButtonHTMLAttributes<HTMLButtonElement> {
   icon?: IconName;
   glyph?: string;
   label: string;
-  size?: 28 | 30 | 32 | 34 | 36 | 38 | 40;
+  size?: 28 | 30 | 32 | 34 | 36 | 38 | 40 | 44;
   iconSize?: number;
   strokeWidth?: number;
   variant?: "ghost" | "send";
@@ -270,12 +280,14 @@ export function Checkbox(props: CheckboxProps) {
 }
 
 export interface TypingIndicatorProps {
-  name: string;
+  /** Who is typing: one name, or each of them. */
+  name: string | string[];
   class?: string;
 }
 
-/** "Name is typing…" with three dots. */
+/** "Name is typing…" with three dots; two people by name, "Several people" beyond that. */
 export function TypingIndicator(props: TypingIndicatorProps) {
+  const names = () => (Array.isArray(props.name) ? props.name : [props.name]);
   return (
     <span class={cx("lu-typing", props.class)}>
       <span class="lu-typing__dots" aria-hidden="true">
@@ -283,8 +295,14 @@ export function TypingIndicator(props: TypingIndicatorProps) {
         <span></span>
         <span></span>
       </span>
-      <span>
-        <strong>{props.name}</strong> is typing…
+      <span class="lu-typing__text">
+        <Show when={names().length <= 2} fallback="Several people are typing…">
+          <strong>{names()[0]}</strong>
+          <Show when={names().length === 2} fallback=" is typing…">
+            {" and "}
+            <strong>{names()[1]}</strong> are typing…
+          </Show>
+        </Show>
       </span>
     </span>
   );
@@ -293,34 +311,43 @@ export function TypingIndicator(props: TypingIndicatorProps) {
 export interface ComposerProps extends JSX.InputHTMLAttributes<HTMLInputElement> {
   placeholder?: string;
   label?: string;
-  typing?: string;
+  /** Who is typing, named under the field. */
+  typing?: string | string[];
   hint?: string;
+  /** The attach, formatting, emoji and mention buttons; a screen with nothing behind them leaves them out. */
+  tools?: boolean;
   onSend?: () => void;
   onAttach?: () => void;
 }
 
 /** Message bar with tools, send and a hint row. */
 export function Composer(props: ComposerProps) {
-  const [local, input] = splitProps(props, ["placeholder", "label", "typing", "hint", "id", "onSend", "onAttach", "class"]);
+  const [local, input] = splitProps(props, ["placeholder", "label", "typing", "hint", "tools", "id", "onSend", "onAttach", "class"]);
   const fid = fieldId(local.id);
   const placeholder = () => local.placeholder ?? "Message";
   const hint = () => local.hint ?? "Return to send";
+  const tools = () => local.tools ?? true;
+  const typing = () => (Array.isArray(local.typing) ? (local.typing.length ? local.typing : undefined) : local.typing || undefined);
   return (
     <div class={cx("lu-composer", local.class)}>
-      <div class="lu-composer__field">
-        <IconButton icon="plus" label="Attach a file" class="lu-composer__attach" onClick={() => local.onAttach?.()} />
+      <div class={cx("lu-composer__field", !tools() && "is-bare")}>
+        <Show when={tools()}>
+          <IconButton icon="plus" label="Attach a file" class="lu-composer__attach" onClick={() => local.onAttach?.()} />
+        </Show>
         <label for={fid} class="lu-sr">
           {local.label ?? placeholder()}
         </label>
         <input id={fid} type="text" placeholder={placeholder()} autocomplete="off" class="lu-composer__input" {...input} />
-        <IconButton glyph="Aa" label="Text formatting" />
-        <IconButton icon="emoji" label="Emoji" />
-        <IconButton icon="mention" label="Mention someone" strokeWidth={1.9} />
+        <Show when={tools()}>
+          <IconButton glyph="Aa" label="Text formatting" />
+          <IconButton icon="emoji" label="Emoji" />
+          <IconButton icon="mention" label="Mention someone" strokeWidth={1.9} />
+        </Show>
         <IconButton icon="send" variant="send" size={40} label="Send message" class="lu-composer__send" onClick={() => local.onSend?.()} />
       </div>
-      <Show when={local.typing || hint()}>
-        <div class="lu-composer__hint">
-          <Show when={local.typing} fallback={<span></span>}>
+      <Show when={typing() || hint()}>
+        <div class="lu-composer__hint" aria-live="polite">
+          <Show when={typing()} fallback={<span></span>}>
             {(name) => <TypingIndicator name={name()} />}
           </Show>
           <Show when={hint()}>
@@ -341,7 +368,7 @@ export interface AvatarProps {
   initials: string;
   tone?: Tone;
   size?: 22 | 28 | 34 | 38 | 40 | 44;
-  status?: Status;
+  status?: Status | "offline";
   ring?: "surface" | "bg" | "rail";
   label?: string;
   class?: string;
@@ -435,13 +462,20 @@ export interface MemberEntry {
   /** A second line under the subtitle, such as a bio. */
   detail?: string;
   tag?: string;
-  href?: string;
+  /** Whatever names the person to the screen; handed back by `onOpen`. */
+  id?: string;
 }
 
 export interface MemberListProps {
-  sections: { title: string; members: MemberEntry[] }[];
+  /** A section with no title is a list with nothing over it. */
+  sections: { title?: string; members: MemberEntry[] }[];
+  /** How many there are when the sections show only some: draws "View all". */
   total?: number;
   onViewAll?: () => void;
+  /** A row was pressed; the row is what a profile card opens against. */
+  onOpen?: (member: MemberEntry, row: HTMLElement) => void;
+  /** What to say when no section has anyone. */
+  empty?: string;
   class?: string;
 }
 
@@ -452,12 +486,14 @@ export function MemberList(props: MemberListProps) {
       <For each={props.sections}>
         {(sec, i) => (
           <>
-            <h3 class={cx("lu-members__title", i() > 0 && "is-later")}>{sec.title}</h3>
+            <Show when={sec.title}>
+              <h3 class={cx("lu-members__title", i() > 0 && "is-later")}>{sec.title}</h3>
+            </Show>
             <ul class="lu-members__list">
               <For each={sec.members}>
                 {(m) => (
                   <li>
-                    <a href={m.href ?? "#"} class={cx("lu-member", m.status === "away" && "is-away")}>
+                    <button type="button" aria-haspopup={props.onOpen ? "dialog" : undefined} onClick={(e) => props.onOpen?.(m, e.currentTarget)} class={cx("lu-member", m.status === "away" && "is-away")}>
                       <Avatar initials={m.initials} tone={m.tone} size={34} status={m.status} ring="surface" />
                       <span class="lu-member__text">
                         <span class="lu-member__name">
@@ -476,7 +512,7 @@ export function MemberList(props: MemberListProps) {
                           <span class="lu-member__sub">{m.detail}</span>
                         </Show>
                       </span>
-                    </a>
+                    </button>
                   </li>
                 )}
               </For>
@@ -484,6 +520,9 @@ export function MemberList(props: MemberListProps) {
           </>
         )}
       </For>
+      <Show when={props.empty && props.sections.every((sec) => sec.members.length === 0)}>
+        <p class="lu-members__none">{props.empty}</p>
+      </Show>
       <Show when={props.total}>
         <Button size="sm" block class="lu-members__all" onClick={() => props.onViewAll?.()}>
           View all {props.total} members
@@ -512,7 +551,12 @@ export interface ServerRailProps {
   /** Home is the current place (no server is). */
   homeCurrent?: boolean;
   servers?: RailServer[];
-  self?: { name: string; initials: string; tone?: Tone; status?: Status; onClick?: () => void };
+  /**
+   * The signed-in person at the foot of the rail. `offline` is the dot of
+   * someone who is not connected; `menuOpen` says the button's menu is up;
+   * `hint` is what hovering it tells.
+   */
+  self?: { name: string; initials: string; tone?: Tone; status?: Status | "offline"; menuOpen?: boolean; hint?: string; onClick?: (button: HTMLElement) => void };
   onHome?: () => void;
   onAddServer?: () => void;
   class?: string;
@@ -561,12 +605,7 @@ export function ServerRail(props: ServerRailProps) {
       <span class="lu-rail__spacer"></span>
       <Show when={props.self}>
         {(self) => (
-          <button
-            type="button"
-            class="lu-rail__self"
-            onClick={() => self().onClick?.()}
-            aria-label={self().name + ", " + (self().status === "online" ? "available" : self().status ? STATUS_WORD[self().status as Status] : "offline") + " — open profile"}
-          >
+          <button type="button" class="lu-rail__self" onClick={(e) => self().onClick?.(e.currentTarget)} aria-haspopup="menu" aria-expanded={!!self().menuOpen} aria-label={self().name + ", account menu"} title={self().hint}>
             <Avatar initials={self().initials} tone={self().tone ?? "indigo"} size={38} status={self().status} ring="rail" />
           </button>
         )}
@@ -577,7 +616,10 @@ export function ServerRail(props: ServerRailProps) {
 
 export interface ServerHeaderProps {
   name: string;
-  onOpenMenu?: () => void;
+  /** The name is a button that opens the place's menu; without it the name is a heading. */
+  onOpenMenu?: (button: HTMLElement) => void;
+  menuOpen?: boolean;
+  /** The pencil beside the name; left out where there is nowhere for it to lead. */
   onNewMessage?: () => void;
   class?: string;
 }
@@ -586,11 +628,22 @@ export interface ServerHeaderProps {
 export function ServerHeader(props: ServerHeaderProps) {
   return (
     <div class={cx("lu-serverhead", props.class)}>
-      <button type="button" class="lu-serverhead__name" onClick={() => props.onOpenMenu?.()}>
-        <span class="lu-serverhead__title">{props.name}</span>
-        <Icon name="chevron-down" size={14} />
-      </button>
-      <IconButton icon="compose" label="New message" size={34} onClick={() => props.onNewMessage?.()} />
+      <Show
+        when={props.onOpenMenu}
+        fallback={
+          <h1 class="lu-serverhead__name">
+            <span class="lu-serverhead__title">{props.name}</span>
+          </h1>
+        }
+      >
+        <button type="button" class="lu-serverhead__name" aria-haspopup="menu" aria-expanded={!!props.menuOpen} aria-label={props.name + ", server menu"} onClick={(e) => props.onOpenMenu?.(e.currentTarget)}>
+          <span class="lu-serverhead__title">{props.name}</span>
+          <Icon name="chevron-down" size={14} />
+        </button>
+      </Show>
+      <Show when={props.onNewMessage}>
+        <IconButton icon="compose" label="New message" size={34} onClick={() => props.onNewMessage?.()} />
+      </Show>
     </div>
   );
 }
@@ -606,7 +659,7 @@ export function QuickTiles(props: QuickTilesProps) {
     <div class={cx("lu-quick", props.class)}>
       <For each={props.items}>
         {(it) => (
-          <a href={it.href ?? "#"} onClick={() => it.onClick?.()} class="lu-quick__tile">
+          <a href={it.href ?? "#"} onClick={(e) => pressed(e, it)} class="lu-quick__tile">
             <Icon name={it.icon} size={18} strokeWidth={1.8} />
             <span>{it.label}</span>
             <Show when={it.count}>
@@ -678,7 +731,7 @@ export function ChannelList(props: ChannelListProps) {
                   const person = () => it.kind === "dm" || it.kind === "group";
                   return (
                     <li>
-                      <a href={it.href ?? "#"} onClick={() => it.onClick?.()} aria-current={it.active ? "page" : undefined} class={cx("lu-row", "is-" + state(), person() && "lu-row--person")}>
+                      <a href={it.href ?? "#"} onClick={(e) => pressed(e, it)} aria-current={it.active ? "page" : undefined} class={cx("lu-row", "is-" + state(), person() && "lu-row--person")}>
                         <RowLead item={it} />
                         <span class="lu-row__name">
                           {it.name}
@@ -743,7 +796,11 @@ export interface ChannelHeaderProps {
   topic?: string;
   /** `dm` shows the lock (end-to-end encrypted); `page` shows no glyph. */
   kind?: "channel" | "private" | "dm" | "page";
-  actions?: { icon: IconName; label: string; onClick?: () => void; strokeWidth?: number }[];
+  /** `narrow` shows the action only where the window is too narrow for the aside to stand in the row. */
+  actions?: { icon: IconName; label: string; onClick?: () => void; strokeWidth?: number; narrow?: boolean; pressed?: boolean }[];
+  /** Back to the list, where the frame is folded (a phone). */
+  onBack?: () => void;
+  backLabel?: string;
   class?: string;
 }
 
@@ -758,6 +815,9 @@ export function ChannelHeader(props: ChannelHeaderProps) {
     ];
   return (
     <header class={cx("lu-chhead", props.class)}>
+      <Show when={props.onBack}>
+        <IconButton icon="back" label={props.backLabel ?? "Back"} size={44} class="lu-chhead__back" onClick={() => props.onBack?.()} />
+      </Show>
       <div class="lu-chhead__id">
         <Show when={props.kind !== "page"}>
           <Icon name={props.kind === "private" || props.kind === "dm" ? "lock" : "hash"} size={20} strokeWidth={2.2} class="lu-chhead__glyph" />
@@ -769,7 +829,7 @@ export function ChannelHeader(props: ChannelHeaderProps) {
         </Show>
       </div>
       <div class="lu-chhead__actions">
-        <For each={list()}>{(a) => <IconButton icon={a.icon} label={a.label} strokeWidth={a.strokeWidth ?? 1.8} onClick={() => a.onClick?.()} />}</For>
+        <For each={list()}>{(a) => <IconButton icon={a.icon} label={a.label} strokeWidth={a.strokeWidth ?? 1.8} pressed={"pressed" in a ? a.pressed : undefined} class={"narrow" in a && a.narrow ? "lu-chhead__narrow" : undefined} onClick={() => a.onClick?.()} />}</For>
       </div>
     </header>
   );
@@ -1049,19 +1109,43 @@ export interface MessageProps {
   onThread?: () => void;
   onMore?: () => void;
   variant?: "default" | "parent" | "reply";
+  /** The name and the avatar open the author's profile, against the one pressed. */
+  onOpenProfile?: (pressed: HTMLElement) => void;
+  /**
+   * What the same person sent straight after: drawn under the first as
+   * further paragraphs of one block, each with its time in the avatar's
+   * column under the pointer.
+   */
+  parts?: MessagePart[];
   class?: string;
 }
 
-/** One message. */
+export interface MessagePart {
+  time?: string;
+  datetime?: string;
+  children?: JSX.Element | string[];
+}
+
+/** One message, or one person's run of them as a block. */
 export function Message(props: MessageProps) {
   const variant = () => props.variant ?? "default";
   const compact = () => variant() !== "default";
+  const avatar = () => <Avatar initials={props.initials} tone={props.tone ?? "blue"} size={compact() ? 28 : 40} />;
   return (
     <article class={cx("lu-msg", "lu-msg--" + variant(), props.highlighted && "is-highlighted", props.class)}>
-      <Avatar initials={props.initials} tone={props.tone ?? "blue"} size={compact() ? 28 : 40} />
+      <Show when={props.onOpenProfile} fallback={avatar()}>
+        {/* The name is the control; the avatar is the same one for a pointer. */}
+        <button type="button" class="lu-msg__avatar" tabindex={-1} aria-hidden="true" onClick={(e) => props.onOpenProfile?.(e.currentTarget)}>
+          {avatar()}
+        </button>
+      </Show>
       <div class="lu-msg__main">
         <div class="lu-msg__head">
-          <span class="lu-msg__author">{props.author}</span>
+          <Show when={props.onOpenProfile} fallback={<span class="lu-msg__author">{props.author}</span>}>
+            <button type="button" class="lu-msg__author lu-msg__name" aria-haspopup="dialog" onClick={(e) => props.onOpenProfile?.(e.currentTarget)}>
+              {props.author}
+            </button>
+          </Show>
           <Show when={compact() ? undefined : props.tag}>{(tag) => <Tag tone={tag().tone ?? "neutral"}>{tag().label}</Tag>}</Show>
           <Show when={props.time}>
             <time datetime={props.datetime} class="lu-msg__time">
@@ -1072,6 +1156,21 @@ export function Message(props: MessageProps) {
         <div class="lu-msg__body">
           <Paras>{props.children}</Paras>
         </div>
+        <For each={props.parts ?? []}>
+          {(part) => (
+            <div class="lu-msg__part">
+              <Show when={part.time}>
+                <time datetime={part.datetime} class="lu-msg__parttime">
+                  <span class="lu-sr">{props.author}, </span>
+                  {part.time}
+                </time>
+              </Show>
+              <div class="lu-msg__body">
+                <Paras>{part.children}</Paras>
+              </div>
+            </div>
+          )}
+        </For>
         <Show when={props.attachment}>{(a) => <Attachment {...a()} />}</Show>
         <Show when={props.thread}>{(t) => <ThreadSummary {...t()} />}</Show>
         <Show when={props.reactions && props.reactions.length}>
@@ -1286,14 +1385,27 @@ export function SidePanel(props: SidePanelProps) {
   return (
     <Panel class={cx("lu-sidepanel", props.class)}>
       <div class="lu-sidepanel__head">
-        <SegmentedTabs
-          tabs={props.tabs}
-          value={cur()}
-          onChange={(id) => {
-            if (props.value === undefined) setInner(id);
-            props.onChange?.(id);
-          }}
-        />
+        {/* A panel with one thing in it has nothing to switch between: the tab's words are its heading. */}
+        <Show
+          when={props.tabs.length > 1}
+          fallback={
+            <h2 class="lu-sidepanel__title">
+              {tab()?.label}
+              <Show when={tab()?.count !== undefined}>
+                <span class="lu-segtabs__count">{tab()?.count}</span>
+              </Show>
+            </h2>
+          }
+        >
+          <SegmentedTabs
+            tabs={props.tabs}
+            value={cur()}
+            onChange={(id) => {
+              if (props.value === undefined) setInner(id);
+              props.onChange?.(id);
+            }}
+          />
+        </Show>
       </div>
       <div role="tabpanel" aria-label={tab()?.label ?? props.label ?? "Members and threads"} class="lu-sidepanel__body">
         {panel()}
@@ -1302,13 +1414,29 @@ export function SidePanel(props: SidePanelProps) {
   );
 }
 
+/** The search field at the head of a side panel's body. */
+export function SidePanelSearch(props: { children?: JSX.Element }) {
+  return <div class="lu-sidepanel__search">{props.children}</div>;
+}
+
+/** The part of a side panel's body that scrolls. */
+export function SidePanelScroll(props: { children?: JSX.Element }) {
+  return <div class="lu-sidepanel__scroll">{props.children}</div>;
+}
+
 export interface AppShellProps {
   rail?: JSX.Element;
   sidebar?: JSX.Element;
   sidebarLabel?: string;
   main?: JSX.Element;
   aside?: JSX.Element;
+  /** The frame's height; the window's when left out. */
   height?: number | string;
+  /** Folded (a phone), the conversation is over the rail and the sidebar; otherwise they are the screen. */
+  reading?: boolean;
+  /** In a window too narrow for three columns, the aside is over the conversation's end. */
+  asideOpen?: boolean;
+  onAsideClose?: () => void;
   class?: string;
 }
 
@@ -1320,7 +1448,7 @@ export function AppShell(props: AppShellProps) {
   // only when there is something to show.
   const aside = children(() => props.aside);
   return (
-    <div class={cx("lu-shell", props.class)} style={props.height !== undefined ? { height: typeof props.height === "number" ? props.height + "px" : props.height } : undefined}>
+    <div class={cx("lu-shell", !!aside() && "has-aside", props.reading && "is-reading", props.asideOpen && "is-aside-open", props.class)} style={props.height !== undefined ? { height: typeof props.height === "number" ? props.height + "px" : props.height } : undefined}>
       <div class="lu-shell__side">
         {props.rail}
         <nav aria-label={props.sidebarLabel ?? "Channels and messages"} class="lu-shell__sidebar">
@@ -1331,10 +1459,343 @@ export function AppShell(props: AppShellProps) {
         <Panel class="lu-shell__conversation">{props.main}</Panel>
       </main>
       <Show when={aside()}>
+        <button type="button" tabindex={-1} aria-label="Close the side panel" class="lu-shell__scrim" onClick={() => props.onAsideClose?.()}></button>
         <aside aria-label="Members and threads" class="lu-shell__aside">
           {aside()}
         </aside>
       </Show>
+    </div>
+  );
+}
+
+/* ── Over the frame ──────────────────────────────────────── */
+
+export interface PopoverProps {
+  /** What opened it: it is placed against this, and focus goes back to it. */
+  anchor?: HTMLElement | null;
+  /**
+   * `below` hangs it under the anchor with their left edges in line (over
+   * it when there is no room under, beside it at the window's end);
+   * `beside` stands it to the anchor's right with their feet in line, as
+   * the account menu stands by the rail.
+   */
+  placement?: "below" | "beside";
+  closeLabel?: string;
+  onClose: () => void;
+  children?: JSX.Element;
+}
+
+const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+/** A menu, a card or a small form over the frame: placed against what opened it, closed by Escape or a press outside, with focus kept inside. */
+export function Popover(props: PopoverProps) {
+  let box: HTMLDivElement | undefined;
+  const [at, setAt] = createSignal<{ left: number; top: number } | null>(null);
+  // The board's rules for where a card and a menu go, kept 8 inside the window.
+  const place = () => {
+    if (!box) return;
+    const w = box.offsetWidth;
+    const h = box.offsetHeight;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const r = props.anchor?.isConnected ? props.anchor.getBoundingClientRect() : null;
+    let left = (vw - w) / 2;
+    let top = (vh - h) / 2;
+    if (r && props.placement === "beside") {
+      left = r.right + 12;
+      top = r.bottom - h;
+    } else if (r && r.right + w + 16 > vw && r.left - w - 12 >= 8) {
+      left = r.left - w - 12;
+      top = r.top - 8;
+    } else if (r) {
+      left = r.left;
+      top = r.bottom + 8;
+      if (top + h > vh - 8) top = r.top - h - 8;
+    }
+    setAt({ left: Math.round(Math.max(8, Math.min(left, vw - w - 8))), top: Math.round(Math.max(8, Math.min(top, vh - h - 8))) });
+  };
+  const inside = () => (box ? [...box.querySelectorAll<HTMLElement>(FOCUSABLE)] : []);
+  // On the document, not on the popover: a browser that does not focus a
+  // button it is clicked on (Safari) leaves the focus on the page's body
+  // after a press inside, and Escape must still close what is open.
+  const onKeyDown = (e: KeyboardEvent) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      props.onClose();
+      return;
+    }
+    if (e.key !== "Tab") return;
+    const all = inside();
+    const first = all[0];
+    const last = all[all.length - 1];
+    if (!first || !last) return;
+    const at = document.activeElement;
+    const within = !!at && !!box?.contains(at);
+    if (e.shiftKey && (at === first || !within)) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && (at === last || !within)) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
+  onMount(() => {
+    place();
+    inside()[0]?.focus({ preventScroll: true });
+    // What it holds can grow after it opens (a list that arrives, a note).
+    const watch = new ResizeObserver(place);
+    if (box) watch.observe(box);
+    window.addEventListener("resize", place);
+    document.addEventListener("keydown", onKeyDown, true);
+    onCleanup(() => {
+      watch.disconnect();
+      window.removeEventListener("resize", place);
+      document.removeEventListener("keydown", onKeyDown, true);
+      if (props.anchor?.isConnected) props.anchor.focus({ preventScroll: true });
+    });
+  });
+  return (
+    <Portal>
+      <div class="lu-popover">
+        <button type="button" tabindex={-1} aria-label={props.closeLabel ?? "Close"} class="lu-popover__scrim" onClick={() => props.onClose()}></button>
+        <div ref={box} class="lu-popover__box" style={{ left: (at()?.left ?? 0) + "px", top: (at()?.top ?? 0) + "px", visibility: at() ? "visible" : "hidden" }}>
+          {props.children}
+        </div>
+      </div>
+    </Portal>
+  );
+}
+
+export interface MenuProps {
+  label: string;
+  /** A short list of commands, narrower than the account menu. */
+  compact?: boolean;
+  children?: JSX.Element;
+  class?: string;
+}
+
+/** A menu: the arrow keys, Home and End move through its items. */
+export function Menu(props: MenuProps) {
+  const onKeyDown = (e: KeyboardEvent & { currentTarget: HTMLDivElement }) => {
+    const items = [...e.currentTarget.querySelectorAll<HTMLElement>('[role^="menuitem"]')];
+    const i = items.indexOf(document.activeElement as HTMLElement);
+    const next = e.key === "ArrowDown" ? (i + 1) % items.length : e.key === "ArrowUp" ? (i - 1 + items.length) % items.length : e.key === "Home" ? 0 : e.key === "End" ? items.length - 1 : -1;
+    if (next < 0) return;
+    e.preventDefault();
+    items[next]?.focus();
+  };
+  return (
+    <div role="menu" aria-label={props.label} class={cx("lu-menu", props.compact && "lu-menu--compact", props.class)} onKeyDown={onKeyDown}>
+      {props.children}
+    </div>
+  );
+}
+
+/** Who a menu belongs to, at its head. */
+export function MenuHead(props: { name: string; sub?: string; initials: string; tone?: Tone; status?: Status | "offline" }) {
+  return (
+    <div class="lu-menu__head">
+      <Avatar initials={props.initials} tone={props.tone ?? "indigo"} size={40} status={props.status} ring="surface" />
+      <span class="lu-menu__who">
+        <span class="lu-menu__name">{props.name}</span>
+        <Show when={props.sub}>
+          <span class="lu-menu__sub">{props.sub}</span>
+        </Show>
+      </span>
+    </div>
+  );
+}
+
+export function MenuRule() {
+  return <span role="separator" class="lu-menu__rule"></span>;
+}
+
+export function MenuLabel(props: { children?: JSX.Element }) {
+  return (
+    <span role="presentation" class="lu-menu__label">
+      {props.children}
+    </span>
+  );
+}
+
+export interface MenuItemProps {
+  icon?: IconName;
+  /** A key or a word at the row's end. */
+  hint?: string;
+  onSelect?: () => void;
+  children?: JSX.Element;
+}
+
+/** A command in a menu. */
+export function MenuItem(props: MenuItemProps) {
+  return (
+    <button type="button" role="menuitem" class="lu-menu__item" onClick={() => props.onSelect?.()}>
+      <Show when={props.icon}>{(icon) => <Icon name={icon()} size={16} strokeWidth={1.9} />}</Show>
+      <span class="lu-menu__text">{props.children}</span>
+      <Show when={props.hint}>
+        <span class="lu-menu__hint">{props.hint}</span>
+      </Show>
+    </button>
+  );
+}
+
+export interface MenuRadioProps {
+  checked: boolean;
+  /** The status this row stands for, as its dot. */
+  status?: Status;
+  onSelect?: () => void;
+  children?: JSX.Element;
+}
+
+/** One of a menu's either-or rows: a dot, the words, a check on the one chosen. */
+export function MenuRadio(props: MenuRadioProps) {
+  return (
+    <button type="button" role="menuitemradio" aria-checked={props.checked} class="lu-menu__item" onClick={() => props.onSelect?.()}>
+      <Show when={props.status}>{(status) => <span aria-hidden="true" class={cx("lu-menu__dot", "lu-status-" + status())}></span>}</Show>
+      <span class="lu-menu__text">{props.children}</span>
+      <Show when={props.checked}>
+        <Icon name="check" size={16} strokeWidth={2.2} class="lu-menu__check" />
+      </Show>
+    </button>
+  );
+}
+
+const PRESENCE_WORD: Record<Status, string> = { online: "Online", away: "Away", dnd: "Do not disturb" };
+
+export interface ProfileCardProps {
+  name: string;
+  initials: string;
+  tone?: Tone;
+  handle?: string;
+  /** A word beside the name: "You", "New". */
+  tag?: string;
+  /** Where the person is: a status, `null` for not here, left out where nowhere says. */
+  status?: Status | null;
+  /** What their profile says of them, a line each. */
+  details?: { icon: IconName; label: string; text: string }[];
+  /** A line over the action: what pressing it led to. */
+  note?: string;
+  action?: { label: string; onClick?: () => void; disabled?: boolean };
+  onClose?: () => void;
+  class?: string;
+}
+
+/** Who someone is, opened from their name or their row. */
+export function ProfileCard(props: ProfileCardProps) {
+  const hid = fieldId();
+  const tone = () => "lu-tone-" + (props.tone ?? "blue");
+  return (
+    <section role="dialog" aria-labelledby={hid} class={cx("lu-pcard", props.class)}>
+      <div class={cx("lu-pcard__band", tone())}>
+        <IconButton icon="close" label="Close profile" size={32} strokeWidth={2} class="lu-pcard__close" onClick={() => props.onClose?.()} />
+      </div>
+      <div class="lu-pcard__body">
+        <div aria-hidden="true" class={cx("lu-pcard__avatar", tone())}>
+          {props.initials}
+          <Show when={props.status}>{(status) => <span class={cx("lu-pcard__dot", "lu-status-" + status())}></span>}</Show>
+        </div>
+        <div class="lu-pcard__who">
+          <div class="lu-pcard__named">
+            <h2 id={hid} class="lu-pcard__name">
+              {props.name}
+            </h2>
+            <Show when={props.tag}>
+              <Tag tone="accent">{props.tag}</Tag>
+            </Show>
+          </div>
+          <Show when={props.handle}>
+            <p class="lu-pcard__handle">@{props.handle}</p>
+          </Show>
+        </div>
+        <Show when={props.status !== undefined}>
+          <p class="lu-pcard__presence">
+            <span aria-hidden="true" class={"lu-status-" + (props.status ?? "offline")}></span>
+            {props.status ? PRESENCE_WORD[props.status] : "Offline"}
+          </p>
+        </Show>
+        <Show when={props.details?.length}>
+          <dl class="lu-pcard__details">
+            <For each={props.details}>
+              {(d) => (
+                <div class="lu-pcard__detail">
+                  <Icon name={d.icon} size={15} strokeWidth={1.9} />
+                  <dt class="lu-sr">{d.label}</dt>
+                  <dd>{d.text}</dd>
+                </div>
+              )}
+            </For>
+          </dl>
+        </Show>
+        <Show when={props.note}>
+          <p class="lu-pcard__note" role="status">
+            {props.note}
+          </p>
+        </Show>
+        <Show when={props.action}>
+          {(a) => (
+            <div class="lu-pcard__actions">
+              <Button variant="primary" size="md" disabled={a().disabled} onClick={() => a().onClick?.()}>
+                {a().label}
+              </Button>
+            </div>
+          )}
+        </Show>
+      </div>
+    </section>
+  );
+}
+
+export interface PopProps {
+  title: string;
+  subtitle?: string;
+  children?: JSX.Element;
+  class?: string;
+}
+
+/** What a popover holds when it asks for something: a title, a line under it, a small form. */
+export function Pop(props: PopProps) {
+  const hid = fieldId();
+  return (
+    <section role="dialog" aria-labelledby={hid} class={cx("lu-pop", props.class)}>
+      <div class="lu-pop__head">
+        <h2 id={hid} class="lu-pop__title">
+          {props.title}
+        </h2>
+        <Show when={props.subtitle}>
+          <p class="lu-pop__subtitle">{props.subtitle}</p>
+        </Show>
+      </div>
+      {props.children}
+    </section>
+  );
+}
+
+export interface ChoiceProps<T extends string | number> {
+  label: string;
+  options: { value: T; label: string }[];
+  value: T;
+  onChange?: (value: T) => void;
+  class?: string;
+}
+
+/** One of a few, on a track as the segmented tabs are. */
+export function Choice<T extends string | number>(props: ChoiceProps<T>) {
+  const lid = fieldId();
+  return (
+    <div class={cx("lu-choice", props.class)}>
+      <span id={lid} class="lu-choice__label">
+        {props.label}
+      </span>
+      <div role="radiogroup" aria-labelledby={lid} class="lu-choice__track">
+        <For each={props.options}>
+          {(o) => (
+            <button type="button" role="radio" aria-checked={props.value === o.value} class="lu-choice__option" onClick={() => props.onChange?.(o.value)}>
+              {o.label}
+            </button>
+          )}
+        </For>
+      </div>
     </div>
   );
 }

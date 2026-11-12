@@ -5,6 +5,7 @@
 import { Show, createResource, createSignal, onMount } from "solid-js";
 import { useNavigate, useParams, useSearch } from "@tanstack/solid-router";
 import { Button, Card } from "../design/components";
+import { AuthPage, TrustCard } from "./auth-page";
 import { ClientError, type InvitePreviewSummary } from "../client/bridge";
 import { SERVED_BY_INSTANCE, client, openInstance, opened, queryClient, refreshSignedIn, savedInstance } from "../client/state";
 import type { SignInSearch } from "./index";
@@ -48,11 +49,16 @@ export function Invite() {
   const notFound = () => preview.error instanceof ClientError && preview.error.code === "NOT_FOUND";
 
   return (
-    <div class="auth">
-      <div class="auth__logo" aria-hidden="true">
-        <img src="/brand/lumia-original-light.svg" alt="" class="lu-only-light" />
-        <img src="/brand/lumia-original-dark.svg" alt="" class="lu-only-dark" />
-      </div>
+    <AuthPage
+      under={
+        <Show when={preview() && !preview()?.signedIn}>
+          New to Lumia?{" "}
+          <button type="button" class="lu-link auth__switch" onClick={toSignIn}>
+            Create an account
+          </button>
+        </Show>
+      }
+    >
       <Show
         when={preview()}
         fallback={
@@ -65,10 +71,7 @@ export function Invite() {
       >
         {(p) => (
           <Card title={p().info.serverName} subtitle={`${p().info.memberCount} ${p().info.memberCount === 1 ? "member" : "members"}${p().info.asGuest ? " · you would join as a guest" : ""}`}>
-            <div class="auth__trust">
-              <span class="auth__trust-host">{p().info.host}</span>
-              <span class="auth__trust-op">run by {p().info.operatorName || "an unnamed operator"}</span>
-            </div>
+            <TrustCard host={p().info.host} operatorName={p().info.operatorName} />
             <div class="auth__form">
               <Show when={error()}>
                 <p class="auth__error" role="alert">
@@ -78,17 +81,9 @@ export function Invite() {
               <Show
                 when={p().signedIn}
                 fallback={
-                  <>
-                    <Button variant="primary" type="button" block onClick={toSignIn}>
-                      Sign in to join
-                    </Button>
-                    <p class="auth__foot">
-                      New to Lumia?{" "}
-                      <button type="button" class="lu-link auth__switch" onClick={toSignIn}>
-                        Create an account
-                      </button>
-                    </p>
-                  </>
+                  <Button variant="primary" type="button" block onClick={toSignIn}>
+                    Sign in to join
+                  </Button>
                 }
               >
                 <Button variant="primary" type="button" block disabled={busy()} onClick={() => void join()}>
@@ -99,6 +94,6 @@ export function Invite() {
           </Card>
         )}
       </Show>
-    </div>
+    </AuthPage>
   );
 }
