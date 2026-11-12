@@ -48,7 +48,7 @@ use lumia_core::proto::{
     CreateInviteRequest, EmailInviteRequest, HandoffResponse, Invite, InvitePreview,
     ListInvitesResponse, ListPasskeysResponse, MagicLinkCompleteRequest, MagicLinkRequest, Member,
     PasskeyAssertFinishRequest, PasskeyAssertStartRequest, PasskeyChallenge,
-    PasskeyRegisterFinishRequest, SignedProfile, UpdateAccountRequest,
+    PasskeyRegisterFinishRequest, SignedProfile, UpdateAccountRequest, UpdateServerRequest,
 };
 use lumia_core::proto::{
     DmRequest, DmRequestState, GetHistoryChunkResponse, GetIdentityBackupResponse,
@@ -420,6 +420,71 @@ impl Api {
                 "/api/v1/account/avatar",
                 Some(picture),
                 Some((CONTENT_TYPE.as_str(), media_type)),
+            )
+            .await?;
+        decoded(status, &bytes)
+    }
+
+    /// `PATCH /servers/{server_id}`: the server's name, its retention in
+    /// days (0 for ever), or both; `None` leaves one as it is.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` without `MANAGE_SERVER`; `INVALID_ARGUMENT` with
+    /// `details.field` `name`; transport failure.
+    pub async fn update_server(
+        &self,
+        server_id: &str,
+        name: Option<String>,
+        retention_days: Option<u32>,
+    ) -> Result<Server, ClientError> {
+        let req = UpdateServerRequest {
+            name,
+            retention_days,
+        };
+        let (status, bytes) = self
+            .send(
+                reqwest::Method::PATCH,
+                &format!("/api/v1/servers/{server_id}"),
+                Some(req.encode_to_vec()),
+                None,
+            )
+            .await?;
+        decoded(status, &bytes)
+    }
+
+    /// `PUT /servers/{server_id}/icon`: `picture` is a file's bytes as
+    /// chosen, taken as the account's picture is.
+    ///
+    /// # Errors
+    /// As [`Api::put_avatar`], and `PERMISSION_DENIED` without `MANAGE_SERVER`.
+    pub async fn put_server_icon(
+        &self,
+        server_id: &str,
+        picture: Vec<u8>,
+        media_type: &str,
+    ) -> Result<Server, ClientError> {
+        let (status, bytes) = self
+            .send(
+                reqwest::Method::PUT,
+                &format!("/api/v1/servers/{server_id}/icon"),
+                Some(picture),
+                Some((CONTENT_TYPE.as_str(), media_type)),
+            )
+            .await?;
+        decoded(status, &bytes)
+    }
+
+    /// `DELETE /servers/{server_id}/icon`.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` without `MANAGE_SERVER`; transport failure.
+    pub async fn delete_server_icon(&self, server_id: &str) -> Result<Server, ClientError> {
+        let (status, bytes) = self
+            .send(
+                reqwest::Method::DELETE,
+                &format!("/api/v1/servers/{server_id}/icon"),
+                None,
+                None,
             )
             .await?;
         decoded(status, &bytes)

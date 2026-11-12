@@ -352,3 +352,76 @@ async fn stop_ends_the_loop() {
         .expect("welcomed");
     stopped(&device).await;
 }
+
+/// A server's owner changes its name, retention and picture (architecture
+/// 6.7): another member, live, is told through its account log and finds
+/// the server as it now is in its snapshot, without the settings offered.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_servers_settings_reach_its_members() {
+    let Some(base) = instance() else { return };
+    let (owner, member) = (Device::new(&base), Device::new(&base));
+    let id = stamp();
+    owner
+        .app
+        .create_account(&format!("owner{id}"), PASSWORD, None)
+        .await
+        .unwrap();
+    let server = owner.app.create_server("Before").await.unwrap();
+    assert!(server.can_manage);
+    let invite = owner
+        .app
+        .create_invite(&server.server_id, 0, None)
+        .await
+        .unwrap();
+    member
+        .app
+        .create_account(&format!("member{id}"), PASSWORD, Some(&invite.url))
+        .await
+        .unwrap();
+    let theirs = |snapshot: lumia_client::app::SnapshotSummary| {
+        snapshot
+            .servers
+            .into_iter()
+            .find(|s| s.server_id == server.server_id)
+            .expect("the member is in the server")
+    };
+    let before = theirs(member.app.snapshot().await.unwrap());
+    assert_eq!(before.name, "Before");
+    assert!(!before.can_manage, "a member is not offered the settings");
+
+    let from = member.seen();
+    member.start(&[]).unwrap();
+    member
+        .wait_for(from, Duration::from_secs(10), welcomed)
+        .await
+        .expect("the member is welcomed");
+
+    let live = member.seen();
+    let mine = owner
+        .app
+        .update_server(&server.server_id, Some("  After  "), Some(30))
+        .await
+        .unwrap();
+    let mine = mine
+        .servers
+        .into_iter()
+        .find(|s| s.server_id == server.server_id)
+        .unwrap();
+    assert_eq!((mine.name.as_str(), mine.retention_days), ("After", 30));
+    member
+        .wait_for(live, Duration::from_secs(15), account_applied)
+        .await
+        .expect("the member's account log says the server changed");
+    let after = theirs(member.app.snapshot().await.unwrap());
+    assert_eq!((after.name.as_str(), after.retention_days), ("After", 30));
+
+    // A member may not change it: the instance refuses, whatever is offered.
+    let refused = member
+        .app
+        .update_server(&server.server_id, Some("Mine"), None)
+        .await;
+    assert!(
+        matches!(&refused, Err(lumia_client::ClientError::Api { code, .. }) if code == "PERMISSION_DENIED"),
+        "{refused:?}"
+    );
+}

@@ -118,6 +118,12 @@ impl From<app::InstanceSummary> for InstanceSummary {
 pub struct ServerSummary {
     pub server_id: String,
     pub name: String,
+    /// The server's picture, a path of this instance; empty for none.
+    pub icon_url: String,
+    /// How long the server keeps its messages, in days; 0 for ever.
+    pub retention_days: u32,
+    /// Whether this account may change the server's settings (architecture 6.7).
+    pub can_manage: bool,
 }
 
 impl From<app::ServerSummary> for ServerSummary {
@@ -125,6 +131,9 @@ impl From<app::ServerSummary> for ServerSummary {
         Self {
             server_id: s.server_id,
             name: s.name,
+            icon_url: s.icon_url,
+            retention_days: s.retention_days,
+            can_manage: s.can_manage,
         }
     }
 }
@@ -978,6 +987,46 @@ impl Client {
     /// text; sent at once when the gateway is up, and on every welcome.
     pub fn set_status(&self, status: String, custom_status: String) -> Res<()> {
         Ok(self.app.set_status(&status, &custom_status)?)
+    }
+
+    /// `PATCH /servers/{id}`: a server's name, how long it keeps messages
+    /// in days (0 for ever), or both; `None` leaves one as it is. Returns
+    /// the snapshot as it then is.
+    pub fn update_server(
+        &self,
+        server_id: String,
+        name: Option<String>,
+        retention_days: Option<u32>,
+    ) -> Res<SnapshotSummary> {
+        Ok(self
+            .runtime
+            .block_on(
+                self.app
+                    .update_server(&server_id, name.as_deref(), retention_days),
+            )?
+            .into())
+    }
+
+    /// `PUT /servers/{id}/icon`: `picture` is a file's bytes as chosen,
+    /// taken as the account's picture is. Returns the snapshot as it then is.
+    pub fn set_server_icon(
+        &self,
+        server_id: String,
+        picture: Vec<u8>,
+        media_type: String,
+    ) -> Res<SnapshotSummary> {
+        Ok(self
+            .runtime
+            .block_on(self.app.set_server_icon(&server_id, picture, &media_type))?
+            .into())
+    }
+
+    /// `DELETE /servers/{id}/icon`.
+    pub fn remove_server_icon(&self, server_id: String) -> Res<SnapshotSummary> {
+        Ok(self
+            .runtime
+            .block_on(self.app.remove_server_icon(&server_id))?
+            .into())
     }
 
     /// `POST /servers`: a server this account owns.

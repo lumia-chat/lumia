@@ -87,6 +87,19 @@ enum Cmd {
     Servers,
     /// Create a server you own.
     ServerCreate { name: String },
+    /// Change a server's settings: its name, how long it keeps messages
+    /// (`--retention 0` for ever), its picture (a file), or none (`--no-icon`).
+    ServerUpdate {
+        server_id: String,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        retention: Option<u32>,
+        #[arg(long)]
+        icon: Option<PathBuf>,
+        #[arg(long)]
+        no_icon: bool,
+    },
     /// Create a channel in a server.
     ChannelCreate { server_id: String, name: String },
     /// Mint an invite link for a server (unlimited unless `--max-uses`, open-ended unless `--hours`).
@@ -391,6 +404,46 @@ async fn run(cli: Cli) -> Result<(), ClientError> {
         Cmd::ServerCreate { name } => {
             let s = api.create_server(&name).await?;
             println!("{}  {}", wire::display(&s.server_id), s.name);
+            Ok(())
+        }
+        Cmd::ServerUpdate {
+            server_id,
+            name,
+            retention,
+            icon,
+            no_icon,
+        } => {
+            let mut server = None;
+            if name.is_some() || retention.is_some() {
+                server = Some(api.update_server(&server_id, name, retention).await?);
+            }
+            if let Some(path) = icon {
+                let picture = std::fs::read(&path)
+                    .map_err(|e| ClientError::State(format!("{}: {e}", path.display())))?;
+                server = Some(
+                    api.put_server_icon(&server_id, picture, "application/octet-stream")
+                        .await?,
+                );
+            }
+            if no_icon {
+                server = Some(api.delete_server_icon(&server_id).await?);
+            }
+            let s = server.ok_or_else(|| ClientError::State("nothing to change".into()))?;
+            println!(
+                "{}  {}  retention {}  icon {}",
+                wire::display(&s.server_id),
+                s.name,
+                if s.retention_days == 0 {
+                    "for ever".to_string()
+                } else {
+                    format!("{} days", s.retention_days)
+                },
+                if s.icon_url.is_empty() {
+                    "none"
+                } else {
+                    &s.icon_url
+                }
+            );
             Ok(())
         }
         Cmd::ChannelCreate { server_id, name } => {

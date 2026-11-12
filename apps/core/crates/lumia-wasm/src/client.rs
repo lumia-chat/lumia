@@ -297,6 +297,65 @@ impl Client {
         to_js(&self.app.create_server(&name).await.map_err(js)?)
     }
 
+    /// `PATCH /servers/{id}`: a server's name, how long it keeps messages in
+    /// days (0 for ever), or both; one left out stays. The snapshot as it
+    /// then is.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` without `MANAGE_SERVER`; `INVALID_ARGUMENT` with
+    /// its details (the page words it by `details.field`); transport failure.
+    #[wasm_bindgen(js_name = updateServer)]
+    pub async fn update_server(
+        &self,
+        server_id: String,
+        name: Option<String>,
+        retention_days: Option<u32>,
+    ) -> Result<JsValue, JsError> {
+        to_js(
+            &self
+                .app
+                .update_server(&server_id, name.as_deref(), retention_days)
+                .await
+                .map_err(js_api)?,
+        )
+    }
+
+    /// `PUT /servers/{id}/icon`: `picture` is a file's bytes as chosen. The
+    /// snapshot as it then is.
+    ///
+    /// # Errors
+    /// As `setAvatar`, and `PERMISSION_DENIED` without `MANAGE_SERVER`.
+    #[wasm_bindgen(js_name = setServerIcon)]
+    pub async fn set_server_icon(
+        &self,
+        server_id: String,
+        picture: Vec<u8>,
+        media_type: String,
+    ) -> Result<JsValue, JsError> {
+        to_js(
+            &self
+                .app
+                .set_server_icon(&server_id, picture, &media_type)
+                .await
+                .map_err(js_api)?,
+        )
+    }
+
+    /// `DELETE /servers/{id}/icon`.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` without `MANAGE_SERVER`; transport failure.
+    #[wasm_bindgen(js_name = removeServerIcon)]
+    pub async fn remove_server_icon(&self, server_id: String) -> Result<JsValue, JsError> {
+        to_js(
+            &self
+                .app
+                .remove_server_icon(&server_id)
+                .await
+                .map_err(js_api)?,
+        )
+    }
+
     /// `POST /channels`: a text channel in a server this account may manage channels in.
     ///
     /// # Errors

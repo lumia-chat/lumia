@@ -104,6 +104,40 @@ pub struct InstanceSummary {
 pub struct ServerSummary {
     pub server_id: String,
     pub name: String,
+    /// The server's picture, a path of this instance as
+    /// [`MemberSummary::avatar_url`] is; empty for none.
+    #[serde(default)]
+    pub icon_url: String,
+    /// How long the server keeps its messages, in days; 0 for ever.
+    #[serde(default)]
+    pub retention_days: u32,
+    /// Whether this account may change the server's settings: its owner,
+    /// or a member whose roles grant `MANAGE_SERVER` or `ADMINISTRATOR`
+    /// (architecture 6.7). What a shell offers; the instance decides.
+    #[serde(default)]
+    pub can_manage: bool,
+}
+
+impl ServerSummary {
+    /// The server as the snapshot says it, with what `memberships` (the
+    /// account's own) says this account may do there.
+    fn of(server: &lumia_core::proto::Server, memberships: &[lumia_core::proto::Member]) -> Self {
+        use lumia_core::proto::Permission;
+        let can_manage = memberships
+            .iter()
+            .filter(|m| m.server_id == server.server_id)
+            .flat_map(|m| m.permissions.iter())
+            .any(|p| {
+                *p == Permission::Administrator as i32 || *p == Permission::ManageServer as i32
+            });
+        Self {
+            server_id: wire::display(&server.server_id),
+            name: server.name.clone(),
+            icon_url: server.icon_url.clone(),
+            retention_days: server.retention_days,
+            can_manage,
+        }
+    }
 }
 
 /// What an invite shows before joining (`GET /invites/{code}`): the
@@ -1264,8 +1298,8 @@ impl App {
     pub async fn create_server(&self, name: &str) -> Result<ServerSummary, ClientError> {
         let s = self.api.create_server(name.trim()).await?;
         Ok(ServerSummary {
-            server_id: wire::display(&s.server_id),
-            name: s.name,
+            can_manage: true,
+            ..ServerSummary::of(&s, &[])
         })
     }
 
@@ -1505,10 +1539,7 @@ impl App {
             servers: snap
                 .servers
                 .iter()
-                .map(|s| ServerSummary {
-                    server_id: wire::display(&s.server_id),
-                    name: s.name.clone(),
-                })
+                .map(|s| ServerSummary::of(s, &snap.memberships))
                 .collect(),
             channels: snap
                 .channels
@@ -1966,6 +1997,67 @@ impl App {
         media_type: &str,
     ) -> Result<SnapshotSummary, ClientError> {
         self.api.put_avatar(picture, media_type).await?;
+        self.snapshot().await
+    }
+
+    /// Changes a server's settings (`PATCH /servers/{id}`, architecture
+    /// 6.7): its name, how long it keeps messages in days (0 for ever), or
+    /// both; `None` leaves one as it is. Every member hears of it through
+    /// the account log. Returns the account's snapshot as it then is.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` without `MANAGE_SERVER` there; `INVALID_ARGUMENT`
+    /// with `details.field` `name` for an empty name or one over 100
+    /// characters; transport failure.
+    pub async fn update_server(
+        &self,
+        server_id: &str,
+        name: Option<&str>,
+        retention_days: Option<u32>,
+    ) -> Result<SnapshotSummary, ClientError> {
+        let server_id = parse_uuid(server_id)?;
+        self.api
+            .update_server(
+                &wire::display(&server_id),
+                name.map(|n| n.trim().to_string()),
+                retention_days,
+            )
+            .await?;
+        self.snapshot().await
+    }
+
+    /// Makes `picture`, a file's bytes as chosen, a server's picture
+    /// (`PUT /servers/{id}/icon`), as [`App::set_avatar`] does the
+    /// account's. Returns the account's snapshot as it then is.
+    ///
+    /// # Errors
+    /// As [`App::set_avatar`], and `PERMISSION_DENIED` without
+    /// `MANAGE_SERVER` there.
+    pub async fn set_server_icon(
+        &self,
+        server_id: &str,
+        picture: Vec<u8>,
+        media_type: &str,
+    ) -> Result<SnapshotSummary, ClientError> {
+        let server_id = parse_uuid(server_id)?;
+        self.api
+            .put_server_icon(&wire::display(&server_id), picture, media_type)
+            .await?;
+        self.snapshot().await
+    }
+
+    /// Takes a server's picture away (`DELETE /servers/{id}/icon`).
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` without `MANAGE_SERVER` there; transport failure.
+    pub async fn remove_server_icon(
+        &self,
+        server_id: &str,
+    ) -> Result<SnapshotSummary, ClientError> {
+        let server_id = parse_uuid(server_id)?;
+        self.api
+            .delete_server_icon(&wire::display(&server_id))
+            .await?;
         self.snapshot().await
     }
 
@@ -2923,6 +3015,9 @@ mod kept_tests {
             servers: vec![ServerSummary {
                 server_id: "s".into(),
                 name: "Acme".into(),
+                icon_url: String::new(),
+                retention_days: 0,
+                can_manage: false,
             }],
             channels: vec![ChannelSummary {
                 channel_id: "c".into(),
