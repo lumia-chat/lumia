@@ -1,4 +1,7 @@
-//! Profile: how people see this person. The status they chose (protocol 6.7: online, away
+//! Profile: how people see this person. The account's own handle on this instance, with
+//! its display name on a computer that does not hold the identity (`PATCH /account`,
+//! architecture 6.2: any signed-in device may change them); the status they chose
+//! (protocol 6.7: online, away
 //! or do not disturb, with a custom line), the signed profile the identity carries
 //! (architecture 6.4: display name, pronouns and bio, signed by this computer's device key
 //! and sent to the instance as the account's), and, for an account with no identity on
@@ -20,7 +23,9 @@ use crate::ui::components::{
 };
 
 pub fn view(s: &State, look: Look) -> El {
-    let mut content = page_column().child(status(s, look));
+    let mut content = page_column()
+        .child(account_card(s, look))
+        .child(status(s, look));
     let form = &s.account.profile;
     content = if form.loaded || s.session.has_identity() {
         content.child(profile(s, look))
@@ -49,6 +54,56 @@ fn save_status(s: &mut State, _: &mut Tx) {
 
 fn save_profile(s: &mut State, _: &mut Tx) {
     s.save_profile();
+}
+
+fn save_account(s: &mut State, _: &mut Tx) {
+    s.save_account();
+}
+
+/// The account on this instance: the handle people find and mention it by, and the name
+/// they see where no signed profile gives one from this computer.
+fn account_card(s: &State, look: Look) -> El {
+    let form = &s.account.profile.account;
+    let mut card = card(
+        "Account",
+        &format!("Who you are on {}.", s.session.address()),
+        look,
+    )
+    .key("account-form")
+    .w_full()
+    .child(field(
+        "handle",
+        "Handle",
+        &form.handle,
+        "ada",
+        |s| &mut s.account.profile.account.handle,
+        save_account,
+        look,
+    ));
+    if s.names_account() {
+        card = card.child(field(
+            "account-name",
+            "Display name",
+            &form.display_name,
+            "How people see you",
+            |s| &mut s.account.profile.account.display_name,
+            save_account,
+            look,
+        ));
+    }
+    if !form.error.is_empty() {
+        card = card.child(error_text(&form.error, look));
+    }
+    if form.saved {
+        card = card.child(quiet("Saved.", look));
+    }
+    card.child(action(primary_button(
+        "save-account",
+        "Save",
+        !form.busy && !form.handle.text.trim().is_empty(),
+        State::save_account,
+        look,
+    )))
 }
 
 /// What people see beside this person's name in a server's member list.

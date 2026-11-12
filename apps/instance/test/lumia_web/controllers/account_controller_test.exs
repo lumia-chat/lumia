@@ -47,6 +47,66 @@ defmodule LumiaWeb.AccountControllerTest do
     assert {404, _} = profile(conn, stranger, q)
   end
 
+  describe "PATCH /account" do
+    defp patch_account(conn, account, %V1.UpdateAccountRequest{} = req) do
+      conn =
+        conn
+        |> authed(account)
+        |> put_req_header("content-type", @proto)
+        |> patch("/api/v1/account", V1.UpdateAccountRequest.encode(req))
+
+      {conn.status, conn.resp_body}
+    end
+
+    test "changes the handle, the display name, or both, and leaves what is not named", %{
+      conn: conn
+    } do
+      a = account("a")
+
+      assert {200, body} = patch_account(conn, a, %V1.UpdateAccountRequest{display_name: "Ada"})
+      assert %V1.Account{display_name: "Ada", handle: handle} = V1.Account.decode(body)
+      assert handle == a.handle
+
+      assert {200, body} = patch_account(conn, a, %V1.UpdateAccountRequest{handle: "ada_l"})
+      assert %V1.Account{display_name: "Ada", handle: "ada_l"} = V1.Account.decode(body)
+
+      req = %V1.UpdateAccountRequest{handle: "countess", display_name: ""}
+      assert {200, body} = patch_account(conn, a, req)
+      assert %V1.Account{display_name: "", handle: "countess"} = V1.Account.decode(body)
+    end
+
+    test "a taken handle is ALREADY_EXISTS and a bad one INVALID_ARGUMENT", %{conn: conn} do
+      a = account("a")
+      b = account("b")
+
+      assert {409, body} = patch_account(conn, a, %V1.UpdateAccountRequest{handle: b.handle})
+      assert %V1.Error{code: :ALREADY_EXISTS} = V1.Error.decode(body)
+      assert {400, body} = patch_account(conn, a, %V1.UpdateAccountRequest{handle: "not one"})
+      assert %V1.Error{code: :INVALID_ARGUMENT} = V1.Error.decode(body)
+    end
+
+    test "takes JSON as it takes protobuf, and needs a session", %{conn: conn} do
+      a = account("a")
+
+      json =
+        conn
+        |> authed(a)
+        |> put_req_header("accept", "application/json")
+        |> put_req_header("content-type", "application/json")
+        |> patch("/api/v1/account", Jason.encode!(%{displayName: "Ada"}))
+
+      assert %{"displayName" => "Ada", "handle" => handle} = json_response(json, 200)
+      assert handle == a.handle
+
+      anonymous =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> patch("/api/v1/account", Jason.encode!(%{displayName: "Nobody"}))
+
+      assert anonymous.status == 401
+    end
+  end
+
   test "a malformed id is not found", %{conn: conn} do
     conn = conn |> authed(account("a")) |> get("/api/v1/accounts/not-an-id")
     assert conn.status == 404

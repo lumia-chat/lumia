@@ -1854,6 +1854,30 @@ impl App {
         ))
     }
 
+    /// Changes this account's handle, its display name, or both, on this
+    /// instance (`PATCH /account`); `None` leaves one as it is and an empty
+    /// display name clears it. Any signed-in device may, with or without
+    /// the identity's key: this is the account's own name here, which a
+    /// signed profile saved later replaces and the other way round
+    /// (architecture 6.2). Returns the account's snapshot as it then is,
+    /// kept as `snapshot` keeps it.
+    ///
+    /// # Errors
+    /// `ALREADY_EXISTS` for a handle another account has or holds from a
+    /// rename, `INVALID_ARGUMENT` for one that is not a handle (2 to 32 of
+    /// a-z, 0-9, `_`, `.`, `-`) or a name over 64 characters.
+    pub async fn update_account(
+        &self,
+        handle: Option<&str>,
+        display_name: Option<&str>,
+    ) -> Result<SnapshotSummary, ClientError> {
+        let trimmed = |v: Option<&str>| v.map(|v| v.trim().to_string());
+        self.api
+            .update_account(trimmed(handle), trimmed(display_name))
+            .await?;
+        self.snapshot().await
+    }
+
     /// Says this person is typing in a server's channel (protocol 6.7).
     /// Call it on every edit of the composer: it is sent at most once in
     /// [`TYPING_EVERY`] for a channel, and not at all for a personal

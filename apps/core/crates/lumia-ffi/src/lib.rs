@@ -922,6 +922,23 @@ impl Client {
         Ok(self.app.watch_presence(&watch_server_ids)?)
     }
 
+    /// `PATCH /account`: this account's handle, display name, or both; a
+    /// value left out stays, an empty display name clears it. Returns the
+    /// snapshot as it then is.
+    pub fn update_account(
+        &self,
+        handle: Option<String>,
+        display_name: Option<String>,
+    ) -> Res<SnapshotSummary> {
+        Ok(self
+            .runtime
+            .block_on(
+                self.app
+                    .update_account(handle.as_deref(), display_name.as_deref()),
+            )?
+            .into())
+    }
+
     /// Says this person is typing in a server's channel (protocol 6.7);
     /// call it on every edit of the composer, the core spaces them out.
     pub fn typing(&self, channel_id: String) -> Res<()> {

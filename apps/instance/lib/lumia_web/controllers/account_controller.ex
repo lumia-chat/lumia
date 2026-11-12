@@ -13,6 +13,20 @@ defmodule LumiaWeb.AccountController do
   end
 
   @doc """
+  `PATCH /account`: the caller's own handle and display name, either or
+  both (`Lumia.Accounts.update_account/2`).
+  """
+  def update(conn, _params) do
+    account = Lumia.Repo.get!(Lumia.Accounts.Account, conn.assigns.current_account_id)
+
+    with {:ok, req} <- ProtoConn.decode(conn, Lumia.V1.UpdateAccountRequest),
+         changes = Map.reject(Map.take(req, [:handle, :display_name]), fn {_, v} -> is_nil(v) end),
+         {:ok, updated} <- Lumia.Accounts.update_account(account, changes) do
+      ProtoConn.render(conn, Lumia.Proto.account(updated, own: true))
+    end
+  end
+
+  @doc """
   `PUT /account/profile`: a new signed profile for the caller's account,
   vouched for by the identity's held roster; the display name and avatar
   follow, and the account log says so (`ProfileUpdated`).

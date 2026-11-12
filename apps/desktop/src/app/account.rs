@@ -61,9 +61,22 @@ impl Default for Devices {
     }
 }
 
-/// The profile screen: the status card and the signed profile's form.
+/// The profile screen's account card: the handle and, on a computer that does not hold
+/// the identity, the display name (`PATCH /account`).
+#[derive(Debug, Default)]
+pub struct AccountForm {
+    pub handle: TextEdit,
+    pub display_name: TextEdit,
+    /// Waiting for the instance's answer to a save.
+    pub busy: bool,
+    pub saved: bool,
+    pub error: String,
+}
+
+/// The profile screen: the account card, the status card and the signed profile's form.
 #[derive(Debug)]
 pub struct Profile {
+    pub account: AccountForm,
     /// `ONLINE`, `AWAY` or `DO_NOT_DISTURB` (protocol 6.7).
     pub status: String,
     pub custom_status: TextEdit,
@@ -84,6 +97,7 @@ pub struct Profile {
 impl Default for Profile {
     fn default() -> Self {
         Self {
+            account: AccountForm::default(),
             status: "ONLINE".into(),
             custom_status: TextEdit::default(),
             status_saved: false,
@@ -114,6 +128,12 @@ impl State {
                 if let Some(chosen) = self.session.status() {
                     form.status = chosen.status;
                     form.custom_status.replace_text(&chosen.custom_status);
+                }
+                if let Some(snapshot) = &self.session.snapshot {
+                    form.account.handle.replace_text(&snapshot.handle);
+                    form.account
+                        .display_name
+                        .replace_text(&snapshot.display_name);
                 }
                 self.account.profile = form;
                 if self.session.has_identity() {
@@ -260,6 +280,28 @@ impl State {
         }
     }
 
+    /// Whether the account card has the display name: on a computer that holds the
+    /// identity the name is the signed profile's to carry, in the card under it.
+    pub fn names_account(&self) -> bool {
+        !(self.account.profile.loaded || self.session.has_identity())
+    }
+
+    /// Sends the account card: the handle, and the display name where the card has it.
+    pub fn save_account(&mut self) {
+        let names = self.names_account();
+        let form = &mut self.account.profile.account;
+        if form.busy || form.handle.text.trim().is_empty() {
+            return;
+        }
+        form.busy = true;
+        form.saved = false;
+        form.error.clear();
+        self.session.save_account(
+            &form.handle.text,
+            names.then_some(form.display_name.text.as_str()),
+        );
+    }
+
     /// Signs the form as a new profile version and sends it.
     pub fn save_profile(&mut self) {
         let form = &mut self.account.profile;
@@ -355,6 +397,25 @@ impl State {
                         form.error = match failure.code.as_str() {
                             "FAILED_PRECONDITION" => "This account is not linked to your identity, so the instance keeps the profile it has.".into(),
                             "CONFLICT" => "A newer profile is already held. Reload and try again.".into(),
+                            _ => failure.message.clone(),
+                        }
+                    }
+                }
+            }
+            IdentityUpdate::AccountSaved(answer) => {
+                let form = &mut self.account.profile.account;
+                form.busy = false;
+                match answer {
+                    Ok(snapshot) => {
+                        form.saved = true;
+                        // As the instance keeps them: trimmed.
+                        form.handle.replace_text(&snapshot.handle);
+                        form.display_name.replace_text(&snapshot.display_name);
+                    }
+                    Err(failure) => {
+                        form.error = match failure.code.as_str() {
+                            "ALREADY_EXISTS" => "That handle is taken.".into(),
+                            "INVALID_ARGUMENT" => "A handle is 2 to 32 letters, digits, _, . or -, and a display name at most 64 characters.".into(),
                             _ => failure.message.clone(),
                         }
                     }

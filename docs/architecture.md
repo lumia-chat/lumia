@@ -171,6 +171,8 @@ A **guest membership** sees only the channels granted by explicit per-channel ov
 
 **Rationale.** One mechanism, identity-bound guest memberships, serves contractors and connected channels (section 6.5).
 
+**Names** (decided 2026-11-12). An account has a **handle**, unique on its instance without regard to case (2 to 32 of a to z, digits, `_`, `.` and `-`), and a **display name**. Both are the account's own to change from any signed-in device, with or without the identity's key (`PATCH /account`). The identity's signed profile (section 5) also carries a display name, and an instance that takes a signed profile takes its name: the two are not layered, **the later one stands**. A device that holds the identity's key edits the name in the signed profile, so it travels to every instance the identity is on; a device that does not edits the account's, which is this instance's alone until a signed profile is next saved. That is the "local override" the identity proto speaks of, without a second column or a rule for which wins. Messages, mentions and memberships refer to the account by id, so a rename breaks nothing that was written. The handle an account leaves is **held for it for 30 days**: nobody else can take it, so a rename cannot be followed at once by someone posing under the old name, and the account can go back. One handle is held per account, the one it last left.
+
 ### 6.3 Identity proof and instance policy
 
 **Decision.** *Identity proof establishes which identity is requesting access. It never overrides an instance's or a server's authentication, provisioning, or membership policy.*

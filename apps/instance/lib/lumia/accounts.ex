@@ -16,6 +16,7 @@ defmodule Lumia.Accounts do
   alias Lumia.Accounts.Account
   alias Lumia.Accounts.AccountEvent
   alias Lumia.Accounts.AccountEventPayload
+  alias Lumia.Accounts.HandleHold
   alias Lumia.Auth.Totp
   alias Lumia.Proto
   alias Lumia.Repo
@@ -44,8 +45,132 @@ defmodule Lumia.Accounts do
     )
   end
 
-  @doc "Creates an account. Spike-level; auth flows come with the identity endpoints."
+  # A handle left by a rename is held for its account this long.
+  @handle_hold_days 30
+  @display_name_max 64
+
+  @doc """
+  Whether `handle` is one an account may be made with or renamed to: 2 to
+  32 of the letters a to z, digits, `_`, `.` and `-`, beginning with a
+  letter, a digit or `_`. Handles are unique without regard to case.
+  """
+  def valid_handle?(handle) when is_binary(handle),
+    do: Regex.match?(~r/\A[A-Za-z0-9_][A-Za-z0-9_.-]{1,31}\z/, handle)
+
+  def valid_handle?(_), do: false
+
+  @doc """
+  Changes the account's own handle and display name (`PATCH /account`);
+  `changes` has `:handle`, `:display_name`, both or neither, and a key
+  left out is left as it is. A display name of nothing clears it.
+
+  The handle it leaves is held for it for #{@handle_hold_days} days: nobody
+  else can take it, and it can go back. `{:error, :already_exists}` for a
+  handle another account has or holds, `{:error, :invalid_argument}` for
+  one that is not a handle or a name that is too long. `ProfileUpdated`
+  goes on the account's log.
+
+  The display name set here stands until a signed profile sets another
+  (`put_profile/2`), and the other way round: the later of the two is the
+  account's name on this instance (architecture 6.2, "Names").
+  """
+  def update_account(%Account{} = account, changes) when is_map(changes) do
+    handle = changes |> Map.get(:handle, account.handle) |> to_string() |> String.trim()
+
+    name =
+      case Map.fetch(changes, :display_name) do
+        {:ok, name} -> name |> to_string() |> String.trim() |> blank_to_nil()
+        :error -> account.display_name
+      end
+
+    renamed? = String.downcase(handle) != String.downcase(account.handle)
+
+    cond do
+      not valid_handle?(handle) ->
+        {:error, :invalid_argument}
+
+      is_binary(name) and String.length(name) > @display_name_max ->
+        {:error, :invalid_argument}
+
+      handle == account.handle and name == account.display_name ->
+        {:ok, account}
+
+      true ->
+        Tx.transact(fn -> store_account(account, handle, name, renamed?) end)
+    end
+  end
+
+  defp store_account(account, handle, name, renamed?) do
+    with :ok <- if(renamed?, do: free_for(handle, account.id), else: :ok),
+         {:ok, updated} <-
+           account
+           |> Ecto.Changeset.change(handle: handle, display_name: name)
+           |> Ecto.Changeset.unique_constraint(:handle, name: :accounts_handle_index)
+           |> Repo.update()
+           |> taken_as_exists(),
+         :ok <- if(renamed?, do: hold(account), else: :ok),
+         {:ok, _} <-
+           append_event(
+             account.id,
+             {:profile_updated, %V1.ProfileUpdated{account: Lumia.Proto.account(updated)}}
+           ) do
+      {:ok, updated}
+    end
+  end
+
+  # Whether nobody else holds `handle` from a rename of their own. A hold
+  # that has run out, or the account's own, is dropped on the way.
+  defp free_for(handle, account_id) do
+    now = DateTime.utc_now()
+
+    holds =
+      from h in HandleHold, where: fragment("lower(?)", h.handle) == ^String.downcase(handle)
+
+    spent =
+      if account_id,
+        do: where(holds, [h], h.account_id == ^account_id or h.until <= ^now),
+        else: where(holds, [h], h.until <= ^now)
+
+    Repo.delete_all(spent)
+    if Repo.exists?(holds), do: {:error, :already_exists}, else: :ok
+  end
+
+  defp hold(%Account{id: id, handle: left}) do
+    until = DateTime.add(DateTime.utc_now(), @handle_hold_days * 86_400, :second)
+
+    Repo.insert!(%HandleHold{account_id: id, handle: left, until: until},
+      on_conflict: {:replace, [:handle, :until]},
+      conflict_target: :account_id
+    )
+
+    :ok
+  end
+
+  defp taken_as_exists({:error, %Ecto.Changeset{errors: errors}} = error) do
+    taken? =
+      match?({_, opts} when is_list(opts), errors[:handle]) and
+        elem(errors[:handle], 1)[:constraint] == :unique
+
+    if taken?, do: {:error, :already_exists}, else: error
+  end
+
+  defp taken_as_exists(other), do: other
+
+  @doc """
+  Creates an account. A handle that is not one (`valid_handle?/1`) is a
+  changeset error; one another account has, or holds from a rename, is
+  `{:error, :already_exists}`.
+  """
   def create_account(attrs) do
+    handle = attrs[:handle] || attrs["handle"]
+
+    with true <- is_binary(handle) || {:error, :invalid_argument},
+         :ok <- free_for(handle, nil) do
+      attrs |> account_changeset() |> Repo.insert() |> taken_as_exists()
+    end
+  end
+
+  defp account_changeset(attrs) do
     %Account{}
     |> Ecto.Changeset.cast(attrs, [
       :identity_id,
@@ -60,11 +185,15 @@ defmodule Lumia.Accounts do
       :profile
     ])
     |> Ecto.Changeset.validate_required([:handle])
+    |> Ecto.Changeset.validate_change(:handle, fn :handle, handle ->
+      if valid_handle?(handle),
+        do: [],
+        else: [handle: "2 to 32 letters, digits, _, . or -, not beginning with . or -"]
+    end)
     |> Ecto.Changeset.validate_inclusion(:kind, ~w(human bot))
     |> Ecto.Changeset.validate_inclusion(:instance_role, ~w(none moderator admin owner))
     |> Ecto.Changeset.unique_constraint(:handle, name: :accounts_handle_index)
     |> Ecto.Changeset.unique_constraint(:email, name: :accounts_email_index)
-    |> Repo.insert()
   end
 
   @doc """

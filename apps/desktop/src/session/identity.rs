@@ -7,7 +7,9 @@
 //! device's link request from here; the per-instance state of a revocation ("revoked on 1
 //! of 2"), since this shell knows one instance.
 
-use lumia_client::app::{PasskeySummary, ProfileSummary, RosterSummary, StatusSummary};
+use lumia_client::app::{
+    PasskeySummary, ProfileSummary, RosterSummary, SnapshotSummary, StatusSummary,
+};
 
 use super::{Failure, Session, Update};
 
@@ -31,6 +33,9 @@ pub enum IdentityUpdate {
     Profile(Result<Option<ProfileSummary>, Failure>),
     /// A new profile version was signed and sent.
     ProfileSaved(Result<ProfileSummary, Failure>),
+    /// The account's own handle and display name were changed on the instance
+    /// (`PATCH /account`): its snapshot as it then is.
+    AccountSaved(Result<SnapshotSummary, Failure>),
     /// The instance was asked to mail a sign-in link.
     MagicLinkSent(Result<(), Failure>),
     /// A magic link's token was completed into a session.
@@ -182,6 +187,22 @@ impl Session {
         });
     }
 
+    /// Changes the account's handle on the instance, and its display name when one is
+    /// given (the form leaves it out on a computer that holds the identity, where the
+    /// signed profile carries the name). Any signed-in device may. The answer is
+    /// [`IdentityUpdate::AccountSaved`].
+    pub fn save_account(&self, handle: &str, display_name: Option<&str>) {
+        let Some(app) = self.client() else { return };
+        let (handle, display_name) = (handle.trim().to_string(), display_name.map(str::to_string));
+        self.task(async move {
+            Update::Identity(IdentityUpdate::AccountSaved(
+                app.update_account(Some(&handle), display_name.as_deref())
+                    .await
+                    .map_err(Failure::from),
+            ))
+        });
+    }
+
     /// The status this person chose (`ONLINE`, `AWAY` or `DO_NOT_DISTURB`) and their custom
     /// status text (protocol 6.7), from the local store.
     pub fn status(&self) -> Option<StatusSummary> {
@@ -248,6 +269,18 @@ impl Session {
                 self.signed_in = true;
                 self.load();
             }
+            IdentityUpdate::AccountSaved(Ok(snapshot)) => {
+                // The lists that name this person were read before the change.
+                let me = snapshot.account_id.as_str();
+                let listed = self.members.values_mut().flatten();
+                for person in listed.chain(self.people.values_mut()) {
+                    if person.account_id == me {
+                        person.handle.clone_from(&snapshot.handle);
+                        person.display_name.clone_from(&snapshot.display_name);
+                    }
+                }
+                self.snapshot = Some(snapshot.clone());
+            }
             IdentityUpdate::LinkRequested(_)
             | IdentityUpdate::MagicLinkSent(_)
             | IdentityUpdate::Linked(Err(_))
@@ -257,6 +290,7 @@ impl Session {
             | IdentityUpdate::PasskeyRemoved(Err(_))
             | IdentityUpdate::Profile(Err(_))
             | IdentityUpdate::ProfileSaved(Err(_))
+            | IdentityUpdate::AccountSaved(Err(_))
             | IdentityUpdate::MagicLinkSignedIn(Err(_)) => {}
         }
     }

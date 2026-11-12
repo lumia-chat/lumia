@@ -492,6 +492,27 @@ impl Client {
         to_js(&self.app.snapshot().await.map_err(js)?)
     }
 
+    /// `PATCH /account`: this account's handle, display name, or both; a
+    /// value left out stays, an empty display name clears it. Resolves to
+    /// the snapshot as it then is.
+    ///
+    /// # Errors
+    /// `ALREADY_EXISTS` for a handle that is taken or held,
+    /// `INVALID_ARGUMENT` for one that is not a handle.
+    #[wasm_bindgen(js_name = updateAccount)]
+    pub async fn update_account(
+        &self,
+        handle: Option<String>,
+        display_name: Option<String>,
+    ) -> Result<JsValue, JsError> {
+        let snapshot = self
+            .app
+            .update_account(handle.as_deref(), display_name.as_deref())
+            .await
+            .map_err(js)?;
+        to_js(&snapshot)
+    }
+
     /// `GET /accounts/{id}`: a public profile, when visible.
     ///
     /// # Errors

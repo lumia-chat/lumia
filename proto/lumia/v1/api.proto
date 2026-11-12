@@ -66,6 +66,17 @@ message CreateAccountRequest {
   bytes device_id = 7;
 }
 
+// PATCH /account: the caller's own handle and display name on this instance.
+// A field left out is left as it is.
+message UpdateAccountRequest {
+  // 2 to 32 of a-z, 0-9, `_`, `.` and `-`, not beginning with `.` or `-`;
+  // unique without regard to case. The handle left is held for this
+  // account for 30 days.
+  optional string handle = 1;
+  // At most 64 characters. Empty clears it: the account goes by its handle.
+  optional string display_name = 2;
+}
+
 message ChallengeRequest {
   ChallengePurpose purpose = 1;
 }

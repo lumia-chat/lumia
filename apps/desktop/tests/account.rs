@@ -592,6 +592,87 @@ fn the_profile_of_an_account_with_no_identity_here_leads_to_linking() {
 }
 
 #[test]
+fn the_handle_and_the_display_name_are_changed_from_any_computer() {
+    let mut rt = at_profile();
+    // What the account has, to start from: this computer holds no identity, so the
+    // display name is the account card's too.
+    assert_eq!(rt.state.account.profile.account.handle.text, "ada");
+    assert_eq!(
+        rt.state.account.profile.account.display_name.text,
+        "Ada Lovelace"
+    );
+    assert!(rt.find("handle").is_some() && rt.find("account-name").is_some());
+    let shown = words(&rt);
+    assert!(
+        shown.contains("Account") && shown.contains("Who you are on 127.0.0.1:9."),
+        "{shown}"
+    );
+
+    // Each refusal in words.
+    press(&mut rt, "save-account");
+    assert!(rt.state.account.profile.account.busy);
+    rt.update(|s, _| {
+        s.receive(&Update::Identity(IdentityUpdate::AccountSaved(Err(
+            failure("ALREADY_EXISTS", "taken"),
+        ))));
+    });
+    settle(&mut rt);
+    assert!(!rt.state.account.profile.account.busy);
+    assert!(words(&rt).contains("That handle is taken."));
+    press(&mut rt, "save-account");
+    rt.update(|s, _| {
+        s.receive(&Update::Identity(IdentityUpdate::AccountSaved(Err(
+            failure("INVALID_ARGUMENT", "invalid"),
+        ))));
+    });
+    settle(&mut rt);
+    assert!(words(&rt).contains(
+        "A handle is 2 to 32 letters, digits, _, . or -, and a display name at most 64 characters."
+    ));
+
+    // Saved: the form has what the instance kept, and the name on screen follows at once,
+    // in the member list too.
+    press(&mut rt, "save-account");
+    rt.update(|s, _| {
+        let mut snapshot = snapshot();
+        snapshot.handle = "countess".into();
+        snapshot.display_name = "Ada, Countess of Lovelace".into();
+        s.receive(&Update::Identity(IdentityUpdate::AccountSaved(Ok(
+            snapshot,
+        ))));
+    });
+    settle(&mut rt);
+    let form = &rt.state.account.profile.account;
+    assert!(form.saved && form.error.is_empty());
+    assert_eq!(form.handle.text, "countess");
+    assert_eq!(rt.state.session.self_name(), "Ada, Countess of Lovelace");
+    assert_eq!(rt.state.session.people["me"].handle, "countess");
+    let shown = words(&rt);
+    assert!(
+        shown.contains("Saved.") && shown.contains("as Ada, Countess of Lovelace."),
+        "{shown}"
+    );
+
+    // An empty handle is not sent.
+    rt.update(|s, _| s.account.profile.account.handle.replace_text("  "));
+    settle(&mut rt);
+    press(&mut rt, "save-account");
+    assert!(!rt.state.account.profile.account.busy);
+}
+
+#[test]
+fn a_computer_that_holds_the_identity_names_the_account_in_its_signed_profile() {
+    let mut rt = at_profile();
+    rt.update(|s, _| s.receive(&Update::Identity(IdentityUpdate::Profile(Ok(None)))));
+    settle(&mut rt);
+    assert!(
+        rt.find("handle").is_some() && rt.find("display-name").is_some(),
+        "the handle in the account card, the name in the signed profile's"
+    );
+    assert!(rt.find("account-name").is_none(), "and not twice");
+}
+
+#[test]
 fn a_status_is_chosen_kept_and_shown_again() {
     let mut rt = at_profile();
     assert_eq!(rt.state.account.profile.status, "ONLINE");

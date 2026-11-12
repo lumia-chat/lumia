@@ -213,14 +213,15 @@ defmodule Lumia.Auth.Oidc do
   end
 
   # The handle's base: the preferred username, else the email's local part,
-  # else "user"; lowercase, `[a-z0-9_]`, at most 24 characters.
+  # else "user"; lowercase, `[a-z0-9_]`, at most 24 characters, and a handle
+  # (`Lumia.Accounts.valid_handle?/1`: two at least).
   defp handle_base(claims) do
     [claims["preferred_username"], claims["email"] |> to_string() |> String.split("@") |> hd()]
     |> Enum.find("user", &(is_binary(&1) and &1 != ""))
     |> String.downcase()
     |> String.replace(~r/[^a-z0-9_]/, "")
     |> String.slice(0, 24)
-    |> then(&if(&1 == "", do: "user", else: &1))
+    |> then(&if(Accounts.valid_handle?(&1), do: &1, else: "user"))
   end
 
   # The base itself, else with a random suffix; nil when none is free.

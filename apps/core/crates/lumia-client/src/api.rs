@@ -27,7 +27,7 @@ use lumia_core::proto::{
     CreateInviteRequest, EmailInviteRequest, HandoffResponse, Invite, InvitePreview,
     ListInvitesResponse, ListPasskeysResponse, MagicLinkCompleteRequest, MagicLinkRequest, Member,
     PasskeyAssertFinishRequest, PasskeyAssertStartRequest, PasskeyChallenge,
-    PasskeyRegisterFinishRequest, SignedProfile,
+    PasskeyRegisterFinishRequest, SignedProfile, UpdateAccountRequest,
 };
 use lumia_core::proto::{
     DmRequest, DmRequestState, GetHistoryChunkResponse, GetIdentityBackupResponse,
@@ -208,6 +208,33 @@ impl Api {
             ..Default::default()
         };
         self.post("/api/v1/accounts/by-identity", &req).await
+    }
+
+    /// `PATCH /account`: the caller's own handle and display name on this
+    /// instance; `None` leaves one as it is, and an empty display name
+    /// clears it.
+    ///
+    /// # Errors
+    /// `ALREADY_EXISTS` for a handle another account has or holds,
+    /// `INVALID_ARGUMENT` for one that is not a handle; transport failure.
+    pub async fn update_account(
+        &self,
+        handle: Option<String>,
+        display_name: Option<String>,
+    ) -> Result<Account, ClientError> {
+        let req = UpdateAccountRequest {
+            handle,
+            display_name,
+        };
+        let (status, bytes) = self
+            .send(
+                reqwest::Method::PATCH,
+                "/api/v1/account",
+                Some(req.encode_to_vec()),
+                None,
+            )
+            .await?;
+        decoded(status, &bytes)
     }
 
     /// `PUT /account/profile`: a new signed profile for the caller's account.

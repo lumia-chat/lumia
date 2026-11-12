@@ -97,6 +97,18 @@ defmodule Lumia.V1.CreateAccountRequest do
   field :device_id, 7, type: :bytes, json_name: "deviceId"
 end
 
+defmodule Lumia.V1.UpdateAccountRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.UpdateAccountRequest",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :handle, 1, proto3_optional: true, type: :string
+  field :display_name, 2, proto3_optional: true, type: :string, json_name: "displayName"
+end
+
 defmodule Lumia.V1.ChallengeRequest do
   @moduledoc false
 

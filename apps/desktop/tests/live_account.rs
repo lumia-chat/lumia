@@ -460,6 +460,114 @@ fn a_status_is_kept_and_reported_by_the_instance() {
     finished(again, &holder);
 }
 
+/// An account made with a password on this computer, which holds no identity: its handle
+/// and display name are its own to change (`PATCH /account`), a taken handle is refused in
+/// words, the old handle no longer signs in and nobody else can take it.
+#[test]
+fn a_password_account_changes_its_handle_and_display_name() {
+    let Some((instance, bin)) = environment() else {
+        return;
+    };
+    let (before, after) = (unique("was"), unique("now"));
+    let mut state = opened(&instance, scratch("rename"));
+    state.sign_in.creating = true;
+    state.sign_in.handle = TextEdit::new(before.as_str());
+    state.sign_in.password.replace_text(PASSWORD);
+    state.submit();
+    wait(&mut state, "the shell", |s| s.route == Route::Shell);
+    wait(&mut state, "the first snapshot", |s| {
+        s.session.snapshot.is_some()
+    });
+    assert!(!state.session.has_identity());
+
+    // Someone else, whose handle is theirs.
+    let other = scratch("rename-other");
+    let taken = unique("held");
+    cli(&bin, &other, &["instance", "add", &instance]);
+    cli(
+        &bin,
+        &other,
+        &[
+            "account",
+            "create",
+            "--handle",
+            &taken,
+            "--password",
+            PASSWORD,
+        ],
+    );
+
+    state.go_home(HomeView::Profile);
+    assert!(state.names_account());
+    assert_eq!(state.account.profile.account.handle.text, before);
+    assert_eq!(state.account.profile.account.display_name.text, "");
+
+    state.account.profile.account.handle.replace_text(&taken);
+    state.save_account();
+    wait(&mut state, "the refusal", |s| {
+        !s.account.profile.account.busy
+    });
+    assert_eq!(state.account.profile.account.error, "That handle is taken.");
+
+    state.account.profile.account.handle.replace_text(&after);
+    state
+        .account
+        .profile
+        .account
+        .display_name
+        .replace_text("  Ada Lovelace ");
+    state.save_account();
+    wait(&mut state, "the save", |s| !s.account.profile.account.busy);
+    let form = &state.account.profile.account;
+    assert!(form.saved, "{}", form.error);
+    assert_eq!(
+        form.display_name.text, "Ada Lovelace",
+        "as the instance keeps it"
+    );
+    assert_eq!(state.session.self_name(), "Ada Lovelace");
+    assert_eq!(
+        state.session.snapshot.as_ref().map(|s| s.handle.as_str()),
+        Some(after.as_str())
+    );
+
+    // The handle left is held for this account: nobody else makes an account with it.
+    let squatter = scratch("rename-squatter");
+    cli(&bin, &squatter, &["instance", "add", &instance]);
+    let (made, said) = cli_try(
+        &bin,
+        &squatter,
+        &[
+            "account",
+            "create",
+            "--handle",
+            &before,
+            "--password",
+            PASSWORD,
+        ],
+    );
+    assert!(!made, "the old handle was given away: {said}");
+
+    // A second launch signs in with the new handle, not the old one.
+    let me = state.session.me().to_string();
+    state.sign_out();
+    wait(&mut state, "signing out", |s| !s.session.signed_in);
+    state.sign_in.creating = false;
+    state.sign_in.handle = TextEdit::new(before.as_str());
+    state.sign_in.password.replace_text(PASSWORD);
+    state.submit();
+    wait(&mut state, "the old handle's refusal", |s| {
+        !s.sign_in.busy && !s.sign_in.error.is_empty()
+    });
+    assert_eq!(state.sign_in.error, "Wrong handle or password.");
+    state.sign_in.handle = TextEdit::new(after.as_str());
+    state.submit();
+    wait(&mut state, "the shell again", |s| {
+        s.route == Route::Shell && s.session.snapshot.is_some()
+    });
+    assert_eq!(state.session.me(), me);
+    assert_eq!(state.session.self_name(), "Ada Lovelace");
+}
+
 /// `GET path` on the instance, for the dev mailbox (plain HTTP on a dev instance).
 fn http_get(instance: &str, path: &str) -> String {
     let authority = instance
