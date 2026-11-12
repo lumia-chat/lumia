@@ -138,7 +138,9 @@ defmodule Lumia.Authz.Access do
       member ->
         from(c in Channel,
           where: c.server_id == ^server_id and is_nil(c.deleted_at),
-          order_by: c.position
+          # Channels share a position until someone orders them; the id (UUIDv7) keeps
+          # those in the order they were made instead of whatever order the heap has.
+          order_by: [c.position, c.id]
         )
         |> Repo.all()
         |> Enum.flat_map(&viewable_access(member, &1))

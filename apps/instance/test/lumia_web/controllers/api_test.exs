@@ -287,6 +287,29 @@ defmodule LumiaWeb.ApiTest do
       assert channel.name == "general"
     end
 
+    test "channels at one position are listed in the order they were made", ctx do
+      {:ok, _} = Servers.create_channel(ctx.server.id, ctx.owner.id, "design")
+      {:ok, _} = Servers.create_channel(ctx.server.id, ctx.owner.id, "archive")
+
+      names = fn ->
+        Enum.map(
+          decode(get(ctx.conn, "/api/v1/account/snapshot"), V1.AccountSnapshot).channels,
+          & &1.name
+        )
+      end
+
+      assert names.() == ["general", "design", "archive"]
+
+      # An update moves the row in the heap, which is the order an unordered tie comes back in.
+      import Ecto.Query
+
+      Lumia.Repo.update_all(from(c in Lumia.Events.Channel, where: c.id == ^ctx.general.id),
+        set: [topic: "moved"]
+      )
+
+      assert names.() == ["general", "design", "archive"]
+    end
+
     test "create a server and a channel over the API, in protobuf", ctx do
       created =
         post_proto(ctx.conn, "/api/v1/servers", %V1.CreateServerRequest{name: "Beta"}, :proto)
