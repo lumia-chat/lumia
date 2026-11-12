@@ -1,6 +1,7 @@
 //! The views: what the window draws for the state in `app`. They read the state and call
 //! its methods; nothing here talks to the session's runtime or the network.
 
+pub mod body;
 pub mod components;
 mod conversation;
 mod home;

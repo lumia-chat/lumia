@@ -4,7 +4,7 @@
 //! a value the design system does not know about.
 
 use rune::{Color, Family, Shadow, TextStyle};
-use rune_kit::MarkdownStyle;
+use rune_kit::syntax::{Syntax, SyntaxTheme};
 
 /// The display family's name inside the font files: titles and monograms only.
 const DISPLAY: Family = Family::Named("Bricolage Grotesque");
@@ -43,16 +43,29 @@ pub fn tone(id: &str, c: &Colors) -> (Color, Color) {
     tones[hash as usize % tones.len()]
 }
 
-/// Message bodies: the protocol's Markdown subset in the message type style.
-pub fn markdown(dark: bool) -> MarkdownStyle {
+// What a message body (`ui::body`) needs that the design system does not name yet: it has no
+// code style and no syntax palette. Derived here so the view holds no literal.
+
+/// A code block in a message: the mono slot, a step under the message size.
+pub const TEXT_CODE: TextStyle = TextStyle::new(13.0, 400.0).lh(20.0).mono();
+/// Inline code's size beside the message text around it.
+pub const CODE_SCALE: f32 = 0.9;
+/// The room either side of inline code inside its chip.
+pub const CODE_PAD: f32 = 3.5;
+/// `**strong**` in a message: the weight of the name above it.
+pub const WEIGHT_STRONG: f32 = TEXT_AUTHOR.weight;
+
+/// The line under a link in a message, before the pointer is over it.
+pub fn link_underline(c: &Colors) -> Color {
+    c.link.alpha(0.4)
+}
+
+/// Token colours for a code block: Rune's neutral hues, with the greys the theme's own.
+pub fn syntax(dark: bool) -> SyntaxTheme {
     let c = colors(dark);
-    MarkdownStyle::neutral(dark)
-        .text(c.ink_body)
-        .muted(c.ink_secondary)
-        .link(c.link)
-        .inline_code_bg(c.inset)
-        .code_block(c.inset, c.line)
-        .quote_rule(c.line_strong)
-        .selection(c.accent_soft)
-        .body_font(TEXT_MESSAGE)
+    SyntaxTheme::neutral(dark)
+        .with(Syntax::Comment, c.ink_muted)
+        .with(Syntax::Punctuation, c.ink_secondary)
+        .with(Syntax::Operator, c.ink_secondary)
+        .with(Syntax::Variable, c.ink_body)
 }

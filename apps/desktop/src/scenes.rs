@@ -114,6 +114,7 @@ pub const SCENES: &[Scene] = &[
     ("home-dm-outside", home_dm_outside),
     ("home-requests", home_requests),
     ("home-new-message", home_new_message),
+    ("bodies", bodies),
 ];
 
 /// A signed-in account with two servers, for the scenes that need no instance.
@@ -485,4 +486,85 @@ mod staged {
         state.session.connection = Connection::Connected;
         state.session.last_error = None;
     }
+}
+
+/// What the `bodies` scene lists: every construct of the protocol's Markdown subset
+/// (protocol 14), what is outside it and must stay as typed, and a line per script.
+pub const BODIES: &[&str] = &[
+    "A paragraph with *emphasis*, **strong**, ~~strike~~ and inline `code`, and a link to \
+     [the architecture](https://example.com/architecture) beside a bare one, https://example.com/plan.\n\n\
+     A second paragraph,\non two lines.",
+    "```rust\n// A fenced block with a language.\nfn main() {\n    let answer = 42;\n    \
+     println!(\"the answer is {answer}\");\n}\n```\n\n```\nand one without\n```",
+    "> A quote, with **strong** inside it.\n>\n> Its second paragraph.\n\nAnd the reply under it.",
+    "- an unordered list\n- with a nested one\n  - first\n  - second\n- and a last item\n\n\
+     1. an ordered list\n2. its second item\n   1. nested\n   2. numbers\n3. its third",
+    "# Not a heading\n\n<b>not bold</b> and ![not an image](https://example.com/cat.png)\n\n\
+     | not | a table |\n|-----|---------|\n| 1 | 2 |\n\n[not a web link](file:///etc/passwd)",
+    "日本語のメッセージです。句読点は、どうなりますか。",
+    "这是一条中文消息，用来检查换行和标点。",
+    "한국어 메시지입니다. 줄바꿈과 문장 부호를 확인합니다.",
+    "هذه رسالة باللغة العربية مع `code` للتحقق من الاتجاه.",
+    "Сообщение на русском языке, чтобы проверить кириллицу.",
+    "Emoji with joiners: 👍🏽 👨‍👩‍👧‍👦 🏳️‍🌈 🧑🏻‍💻",
+    "A word too long for the line: https://example.com/a/very/long/path/that/keeps/going/and/going/\
+     and/going/until/it/is/wider/than/the/conversation/and/has/to/break/somewhere/in/the/middle\n\n\
+     ```\nlet line = \"and a line of code that is longer than the block is wide, which wraps rather than running out of its frame\";\n```",
+];
+
+/// The `bodies` scene: a channel whose messages are [`BODIES`], with no instance behind it.
+/// No instance is opened, so nothing reaches the network. A tall window shows them all:
+/// `--snap out.png --scene bodies --size 1180x1900`.
+pub fn bodies(state: &mut State) {
+    use crate::session::{Entry, Update};
+    use lumia_client::app::{ChannelSummary, MemberSummary, ServerSummary, SnapshotSummary};
+    state.route = Route::Shell;
+    state.receive(&Update::Snapshot(Ok(SnapshotSummary {
+        account_id: "me".into(),
+        handle: "ada".into(),
+        display_name: "Ada Lovelace".into(),
+        servers: vec![ServerSummary {
+            server_id: "acme".into(),
+            name: "Acme Works".into(),
+        }],
+        channels: vec![ChannelSummary {
+            channel_id: "general".into(),
+            server_id: "acme".into(),
+            name: "general".into(),
+            kind: "TEXT".into(),
+            last_seq: 0,
+            participant_account_ids: Vec::new(),
+            host: String::new(),
+        }],
+        pending_requests: Vec::new(),
+    })));
+    let member = |id: &str, name: &str| MemberSummary {
+        account_id: id.into(),
+        handle: id.into(),
+        display_name: name.into(),
+        nickname: String::new(),
+        pronouns: String::new(),
+        bio: String::new(),
+    };
+    state.receive(&Update::Members {
+        server_id: "acme".into(),
+        members: vec![
+            member("me", "Ada Lovelace"),
+            member("grace", "Grace Hopper"),
+        ],
+    });
+    let now = chrono::Utc::now().timestamp_micros();
+    state.session.entries = BODIES
+        .iter()
+        .enumerate()
+        .map(|(i, body)| Entry {
+            id: format!("b{i}"),
+            seq: i as u64,
+            author_account_id: if i.is_multiple_of(2) { "grace" } else { "me" }.into(),
+            body: (*body).into(),
+            at_micros: now - ((BODIES.len() - i) as i64) * 60_000_000,
+            deleted: false,
+        })
+        .collect();
+    state.session.revision += 1;
 }

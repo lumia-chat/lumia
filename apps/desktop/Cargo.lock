@@ -3035,6 +3035,7 @@ version = "0.2.1"
 dependencies = [
  "chrono",
  "lumia-client",
+ "pulldown-cmark",
  "rune",
  "rune-kit",
  "serde",
@@ -4294,6 +4295,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "procwatch"
+version = "0.1.0"
+source = "git+https://github.com/anomalyco/rune?rev=1f1b6c22c4476b06adc812c9abe3e37c97ffa398#1f1b6c22c4476b06adc812c9abe3e37c97ffa398"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "profiling"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4820,6 +4829,7 @@ dependencies = [
  "png 0.18.1",
  "pollster",
  "portable-atomic",
+ "procwatch",
  "raw-window-handle",
  "raw-window-metal",
  "resvg",
@@ -4871,7 +4881,6 @@ name = "rune-kit"
 version = "0.0.1"
 source = "git+https://github.com/anomalyco/rune?rev=1f1b6c22c4476b06adc812c9abe3e37c97ffa398#1f1b6c22c4476b06adc812c9abe3e37c97ffa398"
 dependencies = [
- "pulldown-cmark",
  "rune",
  "rune-highlights",
  "rune-motion",

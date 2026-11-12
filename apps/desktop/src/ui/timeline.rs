@@ -1,13 +1,26 @@
 //! The messages of the conversation on screen: a virtualized list of the session's entries
 //! and the sends the store does not hold yet, with a divider above each day's first message.
 //! The same list draws a server's channel and a personal conversation.
+//!
+//! The list is one selection group: a drag runs from one message into the next, Cmd+A in
+//! a message takes the conversation, and a copy reads as a transcript. Each stored message
+//! gives it its author and time on one line (a tab between them, as Rune joins texts side
+//! by side), its body under that (`body` says what a body copies as), and a blank line
+//! before the next message. Without the names a copied stretch of conversation does not
+//! say who said what; a selection inside one body takes neither. The day dividers stay out
+//! of it: "Today" is wrong by tomorrow. A send still pending is not selectable at all.
+//!
+//! Two limits are Rune's (its issue 550): a copy that spans rows scrolled out of the
+//! mounted window builds them to read their text and stops, without saying so, at 10,000
+//! such rows or 4 MiB; and while a selection spans many unmounted rows, each scrolled
+//! frame that mounts rows costs more (`benches/timeline.rs` measures it).
 
 use std::borrow::Cow;
 
 use chrono::{DateTime, Local, NaiveDate};
-use rune::{Cursor, El, GrowthSpec, ScrollSpec, Tx, col, el, row, text};
-use rune_kit::{Markdown, MarkdownStyle};
+use rune::{Cursor, El, GrowthSpec, ScrollSpec, col, el, row, text};
 
+use super::body;
 use super::components::{Look, avatar};
 use crate::app::State;
 use crate::session::{Entry, Pending};
@@ -15,11 +28,6 @@ use crate::tokens::{self as t};
 
 /// A message row's height before it is measured: an avatar and its padding.
 const ROW_ESTIMATE: f32 = t::AVATAR_LG + t::SPACE_24;
-
-thread_local! {
-    /// Message-body styles for light and dark, built once.
-    static STYLES: [MarkdownStyle; 2] = [t::markdown(false), t::markdown(true)];
-}
 
 /// The list, pinned to its newest message. `label` names it for assistive technology.
 /// Call it only when there is something to list.
@@ -34,6 +42,7 @@ pub fn view(s: &State, label: String, look: Look) -> El {
         .growth(GrowthSpec::default())
         .role("list")
         .label(label)
+        .selection_group(true)
         .virtual_rows(
             count,
             ROW_ESTIMATE,
@@ -71,20 +80,6 @@ pub fn is_empty(s: &State) -> bool {
     s.session.entries.is_empty() && s.session.pending_here().next().is_none()
 }
 
-/// A message body: the protocol's Markdown subset. `selectable` is off for a send that is
-/// still pending.
-fn body(source: &str, selectable: bool, look: Look) -> El {
-    STYLES.with(|styles| {
-        let markdown = Markdown::new(source).selectable(selectable);
-        let markdown = if selectable {
-            markdown.on_link_tx(open_link)
-        } else {
-            markdown
-        };
-        markdown.render(&styles[usize::from(look.dark)]).key("body")
-    })
-}
-
 fn local(micros: i64) -> DateTime<Local> {
     DateTime::from_timestamp_micros(micros)
         .unwrap_or_default()
@@ -120,21 +115,38 @@ fn day_divider(label: String, look: Look) -> El {
         .child(rule())
 }
 
-/// An avatar beside a name, a time, and whatever the message is.
+/// An avatar beside a name, a time, and whatever the message is. `selectable` puts the name
+/// and the time in the list's selection: a copy that reaches them starts the message on a
+/// line of its own, after a blank one.
 fn message_frame(
     key: &str,
     author: &str,
     author_id: &str,
     time: String,
     content: El,
+    selectable: bool,
     look: Look,
 ) -> El {
     let c = look.c;
+    let part = |part: El, before: u8| {
+        if selectable {
+            part.selectable(true)
+                .selection_color(c.accent_soft)
+                .copy_breaks(before, 1)
+        } else {
+            part
+        }
+    };
+    let name = text(author)
+        .key("author")
+        .font(t::TEXT_AUTHOR)
+        .color(c.ink_emphasis);
+    let time = text(time).key("time").font(t::TEXT_META).color(c.ink_muted);
     let head = row()
         .gap(t::SPACE_8)
         .items_center()
-        .child(text(author).font(t::TEXT_AUTHOR).color(c.ink_emphasis))
-        .child(text(time).font(t::TEXT_META).color(c.ink_muted));
+        .child(part(name, 2))
+        .child(part(time, 1));
     row()
         .key(key)
         .w_full()
@@ -155,31 +167,21 @@ fn message_frame(
         )
 }
 
-/// Opens a link from a message in the browser. Only web links: a message is text someone
-/// else wrote, and other schemes can start other programs.
-fn open_link(_: &mut State, url: &str, tx: &mut Tx) {
-    if url.starts_with("https://") || url.starts_with("http://") {
-        let _ = tx.open_url(url);
-    }
-}
-
 fn stored_row(s: &State, i: usize, entry: &Entry, look: Look) -> El {
     let c = look.c;
     let author = s.session.name_of(&entry.author_account_id);
     let content = if entry.deleted {
-        text("(deleted)")
-            .font(t::TEXT_MESSAGE)
-            .color(c.ink_quiet)
-            .key("body")
+        body::note("(deleted)", c.ink_quiet, look)
     } else {
-        body(&entry.body, true, look)
+        body::view(&entry.body, true, look)
     };
     let row = message_frame(
         &entry.id,
         &author,
         &entry.author_account_id,
         clock(entry.at_micros),
-        content,
+        content.key("body"),
+        true,
         look,
     );
     // The divider lives in the first row of its day: a row of its own would vanish when the
@@ -202,7 +204,7 @@ fn stored_row(s: &State, i: usize, entry: &Entry, look: Look) -> El {
 /// A send the store does not hold yet: dimmed until it does, with the refusal when there was one.
 fn pending_row(s: &State, pending: &Pending, look: Look) -> El {
     let c = look.c;
-    let body = body(&pending.body, false, look);
+    let body = body::view(&pending.body, false, look).key("body");
     let content = match &pending.failed {
         None => col().w_full().opacity(0.5).child(body),
         Some(why) => {
@@ -244,6 +246,7 @@ fn pending_row(s: &State, pending: &Pending, look: Look) -> El {
         s.session.me(),
         time,
         content,
+        false,
         look,
     )
 }
