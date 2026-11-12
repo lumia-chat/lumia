@@ -29,16 +29,26 @@ rm -rf "$out" && mkdir -p "$out"
 
 apk=$(ls "$root"/app/build/outputs/apk/release/*.apk | head -1)
 [ -f "$apk" ] || { echo "release: no APK"; exit 1; }
-label=${version:-$(grep -o 'versionName = "[^"]*"' "$root/app/build.gradle.kts" | cut -d'"' -f2)}
+label=${version:-$(sed -n 's/^val lumiaVersion = .*?: "\([^"]*\)".*/\1/p' "$root/app/build.gradle.kts")}
+[ -n "$label" ] || { echo "release: no version given and none read from app/build.gradle.kts"; exit 1; }
 case "$apk" in
   *unsigned*) name="Lumia-$label-unsigned.apk" ;;
   *) name="Lumia-$label.apk" ;;
 esac
 cp "$apk" "$out/$name"
 
-# The signature checked with the SDK's apksigner when it is on hand.
+# The signature checked with the SDK's apksigner when it is on hand. Its own verdict is
+# the gate, and everything it said is shown when the verdict is no: the first release that
+# ran this failed here with nothing to say why, because only one line of the output was
+# looked for and the rest was dropped.
 apksigner=$(ls "${ANDROID_HOME:-/nonexistent}"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1)
 if [ -n "$apksigner" ] && [ "$name" = "Lumia-$label.apk" ]; then
-  "$apksigner" verify --print-certs "$out/$name" | grep "Signer #1 certificate SHA-256" || { echo "release: the APK's signature does not verify"; exit 1; }
+  echo "release: checking the signature with $apksigner"
+  if ! "$apksigner" verify --print-certs "$out/$name" >"$out/signature.txt" 2>&1; then
+    cat "$out/signature.txt"
+    echo "release: the APK's signature does not verify"; exit 1
+  fi
+  grep "certificate SHA-256" "$out/signature.txt" || { cat "$out/signature.txt"; echo "release: apksigner verified the APK and named no certificate"; exit 1; }
+  rm -f "$out/signature.txt"
 fi
 echo "release: Android build $build${version:+ ($version)} at $out/$name ($(du -h "$out/$name" | cut -f1))"

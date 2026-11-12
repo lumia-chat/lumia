@@ -12,8 +12,9 @@ permissions:
 
 # The Android app: the core for arm64 through cargo-ndk, the Kotlin
 # bindings, the tokens, and the debug build with Gradle, as the check
-# that it all compiles; the APK is not kept, a build to install is a
-# release's. The emulator smoke (apps/android/scripts/smoke.sh) runs
+# that it all compiles, then the release build signed with a throwaway key,
+# as the check that a release can be made; no APK is kept, a build to
+# install is a release's. The emulator smoke (apps/android/scripts/smoke.sh) runs
 # locally; a hosted emulator needs KVM and minutes this job does not
 # spend yet.
 jobs:
@@ -46,3 +47,17 @@ jobs:
           ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.2.12479018
       - run: ./gradlew assembleDebug --no-daemon
         working-directory: apps/android
+      # The release build too, signed with a key made here and thrown away:
+      # the shrinker, the signature and the script's check of it. A release
+      # is the only other place these run, which is too late to find them
+      # broken (the first release that ran them, 0.3.0, did).
+      - name: The release build with a throwaway key
+        run: |
+          keytool -genkeypair -keystore "$RUNNER_TEMP/throwaway.jks" -alias lumia -keyalg RSA -keysize 4096 -validity 2 -storepass throwaway-pass -dname "CN=Throwaway CI key"
+          apps/android/scripts/release.sh
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.2.12479018
+          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/throwaway.jks
+          ANDROID_KEYSTORE_PASSWORD: throwaway-pass
+          ANDROID_KEY_ALIAS: lumia
+          ANDROID_KEY_PASSWORD: throwaway-pass
