@@ -78,6 +78,9 @@ pub struct DeviceInfo {
     pub web_origin: String,
     /// When it was added, nanoseconds.
     pub added_at: i128,
+    /// What its person called it ("desktop"), for display. It is the roster
+    /// entry's, not the certificate's: no certifier vouches for it.
+    pub label: String,
     /// The certificate as carried.
     pub cert: DeviceCertBody,
 }
@@ -201,6 +204,7 @@ fn parse(bytes: &[u8]) -> Result<Parsed, RosterError> {
                 kind: DeviceKind::try_from(cert.kind).unwrap_or(DeviceKind::Unspecified),
                 web_origin: cert.web_origin.clone(),
                 added_at: ts_nanos(cert.added_at.as_ref()),
+                label: entry.label.clone(),
                 cert,
             },
         );

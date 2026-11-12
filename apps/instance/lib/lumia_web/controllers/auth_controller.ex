@@ -184,9 +184,15 @@ defmodule LumiaWeb.AuthController do
       else: {:error, :policy_denied}
   end
 
+  # The session belongs to the device that made the account, so that revoking
+  # the device ends it: the proof's device, else the one the request names. A
+  # client that names none gets a session no device revocation reaches.
   defp device_id(%V1.CreateAccountRequest{proof: %V1.IdentityProof{device_id: id}})
        when byte_size(id) == 16,
        do: Proto.from_uuid(id)
+
+  defp device_id(%V1.CreateAccountRequest{device_id: id}) when byte_size(id) == 16,
+    do: Proto.from_uuid(id)
 
   defp device_id(_), do: Ecto.UUID.generate()
 

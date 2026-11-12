@@ -61,6 +61,9 @@ message CreateAccountRequest {
   SignedProfile profile = 5;
   // Invite that led here, if any; grants the membership on success.
   string invite_code = 6;
+  // The device making the account, for a password creation (a proof names
+  // its own). The session is this device's, so revoking the device ends it.
+  bytes device_id = 7;
 }
 
 message ChallengeRequest {

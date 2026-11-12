@@ -703,7 +703,7 @@ fn roster_summary(roster: &lumia_core::identity::roster::Verified, me: &[u8]) ->
         .map(|(id, info)| DeviceSummary {
             device_id: wire::display(id),
             kind: format!("{:?}", info.kind).to_lowercase(),
-            label: String::new(),
+            label: info.label.clone(),
             web_origin: info.web_origin.clone(),
             added_at_micros: i64::try_from(info.added_at / 1000).unwrap_or(0),
             this_device: id.as_slice() == me,
@@ -1167,7 +1167,10 @@ impl App {
         invite: Option<&str>,
     ) -> Result<(), ClientError> {
         let code = invite.map(invite_code_of).unwrap_or_default();
-        let pair = self.api.create_account(handle, "", password, &code).await?;
+        let pair = self
+            .api
+            .create_account(handle, "", password, &code, self.device_id.clone())
+            .await?;
         self.save_tokens(&pair)
     }
 

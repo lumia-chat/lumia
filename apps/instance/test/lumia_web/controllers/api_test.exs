@@ -103,6 +103,37 @@ defmodule LumiaWeb.ApiTest do
   end
 
   describe "accounts and sign-in" do
+    test "the session made with an account is its device's, so revoking the device ends it", %{
+      conn: conn
+    } do
+      device_id = Ecto.UUID.generate()
+
+      created =
+        post_proto(conn, "/api/v1/accounts", %V1.CreateAccountRequest{
+          handle: "dev#{System.unique_integer([:positive])}",
+          password: "correct horse battery",
+          device_id: Proto.uuid(device_id)
+        })
+
+      assert %V1.TokenPair{access_token: access} = decode(created, V1.TokenPair)
+      assert {:ok, session} = Auth.verify_access(access)
+      assert session.device_id == device_id
+
+      Auth.revoke_device(session.account_id, device_id)
+      assert {:error, _} = Auth.verify_access(access)
+
+      # A client that names no device still gets a session, one no device owns.
+      unnamed =
+        post_proto(conn, "/api/v1/accounts", %V1.CreateAccountRequest{
+          handle: "nodev#{System.unique_integer([:positive])}",
+          password: "correct horse battery"
+        })
+
+      assert %V1.TokenPair{access_token: other} = decode(unnamed, V1.TokenPair)
+      assert {:ok, %{device_id: minted}} = Auth.verify_access(other)
+      assert minted != device_id
+    end
+
     test "create, sign in, refresh, sign out", %{conn: conn} do
       handle = "ryan#{System.unique_integer([:positive])}"
 

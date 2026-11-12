@@ -478,12 +478,14 @@ impl Api {
         email: &str,
         password: &str,
         invite_code: &str,
+        device_id: Vec<u8>,
     ) -> Result<TokenPair, ClientError> {
         let req = CreateAccountRequest {
             handle: handle.into(),
             email: email.into(),
             password: password.into(),
             invite_code: invite_code.into(),
+            device_id,
             ..Default::default()
         };
         self.post("/api/v1/accounts", &req).await

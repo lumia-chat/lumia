@@ -326,7 +326,13 @@ async fn run(cli: Cli) -> Result<(), ClientError> {
         } => {
             let code = invite.as_deref().map(invite_code_of).unwrap_or_default();
             let tokens = api
-                .create_account(&handle, email.as_deref().unwrap_or(""), &password, &code)
+                .create_account(
+                    &handle,
+                    email.as_deref().unwrap_or(""),
+                    &password,
+                    &code,
+                    ctx.device_id.clone(),
+                )
                 .await?;
             save_tokens(&mut ctx, &tokens)?;
             println!("created and signed in as {handle}");

@@ -94,6 +94,7 @@ defmodule Lumia.V1.CreateAccountRequest do
   field :proof, 4, type: Lumia.V1.IdentityProof
   field :profile, 5, type: Lumia.V1.SignedProfile
   field :invite_code, 6, type: :string, json_name: "inviteCode"
+  field :device_id, 7, type: :bytes, json_name: "deviceId"
 end
 
 defmodule Lumia.V1.ChallengeRequest do

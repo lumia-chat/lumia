@@ -438,7 +438,7 @@ async fn device_revoke(env: &Env) -> Result<(), ClientError> {
     let password = "correct horse battery staple";
 
     let tokens = anon
-        .create_account(&handle("revoke"), "", password, "")
+        .create_account(&handle("revoke"), "", password, "", a.device_id.clone())
         .await?;
     let api_a = Api::new(&base).with_tokens(pair(&tokens));
     a.device().create("a")?;
@@ -481,7 +481,7 @@ async fn rotate_handoff(env: &Env) -> Result<(), ClientError> {
     let password = "correct horse battery staple";
 
     let tokens = anon
-        .create_account(&handle("rotate"), "", password, "")
+        .create_account(&handle("rotate"), "", password, "", a.device_id.clone())
         .await?;
     let api_a = Api::new(&base).with_tokens(pair(&tokens));
     let created = a.device().create("a")?;
