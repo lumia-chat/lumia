@@ -412,6 +412,31 @@ fn a_drag_runs_from_one_message_into_the_next_and_across_three() {
 }
 
 #[test]
+fn a_copy_names_a_block_once() {
+    let mut state = signed_in();
+    let now = chrono::Utc::now().timestamp_micros();
+    state.session.entries = vec![
+        message("m0", "grace", "First of the block.", now - 2 * MINUTE),
+        message("m1", "grace", "Second of the block.", now - MINUTE),
+        message("m2", "me", "An answer.", now),
+    ];
+    state.session.revision += 1;
+    let mut rt = runtime(state);
+    let last = glyphs(&rt, "m2/body/b0");
+    let from = start(&rt, "m0/author");
+    let all = drag(&mut rt, from, after(last[last.len() - 1]));
+    // `head` names its even messages Grace's; the third here is Ada's.
+    let answer = head(&rt, 2).replace("Grace Hopper", "Ada Lovelace");
+    assert_copied(
+        &all,
+        &format!(
+            "{}\nFirst of the block.\n\nSecond of the block.\n\n{answer}\nAn answer.",
+            head(&rt, 0),
+        ),
+    );
+}
+
+#[test]
 fn a_selection_stays_while_messages_arrive() {
     let mut rt = conversation(&["First message here.", "Second message here."]);
     let (a, b) = (glyphs(&rt, "m0/body/b0"), glyphs(&rt, "m1/body/b0"));

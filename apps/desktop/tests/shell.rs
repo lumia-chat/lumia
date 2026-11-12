@@ -272,6 +272,96 @@ fn a_send_the_store_does_not_hold_yet_reads_as_sending_and_a_refused_one_says_wh
     assert!(rt.state.session.pending.iter().all(|p| p.id != "p1"));
 }
 
+/// Noon today, so a test's minutes either side of it are all one day wherever it runs.
+fn noon_micros() -> i64 {
+    chrono::Local::now()
+        .date_naive()
+        .and_hms_opt(12, 0, 0)
+        .and_then(|noon| noon.and_local_timezone(chrono::Local).single())
+        .expect("noon exists")
+        .timestamp_micros()
+}
+
+#[test]
+fn messages_one_person_sends_close_together_are_one_block() {
+    const MINUTE: i64 = 60_000_000;
+    let noon = noon_micros();
+    let mut state = signed_in();
+    state.session.entries = vec![
+        message("k0", "grace", "One.", noon),
+        message("k1", "grace", "Two.", noon + MINUTE),
+        // More than five minutes after the one before it: a block of its own.
+        message("k2", "grace", "After a pause.", noon + 7 * MINUTE),
+        message("k3", "me", "Mine.", noon + 8 * MINUTE),
+        message("k4", "me", "Mine again.", noon + 9 * MINUTE),
+        // The same person a day on: under the day's divider, so not in yesterday's block.
+        message(
+            "k5",
+            "me",
+            "The next day.",
+            noon + 9 * MINUTE + 86_400_000_000,
+        ),
+    ];
+    state.session.pending.push(Pending {
+        id: "k6".into(),
+        channel_id: "general".into(),
+        body: "On its way.".into(),
+        sent_at_micros: noon + 10 * MINUTE + 86_400_000_000,
+        failed: None,
+    });
+    state.session.revision += 1;
+    let mut rt = runtime(state);
+
+    // The time of a message under a block's first shows while the pointer is on its row.
+    let shown = |rt: &rune::Runtime<State>| {
+        let time = rt
+            .elements()
+            .into_iter()
+            .find(|e| e.key.as_deref() == Some("time") && e.path.contains("/k1/"));
+        time.expect("k1 has a time").opacity
+    };
+    assert_eq!(shown(&rt), 0.0);
+    let (x, y) = rt.find("k1/body").expect("k1 is on screen");
+    rt.pointer_move(x, y);
+    settle(&mut rt);
+    assert_eq!(shown(&rt), 1.0);
+
+    let opens = |key: &str| rt.find(&format!("{key}/author")).is_some();
+    assert_eq!(
+        ["k0", "k1", "k2", "k3", "k4", "k5", "k6"].map(opens),
+        [true, false, true, true, false, true, false],
+        "who is named: the first message of each block"
+    );
+    // A message under the first still says whose it is and when, to assistive technology.
+    let time = |key: &str| {
+        rt.elements()
+            .into_iter()
+            .find(|e| e.key.as_deref() == Some("time") && e.path.contains(&format!("/{key}/")))
+            .unwrap_or_else(|| panic!("{key} has no time"))
+    };
+    assert_eq!(time("k1").text.as_deref(), Some("12:01"));
+    assert_eq!(time("k1").label.as_deref(), Some("Grace Hopper, 12:01 PM"));
+    assert_eq!(time("k0").text.as_deref(), Some("12:00 PM"));
+    // A send on its way joins the block it will land in: dimmed, and "Sending…" only as
+    // what its row is called.
+    assert_eq!(time("k6").text.as_deref(), Some("12:10"));
+    assert_eq!(time("k6").label.as_deref(), Some("Ada Lovelace, Sending…"));
+
+    // A block's messages sit closer than two blocks do.
+    let row = |key: &str| {
+        rt.elements()
+            .into_iter()
+            .find(|e| e.key.as_deref() == Some(key) && e.role == "listitem")
+            .unwrap_or_else(|| panic!("{key} is not on screen"))
+            .rect
+    };
+    // To the half point: a row's height is its text's, which is not whole points.
+    let below = |a: &str, b: &str| (row(b)[1] - (row(a)[1] + row(a)[3])).round();
+    assert_eq!(below("k0", "k1"), 0.0, "a block's rows touch");
+    assert_eq!(below("k1", "k2"), 8.0, "blocks stand apart");
+    assert_eq!(below("k2", "k3"), 8.0);
+}
+
 #[test]
 fn return_in_the_composer_sends_and_a_send_that_cannot_be_queued_keeps_the_draft() {
     let mut rt = runtime(signed_in());

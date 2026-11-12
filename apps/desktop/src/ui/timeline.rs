@@ -2,13 +2,20 @@
 //! and the sends the store does not hold yet, with a divider above each day's first message.
 //! The same list draws a server's channel and a personal conversation.
 //!
+//! Messages one person sends close together are one block, as the board's are: the avatar,
+//! the name and the time once, over the first, and the rest under it at a paragraph's
+//! distance ([`joins`] says what "close together" is). Each message is still a row of its
+//! own, so the list unmounts a long block a row at a time; a row after the first has its
+//! time in the avatar's column, shown while the pointer is on the row.
+//!
 //! The list is one selection group: a drag runs from one message into the next, Cmd+A in
-//! a message takes the conversation, and a copy reads as a transcript. Each stored message
-//! gives it its author and time on one line (a tab between them, as Rune joins texts side
-//! by side), its body under that (`body` says what a body copies as), and a blank line
-//! before the next message. Without the names a copied stretch of conversation does not
-//! say who said what; a selection inside one body takes neither. The day dividers stay out
-//! of it: "Today" is wrong by tomorrow. A send still pending is not selectable at all.
+//! a message takes the conversation, and a copy reads as a transcript. Each block gives it
+//! its author and time on one line (a tab between them, as Rune joins texts side by side),
+//! each message's body under that (`body` says what a body copies as) with a blank line
+//! between two, and a blank line before the next block. Without the names a copied stretch
+//! of conversation does not say who said what; a selection inside one body takes neither.
+//! The day dividers stay out of it: "Today" is wrong by tomorrow. A send still pending is
+//! not selectable at all.
 //!
 //! Two limits are Rune's (its issue 550): a copy that spans rows scrolled out of the
 //! mounted window builds them to read their text and stops, without saying so, at 10,000
@@ -30,7 +37,14 @@ use crate::tokens::{self as t};
 const OLDER_WITHIN: usize = 20;
 
 /// A message row's height before it is measured: an avatar, its padding and the gap under it.
-const ROW_ESTIMATE: f32 = t::AVATAR_LG + t::SPACE_24 + t::SPACE_2;
+const ROW_ESTIMATE: f32 = t::AVATAR_LG + t::SPACE_24 + BLOCK_GAP;
+
+/// The room between one block and the next. The board first drew 2 here, which read as
+/// crowded in the app; Ryan asked for a little more (2026-11-12) and the boards follow.
+const BLOCK_GAP: f32 = t::SPACE_8;
+
+/// How long after a message another from the same person still goes in its block.
+const BLOCK_WITHIN_MICROS: i64 = 5 * 60 * 1_000_000;
 
 /// The list, pinned to its newest message. `label` names it for assistive technology.
 /// Call it only when there is something to list.
@@ -60,10 +74,11 @@ pub fn view(s: &State, label: String, look: Look) -> El {
             },
             move |s: &State, i| {
                 let look = Look::of(dark);
+                let place = Place::of(s, i);
                 match s.session.entries.get(i) {
-                    Some(entry) => stored_row(s, i, entry, look),
+                    Some(entry) => stored_row(s, i, entry, place, look),
                     None => match s.session.pending_here().nth(i - s.session.entries.len()) {
-                        Some(pending) => pending_row(s, pending, look),
+                        Some(pending) => pending_row(s, pending, place, look),
                         None => el(),
                     },
                 }
@@ -99,6 +114,60 @@ fn clock(micros: i64) -> String {
     local(micros).format("%-I:%M %p").to_string()
 }
 
+/// Who wrote row `i` and when, whether the store holds it or it is still being sent.
+fn stamp(s: &State, i: usize) -> Option<(&str, i64)> {
+    match s.session.entries.get(i) {
+        Some(entry) => Some((entry.author_account_id.as_str(), entry.at_micros)),
+        None => s
+            .session
+            .pending_here()
+            .nth(i - s.session.entries.len())
+            .map(|pending| (s.session.me(), pending.sent_at_micros)),
+    }
+}
+
+/// Whether a message goes in the block of the one before it: the same person, on the same
+/// day (a day's first message carries the divider), within [`BLOCK_WITHIN_MICROS`] of it.
+/// Measured from the message before, not the block's first, so a run of quick messages
+/// stays one block however long it goes on. Either way round, since a pending send is
+/// stamped by this computer's clock and the message before it by the instance's.
+fn joins((before, before_at): (&str, i64), (author, at): (&str, i64)) -> bool {
+    !author.is_empty()
+        && author == before
+        && (at - before_at).abs() < BLOCK_WITHIN_MICROS
+        && local(at).date_naive() == local(before_at).date_naive()
+}
+
+/// Where a row sits in its block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Place {
+    /// The block's first message: the one under the avatar, the name and the time.
+    opens: bool,
+    /// Its last: the next row, when there is one, opens another.
+    closes: bool,
+}
+
+impl Place {
+    fn of(s: &State, i: usize) -> Self {
+        let at = |i: usize| stamp(s, i);
+        let joined = |i: usize| {
+            i.checked_sub(1)
+                .and_then(at)
+                .zip(at(i))
+                .is_some_and(|(before, this)| joins(before, this))
+        };
+        Self {
+            opens: !joined(i),
+            closes: !joined(i + 1),
+        }
+    }
+}
+
+/// A time without its half of the day, for the avatar's column: `9:04`.
+fn short_clock(micros: i64) -> String {
+    local(micros).format("%-I:%M").to_string()
+}
+
 /// How a day reads above its first message.
 fn day_label(day: NaiveDate) -> String {
     let today = Local::now().date_naive();
@@ -125,19 +194,63 @@ fn day_divider(label: String, look: Look) -> El {
         .child(rule())
 }
 
-/// An avatar beside a name, a time, and whatever the message is. `selectable` puts the name
-/// and the time in the list's selection: a copy that reaches them starts the message on a
-/// line of its own, after a blank one.
-fn message_frame(
-    key: &str,
-    author: &str,
-    author_id: &str,
+/// What a message row says besides its content.
+struct Head<'a> {
+    author: &'a str,
+    author_id: &'a str,
+    /// The time beside the name, or what stands there for a send on its way.
     time: String,
-    content: El,
+    /// The time in the avatar's column of a row that goes on in a block.
+    short_time: String,
+    /// Puts the name and the time in the list's selection: a copy that reaches them starts
+    /// the block on a line of its own, after a blank one.
     selectable: bool,
-    look: Look,
-) -> El {
+}
+
+/// A message's row. The first of a block is an avatar beside a name, a time and the
+/// message; the ones after it are the message alone under those, in the same column.
+fn message_frame(key: &str, head: Head<'_>, content: El, place: Place, look: Look) -> El {
     let c = look.c;
+    let Head {
+        author,
+        author_id,
+        time,
+        short_time,
+        selectable,
+    } = head;
+    // A block's rows touch, and are a paragraph's distance apart between them: the board
+    // draws a block's messages as the paragraphs of one.
+    let within = t::SPACE_4 / 2.0;
+    let frame = row()
+        .key(key)
+        .w_full()
+        .px(t::SPACE_12)
+        .pt(if place.opens { t::SPACE_8 } else { within })
+        .pb(if place.closes { t::SPACE_8 } else { within })
+        .gap(t::SPACE_14)
+        .radius(t::RADIUS_12)
+        .hover(c.hover_message)
+        .role("listitem");
+    if !place.opens {
+        // The time of a message under the block's first, where the avatar would be: there
+        // for assistive technology always, and for the eye while the pointer is on the row.
+        let when = el()
+            .w(t::AVATAR_LG)
+            .h(t::TEXT_MESSAGE.line_height)
+            .center()
+            .child(
+                text(short_time)
+                    .key("time")
+                    .font(t::TEXT_META)
+                    .color(c.ink_muted)
+                    .label(format!("{author}, {time}"))
+                    .group_opacity(0.0, 1.0),
+            );
+        return frame
+            .hover_group()
+            .child(when)
+            .child(col().grow(1.0).min_w(0.0).child(content));
+    }
     let part = |part: El, before: u8| {
         if selectable {
             part.selectable(true)
@@ -170,29 +283,17 @@ fn message_frame(
         .items_center()
         .child(part(name, 2))
         .child(part(time, 1));
-    row()
-        .key(key)
-        .w_full()
-        .px(t::SPACE_12)
-        .py(t::SPACE_8)
-        // The board's gap between one row and the next.
-        .mb(t::SPACE_2)
-        .gap(t::SPACE_14)
-        .radius(t::RADIUS_12)
-        .hover(c.hover_message)
-        .role("listitem")
-        .child(picture)
-        .child(
-            col()
-                .grow(1.0)
-                .min_w(0.0)
-                .gap(t::SPACE_4)
-                .child(head)
-                .child(content),
-        )
+    frame.child(picture).child(
+        col()
+            .grow(1.0)
+            .min_w(0.0)
+            .gap(t::SPACE_4)
+            .child(head)
+            .child(content),
+    )
 }
 
-fn stored_row(s: &State, i: usize, entry: &Entry, look: Look) -> El {
+fn stored_row(s: &State, i: usize, entry: &Entry, place: Place, look: Look) -> El {
     let c = look.c;
     let author = s.session.name_of(&entry.author_account_id);
     let content = if entry.deleted {
@@ -200,30 +301,25 @@ fn stored_row(s: &State, i: usize, entry: &Entry, look: Look) -> El {
     } else {
         body::view(&entry.body, true, look)
     };
-    let row = message_frame(
-        &entry.id,
-        &author,
-        &entry.author_account_id,
-        clock(entry.at_micros),
-        content.key("body"),
-        true,
-        look,
-    );
+    let head = Head {
+        author: &author,
+        author_id: &entry.author_account_id,
+        time: clock(entry.at_micros),
+        short_time: short_clock(entry.at_micros),
+        selectable: true,
+    };
+    let row = message_frame(&entry.id, head, content.key("body"), place, look);
     // The divider lives in the first row of its day: a row of its own would vanish when the
-    // list unmounts it.
+    // list unmounts it. So does the word that older messages are on their way, in the
+    // oldest row.
     let day = local(entry.at_micros).date_naive();
     let previous = i
         .checked_sub(1)
         .and_then(|p| s.session.entries.get(p))
         .map(|e| local(e.at_micros).date_naive());
-    // So does the word that older messages are on their way, in the oldest row.
-    let fetching = i == 0 && s.session.loading_older();
-    if previous == Some(day) && !fetching {
-        return row;
-    }
-    let mut above = col().key(format!("day-{}", entry.id)).w_full();
-    if fetching {
-        above = above.child(
+    let mut slot = slot(place);
+    if i == 0 && s.session.loading_older() {
+        slot = slot.child(
             text("Loading earlier messages…")
                 .font(t::TEXT_META)
                 .color(c.ink_muted)
@@ -234,13 +330,22 @@ fn stored_row(s: &State, i: usize, entry: &Entry, look: Look) -> El {
         );
     }
     if previous != Some(day) {
-        above = above.child(day_divider(day_label(day), look));
+        slot = slot.child(day_divider(day_label(day), look));
     }
-    above.child(row)
+    slot.child(row)
+}
+
+/// What the list holds a message's row in: the row, with the room under a block's last.
+/// The room is the slot's padding and not the row's margin, which a virtual list does not
+/// lay out: the 2 points the rows asked for before this never showed.
+fn slot(place: Place) -> El {
+    col()
+        .w_full()
+        .pb(if place.closes { BLOCK_GAP } else { 0.0 })
 }
 
 /// A send the store does not hold yet: dimmed until it does, with the refusal when there was one.
-fn pending_row(s: &State, pending: &Pending, look: Look) -> El {
+fn pending_row(s: &State, pending: &Pending, place: Place, look: Look) -> El {
     let c = look.c;
     let body = body::view(&pending.body, false, look).key("body");
     let content = match &pending.failed {
@@ -278,13 +383,12 @@ fn pending_row(s: &State, pending: &Pending, look: Look) -> El {
     } else {
         "Sending…".into()
     };
-    message_frame(
-        &pending.id,
-        s.session.self_name(),
-        s.session.me(),
+    let head = Head {
+        author: s.session.self_name(),
+        author_id: s.session.me(),
         time,
-        content,
-        false,
-        look,
-    )
+        short_time: short_clock(pending.sent_at_micros),
+        selectable: false,
+    };
+    slot(place).child(message_frame(&pending.id, head, content, place, look))
 }

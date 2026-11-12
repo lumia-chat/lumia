@@ -128,6 +128,7 @@ pub const SCENES: &[Scene] = &[
     ("home-requests", home_requests),
     ("home-new-message", home_new_message),
     ("bodies", bodies),
+    ("blocks", blocks),
     ("sign-in-browser", sign_in_browser),
     ("sign-in-waiting", |s| {
         sign_in_browser(s);
@@ -585,6 +586,49 @@ pub const BODIES: &[&str] = &[
      and/going/until/it/is/wider/than/the/conversation/and/has/to/break/somewhere/in/the/middle\n\n\
      ```\nlet line = \"and a line of code that is longer than the block is wide, which wraps rather than running out of its frame\";\n```",
 ];
+
+/// The `blocks` scene: a channel where people send several messages close together, with no
+/// instance behind it. What one person sends within minutes is one block under one name; a
+/// longer pause, another person or a send still on its way each show what they do to it.
+pub fn blocks(state: &mut State) {
+    use crate::session::{Entry, Pending};
+    servers_sample(state);
+    let now = chrono::Utc::now().timestamp_micros();
+    let minutes_ago = |minutes: i64| now - minutes * 60_000_000;
+    let said = [
+        ("grace", 58, "Morning! The compiler notes are up."),
+        ("grace", 58, "Also: the nanosecond wires arrived."),
+        (
+            "grace",
+            57,
+            "I will bring a few on Thursday, one for everyone who asks.",
+        ),
+        ("me", 50, "Wonderful, save me one."),
+        ("me", 49, "Reading the notes now."),
+        ("grace", 12, "Any questions so far?"),
+        ("me", 2, "Just one, about the loader."),
+    ];
+    state.session.entries = said
+        .iter()
+        .enumerate()
+        .map(|(i, (author, ago, body))| Entry {
+            id: format!("k{i}"),
+            seq: i as u64,
+            author_account_id: (*author).into(),
+            body: (*body).into(),
+            at_micros: minutes_ago(*ago),
+            deleted: false,
+        })
+        .collect();
+    state.session.pending = vec![Pending {
+        id: "k-pending".into(),
+        channel_id: "general".into(),
+        body: "Does it relocate before or after linking?".into(),
+        sent_at_micros: now,
+        failed: None,
+    }];
+    state.session.revision += 1;
+}
 
 /// The `bodies` scene: a channel whose messages are [`BODIES`], with no instance behind it.
 /// No instance is opened, so nothing reaches the network. A tall window shows them all:
