@@ -900,6 +900,7 @@ impl Session {
                     self.members_fresh = true;
                     self.load_members(&snapshot.servers);
                 }
+                self.dm_snapshot_applied();
             }
             Update::Snapshot(Err(failure)) => {
                 self.last_error = Some(failure.message.clone());

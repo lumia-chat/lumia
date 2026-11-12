@@ -21,21 +21,63 @@ pub struct Chrome<'a> {
     pub empty: (&'a str, &'a str),
 }
 
+/// What a personal conversation says besides; a channel has none of it.
+#[derive(Default)]
+pub struct Extras {
+    /// The line beside the title (the other side's pronouns, the host).
+    pub topic: Option<String>,
+    /// What to know before reading, between the header and the messages.
+    pub notices: Vec<El>,
+    /// The glyph of the empty state, when it is not a channel's hash.
+    pub empty_glyph: Option<&'static Icon>,
+    /// The composer takes no words yet; the placeholder says why.
+    pub composer_disabled: bool,
+}
+
 /// The panel for the conversation on screen.
 pub fn view(s: &State, chrome: Chrome<'_>, look: Look) -> El {
+    view_with(s, chrome, Extras::default(), look)
+}
+
+/// [`view`] with what a personal conversation adds.
+pub fn view_with(s: &State, chrome: Chrome<'_>, extras: Extras, look: Look) -> El {
     let list = if timeline::is_empty(s) {
-        empty_state(&icons::HASH, chrome.empty.0, chrome.empty.1, look)
+        empty_state(
+            extras.empty_glyph.unwrap_or(&icons::HASH),
+            chrome.empty.0,
+            chrome.empty.1,
+            look,
+        )
     } else {
         timeline::view(s, chrome.list_label, look)
     };
-    let mut pane = panel("panel", look)
-        .w_full()
-        .child(header(chrome.title, chrome.glyph, look))
-        .child(list);
+    let mut pane = panel("panel", look).w_full().child(header_with(
+        chrome.title,
+        chrome.glyph,
+        extras.topic.as_deref(),
+        look,
+    ));
+    if !extras.notices.is_empty() {
+        let mut notices = col()
+            .key("notices")
+            .w_full()
+            .px(t::SPACE_24)
+            .pt(t::SPACE_12)
+            .gap(t::SPACE_8);
+        for notice in extras.notices {
+            notices = notices.child(notice);
+        }
+        pane = pane.child(notices);
+    }
+    pane = pane.child(list);
     if let Some(error) = &s.session.last_error {
         pane = pane.child(el().w_full().px(t::SPACE_24).child(error_text(error, look)));
     }
-    pane.child(composer(s, &chrome.placeholder, look))
+    pane.child(if extras.composer_disabled {
+        composer_off(&chrome.placeholder, look)
+    } else {
+        composer(s, &chrome.placeholder, look)
+    })
 }
 
 /// A panel with a header and an empty state, for a place with no conversation.
@@ -48,6 +90,16 @@ pub fn vacant(title: &str, glyph: &'static Icon, empty: (&str, &str), look: Look
 
 /// The panel's header: an optional glyph and the title, over a hairline.
 pub fn header(title: &str, glyph: Option<&'static Icon>, look: Look) -> El {
+    header_with(title, glyph, None, look)
+}
+
+/// [`header`] with a topic: a quieter line beside the title, after a rule.
+pub fn header_with(
+    title: &str,
+    glyph: Option<&'static Icon>,
+    topic: Option<&str>,
+    look: Look,
+) -> El {
     let c = look.c;
     let mut bar = row()
         .key("header")
@@ -62,13 +114,78 @@ pub fn header(title: &str, glyph: Option<&'static Icon>, look: Look) -> El {
     if let Some(glyph) = glyph {
         bar = bar.child(icon(glyph, t::SPACE_18).color(c.accent));
     }
-    bar.child(
+    bar = bar.child(
         text(title)
             .font(t::TITLE_CHANNEL)
             .color(c.ink)
             .truncate()
             .role("heading"),
-    )
+    );
+    if let Some(topic) = topic.filter(|topic| !topic.is_empty()) {
+        bar = bar
+            .child(
+                el().w(1.0)
+                    .h(t::SPACE_18 + t::SPACE_2)
+                    .mx(t::SPACE_6)
+                    .fill(c.line_strong),
+            )
+            .child(
+                text(topic)
+                    .font(t::TEXT_BODY)
+                    .color(c.ink_secondary)
+                    .truncate()
+                    .grow(1.0)
+                    .min_w(0.0),
+            );
+    }
+    bar
+}
+
+/// The composer of a conversation that takes no words yet: its frame, with the reason where
+/// the words would go.
+fn composer_off(reason: &str, look: Look) -> El {
+    let c = look.c;
+    let frame = row()
+        .key("composer-box")
+        .w_full()
+        .items_center()
+        .gap(t::SPACE_8)
+        .pl(t::SPACE_16)
+        .pr(t::SPACE_8)
+        .py(t::SPACE_8)
+        .radius(t::RADIUS_16)
+        .fill(c.field)
+        .border(1.0, c.border_composer)
+        .child(
+            text(reason)
+                .key("composer")
+                .font(t::TEXT_MESSAGE)
+                .color(c.ink_muted)
+                .truncate()
+                .grow(1.0)
+                .min_w(0.0)
+                .role("textbox")
+                .label(reason)
+                .disabled(true),
+        )
+        .child(
+            el().key("send")
+                .size(t::SPACE_40, t::SPACE_40)
+                .radius(t::SPACE_40 / 2.0)
+                .fill(c.accent)
+                .center()
+                .opacity(0.5)
+                .role("button")
+                .label("Send")
+                .disabled(true)
+                .child(icon(&icons::SEND, t::SPACE_18).color(c.on_accent)),
+        );
+    col()
+        .w_full()
+        .px(t::SPACE_24)
+        .pt(t::SPACE_4)
+        .pb(t::SPACE_16)
+        .child(frame)
 }
 
 fn composer(s: &State, placeholder: &str, look: Look) -> El {
