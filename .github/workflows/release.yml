@@ -12,6 +12,13 @@
 # systems and which are waited for but may fail, and the iOS upload,
 # which can be re-sent without a new tag (ios-upload.yml).
 #
+# A tag with a hyphen in it (v0.3.0-rc.1) is a pre-release, for trying the
+# builds themselves: the same jobs run and the release is published marked
+# as a pre-release and not as the latest, so no installed Mac app is
+# offered it and the instance is not deployed. The iOS build goes to
+# TestFlight under the version before the hyphen, which is all the store
+# takes.
+#
 # The version is the tag without its v. Secrets: DEVELOPER_ID_P12 and
 # DEVELOPER_ID_P12_PASSWORD (the Developer ID Application certificate with
 # its key, base64 of the .p12), ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_P8 (the
@@ -36,7 +43,9 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - run: gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "Lumia ${GITHUB_REF_NAME#v}" --generate-notes
+      - run: |
+          case "$GITHUB_REF_NAME" in *-*) kind=--prerelease ;; *) kind= ;; esac
+          gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "Lumia ${GITHUB_REF_NAME#v}" --generate-notes $kind
         env:
           GH_TOKEN: ${{ github.token }}
 
@@ -152,7 +161,11 @@ jobs:
       - run: echo "$ASC_KEY_P8" | base64 -d > "$RUNNER_TEMP/asc.p8"
         env:
           ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
-      - run: apps/apple/scripts/release.sh "${GITHUB_REF_NAME#v}" --upload
+      # The store takes a version of numbers and dots: a pre-release tag's is
+      # the part before its hyphen.
+      - run: |
+          version=${GITHUB_REF_NAME#v}
+          apps/apple/scripts/release.sh "${version%%-*}" --upload
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
@@ -289,6 +302,12 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - run: gh release edit "$GITHUB_REF_NAME" --draft=false --latest
+      # "Latest" is what the Mac app's update feed follows, so a pre-release
+      # is never that.
+      - run: |
+          case "$GITHUB_REF_NAME" in
+            *-*) gh release edit "$GITHUB_REF_NAME" --draft=false --prerelease ;;
+            *) gh release edit "$GITHUB_REF_NAME" --draft=false --latest ;;
+          esac
         env:
           GH_TOKEN: ${{ github.token }}

@@ -90,10 +90,13 @@ tar -C "$work" -czf "$dist/$name.tar.gz" "$name"
 # names, and Vulkan's loader, since Vulkan is the only way the shell draws on Linux. What
 # it uses if it is there (Wayland or X11, Mesa's Vulkan drivers where the GPU's vendor
 # ships none, the fonts for scripts its own faces lack) is recommended.
+# A pre-release's hyphen becomes a tilde, which dpkg sorts before the release itself
+# (0.3.0~rc.1 is older than 0.3.0); a hyphen would start a package revision.
+deb_version=$(printf '%s' "$version" | sed 's/-/~/')
 mkdir -p "$pkg/DEBIAN"
 cat >"$pkg/DEBIAN/control" <<CONTROL
 Package: lumia
-Version: $version
+Version: $deb_version
 Architecture: $deb_arch
 Maintainer: The Lumia project <https://github.com/lumia-chat/lumia/issues>
 Installed-Size: $(du -sk "$pkg/usr" | cut -f1)
@@ -110,7 +113,7 @@ Description: Lumia, a chat app (preview)
 CONTROL
 dpkg-deb --build --root-owner-group "$pkg" "$dist/$name.deb" >/dev/null
 dpkg-deb --info "$dist/$name.deb" >"$work/deb.info"
-grep -q "Version: $version" "$work/deb.info" || { echo "dist: the package does not carry version $version"; exit 1; }
+grep -q "Version: $deb_version" "$work/deb.info" || { echo "dist: the package does not carry version $deb_version"; exit 1; }
 dpkg-deb --contents "$dist/$name.deb" >"$work/deb.contents"
 grep -q "usr/bin/lumia" "$work/deb.contents" || { echo "dist: the package has no usr/bin/lumia"; exit 1; }
 

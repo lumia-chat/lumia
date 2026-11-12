@@ -1,6 +1,6 @@
 # The instance on Fly.io (apps/instance/fly.toml): a v* tag, the one that
 # starts the release (release.yml), deploys lumia-instance from that tag,
-# and only then; `workflow_dispatch` deploys a chosen ref by hand. The
+# and only then (a pre-release tag, one with a hyphen, deploys nothing); `workflow_dispatch` deploys a chosen ref by hand. The
 # build runs on a Fly remote builder from the repository root, which the
 # Dockerfile needs as its context (it copies the core and the web UI),
 # and the rollout is the one fly.toml describes: migrate on a throwaway
@@ -23,6 +23,7 @@ concurrency:
 
 jobs:
   deploy:
+    if: ${{ github.event_name == 'workflow_dispatch' || !contains(github.ref_name, '-') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
