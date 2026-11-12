@@ -4,9 +4,37 @@ Lumia is a chat app you can host yourself. Servers with public and private chann
 
 Personal DMs are end-to-end encrypted. Server content is readable by the people who run the server, and the app tells you which is which.
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/desktop-dark.png">
+    <img src="docs/screenshots/desktop-light.png" alt="The desktop app's design: a rail of servers, a server's channels, the general channel with its messages, and the members beside it" width="100%">
+  </picture>
+</p>
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/ios-home-dark.png">
+    <img src="docs/screenshots/ios-home-light.png" alt="The iOS design: Home, with personal conversations" width="30%">
+  </picture>
+  &nbsp;
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/ios-channel-dark.png">
+    <img src="docs/screenshots/ios-channel-light.png" alt="The iOS design: a channel" width="30%">
+  </picture>
+  &nbsp;
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/ios-conversation-dark.png">
+    <img src="docs/screenshots/ios-conversation-light.png" alt="The iOS design: an end-to-end encrypted personal conversation" width="30%">
+  </picture>
+</p>
+
+<p align="center"><sub>The design the apps are drawn to, with made-up people in it. It runs ahead of the apps: see Status.</sub></p>
+
 ## Status
 
-Design stage. The architecture and protocol are written; the server, client core, and apps are not yet started. Nothing here runs.
+Early, and used by a handful of testers. The instance, the client core and the apps run: signing in, servers and channels, invites, presence, end-to-end encrypted personal DMs, devices and push notifications. Builds are on the [releases page](https://github.com/lumia-chat/lumia/releases): macOS, Android as an APK, and previews for Windows and Linux that nobody has tried on those systems yet; iOS goes through TestFlight.
+
+Not built yet: threads, reactions, attachments, search and calls, all of which the pictures above show. [docs/plan.md](docs/plan.md) says what is done and what is next.
 
 ## How it works
 
