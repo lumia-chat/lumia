@@ -109,11 +109,12 @@ fn this_computer_links_to_an_identity_a_cli_device_holds() {
     .expect("linked");
     assert!(state.session.has_identity() && state.session.signed_in);
     assert_eq!(roster.devices.len(), 2, "the CLI's device and this one");
-    // The roster carries no label for a device; the one given at the request is not in it.
-    assert_eq!(
-        roster.devices.iter().filter(|d| d.this_device).count(),
-        1,
-        "{:?}",
+    assert!(
+        roster
+            .devices
+            .iter()
+            .any(|d| d.this_device && d.label == "desktop"),
+        "this computer is in the roster under the name it gave: {:?}",
         roster.devices
     );
 }

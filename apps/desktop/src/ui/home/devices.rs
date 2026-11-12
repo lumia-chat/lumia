@@ -4,8 +4,8 @@
 //! computer, the way to linking it. The same states and wording as `DevicesView` in the
 //! SwiftUI app's `HomeViews.swift` and the web's `home.tsx`.
 //!
-//! A device is named by its kind, as the other shells name it: the roster summary the core
-//! gives carries no label.
+//! A device is named by the label its person gave it when it was linked, and by its kind
+//! when it has none.
 //!
 //! Not here: "Add a passkey". A passkey is made on the instance's web page, which needs the
 //! browser handoff (architecture 6.3) this shell does not have yet; the card says so
@@ -245,10 +245,13 @@ fn passkeys(s: &State, look: Look) -> El {
 
 // ---- The roster -------------------------------------------------------------------------
 
-/// A device's name: the roster carries its kind and no label, so the kind names it.
+/// A device's name: the label it was linked under, else what kind of device it is.
 fn name_of(device: &DeviceSummary) -> String {
     if device.this_device {
         return "This computer".into();
+    }
+    if !device.label.trim().is_empty() {
+        return device.label.trim().to_string();
     }
     match device.kind.as_str() {
         "web" => "Browser".into(),
