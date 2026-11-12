@@ -2153,7 +2153,33 @@ impl App {
         let mut stores = self.identity.lock().await;
         device(&mut stores, &self.device_id)
             .link_account(&api, password)
+            .await?;
+        drop(stores);
+        self.announce_device().await;
+        Ok(())
+    }
+
+    /// Publishes this device's key packages when it gained its identity
+    /// while the gateway loop was already running. The engine publishes
+    /// them when the gateway welcomes it, and a device linked after that
+    /// welcome had no engine to hear it: nobody could add it to a group
+    /// until its next connection. Best effort, since the next welcome
+    /// publishes them anyway.
+    async fn announce_device(&self) {
+        if !self.started() {
+            return;
+        }
+        let Ok(engine) = self.dm_engine() else {
+            return;
+        };
+        let outcomes = engine
+            .lock()
             .await
+            .on_welcome(&lumia_core::proto::Welcome::default())
+            .await;
+        if let Ok(outcomes) = outcomes {
+            self.dispatch(outcomes);
+        }
     }
 
     /// Step 1 of linking this device (identity spec 4.2): the request to
@@ -2197,6 +2223,7 @@ impl App {
         let pair = dev.sign_in(&api).await?;
         drop(stores);
         self.save_tokens(&pair)?;
+        self.announce_device().await;
         Ok(roster_summary(&roster, &self.device_id))
     }
 
@@ -2429,20 +2456,30 @@ impl App {
         }
     }
 
-    /// Sends a message in a personal DM; `DmDelivered` follows on the sink
-    /// once the ciphertext is acked.
+    /// Sends a message in a personal DM and returns its id, which is also
+    /// the id of the command that carries it: `DmDelivered` names it on the
+    /// sink once the ciphertext is acked, an `Error` names it when the
+    /// instance refuses it, and the message is in the log under it.
     ///
     /// # Errors
     /// Without the group for the conversation, or before the loop started.
-    pub async fn dm_send(&self, channel_id: &str, body: &str) -> Result<(), ClientError> {
+    pub async fn dm_send(&self, channel_id: &str, body: &str) -> Result<String, ClientError> {
         let channel = parse_uuid(channel_id)?;
         let engine = self.dm_engine()?;
         let mut e = engine.lock().await;
         e.load_participants(&channel)?;
         let outcomes = e.send_text(&channel, body)?;
         drop(e);
+        // The engine queues one command for a send; its id is the operation's.
+        let id = outcomes
+            .iter()
+            .find_map(|o| match o {
+                Outcome::Send(command) => Some(wire::display(&command.command_id)),
+                _ => None,
+            })
+            .unwrap_or_default();
         self.dispatch(outcomes);
-        Ok(())
+        Ok(id)
     }
 
     /// Deletes one of this identity's messages in a personal DM.

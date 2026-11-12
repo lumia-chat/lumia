@@ -1328,9 +1328,9 @@ impl Client {
 
     /// Sends a message in a personal DM.
     pub fn dm_send(&self, channel_id: String, body: String) -> Res<()> {
-        Ok(self
-            .runtime
-            .block_on(self.app.dm_send(&channel_id, &body))?)
+        self.runtime
+            .block_on(self.app.dm_send(&channel_id, &body))?;
+        Ok(())
     }
 
     /// Deletes one of this identity's messages in a personal DM.

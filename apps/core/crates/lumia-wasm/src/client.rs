@@ -744,7 +744,11 @@ impl Client {
     /// Without the group for the conversation, or before the loop started.
     #[wasm_bindgen(js_name = dmSend)]
     pub async fn dm_send(&self, channel_id: String, body: String) -> Result<(), JsError> {
-        self.app.dm_send(&channel_id, &body).await.map_err(js)
+        self.app
+            .dm_send(&channel_id, &body)
+            .await
+            .map(|_id| ())
+            .map_err(js)
     }
 
     /// Deletes one of this identity's messages in a personal DM.
