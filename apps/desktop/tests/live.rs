@@ -94,7 +94,6 @@ fn a_message_sent_from_the_shell_goes_from_pending_into_the_store() {
     );
     again.connect();
     assert!(again.session.signed_in, "the tokens were kept");
-    again.resume();
     assert_eq!(again.route, Route::Shell);
     assert_eq!(again.session.channel().map(str::to_string), channel);
     assert!(

@@ -350,9 +350,12 @@ fn an_account_with_no_identity_here_is_led_to_linking_from_devices() {
         assert!(shown.contains(expected), "{expected:?} in:\n{shown}");
     }
     assert!(rt.find("devices-list").is_none());
+    // A passkey is made on the instance's page: the button asks for the handoff, once.
+    assert!(shown.contains("Add a passkey"));
+    press(&mut rt, "add-passkey");
     assert!(
-        !shown.contains("Add a passkey"),
-        "no control for what this shell cannot do yet"
+        rt.state.links.handing_off,
+        "the instance is asked for a token"
     );
 
     press(&mut rt, "link-this-computer");

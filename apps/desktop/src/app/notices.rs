@@ -10,8 +10,7 @@ use std::collections::HashMap;
 
 use lumia_client::app::AppEvent;
 
-use super::{HomeView, Route, State};
-use crate::session::Conversation;
+use super::{Route, State};
 use crate::session::notices::{Notice, NoticeUpdate};
 
 /// What the window knows about being looked at, and the notices it owes the system.
@@ -125,8 +124,7 @@ impl State {
             .personal_channels()
             .any(|channel| channel.channel_id == channel_id)
         {
-            self.go_home(HomeView::Conversations);
-            self.session.open_conversation(Conversation::Dm(channel_id));
+            self.open_dm(&channel_id);
         } else {
             if self.server_id() != Some(server_id.as_str()) {
                 self.select_server(&server_id);

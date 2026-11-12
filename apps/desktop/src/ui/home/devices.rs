@@ -7,9 +7,11 @@
 //! A device is named by the label its person gave it when it was linked, and by its kind
 //! when it has none.
 //!
-//! Not here: "Add a passkey". A passkey is made on the instance's web page, which needs the
-//! browser handoff (architecture 6.3) this shell does not have yet; the card says so
-//! instead of drawing the control. Nor "revoked on 1 of 2 instances": this shell knows one.
+//! "Add a passkey" opens the instance's web page signed in as this account, in the system
+//! browser (architecture 6.3): a passkey is made there, by the browser, for the instance's
+//! own domain.
+//!
+//! Not here: "revoked on 1 of 2 instances"; this shell knows one instance.
 
 use chrono::{DateTime, Local};
 use lumia_client::app::{DeviceSummary, PasskeySummary, RosterSummary};
@@ -238,8 +240,18 @@ fn passkeys(s: &State, look: Look) -> El {
     if !form.passkey_error.is_empty() {
         card = card.child(error_text(&form.passkey_error, look));
     }
-    card.child(quiet(
-        "A passkey is made on the instance's web page. This app cannot open it signed in as you yet; use the web app's Devices page for now.",
+    if !s.links.handoff_error.is_empty() {
+        card = card.child(error_text(&s.links.handoff_error, look));
+    }
+    card.child(row().child(secondary_button(
+        "add-passkey",
+        "Add a passkey",
+        !s.links.handing_off,
+        |s| s.open_web_signed_in("devices"),
+        look,
+    )))
+    .child(quiet(
+        "It is made on the instance's page, which opens in your browser signed in as you.",
     ))
 }
 

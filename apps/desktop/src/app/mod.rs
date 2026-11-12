@@ -313,9 +313,7 @@ pub fn init() -> State {
     {
         state.sign_in.instance = TextEdit::new(&instance);
         state.connect();
-        if state.session.signed_in {
-            state.resume();
-        } else {
+        if !state.session.signed_in {
             state.sign_in.handle = TextEdit::new(&handle);
             state.sign_in.password.replace_text(&password);
             state.submit();
@@ -324,9 +322,6 @@ pub fn init() -> State {
     }
     if state.settings.instance.is_some() {
         state.connect();
-        if state.session.signed_in {
-            state.resume();
-        }
     }
     state
 }

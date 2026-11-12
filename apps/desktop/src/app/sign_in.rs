@@ -52,7 +52,9 @@ impl SignIn {
 }
 
 impl State {
-    /// Opens the instance in the field and asks for its trust card.
+    /// Opens the instance in the field and asks for its trust card. When its stores already
+    /// hold a session (a launch, or coming back to an instance that was left without
+    /// signing out), that goes straight into the shell.
     pub fn connect(&mut self) {
         self.sign_in.error.clear();
         let url = self
@@ -67,6 +69,9 @@ impl State {
                 self.sign_in.reaching = true;
                 self.settings.instance = Some(url);
                 self.settings.save(&self.data_dir);
+                if self.session.signed_in {
+                    self.resume();
+                }
             }
             Err(error) => self.sign_in.error = error,
         }
