@@ -54,6 +54,20 @@ defmodule Lumia.Push do
     :ok
   end
 
+  @doc """
+  Removes every subscription a device holds for an account: what
+  `Lumia.Auth.revoke/1` does when the device's last session of the account
+  ends, however it ended (signing out, being signed out from elsewhere, the
+  device revoked from the identity).
+  """
+  def forget(account_id, device_id) do
+    Repo.delete_all(
+      from s in Subscription, where: s.account_id == ^account_id and s.device_id == ^device_id
+    )
+
+    :ok
+  end
+
   @doc "The subscriptions of these accounts, by device."
   def for_accounts(account_ids) do
     Repo.all(from s in Subscription, where: s.account_id in ^account_ids)

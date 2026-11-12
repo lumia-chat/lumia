@@ -265,7 +265,7 @@ The upload URL is single-use and expires. The attachment ID is then referenced f
 | `POST /friends/requests/{account_id}/accept` | → 204 |
 | `DELETE /friends/{account_id}` | → 204 |
 | `PUT /push/subscription` | `PushSubscription` → 204 | One per (device, kind), replacing the previous. Content-free pushes ("New message") go to devices with no live session, for personal DM messages and account mentions (architecture 15.5). |
-| `DELETE /push/subscription?kind=` | → 204 | Removes this device's subscription of that kind. |
+| `DELETE /push/subscription?kind=` | → 204 | Removes this device's subscription of that kind. A client does this before it signs out. The instance also removes every subscription a device holds for an account when the device's last usable session of that account ends (signed out, revoked from elsewhere, the device revoked from the identity): a push is read with a session, and a signed-out device must not be told the account has mail. |
 | `POST /dm-requests` | `SendDmRequestRequest` → `DmRequest` (201); `ALREADY_EXISTS` when the pair already has a personal DM; `NOT_FOUND` for a sender the recipient blocked |
 | `POST /dm-requests/{request_id}/respond` | `RespondDmRequestRequest` → `DmRequest`; only the recipient; accepting opens the pair's personal DM and puts `DmRequestUpdated` then `ChannelAdded` on both account logs |
 | `PUT /blocks` | `UpdateBlockListRequest` → 204 |
@@ -344,6 +344,8 @@ List endpoints take `page_size` (1 to 200, default 50) and an opaque `cursor`, a
 - **Bot tokens**: long-lived, scoped, sent as bearer. Scopes are permission names from `chat.proto`; a bot's effective permissions are the intersection of its scopes and its roles.
 - **OAuth 2.1** with PKCE for user-authorized integrations, standard endpoints under `/oauth/`.
 - A session is bound to a `device_id`. If the device is revoked in the roster the instance holds, every call fails with `DEVICE_REVOKED` and the gateway disconnects.
+- A client holds one session. A sign-in made while it holds one (linking a device that had signed in with a password, signing in again without signing out) revokes the held session once the new pair has arrived, so nothing is left alive on the instance that no client can sign out of.
+- A client gives every request a time to be answered in (the core: 20 seconds, more for what carries a picture or a chunk of history, 8 for the sign-out itself) and treats one that runs out as a transport failure. A refresh that ran out is the answer that never arrived, which the grace above is for.
 
 ## 13. Identity proof
 

@@ -30,6 +30,7 @@ defmodule Lumia.Auth do
   alias Lumia.Auth.Session
   alias Lumia.Crypto
   alias Lumia.Proto
+  alias Lumia.Push
   alias Lumia.Repo
   alias Lumia.Tx
   alias Lumia.V1
@@ -226,8 +227,25 @@ defmodule Lumia.Auth do
              }}
           )
 
+        # A push wakes a device to read a message with its session. With
+        # its last one gone it could read nothing, and whoever holds a
+        # signed-out phone would still be told the account has mail.
+        unless signed_in?(account_id, device_id), do: Push.forget(account_id, device_id)
+
         :ok
     end
+  end
+
+  @doc "Whether a device still has a session of this account that can be used."
+  def signed_in?(account_id, device_id) do
+    now = DateTime.utc_now()
+
+    Repo.exists?(
+      from s in Session,
+        where:
+          s.account_id == ^account_id and s.device_id == ^device_id and is_nil(s.revoked_at) and
+            s.refresh_expires_at > ^now
+    )
   end
 
   @doc "Revokes every session of a device on this instance (identity spec 4.4)."

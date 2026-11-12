@@ -4,11 +4,14 @@ defmodule Lumia.PushTest do
   use Lumia.DataCase, async: false
   use Oban.Testing, repo: Lumia.Repo
 
+  import Ecto.Query
   import Lumia.Fixtures
 
+  alias Lumia.Auth
   alias Lumia.Events
   alias Lumia.Push
   alias Lumia.Push.WebPush
+  alias Lumia.Repo
   alias Lumia.Servers
   alias Lumia.V1
   alias Lumia.Workers
@@ -124,6 +127,47 @@ defmodule Lumia.PushTest do
                })
 
       :ok = Push.delete(device, "web_push")
+      assert Push.for_accounts([a.id]) == []
+    end
+
+    test "a device's subscriptions go with its last session of the account, however that ends" do
+      a = account("a")
+      {phone, laptop} = {Ecto.UUID.generate(), Ecto.UUID.generate()}
+      {:ok, password, _} = Auth.create_session(a.id, phone)
+      {:ok, linked, _} = Auth.create_session(a.id, phone)
+      {:ok, _other, _} = Auth.create_session(a.id, laptop)
+      subscribe(a, phone, :RELAY_APNS)
+      subscribe(a, laptop)
+      devices = fn -> [a.id] |> Push.for_accounts() |> Enum.map(& &1.device_id) |> Enum.sort() end
+
+      # One of the phone's two sessions ends: it still has one to read with.
+      :ok = Auth.revoke(password.id)
+      assert devices.() == Enum.sort([phone, laptop])
+
+      # Its last one ends, as when it is signed out from elsewhere: the
+      # phone is no longer told of anything. The laptop is not touched.
+      :ok = Auth.revoke(linked.id)
+      assert devices.() == [laptop]
+
+      # The same for a device revoked from the identity.
+      Auth.revoke_device(a.id, laptop)
+      assert devices.() == []
+    end
+
+    test "a session that has run out does not keep a subscription alive" do
+      a = account("a")
+      phone = Ecto.UUID.generate()
+      {:ok, stale, _} = Auth.create_session(a.id, phone)
+      {:ok, live, _} = Auth.create_session(a.id, phone)
+      subscribe(a, phone, :RELAY_APNS)
+
+      past = DateTime.add(DateTime.utc_now(), -60, :second)
+
+      Repo.update_all(from(s in Auth.Session, where: s.id == ^stale.id),
+        set: [refresh_expires_at: past]
+      )
+
+      :ok = Auth.revoke(live.id)
       assert Push.for_accounts([a.id]) == []
     end
   end
