@@ -514,7 +514,7 @@ Deleting an **identity** is separate and done per instance by deleting each acco
 
 *Rejected for the Rune shell.* *One updater of Lumia's own on all three.* The part it would share, fetching and verifying, is the easy part; Lumia would own the swap on three systems (Gatekeeper and quarantine on macOS, locked files and elevation on Windows), as security-critical code with no delta updates. *A ready-made cross-platform updater.* The one looked at lists checksums in its feed and no signature was found, which the rule above does not allow.
 
-*Open in it.* A signature on each download does not stop a compromised host offering an old signed build as the newest. Sparkle's signed feeds answer that on macOS where the release in use has them; on Windows the installer may have to refuse a downgrade itself. And the Windows and Linux installs of the Tauri shell update from its `latest.json` under another key, so the first Rune release on those platforms is also published there, once, for them to update into.
+*Open in it.* A signature on each download does not stop a compromised host offering an old signed build as the newest. Sparkle's signed feeds answer that on macOS where the release in use has them; on Windows the installer may have to refuse a downgrade itself. Installs of the Tauri shell are not carried over to the Rune shell through the Tauri updater's feed: on 2026-11-11 they were testers' only, who install the new shell afresh.
 
 *What the update check reveals.* It is the one request a client makes to anything other than the user's own instances: once a day, GitHub learns an IP address fetched the feed. The check is the user's to turn off (the macOS app's menu; the Tauri shell's with its settings page), and section 11.1's visibility list names it.
 
