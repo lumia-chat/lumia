@@ -1,9 +1,17 @@
 // The small components the layout builds from, after the design system's
 // (apps/web/src/design/components.tsx) and the Swift ones: avatar, notice,
-// empty state, message row, request card, device row, composer, the auth
-// card and its fields, buttons. Tokens only; no literal colours or sizes.
+// empty state, message row, request card, device row, composer and the
+// line under it that says who is typing, the auth card and its fields,
+// buttons. Tokens only; no literal colours or sizes.
 package chat.lumia.kit
 
+import android.provider.Settings
+import androidx.compose.animation.core.EaseInOut
+import androidx.compose.animation.core.StartOffset
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.keyframes
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.border
@@ -32,12 +40,22 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -99,24 +117,62 @@ fun LumiaEmptyState(icon: ImageVector, title: String, text: String? = null, acti
     }
 }
 
+// What the phone boards draw and `tokens.json` has no name for, made from
+// the nearest tokens (the desktop shell's `tokens.rs` does the same).
+
+/** The room between one block of messages and the next. The boards drew 2; Ryan asked for more (2026-11-12). */
+private val BlockGap = LumiaTokens.space8
+/** Between two messages of a block, and under its name: a paragraph's distance, as the boards draw a message of several. */
+private val BlockWithin = LumiaTokens.space4
+/** Under the line that says who is typing, to the panel's foot (20). */
+private val TypingFoot = LumiaTokens.space16 + LumiaTokens.space4
+/** Between two dots of the typing line (3). */
+private val TypingDotGap = (LumiaTokens.space2 + LumiaTokens.space4) / 2
+
+/**
+ * A message's row. Messages one person sends close together are one block
+ * (`joins` says what that is, [place] where this one sits in its block):
+ * the first is an avatar beside the name, the time and the message; the
+ * ones after it are the message alone, in the same column, a paragraph's
+ * distance under the one before. A phone has no pointer to show such a
+ * row's time under, so it is not drawn; a screen reader still hears whose
+ * the message is and when, before it. Each row is one stop for it.
+ */
 @Composable
-fun LumiaMessageRow(author: String, tone: AvatarTone, time: String, text: String, deleted: Boolean = false) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = LumiaTokens.space16, vertical = LumiaTokens.space6),
-        horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space12),
-        verticalAlignment = Alignment.Top,
-    ) {
-        LumiaAvatar(initialsOf(author), tone, LumiaTokens.avatarMd)
-        Column(verticalArrangement = Arrangement.spacedBy(LumiaTokens.space2), modifier = Modifier.weight(1f)) {
+fun LumiaMessageRow(author: String, tone: AvatarTone, time: String, text: String, deleted: Boolean = false, place: BlockPlace = BlockPlace.Alone) {
+    val body = @Composable { modifier: Modifier ->
+        Text(
+            if (deleted) "(deleted)" else text,
+            style = LumiaTokens.textMessage.style,
+            color = if (deleted) LumiaTokens.inkQuiet.color else LumiaTokens.inkBody.color,
+            modifier = modifier,
+        )
+    }
+    val frame = Modifier
+        .fillMaxWidth()
+        .semantics(mergeDescendants = true) {}
+        .padding(
+            start = LumiaTokens.space16,
+            end = LumiaTokens.space16,
+            top = if (place.opens) BlockGap + LumiaTokens.space8 else BlockWithin / 2,
+            bottom = if (place.closes) LumiaTokens.space8 else BlockWithin / 2,
+        )
+    if (!place.opens) {
+        Box(frame) {
+            Box(Modifier.matchParentSize().semantics { contentDescription = "$author, $time" })
+            body(Modifier.padding(start = LumiaTokens.avatarLg + LumiaTokens.space12))
+        }
+        return
+    }
+    Row(modifier = frame, horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space12), verticalAlignment = Alignment.Top) {
+        // The name beside it says who; the initials would only be read out before it.
+        Box(Modifier.clearAndSetSemantics {}) { LumiaAvatar(initialsOf(author), tone, LumiaTokens.avatarLg) }
+        Column(verticalArrangement = Arrangement.spacedBy(BlockWithin), modifier = Modifier.weight(1f)) {
             Row(horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space8), verticalAlignment = Alignment.Bottom) {
                 Text(author, style = LumiaTokens.textAuthor.style, color = LumiaTokens.inkEmphasis.color)
                 Text(time, style = LumiaTokens.textMeta.style, color = LumiaTokens.inkQuiet.color)
             }
-            Text(
-                if (deleted) "(deleted)" else text,
-                style = LumiaTokens.textMessage.style,
-                color = if (deleted) LumiaTokens.inkQuiet.color else LumiaTokens.inkBody.color,
-            )
+            body(Modifier)
         }
     }
 }
@@ -134,12 +190,13 @@ fun LumiaDayDivider(label: String) {
     }
 }
 
+/** The composer. It has no room of its own underneath: [LumiaTypingLine] goes under it and has the room to the panel's foot. */
 @Composable
 fun LumiaComposer(text: String, onText: (String) -> Unit, placeholder: String, enabled: Boolean = true, onSend: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = LumiaTokens.space16, end = LumiaTokens.space16, bottom = LumiaTokens.space16)
+            .padding(horizontal = LumiaTokens.space16)
             .background(LumiaTokens.field.color, RoundedCornerShape(LumiaTokens.radius12))
             .border(1.dp, LumiaTokens.borderComposer.color, RoundedCornerShape(LumiaTokens.radius12))
             .padding(LumiaTokens.space10),
@@ -148,6 +205,89 @@ fun LumiaComposer(text: String, onText: (String) -> Unit, placeholder: String, e
     ) {
         LumiaInput(text, onText, placeholder, enabled = enabled, modifier = Modifier.weight(1f).heightIn(min = 24.dp), maxLines = 8)
         LumiaPrimaryButton("Send", enabled = enabled && text.isNotBlank(), onClick = onSend)
+    }
+}
+
+/**
+ * The line under the composer, as the phone boards draw it: who is typing
+ * in a server's channel (protocol 6.7), three dots and the words, the
+ * names in stronger ink. It keeps its height when nobody is, so the
+ * composer and the messages over it stay where they are as people start
+ * and stop. [names] are whoever began first at the front; a personal
+ * conversation passes none (`LumiaSession.typed` says why).
+ *
+ * The boards end the line at the panel's foot, where the system's bar
+ * lies over the screen: [systemFoot] is how much of the foot the system
+ * covers, and the room under the words is that or the line's own,
+ * whichever is more, not one on top of the other.
+ */
+@Composable
+fun LumiaTypingLine(names: List<String>, systemFoot: Dp) {
+    val words = typingWords(names)
+    val strong = SpanStyle(color = LumiaTokens.inkEmphasis.color, fontWeight = FontWeight(LumiaTokens.textSection.weight))
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = LumiaTokens.space16)
+            .padding(start = LumiaTokens.space8, top = LumiaTokens.space8, end = LumiaTokens.space8, bottom = maxOf(TypingFoot, systemFoot)),
+        horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space8),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (names.isNotEmpty()) TypingDots()
+        Text(
+            buildAnnotatedString {
+                append(words.text)
+                addStyle(strong, 0, words.named)
+            },
+            style = LumiaTokens.textMeta.style,
+            color = LumiaTokens.inkMuted.color,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+/** A typing dot at its faintest; it is at full strength two fifths of the way through its cycle and faint again at four fifths. */
+private const val TYPING_DOT_DIM = 0.3f
+/** One cycle of a typing dot, and how far each dot is behind the one before. */
+private const val TYPING_DOT_PERIOD_MS = 1200
+private const val TYPING_DOT_LAG_MS = 150
+
+/**
+ * The typing line's three dots, each brightening and fading in turn, the
+ * second and third a little behind the one before. Still and at full
+ * strength when the system's animations are off. Nothing a screen reader
+ * is told: the words beside them say it.
+ */
+@Composable
+private fun TypingDots() {
+    val resolver = LocalContext.current.contentResolver
+    val still = remember { Settings.Global.getFloat(resolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f }
+    val color = LumiaTokens.inkMuted.color
+    Row(Modifier.clearAndSetSemantics {}, horizontalArrangement = Arrangement.spacedBy(TypingDotGap)) {
+        if (still) {
+            repeat(3) { Box(Modifier.size(LumiaTokens.space4).background(color, CircleShape)) }
+        } else {
+            val cycle = rememberInfiniteTransition(label = "typing")
+            repeat(3) { n ->
+                val alpha by cycle.animateFloat(
+                    initialValue = TYPING_DOT_DIM,
+                    targetValue = TYPING_DOT_DIM,
+                    animationSpec = infiniteRepeatable(
+                        keyframes {
+                            durationMillis = TYPING_DOT_PERIOD_MS
+                            TYPING_DOT_DIM at 0 using EaseInOut
+                            1f at TYPING_DOT_PERIOD_MS * 2 / 5 using EaseInOut
+                            TYPING_DOT_DIM at TYPING_DOT_PERIOD_MS * 4 / 5
+                        },
+                        initialStartOffset = StartOffset(n * TYPING_DOT_LAG_MS),
+                    ),
+                    label = "dot$n",
+                )
+                Box(Modifier.size(LumiaTokens.space4).graphicsLayer { this.alpha = alpha }.background(color, CircleShape))
+            }
+        }
     }
 }
 

@@ -17,13 +17,18 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -48,6 +53,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
 import chat.lumia.kit.AppStore
 import chat.lumia.kit.AvatarTone
 import chat.lumia.kit.LumiaAvatar
@@ -65,9 +71,12 @@ import chat.lumia.kit.LumiaRequestCard
 import chat.lumia.kit.LumiaSecondaryButton
 import chat.lumia.kit.LumiaSession
 import chat.lumia.kit.LumiaTokens
+import chat.lumia.kit.LumiaTypingLine
 import chat.lumia.kit.NoticeTone
 import chat.lumia.kit.Route
 import chat.lumia.kit.SectionTitle
+import chat.lumia.kit.Stamp
+import chat.lumia.kit.blockPlaces
 import chat.lumia.kit.dayOfMicros
 import chat.lumia.kit.initialsOf
 import chat.lumia.kit.lumiaCode
@@ -75,6 +84,7 @@ import chat.lumia.kit.lumiaMessage
 import chat.lumia.kit.timeOfMicros
 import kotlinx.coroutines.launch
 import uniffi.lumia_ffi.DeviceSummary
+import uniffi.lumia_ffi.DmMessageSummary
 import uniffi.lumia_ffi.DmRequestSummary
 import androidx.compose.foundation.background
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -98,6 +108,11 @@ fun ConversationScreen(session: LumiaSession, channelId: String, back: () -> Uni
     val others = channel?.participantAccountIds?.filter { it != session.me } ?: emptyList()
     val title = channel?.let { session.conversationName(it) } ?: "Conversation"
     val listState = rememberLazyListState()
+    // Whose a message is: this account's from any of its devices, else the sender's.
+    val me = session.me
+    val senderOf = { m: DmMessageSummary -> if (m.mine) me else m.senderAccountId.ifEmpty { m.senderIdentityId } }
+    val sent = log?.messages ?: emptyList()
+    val places = remember(sent, me) { blockPlaces(sent.map { Stamp(senderOf(it), it.sentAtMicros) }) }
 
     LaunchedEffect(channelId) {
         session.refreshDmChannels()
@@ -114,7 +129,7 @@ fun ConversationScreen(session: LumiaSession, channelId: String, back: () -> Uni
         subtitle = listOf(others.map { session.pronounsOf(it) }.filter { it.isNotEmpty() }.joinToString(", "), channel?.host?.ifEmpty { null }?.let { "on $it" } ?: "").filter { it.isNotEmpty() }.joinToString(" · ").ifEmpty { null },
         lead = { LumiaAvatar(initialsOf(title), AvatarTone.of(others.firstOrNull() ?: channelId), LumiaTokens.avatarMd) },
     ) {
-        Column(Modifier.fillMaxSize().imePadding().navigationBarsPadding()) {
+        Column(Modifier.fillMaxSize().imePadding()) {
             LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth(), contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = LumiaTokens.space8)) {
                 item {
                     Column(Modifier.padding(horizontal = LumiaTokens.space16), verticalArrangement = Arrangement.spacedBy(LumiaTokens.space8)) {
@@ -131,10 +146,9 @@ fun ConversationScreen(session: LumiaSession, channelId: String, back: () -> Uni
                     }
                 }
                 if (log != null && log.messages.isNotEmpty()) item { LumiaDayDivider("Messages") }
-                items(log?.messages ?: emptyList(), key = { it.messageId }) { m ->
+                itemsIndexed(sent, key = { _, m -> m.messageId }) { i, m ->
                     val who = if (m.mine) session.selfName else if (m.senderAccountId.isNotEmpty() || others.size != 1) session.nameOf(m.senderAccountId) else session.nameOf(others[0])
-                    val toneId = if (m.mine) session.me else m.senderAccountId.ifEmpty { m.senderIdentityId }
-                    LumiaMessageRow(who, AvatarTone.of(toneId), timeOfMicros(m.sentAtMicros), m.body, m.deleted)
+                    LumiaMessageRow(who, AvatarTone.of(senderOf(m)), timeOfMicros(m.sentAtMicros), m.body, m.deleted, places[i])
                 }
                 if (error.isNotEmpty()) item { LumiaErrorText(error) }
             }
@@ -146,6 +160,10 @@ fun ConversationScreen(session: LumiaSession, channelId: String, back: () -> Uni
                 error = ""
                 scope.launch { try { session.dmSend(channelId, body) } catch (e: Exception) { error = e.lumiaMessage } }
             }
+            // Nobody is shown typing in a personal conversation, and nothing is sent when this
+            // person does (protocol 6.7); the line keeps its room, so the composer sits where a
+            // channel's does and the boards draw it.
+            ComposerFoot(emptyList())
         }
     }
 }
@@ -162,29 +180,48 @@ fun ChannelScreen(session: LumiaSession, channelId: String, back: () -> Unit) {
     val messages = session.messages[channelId] ?: emptyList()
     val name = channel?.name ?: "channel"
     val listState = rememberLazyListState()
+    val places = remember(messages) { blockPlaces(messages.map { Stamp(it.authorAccountId, it.createdAtMicros) }) }
 
     LaunchedEffect(channelId) { session.refreshMessages(channelId) }
     LaunchedEffect(messages.size) { if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size + 1) }
 
     PanelScreen(back = server?.name ?: "the server", onBack = back, title = "# $name", subtitle = server?.name) {
-        Column(Modifier.fillMaxSize().imePadding().navigationBarsPadding()) {
+        Column(Modifier.fillMaxSize().imePadding()) {
             LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth(), contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = LumiaTokens.space8)) {
                 if (messages.isEmpty()) item { LumiaEmptyState(Icons.Filled.ChatBubbleOutline, "Nothing here yet", "Say something.") }
                 else item { LumiaDayDivider("Today") }
-                items(messages, key = { it.messageId }) { m ->
-                    LumiaMessageRow(session.nameOf(m.authorAccountId), AvatarTone.of(m.authorAccountId), timeOfMicros(m.createdAtMicros), m.body, m.deleted)
+                itemsIndexed(messages, key = { _, m -> m.messageId }) { i, m ->
+                    LumiaMessageRow(session.nameOf(m.authorAccountId), AvatarTone.of(m.authorAccountId), timeOfMicros(m.createdAtMicros), m.body, m.deleted, places[i])
                 }
                 if (error.isNotEmpty()) item { LumiaErrorText(error) }
             }
-            LumiaComposer(draft, { draft = it }, "Message #$name") {
+            // Every edit that leaves something in the composer says this person is typing;
+            // emptied is not typing (a send). The core spaces what is sent.
+            LumiaComposer(draft, { draft = it; if (it.isNotBlank()) session.typed(channelId) }, "Message #$name") {
                 val body = draft.trim()
                 if (body.isEmpty()) return@LumiaComposer
                 draft = ""
                 error = ""
                 scope.launch { try { session.sendMessage(channelId, body) } catch (e: Exception) { error = e.lumiaMessage } }
             }
+            ComposerFoot(session.typingIn(channelId))
         }
     }
+}
+
+/**
+ * What is under a conversation's composer, to the foot of the panel: the
+ * line that says who is typing. The navigation bar lies over the panel's
+ * foot, and the line's own room there takes it in; the keyboard, when it
+ * is up, covers the bar and is already under the screen (`imePadding`).
+ * A composable of its own, so the keyboard's travel redraws this line and
+ * not the messages.
+ */
+@Composable
+private fun ComposerFoot(typing: List<String>) {
+    val bar = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+    val keyboard = WindowInsets.ime.asPaddingValues().calculateBottomPadding()
+    LumiaTypingLine(typing, systemFoot = (bar - keyboard).coerceAtLeast(0.dp))
 }
 
 // Requests

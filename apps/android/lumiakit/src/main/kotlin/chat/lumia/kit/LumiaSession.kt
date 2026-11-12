@@ -1,7 +1,8 @@
 // The session: one instance's client with the state the screens show,
 // kept fresh by the gateway's events the way the web's queries are
-// (apps/web/src/client/state.ts) and the Swift LumiaSession is. Compose
-// state, written on the main thread; every client call goes off it.
+// (apps/web/src/client/state.ts) and the Swift LumiaSession is, with who is
+// typing in the servers' channels as the desktop shell's session keeps it.
+// Compose state, written on the main thread; every client call goes off it.
 package chat.lumia.kit
 
 import androidx.compose.runtime.getValue
@@ -12,6 +13,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import uniffi.lumia_ffi.ClientEvent
 import uniffi.lumia_ffi.DmChannelSummary
@@ -144,6 +146,7 @@ class LumiaSession(val client: LumiaClient) {
         messages.clear()
         dmChannels = emptyList()
         dmLogs.clear()
+        showTyping(Typing())
     }
 
     // Identity
@@ -387,7 +390,14 @@ class LumiaSession(val client: LumiaClient) {
                 serverPresence.clear()
                 watchPresence(watchingServerIds)
             }
-            is ClientEvent.Applied -> refreshMessages(event.channelId)
+            is ClientEvent.Applied -> {
+                refreshMessages(event.channelId)
+                // Whoever's message arrived has finished typing it. Written with the
+                // messages, nothing suspending between, so no frame shows one without the other.
+                var now = typing
+                for (m in event.events.mapNotNull { it.message }) now = now.stopped(event.channelId, m.authorAccountId)
+                showTyping(now)
+            }
             is ClientEvent.SnapshotTaken -> refreshMessages(event.channelId)
             is ClientEvent.AccountApplied -> { refreshSnapshot(); refreshDmChannels() }
             is ClientEvent.Reconnecting -> connection = ConnectionState.Reconnecting(event.attempt)
@@ -404,10 +414,55 @@ class LumiaSession(val client: LumiaClient) {
                 for (id in event.leftAccountIds) server.remove(id)
                 serverPresence[event.serverId] = server
             }
-            // Who is typing (protocol 6.7) is not drawn on Android yet.
-            is ClientEvent.Acked, is ClientEvent.Error, is ClientEvent.SubscriptionFailed, is ClientEvent.DmNote, is ClientEvent.Typing -> Unit
+            // Never this account's own: the instance does not send it back, and it is not shown if one does.
+            is ClientEvent.Typing -> if (event.accountId != me) {
+                showTyping(typing.began(event.channelId, event.accountId, event.untilMicros))
+            }
+            is ClientEvent.Acked, is ClientEvent.Error, is ClientEvent.SubscriptionFailed, is ClientEvent.DmNote -> Unit
         }
     }
+
+    // Typing (protocol 6.7)
+
+    /** Who is typing in the servers' channels, whoever began first at the front; never this account. */
+    private var typing by mutableStateOf(Typing())
+    private var typingExpiry: Job? = null
+
+    /**
+     * This person changed what the composer of a server's channel holds and
+     * left something in it: says so to the channel. The core sends it at most
+     * once in five seconds and holds back anything that is not a server's
+     * channel. A personal conversation's screen does not call this at all:
+     * the instance is not to learn who is writing there, and whether typing
+     * travels inside one is an open item of the E2EE spec (section 13).
+     */
+    fun typed(channelId: String) {
+        if (connection != ConnectionState.Connected) return
+        scope.launch { runCatching { client.call { typing(channelId) } } }
+    }
+
+    /** The names of those typing in a channel, whoever began first at the front. */
+    fun typingIn(channelId: String): List<String> = typing.inChannel(channelId).map { nameOf(it) }
+
+    /**
+     * Shows who is typing now, and drops each when their time runs out:
+     * nothing arrives when someone stops, so one job sleeps until the first
+     * end there is, and ends itself once nobody is typing.
+     */
+    private fun showTyping(now: Typing) {
+        if (now == typing) return
+        typing = now
+        typingExpiry?.cancel()
+        typingExpiry = scope.launch {
+            while (true) {
+                val ends = typing.ends ?: break
+                delay(((ends - nowMicros()) / 1000 + 1).coerceAtLeast(1))
+                typing = typing.expired(nowMicros())
+            }
+        }
+    }
+
+    private fun nowMicros(): Long = System.currentTimeMillis() * 1000
 
     // Presence (protocol 6.7)
 

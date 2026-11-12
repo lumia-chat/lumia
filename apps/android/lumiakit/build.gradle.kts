@@ -35,4 +35,6 @@ dependencies {
     api(libs.compose.ui)
     api(libs.compose.foundation)
     api(libs.compose.material3)
+    // src/test: the rules that are plain values (Timeline.kt), on the JVM.
+    testImplementation(libs.junit)
 }
