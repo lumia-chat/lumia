@@ -31,18 +31,18 @@ Design stage. The architecture and protocol are written; the server, client core
 ```
 apps/instance   Elixir (Phoenix); what one deployment runs
 apps/core       Rust client core: protocol, sync engine, local store, identity; lumia-cli
-apps/ios        SwiftUI
-apps/macos      SwiftUI
+apps/apple      SwiftUI: the iOS app, and the macOS app the desktop shell replaces
 apps/android    Jetpack Compose
-apps/desktop    Tauri shell for Windows and Linux
+apps/desktop    The desktop shell for macOS, Windows and Linux, in Rust on Rune; and the Tauri shell it replaces
 apps/relay      Push relay for APNs and FCM
-apps/web        Web UI (SolidJS), shared with apps/desktop
+apps/web        Web UI (SolidJS) for the browser
 assets/         Logo, icons, fonts and design tokens shared by every shell
 proto/          Protobuf schemas
 docs/           Architecture, protocol contract, and specs
+spikes/         Throwaway code behind the write-ups in docs/spikes
 ```
 
-`apps/instance`, `apps/core`, `apps/web`, `apps/desktop` and `apps/relay` exist; the rest do not yet. Section 18 of the architecture doc gives the order they will be built in.
+Section 18 of the architecture doc gives the order these were built in, and section 21 says what each directory holds.
 
 ## Platforms
 

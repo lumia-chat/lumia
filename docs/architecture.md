@@ -470,32 +470,45 @@ Deleting an **identity** is separate and done per instance by deleting each acco
 
 | Platform | UI | Core |
 |---|---|---|
-| macOS, iOS | SwiftUI | Native, via UniFFI |
+| macOS, Windows, Linux | One desktop shell on Rune, a Rust-native toolkit that draws its own interface on the GPU | Native, in-process, linked as a Rust dependency |
+| iOS | SwiftUI | Native, via UniFFI |
 | Android | Jetpack Compose | Native, via UniFFI |
-| Windows, Linux | Tauri shell running the web UI on the system webview | Native, in-process |
-| Web | Same UI as the Tauri shell | WASM |
+| Web | The web UI (SolidJS) | WASM |
+
+**The desktop shell** (decided 2026-11-11). The three desktops share one shell, written in Rust on [Rune](https://github.com/anomalyco/rune) and built for macOS first, then Windows and Linux. It replaces two shells: the SwiftUI macOS app, and the Tauri shell that ran the web UI on the system webview for Windows and Linux. The reasons:
+
+- *One desktop interface instead of two.* The desktop had two to keep alike, SwiftUI on macOS and the web UI on Windows and Linux; it has one.
+- *The core links directly.* `lumia_client::app::App` is a Rust API and the shell's state is a Rust struct, so there is no binding layer and no WASM on the desktop. The Tauri shell ran the core as WASM inside the webview, as the browser does.
+- *No webview.* The weakest desktop was Linux on WebKitGTK, which is where the previous decision expected to miss its budgets.
+- *Measured.* Two spikes built the same shell (rail, sidebar, a 10,000-message list, a composer) over a seeded core store, one on Rune and one on GPUI, on macOS ([spikes/2026-11-11-rune-desktop.md](spikes/2026-11-11-rune-desktop.md), [spikes/2026-11-11-gpui-desktop.md](spikes/2026-11-11-gpui-desktop.md)). On Rune the window's first frame came 300 ms after launch against the 1 s budget, a scrolled frame cost 0.12 ms of CPU at the median and 0.59 ms at worst, and the idle process held 117 MB against the 150 MB budget. Message bodies in the protocol's Markdown subset rendered with Japanese, Chinese, Arabic, Cyrillic and emoji; input-method composition and the accessibility tree passed their headless tests.
+
+**What the decision rests on that is not proven** (hard rule 7). Each is a proof obligation in section 20:
+
+- *Rune is pre-release.* It was three weeks old at the decision, is at version 0.0.1, asks apps to pin a revision, and builds against its own patched `wgpu-hal` and `winit`, which the shell's manifest repeats. It takes no pull requests: a fix Lumia needs is an upstream issue or a patch Lumia carries.
+- *Input methods reach Rune through winit* on every desktop, which Rune's own plan calls incomplete, with open issues on Wayland. Composition handling is tested; nobody has typed Japanese, Chinese or Korean into the window.
+- *Accessibility* goes through AccessKit. The tree reads correctly headlessly; no screen reader has been run over it.
+- *Frame pacing.* While scrolling at 60 Hz, one or two frames in a hundred began a refresh late, however little they cost.
+- *Windows and Linux* have not been run.
+- *Selecting text across messages* needs either a 13-line patch to Rune's Markdown widget or Lumia's own renderer for message bodies; the widget as shipped stops a selection at the end of a message.
+
+**Fallback.** GPUI with GPUI Kit is the named alternative. On the same workload it began every frame on time, brings its own input-method code for each platform, and selects across messages as shipped; it costs two to five times the CPU per frame, and its working stack is three parties deep (Zed's tree, one person's republished snapshots of it, a third party's component kit). The shell moves to it if a hand check of input methods or of a screen reader fails in the Rune window and cannot be fixed upstream or by a patch Lumia can carry, or if a desktop row of section 17 misses on Rune. The shell keeps its session layer (the client, the gateway's events, the state the screens read) free of toolkit types so that such a move rewrites views and not client logic.
+
+**Transition.** Until the Rune shell reaches parity on a platform, that platform's existing shell is the one that ships: the SwiftUI app on macOS, the Tauri shell on Windows and Linux. Parity is the feature list of the shell being replaced plus the hand checks above on that platform. At parity on macOS, `apps/apple/Lumia-macOS` is removed (LumiaKit and the iOS app stay); at parity on Windows and Linux, `apps/desktop/src-tauri` is removed. No platform ships two desktop shells.
 
 **Rejected.**
 - *One cross-platform toolkit everywhere (Flutter, Electron).* Performance is the first priority and Electron's memory footprint is disqualifying.
 - *Fully independent native apps.* Six implementations of MLS and sync is how E2EE bugs happen.
-- *Rust-native desktop UI (Slint, Iced, GPUI).* Still weak on rich text, IME, and accessibility, which are exactly what a chat composer and a message list need. Was the named upgrade path until Qt replaced it (below).
+- *A separate desktop shell per platform: SwiftUI on macOS, the web UI in Tauri on Windows and Linux.* The decision until 2026-11-11. Two desktop interfaces to keep alike, the Linux one on the weakest webview, and the core as WASM on two of three desktops.
+- *GPUI as the first choice.* See the fallback above: steadier and older, heavier per frame, and a supply chain Lumia would depend on three parties to keep moving.
+- *The other Rust-native toolkits (Slint, Iced).* Not spiked. The objection that first rejected all of them, weak rich text, input methods and accessibility, was answered for Rune and GPUI by building on them, and stands untested for the rest.
+- *Qt 6 with Qt Quick.* The escape hatch of the previous decision, for Windows and Linux if WebKitGTK missed its budgets. Strong where the Rust-native toolkits were weak (`QTextDocument`, input methods on Wayland and X11, AT-SPI and UIA), but a fourth interface language in QML, C++ glue through cxx-qt, and LGPL modules that must be linked dynamically. It is the choice of last resort if both Rust-native toolkits fail their hand checks.
 - *Toolkit-native shells for Windows and Linux (WinUI, GTK).* WinUI is one more UI codebase for one platform on a toolkit Microsoft keeps churning; Linux has no single native toolkit, so GTK or Qt chosen for "nativeness" covers part of the desktops either way.
-
-**Linux.** Tauri on Linux means WebKitGTK, the weakest of the system webviews for GPU compositing, Wayland, and raw performance. Linux is therefore where the "webview is the bottleneck" trigger fires first, the budgets in section 17 carry a Linux row, and the Qt path would start there.
-
-**Qt as the desktop escape hatch.** If the Linux budget row in section 17 misses, the desktop shell for **Windows and Linux together** moves from Tauri to **Qt 6 with Qt Quick**, the UI in QML and the glue in Rust through cxx-qt, the Rust core linked in-process. Qt is chosen over the Rust-native toolkits because it is strong where they are weak: rich text (`QTextDocument`), input methods on Wayland and X11, and accessibility (AT-SPI on Linux, UIA on Windows). Telegram Desktop is the existence proof of a Qt chat client that scrolls very large channels smoothly on both platforms, and Qt Quick's scene graph fits a 10k-message list better than WebKitGTK compositing. Considerations recorded so the decision does not have to be re-derived:
-
-- *Both platforms or neither.* Qt buys little on Windows alone: WebView2 is Chromium, so the webview is not the bottleneck there, and a Qt window looks no more native than a webview does. But once the Qt codebase exists for Linux, Windows is nearly free, and Qt for Linux beside Tauri for Windows means two desktop shells, two bug surfaces, and two CI pipelines for one platform class. One desktop codebase, whichever it is; `apps/desktop` is replaced, not joined.
-- *Cost.* A fourth UI implementation (SwiftUI, Compose, the web UI, Qt), and the web UI still exists for the browser. The design system's components are rebuilt in QML; tokens, fonts, and icons carry over from `assets/`. This is the argument that rejected every other extra shell in this section, and it still applies; the measured Linux budget is what overrides it, not preference.
-- *Licensing.* The client core is Apache-2.0 and Qt's main modules are LGPL v3, so Qt is linked dynamically: Flatpak with the KDE runtime on Linux, `windeployqt` on Windows. Static linking under the LGPL needs relinkable objects and is not done. Modules stay on Core, Gui, Quick, Network, and Multimedia; GPL-only modules (Charts, Virtual Keyboard, Data Visualization) are not used.
-- *What it resolves.* The open question of whether the Tauri shell ships the core in-process or as WASM (section 20) disappears, since a Qt shell links the core directly and the desktop gets the native core row in the table above.
-- *What it costs the web client.* The web UI loses its desktop dogfooding; it is exercised in browsers only.
-
-The trigger is the Linux row in section 17, measured on the Tauri shell CI builds. Until it misses, Tauri stays.
 
 **Local-first.** Every connected instance's data the user has seen is in SQLite and readable offline. Sends are optimistic with client-minted command IDs. Reconnect resumes from cursors per section 8.4.
 
 **Distribution.** The desktop apps are published as **GitHub Releases**, not through app stores: a `v*` tag builds the macOS DMG (signed with Developer ID, notarized) and the Tauri bundles for Windows and Linux, attaches them to one release, and publishes it only when every build succeeded. The version is the tag. Each app updates itself from that release: the macOS app through **Sparkle**, reading `appcast.xml`, the Tauri shell through its updater plugin, reading `latest.json`; both feeds are signed with a key whose public half is compiled into the app, so a compromised download host cannot push a build. The feed URLs are build settings, so a fork publishes its own releases and points its builds at them. Linux packages installed from deb or rpm update through the package manager, not the app. The Android app ships the same way: the tag builds a signed APK (one release key for the app's life, since Android installs an update only over the same key) and attaches it to the release, where an installer such as Obtainium picks up new versions; push needs no store, FCM only a Firebase project and UnifiedPush nothing. A Play Store listing is a later channel for reach and automatic updates, not a requirement. iOS cannot be installed any other way; it goes through TestFlight and the App Store.
+
+*The Rune shell and releases.* The Rune shell joins this release path platform by platform as it replaces a shell: the same GitHub Release, the same rule that the feed is signed with a key whose public half is compiled into the app. Its bundles and its updater are not built yet (section 20).
 
 *What the update check reveals.* It is the one request a client makes to anything other than the user's own instances: once a day, GitHub learns an IP address fetched the feed. The check is the user's to turn off (the macOS app's menu; the Tauri shell's with its settings page), and section 11.1's visibility list names it.
 
@@ -569,7 +582,7 @@ A limit resolves as **min(operator hard limit, max(applicable plan allowances))*
 
 Proposed. Adjust the numbers; keep the section and the workload spec. Each budget is meaningless without its workload, and CI fails on regressions against the ones that can be measured in CI.
 
-Measured so far, on a laptop: the write transaction commits in under 1 ms and sustains about 10k writes/s across 100 channels with p99 around 6 ms ([spikes/2026-11-01-event-log.md](spikes/2026-11-01-event-log.md)). Through the real gateway, send to delivered is 7 ms p50 and 22 ms p99 with 200 subscribers on one channel, and 13 ms p50 and 32 ms p99 with 1,000, against the 100 ms budget ([spikes/2026-11-01-gateway.md](spikes/2026-11-01-gateway.md)). The first load test ([spikes/2026-11-06-load.md](spikes/2026-11-06-load.md), `mix lumia.load`, 2026-11-06) ran the rows below against a database of 10 million events: send to delivered 6 ms p50 and 18 ms p99 on the row's workload; connect, authenticate and resume 50 channels with presence 66 ms p99; scrollback 3 ms p99; MLS encrypt and decrypt under 0.1 ms; the frame at 177 bytes, which corrected the budget. The connections row missed by seven times that morning (585 KB of server memory per connection against the 80 KB that 100,000 in 8 GB implies, and about 100 connects a second before the database pool dropped queries); by the evening, with the subscribe resolved per frame, the Postgres sockets' read buffers capped and the presence diff made cheap, 10,000 connections cost 97 KB each after the connect and 112 KB after traffic, and 2,000 connects a second completed without a dropped query. The spike has the accounting; the last third is still open. CI runs the instance rows at a small scale (`mix lumia.load --ci`) and the MLS row in release, each p99 against its budget.
+Measured so far, on a laptop: the write transaction commits in under 1 ms and sustains about 10k writes/s across 100 channels with p99 around 6 ms ([spikes/2026-11-01-event-log.md](spikes/2026-11-01-event-log.md)). Through the real gateway, send to delivered is 7 ms p50 and 22 ms p99 with 200 subscribers on one channel, and 13 ms p50 and 32 ms p99 with 1,000, against the 100 ms budget ([spikes/2026-11-01-gateway.md](spikes/2026-11-01-gateway.md)). The first load test ([spikes/2026-11-06-load.md](spikes/2026-11-06-load.md), `mix lumia.load`, 2026-11-06) ran the rows below against a database of 10 million events: send to delivered 6 ms p50 and 18 ms p99 on the row's workload; connect, authenticate and resume 50 channels with presence 66 ms p99; scrollback 3 ms p99; MLS encrypt and decrypt under 0.1 ms; the frame at 177 bytes, which corrected the budget. The connections row missed by seven times that morning (585 KB of server memory per connection against the 80 KB that 100,000 in 8 GB implies, and about 100 connects a second before the database pool dropped queries); by the evening, with the subscribe resolved per frame, the Postgres sockets' read buffers capped and the presence diff made cheap, 10,000 connections cost 97 KB each after the connect and 112 KB after traffic, and 2,000 connects a second completed without a dropped query. The spike has the accounting; the last third is still open. CI runs the instance rows at a small scale (`mix lumia.load --ci`) and the MLS row in release, each p99 against its budget. The desktop shell was measured on macOS in the two toolkit spikes of 2026-11-11 ([spikes/2026-11-11-rune-desktop.md](spikes/2026-11-11-rune-desktop.md)): on Rune, launch to a window's first frame 300 ms with 100,000 local messages, a scrolled frame of a 10,000-message channel 0.12 ms of CPU at p50 and 0.59 ms at worst, idle RSS 117 MB; each with one store open and no connection, where the rows say five instances.
 
 | Budget | Target | Workload |
 |---|---|---|
@@ -577,7 +590,7 @@ Measured so far, on a laptop: the write transaction commits in under 1 ms and su
 | Gateway connect, authenticate, resume 50 channels with no gaps | 500 ms | Same database; cursors current; presence for all 50 |
 | Client cold start to interactive, last-viewed channel rendered from SQLite | 1 s | 100k local messages, 5 instances |
 | Idle desktop client RSS, 5 instances connected | 150 MB | After 10 minutes idle, GC settled |
-| Linux desktop (WebKitGTK): scroll a 10k-message channel at 60 fps, cold start, idle RSS | Same budgets as other desktops | Measured separately because WebKitGTK is the weakest webview; a miss here triggers the Qt desktop shell for Windows and Linux together (section 13) |
+| Desktop shell on each of macOS, Windows and Linux: scroll a 10k-message channel at 60 fps, cold start, idle RSS | The cold start and RSS budgets above; no scrolled frame over 16.7 ms | Measured on the Rune shell, per platform, since a GPU-drawn shell depends on each platform's drivers and compositor. A miss on a platform keeps that platform on the shell it has and reopens the toolkit choice (section 13, the fallback). Measured on macOS only so far: no frame near 16.7 ms of CPU, but one or two frames in a hundred begun a refresh late |
 | Idle mobile client RSS | 80 MB | Same |
 | Concurrent gateway connections per node (4 vCPU, 8 GB) | 100,000 | 50 subscriptions each, 10% in presence, 1 msg/s per 1,000 connections, p99 delivery still under budget. Measured 2026-11-06 at 10,000: delivery p99 34 ms, 97 KB per connection after the connect and 112 KB after 20 s of traffic (585 KB the same morning; the spike has what changed), a third over |
 | Protobuf frame for a plain text message, excluding body | 200 bytes | Transport only: the event envelope and the message inside it, each with its ids and timestamp (measured at 177; a reply's `parent_id` adds 18). The MLS ciphertext of a 1 KB operation measured 188 bytes over the plaintext |
@@ -608,16 +621,19 @@ Prove one complete secure lifecycle before any second UI shell starts. The order
 6. The **web UI inside Tauri** as the first shell, because it is also the Windows, Linux, and browser client, so one shell covers four targets and the web device model (section 11.4) is exercised early.
 7. Multi-node, push, SwiftUI, Compose, in that order.
 8. A first release: what a new person hits first (servers and channels from the apps, the rest of invites, presence, more sign-in methods), what an operator needs (the release path exercised by a tag, two instances in compose), and the proofs the specs still owe. The checklist is in the plan.
+9. The desktop shell on Rune (section 13): macOS first, to parity with the SwiftUI macOS app and through the hand checks, then Windows and Linux to parity with the Tauri shell. Each replaced shell is removed when its platform reaches parity.
 
 ## 19. Deferred and out of scope
 
-Deferred, with a design path noted in the relevant section: federation of any kind; replicated connected channels; an organization's audit of its members' external guest memberships; cross-instance DM requests to strangers via DM-only guest memberships on the recipient's host; key transparency for the directory; an out-of-band code-verification extension for the web client; WASM instance plugins; E2EE private channels; read receipts; link unfurling; custom emoji in text; group calls, video, and screen share detail; bundled TURN; "Sign in with Lumia" OIDC; a Qt desktop shell for Windows and Linux (section 13, on the Linux budget trigger); SAML, SCIM, group sync, compliance export, and audit log; KMS-backed instance master keys.
+Deferred, with a design path noted in the relevant section: federation of any kind; replicated connected channels; an organization's audit of its members' external guest memberships; cross-instance DM requests to strangers via DM-only guest memberships on the recipient's host; key transparency for the directory; an out-of-band code-verification extension for the web client; WASM instance plugins; E2EE private channels; read receipts; link unfurling; custom emoji in text; group calls, video, and screen share detail; bundled TURN; "Sign in with Lumia" OIDC; SAML, SCIM, group sync, compliance export, and audit log; KMS-backed instance master keys.
 
 Out of scope: a hosted-only feature that cannot run self-hosted; a second edition of the server; any mechanism that requires instances to trust each other.
 
 ## 20. Open questions and proof obligations
 
-- Whether the Tauri shell ships the Rust core in-process from day one or starts as WASM for parity with web. Moot if the Linux budget sends desktop to Qt (section 13).
+- The Rune desktop shell's proof obligations (section 13), each closed by doing it and recording the result in the plan: a Japanese, Chinese or Korean input method, dead keys, the emoji picker and dictation typed into the composer on each platform; a screen reader (VoiceOver, Narrator, Orca) over the channel list, the message list and the composer; frame pacing while scrolling in a real window; the section 17 desktop rows on Windows and Linux.
+- How the Rune shell selects text across messages: a carried patch to Rune's Markdown widget, the same change accepted upstream, or Lumia's own renderer for message bodies.
+- What the Rune shell needs from each platform that the shells it replaces had: bundles, signing and the self-update feed (Sparkle on macOS, the Tauri updater elsewhere); the at-rest key from the platform keystore (section 12); the browser handoff for passkeys and OIDC (section 6.3); notifications.
 - Link unfurling: server-fetched versus client-fetched, and whether it exists at all in personal DMs.
 
 ## 21. Repository layout
@@ -625,10 +641,11 @@ Out of scope: a hosted-only feature that cannot run self-hosted; a second editio
 ```
 apps/instance   Elixir, single Phoenix app (contexts, not umbrella); named for what it is, one deployment, since "server" means a community in Lumia
 apps/core       Rust client core: protocol, MLS, SQLite store, sync, search; UniFFI and WASM bindings
-apps/apple      SwiftUI: LumiaKit (the Swift package over the UniFFI bindings: client, session, tokens, components) and one app directory per platform (Lumia-macOS, Lumia-iOS), since the package and the apps version together
+apps/apple      SwiftUI: LumiaKit (the Swift package over the UniFFI bindings: client, session, tokens, components) and one app directory per platform (Lumia-macOS, Lumia-iOS), since the package and the apps version together. Lumia-macOS is removed when the Rune shell reaches parity on macOS (section 13)
 apps/android    Jetpack Compose
-apps/desktop    Tauri shell for Windows and Linux; a Qt shell would replace it here, never sit beside it (section 13)
-apps/web        Web UI, shared with apps/desktop
+apps/desktop    The desktop shell on Rune for macOS, Windows and Linux, the crate at the directory's root. `src-tauri` beside it is the Tauri shell it replaces on Windows and Linux, removed at parity there (section 13)
+apps/web        Web UI for the browser; also what the Tauri shell shows while that shell exists
 proto/          Protobuf schemas; the source of truth for the gateway, the API, and generated types
 docs/           This document, the protocol contract, and the provisional-section specs
+spikes/         Throwaway code behind a write-up in docs/spikes, kept so its numbers can be rerun; nothing ships from here
 ```
