@@ -8,6 +8,7 @@ use std::path::Path;
 use rune::{FileDialogOptions, TextEdit, Tx};
 
 use super::{HomeView, Place, Popover, Route, State};
+use crate::session::Failure;
 use crate::session::avatars::AvatarUpdate;
 use crate::session::identity::IdentityUpdate;
 
@@ -369,24 +370,7 @@ impl State {
         *form = PhotoForm::default();
         match answer {
             Ok(_) => form.saved = true,
-            Err(failure) => {
-                let reason = failure.details.get("reason").map(String::as_str);
-                form.error = match (failure.code.as_str(), reason) {
-                    ("INVALID_ARGUMENT", Some("too_large")) => {
-                        "That picture is too large. Choose one under 8 MB.".into()
-                    }
-                    ("INVALID_ARGUMENT", Some("unsupported")) => {
-                        "That file is not a picture Lumia can read. Choose a PNG, JPEG, WebP or GIF.".into()
-                    }
-                    ("INVALID_ARGUMENT", Some("unreadable")) => {
-                        format!("That file could not be read: {}.", failure.message)
-                    }
-                    ("INVALID_ARGUMENT", _) => "That picture could not be read.".into(),
-                    ("FAILED_PRECONDITION", _) => "This instance does not keep pictures.".into(),
-                    ("RATE_LIMITED", _) => "The instance is busy. Try again in a moment.".into(),
-                    _ => failure.message.clone(),
-                };
-            }
+            Err(failure) => form.error = picture_refusal(failure),
         }
     }
 
@@ -516,5 +500,25 @@ impl State {
             | IdentityUpdate::Passkeys(_)
             | IdentityUpdate::PasskeyRemoved(Ok(())) => {}
         }
+    }
+}
+
+/// Why a picture was not taken, an account's or a server's, as the other shells word it.
+pub(super) fn picture_refusal(failure: &Failure) -> String {
+    let reason = failure.details.get("reason").map(String::as_str);
+    match (failure.code.as_str(), reason) {
+        ("INVALID_ARGUMENT", Some("too_large")) => {
+            "That picture is too large. Choose one under 8 MB.".into()
+        }
+        ("INVALID_ARGUMENT", Some("unsupported")) => {
+            "That file is not a picture Lumia can read. Choose a PNG, JPEG, WebP or GIF.".into()
+        }
+        ("INVALID_ARGUMENT", Some("unreadable")) => {
+            format!("That file could not be read: {}.", failure.message)
+        }
+        ("INVALID_ARGUMENT", _) => "That picture could not be read.".into(),
+        ("FAILED_PRECONDITION", _) => "This instance does not keep pictures.".into(),
+        ("RATE_LIMITED", _) => "The instance is busy. Try again in a moment.".into(),
+        _ => failure.message.clone(),
     }
 }

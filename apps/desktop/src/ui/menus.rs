@@ -3,7 +3,7 @@
 //! is returned from `ui::overlay`, so it mounts at the window's root beside its anchor.
 //!
 //! Where they leave the boards. The server's name has no menu drawn, only its chevron; this
-//! one holds what the shell can do to a server. The account menu has no Preferences and no
+//! one holds what the shell can do to a server, its settings for whoever may change them. The account menu has no Preferences and no
 //! Keyboard shortcuts, which the shell does not have, and has Devices, which it does. The
 //! card has no team, no local time and no call button, none of which the product knows; it
 //! shows the pronouns, the custom status and the bio of the person's verified profile.
@@ -29,32 +29,42 @@ pub const SELF_AVATAR: &str = "self";
 pub fn server(s: &State, look: Look) -> Option<El> {
     let id = s.server_id()?;
     let server = s.session.servers().iter().find(|x| x.server_id == id)?;
-    Some(
-        menu(
-            "server-menu",
-            SERVER_TITLE,
-            &server.name,
-            Side::Bottom,
-            Align::Start,
-            look,
-        )
-        .child(menu_item(
-            "menu-invite",
-            Some(menu_glyph(&icons::MEMBER_JOINED, look)),
-            "Invite people",
-            None,
-            State::open_invites,
-            look,
-        ))
-        .child(menu_item(
-            "menu-new-channel",
-            Some(menu_glyph(&icons::HASH, look)),
-            "New channel",
-            None,
-            State::open_new_channel,
-            look,
-        )),
+    let mut items = menu(
+        "server-menu",
+        SERVER_TITLE,
+        &server.name,
+        Side::Bottom,
+        Align::Start,
+        look,
     )
+    .child(menu_item(
+        "menu-invite",
+        Some(menu_glyph(&icons::MEMBER_JOINED, look)),
+        "Invite people",
+        None,
+        State::open_invites,
+        look,
+    ))
+    .child(menu_item(
+        "menu-new-channel",
+        Some(menu_glyph(&icons::HASH, look)),
+        "New channel",
+        None,
+        State::open_new_channel,
+        look,
+    ));
+    // Offered to whoever may change them; the instance decides all the same.
+    if server.can_manage {
+        items = items.child(menu_item(
+            "menu-server-settings",
+            Some(menu_glyph(&icons::SETTINGS, look)),
+            "Server settings",
+            None,
+            State::open_server_settings,
+            look,
+        ));
+    }
+    Some(items)
 }
 
 /// The account menu: who is signed in, the status they show, and the ways to their

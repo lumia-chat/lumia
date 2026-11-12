@@ -155,10 +155,16 @@ pub fn snapshot() -> SnapshotSummary {
             ServerSummary {
                 server_id: "acme".into(),
                 name: "Acme Works".into(),
+                icon_url: String::new(),
+                retention_days: 0,
+                can_manage: true,
             },
             ServerSummary {
                 server_id: "garden".into(),
                 name: "Garden".into(),
+                icon_url: String::new(),
+                retention_days: 0,
+                can_manage: false,
             },
         ],
         channels: vec![

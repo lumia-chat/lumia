@@ -104,6 +104,29 @@ pub const SCENES: &[Scene] = &[
         servers_sample(s);
         s.open_account_menu();
     }),
+    // A server's settings (`ui/server_settings.rs`): Acme with a picture, which the rail
+    // draws too, and a shorter retention chosen and not yet saved, which says what it
+    // deletes. The picture is the brand's icon standing in; no instance is asked for it.
+    ("server-settings", |s| {
+        use crate::session::avatars::AvatarUpdate;
+        servers_sample(s);
+        let url = format!("/api/v1/avatars/{}", "ac".repeat(32));
+        if let Some(mut snapshot) = s.session.snapshot.clone() {
+            snapshot.servers[0].icon_url.clone_from(&url);
+            snapshot.servers[0].retention_days = 365;
+            s.receive(&Update::Snapshot(Ok(snapshot)));
+        }
+        s.receive(&Update::Avatar(AvatarUpdate::Fetched {
+            url,
+            bytes: Ok(std::sync::Arc::from(
+                &include_bytes!("../../../assets/brand/lumia-original-icon.png")[..],
+            )),
+        }));
+        s.open_server_settings();
+        s.choose_retention(30);
+        s.tick(chrono::Utc::now().timestamp_micros());
+        s.pictures.wait();
+    }),
     ("person-card", |s| {
         servers_sample(s);
         s.open_person("grace", "member-grace");
@@ -179,10 +202,16 @@ fn servers_sample(state: &mut State) {
             ServerSummary {
                 server_id: "acme".into(),
                 name: "Acme Works".into(),
+                icon_url: String::new(),
+                retention_days: 0,
+                can_manage: true,
             },
             ServerSummary {
                 server_id: "garden".into(),
                 name: "Garden".into(),
+                icon_url: String::new(),
+                retention_days: 0,
+                can_manage: false,
             },
         ],
         channels: vec![
@@ -417,6 +446,9 @@ mod staged {
             servers: vec![ServerSummary {
                 server_id: "acme".into(),
                 name: "Acme Works".into(),
+                icon_url: String::new(),
+                retention_days: 0,
+                can_manage: true,
             }],
             channels: vec![
                 channel("general", "acme", "general", "", &[]),
@@ -668,6 +700,9 @@ pub fn bodies(state: &mut State) {
         servers: vec![ServerSummary {
             server_id: "acme".into(),
             name: "Acme Works".into(),
+            icon_url: String::new(),
+            retention_days: 0,
+            can_manage: true,
         }],
         channels: vec![ChannelSummary {
             channel_id: "general".into(),

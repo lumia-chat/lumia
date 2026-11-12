@@ -14,6 +14,7 @@ pub mod menu;
 pub mod notices;
 pub mod pictures;
 pub mod server;
+pub mod server_settings;
 pub mod sign_in;
 
 use std::path::PathBuf;
@@ -158,6 +159,7 @@ impl State {
 
     /// Puts a server on screen with its first channel.
     pub fn select_server(&mut self, server_id: &str) {
+        self.close_server_settings();
         self.place = Place::Server(server_id.to_string());
         self.placed = true;
         self.popover = None;
@@ -179,6 +181,7 @@ impl State {
     }
 
     pub fn select_channel(&mut self, channel_id: &str) {
+        self.close_server_settings();
         self.session.open_channel(channel_id);
         self.draft.clear();
         self.remember_channel();

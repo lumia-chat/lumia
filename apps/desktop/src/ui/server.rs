@@ -119,8 +119,11 @@ pub fn sidebar(s: &State, server: &ServerSummary, look: Look) -> El {
     )
 }
 
-/// The open channel, or what to say when there is none.
+/// The open channel, or what to say when there is none; or the server's settings.
 pub fn main(s: &State, server: &ServerSummary, look: Look) -> El {
+    if s.server_settings_open() {
+        return super::server_settings::view(s, server, look);
+    }
     let Some(channel) = s
         .session
         .channel()

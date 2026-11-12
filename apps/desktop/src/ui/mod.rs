@@ -10,6 +10,7 @@ mod menus;
 mod scroll;
 mod server;
 mod server_popovers;
+mod server_settings;
 mod shell;
 mod sign_in;
 mod timeline;

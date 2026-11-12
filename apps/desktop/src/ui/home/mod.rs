@@ -14,6 +14,9 @@ mod preferences;
 mod profile;
 mod requests;
 
+/// A page's frame, for the server's settings too.
+pub(crate) use devices::{action, page as titled_page, page_column};
+
 use lumia_client::app::ChannelSummary;
 use rune::{Cursor, El, Icon, ScrollSpec, col, el, icon, row, text};
 

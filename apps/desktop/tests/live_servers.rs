@@ -294,3 +294,105 @@ fn a_server_is_made_given_a_channel_and_joined_by_invite() {
     assert!(owner.server_forms.invite.list.is_empty());
     assert_eq!(owner.server_forms.invite.error, "");
 }
+
+/// A server's owner changes its name, retention and picture from its settings (architecture
+/// 6.7); a member, told through the account log, sees the new name and draws the picture,
+/// and is not offered the settings.
+#[test]
+fn a_servers_settings_are_changed_and_every_member_sees_them() {
+    let Ok(instance) = std::env::var("LUMIA_DEV_INSTANCE") else {
+        eprintln!("skipped: no LUMIA_DEV_INSTANCE");
+        return;
+    };
+    let dir = std::env::temp_dir().join(format!("lumia-shell-settings-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis()
+        % 100_000_000;
+
+    let mut owner = new_account(&instance, &dir.join("owner"), &format!("setown{stamp}"));
+    owner.go_home(HomeView::AddServer);
+    owner
+        .server_forms
+        .add
+        .name
+        .replace_text(format!("Before {stamp}"));
+    owner.create_server();
+    wait(&mut owner, "the new server on screen", |s| {
+        matches!(s.place, Place::Server(_))
+    });
+    let server_id = owner.server_id().unwrap().to_string();
+    owner.open_invites();
+    owner.make_invite();
+    wait(&mut owner, "the invite link", |s| {
+        s.server_forms.invite.made.is_some()
+    });
+    let link = owner.server_forms.invite.made.clone().unwrap().url;
+    owner.close_popover();
+
+    let mut member = new_account(&instance, &dir.join("member"), &format!("setmem{stamp}"));
+    member.go_home(HomeView::AddServer);
+    member.server_forms.add.invite.replace_text(&link);
+    member.look_up_invite();
+    wait(&mut member, "the invite's preview", |s| {
+        s.server_forms.add.preview.is_some()
+    });
+    member.join_invite();
+    wait(&mut member, "the joined server on screen", |s| {
+        s.server_id() == Some(server_id.as_str())
+    });
+    let theirs = |s: &State| {
+        s.session
+            .servers()
+            .iter()
+            .find(|x| x.server_id == server_id)
+            .cloned()
+            .unwrap()
+    };
+    assert!(!theirs(&member).can_manage, "a member is not offered them");
+    assert!(theirs(&owner).can_manage, "the owner is");
+
+    // ---- The owner renames the server and keeps its messages for 90 days ------------------
+    owner.open_server_settings();
+    assert!(owner.server_settings_open());
+    owner
+        .server_forms
+        .settings
+        .name
+        .replace_text(format!("After {stamp}"));
+    owner.save_server_name();
+    wait(&mut owner, "the name saved", |s| {
+        s.server_forms.settings.name_saving.saved
+    });
+    owner.choose_retention(90);
+    owner.save_server_retention();
+    wait(&mut owner, "the retention saved", |s| {
+        s.server_forms.settings.retention_saving.saved
+    });
+    assert_eq!(theirs(&owner).name, format!("After {stamp}"));
+    assert_eq!(theirs(&owner).retention_days, 90);
+
+    // ---- A picture, from a file, as a person chooses one -----------------------------
+    let photo = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../instance/test/support/fixtures/media/sideways.jpg");
+    owner.set_server_picture(&photo);
+    wait(&mut owner, "the picture saved", |s| {
+        s.server_forms.settings.picture.saved
+    });
+    let icon = theirs(&owner).icon_url;
+    assert!(icon.starts_with("/api/v1/avatars/"), "{icon}");
+
+    // ---- The member hears of it through the account log, and draws the picture ----------
+    wait(&mut member, "the member's snapshot to change", |s| {
+        theirs(s).name == format!("After {stamp}") && theirs(s).icon_url == icon
+    });
+    assert_eq!(theirs(&member).retention_days, 90);
+    wait(&mut member, "the picture's bytes", |s| {
+        s.session
+            .avatars
+            .held()
+            .any(|(url, _)| url == icon.as_str())
+    });
+}

@@ -10,9 +10,11 @@
 //! that cannot be used is drawn at half strength; the boards draw no disabled state.
 
 use rune::{
-    Align, Color, Cursor, El, Icon, Side, SurfaceFit, TextEdit, Tx, col, el, icon, row, text,
-    text_input,
+    Align, Color, Cursor, El, Icon, Image, Side, SurfaceFit, TextEdit, Tx, col, el, icon, row,
+    text, text_input,
 };
+
+use lumia_client::app::ServerSummary;
 
 use crate::app::State;
 use crate::tokens::{self as t, Colors, Shadows};
@@ -61,20 +63,64 @@ pub fn avatar(name: &str, id: &str, size: f32, look: Look) -> El {
         .child(text(initials(name)).font(t::initials(size)).color(ink))
 }
 
-/// [`avatar`] for someone the state knows: their picture over their initials when this
-/// computer holds it. The initials stay underneath, since a picture that is still decoding
-/// paints nothing.
+/// [`avatar`] for someone the state knows: their picture when this computer holds it. The
+/// initials stay underneath while it decodes, which paints nothing, and go once it is drawn:
+/// a picture with transparency would show them through.
 pub fn avatar_of(s: &State, name: &str, id: &str, size: f32, look: Look) -> El {
-    let initials = avatar(name, id, size, look);
     match s.picture_of(id) {
-        Some(picture) => initials.child(
-            el().key("picture")
-                .absolute(0.0, 0.0)
-                .size(size, size)
+        Some(picture) if drawn(picture) => {
+            let (ground, _) = t::tone(id, look.c);
+            el().size(size, size)
                 .radius(size / 2.0)
-                .pixels_fit(picture.pixels(), SurfaceFit::Fill),
-        ),
-        None => initials,
+                .fill(ground)
+                .a11y_hidden()
+                .child(circled(picture, size))
+        }
+        Some(picture) => avatar(name, id, size, look).child(circled(picture, size)),
+        None => avatar(name, id, size, look),
+    }
+}
+
+/// Whether a picture has decoded and can stand without initials under it.
+pub fn drawn(picture: &Image) -> bool {
+    picture.is_ready() && picture.error().is_none()
+}
+
+/// A picture as a circle `size` across, over whatever it is a child of.
+pub fn circled(picture: &Image, size: f32) -> El {
+    el().key("picture")
+        .absolute(0.0, 0.0)
+        .size(size, size)
+        .radius(size / 2.0)
+        .pixels_fit(picture.pixels(), SurfaceFit::Fill)
+}
+
+/// A server as the rail draws it, `size` across: its initials on the tile's colour, and its
+/// picture over them when this computer holds it.
+pub fn server_picture(s: &State, server: &ServerSummary, size: f32, ink: Color, look: Look) -> El {
+    let tile = el()
+        .size(size, size)
+        .radius(size / 2.0)
+        .fill(look.c.tile)
+        .center()
+        .a11y_hidden();
+    let picture = s.picture_at(&server.icon_url);
+    let tile = if picture.is_some_and(drawn) {
+        tile
+    } else {
+        tile.child(
+            text(initials(&server.name))
+                .font(if size > t::TILE_SIZE {
+                    t::initials(size)
+                } else {
+                    t::TEXT_MONOGRAM_REST
+                })
+                .color(ink),
+        )
+    };
+    match picture {
+        Some(picture) => tile.child(circled(picture, size)),
+        None => tile,
     }
 }
 

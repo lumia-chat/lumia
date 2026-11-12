@@ -89,6 +89,20 @@ fn media_type(path: &Path) -> &'static str {
     }
 }
 
+/// The bytes of the picture file at `path` and what it is taken to be, or the refusal the
+/// instance would have given: an account's photo and a server's picture are read alike.
+pub(super) fn read_picture(path: &Path) -> Result<(Vec<u8>, &'static str), Failure> {
+    match std::fs::metadata(path) {
+        Ok(file) if file.len() > MAX_UPLOAD_BYTES => {
+            Err(refused("too_large", "the picture is over 8 MB"))
+        }
+        Ok(_) => std::fs::read(path)
+            .map(|bytes| (bytes, media_type(path)))
+            .map_err(|error| refused("unreadable", &error.to_string())),
+        Err(error) => Err(refused("unreadable", &error.to_string())),
+    }
+}
+
 fn refused(reason: &str, message: &str) -> Failure {
     Failure {
         code: "INVALID_ARGUMENT".into(),
@@ -125,6 +139,10 @@ impl Session {
     /// they are kept in when it is there, and is asked of the instance otherwise.
     pub(crate) fn want_pictures(&mut self) {
         let own = self.snapshot.as_ref().map(|s| s.avatar_url.as_str());
+        let servers = self
+            .snapshot
+            .iter()
+            .flat_map(|s| s.servers.iter().map(|server| server.icon_url.as_str()));
         let named = self.people.values().map(|p| p.avatar_url.as_str());
         let looked_up = self
             .profiles
@@ -133,6 +151,7 @@ impl Session {
             .map(|p| p.avatar_url.as_str());
         let new: Vec<String> = own
             .into_iter()
+            .chain(servers)
             .chain(named)
             .chain(looked_up)
             .filter(|url| is_own_avatar(url) && !self.avatars.known.contains_key(*url))
@@ -179,18 +198,12 @@ impl Session {
         let Some(app) = self.client() else { return };
         let path = path.to_path_buf();
         self.task(async move {
-            let saved = match std::fs::metadata(&path) {
-                Ok(file) if file.len() > MAX_UPLOAD_BYTES => {
-                    Err(refused("too_large", "the picture is over 8 MB"))
-                }
-                Ok(_) => match std::fs::read(&path) {
-                    Ok(bytes) => app
-                        .set_avatar(bytes, media_type(&path))
-                        .await
-                        .map_err(Failure::from),
-                    Err(error) => Err(refused("unreadable", &error.to_string())),
-                },
-                Err(error) => Err(refused("unreadable", &error.to_string())),
+            let saved = match read_picture(&path) {
+                Ok((bytes, media_type)) => app
+                    .set_avatar(bytes, media_type)
+                    .await
+                    .map_err(Failure::from),
+                Err(refusal) => Err(refusal),
             };
             Update::Avatar(AvatarUpdate::Saved(saved))
         });

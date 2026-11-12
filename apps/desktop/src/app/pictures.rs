@@ -76,6 +76,14 @@ impl Pictures {
 }
 
 impl State {
+    /// The picture a URL names (a server's), when this computer holds it.
+    pub fn picture_at(&self, url: &str) -> Option<&Image> {
+        if url.is_empty() {
+            return None;
+        }
+        self.pictures.get(url)
+    }
+
     /// The picture of an account, when it has one this computer holds.
     pub fn picture_of(&self, account_id: &str) -> Option<&Image> {
         self.pictures.get(self.session.picture_of(account_id)?)

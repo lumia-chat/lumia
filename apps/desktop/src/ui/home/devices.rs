@@ -56,7 +56,7 @@ pub fn view(s: &State, look: Look) -> El {
 
 /// A Home page: the panel, its header with what the page is about, and the page's cards in
 /// a column that scrolls. Devices and Profile are both one.
-pub(super) fn page(key: &'static str, title: &str, topic: &str, content: El, look: Look) -> El {
+pub(crate) fn page(key: &'static str, title: &str, topic: &str, content: El, look: Look) -> El {
     let header = conversation::header_with(title, None, Some(topic), look);
     panel("panel", look).w_full().child(header).child(
         col()
@@ -73,7 +73,7 @@ pub(super) fn page(key: &'static str, title: &str, topic: &str, content: El, loo
 }
 
 /// The column a page's cards stand in: a conversation's side padding, 12 between cards.
-pub(super) fn page_column() -> El {
+pub(crate) fn page_column() -> El {
     col()
         .w_full()
         .px(t::SPACE_24)
@@ -83,7 +83,7 @@ pub(super) fn page_column() -> El {
 }
 
 /// A card's primary action at the width of a button, not of the card.
-pub(super) fn action(button: El) -> El {
+pub(crate) fn action(button: El) -> El {
     row()
         .w_full()
         .child(el().w(t::AUTH_WIDTH / 2.0).child(button))

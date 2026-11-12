@@ -12,7 +12,7 @@
 use lumia_client::app::ServerSummary;
 use rune::{Cursor, El, col, el, icon, row, text};
 
-use super::components::{Look, avatar_of, initials, shadowed, status_dot};
+use super::components::{Look, avatar_of, circled, drawn, initials, shadowed, status_dot};
 use super::menus::{SELF_AVATAR, SERVER_TITLE};
 use super::{home, server};
 use crate::app::{HomeView, Place, Popover, State};
@@ -149,8 +149,11 @@ fn rail(s: &State, current: Option<&ServerSummary>, look: Look) -> El {
         let mut tile = rail_button(format!("server-{}", server.server_id), &server.name, look)
             .radius(t::TILE_SIZE / 2.0)
             .fill(if active { c.raised } else { c.tile })
-            .on_press(move |s: &mut State| s.select_server(&id))
-            .child(
+            .on_press(move |s: &mut State| s.select_server(&id));
+        // The server's picture once this computer holds it; its initials until it is drawn.
+        let picture = s.picture_at(&server.icon_url);
+        if !picture.is_some_and(drawn) {
+            tile = tile.child(
                 text(initials(&server.name))
                     .font(if active {
                         t::TITLE_MONOGRAM
@@ -159,6 +162,10 @@ fn rail(s: &State, current: Option<&ServerSummary>, look: Look) -> El {
                     })
                     .color(if active { c.ink_selected } else { c.ink }),
             );
+        }
+        if let Some(picture) = picture {
+            tile = tile.child(circled(picture, t::TILE_SIZE).a11y_hidden());
+        }
         if active {
             tile = shadowed(tile, look.shadows.ring_current);
         }

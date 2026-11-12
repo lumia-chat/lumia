@@ -19,6 +19,8 @@ pub struct ServerForms {
     pub add: AddServer,
     pub channel: NewChannel,
     pub invite: Invites,
+    /// The settings page of a server (`app::server_settings`).
+    pub settings: super::server_settings::ServerSettings,
     /// What was just made or joined, to put on screen once a snapshot lists it.
     opening: Option<Opening>,
 }
@@ -246,6 +248,11 @@ impl State {
 
     pub(super) fn react_server(&mut self, update: &ServerUpdate) {
         match update {
+            ServerUpdate::SettingSaved {
+                server_id,
+                setting,
+                result,
+            } => self.react_setting(server_id, *setting, result),
             ServerUpdate::ServerCreated(answer) => {
                 let form = &mut self.server_forms.add;
                 form.creating = false;
