@@ -437,8 +437,7 @@ fn the_shell_exchanges_requests_and_encrypted_messages_with_cli_devices() {
 
 /// The order a person meets: signed in with a password on a computer that holds no
 /// identity, told to link it, linked while the gateway is already connected, and then in a
-/// conversation someone else's device creates: welcomed into its group, or, as things are,
-/// left out of it and rejoining.
+/// conversation someone else's device creates, welcomed into its group.
 #[test]
 fn a_shell_linked_after_signing_in_gets_into_a_conversation_someone_else_created() {
     let (Ok(instance), Ok(bin)) = (
@@ -523,47 +522,13 @@ fn a_shell_linked_after_signing_in_gets_into_a_conversation_someone_else_created
         s.session.dm_member(&channel).is_some()
     });
 
-    // A device linked while its gateway was already connected has published no key
-    // packages (the core publishes them on a welcome, and the engine did not exist at the
-    // last one), so the creator could not add it: `created group ... with 2 leaves`, the
-    // creator's and the first device's. Until the core publishes them when the engine
-    // starts, the way in is the one the screen offers: Rejoin.
-    let deadline = Instant::now() + Duration::from_secs(3);
-    while Instant::now() < deadline && state.session.dm_member(&channel) != Some(true) {
-        state.drain();
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    if state.session.dm_member(&channel) == Some(true) {
-        eprintln!("welcomed by the creator:\n{accepted}");
-    } else {
-        eprintln!("not welcomed, rejoining; the creator said:\n{accepted}");
-        assert!(
-            !state.session.send("Too early.", 0),
-            "nothing is sent from outside the group"
-        );
-        state.rejoin_dm();
-        assert!(state.home.rejoining);
-        wait(&mut state, "the rejoin", |s| {
-            !s.home.rejoining && s.session.dm_member(&channel) == Some(true)
-        });
-        assert_eq!(state.home.rejoin_error, "");
-        state.session.last_error = None;
-
-        // The CLI's `dm send` encrypts as it connects, before it has read the rejoin's
-        // commit: this message is at the epoch this device was never in. The log counts
-        // it as sent before the join, which the screen says above the messages.
-        cli(
-            &bin,
-            &other,
-            &["dm", "send", &channel, "Across the rejoin."],
-        );
-        wait(&mut state, "the message from before the join", |s| {
-            s.session
-                .dm_log(&channel)
-                .is_some_and(|log| log.before_join == 1)
-        });
-        assert!(state.session.entries.is_empty());
-    }
+    // A device linked while its gateway was already connected publishes its key packages
+    // when the claim completes (the core's `announce_device`), so the creator finds one
+    // and adds it: `created group ... with 3 leaves`, and no rejoin is needed.
+    assert!(accepted.contains("with 3 leaves"), "{accepted}");
+    wait(&mut state, "the creator's welcome", |s| {
+        s.session.dm_member(&channel) == Some(true)
+    });
 
     say(&mut state, "Linked late, and here.");
     hear(&mut state, &bin, &other, &channel, "And heard.", &other_id);

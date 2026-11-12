@@ -11,10 +11,9 @@
 //! more than one other person being started from here (one that exists is read and written
 //! like any other).
 //!
-//! A send is shown as pending until the log holds it. `App::dm_send` does not return the
-//! operation's id, so a pending send is matched to the log by its words and its time, and a
-//! send the instance refuses after it was queued cannot be tied back to its message: only a
-//! send that fails to queue is marked failed.
+//! A send is shown as pending until the log holds it. The engine queues it off this thread
+//! and answers with the message's id, which is also its command's: the pending send takes
+//! that id, the log settles it by it, and a refusal from the instance names it.
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
@@ -59,10 +58,10 @@ pub enum DmUpdate {
         channel_id: String,
         log: Result<DmLogSummary, Failure>,
     },
-    /// A send was queued, or could not be.
+    /// A send was queued, under the message id the engine gave it, or could not be.
     Sent {
         pending_id: String,
-        result: Result<(), Failure>,
+        result: Result<String, Failure>,
     },
     /// [`Session::dm_start`] answered: the conversation's id when one was opened, `None`
     /// when the instance wanted a request first and one went out.
@@ -93,11 +92,8 @@ pub struct DmState {
     pub logs: HashMap<String, DmLogSummary>,
     /// Asks for [`DmState::channels`] that failed in a row.
     channel_failures: u32,
-    /// How many sends this session has minted an id for.
+    /// How many sends this session has minted a placeholder id for.
     sends: u64,
-    /// The messages a pending send was matched to, so two sends of the same words are not
-    /// both taken for the first to arrive.
-    matched: HashSet<String>,
 }
 
 impl Session {
@@ -346,13 +342,30 @@ impl Session {
                     self.revision += 1;
                 }
             }
+            // The send has its real id now. The log may already hold it: it can be read
+            // before this answer arrives.
+            DmUpdate::Sent {
+                pending_id,
+                result: Ok(id),
+            } => {
+                let Some(pending) = self.pending.iter_mut().find(|p| p.id == *pending_id) else {
+                    return;
+                };
+                if !id.is_empty() {
+                    pending.id.clone_from(id);
+                }
+                let channel_id = pending.channel_id.clone();
+                if let Some(log) = self.dm.logs.get(&channel_id).cloned() {
+                    self.settle_dm_sends(&channel_id, &log);
+                }
+                self.revision += 1;
+            }
             // The conversation exists, or its group is being made: the engine's own events
             // (`DmSubscribed`, `DmReady`) say when there is more to read.
             DmUpdate::Started { result: Ok(_), .. }
             | DmUpdate::Answered { result: Ok(_), .. }
             | DmUpdate::Rejoined { result: Ok(()), .. } => self.refresh_dm_channels(),
-            DmUpdate::Sent { result: Ok(()), .. }
-            | DmUpdate::Started { result: Err(_), .. }
+            DmUpdate::Started { result: Err(_), .. }
             | DmUpdate::Answered { result: Err(_), .. }
             | DmUpdate::Rejoined { result: Err(_), .. } => {}
         }
@@ -375,7 +388,7 @@ impl Session {
                 let mut waiting: HashSet<String> = self
                     .pending
                     .iter()
-                    .filter(|p| p.id.starts_with(SEND_PREFIX) && p.failed.is_none())
+                    .filter(|p| p.failed.is_none() && self.dm_member(&p.channel_id).is_some())
                     .map(|p| p.channel_id.clone())
                     .collect();
                 waiting.extend(self.dm().map(str::to_string));
@@ -448,39 +461,14 @@ impl Session {
             .collect()
     }
 
-    /// Drops the pending sends a log now holds: this identity's message with the same words,
-    /// stamped no earlier than the send, that no other send was matched to.
+    /// Drops the pending sends a log now holds, by the id the engine gave each.
     fn settle_dm_sends(&mut self, channel_id: &str, log: &DmLogSummary) {
-        let matched = &mut self.dm.matched;
         let before = self.pending.len();
         self.pending.retain(|p| {
-            if p.channel_id != channel_id || p.failed.is_some() || !p.id.starts_with(SEND_PREFIX) {
-                return true;
-            }
-            let found = log.messages.iter().find(|m| {
-                m.mine
-                    && m.body == p.body
-                    && m.sent_at_micros >= p.sent_at_micros
-                    && !matched.contains(&m.message_id)
-            });
-            match found {
-                Some(message) => {
-                    matched.insert(message.message_id.clone());
-                    false
-                }
-                None => true,
-            }
+            p.channel_id != channel_id || !log.messages.iter().any(|m| m.message_id == p.id)
         });
         if self.pending.len() != before {
             self.revision += 1;
-        }
-        // With nothing waiting, a later send is stamped after every message here.
-        if !self
-            .pending
-            .iter()
-            .any(|p| p.id.starts_with(SEND_PREFIX) && p.failed.is_none())
-        {
-            matched.clear();
         }
     }
 

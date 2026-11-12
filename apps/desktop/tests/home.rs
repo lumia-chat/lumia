@@ -441,47 +441,79 @@ fn a_send_is_pending_until_the_log_holds_it_and_one_that_cannot_be_queued_says_w
     enter(&mut rt);
     assert_eq!(rt.state.draft.text, "", "the draft is taken");
     assert_eq!(rt.state.session.pending.len(), 1);
-    let first = rt.state.session.pending[0].id.clone();
+    let placeholder = rt.state.session.pending[0].id.clone();
     assert!(words(&rt).contains("Sending…"));
 
-    // Said twice: two sends wait.
-    type_text(&mut rt, "On my way.");
-    enter(&mut rt);
-    assert_eq!(rt.state.session.pending.len(), 2);
-
-    // The log as it was does not settle either.
+    // The same words in the log under another id are not this send.
+    let old = said("old", true, "me", "On my way.", before - 1_000_000);
+    let other = said("other", true, "me", "On my way.", now());
     receive(
         &mut rt,
-        log(
-            "with-grace",
-            vec![said("old", true, "me", "On my way.", before - 1_000_000)],
-            0,
-            0,
-        ),
+        log("with-grace", vec![old.clone(), other.clone()], 0, 0),
     );
-    assert_eq!(rt.state.session.pending.len(), 2);
+    assert_eq!(rt.state.session.pending.len(), 1);
 
-    // The first is delivered: one send is settled, the other still waits.
-    let delivered = vec![
-        said("old", true, "me", "On my way.", before - 1_000_000),
-        said("new1", true, "me", "On my way.", now()),
-    ];
-    receive(&mut rt, log("with-grace", delivered.clone(), 0, 0));
-    assert_eq!(rt.state.session.pending.len(), 1);
-    assert_ne!(rt.state.session.pending[0].id, first);
-    // Read again with nothing new, the second is not taken for the first.
-    receive(&mut rt, log("with-grace", delivered.clone(), 0, 0));
-    assert_eq!(rt.state.session.pending.len(), 1);
+    // The engine queued it and says which message it is; the log then settles it.
+    receive(
+        &mut rt,
+        Update::Dm(DmUpdate::Sent {
+            pending_id: placeholder,
+            result: Ok("new1".into()),
+        }),
+    );
+    assert_eq!(rt.state.session.pending[0].id, "new1");
     assert!(words(&rt).contains("Sending…"));
-
-    let mut both = delivered;
-    both.push(said("new2", true, "me", "On my way.", now()));
-    receive(&mut rt, log("with-grace", both, 0, 0));
+    let mut held = vec![old, other, said("new1", true, "me", "On my way.", now())];
+    receive(&mut rt, log("with-grace", held.clone(), 0, 0));
     assert!(rt.state.session.pending.is_empty());
     assert_eq!(rt.state.session.entries.len(), 3);
     assert!(!words(&rt).contains("Sending…"));
 
+    // A log read before the engine's answer settles the send when the answer names it.
+    type_text(&mut rt, "Nearly there.");
+    enter(&mut rt);
+    let placeholder = rt.state.session.pending[0].id.clone();
+    held.push(said("new2", true, "me", "Nearly there.", now()));
+    receive(&mut rt, log("with-grace", held.clone(), 0, 0));
+    assert_eq!(
+        rt.state.session.pending.len(),
+        1,
+        "not yet known to be new2"
+    );
+    receive(
+        &mut rt,
+        Update::Dm(DmUpdate::Sent {
+            pending_id: placeholder,
+            result: Ok("new2".into()),
+        }),
+    );
+    assert!(rt.state.session.pending.is_empty());
+
+    // A send the instance refuses after it was queued is marked by its id.
+    type_text(&mut rt, "Let me in.");
+    enter(&mut rt);
+    let placeholder = rt.state.session.pending[0].id.clone();
+    receive(
+        &mut rt,
+        Update::Dm(DmUpdate::Sent {
+            pending_id: placeholder,
+            result: Ok("new3".into()),
+        }),
+    );
+    receive(
+        &mut rt,
+        Update::Gateway(AppEvent::Error {
+            code: "PERMISSION_DENIED".into(),
+            message: "you are not in this conversation".into(),
+            command_id: "new3".into(),
+        }),
+    );
+    assert!(words(&rt).contains("Not sent: you are not in this conversation"));
+    press(&mut rt, "dismiss");
+    assert!(rt.state.session.pending.is_empty());
+
     // A send the engine cannot queue is marked with the reason and can be dismissed.
+    press(&mut rt, "composer");
     type_text(&mut rt, "Are you there?");
     enter(&mut rt);
     let id = rt.state.session.pending[0].id.clone();
