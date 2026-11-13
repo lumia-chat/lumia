@@ -36,6 +36,43 @@ defmodule Lumia.RelayTest do
                     %{"title" => "Lumia", "body" => "New message"}}
   end
 
+  test "a badge and a read pass through; anything else in a notice does not" do
+    conn =
+      push(%{
+        platform: "apns",
+        token: "tok",
+        instance: "chat.example",
+        notice: %{kind: "read", badge: 3, channel: "secret", title: 7}
+      })
+
+    assert conn.status == 204
+    assert_receive {:delivered, "tok", "chat.example", notice}
+    assert notice == %{"kind" => "read", "badge" => 3, "title" => 7}
+
+    push(%{platform: "apns", token: "tok", instance: "x", notice: %{kind: "other", badge: -1}})
+    assert_receive {:delivered, "tok", "x", %{}}
+  end
+
+  test "a read is a silent background push carrying the badge" do
+    {_public, private} = :crypto.generate_key(:ecdh, :prime256v1)
+    config = [private_key: private, key_id: "K", team_id: "T", topic: "chat.lumia", sandbox: true]
+
+    {_url, headers, body} =
+      Apns.request(config, "abc", "chat.example", %{"kind" => "read", "badge" => 2})
+
+    assert {"apns-push-type", "background"} in headers
+    assert {"apns-priority", "5"} in headers
+    decoded = Jason.decode!(body)
+    assert decoded["aps"] == %{"content-available" => 1, "badge" => 2}
+    assert decoded["kind"] == "read"
+
+    {_url, headers, body} =
+      Apns.request(config, "abc", "chat.example", %{"body" => "New message", "badge" => 4})
+
+    assert {"apns-push-type", "alert"} in headers
+    assert %{"aps" => %{"badge" => 4, "alert" => %{}}} = Jason.decode!(body)
+  end
+
   test "a dead token answers 410, a bad body 400, health 200" do
     assert push(%{platform: "fcm", token: "gone-1", instance: "x", notice: %{}}).status == 410
     assert push(%{platform: "sms", token: "t", instance: "x"}).status == 400

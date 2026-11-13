@@ -29,6 +29,19 @@ defmodule Lumia.V1.DmSend do
   field :parent_id, 3, type: :bytes, json_name: "parentId"
   field :attachments, 4, repeated: true, type: Lumia.V1.DmAttachment
   field :mentions, 5, repeated: true, type: :bytes
+  field :quote, 6, type: Lumia.V1.DmQuote
+end
+
+defmodule Lumia.V1.DmQuote do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.DmQuote",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :message_id, 1, type: :bytes, json_name: "messageId"
+  field :text, 2, type: :string
 end
 
 defmodule Lumia.V1.DmEdit do

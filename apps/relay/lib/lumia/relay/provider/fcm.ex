@@ -39,17 +39,34 @@ defmodule Lumia.Relay.Provider.Fcm do
       Jason.encode!(%{
         "message" => %{
           "token" => token,
-          "data" => %{
-            "title" => notice["title"] || "Lumia",
-            "body" => notice["body"] || "New message",
-            "instance" => instance
-          },
-          "android" => %{"priority" => "high"}
+          "data" => data(notice, instance),
+          "android" => %{"priority" => if(notice["kind"] == "read", do: "normal", else: "high")}
         }
       })
 
     {"https://fcm.googleapis.com/v1/projects/#{config[:project_id]}/messages:send", headers, body}
   end
+
+  # A data message's fields are strings. A read carries no words: the app
+  # takes away what is now read and sets its badge.
+  defp data(%{"kind" => "read"} = notice, instance) do
+    %{"kind" => "read", "instance" => instance}
+    |> with_badge(notice)
+  end
+
+  defp data(notice, instance) do
+    %{
+      "title" => notice["title"] || "Lumia",
+      "body" => notice["body"] || "New message",
+      "instance" => instance
+    }
+    |> with_badge(notice)
+  end
+
+  defp with_badge(data, %{"badge" => n}) when is_integer(n),
+    do: Map.put(data, "badge", Integer.to_string(n))
+
+  defp with_badge(data, _notice), do: data
 
   @doc "The assertion that buys an access token: RS256 over the service account's claims."
   def assertion(config, now \\ System.os_time(:second)) do

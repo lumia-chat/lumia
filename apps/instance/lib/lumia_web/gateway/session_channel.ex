@@ -652,9 +652,10 @@ defmodule LumiaWeb.Gateway.SessionChannel do
 
   defp authorize_write(_socket, nil, _command), do: {:error, :invalid_argument}
 
-  defp authorize_write(socket, channel_id, %V1.Command{op: {op, _}}) do
+  defp authorize_write(socket, channel_id, %V1.Command{op: {op, _}} = command) do
     with {:ok, needed} <- Map.fetch(@write_permission, op),
-         {:ok, access} <- Access.require(socket.assigns.account_id, channel_id, needed) do
+         {:ok, access} <- Access.require(socket.assigns.account_id, channel_id, needed),
+         :ok <- Access.check_command(access, command) do
       {:ok, subscription(access)}
     else
       :error -> {:error, :invalid_argument}

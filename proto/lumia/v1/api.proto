@@ -388,6 +388,30 @@ message AccountSnapshot {
   repeated bytes blocked_identity_ids = 9;
   // Channels the account was asked into and has not answered (6.8).
   repeated ChannelInvitation channel_invitations = 10;
+  // Where the account has read each conversation it is shown, with what is
+  // unread after that (architecture 6.6).
+  repeated ReadState read_states = 11;
+}
+
+// A conversation's read state for the caller: the last event read, how many
+// messages others sent after it, and how many of those notify the caller
+// (a mention of the caller or of everyone, or a quote of the caller's).
+message ReadState {
+  bytes channel_id = 1;
+  uint64 read_seq = 2;
+  uint32 unread = 3;
+  uint32 mentions = 4;
+}
+
+// POST /channels/{channel_id}/read: read through `seq` (never backwards).
+// Answers ReadState.
+message MarkReadRequest { uint64 seq = 1; }
+
+// GET /account/mentions: messages that notify the caller, newest first,
+// in the server named or all of them.
+message ListMentionsResponse {
+  repeated Message messages = 1;
+  bool has_more = 2;
 }
 
 message ListAccountEventsRequest {

@@ -71,6 +71,7 @@ defmodule LumiaWeb.Router do
     delete "/account/avatar", AccountController, :delete_avatar
     put "/account/profile", AccountController, :put_profile
     get "/account/events", AccountController, :events
+    get "/account/mentions", AccountController, :mentions
     get "/accounts/:account_id", AccountController, :show
 
     get "/servers", ServerController, :index
@@ -104,6 +105,7 @@ defmodule LumiaWeb.Router do
     get "/channels/:channel_id/messages", ChannelController, :messages
     post "/channels/:channel_id/commands", ChannelController, :command
     post "/channels/:channel_id/join", ChannelController, :join
+    post "/channels/:channel_id/read", ChannelController, :read
     post "/channels/:channel_id/leave", ChannelController, :leave
     get "/channels/:channel_id/members", ChannelController, :members
     post "/channels/:channel_id/members", ChannelController, :add_members

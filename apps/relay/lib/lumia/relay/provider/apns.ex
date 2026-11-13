@@ -31,7 +31,12 @@ defmodule Lumia.Relay.Provider.Apns do
     end
   end
 
-  @doc "The request to send: URL, headers (with a fresh provider token) and the JSON body."
+  @doc """
+  The request to send: URL, headers (with a fresh provider token) and the
+  JSON body. A message is a visible, mutable alert with the app's badge; a
+  read (`"kind": "read"`) is a silent background wake with the badge, for
+  the app to take away what is now read.
+  """
   def request(config, token, instance, notice) do
     host =
       if config[:sandbox],
@@ -47,27 +52,36 @@ defmodule Lumia.Relay.Provider.Apns do
         config[:private_key]
       )
 
+    read? = notice["kind"] == "read"
+
     headers = [
       {"authorization", "bearer " <> jwt},
       {"apns-topic", config[:topic]},
-      {"apns-push-type", "alert"},
-      {"apns-priority", "10"},
+      {"apns-push-type", if(read?, do: "background", else: "alert")},
+      # Apple asks a background push for 5.
+      {"apns-priority", if(read?, do: "5", else: "10")},
       {"apns-expiration", Integer.to_string(now + 86_400)},
       {"content-type", "application/json"}
     ]
 
-    body =
-      Jason.encode!(%{
-        "aps" => %{
+    aps =
+      if read? do
+        %{"content-available" => 1}
+      else
+        %{
           "alert" => %{
             "title" => notice["title"] || "Lumia",
             "body" => notice["body"] || "New message"
           },
           "mutable-content" => 1,
           "sound" => "default"
-        },
-        "instance" => instance
-      })
+        }
+      end
+
+    aps = if is_integer(notice["badge"]), do: Map.put(aps, "badge", notice["badge"]), else: aps
+    payload = %{"aps" => aps, "instance" => instance}
+    payload = if read?, do: Map.put(payload, "kind", "read"), else: payload
+    body = Jason.encode!(payload)
 
     {host <> "/3/device/" <> token, headers, body}
   end

@@ -40,6 +40,14 @@ message DmSend {
   repeated DmAttachment attachments = 4;
   // Identity ids mentioned, for the receiver's notification decision.
   repeated bytes mentions = 5;
+  // A quote reply (architecture 6.6): the message quoted, by its id, and the
+  // text quoted. Receivers drop the text when the original is deleted.
+  DmQuote quote = 6;
+}
+
+message DmQuote {
+  bytes message_id = 1;
+  string text = 2;
 }
 
 message DmEdit {

@@ -45,6 +45,8 @@ message SendMessage {
   // When replying: also post this reply to the channel as a top-level
   // message that mirrors it.
   bool also_send_to_channel = 5;
+  // The message quoted and the text quoted (architecture 6.6).
+  QuoteReply reply_to = 6;
 }
 
 message EditMessage {

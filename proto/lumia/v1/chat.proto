@@ -196,6 +196,8 @@ message ReactionCount {
   uint32 count = 2;
   // Whether the caller has reacted.
   bool me = 3;
+  // Who reacted, the first of them up to 50, for "who reacted".
+  repeated bytes account_ids = 4;
 }
 
 message ThreadSummary {
@@ -229,6 +231,19 @@ message Message {
   // Set on a notice the instance posts (architecture 6.8): the body is
   // empty, the author is who did it.
   ChannelNotice notice = 16;
+  // What this message quotes (architecture 6.6).
+  QuoteReply reply_to = 17;
+}
+
+// A quote of another message of the same conversation: the whole of it or
+// the part that was selected. On a send, the client gives message_id and
+// text; the instance fills in the author. When the original is deleted the
+// text is dropped and original_deleted is set.
+message QuoteReply {
+  bytes message_id = 1;
+  bytes author_account_id = 2;
+  string text = 3;
+  bool original_deleted = 4;
 }
 
 // Someone came into a channel or went from it.

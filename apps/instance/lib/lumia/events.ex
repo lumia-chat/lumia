@@ -21,11 +21,15 @@ defmodule Lumia.Events do
   alias Lumia.Events.Event
   alias Lumia.Events.EventPayload
   alias Lumia.Events.Message
+  alias Lumia.Events.MessageReaction
   alias Lumia.Proto
   alias Lumia.Repo
   alias Lumia.Schema
   alias Lumia.Tx
   alias Lumia.V1
+
+  # The most of a message a quote keeps, in characters (architecture 6.6).
+  @quote_max 2_000
 
   @doc "Creates a channel. Spike-level; the real context lives elsewhere later."
   def create_channel(kind \\ "text") do
@@ -233,6 +237,11 @@ defmodule Lumia.Events do
     if nulled == 0 do
       {:ok, 0}
     else
+      drop_quotes(
+        channel_id,
+        from(m in Message, where: m.channel_id == ^channel_id and m.seq <= ^seq, select: m.id)
+      )
+
       Repo.delete_all(from m in Message, where: m.channel_id == ^channel_id and m.seq <= ^seq)
 
       with {:ok, _} <-
@@ -317,6 +326,7 @@ defmodule Lumia.Events do
     with {:ok, seq, acl_version, kind} <- take_head(channel_id, now),
          :ok <- check_kind(kind, command),
          :ok <- advance_epoch(channel_id, command),
+         {:ok, command} <- resolve(channel_id, command),
          {:ok, payload} <- payload_for(command, actor, channel_id, seq, now),
          event = build_event(channel_id, seq, acl_version, actor, command, payload, now),
          {:ok, {event, bytes}} <- insert_event(channel_id, event, command_id, actor, now),
@@ -436,6 +446,59 @@ defmodule Lumia.Events do
     |> Repo.insert()
   end
 
+  # What a command names in the channel, checked and filled in before it is
+  # written: a quote's original (its author, the text cut to its limit) and
+  # a reaction's message and emoji (architecture 6.6). After the
+  # fingerprint, so a retry of the same command still matches.
+  defp resolve(
+         channel_id,
+         %V1.Command{
+           op: {:send_message, %V1.SendMessage{reply_to: %V1.QuoteReply{} = quote} = op}
+         } = command
+       ) do
+    case quotable(channel_id, quote.message_id) do
+      {:ok, original} ->
+        quote = %V1.QuoteReply{
+          message_id: quote.message_id,
+          author_account_id: Proto.uuid(original.author_account_id),
+          text: String.slice(quote.text, 0, @quote_max)
+        }
+
+        {:ok, %{command | op: {:send_message, %{op | reply_to: quote}}}}
+
+      error ->
+        error
+    end
+  end
+
+  defp resolve(channel_id, %V1.Command{op: {reaction, op}} = command)
+       when reaction in [:add_reaction, :remove_reaction] do
+    cond do
+      not Lumia.Emoji.single?(op.reaction) -> {:error, :invalid_argument}
+      match?({:ok, _}, quotable(channel_id, op.message_id)) -> {:ok, command}
+      true -> {:error, :message_not_found}
+    end
+  end
+
+  defp resolve(_channel_id, command), do: {:ok, command}
+
+  # A message of this channel that is there to quote or react to: not
+  # deleted, and not a notice.
+  defp quotable(channel_id, message_id_bytes) do
+    message_id = Proto.from_uuid(message_id_bytes)
+
+    case message_id &&
+           Repo.one(
+             from m in Message,
+               where:
+                 m.id == ^message_id and m.channel_id == ^channel_id and is_nil(m.deleted_at) and
+                   is_nil(m.notice)
+           ) do
+      %Message{} = message -> {:ok, message}
+      _ -> {:error, :message_not_found}
+    end
+  end
+
   # Command op → event payload. The message id is the command id.
   defp payload_for(%V1.Command{op: {:send_message, op}} = command, actor, channel_id, seq, now) do
     message = %V1.Message{
@@ -446,7 +509,8 @@ defmodule Lumia.Events do
       parent_id: op.parent_id,
       body: op.body,
       mentions: op.mentions,
-      created_at: Proto.timestamp(now)
+      created_at: Proto.timestamp(now),
+      reply_to: op.reply_to
     }
 
     {:ok, {:message_created, %V1.MessageCreated{message: message}}}
@@ -514,6 +578,8 @@ defmodule Lumia.Events do
         body: op.body,
         created_at: now
       }
+      |> with_quote(op.reply_to)
+      |> with_mentions(op)
       |> Ecto.Changeset.change()
       |> Ecto.Changeset.unique_constraint(:id, name: :messages_pkey)
       |> Repo.insert()
@@ -525,6 +591,30 @@ defmodule Lumia.Events do
       other ->
         other
     end
+  end
+
+  defp materialize(channel_id, _seq, actor, %V1.Command{op: {:add_reaction, op}}, now) do
+    %MessageReaction{
+      message_id: Proto.from_uuid(op.message_id),
+      account_id: actor.account_id,
+      reaction: op.reaction,
+      channel_id: channel_id,
+      created_at: now
+    }
+    |> Repo.insert(on_conflict: :nothing)
+  end
+
+  defp materialize(_channel_id, _seq, actor, %V1.Command{op: {:remove_reaction, op}}, _now) do
+    message_id = Proto.from_uuid(op.message_id)
+
+    Repo.delete_all(
+      from r in MessageReaction,
+        where:
+          r.message_id == ^message_id and r.account_id == ^actor.account_id and
+            r.reaction == ^op.reaction
+    )
+
+    {:ok, nil}
   end
 
   defp materialize(channel_id, _seq, _actor, %V1.Command{op: {:edit_message, op}}, now) do
@@ -539,11 +629,100 @@ defmodule Lumia.Events do
         set: [payload: nil]
       )
 
+      message_id = Proto.from_uuid(op.message_id)
+      drop_quotes(channel_id, from(m in Message, where: m.id == ^message_id, select: m.id))
       {:ok, message_seq}
     end
   end
 
   defp materialize(_channel_id, _seq, _actor, _command, _now), do: {:ok, nil}
+
+  defp with_quote(message, nil), do: message
+
+  defp with_quote(message, %V1.QuoteReply{} = quote) do
+    %{
+      message
+      | reply_to_id: Proto.from_uuid(quote.message_id),
+        reply_to_author_id: Proto.from_uuid(quote.author_account_id),
+        reply_text: quote.text
+    }
+  end
+
+  # Whom the message notifies: the accounts it names and the author it
+  # quotes, and whether it names everyone.
+  defp with_mentions(message, %V1.SendMessage{} = op) do
+    named =
+      for %V1.Mention{target: {:account_id, id}} <- op.mentions,
+          id = Proto.from_uuid(id),
+          id != nil,
+          do: id
+
+    quoted = if message.reply_to_author_id, do: [message.reply_to_author_id], else: []
+
+    %{
+      message
+      | mentioned_account_ids: Enum.uniq(named ++ quoted),
+        mentions_everyone:
+          Enum.any?(op.mentions, &match?(%V1.Mention{target: {:everyone, true}}, &1)),
+        mention_spans: Enum.flat_map(op.mentions, &Proto.mention_span/1)
+    }
+  end
+
+  @doc """
+  Drops the quoted text from the replies to the messages `quoted` (a query
+  of message ids) in a channel, in their rows and in their stored events,
+  which then say the original is gone: deleting a message still deletes
+  it where it was quoted (architecture 6.6).
+  """
+  def drop_quotes(channel_id, quoted) do
+    replies =
+      Repo.all(
+        from m in Message,
+          where:
+            m.channel_id == ^channel_id and m.reply_to_id in subquery(quoted) and
+              not m.reply_deleted,
+          select: m.seq
+      )
+
+    if replies != [] do
+      Repo.update_all(
+        from(m in Message, where: m.channel_id == ^channel_id and m.seq in ^replies),
+        set: [reply_text: nil, reply_deleted: true]
+      )
+
+      from(p in EventPayload,
+        where: p.channel_id == ^channel_id and p.seq in ^replies and not is_nil(p.payload)
+      )
+      |> Repo.all()
+      |> Enum.each(&drop_quote_from/1)
+    end
+
+    :ok
+  end
+
+  defp drop_quote_from(%EventPayload{} = row) do
+    case V1.Event.decode(row.payload) do
+      %V1.Event{
+        payload:
+          {:message_created,
+           %V1.MessageCreated{message: %V1.Message{reply_to: %V1.QuoteReply{} = quote} = message}}
+      } = event ->
+        quote = %{quote | text: "", original_deleted: true}
+
+        event = %{
+          event
+          | payload: {:message_created, %V1.MessageCreated{message: %{message | reply_to: quote}}}
+        }
+
+        Repo.update_all(
+          from(p in EventPayload, where: p.channel_id == ^row.channel_id and p.seq == ^row.seq),
+          set: [payload: V1.Event.encode(event)]
+        )
+
+      _ ->
+        :ok
+    end
+  end
 
   defp update_message(channel_id, message_id_bytes, updates) do
     message_id = Proto.from_uuid(message_id_bytes)

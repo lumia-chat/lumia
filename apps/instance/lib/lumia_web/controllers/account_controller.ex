@@ -4,6 +4,7 @@ defmodule LumiaWeb.AccountController do
   use Phoenix.Controller, formats: []
 
   alias Lumia.Snapshots
+  alias Lumia.V1
   alias LumiaWeb.ProtoConn
 
   action_fallback LumiaWeb.FallbackController
@@ -73,6 +74,29 @@ defmodule LumiaWeb.AccountController do
          %Lumia.Accounts.Account{} = account <-
            Lumia.Repo.get(Lumia.Accounts.Account, account_id) || {:error, :not_found} do
       ProtoConn.render(conn, Lumia.Proto.account(account))
+    end
+  end
+
+  @doc """
+  `GET /account/mentions`: the messages that notify the caller, newest
+  first, in the server `server_id` names or in all; `before` is the last
+  message id of the page before (architecture 6.6).
+  """
+  def mentions(conn, params) do
+    with {:ok, server_id} <- optional_uuid(params["server_id"]),
+         {:ok, before} <- optional_uuid(params["before"]) do
+      {messages, more} = Lumia.Reads.mentions(conn.assigns.current_account_id, server_id, before)
+      ProtoConn.render(conn, %V1.ListMentionsResponse{messages: messages, has_more: more})
+    end
+  end
+
+  defp optional_uuid(nil), do: {:ok, nil}
+  defp optional_uuid(""), do: {:ok, nil}
+
+  defp optional_uuid(value) do
+    case Ecto.UUID.cast(value) do
+      {:ok, id} -> {:ok, id}
+      :error -> {:error, :invalid_argument}
     end
   end
 

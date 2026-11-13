@@ -96,7 +96,7 @@ defmodule Lumia.Push do
     do: true
 
   defp pushable?(%V1.Event{payload: {:message_created, %V1.MessageCreated{message: message}}}),
-    do: Enum.any?(message.mentions, &match?(%V1.Mention{target: {:account_id, _}}, &1))
+    do: message.mentions != [] or message.reply_to != nil
 
   defp pushable?(_), do: false
 
@@ -111,9 +111,10 @@ defmodule Lumia.Push do
   @doc """
   Who to notify for the event at `seq` in `channel_id`, as account ids:
   the other participants of a personal channel, the other member of a
-  server DM, or the accounts mentioned in a server message who are in the
-  channel and see it (architecture 6.8: someone outside it cannot read
-  what mentions them). Never the actor.
+  server DM, or in a server message the accounts it mentions, everyone if
+  it mentions everyone, and the author of the message it quotes, of those
+  in the channel who see it (architecture 6.8: someone outside it cannot
+  read what mentions them). Never the actor.
   """
   def recipients(channel_id, %V1.Event{} = event) do
     actor = Lumia.Proto.from_uuid(event.actor_account_id)
@@ -128,11 +129,20 @@ defmodule Lumia.Push do
       {%Channel{}, {:message_created, %V1.MessageCreated{message: message}}} ->
         shown = shown(channel_id)
 
-        message.mentions
-        |> Enum.flat_map(fn
-          %V1.Mention{target: {:account_id, id}} -> [Lumia.Proto.from_uuid(id)]
-          _ -> []
-        end)
+        named =
+          Enum.flat_map(message.mentions, fn
+            %V1.Mention{target: {:account_id, id}} -> [Lumia.Proto.from_uuid(id)]
+            %V1.Mention{target: {:everyone, true}} -> shown
+            _ -> []
+          end)
+
+        quoted =
+          case message.reply_to do
+            %V1.QuoteReply{author_account_id: author} -> [Lumia.Proto.from_uuid(author)]
+            nil -> []
+          end
+
+        (named ++ quoted)
         |> Enum.filter(&(&1 in shown))
         |> Enum.reject(&(&1 == actor))
         |> Enum.uniq()
@@ -151,13 +161,50 @@ defmodule Lumia.Push do
     )
   end
 
-  @doc "Sends the notice to every offline device of the recipients; returns how many went."
+  @doc """
+  Sends the notice to every offline device of the recipients, each with
+  its account's badge (architecture 6.6); returns how many went.
+  """
   def deliver(channel_id, %V1.Event{} = event) do
     recipients(channel_id, event)
     |> for_accounts()
     |> Enum.reject(&online?(&1.device_id))
-    |> Enum.reduce(0, fn sub, sent ->
-      case Lumia.Push.Sender.send(sub, @notice) do
+    |> send_each(fn account_id -> Map.put(@notice, "badge", Lumia.Reads.badge(account_id)) end)
+  end
+
+  @doc """
+  The account read a conversation further: its devices that are not
+  connected are woken, to take away the notifications of what is now read
+  and set the badge (architecture 6.6). Only where a wake can be silent:
+  the relay's APNs and FCM and UnifiedPush; Web Push shows every push it
+  gets, so a browser is left to the account log when it is next open.
+  Enqueued after the commit, once for a burst of reads.
+  """
+  def read_elsewhere(account_id) do
+    %{account_id: account_id}
+    |> Workers.ReadPush.new()
+    |> Oban.insert()
+
+    :ok
+  end
+
+  @doc "Carries out `read_elsewhere/1`; returns how many went."
+  def deliver_read(account_id) do
+    [account_id]
+    |> for_accounts()
+    |> Enum.filter(&(String.starts_with?(&1.kind, "relay_") or &1.kind == "unified_push"))
+    |> Enum.reject(&online?(&1.device_id))
+    |> send_each(fn account_id ->
+      %{"kind" => "read", "badge" => Lumia.Reads.badge(account_id)}
+    end)
+  end
+
+  defp send_each(subscriptions, notice_for) do
+    notices =
+      subscriptions |> Enum.map(& &1.account_id) |> Enum.uniq() |> Map.new(&{&1, notice_for.(&1)})
+
+    Enum.reduce(subscriptions, 0, fn sub, sent ->
+      case Lumia.Push.Sender.send(sub, notices[sub.account_id]) do
         :ok ->
           sent + 1
 

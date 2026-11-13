@@ -281,7 +281,7 @@ defmodule Lumia.Dms do
   defp insert_participants(channel_id, ids) do
     Enum.reduce_while(ids, :ok, fn account_id, :ok ->
       case Repo.insert(%Participant{channel_id: channel_id, account_id: account_id}) do
-        {:ok, _} -> {:cont, :ok}
+        {:ok, _} -> {:cont, Lumia.Reads.start(account_id, channel_id)}
         {:error, _} -> {:halt, {:error, :account_not_found}}
       end
     end)

@@ -264,6 +264,7 @@ defmodule Lumia.V1.ReactionCount do
   field :reaction, 1, type: :string
   field :count, 2, type: :uint32
   field :me, 3, type: :bool
+  field :account_ids, 4, repeated: true, type: :bytes, json_name: "accountIds"
 end
 
 defmodule Lumia.V1.ThreadSummary do
@@ -307,6 +308,21 @@ defmodule Lumia.V1.Message do
   field :deleted_at, 14, type: Google.Protobuf.Timestamp, json_name: "deletedAt"
   field :mirrors_message_id, 15, type: :bytes, json_name: "mirrorsMessageId"
   field :notice, 16, type: Lumia.V1.ChannelNotice
+  field :reply_to, 17, type: Lumia.V1.QuoteReply, json_name: "replyTo"
+end
+
+defmodule Lumia.V1.QuoteReply do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.QuoteReply",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :message_id, 1, type: :bytes, json_name: "messageId"
+  field :author_account_id, 2, type: :bytes, json_name: "authorAccountId"
+  field :text, 3, type: :string
+  field :original_deleted, 4, type: :bool, json_name: "originalDeleted"
 end
 
 defmodule Lumia.V1.ChannelNotice do

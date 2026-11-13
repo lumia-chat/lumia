@@ -137,6 +137,21 @@ defmodule Lumia.Authz.Access do
     end
   end
 
+  @doc """
+  What a command asks beyond the permission its kind needs: a message that
+  mentions everyone needs `MENTION_EVERYONE` (architecture 6.6). `:ok` or
+  `{:error, :permission_denied}`.
+  """
+  def check_command(access, %Lumia.V1.Command{op: {:send_message, op}}) do
+    everyone? = Enum.any?(op.mentions, &match?(%Lumia.V1.Mention{target: {:everyone, true}}, &1))
+
+    if everyone? and not Permission.has?(access.permissions, :mention_everyone),
+      do: {:error, :permission_denied},
+      else: :ok
+  end
+
+  def check_command(_access, _command), do: :ok
+
   @doc "`{:ok, access}` when the account holds `permission` in the channel, else an error."
   def require(account_id, channel_id, permission) do
     with {:ok, access} <- channel(account_id, channel_id), do: check(access, permission)

@@ -128,7 +128,12 @@ defmodule Lumia.Proto do
       else: []
   end
 
-  def message(%Lumia.Events.Message{} = m) do
+  @doc """
+  A materialized message on the wire, with its reactions as the reader sees
+  them (`reactions`, `Lumia.V1.ReactionCount`s, which `Lumia.Snapshots`
+  makes for the reader).
+  """
+  def message(%Lumia.Events.Message{} = m, reactions \\ []) do
     %V1.Message{
       message_id: uuid(m.id),
       channel_id: uuid(m.channel_id),
@@ -139,9 +144,44 @@ defmodule Lumia.Proto do
       created_at: timestamp(m.created_at),
       edited_at: timestamp(m.edited_at),
       deleted_at: timestamp(m.deleted_at),
-      notice: notice(m.notice, m.notice_account_id)
+      notice: notice(m.notice, m.notice_account_id),
+      mentions: Enum.flat_map(m.mention_spans || [], &mention/1),
+      reply_to: quote_reply(m),
+      reactions: reactions
     }
   end
+
+  defp quote_reply(%Lumia.Events.Message{reply_to_id: nil}), do: nil
+
+  defp quote_reply(%Lumia.Events.Message{} = m) do
+    %V1.QuoteReply{
+      message_id: uuid(m.reply_to_id),
+      author_account_id: uuid(m.reply_to_author_id),
+      text: m.reply_text || "",
+      original_deleted: m.reply_deleted
+    }
+  end
+
+  @doc "A mention as a message row keeps it: its target and where it is in the body."
+  def mention_span(%V1.Mention{target: {:account_id, id}, start: s, end: e}) do
+    case from_uuid(id) do
+      nil -> []
+      account_id -> [%{"account_id" => account_id, "start" => s, "end" => e}]
+    end
+  end
+
+  def mention_span(%V1.Mention{target: {:everyone, true}, start: s, end: e}),
+    do: [%{"everyone" => true, "start" => s, "end" => e}]
+
+  def mention_span(_), do: []
+
+  defp mention(%{"account_id" => id, "start" => s, "end" => e}),
+    do: [%V1.Mention{target: {:account_id, uuid(id)}, start: s, end: e}]
+
+  defp mention(%{"everyone" => true, "start" => s, "end" => e}),
+    do: [%V1.Mention{target: {:everyone, true}, start: s, end: e}]
+
+  defp mention(_), do: []
 
   @doc "A channel notice (architecture 6.8) from its kind as kept and who it is about."
   def notice(nil, _account_id), do: nil
@@ -229,5 +269,10 @@ defmodule Lumia.Proto do
   def leave_reason("account_deleted"), do: :ACCOUNT_DELETED
 
   @doc "The event kind string stored in the events table for a payload tag."
+  # An encrypted payload is named for what it carries, so what is unread in
+  # a personal conversation counts people's messages and not its commits.
+  def kind({:encrypted, %V1.EncryptedPayload{kind: :APPLICATION}}), do: "encrypted"
+  def kind({:encrypted, %V1.EncryptedPayload{kind: :CONTROL}}), do: "encrypted_control"
+  def kind({:encrypted, %V1.EncryptedPayload{kind: :WELCOME}}), do: "encrypted_welcome"
   def kind({tag, _struct}) when is_atom(tag), do: Atom.to_string(tag)
 end

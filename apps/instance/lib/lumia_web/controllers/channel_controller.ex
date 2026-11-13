@@ -59,7 +59,7 @@ defmodule LumiaWeb.ChannelController do
   def snapshot(conn, %{"channel_id" => channel_id}) do
     with {:ok, access} <-
            Access.require(conn.assigns.current_account_id, channel_id, :read_history) do
-      ProtoConn.render(conn, Snapshots.channel(access))
+      ProtoConn.render(conn, Snapshots.channel(access, conn.assigns.current_account_id))
     end
   end
 
@@ -72,7 +72,8 @@ defmodule LumiaWeb.ChannelController do
           channel_id,
           int(params["before_seq"], 0),
           int(params["limit"], 50),
-          parent_id
+          parent_id,
+          conn.assigns.current_account_id
         )
 
       ProtoConn.render(conn, response)
@@ -86,8 +87,9 @@ defmodule LumiaWeb.ChannelController do
     }
 
     with {:ok, %V1.Command{op: {op, _}} = command} <- decode_command(conn, channel_id),
-         {:ok, _} <-
+         {:ok, access} <-
            Access.require(actor.account_id, channel_id, Map.fetch!(@write_permission, op)),
+         :ok <- Access.check_command(access, command),
          {:ok, ack} <- Events.append(channel_id, actor, command) do
       ProtoConn.render(conn, %V1.Ack{
         command_id: command.command_id,
@@ -95,6 +97,14 @@ defmodule LumiaWeb.ChannelController do
         seq: ack.seq,
         event_id: Proto.uuid(ack.event_id)
       })
+    end
+  end
+
+  @doc "`POST /channels/{channel_id}/read`: read through a seq (architecture 6.6); answers the read state."
+  def read(conn, %{"channel_id" => channel_id}) do
+    with {:ok, req} <- ProtoConn.decode(conn, V1.MarkReadRequest),
+         {:ok, state} <- Lumia.Reads.mark(conn.assigns.current_account_id, channel_id, req.seq) do
+      ProtoConn.render(conn, state)
     end
   end
 

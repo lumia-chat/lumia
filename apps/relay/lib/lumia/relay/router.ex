@@ -2,8 +2,10 @@ defmodule Lumia.Relay.Router do
   @moduledoc """
   `POST /push` with `{"platform", "token", "instance", "notice"}` from an
   instance (`Lumia.Push.Sender.Http` there); `GET /health`. The body is
-  bounded, the notice is reduced to its title and body, and the answer
-  says only whether the token is gone, so an instance can forget it.
+  bounded, the notice is reduced to what the relay knows how to carry (its
+  title and body, the app's badge, and `"kind": "read"` for a silent wake
+  after the account read something elsewhere), and the answer says only
+  whether the token is gone, so an instance can forget it.
   """
 
   use Plug.Router
@@ -20,7 +22,7 @@ defmodule Lumia.Relay.Router do
   post "/push" do
     with %{"platform" => platform, "token" => token, "instance" => instance} = params <-
            conn.body_params,
-         notice = Map.take(Map.get(params, "notice", %{}), ["title", "body"]),
+         notice = notice(Map.get(params, "notice", %{})),
          :ok <- Lumia.Relay.deliver(platform, token, instance, notice) do
       send_resp(conn, 204, "")
     else
@@ -34,6 +36,23 @@ defmodule Lumia.Relay.Router do
   match _ do
     send_resp(conn, 404, "")
   end
+
+  # What a notice may carry through: words, a badge that is a count, and the
+  # one kind there is besides a message.
+  defp notice(notice) when is_map(notice) do
+    words = Map.take(notice, ["title", "body"])
+
+    badge =
+      case notice["badge"] do
+        n when is_integer(n) and n >= 0 and n < 100_000 -> %{"badge" => n}
+        _ -> %{}
+      end
+
+    kind = if notice["kind"] == "read", do: %{"kind" => "read"}, else: %{}
+    words |> Map.merge(badge) |> Map.merge(kind)
+  end
+
+  defp notice(_), do: %{}
 
   defp json(conn, status, body) do
     conn

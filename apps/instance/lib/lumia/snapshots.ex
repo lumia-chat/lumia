@@ -60,7 +60,8 @@ defmodule Lumia.Snapshots do
         end),
       channels: channels,
       pending_requests: Enum.map(Lumia.Dms.pending_requests_to(account_id), &Proto.dm_request/1),
-      channel_invitations: Lumia.Channels.invitations(account_id)
+      channel_invitations: Lumia.Channels.invitations(account_id),
+      read_states: Lumia.Reads.states(account_id)
     }
   end
 
@@ -74,12 +75,15 @@ defmodule Lumia.Snapshots do
   end
 
   @doc """
-  The channel snapshot: the channel, newest messages and pins at the log
-  head. A `PERSONAL_*` channel has no server-side messages; its snapshot
-  carries the newest encrypted events instead (protocol section 15).
+  The channel snapshot for `viewer`: the channel, newest messages (with
+  their reactions as the viewer sees them) and pins at the log head. A
+  `PERSONAL_*` channel has no server-side messages; its snapshot carries
+  the newest encrypted events instead (protocol section 15).
   """
-  def channel(%{channel: %{kind: kind} = channel}) do
-    if Dms.personal_kind?(kind), do: encrypted_channel(channel), else: plain_channel(channel)
+  def channel(%{channel: %{kind: kind} = channel}, viewer \\ nil) do
+    if Dms.personal_kind?(kind),
+      do: encrypted_channel(channel),
+      else: plain_channel(channel, viewer)
   end
 
   defp encrypted_channel(channel) do
@@ -89,10 +93,10 @@ defmodule Lumia.Snapshots do
     %V1.ChannelSnapshot{channel: Proto.channel(channel), seq: head, encrypted_events: events}
   end
 
-  defp plain_channel(channel) do
+  defp plain_channel(channel, viewer) do
     head = channel.last_seq
 
-    messages =
+    rows =
       from(m in Message,
         where: m.channel_id == ^channel.id and m.seq <= ^head and is_nil(m.parent_id),
         order_by: [desc: m.seq],
@@ -100,13 +104,17 @@ defmodule Lumia.Snapshots do
       )
       |> Repo.all()
       |> Enum.reverse()
-      |> Enum.map(&Proto.message/1)
+
+    messages = with_reactions(rows, viewer)
 
     %V1.ChannelSnapshot{channel: Proto.channel(channel), seq: head, messages: messages}
   end
 
-  @doc "Scrollback: messages with seq strictly below `before_seq` (0 = head), newest last."
-  def messages(channel_id, before_seq, limit, parent_id \\ nil) do
+  @doc """
+  Scrollback for `viewer`: messages with seq strictly below `before_seq`
+  (0 = head), newest last, with their reactions as the viewer sees them.
+  """
+  def messages(channel_id, before_seq, limit, parent_id \\ nil, viewer \\ nil) do
     limit = min(max(limit, 1), 200)
 
     query =
@@ -124,8 +132,46 @@ defmodule Lumia.Snapshots do
 
     rows = Repo.all(query)
     has_more = length(rows) > limit
-    messages = rows |> Enum.take(limit) |> Enum.reverse() |> Enum.map(&Proto.message/1)
+    messages = rows |> Enum.take(limit) |> Enum.reverse() |> with_reactions(viewer)
     %V1.ListMessagesResponse{messages: messages, has_more: has_more}
+  end
+
+  defp with_reactions(rows, viewer) do
+    reactions = reactions(Enum.map(rows, & &1.id), viewer)
+    Enum.map(rows, &Proto.message(&1, Map.get(reactions, &1.id, [])))
+  end
+
+  @doc """
+  The reactions to each of `message_ids`, as `viewer` sees them: a map from
+  message id to `Lumia.V1.ReactionCount`s, in the order each emoji was
+  first used, with how many, whether the viewer is among them, and the
+  first fifty who reacted.
+  """
+  def reactions([], _viewer), do: %{}
+
+  def reactions(message_ids, viewer) do
+    from(r in Lumia.Events.MessageReaction,
+      where: r.message_id in ^message_ids,
+      order_by: [r.created_at, r.account_id]
+    )
+    |> Repo.all()
+    |> Enum.group_by(& &1.message_id)
+    |> Map.new(fn {message_id, rows} ->
+      counts =
+        rows
+        |> Enum.group_by(& &1.reaction)
+        |> Enum.sort_by(fn {_emoji, [first | _]} -> {first.created_at, first.account_id} end)
+        |> Enum.map(fn {emoji, who} ->
+          %V1.ReactionCount{
+            reaction: emoji,
+            count: length(who),
+            me: Enum.any?(who, &(&1.account_id == viewer)),
+            account_ids: who |> Enum.take(50) |> Enum.map(&Proto.uuid(&1.account_id))
+          }
+        end)
+
+      {message_id, counts}
+    end)
   end
 
   @doc "Account events after a cursor, for `GET /account/events`."

@@ -33,6 +33,7 @@ defmodule Lumia.V1.SendMessage do
   field :attachment_ids, 3, repeated: true, type: :bytes, json_name: "attachmentIds"
   field :parent_id, 4, type: :bytes, json_name: "parentId"
   field :also_send_to_channel, 5, type: :bool, json_name: "alsoSendToChannel"
+  field :reply_to, 6, type: Lumia.V1.QuoteReply, json_name: "replyTo"
 end
 
 defmodule Lumia.V1.EditMessage do

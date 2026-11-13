@@ -671,6 +671,45 @@ defmodule Lumia.V1.AccountSnapshot do
     repeated: true,
     type: Lumia.V1.ChannelInvitation,
     json_name: "channelInvitations"
+
+  field :read_states, 11, repeated: true, type: Lumia.V1.ReadState, json_name: "readStates"
+end
+
+defmodule Lumia.V1.ReadState do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.ReadState",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :channel_id, 1, type: :bytes, json_name: "channelId"
+  field :read_seq, 2, type: :uint64, json_name: "readSeq"
+  field :unread, 3, type: :uint32
+  field :mentions, 4, type: :uint32
+end
+
+defmodule Lumia.V1.MarkReadRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.MarkReadRequest",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :seq, 1, type: :uint64
+end
+
+defmodule Lumia.V1.ListMentionsResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.ListMentionsResponse",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :messages, 1, repeated: true, type: Lumia.V1.Message
+  field :has_more, 2, type: :bool, json_name: "hasMore"
 end
 
 defmodule Lumia.V1.ListAccountEventsRequest do

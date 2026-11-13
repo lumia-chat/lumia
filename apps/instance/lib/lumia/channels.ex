@@ -456,6 +456,8 @@ defmodule Lumia.Channels do
       Repo.insert(%ChannelMember{channel_id: channel.id, account_id: id, joined_at: now},
         on_conflict: :nothing
       )
+
+      Lumia.Reads.start(id, channel.id)
     end)
 
     with :ok <- each(account_ids, &settle(channel.id, &1)), do: {:ok, channel}
@@ -492,6 +494,7 @@ defmodule Lumia.Channels do
     {author, notice} = if added_by, do: {added_by, "added"}, else: {account_id, "joined"}
 
     with {:ok, _} <- Repo.insert(member, on_conflict: :nothing),
+         :ok <- Lumia.Reads.start(account_id, channel.id),
          :ok <- drop_invitation(channel.id, account_id),
          :ok <- settle(channel.id, account_id),
          {:ok, _} <- Events.append_notice(channel.id, author, notice, account_id) do
@@ -511,6 +514,7 @@ defmodule Lumia.Channels do
              },
              on_conflict: :nothing
            ),
+         :ok <- Lumia.Reads.start(account_id, channel.id),
          :ok <- settle(channel.id, account_id) do
       {:ok, channel}
     end

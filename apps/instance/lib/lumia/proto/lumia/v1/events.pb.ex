@@ -373,6 +373,11 @@ defmodule Lumia.V1.AccountEvent do
     type: Lumia.V1.ChannelInvitationRemoved,
     json_name: "channelInvitationRemoved",
     oneof: 0
+
+  field :read_position_updated, 37,
+    type: Lumia.V1.ReadPositionUpdated,
+    json_name: "readPositionUpdated",
+    oneof: 0
 end
 
 defmodule Lumia.V1.MembershipAdded do
@@ -465,6 +470,18 @@ defmodule Lumia.V1.ChannelInvitationRemoved do
     syntax: :proto3
 
   field :channel_id, 1, type: :bytes, json_name: "channelId"
+end
+
+defmodule Lumia.V1.ReadPositionUpdated do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.ReadPositionUpdated",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :channel_id, 1, type: :bytes, json_name: "channelId"
+  field :seq, 2, type: :uint64
 end
 
 defmodule Lumia.V1.DmRequest do

@@ -167,6 +167,7 @@ message AccountEvent {
     ServerUpdated server_updated = 34;      // a server this account is in changed its name, picture or retention
     ChannelInvitation channel_invited = 35; // someone asked this account into a channel (architecture 6.8)
     ChannelInvitationRemoved channel_invitation_removed = 36; // answered, dismissed or gone
+    ReadPositionUpdated read_position_updated = 37; // this account read a conversation further, on some device
   }
 }
 
@@ -185,6 +186,11 @@ message ChannelInvitation {
   google.protobuf.Timestamp created_at = 3;
 }
 message ChannelInvitationRemoved { bytes channel_id = 1; }
+// Where this account has read a conversation to (architecture 6.6).
+message ReadPositionUpdated {
+  bytes channel_id = 1;
+  uint64 seq = 2;
+}
 
 message DmRequest {
   bytes request_id = 1;
