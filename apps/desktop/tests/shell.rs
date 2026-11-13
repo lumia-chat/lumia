@@ -522,6 +522,7 @@ fn who_is_typing_is_named_under_the_composer_until_their_time_runs_out() {
     assert!(rt.find("typing").is_none());
     assert!(words(&rt).contains("Return to send"));
 
+    let began = chrono::Utc::now().timestamp_micros();
     rt.update(|s, _| {
         s.receive(&typing("general", "grace", 8));
         // Another channel's typing is that channel's, and one's own is never shown.
@@ -564,7 +565,12 @@ fn who_is_typing_is_named_under_the_composer_until_their_time_runs_out() {
     // Nothing says someone stopped: their time runs out. Grace's is the first to.
     let now = chrono::Utc::now().timestamp_micros();
     let ends = rt.state.session.typing_ends().expect("someone is typing");
-    assert!((ends - now - 8_000_000).abs() < 1_000_000, "{}", ends - now);
+    // Eight seconds from when she began, however long the frames since have taken.
+    assert!(
+        (began + 8_000_000..=now + 8_000_000).contains(&ends),
+        "{}",
+        ends - now
+    );
     rt.update(move |s, _| {
         assert!(!s.tick(now), "nobody's time is up yet");
         assert!(s.tick(now + 9_000_000));

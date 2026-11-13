@@ -88,7 +88,9 @@ pub fn app_id(data_dir: &Path, usual: bool) -> String {
 pub fn claim(data_dir: &Path, launch: &Launch, headless: bool) -> Claim {
     let usual = std::env::var_os("LUMIA_DATA_DIR").is_none_or(|dir| dir.is_empty());
     // Windows: the first process owns a named pipe, and a later one hands it its arguments.
-    if !headless && !rune::single_instance(&app_id(data_dir, usual)) {
+    // Rune claims on Linux too, with a socket of its own per process; Unix has the socket
+    // below, and two would hand every link over twice.
+    if cfg!(windows) && !headless && !rune::single_instance(&app_id(data_dir, usual)) {
         return Claim::Forwarded;
     }
     let path = data_dir.join("instance.lock");
