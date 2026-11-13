@@ -124,6 +124,10 @@ pub struct ServerSummary {
     /// Whether it may start server DMs there (`START_SERVER_DMS`).
     #[serde(default)]
     pub can_start_dms: bool,
+    /// Whether it may mention everyone there (`MENTION_EVERYONE`), and so
+    /// is offered `@everyone` in the composer (architecture 6.6).
+    #[serde(default)]
+    pub can_mention_everyone: bool,
     /// This account's own switches there (architecture 6.8): adds to
     /// channels wait as invitations; nobody may start a server DM with it.
     #[serde(default)]
@@ -153,6 +157,7 @@ impl ServerSummary {
             can_manage: holds(Permission::ManageServer),
             can_manage_channels: holds(Permission::ManageChannels),
             can_start_dms: holds(Permission::StartServerDms),
+            can_mention_everyone: holds(Permission::MentionEveryone),
             channel_adds_by_invitation: own.is_some_and(|m| m.channel_adds_by_invitation),
             server_dms_off: own.is_some_and(|m| m.server_dms_off),
         }
@@ -1598,6 +1603,7 @@ impl App {
             can_manage: true,
             can_manage_channels: true,
             can_start_dms: true,
+            can_mention_everyone: true,
             ..ServerSummary::of(&s, &[])
         })
     }
@@ -3876,6 +3882,7 @@ mod kept_tests {
                 can_manage: false,
                 can_manage_channels: false,
                 can_start_dms: false,
+                can_mention_everyone: false,
                 channel_adds_by_invitation: false,
                 server_dms_off: false,
             }],
