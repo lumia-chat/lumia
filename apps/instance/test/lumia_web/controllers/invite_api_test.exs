@@ -1,5 +1,7 @@
 defmodule LumiaWeb.InviteApiTest do
-  use LumiaWeb.ConnCase, async: true
+  # Not async: it changes the application's environment (a setting every
+  # test reads), which a test running beside it would see.
+  use LumiaWeb.ConnCase, async: false
 
   import Lumia.Fixtures
 

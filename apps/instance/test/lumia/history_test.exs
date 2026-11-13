@@ -1,5 +1,7 @@
 defmodule Lumia.HistoryTest do
-  use Lumia.DataCase, async: true
+  # Not async: it changes the application's environment (a setting every
+  # test reads), which a test running beside it would see.
+  use Lumia.DataCase, async: false
 
   alias Lumia.History
 
