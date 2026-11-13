@@ -8,8 +8,11 @@ package chat.lumia
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -30,10 +33,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Tag
 import androidx.compose.material.icons.filled.Group
+import androidx.compose.material.icons.outlined.PersonRemove
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Switch
@@ -50,8 +55,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
 import chat.lumia.kit.AvatarTone
 import chat.lumia.kit.LumiaAvatar
 import chat.lumia.kit.LumiaCard
@@ -277,6 +286,7 @@ fun ChannelMembersScreen(
                         tag = if (me) "You" else null,
                         onClick = { card = id },
                         onLongClick = if (canRemove) ({ menu = id }) else null,
+                        trailing = if (canRemove) ({ MemberRemoveButton("Remove ${session.nameOf(id)} from #$name", enabled = !busy) { remove(id) } }) else null,
                     )
                     DropdownMenu(expanded = menu == id, onDismissRequest = { menu = null }, containerColor = LumiaTokens.surface.color) {
                         DropdownMenuItem(
@@ -649,6 +659,41 @@ fun DefaultChannelsCard(session: LumiaSession, server: ServerSummary) {
             if (error.isNotEmpty()) LumiaErrorText(error)
             if (saved) Text("Saved.", style = LumiaTokens.textMeta.style, color = LumiaTokens.inkSecondary.color)
             LumiaPrimaryButton("Save", Modifier.fillMaxWidth(), enabled = !busy && chosen != null && chosen != current) { save() }
+        }
+    }
+}
+
+/**
+ * A member row's Remove, as the dark Quiet Split draws it: `row-height` square (32) at radius 8,
+ * the member-remove glyph in the faint ink, and while pressed (a phone has no pointer to hover)
+ * the danger ink on its soft fill and border. The target reaches 44 (`tile-size`) for a finger.
+ * The long press's menu does the same.
+ */
+@Composable
+private fun MemberRemoveButton(label: String, enabled: Boolean, onClick: () -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val shape = RoundedCornerShape(LumiaTokens.radius8)
+    Box(
+        Modifier
+            .size(LumiaTokens.tileSize)
+            .clickable(interactionSource = interaction, indication = null, enabled = enabled, role = Role.Button, onClickLabel = label, onClick = onClick)
+            .semantics { contentDescription = label },
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            Modifier
+                .size(LumiaTokens.rowHeight)
+                .background(if (pressed) LumiaTokens.dangerSoft.color else Color.Transparent, shape)
+                .border(1.dp, if (pressed) LumiaTokens.dangerLine.color else Color.Transparent, shape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                Icons.Outlined.PersonRemove,
+                contentDescription = null,
+                tint = if (pressed) LumiaTokens.danger.color else LumiaTokens.inkFaint.color,
+                modifier = Modifier.size(LumiaTokens.space16),
+            )
         }
     }
 }
