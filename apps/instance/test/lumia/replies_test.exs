@@ -221,10 +221,10 @@ defmodule Lumia.RepliesTest do
       command = send_message(ctx.general.id, "@everyone hi")
       {:send_message, op} = command.op
       command = %{command | op: {:send_message, %{op | mentions: [everyone()]}}}
-      assert {:error, :permission_denied} = Access.check_command(access, command)
+      assert {:error, :permission_denied} = Access.check_command(access, nil, command)
 
       {:ok, access} = Access.require(ctx.owner.id, ctx.general.id, :send_messages)
-      assert :ok = Access.check_command(access, command)
+      assert :ok = Access.check_command(access, nil, command)
       {:ok, %{seq: seq}} = Events.append(ctx.general.id, actor(ctx.owner), command)
       [event] = Events.events_after(ctx.general.id, seq - 1, 1)
 

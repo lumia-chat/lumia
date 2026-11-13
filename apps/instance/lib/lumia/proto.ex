@@ -158,7 +158,9 @@ defmodule Lumia.Proto do
       message_id: uuid(m.reply_to_id),
       author_account_id: uuid(m.reply_to_author_id),
       text: m.reply_text || "",
-      original_deleted: m.reply_deleted
+      original_deleted: m.reply_deleted,
+      # Sent without notifying the author quoted: they are not among those it notifies.
+      silent: m.reply_to_author_id not in (m.mentioned_account_ids || [])
     }
   end
 

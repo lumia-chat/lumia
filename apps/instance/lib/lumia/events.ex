@@ -461,7 +461,8 @@ defmodule Lumia.Events do
         quote = %V1.QuoteReply{
           message_id: quote.message_id,
           author_account_id: Proto.uuid(original.author_account_id),
-          text: String.slice(quote.text, 0, @quote_max)
+          text: String.slice(quote.text, 0, @quote_max),
+          silent: quote.silent
         }
 
         {:ok, %{command | op: {:send_message, %{op | reply_to: quote}}}}
@@ -618,7 +619,30 @@ defmodule Lumia.Events do
   end
 
   defp materialize(channel_id, _seq, _actor, %V1.Command{op: {:edit_message, op}}, now) do
-    update_message(channel_id, op.message_id, set: [body: op.body, edited_at: now])
+    # The edit's mentions replace the message's; the author a reply quotes
+    # stays notified as it was (architecture 6.6).
+    message_id = Proto.from_uuid(op.message_id)
+
+    quoted =
+      Repo.one(
+        from m in Message,
+          where:
+            m.id == ^message_id and m.channel_id == ^channel_id and
+              m.reply_to_author_id in m.mentioned_account_ids,
+          select: m.reply_to_author_id
+      )
+
+    named = named_in(op.mentions)
+
+    update_message(channel_id, op.message_id,
+      set: [
+        body: op.body,
+        edited_at: now,
+        mentioned_account_ids: Enum.uniq(named ++ List.wrap(quoted)),
+        mentions_everyone: everyone_in?(op.mentions),
+        mention_spans: Enum.flat_map(op.mentions, &Proto.mention_span/1)
+      ]
+    )
   end
 
   defp materialize(channel_id, _seq, _actor, %V1.Command{op: {:delete_message, op}}, now) do
@@ -651,22 +675,33 @@ defmodule Lumia.Events do
   # Whom the message notifies: the accounts it names and the author it
   # quotes, and whether it names everyone.
   defp with_mentions(message, %V1.SendMessage{} = op) do
-    named =
-      for %V1.Mention{target: {:account_id, id}} <- op.mentions,
-          id = Proto.from_uuid(id),
-          id != nil,
-          do: id
+    # The author quoted, unless the reply was sent silent.
+    quoted =
+      case op.reply_to do
+        %V1.QuoteReply{silent: false} when message.reply_to_author_id != nil ->
+          [message.reply_to_author_id]
 
-    quoted = if message.reply_to_author_id, do: [message.reply_to_author_id], else: []
+        _ ->
+          []
+      end
 
     %{
       message
-      | mentioned_account_ids: Enum.uniq(named ++ quoted),
-        mentions_everyone:
-          Enum.any?(op.mentions, &match?(%V1.Mention{target: {:everyone, true}}, &1)),
+      | mentioned_account_ids: Enum.uniq(named_in(op.mentions) ++ quoted),
+        mentions_everyone: everyone_in?(op.mentions),
         mention_spans: Enum.flat_map(op.mentions, &Proto.mention_span/1)
     }
   end
+
+  defp named_in(mentions) do
+    for %V1.Mention{target: {:account_id, id}} <- mentions,
+        id = Proto.from_uuid(id),
+        id != nil,
+        do: id
+  end
+
+  defp everyone_in?(mentions),
+    do: Enum.any?(mentions, &match?(%V1.Mention{target: {:everyone, true}}, &1))
 
   @doc """
   Drops the quoted text from the replies to the messages `quoted` (a query

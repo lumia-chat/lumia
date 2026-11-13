@@ -323,6 +323,7 @@ defmodule Lumia.V1.QuoteReply do
   field :author_account_id, 2, type: :bytes, json_name: "authorAccountId"
   field :text, 3, type: :string
   field :original_deleted, 4, type: :bool, json_name: "originalDeleted"
+  field :silent, 5, type: :bool
 end
 
 defmodule Lumia.V1.ChannelNotice do

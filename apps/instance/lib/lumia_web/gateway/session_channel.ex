@@ -642,7 +642,9 @@ defmodule LumiaWeb.Gateway.SessionChannel do
   @write_permission %{
     send_message: :send_messages,
     edit_message: :send_messages,
-    delete_message: :send_messages,
+    # The author's own, or a moderator's who may not be in the channel:
+    # `Access.check_command/3` says which.
+    delete_message: :view_channel,
     add_reaction: :add_reactions,
     remove_reaction: :add_reactions,
     pin_message: :manage_messages,
@@ -655,7 +657,7 @@ defmodule LumiaWeb.Gateway.SessionChannel do
   defp authorize_write(socket, channel_id, %V1.Command{op: {op, _}} = command) do
     with {:ok, needed} <- Map.fetch(@write_permission, op),
          {:ok, access} <- Access.require(socket.assigns.account_id, channel_id, needed),
-         :ok <- Access.check_command(access, command) do
+         :ok <- Access.check_command(access, socket.assigns.account_id, command) do
       {:ok, subscription(access)}
     else
       :error -> {:error, :invalid_argument}

@@ -138,19 +138,69 @@ defmodule Lumia.Authz.Access do
   end
 
   @doc """
-  What a command asks beyond the permission its kind needs: a message that
-  mentions everyone needs `MENTION_EVERYONE` (architecture 6.6). `:ok` or
-  `{:error, :permission_denied}`.
+  What a command by `account_id` asks beyond the permission its kind needs
+  (architecture 6.6): a message or an edit that mentions everyone needs
+  `MENTION_EVERYONE`; an edit is the message's author's alone, and a delete
+  its author's or a `MANAGE_MESSAGES` holder's. `:ok`,
+  `{:error, :permission_denied}`, or `{:error, :message_not_found}` for a
+  message to edit or delete that is not there, is gone, or is a notice.
   """
-  def check_command(access, %Lumia.V1.Command{op: {:send_message, op}}) do
-    everyone? = Enum.any?(op.mentions, &match?(%Lumia.V1.Mention{target: {:everyone, true}}, &1))
+  def check_command(access, _account_id, %Lumia.V1.Command{op: {:send_message, op}}) do
+    everyone_allowed(access, op.mentions)
+  end
+
+  def check_command(access, account_id, %Lumia.V1.Command{op: {:edit_message, op}}) do
+    with :ok <- everyone_allowed(access, op.mentions) do
+      case author_of(access.channel.id, op.message_id) do
+        nil -> {:error, :message_not_found}
+        ^account_id -> :ok
+        _ -> {:error, :permission_denied}
+      end
+    end
+  end
+
+  def check_command(access, account_id, %Lumia.V1.Command{op: {:delete_message, op}}) do
+    case author_of(access.channel.id, op.message_id) do
+      nil ->
+        {:error, :message_not_found}
+
+      ^account_id ->
+        :ok
+
+      _ ->
+        if Permission.has?(access.permissions, :manage_messages),
+          do: :ok,
+          else: {:error, :permission_denied}
+    end
+  end
+
+  def check_command(_access, _account_id, _command), do: :ok
+
+  defp everyone_allowed(access, mentions) do
+    everyone? = Enum.any?(mentions, &match?(%Lumia.V1.Mention{target: {:everyone, true}}, &1))
 
     if everyone? and not Permission.has?(access.permissions, :mention_everyone),
       do: {:error, :permission_denied},
       else: :ok
   end
 
-  def check_command(_access, _command), do: :ok
+  # Who wrote a message of the channel that is there to edit or delete: not
+  # gone, and not a notice. Nil otherwise.
+  defp author_of(channel_id, message_id_bytes) do
+    case Lumia.Proto.from_uuid(message_id_bytes) do
+      nil ->
+        nil
+
+      message_id ->
+        Repo.one(
+          from m in Lumia.Events.Message,
+            where:
+              m.id == ^message_id and m.channel_id == ^channel_id and is_nil(m.deleted_at) and
+                is_nil(m.notice),
+            select: m.author_account_id
+        )
+    end
+  end
 
   @doc "`{:ok, access}` when the account holds `permission` in the channel, else an error."
   def require(account_id, channel_id, permission) do

@@ -21,7 +21,9 @@ defmodule LumiaWeb.ChannelController do
   @write_permission %{
     send_message: :send_messages,
     edit_message: :send_messages,
-    delete_message: :send_messages,
+    # The author's own, or a moderator's who may not be in the channel:
+    # `Access.check_command/3` says which.
+    delete_message: :view_channel,
     add_reaction: :add_reactions,
     remove_reaction: :add_reactions,
     pin_message: :manage_messages,
@@ -89,7 +91,7 @@ defmodule LumiaWeb.ChannelController do
     with {:ok, %V1.Command{op: {op, _}} = command} <- decode_command(conn, channel_id),
          {:ok, access} <-
            Access.require(actor.account_id, channel_id, Map.fetch!(@write_permission, op)),
-         :ok <- Access.check_command(access, command),
+         :ok <- Access.check_command(access, actor.account_id, command),
          {:ok, ack} <- Events.append(channel_id, actor, command) do
       ProtoConn.render(conn, %V1.Ack{
         command_id: command.command_id,
