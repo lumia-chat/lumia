@@ -675,9 +675,12 @@ async function preferencesStep(which: string, stamp: number) {
     if ((await ground()) !== DARK) throw new Error(`System under a dark system draws the ground ${await ground()}`);
     await page.emulateMedia({ colorScheme: "light" });
     if ((await ground()) !== LIGHT) throw new Error(`System under a light system draws the ground ${await ground()}`);
-    phase("density");
+    phase("compact");
     await appearance.getByRole("tab", { name: "Dark" }).click();
-    await page.getByRole("tablist", { name: "Message density" }).getByRole("tab", { name: "Compact" }).click();
+    const preset = page.getByRole("tablist", { name: "Preset" });
+    if ((await preset.getByRole("tab", { name: "Comfortable" }).getAttribute("aria-selected")) !== "true") throw new Error("the preset at first is not Comfortable");
+    await preset.getByRole("tab", { name: "Compact" }).click();
+    if ((await page.getByRole("tablist", { name: "Avatars" }).getByRole("tab", { name: "Small" }).getAttribute("aria-selected")) !== "true") throw new Error("Compact did not choose small avatars");
     // A load from nothing: what is drawn now is what the browser kept.
     await goto(page, `${base}/app`);
     await page.getByText(`Three of ${stamp}`).waitFor();
@@ -686,6 +689,39 @@ async function preferencesStep(which: string, stamp: number) {
     if (compact.avatar !== 28) throw new Error(`a compact message's avatar is ${compact.avatar} wide`);
     if (compact.height >= comfortable.height) throw new Error(`a compact block is ${compact.height} tall and a comfortable one ${comfortable.height}`);
     await page.screenshot({ path: `${out}/${which}-compact.png` });
+    phase("minimal");
+    await page.getByRole("button", { name: /account menu/ }).click();
+    await page.getByRole("menuitem", { name: "Preferences" }).click();
+    await preset.getByRole("tab", { name: "Minimal" }).click();
+    if (await page.getByRole("tablist", { name: "Avatars" }).isVisible()) throw new Error("one line still offers avatars");
+    await page.getByRole("tablist", { name: "Font size" }).getByRole("tab", { name: "20" }).click();
+    // Font size is no part of a preset: still Minimal.
+    if ((await preset.getByRole("tab", { name: "Minimal" }).getAttribute("aria-selected")) !== "true") throw new Error("a font size undid the preset");
+    await page.getByRole("tablist", { name: "Spacing" }).getByRole("tab", { name: "Roomy" }).click();
+    await page.getByText("Custom: these settings match no preset.").waitFor();
+    if ((await preset.locator('[aria-selected="true"]').count()) !== 0) throw new Error("Custom still selects a preset");
+    await page.getByRole("tablist", { name: "Spacing" }).getByRole("tab", { name: "Tight" }).click();
+    if ((await preset.getByRole("tab", { name: "Minimal" }).getAttribute("aria-selected")) !== "true") throw new Error("Minimal's values again are not Minimal");
+    await goto(page, `${base}/app`);
+    await page.getByText(`Three of ${stamp}`).waitFor();
+    const lines = await page.evaluate(() =>
+      Array.from(document.querySelectorAll(".lu-msglist .lu-msg--line .lu-msg__part")).map((line) => {
+        const box = (sel: string) => line.querySelector(sel)?.getBoundingClientRect();
+        const text = line.querySelector(".lu-line__text p");
+        const t = text?.getBoundingClientRect();
+        // The text's first line box, which the time and the name sit on.
+        const first = t && text ? { top: t.top, bottom: t.top + parseFloat(getComputedStyle(text).lineHeight) } : undefined;
+        const within = (b?: DOMRect) => !!b && !!first && b.top >= first.top - 2 && b.bottom <= first.bottom + 2;
+        return { time: within(box(".lu-line__time")), name: within(box(".lu-line__name")), size: text ? getComputedStyle(text).fontSize : "", avatars: document.querySelectorAll(".lu-msglist .lu-avatar").length };
+      }),
+    );
+    if (lines.length !== 3) throw new Error(`Minimal drew ${lines.length} lines for three messages`);
+    for (const l of lines) {
+      if (l.avatars) throw new Error("one line drew an avatar");
+      if (!l.time || !l.name) throw new Error(`a line's time and name are not on its text's first line: ${JSON.stringify(l)}`);
+      if (l.size !== "20px") throw new Error(`the text is ${l.size} at font size 20`);
+    }
+    await page.screenshot({ path: `${out}/${which}-minimal.png` });
     phase("kept through sign-out");
     await page.getByRole("button", { name: /account menu/ }).click();
     await page.getByRole("menuitem", { name: "Sign out" }).click();
@@ -694,7 +730,7 @@ async function preferencesStep(which: string, stamp: number) {
   } finally {
     await ctx.close();
   }
-  console.log(`  ${which}: opened Preferences from the account menu, chose each appearance against the system's, drew a block compact, and kept both through a reload and a sign-out, in ${Date.now() - t0} ms`);
+  console.log(`  ${which}: opened Preferences from the account menu, chose each appearance against the system's, drew a block compact and then as Minimal's lines at 20, Custom between, and kept them through a reload and a sign-out, in ${Date.now() - t0} ms`);
 }
 
 // A server's settings (architecture 6.7): its owner renames it, keeps its

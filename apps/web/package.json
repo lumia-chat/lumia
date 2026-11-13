@@ -9,6 +9,7 @@
     "dev": "bun run tokens && vite",
     "build": "bun run tokens && bun run wasm && tsc --noEmit && vite build",
     "check": "bun run tokens && bun run wasm && tsc --noEmit",
+    "test": "bun test src",
     "preview": "vite preview",
     "e2e": "bun run e2e/run.ts",
     "build:instance": "bun run tokens && bun run wasm && tsc --noEmit && vite build --mode instance --outDir ../instance/priv/static/ui --emptyOutDir"

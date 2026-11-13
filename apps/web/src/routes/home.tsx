@@ -1,7 +1,7 @@
 // Home: personal DMs grouped by the instance that hosts them, message
 // requests, this identity's devices, and starting a conversation. From
 // the "Home", "Requests" and "Devices" boards in the gallery.
-import { For, Show, createEffect, createMemo, createSignal, on } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, on, type JSX } from "solid-js";
 import {
   Avatar,
   Button,
@@ -27,7 +27,7 @@ import {
 import { ClientError, type ChannelSummary, type DeviceSummary, type DmMessageSummary, type InvitePreviewSummary, type MemberSummary, type MessageSummary, type PasskeySummary, type ProfileSummary, type SnapshotSummary } from "../client/bridge";
 import { SERVED_BY_INSTANCE, avatarSrc, client, pictureRefusal, savedInstance, dmChannelsQuery, dmMessagesQuery, enableNotifications, hasIdentityQuery, myStatus, peopleQuery, pushState, queryClient, readStatesQuery, rosterQuery, setMyStatus, snapshotQuery } from "../client/state";
 import { useNames } from "../client/names";
-import { preferences, setAppearance, setDensity, type Appearance, type Density } from "../client/preferences";
+import { FONT_SIZES, choosePreset, preferences, presetOf, setAppearance, setPreferences, type Appearance, type Avatars, type FontSize, type Layout, type Preset, type Spacing } from "../client/preferences";
 import { addPasskey, passkeysAvailable } from "../client/passkeys";
 import { initialsOf, toneFor } from "./app";
 import { Compose, Timeline, createMarkRead, quoteOf, thrownRefusal, type Refusal, type Replying, type TimelineItem } from "./timeline";
@@ -431,7 +431,7 @@ function Conversation(props: HomeProps) {
               <Timeline
                 items={items()}
                 label={`Messages with ${title()}`}
-                density={preferences().density}
+                display={preferences()}
                 me={me()}
                 authorName={(m) => {
                   const dm = byId().get(m.id);
@@ -971,19 +971,83 @@ function Preferences(props: HomeProps) {
             onChange={(id) => setAppearance(id as Appearance)}
           />
         </Card>
-        <Card title="Messages" subtitle="Comfortable gives each message room. Compact shows more of a conversation at once.">
-          <SegmentedTabs
-            label="Message density"
-            tabs={[
-              { id: "comfortable", label: "Comfortable" },
-              { id: "compact", label: "Compact" },
-            ]}
-            value={preferences().density}
-            onChange={(id) => setDensity(id as Density)}
-          />
+        {/* A preset writes its values; the one shown is the one they match, or none. Images and embeds have no control until there are any. */}
+        <Card title="Messages" subtitle="Start from a preset, then change anything below.">
+          <div class="lu-prefs">
+            <SegmentedTabs
+              label="Preset"
+              tabs={[
+                { id: "comfortable", label: "Comfortable" },
+                { id: "compact", label: "Compact" },
+                { id: "minimal", label: "Minimal" },
+              ]}
+              value={presetOf(preferences()) ?? ""}
+              onChange={(id) => choosePreset(id as Preset)}
+            />
+            <Show when={!presetOf(preferences())}>
+              <p class="lu-prefs__note">Custom: these settings match no preset.</p>
+            </Show>
+            <PreferenceRow label="Layout">
+              <SegmentedTabs
+                label="Layout"
+                tabs={[
+                  { id: "grouped", label: "Grouped" },
+                  { id: "one_line", label: "One line" },
+                ]}
+                value={preferences().layout}
+                onChange={(id) => setPreferences({ layout: id as Layout })}
+              />
+            </PreferenceRow>
+            <PreferenceRow label="Spacing">
+              <SegmentedTabs
+                label="Spacing"
+                tabs={[
+                  { id: "roomy", label: "Roomy" },
+                  { id: "cozy", label: "Cozy" },
+                  { id: "tight", label: "Tight" },
+                ]}
+                value={preferences().spacing}
+                onChange={(id) => setPreferences({ spacing: id as Spacing })}
+              />
+            </PreferenceRow>
+            <Show when={preferences().layout === "grouped"}>
+              <PreferenceRow label="Avatars">
+                <SegmentedTabs
+                  label="Avatars"
+                  tabs={[
+                    { id: "large", label: "Large" },
+                    { id: "small", label: "Small" },
+                    { id: "hidden", label: "Hidden" },
+                  ]}
+                  value={preferences().avatars}
+                  onChange={(id) => setPreferences({ avatars: id as Avatars })}
+                />
+              </PreferenceRow>
+            </Show>
+            <PreferenceRow label="Font size">
+              <SegmentedTabs
+                label="Font size"
+                tabs={FONT_SIZES.map((size) => ({ id: String(size), label: String(size) }))}
+                value={String(preferences().fontSize)}
+                onChange={(id) => setPreferences({ fontSize: Number(id) as FontSize })}
+              />
+            </PreferenceRow>
+          </div>
         </Card>
       </div>
     </>
+  );
+}
+
+/** One of the Messages card's settings: its name over its choice. */
+function PreferenceRow(props: { label: string; children: JSX.Element }) {
+  return (
+    <div class="lu-prefs__row">
+      <span class="lu-prefs__label" aria-hidden="true">
+        {props.label}
+      </span>
+      {props.children}
+    </div>
   );
 }
 

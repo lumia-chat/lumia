@@ -1060,12 +1060,55 @@ function Pieces() {
         </Message>
       </section>
       <section>
-        <h2>The same block, compact (a preference of this browser)</h2>
-        <div class="lu-msglist--compact">
-          <Message author={PEOPLE.leo.name} initials="LM" tone="sky" time="10:08 AM" datetime="2026-11-02T10:08" actions={false} density="compact" onOpenProfile={() => {}} parts={[{ time: "10:09", datetime: "2026-11-02T10:09", children: "Also: who do I ask about a desk by the windows?" }]}>
+        <h2>The same block, compact (a preference of this browser: Cozy, small avatars)</h2>
+        <MessageList label="Compact" spacing="cozy" class="pieces__list">
+          <Message author={PEOPLE.leo.name} initials="LM" tone="sky" time="10:08 AM" datetime="2026-11-02T10:08" actions={false} avatars="small" onOpenProfile={() => {}} parts={[{ time: "10:09", datetime: "2026-11-02T10:09", children: "Also: who do I ask about a desk by the windows?" }]}>
             Thank you all, what a warm welcome! My calendar is open for coffee chats this week.
           </Message>
-        </div>
+        </MessageList>
+      </section>
+      <section>
+        <h2>Grouped with avatars hidden (Roomy)</h2>
+        <MessageList label="No avatars" avatars="hidden" class="pieces__list">
+          <Message author={PEOPLE.leo.name} initials="LM" tone="sky" time="10:08 AM" datetime="2026-11-02T10:08" actions={false} avatars="hidden" onOpenProfile={() => {}} parts={[{ time: "10:09", datetime: "2026-11-02T10:09", children: "Also: who do I ask about a desk by the windows?" }]}>
+            Thank you all, what a warm welcome! My calendar is open for coffee chats this week.
+          </Message>
+        </MessageList>
+      </section>
+      <section>
+        <h2>Minimal: one line, Tight</h2>
+        <MessageList label="Minimal" layout="one_line" spacing="tight" avatars="hidden" class="pieces__list">
+          <NoticeLine time="10:02 AM" datetime="2026-11-02T10:02">
+            Leo Martins joined
+          </NoticeLine>
+          <Message
+            layout="one_line"
+            author={PEOPLE.leo.name}
+            initials="LM"
+            tone="sky"
+            time="10:08 AM"
+            datetime="2026-11-02T10:08"
+            actions={false}
+            onOpenProfile={() => {}}
+            parts={[{ time: "10:09 AM", datetime: "2026-11-02T10:09", children: "Also: who do I ask about a desk by the windows? The ones by the plants get the morning light and I would happily trade a monitor for one.", reactions: [{ emoji: "👋", label: "Wave", count: 3 }] }]}
+          >
+            Thank you all, what a warm welcome! My calendar is open for coffee chats this week.
+          </Message>
+          <Message
+            layout="one_line"
+            author={PEOPLE.priya.name}
+            initials="PR"
+            tone="peach"
+            time="10:11 AM"
+            datetime="2026-11-02T10:11"
+            actions={false}
+            mentioned
+            onOpenProfile={() => {}}
+            reference={<ReplyRef name={PEOPLE.leo.name} initials="LM" tone="sky" text="Also: who do I ask about a desk by the windows?" />}
+          >
+            Ask Sam, they keep the seating plan.
+          </Message>
+        </MessageList>
       </section>
       <section>
         <h2>Over the frame: the account menu, a server's menu, the profile card, a popover</h2>

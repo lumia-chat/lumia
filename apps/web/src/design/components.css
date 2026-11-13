@@ -94,7 +94,7 @@
 .lu-composer { padding: 4px var(--space-24) 14px; }
 .lu-composer__field { display: flex; align-items: center; gap: var(--space-2); padding: 6px 6px 6px 8px; border: 1px solid var(--border-composer); border-radius: var(--radius-16); background: var(--field); box-shadow: var(--shadow-composer); }
 .lu-composer__field:focus-within { border-color: var(--border-active); }
-.lu-composer__input { flex: 1; min-width: 0; height: 42px; padding: 0 8px; border: 0; outline: none; background: transparent; font: inherit; font-size: 15px; color: var(--ink-field); }
+.lu-composer__input { flex: 1; min-width: 0; height: 42px; padding: 0 8px; border: 0; outline: none; background: transparent; font: inherit; font-size: calc(15px * var(--msg-scale, 1)); color: var(--ink-field); }
 .lu-composer__field .lu-composer__attach { color: var(--ink-secondary); }
 .lu-composer__send { margin-left: 4px; }
 .lu-composer__field.is-bare .lu-composer__input { padding-left: 10px; }
@@ -233,6 +233,11 @@ h1.lu-serverhead__name:hover { background: none; }
 .lu-segtabs__tab { display: flex; align-items: center; justify-content: center; gap: var(--space-6); height: 34px; border-radius: var(--radius-9); background: transparent; color: var(--ink-quiet); font-size: 13.5px; font-weight: 700; }
 .lu-segtabs__tab.is-on { background: var(--tab-active); color: var(--ink); box-shadow: var(--shadow-tab); }
 .lu-segtabs__count { font-size: 12px; font-weight: 600; color: var(--ink-muted); }
+/* Preferences' Messages card: the preset, what it says when nothing matches, and each setting's name over its choice. */
+.lu-prefs { display: flex; flex-direction: column; gap: var(--space-14); }
+.lu-prefs__note { margin: calc(var(--space-6) * -1) 0 0; font-size: 13.5px; color: var(--ink-muted); }
+.lu-prefs__row { display: flex; flex-direction: column; gap: var(--space-6); }
+.lu-prefs__label { font-size: 13.5px; font-weight: 600; color: var(--ink-body); }
 
 /* ── ChannelHeader ── */
 .lu-chhead { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; min-height: var(--header-height); padding: 10px 14px 10px 24px; border-bottom: 1px solid var(--line); }
@@ -247,24 +252,25 @@ h1.lu-serverhead__name:hover { background: none; }
 .lu-chhead__back, .lu-chhead__narrow { display: none; }
 
 /* ── Message ── */
-.lu-msg { position: relative; isolation: isolate; display: flex; gap: 14px; padding: 8px 12px; border-radius: var(--radius-12); --msg-lead: calc(var(--avatar-lg) + 14px + 12px); --msg-pad-y: 8px; --msg-ref: 22px; --msg-avatar: var(--avatar-lg); }
+/* Its measures are variables the list's spacing and the message's avatars set (Preferences): the avatar, the room beside it, over and under the row, under the name. */
+.lu-msg { position: relative; isolation: isolate; display: flex; gap: var(--msg-beside); padding: var(--msg-pad-y) 12px; border-radius: var(--radius-12); --msg-avatar: var(--avatar-lg); --msg-beside: 14px; --msg-pad-y: 8px; --msg-under: var(--space-4); --msg-ref: calc(22px * var(--msg-scale, 1)); --msg-lead: calc(var(--msg-avatar) + var(--msg-beside) + 12px); }
 /* A reply: the line of what it quotes over the avatar row, 2 above it (`ReplyRef`). */
 .lu-msg.has-ref { flex-wrap: wrap; row-gap: var(--space-2); }
 .lu-msg--default:hover { background: var(--hover-message); }
 .lu-msg.is-highlighted { background: var(--accent-wash); }
 .lu-msg .lu-avatar { font-size: 14px; }
-.lu-msg__main { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-4); }
+.lu-msg__main { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: var(--msg-under); }
 .lu-msg__head { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-8); }
-.lu-msg__author { font-size: 15px; font-weight: 700; color: var(--ink); }
+.lu-msg__author { font-size: calc(15px * var(--msg-scale, 1)); font-weight: 700; color: var(--ink); }
 .lu-msg__name { font-family: var(--font-sans); border-radius: 4px; }
 .lu-msg__name:hover { text-decoration: underline; text-underline-offset: 3px; }
 .lu-msg__avatar { flex: none; align-self: flex-start; border-radius: var(--radius-round); }
-.lu-msg__part { position: relative; align-self: stretch; display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-4); }
-.lu-msg__parttime { position: absolute; right: 100%; top: 0; width: 40px; margin-right: 14px; font-size: 11px; line-height: 24px; text-align: center; color: var(--ink-muted); white-space: nowrap; opacity: 0; transition: opacity .12s ease; }
+.lu-msg__part { position: relative; align-self: stretch; display: flex; flex-direction: column; align-items: flex-start; gap: var(--msg-under); }
+.lu-msg__parttime { position: absolute; right: 100%; top: 0; width: var(--msg-avatar); margin-right: var(--msg-beside); font-size: calc(11px * var(--msg-scale, 1)); line-height: calc(24px * var(--msg-scale, 1)); text-align: center; color: var(--ink-muted); white-space: nowrap; opacity: 0; transition: opacity .12s ease; }
 .lu-msg__part:hover .lu-msg__parttime, .lu-msg__part:focus-within .lu-msg__parttime { opacity: 1; }
-.lu-msg__time { font-size: 12.5px; color: var(--ink-muted); }
+.lu-msg__time { font-size: calc(12.5px * var(--msg-scale, 1)); color: var(--ink-muted); }
 .lu-msg__body { display: contents; }
-.lu-msg__body p { margin: 0; font-size: 15px; line-height: 1.6; color: var(--ink-body); text-wrap: pretty; }
+.lu-msg__body p { margin: 0; font-size: calc(15px * var(--msg-scale, 1)); line-height: 1.6; color: var(--ink-body); text-wrap: pretty; }
 .lu-msg__reactions { display: flex; flex-wrap: wrap; gap: var(--space-6); margin-top: 2px; }
 .lu-msg .lu-attach, .lu-msg .lu-threadsum { margin-top: 4px; }
 .lu-msg--reply, .lu-msg--parent { gap: 10px; padding: 0; border-radius: 0; }
@@ -294,10 +300,10 @@ h1.lu-serverhead__name:hover { background: none; }
 /* ── SystemMessage ── */
 .lu-sysmsg { display: flex; align-items: center; gap: 14px; padding: 6px 12px; }
 .lu-sysmsg__icon { flex: none; width: 40px; display: flex; justify-content: center; color: var(--online); }
-.lu-sysmsg__text { margin: 0; flex: 1; min-width: 0; font-size: 14px; color: var(--ink-quiet); }
+.lu-sysmsg__text { margin: 0; flex: 1; min-width: 0; font-size: calc(14px * var(--msg-scale, 1)); color: var(--ink-quiet); }
 .lu-sysmsg__text strong { font-weight: 600; color: var(--ink); }
 .lu-sysmsg__text a { color: var(--accent-ink); font-weight: 600; text-decoration: none; }
-.lu-sysmsg__time { flex: none; font-size: 12.5px; color: var(--ink-muted); }
+.lu-sysmsg__time { flex: none; font-size: calc(12.5px * var(--msg-scale, 1)); color: var(--ink-muted); }
 
 /* ── Divider ── */
 .lu-divider { display: flex; align-items: center; gap: var(--space-12); padding: 8px 10px; }
@@ -327,15 +333,42 @@ button.lu-mention:hover { text-decoration: underline; text-underline-offset: 3px
 /* ── MessageList ── */
 .lu-msglist { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column-reverse; }
 .lu-msglist__log { display: flex; flex-direction: column; gap: var(--space-8); padding: 14px 14px 8px; }
-/* Compact (Preferences): the small avatar, and half the room between blocks, inside one and around a day's divider. */
-.lu-msglist--compact .lu-msglist__log { gap: var(--space-4); }
-.lu-msglist--compact .lu-msg--default { gap: var(--space-10); padding: var(--space-4) 12px; --msg-lead: calc(var(--avatar-sm) + var(--space-10) + 12px); --msg-pad-y: var(--space-4); --msg-avatar: var(--avatar-sm); }
-.lu-msglist--compact .lu-msg--default .lu-msg__main, .lu-msglist--compact .lu-msg--default .lu-msg__part { gap: var(--space-2); }
-.lu-msglist--compact .lu-msg--default .lu-avatar { font-size: 10px; }
-.lu-msglist--compact .lu-msg__parttime { width: var(--avatar-sm); margin-right: var(--space-10); font-size: 9.5px; }
-.lu-msglist--compact .lu-sysmsg { gap: var(--space-10); padding: 3px 12px; }
-.lu-msglist--compact .lu-sysmsg__icon { width: var(--avatar-sm); }
-.lu-msglist--compact .lu-divider { padding: var(--space-4) 10px; }
+/* Spacing (Preferences): Roomy is the above; Cozy halves the room between blocks, inside one and around a day's divider; Tight takes the block's edges to 2. In one line it is the room between lines. */
+.lu-msglist { --line-gap: var(--space-4); }
+.lu-msglist--cozy { --line-gap: var(--space-2); }
+.lu-msglist--tight { --line-gap: 0px; }
+.lu-msglist--cozy .lu-msglist__log { gap: var(--space-4); }
+.lu-msglist--tight .lu-msglist__log { gap: var(--space-2); }
+.lu-msglist--cozy .lu-msg--default { --msg-beside: var(--space-10); --msg-pad-y: var(--space-4); --msg-under: var(--space-2); }
+.lu-msglist--tight .lu-msg--default { --msg-beside: var(--space-10); --msg-pad-y: var(--space-2); --msg-under: var(--space-2); }
+.lu-msglist--cozy .lu-sysmsg { gap: var(--space-10); padding: 3px 12px; }
+.lu-msglist--tight .lu-sysmsg { gap: var(--space-10); padding: var(--space-2) 12px; }
+.lu-msglist--cozy .lu-divider, .lu-msglist--tight .lu-divider { padding: var(--space-4) 10px; }
+.lu-msglist .lu-divider__label { font-size: calc(12.5px * var(--msg-scale, 1)); }
+/* Avatars (Preferences): small, or none and no room kept for one; a block's later messages then keep their time for assistive technology alone. */
+.lu-msg--avatars-small { --msg-avatar: var(--avatar-sm); }
+.lu-msg--avatars-small .lu-avatar { font-size: 10px; }
+.lu-msg--avatars-small .lu-msg__parttime { font-size: calc(9.5px * var(--msg-scale, 1)); }
+.lu-msg.lu-msg--avatars-hidden { --msg-avatar: 0px; --msg-beside: 0px; }
+.lu-msg--avatars-hidden .lu-replyref { padding-left: 0; }
+.lu-msglist--avatars-hidden .lu-sysmsg__icon, .lu-msglist--avatars-hidden .lu-noticeline__glyph { width: auto; }
+/* One line (Preferences): `time  name  text` on every line, a message that runs on wrapping under its text; what it quotes over the text, its reactions under it. */
+.lu-msg--line { display: flex; flex-direction: column; gap: var(--line-gap, var(--space-4)); padding: 0 12px; --msg-lead: 12px; --msg-pad-y: 0px; }
+.lu-msg--line .lu-msg__part { display: grid; grid-template-columns: auto auto minmax(0, 1fr); column-gap: var(--space-8); row-gap: var(--space-2); align-items: baseline; }
+.lu-msg.lu-msg--line .lu-msg__part::before { top: calc(var(--line-gap, var(--space-4)) / -2); bottom: calc(var(--line-gap, var(--space-4)) / -2); }
+.lu-msg--line .lu-msg__part:where(:hover)::before { background: var(--hover-message); border-radius: var(--radius-8); }
+.lu-line__time { grid-column: 1; grid-row: 1; font-size: calc(12.5px * var(--msg-scale, 1)); font-variant-numeric: tabular-nums; color: var(--ink-muted); white-space: nowrap; }
+.lu-line__name { grid-column: 2; grid-row: 1; white-space: nowrap; }
+.lu-line__text { grid-column: 3; grid-row: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-2); }
+.lu-msg__part.has-ref > .lu-line__time, .lu-msg__part.has-ref > .lu-line__name, .lu-msg__part.has-ref > .lu-line__text { grid-row: 2; }
+.lu-msg--line .lu-replyref { grid-column: 3; grid-row: 1; height: auto; padding: 0; }
+.lu-msg--line .lu-replyref::before { content: "↳"; color: var(--ink-muted); }
+.lu-msg--line .lu-replyref .lu-replyref__line, .lu-msg--line .lu-replyref .lu-replyref__avatar, .lu-msg--line .lu-replyref .lu-replyref__gone { display: none; }
+.lu-msg--line .lu-replyref__name::after { content: ":"; }
+.lu-msg--line .lu-msg__part > .lu-actions.is-floating, .lu-msg--line .lu-msg__part--first > .lu-actions.is-floating { top: calc(-14px - var(--space-2)); }
+.lu-msglist--lines .lu-noticeline { gap: var(--space-8); }
+.lu-msglist--lines .lu-noticeline__glyph { display: none; }
+.lu-msglist--lines .lu-noticeline__time { order: -1; font-variant-numeric: tabular-nums; color: var(--ink-muted); }
 
 /* ── ThreadPanel ── */
 .lu-thread { flex: 1; min-height: 0; display: flex; flex-direction: column; }
@@ -420,7 +453,7 @@ button.lu-mention:hover { text-decoration: underline; text-underline-offset: 3px
 .lu-notice--accent { background: var(--accent-soft); color: var(--accent-ink); }
 
 /* Channel membership: notices, the join bar, invitations, Browse, pickers (architecture 6.8). */
-.lu-noticeline { display: flex; align-items: center; gap: var(--space-12); padding: var(--space-4) var(--space-12); font-size: 12.5px; color: var(--ink-muted); }
+.lu-noticeline { display: flex; align-items: center; gap: var(--space-12); padding: var(--space-4) var(--space-12); font-size: calc(12.5px * var(--msg-scale, 1)); color: var(--ink-muted); }
 .lu-noticeline__glyph { flex: none; width: 34px; color: var(--ink-faint); }
 .lu-noticeline__text { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .lu-noticeline__time { color: var(--ink-faint); }
@@ -584,7 +617,7 @@ button.lu-mention:hover { text-decoration: underline; text-underline-offset: 3px
 .lu-msg__part.is-replying::before { background: var(--hover-message); border-radius: var(--radius-12); }
 .lu-msg__part.is-flash::before { background: var(--accent-wash); border-radius: var(--radius-12); box-shadow: inset 2px 0 0 var(--accent); transition: none; }
 /* The line of what a reply quotes ("Inline replies"): its connector starts under the avatar's centre. */
-.lu-replyref { flex: 0 0 100%; min-width: 0; display: flex; align-items: center; gap: var(--space-6); height: 20px; margin: 0; padding: 0 0 0 calc(var(--msg-avatar) / 2 - 1px); border: 0; background: none; font: inherit; font-family: var(--font-sans); font-size: 13px; text-align: left; color: var(--ink-muted); }
+.lu-replyref { flex: 0 0 100%; min-width: 0; display: flex; align-items: center; gap: var(--space-6); height: calc(20px * var(--msg-scale, 1)); margin: 0; padding: 0 0 0 calc(var(--msg-avatar) / 2 - 1px); border: 0; background: none; font: inherit; font-family: var(--font-sans); font-size: calc(13px * var(--msg-scale, 1)); text-align: left; color: var(--ink-muted); }
 button.lu-replyref { cursor: pointer; }
 .lu-replyref__line { flex: none; margin-top: 8px; color: var(--border-hover); }
 .lu-msg .lu-replyref .lu-replyref__avatar { width: 18px; height: 18px; overflow: hidden; font-size: 7.5px; }
@@ -595,13 +628,13 @@ button.lu-replyref { cursor: pointer; }
 .lu-replyref__gone { flex: none; width: 18px; height: 18px; border-radius: var(--radius-round); background: var(--chip); color: var(--ink-muted); display: flex; align-items: center; justify-content: center; }
 .lu-replyref__deleted { min-width: 0; font-style: italic; color: var(--ink-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* "(edited)", after a body's last line. */
-.lu-msg__edited { font-size: 12.5px; color: var(--ink-muted); white-space: nowrap; }
+.lu-msg__edited { font-size: calc(12.5px * var(--msg-scale, 1)); color: var(--ink-muted); white-space: nowrap; }
 /* A body being edited where it is drawn. */
 .lu-msgedit { align-self: stretch; display: flex; flex-direction: column; gap: var(--space-4); }
-.lu-msgedit__field { display: block; width: 100%; min-height: 44px; max-height: 50vh; padding: 9px 12px; border: 1px solid var(--border-active); border-radius: var(--radius-12); background: var(--field); font: inherit; font-family: var(--font-sans); font-size: 15px; line-height: 1.6; color: var(--ink-field); resize: none; overflow-y: auto; box-sizing: border-box; }
+.lu-msgedit__field { display: block; width: 100%; min-height: 44px; max-height: 50vh; padding: 9px 12px; border: 1px solid var(--border-active); border-radius: var(--radius-12); background: var(--field); font: inherit; font-family: var(--font-sans); font-size: calc(15px * var(--msg-scale, 1)); line-height: 1.6; color: var(--ink-field); resize: none; overflow-y: auto; box-sizing: border-box; }
 .lu-msgedit__field:focus { outline: none; }
-.lu-msg__body .lu-msgedit__hint { margin: 0; font-size: 12.5px; color: var(--ink-muted); }
-.lu-msg__body .lu-msg__refused { margin: 0; font-size: 13px; line-height: 1.4; color: var(--dnd); }
+.lu-msg__body .lu-msgedit__hint { margin: 0; font-size: calc(12.5px * var(--msg-scale, 1)); color: var(--ink-muted); }
+.lu-msg__body .lu-msg__refused { margin: 0; font-size: calc(13px * var(--msg-scale, 1)); line-height: 1.4; color: var(--dnd); }
 /* "Delete this message?": its line quoted under the title, Cancel and Delete at its end. */
 .lu-pop--confirm { width: 360px; }
 .lu-pop--confirm .lu-pop__subtitle { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

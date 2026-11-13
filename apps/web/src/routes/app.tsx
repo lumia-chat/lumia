@@ -745,7 +745,7 @@ export function App() {
                             <Timeline
                               items={timelineItems()}
                               label={isDm() ? `Messages with ${title()}` : `Messages in #${ch().name}`}
-                              density={preferences().density}
+                              display={preferences()}
                               me={accountId()}
                               authorName={(m) => nameOf(m.authorId)}
                               authorPhoto={(m) => photoOf(m.authorId)}

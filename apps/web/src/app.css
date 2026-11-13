@@ -5,7 +5,8 @@ body { background: var(--bg); color: var(--ink-body); font-family: var(--font-sa
 a { color: var(--link); }
 
 /* ── The design gallery (not a product screen) ── */
-.gallery { min-height: 100vh; display: flex; flex-direction: column; }
+/* The boards are drawn at their own size, whatever font size Preferences holds. */
+.gallery { min-height: 100vh; display: flex; flex-direction: column; --msg-scale: 1; }
 .gallery__bar { display: flex; align-items: center; gap: var(--space-16); padding: var(--space-8) var(--space-16); background: var(--surface); box-shadow: var(--shadow-panel); font-size: 13.5px; }
 .gallery__bar strong { color: var(--ink); margin-right: auto; }
 .gallery__nav { display: flex; gap: var(--space-4); }
@@ -92,6 +93,7 @@ a { color: var(--link); }
 .pieces > section > h2 { font: 600 12.5px/1 var(--font-sans); text-transform: none; color: var(--ink-muted); margin: 0 0 var(--space-12); }
 .pieces__row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-12); }
 .pieces__row--top { align-items: flex-start; gap: var(--space-24); }
+.pieces__list { flex: none; max-width: 720px; border-radius: var(--radius-12); background: var(--surface); }
 .pieces__icon { display: inline-flex; padding: 6px; border-radius: var(--radius-8); background: var(--surface); color: var(--ink-quiet); }
 
 /* ── Sign in, link, invite, other-tab ── */

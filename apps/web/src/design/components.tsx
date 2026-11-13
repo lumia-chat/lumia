@@ -1566,10 +1566,16 @@ export interface MessageProps {
    * column under the pointer.
    */
   parts?: MessagePart[];
-  /** Compact draws the small avatar; the list it is in closes the room around it. */
-  density?: "comfortable" | "compact";
+  /** Grouped is the block under one name; one line draws each message as `time  name  text`, with no avatar. */
+  layout?: MessageLayout;
+  /** Large, small, or none and no room kept for one (grouped only). */
+  avatars?: MessageAvatars;
   class?: string;
 }
+
+export type MessageLayout = "grouped" | "one_line";
+export type MessageAvatars = "large" | "small" | "hidden";
+export type MessageSpacing = "roomy" | "cozy" | "tight";
 
 export interface MessagePart {
   time?: string;
@@ -1604,69 +1610,139 @@ function Reactions(props: { reactions?: ReactionChipProps[]; onAdd?: (pressed: H
 export function Message(props: MessageProps) {
   const variant = () => props.variant ?? "default";
   const compact = () => variant() !== "default";
-  const avatar = () => <Avatar initials={props.initials} src={props.src} tone={props.tone ?? "blue"} size={compact() || props.density === "compact" ? 28 : 40} />;
+  const avatars = () => props.avatars ?? "large";
+  const avatar = () => <Avatar initials={props.initials} src={props.src} tone={props.tone ?? "blue"} size={compact() || avatars() === "small" ? 28 : 40} />;
   // Read once: the row's class and its first line both ask.
   const reference = children(() => props.reference);
-  return (
-    <article class={cx("lu-msg", "lu-msg--" + variant(), props.highlighted && "is-highlighted", !!reference() && "has-ref", props.class)}>
-      {reference()}
-      <Show when={props.onOpenProfile} fallback={avatar()}>
-        {/* The name is the control; the avatar is the same one for a pointer. */}
-        <button type="button" class="lu-msg__avatar" tabindex={-1} aria-hidden="true" onClick={(e) => props.onOpenProfile?.(e.currentTarget)}>
-          {avatar()}
-        </button>
+  const name = (extra?: string) => (
+    <Show when={props.onOpenProfile} fallback={<span class={cx("lu-msg__author", extra)}>{props.author}</span>}>
+      <button type="button" class={cx("lu-msg__author", "lu-msg__name", extra)} aria-haspopup="dialog" onClick={(e) => props.onOpenProfile?.(e.currentTarget)}>
+        {props.author}
+      </button>
+    </Show>
+  );
+  // A message as one line: its time, the name again, and its text, which wraps under itself.
+  const line = (m: MessagePart, first: boolean, ref?: JSX.Element) => (
+    <div class={cx("lu-msg__part", first && "lu-msg__part--first", !!ref && "has-ref", m.mentioned && "is-mentioned", m.flash && "is-flash", m.replying && "is-replying")} data-message-id={m.id}>
+      {ref}
+      <Show when={m.time}>
+        <time datetime={m.datetime} class="lu-line__time">
+          {m.time}
+        </time>
       </Show>
-      <div class="lu-msg__main">
-        <div class={cx("lu-msg__part", "lu-msg__part--first", props.mentioned && "is-mentioned", props.flash && "is-flash", props.replying && "is-replying")} data-message-id={props.id}>
-          <div class="lu-msg__head">
-            <Show when={props.onOpenProfile} fallback={<span class="lu-msg__author">{props.author}</span>}>
-              <button type="button" class="lu-msg__author lu-msg__name" aria-haspopup="dialog" onClick={(e) => props.onOpenProfile?.(e.currentTarget)}>
-                {props.author}
+      {name("lu-line__name")}
+      <div class="lu-line__text">
+        <div class="lu-msg__body">
+          <Paras>{m.children}</Paras>
+        </div>
+        <Reactions reactions={m.reactions} onAdd={m.onAddReaction} />
+      </div>
+      {m.tools}
+    </div>
+  );
+  const firstPart: MessagePart = {
+    get time() {
+      return props.time;
+    },
+    get datetime() {
+      return props.datetime;
+    },
+    get children() {
+      return props.children;
+    },
+    get id() {
+      return props.id;
+    },
+    get reactions() {
+      return props.reactions;
+    },
+    get onAddReaction() {
+      return props.onAddReaction;
+    },
+    get tools() {
+      return props.tools;
+    },
+    get mentioned() {
+      return props.mentioned;
+    },
+    get flash() {
+      return props.flash;
+    },
+    get replying() {
+      return props.replying;
+    },
+  };
+  return (
+    <Show
+      when={props.layout === "one_line" && !compact()}
+      fallback={
+        <article class={cx("lu-msg", "lu-msg--" + variant(), !compact() && avatars() !== "large" && "lu-msg--avatars-" + avatars(), props.highlighted && "is-highlighted", !!reference() && "has-ref", props.class)}>
+          {reference()}
+          <Show when={compact() || avatars() !== "hidden"}>
+            <Show when={props.onOpenProfile} fallback={avatar()}>
+              {/* The name is the control; the avatar is the same one for a pointer. */}
+              <button type="button" class="lu-msg__avatar" tabindex={-1} aria-hidden="true" onClick={(e) => props.onOpenProfile?.(e.currentTarget)}>
+                {avatar()}
               </button>
             </Show>
-            <Show when={compact() ? undefined : props.tag}>{(tag) => <Tag tone={tag().tone ?? "neutral"}>{tag().label}</Tag>}</Show>
-            <Show when={props.time}>
-              <time datetime={props.datetime} class="lu-msg__time">
-                {props.time}
-              </time>
+          </Show>
+          <div class="lu-msg__main">
+            <div class={cx("lu-msg__part", "lu-msg__part--first", props.mentioned && "is-mentioned", props.flash && "is-flash", props.replying && "is-replying")} data-message-id={props.id}>
+              <div class="lu-msg__head">
+                {name()}
+                <Show when={compact() ? undefined : props.tag}>{(tag) => <Tag tone={tag().tone ?? "neutral"}>{tag().label}</Tag>}</Show>
+                <Show when={props.time}>
+                  <time datetime={props.datetime} class="lu-msg__time">
+                    {props.time}
+                  </time>
+                </Show>
+              </div>
+              <div class="lu-msg__body">
+                <Paras>{props.children}</Paras>
+              </div>
+              <Show when={!props.parts?.length}>
+                <Show when={props.attachment}>{(a) => <Attachment {...a()} />}</Show>
+                <Show when={props.thread}>{(t) => <ThreadSummary {...t()} />}</Show>
+              </Show>
+              <Reactions reactions={props.reactions} onAdd={props.onAddReaction} />
+              {props.tools}
+            </div>
+            <For each={props.parts ?? []}>
+              {(part) => (
+                <div class={cx("lu-msg__part", part.mentioned && "is-mentioned", part.flash && "is-flash", part.replying && "is-replying")} data-message-id={part.id}>
+                  <Show when={part.time}>
+                    {/* With no avatar there is no column for it: the time is for assistive technology alone. */}
+                    <time datetime={part.datetime} class={avatars() === "hidden" && !compact() ? "lu-sr" : "lu-msg__parttime"}>
+                      <span class="lu-sr">{props.author}, </span>
+                      {part.time}
+                    </time>
+                  </Show>
+                  <div class="lu-msg__body">
+                    <Paras>{part.children}</Paras>
+                  </div>
+                  <Reactions reactions={part.reactions} onAdd={part.onAddReaction} />
+                  {part.tools}
+                </div>
+              )}
+            </For>
+            <Show when={props.parts?.length}>
+              <Show when={props.attachment}>{(a) => <Attachment {...a()} />}</Show>
+              <Show when={props.thread}>{(t) => <ThreadSummary {...t()} />}</Show>
             </Show>
           </div>
-          <div class="lu-msg__body">
-            <Paras>{props.children}</Paras>
-          </div>
-          <Show when={!props.parts?.length}>
-            <Show when={props.attachment}>{(a) => <Attachment {...a()} />}</Show>
-            <Show when={props.thread}>{(t) => <ThreadSummary {...t()} />}</Show>
+          <Show when={(props.actions ?? true) && !compact()}>
+            <MessageActions onReact={() => props.onReact?.()} onThread={props.onThread} onMore={props.onMore} />
           </Show>
-          <Reactions reactions={props.reactions} onAdd={props.onAddReaction} />
-          {props.tools}
-        </div>
-        <For each={props.parts ?? []}>
-          {(part) => (
-            <div class={cx("lu-msg__part", part.mentioned && "is-mentioned", part.flash && "is-flash", part.replying && "is-replying")} data-message-id={part.id}>
-              <Show when={part.time}>
-                <time datetime={part.datetime} class="lu-msg__parttime">
-                  <span class="lu-sr">{props.author}, </span>
-                  {part.time}
-                </time>
-              </Show>
-              <div class="lu-msg__body">
-                <Paras>{part.children}</Paras>
-              </div>
-              <Reactions reactions={part.reactions} onAdd={part.onAddReaction} />
-              {part.tools}
-            </div>
-          )}
-        </For>
-        <Show when={props.parts?.length}>
-          <Show when={props.attachment}>{(a) => <Attachment {...a()} />}</Show>
-          <Show when={props.thread}>{(t) => <ThreadSummary {...t()} />}</Show>
-        </Show>
-      </div>
-      <Show when={(props.actions ?? true) && !compact()}>
-        <MessageActions onReact={() => props.onReact?.()} onThread={props.onThread} onMore={props.onMore} />
-      </Show>
-    </article>
+        </article>
+      }
+    >
+      <article class={cx("lu-msg", "lu-msg--line", props.highlighted && "is-highlighted", props.class)}>
+        {line(firstPart, true, reference())}
+        <For each={props.parts ?? []}>{(part) => line(part, false)}</For>
+        <Show when={props.attachment}>{(a) => <Attachment {...a()} />}</Show>
+        <Show when={props.thread}>{(t) => <ThreadSummary {...t()} />}</Show>
+      </article>
+    </Show>
   );
 }
 
@@ -1728,8 +1804,11 @@ export function Divider(props: DividerProps) {
 
 export interface MessageListProps {
   label?: string;
-  /** Compact halves the room between blocks, inside one and around a day's divider. */
-  density?: "comfortable" | "compact";
+  /** The room between blocks, inside one and around a day's divider (Roomy by default), or between lines in one line. */
+  spacing?: MessageSpacing;
+  layout?: MessageLayout;
+  /** The list's avatars, for the rows it draws that are not messages (a join line's glyph). */
+  avatars?: MessageAvatars;
   children?: JSX.Element;
   /** The pane that scrolls, and its scrolling: whether it is at its newest end, where a jump goes. */
   scrollRef?: (el: HTMLDivElement) => void;
@@ -1740,7 +1819,7 @@ export interface MessageListProps {
 /** Bottom-anchored scrolling log. */
 export function MessageList(props: MessageListProps) {
   return (
-    <div ref={(el) => props.scrollRef?.(el)} onScroll={() => props.onScroll?.()} class={cx("lu-msglist", props.density === "compact" && "lu-msglist--compact", props.class)}>
+    <div ref={(el) => props.scrollRef?.(el)} onScroll={() => props.onScroll?.()} class={cx("lu-msglist", props.spacing && props.spacing !== "roomy" && "lu-msglist--" + props.spacing, props.layout === "one_line" && "lu-msglist--lines", props.avatars === "hidden" && "lu-msglist--avatars-hidden", props.class)}>
       <div role="log" aria-label={props.label ?? "Messages"} class="lu-msglist__log">
         {props.children}
       </div>

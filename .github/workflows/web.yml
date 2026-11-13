@@ -32,4 +32,6 @@ jobs:
           workspaces: apps/core
           key: web
       - run: bun install --frozen-lockfile
+      - run: bun run test
+        timeout-minutes: 2
       - run: bun run build

@@ -36,6 +36,7 @@ import {
 import { frequentEmoji, usedEmoji } from "../design/emoji";
 import { ClientError, type MemberSummary, type MentionSummary, type QuoteSummary, type ReactionSummary, type ReadStateSummary } from "../client/bridge";
 import { avatarSrc, markRead } from "../client/state";
+import type { Display } from "../client/preferences";
 import { byBlock, byDay, initialsOf, shortTimeOf, timeOf, toneFor } from "./app";
 
 /** One message of a conversation, whichever kind it is. */
@@ -184,7 +185,8 @@ export function createMarkRead(opts: { channelId: () => string | undefined; newe
 export interface TimelineProps {
   items: TimelineItem[];
   label: string;
-  density: "comfortable" | "compact";
+  /** How messages are drawn (Preferences). */
+  display: Pick<Display, "layout" | "spacing" | "avatars">;
   me: string;
   authorName: (item: TimelineItem) => string;
   authorPhoto: (item: TimelineItem) => string | undefined;
@@ -456,7 +458,9 @@ export function Timeline(props: TimelineProps) {
     <>
       <MessageList
         label={props.label}
-        density={props.density}
+        layout={props.display.layout}
+        spacing={props.display.spacing}
+        avatars={props.display.avatars}
         scrollRef={(el) => (scroller = el)}
         onScroll={() => {
           props.onAtEnd(atEnd());
@@ -494,7 +498,8 @@ export function Timeline(props: TimelineProps) {
                           time={t.time}
                           datetime={t.datetime}
                           actions={false}
-                          density={props.density}
+                          layout={props.display.layout}
+                          avatars={props.display.avatars}
                           onOpenProfile={props.onOpenProfile && first.authorId ? (anchor) => props.onOpenProfile?.(first, anchor) : undefined}
                           id={first.id}
                           reference={first.reply ? reference(first) : undefined}
@@ -505,7 +510,8 @@ export function Timeline(props: TimelineProps) {
                           flash={flash() === first.id}
                           replying={props.replyingTo === first.id}
                           parts={block.rest.map((m) => ({
-                            time: shortTimeOf(m.at),
+                            // One line shows it whole; grouped, in the avatar's column, without its "AM" or "PM".
+                            time: props.display.layout === "one_line" ? timeOf(m.at).time : shortTimeOf(m.at),
                             datetime: timeOf(m.at).datetime,
                             children: body(m),
                             id: m.id,

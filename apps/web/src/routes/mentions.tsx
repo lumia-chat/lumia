@@ -73,7 +73,8 @@ export function MentionsPage(props: MentionsPageProps) {
                     tone={toneFor(m.authorAccountId)}
                     time={when(m.createdAtMicros)}
                     actions={false}
-                    density={preferences().density}
+                    layout={preferences().layout}
+                    avatars={preferences().avatars}
                     reference={
                       m.reply ? (
                         <ReplyRef
