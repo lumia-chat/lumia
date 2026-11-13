@@ -289,14 +289,16 @@ struct ConversationRow: View {
             HStack(spacing: LumiaTokens.space12) {
                 LumiaAvatar(initials: initials(of: name), tone: .of(others.first ?? channel.channelId), size: LumiaTokens.avatarLg)
                 VStack(alignment: .leading, spacing: LumiaTokens.space2) {
+                    // The board's: the name at 700 while unread and 600 after, the
+                    // last line in the body's ink while unread and muted after.
                     HStack(alignment: .firstTextBaseline, spacing: LumiaTokens.space8) {
-                        Text(name).font(LumiaTokens.textAuthor.font).fontWeight(bold ? .bold : nil).foregroundStyle(LumiaTokens.inkEmphasis.color).lineLimit(1)
+                        Text(name).font(LumiaTokens.textAuthor.font).fontWeight(bold ? .bold : .semibold).foregroundStyle(LumiaTokens.ink.color).lineLimit(1)
                         Spacer(minLength: 0)
-                        if let last { Text(rowTime(ofMicros: last.sentAtMicros)).font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkSecondary.color) }
+                        if let last { Text(rowTime(ofMicros: last.sentAtMicros)).font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkMuted.color) }
                     }
                     HStack(spacing: LumiaTokens.space8) {
-                        Text(preview).font(LumiaTokens.textMember.font).fontWeight(bold ? .semibold : nil)
-                            .foregroundStyle(bold ? LumiaTokens.inkBody.color : LumiaTokens.inkSecondary.color).lineLimit(1)
+                        Text(preview).font(.system(size: LumiaTokens.textMember.size))
+                            .foregroundStyle(bold ? LumiaTokens.inkBody.color : LumiaTokens.inkMuted.color).lineLimit(1)
                         Spacer(minLength: 0)
                         if unread.mentions > 0 { LumiaCountBadge(unread.mentions) }
                     }

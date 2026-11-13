@@ -128,6 +128,13 @@ public actor LumiaClient {
     public func react(channelID: String, messageID: String, emoji: String, remove: Bool) throws {
         try inner.react(channelId: channelID, messageId: messageID, emoji: emoji, remove: remove)
     }
+    /// Editing and deleting a server's message (architecture 6.6): the
+    /// command goes through the gateway, and the answer is its id, which a
+    /// refusal's error names.
+    public func editMessage(channelID: String, messageID: String, body: String, mentions: [MentionSummary]) throws -> String {
+        try inner.editMessage(channelId: channelID, messageId: messageID, body: body, mentions: mentions)
+    }
+    public func deleteMessage(channelID: String, messageID: String) throws -> String { try inner.deleteMessage(channelId: channelID, messageId: messageID) }
     public func readStates() -> [ReadStateSummary] { inner.readStates() }
     public func badge() -> UInt32 { inner.badge() }
     public func markRead(channelID: String, seq: UInt64) throws -> ReadStateSummary { try inner.markRead(channelId: channelID, seq: seq) }
@@ -200,6 +207,7 @@ public actor LumiaClient {
     public func dmReact(channelID: String, messageID: String, emoji: String, remove: Bool) throws {
         try inner.dmReact(channelId: channelID, messageId: messageID, emoji: emoji, remove: remove)
     }
+    public func dmEdit(channelID: String, messageID: String, body: String) throws { try inner.dmEdit(channelId: channelID, messageId: messageID, body: body) }
     public func dmDelete(channelID: String, messageID: String) throws { try inner.dmDelete(channelId: channelID, messageId: messageID) }
     public func dmRejoin(channelID: String) throws { try inner.dmRejoin(channelId: channelID) }
     public func dmMessages(channelID: String) throws -> DmLogSummary { try inner.dmMessages(channelId: channelID) }

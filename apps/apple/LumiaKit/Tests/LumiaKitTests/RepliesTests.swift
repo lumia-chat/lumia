@@ -1,7 +1,9 @@
 // Quote replies, reactions, mentions and read state (architecture 6.6):
-// quotes, the chips' and the bar's words, the @ list, a body's mentions,
-// the counts, marking read, the "New messages" line, which notifications
-// go, and the emoji picker's list.
+// quotes, the reference line's and the reply bar's words, a message's
+// actions, editing and deleting, the chips' and the bar's words, the @
+// list, a body's mentions and how they are drawn, the counts, marking read,
+// the "New messages" line, which notifications go, and the emoji picker's
+// list.
 @testable import LumiaKit
 import LumiaFFI
 import XCTest
@@ -31,9 +33,56 @@ final class RepliesTests: XCTestCase {
         XCTAssertFalse(whole.originalDeleted)
         XCTAssertEqual(Replies.quote(messageID: "m1", authorID: "ada", body: "Shipped on Friday.", part: " Shipped ").text, "Shipped")
         XCTAssertEqual(Replies.quote(messageID: "m", authorID: "a", body: String(repeating: "é", count: 2_500)).text.count, 2_000)
+        XCTAssertFalse(whole.silent, "a reply notifies whom it quotes unless the switch is off")
+        XCTAssertTrue(Replies.quote(messageID: "m1", authorID: "ada", body: "Shipped.", silent: true).silent)
         XCTAssertEqual(Replies.replyingTo("Ada"), "Replying to Ada")
-        XCTAssertEqual(Replies.quoteLabel(name: "Ada", text: "hi"), "Quote of Ada: hi")
-        XCTAssertEqual(Replies.quoteLabel(name: nil, text: "hi"), "Quote: hi")
+    }
+
+    func testTheReferenceLineAndTheReplyBarsWords() {
+        XCTAssertEqual(Replies.referenceLabel(name: "Maya Chen", quotesMe: false, text: "Morning, Acme"), "Replying to Maya Chen: Morning, Acme. Jump to message")
+        XCTAssertEqual(Replies.referenceLabel(name: "Maya Chen", quotesMe: false, text: "Closes next Friday."), "Replying to Maya Chen: Closes next Friday. Jump to message", "no second full stop")
+        XCTAssertEqual(Replies.referenceLabel(name: "Sam Rivera", quotesMe: true, text: "Can we get the link?"), "Replying to you: Can we get the link? Jump to message")
+        XCTAssertEqual(Replies.referenceLabel(name: nil, quotesMe: false, text: "hi"), "Replying to a message: hi. Jump to message")
+        XCTAssertEqual(Replies.referenceName("Maya Chen", quotesMe: false), "Maya Chen")
+        XCTAssertEqual(Replies.referenceName("Sam Rivera", quotesMe: true), "@Sam Rivera")
+        XCTAssertEqual(Replies.originalDeleted, "Original message was deleted")
+        // The "@ On" switch: for a reply to someone else in a server's conversation.
+        XCTAssertTrue(Replies.offersMentionSwitch(quotedAuthor: "ada", me: "me", personal: false))
+        XCTAssertFalse(Replies.offersMentionSwitch(quotedAuthor: "me", me: "me", personal: false), "not for a reply to oneself")
+        XCTAssertFalse(Replies.offersMentionSwitch(quotedAuthor: "ada", me: "me", personal: true), "not in a personal conversation")
+        XCTAssertFalse(Replies.offersMentionSwitch(quotedAuthor: "", me: "me", personal: false))
+        XCTAssertEqual(Replies.mentionSwitchLabel("Jonah Patel"), "Mention Jonah Patel")
+        XCTAssertEqual(Replies.mentionSwitchWords(true), "On")
+        XCTAssertEqual(Replies.mentionSwitchWords(false), "Off")
+    }
+
+    func testAMessagesActionsAreItsAuthorsAndAModeratorsDelete() {
+        let words = { (a: [MessageAction]) in a.map(\.words) }
+        XCTAssertEqual(words(MessageAction.offered(mine: true, personal: false, canManageMessages: false)), ["Add reaction", "Reply", "Edit message", "Copy text", "Delete message"])
+        XCTAssertEqual(words(MessageAction.offered(mine: false, personal: false, canManageMessages: false)), ["Add reaction", "Reply", "Copy text"])
+        XCTAssertEqual(words(MessageAction.offered(mine: false, personal: false, canManageMessages: true)), ["Add reaction", "Reply", "Copy text", "Delete message"], "a moderator deletes, and edits nobody's")
+        XCTAssertEqual(words(MessageAction.offered(mine: false, personal: true, canManageMessages: true)), ["Add reaction", "Reply", "Copy text"], "nobody else's in a personal conversation")
+        XCTAssertEqual(words(MessageAction.offered(mine: true, personal: true, canManageMessages: false)), ["Add reaction", "Reply", "Edit message", "Copy text", "Delete message"])
+    }
+
+    func testSavingAnEditSendsWhatChangedAndAsksToDeleteWhatIsEmptied() {
+        XCTAssertEqual(MessageEdits.outcome(original: "Shipped.", draft: "  Shipped on Friday.\n"), .save("Shipped on Friday."))
+        XCTAssertEqual(MessageEdits.outcome(original: "Shipped.", draft: "Shipped. "), .unchanged)
+        XCTAssertEqual(MessageEdits.outcome(original: "Shipped.", draft: " \n "), .delete)
+        XCTAssertEqual(MessageEdits.edited, "(edited)")
+        XCTAssertEqual(MessageEdits.editedLabel, "edited")
+        XCTAssertEqual(MessageEdits.deleteTitle, "Delete this message?")
+        XCTAssertEqual(MessageEdits.notSaved("You can only edit your own messages."), "Not saved: You can only edit your own messages.")
+        XCTAssertEqual(MessageEdits.firstLine("\n  Shipped on Friday.  \nAnd more."), "Shipped on Friday.")
+        XCTAssertEqual(MessageEdits.firstLine(""), "")
+        // Return on a phone's keyboard is a line break typed: one character more.
+        XCTAssertTrue(MessageEdits.returnTyped(old: "Shipped", new: "Shipped\n"))
+        XCTAssertTrue(MessageEdits.returnTyped(old: "a\nb", new: "a\n\nb"))
+        XCTAssertFalse(MessageEdits.returnTyped(old: "Shipped", new: "Shipped!"))
+        XCTAssertFalse(MessageEdits.returnTyped(old: "Shipped", new: "Shipped\nand more"), "a paste is not Return")
+        // Up in an empty composer: the newest that can be edited.
+        XCTAssertEqual(MessageEdits.newestOwn([("a", true), ("b", false), ("c", true), ("d", false)]), "c")
+        XCTAssertNil(MessageEdits.newestOwn([("a", false)]))
     }
 
     func testAQuotedMessageOpensABlockOfItsOwnThatTheNextMayJoin() {
@@ -121,6 +170,25 @@ final class RepliesTests: XCTestCase {
         XCTAssertEqual(MentionSpans.segments(body: "@ada", mentions: [mention("a", 0, 4), mention("b", 1, 3)]).map(\.text), ["@ada"])
     }
 
+    func testAnEditsRefusalIsMatchedByItsCommand() {
+        var sent = EditsSent()
+        sent.sent(command: "c1", message: "m1")
+        sent.sent(command: "c2", message: "m2")
+        XCTAssertNil(sent.refused(command: "c9"), "another command's refusal is not an edit's")
+        XCTAssertEqual(sent.refused(command: "c2"), "m2")
+        XCTAssertNil(sent.refused(command: "c2"), "each is answered once")
+        XCTAssertEqual(sent.refused(command: "c1"), "m1")
+    }
+
+    func testAMentionIsDrawnAsThePersonsNameAndCopiedSo() {
+        let names = ["ada": "Ada Lovelace"]
+        let name = { (id: String) in names[id] ?? "" }
+        let body = "é @ada and @everyone, @zed!"
+        let mentions = [mention("ada", 3, 7), mention("", 12, 21, everyone: true), mention("zed", 23, 27)]
+        XCTAssertEqual(MentionSpans.drawn(body: body, mentions: mentions, name: name), "é @Ada Lovelace and @everyone, @zed!", "someone not known stays as written")
+        XCTAssertEqual(MentionSpans.drawn(body: "no one", mentions: [], name: name), "no one")
+    }
+
     func testCountsByConversationServerAndBadge() {
         let reads = ReadCounts([state("general", unread: 3), state("design", unread: 2, mentions: 2), state("dm", unread: 4, mentions: 4)])
         XCTAssertEqual(reads.unread("design").mentions, 2)
@@ -153,6 +221,8 @@ final class RepliesTests: XCTestCase {
         XCTAssertEqual(NewMessagesLine.since(state("c", read: 4, unread: 2)), 4)
         XCTAssertNil(NewMessagesLine.since(state("c", read: 4)), "nothing unread, no line")
         XCTAssertNil(NewMessagesLine.since(nil))
+        XCTAssertEqual(NewMessagesLine.drawn, "New")
+        XCTAssertEqual(NewMessagesLine.words, "New messages", "what assistive technology hears")
     }
 
     func testAConversationsNotificationsGoOnceItIsRead() {

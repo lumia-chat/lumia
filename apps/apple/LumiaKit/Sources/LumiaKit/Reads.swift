@@ -5,8 +5,9 @@
 // message is on screen and the app is in front, at most once a second each,
 // and only when that moves something (`ReadMarks`); the Mentions pages are
 // read a page at a time; a send carries the mentions the core finds in its
-// body and what it quotes; finding a message for a jump reads further back
-// in the store, up to `Replies.seekPages` pages.
+// body and what it quotes, and an edit those of its new body; finding a
+// message for a jump reads further back in the store, up to
+// `Replies.seekPages` pages.
 import Foundation
 import LumiaFFI
 
@@ -151,15 +152,65 @@ public extension LumiaSession {
     /// quotes. The answer is who was mentioned and is not in the channel, so
     /// not notified.
     func send(channelID: String, body: String, quote: QuoteSummary?) async throws -> [String] {
-        var mentions: [MentionSummary] = []
-        if let channel = channel(channelID), channel.kind == textKind {
-            let everyone = snapshot?.servers.first { $0.serverId == channel.serverId }?.canMentionEveryone ?? false
-            mentions = await client.findMentions(body: body, members: serverMembers[channel.serverId] ?? [], everyone: everyone)
-        }
+        let mentions = await mentions(in: body, channelID: channelID)
         let outside = Replies.outside(mentions, inside: channelMemberIDs[channelID], me: me)
         _ = try await client.sendMessageWith(channelID: channelID, body: body, mentions: mentions, replyTo: quote)
         await refreshMessages(channelID: channelID)
         return outside
+    }
+
+    /// The mentions a body makes in a server's channel, as the core finds
+    /// them, of its members and of everyone for one who may; none in a
+    /// server DM, where both are told of every message.
+    private func mentions(in body: String, channelID: String) async -> [MentionSummary] {
+        guard let channel = channel(channelID), channel.kind == textKind else { return [] }
+        let everyone = snapshot?.servers.first { $0.serverId == channel.serverId }?.canMentionEveryone ?? false
+        return await client.findMentions(body: body, members: serverMembers[channel.serverId] ?? [], everyone: everyone)
+    }
+
+    // MARK: Editing and deleting
+
+    /// Whether this account may delete others' messages in a server's
+    /// conversation (`MANAGE_MESSAGES` there); never in a personal one.
+    func canManageMessages(channelID: String) -> Bool {
+        guard let channel = channel(channelID), !channel.serverId.isEmpty else { return false }
+        return snapshot?.servers.first { $0.serverId == channel.serverId }?.canManageMessages ?? false
+    }
+
+    /// Edits one of this account's messages: in a server's conversation with
+    /// the mentions its new body makes, the edit coming back as an applied
+    /// event and a refusal as the error naming its command (`editsSent`); in
+    /// a personal one through its encryption. What is refused is kept under
+    /// the message, "Not saved: …" (`editRefusals`), until it is edited again.
+    func edit(channelID: String, messageID: String, body: String) async {
+        editRefusals[messageID] = nil
+        do {
+            if dmLogs[channelID] != nil {
+                try await client.dmEdit(channelID: channelID, messageID: messageID, body: body)
+                await refreshDmLog(channelID: channelID)
+            } else {
+                let mentions = await mentions(in: body, channelID: channelID)
+                let command = try await client.editMessage(channelID: channelID, messageID: messageID, body: body, mentions: mentions)
+                editsSent.sent(command: command, message: messageID)
+            }
+        } catch {
+            editRefusals[messageID] = MessageEdits.notSaved(error.lumiaMessage)
+        }
+    }
+
+    /// What the instance refused of a message's last edit, taken away as it
+    /// is edited again.
+    func clearEditRefusal(_ messageID: String) { editRefusals[messageID] = nil }
+
+    /// Deletes a message: this account's own, or another's for one who may
+    /// manage a server's messages; in a personal conversation, only its own.
+    func delete(channelID: String, messageID: String) async throws {
+        if dmLogs[channelID] != nil {
+            try await client.dmDelete(channelID: channelID, messageID: messageID)
+            await refreshDmLog(channelID: channelID)
+        } else {
+            _ = try await client.deleteMessage(channelID: channelID, messageID: messageID)
+        }
     }
 
     /// Sends a message in a personal conversation, quoting another or not.

@@ -1,5 +1,5 @@
-// A server's sidebar beside the rail (architecture 6.8): its Mentions row
-// with the server's count (architecture 6.6), its invitations,
+// A server's sidebar beside the rail (architecture 6.8): its Mentions quick
+// tile with the server's count (architecture 6.6), its invitations,
 // the channels this account is in under a Channels heading whose +
 // offers Create a channel and Browse channels, its server DMs under a
 // Direct messages heading whose + picks a member to message, and the
@@ -27,9 +27,17 @@ struct ServerScreen: View {
             SideHeader(title: server.name, meta: session.host, action: ("square.and.pencil", "New message", { path.append(.newMessage) }))
             ScrollView {
                 VStack(alignment: .leading, spacing: LumiaTokens.space2) {
-                    // This server's messages that mention this account or reply to it (architecture 6.6).
-                    MentionsRow(count: session.serverUnread(server.serverId).mentions) { path.append(.mentions(serverID: server.serverId)) }
-                        .padding(.bottom, LumiaTokens.space8)
+                    // This server's messages that mention this account or reply to it
+                    // (architecture 6.6): the board's quick tiles, of which Threads and
+                    // Saved do not exist yet, so Mentions is the row's first alone.
+                    let mentions = session.serverUnread(server.serverId).mentions
+                    HStack(spacing: LumiaTokens.space6) {
+                        Tile(label: "Mentions", icon: "at", count: Int(mentions), spoken: Replies.unreadWords(unread: mentions, mentions: mentions)) { path.append(.mentions(serverID: server.serverId)) }
+                            .accessibilityIdentifier("mentions-row")
+                        Color.clear.frame(maxWidth: .infinity, maxHeight: 1)
+                        Color.clear.frame(maxWidth: .infinity, maxHeight: 1)
+                    }
+                    .padding(.bottom, LumiaTokens.space12)
                     ForEach(invitations, id: \.channel.channelId) { invitation in
                         InvitationRow(
                             line: Membership.invitationLine(channel: invitation.channel.name, inviter: session.name(of: invitation.invitedByAccountId)),
@@ -55,8 +63,9 @@ struct ServerScreen: View {
                             .padding(.horizontal, LumiaTokens.space10)
                     }
                     ForEach(channels, id: \.channelId) { c in
-                        SidebarRow(label: c.name, unread: session.unread(c.channelId), open: { path.append(.channel(id: c.channelId)) }) {
-                            ChannelGlyph(isPrivate: c.private)
+                        let unread = session.unread(c.channelId)
+                        SidebarRow(label: c.name, unread: unread, open: { path.append(.channel(id: c.channelId)) }) {
+                            ChannelGlyph(isPrivate: c.private, unread: unread.unread > 0)
                         }
                     }
                     // The server's own conversations, kept by it (architecture 6.4).
@@ -150,9 +159,10 @@ struct HeadingWithAdd<Items: View>: View {
     }
 }
 
-/// A channel's glyph: `#`, or a lock for a private one.
+/// A channel's glyph: `#`, or a lock for a private one; stronger while unread.
 struct ChannelGlyph: View {
     let isPrivate: Bool
+    var unread = false
     var body: some View {
         Group {
             if isPrivate {
@@ -161,14 +171,14 @@ struct ChannelGlyph: View {
                 Text("#").font(LumiaTokens.textNav.font).accessibilityHidden(true)
             }
         }
-        .foregroundStyle(LumiaTokens.inkMuted.color)
+        .foregroundStyle(unread ? LumiaTokens.inkMuted.color : LumiaTokens.inkFaint.color)
         .frame(width: LumiaTokens.space12)
     }
 }
 
-/// A row of a server's sidebar: a glyph and a name.
-/// One with unread messages is drawn in the strong ink and weight, with
-/// their count for this account at its end (architecture 6.6).
+/// A row of a server's sidebar: a glyph and a name, in the quiet ink.
+/// One with unread messages is drawn in the ink at 600, with their count
+/// for this account at its end as the full badge (architecture 6.6).
 struct SidebarRow<Glyph: View>: View {
     let label: String
     var unread: (unread: UInt32, mentions: UInt32) = (0, 0)
@@ -181,7 +191,7 @@ struct SidebarRow<Glyph: View>: View {
                 glyph()
                 Text(label).font(LumiaTokens.textNav.font)
                     .fontWeight(unread.unread > 0 ? .semibold : nil)
-                    .foregroundStyle(unread.unread > 0 ? LumiaTokens.inkEmphasis.color : LumiaTokens.ink.color).lineLimit(1)
+                    .foregroundStyle(unread.unread > 0 ? LumiaTokens.ink.color : LumiaTokens.inkQuiet.color).lineLimit(1)
                 Spacer(minLength: 0)
                 if unread.mentions > 0 { LumiaCountBadge(unread.mentions) }
             }

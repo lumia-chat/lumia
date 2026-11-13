@@ -1,94 +1,201 @@
 // The pieces architecture 6.6 adds to a conversation, after the design
-// system's (apps/web/src/design/components.tsx and components.css): a
-// message body with its mentions as pills, the quote above a message, the
-// reaction chips under it, the bars over the composer (the quote being
-// replied with, and what a send that mentioned people outside the channel
-// can do about it), the @ list, the "New messages" line and the count
-// badge. Tokens only.
+// system's (apps/web/src/design/components.tsx and components.css) and the
+// "Inline replies" and phone boards: a message body with its mentions as
+// pills by name and "(edited)", a reply's reference line above it, the
+// reaction chips under it, the reply bar inside the composer, the bar over
+// it after a send that mentioned people outside the channel, the @ list,
+// the "New" line, the count badges and the field a message becomes while
+// edited. Tokens only.
 import LumiaFFI
 import SwiftUI
 
 /// A message's words, its mentions drawn as the design's `lu-mention`
-/// pills: the accent's ink on its soft fill, as written. A pill naming a
-/// person opens them through `openPerson` where given.
+/// pills: `@` and the person's name (`name` gives it; a mention of someone
+/// not known stays as written), the accent's ink on its soft fill, with the
+/// pill's rounded ends where the system can draw them (iOS 18), a plain
+/// fill before. A pill naming a person opens them through `openPerson`
+/// where given. An edited message says so after its last word.
 public struct MessageBodyText: View {
     let text: String
     let mentions: [MentionSummary]
     let deleted: Bool
+    let edited: Bool
+    let name: (String) -> String
     let openPerson: ((String) -> Void)?
 
-    public init(text: String, mentions: [MentionSummary], deleted: Bool = false, openPerson: ((String) -> Void)? = nil) {
-        self.text = text; self.mentions = mentions; self.deleted = deleted; self.openPerson = openPerson
+    public init(text: String, mentions: [MentionSummary], deleted: Bool = false, edited: Bool = false, name: @escaping (String) -> String = { _ in "" }, openPerson: ((String) -> Void)? = nil) {
+        self.text = text; self.mentions = mentions; self.deleted = deleted; self.edited = edited; self.name = name; self.openPerson = openPerson
     }
 
     static let scheme = "lumia-mention"
+    /// The pill's room either side of the name: a narrow space that does
+    /// not break, as near as running words come to the design's padding.
+    static let pad = "\u{202F}"
 
-    private var attributed: AttributedString {
-        var all = AttributedString()
-        for segment in MentionSpans.segments(body: text, mentions: mentions) {
-            var part = AttributedString(segment.text)
-            if let m = segment.mention {
-                part.swiftUI.foregroundColor = LumiaTokens.accentInk.color
-                part.swiftUI.backgroundColor = LumiaTokens.accentSoft.color
-                part.swiftUI.font = LumiaTokens.textMessage.font.weight(.semibold)
-                if !m.everyone, openPerson != nil { part.link = URL(string: "\(Self.scheme):\(m.accountId)") }
+    private func pill(_ segment: BodySegment, _ mention: MentionSummary, filled: Bool) -> AttributedString {
+        // One pill, never cut across two lines: its spaces do not break.
+        let said = segment.drawn(name: name).replacingOccurrences(of: " ", with: "\u{00A0}")
+        var part = AttributedString(Self.pad + said + Self.pad)
+        part.swiftUI.foregroundColor = LumiaTokens.accentInk.color
+        part.swiftUI.font = LumiaTokens.textMessage.font.weight(.semibold)
+        if filled { part.swiftUI.backgroundColor = LumiaTokens.accentSoft.color }
+        if !mention.everyone, openPerson != nil { part.link = URL(string: "\(Self.scheme):\(mention.accountId)") }
+        return part
+    }
+
+    /// The words as one `Text`, so they wrap as one paragraph; `rounded`
+    /// marks the pills for the renderer that draws their ends.
+    private func words(rounded: Bool) -> Text {
+        var all = Text(verbatim: "")
+        for segment in MentionSpans.segments(body: text, mentions: deleted ? [] : mentions) {
+            guard let mention = segment.mention else {
+                all = all + Text(verbatim: segment.text)
+                continue
             }
-            all += part
+            if rounded, #available(iOS 18, macOS 15, *) {
+                all = all + Text(pill(segment, mention, filled: false)).customAttribute(MentionPill())
+            } else {
+                all = all + Text(pill(segment, mention, filled: true))
+            }
+        }
+        if edited, !deleted {
+            all = all + Text(verbatim: " " + MessageEdits.edited).font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkMuted.color)
         }
         return all
     }
 
     public var body: some View {
-        Text(mentions.isEmpty ? AttributedString(text) : attributed)
-            .font(LumiaTokens.textMessage.font)
-            .lineSpacing(MessageMeasures.leading)
-            .foregroundStyle(deleted ? LumiaTokens.inkQuiet.color : LumiaTokens.inkBody.color)
-            .italic(deleted)
-            .tint(LumiaTokens.accentInk.color)
-            .environment(\.openURL, OpenURLAction { url in
-                guard url.scheme == Self.scheme else { return .discarded }
-                openPerson?(url.absoluteString.replacingOccurrences(of: "\(Self.scheme):", with: ""))
-                return .handled
-            })
+        Group {
+            if #available(iOS 18, macOS 15, *) {
+                words(rounded: true).textRenderer(MentionPillRenderer(fill: LumiaTokens.accentSoft.color))
+            } else {
+                words(rounded: false)
+            }
+        }
+        .font(LumiaTokens.textMessage.font)
+        .lineSpacing(MessageMeasures.leading)
+        .foregroundStyle(deleted ? LumiaTokens.inkQuiet.color : LumiaTokens.inkBody.color)
+        .italic(deleted)
+        .tint(LumiaTokens.accentInk.color)
+        .environment(\.openURL, OpenURLAction { url in
+            guard url.scheme == Self.scheme else { return .discarded }
+            openPerson?(url.absoluteString.replacingOccurrences(of: "\(Self.scheme):", with: ""))
+            return .handled
+        })
     }
 }
 
-/// A quote above a message's words: the accent's rule on its left, the
-/// quoted author's name and the text, two lines at most. A tap jumps to
-/// the original; a deleted original says so instead and does nothing.
-public struct LumiaQuoteBlock: View {
+/// Marks a mention's run for `MentionPillRenderer`.
+@available(iOS 18, macOS 15, *)
+struct MentionPill: TextAttribute {}
+
+/// Draws each mention's pill under its words: the soft fill with the
+/// design's 6-point corners, a point over and under the line.
+@available(iOS 18, macOS 15, *)
+struct MentionPillRenderer: TextRenderer {
+    let fill: Color
+
+    func draw(layout: Text.Layout, in ctx: inout GraphicsContext) {
+        for line in layout {
+            // A mention may be several runs on a line: one pill for them all.
+            var pill: CGRect?
+            func close() {
+                if let rect = pill {
+                    ctx.fill(Path(roundedRect: rect.insetBy(dx: 0, dy: -LumiaTokens.space2 / 2), cornerRadius: LumiaTokens.radius6), with: .color(fill))
+                }
+                pill = nil
+            }
+            for run in line {
+                if run[MentionPill.self] != nil {
+                    pill = pill.map { $0.union(run.typographicBounds.rect) } ?? run.typographicBounds.rect
+                } else {
+                    close()
+                }
+            }
+            close()
+            for run in line { ctx.draw(run) }
+        }
+    }
+}
+
+/// A reply's reference line, above its message (the "Inline replies"
+/// board): a connector from the avatar below, the quoted person's small
+/// avatar and name (`@` and this account's own for a reply to it, in the
+/// accent's ink), and the quoted text on one line, cut short. The whole of
+/// it is one button that jumps to the original. A deleted original says so
+/// instead and does nothing; a quote whose author is not known (a personal
+/// conversation's) leaves the avatar and name out.
+public struct LumiaReplyReference: View {
     let quote: QuoteDisplay
 
     public init(quote: QuoteDisplay) { self.quote = quote }
 
+    /// The quoted person's avatar, and the deleted original's mark.
+    static let mark = LumiaTokens.space18
+
     public var body: some View {
-        HStack(spacing: 0) {
-            (quote.deleted ? LumiaTokens.lineStrong.color : LumiaTokens.accent.color)
-                .frame(width: 3)
-            VStack(alignment: .leading, spacing: 1) {
-                if quote.deleted {
-                    Text(Replies.originalDeleted).font(LumiaTokens.textCompact.font).foregroundStyle(LumiaTokens.inkMuted.color)
-                } else {
-                    if let name = quote.name { Text(name).font(LumiaTokens.textSection.font).foregroundStyle(LumiaTokens.inkEmphasis.color) }
-                    Text(quote.text).font(LumiaTokens.textCompact.font).foregroundStyle(LumiaTokens.inkSecondary.color).lineLimit(2)
-                }
+        if quote.deleted {
+            HStack(spacing: LumiaTokens.space6) {
+                ReplyConnector()
+                Image(systemName: "minus").font(.system(size: LumiaTokens.space10, weight: .bold))
+                    .foregroundStyle(LumiaTokens.inkMuted.color)
+                    .frame(width: Self.mark, height: Self.mark)
+                    .background(LumiaTokens.chip.color, in: Circle())
+                Text(Replies.originalDeleted).font(.system(size: LumiaTokens.textLinkSm.size)).italic()
+                    .foregroundStyle(LumiaTokens.inkMuted.color).lineLimit(1)
             }
-            .padding(.vertical, LumiaTokens.space4)
-            .padding(.leading, LumiaTokens.space10)
-            .padding(.trailing, LumiaTokens.space12)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Replies.originalDeleted)
+        } else {
+            Button { quote.open?() } label: {
+                HStack(spacing: LumiaTokens.space6) {
+                    ReplyConnector()
+                    if let name = quote.name {
+                        LumiaAvatar(initials: initials(of: name), tone: .of(quote.authorID), size: Self.mark)
+                        Text(Replies.referenceName(name, quotesMe: quote.quotesMe)).font(LumiaTokens.textLinkSm.font)
+                            .foregroundStyle(quote.quotesMe ? LumiaTokens.accentInk.color : LumiaTokens.inkBody.color)
+                            .lineLimit(1).fixedSize()
+                    }
+                    Text(quote.text).font(.system(size: LumiaTokens.textLinkSm.size))
+                        .foregroundStyle(LumiaTokens.inkMuted.color).lineLimit(1).truncationMode(.tail)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(Replies.referenceLabel(name: quote.name, quotesMe: quote.quotesMe, text: quote.text))
         }
-        .background(LumiaTokens.inset.color)
-        .clipShape(UnevenRoundedRectangle(bottomTrailingRadius: LumiaTokens.radius8, topTrailingRadius: LumiaTokens.radius8))
-        .contentShape(Rectangle())
-        .onTapGesture { if !quote.deleted { quote.open?() } }
-        .padding(.vertical, LumiaTokens.space2)
     }
 }
 
-/// A message's reactions as the design's chips, the one this account has in
-/// the accent; a tap toggles it, a long press says who. Then the way to add
-/// another.
+/// The reference line's connector: down from the reply's avatar, round the
+/// corner and along to the quoted person's (the board's 26 by 12 stroke,
+/// set 8 down so its run meets the small avatar's middle).
+struct ReplyConnector: View {
+    var body: some View {
+        ReplyConnectorShape()
+            .stroke(LumiaTokens.borderHover.color, style: StrokeStyle(lineWidth: LumiaTokens.space2, lineCap: .round))
+            .frame(width: LumiaTokens.space24 + LumiaTokens.space2, height: LumiaTokens.space12)
+            .padding(.top, LumiaTokens.space8)
+            .accessibilityHidden(true)
+    }
+}
+
+/// `M1 12V7a5 5 0 0 1 5-5h19`, in its 26 by 12 box.
+struct ReplyConnectorShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        var p = Path()
+        p.move(to: CGPoint(x: rect.minX + 1, y: rect.maxY))
+        p.addLine(to: CGPoint(x: rect.minX + 1, y: rect.minY + 7))
+        p.addArc(tangent1End: CGPoint(x: rect.minX + 1, y: rect.minY + 2), tangent2End: CGPoint(x: rect.minX + 6, y: rect.minY + 2), radius: 5)
+        p.addLine(to: CGPoint(x: rect.maxX - 1, y: rect.minY + 2))
+        return p
+    }
+}
+
+/// A message's reactions as the phone boards' chips, the one this account
+/// has in the accent; a tap toggles it, a long press says who. Then the way
+/// to add another.
 public struct LumiaReactionChips: View {
     let reactions: [ReactionDisplay]
     let toggle: (String) -> Void
@@ -98,17 +205,20 @@ public struct LumiaReactionChips: View {
         self.reactions = reactions; self.toggle = toggle; self.add = add
     }
 
+    /// A chip's height, the phone boards' 32.
+    static let height = LumiaTokens.rowHeight
+
     public var body: some View {
         LumiaFlow(spacing: LumiaTokens.space6) {
             ForEach(reactions) { r in
                 Button { toggle(r.emoji) } label: {
                     HStack(spacing: LumiaTokens.space6) {
                         Text(r.emoji).font(LumiaTokens.textCompact.font)
-                        Text("\(r.count)").font(LumiaTokens.textLabel.font)
-                            .foregroundStyle(r.me ? LumiaTokens.accentInk.color : LumiaTokens.inkBody.color)
+                        Text("\(r.count)").font(LumiaTokens.textLinkSm.font)
+                            .foregroundStyle(r.me ? LumiaTokens.accentInk.color : LumiaTokens.inkSecondary.color)
                     }
-                    .padding(.horizontal, LumiaTokens.space10)
-                    .frame(height: LumiaTokens.space28)
+                    .padding(.horizontal, LumiaTokens.space12)
+                    .frame(height: Self.height)
                     .background(r.me ? LumiaTokens.accentSoft.color : LumiaTokens.reaction.color, in: Capsule())
                     .overlay(Capsule().stroke(r.me ? LumiaTokens.reactionOnBorder.color : LumiaTokens.reaction.color))
                     .contentShape(Capsule())
@@ -120,9 +230,9 @@ public struct LumiaReactionChips: View {
             }
             if let add {
                 Button(action: add) {
-                    Image(systemName: "face.smiling").font(.system(size: 15))
+                    Image(systemName: "face.smiling").font(LumiaTokens.textCompact.font)
                         .foregroundStyle(LumiaTokens.inkMuted.color)
-                        .frame(width: LumiaTokens.space28, height: LumiaTokens.space28)
+                        .frame(width: Self.height, height: Self.height)
                         .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
@@ -199,35 +309,71 @@ public struct LumiaComposerBar<Words: View, End: View>: View {
     }
 }
 
-/// Over the composer while replying: "Replying to Ada", the quote on one
-/// line, and the way out of it.
-public struct LumiaReplyBar: View {
-    let name: String
-    let text: String
-    let cancel: () -> Void
+/// What the composer holds while replying: to whom, the "@ On" switch
+/// (nil where none is offered: a reply to oneself, a personal
+/// conversation), and the way out of it.
+public struct ComposerReply {
+    public let name: String
+    public let mention: Binding<Bool>?
+    public let cancel: () -> Void
 
-    public init(name: String, text: String, cancel: @escaping () -> Void) {
-        self.name = name; self.text = text; self.cancel = cancel
+    public init(name: String, mention: Binding<Bool>?, cancel: @escaping () -> Void) {
+        self.name = name; self.mention = mention; self.cancel = cancel
     }
+}
 
-    public var body: some View {
-        LumiaComposerBar {
-            VStack(alignment: .leading, spacing: LumiaTokens.space2) {
-                (Text("Replying to ") + Text(name).fontWeight(.semibold).foregroundColor(LumiaTokens.inkEmphasis.color))
-                    .font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkMuted.color).lineLimit(1)
-                Text(text).font(LumiaTokens.textCompact.font).foregroundStyle(LumiaTokens.inkSecondary.color).lineLimit(1)
+/// The reply bar (the "Inline replies" board's composer): a strip inside
+/// the composer's frame, over its field: "Replying to **Ada**", the "@ On"
+/// switch and Cancel reply. No line of the quoted text.
+struct LumiaReplyStrip: View {
+    let reply: ComposerReply
+
+    /// The switch's and Cancel reply's height.
+    static let control = LumiaTokens.space28
+
+    var body: some View {
+        HStack(spacing: LumiaTokens.space10) {
+            Image(systemName: "arrow.uturn.left").font(.system(size: LumiaTokens.textLabel.size, weight: .medium))
+                .foregroundStyle(LumiaTokens.inkSecondary.color)
+                .accessibilityHidden(true)
+            (Text(verbatim: "Replying to ") + Text(verbatim: reply.name).fontWeight(.bold).foregroundStyle(LumiaTokens.ink.color))
+                .font(.system(size: LumiaTokens.textLabel.size))
+                .foregroundStyle(LumiaTokens.inkSecondary.color)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if let mention = reply.mention {
+                let on = mention.wrappedValue
+                Button { mention.wrappedValue.toggle() } label: {
+                    HStack(spacing: LumiaTokens.space4) {
+                        Image(systemName: "at").font(.system(size: LumiaTokens.textLinkSm.size, weight: .bold))
+                        Text(Replies.mentionSwitchWords(on))
+                    }
+                    .font(.system(size: LumiaTokens.textMeta.size, weight: .bold))
+                    .foregroundStyle(on ? LumiaTokens.accentInk.color : LumiaTokens.inkQuiet.color)
+                    .padding(.horizontal, LumiaTokens.space10)
+                    .frame(height: Self.control)
+                    .background(on ? LumiaTokens.accentSoft.color : LumiaTokens.chip.color, in: Capsule())
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Replies.mentionSwitchLabel(reply.name))
+                .accessibilityValue(Replies.mentionSwitchWords(on))
+                .accessibilityAddTraits(on ? .isSelected : [])
             }
-            .accessibilityElement(children: .combine)
-        } end: {
-            Button(action: cancel) {
-                Image(systemName: "xmark").font(.system(size: 13, weight: .semibold))
+            Button(action: reply.cancel) {
+                Image(systemName: "xmark").font(.system(size: LumiaTokens.textCompact.size, weight: .semibold))
                     .foregroundStyle(LumiaTokens.inkQuiet.color)
-                    .frame(width: LumiaTokens.controlHeight, height: LumiaTokens.controlHeight)
-                    .contentShape(Rectangle())
+                    .frame(width: Self.control, height: Self.control)
+                    .contentShape(RoundedRectangle(cornerRadius: LumiaTokens.radius8))
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Cancel reply")
         }
+        .padding(.leading, LumiaTokens.space14)
+        .padding(.trailing, LumiaTokens.space8)
+        .padding(.vertical, LumiaTokens.space14 / 2)
+        .background(LumiaTokens.inset.color)
+        .overlay(alignment: .bottom) { LumiaTokens.borderComposer.color.frame(height: 1) }
     }
 }
 
@@ -294,30 +440,97 @@ public struct LumiaMentionList: View {
 }
 
 /// The "New messages" line, above the first message after where this
-/// account had read to when the conversation opened.
+/// account had read to when the conversation opened: the accent's rule,
+/// then "New" (the boards' unread divider).
 public struct LumiaNewMessagesLine: View {
     public init() {}
     public var body: some View {
         HStack(spacing: LumiaTokens.space12) {
-            LumiaTokens.accent.color.frame(height: 1)
-            Text(NewMessagesLine.words).font(LumiaTokens.textSection.font).foregroundStyle(LumiaTokens.accent.color)
+            LumiaTokens.accentLine.color.frame(height: 1)
+            Text(NewMessagesLine.drawn).font(.system(size: LumiaTokens.textSection.size, weight: .bold)).foregroundStyle(LumiaTokens.accentInk.color)
         }
         .padding(.horizontal, LumiaTokens.space10)
-        .padding(.vertical, LumiaTokens.space8)
+        .padding(.vertical, LumiaTokens.space6)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(NewMessagesLine.words)
     }
 }
 
-/// The design system's count badge: how many mentions, on the accent.
+/// The design system's count badges: how many, on the accent. `full` is a
+/// sidebar row's (20 high); `ringed` the rail's, ringed in the rail's own
+/// colour so it stands off the tile it sits on; `small` a quick tile's (18).
 public struct LumiaCountBadge: View {
+    public enum Style: Sendable { case full, ringed, small }
     let count: UInt32
-    public init(_ count: UInt32) { self.count = count }
+    let style: Style
+    public init(_ count: UInt32, style: Style = .full) { self.count = count; self.style = style }
+
     public var body: some View {
-        Text("\(count)").font(LumiaTokens.textCount.font).foregroundStyle(LumiaTokens.onAccent.color)
-            .padding(.horizontal, LumiaTokens.space6)
-            .frame(minWidth: LumiaTokens.space18, minHeight: LumiaTokens.space18)
+        let side = style == .small ? LumiaTokens.space18 : LumiaTokens.space18 + LumiaTokens.space2
+        let ring = style == .ringed ? LumiaTokens.space2 : 0
+        Text("\(count)")
+            .font(.system(size: style == .small ? LumiaTokens.textCount.size - 0.5 : LumiaTokens.textCount.size, weight: .bold))
+            .foregroundStyle(LumiaTokens.onAccent.color)
+            .padding(.horizontal, (style == .full ? LumiaTokens.space12 : LumiaTokens.space10) / 2 + ring)
+            .frame(minWidth: side, minHeight: side)
             .background(LumiaTokens.accent.color, in: Capsule())
+            .overlay { if ring > 0 { Capsule().strokeBorder(LumiaTokens.rail.color, lineWidth: ring) } }
+            .fixedSize()
             .accessibilityHidden(true)
+    }
+}
+
+/// A message's words as a field, in place of them while its author edits it
+/// (architecture 6.6): the design's text field, growing with what it holds,
+/// with the keyboard and the caret at its end. Return saves and Escape
+/// cancels on a keyboard that has them (Shift-Return a new line); a phone's
+/// own keyboard saves with its Return, and the line under the field says
+/// Cancel and Save as buttons, since a phone has no Escape to name.
+public struct LumiaMessageEditor: View {
+    @Binding var draft: String
+    let save: () -> Void
+    let cancel: () -> Void
+    @FocusState private var focused: Bool
+    @State private var newline = false
+
+    public init(draft: Binding<String>, save: @escaping () -> Void, cancel: @escaping () -> Void) {
+        self._draft = draft; self.save = save; self.cancel = cancel
+    }
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: LumiaTokens.space6) {
+            TextField("", text: $draft, axis: .vertical)
+                .focused($focused)
+                .textFieldStyle(.plain)
+                .font(LumiaTokens.textMessage.font)
+                .foregroundStyle(LumiaTokens.inkField.color)
+                .lineLimit(1...12)
+                .padding(.horizontal, LumiaTokens.space12)
+                .padding(.vertical, LumiaTokens.space10)
+                .background(LumiaTokens.field.color, in: RoundedRectangle(cornerRadius: LumiaTokens.radius12))
+                .overlay(RoundedRectangle(cornerRadius: LumiaTokens.radius12).stroke(LumiaTokens.borderActive.color))
+                .onKeyPress(.escape) { cancel(); return .handled }
+                .onKeyPress(keys: [.return]) { press in
+                    newline = press.modifiers.contains(.shift)
+                    return .ignored
+                }
+                .onChange(of: draft) { old, new in
+                    guard MessageEdits.returnTyped(old: old, new: new) else { return }
+                    if newline { newline = false; return }
+                    draft = old
+                    save()
+                }
+                .accessibilityLabel("Edit message")
+                .accessibilityIdentifier("message-editor")
+            HStack(spacing: LumiaTokens.space4) {
+                Button("Cancel", action: cancel)
+                Text(verbatim: "·").accessibilityHidden(true)
+                Button("Save", action: save).fontWeight(.semibold).foregroundStyle(LumiaTokens.accentInk.color)
+            }
+            .buttonStyle(.plain)
+            .font(LumiaTokens.textMeta.font)
+            .foregroundStyle(LumiaTokens.inkMuted.color)
+        }
+        .onAppear { focused = true }
     }
 }

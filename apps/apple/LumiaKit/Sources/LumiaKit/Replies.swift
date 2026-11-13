@@ -1,7 +1,9 @@
 // Quote replies, reactions, mentions and read state (architecture 6.6), as
-// values the tests cover: what a quote holds, how a reaction's chip and the
-// bar after a send read, the composer's @ list, where a body's mentions
-// fall, the counts the sidebars and the badge show, when a conversation is
+// values the tests cover: what a quote holds and how a reply's reference
+// line and the reply bar read, how a reaction's chip and the bar after a
+// send read, a message's actions, what editing and deleting one decide, the
+// composer's @ list, where a body's mentions fall and how they are drawn,
+// the counts the sidebars and the badge show, when a conversation is
 // marked read, where its "New messages" line goes, and which delivered
 // notifications are read. The rules and words are the desktop shell's
 // (apps/desktop/src/app/replies.rs, src/session/reads.rs, src/ui/replies.rs)
@@ -10,8 +12,7 @@ import Foundation
 import LumiaFFI
 
 public enum Replies {
-    /// The quick reactions: the top of a message's actions, and the start of
-    /// the picker's "Frequently used".
+    /// The quick reactions: the start of the picker's "Frequently used".
     public static let quick = ["👍", "❤️", "😂", "🎉", "😮", "😢"]
     /// The most a quote holds, in characters.
     public static let quoteLimit = 2_000
@@ -25,20 +26,40 @@ public enum Replies {
     public static let pageSize: UInt32 = 200
 
     /// The quote of a message: the whole of its body, or the part of it
-    /// chosen, trimmed and kept to `quoteLimit` characters.
-    public static func quote(messageID: String, authorID: String, body: String, part: String? = nil) -> QuoteSummary {
+    /// chosen, trimmed and kept to `quoteLimit` characters. `silent` is the
+    /// reply bar's "@ On" switch turned off: the author quoted is not told.
+    public static func quote(messageID: String, authorID: String, body: String, part: String? = nil, silent: Bool = false) -> QuoteSummary {
         let text = (part ?? body).trimmingCharacters(in: .whitespacesAndNewlines)
-        return QuoteSummary(messageId: messageID, authorAccountId: authorID, text: String(text.prefix(quoteLimit)), originalDeleted: false, silent: false)
+        return QuoteSummary(messageId: messageID, authorAccountId: authorID, text: String(text.prefix(quoteLimit)), originalDeleted: false, silent: silent)
     }
 
-    /// What a quote above a message says for assistive technology, and its
-    /// first line over the composer: "Replying to Ada".
+    /// The reply bar's words: "Replying to Ada".
     public static func replyingTo(_ name: String) -> String { "Replying to \(name)" }
 
-    /// A quote as assistive technology hears it; `name` is nil for an author not known.
-    public static func quoteLabel(name: String?, text: String) -> String {
-        if let name { return "Quote of \(name): \(text)" }
-        return "Quote: \(text)"
+    /// Whether the reply bar offers its "@ On" switch: in a server's
+    /// conversation, for a reply to someone else (a personal one's every
+    /// message notifies anyway, and one's own reply notifies nobody).
+    public static func offersMentionSwitch(quotedAuthor: String, me: String, personal: Bool) -> Bool {
+        !personal && !quotedAuthor.isEmpty && quotedAuthor != me
+    }
+
+    /// The "@ On" switch: what it is called and what it says.
+    public static func mentionSwitchLabel(_ name: String) -> String { "Mention \(name)" }
+    public static func mentionSwitchWords(_ on: Bool) -> String { on ? "On" : "Off" }
+
+    /// The name on a reply's reference line: the person quoted, or, for a
+    /// reply to this account, `@` and its own name.
+    public static func referenceName(_ name: String, quotesMe: Bool) -> String {
+        quotesMe ? "@\(name)" : name
+    }
+
+    /// A reply's reference line as one button: "Replying to Maya Chen: Morning,
+    /// Acme! Jump to message", "Replying to you: …", and for an author not
+    /// known (a personal conversation's) "Replying to a message: …".
+    public static func referenceLabel(name: String?, quotesMe: Bool, text: String) -> String {
+        let who = quotesMe ? "you" : (name ?? "a message")
+        let ends = text.last.map { ".!?…".contains($0) } ?? false
+        return "Replying to \(who): \(text)\(ends ? "" : ".") Jump to message"
     }
 
     /// What a quote of a message that was deleted says.
@@ -127,6 +148,99 @@ public enum Replies {
     }
 }
 
+// MARK: A message's actions, editing and deleting
+
+/// What a long press on a message offers, in the sheet's order.
+public enum MessageAction: String, CaseIterable, Sendable {
+    case addReaction, reply, edit, copy, delete
+
+    public var words: String {
+        switch self {
+        case .addReaction: "Add reaction"
+        case .reply: "Reply"
+        case .edit: "Edit message"
+        case .copy: "Copy text"
+        case .delete: "Delete message"
+        }
+    }
+
+    /// A message's actions: its author edits it, anywhere; its author
+    /// deletes it, and so does one who may manage a server's messages
+    /// (`ServerSummary.canManageMessages`), never in a personal conversation.
+    public static func offered(mine: Bool, personal: Bool, canManageMessages: Bool) -> [MessageAction] {
+        allCases.filter { action in
+            switch action {
+            case .edit: mine
+            case .delete: mine || (!personal && canManageMessages)
+            default: true
+            }
+        }
+    }
+}
+
+/// What saving an edit does.
+public enum EditOutcome: Equatable, Sendable {
+    /// Send this body, trimmed.
+    case save(String)
+    /// Nothing changed: the field closes and nothing is sent.
+    case unchanged
+    /// Emptied: the deletion is asked about instead.
+    case delete
+}
+
+public enum MessageEdits {
+    /// After a body's words, once its author has edited it.
+    public static let edited = "(edited)"
+    /// The same, as assistive technology hears it.
+    public static let editedLabel = "edited"
+    /// The confirmation before a message is deleted.
+    public static let deleteTitle = "Delete this message?"
+
+    public static func outcome(original: String, draft: String) -> EditOutcome {
+        let body = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        if body.isEmpty { return .delete }
+        if body == original.trimmingCharacters(in: .whitespacesAndNewlines) { return .unchanged }
+        return .save(body)
+    }
+
+    /// What the instance refused of an edit, under the message.
+    public static func notSaved(_ why: String) -> String { "Not saved: \(why)" }
+
+    /// A message's first line, under the confirmation's title.
+    public static func firstLine(_ body: String) -> String {
+        body.split(whereSeparator: \.isNewline).lazy.map { $0.trimmingCharacters(in: .whitespaces) }.first { !$0.isEmpty } ?? ""
+    }
+
+    /// Whether an edit of a field is Return typed on a keyboard that has no
+    /// other way to say it: one character more, and it is a line break.
+    public static func returnTyped(old: String, new: String) -> Bool {
+        guard new.count == old.count + 1 else { return false }
+        return new.filter(\.isNewline).count == old.filter(\.isNewline).count + 1
+    }
+
+    /// The message Up in an empty composer edits: this account's newest
+    /// that can be edited (not a notice, not deleted).
+    public static func newestOwn(_ messages: [(id: String, editable: Bool)]) -> String? {
+        messages.last { $0.editable }?.id
+    }
+}
+
+/// The edits of a server's messages sent through the gateway and not yet
+/// answered, by the command id each send answered with: a refusal names its
+/// command, so what it says goes under that message and no other.
+public struct EditsSent: Equatable, Sendable {
+    private var byCommand: [String: String] = [:]
+
+    public init() {}
+
+    public mutating func sent(command: String, message: String) { byCommand[command] = message }
+
+    /// The message whose edit a refusal of `command` answers, taken; nil
+    /// for a command that was not an edit.
+    public mutating func refused(command: String) -> String? { byCommand.removeValue(forKey: command) }
+}
+
+
 // MARK: The @ list
 
 /// The `@word` at the end of the composer's draft, which the @ list
@@ -192,6 +306,16 @@ public enum MentionList {
 public struct BodySegment: Equatable, Sendable {
     public let text: String
     public let mention: MentionSummary?
+
+    /// What is drawn: a mention as `@` and the person's name (`name` gives
+    /// it, empty for one not known, whose mention stays as written), and
+    /// `@everyone` as it is.
+    public func drawn(name: (String) -> String) -> String {
+        guard let mention else { return text }
+        if mention.everyone { return "@everyone" }
+        let n = name(mention.accountId)
+        return n.isEmpty ? text : "@\(n)"
+    }
 }
 
 public enum MentionSpans {
@@ -212,6 +336,11 @@ public enum MentionSpans {
         }
         if at < bytes.count, let rest = words(at, bytes.count) { out.append(BodySegment(text: rest, mention: nil)) }
         return out.isEmpty ? [BodySegment(text: body, mention: nil)] : out
+    }
+
+    /// A body as it is drawn, each mention by name: what Copy text copies.
+    public static func drawn(body: String, mentions: [MentionSummary], name: (String) -> String) -> String {
+        segments(body: body, mentions: mentions).map { $0.drawn(name: name) }.joined()
     }
 }
 
@@ -285,7 +414,10 @@ public struct ReadEntry: Equatable, Sendable {
 }
 
 public enum NewMessagesLine {
+    /// What assistive technology hears of the line.
     public static let words = "New messages"
+    /// What the line says, after its rule.
+    public static let drawn = "New"
 
     /// Where the line goes: above the first message after `readTo` that
     /// someone else sent (as the count counts); nil when there is none.

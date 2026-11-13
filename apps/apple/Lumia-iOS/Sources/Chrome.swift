@@ -46,17 +46,18 @@ struct PhoneRail: View {
     var body: some View {
         VStack(spacing: LumiaTokens.space12) {
             // Home's count: the requests that wait and the personal conversations' unread messages.
-            tile(current: place == .home, badge: (session.snapshot?.pendingRequests.count ?? 0) + Int(session.personalMentions), label: "Home") {
+            tile(current: place == .home, badge: (session.snapshot?.pendingRequests.count ?? 0) + Int(session.personalMentions), badgeOut: LumiaTokens.space10 / 2, label: "Home") {
                 place = .home
             } content: {
                 Image("Logo").resizable().scaledToFit().padding(LumiaTokens.space6)
             }
             Rectangle().fill(LumiaTokens.railDivider.color).frame(width: 24, height: 1)
             ForEach(servers, id: \.serverId) { s in
-                // What is unread in it: a mark at the rail's edge, and its count for this account on the tile.
+                // What is unread in a server not on screen (the board's): its
+                // count for this account on the tile, else a dot at its top end.
                 let unread = session.serverUnread(s.serverId)
                 let current = place == .server(id: s.serverId)
-                tile(current: current, badge: Int(unread.mentions), mentionBadge: true, unread: unread.unread && !current, label: s.name, value: Replies.unreadWords(unread: unread.unread ? 1 : 0, mentions: unread.mentions)) {
+                tile(current: current, badge: current ? 0 : Int(unread.mentions), unread: unread.unread && !current, label: s.name, value: Replies.unreadWords(unread: unread.unread ? 1 : 0, mentions: unread.mentions)) {
                     place = .server(id: s.serverId)
                 } content: {
                     // The server's picture over its initials, when it has one (architecture 6.7).
@@ -101,7 +102,10 @@ struct PhoneRail: View {
         .background(LumiaTokens.rail.color.ignoresSafeArea())
     }
 
-    private func tile<C: View>(current: Bool, badge: Int, mentionBadge: Bool = false, unread: Bool = false, label: String, value: String = "", action: @escaping () -> Void, @ViewBuilder content: () -> C) -> some View {
+    /// A rail tile. Its count sits over its top end, `badgeOut` past it (the
+    /// boards' 4 for a server, 5 for Home), ringed in the rail's colour; a
+    /// server with something unread and no count has the dot there instead.
+    private func tile<C: View>(current: Bool, badge: Int, badgeOut: CGFloat = LumiaTokens.space4, unread: Bool = false, label: String, value: String = "", action: @escaping () -> Void, @ViewBuilder content: () -> C) -> some View {
         Button(action: action) {
             content()
                 .frame(width: LumiaTokens.tileSize, height: LumiaTokens.tileSize)
@@ -111,16 +115,11 @@ struct PhoneRail: View {
                 .overlay(RoundedRectangle(cornerRadius: current ? LumiaTokens.radius14 : LumiaTokens.radiusRound).stroke(current ? LumiaTokens.accent.color : .clear, lineWidth: 2))
                 .overlay(alignment: .topTrailing) {
                     if badge > 0 {
-                        Group { if mentionBadge { LumiaCountBadge(UInt32(badge)) } else { CountBadge(badge) } }.offset(x: 4, y: -4)
-                    }
-                }
-                // Something unread in a server not on screen: the small mark at the rail's edge.
-                .overlay(alignment: .leading) {
-                    if unread {
-                        Capsule().fill(LumiaTokens.ink.color)
-                            .frame(width: LumiaTokens.space4, height: LumiaTokens.space8)
-                            .offset(x: -(LumiaTokens.railWidth - LumiaTokens.tileSize) / 2)
-                            .accessibilityHidden(true)
+                        LumiaCountBadge(UInt32(badge), style: .ringed)
+                            .alignmentGuide(.top) { $0[.top] + badgeOut }
+                            .alignmentGuide(.trailing) { $0[.trailing] - badgeOut }
+                    } else if unread {
+                        UnreadDot()
                     }
                 }
         }
@@ -131,13 +130,14 @@ struct PhoneRail: View {
     }
 }
 
-struct CountBadge: View {
-    let count: Int
-    init(_ count: Int) { self.count = count }
+/// A server's unread mark on the rail: a dot at its tile's top end, 11
+/// across with a 2-point ring in the rail's colour.
+struct UnreadDot: View {
     var body: some View {
-        Text("\(count)").font(LumiaTokens.textCount.font).foregroundStyle(LumiaTokens.onAccent.color)
-            .padding(.horizontal, LumiaTokens.space4).frame(minWidth: 18, minHeight: 18)
-            .background(LumiaTokens.unread.color, in: Capsule())
+        Circle().fill(LumiaTokens.unread.color)
+            .overlay(Circle().strokeBorder(LumiaTokens.rail.color, lineWidth: LumiaTokens.space2))
+            .frame(width: LumiaTokens.space10 + 1, height: LumiaTokens.space10 + 1)
+            .accessibilityHidden(true)
     }
 }
 
@@ -170,29 +170,42 @@ struct SideHeader: View {
     }
 }
 
-/// The Requests / Devices / New message tiles.
+/// A quick tile (Home's Requests, Devices and New; a server's Mentions): the
+/// boards' 58-high tile, three to a row, ringed in the edge's colour, its
+/// count as the small badge at its top end. `spoken`, where given, is what
+/// assistive technology hears after the name as its value; else the count.
 struct Tile: View {
     let label: String
     let icon: String
     var count = 0
+    var spoken: String?
     let action: () -> Void
+
+    /// The boards' quick tile: 58 high.
+    static let height = LumiaTokens.space40 + LumiaTokens.space18
 
     var body: some View {
         Button(action: action) {
             VStack(spacing: LumiaTokens.space4) {
-                Image(systemName: icon).font(.system(size: 16))
-                Text(label).font(LumiaTokens.textCompact.font)
+                Image(systemName: icon).font(.system(size: LumiaTokens.space18 - 1))
+                Text(label).font(LumiaTokens.textSection.font)
             }
             .foregroundStyle(LumiaTokens.inkBody.color)
-            .frame(maxWidth: .infinity).frame(height: 58)
+            .frame(maxWidth: .infinity).frame(height: Self.height)
             .background(LumiaTokens.tile.color, in: RoundedRectangle(cornerRadius: LumiaTokens.radius14))
-            .overlay(RoundedRectangle(cornerRadius: LumiaTokens.radius14).stroke(LumiaTokens.line.color))
+            .overlay(RoundedRectangle(cornerRadius: LumiaTokens.radius14).stroke(LumiaTokens.edge.color))
             .overlay(alignment: .topTrailing) {
-                if count > 0 { CountBadge(count).padding(LumiaTokens.space6) }
+                if count > 0 {
+                    LumiaCountBadge(UInt32(count), style: .small)
+                        .padding(.top, LumiaTokens.space6)
+                        .padding(.trailing, LumiaTokens.space6 + 1)
+                }
             }
+            .contentShape(RoundedRectangle(cornerRadius: LumiaTokens.radius14))
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(count > 0 ? "\(label), \(count)" : label)
+        .accessibilityLabel(spoken != nil || count == 0 ? label : "\(label), \(count)")
+        .accessibilityValue(spoken ?? "")
     }
 }
 

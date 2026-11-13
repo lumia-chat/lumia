@@ -1,13 +1,15 @@
 // A conversation on the phone: a server's channel or DM, and a personal
 // conversation. Messages in blocks with a divider over each day's first,
 // and what architecture 6.6 adds (`Replies.swift` for the sheets): a
-// message's quote above its words, its mentions as pills, its reactions
-// under them and a tint when it is for this account; a long press opens its
-// actions; the quote being replied with over the composer, the @ list in a
-// server's channel and the bar after a send that mentioned someone not in
-// it; the "New messages" line, which the list opens at when it is above the
-// fold; and the conversation marked read while its newest message is on
-// screen and the app is active.
+// reply's reference line above it, a message's mentions as pills by name,
+// its reactions under it and a wash when it is for this account; a long
+// press opens its actions; editing one's own message in place, where its
+// words were, and deleting after a confirmation; the reply bar inside the
+// composer with its "@ On" switch, the @ list in a server's channel and the
+// bar after a send that mentioned someone not in it; the "New messages"
+// line, which the list opens at when it is above the fold; and the
+// conversation marked read while its newest message is on screen and the
+// app is active.
 import LumiaFFI
 import LumiaKit
 import SwiftUI
@@ -75,6 +77,90 @@ private struct Reading: ViewModifier {
     }
 }
 
+// MARK: Editing and deleting
+
+/// A conversation's edits and deletions (architecture 6.6): the message
+/// being edited in place and what its field holds, the one whose deletion
+/// is being asked about, and what the actions' sheet chose to do once it
+/// has gone. What the instance refused of an edit is the session's
+/// (`editRefusals`), matched to the edit by its command id.
+struct Changes {
+    var editing: String?
+    var draft = ""
+    var deleting: MessageRef?
+    var chosen: (MessageRef, MessageAction)?
+}
+
+/// What both kinds of conversation do with their `Changes`.
+@MainActor
+struct Changer {
+    let session: LumiaSession
+    let channelID: String
+    @Binding var changes: Changes
+    @Binding var error: String
+
+    /// Edit message: the field in place of the words, holding them as written.
+    func start(_ ref: MessageRef) {
+        changes.editing = ref.id
+        changes.draft = ref.body
+        session.clearEditRefusal(ref.id)
+    }
+
+    /// The field, for the message being edited.
+    func edit(_ ref: MessageRef) -> MessageEdit? {
+        guard changes.editing == ref.id else { return nil }
+        return MessageEdit(draft: $changes.draft, save: { save(ref) }, cancel: { changes.editing = nil })
+    }
+
+    /// Return or Save: the field goes at once and the message shows the new
+    /// words when the edit comes back; nothing changed sends nothing, and
+    /// nothing left asks to delete instead.
+    func save(_ ref: MessageRef) {
+        switch MessageEdits.outcome(original: ref.body, draft: changes.draft) {
+        case .unchanged:
+            changes.editing = nil
+        case .delete:
+            changes.deleting = ref
+        case let .save(body):
+            changes.editing = nil
+            Task { await session.edit(channelID: channelID, messageID: ref.id, body: body) }
+        }
+    }
+
+    /// Delete, from the confirmation.
+    func delete(_ ref: MessageRef) {
+        if changes.editing == ref.id { changes.editing = nil }
+        Task {
+            do { try await session.delete(channelID: channelID, messageID: ref.id) } catch let refused { self.error = refused.lumiaMessage }
+        }
+    }
+
+    /// The sheet has gone: Edit message or Delete message, as it chose.
+    func afterSheet() {
+        guard let (ref, action) = changes.chosen else { return }
+        changes.chosen = nil
+        switch action {
+        case .edit: start(ref)
+        case .delete: changes.deleting = ref
+        default: break
+        }
+    }
+
+}
+
+extension View {
+    /// "Delete this message?" over a conversation: the message's first line,
+    /// Cancel, and Delete, which the system draws as destructive.
+    func deleteConfirmation(_ changer: Changer) -> some View {
+        alert(MessageEdits.deleteTitle, isPresented: Binding(get: { changer.changes.deleting != nil }, set: { if !$0 { changer.changes.deleting = nil } }), presenting: changer.changes.deleting) { ref in
+            Button("Cancel", role: .cancel) {}
+            Button("Delete", role: .destructive) { changer.delete(ref) }
+        } message: { ref in
+            Text(MessageEdits.firstLine(ref.drawn))
+        }
+    }
+}
+
 // MARK: Personal conversation
 
 struct ConversationScreen: View {
@@ -86,10 +172,13 @@ struct ConversationScreen: View {
     @State private var replying: QuoteSummary?
     @State private var replyingTo = ""
     @State private var sheet: MessageSheet?
+    @State private var changes = Changes()
     @State private var flash: String?
     @State private var newestVisible = false
     @State private var scroll: ScrollRequest?
     @FocusState private var composing: Bool
+
+    private var changer: Changer { Changer(session: session, channelID: channelID, changes: $changes, error: $error) }
 
     /// How much room the messages take: Preferences' density, here as in a channel.
     private var measures: MessageMeasures { .of(preferences.density) }
@@ -158,21 +247,23 @@ struct ConversationScreen: View {
             // No one is said to be typing here, and this device says nothing of
             // it either: the instance is not to learn who is writing in a
             // personal conversation (protocol 6.7; an open item of the E2EE spec).
-            LumiaComposer(text: $draft, placeholder: member ? "Message \(title)" : "Setting up the encrypted group…", disabled: !member, hint: nil, focused: $composing) {
+            // The reply bar has no "@ On" here: every message of a personal conversation notifies.
+            LumiaComposer(text: $draft, placeholder: member ? "Message \(title)" : "Setting up the encrypted group…", disabled: !member, hint: nil, focused: $composing, reply: replying.map { _ in ComposerReply(name: replyingTo, mention: nil) { replying = nil } }, editLast: editLast) {
                 Task { await send() }
             } above: {
-                if let replying {
-                    LumiaReplyBar(name: replyingTo, text: replying.text) { self.replying = nil }
-                }
+                EmptyView()
             }
         }
         .modifier(Reading(session: session, channelID: channelID, newest: log?.messages.last?.seq ?? 0, marks: member, load: {
             await session.refreshDmChannels()
             await session.refreshDmLog(channelID: channelID)
         }, jump: jump, newestVisible: $newestVisible, scroll: $scroll))
-        .sheet(item: $sheet) { sheet in
-            MessageSheetView(sheet: sheet, react: react, reply: { m, part in startReply(id: m.id, name: m.authorName, body: m.body, part: part) })
+        // A message's sheet takes the keyboard from the composer, so its words can be selected.
+        .onChange(of: sheet) { _, open in if open != nil { composing = false } }
+        .sheet(item: $sheet, onDismiss: changer.afterSheet) { sheet in
+            MessageSheetView(sheet: sheet, react: react, reply: { m, part in startReply(id: m.id, name: m.authorName, body: m.drawn, part: part) }, chose: { changes.chosen = ($0, $1) })
         }
+        .deleteConfirmation(changer)
     }
 
     /// Whose a message is, for its block and its avatar's tone:
@@ -189,18 +280,37 @@ struct ConversationScreen: View {
         m.mine ? session.selfName : (!m.senderAccountId.isEmpty || others.count != 1 ? session.name(of: m.senderAccountId) : session.name(of: others[0]))
     }
 
+    /// A message as its actions need it: only one's own is edited or deleted here.
+    private func ref(_ m: DmMessageSummary) -> MessageRef {
+        MessageRef(id: m.messageId, authorID: authorID(of: m), authorName: who(m), body: m.body, drawn: m.body, actions: MessageAction.offered(mine: m.mine, personal: true, canManageMessages: false))
+    }
+
     private func extras(_ m: DmMessageSummary) -> MessageExtras {
         var x = MessageExtras()
         // A quote whose author is not known draws no name.
-        x.quote = m.reply.map { q in QuoteDisplay(name: q.authorAccountId.isEmpty ? nil : session.name(of: q.authorAccountId), text: q.text, deleted: q.originalDeleted, open: { jump(q.messageId) }) }
+        x.quote = m.reply.map { q in QuoteDisplay(authorID: q.authorAccountId, name: q.authorAccountId.isEmpty ? nil : session.name(of: q.authorAccountId), text: q.text, deleted: q.originalDeleted, quotesMe: q.authorAccountId == session.me, open: { jump(q.messageId) }) }
         x.reactions = reactionDisplays(m.reactions, session: session)
         x.flashed = flash == m.messageId
+        x.replying = replying?.messageId == m.messageId
+        x.edited = m.edited
+        x.notSaved = session.editRefusals[m.messageId]
         guard member else { return x }
+        let ref = ref(m)
+        x.edit = changer.edit(ref)
         x.toggle = { react(m.messageId, $0) }
         x.addReaction = { sheet = .picker(messageID: m.messageId) }
-        x.reply = { startReply(id: m.messageId, name: who(m), body: m.body, part: nil) }
-        x.actions = { sheet = .actions(MessageRef(id: m.messageId, authorID: authorID(of: m), authorName: who(m), body: m.body, mine: Set(m.reactions.filter(\.me).map(\.reaction)))) }
+        x.reply = { startReply(id: m.messageId, name: who(m), body: ref.drawn, part: nil) }
+        if ref.actions.contains(.edit) { x.editMessage = { changer.start(ref) } }
+        if ref.actions.contains(.delete) { x.deleteMessage = { changes.deleting = ref } }
+        x.actions = { sheet = .actions(ref) }
         return x
+    }
+
+    /// Up in an empty composer: this account's newest message, edited.
+    private func editLast() {
+        let all = log?.messages ?? []
+        guard member, let id = MessageEdits.newestOwn(all.map { ($0.messageId, $0.mine && !$0.deleted) }), let m = all.first(where: { $0.messageId == id }) else { return }
+        changer.start(ref(m))
     }
 
     private func startReply(id: String, name: String, body: String, part: String?) {
@@ -259,12 +369,17 @@ struct ChannelScreen: View {
     @State private var error = ""
     @State private var joining = false
     @State private var replying: QuoteSummary?
+    /// The reply bar's "@ On": on for each new reply.
+    @State private var mentionOn = true
     @State private var sheet: MessageSheet?
+    @State private var changes = Changes()
     @State private var outside: OutsideNote?
     @State private var flash: String?
     @State private var newestVisible = false
     @State private var scroll: ScrollRequest?
     @FocusState private var composing: Bool
+
+    private var changer: Changer { Changer(session: session, channelID: channelID, changes: $changes, error: $error) }
 
     /// How much room the messages take: Preferences' density. The list
     /// only: the header, the composer and the typing line stay as they are.
@@ -337,7 +452,7 @@ struct ChannelScreen: View {
             }
             if member {
                 // Who is typing goes under the field, in a server's channel only (protocol 6.7).
-                LumiaComposer(text: $draft, placeholder: isDM ? "Message \(title)" : "Message #\(name)", hint: nil, typing: session.typingNames(in: channelID), focused: $composing) {
+                LumiaComposer(text: $draft, placeholder: isDM ? "Message \(title)" : "Message #\(name)", hint: nil, typing: session.typingNames(in: channelID), focused: $composing, reply: replyBar, editLast: editLast) {
                     Task { await send() }
                 } above: {
                     composerBars
@@ -358,12 +473,23 @@ struct ChannelScreen: View {
         .onChange(of: session.commandError) { _, _ in
             if let refused = session.takeCommandError() { error = refused }
         }
-        .sheet(item: $sheet) { sheet in
-            MessageSheetView(sheet: sheet, react: react, reply: { m, part in startReply(id: m.id, authorID: m.authorID, body: m.body, part: part) })
+        // A message's sheet takes the keyboard from the composer, so its words can be selected.
+        .onChange(of: sheet) { _, open in if open != nil { composing = false } }
+        .sheet(item: $sheet, onDismiss: changer.afterSheet) { sheet in
+            MessageSheetView(sheet: sheet, react: react, reply: { m, part in startReply(id: m.id, authorID: m.authorID, body: m.drawn, part: part) }, chose: { changes.chosen = ($0, $1) })
         }
+        .deleteConfirmation(changer)
     }
 
-    /// Over the composer: the bar after a send, the @ list, the quote being replied with.
+    /// The reply bar inside the composer, with its "@ On" for a reply to
+    /// someone else; none for a reply to oneself.
+    private var replyBar: ComposerReply? {
+        guard let replying else { return nil }
+        let switchable = Replies.offersMentionSwitch(quotedAuthor: replying.authorAccountId, me: session.me, personal: false)
+        return ComposerReply(name: session.name(of: replying.authorAccountId), mention: switchable ? $mentionOn : nil) { self.replying = nil }
+    }
+
+    /// Over the composer: the bar after a send and the @ list.
     @ViewBuilder private var composerBars: some View {
         if let outside {
             LumiaComposerBar {
@@ -393,9 +519,6 @@ struct ChannelScreen: View {
                 }
             }
         }
-        if let replying {
-            LumiaReplyBar(name: session.name(of: replying.authorAccountId), text: replying.text) { self.replying = nil }
-        }
     }
 
     private func row(_ choice: MentionChoice) -> LumiaMentionList.Row {
@@ -407,22 +530,45 @@ struct ChannelScreen: View {
         }
     }
 
+    /// A message as its actions need it: its author edits it, and deletes
+    /// it as one who may manage the server's messages may.
+    private func ref(_ m: MessageSummary) -> MessageRef {
+        let drawn = MentionSpans.drawn(body: m.body, mentions: m.mentions) { knownName($0, session: session) }
+        let actions = MessageAction.offered(mine: m.authorAccountId == session.me, personal: false, canManageMessages: session.canManageMessages(channelID: channelID))
+        return MessageRef(id: m.messageId, authorID: m.authorAccountId, authorName: session.name(of: m.authorAccountId), body: m.body, drawn: drawn, actions: actions)
+    }
+
     private func extras(_ m: MessageSummary) -> MessageExtras {
         var x = MessageExtras()
         x.mentions = m.mentions
-        x.quote = m.reply.map { q in QuoteDisplay(name: q.authorAccountId.isEmpty ? nil : session.name(of: q.authorAccountId), text: q.text, deleted: q.originalDeleted, open: { jump(q.messageId) }) }
+        x.name = { knownName($0, session: session) }
+        x.quote = m.reply.map { q in QuoteDisplay(authorID: q.authorAccountId, name: q.authorAccountId.isEmpty ? nil : session.name(of: q.authorAccountId), text: q.text, deleted: q.originalDeleted, quotesMe: q.authorAccountId == session.me, open: { jump(q.messageId) }) }
         x.reactions = reactionDisplays(m.reactions, session: session)
         x.tinted = m.mentionsMe
         x.flashed = flash == m.messageId
+        x.replying = replying?.messageId == m.messageId
+        x.edited = m.edited
+        x.notSaved = session.editRefusals[m.messageId]
         if let serverID = channel?.serverId, !serverID.isEmpty {
             x.openPerson = { openPerson(PersonInServer(accountID: $0, serverID: serverID)) }
         }
         guard member else { return x }
+        let ref = ref(m)
+        x.edit = changer.edit(ref)
         x.toggle = { react(m.messageId, $0) }
         x.addReaction = { sheet = .picker(messageID: m.messageId) }
-        x.reply = { startReply(id: m.messageId, authorID: m.authorAccountId, body: m.body, part: nil) }
-        x.actions = { sheet = .actions(MessageRef(id: m.messageId, authorID: m.authorAccountId, authorName: session.name(of: m.authorAccountId), body: m.body, mine: Set(m.reactions.filter(\.me).map(\.reaction)))) }
+        x.reply = { startReply(id: m.messageId, authorID: m.authorAccountId, body: ref.drawn, part: nil) }
+        if ref.actions.contains(.edit) { x.editMessage = { changer.start(ref) } }
+        if ref.actions.contains(.delete) { x.deleteMessage = { changes.deleting = ref } }
+        x.actions = { sheet = .actions(ref) }
         return x
+    }
+
+    /// Up in an empty composer: this account's newest message, edited.
+    private func editLast() {
+        let editable = messages.map { ($0.messageId, $0.authorAccountId == session.me && $0.notice.isEmpty && !$0.deleted) }
+        guard member, let id = MessageEdits.newestOwn(editable), let m = messages.first(where: { $0.messageId == id }) else { return }
+        changer.start(ref(m))
     }
 
     /// Opens who wrote a message, in this server.
@@ -431,9 +577,11 @@ struct ChannelScreen: View {
         return { openPerson(PersonInServer(accountID: accountID, serverID: serverID)) }
     }
 
-    /// "Reply", or "Quote reply" over words selected: the quote over the composer, which takes the keyboard.
+    /// "Reply", or "Quote reply" over words selected: the reply bar in the
+    /// composer, its "@ On" on, and the keyboard.
     private func startReply(id: String, authorID: String, body: String, part: String?) {
         replying = Replies.quote(messageID: id, authorID: authorID, body: body, part: part)
+        mentionOn = true
         composing = true
     }
 
@@ -460,7 +608,9 @@ struct ChannelScreen: View {
     private func send() async {
         let body = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !body.isEmpty else { return }
-        let quote = replying
+        // "@ On" turned off: the reply notifies nobody.
+        var quote = replying
+        if let q = quote { quote?.silent = Replies.offersMentionSwitch(quotedAuthor: q.authorAccountId, me: session.me, personal: false) && !mentionOn }
         draft = ""
         replying = nil
         error = ""

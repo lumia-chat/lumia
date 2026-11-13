@@ -1,17 +1,21 @@
 #!/bin/sh
-# Quote replies, reactions, mentions and read state by hand (architecture
-# 6.6), in a simulator against an instance built from this tree. The
-# phone's account owns a server; Ada Lovelace, the release CLI and the
-# instance's HTTP API (the CLI sends no quote or reaction), quotes one of
-# its messages, quotes one it then deletes, reacts to it, mentions it in
-# #general and in #design, and writes in #random; Bo Diddley is in the
-# server and not in #general. The script draws what the LUMIA_DEV_SCREEN
-# values server, channel, mentions and homementions open, light and dark,
-# then runs testRepliesReactionsMentionsAndReads and reads the instance at
-# each step: #design read once its newest message was on screen, a reply
-# made from a long press carrying its quote, a reaction added and taken
-# away again, a mention picked from the @ list of someone not in the channel
-# and "Add to #general" adding them. Last, the read wake: three notifications
+# Quote replies, reactions, mentions, read state, editing and deleting by
+# hand (architecture 6.6), in a simulator against an instance built from
+# this tree. The phone's account owns a server; Ada Lovelace, the release
+# CLI (quotes, reactions) and the instance's HTTP API (what the CLI cannot
+# send: a mention with its byte range, an edit, a delete), quotes one of its
+# messages, quotes one it then deletes, reacts to it, edits one of her own,
+# mentions it in #general and in #design, and writes in #random; Bo Diddley
+# is in the server and not in #general. The script draws what the
+# LUMIA_DEV_SCREEN values server, channel, mentions and homementions open,
+# light and dark, then runs testRepliesReactionsMentionsAndReads and reads
+# the instance at each step: #design read once its newest message was on
+# screen, a reply made from a long press carrying its quote and sent with
+# "@ On" off (silent), a reaction added and taken away again, the reply
+# edited in place (its new words and edited_at on the instance) and then
+# deleted after the confirmation (deleted_at), a mention picked from the @
+# list of someone not in the channel and "Add to #general" adding them.
+# Last, the read wake: three notifications
 # delivered to the app in the background, #design read from elsewhere, and
 # the read push through the debug build's lumia://dev/read-push (simctl push
 # delivers no silent push); #design's notification goes and #general's stays.
@@ -93,15 +97,19 @@ api "$ta" POST "/channels/$design/join" >/dev/null
 api "$ta" POST "/channels/$random/join" >/dev/null
 api "$tb" POST "/channels/$general/leave" >/dev/null
 
-# #general: the phone's message, Ada's quote of it, a quote of one deleted, a mention, reactions.
-shipped=$(say "$to" "$general" "Shipped on Friday.")
-draft=$(say "$to" "$general" "A draft I will take back.")
-say "$ta" "$general" "Morning all, the review is at ten." >/dev/null
-say "$ta" "$general" "Nice work, that was quick." "\"replyTo\":{\"messageId\":\"$shipped\",\"text\":\"Shipped on Friday.\"}" >/dev/null
-say "$ta" "$general" "What did this say?" "\"replyTo\":{\"messageId\":\"$draft\",\"text\":\"A draft\"}" >/dev/null
+# #general: the phone's message, Ada's quote of it, a quote of one deleted,
+# one of hers edited, a mention, reactions. The CLI prints "acked at seq N: <id>".
+sent() { c "$@" | sed -n 's/^acked at seq [0-9]*: //p' | tail -1; }
+shipped=$(sent owner send "$general" "Shipped on Friday.")
+draft=$(sent owner send "$general" "A draft I will take back.")
+c ada send "$general" "Morning all, the review is at ten." >/dev/null
+c ada send "$general" "Nice work, that was quick." --reply-to "$shipped" --quote "Shipped on Friday." >/dev/null
+c ada send "$general" "What did this say?" --reply-to "$draft" --quote "A draft" >/dev/null
 command "$to" "$general" "\"deleteMessage\":{\"messageId\":\"$draft\"}" >/dev/null
-command "$ta" "$general" "\"addReaction\":{\"messageId\":\"$shipped\",\"reaction\":\"👍\"}" >/dev/null
-command "$ta" "$general" "\"addReaction\":{\"messageId\":\"$shipped\",\"reaction\":\"🎉\"}" >/dev/null
+deck=$(sent ada send "$general" "The deck is in the drive.")
+command "$ta" "$general" "\"editMessage\":{\"messageId\":\"$deck\",\"body\":\"The deck is in the shared drive.\"}" >/dev/null
+c ada react "$general" "$shipped" "👍" >/dev/null
+c ada react "$general" "$shipped" "🎉" >/dev/null
 # A mention of the phone's account in <body>, with its UTF-8 byte range (the CLI's has none).
 mentioning() { # <body>
   python3 -c "
@@ -117,7 +125,7 @@ say "$ta" "$design" "The mockups are in the drive." >/dev/null
 which="@$owner which one do you like?"
 say "$ta" "$design" "$which" "$(mentioning "$which")" >/dev/null
 # #random: unread for the dark picture of its "New messages" line.
-for n in 1 2 3; do say "$ta" "$random" "Random thought number $n." >/dev/null; done
+c ada send "$random" "Random thought number {n}." --count 3 >/dev/null
 echo "seeded $owner owning Acme Works ($server), with Ada and Bo"
 
 udid=$(xcrun simctl list devices available -j | python3 -c "
@@ -193,12 +201,16 @@ seen read
 
 reached actions 60
 seen actions
+reached replybar 60
+seen replybar
 reached replied 60
 quoted=$(messages "$general" | py "
 m = [x for x in d.get('messages', []) if x.get('body') == 'On it, thanks.']
-print(m[0].get('replyTo', {}).get('text', '') if m else '')")
-[ "$quoted" = "Morning all, the review is at ten." ] || fail "the reply made from the long press does not quote Ada's message: \"$quoted\""
-echo "a reply by long press carries its quote"
+q = m[0].get('replyTo', {}) if m else {}
+print(q.get('text', ''), '|', q.get('silent', False))")
+[ "$quoted" = "Morning all, the review is at ten. | True" ] || fail "the reply made from the long press does not quote Ada's message with @ On off: \"$quoted\""
+reply_id=$(messages "$general" | py "print([x for x in d.get('messages', []) if x.get('body') == 'On it, thanks.'][0]['messageId'])")
+echo "a reply by long press carries its quote, and with @ On off notifies nobody"
 seen replied
 
 reached reacted 60
@@ -215,6 +227,26 @@ print(' '.join(sorted(r.get('reaction', '') + ':' + str(r.get('count', 0)) for r
 case "$mine" in *"👍:1"*) ;; *) fail "the 👍 chip did not take this account's reaction away again: $mine" ;; esac
 echo "a reaction toggled on and off by its chip"
 seen unreacted
+
+reached editing 90
+seen editing
+reached edited 60
+edit=$(messages "$general" | py "
+m = [x for x in d.get('messages', []) if x.get('messageId') == '$reply_id'][0]
+print(m.get('body', ''), '|', bool(m.get('editedAt')))")
+[ "$edit" = "On it, thanks. Done. | True" ] || fail "the reply edited in place is not the new words, edited, on the instance: \"$edit\""
+echo "the reply edited in place: its new words and edited_at on the instance"
+seen edited
+reached confirm 60
+seen confirm
+reached deleted 60
+gone=$(messages "$general" | py "
+m = [x for x in d.get('messages', []) if x.get('messageId') == '$reply_id']
+print(bool(m and m[0].get('deletedAt')))")
+# Only deleted_at: the history over HTTP still gives a deleted message's words (2026-11-13).
+[ "$gone" = "True" ] || fail "the reply deleted after the confirmation is not deleted on the instance"
+echo "the reply deleted after the confirmation: deleted_at on the instance"
+seen deleted
 
 reached mentioned 60
 mention=$(messages "$general" | py "

@@ -121,6 +121,11 @@ public final class LumiaSession {
     /// reaction that is not one emoji, @everyone without the permission, a
     /// quote of a message that is gone), until it is read.
     public internal(set) var commandError: String?
+    /// The edits sent through the gateway and not yet answered, by command
+    /// id: a refusal names its command, and is said under the message.
+    var editsSent = EditsSent()
+    /// What the instance refused of a message's edit, by message: "Not saved: …".
+    public internal(set) var editRefusals: [String: String] = [:]
     /// A message to show once its conversation is on screen: a mention
     /// opened from a Mentions page.
     public var pendingReveal: Reveal?
@@ -792,8 +797,12 @@ public final class LumiaSession {
             await refreshReads()
             await refreshSnapshot()
             await refreshDmChannels()
-        case let .error(_, message, _):
-            commandError = message
+        case let .error(_, message, commandId):
+            if let edited = editsSent.refused(command: commandId) {
+                editRefusals[edited] = MessageEdits.notSaved(message)
+            } else {
+                commandError = message
+            }
         case let .reconnecting(attempt, _, _):
             connection = .reconnecting(attempt: attempt)
         case let .disconnected(reason, _):

@@ -616,17 +616,21 @@ final class SmokeUITests: XCTestCase {
         sleep(10)
     }
 
-    /// Quote replies, reactions, mentions and read state by hand
-    /// (scripts/smoke-replies.sh), signed in as the owner of a server where
-    /// Ada has written: #design unread with a mention, which opens at its
-    /// "New messages" line and is read once its newest message is on screen;
-    /// a reply to Ada's message from a long press's actions; a reaction
-    /// chip tapped on and off; one added from the emoji picker; Bo picked
-    /// from the @ list, marked as not in #general, and added from the bar
-    /// after the send; and the server's Mentions page, whose item opens its
+    /// Quote replies, reactions, mentions, read state, editing and deleting
+    /// by hand (scripts/smoke-replies.sh), signed in as the owner of a server
+    /// where Ada has written: #design unread with a mention, which opens at
+    /// its "New messages" line and is read once its newest message is on
+    /// screen; a long press's actions on Ada's message (Add reaction, Reply,
+    /// Copy text, and Delete message for the owner, who may; no Edit
+    /// message); a reply to it from there, with the reply bar's "@ On"
+    /// turned off, drawn under its reference line; a reaction chip tapped on
+    /// and off; one added through Add reaction's picker; the reply edited in
+    /// place and then deleted after the confirmation; Bo picked from the @
+    /// list, marked as not in #general, and added from the bar after the
+    /// send; and the server's Mentions tile, whose page's item opens its
     /// channel. Each step waits for the smoke to look (`<step>.seen`):
-    /// `sidebar`, `newline`, `read`, `actions`, `replied`, `reacted`,
-    /// `unreacted`, `mentioned`, `added`, `mentionspage`.
+    /// `sidebar`, `newline`, `read`, `actions`, `replybar`, `replied`, `reacted`,
+    /// `unreacted`, `editing`, `edited`, `confirm`, `deleted`, `mentioned`, `added`, `mentionspage`.
     func testRepliesReactionsMentionsAndReads() throws {
         let env = ProcessInfo.processInfo.environment
         let steps = try XCTUnwrap(env["LUMIA_UITEST_STEPS"])
@@ -649,8 +653,8 @@ final class SmokeUITests: XCTestCase {
             XCTAssertEqual(XCTWaiter().wait(for: [done], timeout: 20), .completed, "\(why): \(element.value as? String ?? "nil")")
         }
 
-        // The sidebar: Mentions with the server's count, #design unread with its mention.
-        XCTAssertTrue(mentionsRow.waitForExistence(timeout: 90), "no Mentions row at the top of the server's sidebar")
+        // The sidebar: the Mentions tile with the server's count, #design unread with its mention.
+        XCTAssertTrue(mentionsRow.waitForExistence(timeout: 90), "no Mentions tile at the top of the server's sidebar")
         XCTAssertEqual(mentionsRow.label, "Mentions")
         XCTAssertTrue((mentionsRow.value as? String ?? "").contains("mention"), "the Mentions row has no count: \(mentionsRow.value ?? "nil")")
         let design = app.buttons["design"]
@@ -667,24 +671,35 @@ final class SmokeUITests: XCTestCase {
         waitFor(design, value: "", "#design is still unread after it was read")
         reached("read")
 
-        // A long press on Ada's message: its actions; Reply puts the quote over the composer.
+        // A long press on Ada's message: its actions, no quick reactions, and
+        // no Edit message on someone else's; Reply puts the reply bar in the composer.
         app.buttons["general"].tap()
         let ada = anything.matching(NSPredicate(format: "label BEGINSWITH %@ AND value == %@", "Ada Lovelace, ", "Morning all, the review is at ten.")).firstMatch
         XCTAssertTrue(ada.waitForExistence(timeout: 30), "no message of Ada's in #general")
         ada.press(forDuration: 1.0)
-        for words in ["React with 👍", "React with 😢", "Reply", "Add reaction", "Copy text"] {
+        for words in ["Add reaction", "Reply", "Copy text", "Delete message"] {
             XCTAssertTrue(app.buttons[words].waitForExistence(timeout: 10), "the message's actions have no \(words)")
         }
+        XCTAssertFalse(app.buttons["Edit message"].exists, "Edit message is offered on someone else's message")
+        XCTAssertFalse(app.buttons["React with 👍"].exists, "the quick reactions are still in the sheet")
         reached("actions")
         app.buttons["Reply"].tap()
-        XCTAssertTrue(starting("Replying to Ada Lovelace").waitForExistence(timeout: 10), "no quote over the composer")
+        XCTAssertTrue(labelled("Replying to Ada Lovelace").waitForExistence(timeout: 10), "no reply bar in the composer")
         XCTAssertTrue(app.buttons["Cancel reply"].exists)
+        // "@ On", turned off: the reply notifies nobody.
+        let mention = app.buttons["Mention Ada Lovelace"]
+        XCTAssertTrue(mention.exists, "the reply bar has no @ On")
+        XCTAssertEqual(mention.value as? String, "On", "@ On is not on for a new reply")
+        mention.tap()
+        waitFor(mention, value: "Off", "@ On did not turn off")
+        reached("replybar")
         if app.buttons["Continue"].exists { app.buttons["Continue"].tap() }
         field.typeText("On it, thanks.")
         app.buttons["Send"].tap()
-        let reply = anything.matching(NSPredicate(format: "label CONTAINS %@ AND value == %@", "Quote of Ada Lovelace: Morning all", "On it, thanks.")).firstMatch
-        XCTAssertTrue(reply.waitForExistence(timeout: 20), "the reply is not drawn with its quote")
-        XCTAssertFalse(app.buttons["Cancel reply"].exists, "the quote is still over the composer after the send")
+        let reply = anything.matching(NSPredicate(format: "label BEGINSWITH %@ AND value == %@", "Robin Owner, ", "On it, thanks.")).firstMatch
+        XCTAssertTrue(reply.waitForExistence(timeout: 20), "the reply is not drawn")
+        XCTAssertTrue(starting("Replying to Ada Lovelace: Morning all, the review is at ten. Jump to message").exists, "the reply has no reference line")
+        XCTAssertFalse(app.buttons["Cancel reply"].exists, "the reply bar is still in the composer after the send")
         reached("replied")
 
         // A reaction chip: this account's added by a tap, and taken away by another.
@@ -703,18 +718,28 @@ final class SmokeUITests: XCTestCase {
         ada.press(forDuration: 1.0)
         let words = app.textViews.firstMatch
         XCTAssertTrue(words.waitForExistence(timeout: 10), "the message's actions do not show its words")
-        words.doubleTap()
+        // The first word, double-tapped once the sheet has settled: the
+        // view's middle can fall between two words, which selects none.
+        sleep(1)
+        words.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.5)).doubleTap()
         let quoteReply = anything.matching(NSPredicate(format: "label == %@", "Quote reply")).firstMatch
         if !quoteReply.waitForExistence(timeout: 10) { print("the app with words selected:\n" + app.debugDescription) }
         XCTAssertTrue(quoteReply.exists, "the selection's menu has no Quote reply")
         quoteReply.tap()
-        let partial = starting("Replying to Ada Lovelace")
-        XCTAssertTrue(partial.waitForExistence(timeout: 10), "Quote reply put no quote over the composer")
-        XCTAssertFalse(partial.label.contains("Morning all, the review is at ten."), "Quote reply quoted the whole message: \(partial.label)")
-        app.buttons["Cancel reply"].tap()
+        XCTAssertTrue(labelled("Replying to Ada Lovelace").waitForExistence(timeout: 10), "Quote reply put no reply bar in the composer")
+        // The reply bar shows no quoted text: what was quoted is the reference line's once sent.
+        if app.buttons["Continue"].exists { app.buttons["Continue"].tap() }
+        field.typeText("Which part?")
+        app.buttons["Send"].tap()
+        // The word double-tapped, "Morning", and not the whole message, which the reply before quotes.
+        XCTAssertTrue(labelled("Replying to Ada Lovelace: Morning. Jump to message").waitForExistence(timeout: 20), "the quote reply has no reference line quoting the word chosen alone")
 
-        // The picker, from the chips' Add reaction: found by name.
-        app.buttons.matching(NSPredicate(format: "label == %@", "Add reaction")).firstMatch.tap()
+        // The picker, from a long press's Add reaction: found by name.
+        ada.press(forDuration: 1.0)
+        // The sheet's, by its identifier: the chips under messages have an Add reaction of their own.
+        let addReaction = app.buttons["action-addReaction"]
+        XCTAssertTrue(addReaction.waitForExistence(timeout: 10), "the message's actions have no Add reaction")
+        addReaction.tap()
         let search = app.textFields["Search emoji"]
         XCTAssertTrue(search.waitForExistence(timeout: 10), "no emoji picker")
         XCTAssertTrue(labelled("Frequently used").exists, "the picker has no Frequently used")
@@ -722,6 +747,37 @@ final class SmokeUITests: XCTestCase {
         search.typeText("rocket")
         app.buttons["rocket"].firstMatch.tap()
         XCTAssertTrue(labelled("You reacted with 🚀, 1").waitForExistence(timeout: 20), "the picker's 🚀 is not on the message")
+
+        // Editing one's own reply in place: the field holds its words with the
+        // caret at their end, Return saves, and the message says "(edited)".
+        reply.press(forDuration: 1.0)
+        for words in ["Add reaction", "Reply", "Edit message", "Copy text", "Delete message"] {
+            XCTAssertTrue(app.buttons[words].waitForExistence(timeout: 10), "one's own message's actions have no \(words)")
+        }
+        app.buttons["Edit message"].tap()
+        let editor = app.textFields["message-editor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 10), "Edit message put no field where the words were")
+        XCTAssertEqual(editor.value as? String, "On it, thanks.")
+        reached("editing")
+        editor.typeText(" Done.\n")
+        let edited = anything.matching(NSPredicate(format: "label BEGINSWITH %@ AND value == %@", "Robin Owner, ", "On it, thanks. Done., edited")).firstMatch
+        XCTAssertTrue(edited.waitForExistence(timeout: 20), "the edit did not come back as the message's words, edited")
+        XCTAssertFalse(editor.exists, "the field stayed after Return")
+        reached("edited")
+
+        // Deleting it, after the confirmation.
+        edited.press(forDuration: 1.0)
+        XCTAssertTrue(app.buttons["Delete message"].waitForExistence(timeout: 10), "one's own message's actions have no Delete message")
+        app.buttons["Delete message"].tap()
+        let confirm = app.alerts["Delete this message?"]
+        XCTAssertTrue(confirm.waitForExistence(timeout: 10), "no confirmation before deleting")
+        XCTAssertTrue(confirm.staticTexts["On it, thanks. Done."].exists, "the confirmation does not quote the message's first line")
+        XCTAssertTrue(confirm.buttons["Cancel"].exists)
+        reached("confirm")
+        confirm.buttons["Delete"].tap()
+        let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: edited)
+        XCTAssertEqual(XCTWaiter().wait(for: [gone], timeout: 20), .completed, "the deleted message is still drawn with its words")
+        reached("deleted")
 
         // The @ list: Bo, who is not in #general, picked; the bar after the send adds him.
         // (A new simulator's keyboard first explains sliding to type.)
@@ -740,11 +796,11 @@ final class SmokeUITests: XCTestCase {
         XCTAssertTrue(bar.waitForExistence(timeout: 20), "no bar saying Bo was not notified")
         reached("mentioned")
         app.buttons["Add to #general"].tap()
-        let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: bar)
-        XCTAssertEqual(XCTWaiter().wait(for: [gone], timeout: 20), .completed, "the bar stayed after Bo was added")
+        let barGone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: bar)
+        XCTAssertEqual(XCTWaiter().wait(for: [barGone], timeout: 20), .completed, "the bar stayed after Bo was added")
         reached("added")
 
-        // The server's Mentions: Ada's messages for this account, each opening its channel.
+        // The server's Mentions tile: Ada's messages for this account, each opening its channel.
         sidebar()
         mentionsRow.tap()
         let item = anything.matching(NSPredicate(format: "label BEGINSWITH %@", "Ada Lovelace in #general")).firstMatch

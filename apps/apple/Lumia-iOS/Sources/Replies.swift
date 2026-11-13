@@ -1,12 +1,13 @@
-// Quote replies, reactions and mentions on the phone (architecture 6.6),
-// the desktop shell's and the web's states and words in iOS's idiom: a
-// long press on a message opens its actions as a sheet (the six quick
-// reactions in a row at the top, the message's words, selectable, whose
-// selection menu offers "Quote reply", then Reply, Add reaction and Copy
-// text); Add reaction is the emoji picker as a sheet; and the Mentions
-// page of a server or of Home. Message text in the conversation's list is
-// not selectable: a long press there is the actions, as in the system's
-// own Messages, and selecting part of a message is done in the sheet.
+// Quote replies, reactions, mentions, editing and deleting on the phone
+// (architecture 6.6), the desktop shell's and the web's states and words in
+// iOS's idiom: a long press on a message opens its actions as a sheet (the
+// message's words, selectable, whose selection menu offers "Quote reply",
+// then Add reaction, Reply, Edit message for its author, Copy text, and
+// Delete message for its author or a moderator); Add reaction is the emoji
+// picker as a sheet; and the Mentions page of a server or of Home. Message
+// text in the conversation's list is not selectable: a long press there is
+// the actions, as in the system's own Messages, and selecting part of a
+// message is done in the sheet.
 import LumiaFFI
 import LumiaKit
 import SwiftUI
@@ -30,16 +31,22 @@ struct MessageRef: Equatable {
     let id: String
     let authorID: String
     let authorName: String
+    /// Its words as written: what an edit starts from.
     let body: String
-    /// The reactions this account has on it, for the quick row.
-    let mine: Set<String>
+    /// Its words as drawn, each mention by name: what is copied and quoted.
+    let drawn: String
+    /// What it offers, in the sheet's order.
+    let actions: [MessageAction]
 }
 
-/// The sheet a conversation opens over a message: its actions, or the picker.
+/// The sheet a conversation opens over a message: its actions, or the
+/// picker. Edit message and Delete message are done once the sheet has gone
+/// (`chose`), so the field can take the keyboard and the alert can show.
 struct MessageSheetView: View {
     let sheet: MessageSheet
     let react: (String, String) -> Void
     let reply: (MessageRef, String?) -> Void
+    let chose: (MessageRef, MessageAction) -> Void
     @State private var picking: String?
     @Environment(\.dismiss) private var dismiss
 
@@ -50,7 +57,14 @@ struct MessageSheetView: View {
             } else if case let .picker(id) = sheet {
                 EmojiPicker { emoji in react(id, emoji); dismiss() }
             } else if case let .actions(message) = sheet {
-                MessageActions(message: message, react: { react(message.id, $0); dismiss() }, reply: { part in reply(message, part); dismiss() }, addReaction: { picking = message.id }, close: { dismiss() })
+                MessageActions(message: message) { action, part in
+                    switch action {
+                    case .addReaction: picking = message.id
+                    case .reply: reply(message, part); dismiss()
+                    case .copy: UIPasteboard.general.string = message.drawn; dismiss()
+                    case .edit, .delete: chose(message, action); dismiss()
+                    }
+                }
             }
         }
         .presentationBackground(LumiaTokens.surface.color)
@@ -58,46 +72,29 @@ struct MessageSheetView: View {
     }
 }
 
-/// A message's actions: the quick reactions, its words to select a part of
-/// to quote, Reply, Add reaction, Copy text.
+/// A message's actions: its words to select a part of to quote, then Add
+/// reaction, Reply, Edit message, Copy text and Delete message, as offered.
 struct MessageActions: View {
     let message: MessageRef
-    let react: (String) -> Void
-    let reply: (String?) -> Void
-    let addReaction: () -> Void
-    let close: () -> Void
+    /// An action chosen; Reply carries the words selected, nil for the whole.
+    let run: (MessageAction, String?) -> Void
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: LumiaTokens.space16) {
-                HStack(spacing: LumiaTokens.space4) {
-                    ForEach(Replies.quick, id: \.self) { emoji in
-                        let on = message.mine.contains(emoji)
-                        Button { react(emoji) } label: {
-                            Text(emoji).font(.system(size: 26))
-                                .frame(maxWidth: .infinity).frame(height: 48)
-                                .background(on ? LumiaTokens.accentSoft.color : LumiaTokens.reaction.color, in: RoundedRectangle(cornerRadius: LumiaTokens.radius12))
-                                .overlay(RoundedRectangle(cornerRadius: LumiaTokens.radius12).stroke(on ? LumiaTokens.reactionOnBorder.color : .clear))
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("React with \(emoji)")
-                        .accessibilityAddTraits(on ? .isSelected : [])
-                    }
-                }
                 VStack(alignment: .leading, spacing: LumiaTokens.space4) {
                     Text(message.authorName).font(LumiaTokens.textAuthor.font).foregroundStyle(LumiaTokens.ink.color)
                     // Selecting words here offers "Quote reply" in the selection's menu.
-                    QuotableText(text: message.body) { part in reply(part) }
+                    QuotableText(text: message.drawn) { part in run(.reply, part) }
                 }
                 .padding(LumiaTokens.space12)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(LumiaTokens.inset.color, in: RoundedRectangle(cornerRadius: LumiaTokens.radius12))
                 VStack(spacing: 0) {
-                    action("Reply", icon: "arrowshape.turn.up.left") { reply(nil) }
-                    Divider().overlay(LumiaTokens.line.color)
-                    action("Add reaction", icon: "face.smiling", run: addReaction)
-                    Divider().overlay(LumiaTokens.line.color)
-                    action("Copy text", icon: "doc.on.doc") { UIPasteboard.general.string = message.body; close() }
+                    ForEach(Array(message.actions.enumerated()), id: \.element) { n, action in
+                        if n > 0 { Divider().overlay(LumiaTokens.line.color) }
+                        row(action)
+                    }
                 }
                 .background(LumiaTokens.tile.color, in: RoundedRectangle(cornerRadius: LumiaTokens.radius12))
                 .overlay(RoundedRectangle(cornerRadius: LumiaTokens.radius12).stroke(LumiaTokens.line.color))
@@ -108,18 +105,33 @@ struct MessageActions: View {
         .presentationDetents([.medium, .large])
     }
 
-    private func action(_ label: String, icon: String, run: @escaping () -> Void) -> some View {
-        Button(action: run) {
+    static func icon(_ action: MessageAction) -> String {
+        switch action {
+        case .addReaction: "face.smiling"
+        case .reply: "arrow.uturn.left"
+        case .edit: "pencil"
+        case .copy: "doc.on.doc"
+        case .delete: "trash"
+        }
+    }
+
+    /// One action; Delete message in the danger ink, as the system draws a destructive item.
+    private func row(_ action: MessageAction) -> some View {
+        let danger = action == .delete
+        return Button { run(action, nil) } label: {
             HStack(spacing: LumiaTokens.space12) {
-                Image(systemName: icon).frame(width: 22).foregroundStyle(LumiaTokens.iconStrong.color)
-                Text(label).font(LumiaTokens.textNav.font).foregroundStyle(LumiaTokens.ink.color)
+                Image(systemName: Self.icon(action)).frame(width: LumiaTokens.space24)
+                    .foregroundStyle(danger ? LumiaTokens.dnd.color : LumiaTokens.iconStrong.color)
+                Text(action.words).font(LumiaTokens.textNav.font)
+                    .foregroundStyle(danger ? LumiaTokens.dnd.color : LumiaTokens.ink.color)
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, LumiaTokens.space14)
-            .frame(height: 48)
+            .frame(height: LumiaTokens.controlHeight)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier("action-\(action.rawValue)")
     }
 }
 
@@ -145,6 +157,10 @@ struct QuotableText: UIViewRepresentable {
 
     func updateUIView(_ view: UITextView, context: Context) {
         context.coordinator.quote = quote
+        // Set again only when the words change: setting them clears a
+        // selection, and the sheet is drawn again while one is being made.
+        guard context.coordinator.shown != text else { return }
+        context.coordinator.shown = text
         let style = NSMutableParagraphStyle()
         style.lineSpacing = MessageMeasures.leading
         view.attributedText = NSAttributedString(string: text, attributes: [
@@ -164,6 +180,8 @@ struct QuotableText: UIViewRepresentable {
 
     final class Coordinator: NSObject, UITextViewDelegate {
         var quote: (String) -> Void
+        /// The words the view holds.
+        var shown: String?
         init(quote: @escaping (String) -> Void) { self.quote = quote }
 
         func textView(_ textView: UITextView, editMenuForTextIn range: NSRange, suggestedActions: [UIMenuElement]) -> UIMenu? {
@@ -250,14 +268,19 @@ struct EmojiPicker: View {
     }
 }
 
+/// A person's name as a message draws it (a mention, who reacted): empty
+/// for someone not known, where the session would give their id's start.
+@MainActor
+func knownName(_ id: String, session: LumiaSession) -> String {
+    let n = session.name(of: id)
+    return n == String(id.prefix(8)) ? "" : n
+}
+
 /// How a conversation draws a message's reactions: who, as the chip says it.
 @MainActor
 func reactionDisplays(_ reactions: [ReactionSummary], session: LumiaSession) -> [ReactionDisplay] {
     reactions.map { r in
-        ReactionDisplay(emoji: r.reaction, count: r.count, me: r.me, words: Replies.reactedWords(r, me: session.me) { id in
-            let n = session.name(of: id)
-            return n == String(id.prefix(8)) ? "" : n
-        })
+        ReactionDisplay(emoji: r.reaction, count: r.count, me: r.me, words: Replies.reactedWords(r, me: session.me) { knownName($0, session: session) })
     }
 }
 
@@ -327,6 +350,12 @@ struct MentionsScreen: View {
         return Button { open(m) } label: {
             VStack(alignment: .leading, spacing: LumiaTokens.space8) {
                 Text(where_).font(LumiaTokens.textSection.font).foregroundStyle(LumiaTokens.inkMuted.color)
+                // The reply's reference line, as the conversation draws it; the item itself is the jump.
+                if let q = m.reply {
+                    LumiaReplyReference(quote: QuoteDisplay(authorID: q.authorAccountId, name: q.authorAccountId.isEmpty ? nil : session.name(of: q.authorAccountId), text: q.text, deleted: q.originalDeleted, quotesMe: q.authorAccountId == session.me, open: nil))
+                        .padding(.leading, LumiaTokens.avatarMd / 2 - 1)
+                        .allowsHitTesting(false)
+                }
                 HStack(alignment: .top, spacing: LumiaTokens.space12) {
                     LumiaAvatar(initials: initials(of: author), tone: .of(m.authorAccountId), size: LumiaTokens.avatarMd)
                     VStack(alignment: .leading, spacing: LumiaTokens.space4) {
@@ -334,10 +363,7 @@ struct MentionsScreen: View {
                             Text(author).font(LumiaTokens.textAuthor.font).foregroundStyle(LumiaTokens.ink.color)
                             Text(at).font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkMuted.color)
                         }
-                        if let q = m.reply {
-                            LumiaQuoteBlock(quote: QuoteDisplay(name: q.authorAccountId.isEmpty ? nil : session.name(of: q.authorAccountId), text: q.text, deleted: q.originalDeleted, open: nil))
-                        }
-                        MessageBodyText(text: m.body, mentions: m.mentions)
+                        MessageBodyText(text: m.body, mentions: m.mentions, edited: m.edited, name: { knownName($0, session: session) })
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .multilineTextAlignment(.leading)
                     }
@@ -350,12 +376,12 @@ struct MentionsScreen: View {
         }
         .buttonStyle(.plain)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(author) in \(where_), \(at): \(m.body)")
+        .accessibilityLabel("\(author) in \(where_), \(at): \(MentionSpans.drawn(body: m.body, mentions: m.mentions) { knownName($0, session: session) })")
         .accessibilityAddTraits(.isButton)
     }
 }
 
-/// A sidebar row's Mentions: the `at` glyph, the word, the count.
+/// Home's Mentions row (no board has a place for it): the `at` glyph, the word, the count.
 struct MentionsRow: View {
     let count: UInt32
     let open: () -> Void
