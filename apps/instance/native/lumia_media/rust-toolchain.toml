@@ -2,3 +2,4 @@
 # The client core's (apps/core/rust-toolchain.toml): one Rust for the repository, so a
 # machine or a runner that builds the core has what this needs.
 channel = "1.96.0"
+components = ["rustfmt", "clippy"]
