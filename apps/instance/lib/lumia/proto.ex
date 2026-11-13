@@ -131,9 +131,26 @@ defmodule Lumia.Proto do
   @doc """
   A materialized message on the wire, with its reactions as the reader sees
   them (`reactions`, `Lumia.V1.ReactionCount`s, which `Lumia.Snapshots`
-  makes for the reader).
+  makes for the reader). A deleted one is its tombstone: the row keeps its
+  words for moderation until the purge (architecture 6.6 and 8.5), but no
+  reader is given them.
   """
-  def message(%Lumia.Events.Message{} = m, reactions \\ []) do
+  def message(m, reactions \\ [])
+
+  def message(%Lumia.Events.Message{deleted_at: %DateTime{}} = m, _reactions) do
+    %V1.Message{
+      message_id: uuid(m.id),
+      channel_id: uuid(m.channel_id),
+      seq: m.seq,
+      author_account_id: uuid(m.author_account_id),
+      parent_id: uuid(m.parent_id),
+      created_at: timestamp(m.created_at),
+      edited_at: timestamp(m.edited_at),
+      deleted_at: timestamp(m.deleted_at)
+    }
+  end
+
+  def message(%Lumia.Events.Message{} = m, reactions) do
     %V1.Message{
       message_id: uuid(m.id),
       channel_id: uuid(m.channel_id),

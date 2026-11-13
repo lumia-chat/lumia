@@ -109,6 +109,14 @@ defmodule Lumia.EditsTest do
 
     {:ok, _} = Events.append(ctx.general.id, actor(ctx.owner), delete(ctx.general, message))
     assert Repo.get!(Message, message).deleted_at
+    # The row keeps the words for moderation; history gives a reader the tombstone.
+    %V1.ListMessagesResponse{messages: [shown]} =
+      Snapshots.messages(ctx.general.id, 0, 50, nil, ctx.ada.id)
+      |> Map.update!(:messages, fn ms -> Enum.filter(ms, &(&1.notice == nil)) end)
+
+    assert shown.deleted_at
+    assert shown.body == ""
+    assert shown.mentions == [] and shown.reply_to == nil and shown.reactions == []
     # Gone: nothing more to edit or delete.
     assert {:error, :message_not_found} =
              allowed(ctx.grace, ctx.general, edit(ctx.general, message, "Back?"))
