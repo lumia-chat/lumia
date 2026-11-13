@@ -576,12 +576,12 @@ export class Bridge {
     // A query's members are a store's proxies, which a worker message cannot carry: plain copies go.
     return this.call("findMentions", body, members.map((m) => ({ ...m })), everyone);
   }
-  /** Edits one of this account's messages in a server's channel: its new body and the mentions it makes. A refusal comes back as an `error` event. */
-  editMessage(channelId: string, messageId: string, body: string, mentions: MentionSummary[]): Promise<void> {
+  /** Edits one of this account's messages in a server's channel: its new body and the mentions it makes. Answers the command id an `error` event names if it is refused. */
+  editMessage(channelId: string, messageId: string, body: string, mentions: MentionSummary[]): Promise<string> {
     return this.call("editMessage", channelId, messageId, body, mentions);
   }
-  /** Deletes a message of a server's channel: this account's own, or another's with `MANAGE_MESSAGES`. A refusal comes back as an `error` event. */
-  deleteMessage(channelId: string, messageId: string): Promise<void> {
+  /** Deletes a message of a server's channel: this account's own, or another's with `MANAGE_MESSAGES`. Answers the command id an `error` event names if it is refused. */
+  deleteMessage(channelId: string, messageId: string): Promise<string> {
     return this.call("deleteMessage", channelId, messageId);
   }
   /** Adds this account's reaction to a message of a server channel, or takes it away. */

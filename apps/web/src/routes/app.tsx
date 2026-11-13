@@ -355,10 +355,8 @@ export function App() {
   const channelMembers = channelMembersQuery(() => (current()?.kind === "TEXT" && joined() ? channelId() : undefined));
   // What the gateway refused of what this view sent (architecture 6.6: a mention of everyone without the permission, a quote of a message that is gone).
   const sent = new Set<string>();
-  // Edits and deletes waiting for the instance. The core does not say which command an edit or a
-  // delete is, so a refusal no send accounts for is the newest of these, while it is still waiting.
-  const waiting: { messageId: string; kind: "edit" | "delete"; body?: string; at: number }[] = [];
-  const WAIT_MS = 15_000;
+  // Edits and deletes sent from this view, by their command id, which a refusal names.
+  const waiting = new Map<string, { messageId: string; kind: "edit" | "delete" }>();
   createEffect(
     on(commandError, (err) => {
       if (!err) return;
@@ -367,23 +365,11 @@ export function App() {
         setError(err.code === "PERMISSION_DENIED" ? "You cannot do that in this channel." : /not_found/i.test(err.code + err.message) ? "The message you quoted is gone." : err.message || err.code);
         return;
       }
-      const w = waiting.pop();
-      if (!w || Date.now() - w.at > WAIT_MS) return;
+      const w = waiting.get(err.commandId);
+      if (!w) return;
+      waiting.delete(err.commandId);
       setRefused({ messageId: w.messageId, text: refusalWords(w.kind, err.code, err.message) });
     }),
-  );
-  // An edit or a delete that came back is no longer waiting.
-  createEffect(
-    on(
-      () => messages.data,
-      (list) => {
-        for (let i = waiting.length - 1; i >= 0; i--) {
-          const w = waiting[i];
-          const m = w && list?.find((x) => x.messageId === w.messageId);
-          if (!w || !m || (w.kind === "delete" ? m.deleted : m.body === w.body) || Date.now() - w.at > WAIT_MS) waiting.splice(i, 1);
-        }
-      },
-    ),
   );
 
   const send = async () => {
@@ -466,8 +452,7 @@ export function App() {
     try {
       // An edit carries its mentions again, found as a send finds them; a server DM has none.
       const mentions = ch.kind === "TEXT" && srv ? await client().findMentions(body, serverMembers.data ?? [], srv.canMentionEveryone) : [];
-      waiting.push({ messageId: item.id, kind: "edit", body, at: Date.now() });
-      await client().editMessage(id, item.id, body, mentions);
+      waiting.set(await client().editMessage(id, item.id, body, mentions), { messageId: item.id, kind: "edit" });
     } catch (e) {
       setRefused({ messageId: item.id, text: refusalWords("edit", "", e instanceof Error ? e.message : String(e)) });
     }
@@ -477,8 +462,7 @@ export function App() {
     if (!id) return;
     setRefused(null);
     try {
-      waiting.push({ messageId: item.id, kind: "delete", at: Date.now() });
-      await client().deleteMessage(id, item.id);
+      waiting.set(await client().deleteMessage(id, item.id), { messageId: item.id, kind: "delete" });
     } catch (e) {
       setRefused({ messageId: item.id, text: refusalWords("delete", "", e instanceof Error ? e.message : String(e)) });
     }
