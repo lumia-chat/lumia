@@ -8,7 +8,7 @@
 // and saved, reactions, attachments, pins, calls, role tags, and the
 // composer's formatting, emoji and mention buttons. None of those is
 // drawn here until there is something behind it (plan step 6).
-import { For, Show, createEffect, createMemo, createSignal, on } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
 import { useNavigate, useSearch } from "@tanstack/solid-router";
 import {
   SidePanel,
@@ -31,7 +31,7 @@ import {
 import { signedOut, type ChannelSummary, type MessageSummary, type ServerSummary } from "../client/bridge";
 import { avatarSrc, checkPush, client, connection, loadMyStatus, membersQuery, messagesQuery, presence, customStatusOf, presenceOf, queryClient, sessionEnded, signOut, snapshotQuery, startGateway, typingIn, watchPresence } from "../client/state";
 import { useNames } from "../client/names";
-import { preferences } from "../client/preferences";
+import { preferences, setAsideHidden } from "../client/preferences";
 import { ConversationAside, HomeMain, HomeSidebar, type HomeView } from "./home";
 import { Overlay, myStatusDot, type Over } from "./menus";
 import { ServerSettings } from "./server-settings";
@@ -164,6 +164,24 @@ export function App() {
   const [reading, setReading] = createSignal(!!(search().view || search().dm));
   // Where three columns do not fit, the aside comes over the conversation when asked for.
   const [asideOpen, setAsideOpen] = createSignal(false);
+  // Whether the window is that narrow (the frame's breakpoint, components.css).
+  const narrowQuery = matchMedia("(max-width: 1099px)");
+  const [narrow, setNarrow] = createSignal(narrowQuery.matches);
+  const onWidth = (e: MediaQueryListEvent) => {
+    setNarrow(e.matches);
+    if (!e.matches) setAsideOpen(false);
+  };
+  narrowQuery.addEventListener("change", onWidth);
+  onCleanup(() => narrowQuery.removeEventListener("change", onWidth));
+  // The aside's toggle: over the conversation or not in a narrow window; in
+  // the row or not in a wide one, which this browser remembers.
+  const asideShown = () => (narrow() ? asideOpen() : !preferences().asideHidden);
+  const toggleAside = () => (narrow() ? setAsideOpen((open) => !open) : setAsideHidden(!preferences().asideHidden));
+  const onEscape = (e: KeyboardEvent) => {
+    if (e.key === "Escape" && asideOpen()) setAsideOpen(false);
+  };
+  document.addEventListener("keydown", onEscape);
+  onCleanup(() => document.removeEventListener("keydown", onEscape));
   // The server's settings in its main pane, until a channel or another server is chosen.
   const [settingsOpen, setSettingsOpen] = createSignal(false);
   const goHome = (view: HomeView, dm?: string, read = true) => {
@@ -269,8 +287,8 @@ export function App() {
     toLink: () => void navigate({ to: "/link" }),
     toServer: goServer,
     back: () => setReading(false),
-    asideOpen: asideOpen(),
-    toggleAside: () => setAsideOpen((open) => !open),
+    asideShown: asideShown(),
+    toggleAside,
     openPerson,
   });
 
@@ -287,6 +305,7 @@ export function App() {
       <AppShell
         reading={reading()}
         asideOpen={asideOpen()}
+        asideHidden={preferences().asideHidden}
         onAsideClose={() => setAsideOpen(false)}
         sidebarLabel={home() ? "Conversations" : `${server()?.name ?? "Server"} channels`}
         rail={
@@ -344,7 +363,7 @@ export function App() {
               >
                 {(ch) => (
                   <>
-                    <ChannelHeader name={ch().name} onBack={() => setReading(false)} backLabel={`Back to ${server()?.name ?? "the server"}`} actions={[{ icon: "members", label: "Members", narrow: true, pressed: asideOpen(), onClick: () => setAsideOpen((open) => !open) }]} />
+                    <ChannelHeader name={ch().name} onBack={() => setReading(false)} backLabel={`Back to ${server()?.name ?? "the server"}`} actions={[{ icon: "members", label: asideShown() ? "Hide members" : "Show members", pressed: asideShown(), onClick: toggleAside }]} />
                     <Show
                       when={!messages.data || days().length > 0}
                       fallback={

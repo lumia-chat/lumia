@@ -832,6 +832,61 @@ async function autoscrollStep(which: string, stamp: number) {
   console.log(`  ${which}: drew no ring on a focused field, autoscrolled the message list with the middle button held and stopped when it came up, and did not on a primary drag, in ${Date.now() - t0} ms`);
 }
 
+// The aside beside a conversation (the member list): a wide window puts it
+// away and brings it back from the header's toggle, and remembers that; a
+// narrow one slides it over the conversation's end, and the shade or
+// Escape puts it away.
+async function asideStep(which: string, stamp: number) {
+  const dir = resolve(work, `cli-aside-${which}`);
+  const handle = `aside${which}${stamp}`;
+  lumia(dir, "instance", "add", instance);
+  lumia(dir, "account", "create", "--handle", handle, "--password", password);
+  const own = lumia(dir, "server-create", "Aside").match(/[0-9a-f-]{36}/)?.[0];
+  if (!own) throw new Error("no server id");
+  lumia(dir, "channel-create", own, "general");
+  const { ctx, page } = await open(which, "aside");
+  const t0 = Date.now();
+  try {
+    await trustCard(page);
+    await page.getByLabel("Email or handle").fill(handle);
+    await page.getByRole("textbox", { name: "Password" }).fill(password);
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await page.getByPlaceholder("Message #general").waitFor();
+    const aside = page.locator(".lu-shell__aside");
+    phase("wide");
+    await aside.waitFor();
+    await page.getByRole("button", { name: "Hide members" }).click();
+    await aside.waitFor({ state: "hidden" });
+    await page.reload();
+    await page.getByPlaceholder("Message #general").waitFor();
+    if (await aside.isVisible()) throw new Error("put away, then back after a reload");
+    await page.getByRole("button", { name: "Show members" }).click();
+    await aside.waitFor();
+    phase("narrow");
+    await page.setViewportSize({ width: 900, height: 800 });
+    await aside.waitFor({ state: "hidden" });
+    await page.getByRole("button", { name: "Show members" }).click();
+    await aside.waitFor();
+    // Slid all the way in: at the window's end.
+    await page.waitForFunction(() => getComputedStyle(document.querySelector(".lu-shell__aside")!).transform === "none");
+    const box = await aside.boundingBox();
+    if (!box || Math.abs(box.x + box.width - 900) > 1) throw new Error(`the aside stands at ${JSON.stringify(box)}`);
+    await page.screenshot({ path: `${out}/${which}-aside-over.png` });
+    await page.getByRole("button", { name: "Close the side panel" }).click({ position: { x: 40, y: 300 } });
+    await aside.waitFor({ state: "hidden" });
+    await page.getByRole("button", { name: "Show members" }).click();
+    await aside.waitFor();
+    await page.keyboard.press("Escape");
+    await aside.waitFor({ state: "hidden" });
+    phase("wide again");
+    await page.setViewportSize({ width: 1440, height: 960 });
+    await aside.waitFor();
+  } finally {
+    await ctx.close();
+  }
+  console.log(`  ${which}: put the member list away and back in a wide window and kept it across a reload, slid it over a narrow one and put it away by the shade and by Escape, in ${Date.now() - t0} ms`);
+}
+
 // A session revoked from elsewhere (protocol 12), as "sign out everywhere"
 // or a reused refresh token does it: the gateway is told and its loop
 // ends, the page asks for the snapshot, is refused, and goes back to the
@@ -1351,6 +1406,7 @@ try {
       ["preferences", () => preferencesStep(which, stamp)],
       ["server settings", () => serverSettings(which, stamp)],
       ["autoscroll", () => autoscrollStep(which, stamp)],
+      ["aside", () => asideStep(which, stamp)],
       ["push", () => webPush(which, `web${stamp}`, passwordDir, server, general, webAccount)],
       ["magic link", () => magicLink(which)],
       ["passkey", () => passkey(which, `web${stamp}`)],

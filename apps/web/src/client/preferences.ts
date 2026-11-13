@@ -15,10 +15,12 @@ export type Density = "comfortable" | "compact";
 export interface Preferences {
   appearance: Appearance;
   density: Density;
+  /** The member list (or a conversation's details) put away from a wide window's row. */
+  asideHidden: boolean;
 }
 
 const KEY = "lumia:preferences";
-const DEFAULTS: Preferences = { appearance: "system", density: "comfortable" };
+const DEFAULTS: Preferences = { appearance: "system", density: "comfortable", asideHidden: false };
 
 /** What was stored, with the default for anything missing or not understood. */
 export function readPreferences(stored: string | null): Preferences {
@@ -32,6 +34,7 @@ export function readPreferences(stored: string | null): Preferences {
   return {
     appearance: kept.appearance === "light" || kept.appearance === "dark" ? kept.appearance : DEFAULTS.appearance,
     density: kept.density === "compact" ? "compact" : DEFAULTS.density,
+    asideHidden: kept.asideHidden === true,
   };
 }
 
@@ -82,6 +85,10 @@ function change(next: Preferences) {
 
 export function setAppearance(appearance: Appearance) {
   if (appearance !== current().appearance) change({ ...current(), appearance });
+}
+
+export function setAsideHidden(asideHidden: boolean) {
+  if (asideHidden !== current().asideHidden) change({ ...current(), asideHidden });
 }
 
 export function setDensity(density: Density) {

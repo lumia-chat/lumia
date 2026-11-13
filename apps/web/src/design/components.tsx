@@ -1469,6 +1469,8 @@ export interface AppShellProps {
   reading?: boolean;
   /** In a window too narrow for three columns, the aside is over the conversation's end. */
   asideOpen?: boolean;
+  /** In a window wide enough for it, the aside is put away from the row. */
+  asideHidden?: boolean;
   onAsideClose?: () => void;
   class?: string;
 }
@@ -1481,7 +1483,7 @@ export function AppShell(props: AppShellProps) {
   // only when there is something to show.
   const aside = children(() => props.aside);
   return (
-    <div class={cx("lu-shell", !!aside() && "has-aside", props.reading && "is-reading", props.asideOpen && "is-aside-open", props.class)} style={props.height !== undefined ? { height: typeof props.height === "number" ? props.height + "px" : props.height } : undefined}>
+    <div class={cx("lu-shell", !!aside() && "has-aside", props.reading && "is-reading", props.asideOpen && "is-aside-open", props.asideHidden && "is-aside-hidden", props.class)} style={props.height !== undefined ? { height: typeof props.height === "number" ? props.height + "px" : props.height } : undefined}>
       <div class="lu-shell__side">
         {props.rail}
         <nav aria-label={props.sidebarLabel ?? "Channels and messages"} class="lu-shell__sidebar">

@@ -47,7 +47,8 @@ export interface HomeProps {
   /** Back to the rail and the sidebar, where the frame is folded. */
   back: () => void;
   /** The aside over the conversation, where the window is too narrow for it in the row. */
-  asideOpen: boolean;
+  /** Whether the aside shows, in the row or over the conversation. */
+  asideShown: boolean;
   toggleAside: () => void;
   /** The profile card of an account, against what was pressed. */
   openPerson: (accountId: string, anchor: HTMLElement) => void;
@@ -323,7 +324,7 @@ function Conversation(props: HomeProps) {
     <Show when={channel()} fallback={<ChooseConversation {...props} />}>
       {(ch) => (
         <>
-          <ChannelHeader kind="dm" name={title()} topic={ch().host ? `on ${ch().host}` : undefined} onBack={props.back} backLabel="Back to Home" actions={[{ icon: "members", label: "Details", narrow: true, pressed: props.asideOpen, onClick: props.toggleAside }]} />
+          <ChannelHeader kind="dm" name={title()} topic={ch().host ? `on ${ch().host}` : undefined} onBack={props.back} backLabel="Back to Home" actions={[{ icon: "members", label: props.asideShown ? "Hide details" : "Show details", pressed: props.asideShown, onClick: props.toggleAside }]} />
           <MessageList density={preferences().density}>
             <Notice icon="shield">
               Messages here are end-to-end encrypted. Only your devices and those of {participants().filter((p) => p.id !== me()).map((p) => p.name).join(", ") || "the other participants"} can read them.
