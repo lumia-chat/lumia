@@ -196,10 +196,10 @@ A **guest membership** sees only the channels granted by explicit per-channel ov
 | Service governance | The hosting instance | The hosting instance still controls availability, suspension, quotas, and service retention |
 | Encryption | At rest, server-readable | End-to-end (MLS) |
 | Bots | Allowed | Only as a full MLS member the participants add |
-| Gate | Shared membership of the server | Friendship, or an accepted DM request |
+| Gate | Shared membership of the server, unless the recipient turned server DMs off there or either has blocked the other (section 6.8) | Friendship, or an accepted DM request |
 | Shown in | That server's sidebar | Home |
 
-The same two people can have both. The client offers "Move to personal DM" on a server DM, which starts a new personal DM and links to the old one; it does not move history across the governance boundary.
+The same two people can have both. A server DM is 1:1 for now; group server DMs come later. It says once, at its top, whose it is: "Messages here are kept by Acme Works and follow its message history settings. For an encrypted conversation, message privately." It follows the server's retention (section 6.7), and no screen lets an admin read DMs. Later, the client is to offer "Move to personal DM" on a server DM, which starts a new personal DM and links to the old one; it does not move history across the governance boundary. Until then, a member's profile card in a server offers **Message** (a server DM) first and **Message privately** (a personal DM) beside it; at Home it offers only the personal one.
 
 **Rejected.** *One DM per pair per instance, shown in both places.* A work DM and a private DM have different owners; collapsing them forces one of them to have the wrong governance.
 
@@ -260,6 +260,26 @@ Deferred: read receipts, link unfurling, custom emoji in text, voice channels, v
 Members hear of a change through their account logs: after the change commits, a job appends `ServerUpdated`, the server as it now is, to every member's log, in batches and once for a burst of edits, so the request never waits on a large server's fan-out and a member who was offline finds it on resume. A member who joins later gets the server as it is in `MembershipAdded`. A client knows whether to offer the settings from its own memberships in the account snapshot, which carry the member's resolved server-level permissions.
 
 **Rejected.** *Broadcasting the change over PubSub to the server's live sessions only.* Cheaper for a large server, but an offline member's cached name and picture would stay wrong until something else made it ask, and every other cached thing a client holds comes through a log.
+
+### 6.8 Channel membership
+
+**Decision** (Ryan, 2026-11-12). Being in a server no longer puts a member in every channel. **Permission** (section 7) still decides who may see a channel and who may join it; **channel membership** decides what is in a member's sidebar, which channels deliver to them live, notify them and count as unread, and where they may post. It is Slack's model.
+
+- **Public channels** are those `@everyone` may view. A member joins one from **Browse channels**, which lists every public channel they have not joined, with its topic and member count. Opening one there shows it read-only (as `READ_HISTORY` allows), with a bar in place of the composer: "You're not in #design" and **Join**.
+- **Private channels** are chosen as private when created, which writes the overwrites of section 7.1. They are never in Browse, and the only way in is to be added (or invited, below) by someone in them; the add writes a member overwrite granting view as well as the membership. Creating either kind needs `MANAGE_CHANNELS`.
+- **Adding.** Anyone in a channel may add any member of the server to it, public or private. Removing someone else needs `MANAGE_CHANNELS`. Anyone may leave any channel, a default one included; leaving a private one means being added again to come back.
+- **"Let others add me to channels"** is a member's own switch, per server, on by default. Off, an add becomes an **invitation**: "Ada invited you to #design", with **Join** and **Dismiss**, and the add-people picker marks them "Will be invited". It holds against admins too. It does not stop default channels.
+- **Default channels** are joined by every new member as they join the server. A server's first channel is its default until its admins choose others in Server settings.
+- **Notices.** Joining, being added and leaving each post a notice in the channel: "Grace joined", "Ada added Grace", "Grace left". These are the join system messages of section 6.6.
+- **Mentions** notify only members of the channel; someone outside it cannot read the message. A prompt to add the person mentioned comes later.
+- **The member list** beside a channel is that channel's members, with **Add people** at its top. The whole server's members are in Browse and in the add-people picker.
+- **The sidebar.** The Channels heading has a **+** offering **Create a channel** (to those with `MANAGE_CHANNELS`) and **Browse channels** (to everyone). Below the channels, **Direct messages** lists the member's server DMs, with its own **+** to pick a member to message.
+- **Server DMs** (section 6.4) need `START_SERVER_DMS`, which members have by default. A member's second switch, **"Let members of this server message me"**, is per server and on by default. With it off, their profile card offers only "Message privately" and the DM picker marks them unavailable. A block between the two (section 6.4, "Decline and block") stops server DMs as well.
+- **Where the switches live.** The server's menu offers every member **Your settings in Acme Works**, a page of the two switches. They are kept on the membership at the instance, so every device of the account follows them.
+
+When this lands, every current member is put in every channel they can see, so nothing leaves anyone's sidebar, and each server's first channel becomes its default. There are no users to migrate beyond testers (2026-11-11), so this is a one-time conversion, not a path kept in the code.
+
+**Rejected.** *Membership as permission alone* (Discord), which this replaces: every member is in every channel they can see, so a large server's sidebar and notifications are everything in it, and a channel can only be left by muting it.
 
 ## 7. Permissions, authorization, revocation
 
