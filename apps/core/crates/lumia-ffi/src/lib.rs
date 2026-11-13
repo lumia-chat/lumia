@@ -513,6 +513,13 @@ impl From<app::ReadStateSummary> for ReadStateSummary {
     }
 }
 
+/// A page of a channel's history from the instance, oldest first.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct MessagePage {
+    pub messages: Vec<MessageSummary>,
+    pub has_more: bool,
+}
+
 /// A page of the messages that notify this account, newest first.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct MentionsPage {
@@ -1637,6 +1644,24 @@ impl Client {
             .runtime
             .block_on(self.app.mentions(server_id.as_deref(), before.as_deref()))?;
         Ok(MentionsPage {
+            messages: messages.into_iter().map(Into::into).collect(),
+            has_more,
+        })
+    }
+
+    /// `GET /channels/{id}/messages`: history older than the store holds,
+    /// the newest `limit` below `before_seq`, oldest first, and whether
+    /// older remains. Not stored: keep it beside the store's messages.
+    pub fn older_messages(
+        &self,
+        channel_id: String,
+        before_seq: u64,
+        limit: u32,
+    ) -> Res<MessagePage> {
+        let (messages, has_more) =
+            self.runtime
+                .block_on(self.app.older_messages(&channel_id, before_seq, limit))?;
+        Ok(MessagePage {
             messages: messages.into_iter().map(Into::into).collect(),
             has_more,
         })
