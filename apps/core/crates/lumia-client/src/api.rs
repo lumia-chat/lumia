@@ -440,6 +440,7 @@ impl Api {
         let req = UpdateServerRequest {
             name,
             retention_days,
+            default_channels: None,
         };
         let (status, bytes) = self
             .send(

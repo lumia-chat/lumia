@@ -229,6 +229,8 @@ defmodule Lumia.Invites do
             do: [kind: "guest", expires_at: guest_expiry(invite.guest_days)],
             else: []
 
+        opts = [{:channel_id, invite.channel_id} | opts]
+
         with {:ok, member} <-
                Servers.add_member(invite.server_id, account_id, invite.created_by, opts),
              {:ok, _} <- count_use(invite),

@@ -138,11 +138,13 @@ The server sends `Disconnect` before closing. `DISCONNECT_SERVER_SHUTDOWN` and `
 
 A client's first connection to an instance, and any connection after a generation change, follows this path:
 
-1. `GET /account/snapshot` → `AccountSnapshot` with `seq`. Apply it: servers, memberships, channels (the servers' and the personal DMs the account is in, with their participants), pending requests, friendships, roster, block list.
+1. `GET /account/snapshot` → `AccountSnapshot` with `seq`. Apply it: servers, memberships, channels (the servers' channels the account is in and can see, its server DMs among them, and the personal DMs it is in, with their participants), invitations into channels, pending requests, friendships, roster, block list.
 2. `ResumeAccount{after_seq: snapshot.seq}` on the gateway.
 3. `Subscribe` with cursor 0 for every channel in the snapshot, which yields `SNAPSHOT_REQUIRED` for each; take the channel snapshot path for the ones the user opens first and lazily for the rest.
 
-Thereafter, the account log tells the client about every channel it gains (`ChannelAdded`, subscribe to it) or loses (`ChannelRemoved`, unsubscribe and drop). A server it is in that changes its name, picture or retention comes as `ServerUpdated`, the server as it now is.
+Thereafter, the account log tells the client about every channel it gains (`ChannelAdded`, subscribe to it) or loses (`ChannelRemoved`, unsubscribe and drop). A server's channel is gained by being in it and able to see it (architecture 6.8): joining, being added, arriving in a server's default channels, starting a server DM or being messaged in one; it is lost by leaving, being removed or losing sight of it. An invitation into a channel comes as `ChannelInvitation` (`channel_invited`) and goes as `ChannelInvitationRemoved` when it is answered or dismissed. A server it is in that changes its name, picture or retention comes as `ServerUpdated`, the server as it now is; a change to its own membership there (roles, switches) as `MembershipUpdated`, which carries its resolved server-level permissions as the snapshot's memberships do.
+
+A client may subscribe to a public channel it is not in, to preview it (it has `READ_HISTORY` there), and it then holds none of the permissions that write. A notice (joined, added, left, removed) is a `Message` with `notice` set and an empty body, delivered, kept and paged like any message and never edited or deleted.
 
 ## 8. Idempotency
 
@@ -215,11 +217,20 @@ Base path `/api/v1`. All endpoints require `Authorization: Bearer <access_token>
 | `GET /servers` | → `ListServersResponse` |
 | `POST /servers` | `CreateServerRequest` → `Server` |
 | `GET /servers/{server_id}` | → `Server` |
-| `PATCH /servers/{server_id}` | `UpdateServerRequest` → `Server` | The server's name, its retention, or both (architecture 6.7); a field left out is left as it is, and `retention_days` 0 keeps messages for ever. Needs `MANAGE_SERVER` (the owner and `ADMINISTRATOR` have it): `PERMISSION_DENIED` otherwise. `INVALID_ARGUMENT` with `details.field` `name` for a name that is empty or over 100 characters once trimmed. Every member gets `ServerUpdated` on its account log. |
+| `PATCH /servers/{server_id}` | `UpdateServerRequest` → `Server` | The server's name, its retention, its default channels, any of them (architecture 6.7 and 6.8); a field left out is left as it is, and `retention_days` 0 keeps messages for ever. Needs `MANAGE_SERVER` (the owner and `ADMINISTRATOR` have it): `PERMISSION_DENIED` otherwise. `INVALID_ARGUMENT` with `details.field` `name` for a name that is empty or over 100 characters once trimmed, and `default_channels` for a channel that is not a public text channel of the server. Every member gets `ServerUpdated` on its account log for a name, picture or retention. |
 | `PUT /servers/{server_id}/icon` | a picture's bytes → `Server` | The server's picture, taken as `PUT /account/avatar` takes an account's (the same formats, limits and refusals) and named in `Server.icon_url`, a path under `/api/v1/avatars/`. `MANAGE_SERVER`; `ServerUpdated` to every member. |
 | `DELETE /servers/{server_id}/icon` | → `Server` | The server has no picture again. `MANAGE_SERVER`; `ServerUpdated` to every member. |
-| `GET /servers/{server_id}/channels` | → `ListChannelsResponse` |
-| `POST /channels` | `CreateChannelRequest` → `Channel`; needs `MANAGE_CHANNELS` in the server (`PERMISSION_DENIED` otherwise, also for a non-member) |
+| `GET /servers/{server_id}/channels` | → `ListChannelsResponse`: the channels the caller is in and can see, its server DMs among them, in sidebar order |
+| `GET /servers/{server_id}/channels/browse` | → `ListChannelsResponse`: the public text channels the caller can see and is not in, each with `member_count` (architecture 6.8); never a private one |
+| `PATCH /servers/{server_id}/membership` | `UpdateMembershipRequest` → `Member`: the caller's own switches in the server, `channel_adds_by_invitation` and `server_dms_off` (architecture 6.8); `MembershipUpdated` on its log |
+| `POST /servers/{server_id}/dms` | `OpenServerDmRequest` → `Channel`: the 1:1 `SERVER_DM` with a member, started if there is none (architecture 6.4), and `ChannelAdded` on both logs. `START_SERVER_DMS` to start one (`PERMISSION_DENIED`); `FAILED_PRECONDITION{state: "server_dms_off"}` when the other turned them off; `NOT_FOUND` for someone not in the server or blocked either way. A block also leaves an existing one readable and nothing more |
+| `POST /channels` | `CreateChannelRequest` → `Channel`; needs `MANAGE_CHANNELS` in the server (`PERMISSION_DENIED` otherwise, also for a non-member). `private` makes it private: its `@everyone` overwrite denies view, and only those in it see it. The creator is in it; a server's first channel is its default |
+| `POST /channels/{channel_id}/join` | → `Channel`: a public channel the caller can see, or one it was invited to; joining twice is fine. `NOT_FOUND` otherwise, so a private channel is not disclosed. Posts "joined" |
+| `POST /channels/{channel_id}/leave` | → 204: any channel, a default one included; `NOT_FOUND` when not in it. Posts "left" |
+| `GET /channels/{channel_id}/members` | → `ListChannelMembersResponse`: who is in a channel the caller can see |
+| `POST /channels/{channel_id}/members` | `AddChannelMembersRequest` → `AddChannelMembersResponse`: the caller, in the channel or holding `MANAGE_CHANNELS`, adds members of the server who could see it once in it (`INVALID_ARGUMENT{field: "account_ids"}` otherwise, and nothing is done). Someone with `channel_adds_by_invitation` is invited instead; someone already in it or invited is left as they are. Posts "added" for each added |
+| `DELETE /channels/{channel_id}/members/{account_id}` | → 204: `MANAGE_CHANNELS`, or the caller itself (leaving). Posts "removed" |
+| `DELETE /channel-invitations/{channel_id}` | → 204: no to an invitation; `NOT_FOUND` when there is none. To say yes, join |
 | `PATCH /channels/{channel_id}` | `Channel` (partial) → `Channel` |
 | `DELETE /channels/{channel_id}` | → 204 |
 | `POST /dms/personal` | `OpenPersonalDmRequest` → `OpenPersonalDmResponse` (200 existing, 201 new); `FAILED_PRECONDITION{state: "request"}` without an accepted DM request with each participant; three or more participants open a new `PERSONAL_GROUP_DM` |

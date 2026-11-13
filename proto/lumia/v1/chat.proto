@@ -133,6 +133,14 @@ message Channel {
   google.protobuf.Timestamp created_at = 11;
   // Personal DMs: the instance hosting it, for Home aggregation labels.
   string host = 12;
+  // TEXT (architecture 6.8): made private at creation, so never in Browse
+  // and entered only by being added.
+  bool private = 13;
+  // TEXT: joined by every member as they join the server.
+  bool is_default = 14;
+  // How many accounts are in the channel. Filled where a listing says so
+  // (Browse); 0 elsewhere.
+  uint32 member_count = 15;
 }
 
 message Member {
@@ -149,6 +157,11 @@ message Member {
   // memberships in AccountSnapshot, so a client knows what it may offer
   // (architecture 6.7); empty everywhere else.
   repeated Permission permissions = 8;
+  // The member's own switches in this server (architecture 6.8). Adds to
+  // channels wait as invitations for their yes:
+  bool channel_adds_by_invitation = 9;
+  // Nobody may start a server DM with them:
+  bool server_dms_off = 10;
 }
 
 message Mention {
@@ -213,6 +226,23 @@ message Message {
   google.protobuf.Timestamp deleted_at = 14;
   // Replies posted "also to channel" reference the reply they mirror.
   bytes mirrors_message_id = 15;
+  // Set on a notice the instance posts (architecture 6.8): the body is
+  // empty, the author is who did it.
+  ChannelNotice notice = 16;
+}
+
+// Someone came into a channel or went from it.
+message ChannelNotice {
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    JOINED = 1;   // the author joined
+    ADDED = 2;    // the author added account_id
+    LEFT = 3;     // the author left
+    REMOVED = 4;  // the author removed account_id
+  }
+  Kind kind = 1;
+  // Who came or went.
+  bytes account_id = 2;
 }
 
 message Presence {

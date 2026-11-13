@@ -89,6 +89,22 @@ defmodule Lumia.V1.Permission do
   field :MANAGE_BOTS, 31
 end
 
+defmodule Lumia.V1.ChannelNotice.Kind do
+  @moduledoc false
+
+  use Protobuf,
+    enum: true,
+    full_name: "lumia.v1.ChannelNotice.Kind",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :KIND_UNSPECIFIED, 0
+  field :JOINED, 1
+  field :ADDED, 2
+  field :LEFT, 3
+  field :REMOVED, 4
+end
+
 defmodule Lumia.V1.Account do
   @moduledoc false
 
@@ -179,6 +195,9 @@ defmodule Lumia.V1.Channel do
   field :acl_version, 10, type: :uint64, json_name: "aclVersion"
   field :created_at, 11, type: Google.Protobuf.Timestamp, json_name: "createdAt"
   field :host, 12, type: :string
+  field :private, 13, type: :bool
+  field :is_default, 14, type: :bool, json_name: "isDefault"
+  field :member_count, 15, type: :uint32, json_name: "memberCount"
 end
 
 defmodule Lumia.V1.Member do
@@ -194,6 +213,8 @@ defmodule Lumia.V1.Member do
   field :joined_at, 6, type: Google.Protobuf.Timestamp, json_name: "joinedAt"
   field :expires_at, 7, type: Google.Protobuf.Timestamp, json_name: "expiresAt"
   field :permissions, 8, repeated: true, type: Lumia.V1.Permission, enum: true
+  field :channel_adds_by_invitation, 9, type: :bool, json_name: "channelAddsByInvitation"
+  field :server_dms_off, 10, type: :bool, json_name: "serverDmsOff"
 end
 
 defmodule Lumia.V1.Mention do
@@ -285,6 +306,19 @@ defmodule Lumia.V1.Message do
   field :edited_at, 13, type: Google.Protobuf.Timestamp, json_name: "editedAt"
   field :deleted_at, 14, type: Google.Protobuf.Timestamp, json_name: "deletedAt"
   field :mirrors_message_id, 15, type: :bytes, json_name: "mirrorsMessageId"
+  field :notice, 16, type: Lumia.V1.ChannelNotice
+end
+
+defmodule Lumia.V1.ChannelNotice do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.ChannelNotice",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :kind, 1, type: Lumia.V1.ChannelNotice.Kind, enum: true
+  field :account_id, 2, type: :bytes, json_name: "accountId"
 end
 
 defmodule Lumia.V1.Presence do

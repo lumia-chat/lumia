@@ -80,6 +80,9 @@ defmodule LumiaWeb.Router do
     put "/servers/:server_id/icon", ServerController, :put_icon
     delete "/servers/:server_id/icon", ServerController, :delete_icon
     get "/servers/:server_id/channels", ServerController, :channels
+    get "/servers/:server_id/channels/browse", ServerController, :browse
+    patch "/servers/:server_id/membership", ServerController, :update_membership
+    post "/servers/:server_id/dms", ServerController, :open_dm
     get "/servers/:server_id/members", ServerController, :members
     patch "/servers/:server_id/members/:account_id", ServerController, :update_member
     delete "/servers/:server_id/members/:account_id", ServerController, :remove_member
@@ -100,6 +103,12 @@ defmodule LumiaWeb.Router do
     get "/channels/:channel_id/snapshot", ChannelController, :snapshot
     get "/channels/:channel_id/messages", ChannelController, :messages
     post "/channels/:channel_id/commands", ChannelController, :command
+    post "/channels/:channel_id/join", ChannelController, :join
+    post "/channels/:channel_id/leave", ChannelController, :leave
+    get "/channels/:channel_id/members", ChannelController, :members
+    post "/channels/:channel_id/members", ChannelController, :add_members
+    delete "/channels/:channel_id/members/:account_id", ChannelController, :remove_member
+    delete "/channel-invitations/:channel_id", ChannelController, :dismiss_invitation
 
     put "/push/subscription", PushController, :put
     delete "/push/subscription", PushController, :delete

@@ -23,7 +23,7 @@ defmodule Lumia.Snapshots do
 
   @snapshot_messages 50
 
-  @doc "The account snapshot: account, servers, memberships, viewable channels, at the account log head."
+  @doc "The account snapshot: account, servers, memberships, the channels it is shown, at the account log head."
   def account(account_id) do
     account = Repo.get!(Account, account_id)
     seq = account.last_seq
@@ -40,11 +40,12 @@ defmodule Lumia.Snapshots do
       |> Repo.all()
       |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
 
-    # Every channel the account can view: its servers' channels, then the
+    # Every channel the account is shown: its servers' channels it is in
+    # and can view (architecture 6.8), its server DMs among them, then the
     # personal DMs it is in (with their participants and host).
     channels =
       server_ids
-      |> Enum.flat_map(&Access.viewable_channels(account_id, &1))
+      |> Enum.flat_map(&Access.viewable_channels(account_id, &1, joined: true))
       |> Enum.map(& &1.channel)
       |> Enum.concat(Dms.personal_channels(account_id))
       |> Enum.map(&Proto.channel/1)
@@ -58,7 +59,8 @@ defmodule Lumia.Snapshots do
           Proto.member(m, Map.get(role_ids, m.server_id, []), server_permissions(m))
         end),
       channels: channels,
-      pending_requests: Enum.map(Lumia.Dms.pending_requests_to(account_id), &Proto.dm_request/1)
+      pending_requests: Enum.map(Lumia.Dms.pending_requests_to(account_id), &Proto.dm_request/1),
+      channel_invitations: Lumia.Channels.invitations(account_id)
     }
   end
 

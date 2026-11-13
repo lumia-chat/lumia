@@ -251,7 +251,34 @@ message UpdateServerRequest {
   optional string name = 1;
   // Days the server keeps its messages; 0 keeps them for ever.
   optional uint32 retention_days = 2;
+  // The channels every newcomer joins, all of them public text channels of
+  // this server; empty for none (architecture 6.8).
+  ChannelIds default_channels = 3;
 }
+
+message ChannelIds { repeated bytes channel_ids = 1; }
+
+// PATCH /servers/{server_id}/membership: the caller's own switches there
+// (architecture 6.8). A field left out is left as it is. Answers Member.
+message UpdateMembershipRequest {
+  optional bool channel_adds_by_invitation = 1;
+  optional bool server_dms_off = 2;
+}
+
+// POST /channels/{channel_id}/members: accounts added at once, or invited
+// when they take adds as invitations.
+message AddChannelMembersRequest { repeated bytes account_ids = 1; }
+message AddChannelMembersResponse {
+  repeated bytes added_account_ids = 1;
+  repeated bytes invited_account_ids = 2;
+}
+
+// GET /channels/{channel_id}/members: everyone in the channel.
+message ListChannelMembersResponse { repeated bytes account_ids = 1; }
+
+// POST /servers/{server_id}/dms: the 1:1 server DM with the account,
+// started if there is none (architecture 6.4).
+message OpenServerDmRequest { bytes account_id = 1; }
 
 message ListChannelsResponse { repeated Channel channels = 1; }
 
@@ -263,6 +290,8 @@ message CreateChannelRequest {
   repeated Overwrite overwrites = 5;
   // For DM kinds.
   repeated bytes participant_account_ids = 6;
+  // TEXT: private from the start (architecture 6.8).
+  bool private = 7;
 }
 
 // Personal DM creation. The server enforces the uniqueness constraint on the
@@ -357,6 +386,8 @@ message AccountSnapshot {
   repeated FriendshipUpdated friendships = 7;
   SignedRoster roster = 8;
   repeated bytes blocked_identity_ids = 9;
+  // Channels the account was asked into and has not answered (6.8).
+  repeated ChannelInvitation channel_invitations = 10;
 }
 
 message ListAccountEventsRequest {

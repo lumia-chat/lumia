@@ -51,6 +51,20 @@ defmodule Lumia.Dms do
     end
   end
 
+  @doc "Whether either account has blocked the other: a DM request between them answered `blocked`."
+  def blocked_between?(a, b), do: blocked?(a, b) or blocked?(b, a)
+
+  @doc """
+  Whether the account and anyone else in the conversation (a server DM's
+  members, architecture 6.4) are blocked either way.
+  """
+  def blocked_in?(channel_id, account_id) do
+    channel_id
+    |> Lumia.Channels.member_ids()
+    |> Enum.reject(&(&1 == account_id))
+    |> Enum.any?(&blocked_between?(account_id, &1))
+  end
+
   defp blocked?(from, to) do
     Repo.exists?(
       from r in Request,

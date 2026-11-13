@@ -60,6 +60,10 @@ defmodule LumiaWeb.Gateway.SessionChannelTest do
 
   defp event_seq({:event_bytes, bytes}), do: V1.Event.decode(bytes).seq
 
+  # Where a channel's log is now: a member's arrival in a default channel
+  # posts "joined" there (architecture 6.8), which a subscribe at 0 replays.
+  defp head(channel_id), do: elem(Events.head(channel_id), 0)
+
   defp cursors(channels),
     do: Enum.map(channels, &%V1.Cursor{log_id: Proto.uuid(&1.id), seq: 0})
 
@@ -478,8 +482,10 @@ defmodule LumiaWeb.Gateway.SessionChannelTest do
       assert_push "frame", %V1.ServerFrame{frame: {:subscribe_result, _}}
       four = flush_queries()
 
+      # The channels, the membership of the server and of the channels, and the
+      # heads come with the channel rows.
       assert two == four
-      assert two <= 4
+      assert two <= 5
     end
 
     test "a non-member cannot subscribe and learns nothing", ctx do
@@ -621,7 +627,7 @@ defmodule LumiaWeb.Gateway.SessionChannelTest do
       {:ok, _, tokens} = Auth.create_session(member.id, Ecto.UUID.generate())
       {:ok, socket} = connect(Socket, %{}, connect_info: %{auth_token: tokens.access_token})
       {_, socket} = join!(socket)
-      subscribe(socket, ctx.channel.id, 0)
+      subscribe(socket, ctx.channel.id, head(ctx.channel.id))
 
       :ok = Servers.remove_member(ctx.server.id, member.id, ctx.account.id, "removed")
 
@@ -637,7 +643,7 @@ defmodule LumiaWeb.Gateway.SessionChannelTest do
       {:ok, _, tokens} = Auth.create_session(member.id, Ecto.UUID.generate())
       {:ok, socket} = connect(Socket, %{}, connect_info: %{auth_token: tokens.access_token})
       {_, socket} = join!(socket)
-      subscribe(socket, ctx.channel.id, 0)
+      subscribe(socket, ctx.channel.id, head(ctx.channel.id))
 
       # Make the channel private; the bump appends acl_changed, which the
       # member must not receive because they can no longer view.
@@ -698,7 +704,7 @@ defmodule LumiaWeb.Gateway.SessionChannelTest do
       {:ok, _, tokens} = Auth.create_session(member.id, Ecto.UUID.generate())
       {:ok, socket} = connect(Socket, %{}, connect_info: %{auth_token: tokens.access_token})
       {_, socket} = join!(socket)
-      subscribe(socket, ctx.channel.id, 0)
+      subscribe(socket, ctx.channel.id, head(ctx.channel.id))
 
       # Remove the member directly in the database, without the account-log
       # event or an acl bump, so only staleness can catch it.
@@ -729,7 +735,7 @@ defmodule LumiaWeb.Gateway.SessionChannelTest do
       {:ok, _, tokens} = Auth.create_session(member.id, Ecto.UUID.generate())
       {:ok, socket} = connect(Socket, %{}, connect_info: %{auth_token: tokens.access_token})
       {_, socket} = join!(socket)
-      subscribe(socket, ctx.channel.id, 0)
+      subscribe(socket, ctx.channel.id, head(ctx.channel.id))
 
       Lumia.Repo.delete_all(
         from(m in Lumia.Servers.Member,

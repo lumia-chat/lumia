@@ -78,11 +78,12 @@ defmodule Lumia.Push do
 
   @doc """
   Called after an event committed: enqueues the push job when the event
-  is a personal DM application message or a server message that mentions
-  an account. Cheap; the job does the lookups.
+  is a personal DM application message, a server message that mentions
+  an account, or a message in a server DM. Cheap; the job does the
+  lookups.
   """
   def after_commit(channel_id, %V1.Event{} = event) do
-    if pushable?(event) do
+    if pushable?(event) or server_dm_message?(channel_id, event) do
       %{channel_id: channel_id, seq: event.seq}
       |> Workers.Push.new()
       |> Oban.insert()
@@ -99,10 +100,20 @@ defmodule Lumia.Push do
 
   defp pushable?(_), do: false
 
+  defp server_dm_message?(channel_id, %V1.Event{
+         payload: {:message_created, %V1.MessageCreated{message: %V1.Message{notice: nil}}}
+       }) do
+    Repo.exists?(from c in Channel, where: c.id == ^channel_id and c.kind == "server_dm")
+  end
+
+  defp server_dm_message?(_channel_id, _event), do: false
+
   @doc """
   Who to notify for the event at `seq` in `channel_id`, as account ids:
-  the other participants of a personal channel, or the accounts mentioned
-  in a server message. Never the actor.
+  the other participants of a personal channel, the other member of a
+  server DM, or the accounts mentioned in a server message who are in the
+  channel and see it (architecture 6.8: someone outside it cannot read
+  what mentions them). Never the actor.
   """
   def recipients(channel_id, %V1.Event{} = event) do
     actor = Lumia.Proto.from_uuid(event.actor_account_id)
@@ -111,18 +122,33 @@ defmodule Lumia.Push do
       {%Channel{kind: kind}, {:encrypted, _}} ->
         if Dms.personal_kind?(kind), do: Dms.participants(channel_id) -- [actor], else: []
 
+      {%Channel{kind: "server_dm"}, {:message_created, %V1.MessageCreated{message: message}}} ->
+        if message.notice, do: [], else: shown(channel_id) -- [actor]
+
       {%Channel{}, {:message_created, %V1.MessageCreated{message: message}}} ->
+        shown = shown(channel_id)
+
         message.mentions
         |> Enum.flat_map(fn
           %V1.Mention{target: {:account_id, id}} -> [Lumia.Proto.from_uuid(id)]
           _ -> []
         end)
+        |> Enum.filter(&(&1 in shown))
         |> Enum.reject(&(&1 == actor))
         |> Enum.uniq()
 
       _ ->
         []
     end
+  end
+
+  # Who the channel is shown to: in it and able to see it.
+  defp shown(channel_id) do
+    Repo.all(
+      from v in Lumia.Servers.ChannelViewer,
+        where: v.channel_id == ^channel_id,
+        select: v.account_id
+    )
   end
 
   @doc "Sends the notice to every offline device of the recipients; returns how many went."

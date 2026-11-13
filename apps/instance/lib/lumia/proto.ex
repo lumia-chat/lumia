@@ -88,11 +88,17 @@ defmodule Lumia.Proto do
       nickname: m.nickname || "",
       joined_at: timestamp(m.joined_at),
       expires_at: timestamp(m.expires_at),
-      permissions: permissions |> Lumia.Authz.Permission.from_bits() |> Enum.map(&permission/1)
+      permissions: permissions |> Lumia.Authz.Permission.from_bits() |> Enum.map(&permission/1),
+      channel_adds_by_invitation: m.channel_adds_by_invitation,
+      server_dms_off: m.server_dms_off
     }
   end
 
-  def channel(%Lumia.Events.Channel{} = c) do
+  @doc """
+  A channel on the wire. `member_count` is given only where a listing asks
+  for it (Browse, architecture 6.8).
+  """
+  def channel(%Lumia.Events.Channel{} = c, member_count \\ 0) do
     %V1.Channel{
       channel_id: uuid(c.id),
       kind: channel_kind(c.kind),
@@ -104,11 +110,18 @@ defmodule Lumia.Proto do
       acl_version: c.acl_version,
       created_at: timestamp(c.inserted_at),
       participant_account_ids: participants(c),
-      host: if(Lumia.Dms.personal_kind?(c.kind), do: Lumia.Identity.host(), else: "")
+      host: if(Lumia.Dms.personal_kind?(c.kind), do: Lumia.Identity.host(), else: ""),
+      private: c.private,
+      is_default: c.is_default,
+      member_count: member_count
     }
   end
 
-  # Personal DMs carry their participants so a client can fetch rosters.
+  # DMs carry their participants: a personal one's so a client can fetch
+  # rosters, a server one's so it can name the conversation.
+  defp participants(%Lumia.Events.Channel{kind: "server_dm", id: id}),
+    do: Enum.map(Lumia.Channels.member_ids(id), &uuid/1)
+
   defp participants(%Lumia.Events.Channel{kind: kind, id: id}) do
     if Lumia.Dms.personal_kind?(kind),
       do: Enum.map(Lumia.Dms.participants(id), &uuid/1),
@@ -125,9 +138,22 @@ defmodule Lumia.Proto do
       body: m.body || "",
       created_at: timestamp(m.created_at),
       edited_at: timestamp(m.edited_at),
-      deleted_at: timestamp(m.deleted_at)
+      deleted_at: timestamp(m.deleted_at),
+      notice: notice(m.notice, m.notice_account_id)
     }
   end
+
+  @doc "A channel notice (architecture 6.8) from its kind as kept and who it is about."
+  def notice(nil, _account_id), do: nil
+
+  def notice(kind, account_id) do
+    %V1.ChannelNotice{kind: notice_kind(kind), account_id: uuid(account_id)}
+  end
+
+  defp notice_kind("joined"), do: :JOINED
+  defp notice_kind("added"), do: :ADDED
+  defp notice_kind("left"), do: :LEFT
+  defp notice_kind("removed"), do: :REMOVED
 
   def dm_request(%Lumia.Dms.Request{} = r) do
     %V1.DmRequest{

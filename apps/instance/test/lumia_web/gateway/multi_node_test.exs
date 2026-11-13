@@ -88,7 +88,8 @@ defmodule LumiaWeb.Gateway.MultiNodeTest do
     assert_reply ref, :ok
   end
 
-  # A member with a session here, subscribed to the channel from the start.
+  # A member with a session here, subscribed to the channel from where its
+  # log is once they arrived (their arrival posts "joined" there).
   defp member_socket(ctx) do
     member = account("member")
     {:ok, _} = Servers.add_member(ctx.server.id, member.id, ctx.owner.id)
@@ -102,7 +103,14 @@ defmodule LumiaWeb.Gateway.MultiNodeTest do
     push(socket, "frame", %V1.ClientFrame{
       frame:
         {:subscribe,
-         %V1.Subscribe{cursors: [%V1.Cursor{log_id: Proto.uuid(ctx.channel.id), seq: 0}]}}
+         %V1.Subscribe{
+           cursors: [
+             %V1.Cursor{
+               log_id: Proto.uuid(ctx.channel.id),
+               seq: elem(Events.head(ctx.channel.id), 0)
+             }
+           ]
+         }}
     })
 
     assert_push "frame", %V1.ServerFrame{
@@ -200,10 +208,11 @@ defmodule LumiaWeb.Gateway.MultiNodeTest do
        ctx do
     close_owner(ctx)
     {member, socket} = member_socket(ctx)
+    {head, _} = Events.head(ctx.channel.id)
 
     append_on_peer(ctx, "before", [])
     assert_push "frame", {:event_bytes, bytes}, 5_000
-    assert V1.Event.decode(bytes).seq == 1
+    assert V1.Event.decode(bytes).seq == head + 1
 
     :ok =
       PeerNode.call(ctx.peer, Servers, :remove_member, [

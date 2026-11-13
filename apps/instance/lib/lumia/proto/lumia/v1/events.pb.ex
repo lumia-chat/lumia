@@ -363,6 +363,16 @@ defmodule Lumia.V1.AccountEvent do
     oneof: 0
 
   field :server_updated, 34, type: Lumia.V1.ServerUpdated, json_name: "serverUpdated", oneof: 0
+
+  field :channel_invited, 35,
+    type: Lumia.V1.ChannelInvitation,
+    json_name: "channelInvited",
+    oneof: 0
+
+  field :channel_invitation_removed, 36,
+    type: Lumia.V1.ChannelInvitationRemoved,
+    json_name: "channelInvitationRemoved",
+    oneof: 0
 end
 
 defmodule Lumia.V1.MembershipAdded do
@@ -431,6 +441,30 @@ defmodule Lumia.V1.ServerUpdated do
     syntax: :proto3
 
   field :server, 1, type: Lumia.V1.Server
+end
+
+defmodule Lumia.V1.ChannelInvitation do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.ChannelInvitation",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :channel, 1, type: Lumia.V1.Channel
+  field :invited_by_account_id, 2, type: :bytes, json_name: "invitedByAccountId"
+  field :created_at, 3, type: Google.Protobuf.Timestamp, json_name: "createdAt"
+end
+
+defmodule Lumia.V1.ChannelInvitationRemoved do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.ChannelInvitationRemoved",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :channel_id, 1, type: :bytes, json_name: "channelId"
 end
 
 defmodule Lumia.V1.DmRequest do

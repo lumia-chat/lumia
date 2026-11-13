@@ -378,6 +378,79 @@ defmodule Lumia.V1.UpdateServerRequest do
 
   field :name, 1, proto3_optional: true, type: :string
   field :retention_days, 2, proto3_optional: true, type: :uint32, json_name: "retentionDays"
+  field :default_channels, 3, type: Lumia.V1.ChannelIds, json_name: "defaultChannels"
+end
+
+defmodule Lumia.V1.ChannelIds do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.ChannelIds",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :channel_ids, 1, repeated: true, type: :bytes, json_name: "channelIds"
+end
+
+defmodule Lumia.V1.UpdateMembershipRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.UpdateMembershipRequest",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :channel_adds_by_invitation, 1,
+    proto3_optional: true,
+    type: :bool,
+    json_name: "channelAddsByInvitation"
+
+  field :server_dms_off, 2, proto3_optional: true, type: :bool, json_name: "serverDmsOff"
+end
+
+defmodule Lumia.V1.AddChannelMembersRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.AddChannelMembersRequest",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :account_ids, 1, repeated: true, type: :bytes, json_name: "accountIds"
+end
+
+defmodule Lumia.V1.AddChannelMembersResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.AddChannelMembersResponse",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :added_account_ids, 1, repeated: true, type: :bytes, json_name: "addedAccountIds"
+  field :invited_account_ids, 2, repeated: true, type: :bytes, json_name: "invitedAccountIds"
+end
+
+defmodule Lumia.V1.ListChannelMembersResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.ListChannelMembersResponse",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :account_ids, 1, repeated: true, type: :bytes, json_name: "accountIds"
+end
+
+defmodule Lumia.V1.OpenServerDmRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.OpenServerDmRequest",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :account_id, 1, type: :bytes, json_name: "accountId"
 end
 
 defmodule Lumia.V1.ListChannelsResponse do
@@ -409,6 +482,8 @@ defmodule Lumia.V1.CreateChannelRequest do
     repeated: true,
     type: :bytes,
     json_name: "participantAccountIds"
+
+  field :private, 7, type: :bool
 end
 
 defmodule Lumia.V1.OpenPersonalDmRequest do
@@ -591,6 +666,11 @@ defmodule Lumia.V1.AccountSnapshot do
   field :friendships, 7, repeated: true, type: Lumia.V1.FriendshipUpdated
   field :roster, 8, type: Lumia.V1.SignedRoster
   field :blocked_identity_ids, 9, repeated: true, type: :bytes, json_name: "blockedIdentityIds"
+
+  field :channel_invitations, 10,
+    repeated: true,
+    type: Lumia.V1.ChannelInvitation,
+    json_name: "channelInvitations"
 end
 
 defmodule Lumia.V1.ListAccountEventsRequest do

@@ -26,7 +26,10 @@ Two invariants:
 | `roles` | `id`, `server_id`, `name`, `position`, `permissions` bigint, `color`, `is_everyone` | Bit index of `permissions` equals the proto `Permission` enum value. Exactly one `is_everyone` role per server, created with the server, undeletable. |
 | `member_roles` | `server_id`, `account_id`, `role_id` | Primary key on all three. `@everyone` is implicit and never stored. |
 | `channel_overwrites` | `channel_id`, `target_kind` (`role` \| `member`), `target_id`, `allow` bigint, `deny` bigint | Primary key `(channel_id, target_kind, target_id)`. Normalized on write: a bit present in `deny` is cleared from `allow`, so the two never overlap and the algorithm's same-layer rule (3.1) is unambiguous. |
-| `server_members` | `server_id`, `account_id`, `kind`, `nickname`, `joined_at`, `expires_at` | `kind` is `member` or `guest` (architecture 6.2). |
+| `server_members` | `server_id`, `account_id`, `kind`, `nickname`, `joined_at`, `expires_at`, `channel_adds_by_invitation`, `server_dms_off` | `kind` is `member` or `guest` (architecture 6.2). The two switches are the member's own (architecture 6.8). |
+| `channel_members` | `channel_id`, `account_id`, `added_by_account_id`, `joined_at` | Who is in a channel (architecture 6.8, section 3.4); a server DM's members are its participants. |
+| `channel_invitations` | `channel_id`, `account_id`, `invited_by_account_id`, `created_at` | An add waiting for its member's yes. |
+| `channel_viewers` | `channel_id`, `account_id` | Who the channel is shown to (in it and able to see it), as last announced on account logs (section 6.3). |
 | `servers` | …, `owner_account_id` | |
 | `accounts` | …, `instance_role` (`none` \| `moderator` \| `admin` \| `owner`) | Section 7. |
 | `audit_log` | `id`, `scope_kind` (`server` \| `instance`), `scope_id`, `actor_account_id`, `action`, `target_kind`, `target_id`, `before` jsonb, `after` jsonb, `override` bool, `created_at` | Section 9. |
@@ -63,13 +66,23 @@ The spec's reference is a straightforward Elixir function over `MapSet`s, kept i
 | Check | Rule |
 |---|---|
 | Can view channel | `VIEW_CHANNEL ∈ resolve` |
-| Channel is private | The `@everyone` overwrite denies `VIEW_CHANNEL` |
+| Channel is private | Made private at creation (`channels.private`), which writes the `@everyone` overwrite that denies `VIEW_CHANNEL` |
 | Can manage a role R | `MANAGE_ROLES ∈ resolve(server-level)` and `position(R) > position(actor's highest role)` (lower position sorts first and is higher), or actor is owner |
 | Can grant permission P on a role or overwrite | Actor holds P, or is owner or Administrator |
 | Can kick or ban member M | `MANAGE_MEMBERS` and M is not the owner and M's highest role is below actor's |
 | Can change ownership | Actor is owner, with reauth (identity spec section 10) |
 
 The owner cannot be kicked, banned, or stripped of roles by anyone.
+
+### 3.4 Channel membership
+
+Membership sits on top of resolution (architecture 6.8), in `Lumia.Authz.Access.permissions/4`, the one place the rule is written:
+
+- In a server's text channel, an account not in it holds none of `SEND_MESSAGES`, `SEND_IN_THREADS`, `ATTACH_FILES`, `ADD_REACTIONS` and `START_CALLS`, whatever resolution gave; it keeps the rest, so a public channel can be read before joining and a moderator keeps `MANAGE_MESSAGES`.
+- In a private channel, being in it adds `VIEW_CHANNEL` for a `member` (not a `guest`): a private channel's people need no overwrite each, so its size is not bound by the overwrite limit (section 10). A guest sees what overwrites grant it, here as anywhere.
+- A `SERVER_DM` is its members' alone: each holds `VIEW_CHANNEL`, `READ_HISTORY`, `SEND_MESSAGES`, `SEND_IN_THREADS`, `ATTACH_FILES`, `ADD_REACTIONS` and `START_CALLS`, without the writes while either has blocked the other, and anyone else, an administrator included, gets `NOT_FOUND`.
+
+Who may join: a `member` or `guest` of the server, into a public text channel it can view, or into any it holds an invitation to. Who may add: anyone in the channel, or holding `MANAGE_CHANNELS`, adding members of the server who could view it once in it. Who may remove someone else: `MANAGE_CHANNELS`.
 
 ## 4. ACL snapshots and the cache
 
@@ -115,14 +128,17 @@ The bump is `UPDATE channels SET acl_version = acl_version + 1 WHERE ...` in the
 |---|---|
 | Roles assigned or removed | `MembershipUpdated` to that member |
 | Server name, picture or retention changed (`MANAGE_SERVER`) | `ServerUpdated` to every member, by a job after the commit (architecture 6.7); no `acl_version` moves |
-| Kick, ban, leave, guest expiry, account deletion | `MembershipRemoved` to that member, plus `ChannelRemoved` for each channel they could view |
-| Join, guest added, guest promoted | `MembershipAdded` to that member, plus `ChannelAdded` for each channel they can view |
+| Kick, ban, leave, guest expiry, account deletion | `MembershipRemoved` to that member, plus `ChannelRemoved` for each channel they were shown; they leave the server's text channels and lose their invitations there |
+| Join, guest added, guest promoted | `MembershipAdded` to that member, plus `ChannelAdded` for each default channel they arrive in (architecture 6.8) |
+| Member's own switches changed | `MembershipUpdated` to that member |
+| Joined, added, left or removed from a channel; a server DM started | `ChannelAdded` or `ChannelRemoved` to that member when what it is shown changed, in the same transaction |
+| Invited into a channel; invitation answered or dismissed | `ChannelInvitation` or `ChannelInvitationRemoved` to that member |
 
 No `acl_version` changes. The member's sessions act on receipt; the reconciler's account-log nudge catches a missed delivery within one tick.
 
 ### 6.3 Viewer diff job
 
-When a definition-level change can alter who may view a channel, an Oban job (debounced 30 seconds per server so a burst of admin edits runs once) recomputes the set of viewers for each affected channel, diffs it against the previous set, and appends `ChannelAdded` or `ChannelRemoved` to the account logs of members who gained or lost view. Discovery is therefore eventually consistent in the background; delivery is stopped immediately by `acl_version`.
+When a definition-level change can alter who may view a channel, an Oban job (debounced 30 seconds per server so a burst of admin edits runs once) recomputes the set of viewers for each affected channel (those in it who can view it, section 3.4), diffs it against the previous set, and appends `ChannelAdded` or `ChannelRemoved` to the account logs of members who gained or lost view. A change of channel membership settles the one account's row at once instead. Discovery is therefore eventually consistent in the background; delivery is stopped immediately by `acl_version`.
 
 ## 7. Instance administration
 

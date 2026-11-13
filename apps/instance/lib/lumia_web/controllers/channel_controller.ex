@@ -8,6 +8,7 @@ defmodule LumiaWeb.ChannelController do
   use Phoenix.Controller, formats: []
 
   alias Lumia.Authz.Access
+  alias Lumia.Channels
   alias Lumia.Events
   alias Lumia.Proto
   alias Lumia.Servers
@@ -33,7 +34,8 @@ defmodule LumiaWeb.ChannelController do
          server_id = Proto.from_uuid(req.server_id),
          {:ok, channel} <-
            Servers.create_channel(server_id, conn.assigns.current_account_id, req.name,
-             topic: req.topic
+             topic: req.topic,
+             private: req.private
            ) do
       ProtoConn.render(conn, 201, Proto.channel(channel))
     end
@@ -93,6 +95,57 @@ defmodule LumiaWeb.ChannelController do
         seq: ack.seq,
         event_id: Proto.uuid(ack.event_id)
       })
+    end
+  end
+
+  @doc "`POST /channels/{channel_id}/join` (architecture 6.8): answers the channel."
+  def join(conn, %{"channel_id" => channel_id}) do
+    with {:ok, channel} <- Channels.join(channel_id, conn.assigns.current_account_id) do
+      ProtoConn.render(conn, Proto.channel(channel))
+    end
+  end
+
+  @doc "`POST /channels/{channel_id}/leave`."
+  def leave(conn, %{"channel_id" => channel_id}) do
+    with :ok <- Channels.leave(channel_id, conn.assigns.current_account_id) do
+      ProtoConn.no_content(conn)
+    end
+  end
+
+  @doc "`GET /channels/{channel_id}/members`: who is in a channel the caller can see."
+  def members(conn, %{"channel_id" => channel_id}) do
+    with {:ok, ids} <- Channels.members(channel_id, conn.assigns.current_account_id) do
+      ProtoConn.render(conn, %V1.ListChannelMembersResponse{
+        account_ids: Enum.map(ids, &Proto.uuid/1)
+      })
+    end
+  end
+
+  @doc "`POST /channels/{channel_id}/members`: added, or invited when they take adds that way."
+  def add_members(conn, %{"channel_id" => channel_id}) do
+    with {:ok, req} <- ProtoConn.decode(conn, V1.AddChannelMembersRequest),
+         ids = Enum.map(req.account_ids, &Proto.from_uuid/1),
+         true <- Enum.all?(ids, &is_binary/1) || {:error, {:invalid_argument, "account_ids"}},
+         {:ok, %{added: added, invited: invited}} <-
+           Channels.add(channel_id, conn.assigns.current_account_id, ids) do
+      ProtoConn.render(conn, %V1.AddChannelMembersResponse{
+        added_account_ids: Enum.map(added, &Proto.uuid/1),
+        invited_account_ids: Enum.map(invited, &Proto.uuid/1)
+      })
+    end
+  end
+
+  @doc "`DELETE /channels/{channel_id}/members/{account_id}`: `MANAGE_CHANNELS`, or oneself."
+  def remove_member(conn, %{"channel_id" => channel_id, "account_id" => account_id}) do
+    with :ok <- Channels.remove(channel_id, conn.assigns.current_account_id, account_id) do
+      ProtoConn.no_content(conn)
+    end
+  end
+
+  @doc "`DELETE /channel-invitations/{channel_id}`: no to an invitation."
+  def dismiss_invitation(conn, %{"channel_id" => channel_id}) do
+    with :ok <- Channels.dismiss(channel_id, conn.assigns.current_account_id) do
+      ProtoConn.no_content(conn)
     end
   end
 

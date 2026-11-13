@@ -14,6 +14,10 @@ defmodule Lumia.Events.Channel do
     # Second granularity; see the migration for why.
     field :last_seq_at, :utc_datetime
     field :acl_version, :integer, default: 1
+    # Architecture 6.8: chosen private at creation (never in Browse, entered
+    # only by being added), and joined by every newcomer to the server.
+    field :private, :boolean, default: false
+    field :is_default, :boolean, default: false
     # E2EE conversations (docs/specs/e2ee.md section 11): the current MLS
     # epoch, and the uniqueness key of a PERSONAL_DM's participant pair.
     field :mls_epoch, :integer, default: 0

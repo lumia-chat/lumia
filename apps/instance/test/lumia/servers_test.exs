@@ -220,11 +220,12 @@ defmodule Lumia.ServersTest do
       assert Servers.member_for(ctx.server.id, alice.id).role_ids == [role.id]
     end
 
-    test "kicking appends membership_removed and channel_removed for viewable channels", ctx do
+    test "kicking appends membership_removed and channel_removed for the channels they were shown",
+         ctx do
       alice = account("alice")
+      # In general by default (architecture 6.8), in random by joining it.
       {:ok, _} = Servers.add_member(ctx.server.id, alice.id, ctx.owner.id)
-      ViewerDiff.diff_channel(ctx.general.id)
-      ViewerDiff.diff_channel(ctx.random.id)
+      {:ok, _} = Lumia.Channels.join(ctx.random.id, alice.id)
 
       :ok = Servers.remove_member(ctx.server.id, alice.id, ctx.owner.id, "removed")
 
@@ -341,10 +342,13 @@ defmodule Lumia.ServersTest do
          ctx do
       alice = account("alice")
       bob = account("bob")
+      # Both arrive in general, the server's default channel, and are shown it at once.
       {:ok, _} = Servers.add_member(ctx.server.id, alice.id, ctx.owner.id)
       {:ok, _} = Servers.add_member(ctx.server.id, bob.id, ctx.owner.id)
-      assert %{added: added} = ViewerDiff.diff_channel(ctx.general.id)
-      assert Enum.sort(added) == Enum.sort([ctx.owner.id, alice.id, bob.id])
+      assert %{added: []} = ViewerDiff.diff_channel(ctx.general.id)
+
+      assert Enum.sort(Servers.viewers(ctx.general.id)) ==
+               Enum.sort([ctx.owner.id, alice.id, bob.id])
 
       everyone = Repo.get_by!(Role, server_id: ctx.server.id, is_everyone: true)
 
@@ -388,7 +392,11 @@ defmodule Lumia.ServersTest do
           []
         )
 
+      # Able to see it, and shown it once in it (architecture 6.8).
+      refute guest.id in Servers.viewers(ctx.general.id)
+      {:ok, _} = Lumia.Channels.join(ctx.general.id, guest.id)
       assert guest.id in Servers.viewers(ctx.general.id)
+      assert {:error, :not_found} = Lumia.Channels.join(ctx.random.id, guest.id)
       refute guest.id in Servers.viewers(ctx.random.id)
     end
   end

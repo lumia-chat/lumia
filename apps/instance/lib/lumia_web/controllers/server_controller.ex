@@ -57,6 +57,8 @@ defmodule LumiaWeb.ServerController do
     with {:ok, _server} <- member_server(conn, server_id),
          {:ok, req} <- ProtoConn.decode(conn, V1.UpdateServerRequest),
          changes = Map.reject(Map.take(req, [:name, :retention_days]), fn {_, v} -> is_nil(v) end),
+         {:ok, _} <-
+           set_defaults(server_id, conn.assigns.current_account_id, req.default_channels),
          {:ok, updated} <-
            Servers.update_server(server_id, conn.assigns.current_account_id, changes) do
       ProtoConn.render(conn, Proto.server(updated))
@@ -67,6 +69,16 @@ defmodule LumiaWeb.ServerController do
       other ->
         other
     end
+  end
+
+  defp set_defaults(_server_id, _actor_id, nil), do: {:ok, nil}
+
+  defp set_defaults(server_id, actor_id, %V1.ChannelIds{channel_ids: ids}) do
+    ids = Enum.map(ids, &Proto.from_uuid/1)
+
+    if Enum.all?(ids, &is_binary/1),
+      do: Lumia.Channels.set_defaults(server_id, actor_id, ids),
+      else: {:error, {:invalid_argument, "default_channels"}}
   end
 
   @doc "`PUT /servers/{server_id}/icon`: the body is a picture, as chosen (`Lumia.Servers.set_icon/3`)."
@@ -92,10 +104,50 @@ defmodule LumiaWeb.ServerController do
     with {:ok, _server} <- member_server(conn, server_id) do
       channels =
         conn.assigns.current_account_id
-        |> Access.viewable_channels(server_id)
+        |> Access.viewable_channels(server_id, joined: true)
         |> Enum.map(&Proto.channel(&1.channel))
 
       ProtoConn.render(conn, %V1.ListChannelsResponse{channels: channels})
+    end
+  end
+
+  @doc """
+  `GET /servers/{server_id}/channels/browse` (architecture 6.8): the
+  public channels the caller can see and is not in, with how many are.
+  """
+  def browse(conn, %{"server_id" => server_id}) do
+    with {:ok, _server} <- member_server(conn, server_id) do
+      channels =
+        server_id
+        |> Lumia.Channels.browse(conn.assigns.current_account_id)
+        |> Enum.map(fn {channel, count} -> Proto.channel(channel, count) end)
+
+      ProtoConn.render(conn, %V1.ListChannelsResponse{channels: channels})
+    end
+  end
+
+  @doc "`PATCH /servers/{server_id}/membership`: the caller's own switches there (architecture 6.8)."
+  def update_membership(conn, %{"server_id" => server_id}) do
+    account_id = conn.assigns.current_account_id
+
+    with {:ok, req} <- ProtoConn.decode(conn, V1.UpdateMembershipRequest),
+         changes =
+           Map.reject(Map.take(req, [:channel_adds_by_invitation, :server_dms_off]), fn {_, v} ->
+             is_nil(v)
+           end),
+         {:ok, member} <- Servers.update_membership(server_id, account_id, changes) do
+      ProtoConn.render(conn, Proto.member(member, role_ids(server_id, account_id)))
+    end
+  end
+
+  @doc "`POST /servers/{server_id}/dms`: the server DM with a member, started if need be."
+  def open_dm(conn, %{"server_id" => server_id}) do
+    with {:ok, req} <- ProtoConn.decode(conn, V1.OpenServerDmRequest),
+         account_id when is_binary(account_id) <-
+           Proto.from_uuid(req.account_id) || {:error, :not_found},
+         {:ok, channel} <-
+           Lumia.Channels.open_dm(server_id, conn.assigns.current_account_id, account_id) do
+      ProtoConn.render(conn, Proto.channel(channel))
     end
   end
 

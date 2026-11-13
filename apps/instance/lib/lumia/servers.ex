@@ -23,6 +23,7 @@ defmodule Lumia.Servers do
   alias Lumia.Events.Channel
   alias Lumia.Proto
   alias Lumia.Repo
+  alias Lumia.Servers.ChannelMember
   alias Lumia.Servers.ChannelOverwrite
   alias Lumia.Servers.Member
   alias Lumia.Servers.MemberRole
@@ -41,7 +42,8 @@ defmodule Lumia.Servers do
     :send_in_threads,
     :attach_files,
     :add_reactions,
-    :start_calls
+    :start_calls,
+    :start_server_dms
   ]
 
   @name_max 100
@@ -94,20 +96,29 @@ defmodule Lumia.Servers do
   @doc """
   Creates a text channel in a server; the actor needs `manage_channels`
   there (the owner has everything). Bumps nothing; the channel is new at
-  version 1.
+  version 1. With `private: true` its `@everyone` overwrite denies view, so
+  only those in it see it (architecture 6.8). The creator is in it from
+  the start; a server's first channel is its default.
   """
   def create_channel(server_id, actor_id, name, opts \\ []) do
+    private = Keyword.get(opts, :private, false)
+
     Tx.transact(fn ->
       with {:ok, actor} <- actor(server_id, actor_id),
            :ok <- require_permission(actor, :manage_channels),
+           first? = not Repo.exists?(from c in Channel, where: c.server_id == ^server_id),
            {:ok, channel} <-
              Repo.insert(%Channel{
                kind: "text",
                server_id: server_id,
                name: name,
                topic: Keyword.get(opts, :topic),
-               position: Keyword.get(opts, :position, 0)
+               position: Keyword.get(opts, :position, 0),
+               private: private,
+               is_default: first? and not private
              }),
+           :ok <- hide_from_everyone(channel, private),
+           {:ok, _} <- Lumia.Channels.enter_quietly(channel, actor_id),
            {:ok, _} <-
              Audit.record({:server, server_id}, actor_id, "channel.create",
                target: {:channel, channel.id},
@@ -119,9 +130,32 @@ defmodule Lumia.Servers do
     end)
   end
 
+  defp hide_from_everyone(_channel, false), do: :ok
+
+  defp hide_from_everyone(channel, true) do
+    everyone =
+      Repo.one!(
+        from r in Role, where: r.server_id == ^channel.server_id and r.is_everyone, select: r.id
+      )
+
+    with {:ok, _} <-
+           Repo.insert(%ChannelOverwrite{
+             channel_id: channel.id,
+             target_kind: "role",
+             target_id: everyone,
+             allow: 0,
+             deny: Permission.bit(:view_channel)
+           }),
+         do: :ok
+  end
+
   # ---- Membership (member-level: account log, no acl bump) --------------------
 
-  @doc "Adds a member or guest. Appends MembershipAdded to their account log."
+  @doc """
+  Adds a member or guest. Appends MembershipAdded to their account log,
+  and they join the server's default channels and the one `channel_id`
+  names, if any, as far as they can see them (architecture 6.8).
+  """
   def add_member(server_id, account_id, actor_id, opts \\ []) do
     kind = Keyword.get(opts, :kind, "member")
 
@@ -135,6 +169,7 @@ defmodule Lumia.Servers do
                {:membership_added,
                 %V1.MembershipAdded{member: Proto.member(member), server: Proto.server(server)}}
              ),
+           :ok <- Lumia.Channels.arrive(server_id, account_id, Keyword.get(opts, :channel_id)),
            {:ok, _} <-
              Audit.record({:server, server_id}, actor_id, "member.add",
                target: {:account, account_id},
@@ -156,7 +191,9 @@ defmodule Lumia.Servers do
       with {:ok, server} <- fetch_server(server_id),
            :ok <- check_removal(server, account_id, actor_id, reason),
            {1, _} <- delete_member(server_id, account_id),
+           :ok <- leave_channels(server_id, account_id),
            channel_ids = viewable_channel_ids(server_id, account_id),
+           :ok <- forget_viewer(account_id, channel_ids),
            {:ok, _} <-
              Accounts.append_event(
                account_id,
@@ -182,6 +219,25 @@ defmodule Lumia.Servers do
     |> unwrap()
   end
 
+  @doc """
+  The member's own switches in a server (architecture 6.8):
+  `:channel_adds_by_invitation`, `:server_dms_off`, either or both. Their
+  other devices hear of it through `MembershipUpdated`. Returns the member.
+  """
+  def update_membership(server_id, account_id, changes) do
+    Tx.transact(fn ->
+      with {:ok, member} <- fetch_member(server_id, account_id),
+           {:ok, updated} <- member |> Ecto.Changeset.change(changes) |> Repo.update(),
+           {:ok, _} <-
+             Accounts.append_event(
+               account_id,
+               {:membership_updated, %V1.MembershipUpdated{member: own_member(updated)}}
+             ) do
+        {:ok, updated}
+      end
+    end)
+  end
+
   @doc "Assigns a role. Member-level: MembershipUpdated on the account log, no acl bump."
   def assign_role(server_id, account_id, role_id, actor_id) do
     change_roles(server_id, account_id, role_id, actor_id, :assign)
@@ -198,13 +254,11 @@ defmodule Lumia.Servers do
            {:ok, actor} <- actor(server_id, actor_id),
            true <- Authz.can_manage_role?(actor, role) || {:error, :permission_denied},
            {:ok, _} <- apply_role_change(server_id, account_id, role_id, op),
-           role_ids = role_ids(server_id, account_id),
            {:ok, member} <- fetch_member(server_id, account_id),
            {:ok, _} <-
              Accounts.append_event(
                account_id,
-               {:membership_updated,
-                %V1.MembershipUpdated{member: Proto.member(member, role_ids)}}
+               {:membership_updated, %V1.MembershipUpdated{member: own_member(member)}}
              ),
            {:ok, _} <-
              Audit.record({:server, server_id}, actor_id, "member.#{op}_role",
@@ -262,8 +316,7 @@ defmodule Lumia.Servers do
     with {:ok, _} <-
            Accounts.append_event(
              account_id,
-             {:membership_updated,
-              %V1.MembershipUpdated{member: Proto.member(member, role_ids(server_id, account_id))}}
+             {:membership_updated, %V1.MembershipUpdated{member: own_member(member)}}
            ),
          {:ok, _} <-
            Audit.record({:server, server_id}, actor_id, "member.set_roles",
@@ -600,42 +653,62 @@ defmodule Lumia.Servers do
     end
   end
 
-  @doc "Every account that can view the channel, resolved fresh from Postgres."
+  @doc """
+  Every account the channel is shown to, resolved fresh from Postgres:
+  those in it who are still members of its server and can view it
+  (architecture 6.8). The viewer diff announces this set's changes.
+  """
   def viewers(channel_id) do
-    case Lumia.Authz.Cache.fetch_current(channel_id) do
-      {:ok, snapshot} when is_binary(snapshot.server_id) ->
-        members =
-          Repo.all(
-            from m in Member,
-              where: m.server_id == ^snapshot.server_id,
-              select: {m.account_id, m.kind}
-          )
+    with {:ok, snapshot} when is_binary(snapshot.server_id) <-
+           Lumia.Authz.Cache.fetch_current(channel_id),
+         %Channel{} = channel <- Repo.get(Channel, channel_id) do
+      members =
+        Repo.all(
+          from cm in ChannelMember,
+            join: m in Member,
+            on: m.server_id == ^snapshot.server_id and m.account_id == cm.account_id,
+            where: cm.channel_id == ^channel_id,
+            select: {m.account_id, m.kind}
+        )
 
-        roles_by_account =
-          Repo.all(
-            from mr in MemberRole,
-              where: mr.server_id == ^snapshot.server_id,
-              select: {mr.account_id, mr.role_id}
-          )
+      roles_by_account =
+        Repo.all(
+          from mr in MemberRole,
+            where: mr.server_id == ^snapshot.server_id,
+            select: {mr.account_id, mr.role_id}
+        )
 
-        role_map = Enum.group_by(roles_by_account, &elem(&1, 0), &elem(&1, 1))
+      role_map = Enum.group_by(roles_by_account, &elem(&1, 0), &elem(&1, 1))
 
-        for {account_id, kind} <- members,
-            member = %{
-              account_id: account_id,
-              kind: String.to_existing_atom(kind),
-              role_ids: Map.get(role_map, account_id, []),
-              owner?: snapshot.owner_account_id == account_id
-            },
-            Authz.can?(snapshot, member, :view_channel),
-            do: account_id
-
-      _ ->
-        []
+      for {account_id, kind} <- members,
+          member = %{
+            account_id: account_id,
+            kind: String.to_existing_atom(kind),
+            role_ids: Map.get(role_map, account_id, []),
+            owner?: snapshot.owner_account_id == account_id
+          },
+          bits = Lumia.Authz.Access.permissions(snapshot, member, channel, true),
+          Permission.has?(bits, :view_channel),
+          do: account_id
+    else
+      _ -> []
     end
   end
 
   # ---- Internals ---------------------------------------------------------------
+
+  # A membership as its own account's log carries it: with its roles and
+  # its resolved server-level permissions, as the snapshot gives them, so a
+  # client knows what to offer after a change as it did before one.
+  defp own_member(%Member{server_id: server_id, account_id: account_id} = member) do
+    permissions =
+      case actor(server_id, account_id) do
+        {:ok, actor} -> actor.server_permissions
+        _ -> 0
+      end
+
+    Proto.member(member, role_ids(server_id, account_id), permissions)
+  end
 
   defp insert_member(server_id, account_id, kind, expires_at \\ nil) do
     %Member{
@@ -672,6 +745,33 @@ defmodule Lumia.Servers do
   end
 
   defp check_removal(_server, _account_id, _actor_id, _reason), do: {:error, :permission_denied}
+
+  # Out of every channel of the server and every invitation into one; a
+  # server DM stays theirs, hidden while they are not a member.
+  defp leave_channels(server_id, account_id) do
+    text = from c in Channel, where: c.server_id == ^server_id and c.kind == "text", select: c.id
+
+    Repo.delete_all(
+      from m in ChannelMember,
+        where: m.account_id == ^account_id and m.channel_id in subquery(text)
+    )
+
+    Repo.delete_all(
+      from i in Lumia.Servers.ChannelInvitation,
+        where: i.account_id == ^account_id and i.channel_id in subquery(text)
+    )
+
+    :ok
+  end
+
+  defp forget_viewer(account_id, channel_ids) do
+    Repo.delete_all(
+      from v in Lumia.Servers.ChannelViewer,
+        where: v.account_id == ^account_id and v.channel_id in ^channel_ids
+    )
+
+    :ok
+  end
 
   defp viewable_channel_ids(server_id, account_id) do
     Repo.all(

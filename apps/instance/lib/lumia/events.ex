@@ -136,6 +136,62 @@ defmodule Lumia.Events do
     end
   end
 
+  @doc """
+  Posts a notice in a server channel (architecture 6.8): a message with no
+  body, written by `author_id`, about `account_id`; `kind` is `"joined"`,
+  `"added"`, `"left"` or `"removed"`. It is materialized as any message
+  is, so it is in snapshots and scrollback, and cannot be edited or
+  deleted. Broadcasts after commit.
+  """
+  def append_notice(channel_id, author_id, kind, account_id)
+      when kind in ~w(joined added left removed) do
+    message_id = Schema.generate_id()
+
+    result =
+      Tx.transact(fn ->
+        now = DateTime.utc_now()
+
+        with {:ok, seq, acl_version, _kind} <- take_head(channel_id, now),
+             message = %V1.Message{
+               message_id: Proto.uuid(message_id),
+               channel_id: Proto.uuid(channel_id),
+               seq: seq,
+               author_account_id: Proto.uuid(author_id),
+               created_at: Proto.timestamp(now),
+               notice: Proto.notice(kind, account_id)
+             },
+             event = %V1.Event{
+               event_id: Proto.uuid(Schema.generate_id()),
+               channel_id: Proto.uuid(channel_id),
+               seq: seq,
+               actor_account_id: Proto.uuid(author_id),
+               created_at: Proto.timestamp(now),
+               acl_version: acl_version,
+               payload: {:message_created, %V1.MessageCreated{message: message}}
+             },
+             {:ok, {event, bytes}} <-
+               insert_event(channel_id, event, nil, %{account_id: author_id}, now),
+             {:ok, _} <-
+               Repo.insert(%Message{
+                 id: message_id,
+                 channel_id: channel_id,
+                 seq: seq,
+                 author_account_id: author_id,
+                 body: "",
+                 created_at: now,
+                 notice: kind,
+                 notice_account_id: account_id
+               }) do
+          {:ok, {event, bytes}}
+        end
+      end)
+
+    with {:ok, {event, bytes}} <- result do
+      broadcast_after_commit(channel_id, event, bytes, [])
+      {:ok, %{channel_id: channel_id, seq: event.seq, message_id: message_id}}
+    end
+  end
+
   # Deferred until the outermost transaction commits (see Lumia.Tx).
   defp broadcast_after_commit(channel_id, event, bytes, opts) do
     if Keyword.get(opts, :broadcast, true),
@@ -494,7 +550,9 @@ defmodule Lumia.Events do
 
     query =
       from m in Message,
-        where: m.id == ^message_id and m.channel_id == ^channel_id and is_nil(m.deleted_at),
+        where:
+          m.id == ^message_id and m.channel_id == ^channel_id and is_nil(m.deleted_at) and
+            is_nil(m.notice),
         select: m.seq
 
     case Repo.update_all(query, updates) do
