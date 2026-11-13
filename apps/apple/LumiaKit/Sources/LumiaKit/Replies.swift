@@ -28,7 +28,7 @@ public enum Replies {
     /// chosen, trimmed and kept to `quoteLimit` characters.
     public static func quote(messageID: String, authorID: String, body: String, part: String? = nil) -> QuoteSummary {
         let text = (part ?? body).trimmingCharacters(in: .whitespacesAndNewlines)
-        return QuoteSummary(messageId: messageID, authorAccountId: authorID, text: String(text.prefix(quoteLimit)), originalDeleted: false)
+        return QuoteSummary(messageId: messageID, authorAccountId: authorID, text: String(text.prefix(quoteLimit)), originalDeleted: false, silent: false)
     }
 
     /// What a quote above a message says for assistive technology, and its

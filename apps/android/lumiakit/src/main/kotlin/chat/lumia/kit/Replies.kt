@@ -51,7 +51,7 @@ const val SEEK_PAGES = 5
 fun quoteOf(messageId: String, authorAccountId: String, body: String, part: String? = null): QuoteSummary {
     val text = (part ?: body).trim()
     val kept = if (text.codePointCount(0, text.length) > QUOTE_MOST) text.substring(0, text.offsetByCodePoints(0, QUOTE_MOST)) else text
-    return QuoteSummary(messageId, authorAccountId, kept, false)
+    return QuoteSummary(messageId, authorAccountId, kept, false, false)
 }
 
 /** What the bar over the composer says first: "Replying to Ada"; the name is drawn stronger. */

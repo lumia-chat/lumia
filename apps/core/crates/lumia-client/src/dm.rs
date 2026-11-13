@@ -650,6 +650,27 @@ impl DmEngine {
         self.send_operation(channel_id, op)
     }
 
+    /// Edits one of this identity's messages (a `DmEdit` operation).
+    ///
+    /// # Errors
+    /// As [`DmEngine::send_operation`].
+    pub fn send_edit(
+        &mut self,
+        channel_id: &[u8],
+        message_id: Vec<u8>,
+        body: &str,
+    ) -> Result<Vec<Outcome>, ClientError> {
+        let op = DmOperation {
+            operation_id: wire::new_id(),
+            sent_at: Some(now_ts()),
+            op: Some(dm_operation::Op::Edit(lumia_core::proto::DmEdit {
+                message_id,
+                body: body.to_string(),
+            })),
+        };
+        self.send_operation(channel_id, op)
+    }
+
     /// Deletes one of this identity's messages (a `DmDelete` operation).
     ///
     /// # Errors

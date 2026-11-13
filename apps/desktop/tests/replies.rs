@@ -128,6 +128,7 @@ fn a_quote_and_reactions_are_drawn_with_who_reacted() {
         author_account_id: "grace".into(),
         text: "Shipped on Friday.".into(),
         original_deleted: false,
+        silent: false,
     });
     state.session.entries[1].reactions = vec![ReactionSummary {
         reaction: "👍".into(),
@@ -140,6 +141,7 @@ fn a_quote_and_reactions_are_drawn_with_who_reacted() {
         author_account_id: String::new(),
         text: String::new(),
         original_deleted: true,
+        silent: false,
     });
     state.session.revision += 1;
     let rt = runtime(state);
@@ -255,6 +257,7 @@ fn a_mention_opens_its_channel_at_it() {
         }],
         reactions: Vec::new(),
         mentions_me: true,
+        edited: false,
     };
     state.session.reads.mentions.insert(
         "acme".into(),

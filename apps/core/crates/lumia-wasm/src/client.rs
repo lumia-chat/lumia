@@ -902,6 +902,37 @@ impl Client {
         to_js(&lumia_client::app::find_mentions(&body, &members, everyone))
     }
 
+    /// Edits one of this account's messages in a server's channel: its new
+    /// body and mentions (`[{accountId, everyone, start, end}]`).
+    ///
+    /// # Errors
+    /// When not started or an id is malformed.
+    #[wasm_bindgen(js_name = editMessage)]
+    pub fn edit_message(
+        &self,
+        channel_id: String,
+        message_id: String,
+        body: String,
+        mentions: JsValue,
+    ) -> Result<(), JsError> {
+        let mentions: Vec<MentionSummary> = from_js(mentions)?.unwrap_or_default();
+        self.app
+            .edit_message(&channel_id, &message_id, &body, &mentions)
+            .map_err(js)
+    }
+
+    /// Deletes a message of a server's channel: this account's own, or any
+    /// for a moderator.
+    ///
+    /// # Errors
+    /// When not started or an id is malformed.
+    #[wasm_bindgen(js_name = deleteMessage)]
+    pub fn delete_message(&self, channel_id: String, message_id: String) -> Result<(), JsError> {
+        self.app
+            .delete_message(&channel_id, &message_id)
+            .map_err(js)
+    }
+
     /// Adds this account's reaction to a message, or takes it away.
     ///
     /// # Errors
@@ -1199,6 +1230,23 @@ impl Client {
     ) -> Result<(), JsError> {
         self.app
             .dm_react(&channel_id, &message_id, &emoji, remove)
+            .await
+            .map_err(js)
+    }
+
+    /// Edits one of this identity's messages in a personal DM.
+    ///
+    /// # Errors
+    /// Without the group for the conversation, or before the loop started.
+    #[wasm_bindgen(js_name = dmEdit)]
+    pub async fn dm_edit(
+        &self,
+        channel_id: String,
+        message_id: String,
+        body: String,
+    ) -> Result<(), JsError> {
+        self.app
+            .dm_edit(&channel_id, &message_id, &body)
             .await
             .map_err(js)
     }

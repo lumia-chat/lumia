@@ -317,5 +317,6 @@ pub fn quote_of(entry: &Entry, part: Option<&str>) -> QuoteSummary {
         author_account_id: entry.author_account_id.clone(),
         text: text.chars().take(2_000).collect(),
         original_deleted: false,
+        silent: false,
     }
 }

@@ -51,6 +51,7 @@ pub fn replies(state: &mut State) {
         author_account_id: "grace".into(),
         text: asked.into(),
         original_deleted: false,
+        silent: false,
     });
     quoting.reactions = vec![
         ReactionSummary {
@@ -76,6 +77,7 @@ pub fn replies(state: &mut State) {
         author_account_id: "grace".into(),
         text: String::new(),
         original_deleted: true,
+        silent: false,
     });
     state.session.entries = vec![
         entry("r1", 1, "grace", asked, 32),
@@ -103,6 +105,7 @@ pub fn replies(state: &mut State) {
         author_account_id: "grace".into(),
         text: named.into(),
         original_deleted: false,
+        silent: false,
     });
     state.replies.outside = Some(crate::app::replies::Outside {
         channel_id: "general".into(),
@@ -166,6 +169,7 @@ pub fn mentions(state: &mut State) {
         mentions: vec![mention("me", body, "@ada")],
         reactions: Vec::new(),
         mentions_me: true,
+        edited: false,
     };
     state.session.reads.mentions.insert(
         "acme".into(),

@@ -42,6 +42,8 @@ pub struct StoredMessage {
     pub created_at_micros: i64,
     /// Whether the message has been deleted.
     pub deleted: bool,
+    /// Whether its author has edited it.
+    pub edited: bool,
     /// A notice's kind as the protocol names it in lower case (`joined`,
     /// `added`, `left`, `removed`); empty for a message (architecture 6.8).
     pub notice: String,
@@ -66,6 +68,8 @@ pub struct StoredQuote {
     pub text: String,
     /// The message quoted was deleted, and the text with it.
     pub original_deleted: bool,
+    /// Sent without notifying the author quoted.
+    pub silent: bool,
 }
 
 /// A mention: an account (empty for everyone) and its byte range in the body.
@@ -103,6 +107,7 @@ impl StoredMessage {
             body: m.body.clone(),
             created_at_micros: crate::wire::micros(m.created_at.as_ref()).unwrap_or(0),
             deleted: m.deleted_at.is_some(),
+            edited: m.edited_at.is_some(),
             notice,
             notice_account_id,
             reply: m.reply_to.as_ref().map(|q| StoredQuote {
@@ -110,6 +115,7 @@ impl StoredMessage {
                 author_account_id: q.author_account_id.clone(),
                 text: q.text.clone(),
                 original_deleted: q.original_deleted,
+                silent: q.silent,
             }),
             mentions: m.mentions.iter().filter_map(mention_of).collect(),
             reactions: m
@@ -124,7 +130,9 @@ impl StoredMessage {
     }
 }
 
-fn mention_of(m: &crate::proto::Mention) -> Option<StoredMention> {
+/// A mention as the store keeps it; none for one of a role.
+#[must_use]
+pub fn mention_of(m: &crate::proto::Mention) -> Option<StoredMention> {
     use crate::proto::mention::Target;
     let (account_id, everyone) = match m.target.as_ref()? {
         Target::AccountId(id) => (id.clone(), false),

@@ -502,6 +502,9 @@ pub struct MessageSummary {
     /// author is who did it, `notice_account_id` who it is about.
     pub notice: String,
     pub notice_account_id: String,
+    /// Whether its author has edited it ("(edited)").
+    #[serde(default)]
+    pub edited: bool,
     /// What it quotes (architecture 6.6).
     pub reply: Option<QuoteSummary>,
     /// Whom it mentions, and where in its body.
@@ -524,6 +527,10 @@ pub struct QuoteSummary {
     pub text: String,
     /// The message quoted was deleted, and the text with it.
     pub original_deleted: bool,
+    /// Sent without notifying the author quoted; on a send, the reply bar's
+    /// "@ On" switch turned off.
+    #[serde(default)]
+    pub silent: bool,
 }
 
 /// A mention: an account, or everyone, and its byte range in the body.
@@ -842,7 +849,9 @@ fn hex_id(id: &[u8]) -> String {
 
 fn stored_summary(m: &lumia_core::store::StoredMessage, me: &[u8]) -> MessageSummary {
     let mentions_me = m.mentions.iter().any(|x| x.everyone || x.account_id == me)
-        || m.reply.as_ref().is_some_and(|q| q.author_account_id == me);
+        || m.reply
+            .as_ref()
+            .is_some_and(|q| q.author_account_id == me && !q.silent);
     MessageSummary {
         message_id: wire::display(&m.message_id),
         channel_id: wire::display(&m.channel_id),
@@ -853,11 +862,13 @@ fn stored_summary(m: &lumia_core::store::StoredMessage, me: &[u8]) -> MessageSum
         deleted: m.deleted,
         notice: m.notice.clone(),
         notice_account_id: hex_id(&m.notice_account_id),
+        edited: m.edited,
         reply: m.reply.as_ref().map(|q| QuoteSummary {
             message_id: wire::display(&q.message_id),
             author_account_id: hex_id(&q.author_account_id),
             text: q.text.clone(),
             original_deleted: q.original_deleted,
+            silent: q.silent,
         }),
         mentions: m
             .mentions
@@ -1175,7 +1186,7 @@ impl Reads {
                             || stored
                                 .reply
                                 .as_ref()
-                                .is_some_and(|q| q.author_account_id == self.me);
+                                .is_some_and(|q| q.author_account_id == self.me && !q.silent);
                         (!mine, named)
                     }
                     _ => (false, false),
@@ -2767,6 +2778,7 @@ impl App {
                 Ok::<_, ClientError>(lumia_core::proto::QuoteReply {
                     message_id: parse_uuid(&q.message_id)?,
                     text: q.text.clone(),
+                    silent: q.silent,
                     ..Default::default()
                 })
             })
@@ -2782,6 +2794,63 @@ impl App {
             })),
         }))?;
         Ok(wire::display(&id))
+    }
+
+    /// Edits one of this account's messages in a server's channel: its new
+    /// body and mentions (architecture 6.6). The instance refuses another's
+    /// message, a notice, and `@everyone` without `MENTION_EVERYONE`.
+    ///
+    /// # Errors
+    /// When not started or an id is malformed.
+    pub fn edit_message(
+        &self,
+        channel_id: &str,
+        message_id: &str,
+        body: &str,
+        mentions: &[MentionSummary],
+    ) -> Result<(), ClientError> {
+        let channel = parse_uuid(channel_id)?;
+        let mentions = mentions
+            .iter()
+            .map(|m| {
+                Ok(lumia_core::proto::Mention {
+                    target: Some(if m.everyone {
+                        mention::Target::Everyone(true)
+                    } else {
+                        mention::Target::AccountId(parse_uuid(&m.account_id)?)
+                    }),
+                    start: m.start,
+                    end: m.end,
+                })
+            })
+            .collect::<Result<Vec<_>, ClientError>>()?;
+        self.send_command(GatewayCommand::Send(Command {
+            command_id: wire::new_id(),
+            channel_id: channel,
+            op: Some(command::Op::EditMessage(lumia_core::proto::EditMessage {
+                message_id: parse_uuid(message_id)?,
+                body: body.to_string(),
+                mentions,
+            })),
+        }))
+    }
+
+    /// Deletes a message of a server's channel: this account's own, or any
+    /// for one holding `MANAGE_MESSAGES` there (architecture 6.6).
+    ///
+    /// # Errors
+    /// When not started or an id is malformed.
+    pub fn delete_message(&self, channel_id: &str, message_id: &str) -> Result<(), ClientError> {
+        let channel = parse_uuid(channel_id)?;
+        self.send_command(GatewayCommand::Send(Command {
+            command_id: wire::new_id(),
+            channel_id: channel,
+            op: Some(command::Op::DeleteMessage(
+                lumia_core::proto::DeleteMessage {
+                    message_id: parse_uuid(message_id)?,
+                },
+            )),
+        }))
     }
 
     /// Adds this account's reaction to a message of a server channel, or
@@ -3616,6 +3685,27 @@ impl App {
         Ok(())
     }
 
+    /// Edits one of this identity's messages in a personal DM.
+    ///
+    /// # Errors
+    /// Without the group for the conversation, or before the loop started.
+    pub async fn dm_edit(
+        &self,
+        channel_id: &str,
+        message_id: &str,
+        body: &str,
+    ) -> Result<(), ClientError> {
+        let channel = parse_uuid(channel_id)?;
+        let message = parse_uuid(message_id)?;
+        let engine = self.dm_engine_ready().await?;
+        let mut e = engine.lock().await;
+        e.load_participants(&channel)?;
+        let outcomes = e.send_edit(&channel, message, body)?;
+        drop(e);
+        self.dispatch(outcomes);
+        Ok(())
+    }
+
     /// Deletes one of this identity's messages in a personal DM.
     ///
     /// # Errors
@@ -3701,6 +3791,7 @@ impl App {
                         .unwrap_or_default(),
                     text: q.text.clone(),
                     original_deleted: q.original_deleted,
+                    silent: false,
                 }),
                 reactions: m
                     .reactions
@@ -3898,6 +3989,7 @@ mod read_tests {
                         author_account_id: a.to_vec(),
                         text: "x".into(),
                         original_deleted: false,
+                        silent: false,
                     }),
                     ..Default::default()
                 }),
@@ -3948,6 +4040,22 @@ mod read_tests {
         r.read_elsewhere(&ROOM, 7);
         let c = &r.by_channel[ROOM.as_slice()];
         assert_eq!((c.read_seq, c.unread, c.mentions), (7, 0, 0));
+    }
+
+    #[test]
+    fn a_silent_reply_does_not_notify_the_author_it_quotes() {
+        let mut r = reads("TEXT");
+        let mut quiet = sent(4, THEM, Vec::new(), Some(ME));
+        if let Some(event::Payload::MessageCreated(MessageCreated { message: Some(m) })) =
+            quiet.payload.as_mut()
+        {
+            if let Some(q) = m.reply_to.as_mut() {
+                q.silent = true;
+            }
+        }
+        r.count(&[quiet]);
+        let c = &r.by_channel[ROOM.as_slice()];
+        assert_eq!((c.unread, c.mentions), (1, 0));
     }
 
     #[test]

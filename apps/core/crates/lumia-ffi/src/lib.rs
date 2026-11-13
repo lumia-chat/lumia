@@ -395,6 +395,8 @@ pub struct MessageSummary {
     /// author is who did it, `notice_account_id` who it is about.
     pub notice: String,
     pub notice_account_id: String,
+    /// Whether its author has edited it ("(edited)").
+    pub edited: bool,
     /// What it quotes (architecture 6.6).
     pub reply: Option<QuoteSummary>,
     /// Whom it mentions, with UTF-8 byte ranges into the body.
@@ -414,6 +416,9 @@ pub struct QuoteSummary {
     /// What of it was quoted; empty once it is deleted.
     pub text: String,
     pub original_deleted: bool,
+    /// Sent without notifying the author quoted; on a send, the reply bar's
+    /// "@ On" switch turned off.
+    pub silent: bool,
 }
 
 impl From<app::QuoteSummary> for QuoteSummary {
@@ -423,6 +428,7 @@ impl From<app::QuoteSummary> for QuoteSummary {
             author_account_id: q.author_account_id,
             text: q.text,
             original_deleted: q.original_deleted,
+            silent: q.silent,
         }
     }
 }
@@ -434,6 +440,7 @@ impl From<QuoteSummary> for app::QuoteSummary {
             author_account_id: q.author_account_id,
             text: q.text,
             original_deleted: q.original_deleted,
+            silent: q.silent,
         }
     }
 }
@@ -539,6 +546,7 @@ impl From<app::MessageSummary> for MessageSummary {
             deleted: m.deleted,
             notice: m.notice,
             notice_account_id: m.notice_account_id,
+            edited: m.edited,
             reply: m.reply.map(Into::into),
             mentions: m.mentions.into_iter().map(Into::into).collect(),
             reactions: m.reactions.into_iter().map(Into::into).collect(),
@@ -1607,6 +1615,26 @@ impl Client {
             .collect()
     }
 
+    /// Edits one of this account's messages in a server's channel.
+    pub fn edit_message(
+        &self,
+        channel_id: String,
+        message_id: String,
+        body: String,
+        mentions: Vec<MentionSummary>,
+    ) -> Res<()> {
+        let mentions: Vec<app::MentionSummary> = mentions.into_iter().map(Into::into).collect();
+        Ok(self
+            .app
+            .edit_message(&channel_id, &message_id, &body, &mentions)?)
+    }
+
+    /// Deletes a message of a server's channel: this account's own, or any
+    /// for a moderator.
+    pub fn delete_message(&self, channel_id: String, message_id: String) -> Res<()> {
+        Ok(self.app.delete_message(&channel_id, &message_id)?)
+    }
+
     /// Adds this account's reaction to a message, or takes it away.
     pub fn react(
         &self,
@@ -1891,6 +1919,13 @@ impl Client {
         self.runtime
             .block_on(self.app.dm_send_with(&channel_id, &body, quote.as_ref()))?;
         Ok(())
+    }
+
+    /// Edits one of this identity's messages in a personal DM.
+    pub fn dm_edit(&self, channel_id: String, message_id: String, body: String) -> Res<()> {
+        Ok(self
+            .runtime
+            .block_on(self.app.dm_edit(&channel_id, &message_id, &body))?)
     }
 
     /// Adds this identity's reaction to a message of a personal DM, or

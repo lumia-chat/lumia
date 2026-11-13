@@ -810,3 +810,88 @@ async fn a_quote_a_mention_a_reaction_and_a_read() {
         .unwrap();
     assert!(state.read_seq >= reply.seq && state.unread == 0);
 }
+
+/// Editing and deleting (architecture 6.6): a member edits their own
+/// message, the owner may not edit it but, holding `MANAGE_MESSAGES`, may
+/// delete it, and a member's device follows both.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_author_edits_and_a_moderator_deletes() {
+    let Some(base) = instance() else { return };
+    let (owner, member, server_id, _member_id) = owner_and_member(&base).await;
+    let general = member
+        .app
+        .snapshot()
+        .await
+        .unwrap()
+        .channels
+        .iter()
+        .find(|c| c.server_id == server_id && c.name == "general")
+        .unwrap()
+        .channel_id
+        .clone();
+    let from = member.seen();
+    member.app.subscribe(&general).unwrap();
+    member
+        .wait_for(from, Duration::from_secs(10), first_read(&general))
+        .await
+        .expect("the channel is read");
+    let acked = |e: &AppEvent| matches!(e, AppEvent::Acked { .. }).then_some(());
+    let refused = |e: &AppEvent| matches!(e, AppEvent::Error { .. }).then_some(());
+    let sent = member.seen();
+    let id = member
+        .app
+        .send_message(&general, "Shipped Thursday.")
+        .unwrap();
+    member
+        .wait_for(sent, Duration::from_secs(10), acked)
+        .await
+        .expect("sent");
+
+    let started = owner.seen();
+    owner.start(std::slice::from_ref(&general)).unwrap();
+    owner
+        .wait_for(started, Duration::from_secs(10), welcomed)
+        .await
+        .expect("the owner is welcomed");
+    let tried = owner.seen();
+    owner
+        .app
+        .edit_message(&general, &id, "Not yours.", &[])
+        .unwrap();
+    owner
+        .wait_for(tried, Duration::from_secs(10), refused)
+        .await
+        .expect("an edit of another's message is refused");
+
+    let edited = member.seen();
+    member
+        .app
+        .edit_message(&general, &id, "Shipped Friday.", &[])
+        .unwrap();
+    let shown = member
+        .wait_for(edited, Duration::from_secs(10), |_| {
+            member
+                .app
+                .messages(&general, 50)
+                .unwrap()
+                .into_iter()
+                .find(|m| m.message_id == id && m.edited)
+        })
+        .await
+        .expect("the edit reaches the store");
+    assert_eq!(shown.body, "Shipped Friday.");
+
+    let gone = member.seen();
+    owner.app.delete_message(&general, &id).unwrap();
+    member
+        .wait_for(gone, Duration::from_secs(10), |_| {
+            member
+                .app
+                .messages(&general, 50)
+                .unwrap()
+                .into_iter()
+                .find(|m| m.message_id == id && m.deleted)
+        })
+        .await
+        .expect("the moderator's delete reaches the member");
+}

@@ -49,7 +49,9 @@ CREATE TABLE IF NOT EXISTS messages (
   reply_author_id BLOB NOT NULL DEFAULT x'',
   reply_text TEXT NOT NULL DEFAULT '',
   reply_deleted INTEGER NOT NULL DEFAULT 0,
-  mentions TEXT NOT NULL DEFAULT '[]'
+  mentions TEXT NOT NULL DEFAULT '[]',
+  edited INTEGER NOT NULL DEFAULT 0,
+  reply_silent INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS reactions (
   message_id BLOB NOT NULL,
@@ -609,7 +611,8 @@ impl Store for SqliteStore {
             .conn
             .prepare(
                 "SELECT message_id, channel_id, seq, author_account_id, body, created_at_micros, deleted,
-                        notice, notice_account_id, reply_to_id, reply_author_id, reply_text, reply_deleted, mentions
+                        notice, notice_account_id, reply_to_id, reply_author_id, reply_text, reply_deleted, mentions,
+                        edited, reply_silent
                  FROM messages WHERE channel_id = ?1 AND seq < ?2 ORDER BY seq DESC LIMIT ?3",
             )
             .map_err(backend)?;
@@ -626,6 +629,7 @@ impl Store for SqliteStore {
                     body: row.get(4)?,
                     created_at_micros: row.get(5)?,
                     deleted: row.get::<_, i64>(6)? != 0,
+                    edited: row.get::<_, i64>(14)? != 0,
                     notice: row.get(7)?,
                     notice_account_id: row.get(8)?,
                     reply: {
@@ -638,6 +642,7 @@ impl Store for SqliteStore {
                                 author_account_id: row.get(10)?,
                                 text: row.get(11)?,
                                 original_deleted: row.get::<_, i64>(12)? != 0,
+                                silent: row.get::<_, i64>(15)? != 0,
                             })
                         }
                     },
@@ -853,6 +858,9 @@ fn add_missing_columns(conn: &Connection) -> Result<(), StoreError> {
         ("reply_text", "TEXT NOT NULL DEFAULT ''"),
         ("reply_deleted", "INTEGER NOT NULL DEFAULT 0"),
         ("mentions", "TEXT NOT NULL DEFAULT '[]'"),
+        // Edits, and replies sent without notifying (6.6).
+        ("edited", "INTEGER NOT NULL DEFAULT 0"),
+        ("reply_silent", "INTEGER NOT NULL DEFAULT 0"),
     ];
     for (name, kind) in columns {
         let has = conn
@@ -925,9 +933,14 @@ fn materialize(tx: &rusqlite::Transaction<'_>, ev: &StoredEvent) -> Result<(), S
             }
         }
         Some(event::Payload::MessageEdited(edited)) => {
+            let mentions: Vec<_> = edited
+                .mentions
+                .iter()
+                .filter_map(lumia_core::store::mention_of)
+                .collect();
             tx.execute(
-                "UPDATE messages SET body = ?2 WHERE message_id = ?1",
-                params![edited.message_id, edited.body],
+                "UPDATE messages SET body = ?2, mentions = ?3, edited = 1 WHERE message_id = ?1 AND deleted = 0",
+                params![edited.message_id, edited.body, mentions_json(&mentions)],
             )
             .map_err(backend)?;
         }
@@ -985,8 +998,8 @@ fn insert_message(tx: &rusqlite::Transaction<'_>, m: &StoredMessage) -> Result<(
     let reply = m.reply.as_ref();
     tx.execute(
         "INSERT OR REPLACE INTO messages (message_id, channel_id, seq, author_account_id, body, created_at_micros, deleted, notice, notice_account_id,
-                                          reply_to_id, reply_author_id, reply_text, reply_deleted, mentions)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                                          reply_to_id, reply_author_id, reply_text, reply_deleted, mentions, edited, reply_silent)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
         params![
             m.message_id, m.channel_id, to_i64(m.seq), m.author_account_id, m.body, m.created_at_micros, i64::from(m.deleted),
             m.notice, m.notice_account_id,
@@ -995,6 +1008,8 @@ fn insert_message(tx: &rusqlite::Transaction<'_>, m: &StoredMessage) -> Result<(
             reply.map_or("", |q| q.text.as_str()),
             i64::from(reply.is_some_and(|q| q.original_deleted)),
             mentions_json(&m.mentions),
+            i64::from(m.edited),
+            i64::from(reply.is_some_and(|q| q.silent)),
         ],
     )
     .map_err(backend)?;
@@ -1129,6 +1144,7 @@ mod tests {
                         author_account_id: vec![5; 16],
                         text: "lunch?".into(),
                         original_deleted: false,
+                        silent: false,
                     }),
                     ..Default::default()
                 }),
@@ -1200,6 +1216,37 @@ mod tests {
         let quote = store.messages(&ch, 10).unwrap()[1].reply.clone().unwrap();
         assert!(quote.original_deleted);
         assert_eq!(quote.text, "");
+    }
+
+    #[test]
+    fn an_edit_is_kept_with_its_mentions_and_marked_edited() {
+        use lumia_core::proto::{mention, Mention, MessageEdited};
+        let mut store = SqliteStore::in_memory().unwrap();
+        let ch = vec![1u8; 16];
+        store
+            .apply(LogKind::Channel, &ch, &[created(&ch, 1, "@ada hi")])
+            .unwrap();
+        assert!(!store.messages(&ch, 10).unwrap()[0].edited);
+        let edited = stored(
+            &ch,
+            2,
+            event::Payload::MessageEdited(MessageEdited {
+                message_id: vec![1; 16],
+                body: "@bo hi".into(),
+                mentions: vec![Mention {
+                    target: Some(mention::Target::AccountId(vec![6; 16])),
+                    start: 0,
+                    end: 3,
+                }],
+                ..Default::default()
+            }),
+        );
+        store.apply(LogKind::Channel, &ch, &[edited]).unwrap();
+        let kept = &store.messages(&ch, 10).unwrap()[0];
+        assert!(kept.edited);
+        assert_eq!(kept.body, "@bo hi");
+        assert_eq!(kept.mentions.len(), 1);
+        assert_eq!(kept.mentions[0].account_id, vec![6; 16]);
     }
 
     #[test]
@@ -1309,6 +1356,7 @@ mod tests {
             body: "new".into(),
             created_at_micros: 0,
             deleted: false,
+            edited: false,
             notice: String::new(),
             notice_account_id: Vec::new(),
             reply: None,
