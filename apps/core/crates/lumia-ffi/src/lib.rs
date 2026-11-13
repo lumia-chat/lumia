@@ -131,6 +131,8 @@ pub struct ServerSummary {
     pub can_start_dms: bool,
     /// Whether it may mention everyone there (`MENTION_EVERYONE`).
     pub can_mention_everyone: bool,
+    /// Whether it may delete others' messages there (`MANAGE_MESSAGES`).
+    pub can_manage_messages: bool,
     /// This account's own switches there: adds to channels wait as
     /// invitations; nobody may start a server DM with it.
     pub channel_adds_by_invitation: bool,
@@ -148,6 +150,7 @@ impl From<app::ServerSummary> for ServerSummary {
             can_manage_channels: s.can_manage_channels,
             can_start_dms: s.can_start_dms,
             can_mention_everyone: s.can_mention_everyone,
+            can_manage_messages: s.can_manage_messages,
             channel_adds_by_invitation: s.channel_adds_by_invitation,
             server_dms_off: s.server_dms_off,
         }

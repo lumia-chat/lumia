@@ -308,6 +308,7 @@ pub(crate) fn servers_sample(state: &mut State) {
                 channel_adds_by_invitation: false,
                 server_dms_off: false,
                 can_mention_everyone: false,
+                can_manage_messages: false,
             },
             ServerSummary {
                 server_id: "garden".into(),
@@ -320,6 +321,7 @@ pub(crate) fn servers_sample(state: &mut State) {
                 channel_adds_by_invitation: false,
                 server_dms_off: false,
                 can_mention_everyone: false,
+                can_manage_messages: false,
             },
         ],
         channels: vec![
@@ -664,6 +666,7 @@ mod staged {
                 channel_adds_by_invitation: false,
                 server_dms_off: false,
                 can_mention_everyone: false,
+                can_manage_messages: false,
             }],
             channels: vec![
                 channel("general", "acme", "general", "", &[]),
@@ -934,6 +937,7 @@ pub fn bodies(state: &mut State) {
             channel_adds_by_invitation: false,
             server_dms_off: false,
             can_mention_everyone: false,
+            can_manage_messages: false,
         }],
         channels: vec![ChannelSummary {
             channel_id: "general".into(),

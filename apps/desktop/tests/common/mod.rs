@@ -167,6 +167,7 @@ pub fn snapshot() -> SnapshotSummary {
                 channel_adds_by_invitation: false,
                 server_dms_off: false,
                 can_mention_everyone: false,
+                can_manage_messages: false,
             },
             ServerSummary {
                 server_id: "garden".into(),
@@ -179,6 +180,7 @@ pub fn snapshot() -> SnapshotSummary {
                 channel_adds_by_invitation: false,
                 server_dms_off: false,
                 can_mention_everyone: false,
+                can_manage_messages: false,
             },
         ],
         channels: vec![
