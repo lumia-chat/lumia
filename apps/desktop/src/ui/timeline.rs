@@ -142,7 +142,7 @@ pub fn view(s: &State, label: String, look: Look) -> El {
         .scroll(ScrollSpec { stick_bottom: true })
         .child(el().grow(1.0))
         .child(rows)
-        .with_scroll_bar(look)
+        .with_scroll_bar("messages", look)
 }
 
 /// Whether the open conversation has anything to list.

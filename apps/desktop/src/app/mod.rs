@@ -8,6 +8,7 @@
 //! (devices, profile, status).
 
 pub mod account;
+pub mod autoscroll;
 pub mod home;
 pub mod links;
 pub mod menu;
@@ -107,6 +108,8 @@ pub struct State {
     pub notices: notices::Notices,
     /// The avatars the session holds, decoded for drawing.
     pub pictures: pictures::Pictures,
+    /// The pane the middle button scrolls while it is held (`autoscroll`).
+    pub autoscroll: autoscroll::Autoscroll,
 }
 
 impl State {
@@ -139,6 +142,7 @@ impl State {
             links: links::Links::default(),
             notices: notices::Notices::default(),
             pictures: pictures::Pictures::default(),
+            autoscroll: autoscroll::Autoscroll::default(),
         }
     }
 
@@ -480,7 +484,14 @@ pub fn setup(state: &mut State, waker: Waker) {
 }
 
 /// `AppSpec::poll`: before every frame, on the window's thread.
-pub fn poll(state: &mut State, _now: f64, tx: &mut Tx) -> bool {
+pub fn poll(state: &mut State, now: f64, tx: &mut Tx) -> bool {
+    // The middle button held over a pane: it moves a step each frame until the button is up.
+    if let Some((pane, y)) = state.autoscroll_step(now) {
+        tx.scroll_to_y(pane, y);
+    }
+    if state.autoscroll.active() {
+        tx.wake_after(std::time::Duration::from_millis(16));
+    }
     let drained = state.drain();
     let now = chrono::Utc::now().timestamp_micros();
     let ticked = state.tick(now);

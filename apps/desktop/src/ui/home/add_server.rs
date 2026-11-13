@@ -43,7 +43,7 @@ pub fn view(s: &State, look: Look) -> El {
                 stick_bottom: false,
             })
             .child(page)
-            .with_scroll_bar(look),
+            .with_scroll_bar("add-server", look),
     )
 }
 

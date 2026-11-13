@@ -100,7 +100,7 @@ pub fn sidebar(s: &State, server: &ServerSummary, look: Look) -> El {
             stick_bottom: false,
         })
         .child(channels)
-        .with_scroll_bar(look);
+        .with_scroll_bar("channels", look);
     // The board's control beside the name: a message to someone, which is Home's to start.
     let new_message = icon_button(
         "new-message",
@@ -287,7 +287,7 @@ pub fn members(s: &State, server: &ServerSummary, look: Look) -> El {
                     stick_bottom: false,
                 })
                 .child(list)
-                .with_scroll_bar(look),
+                .with_scroll_bar("members", look),
         )
 }
 

@@ -187,7 +187,7 @@ pub fn invite(s: &State, look: Look) -> Option<El> {
                     stick_bottom: false,
                 })
                 .child(body)
-                .with_scroll_bar(look),
+                .with_scroll_bar("invite-body", look),
         ),
     )
 }

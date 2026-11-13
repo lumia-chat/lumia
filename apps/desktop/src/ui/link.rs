@@ -120,7 +120,7 @@ pub(super) fn screen(key: &'static str, content: El, look: Look) -> El {
         .child(room())
         .child(col().items_center().py(t::SPACE_40).child(content))
         .child(room())
-        .with_scroll_bar(look)
+        .with_scroll_bar(key, look)
 }
 
 fn claim(s: &mut State, _: &mut Tx) {

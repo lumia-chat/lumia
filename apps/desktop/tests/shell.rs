@@ -414,6 +414,92 @@ fn the_message_list_has_a_scroll_bar_that_shows_while_it_scrolls() {
     );
 }
 
+/// The middle button held over a pane and the pointer moved up from where it came down
+/// scrolls the pane up a step each frame, faster further away, with a mark where it came
+/// down, until the button comes up (`app::autoscroll`). The primary button's drag is a
+/// selection, as before, and starts none of it.
+#[test]
+fn the_middle_button_held_and_moved_autoscrolls_a_pane() {
+    use rune::PointerButton;
+
+    let mut state = signed_in();
+    let now = chrono::Utc::now().timestamp_micros();
+    state.session.entries = (0..80)
+        .map(|i| {
+            message(
+                &format!("s{i}"),
+                "grace",
+                "A line.",
+                now - (80 - i) * 60_000_000,
+            )
+        })
+        .collect();
+    state.session.revision += 1;
+    let mut rt = runtime(state);
+    settle(&mut rt);
+    // How far the list has scrolled, as where its last row stands: up the screen as the
+    // list scrolls down, down it as the list scrolls up. Negated, so up is less.
+    let offset = |rt: &rune::Runtime<State>| {
+        -rt.elements()
+            .into_iter()
+            .find(|e| e.key.as_deref() == Some("s79") && e.role == "listitem")
+            .map_or(f32::MAX, |e| e.rect[1])
+    };
+    // What a window's poll does before each frame, `seconds` into the run.
+    let frame = |rt: &mut rune::Runtime<State>, seconds: f64| {
+        rt.update(move |s, tx| {
+            lumia_shell::app::poll(s, seconds, tx);
+        });
+        rt.frame(1.0 / 60.0);
+    };
+    let (x, y) = rt.find("messages").unwrap();
+    let at_rest = offset(&rt);
+
+    // A primary drag is the content's.
+    rt.pointer_move(x, y);
+    rt.pointer_down(x, y);
+    rt.pointer_move(x, y - 120.0);
+    settle(&mut rt);
+    assert!(!rt.state.autoscroll.active());
+    rt.pointer_up(x, y - 120.0);
+    settle(&mut rt);
+
+    // Held near the press: the mark, and no movement.
+    rt.pointer_move(x, y);
+    rt.button_down(x, y, PointerButton::Middle);
+    rt.pointer_move(x, y - 4.0);
+    settle(&mut rt);
+    assert!(rt.state.autoscroll.active());
+    assert!(rt.find("autoscroll-mark").is_some());
+    for i in 0..5 {
+        frame(&mut rt, f64::from(i) * 0.05);
+    }
+    assert_eq!(offset(&rt), at_rest, "inside the dead zone nothing scrolls");
+
+    // Moved well above it: up, and on while it is held.
+    rt.pointer_move(x, y - 120.0);
+    for i in 5..20 {
+        frame(&mut rt, f64::from(i) * 0.05);
+    }
+    let moved = offset(&rt);
+    assert!(moved < at_rest - 100.0, "{moved} from {at_rest}");
+    for i in 20..30 {
+        frame(&mut rt, f64::from(i) * 0.05);
+    }
+    assert!(offset(&rt) < moved, "it goes on while held");
+
+    // Let go: it stops, and the mark goes.
+    rt.button_up(x, y - 120.0, PointerButton::Middle);
+    settle(&mut rt);
+    assert!(!rt.state.autoscroll.active());
+    assert!(rt.find("autoscroll-mark").is_none());
+    let stopped = offset(&rt);
+    for i in 30..40 {
+        frame(&mut rt, f64::from(i) * 0.05);
+    }
+    assert_eq!(offset(&rt), stopped);
+}
+
 /// The instance's word that `who` is typing in `channel` for `seconds` more.
 fn typing(channel: &str, who: &str, seconds: i64) -> Update {
     Update::Gateway(lumia_client::app::AppEvent::Typing {

@@ -123,7 +123,7 @@ pub fn sidebar(s: &State, look: Look) -> El {
                 stick_bottom: false,
             })
             .child(list)
-            .with_scroll_bar(look),
+            .with_scroll_bar("conversations", look),
     );
     let new_message = icon_button(
         "new-message",
@@ -298,7 +298,7 @@ fn page(title: &str, topic: &str, content: El, look: Look) -> El {
                         .pb(t::SPACE_24)
                         .gap(t::SPACE_12),
                 )
-                .with_scroll_bar(look),
+                .with_scroll_bar("page", look),
         )
 }
 

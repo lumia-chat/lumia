@@ -68,7 +68,7 @@ pub(crate) fn page(key: &'static str, title: &str, topic: &str, content: El, loo
                 stick_bottom: false,
             })
             .child(content)
-            .with_scroll_bar(look),
+            .with_scroll_bar(key, look),
     )
 }
 

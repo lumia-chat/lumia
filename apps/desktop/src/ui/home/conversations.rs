@@ -247,7 +247,7 @@ pub fn aside(s: &State, look: Look) -> Option<El> {
                         .child(section_label("In this conversation", t::SPACE_8, look))
                         .child(list),
                 )
-                .with_scroll_bar(look),
+                .with_scroll_bar("participants", look),
         ),
     )
 }
