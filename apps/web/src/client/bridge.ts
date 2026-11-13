@@ -545,6 +545,10 @@ export class Bridge {
   messages(channelId: string, limit = 100): Promise<MessageSummary[]> {
     return this.call("messages", channelId, limit);
   }
+  /** Scrollback from the instance, older than the store holds: the newest `limit` below `beforeSeq`, oldest first. Not stored. */
+  olderMessages(channelId: string, beforeSeq: number, limit = 100): Promise<{ messages: MessageSummary[]; hasMore: boolean }> {
+    return this.call("olderMessages", channelId, beforeSeq, limit);
+  }
   start(channelIds: string[]): Promise<void> {
     return this.call("start", channelIds);
   }

@@ -963,6 +963,61 @@ async function membershipStep(which: string, stamp: number) {
 // while the Mentions page is open: the channel's row, the Mentions row and
 // the title count it, the page lists it, and opening it from there shows
 // the "New messages" line and reads it, which takes the counts away.
+// History from before this browser's store begins: a channel more than
+// 1,000 events long is read from its snapshot (the newest 50), so scrolling
+// up reads the store's few and then the instance's scrollback, a page at a
+// time, back to the channel's first message.
+async function historyStep(which: string, stamp: number) {
+  const ownerDir = resolve(work, `cli-history-owner-${which}`);
+  const readerDir = resolve(work, `cli-history-reader-${which}`);
+  const owner = `writer${which}${stamp}`;
+  const reader = `reader${which}${stamp}`;
+  lumia(ownerDir, "instance", "add", instance);
+  lumia(ownerDir, "account", "create", "--handle", owner, "--password", password);
+  const server = lumia(ownerDir, "server-create", `History ${stamp}`).match(/[0-9a-f-]{36}/)?.[0];
+  if (!server) throw new Error("no server id");
+  const general = lumia(ownerDir, "channel-create", server, "general").match(/[0-9a-f-]{36}/)?.[0];
+  if (!general) throw new Error("no channel id");
+  const code = lumia(ownerDir, "invite-create", server).trim().split(/\s+/)[0];
+  if (!code) throw new Error("no invite code");
+  lumia(readerDir, "instance", "add", instance);
+  lumia(readerDir, "account", "create", "--handle", reader, "--password", password);
+  lumia(readerDir, "join", code);
+  phase("seeding");
+  // The first alone, so it is the channel's first message; the rest sixteen at a time.
+  lumia(ownerDir, "send", general, "history 0");
+  const SENT = 1_050;
+  for (let from = 1; from < SENT; from += 16) {
+    const batch = [];
+    for (let i = from; i < Math.min(from + 16, SENT); i++) {
+      batch.push(Bun.spawn([cli, "--data-dir", ownerDir, "send", general, `history ${i}`], { stdout: "ignore", stderr: "ignore" }).exited);
+    }
+    await Promise.all(batch);
+  }
+  const { ctx, page } = await open(which, "history");
+  const t0 = Date.now();
+  try {
+    await trustCard(page);
+    await page.getByLabel("Email or handle").fill(reader);
+    await page.getByRole("textbox", { name: "Password" }).fill(password);
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await page.getByPlaceholder("Message #general").waitFor();
+    phase("scrolling back");
+    const first = page.locator(".lu-msg__body", { hasText: /^history 0$/ });
+    const list = page.locator(".lu-msglist").first();
+    for (let i = 0; i < 120 && (await first.count()) === 0; i++) {
+      // To the oldest message shown: the list is bottom-anchored, so its top is the most negative scroll.
+      await list.evaluate((el) => el.scrollTo({ top: -el.scrollHeight }));
+      await page.waitForTimeout(250);
+    }
+    await first.waitFor({ timeout: 5_000 });
+    await page.screenshot({ path: `${out}/${which}-history.png` });
+  } finally {
+    await ctx.close();
+  }
+  console.log(`  ${which}: scrolled a channel of ${SENT} messages back to its first, past the store into the instance's history, in ${Date.now() - t0} ms`);
+}
+
 async function repliesStep(which: string, stamp: number) {
   const ownerDir = resolve(work, `cli-replies-owner-${which}`);
   const readerDir = resolve(work, `cli-replies-reader-${which}`);
@@ -1570,6 +1625,7 @@ try {
       ["aside", () => asideStep(which, stamp)],
       ["membership", () => membershipStep(which, stamp)],
       ["replies", () => repliesStep(which, stamp)],
+      ["history", () => historyStep(which, stamp)],
       ["push", () => webPush(which, `web${stamp}`, passwordDir, server, general, webAccount)],
       ["magic link", () => magicLink(which)],
       ["passkey", () => passkey(which, `web${stamp}`)],

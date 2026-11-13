@@ -68,7 +68,7 @@ fn to_js<T: Serialize>(value: &T) -> Result<JsValue, JsError> {
     serde_wasm_bindgen::to_value(value).map_err(|e| JsError::new(&e.to_string()))
 }
 
-/// A page of mentions, as `mentions` gives it.
+/// A page of messages, as `mentions` and `olderMessages` give it.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct MentionsPage {
@@ -803,6 +803,29 @@ impl Client {
     /// On a store failure or a malformed id.
     pub fn messages(&self, channel_id: String, limit: u32) -> Result<JsValue, JsError> {
         to_js(&self.app.messages(&channel_id, limit).map_err(js)?)
+    }
+
+    /// `GET /channels/{id}/messages`: scrollback from the instance, older
+    /// than the store holds: `{messages, hasMore}`, the newest `limit` below
+    /// `before_seq`, oldest first. Not stored.
+    ///
+    /// # Errors
+    /// On transport or API failure.
+    #[wasm_bindgen(js_name = olderMessages)]
+    pub async fn older_messages(
+        &self,
+        channel_id: String,
+        before_seq: f64,
+        limit: u32,
+    ) -> Result<JsValue, JsError> {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let before_seq = before_seq.max(0.0) as u64;
+        let (messages, has_more) = self
+            .app
+            .older_messages(&channel_id, before_seq, limit)
+            .await
+            .map_err(js)?;
+        to_js(&MentionsPage { messages, has_more })
     }
 
     /// Starts the gateway loop on this worker; `listener` is called with

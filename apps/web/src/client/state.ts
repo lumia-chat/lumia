@@ -4,7 +4,7 @@
 // bridge; nothing here renders.
 import { QueryClient, createInfiniteQuery, createQuery, useQueryClient } from "@tanstack/solid-query";
 import { createSignal } from "solid-js";
-import { Bridge, ClientError, claimOwnership, type ClientEvent, type MemberSummary, type Opened, type ReadStateSummary, type SnapshotSummary, type StatusSummary } from "./bridge";
+import { Bridge, ClientError, claimOwnership, type ClientEvent, type MemberSummary, type MessageSummary, type Opened, type ReadStateSummary, type SnapshotSummary, type StatusSummary } from "./bridge";
 
 export const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: Infinity, retry: false } },
@@ -563,30 +563,65 @@ export function tookSnapshot(snapshot: SnapshotSummary): void {
   queryClient.setQueryData(["snapshot"], snapshot);
 }
 
-/** How many of a channel's newest messages are read from the store: a page of 200, more as a jump to an older one asks. */
+/** How many of a channel's newest messages are read from the store: a page of 200, more as the reader scrolls up or a jump to an older one asks. */
 const MESSAGE_PAGE = 200;
 const [messagePages, setMessagePages] = createSignal<Map<string, number>>(new Map());
 
+/** What the instance gave of a channel's history from before the store begins (`olderMessages`), oldest first, and whether older remains. Kept for the page's life, not stored, as the desktop shell keeps it. */
+type History = { messages: MessageSummary[]; more: boolean };
+const history = new Map<string, History>();
+/** How many messages the store gave for a channel at its last read: fewer than asked means it has no older. */
+const storedCount = new Map<string, number>();
+const loadingOlder = new Set<string>();
+
+/** A channel's messages: what the instance gave from before the store begins, then the store's newest pages. */
 export function messagesQuery(channelId: () => string | undefined) {
   return createQuery(() => {
     const id = channelId();
-    const pages = (id && messagePages().get(id)) || 1;
     return {
       queryKey: ["messages", id],
-      queryFn: () => client().messages(id as string, MESSAGE_PAGE * pages),
+      queryFn: async () => {
+        // Read when it runs: a page more is asked for by setting this, then refetching.
+        const pages = messagePages().get(id as string) ?? 1;
+        const stored = await client().messages(id as string, MESSAGE_PAGE * pages);
+        storedCount.set(id as string, stored.length);
+        const first = stored[0]?.seq ?? Infinity;
+        const older = (history.get(id as string)?.messages ?? []).filter((m) => m.seq < first);
+        return [...older, ...stored];
+      },
       enabled: !!id,
     };
   });
 }
 
-/** Reads one more page of a channel's older messages from the store; false when there were no more. */
+/** Reads one more page of a channel's older messages: from the store while it has more, then from the instance. False when there were no more, or one is already on its way. */
 export async function loadOlderMessages(channelId: string): Promise<boolean> {
-  const pages = messagePages().get(channelId) ?? 1;
-  const before = queryClient.getQueryData<unknown[]>(["messages", channelId])?.length ?? 0;
-  if (before < MESSAGE_PAGE * pages) return false;
-  setMessagePages(new Map(messagePages()).set(channelId, pages + 1));
-  const after = await queryClient.fetchQuery({ queryKey: ["messages", channelId], queryFn: () => client().messages(channelId, MESSAGE_PAGE * (pages + 1)) });
-  return after.length > before;
+  if (loadingOlder.has(channelId)) return false;
+  loadingOlder.add(channelId);
+  try {
+    const pages = messagePages().get(channelId) ?? 1;
+    const stored = storedCount.get(channelId) ?? 0;
+    if (stored >= MESSAGE_PAGE * pages) {
+      setMessagePages(new Map(messagePages()).set(channelId, pages + 1));
+      await queryClient.refetchQueries({ queryKey: ["messages", channelId] });
+      if ((storedCount.get(channelId) ?? 0) > stored) return true;
+    }
+    // The store has nothing older: the instance's scrollback, before the oldest shown.
+    const kept = history.get(channelId);
+    if (kept && !kept.more) return false;
+    const oldest = queryClient.getQueryData<MessageSummary[]>(["messages", channelId])?.[0]?.seq;
+    if (oldest === undefined || oldest <= 1) return false;
+    const page = await client().olderMessages(channelId, oldest, MESSAGE_PAGE);
+    history.set(channelId, { messages: [...page.messages, ...(kept?.messages ?? [])], more: page.hasMore && page.messages.length > 0 });
+    await queryClient.refetchQueries({ queryKey: ["messages", channelId] });
+    return page.messages.length > 0;
+  } catch {
+    // Not asked again until the page is reloaded.
+    history.set(channelId, { messages: history.get(channelId)?.messages ?? [], more: false });
+    return false;
+  } finally {
+    loadingOlder.delete(channelId);
+  }
 }
 
 export { useQueryClient };

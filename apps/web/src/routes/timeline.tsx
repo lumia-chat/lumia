@@ -163,6 +163,8 @@ export interface TimelineProps {
 }
 
 const JUMP_PAGES = 5;
+/** How near the oldest message shown, in pixels, the reader gets before the page before it is read. */
+const OLDER_WITHIN = 600;
 
 export function Timeline(props: TimelineProps) {
   let scroller: HTMLDivElement | undefined;
@@ -174,10 +176,11 @@ export function Timeline(props: TimelineProps) {
     if (rs === null) return;
     setNewFrom(rs && rs.unread > 0 ? rs.readSeq : undefined);
   });
+  // Above the first unread message: after the read position, someone else's, not a notice (as the count counts).
   const firstNew = createMemo(() => {
     const from = newFrom();
     if (from === null || from === undefined) return undefined;
-    return props.items.find((m) => m.seq > from)?.id;
+    return props.items.find((m) => m.seq > from && !m.notice && m.authorId !== props.me)?.id;
   });
   const days = createMemo(() =>
     byDay(props.items, (m) => m.at).map((day) => ({
@@ -219,6 +222,16 @@ export function Timeline(props: TimelineProps) {
       void frame().then(() => jump(id).finally(() => props.onJumped?.()));
     }),
   );
+
+  // Reading up to the oldest messages shown asks for the page before them: the store's, then the
+  // instance's. The list is bottom-anchored, so what comes in above leaves the view where it is.
+  let older = false;
+  const nearTop = () => {
+    if (older || !props.loadOlder || !scroller) return;
+    if (scroller.scrollHeight - scroller.clientHeight + scroller.scrollTop > OLDER_WITHIN) return;
+    older = true;
+    void props.loadOlder().finally(() => (older = false));
+  };
 
   // At its newest end: the list is bottom-anchored (column-reverse), so scrolled to the end is 0.
   const atEnd = () => !scroller || Math.abs(scroller.scrollTop) < 4;
@@ -327,6 +340,7 @@ export function Timeline(props: TimelineProps) {
         onScroll={() => {
           props.onAtEnd(atEnd());
           if (selected()) onSelection();
+          nearTop();
         }}
       >
         {props.before}
