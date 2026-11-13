@@ -10,7 +10,7 @@
 //! menu (`menus::account`), and its dot says whether the gateway is connected.
 
 use lumia_client::app::ServerSummary;
-use rune::{Cursor, El, col, el, icon, row, text};
+use rune::{Cursor, Edge, El, Transition, col, el, icon, row, text};
 
 use super::components::{Look, avatar_of, circled, drawn, initials, shadowed, status_dot};
 use super::menus::{SELF_AVATAR, SERVER_TITLE};
@@ -57,6 +57,12 @@ pub fn view(s: &State, look: Look) -> El {
         .w_full()
         .h_full()
         .fill(look.c.bg)
+        // How wide the window is decides where the aside goes (`app::aside`).
+        .on_layout(|s: &mut State, [_, _, width, _]: [f32; 4]| {
+            if s.window_width != Some(width) {
+                s.set_window_width(width);
+            }
+        })
         .child(rail(s, current, look))
         .child(sidebar)
         .child(
@@ -68,9 +74,39 @@ pub fn view(s: &State, look: Look) -> El {
                 .child(main),
         );
     match aside {
-        Some(aside) => shell.child(col().h_full().padding(t::SPACE_8).child(aside)),
-        None => shell.child(el().w(t::SPACE_8)),
+        Some(aside) if s.aside_in_row() => {
+            shell.child(col().h_full().padding(t::SPACE_8).child(aside))
+        }
+        Some(aside) if s.aside_over() => shell
+            .child(el().w(t::SPACE_8))
+            .child(scrim(look))
+            .child(slideover(aside)),
+        _ => shell.child(el().w(t::SPACE_8)),
     }
+}
+
+/// The shade over the window under an aside that slides over it: a press on it puts the
+/// aside away.
+fn scrim(look: Look) -> El {
+    el().key("aside-scrim")
+        .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+        .fill(look.c.scrim)
+        .a11y_hidden()
+        .on_press(State::close_aside)
+}
+
+/// The aside over a narrow window's conversation, at its end: it slides in from there and
+/// out again, and while it is over, the window behind it waits (a press outside, or Escape,
+/// puts it away).
+fn slideover(aside: El) -> El {
+    col()
+        .key("aside-over")
+        .pin(None, Some(0.0), Some(0.0), Some(0.0))
+        .h_full()
+        .padding(t::SPACE_8)
+        .transition(Transition::move_edge(Edge::Trailing))
+        .modal(true, State::close_aside)
+        .child(aside)
 }
 
 // ---- Rail -------------------------------------------------------------------------------

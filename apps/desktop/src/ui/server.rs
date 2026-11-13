@@ -148,6 +148,7 @@ pub fn main(s: &State, server: &ServerSummary, look: Look) -> El {
             list_label: format!("Messages in {name}"),
             placeholder: format!("Message #{name}"),
             empty: ("Nothing here yet", "Say something."),
+            aside: Some("Members"),
         },
         look,
     )

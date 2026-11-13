@@ -3,7 +3,9 @@
 
 use rune::{Cursor, Cycle, El, Icon, Span, col, el, icon, rich, row, text, text_input};
 
-use super::components::{Look, empty_state, error_text, panel, title_rule, topic as topic_line};
+use super::components::{
+    Look, empty_state, error_text, icon_button, panel, title_rule, topic as topic_line,
+};
 use super::timeline;
 use crate::app::State;
 use crate::tokens::{self as t, icons};
@@ -19,6 +21,9 @@ pub struct Chrome<'a> {
     pub placeholder: String,
     /// The title and line of the empty state, when there is nothing to list.
     pub empty: (&'a str, &'a str),
+    /// What the aside beside the conversation is called, for the header's toggle that
+    /// shows and puts it away (`app::aside`); none when there is no aside.
+    pub aside: Option<&'a str>,
 }
 
 /// What a personal conversation says besides; a channel has none of it.
@@ -51,12 +56,13 @@ pub fn view_with(s: &State, chrome: Chrome<'_>, extras: Extras, look: Look) -> E
     } else {
         timeline::view(s, chrome.list_label, look)
     };
-    let mut pane = panel("panel", look).w_full().child(header_with(
-        chrome.title,
-        chrome.glyph,
-        extras.topic.as_deref(),
-        look,
-    ));
+    let mut header = header_with(chrome.title, chrome.glyph, extras.topic.as_deref(), look);
+    if let Some(aside) = chrome.aside {
+        header = header
+            .child(el().grow(1.0))
+            .child(aside_toggle(s, aside, look));
+    }
+    let mut pane = panel("panel", look).w_full().child(header);
     if !extras.notices.is_empty() {
         let mut notices = col()
             .key("notices")
@@ -94,6 +100,28 @@ pub fn header(title: &str, glyph: Option<&'static Icon>, look: Look) -> El {
 }
 
 /// [`header`] with a topic: a quieter line beside the title, after a rule.
+/// The header's toggle of the aside named `aside`: pressed while it shows.
+fn aside_toggle(s: &State, aside: &str, look: Look) -> El {
+    let shown = s.aside_shown();
+    let button = icon_button(
+        "toggle-aside",
+        &icons::MEMBERS,
+        &if shown {
+            format!("Hide {}", aside.to_lowercase())
+        } else {
+            format!("Show {}", aside.to_lowercase())
+        },
+        State::toggle_aside,
+        look,
+    )
+    .checked(shown);
+    if shown {
+        button.fill(look.c.hover_icon)
+    } else {
+        button
+    }
+}
+
 pub fn header_with(
     title: &str,
     glyph: Option<&'static Icon>,

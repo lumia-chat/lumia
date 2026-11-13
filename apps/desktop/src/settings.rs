@@ -43,6 +43,9 @@ pub struct Settings {
     pub appearance: Appearance,
     pub density: Density,
     pub scroll_bars: ScrollBars,
+    /// The member list (or a conversation's details) put away from a wide window's row by
+    /// its toggle in the conversation's header. A narrow window never has it in the row.
+    pub aside_hidden: bool,
 }
 
 /// Light, dark, or whichever the system is in.

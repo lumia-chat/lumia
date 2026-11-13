@@ -104,6 +104,13 @@ pub const SCENES: &[Scene] = &[
         servers_sample(s);
         s.open_account_menu();
     }),
+    // A window too narrow for the member list in the row (`app::aside`): it slides over the
+    // conversation's end. Drawn at `--size 900x700`.
+    ("members-over", |s| {
+        servers_sample(s);
+        s.set_window_width(900.0);
+        s.toggle_aside();
+    }),
     // A server's settings (`ui/server_settings.rs`): Acme with a picture, which the rail
     // draws too, and a shorter retention chosen and not yet saved, which says what it
     // deletes. The picture is the brand's icon standing in; no instance is asked for it.

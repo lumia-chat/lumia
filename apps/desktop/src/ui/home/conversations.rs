@@ -122,6 +122,8 @@ pub fn view(s: &State, look: Look) -> El {
                     "Messages show once this device is in the conversation's group.",
                 )
             },
+            // The participants beside a conversation, for a computer that holds the identity.
+            aside: s.session.has_identity().then_some("Details"),
         },
         Extras {
             topic: Some(topic),

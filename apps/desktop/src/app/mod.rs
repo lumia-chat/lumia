@@ -8,6 +8,7 @@
 //! (devices, profile, status).
 
 pub mod account;
+pub mod aside;
 pub mod autoscroll;
 pub mod home;
 pub mod links;
@@ -110,6 +111,10 @@ pub struct State {
     pub pictures: pictures::Pictures,
     /// The pane the middle button scrolls while it is held (`autoscroll`).
     pub autoscroll: autoscroll::Autoscroll,
+    /// The window's width in points, as the shell's layout last reported it (`aside`).
+    pub(crate) window_width: Option<f32>,
+    /// The aside over a narrow window's conversation, asked for by its toggle (`aside`).
+    pub aside_open: bool,
 }
 
 impl State {
@@ -143,6 +148,8 @@ impl State {
             notices: notices::Notices::default(),
             pictures: pictures::Pictures::default(),
             autoscroll: autoscroll::Autoscroll::default(),
+            window_width: None,
+            aside_open: false,
         }
     }
 
@@ -164,6 +171,7 @@ impl State {
     /// Puts a server on screen with its first channel.
     pub fn select_server(&mut self, server_id: &str) {
         self.close_server_settings();
+        self.aside_open = false;
         self.place = Place::Server(server_id.to_string());
         self.placed = true;
         self.popover = None;
@@ -208,6 +216,7 @@ impl State {
 
     /// Goes to Home, showing `view`. No server is on screen there, so none is watched.
     pub fn go_home(&mut self, view: HomeView) {
+        self.aside_open = false;
         let arriving = self.place != Place::Home || self.home_view != view;
         if self.place != Place::Home {
             self.session.close_conversation();
