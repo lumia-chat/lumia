@@ -402,7 +402,7 @@ final class SmokeUITests: XCTestCase {
     /// at it: `invitation` (joined #design from the sidebar's row),
     /// `browsed` (#random read from Browse, then joined from its bar),
     /// `added` (Grace added to #random and Ada invited, from Add people),
-    /// `removed` (Grace removed by the row's swipe), `dm` (a server DM with
+    /// `removed` (Grace removed by the Remove at her row's end), `dm` (a server DM with
     /// Ada from her profile card, and a message sent there), `switch` (Let
     /// members of this server message me, off), `defaults` (#design made a
     /// default channel) and `left` (#random left from its members).
@@ -426,7 +426,7 @@ final class SmokeUITests: XCTestCase {
         XCTAssertTrue(invitation.waitForExistence(timeout: 30), "no invitation in the sidebar")
         XCTAssertTrue(invitation.label.hasPrefix("#design · "), "the invitation reads \"\(invitation.label)\"")
         app.buttons["Join"].firstMatch.tap()
-        XCTAssertTrue(app.textFields["Message #design"].waitForExistence(timeout: 20), "joining from the invitation did not open #design with its composer")
+        XCTAssertTrue(composer(in: app, "Message #design").waitForExistence(timeout: 20), "joining from the invitation did not open #design with its composer")
         reached("invitation", under: steps)
         back()
 
@@ -438,9 +438,9 @@ final class SmokeUITests: XCTestCase {
         XCTAssertTrue(random.label.contains("member"), "Browse does not say how many are in #random: \(random.label)")
         random.tap()
         XCTAssertTrue(labelled("You’re not in #random").waitForExistence(timeout: 20), "no bar saying the account is not in #random")
-        XCTAssertFalse(app.textFields["Message #random"].exists, "a composer in a channel the account is not in")
+        XCTAssertFalse(composer(in: app, "Message #random").exists, "a composer in a channel the account is not in")
         app.buttons["Join"].firstMatch.tap()
-        XCTAssertTrue(app.textFields["Message #random"].waitForExistence(timeout: 20), "joining from the bar did not bring the composer back")
+        XCTAssertTrue(composer(in: app, "Message #random").waitForExistence(timeout: 20), "joining from the bar did not bring the composer back")
         reached("browsed", under: steps)
 
         // Add people: Grace added, Ada invited.
@@ -459,9 +459,10 @@ final class SmokeUITests: XCTestCase {
         XCTAssertTrue(labelled("Members").exists, "Add did not go back to the members")
         reached("added", under: steps)
 
-        // Removed by the row's swipe, as the owner may.
-        graceRow.swipeLeft()
-        app.buttons["Remove from #random"].tap()
+        // Removed by the Remove at the row's end, as the owner may (a swipe offers the same).
+        let remove = app.buttons["Remove Grace Hopper from #random"]
+        XCTAssertTrue(remove.exists, "Grace's row has no Remove at its end")
+        remove.tap()
         let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: graceRow)
         XCTAssertEqual(XCTWaiter().wait(for: [gone], timeout: 20), .completed, "Grace is still listed once removed")
         reached("removed", under: steps)
@@ -474,7 +475,7 @@ final class SmokeUITests: XCTestCase {
         button(containing: "Ada Lovelace").tap()
         XCTAssertTrue(app.buttons["Message privately"].waitForExistence(timeout: 10), "the profile card offers no Message privately")
         app.buttons["Message"].tap()
-        let composer = app.textFields["Message Ada Lovelace"]
+        let composer = composer(in: app, "Message Ada Lovelace")
         XCTAssertTrue(composer.waitForExistence(timeout: 20), "Message did not open the server DM with Ada")
         XCTAssertTrue(anything.matching(NSPredicate(format: "label BEGINSWITH %@", "Messages here are kept by ")).firstMatch.exists, "the server DM does not say whose it is")
         composer.tap()
@@ -521,6 +522,15 @@ final class SmokeUITests: XCTestCase {
     }
 
     /// Announces a step to the smoke and waits until it says it has looked.
+    /// The composer, by its identifier and, when given, its placeholder. Its field grows with what
+    /// is typed (`axis: .vertical`), which iOS 17 shows assistive technology as a text view and
+    /// iOS 18 and later as a text field, so it is looked for as either.
+    private func composer(in app: XCUIApplication, _ placeholder: String? = nil) -> XCUIElement {
+        let fields = app.descendants(matching: .any).matching(identifier: "composer")
+        guard let placeholder else { return fields.firstMatch }
+        return fields.matching(NSPredicate(format: "placeholderValue == %@ OR label == %@", placeholder, placeholder)).firstMatch
+    }
+
     private func reached(_ step: String, under steps: String, saying words: String? = nil) {
         try? (words ?? step).write(toFile: "\(steps)/\(step)", atomically: true, encoding: .utf8)
         for _ in 0..<1200 where !FileManager.default.fileExists(atPath: "\(steps)/\(step).seen") { usleep(100_000) }
@@ -643,7 +653,7 @@ final class SmokeUITests: XCTestCase {
         let backButton = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Back to ")).firstMatch
         let mentionsRow = app.buttons["mentions-row"]
         // The composer, by its identifier: with text in it, it reports no placeholder.
-        let field = app.textFields["composer"]
+        let field = composer(in: app)
         func sidebar() {
             while backButton.exists { backButton.tap(); sleep(1) }
             XCTAssertTrue(mentionsRow.waitForExistence(timeout: 10), "not back at the server's sidebar")

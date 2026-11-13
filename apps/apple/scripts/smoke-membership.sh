@@ -167,7 +167,7 @@ api "$ta" GET /account/snapshot | py "sys.exit(0 if any(i['channel']['channelId'
 seen added; echo "Grace added to #random, Ada invited"
 reached removed 120
 has "$(members_of "$random")" "$grace_id" && fail "Grace is still in #random after Remove"
-seen removed; echo "Grace removed from #random by the row's swipe"
+seen removed; echo "Grace removed from #random by the Remove at her row's end"
 reached dm 120
 api "$to" GET "/channels/$dm/messages" | py "sys.exit(0 if any(m.get('body') == 'Sent from the phone\\'s server DM.' for m in d.get('messages', [])) else 1)" ||
   fail "the message sent in the server DM is not on the instance"

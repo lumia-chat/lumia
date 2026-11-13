@@ -147,11 +147,23 @@ struct ChannelMembersScreen: View {
                 if !error.isEmpty { LumiaErrorText(error).plainRow() }
                 ForEach(ids ?? [], id: \.self) { id in
                     let line = memberLine(session, id)
-                    Button { if let s = channel?.serverId { openPerson(PersonInServer(accountID: id, serverID: s)) } } label: {
-                        LumiaMemberRow(name: line.name, subtitle: line.handle, tone: .of(id), tag: id == session.me ? "You" : nil, status: channel.flatMap { session.presence(of: id, in: $0.serverId) })
-                            .contentShape(Rectangle())
+                    HStack(spacing: 2) {
+                        Button { if let s = channel?.serverId { openPerson(PersonInServer(accountID: id, serverID: s)) } } label: {
+                            LumiaMemberRow(name: line.name, subtitle: line.handle, tone: .of(id), tag: id == session.me ? "You" : nil, status: channel.flatMap { session.presence(of: id, in: $0.serverId) })
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        // The dark Quiet Split's Remove at the row's end; the swipe below does the same.
+                        if canManage, id != session.me {
+                            Button { Task { await remove(id) } } label: {
+                                Image(systemName: "person.badge.minus")
+                            }
+                            .buttonStyle(MemberRemoveStyle())
+                            .disabled(busy)
+                            .accessibilityLabel("Remove \(line.name) from #\(name)")
+                            .padding(.trailing, LumiaTokens.space4)
+                        }
                     }
-                    .buttonStyle(.plain)
                     .plainRow()
                     .swipeActions(edge: .trailing) {
                         if canManage, id != session.me {
@@ -508,5 +520,27 @@ struct ProfileCard: View {
         } catch {
             note = error.lumiaCode == "ALREADY_EXISTS" ? "You already asked; waiting for their answer." : error.lumiaMessage
         }
+    }
+}
+
+/// A member row's Remove, as the dark Quiet Split draws it: `row-height` square (32) at radius 8,
+/// the glyph in the faint ink, and while pressed (a phone has no pointer to hover) the danger ink
+/// on its soft fill and border. The target reaches 44 (`tile-size`), the least a finger needs.
+private struct MemberRemoveStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: LumiaTokens.space16, weight: .medium))
+            .foregroundStyle(configuration.isPressed ? LumiaTokens.danger.color : LumiaTokens.inkFaint.color)
+            .frame(width: LumiaTokens.rowHeight, height: LumiaTokens.rowHeight)
+            .background(
+                RoundedRectangle(cornerRadius: LumiaTokens.radius8)
+                    .fill(configuration.isPressed ? LumiaTokens.dangerSoft.color : .clear)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: LumiaTokens.radius8)
+                    .strokeBorder(configuration.isPressed ? LumiaTokens.dangerLine.color : .clear, lineWidth: 1)
+            )
+            .frame(width: LumiaTokens.tileSize, height: LumiaTokens.tileSize)
+            .contentShape(Rectangle())
     }
 }
