@@ -50,7 +50,7 @@ fn head(rt: &Runtime<State>, i: usize) -> String {
     format!("{name}\t{}", at.format("%-I:%M %p"))
 }
 
-/// The element whose path ends in `suffix` (`m0/body/b0`), skipping unkeyed elements
+/// The element whose path ends in `suffix` (`message-m0/body/b0`), skipping unkeyed elements
 /// between the keys as `Runtime::find` does.
 fn element(rt: &Runtime<State>, suffix: &str) -> ElementInfo {
     let keyed = |path: &str| {
@@ -220,7 +220,7 @@ fn every_construct_of_the_subset_draws_its_text() {
         "A [link](https://example.com/a) and https://example.com/b.",
     ]);
     assert_eq!(
-        texts(&rt, "m0/body"),
+        texts(&rt, "message-m0/body"),
         [
             "A paragraph with emphasis, strong, strike and inline code.",
             "A second,\non two lines.",
@@ -228,7 +228,7 @@ fn every_construct_of_the_subset_draws_its_text() {
     );
     // Inline code is drawn between narrow spaces that make room for its chip; assistive
     // technology is given the words without them.
-    let para = element(&rt, "m0/body/b0");
+    let para = element(&rt, "message-m0/body/b0");
     let drawn = para.text.unwrap();
     assert!(
         drawn.contains("inline \u{202f}\u{202f}\u{2066}code\u{2069}\u{202f}\u{202f}."),
@@ -240,30 +240,33 @@ fn every_construct_of_the_subset_draws_its_text() {
     );
 
     assert_eq!(
-        texts(&rt, "m1/body"),
+        texts(&rt, "message-m1/body"),
         ["fn main() {\n    println!(\"hi\");\n}"]
     );
-    assert_eq!(roles(&rt, "m1/body"), ["code", "text"]);
+    assert_eq!(roles(&rt, "message-m1/body"), ["code", "text"]);
 
     assert_eq!(
-        texts(&rt, "m2/body"),
+        texts(&rt, "message-m2/body"),
         ["A quote.", "Its second paragraph.", "And the reply."]
     );
-    assert_eq!(element(&rt, "m2/body/b0").role, "blockquote");
+    assert_eq!(element(&rt, "message-m2/body/b0").role, "blockquote");
 
     // A list's markers are drawn, and are not the item's text.
     assert_eq!(
-        texts(&rt, "m3/body"),
+        texts(&rt, "message-m3/body"),
         [
             "•", "one", "•", "two", "1.", "nested", "2.", "numbers", "•", "three"
         ]
     );
-    assert_eq!(element(&rt, "m3/body/b0").role, "list");
-    assert_eq!(element(&rt, "m3/body/b0/i1").role, "listitem");
-    assert_eq!(element(&rt, "m3/body/b0/i1/b1").role, "list");
-    assert_eq!(texts(&rt, "m4/body"), ["5.", "five", "6.", "six"]);
+    assert_eq!(element(&rt, "message-m3/body/b0").role, "list");
+    assert_eq!(element(&rt, "message-m3/body/b0/i1").role, "listitem");
+    assert_eq!(element(&rt, "message-m3/body/b0/i1/b1").role, "list");
+    assert_eq!(texts(&rt, "message-m4/body"), ["5.", "five", "6.", "six"]);
 
-    assert_eq!(texts(&rt, "m5/body"), ["A link and https://example.com/b."]);
+    assert_eq!(
+        texts(&rt, "message-m5/body"),
+        ["A link and https://example.com/b."]
+    );
     assert!(
         rt.find("https://example.com/a").is_some() && rt.find("https://example.com/b").is_some()
     );
@@ -281,10 +284,14 @@ fn what_is_outside_the_subset_is_drawn_as_it_was_typed() {
     ];
     let mut rt = conversation(&typed);
     for (i, source) in typed.iter().enumerate().take(5) {
-        assert_eq!(texts(&rt, &format!("m{i}/body")), [*source]);
-        assert_eq!(roles(&rt, &format!("m{i}/body")), ["text"], "{source}");
+        assert_eq!(texts(&rt, &format!("message-m{i}/body")), [*source]);
+        assert_eq!(
+            roles(&rt, &format!("message-m{i}/body")),
+            ["text"],
+            "{source}"
+        );
     }
-    assert_eq!(texts(&rt, "m5/body"), ["•", "[ ] not a checkbox"]);
+    assert_eq!(texts(&rt, "message-m5/body"), ["•", "[ ] not a checkbox"]);
     // Nothing in the list is anything but text, a list and what frames a row.
     let rows = roles(&rt, "rows");
     for role in [
@@ -308,12 +315,12 @@ fn every_script_reaches_the_screen_as_it_was_sent() {
     ];
     let mut rt = conversation(&sent);
     for (i, source) in sent.iter().enumerate() {
-        assert_eq!(texts(&rt, &format!("m{i}/body")), [*source]);
+        assert_eq!(texts(&rt, &format!("message-m{i}/body")), [*source]);
     }
     // Arabic starts at the right edge of its row: the text is laid out right to left.
-    let arabic = glyphs(&rt, "m3/body/b0");
-    let latin = glyphs(&rt, "m4/body/b0");
-    let row = element(&rt, "m3/body/b0").rect;
+    let arabic = glyphs(&rt, "message-m3/body/b0");
+    let latin = glyphs(&rt, "message-m4/body/b0");
+    let row = element(&rt, "message-m3/body/b0").rect;
     let right = arabic.iter().map(|g| g.0).fold(0.0, f32::max);
     assert!(
         row[0] + row[2] - right < 12.0,
@@ -333,9 +340,9 @@ fn every_script_reaches_the_screen_as_it_was_sent() {
 fn a_word_wider_than_the_row_breaks_inside_itself() {
     let long = format!("https://example.com/{}", "long/".repeat(60));
     let rt = conversation(&[&long, &format!("```\n{}\n```", "x".repeat(400))]);
-    for body in ["m0/body/b0", "m1/body/b0/code"] {
+    for body in ["message-m0/body/b0", "message-m1/body/b0/code"] {
         let text = element(&rt, body);
-        let row = element(&rt, &body[..2]);
+        let row = element(&rt, &body[.."message-m0".len()]);
         assert!(
             text.rect[3] > 60.0,
             "{body} takes several lines: {:?}",
@@ -355,7 +362,7 @@ fn a_drag_selects_within_one_message() {
         "Shipped on **Friday**, with `code` in it.",
         "Reading it now.",
     ]);
-    let g = glyphs(&rt, "m0/body/b0");
+    let g = glyphs(&rt, "message-m0/body/b0");
     // "Shipped on Friday": 7 + 2 + 6 glyphs, spaces drawing none.
     assert_eq!(
         drag(&mut rt, before(g[0]), after(g[14])),
@@ -367,7 +374,7 @@ fn a_drag_selects_within_one_message() {
         drag(&mut rt, before(g[9]), after(end)),
         "Friday, with code in it."
     );
-    assert_eq!(element(&rt, "m1/body/b0").selected, None);
+    assert_eq!(element(&rt, "message-m1/body/b0").selected, None);
 }
 
 #[test]
@@ -378,9 +385,9 @@ fn a_drag_runs_from_one_message_into_the_next_and_across_three() {
         "Third message here.",
     ]);
     let (a, b, c) = (
-        glyphs(&rt, "m0/body/b0"),
-        glyphs(&rt, "m1/body/b0"),
-        glyphs(&rt, "m2/body/b0"),
+        glyphs(&rt, "message-m0/body/b0"),
+        glyphs(&rt, "message-m1/body/b0"),
+        glyphs(&rt, "message-m2/body/b0"),
     );
     // From "message" in the first to the end of "Second" in the next: the author and time
     // between them are part of it, after a blank line.
@@ -399,7 +406,7 @@ fn a_drag_runs_from_one_message_into_the_next_and_across_three() {
     // Upwards is the same selection.
     assert_copied(&drag(&mut rt, after(c[4]), before(a[5])), &three);
     // From a name, the copy starts with it.
-    let name = start(&rt, "m1/author");
+    let name = start(&rt, "message-m1/author");
     let from_name = drag(&mut rt, name, after(c[4]));
     assert_copied(
         &from_name,
@@ -422,8 +429,8 @@ fn a_copy_names_a_block_once() {
     ];
     state.session.revision += 1;
     let mut rt = runtime(state);
-    let last = glyphs(&rt, "m2/body/b0");
-    let from = start(&rt, "m0/author");
+    let last = glyphs(&rt, "message-m2/body/b0");
+    let from = start(&rt, "message-m0/author");
     let all = drag(&mut rt, from, after(last[last.len() - 1]));
     // `head` names its even messages Grace's; the third here is Ada's.
     let answer = head(&rt, 2).replace("Grace Hopper", "Ada Lovelace");
@@ -439,7 +446,10 @@ fn a_copy_names_a_block_once() {
 #[test]
 fn a_selection_stays_while_messages_arrive() {
     let mut rt = conversation(&["First message here.", "Second message here."]);
-    let (a, b) = (glyphs(&rt, "m0/body/b0"), glyphs(&rt, "m1/body/b0"));
+    let (a, b) = (
+        glyphs(&rt, "message-m0/body/b0"),
+        glyphs(&rt, "message-m1/body/b0"),
+    );
     let selected = drag(&mut rt, before(a[5]), after(b[5]));
     assert_copied(
         &selected,
@@ -465,8 +475,8 @@ fn a_drag_through_a_list_a_quote_and_a_code_block_copies_them_as_text() {
          > A quote,\n> on two lines.\n>\n> - with an item\n\n```rust\nfn main() {\n\tlet x = 1;\n}\n```\n\nAnd after.",
         "The next message.",
     ]);
-    let next = glyphs(&rt, "m1/body/b0");
-    let first = start(&rt, "m0/body/b0");
+    let next = glyphs(&rt, "message-m1/body/b0");
+    let first = start(&rt, "message-m0/body/b0");
     let copied = drag(&mut rt, first, after(next[2]));
     assert_copied(
         &copied,
@@ -484,14 +494,14 @@ fn a_drag_through_a_list_a_quote_and_a_code_block_copies_them_as_text() {
         ),
     );
     // Starting inside a list item: that item goes without its marker, the next keep theirs.
-    let two = glyphs(&rt, "m0/body/b1/i1/b0");
-    let three = glyphs(&rt, "m0/body/b1/i2/b0");
+    let two = glyphs(&rt, "message-m0/body/b1/i1/b0");
+    let three = glyphs(&rt, "message-m0/body/b1/i2/b0");
     assert_copied(
         &drag(&mut rt, before(two[1]), after(three[4])),
         "wo\n  1. nested\n  2. numbers\n- three",
     );
     // One item alone is its text.
-    let item = start(&rt, "m0/body/b1/i2/b0");
+    let item = start(&rt, "message-m0/body/b1/i2/b0");
     assert_copied(&drag(&mut rt, item, after(three[4])), "three");
 }
 
@@ -518,7 +528,7 @@ fn command_a_takes_the_conversation_and_command_c_copies_it_as_a_transcript() {
     let clipboard = rune::clipboard::memory();
     rt.use_clipboard(&clipboard);
 
-    let g = glyphs(&rt, "m1/body/b0/i0/b0");
+    let g = glyphs(&rt, "message-m1/body/b0/i0/b0");
     click(&mut rt, before(g[2]));
     command(&mut rt, 'a');
     let transcript = format!(
@@ -549,7 +559,7 @@ fn a_selection_reaches_rows_scrolled_out_of_the_mounted_window() {
     );
 
     // Everything: 400 messages, all but a screenful never built.
-    let newest = glyphs(&rt, "m399/body/b0");
+    let newest = glyphs(&rt, "message-m399/body/b0");
     click(&mut rt, before(newest[3]));
     command(&mut rt, 'a');
     let all = rt.selected_text().unwrap();
@@ -574,11 +584,11 @@ fn a_selection_reaches_rows_scrolled_out_of_the_mounted_window() {
     );
     let top = (0..400)
         .find(|i| {
-            rt.find(&format!("m{i}/body/b0"))
+            rt.find(&format!("message-m{i}/body/b0"))
                 .is_some_and(|(_, y)| y > 150.0 && y < 600.0)
         })
         .expect("a message is on screen");
-    let old = glyphs(&rt, &format!("m{top}/body/b0"));
+    let old = glyphs(&rt, &format!("message-m{top}/body/b0"));
     rt.physical_input(PhysicalInput::Modifiers(Mods {
         shift: true,
         ..Mods::default()
@@ -621,7 +631,7 @@ fn links_open_only_as_web_addresses() {
     // The others are not links at all: their text is what was typed, and a press on any
     // part of it opens nothing.
     assert_eq!(
-        texts(&rt, "m1/body"),
+        texts(&rt, "message-m1/body"),
         [
             "[a file](file:///etc/passwd) [a script](javascript:alert(1)) [mail](mailto:ada@example.com) <lumia://join/x>"
         ]
@@ -634,13 +644,13 @@ fn links_open_only_as_web_addresses() {
     ] {
         assert!(rt.find(url).is_none(), "{url} is a link");
     }
-    for g in glyphs(&rt, "m1/body/b0") {
+    for g in glyphs(&rt, "message-m1/body/b0") {
         click(&mut rt, g);
     }
     assert!(rt.take_url_requests().is_empty());
     // A send that is not stored yet shows its link and does not open it.
-    assert_eq!(texts(&rt, "p1/body"), ["pending"]);
-    for g in glyphs(&rt, "p1/body/b0") {
+    assert_eq!(texts(&rt, "message-p1/body"), ["pending"]);
+    for g in glyphs(&rt, "message-p1/body/b0") {
         click(&mut rt, g);
     }
     assert!(rt.take_url_requests().is_empty());

@@ -243,6 +243,7 @@ pub const SCENES: &[Scene] = &[
     ("replies", replies::replies),
     ("mention-list", replies::mention_list),
     ("emoji-picker", replies::emoji_picker),
+    ("message-toolbar", replies::message_toolbar),
     ("mentions", replies::mentions),
     // The same conversation at the other density. Set on the state, not through
     // `set_density`: a scene does not write the person's settings.

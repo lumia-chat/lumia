@@ -129,6 +129,15 @@ pub fn mention_list(state: &mut State) {
     });
 }
 
+/// `message-toolbar`: the toolbar over a message under the pointer (a picture cannot hover,
+/// so the state says which).
+pub fn message_toolbar(state: &mut State) {
+    replies(state);
+    state.replies.replying = None;
+    state.replies.outside = None;
+    state.replies.hovered = Some("r2".into());
+}
+
 /// `emoji-picker`: the picker open over a message's add-reaction button.
 pub fn emoji_picker(state: &mut State) {
     replies(state);

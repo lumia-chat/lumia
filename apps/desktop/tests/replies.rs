@@ -70,10 +70,36 @@ fn reply_puts_the_quote_over_the_composer_and_escape_takes_it_away() {
     assert!(rt.find("reply-bar").is_none());
 }
 
+/// The rect `[x, y, w, h]` of the element keyed `key`.
+fn rect(rt: &Runtime<State>, key: &str) -> [f32; 4] {
+    rt.elements()
+        .into_iter()
+        .find(|e| e.key.as_deref() == Some(key))
+        .unwrap_or_else(|| panic!("{key} is not on screen"))
+        .rect
+}
+
+#[test]
+fn the_toolbar_sits_at_the_top_end_of_the_row_under_the_pointer() {
+    let mut rt = runtime(signed_in());
+    hover(&mut rt, "m2");
+    let row = rect(&rt, "message-m2");
+    let bar = rect(&rt, "actions");
+    // Inside the row's top end: its right edge at the row's, its top within the row.
+    assert!(
+        (bar[0] + bar[2] - (row[0] + row[2])).abs() < 1.0,
+        "{bar:?} in {row:?}"
+    );
+    assert!(
+        bar[1] >= row[1] - 1.0 && bar[1] < row[1] + row[3],
+        "{bar:?} in {row:?}"
+    );
+}
+
 #[test]
 fn a_selection_inside_one_message_offers_quote_reply_of_just_that() {
     let mut rt = runtime(signed_in());
-    rt.update(|_, tx| tx.select_text("m1/body/b0", 0..7));
+    rt.update(|_, tx| tx.select_text("message-m1/body/b0", 0..7));
     settle(&mut rt);
     let selection = rt.state.replies.selection.clone().expect("a selection");
     assert_eq!(

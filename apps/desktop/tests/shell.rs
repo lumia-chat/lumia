@@ -328,12 +328,12 @@ fn messages_one_person_sends_close_together_are_one_block() {
         time.expect("k1 has a time").opacity
     };
     assert_eq!(shown(&rt), 0.0);
-    let (x, y) = rt.find("k1/body").expect("k1 is on screen");
+    let (x, y) = rt.find("message-k1/body").expect("k1 is on screen");
     rt.pointer_move(x, y);
     settle(&mut rt);
     assert_eq!(shown(&rt), 1.0);
 
-    let opens = |key: &str| rt.find(&format!("{key}/author")).is_some();
+    let opens = |key: &str| rt.find(&format!("message-{key}/author")).is_some();
     assert_eq!(
         ["k0", "k1", "k2", "k3", "k4", "k5", "k6"].map(opens),
         [true, false, true, true, false, true, false],
@@ -358,7 +358,7 @@ fn messages_one_person_sends_close_together_are_one_block() {
     let row = |key: &str| {
         rt.elements()
             .into_iter()
-            .find(|e| e.key.as_deref() == Some(key) && e.role == "listitem")
+            .find(|e| e.key.as_deref() == Some(&format!("message-{key}")) && e.role == "listitem")
             .unwrap_or_else(|| panic!("{key} is not on screen"))
             .rect
     };
@@ -449,7 +449,7 @@ fn the_middle_button_held_and_moved_autoscrolls_a_pane() {
     let offset = |rt: &rune::Runtime<State>| {
         -rt.elements()
             .into_iter()
-            .find(|e| e.key.as_deref() == Some("s79") && e.role == "listitem")
+            .find(|e| e.key.as_deref() == Some("message-s79") && e.role == "listitem")
             .map_or(f32::MAX, |e| e.rect[1])
     };
     // What a window's poll does before each frame, `seconds` into the run.

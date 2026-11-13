@@ -230,7 +230,7 @@ pub fn toolbar(entry_id: &str, look: Look) -> El {
     // Above the row's top edge by the bar's own height less its padding: inside the row.
     let tall = t::ICON_BUTTON + 2.0 * t::SPACE_2 + 2.0;
     shadowed(bar, look.shadows.floating).anchored_fit(
-        format!("rows/{entry_id}"),
+        super::timeline::frame_key(entry_id),
         Side::Top,
         rune::Align::End,
         -(tall + t::SPACE_2),

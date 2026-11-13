@@ -324,6 +324,11 @@ fn body_of(path: &str) -> Option<&str> {
     parts.any(|part| part == "body").then_some(id)
 }
 
+/// The key of a message's row inside its slot in the list.
+pub fn frame_key(id: &str) -> String {
+    format!("message-{id}")
+}
+
 /// A message's row. The first of a block is an avatar beside a name, a time and the
 /// message; the ones after it are the message alone under those, in the same column.
 fn message_frame(
@@ -348,7 +353,10 @@ fn message_frame(
     // draws a block's messages as the paragraphs of one.
     let within = m.under_name / 2.0;
     let mut frame = row()
-        .key(key)
+        // Its own key, apart from its slot's in the list (which holds a day's divider too): the
+        // toolbar over the row under the pointer is anchored to it, and an anchor is found by
+        // its key alone.
+        .key(frame_key(key))
         .w_full()
         .px(t::SPACE_12)
         .pt(if place.opens { m.edge } else { within })
