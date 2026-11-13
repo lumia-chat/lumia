@@ -23,7 +23,10 @@
 //! - **Notifications.** `rune-notify` posts on macOS from a bundled app and on Windows
 //!   once the process has registered an identity (`rune_notify::register`, not called
 //!   yet); on Linux it posts nothing, and the shell needs the desktop's notification
-//!   service over D-Bus.
+//!   service over D-Bus. A conversation's notice is taken back once it is read, here or on
+//!   another device.
+//! - **The badge.** On macOS the Dock icon carries the count of what is unread and for this
+//!   account (`lumia-sparkle`'s `set_badge`); Windows and Linux show none yet.
 //! - **Preferences.** The window's own light or dark is the shell's on every platform;
 //!   on macOS the app's appearance follows it too, and the choice of when scroll bars
 //!   show is carried out through the system's setting ([`system`]). Elsewhere Rune shows
@@ -78,6 +81,8 @@ type MenuFor = ((bool, bool), Option<menu::Updates>);
 static MENU: Mutex<Option<MenuFor>> = Mutex::new(None);
 /// The notifications posted and not yet taken back, by id.
 static POSTED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+/// The count last put on the Dock icon.
+static BADGE: Mutex<Option<u32>> = Mutex::new(None);
 
 /// The size to open the window at: the one remembered from the last launch on macOS,
 /// else the default. A headless run always draws [`HEADLESS_SIZE`].
@@ -240,6 +245,7 @@ pub fn settle(state: &mut State, tx: &mut Tx) -> bool {
     remember_frame();
     if WINDOWED.load(Ordering::Relaxed) {
         system::follow(state);
+        badge(state);
     }
     sync_menu(state);
     updates::follow(tx);
@@ -288,6 +294,20 @@ fn notify(state: &mut State) {
             posted.swap_remove(index);
         }
     }
+    // Read on another device (or here): nothing unread is left to tell of.
+    let read: Vec<String> = posted
+        .iter()
+        .filter(|id| {
+            id.strip_prefix("lumia-")
+                .is_some_and(|channel| state.session.unread(channel).0 == 0)
+        })
+        .cloned()
+        .collect();
+    if !read.is_empty() {
+        let ids: Vec<&str> = read.iter().map(String::as_str).collect();
+        rune_notify::remove(&ids);
+        posted.retain(|id| !read.contains(id));
+    }
     // Only an app the system knows can post or ask it anything (a bundled one on macOS).
     if !rune_notify::available() {
         for notice in owed {
@@ -321,6 +341,24 @@ fn notify(state: &mut State) {
             posted.push(id);
         }
     }
+}
+
+/// Puts the count of what is unread and for this account on the Dock icon, when it changed;
+/// none while signed out.
+fn badge(state: &State) {
+    let count = if state.route == Route::Shell {
+        state.session.badge()
+    } else {
+        0
+    };
+    let mut last = BADGE.lock().unwrap_or_else(PoisonError::into_inner);
+    if *last == Some(count) {
+        return;
+    }
+    let label = (count > 0).then(|| count.to_string());
+    let set = lumia_sparkle::set_badge(label.as_deref());
+    trace(|| format!("badge {count} set={set}"));
+    *last = Some(count);
 }
 
 /// Has AppKit save the window's frame and restore it at the next launch. Asked until the

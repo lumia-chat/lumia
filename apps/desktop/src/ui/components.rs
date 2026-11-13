@@ -135,6 +135,30 @@ pub fn status_dot(size: f32, color: Color, ring: Color) -> El {
         .border(2.0, ring)
 }
 
+/// A count on the accent (the design system's badge): `small` in a row of the sidebar and
+/// on a quick tile, the larger on the rail. Assistive technology reads the row's label, so
+/// the count itself is hidden from it.
+pub fn count_badge(count: u32, small: bool, look: Look) -> El {
+    let c = look.c;
+    let size = if small { t::BADGE_SMALL } else { t::BADGE };
+    el().h(size)
+        .min_w(size)
+        .px(t::SPACE_4)
+        .radius(t::RADIUS_PILL)
+        .fill(c.accent)
+        .center()
+        .a11y_hidden()
+        .child(
+            text(if count > 99 {
+                "99+".to_string()
+            } else {
+                count.to_string()
+            })
+            .font(t::TEXT_COUNT)
+            .color(c.on_accent),
+        )
+}
+
 /// A small tag beside a name, in the accent's tint: "You" in a member's row.
 pub fn tag(words: &str, look: Look) -> El {
     el().px(t::SPACE_6)
@@ -595,6 +619,9 @@ pub fn icon_button(
 /// has no token for either.
 pub const MENU_WIDTH: f32 = 260.0;
 pub const CARD_WIDTH: f32 = 300.0;
+/// The @ list over the composer: a card's width and a card avatar's more (372), room for a
+/// name, a handle and "Not in #channel" on one line. The web's list is as wide.
+pub const AVATAR_CARD_WIDTH: f32 = CARD_WIDTH + t::AVATAR_CARD;
 
 /// A menu floating beside the control keyed `anchor`, on the board's account menu's metrics.
 /// It traps focus, and Escape or a press outside closes it. Fill it with [`menu_item`]s and

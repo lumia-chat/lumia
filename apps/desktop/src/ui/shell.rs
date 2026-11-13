@@ -137,12 +137,15 @@ fn rail(s: &State, current: Option<&ServerSummary>, look: Look) -> El {
         .items_center()
         .fill(c.rail)
         .window_drag();
-    // Home: the logo on a rounded tile, with the requests that wait as its badge.
-    let waiting = s
+    // Home: the logo on a rounded tile, with the requests that wait and the personal
+    // conversations' unread messages as its badge.
+    let requests = s
         .session
         .snapshot
         .as_ref()
         .map_or(0, |snap| snap.pending_requests.len());
+    let unread = s.session.personal_unread() as usize;
+    let waiting = requests + unread;
     let tile = rail_button("home", "Home", look)
         .radius(t::RADIUS_14)
         .fill(c.tile)
@@ -159,22 +162,12 @@ fn rail(s: &State, current: Option<&ServerSummary>, look: Look) -> El {
     if waiting > 0 {
         // Over the tile's corner, ringed in the rail's colour (the board has it 5 out; 4
         // is the nearest step).
-        home = home.child(
-            el().pin(None, Some(-t::SPACE_4), Some(-t::SPACE_4), None)
-                .h(t::BADGE)
-                .min_w(t::BADGE)
-                .px(t::SPACE_4)
-                .radius(t::RADIUS_PILL)
-                .fill(c.accent)
-                .border(2.0, c.rail)
-                .center()
-                .label(format!("{waiting} requests waiting"))
-                .child(
-                    text(waiting.to_string())
-                        .font(t::TEXT_COUNT)
-                        .color(c.on_accent),
-                ),
-        );
+        let label = match (requests, unread) {
+            (0, n) => format!("{n} unread"),
+            (n, 0) => format!("{n} requests waiting"),
+            (r, n) => format!("{r} requests waiting, {n} unread"),
+        };
+        home = home.child(rail_badge(waiting, label, look));
     }
     rail = rail
         .child(home)
@@ -205,7 +198,33 @@ fn rail(s: &State, current: Option<&ServerSummary>, look: Look) -> El {
         if active {
             tile = shadowed(tile, look.shadows.ring_current);
         }
-        rail = rail.child(tile);
+        // What is unread in it: a mark at the rail's edge, and its count for this account
+        // over the tile's corner.
+        let (any, mentions) = s.session.server_unread(&server.server_id);
+        let mut slot = el().child(tile);
+        if any && !active {
+            slot = slot.child(
+                el().pin(
+                    Some(-(t::RAIL_WIDTH - t::TILE_SIZE) / 2.0),
+                    Some((t::TILE_SIZE - t::SPACE_8) / 2.0),
+                    None,
+                    None,
+                )
+                .w(t::SPACE_4)
+                .h(t::SPACE_8)
+                .radius(t::RADIUS_PILL)
+                .fill(c.ink)
+                .a11y_hidden(),
+            );
+        }
+        if mentions > 0 {
+            slot = slot.child(rail_badge(
+                mentions as usize,
+                super::server::with_unread(&server.name, (mentions, mentions)),
+                look,
+            ));
+        }
+        rail = rail.child(slot);
     }
     // Adding a server is not one yet: a dashed outline on the rail itself.
     rail = rail.child(
@@ -246,6 +265,30 @@ fn rail(s: &State, current: Option<&ServerSummary>, look: Look) -> El {
             c.rail,
         ));
     rail.child(el().grow(1.0)).child(me)
+}
+
+/// A count over a rail tile's corner, ringed in the rail's colour (the board has it 5 out; 4
+/// is the nearest step).
+fn rail_badge(count: usize, label: String, look: Look) -> El {
+    let c = look.c;
+    el().pin(None, Some(-t::SPACE_4), Some(-t::SPACE_4), None)
+        .h(t::BADGE)
+        .min_w(t::BADGE)
+        .px(t::SPACE_4)
+        .radius(t::RADIUS_PILL)
+        .fill(c.accent)
+        .border(2.0, c.rail)
+        .center()
+        .label(label)
+        .child(
+            text(if count > 99 {
+                "99+".to_string()
+            } else {
+                count.to_string()
+            })
+            .font(t::TEXT_COUNT)
+            .color(c.on_accent),
+        )
 }
 
 // ---- Sidebar ----------------------------------------------------------------------------

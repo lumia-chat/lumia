@@ -18,7 +18,7 @@
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 
-use lumia_client::app::{AppEvent, ChannelSummary, DmChannelSummary, DmLogSummary};
+use lumia_client::app::{AppEvent, ChannelSummary, DmChannelSummary, DmLogSummary, QuoteSummary};
 
 use super::{Conversation, Entry, Failure, Pending, Session, Update};
 
@@ -458,6 +458,10 @@ impl Session {
                     deleted: m.deleted,
                     notice: String::new(),
                     notice_about: String::new(),
+                    reply: m.reply.clone(),
+                    mentions: Vec::new(),
+                    reactions: m.reactions.clone(),
+                    mentions_me: false,
                 }
             })
             .collect()
@@ -477,7 +481,13 @@ impl Session {
     /// Sends to a personal conversation: shown as pending at once, and marked failed with
     /// the reason when the engine cannot queue it. False when it could not even be tried
     /// (this device is not in the conversation's group), so the caller keeps the draft.
-    pub(super) fn send_dm(&mut self, channel_id: &str, body: &str, now_micros: i64) -> bool {
+    pub(super) fn send_dm(
+        &mut self,
+        channel_id: &str,
+        body: &str,
+        now_micros: i64,
+        reply: Option<&QuoteSummary>,
+    ) -> bool {
         let Some(app) = self.client() else {
             return false;
         };
@@ -493,12 +503,17 @@ impl Session {
             channel_id: channel_id.to_string(),
             body: body.to_string(),
             sent_at_micros: now_micros,
+            reply: reply.cloned(),
             failed: None,
         });
         self.revision += 1;
         let (channel_id, body) = (channel_id.to_string(), body.to_string());
+        let reply = reply.cloned();
         self.task_local(move || async move {
-            let result = app.dm_send(&channel_id, &body).await.map_err(Failure::from);
+            let result = app
+                .dm_send_with(&channel_id, &body, reply.as_ref())
+                .await
+                .map_err(Failure::from);
             Update::Dm(DmUpdate::Sent { pending_id, result })
         });
         true

@@ -8,8 +8,8 @@ use lumia_client::app::{ChannelSummary, MemberSummary, ServerSummary};
 use rune::{Cursor, El, ScrollSpec, col, el, icon, row, text, text_input};
 
 use super::components::{
-    Look, avatar_of, error_text, icon_button, link_button, notice, panel, section_label,
-    small_button, status_dot, tag,
+    Look, avatar_of, count_badge, error_text, icon_button, link_button, notice, panel,
+    section_label, small_button, status_dot, tag,
 };
 use super::conversation::{self, Chrome};
 use super::server_popovers as popovers;
@@ -36,12 +36,14 @@ pub fn sidebar(s: &State, server: &ServerSummary, look: Look) -> El {
         any = true;
         let id = channel.channel_id.clone();
         let glyph = if channel.private { "" } else { "#" };
+        let unread = s.session.unread(&channel.channel_id);
         list = list.child(nav_row(
             format!("channel-{}", channel.channel_id),
             &channel.name,
-            &format!("{} channel", channel.name),
+            &with_unread(&format!("{} channel", channel.name), unread),
             NavLead::Glyph(glyph, channel.private),
             open == Some(channel.channel_id.as_str()),
+            unread,
             move |s: &mut State| s.select_channel(&id),
             look,
         ));
@@ -76,12 +78,14 @@ pub fn sidebar(s: &State, server: &ServerSummary, look: Look) -> El {
         let partner = s.session.dm_partner(dm).to_string();
         let name = s.session.name_of(&partner);
         let id = dm.channel_id.clone();
+        let unread = s.session.unread(&dm.channel_id);
         dms = dms.child(nav_row(
             format!("dm-{}", dm.channel_id),
             &name,
-            &format!("Conversation with {name}"),
+            &with_unread(&format!("Conversation with {name}"), unread),
             NavLead::Avatar(partner),
             open == Some(dm.channel_id.as_str()),
+            unread,
             move |s: &mut State| s.select_channel(&id),
             look,
         ));
@@ -97,6 +101,17 @@ pub fn sidebar(s: &State, server: &ServerSummary, look: Look) -> El {
     } else {
         section_label("Direct messages", t::SPACE_14, look)
     };
+    let (_, mentions) = s.session.server_unread(&server.server_id);
+    let mentions_row = nav_row(
+        "server-mentions".into(),
+        "Mentions",
+        &with_unread("Mentions", (mentions, mentions)),
+        NavLead::Icon(&icons::MENTION),
+        s.server_page() == Some(ServerPage::Mentions),
+        (0, mentions),
+        State::open_server_mentions,
+        look,
+    );
     let body = col()
         .key("channels")
         .w_full()
@@ -105,6 +120,7 @@ pub fn sidebar(s: &State, server: &ServerSummary, look: Look) -> El {
         .scroll(ScrollSpec {
             stick_bottom: false,
         })
+        .child(el().w_full().pb(t::SPACE_8).child(mentions_row))
         .child(channels)
         .child(col().w_full().child(messages).child(dms))
         .with_scroll_bar("channels", look);
@@ -126,31 +142,53 @@ pub fn sidebar(s: &State, server: &ServerSummary, look: Look) -> El {
     )
 }
 
-/// What a sidebar row leads with: a channel's hash (or a lock, for a private one), or the
-/// other person's avatar in a server DM.
-enum NavLead {
+/// What a sidebar row leads with: a channel's hash (or a lock, for a private one), the
+/// other person's avatar in a server DM, or a glyph (Mentions).
+pub(super) enum NavLead {
     Glyph(&'static str, bool),
     Avatar(String),
+    Icon(&'static rune::Icon),
 }
 
-/// A row of the sidebar: a channel or a server DM. 700 on the open one. (The board's 600 is
-/// for a channel with unread messages, which the session does not count.)
-fn nav_row(
+/// A row's name for assistive technology with what is unread in it.
+pub(super) fn with_unread(label: &str, (unread, mentions): (u32, u32)) -> String {
+    match (unread, mentions) {
+        (_, 0) if unread > 0 => format!("{label}, unread"),
+        (0, 0) => label.to_string(),
+        (_, 1) => format!("{label}, 1 mention"),
+        (_, n) => format!("{label}, {n} mentions"),
+    }
+}
+
+/// A row of the sidebar: a channel, a server DM, Mentions. 700 on the open one; 600 in the
+/// strong ink on one with unread messages, and their count for this account at its end.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn nav_row(
     key: String,
     name: &str,
     label: &str,
     lead: NavLead,
     active: bool,
+    (unread, mentions): (u32, u32),
     press: impl Fn(&mut State) + 'static,
     look: Look,
 ) -> El {
     let c = look.c;
+    let bold = !active && unread > 0;
     let style = if active {
         t::TEXT_NAV_ACTIVE
+    } else if bold {
+        t::TEXT_NAV_UNREAD
     } else {
         t::TEXT_NAV
     };
-    let lead_ink = if active { c.accent } else { c.ink_faint };
+    let lead_ink = if active {
+        c.accent
+    } else if bold {
+        c.ink_muted
+    } else {
+        c.ink_faint
+    };
     // The hash is a character of the row's type in a column of its own, as the board sets
     // it; a lock stands in the same column.
     let lead = match lead {
@@ -168,6 +206,11 @@ fn nav_row(
             el().a11y_hidden()
                 .child(super::components::avatar(name, &id, t::AVATAR_XS, look))
         }
+        NavLead::Icon(glyph) => el()
+            .w(t::SPACE_10)
+            .center()
+            .a11y_hidden()
+            .child(icon(glyph, t::SPACE_14).color(lead_ink)),
     };
     let mut item = row()
         .key(key)
@@ -187,11 +230,20 @@ fn nav_row(
         .child(
             text(name.to_string())
                 .font(style)
-                .color(if active { c.ink_selected } else { c.ink_quiet })
+                .color(if active {
+                    c.ink_selected
+                } else if bold {
+                    c.ink
+                } else {
+                    c.ink_quiet
+                })
                 .truncate()
                 .grow(1.0)
                 .min_w(0.0),
         );
+    if mentions > 0 {
+        item = item.child(count_badge(mentions, true, look));
+    }
     if active {
         item = item.fill(c.raised);
         for layer in look.shadows.selected {
@@ -292,6 +344,9 @@ pub fn main(s: &State, server: &ServerSummary, look: Look) -> El {
     match s.server_page() {
         Some(ServerPage::Browse) => return super::channels::browse(s, server, look),
         Some(ServerPage::YourSettings) => return super::channels::your_settings(s, server, look),
+        Some(ServerPage::Mentions) => {
+            return super::mentions::view(s, Some(&server.server_id), look);
+        }
         None => {}
     }
     let Some(channel) = s

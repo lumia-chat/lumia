@@ -46,6 +46,9 @@ pub struct Settings {
     /// The member list (or a conversation's details) put away from a wide window's row by
     /// its toggle in the conversation's header. A narrow window never has it in the row.
     pub aside_hidden: bool,
+    /// The emoji this computer reacted with, most recent first: the emoji picker's
+    /// "Frequently used" row.
+    pub recent_emoji: Vec<String>,
 }
 
 /// Light, dark, or whichever the system is in.

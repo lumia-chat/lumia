@@ -32,9 +32,10 @@
 //! Off macOS the same functions exist and [`Updater::start`] always answers
 //! [`Unavailable::Unsupported`].
 //!
-//! Two functions here are not Sparkle's: [`set_appearance`] and [`set_scroll_bars`], what
-//! the shell's Preferences ask of AppKit. They are here because this is the crate that may
-//! write the message sends, not because they have anything to do with updates.
+//! Three functions here are not Sparkle's: [`set_appearance`] and [`set_scroll_bars`], what
+//! the shell's Preferences ask of AppKit, and [`set_badge`], the count on the Dock icon. They
+//! are here because this is the crate that may write the message sends, not because they
+//! have anything to do with updates.
 
 use std::fmt;
 use std::marker::PhantomData;
@@ -91,6 +92,13 @@ pub fn set_appearance(appearance: Appearance) -> bool {
 /// was done: not macOS, or not the main thread.
 pub fn set_scroll_bars(scroll_bars: ScrollBars) -> bool {
     system::set_scroll_bars(scroll_bars)
+}
+
+/// Puts `label` on the app's Dock icon (the count of what is unread and for this account),
+/// or takes the badge away for `None`. Call on the main thread. False when nothing was done:
+/// not macOS, not the main thread, or a process with no application (a test).
+pub fn set_badge(label: Option<&str>) -> bool {
+    system::set_badge(label)
 }
 
 /// Why there is no updater. The first three are how most launches go and are nothing to
@@ -226,6 +234,7 @@ mod tests {
     fn a_test_changes_no_system_setting() {
         assert!(!set_appearance(Appearance::Dark));
         assert!(!set_scroll_bars(ScrollBars::Always));
+        assert!(!set_badge(Some("3")));
     }
 
     #[test]

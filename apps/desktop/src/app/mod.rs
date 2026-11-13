@@ -16,6 +16,7 @@ pub mod links;
 pub mod menu;
 pub mod notices;
 pub mod pictures;
+pub mod replies;
 pub mod server;
 pub mod server_settings;
 pub mod sign_in;
@@ -59,6 +60,8 @@ pub enum HomeView {
     /// How Lumia looks on this computer (`settings`: appearance, density, scroll bars).
     Preferences,
     AddServer,
+    /// The messages in every server that notify this account (architecture 6.6).
+    Mentions,
 }
 
 /// A surface floating over the shell, anchored to the control that opened it. One at a time.
@@ -80,6 +83,8 @@ pub enum Popover {
     Account,
     /// Someone's profile card, for `State::person`.
     Person,
+    /// The emoji picker, for the message `replies.picker` names.
+    EmojiPicker,
 }
 
 /// Whose profile card is open, and the control it hangs from.
@@ -126,6 +131,8 @@ pub struct State {
     pub(crate) window_width: Option<f32>,
     /// The aside over a narrow window's conversation, asked for by its toggle (`aside`).
     pub aside_open: bool,
+    /// Quote replies, reactions and mentions (`replies`).
+    pub replies: replies::Replies,
 }
 
 impl State {
@@ -162,6 +169,7 @@ impl State {
             autoscroll: autoscroll::Autoscroll::default(),
             window_width: None,
             aside_open: false,
+            replies: replies::Replies::default(),
         }
     }
 
@@ -190,6 +198,7 @@ impl State {
         self.placed = true;
         self.popover = None;
         self.draft.clear();
+        self.replies = replies::Replies::default();
         self.member_filter.clear();
         self.session.watch_presence(&[server_id.to_string()]);
         let first = self
@@ -211,6 +220,9 @@ impl State {
         self.close_page();
         if self.session.joined(channel_id) {
             self.session.previewing = None;
+        }
+        if self.session.channel() != Some(channel_id) {
+            self.replies = replies::Replies::default();
         }
         self.session.open_channel(channel_id);
         self.session.channel_members(channel_id);
@@ -240,6 +252,7 @@ impl State {
         if self.place != Place::Home {
             self.session.close_conversation();
             self.draft.clear();
+            self.replies = replies::Replies::default();
         }
         self.place = Place::Home;
         self.home_view = view;
@@ -318,11 +331,17 @@ impl State {
         if self.draft.is_composing() || self.draft.text.trim().is_empty() {
             return;
         }
-        if self
-            .session
-            .send(&self.draft.text, chrono::Utc::now().timestamp_micros())
-        {
+        let reply = self.replies.replying.clone();
+        if let Some(outside) = self.session.send_with(
+            &self.draft.text,
+            chrono::Utc::now().timestamp_micros(),
+            reply.as_ref(),
+        ) {
             self.draft.clear();
+            self.draft_seen.clear();
+            self.replies.replying = None;
+            self.replies.mention = None;
+            self.sent_outside(outside);
             tx.scroll_to_bottom("messages");
         }
     }
@@ -341,7 +360,8 @@ impl State {
         }
         let expired = self.session.expire_typing(now_micros);
         let pictured = self.pictures.sync(&self.session.avatars);
-        expired || pictured
+        let replied = self.tick_replies();
+        expired || pictured || replied
     }
 
     /// Enters the shell for a session the stores already hold, at launch: with what the
@@ -370,6 +390,7 @@ impl State {
         self.placed = false;
         self.popover = None;
         self.draft.clear();
+        self.replies = replies::Replies::default();
         self.home = home::Home::default();
         self.server_forms = server::ServerForms::default();
         self.channel_forms = channels::ChannelForms::default();
@@ -454,7 +475,8 @@ impl State {
             Update::Notice(update) => self.react_notice(update),
             Update::Avatar(update) => self.react_avatar(update),
             Update::Gateway(event) => self.react_gateway(event),
-            Update::Members { .. }
+            Update::Read(_)
+            | Update::Members { .. }
             | Update::Older { .. }
             | Update::Profile { .. }
             | Update::SignedOut => {}
@@ -527,6 +549,17 @@ pub fn poll(state: &mut State, now: f64, tx: &mut Tx) -> bool {
     let drained = state.drain();
     let now = chrono::Utc::now().timestamp_micros();
     let ticked = state.tick(now);
+    state.land(tx);
+    let found = state.show_found(tx);
+    if state.replies.flash.is_some()
+        || state
+            .replies
+            .outside
+            .as_ref()
+            .is_some_and(|o| o.said.is_some())
+    {
+        tx.wake_after(std::time::Duration::from_millis(250));
+    }
     // Nothing arrives when someone stops typing, so the window asks to be woken when the
     // first of them runs out, once for each such moment.
     let ends = state.session.typing_ends();
@@ -535,5 +568,5 @@ pub fn poll(state: &mut State, now: f64, tx: &mut Tx) -> bool {
         tx.wake_after(std::time::Duration::from_micros(left));
     }
     state.typing_wake = ends;
-    drained || ticked
+    drained || ticked || found
 }

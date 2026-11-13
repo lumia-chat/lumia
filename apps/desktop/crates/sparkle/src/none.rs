@@ -17,6 +17,11 @@ pub(crate) fn set_scroll_bars(_scroll_bars: ScrollBars) -> bool {
     false
 }
 
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+pub(crate) fn set_badge(_label: Option<&str>) -> bool {
+    false
+}
+
 pub(crate) struct Updater(Infallible);
 
 impl Updater {

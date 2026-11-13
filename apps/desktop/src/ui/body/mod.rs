@@ -23,8 +23,10 @@
 //! - A link as its text, not its address. (The address shows under the pointer, since a
 //!   link's text need not say where it goes.)
 //!
-//! Not here yet: mentions (they are entries beside the body, protocol 14, and the session
-//! does not read them).
+//! A mention (architecture 6.6) is drawn as the design system's pill: the message gives
+//! each one's range in its source, which the parser does not keep, so the words of each
+//! (`@ada`) are found again in the paragraphs drawn, where they stand as a word and outside
+//! code.
 
 mod parse;
 
@@ -49,13 +51,44 @@ thread_local! {
 /// The body of a message. `selectable` is off for a send that is still pending: its text
 /// cannot be selected and its links do not open.
 pub fn view(source: &str, selectable: bool, look: Look) -> El {
+    view_with(source, selectable, &[], look)
+}
+
+/// [`view`] with the words of the message's mentions (`@ada`), drawn as pills.
+pub fn view_with(source: &str, selectable: bool, mentions: &[String], look: Look) -> El {
     let blocks = parse(source);
     let body = Body {
         look,
         selectable,
         first: Cell::new(true),
+        mentions: mentions.to_vec(),
     };
     body.blocks(&blocks, None, "", false)
+}
+
+/// Where `words` stand in `text` as a word of their own: not inside another word, and not
+/// running on into the characters a handle has.
+fn standing(text: &str, words: &str) -> Vec<std::ops::Range<usize>> {
+    let handle = |c: char| c.is_alphanumeric() || matches!(c, '_' | '.' | '-');
+    let mut found = Vec::new();
+    let mut from = 0;
+    while let Some(at) = text[from..].find(words) {
+        let start = from + at;
+        let end = start + words.len();
+        let opens = text[..start]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !c.is_alphanumeric() && c != '_');
+        let closes = text[end..]
+            .chars()
+            .next()
+            .is_none_or(|c| !handle(c) || matches!(c, '.' | '-'));
+        if opens && closes {
+            found.push(start..end);
+        }
+        from = end;
+    }
+    found
 }
 
 /// A line of the timeline that is not a message's text but belongs in a copy of it: the
@@ -94,6 +127,8 @@ struct Body {
     /// No text of this body has been drawn yet: the first follows the message's author
     /// and time without a blank line.
     first: Cell<bool>,
+    /// The words of the message's mentions, drawn as pills.
+    mentions: Vec<String>,
 }
 
 impl Body {
@@ -312,6 +347,22 @@ impl Body {
             } else {
                 span
             });
+        }
+        // Mentions last, over what they stand in, but never inside code.
+        for words in &self.mentions {
+            for range in standing(&inline.text, words) {
+                let in_code = inline.runs.iter().any(|(run, style)| {
+                    matches!(style, Style::Code) && run.start < range.end && range.start < run.end
+                });
+                if !in_code {
+                    spans.push(
+                        Span::new(range.start, range.end)
+                            .color(c.accent_ink)
+                            .weight(t::WEIGHT_STRONG)
+                            .bg(c.accent_soft, t::CODE_PAD),
+                    );
+                }
+            }
         }
         spans
     }

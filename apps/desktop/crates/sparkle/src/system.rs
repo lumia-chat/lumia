@@ -1,5 +1,6 @@
 //! Two of the system's settings, made for this app alone: its appearance and when its
-//! scroll bars show. Both are AppKit's and Foundation's own, public for as long as the
+//! scroll bars show; and the badge on its Dock icon (`NSApp.dockTile.badgeLabel`, public
+//! since macOS 10.5). Both are AppKit's and Foundation's own, public for as long as the
 //! systems the app runs on have existed (`NSApplication.appearance` since macOS 10.14; the
 //! shell's deployment target is 14).
 //!
@@ -94,5 +95,31 @@ pub(crate) fn set_scroll_bars(scroll_bars: ScrollBars) -> bool {
     // nullable sender; observers run here, on the main thread (checked above), which is
     // where AppKit itself posts this one.
     unsafe { NSNotificationCenter::defaultCenter().postNotificationName_object(changed, None) };
+    true
+}
+
+pub(crate) fn set_badge(label: Option<&str>) -> bool {
+    if MainThreadMarker::new().is_none() {
+        return false;
+    }
+    let Some(application) = AnyClass::get(c"NSApplication") else {
+        return false;
+    };
+    // SAFETY: `+[NSApplication sharedApplication]` takes nothing and returns the
+    // application object. Main thread, checked above.
+    let app: Option<Retained<AnyObject>> = unsafe { msg_send![application, sharedApplication] };
+    let Some(app) = app else {
+        return false;
+    };
+    // SAFETY: `-[NSApplication dockTile]` takes nothing and returns the app's `NSDockTile`.
+    // Main thread, checked above.
+    let tile: Option<Retained<AnyObject>> = unsafe { msg_send![&*app, dockTile] };
+    let Some(tile) = tile else {
+        return false;
+    };
+    let label = label.map(NSString::from_str);
+    // SAFETY: `-[NSDockTile setBadgeLabel:]` takes a nullable `NSString` (nil takes the
+    // badge away) and returns nothing. Main thread, checked above.
+    let _: () = unsafe { msg_send![&*tile, setBadgeLabel: label.as_deref()] };
     true
 }

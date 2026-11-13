@@ -216,6 +216,10 @@ pub fn message(id: &str, author: &str, body: &str, micros: i64) -> Entry {
         deleted: false,
         notice: String::new(),
         notice_about: String::new(),
+        reply: None,
+        mentions: Vec::new(),
+        reactions: Vec::new(),
+        mentions_me: false,
     }
 }
 

@@ -5,9 +5,12 @@ pub mod body;
 mod channels;
 pub mod components;
 mod conversation;
+mod emoji;
 mod home;
 mod link;
+mod mentions;
 mod menus;
+mod replies;
 mod scroll;
 mod server;
 mod server_popovers;
@@ -34,10 +37,33 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
     };
     // A popover is a child of the root after everything else, so it draws above the shell
     // and escapes its anchor's clipping.
+    // The toolbar over the message under the pointer, under a popover it opened.
+    let toolbar = (s.route == Route::Shell)
+        .then(|| s.toolbar_for())
+        .flatten()
+        .filter(|id| s.session.entries.iter().any(|e| e.id == *id))
+        .map(|id| replies::toolbar(id, look));
+    let screen = match toolbar {
+        Some(toolbar) => screen.child(toolbar),
+        None => screen,
+    };
     let screen = match s.popover.and_then(|popover| overlay(s, popover, look)) {
         Some(popover) => screen.child(popover),
         None => screen,
     };
+    // What floats over the conversation without taking the focus: the @ list over the
+    // composer, and "Quote reply" over a selection inside one message.
+    let mut screen = screen;
+    if s.route == Route::Shell && s.popover.is_none() {
+        if let Some(list) = replies::mention_list(s, look) {
+            screen = screen.child(list);
+        }
+        if let Some((id, words, backward)) = &s.replies.selection
+            && let Some(at) = replies::quote_button_at(&cx.selection_rects(), *backward)
+        {
+            screen = screen.child(replies::quote_button(id, words, at, look));
+        }
+    }
     match s.autoscroll.origin() {
         Some(at) => screen.child(autoscroll_mark(at, look)),
         None => screen,
@@ -80,5 +106,6 @@ fn overlay(s: &State, popover: Popover, look: Look) -> Option<El> {
         Popover::ServerMenu => menus::server(s, look),
         Popover::Account => menus::account(s, look),
         Popover::Person => menus::person(s, look),
+        Popover::EmojiPicker => emoji::picker(s, look),
     }
 }

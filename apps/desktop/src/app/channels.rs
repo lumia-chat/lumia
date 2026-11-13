@@ -18,6 +18,8 @@ pub enum ServerPage {
     Browse,
     /// "Your settings in" the server: this account's two switches there.
     YourSettings,
+    /// The messages in the server that notify this account (architecture 6.6).
+    Mentions,
 }
 
 /// What the channel forms hold between frames.
@@ -100,6 +102,15 @@ impl State {
         self.close_popover();
         self.close_server_settings();
         self.channel_forms.page = Some((server_id, page));
+    }
+
+    /// Mentions: the messages of the server on screen that notify this account.
+    pub fn open_server_mentions(&mut self) {
+        let Some(server_id) = self.server_id().map(str::to_string) else {
+            return;
+        };
+        self.open_page(ServerPage::Mentions);
+        self.session.load_mentions(Some(&server_id), false);
     }
 
     /// Takes a page off the server's main pane.
@@ -372,6 +383,9 @@ impl State {
     // ---- What the session reports -----------------------------------------------------
 
     pub(super) fn react_channel(&mut self, update: &ChannelUpdate) {
+        if let ChannelUpdate::Added { channel_id, result } = update {
+            self.outside_added(channel_id, result.as_ref().map_err(|f| f.message.as_str()));
+        }
         let form = &mut self.channel_forms;
         match update {
             ChannelUpdate::Browse { channels, .. } => {

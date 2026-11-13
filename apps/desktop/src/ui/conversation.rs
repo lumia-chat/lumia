@@ -6,7 +6,7 @@ use rune::{Cursor, Cycle, El, Icon, Span, col, el, icon, rich, row, text, text_i
 use super::components::{
     Look, empty_state, error_text, icon_button, panel, title_rule, topic as topic_line,
 };
-use super::timeline;
+use super::{replies, timeline};
 use crate::app::State;
 use crate::tokens::{self as t, icons};
 
@@ -303,6 +303,8 @@ fn composer(s: &State, placeholder: &str, look: Look) -> El {
         .min_h(t::SPACE_24)
         .max_h(t::SPACE_24 * 8.0)
         .on_edit(|s: &mut State| &mut s.draft)
+        .on_input_key(|s: &mut State, key, _| s.composer_key(key))
+        .on_input_change(|s: &mut State, _| s.follow_mention())
         .on_submit(|s: &mut State, tx| s.send(tx));
     let mut send = el()
         .key("send")
@@ -351,11 +353,30 @@ fn composer(s: &State, placeholder: &str, look: Look) -> El {
     for layer in look.shadows.composer {
         frame = frame.box_shadow(*layer);
     }
-    col()
+    // Over the composer: the bar after a send, the quote being replied with. The @ list
+    // floats over the timeline instead (`ui::view`).
+    let mut above = col().w_full().gap(t::SPACE_6);
+    let mut any = false;
+    for part in [
+        replies::outside_bar(s, look),
+        s.replies
+            .replying
+            .as_ref()
+            .map(|quote| replies::reply_bar(s, quote, look)),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        any = true;
+        above = above.child(part);
+    }
+    let mut column = col()
         .w_full()
         .px(t::SPACE_24)
         .pt(t::SPACE_4)
-        .pb(t::SPACE_14)
-        .child(frame)
-        .child(composer_hint(s, look))
+        .pb(t::SPACE_14);
+    if any {
+        column = column.child(above.pb(t::SPACE_6));
+    }
+    column.child(frame).child(composer_hint(s, look))
 }

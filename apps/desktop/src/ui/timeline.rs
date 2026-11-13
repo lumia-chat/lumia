@@ -17,6 +17,14 @@
 //! The day dividers stay out of it: "Today" is wrong by tomorrow. A send still pending is
 //! not selectable at all.
 //!
+//! A message carries what architecture 6.6 adds (`replies`): its quote above its words, its
+//! reactions under them, the toolbar while the pointer is on it, a tint and an accent rule
+//! when it mentions this account, and a brief one when a jump has just reached it. Above the
+//! first message after where this account had read to when the conversation opened stands
+//! the "New messages" line. A selection inside one message's body is told to the state, for
+//! the "Quote reply" button over it, and the row under the pointer, for the toolbar over it
+//! (both drawn at the root, `ui::view`, so that no row carries them).
+//!
 //! Two limits are Rune's (its issue 550): a copy that spans rows scrolled out of the
 //! mounted window builds them to read their text and stops, without saying so, at 10,000
 //! such rows or 4 MiB; and while a selection spans many unmounted rows, each scrolled
@@ -29,6 +37,7 @@ use rune::{Cursor, El, GrowthSpec, ScrollSpec, col, el, icon, row, text};
 
 use super::body;
 use super::components::{Look, avatar_of};
+use super::replies;
 use super::scroll::WithScrollBar;
 use crate::app::State;
 use crate::session::{Entry, Pending};
@@ -106,6 +115,32 @@ pub fn view(s: &State, label: String, look: Look) -> El {
         .role("list")
         .label(label)
         .selection_group(true)
+        // The pointer leaving the list leaves no row under it. (Each row says when the
+        // pointer comes onto it; a listener per row for leaving cost every frame of a
+        // fling a third more.)
+        .on_hover_change(|s: &mut State, inside, _| {
+            if !inside {
+                s.replies.hovered = None;
+            }
+        })
+        // One listener for the whole list: a selection inside one message's body can be
+        // quoted. (One on every row cost every selection change a call per row.)
+        .on_selection_change(|s: &mut State, change, _| {
+            if change.dragging() {
+                return;
+            }
+            let inside = change.selection().and_then(|sel| {
+                let mut ids = sel
+                    .texts()
+                    .iter()
+                    .filter(|t| t.is_selected())
+                    .map(|t| body_of(t.path()));
+                let first = ids.next().flatten()?;
+                ids.all(|id| id == Some(first))
+                    .then(|| (first.to_string(), sel.text().to_string(), sel.backward()))
+            });
+            s.selection_in(inside);
+        })
         .virtual_rows(
             count,
             Measures::of(s.settings.density).row_estimate(),
@@ -130,8 +165,14 @@ pub fn view(s: &State, label: String, look: Look) -> El {
             },
         )
         .virtual_rows_version(s.session.revision)
-        // Reading up to the oldest rows on screen asks for the page before them.
-        .on_visible_rows(|s: &mut State, visible| visible.start < OLDER_WITHIN && s.load_older());
+        // Reading up to the oldest rows on screen asks for the page before them; the newest
+        // on screen is what marks the conversation read.
+        .on_visible_rows(move |s: &mut State, visible| {
+            let newest = visible.end >= count;
+            let changed = s.replies.newest_visible != newest;
+            s.replies.newest_visible = newest;
+            (visible.start < OLDER_WITHIN && s.load_older()) || changed
+        });
     // A conversation shorter than the pane sits at its foot, against the composer, as the
     // board's does: the space above the first message takes what the rows leave.
     col()
@@ -198,11 +239,21 @@ struct Place {
 impl Place {
     fn of(s: &State, i: usize) -> Self {
         let at = |i: usize| stamp(s, i);
+        // A message that quotes another opens a block of its own, under its name.
+        let quotes = |i: usize| match s.session.entries.get(i) {
+            Some(entry) => entry.reply.is_some(),
+            None => s
+                .session
+                .pending_here()
+                .nth(i - s.session.entries.len())
+                .is_some_and(|p| p.reply.is_some()),
+        };
         let joined = |i: usize| {
-            i.checked_sub(1)
-                .and_then(at)
-                .zip(at(i))
-                .is_some_and(|(before, this)| joins(before, this))
+            !quotes(i)
+                && i.checked_sub(1)
+                    .and_then(at)
+                    .zip(at(i))
+                    .is_some_and(|(before, this)| joins(before, this))
         };
         Self {
             opens: !joined(i),
@@ -255,6 +306,24 @@ struct Head<'a> {
     selectable: bool,
 }
 
+/// What a stored message's row has besides its words: the toolbar and the selection it
+/// hears, its tint.
+#[derive(Default)]
+struct Decor {
+    /// The message, for its toolbar and its selection; none for a send on its way.
+    id: Option<String>,
+    /// It mentions this account, or a jump has just reached it.
+    tint: bool,
+}
+
+/// The message whose body a selected text is in: the row under the list (keyed by the
+/// message's id) when the path runs on through its body. None for a name, a time or a quote.
+fn body_of(path: &str) -> Option<&str> {
+    let mut parts = path.split('/').skip_while(|part| *part != "rows").skip(1);
+    let id = parts.next()?;
+    parts.any(|part| part == "body").then_some(id)
+}
+
 /// A message's row. The first of a block is an avatar beside a name, a time and the
 /// message; the ones after it are the message alone under those, in the same column.
 fn message_frame(
@@ -263,6 +332,7 @@ fn message_frame(
     head: Head<'_>,
     content: El,
     place: Place,
+    decor: Decor,
     look: Look,
 ) -> El {
     let c = look.c;
@@ -277,7 +347,7 @@ fn message_frame(
     // A block's rows touch, and are a paragraph's distance apart between them: the board
     // draws a block's messages as the paragraphs of one.
     let within = m.under_name / 2.0;
-    let frame = row()
+    let mut frame = row()
         .key(key)
         .w_full()
         .px(t::SPACE_12)
@@ -287,6 +357,19 @@ fn message_frame(
         .radius(t::RADIUS_12)
         .hover(c.hover_message)
         .role("listitem");
+    if decor.tint {
+        frame = frame.fill(c.accent_soft).child(
+            el().pin(Some(0.0), Some(0.0), None, Some(0.0))
+                .w(t::SPACE_2)
+                .fill(c.accent)
+                .a11y_hidden(),
+        );
+    }
+    if let Some(id) = decor.id {
+        // The toolbar over the row under the pointer is drawn at the root (`ui::view`), so a
+        // row builds none of it; the row only says when the pointer comes onto it.
+        frame = frame.on_hover(move |s: &mut State| s.hovered(&id, true));
+    }
     if !place.opens {
         // The time of a message under the block's first, where the avatar would be: there
         // for assistive technology always, and for the eye while the pointer is on the row.
@@ -405,9 +488,9 @@ fn stored_row(s: &State, i: usize, entry: &Entry, place: Place, look: Look) -> E
     }
     let author = s.session.name_of(&entry.author_account_id);
     let content = if entry.deleted {
-        body::note("(deleted)", c.ink_quiet, look)
+        body::note("(deleted)", c.ink_quiet, look).key("body")
     } else {
-        body::view(&entry.body, true, look)
+        message_content(s, entry, look)
     };
     let head = Head {
         author: &author,
@@ -416,8 +499,36 @@ fn stored_row(s: &State, i: usize, entry: &Entry, place: Place, look: Look) -> E
         short_time: short_clock(entry.at_micros),
         selectable: true,
     };
-    let row = message_frame(s, &entry.id, head, content.key("body"), place, look);
+    let decor = Decor {
+        id: (!entry.deleted).then(|| entry.id.clone()),
+        tint: entry.mentions_me || s.flashed(&entry.id),
+    };
+    let row = message_frame(s, &entry.id, head, content, place, decor, look);
     with_divider(s, i, entry, place, row, look)
+}
+
+/// A message's words with what architecture 6.6 adds: its quote above them, its mentions as
+/// pills in them, and its reactions under them.
+fn message_content(s: &State, entry: &Entry, look: Look) -> El {
+    let words: Vec<String> = entry
+        .mentions
+        .iter()
+        .filter_map(|m| entry.body.get(m.start as usize..m.end as usize))
+        .map(str::to_string)
+        .collect();
+    let body = body::view_with(&entry.body, true, &words, look).key("body");
+    if entry.reply.is_none() && entry.reactions.is_empty() {
+        return body;
+    }
+    let mut content = col().w_full().gap(t::SPACE_4);
+    if let Some(quote) = &entry.reply {
+        content = content.child(replies::quote_block(s, quote, look));
+    }
+    content = content.child(body);
+    if !entry.reactions.is_empty() {
+        content = content.child(replies::reactions(s, entry, look).mt(t::SPACE_2));
+    }
+    content
 }
 
 /// A stored row in its slot. The divider lives in the first row of its day: a row of its
@@ -446,7 +557,26 @@ fn with_divider(s: &State, i: usize, entry: &Entry, place: Place, row: El, look:
     if previous != Some(day) {
         slot = slot.child(day_divider(day_label(day), m, look));
     }
+    if s.session.new_line_at() == Some(entry.id.as_str()) {
+        slot = slot.child(new_line(m, look));
+    }
     slot.child(row)
+}
+
+/// The "New messages" line, above the first message after where this account had read to.
+fn new_line(m: Measures, look: Look) -> El {
+    let c = look.c;
+    row()
+        .key("new-messages")
+        .w_full()
+        .px(t::SPACE_10)
+        .py(m.divider)
+        .gap(t::SPACE_12)
+        .items_center()
+        .role("separator")
+        .label("New messages")
+        .child(el().grow(1.0).h(1.0).fill(c.accent))
+        .child(text("New messages").font(t::TEXT_SECTION).color(c.accent))
 }
 
 /// What the list holds a message's row in: the row, with the room under a block's last.
@@ -461,7 +591,14 @@ fn slot(place: Place, m: Measures) -> El {
 /// A send the store does not hold yet: dimmed until it does, with the refusal when there was one.
 fn pending_row(s: &State, pending: &Pending, place: Place, look: Look) -> El {
     let c = look.c;
-    let body = body::view(&pending.body, false, look).key("body");
+    let mut body = body::view(&pending.body, false, look).key("body");
+    if let Some(quote) = &pending.reply {
+        body = col()
+            .w_full()
+            .gap(t::SPACE_4)
+            .child(replies::quote_block(s, quote, look))
+            .child(body);
+    }
     let content = match &pending.failed {
         None => col().w_full().opacity(0.5).child(body),
         Some(why) => {
@@ -505,5 +642,13 @@ fn pending_row(s: &State, pending: &Pending, place: Place, look: Look) -> El {
         selectable: false,
     };
     let m = Measures::of(s.settings.density);
-    slot(place, m).child(message_frame(s, &pending.id, head, content, place, look))
+    slot(place, m).child(message_frame(
+        s,
+        &pending.id,
+        head,
+        content,
+        place,
+        Decor::default(),
+        look,
+    ))
 }

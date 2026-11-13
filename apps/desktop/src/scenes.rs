@@ -9,6 +9,7 @@ use lumia_client::app::{
 };
 
 mod account;
+mod replies;
 
 use crate::app::{HomeView, Route, State};
 use crate::session::servers::ServerUpdate;
@@ -238,6 +239,11 @@ pub const SCENES: &[Scene] = &[
     ("home-new-message", home_new_message),
     ("bodies", bodies),
     ("blocks", blocks),
+    // Quote replies, reactions, mentions and read state (architecture 6.6).
+    ("replies", replies::replies),
+    ("mention-list", replies::mention_list),
+    ("emoji-picker", replies::emoji_picker),
+    ("mentions", replies::mentions),
     // The same conversation at the other density. Set on the state, not through
     // `set_density`: a scene does not write the person's settings.
     ("blocks-compact", |s| {
@@ -258,7 +264,7 @@ pub const SCENES: &[Scene] = &[
 ];
 
 /// A signed-in account with two servers, for the scenes that need no instance.
-fn servers_sample(state: &mut State) {
+pub(crate) fn servers_sample(state: &mut State) {
     let channel = |id: &str, server: &str, name: &str| ChannelSummary {
         channel_id: id.into(),
         server_id: server.into(),
@@ -404,6 +410,10 @@ fn channels_sample(state: &mut State) {
         deleted: false,
         notice: notice.into(),
         notice_about: about.into(),
+        reply: None,
+        mentions: Vec::new(),
+        reactions: Vec::new(),
+        mentions_me: false,
     };
     state.session.entries = vec![
         entry("n1", "grace", "", 40, "joined", "grace"),
@@ -878,6 +888,10 @@ pub fn blocks(state: &mut State) {
             deleted: false,
             notice: String::new(),
             notice_about: String::new(),
+            reply: None,
+            mentions: Vec::new(),
+            reactions: Vec::new(),
+            mentions_me: false,
         })
         .collect();
     state.session.pending = vec![Pending {
@@ -886,6 +900,7 @@ pub fn blocks(state: &mut State) {
         body: "Does it relocate before or after linking?".into(),
         sent_at_micros: now,
         failed: None,
+        reply: None,
     }];
     state.session.revision += 1;
     state.receive(&Update::Gateway(AppEvent::Typing {
@@ -967,6 +982,10 @@ pub fn bodies(state: &mut State) {
             deleted: false,
             notice: String::new(),
             notice_about: String::new(),
+            reply: None,
+            mentions: Vec::new(),
+            reactions: Vec::new(),
+            mentions_me: false,
         })
         .collect();
     state.session.revision += 1;

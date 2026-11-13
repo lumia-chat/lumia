@@ -242,6 +242,7 @@ fn a_send_the_store_does_not_hold_yet_reads_as_sending_and_a_refused_one_says_wh
             body: "On my way.".into(),
             sent_at_micros: 0,
             failed: None,
+            reply: None,
         });
         s.session.pending.push(Pending {
             id: "elsewhere".into(),
@@ -249,6 +250,7 @@ fn a_send_the_store_does_not_hold_yet_reads_as_sending_and_a_refused_one_says_wh
             body: "Not here.".into(),
             sent_at_micros: 0,
             failed: None,
+            reply: None,
         });
         s.session.revision += 1;
     });
@@ -312,6 +314,7 @@ fn messages_one_person_sends_close_together_are_one_block() {
         body: "On its way.".into(),
         sent_at_micros: noon + 10 * MINUTE + 86_400_000_000,
         failed: None,
+        reply: None,
     });
     state.session.revision += 1;
     let mut rt = runtime(state);

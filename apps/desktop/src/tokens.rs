@@ -109,6 +109,12 @@ pub const TEXT_NAV_ACTIVE: TextStyle = TextStyle {
     weight: TEXT_AUTHOR.weight,
     ..TEXT_NAV
 };
+/// A row of the sidebar with unread messages: `text-nav` at 600, the boards' unread row
+/// (the secondary button's weight at the same size).
+pub const TEXT_NAV_UNREAD: TextStyle = TextStyle {
+    weight: TEXT_BUTTON_SECONDARY.weight,
+    ..TEXT_NAV
+};
 /// A button in a pane or a popover (14.5 at 700): the secondary label's size at the primary
 /// label's weight.
 pub const TEXT_BUTTON_PANE: TextStyle = TextStyle {

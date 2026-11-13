@@ -82,7 +82,20 @@ pub fn sidebar(s: &State, look: Look) -> El {
             None => groups.push((host, vec![channel])),
         }
     }
-    let mut list = col().w_full();
+    let mentions = s.session.badge() - s.session.personal_unread();
+    let mut list =
+        col()
+            .w_full()
+            .child(el().w_full().pb(t::SPACE_8).child(super::server::nav_row(
+                "home-mentions".into(),
+                "Mentions",
+                &super::server::with_unread("Mentions", (mentions, mentions)),
+                super::server::NavLead::Icon(&icons::MENTION),
+                s.home_view == HomeView::Mentions,
+                (0, mentions),
+                State::open_home_mentions,
+                look,
+            )));
     if groups.is_empty() {
         list = list.child(
             text("No conversations yet.")
@@ -213,6 +226,8 @@ fn conversation_row(s: &State, channel: &ChannelSummary, look: Look) -> El {
         .unwrap_or(channel.channel_id.as_str());
     let active = s.home_view == HomeView::Conversations
         && s.session.dm() == Some(channel.channel_id.as_str());
+    let (unread, mentions) = s.session.unread(&channel.channel_id);
+    let bold = !active && unread > 0;
     let id = channel.channel_id.clone();
     let mut button = row()
         .key(format!("dm-{}", channel.channel_id))
@@ -223,7 +238,10 @@ fn conversation_row(s: &State, channel: &ChannelSummary, look: Look) -> El {
         .items_center()
         .radius(t::RADIUS_8)
         .role("button")
-        .label(format!("Conversation with {name}"))
+        .label(super::server::with_unread(
+            &format!("Conversation with {name}"),
+            (unread, mentions),
+        ))
         .cursor(Cursor::Pointer)
         .focusable(true)
         .focus_ring(2.0, 0.0, c.focus)
@@ -233,14 +251,25 @@ fn conversation_row(s: &State, channel: &ChannelSummary, look: Look) -> El {
             text(name)
                 .font(if active {
                     t::TEXT_NAV_ACTIVE
+                } else if bold {
+                    t::TEXT_NAV_UNREAD
                 } else {
                     t::TEXT_NAV
                 })
-                .color(if active { c.ink_selected } else { c.ink_quiet })
+                .color(if active {
+                    c.ink_selected
+                } else if bold {
+                    c.ink
+                } else {
+                    c.ink_quiet
+                })
                 .truncate()
                 .grow(1.0)
                 .min_w(0.0),
         );
+    if mentions > 0 {
+        button = button.child(super::components::count_badge(mentions, true, look));
+    }
     if active {
         button = button.fill(c.raised);
         for layer in look.shadows.selected {
@@ -262,6 +291,7 @@ pub fn main(s: &State, look: Look) -> El {
         HomeView::Profile => profile::view(s, look),
         HomeView::Preferences => preferences::view(s, look),
         HomeView::AddServer => add_server::view(s, look),
+        HomeView::Mentions => super::mentions::view(s, None, look),
     }
 }
 

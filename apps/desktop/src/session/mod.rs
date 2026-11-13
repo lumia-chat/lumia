@@ -10,8 +10,9 @@
 //! This file is the account, its servers and the conversation on screen. What belongs to
 //! one part of the product lives beside it and reports through its own update type:
 //! [`dms`] (personal conversations), [`servers`] (making and joining servers, channels,
-//! invites), [`channels`] (being in channels, and server DMs) and [`identity`] (devices,
-//! linking, the profile and status).
+//! invites), [`channels`] (being in channels, and server DMs), [`identity`] (devices,
+//! linking, the profile and status) and [`reads`] (read state, reactions, the Mentions
+//! lists and finding a message).
 
 pub mod avatars;
 pub mod browser;
@@ -19,6 +20,7 @@ pub mod channels;
 pub mod dms;
 pub mod identity;
 pub mod notices;
+pub mod reads;
 pub mod servers;
 
 use std::collections::{HashMap, HashSet};
@@ -29,8 +31,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use lumia_client::ClientError;
 use lumia_client::app::{
-    self, App, AppEvent, ChannelSummary, InstanceSummary, MemberSummary, MessageSummary, Opener,
-    Place, ServerSummary, SnapshotSummary, StoreName,
+    self, App, AppEvent, ChannelSummary, InstanceSummary, MemberSummary, MentionSummary,
+    MessageSummary, Opener, Place, QuoteSummary, ReactionSummary, ServerSummary, SnapshotSummary,
+    StoreName,
 };
 use lumia_client::sqlite::SqliteStore;
 
@@ -128,6 +131,7 @@ pub enum Update {
     Browser(browser::BrowserUpdate),
     Notice(notices::NoticeUpdate),
     Avatar(avatars::AvatarUpdate),
+    Read(reads::ReadUpdate),
 }
 
 /// What is on screen to read and write: a server's channel, or a personal conversation.
@@ -161,6 +165,14 @@ pub struct Entry {
     /// `removed`, about `notice_about`, done by the author. Empty for a message.
     pub notice: String,
     pub notice_about: String,
+    /// What it quotes (architecture 6.6).
+    pub reply: Option<QuoteSummary>,
+    /// Whom it mentions, with where in the body.
+    pub mentions: Vec<MentionSummary>,
+    /// Its reactions, in the order each emoji was first used.
+    pub reactions: Vec<ReactionSummary>,
+    /// It mentions this account or everyone, or quotes this account.
+    pub mentions_me: bool,
 }
 
 impl From<MessageSummary> for Entry {
@@ -174,6 +186,10 @@ impl From<MessageSummary> for Entry {
             deleted: m.deleted,
             notice: m.notice,
             notice_about: m.notice_account_id,
+            reply: m.reply,
+            mentions: m.mentions,
+            reactions: m.reactions,
+            mentions_me: m.mentions_me,
         }
     }
 }
@@ -224,6 +240,8 @@ pub struct Pending {
     pub channel_id: String,
     pub body: String,
     pub sent_at_micros: i64,
+    /// What it quotes.
+    pub reply: Option<QuoteSummary>,
     /// Why the instance refused it, when it did.
     pub failed: Option<String>,
 }
@@ -316,6 +334,8 @@ pub struct Session {
     pub dm: dms::DmState,
     /// This device's identity, its roster and profile.
     pub identity: identity::IdentityState,
+    /// Read state, the Mentions lists and the message being found.
+    pub reads: reads::Reads,
     pub last_error: Option<String>,
 }
 
@@ -378,6 +398,7 @@ impl Session {
             browse: HashMap::new(),
             dm: dms::DmState::default(),
             identity: identity::IdentityState::default(),
+            reads: reads::Reads::default(),
             last_error: None,
         })
     }
@@ -655,6 +676,14 @@ impl Session {
         self.revision += 1;
     }
 
+    /// The people a conversation's entries name besides their authors: whom they quote.
+    fn quoted(entries: &[Entry]) -> impl Iterator<Item = &str> {
+        entries
+            .iter()
+            .filter_map(|e| e.reply.as_ref())
+            .map(|q| q.author_account_id.as_str())
+    }
+
     /// Replaces what the open conversation shows.
     pub(crate) fn set_entries(&mut self, entries: Vec<Entry>) {
         let here = self.conversation.as_ref().map(Conversation::id);
@@ -664,6 +693,7 @@ impl Session {
         let strangers: HashSet<&str> = entries
             .iter()
             .flat_map(|e| [e.author_account_id.as_str(), e.notice_about.as_str()])
+            .chain(Self::quoted(&entries))
             .filter(|id| {
                 !id.is_empty() && !self.people.contains_key(*id) && !self.profiles.contains_key(*id)
             })
@@ -709,6 +739,7 @@ impl Session {
         if self.conversation.as_ref() == Some(&conversation) {
             return;
         }
+        self.note_new_since(&conversation);
         self.conversation = Some(conversation);
         self.entries.clear();
         self.reach = Reach {
@@ -790,35 +821,90 @@ impl Session {
     /// it. False when it could not even be queued (nothing open, or the gateway loop is not
     /// running), so the caller keeps the draft.
     pub fn send(&mut self, body: &str, now_micros: i64) -> bool {
+        self.send_with(body, now_micros, None).is_some()
+    }
+
+    /// [`Session::send`] quoting another message, or nothing, with the mentions the body
+    /// makes of the server's members (and of everyone, for one who may). The answer is who
+    /// was mentioned and is not in the channel, so not notified; `None` when nothing could be
+    /// queued.
+    pub fn send_with(
+        &mut self,
+        body: &str,
+        now_micros: i64,
+        reply: Option<&QuoteSummary>,
+    ) -> Option<Vec<String>> {
         let body = body.trim();
         if body.is_empty() {
-            return false;
+            return None;
         }
         let channel = match self.conversation.clone() {
             Some(Conversation::Channel(id)) => id,
-            Some(Conversation::Dm(id)) => return self.send_dm(&id, body, now_micros),
-            None => return false,
+            Some(Conversation::Dm(id)) => {
+                return self.send_dm(&id, body, now_micros, reply).then(Vec::new);
+            }
+            None => return None,
         };
-        let Some(app) = &self.app else {
-            return false;
-        };
+        let app = self.app.clone()?;
+        let mentions = self.mentions_in(&channel, body);
+        let outside = self.outside(&channel, &mentions);
         self.revision += 1;
-        match app.send_message(&channel, body) {
+        match app.send_message_with(&channel, body, &mentions, reply) {
             Ok(id) => {
                 self.pending.push(Pending {
                     id,
                     channel_id: channel,
                     body: body.to_string(),
                     sent_at_micros: now_micros,
+                    reply: reply.cloned(),
                     failed: None,
                 });
-                true
+                Some(outside)
             }
             Err(error) => {
                 self.last_error = Some(format!("Not sent: {error}"));
-                false
+                None
             }
         }
+    }
+
+    /// The mentions `body` makes in a server's channel: of its members, and of everyone when
+    /// this account may. None in a server DM, where both are told of every message anyway.
+    fn mentions_in(&self, channel_id: &str, body: &str) -> Vec<MentionSummary> {
+        let Some(channel) = self.channel_summary(channel_id) else {
+            return Vec::new();
+        };
+        if channel.kind != "TEXT" {
+            return Vec::new();
+        }
+        let everyone = self
+            .servers()
+            .iter()
+            .any(|s| s.server_id == channel.server_id && s.can_mention_everyone);
+        let members = self
+            .members
+            .get(&channel.server_id)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        app::find_mentions(body, members, everyone)
+    }
+
+    /// Of the people `mentions` names, those not in the channel, as far as its members are
+    /// known (none when they are not).
+    fn outside(&self, channel_id: &str, mentions: &[MentionSummary]) -> Vec<String> {
+        let Some(inside) = self.channel_members.get(channel_id) else {
+            return Vec::new();
+        };
+        let mut outside: Vec<String> = Vec::new();
+        for m in mentions.iter().filter(|m| !m.everyone) {
+            if !inside.contains(&m.account_id)
+                && m.account_id != self.me()
+                && !outside.contains(&m.account_id)
+            {
+                outside.push(m.account_id.clone());
+            }
+        }
+        outside
     }
 
     /// Drops a send the instance refused.
@@ -1064,6 +1150,7 @@ impl Session {
                 }
                 self.dm_snapshot_applied();
                 self.want_pictures();
+                self.refresh_reads();
             }
             Update::Snapshot(Err(failure)) => {
                 if failure.signed_out() {
@@ -1113,11 +1200,13 @@ impl Session {
                         history.append(&mut self.reach.history);
                         self.reach.history = history;
                         self.read_entries();
+                        self.seek();
                     }
                     Err(failure) => {
                         // Not asked again for this channel until it is reopened.
                         self.reach.remote_done = true;
                         self.last_error = Some(failure.message.clone());
+                        self.seek();
                     }
                 }
             }
@@ -1130,6 +1219,7 @@ impl Session {
             Update::Browser(update) => self.apply_browser(update),
             Update::Notice(_) => {}
             Update::Avatar(update) => self.apply_avatar(update),
+            Update::Read(update) => self.apply_read(update),
         }
     }
 
@@ -1157,6 +1247,7 @@ impl Session {
                 if self.channel() == Some(channel_id.as_str()) {
                     self.read_entries();
                 }
+                self.refresh_reads();
             }
             AppEvent::SnapshotTaken { channel_id, .. } => {
                 if self.channel() == Some(channel_id.as_str()) {
@@ -1178,7 +1269,11 @@ impl Session {
                 }
                 self.look_up(account_id);
             }
-            AppEvent::AccountApplied { .. } => self.load(),
+            AppEvent::AccountApplied { .. } => {
+                // Another device may have read something.
+                self.refresh_reads();
+                self.load();
+            }
             AppEvent::Error {
                 command_id,
                 message,
