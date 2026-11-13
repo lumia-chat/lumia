@@ -32,7 +32,10 @@ use lumia_client::sqlite::{DmStatus, SqliteStore};
 use lumia_client::ClientError;
 use lumia_core::keystore::Keystore;
 use lumia_core::mls::projection::Projection;
-use lumia_core::proto::{command, event, mention, Command, DmOperation, Mention, SendMessage};
+use lumia_core::proto::{
+    command, event, mention, AddReaction, Command, DmOperation, Mention, QuoteReply,
+    RemoveReaction, SendMessage,
+};
 use lumia_core::store::Store;
 use lumia_core::sync::Notice;
 use lumia_core::wire;
@@ -120,12 +123,25 @@ enum Cmd {
     Invites { server_id: String },
     /// List channels in a server you can view.
     Channels { server_id: String },
-    /// Send a message; `--mention <account-id>` (repeatable) mentions an account.
+    /// Send a message; `--mention <account-id>` (repeatable) mentions an account;
+    /// `--reply-to <message-id>` with `--quote <text>` quotes a message of the channel.
     Send {
         channel_id: String,
         body: String,
         #[arg(long)]
         mention: Vec<String>,
+        #[arg(long)]
+        reply_to: Option<String>,
+        #[arg(long, default_value = "")]
+        quote: String,
+    },
+    /// React to a message with one emoji, or take the reaction away (`--remove`).
+    React {
+        channel_id: String,
+        message_id: String,
+        emoji: String,
+        #[arg(long)]
+        remove: bool,
     },
     /// Print this account's id.
     Whoami,
@@ -544,6 +560,8 @@ async fn run(cli: Cli) -> Result<(), ClientError> {
             channel_id,
             body,
             mention,
+            reply_to,
+            quote,
         } => {
             let channel = parse_uuid(&channel_id)?;
             let mut mentions = Vec::with_capacity(mention.len());
@@ -554,53 +572,42 @@ async fn run(cli: Cli) -> Result<(), ClientError> {
                     end: 0,
                 });
             }
-            let cmd = Command {
-                command_id: wire::new_id(),
-                channel_id: channel.clone(),
-                op: Some(command::Op::SendMessage(SendMessage {
-                    body,
-                    mentions,
+            let reply_to = match reply_to {
+                Some(id) => Some(QuoteReply {
+                    message_id: parse_uuid(&id)?,
+                    text: quote,
                     ..Default::default()
-                })),
+                }),
+                None => None,
             };
-            let (tx, rx) = mpsc::unbounded();
-            let (etx, mut erx) = mpsc::unbounded();
-            let gw = tokio::spawn(gateway::run_forever(
-                api,
-                ctx.store,
-                "lumia-cli",
-                ctx.device_id,
-                vec![channel],
-                rx,
-                etx,
-            ));
-            tx.unbounded_send(GatewayCommand::Send(cmd))
-                .map_err(|e| ClientError::Transport(e.to_string()))?;
-            while let Some(ev) = erx.next().await {
-                match ev {
-                    GatewayEvent::Notice(Notice::Acked { seq, .. }) => {
-                        println!("acked at seq {seq}");
-                        break;
-                    }
-                    GatewayEvent::Notice(Notice::Error(e)) => {
-                        eprintln!("error: {} {}", e.code, e.message);
-                        break;
-                    }
-                    GatewayEvent::Reconnecting {
-                        attempt,
-                        delay,
-                        reason,
-                    } => eprintln!("reconnecting in {delay:?} (attempt {attempt}): {reason}"),
-                    GatewayEvent::Closed(reason) => {
-                        eprintln!("closed: {reason}");
-                        break;
-                    }
-                    _ => {}
-                }
-            }
-            drop(tx);
-            gw.abort();
-            Ok(())
+            let op = command::Op::SendMessage(SendMessage {
+                body,
+                mentions,
+                reply_to,
+                ..Default::default()
+            });
+            send_command(api, ctx, channel, op).await
+        }
+        Cmd::React {
+            channel_id,
+            message_id,
+            emoji,
+            remove,
+        } => {
+            let channel = parse_uuid(&channel_id)?;
+            let message_id = parse_uuid(&message_id)?;
+            let op = if remove {
+                command::Op::RemoveReaction(RemoveReaction {
+                    message_id,
+                    reaction: emoji,
+                })
+            } else {
+                command::Op::AddReaction(AddReaction {
+                    message_id,
+                    reaction: emoji,
+                })
+            };
+            send_command(api, ctx, channel, op).await
         }
         Cmd::Tail { channel_id } => {
             let channel = parse_uuid(&channel_id)?;
@@ -719,6 +726,61 @@ enum DmMode {
     Rejoin(Vec<u8>),
     /// Delete one message, wait for the ack, then stop.
     Delete(Vec<u8>, Vec<u8>),
+}
+
+/// Sends one command to a channel over the gateway and prints its ack with the
+/// command's id (a sent message's id), or the instance's refusal.
+async fn send_command(
+    api: Api,
+    ctx: Ctx,
+    channel: Vec<u8>,
+    op: command::Op,
+) -> Result<(), ClientError> {
+    let id = wire::new_id();
+    let cmd = Command {
+        command_id: id.clone(),
+        channel_id: channel.clone(),
+        op: Some(op),
+    };
+    let (tx, rx) = mpsc::unbounded();
+    let (etx, mut erx) = mpsc::unbounded();
+    let gw = tokio::spawn(gateway::run_forever(
+        api,
+        ctx.store,
+        "lumia-cli",
+        ctx.device_id,
+        vec![channel],
+        rx,
+        etx,
+    ));
+    tx.unbounded_send(GatewayCommand::Send(cmd))
+        .map_err(|e| ClientError::Transport(e.to_string()))?;
+    while let Some(ev) = erx.next().await {
+        match ev {
+            GatewayEvent::Notice(Notice::Acked { seq, .. }) => {
+                // The command's id is the message's, for a quote of it.
+                println!("acked at seq {seq}: {}", wire::display(&id));
+                break;
+            }
+            GatewayEvent::Notice(Notice::Error(e)) => {
+                eprintln!("error: {} {}", e.code, e.message);
+                break;
+            }
+            GatewayEvent::Reconnecting {
+                attempt,
+                delay,
+                reason,
+            } => eprintln!("reconnecting in {delay:?} (attempt {attempt}): {reason}"),
+            GatewayEvent::Closed(reason) => {
+                eprintln!("closed: {reason}");
+                break;
+            }
+            _ => {}
+        }
+    }
+    drop(tx);
+    gw.abort();
+    Ok(())
 }
 
 fn dm_engine(ctx: &mut Ctx, api: &Api) -> Result<DmEngine, ClientError> {
