@@ -836,7 +836,10 @@ async fn an_author_edits_and_a_moderator_deletes() {
         .await
         .expect("the channel is read");
     let acked = |e: &AppEvent| matches!(e, AppEvent::Acked { .. }).then_some(());
-    let refused = |e: &AppEvent| matches!(e, AppEvent::Error { .. }).then_some(());
+    let refused = |e: &AppEvent| match e {
+        AppEvent::Error { command_id, .. } => Some(command_id.clone()),
+        _ => None,
+    };
     let sent = member.seen();
     let id = member
         .app
@@ -854,14 +857,15 @@ async fn an_author_edits_and_a_moderator_deletes() {
         .await
         .expect("the owner is welcomed");
     let tried = owner.seen();
-    owner
+    let command = owner
         .app
         .edit_message(&general, &id, "Not yours.", &[])
         .unwrap();
-    owner
+    let refusal = owner
         .wait_for(tried, Duration::from_secs(10), refused)
         .await
         .expect("an edit of another's message is refused");
+    assert_eq!(refusal, command, "the refusal names the edit");
 
     let edited = member.seen();
     member

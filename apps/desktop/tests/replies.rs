@@ -10,7 +10,7 @@ mod common;
 
 use common::*;
 use lumia_client::app::{
-    ChannelAddSummary, MentionSummary, MessageSummary, QuoteSummary, ReactionSummary,
+    AppEvent, ChannelAddSummary, MentionSummary, MessageSummary, QuoteSummary, ReactionSummary,
     ReadStateSummary,
 };
 use lumia_shell::app::State;
@@ -365,4 +365,24 @@ fn an_edited_message_says_so() {
     state.session.revision += 1;
     let rt = runtime(state);
     assert!(rt.find("message-m2/edited").is_some() || words(&rt).contains("(edited)"));
+}
+
+#[test]
+fn a_refusal_shows_under_the_edit_it_names() {
+    let mut state = signed_in();
+    state.session.reads.editing = Some(("m2".into(), "was".into()));
+    state.session.reads.editing_command = Some("edit1".into());
+    let refused = |command: &str| {
+        Update::Gateway(AppEvent::Error {
+            code: "PERMISSION_DENIED".into(),
+            message: "not yours".into(),
+            command_id: command.into(),
+        })
+    };
+    // Another command's refusal, a reaction's say, is not the edit's.
+    state.receive(&refused("react1"));
+    assert!(state.session.reads.refused.is_none());
+    state.receive(&refused("edit1"));
+    let rt = runtime(state);
+    assert!(words(&rt).contains("Not saved: not yours"));
 }

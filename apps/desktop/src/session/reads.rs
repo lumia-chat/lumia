@@ -66,9 +66,10 @@ pub struct Reads {
     seeking: Option<(String, u32)>,
     /// The message found, for the window to scroll to and mark; taken by it.
     pub found: Option<String>,
-    /// An edit sent and not yet back: the message, and what it was edited from. A refusal
-    /// that arrives meanwhile is the edit's.
+    /// An edit or a delete sent and not yet back: the message, and what it was edited from.
     pub editing: Option<(String, String)>,
+    /// The command carrying it, whose refusal names it.
+    pub editing_command: Option<String>,
     /// Why the instance refused an edit or a delete, under the message it was for.
     pub refused: Option<(String, String)>,
     /// The conversation just opened has a "New messages" line the window has not yet
@@ -258,12 +259,13 @@ impl Session {
             .map(|e| e.body.clone())
             .unwrap_or_default();
         self.reads.editing = Some((message_id.to_string(), was));
+        self.reads.editing_command = None;
         self.reads.refused = None;
         match conversation {
             Conversation::Channel(channel_id) => {
                 let mentions = self.mentions_in(&channel_id, &body);
                 match app.edit_message(&channel_id, message_id, &body, &mentions) {
-                    Ok(()) => {}
+                    Ok(command) => self.reads.editing_command = Some(command),
                     Err(error) => self.last_error = Some(format!("Not saved: {error}")),
                 }
             }
@@ -284,11 +286,13 @@ impl Session {
             return;
         };
         self.reads.editing = Some((message_id.to_string(), String::new()));
+        self.reads.editing_command = None;
         self.reads.refused = None;
         match conversation {
             Conversation::Channel(channel_id) => {
-                if let Err(error) = app.delete_message(&channel_id, message_id) {
-                    self.last_error = Some(format!("Not deleted: {error}"));
+                match app.delete_message(&channel_id, message_id) {
+                    Ok(command) => self.reads.editing_command = Some(command),
+                    Err(error) => self.last_error = Some(format!("Not deleted: {error}")),
                 }
             }
             Conversation::Dm(channel_id) => {

@@ -903,7 +903,8 @@ impl Client {
     }
 
     /// Edits one of this account's messages in a server's channel: its new
-    /// body and mentions (`[{accountId, everyone, start, end}]`).
+    /// body and mentions (`[{accountId, everyone, start, end}]`); returns the
+    /// command id a refusal's error names.
     ///
     /// # Errors
     /// When not started or an id is malformed.
@@ -914,7 +915,7 @@ impl Client {
         message_id: String,
         body: String,
         mentions: JsValue,
-    ) -> Result<(), JsError> {
+    ) -> Result<String, JsError> {
         let mentions: Vec<MentionSummary> = from_js(mentions)?.unwrap_or_default();
         self.app
             .edit_message(&channel_id, &message_id, &body, &mentions)
@@ -922,12 +923,16 @@ impl Client {
     }
 
     /// Deletes a message of a server's channel: this account's own, or any
-    /// for a moderator.
+    /// for a moderator; returns the command id a refusal's error names.
     ///
     /// # Errors
     /// When not started or an id is malformed.
     #[wasm_bindgen(js_name = deleteMessage)]
-    pub fn delete_message(&self, channel_id: String, message_id: String) -> Result<(), JsError> {
+    pub fn delete_message(
+        &self,
+        channel_id: String,
+        message_id: String,
+    ) -> Result<String, JsError> {
         self.app
             .delete_message(&channel_id, &message_id)
             .map_err(js)

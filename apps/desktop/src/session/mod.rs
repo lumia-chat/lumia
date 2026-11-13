@@ -1294,8 +1294,10 @@ impl Session {
                 if let Some(pending) = self.pending.iter_mut().find(|p| p.id == *command_id) {
                     pending.failed = Some(message.clone());
                     self.revision += 1;
-                } else if let Some((id, _)) = self.reads.editing.take() {
-                    // Not a send's: the edit or the delete on its way.
+                } else if self.reads.editing_command.as_ref() == Some(command_id)
+                    && let Some((id, _)) = self.reads.editing.take()
+                {
+                    self.reads.editing_command = None;
                     self.reads.refused = Some((id, message.clone()));
                     self.revision += 1;
                 }

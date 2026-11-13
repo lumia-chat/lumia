@@ -2805,6 +2805,7 @@ impl App {
     /// Edits one of this account's messages in a server's channel: its new
     /// body and mentions (architecture 6.6). The instance refuses another's
     /// message, a notice, and `@everyone` without `MENTION_EVERYONE`.
+    /// Returns the command's id, which a refusal's `AppEvent::Error` names.
     ///
     /// # Errors
     /// When not started or an id is malformed.
@@ -2814,7 +2815,7 @@ impl App {
         message_id: &str,
         body: &str,
         mentions: &[MentionSummary],
-    ) -> Result<(), ClientError> {
+    ) -> Result<String, ClientError> {
         let channel = parse_uuid(channel_id)?;
         let mentions = mentions
             .iter()
@@ -2830,33 +2831,42 @@ impl App {
                 })
             })
             .collect::<Result<Vec<_>, ClientError>>()?;
+        let id = wire::new_id();
         self.send_command(GatewayCommand::Send(Command {
-            command_id: wire::new_id(),
+            command_id: id.clone(),
             channel_id: channel,
             op: Some(command::Op::EditMessage(lumia_core::proto::EditMessage {
                 message_id: parse_uuid(message_id)?,
                 body: body.to_string(),
                 mentions,
             })),
-        }))
+        }))?;
+        Ok(wire::display(&id))
     }
 
     /// Deletes a message of a server's channel: this account's own, or any
-    /// for one holding `MANAGE_MESSAGES` there (architecture 6.6).
+    /// for one holding `MANAGE_MESSAGES` there (architecture 6.6). Returns
+    /// the command's id, which a refusal's `AppEvent::Error` names.
     ///
     /// # Errors
     /// When not started or an id is malformed.
-    pub fn delete_message(&self, channel_id: &str, message_id: &str) -> Result<(), ClientError> {
+    pub fn delete_message(
+        &self,
+        channel_id: &str,
+        message_id: &str,
+    ) -> Result<String, ClientError> {
         let channel = parse_uuid(channel_id)?;
+        let id = wire::new_id();
         self.send_command(GatewayCommand::Send(Command {
-            command_id: wire::new_id(),
+            command_id: id.clone(),
             channel_id: channel,
             op: Some(command::Op::DeleteMessage(
                 lumia_core::proto::DeleteMessage {
                     message_id: parse_uuid(message_id)?,
                 },
             )),
-        }))
+        }))?;
+        Ok(wire::display(&id))
     }
 
     /// Adds this account's reaction to a message of a server channel, or

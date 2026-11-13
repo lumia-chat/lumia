@@ -1618,14 +1618,15 @@ impl Client {
             .collect()
     }
 
-    /// Edits one of this account's messages in a server's channel.
+    /// Edits one of this account's messages in a server's channel; returns
+    /// the command id a refusal's `Error` event names.
     pub fn edit_message(
         &self,
         channel_id: String,
         message_id: String,
         body: String,
         mentions: Vec<MentionSummary>,
-    ) -> Res<()> {
+    ) -> Res<String> {
         let mentions: Vec<app::MentionSummary> = mentions.into_iter().map(Into::into).collect();
         Ok(self
             .app
@@ -1633,8 +1634,9 @@ impl Client {
     }
 
     /// Deletes a message of a server's channel: this account's own, or any
-    /// for a moderator.
-    pub fn delete_message(&self, channel_id: String, message_id: String) -> Res<()> {
+    /// for a moderator; returns the command id a refusal's `Error` event
+    /// names.
+    pub fn delete_message(&self, channel_id: String, message_id: String) -> Res<String> {
         Ok(self.app.delete_message(&channel_id, &message_id)?)
     }
 
