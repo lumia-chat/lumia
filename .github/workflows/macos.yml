@@ -135,8 +135,10 @@ jobs:
           if-no-files-found: ignore
       # The iOS app in whichever iPhone simulator the runner's Xcode ships,
       # one launch per screen, screenshots kept on failure.
+      # 6 to 9 minutes before display settings, 10 and cut off after: half of it is the
+      # simulator and the build.
       - run: apps/apple/scripts/smoke-ios.sh
-        timeout-minutes: 10
+        timeout-minutes: 15
       # The notification extension's path: the phone linked as a second
       # device, a DM accepted elsewhere, the message decrypted for the notice.
       - run: apps/apple/scripts/smoke-push.sh
