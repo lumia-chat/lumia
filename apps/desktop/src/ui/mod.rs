@@ -26,6 +26,15 @@ use crate::tokens;
 use components::Look;
 pub use shell::TRAFFIC_LIGHTS;
 
+/// "1 other", "3 others": the rest of a list of people after the names given.
+pub fn others(n: usize) -> String {
+    if n == 1 {
+        "1 other".into()
+    } else {
+        format!("{n} others")
+    }
+}
+
 /// `AppSpec::view`.
 pub fn view(s: &State, cx: &mut Cx<State>) -> El {
     // Light or dark as Preferences says, which may be "as the system is".

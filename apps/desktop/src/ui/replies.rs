@@ -107,9 +107,9 @@ fn reacted_words(s: &State, reaction: &ReactionSummary) -> String {
         ([], n) => format!("{n} people"),
         ([one], 0) => one.clone(),
         ([one, two], 0) => format!("{one} and {two}"),
-        ([one, two], n) => format!("{one}, {two} and {n} others"),
-        ([one], n) => format!("{one} and {n} others"),
-        ([one, two, rest @ ..], n) => format!("{one}, {two} and {} others", rest.len() + n),
+        ([one, two], n) => format!("{one}, {two} and {}", super::others(n)),
+        ([one], n) => format!("{one} and {}", super::others(n)),
+        ([one, two, rest @ ..], n) => format!("{one}, {two} and {}", super::others(rest.len() + n)),
     };
     format!("{who} reacted with {}", reaction.reaction)
 }

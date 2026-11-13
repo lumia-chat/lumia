@@ -380,7 +380,7 @@ impl State {
         }
     }
 
-    /// What the bar names: "Ada isn't in #design, so they won't be notified."
+    /// What the bar names: "Ada isn’t in #design, so they won’t be notified."
     pub fn outside_words(&self) -> Option<String> {
         let outside = self.replies.outside.as_ref()?;
         if let Some((said, _)) = &outside.said {
@@ -397,13 +397,13 @@ impl State {
             .map(|id| self.session.name_of(id))
             .collect();
         Some(match names.as_slice() {
-            [one] => format!("{one} isn't in #{channel}, so they won't be notified."),
+            [one] => format!("{one} isn’t in #{channel}, so they won’t be notified."),
             [one, two] => {
-                format!("{one} and {two} aren't in #{channel}, so they won't be notified.")
+                format!("{one} and {two} aren’t in #{channel}, so they won’t be notified.")
             }
             [one, two, rest @ ..] => format!(
-                "{one}, {two} and {} others aren't in #{channel}, so they won't be notified.",
-                rest.len()
+                "{one}, {two} and {} aren’t in #{channel}, so they won’t be notified.",
+                crate::ui::others(rest.len())
             ),
             [] => String::new(),
         })

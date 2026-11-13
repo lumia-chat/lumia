@@ -169,7 +169,7 @@ fn the_bar_after_a_send_adds_or_says_who_was_invited() {
         error: String::new(),
     });
     let mut rt = runtime(state);
-    assert!(words(&rt).contains("Bo Diddley isn't in #general, so they won't be notified."));
+    assert!(words(&rt).contains("Bo Diddley isn’t in #general, so they won’t be notified."));
     press(&mut rt, "add-outside");
     assert!(rt.state.replies.outside.as_ref().unwrap().adding);
     rt.update(|s, _| {
