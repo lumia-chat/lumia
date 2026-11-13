@@ -5,6 +5,7 @@ import { routeTree } from "./routes";
 import { queryClient } from "./client/state";
 // Applies the stored appearance before anything is drawn.
 import "./client/preferences";
+import { installAutoscroll } from "./client/autoscroll";
 import "./design/tokens.css";
 import "./design/components.css";
 import "./app.css";
@@ -16,6 +17,8 @@ declare module "@tanstack/solid-router" {
     router: typeof router;
   }
 }
+
+installAutoscroll();
 
 const mount = document.getElementById("app");
 if (mount)

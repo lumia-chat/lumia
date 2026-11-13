@@ -766,6 +766,72 @@ async function serverSettings(which: string, stamp: number) {
   console.log(`  ${which}: renamed a server, kept its messages for 30 days after the warning, gave it a picture, a member was not offered the settings and saw a rename arrive, in ${Date.now() - t0} ms`);
 }
 
+// The middle button held over a pane and moved up from where it came down
+// scrolls the pane up, with a mark where it came down, until it comes up
+// (client/autoscroll.ts); a primary drag does none of it. A field being
+// typed in draws no focus ring.
+async function autoscrollStep(which: string, stamp: number) {
+  const dir = resolve(work, `cli-autoscroll-${which}`);
+  const handle = `scroll${which}${stamp}`;
+  lumia(dir, "instance", "add", instance);
+  lumia(dir, "account", "create", "--handle", handle, "--password", password);
+  const own = lumia(dir, "server-create", "Scroll").match(/[0-9a-f-]{36}/)?.[0];
+  if (!own) throw new Error("no server id");
+  const channel = lumia(dir, "channel-create", own, "general").match(/[0-9a-f-]{36}/)?.[0];
+  if (!channel) throw new Error("no channel id");
+  for (let i = 0; i < 60; i++) lumia(dir, "send", channel, `line ${i} of ${stamp}`);
+  const { ctx, page } = await open(which, "autoscroll");
+  const t0 = Date.now();
+  try {
+    await trustCard(page);
+    phase("no ring");
+    const field = page.getByLabel("Email or handle");
+    await field.focus();
+    const ring = await field.evaluate((el) => {
+      const box = el.closest(".lu-textfield__box");
+      return { outline: getComputedStyle(el).outlineStyle, shadow: box ? getComputedStyle(box).boxShadow : "none" };
+    });
+    if (ring.outline !== "none" || ring.shadow !== "none") throw new Error(`a focused field draws ${JSON.stringify(ring)}`);
+    await field.fill(handle);
+    await page.getByRole("textbox", { name: "Password" }).fill(password);
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await page.getByText(`line 59 of ${stamp}`).waitFor();
+    const composer = page.getByPlaceholder("Message #general");
+    await composer.focus();
+    const composerRing = await composer.evaluate((el) => getComputedStyle(el).outlineStyle);
+    if (composerRing !== "none") throw new Error(`the focused composer draws a ${composerRing} outline`);
+    phase("autoscroll");
+    const list = page.locator(".lu-msglist");
+    const top = () => list.evaluate((el) => el.scrollTop);
+    const box = await list.boundingBox();
+    if (!box) throw new Error("no message list");
+    const [x, y] = [box.x + box.width / 2, box.y + box.height / 2];
+    // A primary drag is a selection's, not this.
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x, y - 150, { steps: 5 });
+    if ((await page.locator(".lu-autoscroll-mark").count()) !== 0) throw new Error("a primary drag autoscrolls");
+    await page.mouse.up();
+    await page.mouse.move(x, y);
+    const before = await top();
+    await page.mouse.down({ button: "middle" });
+    await page.locator(".lu-autoscroll-mark").waitFor();
+    await page.mouse.move(x, y - 150, { steps: 5 });
+    await page.waitForTimeout(700);
+    const during = await top();
+    if (!(during < before - 100)) throw new Error(`held 150 above, the list went from ${before} to ${during}`);
+    await page.screenshot({ path: `${out}/${which}-autoscroll.png` });
+    await page.mouse.up({ button: "middle" });
+    await page.locator(".lu-autoscroll-mark").waitFor({ state: "detached" });
+    const stopped = await top();
+    await page.waitForTimeout(300);
+    if ((await top()) !== stopped) throw new Error("it went on after the button came up");
+  } finally {
+    await ctx.close();
+  }
+  console.log(`  ${which}: drew no ring on a focused field, autoscrolled the message list with the middle button held and stopped when it came up, and did not on a primary drag, in ${Date.now() - t0} ms`);
+}
+
 // A session revoked from elsewhere (protocol 12), as "sign out everywhere"
 // or a reused refresh token does it: the gateway is told and its loop
 // ends, the page asks for the snapshot, is refused, and goes back to the
@@ -1284,6 +1350,7 @@ try {
       ["account", () => account(which, `web${stamp}`, stamp)],
       ["preferences", () => preferencesStep(which, stamp)],
       ["server settings", () => serverSettings(which, stamp)],
+      ["autoscroll", () => autoscrollStep(which, stamp)],
       ["push", () => webPush(which, `web${stamp}`, passwordDir, server, general, webAccount)],
       ["magic link", () => magicLink(which)],
       ["passkey", () => passkey(which, `web${stamp}`)],
