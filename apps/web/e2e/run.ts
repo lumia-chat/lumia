@@ -936,6 +936,9 @@ async function membershipStep(which: string, stamp: number) {
     await page.getByPlaceholder("Message #general").waitFor();
     const sidebar = page.locator(".lu-shell__sidebar");
     if ((await sidebar.getByRole("link", { name: "design" }).count()) > 0) throw new Error("design is listed before joining it");
+    // A member who does not manage channels is offered no Remove on anyone's row.
+    await page.locator(".lu-shell__aside").getByRole("button", { name: new RegExp(`^${owner}`) }).waitFor();
+    if ((await page.locator(".lu-shell__aside .lu-member__action").count()) > 0) throw new Error("Remove offered to a member who does not manage channels");
     phase("browse");
     await page.getByRole("button", { name: "Add channels" }).click();
     await page.getByRole("menuitem", { name: "Browse channels" }).click();
@@ -968,7 +971,28 @@ async function membershipStep(which: string, stamp: number) {
   } finally {
     await ctx.close();
   }
-  console.log(`  ${which}: found a channel in Browse, read it before joining, joined with its notice, left it, and wrote in a server DM opened from a profile card, in ${Date.now() - t0} ms`);
+  // The owner, who manages channels, removes the member from #general by the Remove at the end of their row.
+  phase("remove");
+  const keeper = await open(which, "membership-owner");
+  try {
+    await trustCard(keeper.page);
+    await keeper.page.getByLabel("Email or handle").fill(owner);
+    await keeper.page.getByRole("textbox", { name: "Password" }).fill(password);
+    await keeper.page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await keeper.page.getByPlaceholder("Message #general").waitFor();
+    const aside = keeper.page.locator(".lu-shell__aside");
+    const row = aside.getByRole("button", { name: new RegExp(`^${member}`) });
+    await row.waitFor();
+    if ((await aside.getByRole("button", { name: `Remove ${owner} from #general` }).count()) > 0) throw new Error("Remove offered on the owner's own row");
+    const remove = aside.getByRole("button", { name: `Remove ${member} from #general` });
+    await remove.hover();
+    await keeper.page.screenshot({ path: `${out}/${which}-membership-remove.png` });
+    await remove.click();
+    await row.waitFor({ state: "detached" });
+  } finally {
+    await keeper.ctx.close();
+  }
+  console.log(`  ${which}: found a channel in Browse, read it before joining, joined with its notice, left it, wrote in a server DM opened from a profile card, and was removed from #general by the owner's Remove, in ${Date.now() - t0} ms`);
 }
 
 // Quote replies, reactions, mentions and read state (architecture 6.6):

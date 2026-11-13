@@ -144,15 +144,22 @@
 .lu-members__title { margin: 0; padding: 8px 10px 6px; font-size: 12.5px; font-weight: 600; color: var(--ink-muted); }
 .lu-members__title.is-later { padding-top: 14px; }
 .lu-members__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
-.lu-members__list > li { position: relative; }
-.lu-member__action { position: absolute; top: 50%; right: var(--space-10); transform: translateY(-50%); }
-.lu-member { width: 100%; display: flex; align-items: center; gap: var(--space-12); padding: 6px 10px; border-radius: var(--radius-10); color: inherit; text-align: left; text-decoration: none; }
-.lu-member:hover { background: var(--hover-member); }
+.lu-members__list > li { display: flex; align-items: center; gap: 2px; border-radius: var(--radius-10); }
+/* The dark Quiet Split's Remove at a member row's end: quiet until the pointer or focus is on it, then the danger ink on its soft fill. */
+.lu-member__action { flex: none; width: 32px; height: 32px; margin-right: var(--space-4); display: flex; align-items: center; justify-content: center; border-radius: var(--radius-8); border: 1px solid transparent; background: transparent; color: var(--ink-faint); cursor: pointer; }
+.lu-member__action:hover { background: var(--danger-soft); border-color: var(--danger-line); color: var(--danger); }
+.lu-member__action:focus-visible { border-color: var(--danger); color: var(--danger); outline: none; }
+.lu-member__action:disabled { opacity: 0.5; cursor: default; }
+.lu-member { width: 100%; flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--space-12); padding: 6px 10px; border-radius: var(--radius-10); color: inherit; text-align: left; text-decoration: none; }
+.lu-members__list > li:hover, .lu-members__list > li:has(.lu-member__action:focus-visible) { background: var(--hover-member); }
 .lu-member__text { display: flex; flex-direction: column; min-width: 0; }
-.lu-member__name { display: flex; align-items: center; gap: var(--space-6); font-size: 14px; font-weight: 600; color: var(--ink); }
+.lu-member__name { display: flex; align-items: center; gap: var(--space-6); min-width: 0; font-size: 14px; font-weight: 600; color: var(--ink); }
+/* A long name or line is cut at the row's end (or before its Remove), not run under it. */
+.lu-member__label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lu-member__name > :not(.lu-member__label) { flex: none; }
 .lu-member.is-away .lu-member__name { color: var(--ink-body); }
 .lu-members__none { margin: 0; padding: 10px; font-size: 12.5px; color: var(--ink-quiet); }
-.lu-member__sub { font-size: 12.5px; color: var(--ink-muted); }
+.lu-member__sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--ink-muted); }
 .lu-members__all { margin-top: 10px; }
 
 /* ── ServerRail ── */

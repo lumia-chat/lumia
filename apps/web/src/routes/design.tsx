@@ -228,12 +228,12 @@ function QuietSplit() {
                   {
                     title: "Online · 32",
                     members: [
-                      { ...PEOPLE.maya, status: "online", tag: "Admin" },
-                      { ...PEOPLE.devon, status: "away", subtitle: "In a meeting" },
-                      { ...PEOPLE.sam, status: "online" },
+                      { ...PEOPLE.maya, status: "online", tag: "Admin", action: removing(PEOPLE.maya.name) },
+                      { ...PEOPLE.devon, status: "away", subtitle: "In a meeting", action: removing(PEOPLE.devon.name) },
+                      { ...PEOPLE.sam, status: "online", action: removing(PEOPLE.sam.name) },
                     ],
                   },
-                  { title: "Offline · 96", members: [{ ...PEOPLE.priya }, { ...PEOPLE.leo }] },
+                  { title: "Offline · 96", members: [{ ...PEOPLE.priya, action: removing(PEOPLE.priya.name) }, { ...PEOPLE.leo, action: removing(PEOPLE.leo.name) }] },
                 ]}
                 total={128}
               />
@@ -442,6 +442,9 @@ function DmConversation() {
     </>
   );
 }
+
+/** The dark Quiet Split's Remove at the end of each member row (a channel's, for one who manages channels). */
+const removing = (name: string) => ({ label: "Remove from channel", description: `Remove ${name} from channel`, onClick: () => {} });
 
 function DmAside() {
   return (

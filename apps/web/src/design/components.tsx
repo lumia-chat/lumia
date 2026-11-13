@@ -506,7 +506,7 @@ export interface MemberEntry {
   tag?: string;
   /** Whatever names the person to the screen; handed back by `onOpen`. */
   id?: string;
-  /** Something to do to them, at the row's end: "Remove". */
+  /** Something to do to them, at the row's end: Remove, drawn as the dark Quiet Split's member-remove button (`label` is its tooltip, "Remove from channel"; `description` names whom). */
   action?: { label: string; description: string; disabled?: boolean; onClick: () => void };
 }
 
@@ -541,7 +541,7 @@ export function MemberList(props: MemberListProps) {
                       <Avatar initials={m.initials} src={m.src} tone={m.tone} size={34} status={m.status} ring="surface" />
                       <span class="lu-member__text">
                         <span class="lu-member__name">
-                          {m.name}
+                          <span class="lu-member__label">{m.name}</span>
                           <Show when={m.status}>{(s) => <span class="lu-sr">, {STATUS_WORD[s()]}</span>}</Show>
                           <Show when={m.tag}>
                             <Tag tone="accent" size="sm">
@@ -559,9 +559,9 @@ export function MemberList(props: MemberListProps) {
                     </button>
                     <Show when={m.action}>
                       {(a) => (
-                        <Button variant="text" size="sm" class="lu-member__action" disabled={a().disabled} aria-label={a().description} onClick={() => a().onClick()}>
-                          {a().label}
-                        </Button>
+                        <button type="button" class="lu-member__action" title={a().label} disabled={a().disabled} aria-label={a().description} onClick={() => a().onClick()}>
+                          <Icon name="member-remove" size={16} />
+                        </button>
                       )}
                     </Show>
                   </li>

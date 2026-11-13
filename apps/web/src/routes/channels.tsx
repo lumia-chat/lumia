@@ -255,7 +255,7 @@ export function ChannelMembersAside(props: {
         // Someone who manages channels may take another out of this one.
         const action =
           props.server.canManageChannels && props.joined && id !== props.me
-            ? { label: "Remove", description: `Remove ${name} from #${props.channel.name}`, disabled: busy(), onClick: () => void remove(id) }
+            ? { label: "Remove from channel", description: `Remove ${name} from #${props.channel.name}`, disabled: busy(), onClick: () => void remove(id) }
             : undefined;
         return { id, name, handle: m?.handle ?? "", initials: initialsOf(name), src: avatarSrc(m?.avatarUrl), tone: toneFor(id), status: presenceOf(props.server.serverId, id), subtitle, tag: id === props.me ? "You" : undefined, action };
       })
