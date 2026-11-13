@@ -1,9 +1,12 @@
 // Quote replies, reactions, mentions and read state (architecture 6.6), as
 // plain values the screens draw from and `src/test` checks: the quote a
-// reply carries, the quick reactions and "Frequently used", the `@word` the
+// reply carries and whether it notifies the person quoted, how a reply's
+// reference line names them, who may edit or delete a message and what an
+// edit sends, the quick reactions and "Frequently used", the `@word` the
 // composer's list completes and who it offers, those a message mentioned
 // who are not in its channel and how the bar names them, who reacted and
-// how a chip says so, where a body's mentions are in its text, where the
+// how a chip says so, where a body's mentions are in its text and how it
+// draws them (`@` and the person's name), where the
 // "New messages" line goes, whether a conversation is to be marked read,
 // the counts a sidebar, the rail and the badge show, and which delivered
 // notifications are of conversations now read. The desktop shell's rules
@@ -56,6 +59,104 @@ fun quoteOf(messageId: String, authorAccountId: String, body: String, part: Stri
 
 /** What the bar over the composer says first: "Replying to Ada"; the name is drawn stronger. */
 fun replyingTo(name: String): String = "Replying to $name"
+
+/**
+ * Whether the reply bar offers its "@ On" switch, which says whether the
+ * person quoted is notified: not for a reply to this account's own
+ * message, nor one whose author is not known.
+ */
+fun offersMention(quote: QuoteSummary, me: String): Boolean = quote.authorAccountId.isNotEmpty() && quote.authorAccountId != me
+
+/** The quote a reply is sent with: silent, notifying nobody, when the switch it offered was turned off. */
+fun sentQuote(quote: QuoteSummary, mention: Boolean, me: String): QuoteSummary =
+    quote.copy(silent = offersMention(quote, me) && !mention)
+
+/** The switch's word: "On" or "Off". */
+fun mentionSwitchWord(on: Boolean): String = if (on) "On" else "Off"
+
+/** What the switch is to a screen reader, its state said beside it: "Mention Ada". */
+fun mentionSwitchLabel(name: String): String = "Mention $name"
+
+/**
+ * The name on a reply's reference line: the quoted person's, or, when
+ * that is this account, `@` and its own name, drawn in the accent.
+ */
+fun referenceName(authorAccountId: String, me: String, name: String): String =
+    if (authorAccountId.isNotEmpty() && authorAccountId == me) "@$name" else name
+
+/**
+ * The reference line to a screen reader, one button: "Replying to Maya
+ * Chen: Morning, Acme! Jump to message", "Replying to you: …" when it
+ * quotes this account, and no name where the author is not known; without
+ * the jump where the line is not the button ([jump] false).
+ */
+fun referenceWords(name: String?, toMe: Boolean, text: String, jump: Boolean = true): String {
+    val who = when {
+        toMe -> "Replying to you"
+        name != null -> "Replying to $name"
+        else -> "Replying"
+    }
+    val quoted = text.trim()
+    if (!jump) return "$who: $quoted"
+    // A sentence of its own after the quote, its end stop added where the quote has none.
+    val stop = if (quoted.lastOrNull() in listOf('.', '?', '!', '…')) "" else "."
+    return "$who: $quoted$stop Jump to message"
+}
+
+/** What a reply whose original is gone says in its reference line. */
+const val ORIGINAL_DELETED = "Original message was deleted"
+
+// Editing and deleting (architecture 6.6)
+
+/** What follows the words of a message its author has edited, and what it is to a screen reader. */
+const val EDITED = "(edited)"
+const val EDITED_LABEL = "edited"
+
+/** The question before a message is deleted. */
+const val DELETE_QUESTION = "Delete this message?"
+
+/** Whether this account may edit a message: its own, a message and not a notice, and not deleted. */
+fun mayEdit(authorAccountId: String, me: String, notice: Boolean, deleted: Boolean): Boolean =
+    me.isNotEmpty() && authorAccountId == me && !notice && !deleted
+
+/**
+ * Whether this account is offered Delete message: on its own messages
+ * everywhere, and on others' where it moderates ([moderates]: a server's
+ * `canManageMessages`; never in a personal conversation). The instance
+ * decides either way; a notice is neither edited nor deleted.
+ */
+fun mayDelete(authorAccountId: String, me: String, notice: Boolean, deleted: Boolean, moderates: Boolean): Boolean =
+    me.isNotEmpty() && !notice && !deleted && (authorAccountId == me || moderates)
+
+/** The line of a message the question quotes: its first, trimmed. */
+fun firstLine(body: String): String = body.trim().lineSequence().firstOrNull()?.trim() ?: ""
+
+/** What saving an edit does. */
+sealed class EditOutcome {
+    /** Nothing changed: the field closes and nothing is sent. */
+    data object Unchanged : EditOutcome()
+
+    /** Emptied: it asks to delete the message instead. */
+    data object Delete : EditOutcome()
+
+    /** The new words, trimmed, to send. */
+    data class Save(val body: String) : EditOutcome()
+}
+
+fun editOutcome(before: String, draft: String): EditOutcome {
+    val body = draft.trim()
+    return when {
+        body.isEmpty() -> EditOutcome.Delete
+        body == before.trim() -> EditOutcome.Unchanged
+        else -> EditOutcome.Save(body)
+    }
+}
+
+/** An edit the instance refused, under the message: "Not saved: <why>". */
+fun notSaved(why: String): String = "Not saved: $why"
+
+/** The message Up in an empty composer edits: this account's newest it may edit, or none. */
+fun <T> lastEditable(items: List<T>, editable: (T) -> Boolean): T? = items.lastOrNull(editable)
 
 // Reactions
 
@@ -192,7 +293,38 @@ fun invitedWords(names: List<String>, channel: String): String =
  * range that is not on a character's edge or runs past the body is left
  * out, never drawn wrong.
  */
-fun mentionRanges(body: String, mentions: List<MentionSummary>): List<IntRange> {
+fun mentionRanges(body: String, mentions: List<MentionSummary>): List<IntRange> = placed(body, mentions).map { it.first }
+
+/** A body as it is drawn and copied: its words, and where its mentions are in them. */
+data class Drawn(val text: String, val mentions: List<IntRange>)
+
+/**
+ * A body as drawn: each mention of a person as `@` and their name as the
+ * member list shows it ([nameOf]; the text as written for one with no
+ * name known), `@everyone` as it is, and where each now is. Copying a
+ * message copies this.
+ */
+fun drawnBody(body: String, mentions: List<MentionSummary>, nameOf: (String) -> String?): Drawn {
+    val found = placed(body, mentions).sortedBy { it.first.first }
+    if (found.isEmpty()) return Drawn(body, emptyList())
+    val text = StringBuilder()
+    val ranges = mutableListOf<IntRange>()
+    var at = 0
+    for ((range, mention) in found) {
+        if (range.first < at) continue
+        text.append(body, at, range.first)
+        val name = if (mention.everyone) null else nameOf(mention.accountId)?.ifEmpty { null }
+        val words = name?.let { "@$it" } ?: body.substring(range)
+        ranges.add(text.length until text.length + words.length)
+        text.append(words)
+        at = range.last + 1
+    }
+    text.append(body, at, body.length)
+    return Drawn(text.toString(), ranges)
+}
+
+/** Each of [mentions] with where it is in [body] as the text is indexed here, those that land on characters' edges. */
+private fun placed(body: String, mentions: List<MentionSummary>): List<Pair<IntRange, MentionSummary>> {
     if (mentions.isEmpty()) return emptyList()
     // The UTF-16 index at each UTF-8 offset that starts a character, and at the end.
     val at = HashMap<Int, Int>()
@@ -213,11 +345,15 @@ fun mentionRanges(body: String, mentions: List<MentionSummary>): List<IntRange> 
     return mentions.mapNotNull { m ->
         val start = at[m.start.toInt()]
         val end = at[m.end.toInt()]
-        if (start != null && end != null && end > start) start until end else null
+        if (start != null && end != null && end > start) (start until end) to m else null
     }
 }
 
 // Read state
+
+/** The unread divider's word, and what it is to a screen reader. */
+const val NEW_WORD = "New"
+const val NEW_LABEL = "New messages"
 
 /** What is unread in a conversation: messages others sent after this account's place, and how many of those are for it. */
 data class Unread(val unread: Int, val mentions: Int) {

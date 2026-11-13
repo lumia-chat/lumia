@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -449,10 +450,16 @@ fun ServerScreen(session: LumiaSession, server: ServerSummary, push: (Screen) ->
                 }
             }
             if (error.isNotEmpty()) item { LumiaErrorText(error) }
-            // The server's messages that notify this account (architecture 6.6), with how many are unread.
+            // The server's messages that notify this account (architecture 6.6), with how many are
+            // unread: a quick tile, the board's Threads / Mentions / Saved row, the first of three
+            // where Threads and Saved do not exist yet.
             item {
                 val mentions = unreadIn(session.readStates, (channels + dms).map { it.channelId }).mentions
-                Column(Modifier.padding(bottom = LumiaTokens.space8)) { MentionsRow(mentions) { push(Screen.Mentions(server.serverId)) } }
+                Row(Modifier.fillMaxWidth().padding(bottom = LumiaTokens.space10), horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space6)) {
+                    Tile("Mentions", Icons.Filled.AlternateEmail, mentions, Modifier.weight(1f)) { push(Screen.Mentions(server.serverId)) }
+                    Spacer(Modifier.weight(1f))
+                    Spacer(Modifier.weight(1f))
+                }
             }
             item {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -475,8 +482,10 @@ fun ServerScreen(session: LumiaSession, server: ServerSummary, push: (Screen) ->
             items(channels, key = { it.channelId }) { c ->
                 NavRow(withUnread(if (c.private) "${c.name}, private channel" else "${c.name} channel", session.unread(c.channelId)), session.unread(c.channelId), { push(Screen.Channel(c.channelId)) }) { strong ->
                     // A private channel wears a lock where a public one has its #.
-                    if (c.private) Icon(Icons.Filled.Lock, contentDescription = null, tint = LumiaTokens.inkMuted.color, modifier = Modifier.size(LumiaTokens.space12))
-                    else Text("#", style = LumiaTokens.textNav.style, color = LumiaTokens.inkMuted.color, modifier = Modifier.width(LumiaTokens.space12))
+                    // The glyph is the muted ink while unread, the faint one once read (the boards').
+                    val glyph = if (strong) LumiaTokens.inkMuted.color else LumiaTokens.inkFaint.color
+                    if (c.private) Icon(Icons.Filled.Lock, contentDescription = null, tint = glyph, modifier = Modifier.size(LumiaTokens.space12))
+                    else Text("#", style = LumiaTokens.textNav.style, color = glyph, modifier = Modifier.width(LumiaTokens.space12))
                     NavName(c.name, strong)
                 }
             }

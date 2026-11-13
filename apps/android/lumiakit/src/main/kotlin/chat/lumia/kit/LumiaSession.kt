@@ -496,13 +496,7 @@ class LumiaSession(
      * as who is in it is known (`loadChannelMembers`).
      */
     suspend fun sendMessageWith(channelId: String, body: String, reply: QuoteSummary?): List<String> {
-        val channel = channelOf(channelId)
-        var mentions = emptyList<MentionSummary>()
-        if (channel?.kind == TEXT) {
-            val everyone = snapshot?.servers?.any { it.serverId == channel.serverId && it.canMentionEveryone } == true
-            val members = serverMembers[channel.serverId] ?: emptyList()
-            mentions = client.call { findMentions(body, members, everyone) }
-        }
+        val mentions = mentionsIn(channelId, body)
         val outside = outsideOf(mentions, channelMemberIds[channelId], me)
         client.call { sendMessageWith(channelId, body, mentions, reply) }
         refreshMessages(channelId)
@@ -541,6 +535,82 @@ class LumiaSession(
                 lastError = e.lumiaMessage
             }
         }
+    }
+
+    // Editing and deleting (architecture 6.6)
+
+    /**
+     * Edits refused, by message id: what to say under the message ("Not
+     * saved: …"), until it is edited again or the edit comes back.
+     */
+    val editRefusals = mutableStateMapOf<String, String>()
+
+    /**
+     * The edit sent last and not yet back: a refusal the gateway sends while
+     * it waits is that edit's. The core's `editMessage` answers no command
+     * id to match the refusal by, so this is the nearest the phone can say.
+     */
+    private var editWaiting: Pair<String, String>? = null
+
+    /**
+     * Edits one of this account's messages of a server's channel, with the
+     * mentions its new words make, found as a send's are. Sent through the
+     * gateway; the edit comes back as the channel's event, and a refusal as
+     * one this message shows.
+     */
+    fun editMessage(channelId: String, messageId: String, body: String) {
+        editRefusals.remove(messageId)
+        editWaiting = channelId to messageId
+        scope.launch {
+            try {
+                val mentions = mentionsIn(channelId, body)
+                client.call { editMessage(channelId, messageId, body, mentions) }
+            } catch (e: Exception) {
+                if (editWaiting?.second == messageId) editWaiting = null
+                editRefusals[messageId] = notSaved(e.lumiaMessage)
+            }
+        }
+    }
+
+    /** Deletes a message of a server's channel: this account's own, or anyone's for a moderator. A refusal is shown as `lastError`. */
+    fun deleteMessage(channelId: String, messageId: String) {
+        scope.launch {
+            try { client.call { deleteMessage(channelId, messageId) } } catch (e: Exception) { lastError = e.lumiaMessage }
+        }
+    }
+
+    /** Edits one of this account's messages of a personal conversation, inside its encryption. */
+    fun dmEdit(channelId: String, messageId: String, body: String) {
+        editRefusals.remove(messageId)
+        scope.launch {
+            try {
+                client.call { dmEdit(channelId, messageId, body) }
+                refreshDmLog(channelId)
+            } catch (e: Exception) {
+                editRefusals[messageId] = notSaved(e.lumiaMessage)
+            }
+        }
+    }
+
+    /** Deletes one of this account's messages of a personal conversation. */
+    fun dmDelete(channelId: String, messageId: String) {
+        scope.launch {
+            try {
+                client.call { dmDelete(channelId, messageId) }
+                refreshDmLog(channelId)
+            } catch (e: Exception) {
+                lastError = e.lumiaMessage
+            }
+        }
+    }
+
+    /** The mentions a body makes in a server's text channel, as the core finds them; none anywhere else. */
+    private suspend fun mentionsIn(channelId: String, body: String): List<MentionSummary> {
+        val channel = channelOf(channelId)
+        if (channel?.kind != TEXT) return emptyList()
+        val everyone = snapshot?.servers?.any { it.serverId == channel.serverId && it.canMentionEveryone } == true
+        val members = serverMembers[channel.serverId] ?: emptyList()
+        return client.call { findMentions(body, members, everyone) }
     }
 
     /** The error a screen showed, gone. */
@@ -809,6 +879,8 @@ class LumiaSession(
                 watchPresence(watchingServerIds)
             }
             is ClientEvent.Applied -> {
+                // The edit waited for is back: its channel's edit (which names no message).
+                editWaiting?.let { (channel, _) -> if (channel == event.channelId && event.events.any { it.kind == "message_edited" }) editWaiting = null }
                 refreshMessages(event.channelId)
                 refreshReads()
                 // Someone joined, left, was added or removed: who the @ list marks has changed.
@@ -840,8 +912,17 @@ class LumiaSession(
                 showTyping(typing.began(event.channelId, event.accountId, event.untilMicros))
             }
             // A command refused: a reaction that is not one emoji, @everyone without the
-            // permission, a quote of a message that is gone. The screen says it.
-            is ClientEvent.Error -> lastError = event.message
+            // permission, a quote of a message that is gone. The screen says it; an
+            // edit's refusal, under its message.
+            is ClientEvent.Error -> {
+                val edit = editWaiting
+                if (edit != null) {
+                    editWaiting = null
+                    editRefusals[edit.second] = notSaved(event.message)
+                } else {
+                    lastError = event.message
+                }
+            }
             is ClientEvent.Acked, is ClientEvent.SubscriptionFailed, is ClientEvent.DmNote -> Unit
         }
     }

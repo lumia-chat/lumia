@@ -144,6 +144,75 @@ class RepliesTest {
     }
 
     @Test
+    fun aMentionIsDrawnAsThePersonsNameAndEveryoneAsItIs() {
+        val body = "é @ada 🎉 @bo and @everyone, @who"
+        val names = mapOf("ada" to "Ada Lovelace", "bo" to "")
+        val ada = MentionSummary("ada", false, 3u, 7u)
+        val bo = MentionSummary("bo", false, 13u, 16u)
+        val all = MentionSummary("", true, 21u, 30u)
+        val who = MentionSummary("who", false, 32u, 36u)
+        // Given out of order, as the core may not: drawn in the text's.
+        val drawn = drawnBody(body, listOf(who, bo, all, ada), names::get)
+        // Bo has no name to show and Who is not known: as written.
+        assertEquals("é @Ada Lovelace 🎉 @bo and @everyone, @who", drawn.text)
+        assertEquals(listOf("@Ada Lovelace", "@bo", "@everyone", "@who"), drawn.mentions.map { drawn.text.substring(it) })
+        assertEquals(Drawn("plain", emptyList()), drawnBody("plain", emptyList(), names::get))
+    }
+
+    @Test
+    fun aReplyNotifiesThePersonQuotedUnlessTheSwitchIsOff() {
+        val q = quoteOf("m1", "ada", "Shipped")
+        assertTrue(offersMention(q, "me"))
+        assertFalse(sentQuote(q, mention = true, me = "me").silent)
+        assertTrue(sentQuote(q, mention = false, me = "me").silent)
+        // Replying to oneself, or to a message whose author is not known: no switch, never silent.
+        val own = quoteOf("m2", "me", "Mine")
+        assertFalse(offersMention(own, "me"))
+        assertFalse(sentQuote(own, mention = false, me = "me").silent)
+        assertFalse(offersMention(quoteOf("m3", "", "Who?"), "me"))
+        assertEquals("On", mentionSwitchWord(true))
+        assertEquals("Off", mentionSwitchWord(false))
+        assertEquals("Mention Ada", mentionSwitchLabel("Ada"))
+    }
+
+    @Test
+    fun theReferenceLineNamesWhoWasQuoted() {
+        assertEquals("Maya Chen", referenceName("maya", "me", "Maya Chen"))
+        assertEquals("@Sam Rivera", referenceName("me", "me", "Sam Rivera"))
+        assertEquals("Replying to Maya Chen: Morning. Jump to message", referenceWords("Maya Chen", false, "Morning"))
+        assertEquals("Replying to you: Can we? Jump to message", referenceWords("Sam Rivera", true, "Can we?"))
+        assertEquals("Replying: Hi. Jump to message", referenceWords(null, false, "Hi"))
+        assertEquals("Replying to Maya Chen: Morning", referenceWords("Maya Chen", false, "Morning", jump = false))
+    }
+
+    @Test
+    fun theAuthorEditsAndTheAuthorOrAModeratorDeletes() {
+        assertTrue(mayEdit("me", "me", notice = false, deleted = false))
+        assertFalse(mayEdit("ada", "me", notice = false, deleted = false))
+        assertFalse(mayEdit("me", "me", notice = true, deleted = false))
+        assertFalse(mayEdit("me", "me", notice = false, deleted = true))
+        assertFalse(mayEdit("", "", notice = false, deleted = false))
+        assertTrue(mayDelete("me", "me", notice = false, deleted = false, moderates = false))
+        assertFalse(mayDelete("ada", "me", notice = false, deleted = false, moderates = false))
+        assertTrue(mayDelete("ada", "me", notice = false, deleted = false, moderates = true))
+        assertFalse(mayDelete("ada", "me", notice = true, deleted = false, moderates = true))
+        assertFalse(mayDelete("ada", "me", notice = false, deleted = true, moderates = true))
+    }
+
+    @Test
+    fun savingAnEditSendsWhatChangedAndAnEmptyOneAsksToDelete() {
+        assertEquals(EditOutcome.Save("Shipped Friday"), editOutcome("Shipped Thursday", "  Shipped Friday \n"))
+        assertEquals(EditOutcome.Unchanged, editOutcome("Shipped", "Shipped  "))
+        assertEquals(EditOutcome.Delete, editOutcome("Shipped", " \n "))
+        assertEquals("Not saved: You can only edit your own messages.", notSaved("You can only edit your own messages."))
+        assertEquals("First line", firstLine("\n  First line \nSecond"))
+        assertEquals("", firstLine("   "))
+        data class M(val id: Int, val mine: Boolean)
+        assertEquals(M(3, true), lastEditable(listOf(M(1, true), M(2, false), M(3, true), M(4, false))) { it.mine })
+        assertNull(lastEditable(listOf(M(1, false))) { it.mine })
+    }
+
+    @Test
     fun theNewMessagesLineIsAboveTheFirstUnreadFromSomeoneElse() {
         data class M(val seq: ULong, val author: String, val notice: Boolean = false)
         val ms = listOf(M(1u, "ada"), M(2u, "me"), M(3u, "ada", notice = true), M(4u, "me"), M(5u, "ada"))

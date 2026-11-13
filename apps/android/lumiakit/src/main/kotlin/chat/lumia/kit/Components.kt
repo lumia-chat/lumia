@@ -49,6 +49,8 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.text.TextLayoutResult
@@ -150,6 +152,11 @@ private val TypingDotGap = (LumiaTokens.space2 + LumiaTokens.space4) / 2
  * row's time under, so it is not drawn; a screen reader still hears whose
  * the message is and when, before it. Each row is one stop for it.
  * [measures] are the density's: the avatar and the room around the row.
+ *
+ * The row is the boards' padded box, rounded, inside the list's own
+ * margin: washed in the accent when it is for this account ([washed]: it
+ * mentions it or everyone, or replies to it) and in the soft accent for
+ * the moment a jump reaches it ([flashed]).
  */
 @Composable
 fun LumiaMessageRow(
@@ -161,54 +168,61 @@ fun LumiaMessageRow(
     place: BlockPlace = BlockPlace.Alone,
     measures: Measures = Measures.Comfortable,
     onAuthor: (() -> Unit)? = null,
-    // What architecture 6.6 adds: the quote drawn above the words, where
-    // the body's mentions are (drawn as pills), the reactions under the
-    // words, the tint of a message that mentions this account or that a
-    // jump just reached, and the long press that opens its actions.
-    quote: (@Composable () -> Unit)? = null,
+    // What architecture 6.6 adds: the reply's reference line over the
+    // avatar's row, where the body's mentions are (drawn as pills), the
+    // "(edited)" after its words, the reactions under them, the field it
+    // is edited in where its words were, a line under it (an edit
+    // refused), the wash of a message for this account or that a jump
+    // just reached, and the long press that opens its actions.
+    reference: (@Composable () -> Unit)? = null,
     mentions: List<IntRange> = emptyList(),
+    edited: Boolean = false,
     reactions: (@Composable () -> Unit)? = null,
-    tinted: Boolean = false,
+    editor: (@Composable () -> Unit)? = null,
+    under: (@Composable () -> Unit)? = null,
+    washed: Boolean = false,
+    flashed: Boolean = false,
     onLongPress: (() -> Unit)? = null,
 ) {
     // Who wrote it, tapped on the avatar or the name: their profile card, where a screen offers one.
     val authorTap = if (onAuthor != null) Modifier.clickable(onClickLabel = "view $author's profile", role = Role.Button, onClick = onAuthor) else Modifier
     val body = @Composable { modifier: Modifier ->
         Column(modifier, verticalArrangement = Arrangement.spacedBy(LumiaTokens.space4)) {
-            quote?.invoke()
-            if (deleted) {
-                Text("(deleted)", style = LumiaTokens.textMessage.style, color = LumiaTokens.inkQuiet.color)
-            } else {
-                LumiaBody(text, mentions)
+            when {
+                editor != null -> editor()
+                deleted -> Text("(deleted)", style = LumiaTokens.textMessage.style, color = LumiaTokens.inkQuiet.color)
+                else -> LumiaBody(text, mentions, edited = edited)
             }
-            if (reactions != null) Box(Modifier.padding(top = LumiaTokens.space2)) { reactions() }
+            if (reactions != null && editor == null) Box(Modifier.padding(top = LumiaTokens.space2)) { reactions() }
+            under?.invoke()
         }
     }
-    val accent = LumiaTokens.accent.color
-    val tint = LumiaTokens.accentSoft.color
+    val editing = editor != null
+    val shape = RoundedCornerShape(LumiaTokens.radius12)
+    val fill = when {
+        flashed -> LumiaTokens.accentSoft.color
+        washed -> LumiaTokens.accentWash.color
+        else -> null
+    }
     val frame = Modifier
         .fillMaxWidth()
+        // The list's margin, and the room between blocks outside the row's box.
+        .padding(horizontal = LumiaTokens.space6)
+        .padding(top = if (place.opens) measures.blockGap else 0.dp)
+        .then(if (fill != null) Modifier.background(fill, shape) else Modifier)
         .then(
-            if (tinted) {
-                // The accent's soft wash and a 2-point accent rule on its left edge.
-                Modifier.drawBehind {
-                    drawRect(tint)
-                    drawRect(accent, size = androidx.compose.ui.geometry.Size(LumiaTokens.space2.toPx(), size.height))
-                }
-            } else Modifier,
-        )
-        .then(
-            if (onLongPress != null) {
+            if (onLongPress != null && !editing) {
                 Modifier.pointerInput(onLongPress) { detectTapGestures(onLongPress = { onLongPress() }) }
             } else Modifier,
         )
-        .semantics(mergeDescendants = true) {
-            if (onLongPress != null) onLongClick(label = "Message actions") { onLongPress(); true }
+        // One stop for a screen reader, but for a row being edited, whose field is a stop of its own.
+        .semantics(mergeDescendants = !editing) {
+            if (onLongPress != null && !editing) onLongClick(label = "Message actions") { onLongPress(); true }
         }
         .padding(
-            start = LumiaTokens.space16,
-            end = LumiaTokens.space16,
-            top = if (place.opens) measures.blockGap + measures.edge else measures.within / 2,
+            start = LumiaTokens.space10,
+            end = LumiaTokens.space10,
+            top = if (place.opens) measures.edge else measures.within / 2,
             bottom = if (place.closes) measures.edge else measures.within / 2,
         )
     if (!place.opens) {
@@ -218,38 +232,64 @@ fun LumiaMessageRow(
         }
         return
     }
-    Row(modifier = frame, horizontalArrangement = Arrangement.spacedBy(measures.beside), verticalAlignment = Alignment.Top) {
-        // The name beside it says who; the initials would only be read out before it.
-        Box(Modifier.clip(CircleShape).then(authorTap).clearAndSetSemantics {}) { LumiaAvatar(initialsOf(author), tone, measures.avatar) }
-        Column(verticalArrangement = Arrangement.spacedBy(measures.within), modifier = Modifier.weight(1f)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space8), verticalAlignment = Alignment.Bottom) {
-                Text(author, style = LumiaTokens.textAuthor.style, color = LumiaTokens.inkEmphasis.color, modifier = authorTap)
-                Text(time, style = LumiaTokens.textMeta.style, color = LumiaTokens.inkQuiet.color)
+    // A reply: its reference line over the avatar's row, the boards' 2 apart.
+    Column(frame, verticalArrangement = Arrangement.spacedBy(LumiaTokens.space2)) {
+        reference?.invoke()
+        Row(horizontalArrangement = Arrangement.spacedBy(measures.beside), verticalAlignment = Alignment.Top) {
+            // The name beside it says who; the initials would only be read out before it.
+            Box(Modifier.clip(CircleShape).then(authorTap).clearAndSetSemantics {}) { LumiaAvatar(initialsOf(author), tone, measures.avatar) }
+            Column(verticalArrangement = Arrangement.spacedBy(measures.within), modifier = Modifier.weight(1f)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space8), verticalAlignment = Alignment.Bottom) {
+                    Text(author, style = LumiaTokens.textAuthor.style, color = LumiaTokens.inkEmphasis.color, modifier = authorTap)
+                    Text(time, style = LumiaTokens.textMeta.style, color = LumiaTokens.inkQuiet.color)
+                }
+                body(Modifier)
             }
-            body(Modifier)
         }
     }
 }
 
 /**
  * A message's words, its mentions (by [mentions], where they are in the
- * text) drawn as the design's `lu-mention` pill: the text as written, in
- * the accent's ink and the strong weight, on the accent's soft wash with
- * rounded ends.
+ * text) drawn as the design's `lu-mention` pill: the text, `@` and the
+ * person's name, in the accent's ink and the strong weight, on the
+ * accent's soft wash, reaching 6 past the words and 1 over the line, with
+ * the radius 6. The pill's room beside the words is a thin space each side
+ * of them, inside the pill, so it does not run over its neighbours; a
+ * screen reader has the text without them. An [edited] message's words are
+ * followed by "(edited)", smaller and quieter, on its last line.
  */
 @Composable
-fun LumiaBody(text: String, mentions: List<IntRange>, modifier: Modifier = Modifier) {
-    if (mentions.isEmpty()) {
-        Text(text, style = LumiaTokens.textMessage.style, color = LumiaTokens.inkBody.color, modifier = modifier)
-        return
-    }
+fun LumiaBody(text: String, mentions: List<IntRange>, modifier: Modifier = Modifier, edited: Boolean = false) {
     val ink = LumiaTokens.accentInk.color
     val wash = LumiaTokens.accentSoft.color
-    val styled = remember(text, mentions, ink) {
-        buildAnnotatedString {
-            append(text)
-            for (r in mentions) addStyle(SpanStyle(color = ink, fontWeight = FontWeight(LumiaTokens.textSection.weight)), r.first, r.last + 1)
+    val quiet = LumiaTokens.inkMuted.color
+    // The text drawn, thin spaces and all, and where each pill is in it.
+    val (styled, pills) = remember(text, mentions, ink, quiet, edited) {
+        val pills = mutableListOf<IntRange>()
+        val styled = buildAnnotatedString {
+            var at = 0
+            for (r in mentions.sortedBy { it.first }) {
+                if (r.first < at || r.last >= text.length) continue
+                append(text, at, r.first)
+                val start = length
+                append(THIN_SPACE)
+                pushStyle(SpanStyle(color = ink, fontWeight = FontWeight(LumiaTokens.textSection.weight)))
+                append(text, r.first, r.last + 1)
+                pop()
+                append(THIN_SPACE)
+                pills.add(start until length)
+                at = r.last + 1
+            }
+            append(text, at, text.length)
+            if (edited) {
+                append(" ")
+                pushStyle(SpanStyle(color = quiet, fontSize = LumiaTokens.textMeta.size))
+                append(EDITED)
+                pop()
+            }
         }
+        styled to pills.toList()
     }
     var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
     Text(
@@ -257,34 +297,55 @@ fun LumiaBody(text: String, mentions: List<IntRange>, modifier: Modifier = Modif
         style = LumiaTokens.textMessage.style,
         color = LumiaTokens.inkBody.color,
         onTextLayout = { layout = it },
-        modifier = modifier.drawBehind {
-            val l = layout ?: return@drawBehind
-            val outset = LumiaTokens.space2.toPx()
-            val corner = CornerRadius(LumiaTokens.radius6.toPx())
-            for (r in mentions) {
-                val start = r.first
-                val end = r.last + 1
-                if (end > l.layoutInput.text.length) continue
-                for (line in l.getLineForOffset(start)..l.getLineForOffset(end - 1)) {
-                    val left = if (line == l.getLineForOffset(start)) l.getHorizontalPosition(start, true) else l.getLineLeft(line)
-                    val right = if (line == l.getLineForOffset(end - 1)) l.getHorizontalPosition(end, true).takeIf { it > left } ?: l.getLineRight(line) else l.getLineRight(line)
-                    drawRoundRect(wash, Offset(left - outset, l.getLineTop(line)), Size(right - left + 2 * outset, l.getLineBottom(line) - l.getLineTop(line)), corner)
-                }
-            }
-        },
+        modifier = modifier
+            .then(if (pills.isNotEmpty() || edited) Modifier.semantics { contentDescription = if (edited) "$text, $EDITED_LABEL" else text } else Modifier)
+            .then(
+                if (pills.isEmpty()) Modifier else Modifier.drawBehind {
+                    val l = layout ?: return@drawBehind
+                    val corner = CornerRadius(LumiaTokens.radius6.toPx())
+                    val over = LumiaTokens.space2.toPx() / 2
+                    for (r in pills) {
+                        val start = r.first
+                        val end = r.last + 1
+                        if (end > l.layoutInput.text.length) continue
+                        // The thin space is part of the 6 the pill reaches past the words.
+                        val thin = l.getHorizontalPosition(start + 1, true) - l.getHorizontalPosition(start, true)
+                        val reach = (LumiaTokens.space6.toPx() - thin).coerceAtLeast(0f)
+                        val first = l.getLineForOffset(start)
+                        val last = l.getLineForOffset(end - 1)
+                        for (line in first..last) {
+                            val left = if (line == first) l.getHorizontalPosition(start, true) - reach else l.getLineLeft(line)
+                            val right = if (line == last) l.getHorizontalPosition(end, true).takeIf { it > left } ?: l.getLineRight(line) else l.getLineRight(line)
+                            val end2 = if (line == last) right + reach else right
+                            drawRoundRect(wash, Offset(left, l.getLineTop(line) - over), Size(end2 - left, l.getLineBottom(line) - l.getLineTop(line) + 2 * over), corner)
+                        }
+                    }
+                },
+            ),
     )
 }
 
-/** The "New messages" line, above the first message after where this account had read to: the accent's rule and words. */
+/** The room inside a mention's pill, each side of its words. */
+private const val THIN_SPACE = " "
+
+/**
+ * The unread divider, above the first message after where this account
+ * had read to: a rule in the accent's line, then "New" in the accent's
+ * ink, and nothing after the word. "New messages" to a screen reader.
+ */
 @Composable
 fun LumiaNewMessagesLine(measures: Measures = Measures.Comfortable) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = LumiaTokens.space16, vertical = measures.divider).semantics(mergeDescendants = true) {},
+        modifier = Modifier
+            .fillMaxWidth()
+            // The boards' 6 over and under it, three quarters of a day's divider's, halved in Compact.
+            .padding(horizontal = LumiaTokens.space16, vertical = measures.divider * 3 / 4)
+            .clearAndSetSemantics { contentDescription = NEW_LABEL },
         horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space12),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.weight(1f).height(1.dp).background(LumiaTokens.accent.color))
-        Text("New messages", style = LumiaTokens.textSection.style, color = LumiaTokens.accent.color)
+        Box(Modifier.weight(1f).height(1.dp).background(LumiaTokens.accentLine.color))
+        Text(NEW_WORD, style = LumiaTokens.textSection.style.copy(fontWeight = FontWeight(LumiaTokens.textCount.weight)), color = LumiaTokens.accentInk.color)
     }
 }
 
@@ -343,7 +404,9 @@ fun LumiaComposer(text: String, onText: (String) -> Unit, placeholder: String, e
 /**
  * The composer with where the caret is ([value]'s selection), for what
  * follows it: the @ list completes the `@word` at the caret, and a reply
- * puts the caret here ([focus]).
+ * puts the caret here ([focus]). A [header] is drawn inside its frame over
+ * the field (the reply bar), and the frame's border is the active one
+ * while it is ([active]). [onKey] sees a hardware keyboard's keys first.
  */
 @Composable
 fun LumiaComposer(
@@ -352,34 +415,45 @@ fun LumiaComposer(
     placeholder: String,
     enabled: Boolean = true,
     focus: FocusRequester? = null,
+    header: (@Composable () -> Unit)? = null,
+    active: Boolean = false,
+    onKey: ((KeyEvent) -> Boolean)? = null,
     onSend: () -> Unit,
 ) {
-    Row(
-        modifier = Modifier
+    val shape = RoundedCornerShape(LumiaTokens.radius16)
+    Column(
+        Modifier
             .fillMaxWidth()
             .padding(horizontal = LumiaTokens.space16)
-            .background(LumiaTokens.field.color, RoundedCornerShape(LumiaTokens.radius12))
-            .border(1.dp, LumiaTokens.borderComposer.color, RoundedCornerShape(LumiaTokens.radius12))
-            .padding(LumiaTokens.space10),
-        horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space8),
-        verticalAlignment = Alignment.Bottom,
+            .clip(shape)
+            .background(LumiaTokens.field.color, shape)
+            .border(1.dp, if (active) LumiaTokens.borderActive.color else LumiaTokens.borderComposer.color, shape),
     ) {
-        BasicTextField(
-            value = value,
-            onValueChange = onValue,
-            modifier = Modifier.weight(1f).heightIn(min = 24.dp).then(if (focus != null) Modifier.focusRequester(focus) else Modifier),
-            enabled = enabled,
-            textStyle = LumiaTokens.textBody.style.copy(color = LumiaTokens.inkField.color),
-            cursorBrush = SolidColor(LumiaTokens.accent.color),
-            maxLines = 8,
-            decorationBox = { inner ->
-                Box {
-                    if (value.text.isEmpty()) Text(placeholder, style = LumiaTokens.textBody.style, color = LumiaTokens.inkMuted.color)
-                    inner()
-                }
-            },
-        )
-        LumiaPrimaryButton("Send", enabled = enabled && value.text.isNotBlank(), onClick = onSend)
+        header?.invoke()
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(LumiaTokens.space10),
+            horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space8),
+            verticalAlignment = Alignment.Bottom,
+        ) {
+            BasicTextField(
+                value = value,
+                onValueChange = onValue,
+                modifier = Modifier.weight(1f).heightIn(min = 24.dp)
+                    .then(if (focus != null) Modifier.focusRequester(focus) else Modifier)
+                    .then(if (onKey != null) Modifier.onPreviewKeyEvent(onKey) else Modifier),
+                enabled = enabled,
+                textStyle = LumiaTokens.textBody.style.copy(color = LumiaTokens.inkField.color),
+                cursorBrush = SolidColor(LumiaTokens.accent.color),
+                maxLines = 8,
+                decorationBox = { inner ->
+                    Box {
+                        if (value.text.isEmpty()) Text(placeholder, style = LumiaTokens.textBody.style, color = LumiaTokens.inkMuted.color)
+                        inner()
+                    }
+                },
+            )
+            LumiaPrimaryButton("Send", enabled = enabled && value.text.isNotBlank(), onClick = onSend)
+        }
     }
 }
 

@@ -180,7 +180,7 @@ fun PhoneRail(session: LumiaSession, place: Place, onAdd: () -> Unit, onAccount:
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(LumiaTokens.space12),
     ) {
-        RailTile(current = place == Place.Home, badge = requests + personal, label = homeLabel, onClick = { onPlace(Place.Home) }) {
+        RailTile(current = place == Place.Home, badge = requests + personal, label = homeLabel, home = true, onClick = { onPlace(Place.Home) }) {
             Image(painterResource(R.drawable.logo), contentDescription = null, modifier = Modifier.size(32.dp))
         }
         Box(Modifier.width(24.dp).height(1.dp).background(LumiaTokens.railDivider.color))
@@ -188,7 +188,7 @@ fun PhoneRail(session: LumiaSession, place: Place, onAdd: () -> Unit, onAccount:
             // What is unread in it, its channels and server DMs: a mark at the rail's edge, and its count for this account over the tile's corner.
             val unread = unreadIn(session.readStates, (sidebarChannels(channels, s.serverId) + serverDms(channels, s.serverId)).map { it.channelId })
             val current = place == Place.Server(s.serverId)
-            RailTile(current = current, badge = unread.mentions, label = withUnread(s.name, unread), dot = unread.unread > 0 && !current, onClick = { onPlace(Place.Server(s.serverId)) }) {
+            RailTile(current = current, badge = unread.mentions, label = withUnread(s.name, unread), dot = unread.unread > 0 && unread.mentions == 0 && !current, onClick = { onPlace(Place.Server(s.serverId)) }) {
                 // The server's picture, when it has one, over its initials, as a person's is drawn.
                 Text(initialsOf(s.name), style = LumiaTokens.titleMonogram.style, color = LumiaTokens.ink.color)
                 LumiaPicture(session.pictureOf(s.iconUrl), Modifier.matchParentSize())
@@ -279,17 +279,19 @@ private fun MenuItem(icon: ImageVector, label: String, onClick: () -> Unit) {
     }
 }
 
+/** The rail's unread dot (11 across, the phone boards'). */
+private val RailDot = (LumiaTokens.space10 + LumiaTokens.space12) / 2
+
+/**
+ * A tile of the rail. A server with something unread and nothing for this
+ * account has the unread dot at the tile's top right; with mentions, their
+ * count over the corner, a little further out ([home]'s further still, as
+ * the boards place it); each ringed in the rail's colour.
+ */
 @Composable
-private fun RailTile(current: Boolean, badge: Int, label: String, dot: Boolean = false, onClick: () -> Unit, content: @Composable BoxScope.() -> Unit) {
+private fun RailTile(current: Boolean, badge: Int, label: String, dot: Boolean = false, home: Boolean = false, onClick: () -> Unit, content: @Composable BoxScope.() -> Unit) {
     val shape = if (current) RoundedCornerShape(LumiaTokens.radius14) else CircleShape
-    // The unread mark sits at the rail's edge, outside the tile, so the tile is in a box as wide as the rail.
     Box(Modifier.width(LumiaTokens.railWidth), contentAlignment = Alignment.Center) {
-        if (dot) {
-            Box(
-                Modifier.align(Alignment.CenterStart).width(LumiaTokens.space4).height(LumiaTokens.space8)
-                    .background(LumiaTokens.ink.color, RoundedCornerShape(topEnd = LumiaTokens.radiusPill, bottomEnd = LumiaTokens.radiusPill)),
-            )
-        }
         Box {
             Box(
                 modifier = Modifier
@@ -304,24 +306,54 @@ private fun RailTile(current: Boolean, badge: Int, label: String, dot: Boolean =
                 // The current one's ring, over what the tile holds, a picture too.
                 if (current) Box(Modifier.matchParentSize().border(2.dp, LumiaTokens.accent.color, shape))
             }
-            // Over the tile's corner, ringed in the rail's colour.
+            if (dot && badge == 0) {
+                Box(
+                    Modifier.align(Alignment.TopEnd).size(RailDot)
+                        .background(LumiaTokens.unread.color, CircleShape)
+                        .border(LumiaTokens.space2, LumiaTokens.rail.color, CircleShape),
+                )
+            }
+            // Over the tile's corner: 4 out, Home's 5.
             if (badge > 0) {
-                Box(Modifier.align(Alignment.TopEnd).offset(x = LumiaTokens.space4, y = -LumiaTokens.space4).border(2.dp, LumiaTokens.rail.color, CircleShape).padding(2.dp)) { CountBadge(badge) }
+                val out = if (home) (LumiaTokens.space4 + LumiaTokens.space6) / 2 else LumiaTokens.space4
+                Box(Modifier.align(Alignment.TopEnd).offset(x = out, y = -out)) { CountBadge(badge, BadgeSize.RAIL) }
             }
         }
     }
 }
 
-/** The design's count badge (`lu-badge--sm`): the accent's pill, the count on it, 99+ past that. (`unread` is the dot's colour, not a badge's.) */
+/** Where a count badge is, which decides its size (the phone boards'). */
+enum class BadgeSize {
+    /** A sidebar row's: 20 high and at least as wide, 6 at its sides. */
+    ROW,
+
+    /** A quick tile's: 18 high, 5 at its sides, its count a little smaller. */
+    TILE,
+
+    /** The rail's: 20 high, 5 at its sides, ringed 2 in the rail's colour inside that. */
+    RAIL,
+}
+
+/** The design's count badge: the accent's pill, the count on it, 99+ past that. (`unread` is the dot's colour, not a badge's.) */
 @Composable
-fun CountBadge(count: Int) {
+fun CountBadge(count: Int, size: BadgeSize = BadgeSize.ROW) {
+    val high = if (size == BadgeSize.TILE) LumiaTokens.space18 else LumiaTokens.space18 + LumiaTokens.space2
+    val side = if (size == BadgeSize.ROW) LumiaTokens.space6 else (LumiaTokens.space4 + LumiaTokens.space6) / 2
+    val pill = RoundedCornerShape(LumiaTokens.radiusPill)
+    val style = if (size == BadgeSize.TILE) LumiaTokens.textCount.style.copy(fontSize = LumiaTokens.textCount.size * TILE_COUNT) else LumiaTokens.textCount.style
     Box(
-        modifier = Modifier.heightIn(min = 18.dp).widthIn(min = 18.dp).background(LumiaTokens.accent.color, RoundedCornerShape(LumiaTokens.radiusPill)).padding(horizontal = LumiaTokens.space4),
+        modifier = Modifier.height(high).widthIn(min = high)
+            .background(LumiaTokens.accent.color, pill)
+            .then(if (size == BadgeSize.RAIL) Modifier.border(LumiaTokens.space2, LumiaTokens.rail.color, pill) else Modifier)
+            .padding(horizontal = side),
         contentAlignment = Alignment.Center,
     ) {
-        Text(if (count > 99) "99+" else "$count", style = LumiaTokens.textCount.style, color = LumiaTokens.onAccent.color)
+        Text(if (count > 99) "99+" else "$count", style = style, color = LumiaTokens.onAccent.color, maxLines = 1)
     }
 }
+
+/** A quick tile's count is 10.5 where a badge's is 11 (`text-count`'s note). */
+private const val TILE_COUNT = 10.5f / 11f
 
 /** The sidebar's header: a title, a line under it, and one action. */
 @Composable
@@ -338,23 +370,31 @@ fun SideHeader(title: String, meta: String? = null, action: Triple<ImageVector, 
     }
 }
 
-/** The Requests / Devices / New message tiles. */
+/**
+ * A quick tile, as the phone boards draw Home's Requests / Devices / New
+ * and a server's Mentions: 58 high, three to a row, the surface ringed in
+ * the tiles' edge, a glyph over its label; its count as the small badge at
+ * its top right, 6 down and 7 in. [label] and [count] name it to a screen
+ * reader.
+ */
 @Composable
 fun Tile(label: String, icon: ImageVector, count: Int = 0, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(LumiaTokens.radius14)
     Box(
         modifier = modifier
             .height(58.dp)
-            .clip(RoundedCornerShape(LumiaTokens.radius14))
-            .background(LumiaTokens.tile.color)
-            .border(1.dp, LumiaTokens.line.color, RoundedCornerShape(LumiaTokens.radius14))
-            .clickable(onClick = onClick),
+            .clip(shape)
+            .background(LumiaTokens.surface.color)
+            .border(1.dp, LumiaTokens.edge.color, shape)
+            .clickable(role = Role.Button, onClick = onClick)
+            .semantics(mergeDescendants = true) { contentDescription = if (count > 0) "$label, $count" else label },
         contentAlignment = Alignment.Center,
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(LumiaTokens.space4)) {
             Icon(icon, contentDescription = null, tint = LumiaTokens.inkBody.color, modifier = Modifier.size(18.dp))
-            Text(label, style = LumiaTokens.textCompact.style, color = LumiaTokens.inkBody.color)
+            Text(label, style = LumiaTokens.textSection.style, color = LumiaTokens.inkBody.color)
         }
-        if (count > 0) Box(Modifier.align(Alignment.TopEnd).padding(LumiaTokens.space6)) { CountBadge(count) }
+        if (count > 0) Box(Modifier.align(Alignment.TopEnd).padding(top = LumiaTokens.space6, end = (LumiaTokens.space6 + LumiaTokens.space8) / 2)) { CountBadge(count, BadgeSize.TILE) }
     }
 }
 

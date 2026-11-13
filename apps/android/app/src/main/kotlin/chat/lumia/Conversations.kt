@@ -1,10 +1,12 @@
 // The conversations: a personal one, a server's channel or server DM, and
 // the Mentions pages (architecture 6.6). Each conversation draws its
-// messages with what 6.6 adds (quotes, reactions, mentions, the tint of
-// one that mentions this account, the "New messages" line), opens a
-// message's actions on a long press, puts a quote over the composer, and
-// is marked read while its newest message is on screen with the app in
-// front. The same states and words as the desktop's and the web's.
+// messages with what 6.6 adds (a reply's reference line, reactions,
+// mentions by name, "(edited)", the wash of one for this account, the
+// unread divider), opens a message's actions on a long press, puts the
+// reply bar in the composer's frame, edits a message in place and asks
+// before deleting one, and is marked read while its newest message is on
+// screen with the app in front. The same states and words as the
+// desktop's and the web's.
 package chat.lumia
 
 import android.content.ClipData
@@ -52,7 +54,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -100,7 +108,15 @@ import chat.lumia.kit.lumiaMessage
 import chat.lumia.kit.mentionAt
 import chat.lumia.kit.mentionChoices
 import chat.lumia.kit.mentionPlace
-import chat.lumia.kit.mentionRanges
+import chat.lumia.kit.drawnBody
+import chat.lumia.kit.EditOutcome
+import chat.lumia.kit.editOutcome
+import chat.lumia.kit.firstLine
+import chat.lumia.kit.lastEditable
+import chat.lumia.kit.mayDelete
+import chat.lumia.kit.mayEdit
+import chat.lumia.kit.offersMention
+import chat.lumia.kit.sentQuote
 import chat.lumia.kit.noticeText
 import chat.lumia.kit.notInChannel
 import chat.lumia.kit.otherIn
@@ -161,6 +177,23 @@ private fun follow(listState: LazyListState, newestKey: String?, count: Int, fir
     return newestVisible
 }
 
+/**
+ * The message being edited ([item], its place in the list) brought to the
+ * top of what shows, or as far as the list goes, as editing starts and
+ * with each step of the keyboard rising (the list shortens as it does), so
+ * its field and Cancel and Save are not left under the composer; the list
+ * then holds there ([onHold]) rather than following new messages down.
+ */
+@Composable
+private fun BringEditing(listState: LazyListState, item: Int?, onHold: () -> Unit) {
+    val keyboard = WindowInsets.ime.getBottom(LocalDensity.current)
+    LaunchedEffect(item, keyboard) {
+        if (item == null) return@LaunchedEffect
+        onHold()
+        listState.scrollToItem(item)
+    }
+}
+
 // A personal conversation
 
 @Composable
@@ -175,6 +208,10 @@ fun ConversationScreen(store: AppStore, session: LumiaSession, channelId: String
     var pickerFor by remember { mutableStateOf<String?>(null) }
     var flash by remember { mutableStateOf<String?>(null) }
     var holding by remember { mutableStateOf(false) }
+    // The message being edited in place, and what its field holds; the one asked about deleting.
+    var editing by rememberSaveable { mutableStateOf<String?>(null) }
+    var editDraft by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue("")) }
+    var deleting by remember { mutableStateOf<String?>(null) }
     val focus = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
     val channel = session.snapshot?.channels?.firstOrNull { it.channelId == channelId }
@@ -218,7 +255,21 @@ fun ConversationScreen(store: AppStore, session: LumiaSession, channelId: String
         store.used(emoji)
     }
 
+    fun edit(m: DmMessageSummary) {
+        editing = m.messageId
+        editDraft = TextFieldValue(m.body, TextRange(m.body.length))
+    }
+
+    fun saveEdit(m: DmMessageSummary) {
+        when (val outcome = editOutcome(m.body, editDraft.text)) {
+            EditOutcome.Unchanged -> editing = null
+            EditOutcome.Delete -> deleting = m.messageId
+            is EditOutcome.Save -> { editing = null; session.dmEdit(channelId, m.messageId, outcome.body) }
+        }
+    }
+
     val newestVisible = follow(listState, sent.lastOrNull()?.messageId, sent.size, firstIndex, newLine, holding, { holding = it }) { false }
+    BringEditing(listState, editing?.let { id -> sent.indexOfFirst { it.messageId == id } }?.takeIf { it >= 0 }?.plus(firstIndex)) { holding = true }
     val front = inFront()
     LaunchedEffect(newestVisible, front) {
         while (newestVisible && front) {
@@ -227,7 +278,8 @@ fun ConversationScreen(store: AppStore, session: LumiaSession, channelId: String
         }
     }
     LaunchedEffect(replying) { if (replying != null) { focus.requestFocus(); keyboard?.show() } }
-    BackHandler(enabled = replying != null) { replying = null }
+    BackHandler(enabled = replying != null && editing == null) { replying = null }
+    BackHandler(enabled = editing != null) { editing = null }
 
     PanelScreen(
         back = "Home", onBack = back, title = title,
@@ -257,9 +309,14 @@ fun ConversationScreen(store: AppStore, session: LumiaSession, channelId: String
                         if (i == newLine) LumiaNewMessagesLine(measures)
                         LumiaMessageRow(
                             whoOf(m), AvatarTone.of(senderOf(m)), timeOfMicros(m.sentAtMicros), m.body, m.deleted, places[i], measures,
-                            quote = m.reply?.let { q -> @Composable { QuoteBlock(session, q) { jump(q.messageId) } } },
+                            reference = m.reply?.let { q -> @Composable { ReferenceLine(session, q, measures) { jump(q.messageId) } } },
+                            edited = m.edited && !m.deleted,
                             reactions = if (m.reactions.isNotEmpty() && !m.deleted) ({ ReactionChips(session, m.reactions, { react(m.messageId, it) }, { pickerFor = m.messageId }) }) else null,
-                            tinted = flash == m.messageId,
+                            editor = if (editing == m.messageId && !m.deleted) ({ EditField(editDraft, { editDraft = it }, { saveEdit(m) }, { editing = null }) }) else null,
+                            under = session.editRefusals[m.messageId]?.let { words -> @Composable { LumiaErrorText(words) } },
+                            // A reply to this account, from someone else.
+                            washed = !m.mine && m.reply?.authorAccountId == me && me.isNotEmpty(),
+                            flashed = flash == m.messageId,
                             onLongPress = if (!m.deleted && member) ({ actionsFor = m.messageId }) else null,
                         )
                     }
@@ -267,8 +324,15 @@ fun ConversationScreen(store: AppStore, session: LumiaSession, channelId: String
                 val shown = error.ifEmpty { session.lastError ?: "" }
                 if (shown.isNotEmpty()) item { Column(Modifier.padding(horizontal = LumiaTokens.space16)) { LumiaErrorText(shown) } }
             }
-            replying?.let { q -> ReplyBar(q.authorAccountId.ifEmpty { null }?.let { session.nameOf(it) } ?: title, q.text) { replying = null } }
-            LumiaComposer(draft, { draft = it }, if (member) "Message $title" else "Setting up the encrypted group…", enabled = member, focus = focus) {
+            // Every message here reaches everyone in it, so the reply bar offers no "@ On".
+            val quoting = replying
+            LumiaComposer(
+                draft, { draft = it }, if (member) "Message $title" else "Setting up the encrypted group…", enabled = member, focus = focus,
+                header = quoting?.let { q -> @Composable { ReplyBar(q.authorAccountId.ifEmpty { null }?.let { session.nameOf(it) } ?: title, null, {}) { replying = null } } },
+                active = quoting != null,
+                // Up in an empty composer edits this account's newest message.
+                onKey = { e -> upEdits(e, draft.text) { lastEditable(sent) { it.mine && !it.deleted }?.let { edit(it); true } ?: false } },
+            ) {
                 val body = draft.text.trim()
                 if (body.isEmpty()) return@LumiaComposer
                 val quote = replying
@@ -288,15 +352,26 @@ fun ConversationScreen(store: AppStore, session: LumiaSession, channelId: String
 
     val acting = actionsFor?.let { id -> sent.firstOrNull { it.messageId == id } }
     if (acting != null) {
+        // Only this account's own, in a personal conversation: there is no moderator inside the encryption.
+        val own = acting.mine && !acting.deleted
         MessageActionsSheet(
-            onReact = { react(acting.messageId, it); actionsFor = null },
-            onReply = { replying = quoteOf(acting.messageId, if (acting.mine) me else acting.senderAccountId, acting.body); actionsFor = null },
             onAddReaction = { actionsFor = null; pickerFor = acting.messageId },
+            onReply = { replying = quoteOf(acting.messageId, if (acting.mine) me else acting.senderAccountId, acting.body); actionsFor = null },
+            onEdit = if (own) ({ actionsFor = null; edit(acting) }) else null,
             onCopy = { copy(context, acting.body); actionsFor = null },
+            onDelete = if (own) ({ actionsFor = null; deleting = acting.messageId }) else null,
             onDismiss = { actionsFor = null },
         )
     }
     pickerFor?.let { id -> EmojiPickerSheet(frequentEmoji(store.recentEmoji), onPick = { react(id, it); pickerFor = null }, onDismiss = { pickerFor = null }) }
+    deleting?.let { id ->
+        val m = sent.firstOrNull { it.messageId == id }
+        DeleteDialog(
+            firstLine(m?.body ?: ""),
+            onDelete = { deleting = null; if (editing == id) editing = null; session.dmDelete(channelId, id) },
+            onDismiss = { deleting = null },
+        )
+    }
 }
 
 // A server's channel or server DM
@@ -324,6 +399,11 @@ fun ChannelScreen(store: AppStore, session: LumiaSession, channelId: String, den
     var outside by remember { mutableStateOf<Outside?>(null) }
     var flash by remember { mutableStateOf<String?>(null) }
     var holding by remember { mutableStateOf(false) }
+    // Whether the reply notifies the person it quotes: on for each reply, until turned off.
+    var mentionOn by remember { mutableStateOf(true) }
+    var editing by rememberSaveable { mutableStateOf<String?>(null) }
+    var editDraft by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue("")) }
+    var deleting by remember { mutableStateOf<String?>(null) }
     val focus = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
     val channel = session.channelOf(channelId)
@@ -401,10 +481,23 @@ fun ChannelScreen(store: AppStore, session: LumiaSession, channelId: String, den
         }
     }
 
+    fun edit(m: MessageSummary) {
+        editing = m.messageId
+        editDraft = TextFieldValue(m.body, TextRange(m.body.length))
+    }
+
+    fun saveEdit(m: MessageSummary) {
+        when (val outcome = editOutcome(m.body, editDraft.text)) {
+            EditOutcome.Unchanged -> editing = null
+            EditOutcome.Delete -> deleting = m.messageId
+            is EditOutcome.Save -> { editing = null; session.editMessage(channelId, m.messageId, outcome.body) }
+        }
+    }
+
     fun send() {
         val body = draft.text.trim()
         if (body.isEmpty()) return
-        val quote = replying
+        val quote = replying?.let { sentQuote(it, mentionOn, session.me) }
         draft = TextFieldValue("")
         replying = null
         error = ""
@@ -421,6 +514,7 @@ fun ChannelScreen(store: AppStore, session: LumiaSession, channelId: String, den
         }
     }
 
+    BringEditing(listState, editing?.let { id -> messages.indexOfFirst { it.messageId == id } }?.takeIf { it >= 0 }?.plus(firstIndex)) { holding = true }
     val newestVisible = follow(listState, messages.lastOrNull()?.messageId, messages.size, firstIndex, newLine, holding, { holding = it }) {
         at != null && run { reveal(at); true }
     }
@@ -431,8 +525,9 @@ fun ChannelScreen(store: AppStore, session: LumiaSession, channelId: String, den
             delay(MARK_EVERY_MS)
         }
     }
-    LaunchedEffect(replying) { if (replying != null) { focus.requestFocus(); keyboard?.show() } }
-    BackHandler(enabled = replying != null) { replying = null }
+    LaunchedEffect(replying) { if (replying != null) { mentionOn = true; focus.requestFocus(); keyboard?.show() } }
+    BackHandler(enabled = replying != null && editing == null) { replying = null }
+    BackHandler(enabled = editing != null) { editing = null }
 
     PanelScreen(
         back = server?.name ?: "the server", onBack = back, title = title, subtitle = server?.name,
@@ -450,13 +545,19 @@ fun ChannelScreen(store: AppStore, session: LumiaSession, channelId: String, den
                         if (m.notice.isNotEmpty()) {
                             noticeText(m.notice, session.nameOf(m.authorAccountId), session.nameOf(m.noticeAccountId))?.let { LumiaNoticeRow(it, timeOfMicros(m.createdAtMicros), measures) }
                         } else {
+                            // Its mentions as `@` and the person's name, as the member list shows them.
+                            val drawn = drawnBody(m.body, m.mentions, session::knownNameOf)
                             LumiaMessageRow(
-                                session.nameOf(m.authorAccountId), AvatarTone.of(m.authorAccountId), timeOfMicros(m.createdAtMicros), m.body, m.deleted, places[i], measures,
+                                session.nameOf(m.authorAccountId), AvatarTone.of(m.authorAccountId), timeOfMicros(m.createdAtMicros), drawn.text, m.deleted, places[i], measures,
                                 onAuthor = if (server != null) ({ card = m.authorAccountId }) else null,
-                                quote = m.reply?.let { q -> @Composable { QuoteBlock(session, q) { scope.launch { reveal(q.messageId) } } } },
-                                mentions = remember(m.body, m.mentions) { mentionRanges(m.body, m.mentions) },
+                                reference = m.reply?.let { q -> @Composable { ReferenceLine(session, q, measures) { scope.launch { reveal(q.messageId) } } } },
+                                mentions = drawn.mentions,
+                                edited = m.edited && !m.deleted,
                                 reactions = if (m.reactions.isNotEmpty() && !m.deleted) ({ ReactionChips(session, m.reactions, { if (member) react(m.messageId, it) }, { if (member) pickerFor = m.messageId }) }) else null,
-                                tinted = m.mentionsMe || flash == m.messageId,
+                                editor = if (editing == m.messageId && !m.deleted) ({ EditField(editDraft, { editDraft = it }, { saveEdit(m) }, { editing = null }) }) else null,
+                                under = session.editRefusals[m.messageId]?.let { words -> @Composable { LumiaErrorText(words) } },
+                                washed = m.mentionsMe,
+                                flashed = flash == m.messageId,
                                 onLongPress = if (!m.deleted && member) ({ actionsFor = m.messageId }) else null,
                             )
                         }
@@ -479,10 +580,24 @@ fun ChannelScreen(store: AppStore, session: LumiaSession, channelId: String, den
                         onAdd = ::addOutside, onDismiss = { outside = null },
                     )
                 }
-                replying?.let { q -> ReplyBar(session.nameOf(q.authorAccountId), q.text) { replying = null } }
+                // The reply bar, in the composer's frame: "@ On" in a server's text channel, where
+                // the quote is a mention, and not for a reply to this account's own message.
+                val quoting = replying
+                val header: (@Composable () -> Unit)? = quoting?.let { q ->
+                    {
+                        val offered = channel?.kind == TEXT && offersMention(q, session.me)
+                        ReplyBar(session.nameOf(q.authorAccountId), if (offered) mentionOn else null, { mentionOn = !mentionOn }) { replying = null }
+                    }
+                }
                 // Every edit that leaves something in the composer says this person is typing;
                 // emptied is not typing (a send), nor is the caret moving. The core spaces what is sent.
-                LumiaComposer(draft, { next -> val typed = next.text != draft.text; draft = next; if (typed && next.text.isNotBlank()) session.typed(channelId) }, if (dm) "Message $title" else "Message #$name", focus = focus) { send() }
+                LumiaComposer(
+                    draft, { next -> val typed = next.text != draft.text; draft = next; if (typed && next.text.isNotBlank()) session.typed(channelId) }, if (dm) "Message $title" else "Message #$name", focus = focus,
+                    header = header,
+                    active = quoting != null,
+                    // Up in an empty composer edits this account's newest message.
+                    onKey = { e -> upEdits(e, draft.text) { lastEditable(messages) { mayEdit(it.authorAccountId, session.me, it.notice.isNotEmpty(), it.deleted) }?.let { edit(it); true } ?: false } },
+                ) { send() }
             } else {
                 // Not in it: read it, and join from here (architecture 6.8).
                 Row(
@@ -506,16 +621,35 @@ fun ChannelScreen(store: AppStore, session: LumiaSession, channelId: String, den
     }
     val acting = actionsFor?.let { id -> messages.firstOrNull { it.messageId == id } }
     if (acting != null) {
+        val notice = acting.notice.isNotEmpty()
         MessageActionsSheet(
-            onReact = { react(acting.messageId, it); actionsFor = null },
-            onReply = { replying = quoteOf(acting.messageId, acting.authorAccountId, acting.body); actionsFor = null },
             onAddReaction = { actionsFor = null; pickerFor = acting.messageId },
-            onCopy = { copy(context, acting.body); actionsFor = null },
+            onReply = { replying = quoteOf(acting.messageId, acting.authorAccountId, acting.body); actionsFor = null },
+            onEdit = if (mayEdit(acting.authorAccountId, session.me, notice, acting.deleted)) ({ actionsFor = null; edit(acting) }) else null,
+            // What is drawn: its mentions by name.
+            onCopy = { copy(context, drawnBody(acting.body, acting.mentions, session::knownNameOf).text); actionsFor = null },
+            // Its own, or anyone's for a moderator here; the instance decides either way.
+            onDelete = if (mayDelete(acting.authorAccountId, session.me, notice, acting.deleted, server?.canManageMessages == true)) ({ actionsFor = null; deleting = acting.messageId }) else null,
             onDismiss = { actionsFor = null },
         )
     }
     pickerFor?.let { id -> EmojiPickerSheet(frequentEmoji(store.recentEmoji), onPick = { react(id, it); pickerFor = null }, onDismiss = { pickerFor = null }) }
+    deleting?.let { id ->
+        val m = messages.firstOrNull { it.messageId == id }
+        DeleteDialog(
+            firstLine(m?.let { drawnBody(it.body, it.mentions, session::knownNameOf).text } ?: ""),
+            onDelete = { deleting = null; if (editing == id) editing = null; session.deleteMessage(channelId, id) },
+            onDismiss = { deleting = null },
+        )
+    }
 }
+
+/**
+ * Up on a hardware keyboard in an empty composer: [edit] this account's
+ * newest message, as the desktop's composer does. True when it did.
+ */
+private fun upEdits(e: KeyEvent, draft: String, edit: () -> Boolean): Boolean =
+    e.type == KeyEventType.KeyDown && e.key == Key.DirectionUp && draft.isEmpty() && edit()
 
 /**
  * What is under a conversation's composer, to the foot of the panel: the
@@ -596,8 +730,9 @@ private fun MentionItem(session: LumiaSession, m: MessageSummary, home: Boolean,
                     Text(author, style = LumiaTokens.textAuthor.style, color = LumiaTokens.ink.color)
                     Text(at, style = LumiaTokens.textMeta.style, color = LumiaTokens.inkMuted.color)
                 }
-                m.reply?.let { q -> QuoteBlock(session, q, onOpen) }
-                LumiaBody(m.body, remember(m.body, m.mentions) { mentionRanges(m.body, m.mentions) })
+                m.reply?.let { q -> ReferenceLine(session, q, null, null) }
+                val drawn = drawnBody(m.body, m.mentions, session::knownNameOf)
+                LumiaBody(drawn.text, drawn.mentions, edited = m.edited)
             }
         }
     }
