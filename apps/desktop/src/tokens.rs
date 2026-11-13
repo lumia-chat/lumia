@@ -83,6 +83,8 @@ pub const TEXT_CARD_LINE: TextStyle = TextStyle {
 };
 /// The icon button beside the sidebar's title (34), at `radius-9`.
 pub const ICON_BUTTON: f32 = ROW_HEIGHT + SPACE_2;
+/// A member row's Remove at its end, the dark Quiet Split's (32 square, radius 8).
+pub const MEMBER_ACTION: f32 = ROW_HEIGHT;
 /// A segment of a segmented control (34), at `radius-9`.
 pub const SEGMENT_HEIGHT: f32 = ROW_HEIGHT + SPACE_2;
 /// A person's row in the sidebar (34): `row-height`'s usage line, "DM rows 34px".

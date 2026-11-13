@@ -6,11 +6,11 @@
 //! panel's member rows), worded as the web's and the phones'.
 
 use lumia_client::app::{ChannelSummary, MemberSummary, ServerSummary};
-use rune::{El, ScrollSpec, col, el, row, text};
+use rune::{Cursor, El, ScrollSpec, col, el, icon, row, text};
 
 use super::components::{
-    Look, action_button, card, check_row, error_text, link_button, panel, primary_button,
-    secondary_button, section_label,
+    Look, action_button, card, check_row, error_text, panel, primary_button, secondary_button,
+    section_label,
 };
 use super::home::{action, page_column, titled_page};
 use super::server_popovers::ADD_PEOPLE;
@@ -412,8 +412,10 @@ pub fn channel_members(
         .child(foot)
 }
 
-/// A member's row, with "Remove" at its end for one who manages channels (not on their own):
-/// `removable` names the channel they would be taken out of.
+/// A member's row, with Remove at its end for one who manages channels (not on their own), as
+/// the dark Quiet Split draws it: a quiet member-remove glyph that turns `danger` on a soft fill
+/// and border under the pointer or with keyboard focus. `removable` names the channel they
+/// would be taken out of.
 fn member(
     s: &State,
     server: &ServerSummary,
@@ -425,19 +427,42 @@ fn member(
     let Some(channel) = removable.filter(|_| person.account_id != s.session.me()) else {
         return row;
     };
+    let c = look.c;
     let id = person.account_id.clone();
-    let name = display_name(person);
+    let label = format!("Remove {} from #{channel}", display_name(person));
+    let remove = el()
+        .key(format!("remove-{}", person.account_id))
+        .size(t::MEMBER_ACTION, t::MEMBER_ACTION)
+        .radius(t::RADIUS_8)
+        .center()
+        .role("button")
+        .label(&label)
+        .help("Remove from channel")
+        .hover_group_focus()
+        .cursor(Cursor::Pointer)
+        .focusable(true)
+        .focus_ring(1.0, -1.0, c.danger)
+        .on_press(move |s: &mut State| s.remove_from_channel(&id))
+        .child(
+            el().pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+                .radius(t::RADIUS_8)
+                .fill(c.danger_soft)
+                .border(1.0, c.danger_line)
+                .group_opacity(0.0, 1.0),
+        )
+        .child(
+            icon(&icons::MEMBER_REMOVE, t::SPACE_16)
+                .color(c.ink_faint)
+                .group_color(c.danger),
+        );
+    // Room at the row's end for Remove, so a long name is cut before it and not under it: its
+    // 32 and the 4 from the end, and the board's 2 between, less the row's 10 of padding and
+    // 12 of gap.
+    let room = t::MEMBER_ACTION + t::SPACE_4 + t::SPACE_2 - t::SPACE_10 - t::SPACE_12;
+    let row = row.child(el().w(room));
     el().w_full().child(row).child(
-        el().pin(None, Some(0.0), Some(t::SPACE_10), Some(0.0))
+        el().pin(None, Some(0.0), Some(t::SPACE_4), Some(0.0))
             .center()
-            .child(
-                link_button(
-                    format!("remove-{}", person.account_id),
-                    "Remove",
-                    move |s| s.remove_from_channel(&id),
-                    look,
-                )
-                .label(format!("Remove {name} from #{channel}")),
-            ),
+            .child(remove),
     )
 }
