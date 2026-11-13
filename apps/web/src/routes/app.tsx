@@ -7,10 +7,11 @@
 // menus.tsx; Browse, Your settings and a channel's members in channels.tsx.
 //
 // A conversation's messages and its composer are timeline.tsx's: quote
-// replies, reactions, mentions and the "New messages" line (architecture
-// 6.6). Read state is drawn here: unread channels in the strong ink, a
-// count of mentions on a row, a server's dot and count on the rail, the
-// Mentions row atop the sidebar (mentions.tsx), and the badge.
+// replies, reactions, mentions, editing and deleting, and the "New" line
+// (architecture 6.6). Read state is drawn here: unread channels in the
+// strong ink, a count of mentions on a row, a server's dot and count on
+// the rail, the Mentions tile atop the sidebar (mentions.tsx), and the
+// badge.
 //
 // The board draws more than the product has: search, threads, saved,
 // attachments, pins, calls, role tags, and the composer's formatting,
@@ -30,6 +31,7 @@ import {
   InvitationRow,
   JoinBar,
   Notice,
+  QuickTiles,
   SearchField,
   ServerHeader,
   ServerRail,
@@ -43,7 +45,7 @@ import { ConversationAside, HomeMain, HomeSidebar, type HomeView } from "./home"
 import { Overlay, myStatusDot, type Over } from "./menus";
 import { ServerSettings } from "./server-settings";
 import { BrowsePage, ChannelMembersAside, YourSettingsPage, channelRefusal, joinChannel } from "./channels";
-import { Compose, ComposerNote, Timeline, createMarkRead, invitedWords, notNotifiedWords, quoteOf, type Replying, type TimelineItem } from "./timeline";
+import { Compose, ComposerNote, Timeline, createMarkRead, invitedWords, notNotifiedWords, quoteOf, refusalWords, type Refusal, type Replying, type TimelineItem } from "./timeline";
 import { MentionsPage } from "./mentions";
 
 const TONES = ["peach", "blue", "purple", "mint", "amber", "sky", "stone", "green", "indigo"] as const;
@@ -335,6 +337,9 @@ export function App() {
   const [noteBusy, setNoteBusy] = createSignal(false);
   const [pendingJump, setPendingJump] = createSignal<{ channelId: string; messageId: string } | null>(null);
   const [atEnd, setAtEnd] = createSignal(true);
+  // A message of this account's being edited where it is drawn, and what the instance refused of an edit or a delete.
+  const [editing, setEditing] = createSignal<string | undefined>();
+  const [refused, setRefused] = createSignal<Refusal | null>(null);
   let composerInput: HTMLInputElement | undefined;
   createEffect(
     on(channelId, () => {
@@ -342,18 +347,43 @@ export function App() {
       setNote(null);
       setNoteError("");
       setAtEnd(true);
+      setEditing(undefined);
+      setRefused(null);
     }),
   );
   const serverMembers = membersQuery(() => (home() ? undefined : serverId()));
   const channelMembers = channelMembersQuery(() => (current()?.kind === "TEXT" && joined() ? channelId() : undefined));
   // What the gateway refused of what this view sent (architecture 6.6: a mention of everyone without the permission, a quote of a message that is gone).
   const sent = new Set<string>();
+  // Edits and deletes waiting for the instance. The core does not say which command an edit or a
+  // delete is, so a refusal no send accounts for is the newest of these, while it is still waiting.
+  const waiting: { messageId: string; kind: "edit" | "delete"; body?: string; at: number }[] = [];
+  const WAIT_MS = 15_000;
   createEffect(
     on(commandError, (err) => {
-      if (!err || !sent.has(err.commandId)) return;
-      sent.delete(err.commandId);
-      setError(err.code === "PERMISSION_DENIED" ? "You cannot do that in this channel." : /not_found/i.test(err.code + err.message) ? "The message you quoted is gone." : err.message || err.code);
+      if (!err) return;
+      if (sent.has(err.commandId)) {
+        sent.delete(err.commandId);
+        setError(err.code === "PERMISSION_DENIED" ? "You cannot do that in this channel." : /not_found/i.test(err.code + err.message) ? "The message you quoted is gone." : err.message || err.code);
+        return;
+      }
+      const w = waiting.pop();
+      if (!w || Date.now() - w.at > WAIT_MS) return;
+      setRefused({ messageId: w.messageId, text: refusalWords(w.kind, err.code, err.message) });
     }),
+  );
+  // An edit or a delete that came back is no longer waiting.
+  createEffect(
+    on(
+      () => messages.data,
+      (list) => {
+        for (let i = waiting.length - 1; i >= 0; i--) {
+          const w = waiting[i];
+          const m = w && list?.find((x) => x.messageId === w.messageId);
+          if (!w || !m || (w.kind === "delete" ? m.deleted : m.body === w.body) || Date.now() - w.at > WAIT_MS) waiting.splice(i, 1);
+        }
+      },
+    ),
   );
 
   const send = async () => {
@@ -423,8 +453,40 @@ export function App() {
     );
   };
   const startReply = (item: TimelineItem, text: string) => {
-    setReplying({ messageId: item.id, authorAccountId: item.authorId, name: item.authorId ? nameOf(item.authorId) : "", text });
+    // The "@ On" switch, on for each reply; none for a reply to oneself.
+    setReplying({ messageId: item.id, authorAccountId: item.authorId, name: item.authorId ? nameOf(item.authorId) : "", text, notify: item.authorId && item.authorId !== accountId() ? true : undefined });
     composerInput?.focus();
+  };
+  const saveEdit = async (item: TimelineItem, body: string) => {
+    const id = channelId();
+    const ch = current();
+    const srv = server();
+    if (!id || !ch) return;
+    setRefused(null);
+    try {
+      // An edit carries its mentions again, found as a send finds them; a server DM has none.
+      const mentions = ch.kind === "TEXT" && srv ? await client().findMentions(body, serverMembers.data ?? [], srv.canMentionEveryone) : [];
+      waiting.push({ messageId: item.id, kind: "edit", body, at: Date.now() });
+      await client().editMessage(id, item.id, body, mentions);
+    } catch (e) {
+      setRefused({ messageId: item.id, text: refusalWords("edit", "", e instanceof Error ? e.message : String(e)) });
+    }
+  };
+  const deleteMessage = async (item: TimelineItem) => {
+    const id = channelId();
+    if (!id) return;
+    setRefused(null);
+    try {
+      waiting.push({ messageId: item.id, kind: "delete", at: Date.now() });
+      await client().deleteMessage(id, item.id);
+    } catch (e) {
+      setRefused({ messageId: item.id, text: refusalWords("delete", "", e instanceof Error ? e.message : String(e)) });
+    }
+  };
+  /** Up in the empty composer: this account's newest message here. */
+  const editLast = () => {
+    const last = [...timelineItems()].reverse().find((m) => m.mine && !m.notice && !m.deleted);
+    if (last) setEditing(last.id);
   };
   const react = (item: TimelineItem, emoji: string, remove: boolean) => {
     const id = channelId();
@@ -442,6 +504,8 @@ export function App() {
       at: m.createdAtMicros,
       body: m.body,
       deleted: m.deleted,
+      edited: m.edited,
+      mine: !!m.authorAccountId && m.authorAccountId === accountId(),
       notice: m.notice ? noticeWords(m, nameOf) : "",
       reply: m.reply,
       mentions: m.mentions,
@@ -614,11 +678,21 @@ export function App() {
         sidebar={
           <Show when={!home()} fallback={<HomeSidebar {...homeProps()} />}>
             <ServerHeader name={server()?.name ?? "Lumia"} onOpenMenu={server() ? (anchor) => setOver({ kind: "serverMenu", anchor }) : undefined} menuOpen={over()?.kind === "serverMenu"} onNewMessage={() => goHome("new")} />
+            {/* The board's Threads / Mentions / Saved, of which only Mentions exists. */}
+            <QuickTiles
+              items={[
+                {
+                  icon: "mention",
+                  label: "Mentions",
+                  count: serverCounts(serverId()).mentions || undefined,
+                  countLabel: serverCounts(serverId()).mentions === 1 ? "1 mention" : `${serverCounts(serverId()).mentions} mentions`,
+                  current: page() === "mentions",
+                  onClick: openMentions,
+                },
+              ]}
+            />
             <ChannelList
               sections={[
-                {
-                  items: [{ name: "Mentions", icon: "mention", active: page() === "mentions", mentions: serverCounts(serverId()).mentions || undefined, onClick: openMentions }],
-                },
                 {
                   title: "Channels",
                   items: items(),
@@ -695,10 +769,24 @@ export function App() {
                               onOpenProfile={(m, anchor) => openPerson(m.authorId, anchor)}
                               openPerson={openPerson}
                               knownName={knownName}
+                              photoOf={photoOf}
                               readState={() => (readStates.data ? (stateOf(id) ?? undefined) : null)}
                               canAct={joined()}
                               onReply={startReply}
+                              replyingTo={replying()?.messageId}
+                              onCancelReply={() => setReplying(null)}
                               onReact={react}
+                              canDelete={(m) => !m.notice && (m.mine || (!isDm() && !!server()?.canManageMessages))}
+                              editing={editing()}
+                              onEditing={(mid) => {
+                                setEditing(mid);
+                                // Done with it: back to the composer, where Up took it up.
+                                if (mid) setRefused(null);
+                                else composerInput?.focus();
+                              }}
+                              onEdit={(m, body) => void saveEdit(m, body)}
+                              onDelete={(m) => void deleteMessage(m)}
+                              refused={refused()}
                               jumpTo={pendingJump()?.channelId === id ? pendingJump()?.messageId : undefined}
                               onJumped={() => setPendingJump(null)}
                               loadOlder={() => loadOlderMessages(id)}
@@ -724,6 +812,8 @@ export function App() {
                           onSend={() => void send()}
                           replying={replying()}
                           onCancelReply={() => setReplying(null)}
+                          onReplyNotify={(on) => setReplying((r) => (r ? { ...r, notify: on } : r))}
+                          onEditLast={editLast}
                           mentions={
                             !isDm() && server()
                               ? { members: serverMembers.data ?? [], inChannel: new Set(channelMembers.data ?? []), channel: ch().name, canEveryone: !!server()?.canMentionEveryone }

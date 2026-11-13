@@ -1,33 +1,40 @@
 // A conversation's messages as every client draws them since quote
-// replies, reactions, mentions and read state (architecture 6.6), shared
-// by a server's channels and server DMs (app.tsx) and personal DMs
-// (home.tsx): by day and block, each message with what it quotes, its
-// mentions as pills, its reactions, its own toolbar, the "New messages"
-// line, a jump to a quoted message, and "Quote reply" beside a selection.
-// The composer over a conversation is here too, with the reply bar, the @
-// list and the note after a send.
+// replies, reactions, mentions, read state, editing and deleting
+// (architecture 6.6), shared by a server's channels and server DMs
+// (app.tsx) and personal DMs (home.tsx): by day and block, each message
+// with the line of what it quotes over it, its mentions as pills named as
+// the member list names them, its reactions, its own toolbar (Add
+// reaction, Reply, More actions with Edit message, Copy text and Delete
+// message), "(edited)", the "New" line, a jump to a quoted message, and
+// "Quote reply" beside a selection. A message of this account's is edited
+// where it is drawn, and a delete asks first unless Shift is held. The
+// composer over a conversation is here too, with the reply bar atop its
+// frame, the @ list and the note after a send.
 import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount, type JSX } from "solid-js";
 import {
   ComposerNote,
   Composer,
+  ConfirmDelete,
   Divider,
   EmojiPicker,
   Mention,
   MentionList,
   Message,
   MessageActions,
+  MessageEdit,
   MessageList,
+  MessageMenu,
   NoticeLine,
   Popover,
-  Quote,
   QuoteReplyButton,
   ReplyBar,
+  ReplyRef,
   type MentionOption,
   type ReactionChipProps,
   type Tone,
 } from "../design/components";
-import { QUICK_REACTIONS, frequentEmoji, usedEmoji } from "../design/emoji";
-import type { MemberSummary, MentionSummary, QuoteSummary, ReactionSummary, ReadStateSummary } from "../client/bridge";
+import { frequentEmoji, usedEmoji } from "../design/emoji";
+import { ClientError, type MemberSummary, type MentionSummary, type QuoteSummary, type ReactionSummary, type ReadStateSummary } from "../client/bridge";
 import { avatarSrc, markRead } from "../client/state";
 import { byBlock, byDay, initialsOf, shortTimeOf, timeOf, toneFor } from "./app";
 
@@ -42,6 +49,10 @@ export interface TimelineItem {
   at: number;
   body: string;
   deleted: boolean;
+  /** Its author edited it: "(edited)". */
+  edited: boolean;
+  /** This account wrote it, so it may edit and delete it. */
+  mine: boolean;
   /** What a notice says ("Grace joined"); empty for a message. */
   notice: string;
   reply: QuoteSummary | null;
@@ -57,11 +68,36 @@ export interface Replying {
   /** Who wrote it, for the bar; empty where unknown. */
   name: string;
   text: string;
+  /**
+   * Whether the reply notifies them: the bar's "@ On" switch, on for each
+   * reply. Undefined where there is no switch: a reply to oneself, and a
+   * personal conversation, whose quote carries no such thing.
+   */
+  notify?: boolean;
 }
 
-/** The quote a reply sends: the text trimmed, at most 2,000 characters. */
+/** The quote a reply sends: the text trimmed, at most 2,000 characters, and silent when the switch was turned off. */
 export function quoteOf(r: Replying): QuoteSummary {
-  return { messageId: r.messageId, authorAccountId: r.authorAccountId, text: Array.from(r.text.trim()).slice(0, 2000).join(""), originalDeleted: false };
+  return { messageId: r.messageId, authorAccountId: r.authorAccountId, text: Array.from(r.text.trim()).slice(0, 2000).join(""), originalDeleted: false, silent: r.notify === false };
+}
+
+/** An edit or a delete the instance refused, said under the message: "Not saved: …". */
+export interface Refusal {
+  messageId: string;
+  text: string;
+}
+
+/** Why an edit or a delete was refused, as the line under the message says it. */
+export function refusalWords(kind: "edit" | "delete", code: string, message: string): string {
+  const head = kind === "edit" ? "Not saved" : "Not deleted";
+  if (code === "PERMISSION_DENIED") return `${head}: ${kind === "edit" ? "only its author can edit this message" : "you cannot delete this message"}.`;
+  if (code === "NOT_FOUND" || /not_found/i.test(message)) return `${head}: the message is gone.`;
+  return `${head}: ${message || code || "something went wrong"}.`.replace(/\.\.$/, ".");
+}
+
+/** A refusal thrown by a call (a personal DM's edit or delete), as the line under the message says it. */
+export function thrownRefusal(kind: "edit" | "delete", e: unknown): string {
+  return refusalWords(kind, e instanceof ClientError ? e.code : "", e instanceof Error ? e.message : String(e));
 }
 
 /** A body split at its mentions' UTF-8 byte ranges: the text between, and each mention as written. */
@@ -80,6 +116,20 @@ export function bodySegments(body: string, mentions: MentionSummary[]): { text: 
   }
   if (at < bytes.length) out.push({ text: decode(at, bytes.length) });
   return out;
+}
+
+/** How a mention is drawn: `@` and the name the member list shows, or `@everyone`; as written where the person is not known. */
+export function mentionWords(written: string, mention: MentionSummary, nameOf: (accountId: string) => string | undefined): string {
+  if (mention.everyone || !mention.accountId) return written;
+  const name = nameOf(mention.accountId);
+  return name ? "@" + name : written;
+}
+
+/** A body as it is drawn, mentions by name: what Copy text copies. */
+export function drawnText(body: string, mentions: MentionSummary[], nameOf: (accountId: string) => string | undefined): string {
+  return bodySegments(body, mentions)
+    .map((s) => (s.mention ? mentionWords(s.text, s.mention, nameOf) : s.text))
+    .join("");
 }
 
 /** "Ada, Bo and 3 others reacted with 👍", "You and Ada reacted with 👍": two names at most, as the desktop shell words it. */
@@ -143,14 +193,29 @@ export interface TimelineProps {
   onOpenProfile?: (item: TimelineItem, anchor: HTMLElement) => void;
   /** Someone's card, from a mention of them. */
   openPerson: (accountId: string, anchor: HTMLElement) => void;
-  /** An account's name where it is known (the quote's author, who reacted). */
+  /** An account's name where it is known (the quote's author, who reacted, who a mention names). */
   knownName: (accountId: string) => string | undefined;
-  /** The conversation's read state when it opened (null until known): the "New messages" line goes above the first message after it. */
+  /** An account's picture, for the line of what a reply quotes. */
+  photoOf: (accountId: string) => string | undefined;
+  /** The conversation's read state when it opened (null until known): the "New" line goes above the first message after it. */
   readState: () => ReadStateSummary | undefined | null;
   /** False where nothing can be said (a channel read before joining): no toolbars, no chips to press. */
   canAct: boolean;
   onReply: (item: TimelineItem, text: string) => void;
+  /** The message being replied to: its row keeps its fill and its toolbar, with Reply pressed, which cancels. */
+  replyingTo?: string;
+  onCancelReply: () => void;
   onReact: (item: TimelineItem, emoji: string, remove: boolean) => void;
+  /** Whether this account may delete a message: its own, or another's as a moderator (the instance decides either way). */
+  canDelete: (item: TimelineItem) => boolean;
+  /** The message being edited where it is drawn, and the way in and out of it. */
+  editing?: string;
+  onEditing: (id: string | undefined) => void;
+  /** Saves an edit: the new body, trimmed and not empty. */
+  onEdit: (item: TimelineItem, body: string) => void;
+  onDelete: (item: TimelineItem) => void;
+  /** An edit or a delete refused, said under its message. */
+  refused?: Refusal | null;
   /** A message to jump to as soon as it can be found (from a Mentions page). */
   jumpTo?: string;
   onJumped?: () => void;
@@ -235,7 +300,7 @@ export function Timeline(props: TimelineProps) {
 
   // At its newest end: the list is bottom-anchored (column-reverse), so scrolled to the end is 0.
   const atEnd = () => !scroller || Math.abs(scroller.scrollTop) < 4;
-  // Opened with something unread above the fold: at the "New messages" line, else at the end.
+  // Opened with something unread above the fold: at the "New" line, else at the end.
   let positioned = false;
   createEffect(
     on([() => props.items.length > 0, newFrom], ([loaded, from]) => {
@@ -254,7 +319,8 @@ export function Timeline(props: TimelineProps) {
   const [selected, setSelected] = createSignal<{ left: number; top: number; item: TimelineItem; text: string } | null>(null);
   const onSelection = () => {
     const sel = document.getSelection();
-    if (!props.canAct || !sel || sel.isCollapsed || !sel.anchorNode || !sel.focusNode || !scroller) return setSelected(null);
+    // Not in a field (an edit): its selection is its own.
+    if (!props.canAct || !sel || sel.isCollapsed || !sel.anchorNode || !sel.focusNode || !scroller || document.activeElement instanceof HTMLTextAreaElement) return setSelected(null);
     const bodyOf = (n: Node) => (n instanceof Element ? n : n.parentElement)?.closest(".lu-msg__body") ?? null;
     const body = bodyOf(sel.anchorNode);
     if (!body || body !== bodyOf(sel.focusNode) || !scroller.contains(body)) return setSelected(null);
@@ -281,33 +347,87 @@ export function Timeline(props: TimelineProps) {
     if (!remove) usedEmoji(emoji);
     props.onReact(item, emoji, remove);
   };
+  // More actions' menu, and the question a delete asks, each against what opened it.
+  const [menu, setMenu] = createSignal<{ anchor: HTMLElement; item: TimelineItem } | null>(null);
+  const [confirming, setConfirming] = createSignal<{ anchor: HTMLElement | null; item: TimelineItem } | null>(null);
+  const drawn = (m: TimelineItem) => drawnText(m.body, m.mentions, props.knownName);
+  const askDelete = (item: TimelineItem, anchor: HTMLElement | null, now: boolean) => {
+    if (now) props.onDelete(item);
+    else setConfirming({ anchor, item });
+  };
+  const save = (m: TimelineItem, text: string) => {
+    const body = text.trim();
+    props.onEditing(undefined);
+    // Nothing left is a delete, which asks first.
+    if (!body) return askDelete(m, find(m.id), false);
+    if (body !== m.body.trim()) props.onEdit(m, body);
+  };
+  // The message taken up for editing comes into view (Up in the composer edits one that may be off screen).
+  createEffect(
+    on(
+      () => props.editing,
+      (id) => {
+        if (id) void frame().then(() => find(id)?.scrollIntoView({ block: "nearest" }));
+      },
+    ),
+  );
 
-  const quote = (m: TimelineItem) => (
+  const reference = (m: TimelineItem) => (
     <Show when={m.reply}>
-      {(q) => (
-        <Quote
-          author={q().authorAccountId ? props.knownName(q().authorAccountId) ?? undefined : undefined}
-          text={q().text}
-          deleted={q().originalDeleted}
-          onOpen={() => void jump(q().messageId)}
-        />
-      )}
+      {(q) => {
+        const author = () => q().authorAccountId;
+        const name = () => (author() ? props.knownName(author()) : undefined);
+        return (
+          <ReplyRef
+            name={name()}
+            initials={initialsOf(name() ?? "")}
+            src={author() ? props.photoOf(author()) : undefined}
+            tone={toneFor(author())}
+            self={!!author() && author() === props.me}
+            text={q().text}
+            deleted={q().originalDeleted}
+            onOpen={() => void jump(q().messageId)}
+          />
+        );
+      }}
     </Show>
   );
-  const body = (m: TimelineItem) =>
-    m.deleted ? (
-      "(deleted)"
-    ) : (
-      <p>
-        <For each={bodySegments(m.body, m.mentions)}>
-          {(s) => (
-            <Show when={s.mention} fallback={s.text}>
-              {(mention) => <Mention onOpen={mention().everyone || !mention().accountId ? undefined : (anchor) => props.openPerson(mention().accountId, anchor)}>{s.text}</Mention>}
-            </Show>
-          )}
-        </For>
-      </p>
-    );
+  const body = (m: TimelineItem) => (
+    <Show
+      when={props.editing === m.id && !m.deleted}
+      fallback={
+        <>
+          <Show when={!m.deleted} fallback={<p>(deleted)</p>}>
+            <p>
+              <For each={bodySegments(m.body, m.mentions)}>
+                {(s) => (
+                  <Show when={s.mention} fallback={s.text}>
+                    {(mention) => <Mention onOpen={mention().everyone || !mention().accountId ? undefined : (anchor) => props.openPerson(mention().accountId, anchor)}>{mentionWords(s.text, mention(), props.knownName)}</Mention>}
+                  </Show>
+                )}
+              </For>
+              <Show when={m.edited}>
+                {" "}
+                <span class="lu-msg__edited">
+                  <span aria-hidden="true">(edited)</span>
+                  <span class="lu-sr">edited</span>
+                </span>
+              </Show>
+            </p>
+          </Show>
+          <Show when={props.refused?.messageId === m.id ? props.refused : undefined}>
+            {(r) => (
+              <p class="lu-msg__refused" role="alert">
+                {r().text}
+              </p>
+            )}
+          </Show>
+        </>
+      }
+    >
+      <MessageEdit value={m.body} onSave={(text) => save(m, text)} onCancel={() => props.onEditing(undefined)} />
+    </Show>
+  );
   const chips = (m: TimelineItem): ReactionChipProps[] =>
     m.reactions
       .filter((r) => r.count > 0)
@@ -320,12 +440,13 @@ export function Timeline(props: TimelineProps) {
         onToggle: props.canAct ? () => react(m, r.reaction, r.me) : undefined,
       }));
   const tools = (m: TimelineItem) => (
-    <Show when={props.canAct && !m.deleted}>
+    <Show when={props.canAct && !m.deleted && props.editing !== m.id}>
       <MessageActions
-        quick={QUICK_REACTIONS.map((emoji) => ({ emoji, on: m.reactions.some((r) => r.reaction === emoji && r.me) }))}
-        onQuick={(emoji, on) => react(m, emoji, on)}
         onReact={(anchor) => setPicking({ anchor, item: m })}
-        onReply={() => props.onReply(m, m.body)}
+        onReply={() => (props.replyingTo === m.id ? props.onCancelReply() : props.onReply(m, m.body))}
+        replying={props.replyingTo === m.id}
+        moreOpen={menu()?.item.id === m.id}
+        onMore={(anchor) => setMenu({ anchor, item: m })}
       />
     </Show>
   );
@@ -355,7 +476,7 @@ export function Timeline(props: TimelineProps) {
                   return (
                     <>
                       <Show when={first.id === firstNew()}>
-                        <Divider variant="new" label="New messages" />
+                        <Divider variant="new" />
                       </Show>
                       <Show
                         when={!first.notice}
@@ -376,18 +497,18 @@ export function Timeline(props: TimelineProps) {
                           density={props.density}
                           onOpenProfile={props.onOpenProfile && first.authorId ? (anchor) => props.onOpenProfile?.(first, anchor) : undefined}
                           id={first.id}
-                          quote={quote(first)}
+                          reference={first.reply ? reference(first) : undefined}
                           reactions={chips(first)}
                           onAddReaction={adder(first)}
                           tools={tools(first)}
                           mentioned={first.mentionsMe}
                           flash={flash() === first.id}
+                          replying={props.replyingTo === first.id}
                           parts={block.rest.map((m) => ({
                             time: shortTimeOf(m.at),
                             datetime: timeOf(m.at).datetime,
                             children: body(m),
                             id: m.id,
-                            quote: quote(m),
                             get reactions() {
                               return chips(m);
                             },
@@ -396,6 +517,9 @@ export function Timeline(props: TimelineProps) {
                             mentioned: m.mentionsMe,
                             get flash() {
                               return flash() === m.id;
+                            },
+                            get replying() {
+                              return props.replyingTo === m.id;
                             },
                           }))}
                         >
@@ -440,6 +564,48 @@ export function Timeline(props: TimelineProps) {
           </Popover>
         )}
       </Show>
+      <Show when={menu()} keyed>
+        {(open) => (
+          <Popover anchor={open.anchor} onClose={() => setMenu(null)} closeLabel="Close the menu">
+            <MessageMenu
+              onEdit={
+                open.item.mine
+                  ? () => {
+                      setMenu(null);
+                      props.onEditing(open.item.id);
+                    }
+                  : undefined
+              }
+              onCopy={() => {
+                setMenu(null);
+                void navigator.clipboard?.writeText(drawn(open.item)).catch(() => {});
+              }}
+              onDelete={
+                props.canDelete(open.item)
+                  ? (now) => {
+                      setMenu(null);
+                      askDelete(open.item, open.anchor, now);
+                    }
+                  : undefined
+              }
+            />
+          </Popover>
+        )}
+      </Show>
+      <Show when={confirming()} keyed>
+        {(c) => (
+          <Popover anchor={c.anchor} onClose={() => setConfirming(null)} closeLabel="Keep the message">
+            <ConfirmDelete
+              text={drawn(c.item).split("\n")[0] ?? ""}
+              onCancel={() => setConfirming(null)}
+              onDelete={() => {
+                setConfirming(null);
+                props.onDelete(c.item);
+              }}
+            />
+          </Popover>
+        )}
+      </Show>
     </>
   );
 }
@@ -471,6 +637,10 @@ export interface ComposeProps {
   onSend: () => void;
   replying: Replying | null;
   onCancelReply: () => void;
+  /** The reply bar's "@ On" switch turned. */
+  onReplyNotify?: (on: boolean) => void;
+  /** Up in the empty field: this account's newest message here, taken up for editing. */
+  onEditLast?: () => void;
   /** The @ list's people; none in a DM. */
   mentions?: MentionSource;
   /** What a send left to say, over the field. */
@@ -481,7 +651,7 @@ export interface ComposeProps {
 const MENTION_LIST_MAX = 8;
 let listIds = 0;
 
-/** The composer over a conversation: the reply bar, the @ list over it, and a note after a send. */
+/** The composer over a conversation: the reply bar atop its frame, the @ list over it, and a note after a send. */
 export function Compose(props: ComposeProps) {
   let input: HTMLInputElement | undefined;
   const listId = `lu-mentions-${++listIds}`;
@@ -579,6 +749,11 @@ export function Compose(props: ComposeProps) {
           props.onCancelReply();
           return;
         }
+        if (e.key === "ArrowUp" && !e.currentTarget.value && props.onEditLast && !e.isComposing) {
+          e.preventDefault();
+          props.onEditLast();
+          return;
+        }
         if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
           e.preventDefault();
           props.onSend();
@@ -588,14 +763,27 @@ export function Compose(props: ComposeProps) {
         if (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "Home" || e.key === "End") look();
       }}
       onSend={props.onSend}
+      hint={props.replying ? "Return to send · Esc to cancel the reply" : undefined}
       above={
         <>
           <Show when={open()}>
             <MentionList id={listId} options={options()} active={active()} onActive={setActive} onPick={pick} />
           </Show>
           {props.note}
-          <Show when={props.replying}>{(r) => <ReplyBar name={r().name || undefined} text={r().text} onCancel={props.onCancelReply} />}</Show>
         </>
+      }
+      bar={
+        props.replying ? (
+          <ReplyBar
+            name={props.replying.name || undefined}
+            mention={props.replying.notify}
+            onMention={(on) => props.onReplyNotify?.(on)}
+            onCancel={() => {
+              props.onCancelReply();
+              input?.focus();
+            }}
+          />
+        ) : undefined
       }
     />
   );

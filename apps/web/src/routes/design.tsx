@@ -46,10 +46,13 @@ import {
   Pop,
   ProfileCard,
   QuickTiles,
-  Quote,
+  ConfirmDelete,
+  MessageEdit,
+  MessageMenu,
   QuoteReplyButton,
   ReactionChip,
   ReplyBar,
+  ReplyRef,
   RequestCard,
   SearchField,
   SearchTrigger,
@@ -307,6 +310,101 @@ function HomeBoard(props: { view: "dm" | "requests" | "devices" }) {
       main={props.view === "dm" ? <DmConversation /> : props.view === "requests" ? <Requests /> : <Devices />}
       aside={props.view === "dm" ? <DmAside /> : undefined}
     />
+  );
+}
+
+// The canvas's "Inline replies" board (960 by 800): a channel where Jonah's
+// message is being replied to (its toolbar up, Reply pressed), replies with
+// the line of what they quote over them (one to the reader, one whose
+// original is gone), and the composer with the reply bar atop its frame.
+const REPLIES = {
+  jonah: { name: "Jonah Patel", initials: "JP", tone: "blue" as const },
+  dana: { name: "Dana Kim", initials: "DK", tone: "amber" as const },
+  maya: { name: "Maya Chen", initials: "MC", tone: "peach" as const },
+  sam: { name: "Sam Rivera", initials: "SR", tone: "indigo" as const },
+  priya: { name: "Priya Raman", initials: "PR", tone: "purple" as const },
+  leo: { name: "Leo Okafor", initials: "LO", tone: "mint" as const },
+};
+
+function RepliesBoard() {
+  const [notify, setNotify] = createSignal(true);
+  return (
+    <div class="gallery-replies">
+      <main class="lu-panel gallery-replies__panel">
+        <ChannelHeader name="general" topic="Company-wide news, wins and everyday hellos" actions={[]} />
+        <MessageList label="Messages in #general">
+          <Message
+            {...REPLIES.jonah}
+            author={REPLIES.jonah.name}
+            tag={{ label: "Leadership" }}
+            time="9:31 AM"
+            datetime="2026-11-13T09:31"
+            actions={false}
+            attachment={{ name: "Q4 All-Hands Agenda.pdf", size: "1.2 MB" }}
+            replying
+            tools={<MessageActions onReply={() => {}} replying />}
+          >
+            Q4 all-hands is Thursday at 2:00 PM in the Atrium and on the livestream. The agenda is attached.
+          </Message>
+          <Message
+            {...REPLIES.dana}
+            author={REPLIES.dana.name}
+            tag={{ label: "Workplace" }}
+            time="9:36 AM"
+            datetime="2026-11-13T09:36"
+            actions={false}
+            reference={<ReplyRef {...REPLIES.maya} text="Morning, Acme! 2027 benefits enrollment closes next Friday. The plan guide is pinned." onOpen={() => {}} />}
+            tools={<MessageActions onReply={() => {}} />}
+          >
+            Does the new dental plan cover dependants too, or just employees?
+          </Message>
+          <Message
+            {...REPLIES.jonah}
+            author={REPLIES.jonah.name}
+            tag={{ label: "Leadership" }}
+            time="9:44 AM"
+            datetime="2026-11-13T09:44"
+            actions={false}
+            mentioned
+            reference={<ReplyRef {...REPLIES.sam} self text="Can we get the recording link once it's up? Half of design is out Thursday." onOpen={() => {}} />}
+            tools={<MessageActions onReply={() => {}} />}
+          >
+            Yes — it goes up in #announcements by Friday morning. I'll ping you when it's live.
+          </Message>
+          <Message
+            {...REPLIES.priya}
+            author={REPLIES.priya.name}
+            tag={{ label: "Design" }}
+            time="10:02 AM"
+            datetime="2026-11-13T10:02"
+            actions={false}
+            reference={<ReplyRef {...REPLIES.jonah} text="Q4 All-Hands Agenda.pdf" onOpen={() => {}} />}
+            tools={<MessageActions onReply={() => {}} />}
+          >
+            Page 2 still says 1:00 PM — worth a quick fix before it goes out wider.
+          </Message>
+          <Message
+            {...REPLIES.leo}
+            author={REPLIES.leo.name}
+            tag={{ label: "New", tone: "accent" }}
+            time="10:11 AM"
+            datetime="2026-11-13T10:11"
+            actions={false}
+            reference={<ReplyRef deleted text="" />}
+            tools={<MessageActions onReply={() => {}} />}
+          >
+            Ha, too late — already saved it to my calendar.
+          </Message>
+        </MessageList>
+        <Composer
+          placeholder="Reply to Jonah Patel in #general"
+          tools={false}
+          value="Thanks! Sharing with the design crew"
+          hint="Return to send · Esc to cancel the reply"
+          bar={<ReplyBar name={REPLIES.jonah.name} mention={notify()} onMention={setNotify} />}
+        />
+      </main>
+    </div>
   );
 }
 
@@ -884,13 +982,13 @@ function PhoneBoard() {
 
 export function DesignGallery() {
   const { theme, apply } = useTheme();
-  const [board, setBoard] = createSignal<"split" | "home" | "requests" | "devices" | "signin" | "phone" | "pieces">("split");
+  const [board, setBoard] = createSignal<"split" | "replies" | "home" | "requests" | "devices" | "signin" | "phone" | "pieces">("split");
   return (
     <div class="gallery">
       <header class="gallery__bar">
         <strong>Lumia design system</strong>
         <nav class="gallery__nav" aria-label="Boards">
-          <For each={[["split", "Quiet Split"], ["home", "Home"], ["requests", "Requests"], ["devices", "Devices"], ["signin", "Sign in"], ["phone", "Phone"], ["pieces", "Pieces"]] as const}>
+          <For each={[["split", "Quiet Split"], ["replies", "Inline replies"], ["home", "Home"], ["requests", "Requests"], ["devices", "Devices"], ["signin", "Sign in"], ["phone", "Phone"], ["pieces", "Pieces"]] as const}>
             {([id, label]) => (
               <button type="button" class="gallery__tab" aria-pressed={board() === id} onClick={() => setBoard(id)}>
                 {label}
@@ -908,7 +1006,7 @@ export function DesignGallery() {
         </nav>
       </header>
       <div class="gallery__board">
-        {board() === "split" ? <QuietSplit /> : board() === "home" ? <HomeBoard view="dm" /> : board() === "requests" ? <HomeBoard view="requests" /> : board() === "devices" ? <HomeBoard view="devices" /> : board() === "signin" ? <SignIn /> : board() === "phone" ? <PhoneBoard /> : <Pieces />}
+        {board() === "split" ? <QuietSplit /> : board() === "replies" ? <RepliesBoard /> : board() === "home" ? <HomeBoard view="dm" /> : board() === "requests" ? <HomeBoard view="requests" /> : board() === "devices" ? <HomeBoard view="devices" /> : board() === "signin" ? <SignIn /> : board() === "phone" ? <PhoneBoard /> : <Pieces />}
       </div>
     </div>
   );
@@ -1049,7 +1147,7 @@ function Pieces() {
         </div>
       </section>
       <section>
-        <h2>Replies, reactions, mentions and read state: a quote, mention pills, a row that names you, reactions, the toolbar, “New messages”</h2>
+        <h2>Replies, reactions, mentions and read state: the line of what a reply quotes, mention pills by name, a row that names you, reactions, “(edited)”, the toolbar, the “New” line</h2>
         <div class="pieces__row" style={{ "flex-direction": "column", "align-items": "stretch", "max-width": "720px" }}>
           <MessageList>
             <Message
@@ -1066,11 +1164,26 @@ function Pieces() {
                 { emoji: "🎉", label: "🎉", count: 5, who: "Devon, Sam and 3 others reacted with 🎉" },
               ]}
               onAddReaction={() => {}}
-              parts={[{ time: "9:05", datetime: "2026-11-13T09:05", children: "The flows are in the design channel.", id: "g2" }]}
+              parts={[
+                {
+                  time: "9:05",
+                  datetime: "2026-11-13T09:05",
+                  children: (
+                    <p>
+                      The flows are in the design channel.{" "}
+                      <span class="lu-msg__edited">
+                        <span aria-hidden="true">(edited)</span>
+                        <span class="lu-sr">edited</span>
+                      </span>
+                    </p>
+                  ),
+                  id: "g2",
+                },
+              ]}
             >
               Morning all. The new onboarding flow is ready for a look before standup.
             </Message>
-            <Divider variant="new" label="New messages" />
+            <Divider variant="new" />
             <Message
               author={PEOPLE.devon.name}
               initials="DP"
@@ -1080,43 +1193,58 @@ function Pieces() {
               actions={false}
               onOpenProfile={() => {}}
               mentioned
-              quote={<Quote author={PEOPLE.maya.name} text="Morning all. The new onboarding flow is ready for a look before standup, and the copy is in the doc beside it so we can go through both together." onOpen={() => {}} />}
+              reference={<ReplyRef {...PEOPLE.maya} text="Morning all. The new onboarding flow is ready for a look before standup, and the copy is in the doc beside it so we can go through both together." onOpen={() => {}} />}
             >
               <p>
-                Looks great. <Mention onOpen={() => {}}>@ryan</Mention> can you check the copy on the second screen?
+                Looks great. <Mention onOpen={() => {}}>@{PEOPLE.self.name}</Mention> can you check the copy on the second screen?
               </p>
             </Message>
-            <Message author={PEOPLE.sam.name} initials="SO" tone="mint" time="9:20 AM" datetime="2026-11-13T09:20" actions={false} onOpenProfile={() => {}} quote={<Quote deleted text="" />}>
+            <Message author={PEOPLE.sam.name} initials="SO" tone="mint" time="9:20 AM" datetime="2026-11-13T09:20" actions={false} onOpenProfile={() => {}} reference={<ReplyRef deleted text="" />}>
               Agreed with the above.
             </Message>
+            <Message author={PEOPLE.leo.name} initials="LM" tone="sky" time="9:24 AM" datetime="2026-11-13T09:24" actions={false} onOpenProfile={() => {}} reference={<ReplyRef text="The quote of someone a personal conversation does not name." onOpen={() => {}} />}>
+              A personal conversation’s reply to someone unknown: no avatar, no name.
+            </Message>
           </MessageList>
-          <div class="pieces__row">
-            <MessageActions floating={false} quick={QUICK_REACTIONS.map((emoji, i) => ({ emoji, on: i === 0 }))} onReply={() => {}} />
+          <div class="pieces__row pieces__row--top">
+            <MessageActions floating={false} onReply={() => {}} />
+            <MessageActions floating={false} onReply={() => {}} replying />
             <QuoteReplyButton inline />
+            <MessageMenu onEdit={() => {}} onCopy={() => {}} onDelete={() => {}} />
+            <ConfirmDelete text="Morning all. The new onboarding flow is ready for a look before standup." />
           </div>
         </div>
-        <h2>Over the composer: replying, a note after sending, the @ list</h2>
+        <h2>Editing a message where it is drawn</h2>
+        <div class="pieces__row" style={{ "flex-direction": "column", "align-items": "stretch", "max-width": "720px" }}>
+          <MessageList>
+            <Message author={PEOPLE.self.name} initials="RW" tone="indigo" time="9:30 AM" datetime="2026-11-13T09:30" actions={false} onOpenProfile={() => {}}>
+              <MessageEdit value="Sure, after standup works. I’ll bring the second screen." onSave={() => {}} onCancel={() => {}} />
+            </Message>
+          </MessageList>
+        </div>
+        <h2>Over the composer: the reply bar atop its frame (on, off, to oneself), a note after sending, the @ list</h2>
         <div class="pieces__row" style={{ "flex-direction": "column", "align-items": "stretch", "max-width": "720px" }}>
           <div style={{ position: "relative", "padding-top": "300px" }}>
             <Composer
               placeholder="Message #design"
               tools={false}
+              hint="Return to send · Esc to cancel the reply"
               above={
-                <>
-                  <MentionList
-                    id="gallery-mentions"
-                    active={1}
-                    options={[
-                      { id: "everyone", name: "everyone", everyone: true, note: "Notify everyone in #design" },
-                      { id: "1", name: PEOPLE.maya.name, handle: "maya", initials: "MC", tone: "peach" },
-                      { id: "2", name: "Mateo Ruiz", handle: "mateo", initials: "MR", tone: "sky", note: "Not in #design" },
-                    ]}
-                  />
-                  <ReplyBar name={PEOPLE.maya.name} text="Morning all. The new onboarding flow is ready for a look before standup." />
-                </>
+                <MentionList
+                  id="gallery-mentions"
+                  active={1}
+                  options={[
+                    { id: "everyone", name: "everyone", everyone: true, note: "Notify everyone in #design" },
+                    { id: "1", name: PEOPLE.maya.name, handle: "maya", initials: "MC", tone: "peach" },
+                    { id: "2", name: "Mateo Ruiz", handle: "mateo", initials: "MR", tone: "sky", note: "Not in #design" },
+                  ]}
+                />
               }
+              bar={<ReplyBar name={PEOPLE.maya.name} mention />}
             />
           </div>
+          <Composer placeholder="Message #design" tools={false} hint="Return to send · Esc to cancel the reply" bar={<ReplyBar name={PEOPLE.maya.name} mention={false} />} />
+          <Composer placeholder="Message #design" tools={false} hint="Return to send · Esc to cancel the reply" bar={<ReplyBar name={PEOPLE.self.name} />} />
           <Composer
             placeholder="Message #design"
             tools={false}
@@ -1129,10 +1257,11 @@ function Pieces() {
           <Composer placeholder="Message #design" tools={false} above={<ComposerNote>Invited Mateo to #design.</ComposerNote>} />
           <Composer placeholder="Message #design" tools={false} above={<ComposerNote error="You cannot do that in this channel." actions={[{ label: "Add to #design", primary: true }, { label: "Dismiss" }]}>Mateo isn’t in #design, so they won’t be notified.</ComposerNote>} />
         </div>
-        <h2>The emoji picker, the Mentions row and unread in the sidebar, a Mentions page’s item</h2>
+        <h2>The emoji picker, Mentions as a server’s quick tile and Home’s row, unread in the sidebar, a Mentions page’s item</h2>
         <div class="pieces__row pieces__row--top">
           <EmojiPicker frequent={QUICK_REACTIONS} />
-          <div style={{ width: "240px" }}>
+          <div style={{ width: "240px", display: "flex", "flex-direction": "column", gap: "12px" }}>
+            <QuickTiles items={[{ icon: "mention", label: "Mentions", count: 3, countLabel: "3 mentions" }]} />
             <ChannelList
               sections={[
                 { items: [{ name: "Mentions", icon: "mention", mentions: 3 }] },
@@ -1145,9 +1274,9 @@ function Pieces() {
           </div>
           <ul class="lu-mentionentries" style={{ width: "420px" }}>
             <MentionEntry where="Acme · #design">
-              <Message author={PEOPLE.devon.name} initials="DP" tone="purple" time="Yesterday, 4:30 PM" actions={false} quote={<Quote author="Ryan Winchester" text="Can someone look at the second screen?" />}>
+              <Message author={PEOPLE.devon.name} initials="DP" tone="purple" time="Yesterday, 4:30 PM" actions={false} reference={<ReplyRef {...PEOPLE.self} self text="Can someone look at the second screen?" />}>
                 <p>
-                  <Mention>@ryan</Mention> done, it reads well now.
+                  <Mention>@{PEOPLE.self.name}</Mention> done, it reads well now.
                 </p>
               </Message>
             </MentionEntry>

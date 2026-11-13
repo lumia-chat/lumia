@@ -333,36 +333,44 @@ export interface ComposerProps extends JSX.InputHTMLAttributes<HTMLInputElement>
   tools?: boolean;
   onSend?: () => void;
   onAttach?: () => void;
-  /** What stands over the field: the reply bar, a note after sending, the @ list (which floats over the conversation). */
+  /** What stands over the field: a note after sending, the @ list (which floats over the conversation). */
   above?: JSX.Element;
+  /** The strip atop the field's own frame (the reply bar), which then has the active border. */
+  bar?: JSX.Element;
   inputRef?: (el: HTMLInputElement) => void;
 }
 
 /** Message bar with tools, send and a hint row. */
 export function Composer(props: ComposerProps) {
-  const [local, input] = splitProps(props, ["placeholder", "label", "typing", "hint", "tools", "id", "onSend", "onAttach", "class", "above", "inputRef"]);
+  const [local, input] = splitProps(props, ["placeholder", "label", "typing", "hint", "tools", "id", "onSend", "onAttach", "class", "above", "bar", "inputRef"]);
   const fid = fieldId(local.id);
   const placeholder = () => local.placeholder ?? "Message";
   const hint = () => local.hint ?? "Return to send";
   const tools = () => local.tools ?? true;
   const typing = () => (Array.isArray(local.typing) ? (local.typing.length ? local.typing : undefined) : local.typing || undefined);
+  // Read once: the frame's class and its contents both ask.
+  const bar = children(() => local.bar);
   return (
     <div class={cx("lu-composer", local.class)}>
       {local.above}
-      <div class={cx("lu-composer__field", !tools() && "is-bare")}>
-        <Show when={tools()}>
-          <IconButton icon="plus" label="Attach a file" class="lu-composer__attach" onClick={() => local.onAttach?.()} />
-        </Show>
-        <label for={fid} class="lu-sr">
-          {local.label ?? placeholder()}
-        </label>
-        <input ref={(el) => local.inputRef?.(el)} id={fid} type="text" placeholder={placeholder()} autocomplete="off" class="lu-composer__input" {...input} />
-        <Show when={tools()}>
-          <IconButton glyph="Aa" label="Text formatting" />
-          <IconButton icon="emoji" label="Emoji" />
-          <IconButton icon="mention" label="Mention someone" strokeWidth={1.9} />
-        </Show>
-        <IconButton icon="send" variant="send" size={40} label="Send message" class="lu-composer__send" onClick={() => local.onSend?.()} />
+      {/* Always the same frame, so the field keeps its focus as a bar comes and goes. */}
+      <div class={cx("lu-composer__frame", !!bar() && "has-bar")}>
+        {bar()}
+        <div class={cx("lu-composer__field", !tools() && "is-bare")}>
+          <Show when={tools()}>
+            <IconButton icon="plus" label="Attach a file" class="lu-composer__attach" onClick={() => local.onAttach?.()} />
+          </Show>
+          <label for={fid} class="lu-sr">
+            {local.label ?? placeholder()}
+          </label>
+          <input ref={(el) => local.inputRef?.(el)} id={fid} type="text" placeholder={placeholder()} autocomplete="off" class="lu-composer__input" {...input} />
+          <Show when={tools()}>
+            <IconButton glyph="Aa" label="Text formatting" />
+            <IconButton icon="emoji" label="Emoji" />
+            <IconButton icon="mention" label="Mention someone" strokeWidth={1.9} />
+          </Show>
+          <IconButton icon="send" variant="send" size={40} label="Send message" class="lu-composer__send" onClick={() => local.onSend?.()} />
+        </div>
       </div>
       <Show when={typing() || hint()}>
         <div class="lu-composer__hint" aria-live="polite">
@@ -694,7 +702,8 @@ export function ServerHeader(props: ServerHeaderProps) {
 }
 
 export interface QuickTilesProps {
-  items: { icon: IconName; label: string; count?: number; href?: string; onClick?: () => void }[];
+  /** `countLabel` names the count for assistive technology ("2 mentions"); "2 new" without it. `current` is the page open. */
+  items: { icon: IconName; label: string; count?: number; countLabel?: string; current?: boolean; href?: string; onClick?: () => void }[];
   class?: string;
 }
 
@@ -704,11 +713,11 @@ export function QuickTiles(props: QuickTilesProps) {
     <div class={cx("lu-quick", props.class)}>
       <For each={props.items}>
         {(it) => (
-          <a href={it.href ?? "#"} onClick={(e) => pressed(e, it)} class="lu-quick__tile">
+          <a href={it.href ?? "#"} onClick={(e) => pressed(e, it)} aria-current={it.current ? "page" : undefined} class="lu-quick__tile">
             <Icon name={it.icon} size={18} strokeWidth={1.8} />
             <span>{it.label}</span>
             <Show when={it.count}>
-              <Badge count={it.count} size="sm" label={it.count + " new"} class="lu-quick__badge" />
+              <Badge count={it.count} size="sm" label={it.countLabel ?? it.count + " new"} class="lu-quick__badge" />
             </Show>
           </a>
         )}
@@ -1286,75 +1295,217 @@ export interface MessageActionsProps {
   /** The picker, against the button pressed. */
   onReact?: (pressed: HTMLElement) => void;
   onThread?: () => void;
-  onMore?: () => void;
+  /** The menu of the rest (`MessageMenu`), against the button pressed. */
+  onMore?: (pressed: HTMLElement) => void;
   /**
-   * The product's toolbar (architecture 6.6): a quick row of reactions,
-   * each pressed when this account has it, before Add reaction, and Reply
-   * after it. Without either the toolbar is the board's.
+   * The product's toolbar (the "Inline replies" board, architecture 6.6):
+   * Add reaction, Reply and More actions. Without it the toolbar is the
+   * Quiet Split board's, with its thread button.
    */
-  quick?: { emoji: string; on?: boolean }[];
-  onQuick?: (emoji: string, on: boolean) => void;
   onReply?: () => void;
+  /** This message is the one being replied to: Reply is drawn pressed, with its word. */
+  replying?: boolean;
+  /** The More actions menu is open. */
+  moreOpen?: boolean;
   floating?: boolean;
   class?: string;
 }
 
 /** Hover toolbar for a message. */
 export function MessageActions(props: MessageActionsProps) {
-  const board = () => props.quick === undefined && props.onReply === undefined;
+  const board = () => props.onReply === undefined;
   return (
-    <div class={cx("lu-actions", (props.floating ?? true) && "is-floating", props.class)}>
-      <For each={props.quick ?? []}>
-        {(q) => (
-          <button type="button" class="lu-actions__emoji" aria-label={"React with " + q.emoji} aria-pressed={!!q.on} title={"React with " + q.emoji} onClick={() => props.onQuick?.(q.emoji, !!q.on)}>
-            <span aria-hidden="true">{q.emoji}</span>
+    <div role="toolbar" aria-label="Message actions" class={cx("lu-actions", (props.floating ?? true) && "is-floating", props.replying && "is-replying", props.moreOpen && "is-open", props.class)}>
+      <Show
+        when={!board()}
+        fallback={
+          <>
+            <IconButton icon="reaction-add" label="Add reaction" size={30} aria-haspopup="dialog" onClick={(e) => props.onReact?.(e.currentTarget)} />
+            <IconButton icon="thread" label="Open thread" size={30} onClick={() => props.onThread?.()} />
+            <IconButton icon="more" label="More actions" size={30} onClick={(e) => props.onMore?.(e.currentTarget)} />
+          </>
+        }
+      >
+        <IconButton icon="emoji" label="Add reaction" size={30} iconSize={16} strokeWidth={1.9} aria-haspopup="dialog" onClick={(e) => props.onReact?.(e.currentTarget)} />
+        <Show when={props.replying} fallback={<IconButton icon="reply" label="Reply" size={30} iconSize={16} strokeWidth={1.9} onClick={() => props.onReply?.()} />}>
+          <button type="button" class="lu-actions__replying" aria-pressed="true" onClick={() => props.onReply?.()}>
+            <Icon name="reply" size={16} strokeWidth={1.9} />
+            Reply
           </button>
-        )}
-      </For>
-      <Show when={props.quick?.length}>
-        <span aria-hidden="true" class="lu-actions__rule"></span>
-      </Show>
-      <IconButton icon="reaction-add" label="Add reaction" size={30} aria-haspopup="dialog" onClick={(e) => props.onReact?.(e.currentTarget)} />
-      <Show when={props.onReply}>
-        <IconButton icon="reply" label="Reply" size={30} onClick={() => props.onReply?.()} />
-      </Show>
-      <Show when={board()}>
-        <IconButton icon="thread" label="Open thread" size={30} onClick={() => props.onThread?.()} />
-        <IconButton icon="more" label="More actions" size={30} onClick={() => props.onMore?.()} />
+        </Show>
+        <IconButton icon="more" label="More actions" size={30} iconSize={16} aria-haspopup="menu" aria-expanded={!!props.moreOpen} onClick={(e) => props.onMore?.(e.currentTarget)} />
       </Show>
     </div>
   );
 }
 
-export interface QuoteProps {
-  /** The quoted message's author; a quote whose author is unknown (a personal DM) draws no name. */
-  author?: string;
+export interface MessageMenuProps {
+  /** Its author's own message: it can be edited. */
+  onEdit?: () => void;
+  onCopy?: () => void;
+  /** Its author's own, or a moderator's to take away; `now` when Shift was held, which skips the question. */
+  onDelete?: (now: boolean) => void;
+  class?: string;
+}
+
+/** What More actions opens over a message: Edit message, Copy text, Delete message. */
+export function MessageMenu(props: MessageMenuProps) {
+  return (
+    <Menu label="Message" compact class={props.class}>
+      <Show when={props.onEdit}>
+        <MenuItem onSelect={() => props.onEdit?.()}>Edit message</MenuItem>
+      </Show>
+      <MenuItem onSelect={() => props.onCopy?.()}>Copy text</MenuItem>
+      <Show when={props.onDelete}>
+        <MenuItem onSelect={(e) => props.onDelete?.(e.shiftKey)}>
+          Delete message
+        </MenuItem>
+      </Show>
+    </Menu>
+  );
+}
+
+export interface ReplyRefProps {
+  /**
+   * Who wrote what is quoted, and their picture; a personal DM's quote of
+   * someone unknown draws neither.
+   */
+  name?: string;
+  initials?: string;
+  src?: string;
+  tone?: Tone;
+  /** What is quoted is this account's: its name is drawn as a mention of it. */
+  self?: boolean;
   text: string;
-  /** The original was deleted: the quote says so and leads nowhere. */
+  /** The original was deleted: the line says so and leads nowhere. */
   deleted?: boolean;
   /** Goes to the original. */
   onOpen?: () => void;
   class?: string;
 }
 
-/** What a reply quotes, above its body: the accent bar, who wrote it, two lines of it. */
-export function Quote(props: QuoteProps) {
+/** The connector from the reply's avatar up to what it quotes. */
+function ReplyConnector() {
+  return (
+    <svg class="lu-replyref__line" width="26" height="12" viewBox="0 0 26 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+      <path d="M1 12V7a5 5 0 0 1 5-5h19" />
+    </svg>
+  );
+}
+
+/**
+ * What a reply quotes, on one line over its avatar row (the "Inline
+ * replies" board): a connector from the avatar, the quoted person's small
+ * avatar and name, and the quoted text cut short; pressing it goes to the
+ * original.
+ */
+export function ReplyRef(props: ReplyRefProps) {
+  const who = () => (props.self ? "you" : props.name || "a message");
   return (
     <Show
       when={!props.deleted}
       fallback={
-        <div class={cx("lu-quote", "is-deleted", props.class)}>
-          <span class="lu-quote__text">Original message was deleted</span>
+        <div class={cx("lu-replyref", "is-deleted", props.class)}>
+          <ReplyConnector />
+          <span class="lu-replyref__gone" aria-hidden="true">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round">
+              <path d="M5 12h14" />
+            </svg>
+          </span>
+          <span class="lu-replyref__deleted">Original message was deleted</span>
         </div>
       }
     >
-      <button type="button" class={cx("lu-quote", props.class)} title="Go to the original message" onClick={() => props.onOpen?.()}>
-        <Show when={props.author}>
-          <span class="lu-quote__author">{props.author}</span>
+      <button type="button" class={cx("lu-replyref", props.class)} aria-label={`Replying to ${who()}: ${props.text}. Jump to message`} onClick={() => props.onOpen?.()}>
+        <ReplyConnector />
+        <Show when={props.name}>
+          <span aria-hidden="true" class={cx("lu-avatar", "lu-replyref__avatar", "lu-tone-" + (props.tone ?? "blue"))}>
+            <Face initials={props.initials ?? ""} src={props.src} />
+          </span>
+          <span class={cx("lu-replyref__name", props.self && "is-self")}>{props.self ? "@" + props.name : props.name}</span>
         </Show>
-        <span class="lu-quote__text">{props.text}</span>
+        <span class="lu-replyref__text">{props.text}</span>
       </button>
     </Show>
+  );
+}
+
+export interface MessageEditProps {
+  /** The body as it is, which the field opens with. */
+  value: string;
+  /** Return: the text as it then is. */
+  onSave: (text: string) => void;
+  /** Escape. */
+  onCancel: () => void;
+  class?: string;
+}
+
+/** A message's body being edited where it is drawn: Return saves, Escape cancels. */
+export function MessageEdit(props: MessageEditProps) {
+  let field: HTMLTextAreaElement | undefined;
+  const hint = fieldId();
+  const fit = () => {
+    if (!field) return;
+    field.style.height = "auto";
+    field.style.height = field.scrollHeight + "px";
+  };
+  onMount(() => {
+    if (!field) return;
+    fit();
+    field.focus({ preventScroll: true });
+    const end = field.value.length;
+    field.setSelectionRange(end, end);
+  });
+  return (
+    <div class={cx("lu-msgedit", props.class)}>
+      <textarea
+        ref={field}
+        class="lu-msgedit__field"
+        aria-label="Edit message"
+        aria-describedby={hint}
+        rows={1}
+        value={props.value}
+        onInput={fit}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            e.preventDefault();
+            e.stopPropagation();
+            props.onCancel();
+          } else if (e.key === "Enter" && !e.isComposing) {
+            // As the composer: Return sends, and a line of its own is not something it makes.
+            e.preventDefault();
+            props.onSave(e.currentTarget.value);
+          }
+        }}
+      />
+      <p id={hint} class="lu-msgedit__hint">
+        Esc to cancel · Return to save
+      </p>
+    </div>
+  );
+}
+
+export interface ConfirmDeleteProps {
+  /** The message's first line, quoted under the question. */
+  text: string;
+  onCancel?: () => void;
+  onDelete?: () => void;
+  class?: string;
+}
+
+/** "Delete this message?", asked before a message is deleted (Shift skips it). */
+export function ConfirmDelete(props: ConfirmDeleteProps) {
+  return (
+    <Pop title="Delete this message?" subtitle={props.text || undefined} class={cx("lu-pop--confirm", props.class)}>
+      <div class="lu-pop__actions">
+        <Button size="md" onClick={() => props.onCancel?.()}>
+          Cancel
+        </Button>
+        <Button variant="primary" size="md" onClick={() => props.onDelete?.()}>
+          Delete
+        </Button>
+      </div>
+    </Pop>
   );
 }
 
@@ -1387,8 +1538,10 @@ export interface MessageProps {
   reactions?: ReactionChipProps[];
   /** The `lu-reaction-add` after the chips, which opens the picker against itself. */
   onAddReaction?: (pressed: HTMLElement) => void;
-  /** What it quotes, above its body (`Quote`). */
-  quote?: JSX.Element;
+  /** What it quotes (`ReplyRef`): a line over the avatar row, the block's whole width. */
+  reference?: JSX.Element;
+  /** It is the one being replied to: its row keeps the hover's fill and its toolbar stays. */
+  replying?: boolean;
   /** The first message's own toolbar (`MessageActions`), shown over it alone on hover; each part has its own. */
   tools?: JSX.Element;
   /** The message's id, which a jump to it finds (`data-message-id`). */
@@ -1423,12 +1576,12 @@ export interface MessagePart {
   datetime?: string;
   children?: JSX.Element | string[];
   id?: string;
-  quote?: JSX.Element;
   reactions?: ReactionChipProps[];
   onAddReaction?: (pressed: HTMLElement) => void;
   tools?: JSX.Element;
   mentioned?: boolean;
   flash?: boolean;
+  replying?: boolean;
 }
 
 /** One message's reactions, and the button that adds another. */
@@ -1452,8 +1605,11 @@ export function Message(props: MessageProps) {
   const variant = () => props.variant ?? "default";
   const compact = () => variant() !== "default";
   const avatar = () => <Avatar initials={props.initials} src={props.src} tone={props.tone ?? "blue"} size={compact() || props.density === "compact" ? 28 : 40} />;
+  // Read once: the row's class and its first line both ask.
+  const reference = children(() => props.reference);
   return (
-    <article class={cx("lu-msg", "lu-msg--" + variant(), props.highlighted && "is-highlighted", props.class)}>
+    <article class={cx("lu-msg", "lu-msg--" + variant(), props.highlighted && "is-highlighted", !!reference() && "has-ref", props.class)}>
+      {reference()}
       <Show when={props.onOpenProfile} fallback={avatar()}>
         {/* The name is the control; the avatar is the same one for a pointer. */}
         <button type="button" class="lu-msg__avatar" tabindex={-1} aria-hidden="true" onClick={(e) => props.onOpenProfile?.(e.currentTarget)}>
@@ -1461,7 +1617,7 @@ export function Message(props: MessageProps) {
         </button>
       </Show>
       <div class="lu-msg__main">
-        <div class={cx("lu-msg__part", "lu-msg__part--first", props.mentioned && "is-mentioned", props.flash && "is-flash")} data-message-id={props.id}>
+        <div class={cx("lu-msg__part", "lu-msg__part--first", props.mentioned && "is-mentioned", props.flash && "is-flash", props.replying && "is-replying")} data-message-id={props.id}>
           <div class="lu-msg__head">
             <Show when={props.onOpenProfile} fallback={<span class="lu-msg__author">{props.author}</span>}>
               <button type="button" class="lu-msg__author lu-msg__name" aria-haspopup="dialog" onClick={(e) => props.onOpenProfile?.(e.currentTarget)}>
@@ -1475,7 +1631,6 @@ export function Message(props: MessageProps) {
               </time>
             </Show>
           </div>
-          {props.quote}
           <div class="lu-msg__body">
             <Paras>{props.children}</Paras>
           </div>
@@ -1488,14 +1643,13 @@ export function Message(props: MessageProps) {
         </div>
         <For each={props.parts ?? []}>
           {(part) => (
-            <div class={cx("lu-msg__part", part.mentioned && "is-mentioned", part.flash && "is-flash")} data-message-id={part.id}>
+            <div class={cx("lu-msg__part", part.mentioned && "is-mentioned", part.flash && "is-flash", part.replying && "is-replying")} data-message-id={part.id}>
               <Show when={part.time}>
                 <time datetime={part.datetime} class="lu-msg__parttime">
                   <span class="lu-sr">{props.author}, </span>
                   {part.time}
                 </time>
               </Show>
-              {part.quote}
               <div class="lu-msg__body">
                 <Paras>{part.children}</Paras>
               </div>
@@ -1561,9 +1715,12 @@ export function Divider(props: DividerProps) {
         </div>
       }
     >
-      <div class={cx("lu-divider", "lu-divider--new", props.class)}>
+      {/* "New" to the eye, "New messages" to assistive technology. */}
+      <div class={cx("lu-divider", "lu-divider--new", props.class)} role="separator" aria-label={props.label === undefined || props.label === "New" ? "New messages" : props.label}>
         <span aria-hidden="true" class="lu-divider__rule"></span>
-        <span class="lu-divider__label">{props.label ?? "New"}</span>
+        <span aria-hidden="true" class="lu-divider__label">
+          {props.label ?? "New"}
+        </span>
       </div>
     </Show>
   );
@@ -1658,22 +1815,38 @@ export function ThreadPanel(props: ThreadPanelProps) {
 export interface ReplyBarProps {
   /** Who wrote what is quoted; none where that is not known. */
   name?: string;
-  text: string;
+  /**
+   * Whether the reply notifies them: the "@ On" switch. Left out where it
+   * has nothing to say (a reply to oneself, a personal conversation).
+   */
+  mention?: boolean;
+  onMention?: (on: boolean) => void;
   onCancel?: () => void;
   class?: string;
 }
 
-/** Over the composer while replying: who is quoted, one line of it, and the way out. */
+/** The strip atop the composer's frame while replying: who is quoted, whether they are told, and the way out. */
 export function ReplyBar(props: ReplyBarProps) {
   return (
     <div class={cx("lu-replybar", props.class)} role="status">
-      <div class="lu-replybar__text">
-        <p class="lu-replybar__who">
-          Replying to <Show when={props.name} fallback="a message">{(name) => <strong>{name()}</strong>}</Show>
-        </p>
-        <p class="lu-replybar__quote">{props.text}</p>
-      </div>
-      <IconButton icon="close" label="Cancel reply" size={28} strokeWidth={2} onClick={() => props.onCancel?.()} />
+      <Icon name="reply" size={15} strokeWidth={1.9} class="lu-replybar__icon" />
+      <p class="lu-replybar__who">
+        Replying to <Show when={props.name} fallback="a message">{(name) => <strong>{name()}</strong>}</Show>
+      </p>
+      <Show when={props.mention !== undefined}>
+        <button
+          type="button"
+          class={cx("lu-replybar__mention", props.mention && "is-on")}
+          aria-pressed={!!props.mention}
+          aria-label={"Mention " + (props.name || "them")}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => props.onMention?.(!props.mention)}
+        >
+          <Icon name="mention" size={13} strokeWidth={2.2} />
+          {props.mention ? "On" : "Off"}
+        </button>
+      </Show>
+      <IconButton icon="close" label="Cancel reply" size={28} iconSize={14} strokeWidth={2.2} class="lu-replybar__cancel" onMouseDown={(e) => e.preventDefault()} onClick={() => props.onCancel?.()} />
     </div>
   );
 }
@@ -2212,14 +2385,15 @@ export interface MenuItemProps {
   icon?: IconName;
   /** A key or a word at the row's end. */
   hint?: string;
-  onSelect?: () => void;
+  /** The press, which says whether Shift was held. */
+  onSelect?: (e: MouseEvent) => void;
   children?: JSX.Element;
 }
 
 /** A command in a menu. */
 export function MenuItem(props: MenuItemProps) {
   return (
-    <button type="button" role="menuitem" class="lu-menu__item" onClick={() => props.onSelect?.()}>
+    <button type="button" role="menuitem" class="lu-menu__item" onClick={(e) => props.onSelect?.(e)}>
       <Show when={props.icon}>{(icon) => <Icon name={icon()} size={16} strokeWidth={1.9} />}</Show>
       <span class="lu-menu__text">{props.children}</span>
       <Show when={props.hint}>

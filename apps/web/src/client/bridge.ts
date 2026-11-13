@@ -33,6 +33,8 @@ export interface ServerSummary {
   canStartDms: boolean;
   /** Whether it may mention everyone there (`MENTION_EVERYONE`), and so is offered `@everyone` (architecture 6.6). */
   canMentionEveryone: boolean;
+  /** Whether it may delete others' messages there (`MANAGE_MESSAGES`); its own it always may. */
+  canManageMessages: boolean;
   /** Its own switches there: adds to channels wait as invitations; nobody may start a server DM with it. */
   channelAddsByInvitation: boolean;
   serverDmsOff: boolean;
@@ -144,6 +146,8 @@ export interface QuoteSummary {
   /** What of it was quoted; empty once it is deleted. */
   text: string;
   originalDeleted: boolean;
+  /** The reply notifies nobody: sent with the reply bar's "@ On" switch off. */
+  silent: boolean;
 }
 /** A mention: an account, or everyone, and its UTF-8 byte range in the body (half-open). */
 export interface MentionSummary {
@@ -238,6 +242,8 @@ export interface MessageSummary {
   reactions: ReactionSummary[];
   /** It mentions this account or everyone, or quotes one of its messages. */
   mentionsMe: boolean;
+  /** Its author has edited it ("(edited)"). */
+  edited: boolean;
 }
 export interface EventSummary {
   seq: number;
@@ -570,6 +576,14 @@ export class Bridge {
     // A query's members are a store's proxies, which a worker message cannot carry: plain copies go.
     return this.call("findMentions", body, members.map((m) => ({ ...m })), everyone);
   }
+  /** Edits one of this account's messages in a server's channel: its new body and the mentions it makes. A refusal comes back as an `error` event. */
+  editMessage(channelId: string, messageId: string, body: string, mentions: MentionSummary[]): Promise<void> {
+    return this.call("editMessage", channelId, messageId, body, mentions);
+  }
+  /** Deletes a message of a server's channel: this account's own, or another's with `MANAGE_MESSAGES`. A refusal comes back as an `error` event. */
+  deleteMessage(channelId: string, messageId: string): Promise<void> {
+    return this.call("deleteMessage", channelId, messageId);
+  }
   /** Adds this account's reaction to a message of a server channel, or takes it away. */
   react(channelId: string, messageId: string, emoji: string, remove: boolean): Promise<void> {
     return this.call("react", channelId, messageId, emoji, remove);
@@ -647,6 +661,10 @@ export class Bridge {
   }
   dmReact(channelId: string, messageId: string, emoji: string, remove: boolean): Promise<void> {
     return this.call("dmReact", channelId, messageId, emoji, remove);
+  }
+  /** Edits one of this identity's messages in a personal DM. */
+  dmEdit(channelId: string, messageId: string, body: string): Promise<void> {
+    return this.call("dmEdit", channelId, messageId, body);
   }
   dmDelete(channelId: string, messageId: string): Promise<void> {
     return this.call("dmDelete", channelId, messageId);

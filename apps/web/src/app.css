@@ -12,6 +12,9 @@ a { color: var(--link); }
 .gallery__tab { font: inherit; border: 0; background: var(--track); color: var(--ink-secondary); padding: 6px 12px; border-radius: var(--radius-8); cursor: pointer; }
 .gallery__tab[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent-ink); font-weight: 600; }
 .gallery__board { flex: 1; min-width: 0; }
+/* The "Inline replies" board, at its size. */
+.gallery-replies { box-sizing: border-box; width: 960px; height: 800px; display: flex; padding: var(--space-24); background: var(--bg); }
+.gallery-replies__panel { flex: 1; min-height: 0; }
 .gallery-auth { min-height: 900px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-24); padding: var(--space-24); background: var(--bg); }
 .gallery-auth__logo { width: 150px; height: 138px; overflow: hidden; position: relative; }
 .gallery-auth__logo img { position: absolute; width: 246px; height: 246px; left: -49px; top: -57px; }

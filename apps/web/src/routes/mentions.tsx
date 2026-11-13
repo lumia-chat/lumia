@@ -4,13 +4,13 @@
 // item is where it was said over the message as the timeline draws it;
 // pressing it opens the channel at that message.
 import { For, Show, createMemo } from "solid-js";
-import { ChannelHeader, EmptyState, Mention, MentionEntry, Message, Quote } from "../design/components";
+import { ChannelHeader, EmptyState, Mention, MentionEntry, Message, ReplyRef } from "../design/components";
 import type { MessageSummary, ServerSummary, SnapshotSummary } from "../client/bridge";
 import { mentionsQuery } from "../client/state";
 import { useNames } from "../client/names";
 import { preferences } from "../client/preferences";
 import { dayLabel, initialsOf, timeOf, toneFor } from "./app";
-import { bodySegments } from "./timeline";
+import { bodySegments, mentionWords } from "./timeline";
 
 export interface MentionsPageProps {
   /** The server whose mentions these are; every server's at Home. */
@@ -40,7 +40,7 @@ export function MentionsPage(props: MentionsPageProps) {
   const quoted = (id: string) => {
     if (id && id === props.snapshot?.accountId) return nameOf(id);
     const p = profile(id);
-    return p ? p.displayName || p.nickname || p.handle : undefined;
+    return p ? p.displayName || p.nickname || p.handle || undefined : undefined;
   };
   // A page more as the end comes into view.
   const onScroll = (e: Event & { currentTarget: HTMLDivElement }) => {
@@ -74,17 +74,32 @@ export function MentionsPage(props: MentionsPageProps) {
                     time={when(m.createdAtMicros)}
                     actions={false}
                     density={preferences().density}
-                    quote={
-                      <Show when={m.reply}>
-                        {(q) => <Quote author={q().authorAccountId ? quoted(q().authorAccountId) : undefined} text={q().text} deleted={q().originalDeleted} />}
-                      </Show>
+                    reference={
+                      m.reply ? (
+                        <ReplyRef
+                          name={m.reply.authorAccountId ? quoted(m.reply.authorAccountId) : undefined}
+                          initials={initialsOf(quoted(m.reply.authorAccountId) ?? "")}
+                          src={m.reply.authorAccountId ? photoOf(m.reply.authorAccountId) : undefined}
+                          tone={toneFor(m.reply.authorAccountId)}
+                          self={m.reply.authorAccountId === props.snapshot?.accountId}
+                          text={m.reply.text}
+                          deleted={m.reply.originalDeleted}
+                        />
+                      ) : undefined
                     }
                   >
                     {m.deleted ? (
                       "(deleted)"
                     ) : (
                       <p>
-                        <For each={bodySegments(m.body, m.mentions)}>{(s) => <Show when={s.mention} fallback={s.text}><Mention>{s.text}</Mention></Show>}</For>
+                        <For each={bodySegments(m.body, m.mentions)}>{(s) => <Show when={s.mention} fallback={s.text}>{(mention) => <Mention>{mentionWords(s.text, mention(), quoted)}</Mention>}</Show>}</For>
+                        <Show when={m.edited}>
+                          {" "}
+                          <span class="lu-msg__edited">
+                            <span aria-hidden="true">(edited)</span>
+                            <span class="lu-sr">edited</span>
+                          </span>
+                        </Show>
                       </p>
                     )}
                   </Message>

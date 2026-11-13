@@ -426,7 +426,7 @@ async function dm(which: string, aDir: string, bAccount: string, aHandle: string
   } finally {
     await ctx.close();
   }
-  console.log(`  ${which}: personal DM both ways and back after reload in ${Date.now() - t0} ms`);
+  console.log(`  ${which}: personal DM both ways and back after reload, and its own message edited and deleted, in ${Date.now() - t0} ms`);
 }
 
 async function dmSteps(which: string, page: Page, aDir: string, bAccount: string, aHandle: string) {
@@ -489,6 +489,22 @@ async function dmSteps(which: string, page: Page, aDir: string, bAccount: string
   await again.getByText(reply).waitFor();
   if ((await again.getByText(aHandle).count()) === 0) throw new Error("the CLI's handle is not shown as the sender");
   await again.screenshot({ path: `${out}/${which}-dm.png` });
+  // Its own message, edited where it is drawn and deleted at once with Shift (architecture 6.6, inside the encryption).
+  phase("edit in the dm");
+  const part = (text: string) => again.locator(".lu-msg__part", { has: again.locator(".lu-msg__body", { hasText: text }) });
+  const edited = `${hello}, edited`;
+  await part(hello).hover();
+  await part(hello).getByRole("button", { name: "More actions" }).click();
+  await again.getByRole("menuitem", { name: "Edit message" }).click();
+  const field = again.getByRole("textbox", { name: "Edit message" });
+  await field.fill(edited);
+  await field.press("Enter");
+  await part(edited).locator(".lu-msg__edited").waitFor();
+  phase("delete in the dm");
+  await part(edited).hover();
+  await part(edited).getByRole("button", { name: "More actions" }).click();
+  await again.getByRole("menuitem", { name: "Delete message" }).click({ modifiers: ["Shift"] });
+  await part(edited).waitFor({ state: "detached" });
 }
 
 // An invite link (architecture 6.1): the CLI mints one for its server, a
@@ -956,13 +972,15 @@ async function membershipStep(which: string, stamp: number) {
 }
 
 // Quote replies, reactions, mentions and read state (architecture 6.6):
-// Reply on a message puts its bar over the composer and the reply draws
-// the quote, which jumps back to the original; a reaction from the quick
-// row comes and goes; a mention picked from the @ list is drawn as a
-// pill; and the CLI, as the other member, mentions the browser's account
-// while the Mentions page is open: the channel's row, the Mentions row and
-// the title count it, the page lists it, and opening it from there shows
-// the "New messages" line and reads it, which takes the counts away.
+// Reply on a message puts its bar atop the composer (with "@ On") and
+// keeps the message's toolbar up with Reply pressed, and the reply draws
+// the line of what it quotes, which jumps back to the original; a
+// reaction picked in the picker comes and goes; a mention picked from the
+// @ list is drawn as a pill; and the CLI, as the other member, mentions
+// the browser's account while the Mentions page is open: the channel's
+// row, the Mentions tile and the title count it, the page lists it, and
+// opening it from there shows the "New" line and reads it, which takes
+// the counts away.
 // History from before this browser's store begins: a channel more than
 // 1,000 events long is read from its snapshot (the newest 50), so scrolling
 // up reads the store's few and then the instance's scrollback, a page at a
@@ -1043,18 +1061,28 @@ async function repliesStep(which: string, stamp: number) {
     await original.hover();
     await original.getByRole("button", { name: "Reply", exact: true }).click();
     await page.locator(".lu-replybar", { hasText: `Replying to ${owner}` }).waitFor();
+    await page.getByRole("button", { name: `Mention ${owner}`, pressed: true }).waitFor();
+    await page.getByText("Return to send · Esc to cancel the reply").waitFor();
+    // The message replied to keeps its toolbar, with Reply pressed.
+    await original.getByRole("button", { name: "Reply", pressed: true }).waitFor();
     await composer.fill("Quoted it.");
+    await page.screenshot({ path: `${out}/${which}-replies-bar.png` });
     await composer.press("Enter");
-    const reply = page.locator(".lu-msg__part", { has: page.locator(".lu-msg__body", { hasText: "Quoted it." }) });
-    await reply.locator(".lu-quote", { hasText: "Quote me, please." }).waitFor();
-    await reply.locator(".lu-quote", { hasText: owner }).waitFor();
+    // The line of what it quotes is the reply's row's, over its avatar.
+    const reply = page.locator("article.lu-msg", { has: page.locator(".lu-msg__body", { hasText: "Quoted it." }) });
+    const ref = reply.locator(".lu-replyref");
+    await reply.locator(".lu-replyref", { hasText: "Quote me, please." }).waitFor();
+    await reply.locator(".lu-replyref", { hasText: owner }).waitFor();
     if ((await page.locator(".lu-replybar").count()) > 0) throw new Error("the reply bar stayed after sending");
-    await reply.locator(".lu-quote").click();
+    await ref.click();
     await page.locator(".lu-msg__part.is-flash", { has: page.locator(".lu-msg__body", { hasText: "Quote me, please." }) }).waitFor();
     await page.screenshot({ path: `${out}/${which}-replies-quote.png` });
     phase("reaction");
     await original.hover();
-    await original.getByRole("button", { name: "React with 👍" }).click();
+    await original.getByRole("toolbar", { name: "Message actions" }).getByRole("button", { name: "Add reaction" }).click();
+    const picker = page.getByRole("dialog", { name: "Emoji" });
+    await picker.getByLabel("Search emoji").fill("thumbs up");
+    await picker.getByRole("button", { name: "thumbs up", exact: true }).first().click();
     const chip = original.getByRole("button", { name: "You reacted with 👍" });
     await chip.waitFor();
     if ((await chip.getAttribute("aria-pressed")) !== "true") throw new Error("this account's reaction is not drawn pressed");
@@ -1085,7 +1113,7 @@ async function repliesStep(which: string, stamp: number) {
     await page.screenshot({ path: `${out}/${which}-replies-unread.png` });
     phase("read");
     await entry.click();
-    await page.locator(".lu-divider--new", { hasText: "New messages" }).waitFor();
+    await page.getByRole("separator", { name: "New messages" }).waitFor();
     await row.getByLabel("1 mention").waitFor({ state: "detached" });
     await page.waitForFunction(() => document.title === "Lumia");
     if (await row.evaluate((el) => el.classList.contains("is-unread"))) throw new Error("the channel is still drawn unread once read");
@@ -1094,6 +1122,101 @@ async function repliesStep(which: string, stamp: number) {
     await ctx.close();
   }
   console.log(`  ${which}: replied with a quote that jumps back, reacted and took it back, mentioned from the @ list, and a mention's counts went once it was read from the Mentions page, in ${Date.now() - t0} ms`);
+}
+
+// Editing and deleting (architecture 6.6): this account's own message is
+// edited where it is drawn and then says "(edited)"; Up in the empty
+// composer takes the newest one up again and Escape puts it down; Delete
+// message asks "Delete this message?" first, and Shift skips the
+// question; someone else's message offers neither to a member.
+async function editingStep(which: string, stamp: number) {
+  const ownerDir = resolve(work, `cli-editing-owner-${which}`);
+  const writerDir = resolve(work, `cli-editing-writer-${which}`);
+  const owner = `keeps${which}${stamp}`;
+  const writer = `edits${which}${stamp}`;
+  lumia(ownerDir, "instance", "add", instance);
+  lumia(ownerDir, "account", "create", "--handle", owner, "--password", password);
+  const server = lumia(ownerDir, "server-create", `Editing ${stamp}`).match(/[0-9a-f-]{36}/)?.[0];
+  if (!server) throw new Error("no server id");
+  const general = lumia(ownerDir, "channel-create", server, "general").match(/[0-9a-f-]{36}/)?.[0];
+  if (!general) throw new Error("no channel id");
+  const code = lumia(ownerDir, "invite-create", server).trim().split(/\s+/)[0];
+  if (!code) throw new Error("no invite code");
+  lumia(writerDir, "instance", "add", instance);
+  lumia(writerDir, "account", "create", "--handle", writer, "--password", password);
+  lumia(writerDir, "join", code);
+  lumia(ownerDir, "send", general, "Not yours to change.");
+  const { ctx, page } = await open(which, "editing");
+  const t0 = Date.now();
+  try {
+    await trustCard(page);
+    await page.getByLabel("Email or handle").fill(writer);
+    await page.getByRole("textbox", { name: "Password" }).fill(password);
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    const composer = page.getByPlaceholder("Message #general");
+    await composer.waitFor();
+    const part = (text: string) => page.locator(".lu-msg__part", { has: page.locator(".lu-msg__body", { hasText: text }) });
+    const more = async (text: string) => {
+      await part(text).hover();
+      await part(text).getByRole("button", { name: "More actions" }).click();
+    };
+    phase("someone else's");
+    await more("Not yours to change.");
+    await page.getByRole("menuitem", { name: "Copy text" }).waitFor();
+    if ((await page.getByRole("menuitem", { name: /Edit message|Delete message/ }).count()) > 0) throw new Error("a member is offered to edit or delete someone else's message");
+    await page.keyboard.press("Escape");
+    await page.getByRole("menu").waitFor({ state: "detached" });
+    phase("edit");
+    await composer.fill("First draft.");
+    await composer.press("Enter");
+    await part("First draft.").waitFor();
+    await more("First draft.");
+    await page.getByRole("menuitem", { name: "Edit message" }).click();
+    const field = page.getByRole("textbox", { name: "Edit message" });
+    await field.waitFor();
+    if ((await field.inputValue()) !== "First draft.") throw new Error(`the edit opened with ${JSON.stringify(await field.inputValue())}`);
+    await page.getByText("Esc to cancel · Return to save").waitFor();
+    await field.fill(`Second draft for @${owner}.`);
+    await page.screenshot({ path: `${out}/${which}-editing-field.png` });
+    await field.press("Enter");
+    await field.waitFor({ state: "detached" });
+    await part("Second draft").locator(".lu-msg__edited", { hasText: "(edited)" }).waitFor();
+    // An edit carries its mentions again.
+    await part("Second draft").locator(".lu-mention", { hasText: `@${owner}` }).waitFor();
+    if ((await part("First draft.").count()) > 0) throw new Error("the old body stayed");
+    await page.screenshot({ path: `${out}/${which}-editing-edited.png` });
+    phase("up arrow");
+    await composer.click();
+    await composer.press("ArrowUp");
+    await field.waitFor();
+    if ((await field.inputValue()) !== `Second draft for @${owner}.`) throw new Error(`Up took up ${JSON.stringify(await field.inputValue())}`);
+    await field.press("Escape");
+    await field.waitFor({ state: "detached" });
+    await part("Second draft").waitFor();
+    phase("delete");
+    await more("Second draft");
+    await page.getByRole("menuitem", { name: "Delete message" }).click();
+    const ask = page.getByRole("dialog", { name: "Delete this message?" });
+    await ask.waitFor();
+    await ask.getByText(`Second draft for @${owner}.`).waitFor();
+    await page.screenshot({ path: `${out}/${which}-editing-delete.png` });
+    await ask.getByRole("button", { name: "Delete", exact: true }).click();
+    await ask.waitFor({ state: "detached" });
+    await part("Second draft").waitFor({ state: "detached" });
+    await page.locator(".lu-msg__body", { hasText: /^\(deleted\)$/ }).first().waitFor();
+    phase("shift delete");
+    await composer.fill("Gone at once.");
+    await composer.press("Enter");
+    await part("Gone at once.").waitFor();
+    await more("Gone at once.");
+    await page.getByRole("menuitem", { name: "Delete message" }).click({ modifiers: ["Shift"] });
+    await part("Gone at once.").waitFor({ state: "detached" });
+    if ((await ask.count()) > 0) throw new Error("Shift did not skip the question");
+    await page.screenshot({ path: `${out}/${which}-editing-deleted.png` });
+  } finally {
+    await ctx.close();
+  }
+  console.log(`  ${which}: edited its own message in place ("(edited)"), took it up again with Up and put it down with Escape, deleted one after the question and one at once with Shift, and was offered neither on someone else's, in ${Date.now() - t0} ms`);
 }
 
 // A session revoked from elsewhere (protocol 12), as "sign out everywhere"
@@ -1618,6 +1741,7 @@ try {
       ["aside", () => asideStep(which, stamp)],
       ["membership", () => membershipStep(which, stamp)],
       ["replies", () => repliesStep(which, stamp)],
+      ["editing", () => editingStep(which, stamp)],
       ["history", () => historyStep(which, stamp)],
       ["push", () => webPush(which, `web${stamp}`, passwordDir, server, general, webAccount)],
       ["magic link", () => magicLink(which)],

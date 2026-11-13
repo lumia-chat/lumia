@@ -30,7 +30,7 @@ import { useNames } from "../client/names";
 import { preferences, setAppearance, setDensity, type Appearance, type Density } from "../client/preferences";
 import { addPasskey, passkeysAvailable } from "../client/passkeys";
 import { initialsOf, toneFor } from "./app";
-import { Compose, Timeline, createMarkRead, quoteOf, type Replying, type TimelineItem } from "./timeline";
+import { Compose, Timeline, createMarkRead, quoteOf, thrownRefusal, type Refusal, type Replying, type TimelineItem } from "./timeline";
 import { MentionsPage } from "./mentions";
 
 export type HomeView = "dm" | "requests" | "devices" | "profile" | "preferences" | "new" | "add" | "mentions";
@@ -300,6 +300,9 @@ function Conversation(props: HomeProps) {
   const [error, setError] = createSignal("");
   const [replying, setReplying] = createSignal<Replying | null>(null);
   const [atEnd, setAtEnd] = createSignal(true);
+  // One of this identity's messages being edited where it is drawn, and an edit or a delete that failed.
+  const [editing, setEditing] = createSignal<string | undefined>();
+  const [refused, setRefused] = createSignal<Refusal | null>(null);
   let composerInput: HTMLInputElement | undefined;
   createEffect(
     on(
@@ -307,6 +310,8 @@ function Conversation(props: HomeProps) {
       () => {
         setReplying(null);
         setAtEnd(true);
+        setEditing(undefined);
+        setRefused(null);
       },
     ),
   );
@@ -326,6 +331,8 @@ function Conversation(props: HomeProps) {
       at: m.sentAtMicros,
       body: m.body,
       deleted: m.deleted,
+      edited: m.edited,
+      mine: m.mine,
       notice: "",
       reply: m.reply,
       mentions: [],
@@ -373,9 +380,35 @@ function Conversation(props: HomeProps) {
   };
   const startReply = (item: TimelineItem, text: string) => {
     const m = byId().get(item.id);
-    // The quote's author where the engine knows it; a personal DM's may be unknown.
+    // The quote's author where the engine knows it; a personal DM's may be unknown. No "@ On"
+    // switch here: a personal conversation's quote carries no such thing, and every message notifies.
     setReplying({ messageId: item.id, authorAccountId: item.authorId, name: m ? who(m) : "", text });
     composerInput?.focus();
+  };
+  // Only this identity's own, in a personal conversation: the clients check it (architecture 11).
+  const saveEdit = async (item: TimelineItem, body: string) => {
+    const id = props.channelId;
+    if (!id) return;
+    setRefused(null);
+    try {
+      await client().dmEdit(id, item.id, body);
+    } catch (e) {
+      setRefused({ messageId: item.id, text: thrownRefusal("edit", e) });
+    }
+  };
+  const deleteMessage = async (item: TimelineItem) => {
+    const id = props.channelId;
+    if (!id) return;
+    setRefused(null);
+    try {
+      await client().dmDelete(id, item.id);
+    } catch (e) {
+      setRefused({ messageId: item.id, text: thrownRefusal("delete", e) });
+    }
+  };
+  const editLast = () => {
+    const last = [...items()].reverse().find((m) => m.mine && !m.deleted);
+    if (last) setEditing(last.id);
   };
   const rejoin = async () => {
     if (!props.channelId) return;
@@ -409,10 +442,24 @@ function Conversation(props: HomeProps) {
                 onOpenProfile={(m, anchor) => props.openPerson(m.authorId, anchor)}
                 openPerson={props.openPerson}
                 knownName={knownName}
+                photoOf={photoOf}
                 readState={() => (readStates.data ? (readStates.data.byChannel.get(id) ?? undefined) : null)}
                 canAct={!!state()?.member}
                 onReply={startReply}
+                replyingTo={replying()?.messageId}
+                onCancelReply={() => setReplying(null)}
                 onReact={react}
+                canDelete={(m) => m.mine}
+                editing={editing()}
+                onEditing={(mid) => {
+                  setEditing(mid);
+                  // Done with it: back to the composer, where Up took it up.
+                  if (mid) setRefused(null);
+                  else composerInput?.focus();
+                }}
+                onEdit={(m, body) => void saveEdit(m, body)}
+                onDelete={(m) => void deleteMessage(m)}
+                refused={refused()}
                 onAtEnd={setAtEnd}
                 before={
                   <>
@@ -452,6 +499,7 @@ function Conversation(props: HomeProps) {
             onSend={() => void send()}
             replying={replying()}
             onCancelReply={() => setReplying(null)}
+            onEditLast={state()?.member ? editLast : undefined}
             inputRef={(el) => (composerInput = el)}
           />
         </>
