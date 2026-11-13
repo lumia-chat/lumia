@@ -1038,7 +1038,7 @@ impl Client {
     pub fn create_channel(&self, server_id: String, name: String) -> Res<ChannelSummary> {
         Ok(self
             .runtime
-            .block_on(self.app.create_channel(&server_id, &name))?
+            .block_on(self.app.create_channel(&server_id, &name, false))?
             .into())
     }
 

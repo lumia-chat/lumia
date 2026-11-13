@@ -64,6 +64,10 @@ fn dm(id: &str, host: &str, others: &[&str]) -> ChannelSummary {
         last_seq: 0,
         participant_account_ids: participants,
         host: host.into(),
+        private: false,
+        is_default: false,
+        member_count: 0,
+        topic: String::new(),
     }
 }
 

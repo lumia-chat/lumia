@@ -53,6 +53,7 @@ fn signed_in(s: &mut State) {
         servers: Vec::new(),
         channels: Vec::new(),
         pending_requests: Vec::new(),
+        channel_invitations: Vec::new(),
     })));
 }
 

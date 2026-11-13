@@ -45,6 +45,10 @@ use lumia_core::proto::{
     ReauthResponse, RefreshRequest, RevokeDeviceRequest, Server, SignedRoster, TokenPair,
 };
 use lumia_core::proto::{
+    AddChannelMembersRequest, AddChannelMembersResponse, ChannelIds, ListChannelMembersResponse,
+    OpenServerDmRequest, UpdateMembershipRequest,
+};
+use lumia_core::proto::{
     CreateInviteRequest, EmailInviteRequest, HandoffResponse, Invite, InvitePreview,
     ListInvitesResponse, ListPasskeysResponse, MagicLinkCompleteRequest, MagicLinkRequest, Member,
     PasskeyAssertFinishRequest, PasskeyAssertStartRequest, PasskeyChallenge,
@@ -1086,10 +1090,12 @@ impl Api {
         &self,
         server_id: Vec<u8>,
         name: &str,
+        private: bool,
     ) -> Result<Channel, ClientError> {
         let req = CreateChannelRequest {
             server_id,
             name: name.into(),
+            private,
             ..Default::default()
         };
         self.post("/api/v1/channels", &req).await
@@ -1102,6 +1108,169 @@ impl Api {
     pub async fn channels(&self, server_id: &str) -> Result<ListChannelsResponse, ClientError> {
         self.get(&format!("/api/v1/servers/{server_id}/channels"))
             .await
+    }
+
+    /// `GET /servers/{id}/channels/browse`: the public channels the caller
+    /// can see and is not in, with their member counts (architecture 6.8).
+    ///
+    /// # Errors
+    /// On transport failure or an API error.
+    pub async fn browse_channels(
+        &self,
+        server_id: &str,
+    ) -> Result<ListChannelsResponse, ClientError> {
+        self.get(&format!("/api/v1/servers/{server_id}/channels/browse"))
+            .await
+    }
+
+    /// `POST /channels/{id}/join`.
+    ///
+    /// # Errors
+    /// `NOT_FOUND` for a channel the caller may not join; transport failure.
+    pub async fn join_channel(&self, channel_id: &str) -> Result<Channel, ClientError> {
+        let (status, bytes) = self
+            .send(
+                reqwest::Method::POST,
+                &format!("/api/v1/channels/{channel_id}/join"),
+                None,
+                None,
+            )
+            .await?;
+        decoded(status, &bytes)
+    }
+
+    /// `POST /channels/{id}/leave`.
+    ///
+    /// # Errors
+    /// `NOT_FOUND` when not in it; transport failure.
+    pub async fn leave_channel(&self, channel_id: &str) -> Result<(), ClientError> {
+        self.empty(
+            reqwest::Method::POST,
+            &format!("/api/v1/channels/{channel_id}/leave"),
+            None,
+        )
+        .await
+    }
+
+    /// `GET /channels/{id}/members`.
+    ///
+    /// # Errors
+    /// `NOT_FOUND` for a channel the caller cannot see; transport failure.
+    pub async fn channel_members(
+        &self,
+        channel_id: &str,
+    ) -> Result<ListChannelMembersResponse, ClientError> {
+        self.get(&format!("/api/v1/channels/{channel_id}/members"))
+            .await
+    }
+
+    /// `POST /channels/{id}/members`: `account_ids` as 16-byte ids.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` or `NOT_FOUND` for a caller who may not add there,
+    /// `INVALID_ARGUMENT` with `details.field` `account_ids`; transport failure.
+    pub async fn add_channel_members(
+        &self,
+        channel_id: &str,
+        account_ids: Vec<Vec<u8>>,
+    ) -> Result<AddChannelMembersResponse, ClientError> {
+        self.post(
+            &format!("/api/v1/channels/{channel_id}/members"),
+            &AddChannelMembersRequest { account_ids },
+        )
+        .await
+    }
+
+    /// `DELETE /channels/{id}/members/{account_id}`.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` without `MANAGE_CHANNELS`; transport failure.
+    pub async fn remove_channel_member(
+        &self,
+        channel_id: &str,
+        account_id: &str,
+    ) -> Result<(), ClientError> {
+        self.empty(
+            reqwest::Method::DELETE,
+            &format!("/api/v1/channels/{channel_id}/members/{account_id}"),
+            None,
+        )
+        .await
+    }
+
+    /// `DELETE /channel-invitations/{channel_id}`.
+    ///
+    /// # Errors
+    /// `NOT_FOUND` without one; transport failure.
+    pub async fn dismiss_channel_invitation(&self, channel_id: &str) -> Result<(), ClientError> {
+        self.empty(
+            reqwest::Method::DELETE,
+            &format!("/api/v1/channel-invitations/{channel_id}"),
+            None,
+        )
+        .await
+    }
+
+    /// `PATCH /servers/{id}/membership`: the caller's own switches there.
+    ///
+    /// # Errors
+    /// `NOT_FOUND` for a server it is not in; transport failure.
+    pub async fn update_membership(
+        &self,
+        server_id: &str,
+        req: &UpdateMembershipRequest,
+    ) -> Result<Member, ClientError> {
+        let (status, bytes) = self
+            .send(
+                reqwest::Method::PATCH,
+                &format!("/api/v1/servers/{server_id}/membership"),
+                Some(req.encode_to_vec()),
+                None,
+            )
+            .await?;
+        decoded(status, &bytes)
+    }
+
+    /// `POST /servers/{id}/dms`: the server DM with `account_id` (16 bytes).
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` without `START_SERVER_DMS`, `FAILED_PRECONDITION`
+    /// with `server_dms_off`, `NOT_FOUND`; transport failure.
+    pub async fn open_server_dm(
+        &self,
+        server_id: &str,
+        account_id: Vec<u8>,
+    ) -> Result<Channel, ClientError> {
+        self.post(
+            &format!("/api/v1/servers/{server_id}/dms"),
+            &OpenServerDmRequest { account_id },
+        )
+        .await
+    }
+
+    /// `PATCH /servers/{id}` with only the default channels.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` without `MANAGE_SERVER`, `INVALID_ARGUMENT` with
+    /// `default_channels`; transport failure.
+    pub async fn set_default_channels(
+        &self,
+        server_id: &str,
+        channel_ids: Vec<Vec<u8>>,
+    ) -> Result<Server, ClientError> {
+        let req = UpdateServerRequest {
+            default_channels: Some(ChannelIds { channel_ids }),
+            ..Default::default()
+        };
+        let (status, bytes) = self
+            .send(
+                reqwest::Method::PATCH,
+                &format!("/api/v1/servers/{server_id}"),
+                Some(req.encode_to_vec()),
+                None,
+            )
+            .await?;
+        decoded(status, &bytes)
     }
 
     /// `GET /accounts/{id}`: another account's public profile, when the

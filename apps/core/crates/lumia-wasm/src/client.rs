@@ -356,7 +356,8 @@ impl Client {
         )
     }
 
-    /// `POST /channels`: a text channel in a server this account may manage channels in.
+    /// `POST /channels`: a text channel in a server this account may manage
+    /// channels in; private when `private` is true (architecture 6.8).
     ///
     /// # Errors
     /// `PERMISSION_DENIED` without `manage_channels` there; transport failure.
@@ -365,13 +366,169 @@ impl Client {
         &self,
         server_id: String,
         name: String,
+        private: Option<bool>,
     ) -> Result<JsValue, JsError> {
         to_js(
             &self
                 .app
-                .create_channel(&server_id, &name)
+                .create_channel(&server_id, &name, private.unwrap_or(false))
                 .await
-                .map_err(js)?,
+                .map_err(js_api)?,
+        )
+    }
+
+    /// `GET /servers/{id}/channels/browse`: the public channels this account
+    /// can see and is not in, with how many are in each.
+    ///
+    /// # Errors
+    /// On transport or API failure.
+    #[wasm_bindgen(js_name = browseChannels)]
+    pub async fn browse_channels(&self, server_id: String) -> Result<JsValue, JsError> {
+        to_js(&self.app.browse_channels(&server_id).await.map_err(js_api)?)
+    }
+
+    /// `POST /channels/{id}/join`. The snapshot as it then is.
+    ///
+    /// # Errors
+    /// `NOT_FOUND` for a channel it may not join; transport failure.
+    #[wasm_bindgen(js_name = joinChannel)]
+    pub async fn join_channel(&self, channel_id: String) -> Result<JsValue, JsError> {
+        to_js(&self.app.join_channel(&channel_id).await.map_err(js_api)?)
+    }
+
+    /// `POST /channels/{id}/leave`. The snapshot as it then is.
+    ///
+    /// # Errors
+    /// `NOT_FOUND` when not in it; transport failure.
+    #[wasm_bindgen(js_name = leaveChannel)]
+    pub async fn leave_channel(&self, channel_id: String) -> Result<JsValue, JsError> {
+        to_js(&self.app.leave_channel(&channel_id).await.map_err(js_api)?)
+    }
+
+    /// `GET /channels/{id}/members`: account ids, in the order they came in.
+    ///
+    /// # Errors
+    /// `NOT_FOUND` for a channel it cannot see; transport failure.
+    #[wasm_bindgen(js_name = channelMembers)]
+    pub async fn channel_members(&self, channel_id: String) -> Result<JsValue, JsError> {
+        to_js(
+            &self
+                .app
+                .channel_members(&channel_id)
+                .await
+                .map_err(js_api)?,
+        )
+    }
+
+    /// `POST /channels/{id}/members`: who was added and who invited.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED`, `NOT_FOUND`, or `INVALID_ARGUMENT` with
+    /// `details.field` `account_ids`; transport failure.
+    #[wasm_bindgen(js_name = addChannelMembers)]
+    pub async fn add_channel_members(
+        &self,
+        channel_id: String,
+        account_ids: Vec<String>,
+    ) -> Result<JsValue, JsError> {
+        to_js(
+            &self
+                .app
+                .add_channel_members(&channel_id, &account_ids)
+                .await
+                .map_err(js_api)?,
+        )
+    }
+
+    /// `DELETE /channels/{id}/members/{account_id}`.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` without `MANAGE_CHANNELS`; transport failure.
+    #[wasm_bindgen(js_name = removeChannelMember)]
+    pub async fn remove_channel_member(
+        &self,
+        channel_id: String,
+        account_id: String,
+    ) -> Result<(), JsError> {
+        self.app
+            .remove_channel_member(&channel_id, &account_id)
+            .await
+            .map_err(js_api)
+    }
+
+    /// `DELETE /channel-invitations/{channel_id}`. The snapshot as it then is.
+    ///
+    /// # Errors
+    /// `NOT_FOUND` without one; transport failure.
+    #[wasm_bindgen(js_name = dismissChannelInvitation)]
+    pub async fn dismiss_channel_invitation(&self, channel_id: String) -> Result<JsValue, JsError> {
+        to_js(
+            &self
+                .app
+                .dismiss_channel_invitation(&channel_id)
+                .await
+                .map_err(js_api)?,
+        )
+    }
+
+    /// `PATCH /servers/{id}/membership`: this account's own switches there;
+    /// one left out stays. The snapshot as it then is.
+    ///
+    /// # Errors
+    /// `NOT_FOUND` for a server it is not in; transport failure.
+    #[wasm_bindgen(js_name = updateMembership)]
+    pub async fn update_membership(
+        &self,
+        server_id: String,
+        channel_adds_by_invitation: Option<bool>,
+        server_dms_off: Option<bool>,
+    ) -> Result<JsValue, JsError> {
+        to_js(
+            &self
+                .app
+                .update_membership(&server_id, channel_adds_by_invitation, server_dms_off)
+                .await
+                .map_err(js_api)?,
+        )
+    }
+
+    /// `POST /servers/{id}/dms`: the server DM with a member, to open.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED`, `FAILED_PRECONDITION` with `details.state`
+    /// `server_dms_off`, `NOT_FOUND`; transport failure.
+    #[wasm_bindgen(js_name = openServerDm)]
+    pub async fn open_server_dm(
+        &self,
+        server_id: String,
+        account_id: String,
+    ) -> Result<JsValue, JsError> {
+        to_js(
+            &self
+                .app
+                .open_server_dm(&server_id, &account_id)
+                .await
+                .map_err(js_api)?,
+        )
+    }
+
+    /// `PATCH /servers/{id}` with the default channels. The snapshot as it then is.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` without `MANAGE_SERVER`; `INVALID_ARGUMENT` with
+    /// `details.field` `default_channels`; transport failure.
+    #[wasm_bindgen(js_name = setDefaultChannels)]
+    pub async fn set_default_channels(
+        &self,
+        server_id: String,
+        channel_ids: Vec<String>,
+    ) -> Result<JsValue, JsError> {
+        to_js(
+            &self
+                .app
+                .set_default_channels(&server_id, &channel_ids)
+                .await
+                .map_err(js_api)?,
         )
     }
 

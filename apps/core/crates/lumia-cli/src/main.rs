@@ -447,7 +447,9 @@ async fn run(cli: Cli) -> Result<(), ClientError> {
             Ok(())
         }
         Cmd::ChannelCreate { server_id, name } => {
-            let c = api.create_channel(parse_uuid(&server_id)?, &name).await?;
+            let c = api
+                .create_channel(parse_uuid(&server_id)?, &name, false)
+                .await?;
             println!("{}  #{}", wire::display(&c.channel_id), c.name);
             Ok(())
         }

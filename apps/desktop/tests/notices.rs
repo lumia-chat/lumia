@@ -28,6 +28,10 @@ fn with_a_conversation() -> State {
         last_seq: 0,
         participant_account_ids: vec!["me".into(), "grace".into()],
         host: String::new(),
+        private: false,
+        is_default: false,
+        member_count: 0,
+        topic: String::new(),
     });
     state.receive(&Update::Snapshot(Ok(snap)));
     state

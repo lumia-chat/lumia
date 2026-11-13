@@ -169,6 +169,10 @@ fn an_account_with_a_personal_conversation_lands_on_home() {
         last_seq: 0,
         participant_account_ids: vec!["me".into(), "grace".into()],
         host: String::new(),
+        private: false,
+        is_default: false,
+        member_count: 0,
+        topic: String::new(),
     });
     state.receive(&Update::Snapshot(Ok(snapshot)));
     let rt = runtime(state);
@@ -580,6 +584,8 @@ fn who_is_typing_is_named_under_the_composer_until_their_time_runs_out() {
                     body: "Done.".into(),
                     created_at_micros: 0,
                     deleted: false,
+                    notice: String::new(),
+                    notice_account_id: String::new(),
                 }),
             }],
         }));

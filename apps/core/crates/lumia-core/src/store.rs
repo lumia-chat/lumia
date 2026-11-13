@@ -42,6 +42,26 @@ pub struct StoredMessage {
     pub created_at_micros: i64,
     /// Whether the message has been deleted.
     pub deleted: bool,
+    /// A notice's kind as the protocol names it in lower case (`joined`,
+    /// `added`, `left`, `removed`); empty for a message (architecture 6.8).
+    pub notice: String,
+    /// Who a notice is about; empty for a message.
+    pub notice_account_id: Vec<u8>,
+}
+
+/// A message's notice, as [`StoredMessage`] keeps it: its kind in lower
+/// case and who it is about, or two empties for a message.
+#[must_use]
+pub fn notice_of(m: &crate::proto::Message) -> (String, Vec<u8>) {
+    match &m.notice {
+        Some(n) => (
+            crate::proto::channel_notice::Kind::try_from(n.kind)
+                .map(|k| k.as_str_name().to_lowercase())
+                .unwrap_or_default(),
+            n.account_id.clone(),
+        ),
+        None => (String::new(), Vec::new()),
+    }
 }
 
 /// A command waiting for its acknowledgment.

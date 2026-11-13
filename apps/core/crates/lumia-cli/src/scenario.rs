@@ -947,7 +947,9 @@ async fn reconnect(env: &Env) -> Result<(), ClientError> {
 
 async fn fresh_channel(api: &Api) -> Result<Vec<u8>, ClientError> {
     let server = api.create_server(&handle("scenario")).await?;
-    let channel = api.create_channel(server.server_id, "general").await?;
+    let channel = api
+        .create_channel(server.server_id, "general", false)
+        .await?;
     Ok(channel.channel_id)
 }
 

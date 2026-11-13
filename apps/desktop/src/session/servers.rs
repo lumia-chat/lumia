@@ -89,7 +89,7 @@ impl Session {
         let Some(app) = self.client() else { return };
         let (server_id, name) = (server_id.to_string(), name.trim().to_string());
         self.task(async move {
-            let channel = app.create_channel(&server_id, &name).await;
+            let channel = app.create_channel(&server_id, &name, false).await;
             Update::Server(ServerUpdate::ChannelCreated {
                 server_id,
                 channel: channel.map_err(Failure::from),

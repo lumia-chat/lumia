@@ -40,7 +40,9 @@ CREATE TABLE IF NOT EXISTS messages (
   author_account_id BLOB NOT NULL,
   body TEXT NOT NULL,
   created_at_micros INTEGER NOT NULL,
-  deleted INTEGER NOT NULL DEFAULT 0
+  deleted INTEGER NOT NULL DEFAULT 0,
+  notice TEXT NOT NULL DEFAULT '',
+  notice_account_id BLOB NOT NULL DEFAULT x''
 );
 CREATE INDEX IF NOT EXISTS messages_channel_seq ON messages (channel_id, seq);
 CREATE TABLE IF NOT EXISTS outbox (
@@ -193,6 +195,7 @@ impl SqliteStore {
         conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")
             .map_err(backend)?;
         conn.execute_batch(SCHEMA).map_err(backend)?;
+        add_missing_columns(&conn)?;
         Ok(Self { conn })
     }
 
@@ -554,7 +557,8 @@ impl Store for SqliteStore {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT message_id, channel_id, seq, author_account_id, body, created_at_micros, deleted
+                "SELECT message_id, channel_id, seq, author_account_id, body, created_at_micros, deleted,
+                        notice, notice_account_id
                  FROM messages WHERE channel_id = ?1 AND seq < ?2 ORDER BY seq DESC LIMIT ?3",
             )
             .map_err(backend)?;
@@ -571,6 +575,8 @@ impl Store for SqliteStore {
                     body: row.get(4)?,
                     created_at_micros: row.get(5)?,
                     deleted: row.get::<_, i64>(6)? != 0,
+                    notice: row.get(7)?,
+                    notice_account_id: row.get(8)?,
                 })
             })
             .map_err(backend)?;
@@ -767,6 +773,24 @@ pub fn decode_account_event(ev: &StoredEvent) -> Result<AccountEvent, StoreError
     AccountEvent::decode(ev.bytes.as_slice()).map_err(|_| StoreError::Corrupt(ev.seq))
 }
 
+// A store made before a column existed gains it here: `CREATE TABLE IF NOT
+// EXISTS` leaves an existing table as it was. Notices (architecture 6.8)
+// came after the first stores.
+fn add_missing_columns(conn: &Connection) -> Result<(), StoreError> {
+    let has_notice = conn
+        .prepare("SELECT 1 FROM pragma_table_info('messages') WHERE name = 'notice'")
+        .and_then(|mut stmt| stmt.exists([]))
+        .map_err(backend)?;
+    if !has_notice {
+        conn.execute_batch(
+            "ALTER TABLE messages ADD COLUMN notice TEXT NOT NULL DEFAULT '';
+             ALTER TABLE messages ADD COLUMN notice_account_id BLOB NOT NULL DEFAULT x'';",
+        )
+        .map_err(backend)?;
+    }
+    Ok(())
+}
+
 // Messages are materialized from create, edit and delete events; everything
 // else is kept as raw bytes only until its read side exists.
 fn materialize(tx: &rusqlite::Transaction<'_>, ev: &StoredEvent) -> Result<(), StoreError> {
@@ -774,6 +798,7 @@ fn materialize(tx: &rusqlite::Transaction<'_>, ev: &StoredEvent) -> Result<(), S
     match event.payload {
         Some(event::Payload::MessageCreated(created)) => {
             if let Some(m) = created.message {
+                let (notice, notice_account_id) = lumia_core::store::notice_of(&m);
                 insert_message(
                     tx,
                     &StoredMessage {
@@ -784,6 +809,8 @@ fn materialize(tx: &rusqlite::Transaction<'_>, ev: &StoredEvent) -> Result<(), S
                         body: m.body,
                         created_at_micros: wire::micros(m.created_at.as_ref()).unwrap_or(0),
                         deleted: false,
+                        notice,
+                        notice_account_id,
                     },
                 )?;
             }
@@ -816,9 +843,9 @@ fn materialize(tx: &rusqlite::Transaction<'_>, ev: &StoredEvent) -> Result<(), S
 
 fn insert_message(tx: &rusqlite::Transaction<'_>, m: &StoredMessage) -> Result<(), StoreError> {
     tx.execute(
-        "INSERT OR REPLACE INTO messages (message_id, channel_id, seq, author_account_id, body, created_at_micros, deleted)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        params![m.message_id, m.channel_id, to_i64(m.seq), m.author_account_id, m.body, m.created_at_micros, i64::from(m.deleted)],
+        "INSERT OR REPLACE INTO messages (message_id, channel_id, seq, author_account_id, body, created_at_micros, deleted, notice, notice_account_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![m.message_id, m.channel_id, to_i64(m.seq), m.author_account_id, m.body, m.created_at_micros, i64::from(m.deleted), m.notice, m.notice_account_id],
     )
     .map(|_| ())
     .map_err(backend)
@@ -868,6 +895,58 @@ mod tests {
             seq,
             bytes: event.encode_to_vec(),
         }
+    }
+
+    #[test]
+    fn a_notice_is_kept_with_who_it_is_about() {
+        use lumia_core::proto::{channel_notice, ChannelNotice};
+        let mut store = SqliteStore::in_memory().unwrap();
+        let ch = vec![1u8; 16];
+        let mut notice = created(&ch, 1, "");
+        let mut event = Event::decode(notice.bytes.as_slice()).unwrap();
+        if let Some(event::Payload::MessageCreated(MessageCreated { message: Some(m) })) =
+            event.payload.as_mut()
+        {
+            m.notice = Some(ChannelNotice {
+                kind: channel_notice::Kind::Added as i32,
+                account_id: vec![7; 16],
+            });
+        }
+        notice.bytes = event.encode_to_vec();
+        store
+            .apply(LogKind::Channel, &ch, &[notice, created(&ch, 2, "hi")])
+            .unwrap();
+        let kept = store.messages(&ch, 10).unwrap();
+        assert_eq!(kept[0].notice, "added");
+        assert_eq!(kept[0].notice_account_id, vec![7; 16]);
+        assert_eq!(kept[1].notice, "");
+        assert!(kept[1].notice_account_id.is_empty());
+    }
+
+    #[test]
+    fn a_store_made_before_notices_gains_their_columns() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE messages (
+               message_id BLOB PRIMARY KEY,
+               channel_id BLOB NOT NULL,
+               seq INTEGER NOT NULL,
+               author_account_id BLOB NOT NULL,
+               body TEXT NOT NULL,
+               created_at_micros INTEGER NOT NULL,
+               deleted INTEGER NOT NULL DEFAULT 0
+             );
+             INSERT INTO messages VALUES (x'01', x'02', 1, x'03', 'old', 0, 0);",
+        )
+        .unwrap();
+        let store = SqliteStore::init(conn).unwrap();
+        let kept = store.messages(&[2], 10).unwrap();
+        assert_eq!(
+            (kept[0].body.as_str(), kept[0].notice.as_str()),
+            ("old", "")
+        );
+        // Opening it again finds the columns there and leaves them.
+        add_missing_columns(&store.conn).unwrap();
     }
 
     #[test]
@@ -951,6 +1030,8 @@ mod tests {
             body: "new".into(),
             created_at_micros: 0,
             deleted: false,
+            notice: String::new(),
+            notice_account_id: Vec::new(),
         };
         store.apply_snapshot(&ch, 2000, &[m]).unwrap();
         assert_eq!(

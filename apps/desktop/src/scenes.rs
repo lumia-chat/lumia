@@ -189,6 +189,10 @@ fn servers_sample(state: &mut State) {
         last_seq: 0,
         participant_account_ids: Vec::new(),
         host: String::new(),
+        private: false,
+        is_default: false,
+        member_count: 0,
+        topic: String::new(),
     };
     let member = |id: &str, handle: &str, name: &str, pronouns: &str, bio: &str| MemberSummary {
         account_id: id.into(),
@@ -198,6 +202,8 @@ fn servers_sample(state: &mut State) {
         pronouns: pronouns.into(),
         bio: bio.into(),
         avatar_url: String::new(),
+        channel_adds_by_invitation: false,
+        server_dms_off: false,
     };
     state.receive(&Update::SignedIn(Ok(())));
     state.receive(&Update::Snapshot(Ok(SnapshotSummary {
@@ -212,6 +218,10 @@ fn servers_sample(state: &mut State) {
                 icon_url: String::new(),
                 retention_days: 0,
                 can_manage: true,
+                can_manage_channels: false,
+                can_start_dms: false,
+                channel_adds_by_invitation: false,
+                server_dms_off: false,
             },
             ServerSummary {
                 server_id: "garden".into(),
@@ -219,6 +229,10 @@ fn servers_sample(state: &mut State) {
                 icon_url: String::new(),
                 retention_days: 0,
                 can_manage: false,
+                can_manage_channels: false,
+                can_start_dms: false,
+                channel_adds_by_invitation: false,
+                server_dms_off: false,
             },
         ],
         channels: vec![
@@ -227,6 +241,7 @@ fn servers_sample(state: &mut State) {
             channel("plots", "garden", "plots"),
         ],
         pending_requests: Vec::new(),
+        channel_invitations: Vec::new(),
     })));
     state.receive(&Update::Members {
         server_id: "acme".into(),
@@ -413,6 +428,8 @@ mod staged {
             pronouns: pronouns.into(),
             bio: bio.into(),
             avatar_url: String::new(),
+            channel_adds_by_invitation: false,
+            server_dms_off: false,
         }
     }
 
@@ -430,6 +447,10 @@ mod staged {
             last_seq: 0,
             participant_account_ids: with.iter().map(|id| (*id).to_string()).collect(),
             host: host.into(),
+            private: false,
+            is_default: false,
+            member_count: 0,
+            topic: String::new(),
         }
     }
 
@@ -456,6 +477,10 @@ mod staged {
                 icon_url: String::new(),
                 retention_days: 0,
                 can_manage: true,
+                can_manage_channels: false,
+                can_start_dms: false,
+                channel_adds_by_invitation: false,
+                server_dms_off: false,
             }],
             channels: vec![
                 channel("general", "acme", "general", "", &[]),
@@ -467,6 +492,7 @@ mod staged {
                 request("r1", "barbara", 1, 2),
                 request("r2", "donald", 0, 0),
             ],
+            channel_invitations: Vec::new(),
         }
     }
 
@@ -710,6 +736,10 @@ pub fn bodies(state: &mut State) {
             icon_url: String::new(),
             retention_days: 0,
             can_manage: true,
+            can_manage_channels: false,
+            can_start_dms: false,
+            channel_adds_by_invitation: false,
+            server_dms_off: false,
         }],
         channels: vec![ChannelSummary {
             channel_id: "general".into(),
@@ -719,8 +749,13 @@ pub fn bodies(state: &mut State) {
             last_seq: 0,
             participant_account_ids: Vec::new(),
             host: String::new(),
+            private: false,
+            is_default: false,
+            member_count: 0,
+            topic: String::new(),
         }],
         pending_requests: Vec::new(),
+        channel_invitations: Vec::new(),
     })));
     let member = |id: &str, name: &str| MemberSummary {
         account_id: id.into(),
@@ -730,6 +765,8 @@ pub fn bodies(state: &mut State) {
         pronouns: String::new(),
         bio: String::new(),
         avatar_url: String::new(),
+        channel_adds_by_invitation: false,
+        server_dms_off: false,
     };
     state.receive(&Update::Members {
         server_id: "acme".into(),

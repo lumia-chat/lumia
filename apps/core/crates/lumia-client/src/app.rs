@@ -116,6 +116,19 @@ pub struct ServerSummary {
     /// (architecture 6.7). What a shell offers; the instance decides.
     #[serde(default)]
     pub can_manage: bool,
+    /// Whether it may create channels there (`MANAGE_CHANNELS`), and so is
+    /// offered "Create a channel" (architecture 6.8).
+    #[serde(default)]
+    pub can_manage_channels: bool,
+    /// Whether it may start server DMs there (`START_SERVER_DMS`).
+    #[serde(default)]
+    pub can_start_dms: bool,
+    /// This account's own switches there (architecture 6.8): adds to
+    /// channels wait as invitations; nobody may start a server DM with it.
+    #[serde(default)]
+    pub channel_adds_by_invitation: bool,
+    #[serde(default)]
+    pub server_dms_off: bool,
 }
 
 impl ServerSummary {
@@ -123,19 +136,24 @@ impl ServerSummary {
     /// account's own) says this account may do there.
     fn of(server: &lumia_core::proto::Server, memberships: &[lumia_core::proto::Member]) -> Self {
         use lumia_core::proto::Permission;
-        let can_manage = memberships
-            .iter()
-            .filter(|m| m.server_id == server.server_id)
-            .flat_map(|m| m.permissions.iter())
-            .any(|p| {
-                *p == Permission::Administrator as i32 || *p == Permission::ManageServer as i32
-            });
+        let own = memberships.iter().find(|m| m.server_id == server.server_id);
+        let holds = |wanted: Permission| {
+            own.is_some_and(|m| {
+                m.permissions
+                    .iter()
+                    .any(|p| *p == wanted as i32 || *p == Permission::Administrator as i32)
+            })
+        };
         Self {
             server_id: wire::display(&server.server_id),
             name: server.name.clone(),
             icon_url: server.icon_url.clone(),
             retention_days: server.retention_days,
-            can_manage,
+            can_manage: holds(Permission::ManageServer),
+            can_manage_channels: holds(Permission::ManageChannels),
+            can_start_dms: holds(Permission::StartServerDms),
+            channel_adds_by_invitation: own.is_some_and(|m| m.channel_adds_by_invitation),
+            server_dms_off: own.is_some_and(|m| m.server_dms_off),
         }
     }
 }
@@ -282,13 +300,67 @@ pub struct ChannelSummary {
     pub channel_id: String,
     pub server_id: String,
     pub name: String,
-    /// `ChannelKind` as its name (`TEXT`, `PERSONAL_DM`, ...).
+    /// `ChannelKind` as its name (`TEXT`, `SERVER_DM`, `PERSONAL_DM`, ...).
     pub kind: String,
     pub last_seq: u64,
     /// DM kinds: who is in it.
     pub participant_account_ids: Vec<String>,
     /// Personal DMs: the hosting instance.
     pub host: String,
+    /// `TEXT`: made private, so entered only by being added (architecture 6.8).
+    #[serde(default)]
+    pub private: bool,
+    /// `TEXT`: joined by every newcomer to the server.
+    #[serde(default)]
+    pub is_default: bool,
+    /// How many are in it, where a listing says (Browse); 0 elsewhere.
+    #[serde(default)]
+    pub member_count: u32,
+    /// The channel's topic; empty for none.
+    #[serde(default)]
+    pub topic: String,
+}
+
+impl ChannelSummary {
+    fn of(c: &lumia_core::proto::Channel) -> Self {
+        Self {
+            channel_id: wire::display(&c.channel_id),
+            server_id: wire::display(&c.server_id),
+            name: c.name.clone(),
+            kind: lumia_core::proto::ChannelKind::try_from(c.kind)
+                .map(|k| k.as_str_name().to_string())
+                .unwrap_or_default(),
+            last_seq: c.last_seq,
+            participant_account_ids: c
+                .participant_account_ids
+                .iter()
+                .map(|id| wire::display(id))
+                .collect(),
+            host: c.host.clone(),
+            private: c.private,
+            is_default: c.is_default,
+            member_count: c.member_count,
+            topic: c.topic.clone(),
+        }
+    }
+}
+
+/// An invitation into a channel, waiting for this account's yes
+/// (architecture 6.8): join the channel to take it, dismiss it to say no.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChannelInvitationSummary {
+    pub channel: ChannelSummary,
+    pub invited_by_account_id: String,
+    pub created_at_micros: i64,
+}
+
+/// Who an add brought in at once, and who it invited instead (architecture 6.8).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChannelAddSummary {
+    pub added_account_ids: Vec<String>,
+    pub invited_account_ids: Vec<String>,
 }
 
 /// A DM request waiting for an answer.
@@ -316,6 +388,9 @@ pub struct SnapshotSummary {
     pub servers: Vec<ServerSummary>,
     pub channels: Vec<ChannelSummary>,
     pub pending_requests: Vec<DmRequestSummary>,
+    /// Channels this account was asked into and has not answered.
+    #[serde(default)]
+    pub channel_invitations: Vec<ChannelInvitationSummary>,
 }
 
 /// A person: a member of a server, or a public profile.
@@ -336,6 +411,13 @@ pub struct MemberSummary {
     /// empty for none.
     #[serde(default)]
     pub avatar_url: String,
+    /// Their switches in the server listed (architecture 6.8): an add
+    /// becomes an invitation; nobody may start a server DM with them.
+    /// False for a public profile.
+    #[serde(default)]
+    pub channel_adds_by_invitation: bool,
+    #[serde(default)]
+    pub server_dms_off: bool,
 }
 
 /// A message as the local store holds it.
@@ -349,6 +431,11 @@ pub struct MessageSummary {
     pub body: String,
     pub created_at_micros: i64,
     pub deleted: bool,
+    /// A notice the instance posted (architecture 6.8): `joined`, `added`,
+    /// `left` or `removed`, with an empty body; empty for a message. The
+    /// author is who did it, `notice_account_id` who it is about.
+    pub notice: String,
+    pub notice_account_id: String,
 }
 
 /// One applied channel event.
@@ -623,10 +710,17 @@ fn stored_summary(m: &lumia_core::store::StoredMessage) -> MessageSummary {
         body: m.body.clone(),
         created_at_micros: m.created_at_micros,
         deleted: m.deleted,
+        notice: m.notice.clone(),
+        notice_account_id: if m.notice_account_id.is_empty() {
+            String::new()
+        } else {
+            wire::display(&m.notice_account_id)
+        },
     }
 }
 
 fn message_summary(m: &lumia_core::proto::Message) -> MessageSummary {
+    let (notice, notice_account_id) = lumia_core::store::notice_of(m);
     MessageSummary {
         message_id: wire::display(&m.message_id),
         channel_id: wire::display(&m.channel_id),
@@ -635,6 +729,12 @@ fn message_summary(m: &lumia_core::proto::Message) -> MessageSummary {
         body: m.body.clone(),
         created_at_micros: wire::micros(m.created_at.as_ref()).unwrap_or(0),
         deleted: m.deleted_at.is_some(),
+        notice,
+        notice_account_id: if notice_account_id.is_empty() {
+            String::new()
+        } else {
+            wire::display(&notice_account_id)
+        },
     }
 }
 
@@ -1297,14 +1397,18 @@ impl App {
     /// `INVALID_ARGUMENT` for an empty name; transport failure.
     pub async fn create_server(&self, name: &str) -> Result<ServerSummary, ClientError> {
         let s = self.api.create_server(name.trim()).await?;
+        // Its owner may do everything there.
         Ok(ServerSummary {
             can_manage: true,
+            can_manage_channels: true,
+            can_start_dms: true,
             ..ServerSummary::of(&s, &[])
         })
     }
 
     /// `POST /channels`: a text channel in a server this account may
-    /// manage channels in. The next snapshot lists it.
+    /// manage channels in, private when asked (architecture 6.8). This
+    /// account is in it; the next snapshot lists it.
     ///
     /// # Errors
     /// `PERMISSION_DENIED` without `manage_channels` there; transport failure.
@@ -1312,24 +1416,212 @@ impl App {
         &self,
         server_id: &str,
         name: &str,
+        private: bool,
     ) -> Result<ChannelSummary, ClientError> {
         let id = uuid::Uuid::parse_str(server_id)
             .map_err(|_| ClientError::Transport(format!("not a uuid: {server_id}")))?;
         let c = self
             .api
-            .create_channel(wire::uuid_bytes(id), name.trim())
+            .create_channel(wire::uuid_bytes(id), name.trim(), private)
             .await?;
         Ok(ChannelSummary {
-            channel_id: wire::display(&c.channel_id),
-            server_id: wire::display(&c.server_id),
-            name: c.name,
-            kind: lumia_core::proto::ChannelKind::try_from(c.kind)
-                .map(|k| k.as_str_name().to_string())
-                .unwrap_or_default(),
             last_seq: 0,
-            participant_account_ids: Vec::new(),
-            host: String::new(),
+            ..ChannelSummary::of(&c)
         })
+    }
+
+    /// `GET /servers/{id}/channels/browse`: the public channels of a server
+    /// this account can see and is not in, each with how many are in it, in
+    /// the order the sidebar shows them (architecture 6.8).
+    ///
+    /// # Errors
+    /// On transport or API failure.
+    pub async fn browse_channels(
+        &self,
+        server_id: &str,
+    ) -> Result<Vec<ChannelSummary>, ClientError> {
+        let server_id = parse_uuid(server_id)?;
+        let list = self.api.browse_channels(&wire::display(&server_id)).await?;
+        Ok(list.channels.iter().map(ChannelSummary::of).collect())
+    }
+
+    /// `POST /channels/{id}/join`: a public channel this account can see,
+    /// or one it was invited to; the "joined" notice is posted there.
+    /// Returns the snapshot as it then is, the channel in it.
+    ///
+    /// # Errors
+    /// `NOT_FOUND` for a channel it may not join; transport failure.
+    pub async fn join_channel(&self, channel_id: &str) -> Result<SnapshotSummary, ClientError> {
+        let channel_id = parse_uuid(channel_id)?;
+        self.api.join_channel(&wire::display(&channel_id)).await?;
+        self.snapshot().await
+    }
+
+    /// `POST /channels/{id}/leave`: any channel, a default one included.
+    /// Returns the snapshot as it then is.
+    ///
+    /// # Errors
+    /// `NOT_FOUND` when not in it; transport failure.
+    pub async fn leave_channel(&self, channel_id: &str) -> Result<SnapshotSummary, ClientError> {
+        let channel_id = parse_uuid(channel_id)?;
+        self.api.leave_channel(&wire::display(&channel_id)).await?;
+        self.snapshot().await
+    }
+
+    /// `GET /channels/{id}/members`: who is in a channel this account can
+    /// see, as account ids in the order they came in.
+    ///
+    /// # Errors
+    /// `NOT_FOUND` for one it cannot see; transport failure.
+    pub async fn channel_members(&self, channel_id: &str) -> Result<Vec<String>, ClientError> {
+        let channel_id = parse_uuid(channel_id)?;
+        let list = self
+            .api
+            .channel_members(&wire::display(&channel_id))
+            .await?;
+        Ok(list
+            .account_ids
+            .iter()
+            .map(|id| wire::display(id))
+            .collect())
+    }
+
+    /// `POST /channels/{id}/members`: members of the server added to a
+    /// channel this account is in, or invited when they take adds that way.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` (or `NOT_FOUND`) when it may not add there;
+    /// `INVALID_ARGUMENT` with `details.field` `account_ids` for someone
+    /// not in the server or unable to see the channel; transport failure.
+    pub async fn add_channel_members(
+        &self,
+        channel_id: &str,
+        account_ids: &[String],
+    ) -> Result<ChannelAddSummary, ClientError> {
+        let channel_id = parse_uuid(channel_id)?;
+        let ids = account_ids
+            .iter()
+            .map(|id| parse_uuid(id))
+            .collect::<Result<Vec<_>, _>>()?;
+        let added = self
+            .api
+            .add_channel_members(&wire::display(&channel_id), ids)
+            .await?;
+        Ok(ChannelAddSummary {
+            added_account_ids: added
+                .added_account_ids
+                .iter()
+                .map(|id| wire::display(id))
+                .collect(),
+            invited_account_ids: added
+                .invited_account_ids
+                .iter()
+                .map(|id| wire::display(id))
+                .collect(),
+        })
+    }
+
+    /// `DELETE /channels/{id}/members/{account_id}`: someone taken out of
+    /// a channel, by a member with `MANAGE_CHANNELS`; this account's own id
+    /// is leaving.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` without `MANAGE_CHANNELS`; transport failure.
+    pub async fn remove_channel_member(
+        &self,
+        channel_id: &str,
+        account_id: &str,
+    ) -> Result<(), ClientError> {
+        let channel_id = parse_uuid(channel_id)?;
+        let account_id = parse_uuid(account_id)?;
+        self.api
+            .remove_channel_member(&wire::display(&channel_id), &wire::display(&account_id))
+            .await
+    }
+
+    /// `DELETE /channel-invitations/{channel_id}`: no to an invitation.
+    /// Returns the snapshot as it then is. To say yes, join the channel.
+    ///
+    /// # Errors
+    /// `NOT_FOUND` without one; transport failure.
+    pub async fn dismiss_channel_invitation(
+        &self,
+        channel_id: &str,
+    ) -> Result<SnapshotSummary, ClientError> {
+        let channel_id = parse_uuid(channel_id)?;
+        self.api
+            .dismiss_channel_invitation(&wire::display(&channel_id))
+            .await?;
+        self.snapshot().await
+    }
+
+    /// `PATCH /servers/{id}/membership`: this account's own switches in a
+    /// server (architecture 6.8); `None` leaves one as it is. Returns the
+    /// snapshot as it then is.
+    ///
+    /// # Errors
+    /// `NOT_FOUND` for a server it is not in; transport failure.
+    pub async fn update_membership(
+        &self,
+        server_id: &str,
+        channel_adds_by_invitation: Option<bool>,
+        server_dms_off: Option<bool>,
+    ) -> Result<SnapshotSummary, ClientError> {
+        let server_id = parse_uuid(server_id)?;
+        let req = lumia_core::proto::UpdateMembershipRequest {
+            channel_adds_by_invitation,
+            server_dms_off,
+        };
+        self.api
+            .update_membership(&wire::display(&server_id), &req)
+            .await?;
+        self.snapshot().await
+    }
+
+    /// `POST /servers/{id}/dms`: the 1:1 server DM with a member of the
+    /// server, started if there is none (architecture 6.4). The account
+    /// log brings it to the snapshot; the channel is returned to open.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` without `START_SERVER_DMS`;
+    /// `FAILED_PRECONDITION` with `details.state` `server_dms_off` when they
+    /// turned server DMs off; `NOT_FOUND` for someone not in the server or
+    /// blocked either way; transport failure.
+    pub async fn open_server_dm(
+        &self,
+        server_id: &str,
+        account_id: &str,
+    ) -> Result<ChannelSummary, ClientError> {
+        let server_id = parse_uuid(server_id)?;
+        let account_id = parse_uuid(account_id)?;
+        let c = self
+            .api
+            .open_server_dm(&wire::display(&server_id), account_id)
+            .await?;
+        Ok(ChannelSummary::of(&c))
+    }
+
+    /// `PATCH /servers/{id}` with exactly `channel_ids` as the server's
+    /// default channels, the ones every newcomer joins: public text
+    /// channels of the server, or none. Returns the snapshot as it then is.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` without `MANAGE_SERVER`; `INVALID_ARGUMENT` with
+    /// `details.field` `default_channels`; transport failure.
+    pub async fn set_default_channels(
+        &self,
+        server_id: &str,
+        channel_ids: &[String],
+    ) -> Result<SnapshotSummary, ClientError> {
+        let server_id = parse_uuid(server_id)?;
+        let ids = channel_ids
+            .iter()
+            .map(|id| parse_uuid(id))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.api
+            .set_default_channels(&wire::display(&server_id), ids)
+            .await?;
+        self.snapshot().await
     }
 
     /// `GET /invites/{code}`: what an invite link or code shows before
@@ -1523,8 +1815,9 @@ impl App {
         Ok(())
     }
 
-    /// `GET /account/snapshot`: the account, its servers, the channels it
-    /// can view (the servers' and its personal DMs), the requests waiting.
+    /// `GET /account/snapshot`: the account, its servers, the channels it is
+    /// shown (the servers' it is in, its server DMs and its personal DMs),
+    /// the requests and invitations waiting.
     ///
     /// # Errors
     /// On transport or API failure.
@@ -1541,26 +1834,17 @@ impl App {
                 .iter()
                 .map(|s| ServerSummary::of(s, &snap.memberships))
                 .collect(),
-            channels: snap
-                .channels
+            channels: snap.channels.iter().map(ChannelSummary::of).collect(),
+            pending_requests: snap.pending_requests.iter().map(request_summary).collect(),
+            channel_invitations: snap
+                .channel_invitations
                 .iter()
-                .map(|c| ChannelSummary {
-                    channel_id: wire::display(&c.channel_id),
-                    server_id: wire::display(&c.server_id),
-                    name: c.name.clone(),
-                    kind: lumia_core::proto::ChannelKind::try_from(c.kind)
-                        .map(|k| k.as_str_name().to_string())
-                        .unwrap_or_default(),
-                    last_seq: c.last_seq,
-                    participant_account_ids: c
-                        .participant_account_ids
-                        .iter()
-                        .map(|id| wire::display(id))
-                        .collect(),
-                    host: c.host.clone(),
+                .map(|i| ChannelInvitationSummary {
+                    channel: ChannelSummary::of(&i.channel.clone().unwrap_or_default()),
+                    invited_by_account_id: wire::display(&i.invited_by_account_id),
+                    created_at_micros: wire::micros(i.created_at.as_ref()).unwrap_or(0),
                 })
                 .collect(),
-            pending_requests: snap.pending_requests.iter().map(request_summary).collect(),
         };
         self.keep(KEPT_SNAPSHOT, &summary);
         Ok(summary)
@@ -1609,6 +1893,8 @@ impl App {
             pronouns: a.pronouns,
             bio: a.bio,
             avatar_url: a.avatar_url,
+            channel_adds_by_invitation: false,
+            server_dms_off: false,
         })
     }
 
@@ -1637,6 +1923,8 @@ impl App {
                     pronouns: account.map(|a| a.pronouns.clone()).unwrap_or_default(),
                     bio: account.map(|a| a.bio.clone()).unwrap_or_default(),
                     avatar_url: account.map(|a| a.avatar_url.clone()).unwrap_or_default(),
+                    channel_adds_by_invitation: m.channel_adds_by_invitation,
+                    server_dms_off: m.server_dms_off,
                 }
             }));
             cursor = page.page.map(|p| p.next_cursor).unwrap_or_default();
@@ -3018,6 +3306,10 @@ mod kept_tests {
                 icon_url: String::new(),
                 retention_days: 0,
                 can_manage: false,
+                can_manage_channels: false,
+                can_start_dms: false,
+                channel_adds_by_invitation: false,
+                server_dms_off: false,
             }],
             channels: vec![ChannelSummary {
                 channel_id: "c".into(),
@@ -3027,8 +3319,13 @@ mod kept_tests {
                 last_seq: 7,
                 participant_account_ids: vec!["a".into()],
                 host: String::new(),
+                private: false,
+                is_default: false,
+                member_count: 0,
+                topic: String::new(),
             }],
             pending_requests: Vec::new(),
+            channel_invitations: Vec::new(),
         }
     }
 
@@ -3200,6 +3497,8 @@ mod kept_tests {
             pronouns: "she/her".into(),
             bio: String::new(),
             avatar_url: String::new(),
+            channel_adds_by_invitation: false,
+            server_dms_off: false,
         };
         let all: HashMap<String, Vec<MemberSummary>> =
             HashMap::from([("s".to_string(), vec![member])]);

@@ -145,6 +145,10 @@ pub fn snapshot() -> SnapshotSummary {
         last_seq: 0,
         participant_account_ids: Vec::new(),
         host: String::new(),
+        private: false,
+        is_default: false,
+        member_count: 0,
+        topic: String::new(),
     };
     SnapshotSummary {
         account_id: "me".into(),
@@ -158,6 +162,10 @@ pub fn snapshot() -> SnapshotSummary {
                 icon_url: String::new(),
                 retention_days: 0,
                 can_manage: true,
+                can_manage_channels: false,
+                can_start_dms: false,
+                channel_adds_by_invitation: false,
+                server_dms_off: false,
             },
             ServerSummary {
                 server_id: "garden".into(),
@@ -165,6 +173,10 @@ pub fn snapshot() -> SnapshotSummary {
                 icon_url: String::new(),
                 retention_days: 0,
                 can_manage: false,
+                can_manage_channels: false,
+                can_start_dms: false,
+                channel_adds_by_invitation: false,
+                server_dms_off: false,
             },
         ],
         channels: vec![
@@ -173,6 +185,7 @@ pub fn snapshot() -> SnapshotSummary {
             channel("plots", "garden", "plots", "TEXT"),
         ],
         pending_requests: Vec::new(),
+        channel_invitations: Vec::new(),
     }
 }
 
@@ -185,6 +198,8 @@ pub fn member(id: &str, handle: &str, name: &str) -> MemberSummary {
         pronouns: String::new(),
         bio: String::new(),
         avatar_url: String::new(),
+        channel_adds_by_invitation: false,
+        server_dms_off: false,
     }
 }
 

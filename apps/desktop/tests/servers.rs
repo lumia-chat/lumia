@@ -81,6 +81,10 @@ fn channel(id: &str, server: &str, name: &str) -> ChannelSummary {
         last_seq: 0,
         participant_account_ids: Vec::new(),
         host: String::new(),
+        private: false,
+        is_default: false,
+        member_count: 0,
+        topic: String::new(),
     }
 }
 
@@ -93,6 +97,10 @@ fn snapshot_with_server(id: &str, name: &str) -> SnapshotSummary {
         icon_url: String::new(),
         retention_days: 0,
         can_manage: false,
+        can_manage_channels: false,
+        can_start_dms: false,
+        channel_adds_by_invitation: false,
+        server_dms_off: false,
     });
     snapshot
         .channels
@@ -206,6 +214,10 @@ fn a_server_is_created_by_name_and_opens_once_the_snapshot_lists_it() {
             icon_url: String::new(),
             retention_days: 0,
             can_manage: true,
+            can_manage_channels: false,
+            can_start_dms: false,
+            channel_adds_by_invitation: false,
+            server_dms_off: false,
         })),
     );
     assert!(!rt.state.server_forms.add.creating);
@@ -275,6 +287,10 @@ fn someone_who_went_elsewhere_is_not_pulled_into_the_server_they_made() {
             icon_url: String::new(),
             retention_days: 0,
             can_manage: true,
+            can_manage_channels: false,
+            can_start_dms: false,
+            channel_adds_by_invitation: false,
+            server_dms_off: false,
         })),
     );
     snapshot_arrives(&mut rt, snapshot_with_server("ours", "Our place"));
@@ -474,6 +490,10 @@ fn a_server_with_no_channel_says_where_to_add_one() {
         icon_url: String::new(),
         retention_days: 0,
         can_manage: false,
+        can_manage_channels: false,
+        can_start_dms: false,
+        channel_adds_by_invitation: false,
+        server_dms_off: false,
     });
     state.receive(&Update::Snapshot(Ok(snapshot)));
     let mut rt = runtime(state);

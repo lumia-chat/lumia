@@ -293,7 +293,7 @@ async fn a_sign_in_over_a_held_session_keeps_the_gateway() {
     let server = device.app.create_server("Over").await.unwrap();
     let channel = device
         .app
-        .create_channel(&server.server_id, "general")
+        .create_channel(&server.server_id, "general", false)
         .await
         .unwrap();
     let from = device.seen();
@@ -422,6 +422,255 @@ async fn a_servers_settings_reach_its_members() {
         .await;
     assert!(
         matches!(&refused, Err(lumia_client::ClientError::Api { code, .. }) if code == "PERMISSION_DENIED"),
+        "{refused:?}"
+    );
+}
+
+/// Two accounts in one server, the second through an invite: the owner and
+/// the member's device with its loop started.
+async fn owner_and_member(base: &str) -> (Device, Device, String, String) {
+    let (owner, member) = (Device::new(base), Device::new(base));
+    let id = stamp();
+    owner
+        .app
+        .create_account(&format!("owner{id}"), PASSWORD, None)
+        .await
+        .unwrap();
+    let server = owner.app.create_server("Acme").await.unwrap();
+    owner
+        .app
+        .create_channel(&server.server_id, "general", false)
+        .await
+        .unwrap();
+    let invite = owner
+        .app
+        .create_invite(&server.server_id, 0, None)
+        .await
+        .unwrap();
+    member
+        .app
+        .create_account(&format!("member{id}"), PASSWORD, Some(&invite.url))
+        .await
+        .unwrap();
+    let member_id = member.app.snapshot().await.unwrap().account_id;
+    let from = member.seen();
+    member.start(&[]).unwrap();
+    member
+        .wait_for(from, Duration::from_secs(10), welcomed)
+        .await
+        .expect("the member is welcomed");
+    (owner, member, server.server_id, member_id)
+}
+
+fn names(snapshot: &lumia_client::app::SnapshotSummary, server_id: &str) -> Vec<String> {
+    snapshot
+        .channels
+        .iter()
+        .filter(|c| c.server_id == server_id && c.kind == "TEXT")
+        .map(|c| c.name.clone())
+        .collect()
+}
+
+/// A subscribe's first answer for a channel: its snapshot, or for a short
+/// log its events replayed from the start.
+fn first_read(channel: &str) -> impl Fn(&AppEvent) -> Option<()> + '_ {
+    move |event| match event {
+        AppEvent::SnapshotTaken { channel_id, .. } | AppEvent::Applied { channel_id, .. } => {
+            (channel_id == channel).then_some(())
+        }
+        _ => None,
+    }
+}
+
+/// Channel membership as a member's device sees it (architecture 6.8): only
+/// the default channel at first, Browse with the rest, a join with its
+/// notice in the store, an add to a private channel reaching the account
+/// log, and an add that waits as an invitation once the member says so.
+#[tokio::test(flavor = "multi_thread")]
+async fn channel_membership_reaches_the_member() {
+    let Some(base) = instance() else { return };
+    let (owner, member, server_id, member_id) = owner_and_member(&base).await;
+    let design = owner
+        .app
+        .create_channel(&server_id, "design", false)
+        .await
+        .unwrap();
+    let secret = owner
+        .app
+        .create_channel(&server_id, "secret", true)
+        .await
+        .unwrap();
+    assert!(secret.private);
+
+    let snapshot = member.app.snapshot().await.unwrap();
+    assert_eq!(names(&snapshot, &server_id), ["general"]);
+    let browse = member.app.browse_channels(&server_id).await.unwrap();
+    let listed: Vec<_> = browse
+        .iter()
+        .map(|c| (c.name.as_str(), c.member_count))
+        .collect();
+    assert_eq!(
+        listed,
+        [("design", 1)],
+        "a private channel is never browsed"
+    );
+
+    // Joined: in the snapshot, and its "joined" notice in the store once read.
+    let after = member.app.join_channel(&design.channel_id).await.unwrap();
+    assert_eq!(names(&after, &server_id), ["general", "design"]);
+    let from = member.seen();
+    member.app.subscribe(&design.channel_id).unwrap();
+    member
+        .wait_for(
+            from,
+            Duration::from_secs(10),
+            first_read(&design.channel_id),
+        )
+        .await
+        .expect("the channel is read");
+    let notices: Vec<_> = member
+        .app
+        .messages(&design.channel_id, 50)
+        .unwrap()
+        .into_iter()
+        .filter(|m| !m.notice.is_empty())
+        .map(|m| (m.notice, m.author_account_id, m.notice_account_id))
+        .collect();
+    assert_eq!(
+        notices,
+        [("joined".to_string(), member_id.clone(), member_id.clone())]
+    );
+
+    // Added to the private channel: the account log brings it.
+    let live = member.seen();
+    let added = owner
+        .app
+        .add_channel_members(&secret.channel_id, std::slice::from_ref(&member_id))
+        .await
+        .unwrap();
+    assert_eq!(added.added_account_ids, std::slice::from_ref(&member_id));
+    member
+        .wait_for(live, Duration::from_secs(15), account_applied)
+        .await
+        .expect("the member's account log says it was added");
+    let snapshot = member.app.snapshot().await.unwrap();
+    assert_eq!(
+        names(&snapshot, &server_id),
+        ["general", "design", "secret"]
+    );
+    let in_secret = owner.app.channel_members(&secret.channel_id).await.unwrap();
+    assert_eq!(in_secret.len(), 2);
+
+    // Left, and out of the snapshot.
+    let after = member.app.leave_channel(&design.channel_id).await.unwrap();
+    assert_eq!(names(&after, &server_id), ["general", "secret"]);
+
+    // Taking adds as invitations: the next add waits for a yes.
+    let switched = member
+        .app
+        .update_membership(&server_id, Some(true), None)
+        .await
+        .unwrap();
+    let mine = switched
+        .servers
+        .iter()
+        .find(|s| s.server_id == server_id)
+        .unwrap();
+    assert!(mine.channel_adds_by_invitation && !mine.server_dms_off);
+    assert!(mine.can_start_dms && !mine.can_manage_channels);
+    let invited = owner
+        .app
+        .add_channel_members(&design.channel_id, std::slice::from_ref(&member_id))
+        .await
+        .unwrap();
+    assert_eq!(
+        invited.invited_account_ids,
+        std::slice::from_ref(&member_id)
+    );
+    let snapshot = member.app.snapshot().await.unwrap();
+    assert_eq!(snapshot.channel_invitations.len(), 1);
+    assert_eq!(snapshot.channel_invitations[0].channel.name, "design");
+    let after = member
+        .app
+        .dismiss_channel_invitation(&design.channel_id)
+        .await
+        .unwrap();
+    assert!(after.channel_invitations.is_empty());
+    assert_eq!(names(&after, &server_id), ["general", "secret"]);
+}
+
+/// A server DM (architecture 6.4): started from one side, shown on both,
+/// a message in it read by the other, and one refused when its other side
+/// has turned server DMs off.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_server_dm_reaches_both() {
+    let Some(base) = instance() else { return };
+    let (owner, member, server_id, member_id) = owner_and_member(&base).await;
+    let owner_id = owner.app.snapshot().await.unwrap().account_id;
+
+    let dm = member
+        .app
+        .open_server_dm(&server_id, &owner_id)
+        .await
+        .unwrap();
+    assert_eq!(dm.kind, "SERVER_DM");
+    let mut participants = dm.participant_account_ids.clone();
+    participants.sort();
+    let mut both = vec![owner_id.clone(), member_id.clone()];
+    both.sort();
+    assert_eq!(participants, both);
+    let again = owner
+        .app
+        .open_server_dm(&server_id, &member_id)
+        .await
+        .unwrap();
+    assert_eq!(again.channel_id, dm.channel_id);
+    let shown = owner.app.snapshot().await.unwrap();
+    assert!(shown.channels.iter().any(|c| c.channel_id == dm.channel_id));
+
+    // A new conversation's log is empty: subscribed, there is nothing to read yet.
+    member.app.subscribe(&dm.channel_id).unwrap();
+    let sent = member.seen();
+    member.app.send_message(&dm.channel_id, "hello").unwrap();
+    member
+        .wait_for(sent, Duration::from_secs(10), |e| {
+            matches!(e, AppEvent::Acked { .. }).then_some(())
+        })
+        .await
+        .expect("the message is acked");
+
+    owner.start(std::slice::from_ref(&dm.channel_id)).unwrap();
+    let read = owner.seen();
+    owner
+        .wait_for(read, Duration::from_secs(10), first_read(&dm.channel_id))
+        .await
+        .expect("the owner reads the DM");
+    let bodies: Vec<_> = owner
+        .app
+        .messages(&dm.channel_id, 10)
+        .unwrap()
+        .into_iter()
+        .map(|m| m.body)
+        .collect();
+    assert_eq!(bodies, ["hello"]);
+
+    // Turned off: nobody new may start one.
+    owner
+        .app
+        .update_membership(&server_id, None, Some(true))
+        .await
+        .unwrap();
+    let third = Device::new(&base);
+    let invite = owner.app.create_invite(&server_id, 0, None).await.unwrap();
+    third
+        .app
+        .create_account(&format!("third{}", stamp()), PASSWORD, Some(&invite.url))
+        .await
+        .unwrap();
+    let refused = third.app.open_server_dm(&server_id, &owner_id).await;
+    assert!(
+        matches!(&refused, Err(lumia_client::ClientError::Api { code, details, .. })
+            if code == "FAILED_PRECONDITION" && details.get("state").map(String::as_str) == Some("server_dms_off")),
         "{refused:?}"
     );
 }
