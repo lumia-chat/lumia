@@ -3,12 +3,15 @@
 # smoke-ios.sh cannot show, since it only launches and looks. The UI test
 # (LumiaUITests/SmokeUITests/testPreferencesAreChosenAndKept) opens the
 # account menu on the rail's own avatar, goes to Preferences, reads each
-# choice as assistive technology does, chooses Dark and Compact, launches
-# again on the channel with neither named, and then chooses System and
-# Comfortable back. This script seeds the account and looks at the screen
-# at each step: dark once Dark is chosen, dark at the next launch, and the
-# simulator's own appearance again once System is. Screenshots land in
-# .build/smoke-preferences/. It is not in the macOS workflow yet.
+# choice as assistive technology does, chooses Dark and Minimal, then font
+# size 18 and Cozy, which leaves no preset selected and says Custom,
+# launches again on the channel with nothing named (one line, cozy, at 18,
+# each message still one stop that says whose and when), and then chooses
+# System, Comfortable and 15 back. This script seeds the account and looks
+# at the screen at each step: dark once Dark is chosen, dark at the next
+# launch, and the simulator's own appearance again once System is.
+# Screenshots land in .build/smoke-preferences/. It is not in the macOS
+# workflow yet.
 #
 #   scripts/smoke-preferences.sh     # expects the app and its tests built for the simulator (xcodebuild build-for-testing, see AGENTS.md) and the CLI
 #   LUMIA_INSTANCE=http://host:4000 LUMIA_SIMULATOR="iPhone 15 Pro" scripts/smoke-preferences.sh
@@ -118,13 +121,13 @@ reached menu 240
 echo "the account menu on the rail's avatar has View profile, Preferences and Devices"
 reached dark 60
 expect dark dark "Preferences with Dark chosen"
-echo "Dark and Compact are chosen, each read as selected, and the screen is dark"
+echo "Dark and Minimal are chosen, then 18 and Cozy, which is Custom; each read as selected, and the screen is dark"
 reached kept 120
 expect kept dark "the channel at the next launch"
-echo "the next launch draws the channel dark, with nothing naming the choice"
+echo "the next launch draws the channel dark and in one line, with nothing naming the choices"
 reached system 120
 expect system "$phone" "Preferences with System chosen"
-echo "System and Comfortable are chosen back, and the screen is the simulator's $phone again"
+echo "System, Comfortable and 15 are chosen back, and the screen is the simulator's $phone again"
 wait "$uitest" || { echo "FAIL: the UI test did not pass; see $work/uitest.log"; grep -E "error|failed|XCTAssert" "$work/uitest.log" | head -10; exit 1; }
 uitest=""
 echo "smoke-preferences: ok (the account menu leads to Preferences, each choice says whether it is selected, takes effect as it is made and is kept for the next launch; screenshots under $work)"

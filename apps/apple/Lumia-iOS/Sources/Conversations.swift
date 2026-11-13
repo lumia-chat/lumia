@@ -1,6 +1,6 @@
 // A conversation on the phone: a server's channel or DM, and a personal
-// conversation. Messages in blocks with a divider over each day's first,
-// and what architecture 6.6 adds (`Replies.swift` for the sheets): a
+// conversation. Messages in blocks, or a line each as Preferences says,
+// with a divider over each day's first, and what architecture 6.6 adds (`Replies.swift` for the sheets): a
 // reply's reference line above it, a message's mentions as pills by name,
 // its reactions under it and a wash when it is for this account; a long
 // press opens its actions; editing one's own message in place, where its
@@ -177,11 +177,13 @@ struct ConversationScreen: View {
     @State private var newestVisible = false
     @State private var scroll: ScrollRequest?
     @FocusState private var composing: Bool
+    /// The message text at the system's text size, which the font size scales.
+    @ScaledMetric(relativeTo: .body) private var systemText = LumiaTokens.textMessage.size
 
     private var changer: Changer { Changer(session: session, channelID: channelID, changes: $changes, error: $error) }
 
-    /// How much room the messages take: Preferences' density, here as in a channel.
-    private var measures: MessageMeasures { .of(preferences.density) }
+    /// How the messages are drawn: Preferences' message settings, here as in a channel.
+    private var measures: MessageMeasures { preferences.measures(system: systemText / LumiaTokens.textMessage.size) }
 
     private var channel: ChannelSummary? { session.snapshot?.channels.first { $0.channelId == channelID } }
     private var state: DmChannelSummary? { session.dmChannels.first { $0.channelId == channelID } }
@@ -223,7 +225,7 @@ struct ConversationScreen: View {
                         let line = session.newLine(in: channelID)
                         ForEach(Array(zip(sent, places)), id: \.0.messageId) { m, place in
                             if place.startsDay { LumiaDayDivider(label: dayLabel(ofMicros: m.sentAtMicros), measures: measures) }
-                            if line == m.messageId { LumiaNewMessagesLine().id(NewMessagesLine.words) }
+                            if line == m.messageId { LumiaNewMessagesLine(scale: measures.text).id(NewMessagesLine.words) }
                             LumiaMessageRow(author: who(m), tone: .of(authorID(of: m)), time: time(ofMicros: m.sentAtMicros), text: m.body, deleted: m.deleted, place: place, measures: measures, extras: extras(m))
                                 .id(m.messageId)
                         }
@@ -248,7 +250,7 @@ struct ConversationScreen: View {
             // it either: the instance is not to learn who is writing in a
             // personal conversation (protocol 6.7; an open item of the E2EE spec).
             // The reply bar has no "@ On" here: every message of a personal conversation notifies.
-            LumiaComposer(text: $draft, placeholder: member ? "Message \(title)" : "Setting up the encrypted group…", disabled: !member, hint: nil, focused: $composing, reply: replying.map { _ in ComposerReply(name: replyingTo, mention: nil) { replying = nil } }, editLast: editLast) {
+            LumiaComposer(text: $draft, placeholder: member ? "Message \(title)" : "Setting up the encrypted group…", disabled: !member, hint: nil, focused: $composing, reply: replying.map { _ in ComposerReply(name: replyingTo, mention: nil) { replying = nil } }, editLast: editLast, textScale: measures.text) {
                 Task { await send() }
             } above: {
                 EmptyView()
@@ -378,12 +380,15 @@ struct ChannelScreen: View {
     @State private var newestVisible = false
     @State private var scroll: ScrollRequest?
     @FocusState private var composing: Bool
+    /// The message text at the system's text size, which the font size scales.
+    @ScaledMetric(relativeTo: .body) private var systemText = LumiaTokens.textMessage.size
 
     private var changer: Changer { Changer(session: session, channelID: channelID, changes: $changes, error: $error) }
 
-    /// How much room the messages take: Preferences' density. The list
-    /// only: the header, the composer and the typing line stay as they are.
-    private var measures: MessageMeasures { .of(preferences.density) }
+    /// How the messages are drawn: Preferences' message settings. The list,
+    /// and of the rest only the composer's words, which take the font size:
+    /// the header and the typing line stay as they are.
+    private var measures: MessageMeasures { preferences.measures(system: systemText / LumiaTokens.textMessage.size) }
 
     private var channel: ChannelSummary? { session.channel(channelID) }
     private var server: ServerSummary? { session.snapshot?.servers.first { $0.serverId == channel?.serverId } }
@@ -423,7 +428,7 @@ struct ChannelScreen: View {
                         let line = session.newLine(in: channelID)
                         ForEach(Array(zip(messages, places)), id: \.0.messageId) { m, place in
                             if place.startsDay { LumiaDayDivider(label: dayLabel(ofMicros: m.createdAtMicros), measures: measures) }
-                            if line == m.messageId { LumiaNewMessagesLine().id(NewMessagesLine.words) }
+                            if line == m.messageId { LumiaNewMessagesLine(scale: measures.text).id(NewMessagesLine.words) }
                             if !m.notice.isEmpty {
                                 if let text = noticeText(kind: m.notice, actor: session.name(of: m.authorAccountId), subject: session.name(of: m.noticeAccountId)) {
                                     LumiaNoticeRow(text: text, time: time(ofMicros: m.createdAtMicros), measures: measures)
@@ -452,7 +457,7 @@ struct ChannelScreen: View {
             }
             if member {
                 // Who is typing goes under the field, in a server's channel only (protocol 6.7).
-                LumiaComposer(text: $draft, placeholder: isDM ? "Message \(title)" : "Message #\(name)", hint: nil, typing: session.typingNames(in: channelID), focused: $composing, reply: replyBar, editLast: editLast) {
+                LumiaComposer(text: $draft, placeholder: isDM ? "Message \(title)" : "Message #\(name)", hint: nil, typing: session.typingNames(in: channelID), focused: $composing, reply: replyBar, editLast: editLast, textScale: measures.text) {
                     Task { await send() }
                 } above: {
                     composerBars

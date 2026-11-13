@@ -99,7 +99,7 @@ struct ShellView: View {
             // browse, preview (Browse's first channel, read-only), members, addpeople and profilecard
             // (of the channel LUMIA_DEV_CHANNEL names, else the first; the card is its first member
             // but this account, or LUMIA_DEV_PERSON's handle), serverdm (the first server DM), newdm
-            // and yoursettings; the push smoke opens the account's first personal conversation with `conversation`. (LUMIA_DEV_APPEARANCE and LUMIA_DEV_DENSITY
+            // and yoursettings; the push smoke opens the account's first personal conversation with `conversation`. (LUMIA_DEV_APPEARANCE, LUMIA_DEV_PRESET and LUMIA_DEV_FONT_SIZE
             // choose how that launch looks: `Preferences` in LumiaKit reads them.)
             if let first = ids.first, let screen = ProcessInfo.processInfo.environment["LUMIA_DEV_SCREEN"] {
                 let named = ProcessInfo.processInfo.environment["LUMIA_DEV_CHANNEL"].flatMap { name in snapshot?.channels.first { $0.serverId == first && $0.name == name } }

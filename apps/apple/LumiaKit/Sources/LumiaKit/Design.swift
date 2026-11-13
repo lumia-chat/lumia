@@ -49,8 +49,12 @@ public struct LumiaType: Sendable, Hashable {
         }
     }
 
-    public var font: Font {
-        display ? .system(size: size, weight: fontWeight, design: .rounded) : .system(size: size, weight: fontWeight)
+    public var font: Font { font(scale: 1) }
+
+    /// The style at `scale` times its size: a message row's text at the
+    /// font size Preferences has.
+    public func font(scale: CGFloat) -> Font {
+        display ? .system(size: size * scale, weight: fontWeight, design: .rounded) : .system(size: size * scale, weight: fontWeight)
     }
 }
 

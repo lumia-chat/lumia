@@ -14,7 +14,8 @@ import SwiftUI
 /// not known stays as written), the accent's ink on its soft fill, with the
 /// pill's rounded ends where the system can draw them (iOS 18), a plain
 /// fill before. A pill naming a person opens them through `openPerson`
-/// where given. An edited message says so after its last word.
+/// where given. An edited message says so after its last word. `scale`
+/// is the message rows' text scale, the leading growing with it.
 public struct MessageBodyText: View {
     let text: String
     let mentions: [MentionSummary]
@@ -22,9 +23,10 @@ public struct MessageBodyText: View {
     let edited: Bool
     let name: (String) -> String
     let openPerson: ((String) -> Void)?
+    let scale: CGFloat
 
-    public init(text: String, mentions: [MentionSummary], deleted: Bool = false, edited: Bool = false, name: @escaping (String) -> String = { _ in "" }, openPerson: ((String) -> Void)? = nil) {
-        self.text = text; self.mentions = mentions; self.deleted = deleted; self.edited = edited; self.name = name; self.openPerson = openPerson
+    public init(text: String, mentions: [MentionSummary], deleted: Bool = false, edited: Bool = false, name: @escaping (String) -> String = { _ in "" }, openPerson: ((String) -> Void)? = nil, scale: CGFloat = 1) {
+        self.text = text; self.mentions = mentions; self.deleted = deleted; self.edited = edited; self.name = name; self.openPerson = openPerson; self.scale = scale
     }
 
     static let scheme = "lumia-mention"
@@ -37,7 +39,7 @@ public struct MessageBodyText: View {
         let said = segment.drawn(name: name).replacingOccurrences(of: " ", with: "\u{00A0}")
         var part = AttributedString(Self.pad + said + Self.pad)
         part.swiftUI.foregroundColor = LumiaTokens.accentInk.color
-        part.swiftUI.font = LumiaTokens.textMessage.font.weight(.semibold)
+        part.swiftUI.font = LumiaTokens.textMessage.font(scale: scale).weight(.semibold)
         if filled { part.swiftUI.backgroundColor = LumiaTokens.accentSoft.color }
         if !mention.everyone, openPerson != nil { part.link = URL(string: "\(Self.scheme):\(mention.accountId)") }
         return part
@@ -59,7 +61,7 @@ public struct MessageBodyText: View {
             }
         }
         if edited, !deleted {
-            all = all + Text(verbatim: " " + MessageEdits.edited).font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkMuted.color)
+            all = all + Text(verbatim: " " + MessageEdits.edited).font(LumiaTokens.textMeta.font(scale: scale)).foregroundStyle(LumiaTokens.inkMuted.color)
         }
         return all
     }
@@ -72,8 +74,8 @@ public struct MessageBodyText: View {
                 words(rounded: false)
             }
         }
-        .font(LumiaTokens.textMessage.font)
-        .lineSpacing(MessageMeasures.leading)
+        .font(LumiaTokens.textMessage.font(scale: scale))
+        .lineSpacing(MessageMeasures.leading * scale)
         .foregroundStyle(deleted ? LumiaTokens.inkQuiet.color : LumiaTokens.inkBody.color)
         .italic(deleted)
         .tint(LumiaTokens.accentInk.color)
@@ -127,8 +129,10 @@ struct MentionPillRenderer: TextRenderer {
 /// conversation's) leaves the avatar and name out.
 public struct LumiaReplyReference: View {
     let quote: QuoteDisplay
+    /// The message rows' text scale; the avatar and the connector keep their size.
+    var scale: CGFloat = 1
 
-    public init(quote: QuoteDisplay) { self.quote = quote }
+    public init(quote: QuoteDisplay, scale: CGFloat = 1) { self.quote = quote; self.scale = scale }
 
     /// The quoted person's avatar, and the deleted original's mark.
     static let mark = LumiaTokens.space18
@@ -141,7 +145,7 @@ public struct LumiaReplyReference: View {
                     .foregroundStyle(LumiaTokens.inkMuted.color)
                     .frame(width: Self.mark, height: Self.mark)
                     .background(LumiaTokens.chip.color, in: Circle())
-                Text(Replies.originalDeleted).font(.system(size: LumiaTokens.textLinkSm.size)).italic()
+                Text(Replies.originalDeleted).font(.system(size: LumiaTokens.textLinkSm.size * scale)).italic()
                     .foregroundStyle(LumiaTokens.inkMuted.color).lineLimit(1)
             }
             .accessibilityElement(children: .ignore)
@@ -152,11 +156,11 @@ public struct LumiaReplyReference: View {
                     ReplyConnector()
                     if let name = quote.name {
                         LumiaAvatar(initials: initials(of: name), tone: .of(quote.authorID), size: Self.mark)
-                        Text(Replies.referenceName(name, quotesMe: quote.quotesMe)).font(LumiaTokens.textLinkSm.font)
+                        Text(Replies.referenceName(name, quotesMe: quote.quotesMe)).font(LumiaTokens.textLinkSm.font(scale: scale))
                             .foregroundStyle(quote.quotesMe ? LumiaTokens.accentInk.color : LumiaTokens.inkBody.color)
                             .lineLimit(1).fixedSize()
                     }
-                    Text(quote.text).font(.system(size: LumiaTokens.textLinkSm.size))
+                    Text(quote.text).font(.system(size: LumiaTokens.textLinkSm.size * scale))
                         .foregroundStyle(LumiaTokens.inkMuted.color).lineLimit(1).truncationMode(.tail)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -165,6 +169,52 @@ public struct LumiaReplyReference: View {
             .buttonStyle(.plain)
             .accessibilityLabel(Replies.referenceLabel(name: quote.name, quotesMe: quote.quotesMe, text: quote.text))
         }
+    }
+}
+
+/// A reply's reference in one line: a short line over the message at its
+/// text's start, `↳ Priya: first words…`, cut short at the line's end, the
+/// whole of it a button that jumps to the original (no avatar and no
+/// connector, as there is no avatar to come from). A deleted original
+/// says so instead and does nothing.
+public struct LumiaOneLineReference: View {
+    let quote: QuoteDisplay
+    let scale: CGFloat
+
+    public init(quote: QuoteDisplay, scale: CGFloat = 1) { self.quote = quote; self.scale = scale }
+
+    /// What leads the line.
+    static let arrow = "↳ "
+
+    public var body: some View {
+        if quote.deleted {
+            Text(verbatim: Self.arrow + Replies.originalDeleted).italic()
+                .font(.system(size: LumiaTokens.textLinkSm.size * scale))
+                .foregroundStyle(LumiaTokens.inkMuted.color).lineLimit(1)
+                .accessibilityLabel(Replies.originalDeleted)
+        } else {
+            Button { quote.open?() } label: {
+                words
+                    .font(.system(size: LumiaTokens.textLinkSm.size * scale))
+                    .foregroundStyle(LumiaTokens.inkMuted.color)
+                    .lineLimit(1).truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(Replies.referenceLabel(name: quote.name, quotesMe: quote.quotesMe, text: quote.text))
+        }
+    }
+
+    /// The arrow, whom it quotes in the name's weight (in the accent's ink
+    /// for this account), and the quoted words.
+    private var words: Text {
+        guard let name = quote.name else { return Text(verbatim: Self.arrow + quote.text) }
+        return Text(verbatim: Self.arrow)
+            + Text(verbatim: Replies.referenceName(name, quotesMe: quote.quotesMe) + ":")
+                .fontWeight(LumiaTokens.textLinkSm.fontWeight)
+                .foregroundStyle(quote.quotesMe ? LumiaTokens.accentInk.color : LumiaTokens.inkBody.color)
+            + Text(verbatim: " " + quote.text)
     }
 }
 
@@ -200,9 +250,11 @@ public struct LumiaReactionChips: View {
     let reactions: [ReactionDisplay]
     let toggle: (String) -> Void
     let add: (() -> Void)?
+    /// The message rows' text scale: a chip's words grow, and the chip with them past its 32.
+    let scale: CGFloat
 
-    public init(reactions: [ReactionDisplay], toggle: @escaping (String) -> Void, add: (() -> Void)?) {
-        self.reactions = reactions; self.toggle = toggle; self.add = add
+    public init(reactions: [ReactionDisplay], toggle: @escaping (String) -> Void, add: (() -> Void)?, scale: CGFloat = 1) {
+        self.reactions = reactions; self.toggle = toggle; self.add = add; self.scale = scale
     }
 
     /// A chip's height, the phone boards' 32.
@@ -213,12 +265,12 @@ public struct LumiaReactionChips: View {
             ForEach(reactions) { r in
                 Button { toggle(r.emoji) } label: {
                     HStack(spacing: LumiaTokens.space6) {
-                        Text(r.emoji).font(LumiaTokens.textCompact.font)
-                        Text("\(r.count)").font(LumiaTokens.textLinkSm.font)
+                        Text(r.emoji).font(LumiaTokens.textCompact.font(scale: scale))
+                        Text("\(r.count)").font(LumiaTokens.textLinkSm.font(scale: scale))
                             .foregroundStyle(r.me ? LumiaTokens.accentInk.color : LumiaTokens.inkSecondary.color)
                     }
                     .padding(.horizontal, LumiaTokens.space12)
-                    .frame(height: Self.height)
+                    .frame(minHeight: Self.height)
                     .background(r.me ? LumiaTokens.accentSoft.color : LumiaTokens.reaction.color, in: Capsule())
                     .overlay(Capsule().stroke(r.me ? LumiaTokens.reactionOnBorder.color : LumiaTokens.reaction.color))
                     .contentShape(Capsule())
@@ -230,7 +282,7 @@ public struct LumiaReactionChips: View {
             }
             if let add {
                 Button(action: add) {
-                    Image(systemName: "face.smiling").font(LumiaTokens.textCompact.font)
+                    Image(systemName: "face.smiling").font(LumiaTokens.textCompact.font(scale: scale))
                         .foregroundStyle(LumiaTokens.inkMuted.color)
                         .frame(width: Self.height, height: Self.height)
                         .contentShape(Capsule())
@@ -443,11 +495,13 @@ public struct LumiaMentionList: View {
 /// account had read to when the conversation opened: the accent's rule,
 /// then "New" (the boards' unread divider).
 public struct LumiaNewMessagesLine: View {
-    public init() {}
+    /// The message rows' text scale.
+    let scale: CGFloat
+    public init(scale: CGFloat = 1) { self.scale = scale }
     public var body: some View {
         HStack(spacing: LumiaTokens.space12) {
             LumiaTokens.accentLine.color.frame(height: 1)
-            Text(NewMessagesLine.drawn).font(.system(size: LumiaTokens.textSection.size, weight: .bold)).foregroundStyle(LumiaTokens.accentInk.color)
+            Text(NewMessagesLine.drawn).font(.system(size: LumiaTokens.textSection.size * scale, weight: .bold)).foregroundStyle(LumiaTokens.accentInk.color)
         }
         .padding(.horizontal, LumiaTokens.space10)
         .padding(.vertical, LumiaTokens.space6)
@@ -490,11 +544,13 @@ public struct LumiaMessageEditor: View {
     @Binding var draft: String
     let save: () -> Void
     let cancel: () -> Void
+    /// The message rows' text scale, which the words keep while edited.
+    let scale: CGFloat
     @FocusState private var focused: Bool
     @State private var newline = false
 
-    public init(draft: Binding<String>, save: @escaping () -> Void, cancel: @escaping () -> Void) {
-        self._draft = draft; self.save = save; self.cancel = cancel
+    public init(draft: Binding<String>, save: @escaping () -> Void, cancel: @escaping () -> Void, scale: CGFloat = 1) {
+        self._draft = draft; self.save = save; self.cancel = cancel; self.scale = scale
     }
 
     public var body: some View {
@@ -502,7 +558,7 @@ public struct LumiaMessageEditor: View {
             TextField("", text: $draft, axis: .vertical)
                 .focused($focused)
                 .textFieldStyle(.plain)
-                .font(LumiaTokens.textMessage.font)
+                .font(LumiaTokens.textMessage.font(scale: scale))
                 .foregroundStyle(LumiaTokens.inkField.color)
                 .lineLimit(1...12)
                 .padding(.horizontal, LumiaTokens.space12)
@@ -528,7 +584,7 @@ public struct LumiaMessageEditor: View {
                 Button("Save", action: save).fontWeight(.semibold).foregroundStyle(LumiaTokens.accentInk.color)
             }
             .buttonStyle(.plain)
-            .font(LumiaTokens.textMeta.font)
+            .font(LumiaTokens.textMeta.font(scale: scale))
             .foregroundStyle(LumiaTokens.inkMuted.color)
         }
         .onAppear { focused = true }

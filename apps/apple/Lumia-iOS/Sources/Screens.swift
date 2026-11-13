@@ -841,12 +841,13 @@ struct ProfileScreen: View {
 // MARK: Preferences
 
 // How Lumia looks on this phone: light or dark (or as the phone is), and
-// how much room messages take. Each choice takes effect as it is made and
-// is kept on this phone (`Preferences` in LumiaKit); nothing here is the
-// account's or is sent to the instance. The desktop shell's page
-// (`apps/desktop/src/ui/home/preferences.rs`) without its scroll bars,
-// which on a phone are the system's. No board draws it, so it is the
-// Profile screen's cards with the design's segmented choice.
+// how a conversation's messages are drawn. Each choice takes effect as it
+// is made and is kept on this phone (`Preferences` in LumiaKit); nothing
+// here is the account's or is sent to the instance. The other clients'
+// page in their words, without the desktop's scroll bars, which on a phone
+// are the system's. No board draws it, so it is the Profile screen's cards
+// with the design's segmented choice. Images and Embeds have no control
+// until attachments and unfurling exist.
 struct PreferencesScreen: View {
     @Environment(Preferences.self) private var preferences
 
@@ -858,12 +859,52 @@ struct PreferencesScreen: View {
                     LumiaCard(title: "Appearance", subtitle: "Light, dark, or whichever this phone is in.", width: nil) {
                         LumiaSegmentedTabs("Appearance", tabs: Appearance.allCases.map { .init(id: $0, label: $0.label) }, selected: $preferences.appearance)
                     }
-                    LumiaCard(title: "Messages", subtitle: "Comfortable gives each message room. Compact shows more of a conversation at once.", width: nil) {
-                        LumiaSegmentedTabs("Message density", tabs: Density.allCases.map { .init(id: $0, label: $0.label) }, selected: $preferences.density)
+                    LumiaCard(title: "Messages", subtitle: "Start from a preset, then change anything below.", width: nil) {
+                        VStack(alignment: .leading, spacing: LumiaTokens.space16) {
+                            // None selected when the settings below match no preset.
+                            PreferenceRow("Preset") {
+                                LumiaSegmentedTabs("Preset", tabs: MessagePreset.allCases.map { .init(id: Optional($0), label: $0.label) }, selected: $preferences.preset)
+                                if preferences.preset == nil {
+                                    Text(MessagePreset.custom).font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkMuted.color)
+                                }
+                            }
+                            PreferenceRow("Layout") {
+                                LumiaSegmentedTabs("Layout", tabs: MessageLayout.allCases.map { .init(id: $0, label: $0.label) }, selected: $preferences.layout)
+                            }
+                            PreferenceRow("Spacing") {
+                                LumiaSegmentedTabs("Spacing", tabs: MessageSpacing.allCases.map { .init(id: $0, label: $0.label) }, selected: $preferences.spacing)
+                            }
+                            // One line draws no avatar.
+                            if preferences.layout == .grouped {
+                                PreferenceRow("Avatars") {
+                                    LumiaSegmentedTabs("Avatars", tabs: AvatarSize.allCases.map { .init(id: $0, label: $0.label) }, selected: $preferences.avatars)
+                                }
+                            }
+                            // Six segments of two digits fit the narrowest phone's card.
+                            PreferenceRow("Font size") {
+                                LumiaSegmentedTabs("Font size", tabs: FontSize.choices.map { .init(id: $0, label: $0.label) }, selected: $preferences.fontSize)
+                            }
+                        }
                     }
                 }
                 .padding(LumiaTokens.space16)
             }
+        }
+    }
+}
+
+/// One of the Messages card's settings: its name over its choice.
+private struct PreferenceRow<Content: View>: View {
+    let label: String
+    @ViewBuilder let content: () -> Content
+
+    init(_ label: String, @ViewBuilder content: @escaping () -> Content) { self.label = label; self.content = content }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: LumiaTokens.space8) {
+            Text(label).font(LumiaTokens.textLabel.font).foregroundStyle(LumiaTokens.inkSecondary.color)
+                .accessibilityHidden(true)
+            content()
         }
     }
 }

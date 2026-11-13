@@ -28,9 +28,11 @@ final class SmokeUITests: XCTestCase {
     /// on the rail's own avatar leads there, each choice is an element that
     /// says whether it is the one selected, a choice takes effect as it is
     /// made and is there at the next launch, which draws a channel by it.
-    /// The smoke looks at the screen at each step announced under
-    /// LUMIA_UITEST_STEPS: `menu`, `dark`, `kept` (a channel, dark and
-    /// compact from what was stored alone) and `system`.
+    /// Minimal chosen writes its values; a setting changed after it leaves
+    /// no preset selected and says "Custom". The smoke looks at the screen
+    /// at each step announced under LUMIA_UITEST_STEPS: `menu`, `dark`,
+    /// `kept` (a channel, dark, in one line, cozy and at 18 from what was
+    /// stored alone) and `system`.
     func testPreferencesAreChosenAndKept() throws {
         let steps = try XCTUnwrap(ProcessInfo.processInfo.environment["LUMIA_UITEST_STEPS"])
         // A step is announced, then held for the smoke's screenshot of it.
@@ -54,49 +56,76 @@ final class SmokeUITests: XCTestCase {
         func choice(_ group: String, _ label: String) -> XCUIElement {
             app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", group)).buttons[label]
         }
-        /// Which of a group's choices say they are selected.
+        /// Which of a group's choices say they are selected; none of a group not drawn.
         func selected(_ group: String, of labels: [String]) -> [String] {
-            labels.filter { choice(group, $0).isSelected }
+            labels.filter { let c = choice(group, $0); return c.exists && c.isSelected }
         }
-        let appearances = ["Light", "Dark", "System"]
-        let densities = ["Comfortable", "Compact"]
+        let groups: [(String, [String])] = [
+            ("Appearance", ["Light", "Dark", "System"]),
+            ("Preset", ["Comfortable", "Compact", "Minimal"]),
+            ("Layout", ["Grouped", "One line"]),
+            ("Spacing", ["Roomy", "Cozy", "Tight"]),
+            ("Avatars", ["Large", "Small", "Hidden"]),
+            ("Font size", ["13", "14", "15", "16", "18", "20"]),
+        ]
+        let labels = Dictionary(uniqueKeysWithValues: groups)
+        /// What each group has selected, from the top; a group not drawn has none.
+        func chosen() -> [String: [String]] {
+            Dictionary(uniqueKeysWithValues: groups.map { ($0.0, selected($0.0, of: $0.1)) })
+        }
+        let custom = "Custom: these settings match no preset."
+        let page = { (dark: String, preset: [String], layout: String, spacing: String, avatars: [String], size: String) -> [String: [String]] in
+            ["Appearance": [dark], "Preset": preset, "Layout": [layout], "Spacing": [spacing], "Avatars": avatars, "Font size": [size]]
+        }
 
         openPreferences()
         _ = reached("menu")
         app.collectionViews.buttons["Preferences"].tap()
-        for words in ["Preferences", "How Lumia looks on this phone", "Appearance", "Light, dark, or whichever this phone is in.", "Messages", "Comfortable gives each message room. Compact shows more of a conversation at once."] {
+        for words in ["Preferences", "How Lumia looks on this phone", "Appearance", "Light, dark, or whichever this phone is in.", "Messages", "Start from a preset, then change anything below."] {
             XCTAssertTrue(app.staticTexts[words].waitForExistence(timeout: 10), "the screen does not say \"\(words)\"")
         }
-        for label in appearances { XCTAssertTrue(choice("Appearance", label).exists, "no \(label) under Appearance") }
-        for label in densities { XCTAssertTrue(choice("Message density", label).exists, "no \(label) under Message density") }
+        for (group, all) in groups { for label in all { XCTAssertTrue(choice(group, label).exists, "no \(label) under \(group)") } }
         XCTAssertFalse(app.staticTexts["Scroll bars"].exists, "a phone's scroll indicators are the system's")
+        XCTAssertFalse(app.staticTexts["Images"].exists || app.staticTexts["Embeds"].exists, "no control until there is something for it to do")
         // As a new phone has them.
-        XCTAssertEqual(selected("Appearance", of: appearances), ["System"])
-        XCTAssertEqual(selected("Message density", of: densities), ["Comfortable"])
+        XCTAssertEqual(chosen(), page("System", ["Comfortable"], "Grouped", "Roomy", ["Large"], "15"))
+        XCTAssertFalse(app.staticTexts[custom].exists)
 
         choice("Appearance", "Dark").tap()
-        XCTAssertEqual(selected("Appearance", of: appearances), ["Dark"])
-        choice("Message density", "Compact").tap()
-        XCTAssertEqual(selected("Message density", of: densities), ["Compact"])
+        // Minimal writes its values; one line has no avatars to choose.
+        choice("Preset", "Minimal").tap()
+        XCTAssertEqual(chosen(), page("Dark", ["Minimal"], "One line", "Tight", [], "15"))
+        XCTAssertFalse(choice("Avatars", "Large").exists, "one line draws no avatar")
+        // A setting changed after it is Custom, and the font size is no preset's.
+        choice("Font size", "18").tap()
+        XCTAssertEqual(selected("Preset", of: labels["Preset"]!), ["Minimal"])
+        choice("Spacing", "Cozy").tap()
+        XCTAssertEqual(chosen(), page("Dark", [], "One line", "Cozy", [], "18"))
+        XCTAssertTrue(app.staticTexts[custom].waitForExistence(timeout: 5), "the screen does not say \"\(custom)\"")
         _ = reached("dark")
 
-        // The next launch names neither choice: what it draws is what was kept.
+        // The next launch names no choice: what it draws is what was kept.
         app.terminate()
         app = launch(screen: "channel")
         XCTAssertTrue(app.descendants(matching: .any).matching(NSPredicate(format: "placeholderValue BEGINSWITH %@", "Message #")).firstMatch.waitForExistence(timeout: 90), "the channel did not open")
+        // In one line each message is still one stop that says whose it is and when, then what.
+        let row = app.descendants(matching: .any).matching(NSPredicate(format: "value == %@", "Two, a moment later.")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 30), "no row says the second message")
+        XCTAssertTrue(row.label.contains(", "), "the row's label \"\(row.label)\" is not whose and when")
         _ = reached("kept")
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Back to ")).firstMatch.tap()
         openPreferences()
         app.collectionViews.buttons["Preferences"].tap()
         XCTAssertTrue(choice("Appearance", "Dark").waitForExistence(timeout: 10))
-        XCTAssertEqual(selected("Appearance", of: appearances), ["Dark"])
-        XCTAssertEqual(selected("Message density", of: densities), ["Compact"])
+        XCTAssertEqual(chosen(), page("Dark", [], "One line", "Cozy", [], "18"))
+        XCTAssertTrue(app.staticTexts[custom].exists)
 
-        // And back, as it is made: the phone's own appearance again.
+        // And back, as it is made: the phone's own appearance again, Comfortable at 15.
         choice("Appearance", "System").tap()
-        choice("Message density", "Comfortable").tap()
-        XCTAssertEqual(selected("Appearance", of: appearances), ["System"])
-        XCTAssertEqual(selected("Message density", of: densities), ["Comfortable"])
+        choice("Preset", "Comfortable").tap()
+        choice("Font size", "15").tap()
+        XCTAssertEqual(chosen(), page("System", ["Comfortable"], "Grouped", "Roomy", ["Large"], "15"))
+        XCTAssertFalse(app.staticTexts[custom].exists)
         _ = reached("system")
     }
 

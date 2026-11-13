@@ -53,6 +53,17 @@ public func time(ofMicros micros: Int64) -> String {
     return date.formatted(date: .omitted, time: .shortened)
 }
 
+/// The times of a day that are drawn widest, as `time(ofMicros:)` writes
+/// them (two digits of hour, and in 12 hours both halves of the day): one
+/// line's times take the room of the wider, so its names start in one
+/// column.
+public func widestTimes(calendar: Calendar = .current) -> [String] {
+    let today = calendar.startOfDay(for: Date())
+    return [10, 22].compactMap { hour in
+        calendar.date(bySettingHour: hour, minute: 58, second: 0, of: today)?.formatted(date: .omitted, time: .shortened)
+    }
+}
+
 public func day(ofMicros micros: Int64) -> String {
     let date = Date(timeIntervalSince1970: Double(micros) / 1_000_000)
     return date.formatted(.dateTime.month(.abbreviated).day())
