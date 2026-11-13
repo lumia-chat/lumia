@@ -1,7 +1,7 @@
 {
   "name": "lumia-web",
   "private": true,
-  "version": "0.5.0",
+  "version": "0.6.0",
   "type": "module",
   "scripts": {
     "tokens": "bun run scripts/tokens.ts",
