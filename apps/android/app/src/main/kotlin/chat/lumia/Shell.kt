@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -69,6 +70,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import chat.lumia.kit.AppStore
 import chat.lumia.kit.AvatarTone
+import chat.lumia.kit.LocalTextScale
 import chat.lumia.kit.LumiaAvatar
 import chat.lumia.kit.LumiaEmptyState
 import chat.lumia.kit.LumiaLinkButton
@@ -81,6 +83,7 @@ import chat.lumia.kit.Route
 import chat.lumia.kit.SectionTitle
 import chat.lumia.kit.initialsOf
 import chat.lumia.kit.personalKinds
+import chat.lumia.kit.rememberClock
 import chat.lumia.kit.rowTimeOfMicros
 import chat.lumia.push.PushSetup
 import uniffi.lumia_ffi.ChannelSummary
@@ -223,11 +226,15 @@ fun Shell(store: AppStore, session: LumiaSession, devScreen: String?, devChannel
                 }
             }
         }
-        // A conversation's messages take the room Preferences chose for them. Each
-        // conversation is a screen of its own: what one holds (the draft, a quote
-        // being replied with) is not another's.
-        is Screen.Conversation -> key(top.id) { ConversationScreen(store, session, top.id, store.density, pop) }
-        is Screen.Channel -> key(top.id, top.at) { ChannelScreen(store, session, top.id, store.density, pop, push, top.at) }
+        // A conversation's messages are drawn as Preferences chose, their text and
+        // the composer's at its font size. Each conversation is a screen of its
+        // own: what one holds (the draft, a quote being replied with) is not another's.
+        is Screen.Conversation -> key(top.id) {
+            CompositionLocalProvider(LocalTextScale provides store.display.textScale) { ConversationScreen(store, session, top.id, store.display, pop) }
+        }
+        is Screen.Channel -> key(top.id, top.at) {
+            CompositionLocalProvider(LocalTextScale provides store.display.textScale) { ChannelScreen(store, session, top.id, store.display, pop, push, top.at) }
+        }
         // A mention opens its channel at it, in the Mentions page's place.
         is Screen.Mentions -> MentionsScreen(session, top.serverId, pop) { channelId, messageId ->
             val channel = session.channelOf(channelId)
@@ -335,7 +342,7 @@ fun ConversationRow(session: LumiaSession, channel: ChannelSummary, open: () -> 
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(LumiaTokens.space2)) {
             Row(horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space8), verticalAlignment = Alignment.Bottom) {
                 Text(name, style = LumiaTokens.textAuthor.style, color = LumiaTokens.inkEmphasis.color, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                if (last != null) Text(rowTimeOfMicros(last.sentAtMicros), style = LumiaTokens.textMeta.style, color = LumiaTokens.inkSecondary.color)
+                if (last != null) Text(rowTimeOfMicros(last.sentAtMicros, rememberClock()), style = LumiaTokens.textMeta.style, color = LumiaTokens.inkSecondary.color)
             }
             Row(horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space8), verticalAlignment = Alignment.CenterVertically) {
                 Text(

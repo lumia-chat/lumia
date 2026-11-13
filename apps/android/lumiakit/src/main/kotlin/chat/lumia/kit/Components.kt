@@ -52,6 +52,11 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.AlignmentLine
+import androidx.compose.ui.layout.FirstBaseline
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.Placeable
+import androidx.compose.ui.layout.layoutId
 import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.input.TextFieldValue
@@ -135,8 +140,8 @@ fun LumiaEmptyState(icon: ImageVector, title: String, text: String? = null, acti
 
 // What the phone boards draw and `tokens.json` has no name for, made from
 // the nearest tokens (the desktop shell's `tokens.rs` does the same). A
-// message row's own are `Measures` (Preferences.kt), which the density
-// chosen in Preferences decides.
+// message row's own are `Measures` (Preferences.kt), which the layout,
+// spacing and avatars chosen in Preferences decide.
 
 /** Under the line that says who is typing, to the panel's foot (20). */
 private val TypingFoot = LumiaTokens.space16 + LumiaTokens.space4
@@ -144,14 +149,19 @@ private val TypingFoot = LumiaTokens.space16 + LumiaTokens.space4
 private val TypingDotGap = (LumiaTokens.space2 + LumiaTokens.space4) / 2
 
 /**
- * A message's row. Messages one person sends close together are one block
- * (`joins` says what that is, [place] where this one sits in its block):
- * the first is an avatar beside the name, the time and the message; the
- * ones after it are the message alone, in the same column, a paragraph's
- * distance under the one before. A phone has no pointer to show such a
- * row's time under, so it is not drawn; a screen reader still hears whose
- * the message is and when, before it. Each row is one stop for it.
- * [measures] are the density's: the avatar and the room around the row.
+ * A message's row. Grouped, messages one person sends close together are
+ * one block (`joins` says what that is, [place] where this one sits in its
+ * block): the first is an avatar beside the name, the time and the
+ * message; the ones after it are the message alone, in the same column, a
+ * paragraph's distance under the one before. A phone has no pointer to
+ * show such a row's time under, so it is not drawn; a screen reader still
+ * hears whose the message is and when, before it. With the avatars hidden
+ * no room is kept for one: the name starts where it was, and opens the
+ * profile card as it did. In one line ([Measures.oneLine]) every message
+ * is the time, the name and its words, which wrap under their own start
+ * (`OneLineRow`). Each row is one stop for a screen reader. [measures] are
+ * Preferences': the avatar and the room around the row; its text is drawn
+ * at the size Preferences chose (`LocalTextScale`).
  *
  * The row is the boards' padded box, rounded, inside the list's own
  * margin: washed in the accent when it is for this account ([washed]: it
@@ -190,7 +200,7 @@ fun LumiaMessageRow(
         Column(modifier, verticalArrangement = Arrangement.spacedBy(LumiaTokens.space4)) {
             when {
                 editor != null -> editor()
-                deleted -> Text("(deleted)", style = LumiaTokens.textMessage.style, color = LumiaTokens.inkQuiet.color)
+                deleted -> Text("(deleted)", style = LumiaTokens.textMessage.scaled, color = LumiaTokens.inkQuiet.color)
                 else -> LumiaBody(text, mentions, edited = edited)
             }
             if (reactions != null && editor == null) Box(Modifier.padding(top = LumiaTokens.space2)) { reactions() }
@@ -204,11 +214,13 @@ fun LumiaMessageRow(
         washed -> LumiaTokens.accentWash.color
         else -> null
     }
+    // In one line, every message is a line of its own, with the room between lines and none for a block.
+    val opens = place.opens && !measures.oneLine
     val frame = Modifier
         .fillMaxWidth()
         // The list's margin, and the room between blocks outside the row's box.
         .padding(horizontal = LumiaTokens.space6)
-        .padding(top = if (place.opens) measures.blockGap else 0.dp)
+        .padding(top = if (opens) measures.blockGap else 0.dp)
         .then(if (fill != null) Modifier.background(fill, shape) else Modifier)
         .then(
             if (onLongPress != null && !editing) {
@@ -222,32 +234,106 @@ fun LumiaMessageRow(
         .padding(
             start = LumiaTokens.space10,
             end = LumiaTokens.space10,
-            top = if (place.opens) measures.edge else measures.within / 2,
-            bottom = if (place.closes) measures.edge else measures.within / 2,
+            top = when {
+                measures.oneLine -> measures.line / 2
+                place.opens -> measures.edge
+                else -> measures.within / 2
+            },
+            bottom = when {
+                measures.oneLine -> measures.line / 2
+                place.closes -> measures.edge
+                else -> measures.within / 2
+            },
         )
-    if (!place.opens) {
+    if (measures.oneLine || !place.opens) {
         Box(frame) {
+            // Who and when, before the words: the line's time and name are not read out themselves.
             Box(Modifier.matchParentSize().semantics { contentDescription = "$author, $time" })
-            body(Modifier.padding(start = measures.avatar + measures.beside))
+            if (measures.oneLine) OneLineRow(author, time, authorTap, onAuthor != null, reference) { body(Modifier) }
+            else body(Modifier.padding(start = measures.gutter))
         }
         return
+    }
+    val head = @Composable { modifier: Modifier ->
+        Column(verticalArrangement = Arrangement.spacedBy(measures.within), modifier = modifier) {
+            Row(horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space8), verticalAlignment = Alignment.Bottom) {
+                Text(author, style = LumiaTokens.textAuthor.scaled, color = LumiaTokens.inkEmphasis.color, modifier = authorTap)
+                Text(time, style = LumiaTokens.textMeta.scaled, color = LumiaTokens.inkQuiet.color)
+            }
+            body(Modifier)
+        }
     }
     // A reply: its reference line over the avatar's row, the boards' 2 apart.
     Column(frame, verticalArrangement = Arrangement.spacedBy(LumiaTokens.space2)) {
         reference?.invoke()
-        Row(horizontalArrangement = Arrangement.spacedBy(measures.beside), verticalAlignment = Alignment.Top) {
-            // The name beside it says who; the initials would only be read out before it.
-            Box(Modifier.clip(CircleShape).then(authorTap).clearAndSetSemantics {}) { LumiaAvatar(initialsOf(author), tone, measures.avatar) }
-            Column(verticalArrangement = Arrangement.spacedBy(measures.within), modifier = Modifier.weight(1f)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space8), verticalAlignment = Alignment.Bottom) {
-                    Text(author, style = LumiaTokens.textAuthor.style, color = LumiaTokens.inkEmphasis.color, modifier = authorTap)
-                    Text(time, style = LumiaTokens.textMeta.style, color = LumiaTokens.inkQuiet.color)
-                }
-                body(Modifier)
+        val avatar = measures.avatar
+        if (avatar == null) {
+            // No avatar and no room kept for one: the name, which opens the profile card, starts at the row's edge.
+            head(Modifier)
+        } else {
+            Row(horizontalArrangement = Arrangement.spacedBy(measures.beside), verticalAlignment = Alignment.Top) {
+                // The name beside it says who; the initials would only be read out before it.
+                Box(Modifier.clip(CircleShape).then(authorTap).clearAndSetSemantics {}) { LumiaAvatar(initialsOf(author), tone, avatar) }
+                head(Modifier.weight(1f))
             }
         }
     }
 }
+
+/**
+ * A message as one line: its time and its author's name, then its words,
+ * which wrap under their own start, and its reactions under them. A
+ * reply's short reference line ([reference]) is over the words, at their
+ * start. The time and the name sit on the words' first line, the three
+ * sharing a baseline; a long name is cut short at a quarter of the line,
+ * so the words keep at least half of it on a phone. The name opens the profile card where [tappable]
+ * ([authorTap]), and is a stop of its own then, as a grouped row's is;
+ * else the row's description says it, and neither it nor the time is read
+ * out twice.
+ */
+@Composable
+private fun OneLineRow(author: String, time: String, authorTap: Modifier, tappable: Boolean, reference: (@Composable () -> Unit)?, words: @Composable () -> Unit) {
+    Layout(
+        content = {
+            Text(time, style = LumiaTokens.textMeta.scaled, color = LumiaTokens.inkQuiet.color, maxLines = 1, softWrap = false, modifier = Modifier.layoutId(LineTime).clearAndSetSemantics {})
+            Text(
+                author, style = LumiaTokens.textAuthor.scaled, color = LumiaTokens.inkEmphasis.color, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.layoutId(LineName).then(if (tappable) authorTap else Modifier.clearAndSetSemantics {}),
+            )
+            if (reference != null) Box(Modifier.layoutId(LineReference)) { reference() }
+            Box(Modifier.layoutId(LineWords)) { words() }
+        },
+    ) { measurables, constraints ->
+        val gap = LumiaTokens.space8.roundToPx()
+        val loose = constraints.copy(minWidth = 0, minHeight = 0)
+        val width = constraints.maxWidth
+        val timeP = measurables.first { it.layoutId == LineTime }.measure(loose)
+        val nameP = measurables.first { it.layoutId == LineName }.measure(loose.copy(maxWidth = width / 4))
+        val start = (timeP.width + gap + nameP.width + gap).coerceAtMost(width / 2)
+        val rest = loose.copy(maxWidth = (width - start).coerceAtLeast(0))
+        val refP = measurables.firstOrNull { it.layoutId == LineReference }?.measure(rest)
+        val wordsP = measurables.first { it.layoutId == LineWords }.measure(rest)
+        val top = refP?.let { it.height + LumiaTokens.space2.roundToPx() } ?: 0
+        fun baseline(p: Placeable, otherwise: Int) = p[FirstBaseline].takeIf { it != AlignmentLine.Unspecified } ?: otherwise
+        val nameBase = baseline(nameP, nameP.height)
+        val timeBase = baseline(timeP, nameBase)
+        // Words with no baseline (the field an edit is made in) start level with the name.
+        val wordsBase = baseline(wordsP, nameBase)
+        val line = top + maxOf(timeBase, nameBase, wordsBase)
+        val height = maxOf(line - timeBase + timeP.height, line - nameBase + nameP.height, line - wordsBase + wordsP.height)
+        layout(width, height) {
+            refP?.placeRelative(start, 0)
+            timeP.placeRelative(0, line - timeBase)
+            nameP.placeRelative(timeP.width + gap, line - nameBase)
+            wordsP.placeRelative(start, line - wordsBase)
+        }
+    }
+}
+
+private const val LineTime = "time"
+private const val LineName = "name"
+private const val LineReference = "reference"
+private const val LineWords = "words"
 
 /**
  * A message's words, its mentions (by [mentions], where they are in the
@@ -264,8 +350,9 @@ fun LumiaBody(text: String, mentions: List<IntRange>, modifier: Modifier = Modif
     val ink = LumiaTokens.accentInk.color
     val wash = LumiaTokens.accentSoft.color
     val quiet = LumiaTokens.inkMuted.color
+    val scale = LocalTextScale.current
     // The text drawn, thin spaces and all, and where each pill is in it.
-    val (styled, pills) = remember(text, mentions, ink, quiet, edited) {
+    val (styled, pills) = remember(text, mentions, ink, quiet, edited, scale) {
         val pills = mutableListOf<IntRange>()
         val styled = buildAnnotatedString {
             var at = 0
@@ -284,7 +371,7 @@ fun LumiaBody(text: String, mentions: List<IntRange>, modifier: Modifier = Modif
             append(text, at, text.length)
             if (edited) {
                 append(" ")
-                pushStyle(SpanStyle(color = quiet, fontSize = LumiaTokens.textMeta.size))
+                pushStyle(SpanStyle(color = quiet, fontSize = LumiaTokens.textMeta.size.scaled(scale)))
                 append(EDITED)
                 pop()
             }
@@ -294,7 +381,7 @@ fun LumiaBody(text: String, mentions: List<IntRange>, modifier: Modifier = Modif
     var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
     Text(
         styled,
-        style = LumiaTokens.textMessage.style,
+        style = LumiaTokens.textMessage.scaled,
         color = LumiaTokens.inkBody.color,
         onTextLayout = { layout = it },
         modifier = modifier
@@ -345,28 +432,41 @@ fun LumiaNewMessagesLine(measures: Measures = Measures.Comfortable) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.weight(1f).height(1.dp).background(LumiaTokens.accentLine.color))
-        Text(NEW_WORD, style = LumiaTokens.textSection.style.copy(fontWeight = FontWeight(LumiaTokens.textCount.weight)), color = LumiaTokens.accentInk.color)
+        Text(NEW_WORD, style = LumiaTokens.textSection.scaled.copy(fontWeight = FontWeight(LumiaTokens.textCount.weight)), color = LumiaTokens.accentInk.color)
     }
 }
 
 /**
  * A notice the instance posted in a channel (architecture 6.8): "Ada added
  * Grace", one quiet line in the message text's column, with no avatar and
- * nothing to do with it, and the time after it. One stop for a screen
- * reader, the words then the time.
+ * nothing to do with it, and the time after it. In one line, the time and
+ * then the words, where a message's time is. One stop for a screen reader,
+ * in the order they are drawn.
  */
 @Composable
 fun LumiaNoticeRow(text: String, time: String, measures: Measures = Measures.Comfortable) {
+    val words = @Composable { modifier: Modifier ->
+        Text(text, style = LumiaTokens.textMeta.scaled, color = LumiaTokens.inkMuted.color, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = modifier)
+    }
+    val at = @Composable { Text(time, style = LumiaTokens.textMeta.scaled, color = LumiaTokens.inkQuiet.color) }
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .semantics(mergeDescendants = true) {}
-            .padding(start = LumiaTokens.space16 + measures.avatar + measures.beside, end = LumiaTokens.space16, top = measures.blockGap + measures.within, bottom = measures.within),
+            .then(
+                if (measures.oneLine) Modifier.padding(horizontal = LumiaTokens.space16, vertical = measures.line / 2)
+                else Modifier.padding(start = LumiaTokens.space16 + measures.gutter, end = LumiaTokens.space16, top = measures.blockGap + measures.within, bottom = measures.within),
+            ),
         horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space8),
         verticalAlignment = Alignment.Bottom,
     ) {
-        Text(text, style = LumiaTokens.textMeta.style, color = LumiaTokens.inkMuted.color, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-        Text(time, style = LumiaTokens.textMeta.style, color = LumiaTokens.inkQuiet.color)
+        if (measures.oneLine) {
+            at()
+            words(Modifier.weight(1f, fill = false))
+        } else {
+            words(Modifier.weight(1f, fill = false))
+            at()
+        }
     }
 }
 
@@ -378,7 +478,7 @@ fun LumiaDayDivider(label: String, measures: Measures = Measures.Comfortable) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.weight(1f).height(1.dp).background(LumiaTokens.line.color))
-        Text(label, style = LumiaTokens.textSection.style, color = LumiaTokens.inkQuiet.color)
+        Text(label, style = LumiaTokens.textSection.scaled, color = LumiaTokens.inkQuiet.color)
         Box(Modifier.weight(1f).height(1.dp).background(LumiaTokens.line.color))
     }
 }
@@ -442,12 +542,13 @@ fun LumiaComposer(
                     .then(if (focus != null) Modifier.focusRequester(focus) else Modifier)
                     .then(if (onKey != null) Modifier.onPreviewKeyEvent(onKey) else Modifier),
                 enabled = enabled,
-                textStyle = LumiaTokens.textBody.style.copy(color = LumiaTokens.inkField.color),
+                // At the size Preferences chose for messages, as what it sends will be.
+                textStyle = LumiaTokens.textBody.scaled.copy(color = LumiaTokens.inkField.color),
                 cursorBrush = SolidColor(LumiaTokens.accent.color),
                 maxLines = 8,
                 decorationBox = { inner ->
                     Box {
-                        if (value.text.isEmpty()) Text(placeholder, style = LumiaTokens.textBody.style, color = LumiaTokens.inkMuted.color)
+                        if (value.text.isEmpty()) Text(placeholder, style = LumiaTokens.textBody.scaled, color = LumiaTokens.inkMuted.color)
                         inner()
                     }
                 },

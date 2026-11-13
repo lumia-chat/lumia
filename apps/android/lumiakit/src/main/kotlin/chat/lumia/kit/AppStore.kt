@@ -68,15 +68,16 @@ class AppStore(context: Context) {
         set(value) { prefs.edit().putString("instance", value).apply() }
 
     /**
-     * Preferences' two choices: how Lumia looks on this phone. They are the
-     * phone's and not the account's, kept beside the saved instance under
-     * the names the desktop keeps them by and sent nowhere; signing out and
-     * forgetting the instance leave them be, and a stored value this build
-     * does not know reads as the default.
+     * Preferences' choices: how Lumia looks on this phone, and how it draws
+     * a conversation's messages. They are the phone's and not the
+     * account's, kept beside the saved instance under the names every
+     * client keeps them by and sent nowhere; signing out and forgetting the
+     * instance leave them be, and a stored value this build does not know
+     * reads as the default, each setting on its own.
      */
     var appearance by mutableStateOf(Appearance.of(stored("appearance")))
         private set
-    var density by mutableStateOf(Density.of(stored("density")))
+    var display by mutableStateOf(Display.read(::stored))
         private set
 
     private fun stored(key: String): String? = runCatching { prefs.getString(key, null) }.getOrNull()
@@ -101,21 +102,27 @@ class AppStore(context: Context) {
         prefs.edit().putString("recent_emoji", recentEmoji.joinToString("\n")).apply()
     }
 
-    /** How much room messages take: at once, and at the next launch. */
-    fun choose(density: Density) {
-        this.density = density
-        prefs.edit().putString("density", density.stored).apply()
+    /**
+     * How messages are drawn, a setting or a preset's values: at once, and
+     * at the next launch. Every setting is written, a preset being only the
+     * values it wrote.
+     */
+    fun choose(display: Display) {
+        this.display = display
+        prefs.edit().apply { for ((key, value) in display.written()) putString(key, value) }.apply()
     }
 
     /**
      * A look for this launch only, which a debug build takes from the
-     * launch intent's LUMIA_DEV_APPEARANCE and LUMIA_DEV_DENSITY
-     * (scripts/smoke.sh draws the dark theme and the compact channel so).
-     * Nothing is stored: the launch after it is as the phone chose.
+     * launch intent's LUMIA_DEV_APPEARANCE, LUMIA_DEV_PRESET and
+     * LUMIA_DEV_FONT_SIZE (scripts/smoke.sh draws the dark theme, the
+     * channel in Minimal and its text at 20 so). Nothing is stored: the
+     * launch after it is as the phone chose.
      */
-    fun wear(appearance: Appearance?, density: Density?) {
+    fun wear(appearance: Appearance?, preset: Preset?, fontSize: Int?) {
         if (appearance != null) this.appearance = appearance
-        if (density != null) this.density = density
+        if (preset != null) display = display.with(preset)
+        if (fontSize != null) display = display.copy(fontSize = fontSize)
     }
 
     /**

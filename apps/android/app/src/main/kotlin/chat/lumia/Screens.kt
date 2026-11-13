@@ -50,7 +50,13 @@ import androidx.compose.ui.unit.dp
 import chat.lumia.kit.AppStore
 import chat.lumia.kit.Appearance
 import chat.lumia.kit.AvatarTone
-import chat.lumia.kit.Density
+import chat.lumia.kit.Avatars
+import chat.lumia.kit.FONT_SIZES
+import chat.lumia.kit.Layout
+import chat.lumia.kit.Preset
+import chat.lumia.kit.Spacing
+import chat.lumia.kit.fontSizeNamed
+import chat.lumia.kit.storedAs
 import chat.lumia.kit.LumiaAvatar
 import chat.lumia.kit.LumiaDeviceRow
 import chat.lumia.kit.LumiaEmptyState
@@ -581,16 +587,26 @@ fun ProfileScreen(store: AppStore, session: LumiaSession, back: () -> Unit) {
 
 /**
  * How Lumia looks on this phone: light or dark (or as the phone is), and
- * how much room messages take. Each choice takes effect as it is made and
- * is there at the next launch; they are this phone's and not the
- * account's, so nothing here is sent to the instance and signing out
+ * how a conversation's messages are drawn. Each choice takes effect as it
+ * is made and is there at the next launch; they are this phone's and not
+ * the account's, so nothing here is sent to the instance and signing out
  * leaves them be (`AppStore`). The desktop's page (its scroll bar card is
  * a Mac's alone: a phone's scroll indicators are the system's); no board
  * draws it, so it is the Profile screen's cards with the choice Profile's
  * status has.
+ *
+ * Messages starts from a preset, which writes its values and is shown
+ * chosen while they all match; none is chosen once one is changed, and the
+ * line under them says so. Then each setting, its label over it (the
+ * words every client uses, the web's): the avatars are not offered
+ * in one line, which draws none. Images and embeds have no control until
+ * there is something they change. The six font sizes are the same
+ * segmented choice as the rest: six short numbers fit a phone's width.
  */
 @Composable
 fun PreferencesScreen(store: AppStore, back: () -> Unit) {
+    val display = store.display
+    val preset = display.preset
     PanelScreen(back = "Home", onBack = back, title = "Preferences", subtitle = "How Lumia looks on this phone") {
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).navigationBarsPadding().padding(LumiaTokens.space16), verticalArrangement = Arrangement.spacedBy(LumiaTokens.space12)) {
             LumiaCard("Appearance", "Light, dark, or whichever this phone is in.") {
@@ -600,14 +616,59 @@ fun PreferencesScreen(store: AppStore, back: () -> Unit) {
                     { store.choose(Appearance.of(it)) },
                 )
             }
-            LumiaCard("Messages", "Comfortable gives each message room. Compact shows more of a conversation at once.") {
-                LumiaChoice(
-                    listOf(Density.COMFORTABLE.stored to "Comfortable", Density.COMPACT.stored to "Compact"),
-                    store.density.stored,
-                    { store.choose(Density.of(it)) },
-                )
+            LumiaCard("Messages", "Start from a preset, then change anything below.") {
+                Setting("Preset") {
+                    LumiaChoice(
+                        Preset.entries.map { it.stored to it.label },
+                        preset?.stored ?: "",
+                        { name -> Preset.named(name)?.let { store.choose(display.with(it)) } },
+                    )
+                    if (preset == null) Text("Custom: these settings match no preset.", style = LumiaTokens.textMeta.style, color = LumiaTokens.inkMuted.color)
+                }
+                Setting("Layout") {
+                    LumiaChoice(
+                        listOf(Layout.GROUPED.stored to "Grouped", Layout.ONE_LINE.stored to "One line"),
+                        display.layout.stored,
+                        { name -> storedAs<Layout>(name)?.let { store.choose(display.copy(layout = it)) } },
+                    )
+                }
+                Setting("Spacing") {
+                    LumiaChoice(
+                        listOf(Spacing.ROOMY.stored to "Roomy", Spacing.COZY.stored to "Cozy", Spacing.TIGHT.stored to "Tight"),
+                        display.spacing.stored,
+                        { name -> storedAs<Spacing>(name)?.let { store.choose(display.copy(spacing = it)) } },
+                    )
+                }
+                if (display.layout != Layout.ONE_LINE) {
+                    Setting("Avatars") {
+                        LumiaChoice(
+                            listOf(Avatars.LARGE.stored to "Large", Avatars.SMALL.stored to "Small", Avatars.HIDDEN.stored to "Hidden"),
+                            display.avatars.stored,
+                            { name -> storedAs<Avatars>(name)?.let { store.choose(display.copy(avatars = it)) } },
+                        )
+                    }
+                }
+                Setting("Font size") {
+                    LumiaChoice(
+                        FONT_SIZES.map { "$it" to "$it" },
+                        "${display.fontSize}",
+                        { name -> fontSizeNamed(name)?.let { store.choose(display.copy(fontSize = it)) } },
+                    )
+                }
             }
         }
+    }
+}
+
+/**
+ * One of Messages' settings: its label over its choice, the label saying
+ * which setting the choice is to a screen reader before it.
+ */
+@Composable
+private fun Setting(label: String, content: @Composable () -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(LumiaTokens.space6)) {
+        Text(label, style = LumiaTokens.textLabel.style, color = LumiaTokens.inkSecondary.color)
+        content()
     }
 }
 

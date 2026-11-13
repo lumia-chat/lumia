@@ -73,7 +73,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.currentStateAsState
 import chat.lumia.kit.AppStore
 import chat.lumia.kit.AvatarTone
-import chat.lumia.kit.Density
+import chat.lumia.kit.Display
 import chat.lumia.kit.FLASH_MS
 import chat.lumia.kit.LumiaAvatar
 import chat.lumia.kit.LumiaBody
@@ -90,7 +90,6 @@ import chat.lumia.kit.LumiaSession
 import chat.lumia.kit.LumiaTokens
 import chat.lumia.kit.LumiaTypingLine
 import chat.lumia.kit.MARK_EVERY_MS
-import chat.lumia.kit.Measures
 import chat.lumia.kit.NoticeTone
 import chat.lumia.kit.SAID_FOR_MS
 import chat.lumia.kit.SERVER_DM
@@ -125,6 +124,7 @@ import chat.lumia.kit.pickMention
 import chat.lumia.kit.quoteOf
 import chat.lumia.kit.serverDmNote
 import chat.lumia.kit.timeOfMicros
+import chat.lumia.kit.rememberClock
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import uniffi.lumia_ffi.DmMessageSummary
@@ -197,10 +197,11 @@ private fun BringEditing(listState: LazyListState, item: Int?, onHold: () -> Uni
 // A personal conversation
 
 @Composable
-fun ConversationScreen(store: AppStore, session: LumiaSession, channelId: String, density: Density, back: () -> Unit) {
+fun ConversationScreen(store: AppStore, session: LumiaSession, channelId: String, display: Display, back: () -> Unit) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
-    val measures = Measures.of(density)
+    val measures = display.measures
+    val clock = rememberClock()
     var draft by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue("")) }
     var error by rememberSaveable { mutableStateOf("") }
     var replying by remember { mutableStateOf<QuoteSummary?>(null) }
@@ -308,7 +309,7 @@ fun ConversationScreen(store: AppStore, session: LumiaSession, channelId: String
                     Column {
                         if (i == newLine) LumiaNewMessagesLine(measures)
                         LumiaMessageRow(
-                            whoOf(m), AvatarTone.of(senderOf(m)), timeOfMicros(m.sentAtMicros), m.body, m.deleted, places[i], measures,
+                            whoOf(m), AvatarTone.of(senderOf(m)), timeOfMicros(m.sentAtMicros, clock), m.body, m.deleted, places[i], measures,
                             reference = m.reply?.let { q -> @Composable { ReferenceLine(session, q, measures) { jump(q.messageId) } } },
                             edited = m.edited && !m.deleted,
                             reactions = if (m.reactions.isNotEmpty() && !m.deleted) ({ ReactionChips(session, m.reactions, { react(m.messageId, it) }, { pickerFor = m.messageId }) }) else null,
@@ -385,10 +386,11 @@ fun ConversationScreen(store: AppStore, session: LumiaSession, channelId: String
  * card. Opened at a message ([at], from a Mentions page), it finds it.
  */
 @Composable
-fun ChannelScreen(store: AppStore, session: LumiaSession, channelId: String, density: Density, back: () -> Unit, push: (Screen) -> Unit, at: String? = null) {
+fun ChannelScreen(store: AppStore, session: LumiaSession, channelId: String, display: Display, back: () -> Unit, push: (Screen) -> Unit, at: String? = null) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
-    val measures = Measures.of(density)
+    val measures = display.measures
+    val clock = rememberClock()
     var draft by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue("")) }
     var error by rememberSaveable { mutableStateOf("") }
     var joining by remember { mutableStateOf(false) }
@@ -543,12 +545,12 @@ fun ChannelScreen(store: AppStore, session: LumiaSession, channelId: String, den
                     Column {
                         if (i == newLine) LumiaNewMessagesLine(measures)
                         if (m.notice.isNotEmpty()) {
-                            noticeText(m.notice, session.nameOf(m.authorAccountId), session.nameOf(m.noticeAccountId))?.let { LumiaNoticeRow(it, timeOfMicros(m.createdAtMicros), measures) }
+                            noticeText(m.notice, session.nameOf(m.authorAccountId), session.nameOf(m.noticeAccountId))?.let { LumiaNoticeRow(it, timeOfMicros(m.createdAtMicros, clock), measures) }
                         } else {
                             // Its mentions as `@` and the person's name, as the member list shows them.
                             val drawn = drawnBody(m.body, m.mentions, session::knownNameOf)
                             LumiaMessageRow(
-                                session.nameOf(m.authorAccountId), AvatarTone.of(m.authorAccountId), timeOfMicros(m.createdAtMicros), drawn.text, m.deleted, places[i], measures,
+                                session.nameOf(m.authorAccountId), AvatarTone.of(m.authorAccountId), timeOfMicros(m.createdAtMicros, clock), drawn.text, m.deleted, places[i], measures,
                                 onAuthor = if (server != null) ({ card = m.authorAccountId }) else null,
                                 reference = m.reply?.let { q -> @Composable { ReferenceLine(session, q, measures) { scope.launch { reveal(q.messageId) } } } },
                                 mentions = drawn.mentions,
@@ -711,7 +713,7 @@ private fun MentionItem(session: LumiaSession, m: MessageSummary, home: Boolean,
     val serverName = channel?.let { c -> session.snapshot?.servers?.firstOrNull { it.serverId == c.serverId }?.name }
     val place = mentionPlace(channel?.name, serverName, home)
     val author = session.nameOf(m.authorAccountId)
-    val at = "${dayOfMicros(m.createdAtMicros)}, ${timeOfMicros(m.createdAtMicros)}"
+    val at = "${dayOfMicros(m.createdAtMicros)}, ${timeOfMicros(m.createdAtMicros, rememberClock())}"
     Column(
         Modifier
             .fillMaxWidth()

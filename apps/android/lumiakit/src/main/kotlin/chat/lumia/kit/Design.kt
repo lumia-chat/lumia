@@ -49,4 +49,25 @@ data class LumiaType(val size: TextUnit, val weight: Int, val display: Boolean) 
             fontWeight = FontWeight(weight),
             fontFamily = if (display) FontFamily.SansSerif else FontFamily.Default,
         )
+
+    /** This style at the size a conversation's text is drawn at, where [LocalTextScale] says. */
+    val scaled: TextStyle
+        @Composable get() = style.scaled(LocalTextScale.current)
 }
+
+/**
+ * How much larger than the design a conversation's text is drawn, every
+ * text in a message row and the composer's: Preferences' font size over 15
+ * (`Display.textScale`). 1 everywhere else.
+ */
+val LocalTextScale = staticCompositionLocalOf { 1f }
+
+/**
+ * This style [by] times as large. The size stays in sp, so the phone's
+ * own text scale still applies over it; with no line height of its own,
+ * the line grows with the text.
+ */
+fun TextStyle.scaled(by: Float): TextStyle = if (by == 1f) this else copy(fontSize = fontSize * by)
+
+/** A size [by] times as large, still in sp. */
+fun TextUnit.scaled(by: Float): TextUnit = if (by == 1f) this else this * by

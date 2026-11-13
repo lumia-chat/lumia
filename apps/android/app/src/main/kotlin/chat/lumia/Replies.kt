@@ -96,6 +96,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
@@ -145,8 +146,9 @@ private val SwitchGlyph = (LumiaTokens.space12 + LumiaTokens.space14) / 2
 /** A reaction chip: 32 high, 12 at the sides, the emoji at 14. */
 private val ChipHeight = LumiaTokens.space28 + LumiaTokens.space4
 
-/** The reference line's 13: the small link's size, at the weight given. */
-private fun small(weight: Int) = LumiaTokens.textLinkSm.style.copy(fontWeight = FontWeight(weight))
+/** The reference line's 13: the small link's size, at the weight given, scaled as the row's text is. */
+@Composable
+private fun small(weight: Int) = LumiaTokens.textLinkSm.scaled.copy(fontWeight = FontWeight(weight))
 
 // A reply's reference line
 
@@ -160,13 +162,15 @@ private fun small(weight: Int) = LumiaTokens.textLinkSm.style.copy(fontWeight = 
  * circle and "Original message was deleted", and nothing to press. In a
  * personal conversation, where the author may not be known, the avatar and
  * the name are left out. [measures] are the row's, whose avatar the
- * connector starts under; none on a Mentions page, where it is in the
- * message's column and starts at its edge.
+ * connector starts under (with none, there is no connector); none on a Mentions
+ * page, where it is in the message's column and starts at its edge. In one
+ * line it is the short line over the words, at their start: `↳ Priya:
+ * first words…` (`ShortReference`).
  */
 @Composable
 fun ReferenceLine(session: LumiaSession, quote: QuoteSummary, measures: Measures?, onJump: (() -> Unit)?) {
     // The connector starts under the avatar's centre: half the avatar, less half its stroke.
-    val indent = measures?.let { it.avatar / 2 - LumiaTokens.space2 / 2 } ?: 0.dp
+    val indent = measures?.avatar?.let { it / 2 - LumiaTokens.space2 / 2 } ?: 0.dp
     val known = quote.authorAccountId.isNotEmpty()
     val toMe = known && quote.authorAccountId == session.me
     val name = if (known) session.nameOf(quote.authorAccountId) else null
@@ -179,12 +183,17 @@ fun ReferenceLine(session: LumiaSession, quote: QuoteSummary, measures: Measures
             onClick { onJump(); true }
         }.clickable(role = Role.Button, onClick = onJump)
     }
+    if (measures?.oneLine == true) {
+        ShortReference(quote, name, toMe, session, button)
+        return
+    }
     Row(
         Modifier.fillMaxWidth().padding(start = indent).then(button),
         horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space6),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Connector()
+        // With the avatars hidden there is nothing for it to come from.
+        if (measures == null || measures.avatar != null) Connector()
         if (quote.originalDeleted) {
             Box(Modifier.size(RefAvatar).background(LumiaTokens.chip.color, CircleShape), contentAlignment = Alignment.Center) { Minus() }
             Text(ORIGINAL_DELETED, style = small(LumiaTokens.textMessage.weight).copy(fontStyle = FontStyle.Italic), color = LumiaTokens.inkMuted.color, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -203,6 +212,35 @@ fun ReferenceLine(session: LumiaSession, quote: QuoteSummary, measures: Measures
         Text(quote.text.replace('\n', ' '), style = small(LumiaTokens.textMessage.weight), color = LumiaTokens.inkMuted.color, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
     }
 }
+
+/**
+ * A one-line row's reference: on one line and cut short, the turn arrow,
+ * the quoted person's name and a colon (`@` and this account's own name, in
+ * the accent, when it was quoted), then the quoted words, quieter; or the
+ * arrow and "Original message was deleted", in italics. [button] is what a
+ * tap and a screen reader do with it, as the grouped line's.
+ */
+@Composable
+private fun ShortReference(quote: QuoteSummary, name: String?, toMe: Boolean, session: LumiaSession, button: Modifier) {
+    val strong = SpanStyle(color = if (toMe) LumiaTokens.accentInk.color else LumiaTokens.inkBody.color, fontWeight = FontWeight(LumiaTokens.textSection.weight))
+    val words = buildAnnotatedString {
+        append(TURN)
+        when {
+            quote.originalDeleted -> withStyle(SpanStyle(fontStyle = FontStyle.Italic)) { append(ORIGINAL_DELETED) }
+            else -> {
+                if (name != null) {
+                    withStyle(strong) { append(referenceName(quote.authorAccountId, session.me, name)) }
+                    append(": ")
+                }
+                append(quote.text.replace('\n', ' '))
+            }
+        }
+    }
+    Text(words, style = small(LumiaTokens.textMessage.weight), color = LumiaTokens.inkMuted.color, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth().then(button))
+}
+
+/** The arrow a one-line reference starts with, and the room after it. */
+private const val TURN = "↳ "
 
 /** The connector: down from the avatar's centre, a quarter turn, and along to the quoted avatar (the board's `M1 12V7a5 5 0 0 1 5-5h19`). */
 @Composable
@@ -254,7 +292,8 @@ fun ReactionChips(session: LumiaSession, reactions: List<ReactionSummary>, onTog
             ) {
                 Row(
                     Modifier
-                        .height(ChipHeight)
+                        // Taller only where the text has grown past it (a large font size, the phone's text scale).
+                        .heightIn(min = ChipHeight)
                         .clip(shape)
                         .background(if (r.me) LumiaTokens.accentSoft.color else LumiaTokens.reaction.color, shape)
                         .border(1.dp, if (r.me) LumiaTokens.reactionOnBorder.color else LumiaTokens.reaction.color, shape)
@@ -267,8 +306,8 @@ fun ReactionChips(session: LumiaSession, reactions: List<ReactionSummary>, onTog
                     horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space6),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(r.reaction, style = LumiaTokens.textLinkSm.style.copy(fontWeight = FontWeight(LumiaTokens.textMessage.weight)))
-                    Text("${r.count}", style = LumiaTokens.textLinkSm.style, color = if (r.me) LumiaTokens.accentInk.color else LumiaTokens.inkSecondary.color)
+                    Text(r.reaction, style = LumiaTokens.textLinkSm.scaled.copy(fontWeight = FontWeight(LumiaTokens.textMessage.weight)))
+                    Text("${r.count}", style = LumiaTokens.textLinkSm.scaled, color = if (r.me) LumiaTokens.accentInk.color else LumiaTokens.inkSecondary.color)
                 }
             }
         }
@@ -408,7 +447,7 @@ fun EditField(value: TextFieldValue, onValue: (TextFieldValue) -> Unit, onSave: 
                 .background(LumiaTokens.field.color, shape)
                 .border(1.dp, LumiaTokens.borderActive.color, shape)
                 .padding(horizontal = LumiaTokens.space12, vertical = LumiaTokens.space8),
-            textStyle = LumiaTokens.textMessage.style.copy(color = LumiaTokens.inkField.color),
+            textStyle = LumiaTokens.textMessage.scaled.copy(color = LumiaTokens.inkField.color),
             cursorBrush = SolidColor(LumiaTokens.accent.color),
         )
         Row(horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space4), verticalAlignment = Alignment.CenterVertically) {

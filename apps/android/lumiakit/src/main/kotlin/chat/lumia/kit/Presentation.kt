@@ -1,8 +1,14 @@
 // Presentation helpers shared by the layouts: initials, the avatar tone an
-// id hashes to (the same nine as the web), times.
+// id hashes to (the same nine as the web), times by the phone's clock.
 package chat.lumia.kit
 
+import android.content.Context
+import android.text.format.DateFormat
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalContext
 import java.time.Instant
+import java.util.Locale
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -56,14 +62,32 @@ fun initialsOf(name: String): String {
 private val timeFormat: DateTimeFormatter = DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT)
 private val dayFormat: DateTimeFormatter = DateTimeFormatter.ofPattern("MMM d")
 
-fun timeOfMicros(micros: Long): String =
-    Instant.ofEpochMilli(micros / 1000).atZone(ZoneId.systemDefault()).format(timeFormat)
+/**
+ * The phone's clock: hours and minutes in 24 hours or 12 as its setting
+ * says, which the language's own habit does not (a phone in English set to
+ * 24 hours shows 14:05), written the language's way.
+ */
+fun clockOf(context: Context): DateTimeFormatter {
+    val skeleton = if (DateFormat.is24HourFormat(context)) "Hm" else "hm"
+    return DateTimeFormatter.ofPattern(DateFormat.getBestDateTimePattern(Locale.getDefault(), skeleton))
+}
+
+/** The phone's clock (`clockOf`), read again as the setting changes and kept while it does not. */
+@Composable
+fun rememberClock(): DateTimeFormatter {
+    val context = LocalContext.current
+    val hours24 = DateFormat.is24HourFormat(context)
+    return remember(hours24, Locale.getDefault()) { clockOf(context) }
+}
+
+fun timeOfMicros(micros: Long, clock: DateTimeFormatter = timeFormat): String =
+    Instant.ofEpochMilli(micros / 1000).atZone(ZoneId.systemDefault()).format(clock)
 
 fun dayOfMicros(micros: Long): String =
     Instant.ofEpochMilli(micros / 1000).atZone(ZoneId.systemDefault()).format(dayFormat)
 
 /** When a message was sent, as a row shows it: the time today, the day otherwise. */
-fun rowTimeOfMicros(micros: Long): String {
+fun rowTimeOfMicros(micros: Long, clock: DateTimeFormatter = timeFormat): String {
     val at = Instant.ofEpochMilli(micros / 1000).atZone(ZoneId.systemDefault())
-    return if (at.toLocalDate() == LocalDate.now()) at.format(timeFormat) else at.format(dayFormat)
+    return if (at.toLocalDate() == LocalDate.now()) at.format(clock) else at.format(dayFormat)
 }

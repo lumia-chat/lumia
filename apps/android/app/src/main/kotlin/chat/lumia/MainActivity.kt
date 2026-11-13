@@ -26,12 +26,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import chat.lumia.kit.AppStore
 import chat.lumia.kit.Appearance
-import chat.lumia.kit.Density
 import chat.lumia.kit.LumiaTheme
 import chat.lumia.kit.LumiaTokens
+import chat.lumia.kit.Preset
 import chat.lumia.kit.PushRegistrar
 import chat.lumia.kit.PushTarget
 import chat.lumia.kit.Route
+import chat.lumia.kit.fontSizeNamed
 import chat.lumia.push.PushSetup
 import java.io.File
 
@@ -65,17 +66,18 @@ class MainActivity : ComponentActivity() {
         // A debug build signs in from the launch intent's extras, for the
         // smoke run (scripts/smoke.sh): LUMIA_DEV_INSTANCE, _HANDLE, _PASSWORD, _SCREEN,
         // and _CHANNEL, the name of the channel a screen about one opens on.
-        // LUMIA_DEV_APPEARANCE (light, dark, system) and LUMIA_DEV_DENSITY
-        // (comfortable, compact) are how that launch looks, and are not kept.
+        // LUMIA_DEV_APPEARANCE (light, dark, system), LUMIA_DEV_PRESET
+        // (comfortable, compact, minimal) and LUMIA_DEV_FONT_SIZE (13 to 20)
+        // are how that launch looks, and are not kept.
         // LUMIA_DEV_PUSH is an endpoint that stands in for a distributor's:
         // each sign-in's registration hands it over (`PushSetup.standIn`),
         // so the smoke can see a subscription held, removed and made again.
         val dev = if (BuildConfig.DEBUG) {
-            listOf("LUMIA_DEV_INSTANCE", "LUMIA_DEV_HANDLE", "LUMIA_DEV_PASSWORD", "LUMIA_DEV_SCREEN", "LUMIA_DEV_APPEARANCE", "LUMIA_DEV_DENSITY", "LUMIA_DEV_PUSH", "LUMIA_DEV_CHANNEL")
+            listOf("LUMIA_DEV_INSTANCE", "LUMIA_DEV_HANDLE", "LUMIA_DEV_PASSWORD", "LUMIA_DEV_SCREEN", "LUMIA_DEV_APPEARANCE", "LUMIA_DEV_PRESET", "LUMIA_DEV_FONT_SIZE", "LUMIA_DEV_PUSH", "LUMIA_DEV_CHANNEL")
                 .mapNotNull { key -> intent.getStringExtra(key)?.let { key to it } }.toMap()
         } else emptyMap()
         if (launched) {
-            store.wear(Appearance.named(dev["LUMIA_DEV_APPEARANCE"]), Density.named(dev["LUMIA_DEV_DENSITY"]))
+            store.wear(Appearance.named(dev["LUMIA_DEV_APPEARANCE"]), Preset.named(dev["LUMIA_DEV_PRESET"]), fontSizeNamed(dev["LUMIA_DEV_FONT_SIZE"]))
             dev["LUMIA_DEV_PUSH"]?.let { PushSetup.standIn = it }
         }
         setContent {

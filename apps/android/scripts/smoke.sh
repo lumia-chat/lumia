@@ -5,10 +5,12 @@
 # with two of its own; installs the debug build, launches it signed in as
 # the first account (the LUMIA_DEV_* extras a debug build honours, through
 # the launch intent) and screenshots each screen the LUMIA_DEV_SCREEN
-# switch can open. Then Preferences: dark and compact as a launch can be
-# told to look (LUMIA_DEV_APPEARANCE, LUMIA_DEV_DENSITY), and by taps from
-# the account menu, the screen kept as the phone is turned, a choice kept
-# across a launch and put back, the screen kept as the phone goes dark.
+# switch can open. Then Preferences: dark, Compact, Minimal (light and
+# dark) and the font size at 20 as a launch can be told to look
+# (LUMIA_DEV_APPEARANCE, LUMIA_DEV_PRESET, LUMIA_DEV_FONT_SIZE), and by taps
+# from the account menu, the screen kept as the phone is turned, Minimal
+# chosen and a setting changed after it, which is Custom, kept across a
+# launch and put back, the screen kept as the phone goes dark.
 # Then Server settings, as the server's owner: renamed, a shorter history
 # saved after it says what it deletes, a picture set from elsewhere and
 # removed, and the rail drawing it (a plain member, at the very end, sees
@@ -112,7 +114,7 @@ trap tidy EXIT
 
 # Whose session a launch asks for; a launch keeps a session the phone already holds, whoever is named.
 who=$handle
-launch() { # <screen> <seconds> [more for am start: --es LUMIA_DEV_APPEARANCE dark, --es LUMIA_DEV_DENSITY compact]
+launch() { # <screen> <seconds> [more for am start: --es LUMIA_DEV_APPEARANCE dark, --es LUMIA_DEV_PRESET minimal]
   screen=$1 seconds=$2
   shift 2
   "$adb" shell am force-stop "$bundle" >/dev/null 2>&1 || true
@@ -269,21 +271,54 @@ for screen in server channel requests devices profile preferences new add newcha
 [ -n "$alive" ] || { echo "FAIL: the app was not running after launch"; exit 1; }
 
 # Preferences. First how a launch can be told to look, for the eye: the
-# Preferences screen dark on a light phone, and the channel compact beside
-# channel.png, which is comfortable. Compact must give the same messages
-# less room, and none of it may be kept: the extras are that launch's, and
-# what is drawn after them is as the phone chose.
+# Preferences screen dark on a light phone, and the channel in Compact and
+# in Minimal, light and dark, beside channel.png, which is Comfortable, and
+# at the font size 20. Compact must give the same messages less room and
+# Minimal less again, every message in it one line that names its author;
+# 20 must give them more. None of it may be kept: the extras are that
+# launch's, and what is drawn after them is as the phone chose.
 launch channel 7
 roomy=$(room)
 launch preferences 7 --es LUMIA_DEV_APPEARANCE dark
 shot preferences-dark
 [ "$(node Dark chosen)" = yes ] || { echo "FAIL: a launch told to be dark does not show Dark as the choice; see $work/preferences-dark.png"; exit 1; }
-launch channel 7 --es LUMIA_DEV_DENSITY compact
+launch channel 7 --es LUMIA_DEV_PRESET compact
 shot channel-compact
 tight=$(room)
 [ "$tight" -gt 0 ] && [ "$tight" -lt "$roomy" ] \
-  || { echo "FAIL: compact did not give the channel's messages less room ($tight against $roomy); see $work/channel-compact.png"; exit 1; }
-case "$(stored)" in *appearance*|*density*) echo "FAIL: a launch's LUMIA_DEV_APPEARANCE or LUMIA_DEV_DENSITY was kept on the phone"; exit 1 ;; esac
+  || { echo "FAIL: Compact did not give the channel's messages less room ($tight against $roomy); see $work/channel-compact.png"; exit 1; }
+launch channel 7 --es LUMIA_DEV_PRESET minimal
+shot channel-minimal
+least=$(room)
+[ "$least" -gt 0 ] && [ "$least" -lt "$tight" ] \
+  || { echo "FAIL: Minimal did not give the channel's messages less room than Compact ($least against $tight); see $work/channel-minimal.png"; exit 1; }
+# One line: the phone's account sent three of the messages, two in a row,
+# and each is a line with its name, on the line of its words.
+seen=$(ui)
+names=$(count "$seen" "text=\"$handle\"")
+[ "$names" = 3 ] || { echo "FAIL: in Minimal every message names its author, and $handle is named $names times for three messages; see $work/channel-minimal.png"; exit 1; }
+# The last message's name and words: side by side, their middles level
+# (the name's box is its touch target, 48 high around it, so tops differ).
+beside=$(printf '%s' "$seen" | python3 -c '
+import re, sys
+words, name = sys.argv[1], sys.argv[2]
+nodes = re.findall(r"<node [^>]*>", sys.stdin.read())
+def box(node):
+    return tuple(int(n) for n in re.search(r"bounds=\"\[(\d+),(\d+)\]\[(\d+),(\d+)\]\"", node).groups())
+w = [box(n) for n in nodes if "text=\"%s\"" % words in n][-1]
+n = [box(n) for n in nodes if "text=\"%s\"" % name in n][-1]
+level = abs((w[1] + w[3]) // 2 - (n[1] + n[3]) // 2) < 12
+print("yes" if level and w[0] >= n[2] else "no: words at %s, name at %s" % (w, n))
+' "Still here?" "$handle")
+[ "$beside" = yes ] || { echo "FAIL: in Minimal a message's name is not on the line of its words ($beside); see $work/channel-minimal.png"; exit 1; }
+launch channel 7 --es LUMIA_DEV_PRESET minimal --es LUMIA_DEV_APPEARANCE dark
+shot channel-minimal-dark
+launch channel 7 --es LUMIA_DEV_FONT_SIZE 20
+shot channel-font-20
+large=$(room)
+[ "$large" -gt "$roomy" ] \
+  || { echo "FAIL: the font size 20 did not give the channel's messages more room ($large against $roomy); see $work/channel-font-20.png"; exit 1; }
+case "$(stored)" in *appearance*|*layout*|*spacing*|*avatars*|*font_size*|*images*|*embeds*) echo "FAIL: a launch's LUMIA_DEV_APPEARANCE, LUMIA_DEV_PRESET or LUMIA_DEV_FONT_SIZE was kept on the phone"; exit 1 ;; esac
 # Then as a person gets there and chooses: the rail's own avatar opens the
 # account's menu, the menu leads to Preferences, each choice is the one
 # shown at the next launch, and then both are put back, so what follows is
@@ -313,19 +348,35 @@ for way in 1 0; do
   case "$(ui)" in *"How Lumia looks on this phone"*) ;; *) echo "FAIL: the phone was turned and the app left the screen it was on; see $work/preferences-turned.png"; exit 1 ;; esac
   [ -n "$process" ] && [ "$(running)" = "$process" ] || { echo "FAIL: the app did not survive the phone being turned"; exit 1; }
 done
+# Minimal writes its values and is the preset shown; one line draws no
+# avatars, so they are not offered. Then the spacing changed after it: no
+# preset matches, none is shown chosen, and the page says Custom. All of
+# it is what the next launch has.
 tap Dark
-tap Compact
+tap Minimal
+shot preferences-minimal
+seen=$(ui)
+[ "$(fact "$seen" Minimal chosen)" = yes ] && [ "$(fact "$seen" "One line" chosen)" = yes ] && [ "$(fact "$seen" Tight chosen)" = yes ] \
+  || { echo "FAIL: Minimal was chosen and is not shown as Minimal, one line and tight; see $work/preferences-minimal.png"; exit 1; }
+case "$seen" in *'text="Avatars"'*) echo "FAIL: one line offers the avatars it does not draw; see $work/preferences-minimal.png"; exit 1 ;; esac
+case "$seen" in *"match no preset"*) echo "FAIL: Minimal was chosen and the page says Custom; see $work/preferences-minimal.png"; exit 1 ;; esac
+tap Roomy
 launch preferences 7
 shot preferences-kept
 seen=$(ui)
-[ "$(fact "$seen" Dark chosen)" = yes ] && [ "$(fact "$seen" Compact chosen)" = yes ] \
-  || { echo "FAIL: Dark and Compact were chosen and the next launch does not have them; see $work/preferences-kept.png"; exit 1; }
+[ "$(fact "$seen" Dark chosen)" = yes ] && [ "$(fact "$seen" "One line" chosen)" = yes ] && [ "$(fact "$seen" Roomy chosen)" = yes ] \
+  || { echo "FAIL: Dark, one line and roomy were chosen and the next launch does not have them; see $work/preferences-kept.png"; exit 1; }
+for preset in Comfortable Compact Minimal; do
+  [ "$(fact "$seen" "$preset" chosen)" = no ] || { echo "FAIL: one line and roomy match no preset, and $preset is shown chosen; see $work/preferences-kept.png"; exit 1; }
+done
+case "$seen" in *"Custom: these settings match no preset."*) ;; *) echo "FAIL: settings that match no preset do not say Custom; see $work/preferences-kept.png"; exit 1 ;; esac
 tap System
 tap Comfortable
 launch preferences 7
 seen=$(ui)
-[ "$(fact "$seen" System chosen)" = yes ] && [ "$(fact "$seen" Comfortable chosen)" = yes ] \
+[ "$(fact "$seen" System chosen)" = yes ] && [ "$(fact "$seen" Comfortable chosen)" = yes ] && [ "$(fact "$seen" Grouped chosen)" = yes ] && [ "$(fact "$seen" Large chosen)" = yes ] \
   || { echo "FAIL: System and Comfortable were chosen again and the next launch does not have them"; exit 1; }
+case "$seen" in *"match no preset"*) echo "FAIL: Comfortable was chosen again and the page says Custom"; exit 1 ;; esac
 # System is whichever the phone is in, as it changes: the phone goes dark
 # with the screen open, the picture is dark for the eye, and the screen is
 # still the one the person was on (a phone going dark at sunset does not
@@ -337,7 +388,7 @@ shot preferences-system-dark
 seen=$(ui)
 "$adb" shell cmd uimode night "${night:-no}" >/dev/null
 case "$seen" in *"How Lumia looks on this phone"*) ;; *) echo "FAIL: the phone went dark and the app left the screen it was on; see $work/preferences-system-dark.png"; exit 1 ;; esac
-echo "  preferences: ok (dark and compact for a launch and not kept, $tight against $roomy; reached from the account menu; the screen kept as the phone was turned and turned back; a choice kept across a launch and put back; the screen kept as the phone went dark)"
+echo "  preferences: ok (dark, Compact, Minimal and the font size 20 for a launch and not kept, $roomy against $tight, $least and $large; Minimal one line a message; reached from the account menu; the screen kept as the phone was turned and turned back; Minimal chosen, then Custom, kept across a launch and put back; the screen kept as the phone went dark)"
 
 # Server settings (architecture 6.7), as the server's owner gets there:
 # under its channels, Server settings; the name changed and saved, and the
@@ -581,7 +632,8 @@ gone=$(missing "$before" "$after")
 case "$(marks)" in *unified_push*) echo "FAIL: the phone signed out and still remembers the subscription it sent"; exit 1 ;; esac
 kept=$(stored)
 case "$kept" in *'"instance">'*) ;; *) echo "FAIL: signing out took the saved instance with it"; exit 1 ;; esac
-case "$kept" in *'"appearance">system<'*'"density">comfortable<'*|*'"density">comfortable<'*'"appearance">system<'*) ;; *) echo "FAIL: signing out took the phone's preferences with it"; exit 1 ;; esac
+case "$kept" in *'"appearance">system<'*) ;; *) echo "FAIL: signing out took the phone's appearance with it"; exit 1 ;; esac
+case "$kept" in *'"layout">grouped<'*) ;; *) echo "FAIL: signing out took the phone's message settings with it"; exit 1 ;; esac
 # The launch after it is the sign-in screen, with nothing to say.
 "$adb" shell am force-stop "$bundle" >/dev/null 2>&1 || true
 "$adb" shell am start -W -n "$bundle/.MainActivity" >/dev/null
@@ -737,7 +789,7 @@ shot revoked
 # What Preferences chose is the phone's and not the session's: it is still there.
 kept=$(stored)
 case "$kept" in *'"appearance">system<'*) ;; *) echo "FAIL: the session's end took the phone's appearance with it"; exit 1 ;; esac
-case "$kept" in *'"density">comfortable<'*) ;; *) echo "FAIL: the session's end took the phone's message density with it"; exit 1 ;; esac
+case "$kept" in *'"layout">grouped<'*) ;; *) echo "FAIL: the session's end took the phone's message settings with it"; exit 1 ;; esac
 case "$(marks)" in *unified_push*) echo "FAIL: the session ended and the phone still remembers the subscription it sent"; exit 1 ;; esac
 "$adb" shell am force-stop "$bundle" >/dev/null 2>&1 || true
 "$adb" shell am start -W -n "$bundle/.MainActivity" >/dev/null
@@ -755,10 +807,12 @@ await 'text="connected"' || { shot member-server; echo "FAIL: signed in as $othe
 tap "$renamed"
 await "Invite people" || { shot member-server; echo "FAIL: $other_handle could not open $renamed; see $work/member-server.png"; exit 1; }
 drawn=""
-for _ in $(seq 1 10); do magenta "$(colour "$renamed")" && { drawn=yes; break; }; sleep 1; done
+# The rail's tile, which says "unread" after the name while the member has
+# messages to read; the header's title reads the name alone, and is no picture.
+for _ in $(seq 1 10); do { magenta "$(colour "$renamed, unread")" || magenta "$(colour "$renamed")"; } && { drawn=yes; break; }; sleep 1; done
 shot member-server
 case "$(ui)" in *"Server settings"*) echo "FAIL: $other_handle, a plain member, is offered Server settings; see $work/member-server.png"; exit 1 ;; esac
 [ -n "$drawn" ] || { echo "FAIL: the rail does not draw the server's picture for a member; see $work/member-server.png"; exit 1; }
 "$adb" shell am force-stop "$bundle" >/dev/null 2>&1 || true
 echo "  a member: $work/member-server.png ($other_handle is not offered Server settings, and the rail draws the server's picture)"
-echo "smoke: ok (launched signed in, every screen screenshotted under $work; server settings renamed the server, kept its messages 30 days after saying what that deletes, and a picture set and removed reached the screen and the rail, offered to the owner and not to a member; preferences reached from the account menu, kept across a launch and as the phone was turned, dark and compact drawn; messages in blocks and someone typing in the channel; a mention became a notification and its tap opened the channel; Sign out in the account menu ended the session and the push subscription and said nothing; another account signed in on the same phone was the only one it showed and was sent notices for; a session revoked from elsewhere took the subscription with it, and the app went back to sign-in and said so, opened afterwards or open at the time)"
+echo "smoke: ok (launched signed in, every screen screenshotted under $work; server settings renamed the server, kept its messages 30 days after saying what that deletes, and a picture set and removed reached the screen and the rail, offered to the owner and not to a member; preferences reached from the account menu, kept across a launch and as the phone was turned, dark, Compact, Minimal and the font size 20 drawn, a setting changed after a preset shown as Custom; messages in blocks and someone typing in the channel; a mention became a notification and its tap opened the channel; Sign out in the account menu ended the session and the push subscription and said nothing; another account signed in on the same phone was the only one it showed and was sent notices for; a session revoked from elsewhere took the subscription with it, and the app went back to sign-in and said so, opened afterwards or open at the time)"
