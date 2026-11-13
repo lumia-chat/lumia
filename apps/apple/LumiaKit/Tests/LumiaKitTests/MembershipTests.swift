@@ -15,7 +15,7 @@ final class MembershipTests: XCTestCase {
     }
 
     private func message(_ id: String, author: String, at: Int64, notice: String = "", about: String = "") -> MessageSummary {
-        MessageSummary(messageId: id, channelId: "c", seq: 0, authorAccountId: author, body: notice.isEmpty ? "hi" : "", createdAtMicros: at, deleted: false, notice: notice, noticeAccountId: about)
+        MessageSummary(messageId: id, channelId: "c", seq: 0, authorAccountId: author, body: notice.isEmpty ? "hi" : "", createdAtMicros: at, deleted: false, notice: notice, noticeAccountId: about, reply: nil, mentions: [], reactions: [], mentionsMe: false)
     }
 
     func testTheSidebarListsChannelsAndServerDMsApart() {

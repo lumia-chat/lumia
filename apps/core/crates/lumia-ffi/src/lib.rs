@@ -129,6 +129,8 @@ pub struct ServerSummary {
     pub can_manage_channels: bool,
     /// Whether it may start server DMs there (`START_SERVER_DMS`).
     pub can_start_dms: bool,
+    /// Whether it may mention everyone there (`MENTION_EVERYONE`).
+    pub can_mention_everyone: bool,
     /// This account's own switches there: adds to channels wait as
     /// invitations; nobody may start a server DM with it.
     pub channel_adds_by_invitation: bool,
@@ -145,6 +147,7 @@ impl From<app::ServerSummary> for ServerSummary {
             can_manage: s.can_manage,
             can_manage_channels: s.can_manage_channels,
             can_start_dms: s.can_start_dms,
+            can_mention_everyone: s.can_mention_everyone,
             channel_adds_by_invitation: s.channel_adds_by_invitation,
             server_dms_off: s.server_dms_off,
         }
@@ -320,6 +323,8 @@ pub struct SnapshotSummary {
     pub pending_requests: Vec<DmRequestSummary>,
     /// Channels this account was asked into and has not answered.
     pub channel_invitations: Vec<ChannelInvitationSummary>,
+    /// Where this account has read each conversation (architecture 6.6).
+    pub read_states: Vec<ReadStateSummary>,
 }
 
 impl From<app::SnapshotSummary> for SnapshotSummary {
@@ -333,6 +338,7 @@ impl From<app::SnapshotSummary> for SnapshotSummary {
             channels: s.channels.into_iter().map(Into::into).collect(),
             pending_requests: s.pending_requests.into_iter().map(Into::into).collect(),
             channel_invitations: s.channel_invitations.into_iter().map(Into::into).collect(),
+            read_states: s.read_states.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -389,6 +395,129 @@ pub struct MessageSummary {
     /// author is who did it, `notice_account_id` who it is about.
     pub notice: String,
     pub notice_account_id: String,
+    /// What it quotes (architecture 6.6).
+    pub reply: Option<QuoteSummary>,
+    /// Whom it mentions, with UTF-8 byte ranges into the body.
+    pub mentions: Vec<MentionSummary>,
+    /// Its reactions, in the order each emoji was first used.
+    pub reactions: Vec<ReactionSummary>,
+    /// It mentions this account or everyone, or quotes this account.
+    pub mentions_me: bool,
+}
+
+/// A quote of another message of the conversation (architecture 6.6).
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct QuoteSummary {
+    pub message_id: String,
+    /// Its author; in a personal conversation, empty where unknown.
+    pub author_account_id: String,
+    /// What of it was quoted; empty once it is deleted.
+    pub text: String,
+    pub original_deleted: bool,
+}
+
+impl From<app::QuoteSummary> for QuoteSummary {
+    fn from(q: app::QuoteSummary) -> Self {
+        Self {
+            message_id: q.message_id,
+            author_account_id: q.author_account_id,
+            text: q.text,
+            original_deleted: q.original_deleted,
+        }
+    }
+}
+
+impl From<QuoteSummary> for app::QuoteSummary {
+    fn from(q: QuoteSummary) -> Self {
+        Self {
+            message_id: q.message_id,
+            author_account_id: q.author_account_id,
+            text: q.text,
+            original_deleted: q.original_deleted,
+        }
+    }
+}
+
+/// A mention: an account, or everyone, and its byte range in the body.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct MentionSummary {
+    /// Empty when it is everyone.
+    pub account_id: String,
+    pub everyone: bool,
+    pub start: u32,
+    pub end: u32,
+}
+
+impl From<app::MentionSummary> for MentionSummary {
+    fn from(m: app::MentionSummary) -> Self {
+        Self {
+            account_id: m.account_id,
+            everyone: m.everyone,
+            start: m.start,
+            end: m.end,
+        }
+    }
+}
+
+impl From<MentionSummary> for app::MentionSummary {
+    fn from(m: MentionSummary) -> Self {
+        Self {
+            account_id: m.account_id,
+            everyone: m.everyone,
+            start: m.start,
+            end: m.end,
+        }
+    }
+}
+
+/// One emoji's reactions to a message.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ReactionSummary {
+    pub reaction: String,
+    pub count: u32,
+    /// Whether this account is among them.
+    pub me: bool,
+    /// Who reacted, as many as are known.
+    pub account_ids: Vec<String>,
+}
+
+impl From<app::ReactionSummary> for ReactionSummary {
+    fn from(r: app::ReactionSummary) -> Self {
+        Self {
+            reaction: r.reaction,
+            count: r.count,
+            me: r.me,
+            account_ids: r.account_ids,
+        }
+    }
+}
+
+/// A conversation's read state for this account: the last event read,
+/// how many messages others sent after it, how many of those notify it.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ReadStateSummary {
+    pub channel_id: String,
+    pub read_seq: u64,
+    pub unread: u32,
+    pub mentions: u32,
+}
+
+impl From<app::ReadStateSummary> for ReadStateSummary {
+    fn from(r: app::ReadStateSummary) -> Self {
+        Self {
+            channel_id: r.channel_id,
+            read_seq: r.read_seq,
+            unread: r.unread,
+            mentions: r.mentions,
+        }
+    }
+}
+
+/// A page of the messages that notify this account, newest first.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct MentionsPage {
+    pub messages: Vec<MessageSummary>,
+    pub has_more: bool,
 }
 
 impl From<app::MessageSummary> for MessageSummary {
@@ -403,6 +532,10 @@ impl From<app::MessageSummary> for MessageSummary {
             deleted: m.deleted,
             notice: m.notice,
             notice_account_id: m.notice_account_id,
+            reply: m.reply.map(Into::into),
+            mentions: m.mentions.into_iter().map(Into::into).collect(),
+            reactions: m.reactions.into_iter().map(Into::into).collect(),
+            mentions_me: m.mentions_me,
         }
     }
 }
@@ -507,6 +640,11 @@ pub struct DmMessageSummary {
     pub edited: bool,
     pub deleted: bool,
     pub mine: bool,
+    /// What it quotes; the author is known when the original is in the
+    /// conversation.
+    pub reply: Option<QuoteSummary>,
+    /// Its reactions, each emoji with who reacted where known.
+    pub reactions: Vec<ReactionSummary>,
 }
 
 impl From<app::DmMessageSummary> for DmMessageSummary {
@@ -522,6 +660,8 @@ impl From<app::DmMessageSummary> for DmMessageSummary {
             edited: m.edited,
             deleted: m.deleted,
             mine: m.mine,
+            reply: m.reply.map(Into::into),
+            reactions: m.reactions.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -1416,6 +1556,92 @@ impl Client {
         Ok(self.app.send_message(&channel_id, &body)?)
     }
 
+    /// Sends a message with its mentions and what it quotes (only the
+    /// quote's message id and text are read); returns the message id.
+    pub fn send_message_with(
+        &self,
+        channel_id: String,
+        body: String,
+        mentions: Vec<MentionSummary>,
+        reply_to: Option<QuoteSummary>,
+    ) -> Res<String> {
+        let mentions: Vec<app::MentionSummary> = mentions.into_iter().map(Into::into).collect();
+        let reply_to: Option<app::QuoteSummary> = reply_to.map(Into::into);
+        Ok(self
+            .app
+            .send_message_with(&channel_id, &body, &mentions, reply_to.as_ref())?)
+    }
+
+    /// The mentions `body` makes of `members`, and of everyone when
+    /// `everyone` (this account may), as the core finds them.
+    pub fn find_mentions(
+        &self,
+        body: String,
+        members: Vec<MemberSummary>,
+        everyone: bool,
+    ) -> Vec<MentionSummary> {
+        let members: Vec<app::MemberSummary> = members
+            .into_iter()
+            .map(|m| app::MemberSummary {
+                account_id: m.account_id,
+                handle: m.handle,
+                display_name: m.display_name,
+                nickname: m.nickname,
+                pronouns: m.pronouns,
+                bio: m.bio,
+                avatar_url: m.avatar_url,
+                channel_adds_by_invitation: m.channel_adds_by_invitation,
+                server_dms_off: m.server_dms_off,
+            })
+            .collect();
+        app::find_mentions(&body, &members, everyone)
+            .into_iter()
+            .map(Into::into)
+            .collect()
+    }
+
+    /// Adds this account's reaction to a message, or takes it away.
+    pub fn react(
+        &self,
+        channel_id: String,
+        message_id: String,
+        emoji: String,
+        remove: bool,
+    ) -> Res<()> {
+        Ok(self.app.react(&channel_id, &message_id, &emoji, remove)?)
+    }
+
+    /// Every conversation's read state as this client counts it.
+    pub fn read_states(&self) -> Vec<ReadStateSummary> {
+        self.app.read_states().into_iter().map(Into::into).collect()
+    }
+
+    /// The badge: what notifies this account and is unread, everywhere.
+    pub fn badge(&self) -> u32 {
+        self.app.badge()
+    }
+
+    /// `POST /channels/{id}/read`: read through `seq`; the state as the
+    /// instance then counts it.
+    pub fn mark_read(&self, channel_id: String, seq: u64) -> Res<ReadStateSummary> {
+        Ok(self
+            .runtime
+            .block_on(self.app.mark_read(&channel_id, seq))?
+            .into())
+    }
+
+    /// `GET /account/mentions`: newest first, in one server or (`None`)
+    /// all; `before` is the last message id of the page before.
+    pub fn mentions(&self, server_id: Option<String>, before: Option<String>) -> Res<MentionsPage> {
+        let (messages, has_more) = self
+            .runtime
+            .block_on(self.app.mentions(server_id.as_deref(), before.as_deref()))?;
+        Ok(MentionsPage {
+            messages: messages.into_iter().map(Into::into).collect(),
+            has_more,
+        })
+    }
+
     /// The app came back to the foreground: ask for every head.
     pub fn foreground(&self) -> Res<()> {
         Ok(self.app.foreground()?)
@@ -1627,6 +1853,33 @@ impl Client {
         self.runtime
             .block_on(self.app.dm_send(&channel_id, &body))?;
         Ok(())
+    }
+
+    /// Sends a message in a personal DM quoting another, or nothing.
+    pub fn dm_send_with(
+        &self,
+        channel_id: String,
+        body: String,
+        quote: Option<QuoteSummary>,
+    ) -> Res<()> {
+        let quote: Option<app::QuoteSummary> = quote.map(Into::into);
+        self.runtime
+            .block_on(self.app.dm_send_with(&channel_id, &body, quote.as_ref()))?;
+        Ok(())
+    }
+
+    /// Adds this identity's reaction to a message of a personal DM, or
+    /// takes it away.
+    pub fn dm_react(
+        &self,
+        channel_id: String,
+        message_id: String,
+        emoji: String,
+        remove: bool,
+    ) -> Res<()> {
+        Ok(self
+            .runtime
+            .block_on(self.app.dm_react(&channel_id, &message_id, &emoji, remove))?)
     }
 
     /// Deletes one of this identity's messages in a personal DM.
