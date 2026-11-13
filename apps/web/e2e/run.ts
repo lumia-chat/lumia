@@ -984,16 +984,9 @@ async function historyStep(which: string, stamp: number) {
   lumia(readerDir, "account", "create", "--handle", reader, "--password", password);
   lumia(readerDir, "join", code);
   phase("seeding");
-  // The first alone, so it is the channel's first message; the rest sixteen at a time.
-  lumia(ownerDir, "send", general, "history 0");
+  // One connection, in order: "history 0" is the channel's first message.
   const SENT = 1_050;
-  for (let from = 1; from < SENT; from += 16) {
-    const batch = [];
-    for (let i = from; i < Math.min(from + 16, SENT); i++) {
-      batch.push(Bun.spawn([cli, "--data-dir", ownerDir, "send", general, `history ${i}`], { stdout: "ignore", stderr: "ignore" }).exited);
-    }
-    await Promise.all(batch);
-  }
+  lumia(ownerDir, "send", general, "history {n}", "--count", String(SENT));
   const { ctx, page } = await open(which, "history");
   const t0 = Date.now();
   try {

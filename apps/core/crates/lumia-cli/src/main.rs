@@ -124,7 +124,9 @@ enum Cmd {
     /// List channels in a server you can view.
     Channels { server_id: String },
     /// Send a message; `--mention <account-id>` (repeatable) mentions an account;
-    /// `--reply-to <message-id>` with `--quote <text>` quotes a message of the channel.
+    /// `--reply-to <message-id>` with `--quote <text>` quotes a message of the channel;
+    /// `--count N` sends N of them over one connection, `{n}` in the body numbering
+    /// them from 0 (to seed a long channel).
     Send {
         channel_id: String,
         body: String,
@@ -134,6 +136,8 @@ enum Cmd {
         reply_to: Option<String>,
         #[arg(long, default_value = "")]
         quote: String,
+        #[arg(long, default_value_t = 1)]
+        count: u32,
     },
     /// React to a message with one emoji, or take the reaction away (`--remove`).
     React {
@@ -562,6 +566,7 @@ async fn run(cli: Cli) -> Result<(), ClientError> {
             mention,
             reply_to,
             quote,
+            count,
         } => {
             let channel = parse_uuid(&channel_id)?;
             let mut mentions = Vec::with_capacity(mention.len());
@@ -580,13 +585,17 @@ async fn run(cli: Cli) -> Result<(), ClientError> {
                 }),
                 None => None,
             };
-            let op = command::Op::SendMessage(SendMessage {
-                body,
-                mentions,
-                reply_to,
-                ..Default::default()
-            });
-            send_command(api, ctx, channel, op).await
+            let ops = (0..count.max(1))
+                .map(|n| {
+                    command::Op::SendMessage(SendMessage {
+                        body: body.replace("{n}", &n.to_string()),
+                        mentions: mentions.clone(),
+                        reply_to: reply_to.clone(),
+                        ..Default::default()
+                    })
+                })
+                .collect();
+            send_commands(api, ctx, channel, ops).await
         }
         Cmd::React {
             channel_id,
@@ -607,7 +616,7 @@ async fn run(cli: Cli) -> Result<(), ClientError> {
                     reaction: emoji,
                 })
             };
-            send_command(api, ctx, channel, op).await
+            send_commands(api, ctx, channel, vec![op]).await
         }
         Cmd::Tail { channel_id } => {
             let channel = parse_uuid(&channel_id)?;
@@ -728,20 +737,17 @@ enum DmMode {
     Delete(Vec<u8>, Vec<u8>),
 }
 
-/// Sends one command to a channel over the gateway and prints its ack with the
-/// command's id (a sent message's id), or the instance's refusal.
-async fn send_command(
+/// How many commands go out before their acknowledgements are waited for.
+const IN_FLIGHT: usize = 50;
+
+/// Sends commands to a channel over one gateway connection, in order, and prints each ack
+/// with the command's id (a sent message's id), or the instance's refusal, which ends it.
+async fn send_commands(
     api: Api,
     ctx: Ctx,
     channel: Vec<u8>,
-    op: command::Op,
+    ops: Vec<command::Op>,
 ) -> Result<(), ClientError> {
-    let id = wire::new_id();
-    let cmd = Command {
-        command_id: id.clone(),
-        channel_id: channel.clone(),
-        op: Some(op),
-    };
     let (tx, rx) = mpsc::unbounded();
     let (etx, mut erx) = mpsc::unbounded();
     let gw = tokio::spawn(gateway::run_forever(
@@ -749,33 +755,51 @@ async fn send_command(
         ctx.store,
         "lumia-cli",
         ctx.device_id,
-        vec![channel],
+        vec![channel.clone()],
         rx,
         etx,
     ));
-    tx.unbounded_send(GatewayCommand::Send(cmd))
-        .map_err(|e| ClientError::Transport(e.to_string()))?;
-    while let Some(ev) = erx.next().await {
-        match ev {
-            GatewayEvent::Notice(Notice::Acked { seq, .. }) => {
-                // The command's id is the message's, for a quote of it.
-                println!("acked at seq {seq}: {}", wire::display(&id));
-                break;
+    let mut ops = ops.into_iter().peekable();
+    'batches: while ops.peek().is_some() {
+        // A batch at a time, so the queue never outruns its acknowledgements.
+        let mut waiting: Vec<Vec<u8>> = Vec::new();
+        for op in ops.by_ref().take(IN_FLIGHT) {
+            let id = wire::new_id();
+            waiting.push(id.clone());
+            let cmd = Command {
+                command_id: id,
+                channel_id: channel.clone(),
+                op: Some(op),
+            };
+            tx.unbounded_send(GatewayCommand::Send(cmd))
+                .map_err(|e| ClientError::Transport(e.to_string()))?;
+        }
+        while !waiting.is_empty() {
+            let Some(ev) = erx.next().await else {
+                break 'batches;
+            };
+            match ev {
+                GatewayEvent::Notice(Notice::Acked { command_id, seq }) => {
+                    if let Some(at) = waiting.iter().position(|id| *id == command_id) {
+                        waiting.swap_remove(at);
+                        println!("acked at seq {seq}: {}", wire::display(&command_id));
+                    }
+                }
+                GatewayEvent::Notice(Notice::Error(e)) => {
+                    eprintln!("error: {} {}", e.code, e.message);
+                    break 'batches;
+                }
+                GatewayEvent::Reconnecting {
+                    attempt,
+                    delay,
+                    reason,
+                } => eprintln!("reconnecting in {delay:?} (attempt {attempt}): {reason}"),
+                GatewayEvent::Closed(reason) => {
+                    eprintln!("closed: {reason}");
+                    break 'batches;
+                }
+                _ => {}
             }
-            GatewayEvent::Notice(Notice::Error(e)) => {
-                eprintln!("error: {} {}", e.code, e.message);
-                break;
-            }
-            GatewayEvent::Reconnecting {
-                attempt,
-                delay,
-                reason,
-            } => eprintln!("reconnecting in {delay:?} (attempt {attempt}): {reason}"),
-            GatewayEvent::Closed(reason) => {
-                eprintln!("closed: {reason}");
-                break;
-            }
-            _ => {}
         }
     }
     drop(tx);
