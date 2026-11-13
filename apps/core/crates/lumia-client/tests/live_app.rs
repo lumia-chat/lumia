@@ -674,3 +674,139 @@ async fn a_server_dm_reaches_both() {
         "{refused:?}"
     );
 }
+
+/// Quote replies, mentions, reactions and read state as a member's device
+/// sees them (architecture 6.6): the owner quotes the member and mentions
+/// it, which is unread and notifies it; the member reacts and reads it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_quote_a_mention_a_reaction_and_a_read() {
+    use lumia_client::app::{MentionSummary, QuoteSummary};
+
+    let Some(base) = instance() else { return };
+    let (owner, member, server_id, member_id) = owner_and_member(&base).await;
+    let snapshot = member.app.snapshot().await.unwrap();
+    let general = snapshot
+        .channels
+        .iter()
+        .find(|c| c.server_id == server_id && c.name == "general")
+        .unwrap()
+        .channel_id
+        .clone();
+    let from = member.seen();
+    member.app.subscribe(&general).unwrap();
+    member
+        .wait_for(from, Duration::from_secs(10), first_read(&general))
+        .await
+        .expect("the channel is read");
+    let acked = |e: &AppEvent| matches!(e, AppEvent::Acked { .. }).then_some(());
+    let sent = member.seen();
+    let lunch = member.app.send_message(&general, "lunch?").unwrap();
+    member
+        .wait_for(sent, Duration::from_secs(10), acked)
+        .await
+        .expect("the member's message is acked");
+
+    let started = owner.seen();
+    owner.start(std::slice::from_ref(&general)).unwrap();
+    owner
+        .wait_for(started, Duration::from_secs(10), welcomed)
+        .await
+        .expect("the owner is welcomed");
+    let handle = format!("@{}", snapshot.handle);
+    let body = format!("{handle} yes");
+    let mention = MentionSummary {
+        account_id: member_id.clone(),
+        everyone: false,
+        start: 0,
+        end: u32::try_from(handle.len()).unwrap(),
+    };
+    let quote = QuoteSummary {
+        message_id: lunch.clone(),
+        text: "lunch?".into(),
+        ..QuoteSummary::default()
+    };
+    let arrived = member.seen();
+    let sent = owner.seen();
+    let reply_id = owner
+        .app
+        .send_message_with(&general, &body, &[mention], Some(&quote))
+        .unwrap();
+    owner
+        .wait_for(sent, Duration::from_secs(10), acked)
+        .await
+        .expect("the owner's reply is acked");
+    let reply = member
+        .wait_for(arrived, Duration::from_secs(10), |_| {
+            member
+                .app
+                .messages(&general, 50)
+                .unwrap()
+                .into_iter()
+                .find(|m| m.message_id == reply_id)
+        })
+        .await
+        .expect("the reply reaches the member");
+    let quoted = reply.reply.clone().unwrap();
+    assert_eq!(
+        (
+            quoted.message_id.as_str(),
+            quoted.author_account_id.as_str()
+        ),
+        (lunch.as_str(), member_id.as_str())
+    );
+    assert_eq!(quoted.text, "lunch?");
+    assert!(reply.mentions_me);
+    assert_eq!(reply.mentions[0].account_id, member_id);
+
+    let state = member
+        .app
+        .read_states()
+        .into_iter()
+        .find(|r| r.channel_id == general)
+        .unwrap();
+    assert_eq!((state.unread, state.mentions), (1, 1));
+    assert_eq!(member.app.badge(), 1);
+    let (mentions, more) = member.app.mentions(Some(&server_id), None).await.unwrap();
+    assert_eq!(mentions.len(), 1);
+    assert!(!more);
+    assert_eq!(mentions[0].message_id, reply_id);
+
+    // A reaction: the instance refuses anything but one emoji.
+    let reacted = member.seen();
+    member.app.react(&general, &reply_id, "👍", false).unwrap();
+    member
+        .wait_for(reacted, Duration::from_secs(10), |_| {
+            member
+                .app
+                .messages(&general, 50)
+                .unwrap()
+                .into_iter()
+                .find(|m| m.message_id == reply_id && !m.reactions.is_empty())
+        })
+        .await
+        .map(|m| {
+            assert_eq!(m.reactions[0].reaction, "👍");
+            assert!(m.reactions[0].me && m.reactions[0].count == 1);
+        })
+        .expect("the reaction is in the store");
+    let refused = member.seen();
+    member.app.react(&general, &reply_id, "ok", false).unwrap();
+    member
+        .wait_for(refused, Duration::from_secs(10), |e| {
+            matches!(e, AppEvent::Error { .. }).then_some(())
+        })
+        .await
+        .expect("a word is refused as a reaction");
+
+    // Read: nothing is unread, and the owner's snapshot agrees for the member.
+    let read = member.app.mark_read(&general, reply.seq).await.unwrap();
+    assert_eq!((read.unread, read.mentions), (0, 0));
+    assert_eq!(member.app.badge(), 0);
+    let again = member.app.snapshot().await.unwrap();
+    let state = again
+        .read_states
+        .iter()
+        .find(|r| r.channel_id == general)
+        .unwrap();
+    assert!(state.read_seq >= reply.seq && state.unread == 0);
+}

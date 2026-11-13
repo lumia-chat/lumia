@@ -19,8 +19,9 @@ use futures_util::StreamExt as _;
 use lumia_core::keystore::Keystore;
 use lumia_core::mls::projection::Projection;
 use lumia_core::proto::{
-    command, dm_operation, event, mention, ChannelKind, Command, DeviceKind, DmOperation,
-    DmRequest, DmRequestState, Event, PushKind, PushSubscription, SendMessage, TokenPair,
+    account_event, command, dm_operation, event, mention, ChannelKind, Command, DeviceKind,
+    DmOperation, DmRequest, DmRequestState, Event, PushKind, PushSubscription, SendMessage,
+    TokenPair,
 };
 use lumia_core::store::{LogKind, Store, StoreError, StoredEvent};
 use lumia_core::sync::Notice;
@@ -391,6 +392,10 @@ pub struct SnapshotSummary {
     /// Channels this account was asked into and has not answered.
     #[serde(default)]
     pub channel_invitations: Vec<ChannelInvitationSummary>,
+    /// Where this account has read each conversation, as the instance
+    /// counted it; [`App::read_states`] keeps it current.
+    #[serde(default)]
+    pub read_states: Vec<ReadStateSummary>,
 }
 
 /// A person: a member of a server, or a public profile.
@@ -436,6 +441,65 @@ pub struct MessageSummary {
     /// author is who did it, `notice_account_id` who it is about.
     pub notice: String,
     pub notice_account_id: String,
+    /// What it quotes (architecture 6.6).
+    pub reply: Option<QuoteSummary>,
+    /// Whom it mentions, and where in its body.
+    pub mentions: Vec<MentionSummary>,
+    /// Its reactions, in the order each emoji was first used.
+    pub reactions: Vec<ReactionSummary>,
+    /// Whether it notifies this account: it mentions it or everyone, or
+    /// quotes one of its messages.
+    pub mentions_me: bool,
+}
+
+/// A quote of another message of the conversation (architecture 6.6).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct QuoteSummary {
+    pub message_id: String,
+    /// Its author; in a personal conversation, empty where unknown.
+    pub author_account_id: String,
+    /// What of it was quoted; empty once it is deleted.
+    pub text: String,
+    /// The message quoted was deleted, and the text with it.
+    pub original_deleted: bool,
+}
+
+/// A mention: an account, or everyone, and its byte range in the body.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MentionSummary {
+    /// The account mentioned; empty when it is everyone.
+    pub account_id: String,
+    pub everyone: bool,
+    /// Byte offsets into the body, half-open.
+    pub start: u32,
+    pub end: u32,
+}
+
+/// One emoji's reactions to a message.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReactionSummary {
+    pub reaction: String,
+    pub count: u32,
+    /// Whether this account is among them.
+    pub me: bool,
+    /// Who reacted, as many as are known (the first fifty a snapshot gives,
+    /// and those since).
+    pub account_ids: Vec<String>,
+}
+
+/// A conversation's read state for this account (architecture 6.6): the
+/// last event read, how many messages others sent after it, and how many
+/// of those notify it (in a DM, every one).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadStateSummary {
+    pub channel_id: String,
+    pub read_seq: u64,
+    pub unread: u32,
+    pub mentions: u32,
 }
 
 /// One applied channel event.
@@ -494,6 +558,12 @@ pub struct DmMessageSummary {
     pub edited: bool,
     pub deleted: bool,
     pub mine: bool,
+    /// What it quotes (architecture 6.6); the author is known when the
+    /// quoted message is in the conversation.
+    pub reply: Option<QuoteSummary>,
+    /// Its reactions, each emoji with who reacted (their accounts on this
+    /// instance, where known).
+    pub reactions: Vec<ReactionSummary>,
 }
 
 /// A personal conversation as this device can read it.
@@ -701,7 +771,17 @@ const MEMBER_PAGES: usize = 50;
 const KEPT_SNAPSHOT: &str = "kept_snapshot";
 const KEPT_MEMBERS: &str = "kept_members";
 
-fn stored_summary(m: &lumia_core::store::StoredMessage) -> MessageSummary {
+fn hex_id(id: &[u8]) -> String {
+    if id.is_empty() {
+        String::new()
+    } else {
+        wire::display(id)
+    }
+}
+
+fn stored_summary(m: &lumia_core::store::StoredMessage, me: &[u8]) -> MessageSummary {
+    let mentions_me = m.mentions.iter().any(|x| x.everyone || x.account_id == me)
+        || m.reply.as_ref().is_some_and(|q| q.author_account_id == me);
     MessageSummary {
         message_id: wire::display(&m.message_id),
         channel_id: wire::display(&m.channel_id),
@@ -711,38 +791,54 @@ fn stored_summary(m: &lumia_core::store::StoredMessage) -> MessageSummary {
         created_at_micros: m.created_at_micros,
         deleted: m.deleted,
         notice: m.notice.clone(),
-        notice_account_id: if m.notice_account_id.is_empty() {
-            String::new()
-        } else {
-            wire::display(&m.notice_account_id)
-        },
+        notice_account_id: hex_id(&m.notice_account_id),
+        reply: m.reply.as_ref().map(|q| QuoteSummary {
+            message_id: wire::display(&q.message_id),
+            author_account_id: hex_id(&q.author_account_id),
+            text: q.text.clone(),
+            original_deleted: q.original_deleted,
+        }),
+        mentions: m
+            .mentions
+            .iter()
+            .map(|x| MentionSummary {
+                account_id: hex_id(&x.account_id),
+                everyone: x.everyone,
+                start: x.start,
+                end: x.end,
+            })
+            .collect(),
+        reactions: m
+            .reactions
+            .iter()
+            .map(|r| ReactionSummary {
+                reaction: r.reaction.clone(),
+                count: u32::try_from(r.account_ids.len()).unwrap_or(u32::MAX),
+                me: r.account_ids.iter().any(|a| a == me),
+                account_ids: r.account_ids.iter().map(|a| wire::display(a)).collect(),
+            })
+            .collect(),
+        mentions_me: !me.is_empty() && mentions_me,
     }
 }
 
-fn message_summary(m: &lumia_core::proto::Message) -> MessageSummary {
-    let (notice, notice_account_id) = lumia_core::store::notice_of(m);
-    MessageSummary {
-        message_id: wire::display(&m.message_id),
-        channel_id: wire::display(&m.channel_id),
-        seq: m.seq,
-        author_account_id: wire::display(&m.author_account_id),
-        body: m.body.clone(),
-        created_at_micros: wire::micros(m.created_at.as_ref()).unwrap_or(0),
-        deleted: m.deleted_at.is_some(),
-        notice,
-        notice_account_id: if notice_account_id.is_empty() {
-            String::new()
-        } else {
-            wire::display(&notice_account_id)
-        },
+fn message_summary(m: &lumia_core::proto::Message, me: &[u8]) -> MessageSummary {
+    let stored = lumia_core::store::StoredMessage::of(m);
+    let mut summary = stored_summary(&stored, me);
+    // The instance counted these, beyond the fifty it names.
+    for (r, given) in summary.reactions.iter_mut().zip(&m.reactions) {
+        r.count = given.count;
+        r.me = given.me;
     }
+    summary
 }
 
 fn event_summary(e: &Event) -> EventSummary {
     let (kind, message) = match &e.payload {
-        Some(event::Payload::MessageCreated(c)) => {
-            ("message_created", c.message.as_ref().map(message_summary))
-        }
+        Some(event::Payload::MessageCreated(c)) => (
+            "message_created",
+            c.message.as_ref().map(|m| message_summary(m, &[])),
+        ),
         Some(event::Payload::MessageEdited(_)) => ("message_edited", None),
         Some(event::Payload::MessageDeleted(_)) => ("message_deleted", None),
         Some(event::Payload::Encrypted(_)) => ("encrypted", None),
@@ -962,6 +1058,105 @@ struct Inner {
     watching: Vec<Vec<u8>>,
     /// The channel typing was last sent for and when, in microseconds.
     typed: Option<(Vec<u8>, i64)>,
+    /// Read state, as the last snapshot counted it and the events since
+    /// have added to it (architecture 6.6).
+    reads: Reads,
+}
+
+/// Read state as this client keeps it between snapshots.
+#[derive(Debug, Default)]
+struct Reads {
+    /// This account.
+    me: Vec<u8>,
+    by_channel: HashMap<Vec<u8>, ReadCount>,
+}
+
+#[derive(Debug, Default, Clone)]
+struct ReadCount {
+    /// `TEXT`, `SERVER_DM`, `PERSONAL_DM`, …
+    kind: String,
+    read_seq: u64,
+    unread: u32,
+    mentions: u32,
+    /// The newest event counted, so a replayed one is not counted again.
+    counted_through: u64,
+}
+
+impl Reads {
+    fn dm(kind: &str) -> bool {
+        matches!(
+            kind,
+            "SERVER_DM" | "SERVER_GROUP_DM" | "PERSONAL_DM" | "PERSONAL_GROUP_DM"
+        )
+    }
+
+    /// Adds what the events bring: a message from someone else is unread,
+    /// and notifies this account when it mentions it or everyone, quotes
+    /// one of its messages, or is in a DM.
+    fn count(&mut self, events: &[Event]) {
+        for e in events {
+            let Some(count) = self.by_channel.get_mut(&e.channel_id) else {
+                continue;
+            };
+            if e.seq <= count.counted_through.max(count.read_seq) {
+                continue;
+            }
+            count.counted_through = e.seq;
+            let (others, notifies) = match &e.payload {
+                Some(event::Payload::MessageCreated(c)) => match &c.message {
+                    Some(m) if m.notice.is_none() && m.parent_id.is_empty() => {
+                        let stored = lumia_core::store::StoredMessage::of(m);
+                        let mine = stored.author_account_id == self.me;
+                        let named = stored
+                            .mentions
+                            .iter()
+                            .any(|x| x.everyone || x.account_id == self.me)
+                            || stored
+                                .reply
+                                .as_ref()
+                                .is_some_and(|q| q.author_account_id == self.me);
+                        (!mine, named)
+                    }
+                    _ => (false, false),
+                },
+                Some(event::Payload::Encrypted(p)) => (
+                    p.kind == lumia_core::proto::EncryptedKind::Application as i32
+                        && e.actor_account_id != self.me,
+                    false,
+                ),
+                _ => (false, false),
+            };
+            if others {
+                count.unread += 1;
+                if notifies || Self::dm(&count.kind) {
+                    count.mentions += 1;
+                }
+            }
+        }
+    }
+
+    /// Another device read a conversation through `seq`.
+    fn read_elsewhere(&mut self, channel_id: &[u8], seq: u64) {
+        if let Some(count) = self.by_channel.get_mut(channel_id) {
+            count.read_seq = count.read_seq.max(seq);
+            if seq >= count.counted_through {
+                count.unread = 0;
+                count.mentions = 0;
+            }
+        }
+    }
+
+    fn summaries(&self) -> Vec<ReadStateSummary> {
+        self.by_channel
+            .iter()
+            .map(|(id, c)| ReadStateSummary {
+                channel_id: wire::display(id),
+                read_seq: c.read_seq,
+                unread: c.unread,
+                mentions: c.mentions,
+            })
+            .collect()
+    }
 }
 
 /// The identity's stores: their own lock, so an identity flow that awaits
@@ -1110,6 +1305,7 @@ impl App {
                 writer_generation,
                 watching: Vec::new(),
                 typed: None,
+                reads: Reads::default(),
             }),
             identity: AsyncMutex::new(IdentityStores {
                 store: identity_store,
@@ -1845,7 +2041,41 @@ impl App {
                     created_at_micros: wire::micros(i.created_at.as_ref()).unwrap_or(0),
                 })
                 .collect(),
+            read_states: Vec::new(),
         };
+        let mut summary = summary;
+        {
+            let mut inner = self.lock();
+            let reads = &mut inner.reads;
+            reads.me = account.account_id.clone();
+            reads.by_channel = snap
+                .read_states
+                .iter()
+                .map(|r| {
+                    let kind = snap
+                        .channels
+                        .iter()
+                        .find(|c| c.channel_id == r.channel_id)
+                        .and_then(|c| lumia_core::proto::ChannelKind::try_from(c.kind).ok())
+                        .map(|k| k.as_str_name().to_string())
+                        .unwrap_or_default();
+                    let head = snap
+                        .channels
+                        .iter()
+                        .find(|c| c.channel_id == r.channel_id)
+                        .map_or(r.read_seq, |c| c.last_seq);
+                    let count = ReadCount {
+                        kind,
+                        read_seq: r.read_seq,
+                        unread: r.unread,
+                        mentions: r.mentions,
+                        counted_through: head,
+                    };
+                    (r.channel_id.clone(), count)
+                })
+                .collect();
+            summary.read_states = reads.summaries();
+        }
         self.keep(KEPT_SNAPSHOT, &summary);
         Ok(summary)
     }
@@ -1966,7 +2196,10 @@ impl App {
         let id = parse_uuid(channel_id)?;
         let inner = self.lock();
         let rows = inner.reader.messages(&id, limit as usize)?;
-        Ok(rows.iter().map(stored_summary).collect())
+        Ok(rows
+            .iter()
+            .map(|m| stored_summary(m, &inner.reads.me))
+            .collect())
     }
 
     /// The page of a channel's local messages above one already read: the
@@ -1985,7 +2218,10 @@ impl App {
         let rows = inner
             .reader
             .messages_before(&id, before_seq, limit as usize)?;
-        Ok(rows.iter().map(stored_summary).collect())
+        Ok(rows
+            .iter()
+            .map(|m| stored_summary(m, &inner.reads.me))
+            .collect())
     }
 
     /// `GET /channels/{id}/messages`: scrollback from the instance, for
@@ -2008,8 +2244,12 @@ impl App {
             .api
             .list_messages(channel_id, before_seq, limit)
             .await?;
+        let me = self.lock().reads.me.clone();
         Ok((
-            page.messages.iter().map(message_summary).collect(),
+            page.messages
+                .iter()
+                .map(|m| message_summary(m, &me))
+                .collect(),
             page.has_more,
         ))
     }
@@ -2068,11 +2308,25 @@ impl App {
         let task_sink = Arc::clone(&sink);
         spawn(async move {
             while let Some(ev) = erx.next().await {
-                if let GatewayEvent::Notice(Notice::Welcomed(w)) = &ev {
-                    let _ = app
-                        .lock()
-                        .reader
-                        .meta_set(gateway::ACCOUNT_META, &hex::encode(&w.account_id));
+                match &ev {
+                    GatewayEvent::Notice(Notice::Welcomed(w)) => {
+                        let mut inner = app.lock();
+                        let _ = inner
+                            .reader
+                            .meta_set(gateway::ACCOUNT_META, &hex::encode(&w.account_id));
+                        inner.reads.me = w.account_id.clone();
+                    }
+                    GatewayEvent::Applied(events) => app.lock().reads.count(events),
+                    GatewayEvent::AccountApplied(events) => {
+                        let mut inner = app.lock();
+                        for e in events {
+                            if let Some(account_event::Payload::ReadPositionUpdated(r)) = &e.payload
+                            {
+                                inner.reads.read_elsewhere(&r.channel_id, r.seq);
+                            }
+                        }
+                    }
+                    _ => {}
                 }
                 let engine = app
                     .dm
@@ -2413,17 +2667,173 @@ impl App {
     /// # Errors
     /// When not started or the id is malformed.
     pub fn send_message(&self, channel_id: &str, body: &str) -> Result<String, ClientError> {
+        self.send_message_with(channel_id, body, &[], None)
+    }
+
+    /// Sends a message with its mentions (byte ranges into `body`) and what
+    /// it quotes, if anything (architecture 6.6); returns the client-minted
+    /// message id. The instance refuses a mention of everyone without
+    /// `MENTION_EVERYONE`, and a quote of a message of another channel.
+    ///
+    /// # Errors
+    /// When not started or an id is malformed.
+    pub fn send_message_with(
+        &self,
+        channel_id: &str,
+        body: &str,
+        mentions: &[MentionSummary],
+        reply_to: Option<&QuoteSummary>,
+    ) -> Result<String, ClientError> {
         let channel = parse_uuid(channel_id)?;
         let id = wire::new_id();
+        let mentions = mentions
+            .iter()
+            .map(|m| {
+                Ok(lumia_core::proto::Mention {
+                    target: Some(if m.everyone {
+                        mention::Target::Everyone(true)
+                    } else {
+                        mention::Target::AccountId(parse_uuid(&m.account_id)?)
+                    }),
+                    start: m.start,
+                    end: m.end,
+                })
+            })
+            .collect::<Result<Vec<_>, ClientError>>()?;
+        let reply_to = reply_to
+            .map(|q| {
+                Ok::<_, ClientError>(lumia_core::proto::QuoteReply {
+                    message_id: parse_uuid(&q.message_id)?,
+                    text: q.text.clone(),
+                    ..Default::default()
+                })
+            })
+            .transpose()?;
         self.send_command(GatewayCommand::Send(Command {
             command_id: id.clone(),
             channel_id: channel,
             op: Some(command::Op::SendMessage(SendMessage {
                 body: body.to_string(),
+                mentions,
+                reply_to,
                 ..Default::default()
             })),
         }))?;
         Ok(wire::display(&id))
+    }
+
+    /// Adds this account's reaction to a message of a server channel, or
+    /// takes it away (`remove`). The instance refuses anything but one
+    /// emoji.
+    ///
+    /// # Errors
+    /// When not started or an id is malformed.
+    pub fn react(
+        &self,
+        channel_id: &str,
+        message_id: &str,
+        emoji: &str,
+        remove: bool,
+    ) -> Result<(), ClientError> {
+        let channel = parse_uuid(channel_id)?;
+        let message_id = parse_uuid(message_id)?;
+        let reaction = emoji.to_string();
+        let op = if remove {
+            command::Op::RemoveReaction(lumia_core::proto::RemoveReaction {
+                message_id,
+                reaction,
+            })
+        } else {
+            command::Op::AddReaction(lumia_core::proto::AddReaction {
+                message_id,
+                reaction,
+            })
+        };
+        self.send_command(GatewayCommand::Send(Command {
+            command_id: wire::new_id(),
+            channel_id: channel,
+            op: Some(op),
+        }))
+    }
+
+    /// Every conversation's read state as this client counts it: the
+    /// snapshot's, with the messages since added and the reads of this
+    /// account's other devices taken away.
+    #[must_use]
+    pub fn read_states(&self) -> Vec<ReadStateSummary> {
+        self.lock().reads.summaries()
+    }
+
+    /// The badge: what notifies this account and is unread, everywhere.
+    #[must_use]
+    pub fn badge(&self) -> u32 {
+        self.lock()
+            .reads
+            .by_channel
+            .values()
+            .map(|c| c.mentions)
+            .sum()
+    }
+
+    /// `POST /channels/{id}/read`: this account has read a conversation
+    /// through `seq` (call it when the newest message is on screen and the
+    /// window has focus). The position only moves forward; the answer is
+    /// the state as the instance then counts it, which this client takes.
+    ///
+    /// # Errors
+    /// On transport or API failure, or a malformed id.
+    pub async fn mark_read(
+        &self,
+        channel_id: &str,
+        seq: u64,
+    ) -> Result<ReadStateSummary, ClientError> {
+        let id = parse_uuid(channel_id)?;
+        if let Some(count) = self.lock().reads.by_channel.get(&id) {
+            if seq <= count.read_seq && count.unread == 0 {
+                return Ok(ReadStateSummary {
+                    channel_id: channel_id.to_string(),
+                    read_seq: count.read_seq,
+                    unread: 0,
+                    mentions: 0,
+                });
+            }
+        }
+        let state = self.api.mark_read(channel_id, seq).await?;
+        let mut inner = self.lock();
+        let count = inner.reads.by_channel.entry(id).or_default();
+        count.read_seq = count.read_seq.max(state.read_seq);
+        count.counted_through = count.counted_through.max(state.read_seq);
+        count.unread = state.unread;
+        count.mentions = state.mentions;
+        Ok(ReadStateSummary {
+            channel_id: channel_id.to_string(),
+            read_seq: count.read_seq,
+            unread: count.unread,
+            mentions: count.mentions,
+        })
+    }
+
+    /// `GET /account/mentions`: the messages that notify this account,
+    /// newest first, in one server or (`None`) all; `before` is the last
+    /// message id of the page before. Returns the page and whether there
+    /// is more.
+    ///
+    /// # Errors
+    /// On transport or API failure.
+    pub async fn mentions(
+        &self,
+        server_id: Option<&str>,
+        before: Option<&str>,
+    ) -> Result<(Vec<MessageSummary>, bool), ClientError> {
+        let page = self.api.mentions(server_id, before).await?;
+        let me = self.lock().reads.me.clone();
+        Ok((
+            page.messages
+                .iter()
+                .map(|m| message_summary(m, &me))
+                .collect(),
+            page.has_more,
+        ))
     }
 
     /// The app came back to the foreground: ask for every head.
@@ -3081,11 +3491,33 @@ impl App {
     /// # Errors
     /// Without the group for the conversation, or before the loop started.
     pub async fn dm_send(&self, channel_id: &str, body: &str) -> Result<String, ClientError> {
+        self.dm_send_with(channel_id, body, None).await
+    }
+
+    /// Sends a message in a personal DM quoting another of the
+    /// conversation, or nothing; otherwise as [`App::dm_send`].
+    ///
+    /// # Errors
+    /// Without the group for the conversation, or before the loop started.
+    pub async fn dm_send_with(
+        &self,
+        channel_id: &str,
+        body: &str,
+        quote: Option<&QuoteSummary>,
+    ) -> Result<String, ClientError> {
         let channel = parse_uuid(channel_id)?;
+        let quote = quote
+            .map(|q| {
+                Ok::<_, ClientError>(lumia_core::proto::DmQuote {
+                    message_id: parse_uuid(&q.message_id)?,
+                    text: q.text.clone(),
+                })
+            })
+            .transpose()?;
         let engine = self.dm_engine_ready().await?;
         let mut e = engine.lock().await;
         e.load_participants(&channel)?;
-        let outcomes = e.send_text(&channel, body)?;
+        let outcomes = e.send_text_quoting(&channel, body, quote)?;
         drop(e);
         // The engine queues one command for a send; its id is the operation's.
         let id = outcomes
@@ -3097,6 +3529,29 @@ impl App {
             .unwrap_or_default();
         self.dispatch(outcomes);
         Ok(id)
+    }
+
+    /// Adds this identity's reaction to a message of a personal DM, or
+    /// takes it away (`remove`).
+    ///
+    /// # Errors
+    /// Without the group for the conversation, or before the loop started.
+    pub async fn dm_react(
+        &self,
+        channel_id: &str,
+        message_id: &str,
+        emoji: &str,
+        remove: bool,
+    ) -> Result<(), ClientError> {
+        let channel = parse_uuid(channel_id)?;
+        let message = parse_uuid(message_id)?;
+        let engine = self.dm_engine_ready().await?;
+        let mut e = engine.lock().await;
+        e.load_participants(&channel)?;
+        let outcomes = e.send_react(&channel, message, emoji, remove)?;
+        drop(e);
+        self.dispatch(outcomes);
+        Ok(())
     }
 
     /// Deletes one of this identity's messages in a personal DM.
@@ -3175,6 +3630,30 @@ impl App {
                 edited: m.edited,
                 deleted: m.deleted,
                 mine: m.sender_identity_id == me,
+                reply: m.quote.as_ref().map(|q| QuoteSummary {
+                    message_id: wire::display(&q.message_id),
+                    author_account_id: projection
+                        .message(&q.message_id)
+                        .and_then(|o| e.account_of(&o.sender_identity_id))
+                        .map(|a| wire::display(a))
+                        .unwrap_or_default(),
+                    text: q.text.clone(),
+                    original_deleted: q.original_deleted,
+                }),
+                reactions: m
+                    .reactions
+                    .iter()
+                    .map(|(emoji, who)| ReactionSummary {
+                        reaction: emoji.clone(),
+                        count: u32::try_from(who.len()).unwrap_or(u32::MAX),
+                        me: who.contains(&me),
+                        account_ids: who
+                            .iter()
+                            .filter_map(|identity| e.account_of(identity))
+                            .map(|a| wire::display(a))
+                            .collect(),
+                    })
+                    .collect(),
             })
             .collect();
         Ok(DmLogSummary {
@@ -3281,6 +3760,95 @@ mod invite_tests {
     }
 }
 
+#[cfg(test)]
+mod read_tests {
+    use super::{ReadCount, Reads};
+    use lumia_core::proto::{event, mention, Event, Mention, Message, MessageCreated, QuoteReply};
+
+    const ME: [u8; 16] = [1; 16];
+    const THEM: [u8; 16] = [2; 16];
+    const ROOM: [u8; 16] = [7; 16];
+
+    fn sent(seq: u64, author: [u8; 16], mentions: Vec<Mention>, quoted: Option<[u8; 16]>) -> Event {
+        Event {
+            channel_id: ROOM.to_vec(),
+            seq,
+            payload: Some(event::Payload::MessageCreated(MessageCreated {
+                message: Some(Message {
+                    message_id: vec![seq as u8; 16],
+                    channel_id: ROOM.to_vec(),
+                    author_account_id: author.to_vec(),
+                    body: "hi".into(),
+                    mentions,
+                    reply_to: quoted.map(|a| QuoteReply {
+                        message_id: vec![9; 16],
+                        author_account_id: a.to_vec(),
+                        text: "x".into(),
+                        original_deleted: false,
+                    }),
+                    ..Default::default()
+                }),
+            })),
+            ..Default::default()
+        }
+    }
+
+    fn reads(kind: &str) -> Reads {
+        let mut reads = Reads {
+            me: ME.to_vec(),
+            ..Reads::default()
+        };
+        reads.by_channel.insert(
+            ROOM.to_vec(),
+            ReadCount {
+                kind: kind.into(),
+                read_seq: 3,
+                counted_through: 3,
+                ..ReadCount::default()
+            },
+        );
+        reads
+    }
+
+    fn me(seq: u64) -> Mention {
+        Mention {
+            target: Some(mention::Target::AccountId(ME.to_vec())),
+            start: 0,
+            end: seq as u32,
+        }
+    }
+
+    #[test]
+    fn what_others_send_is_unread_and_what_names_me_notifies() {
+        let mut r = reads("TEXT");
+        r.count(&[
+            sent(4, THEM, Vec::new(), None),
+            sent(5, ME, Vec::new(), None),
+            sent(6, THEM, vec![me(1)], None),
+            sent(7, THEM, Vec::new(), Some(ME)),
+        ]);
+        // A replayed event is not counted twice.
+        r.count(&[sent(7, THEM, Vec::new(), Some(ME))]);
+        let c = &r.by_channel[ROOM.as_slice()];
+        assert_eq!((c.unread, c.mentions), (3, 2));
+
+        r.read_elsewhere(&ROOM, 7);
+        let c = &r.by_channel[ROOM.as_slice()];
+        assert_eq!((c.read_seq, c.unread, c.mentions), (7, 0, 0));
+    }
+
+    #[test]
+    fn every_message_of_a_dm_notifies() {
+        let mut r = reads("SERVER_DM");
+        r.count(&[
+            sent(4, THEM, Vec::new(), None),
+            sent(5, THEM, Vec::new(), None),
+        ]);
+        let c = &r.by_channel[ROOM.as_slice()];
+        assert_eq!((c.unread, c.mentions), (2, 2));
+    }
+}
+
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[allow(clippy::unwrap_used)]
 mod kept_tests {
@@ -3326,6 +3894,7 @@ mod kept_tests {
             }],
             pending_requests: Vec::new(),
             channel_invitations: Vec::new(),
+            read_states: Vec::new(),
         }
     }
 

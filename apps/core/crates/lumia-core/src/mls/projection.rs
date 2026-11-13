@@ -32,6 +32,20 @@ pub struct DmMessage {
     pub deleted: bool,
     /// Reactions: emoji to the identities that set it.
     pub reactions: BTreeMap<String, BTreeSet<Vec<u8>>>,
+    /// What it quotes (architecture 6.6), emptied when that is deleted.
+    pub quote: Option<DmQuoted>,
+}
+
+/// A quote in a personal conversation: the message quoted, by id, and the
+/// text quoted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DmQuoted {
+    /// The message quoted.
+    pub message_id: Vec<u8>,
+    /// What of it was quoted; empty once it is deleted.
+    pub text: String,
+    /// The message quoted was deleted, and the text with it.
+    pub original_deleted: bool,
 }
 
 /// The projection of one conversation.
@@ -79,6 +93,11 @@ impl Projection {
                         edited: false,
                         deleted: false,
                         reactions: BTreeMap::new(),
+                        quote: send.quote.as_ref().map(|q| DmQuoted {
+                            message_id: q.message_id.clone(),
+                            text: q.text.clone(),
+                            original_deleted: false,
+                        }),
                     },
                 );
             }
@@ -91,12 +110,27 @@ impl Projection {
                 }
             }
             dm_operation::Op::Delete(delete) => {
-                if let Some(m) = self.messages.get_mut(&delete.message_id) {
-                    if m.sender_identity_id == sender_identity {
+                let deleted = match self.messages.get_mut(&delete.message_id) {
+                    Some(m) if m.sender_identity_id == sender_identity => {
                         m.body.clear();
                         m.deleted = true;
                         m.attachments.clear();
                         self.pins.remove(&delete.message_id);
+                        true
+                    }
+                    _ => false,
+                };
+                // Deleting still deletes where the message was quoted.
+                if deleted {
+                    for reply in self.messages.values_mut() {
+                        if let Some(q) = reply
+                            .quote
+                            .as_mut()
+                            .filter(|q| q.message_id == delete.message_id)
+                        {
+                            q.text.clear();
+                            q.original_deleted = true;
+                        }
                     }
                 }
             }
@@ -171,6 +205,37 @@ mod tests {
             sent_at: None,
             op: Some(inner),
         }
+    }
+
+    #[test]
+    fn a_quote_loses_its_text_when_the_original_is_deleted() {
+        use crate::proto::DmQuote;
+        let a = vec![1; 32];
+        let dev = vec![9; 16];
+        let mut p = Projection::default();
+        p.apply(1, &a, &dev, &send(1, "regrettable"));
+        let mut reply = send(2, "ha");
+        if let Some(dm_operation::Op::Send(s)) = reply.op.as_mut() {
+            s.quote = Some(DmQuote {
+                message_id: vec![1; 16],
+                text: "regrettable".into(),
+            });
+        }
+        p.apply(2, &a, &dev, &reply);
+        assert_eq!(
+            p.message(&[2; 16]).unwrap().quote.as_ref().unwrap().text,
+            "regrettable"
+        );
+        p.apply(
+            3,
+            &a,
+            &dev,
+            &op(dm_operation::Op::Delete(DmDelete {
+                message_id: vec![1; 16],
+            })),
+        );
+        let quote = p.message(&[2; 16]).unwrap().quote.clone().unwrap();
+        assert!(quote.text.is_empty() && quote.original_deleted);
     }
 
     #[test]

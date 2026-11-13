@@ -10,8 +10,10 @@ use std::path::Path;
 use lumia_core::keystore::{Keystore, KeystoreError};
 use lumia_core::mls::storage::MlsKv;
 use lumia_core::proto::{event, AccountEvent, Event};
-use lumia_core::store::{LogKind, OutboxEntry, Store, StoreError, StoredEvent, StoredMessage};
-use lumia_core::wire;
+use lumia_core::store::{
+    LogKind, OutboxEntry, Store, StoreError, StoredEvent, StoredMention, StoredMessage,
+    StoredQuote, StoredReaction,
+};
 use prost::Message as _;
 use rusqlite::{params, Connection, OptionalExtension};
 
@@ -42,7 +44,19 @@ CREATE TABLE IF NOT EXISTS messages (
   created_at_micros INTEGER NOT NULL,
   deleted INTEGER NOT NULL DEFAULT 0,
   notice TEXT NOT NULL DEFAULT '',
-  notice_account_id BLOB NOT NULL DEFAULT x''
+  notice_account_id BLOB NOT NULL DEFAULT x'',
+  reply_to_id BLOB NOT NULL DEFAULT x'',
+  reply_author_id BLOB NOT NULL DEFAULT x'',
+  reply_text TEXT NOT NULL DEFAULT '',
+  reply_deleted INTEGER NOT NULL DEFAULT 0,
+  mentions TEXT NOT NULL DEFAULT '[]'
+);
+CREATE TABLE IF NOT EXISTS reactions (
+  message_id BLOB NOT NULL,
+  reaction TEXT NOT NULL,
+  account_id BLOB NOT NULL,
+  position INTEGER NOT NULL,
+  PRIMARY KEY (message_id, reaction, account_id)
 );
 CREATE INDEX IF NOT EXISTS messages_channel_seq ON messages (channel_id, seq);
 CREATE TABLE IF NOT EXISTS outbox (
@@ -133,6 +147,38 @@ pub struct SqliteStore {
 }
 
 impl SqliteStore {
+    /// Fills in each message's reactions, each emoji with who reacted, in the
+    /// order it was first used.
+    fn with_reactions(&self, messages: &mut [StoredMessage]) -> Result<(), StoreError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT reaction, account_id, MIN(position) OVER (PARTITION BY reaction) AS first
+                 FROM reactions WHERE message_id = ?1 ORDER BY first, position",
+            )
+            .map_err(backend)?;
+        for m in messages.iter_mut() {
+            let rows = stmt
+                .query_map(params![m.message_id], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+                })
+                .map_err(backend)?;
+            let mut reactions: Vec<StoredReaction> = Vec::new();
+            for row in rows {
+                let (reaction, account) = row.map_err(backend)?;
+                match reactions.iter_mut().find(|r| r.reaction == reaction) {
+                    Some(r) => r.account_ids.push(account),
+                    None => reactions.push(StoredReaction {
+                        reaction,
+                        account_ids: vec![account],
+                    }),
+                }
+            }
+            m.reactions = reactions;
+        }
+        Ok(())
+    }
+
     /// Opens (creating) the database file and applies the schema.
     ///
     /// # Errors
@@ -486,6 +532,11 @@ impl Store for SqliteStore {
         )
         .map_err(backend)?;
         tx.execute(
+            "DELETE FROM reactions WHERE message_id IN (SELECT message_id FROM messages WHERE channel_id = ?1)",
+            params![log_id],
+        )
+        .map_err(backend)?;
+        tx.execute(
             "DELETE FROM messages WHERE channel_id = ?1",
             params![log_id],
         )
@@ -528,7 +579,7 @@ impl Store for SqliteStore {
     fn discard_all(&mut self) -> Result<(), StoreError> {
         self.conn
             .execute_batch(
-                "DELETE FROM cursors; DELETE FROM events; DELETE FROM messages;
+                "DELETE FROM cursors; DELETE FROM events; DELETE FROM messages; DELETE FROM reactions;
                  DELETE FROM meta WHERE key LIKE 'dm:processed:%';",
             )
             .map_err(backend)
@@ -558,7 +609,7 @@ impl Store for SqliteStore {
             .conn
             .prepare(
                 "SELECT message_id, channel_id, seq, author_account_id, body, created_at_micros, deleted,
-                        notice, notice_account_id
+                        notice, notice_account_id, reply_to_id, reply_author_id, reply_text, reply_deleted, mentions
                  FROM messages WHERE channel_id = ?1 AND seq < ?2 ORDER BY seq DESC LIMIT ?3",
             )
             .map_err(backend)?;
@@ -577,11 +628,27 @@ impl Store for SqliteStore {
                     deleted: row.get::<_, i64>(6)? != 0,
                     notice: row.get(7)?,
                     notice_account_id: row.get(8)?,
+                    reply: {
+                        let id: Vec<u8> = row.get(9)?;
+                        if id.is_empty() {
+                            None
+                        } else {
+                            Some(StoredQuote {
+                                message_id: id,
+                                author_account_id: row.get(10)?,
+                                text: row.get(11)?,
+                                original_deleted: row.get::<_, i64>(12)? != 0,
+                            })
+                        }
+                    },
+                    mentions: mentions_from(&row.get::<_, String>(13)?),
+                    reactions: Vec::new(),
                 })
             })
             .map_err(backend)?;
         let mut messages: Vec<StoredMessage> = rows.collect::<Result<_, _>>().map_err(backend)?;
         messages.reverse();
+        self.with_reactions(&mut messages)?;
         Ok(messages)
     }
 
@@ -777,18 +844,68 @@ pub fn decode_account_event(ev: &StoredEvent) -> Result<AccountEvent, StoreError
 // EXISTS` leaves an existing table as it was. Notices (architecture 6.8)
 // came after the first stores.
 fn add_missing_columns(conn: &Connection) -> Result<(), StoreError> {
-    let has_notice = conn
-        .prepare("SELECT 1 FROM pragma_table_info('messages') WHERE name = 'notice'")
-        .and_then(|mut stmt| stmt.exists([]))
-        .map_err(backend)?;
-    if !has_notice {
-        conn.execute_batch(
-            "ALTER TABLE messages ADD COLUMN notice TEXT NOT NULL DEFAULT '';
-             ALTER TABLE messages ADD COLUMN notice_account_id BLOB NOT NULL DEFAULT x'';",
-        )
-        .map_err(backend)?;
+    // Notices (architecture 6.8), then quotes and mentions (6.6).
+    let columns = [
+        ("notice", "TEXT NOT NULL DEFAULT ''"),
+        ("notice_account_id", "BLOB NOT NULL DEFAULT x''"),
+        ("reply_to_id", "BLOB NOT NULL DEFAULT x''"),
+        ("reply_author_id", "BLOB NOT NULL DEFAULT x''"),
+        ("reply_text", "TEXT NOT NULL DEFAULT ''"),
+        ("reply_deleted", "INTEGER NOT NULL DEFAULT 0"),
+        ("mentions", "TEXT NOT NULL DEFAULT '[]'"),
+    ];
+    for (name, kind) in columns {
+        let has = conn
+            .prepare("SELECT 1 FROM pragma_table_info('messages') WHERE name = ?1")
+            .and_then(|mut stmt| stmt.exists([name]))
+            .map_err(backend)?;
+        if !has {
+            conn.execute_batch(&format!("ALTER TABLE messages ADD COLUMN {name} {kind};"))
+                .map_err(backend)?;
+        }
     }
     Ok(())
+}
+
+/// Mentions as a row keeps them: `[[account id in hex, everyone, start, end]]`.
+fn mentions_json(mentions: &[StoredMention]) -> String {
+    let rows: Vec<(String, bool, u32, u32)> = mentions
+        .iter()
+        .map(|m| (hex::encode(&m.account_id), m.everyone, m.start, m.end))
+        .collect();
+    serde_json::to_string(&rows).unwrap_or_else(|_| "[]".into())
+}
+
+fn mentions_from(json: &str) -> Vec<StoredMention> {
+    serde_json::from_str::<Vec<(String, bool, u32, u32)>>(json)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(account, everyone, start, end)| StoredMention {
+            account_id: hex::decode(account).unwrap_or_default(),
+            everyone,
+            start,
+            end,
+        })
+        .collect()
+}
+
+/// Drops the quoted text from the replies to the messages `quoted` names (an
+/// SQL query of message ids with its parameters bound by `bind`): deleting a
+/// message still deletes it where it was quoted (architecture 6.6).
+fn drop_quotes(
+    tx: &rusqlite::Transaction<'_>,
+    quoted: &str,
+    args: impl rusqlite::Params,
+) -> Result<(), StoreError> {
+    tx.execute(
+        &format!(
+            "UPDATE messages SET reply_text = '', reply_deleted = 1
+             WHERE reply_to_id IN ({quoted}) AND reply_deleted = 0"
+        ),
+        args,
+    )
+    .map(|_| ())
+    .map_err(backend)
 }
 
 // Messages are materialized from create, edit and delete events; everything
@@ -798,19 +915,11 @@ fn materialize(tx: &rusqlite::Transaction<'_>, ev: &StoredEvent) -> Result<(), S
     match event.payload {
         Some(event::Payload::MessageCreated(created)) => {
             if let Some(m) = created.message {
-                let (notice, notice_account_id) = lumia_core::store::notice_of(&m);
                 insert_message(
                     tx,
                     &StoredMessage {
-                        message_id: m.message_id,
-                        channel_id: m.channel_id,
-                        seq: m.seq,
-                        author_account_id: m.author_account_id,
-                        body: m.body,
-                        created_at_micros: wire::micros(m.created_at.as_ref()).unwrap_or(0),
                         deleted: false,
-                        notice,
-                        notice_account_id,
+                        ..StoredMessage::of(&m)
                     },
                 )?;
             }
@@ -828,8 +937,39 @@ fn materialize(tx: &rusqlite::Transaction<'_>, ev: &StoredEvent) -> Result<(), S
                 params![deleted.message_id],
             )
             .map_err(backend)?;
+            tx.execute(
+                "DELETE FROM reactions WHERE message_id = ?1",
+                params![deleted.message_id],
+            )
+            .map_err(backend)?;
+            drop_quotes(tx, "?1", params![deleted.message_id])?;
+        }
+        Some(event::Payload::ReactionAdded(added)) => {
+            tx.execute(
+                "INSERT OR IGNORE INTO reactions (message_id, reaction, account_id, position)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    added.message_id,
+                    added.reaction,
+                    added.account_id,
+                    to_i64(event.seq)
+                ],
+            )
+            .map_err(backend)?;
+        }
+        Some(event::Payload::ReactionRemoved(removed)) => {
+            tx.execute(
+                "DELETE FROM reactions WHERE message_id = ?1 AND reaction = ?2 AND account_id = ?3",
+                params![removed.message_id, removed.reaction, removed.account_id],
+            )
+            .map_err(backend)?;
         }
         Some(event::Payload::PayloadsPurged(purged)) => {
+            drop_quotes(
+                tx,
+                "SELECT message_id FROM messages WHERE channel_id = ?1 AND seq < ?2",
+                params![event.channel_id, to_i64(purged.before_seq)],
+            )?;
             tx.execute(
                 "UPDATE messages SET body = '', deleted = 1 WHERE channel_id = ?1 AND seq < ?2",
                 params![event.channel_id, to_i64(purged.before_seq)],
@@ -842,13 +982,39 @@ fn materialize(tx: &rusqlite::Transaction<'_>, ev: &StoredEvent) -> Result<(), S
 }
 
 fn insert_message(tx: &rusqlite::Transaction<'_>, m: &StoredMessage) -> Result<(), StoreError> {
+    let reply = m.reply.as_ref();
     tx.execute(
-        "INSERT OR REPLACE INTO messages (message_id, channel_id, seq, author_account_id, body, created_at_micros, deleted, notice, notice_account_id)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-        params![m.message_id, m.channel_id, to_i64(m.seq), m.author_account_id, m.body, m.created_at_micros, i64::from(m.deleted), m.notice, m.notice_account_id],
+        "INSERT OR REPLACE INTO messages (message_id, channel_id, seq, author_account_id, body, created_at_micros, deleted, notice, notice_account_id,
+                                          reply_to_id, reply_author_id, reply_text, reply_deleted, mentions)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+        params![
+            m.message_id, m.channel_id, to_i64(m.seq), m.author_account_id, m.body, m.created_at_micros, i64::from(m.deleted),
+            m.notice, m.notice_account_id,
+            reply.map_or(&[][..], |q| q.message_id.as_slice()),
+            reply.map_or(&[][..], |q| q.author_account_id.as_slice()),
+            reply.map_or("", |q| q.text.as_str()),
+            i64::from(reply.is_some_and(|q| q.original_deleted)),
+            mentions_json(&m.mentions),
+        ],
     )
-    .map(|_| ())
-    .map_err(backend)
+    .map_err(backend)?;
+    // A snapshot's message brings who reacted with it.
+    for (position, reaction) in m.reactions.iter().enumerate() {
+        for account in &reaction.account_ids {
+            tx.execute(
+                "INSERT OR IGNORE INTO reactions (message_id, reaction, account_id, position)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    m.message_id,
+                    reaction.reaction,
+                    account,
+                    i64::try_from(position).unwrap_or(0) - 1_000_000
+                ],
+            )
+            .map_err(backend)?;
+        }
+    }
+    Ok(())
 }
 
 fn kind_code(kind: LogKind) -> i64 {
@@ -921,6 +1087,119 @@ mod tests {
         assert_eq!(kept[0].notice_account_id, vec![7; 16]);
         assert_eq!(kept[1].notice, "");
         assert!(kept[1].notice_account_id.is_empty());
+    }
+
+    fn stored(channel: &[u8], seq: u64, payload: event::Payload) -> StoredEvent {
+        let event = Event {
+            channel_id: channel.to_vec(),
+            seq,
+            payload: Some(payload),
+            ..Default::default()
+        };
+        StoredEvent {
+            seq,
+            bytes: event.encode_to_vec(),
+        }
+    }
+
+    #[test]
+    fn reactions_quotes_and_mentions_are_kept_and_a_deleted_original_drops_its_quotes() {
+        use lumia_core::proto::{
+            mention, Mention, MessageDeleted, QuoteReply, ReactionAdded, ReactionRemoved,
+        };
+        let mut store = SqliteStore::in_memory().unwrap();
+        let ch = vec![1u8; 16];
+        let original = vec![1u8; 16];
+        let reply = stored(
+            &ch,
+            2,
+            event::Payload::MessageCreated(MessageCreated {
+                message: Some(Message {
+                    message_id: vec![2; 16],
+                    channel_id: ch.clone(),
+                    seq: 2,
+                    body: "@a yes".into(),
+                    mentions: vec![Mention {
+                        target: Some(mention::Target::AccountId(vec![5; 16])),
+                        start: 0,
+                        end: 2,
+                    }],
+                    reply_to: Some(QuoteReply {
+                        message_id: original.clone(),
+                        author_account_id: vec![5; 16],
+                        text: "lunch?".into(),
+                        original_deleted: false,
+                    }),
+                    ..Default::default()
+                }),
+            }),
+        );
+        let react = |seq, account: u8, emoji: &str, add| {
+            let message_id = vec![2; 16];
+            let reaction = emoji.to_string();
+            let account_id = vec![account; 16];
+            stored(
+                &ch,
+                seq,
+                if add {
+                    event::Payload::ReactionAdded(ReactionAdded {
+                        message_id,
+                        reaction,
+                        account_id,
+                    })
+                } else {
+                    event::Payload::ReactionRemoved(ReactionRemoved {
+                        message_id,
+                        reaction,
+                        account_id,
+                    })
+                },
+            )
+        };
+        store
+            .apply(
+                LogKind::Channel,
+                &ch,
+                &[
+                    created(&ch, 1, "lunch?"),
+                    reply,
+                    react(3, 5, "👍", true),
+                    react(4, 6, "🎉", true),
+                    react(5, 6, "👍", true),
+                    react(6, 5, "🎉", true),
+                    react(7, 6, "🎉", false),
+                ],
+            )
+            .unwrap();
+        let kept = store.messages(&ch, 10).unwrap();
+        let r = &kept[1];
+        assert_eq!(r.mentions.len(), 1);
+        assert_eq!(r.mentions[0].account_id, vec![5; 16]);
+        assert_eq!(r.reply.as_ref().unwrap().text, "lunch?");
+        let reactions: Vec<_> = r
+            .reactions
+            .iter()
+            .map(|x| (x.reaction.as_str(), x.account_ids.len()))
+            .collect();
+        assert_eq!(reactions, vec![("👍", 2), ("🎉", 1)]);
+
+        store
+            .apply(
+                LogKind::Channel,
+                &ch,
+                &[stored(
+                    &ch,
+                    8,
+                    event::Payload::MessageDeleted(MessageDeleted {
+                        message_id: original,
+                        purge_cache: false,
+                    }),
+                )],
+            )
+            .unwrap();
+        let quote = store.messages(&ch, 10).unwrap()[1].reply.clone().unwrap();
+        assert!(quote.original_deleted);
+        assert_eq!(quote.text, "");
     }
 
     #[test]
@@ -1032,6 +1311,9 @@ mod tests {
             deleted: false,
             notice: String::new(),
             notice_account_id: Vec::new(),
+            reply: None,
+            mentions: Vec::new(),
+            reactions: Vec::new(),
         };
         store.apply_snapshot(&ch, 2000, &[m]).unwrap();
         assert_eq!(

@@ -12,7 +12,9 @@ use std::cell::RefCell;
 use std::sync::Arc;
 
 use js_sys::Function;
-use lumia_client::app::{App, EventSink, Opener, Place, StoreName};
+use lumia_client::app::{
+    App, EventSink, MentionSummary, MessageSummary, Opener, Place, QuoteSummary, StoreName,
+};
 use lumia_client::sqlite::SqliteStore;
 use lumia_client::ClientError;
 use lumia_core::proto::PushKind;
@@ -64,6 +66,24 @@ fn js_api(e: ClientError) -> JsError {
 
 fn to_js<T: Serialize>(value: &T) -> Result<JsValue, JsError> {
     serde_wasm_bindgen::to_value(value).map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// A page of mentions, as `mentions` gives it.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MentionsPage {
+    messages: Vec<MessageSummary>,
+    has_more: bool,
+}
+
+/// A summary object from the page; `null` or `undefined` is `None`.
+fn from_js<T: for<'de> serde::Deserialize<'de>>(value: JsValue) -> Result<Option<T>, JsError> {
+    if value.is_null() || value.is_undefined() {
+        return Ok(None);
+    }
+    serde_wasm_bindgen::from_value(value)
+        .map(Some)
+        .map_err(|e| JsError::new(&e.to_string()))
 }
 
 /// The worker's origin, which scopes a web device's key (architecture 11.4).
@@ -821,6 +841,88 @@ impl Client {
         self.app.send_message(&channel_id, &body).map_err(js)
     }
 
+    /// Sends a message with its mentions (`[{accountId, everyone, start,
+    /// end}]`) and what it quotes (`{messageId, text}` or null); returns
+    /// the client-minted message id.
+    ///
+    /// # Errors
+    /// When not started or an id is malformed.
+    #[wasm_bindgen(js_name = sendMessageWith)]
+    pub fn send_message_with(
+        &self,
+        channel_id: String,
+        body: String,
+        mentions: JsValue,
+        reply_to: JsValue,
+    ) -> Result<String, JsError> {
+        let mentions: Vec<MentionSummary> = from_js(mentions)?.unwrap_or_default();
+        let reply_to: Option<QuoteSummary> = from_js(reply_to)?;
+        self.app
+            .send_message_with(&channel_id, &body, &mentions, reply_to.as_ref())
+            .map_err(js)
+    }
+
+    /// Adds this account's reaction to a message, or takes it away.
+    ///
+    /// # Errors
+    /// When not started or an id is malformed.
+    pub fn react(
+        &self,
+        channel_id: String,
+        message_id: String,
+        emoji: String,
+        remove: bool,
+    ) -> Result<(), JsError> {
+        self.app
+            .react(&channel_id, &message_id, &emoji, remove)
+            .map_err(js)
+    }
+
+    /// Every conversation's read state as this client counts it.
+    ///
+    /// # Errors
+    /// When the states cannot be converted.
+    #[wasm_bindgen(js_name = readStates)]
+    pub fn read_states(&self) -> Result<JsValue, JsError> {
+        to_js(&self.app.read_states())
+    }
+
+    /// The badge: what notifies this account and is unread.
+    #[must_use]
+    pub fn badge(&self) -> u32 {
+        self.app.badge()
+    }
+
+    /// `POST /channels/{id}/read`: read through `seq`; the state as the
+    /// instance then counts it.
+    ///
+    /// # Errors
+    /// On transport or API failure.
+    #[wasm_bindgen(js_name = markRead)]
+    pub async fn mark_read(&self, channel_id: String, seq: f64) -> Result<JsValue, JsError> {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let seq = seq.max(0.0) as u64;
+        to_js(&self.app.mark_read(&channel_id, seq).await.map_err(js)?)
+    }
+
+    /// `GET /account/mentions`: `{messages, hasMore}`, newest first, in
+    /// one server or all.
+    ///
+    /// # Errors
+    /// On transport or API failure.
+    pub async fn mentions(
+        &self,
+        server_id: Option<String>,
+        before: Option<String>,
+    ) -> Result<JsValue, JsError> {
+        let (messages, has_more) = self
+            .app
+            .mentions(server_id.as_deref(), before.as_deref())
+            .await
+            .map_err(js)?;
+        to_js(&MentionsPage { messages, has_more })
+    }
+
     /// The page came back to the foreground: ask for every head.
     ///
     /// # Errors
@@ -1019,6 +1121,45 @@ impl Client {
             .dm_send(&channel_id, &body)
             .await
             .map(|_id| ())
+            .map_err(js)
+    }
+
+    /// Sends a message in a personal DM quoting another (`{messageId,
+    /// text}` or null).
+    ///
+    /// # Errors
+    /// Without the group for the conversation, or before the loop started.
+    #[wasm_bindgen(js_name = dmSendWith)]
+    pub async fn dm_send_with(
+        &self,
+        channel_id: String,
+        body: String,
+        quote: JsValue,
+    ) -> Result<(), JsError> {
+        let quote: Option<QuoteSummary> = from_js(quote)?;
+        self.app
+            .dm_send_with(&channel_id, &body, quote.as_ref())
+            .await
+            .map(|_id| ())
+            .map_err(js)
+    }
+
+    /// Adds this identity's reaction to a message of a personal DM, or
+    /// takes it away.
+    ///
+    /// # Errors
+    /// Without the group for the conversation, or before the loop started.
+    #[wasm_bindgen(js_name = dmReact)]
+    pub async fn dm_react(
+        &self,
+        channel_id: String,
+        message_id: String,
+        emoji: String,
+        remove: bool,
+    ) -> Result<(), JsError> {
+        self.app
+            .dm_react(&channel_id, &message_id, &emoji, remove)
+            .await
             .map_err(js)
     }
 

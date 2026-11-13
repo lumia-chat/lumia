@@ -404,20 +404,7 @@ pub async fn run<S: Store>(
                     let messages: Vec<StoredMessage> = snap
                         .messages
                         .into_iter()
-                        .map(|m| {
-                            let (notice, notice_account_id) = lumia_core::store::notice_of(&m);
-                            StoredMessage {
-                                message_id: m.message_id,
-                                channel_id: m.channel_id,
-                                seq: m.seq,
-                                author_account_id: m.author_account_id,
-                                body: m.body,
-                                created_at_micros: wire::micros(m.created_at.as_ref()).unwrap_or(0),
-                                deleted: m.deleted_at.is_some(),
-                                notice,
-                                notice_account_id,
-                            }
-                        })
+                        .map(|m| StoredMessage::of(&m))
                         .collect();
                     store.apply_snapshot(&channel_id, snap.seq, &messages)?;
                     let _ = events.unbounded_send(GatewayEvent::SnapshotTaken {

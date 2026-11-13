@@ -586,6 +586,10 @@ fn who_is_typing_is_named_under_the_composer_until_their_time_runs_out() {
                     deleted: false,
                     notice: String::new(),
                     notice_account_id: String::new(),
+                    reply: None,
+                    mentions: Vec::new(),
+                    reactions: Vec::new(),
+                    mentions_me: false,
                 }),
             }],
         }));

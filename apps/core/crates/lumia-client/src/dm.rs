@@ -598,6 +598,20 @@ impl DmEngine {
         channel_id: &[u8],
         body: &str,
     ) -> Result<Vec<Outcome>, ClientError> {
+        self.send_text_quoting(channel_id, body, None)
+    }
+
+    /// [`DmEngine::send_text`] with a quote of another message of the
+    /// conversation (architecture 6.6).
+    ///
+    /// # Errors
+    /// As [`DmEngine::send_operation`].
+    pub fn send_text_quoting(
+        &mut self,
+        channel_id: &[u8],
+        body: &str,
+        quote: Option<lumia_core::proto::DmQuote>,
+    ) -> Result<Vec<Outcome>, ClientError> {
         let id = wire::new_id();
         let op = DmOperation {
             operation_id: id.clone(),
@@ -605,7 +619,32 @@ impl DmEngine {
             op: Some(dm_operation::Op::Send(DmSend {
                 message_id: id,
                 body: body.to_string(),
+                quote,
                 ..Default::default()
+            })),
+        };
+        self.send_operation(channel_id, op)
+    }
+
+    /// Reacts to a message with an emoji, or takes the reaction back (a
+    /// `DmReact` operation).
+    ///
+    /// # Errors
+    /// As [`DmEngine::send_operation`].
+    pub fn send_react(
+        &mut self,
+        channel_id: &[u8],
+        message_id: Vec<u8>,
+        emoji: &str,
+        remove: bool,
+    ) -> Result<Vec<Outcome>, ClientError> {
+        let op = DmOperation {
+            operation_id: wire::new_id(),
+            sent_at: Some(now_ts()),
+            op: Some(dm_operation::Op::React(lumia_core::proto::DmReact {
+                message_id,
+                emoji: emoji.to_string(),
+                remove,
             })),
         };
         self.send_operation(channel_id, op)

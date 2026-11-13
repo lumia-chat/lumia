@@ -149,6 +149,8 @@ fn said(id: &str, mine: bool, account: &str, body: &str, micros: i64) -> DmMessa
         edited: false,
         deleted: false,
         mine,
+        reply: None,
+        reactions: Vec::new(),
     }
 }
 

@@ -46,7 +46,7 @@ use lumia_core::proto::{
 };
 use lumia_core::proto::{
     AddChannelMembersRequest, AddChannelMembersResponse, ChannelIds, ListChannelMembersResponse,
-    OpenServerDmRequest, UpdateMembershipRequest,
+    ListMentionsResponse, MarkReadRequest, OpenServerDmRequest, ReadState, UpdateMembershipRequest,
 };
 use lumia_core::proto::{
     CreateInviteRequest, EmailInviteRequest, HandoffResponse, Invite, InvitePreview,
@@ -1360,6 +1360,43 @@ impl Api {
     pub async fn channel_snapshot(&self, channel_id: &str) -> Result<ChannelSnapshot, ClientError> {
         self.get(&format!("/api/v1/channels/{channel_id}/snapshot"))
             .await
+    }
+
+    /// `POST /channels/{id}/read`: read through `seq` (architecture 6.6).
+    ///
+    /// # Errors
+    /// `NOT_FOUND` for a channel the caller cannot see; transport failure.
+    pub async fn mark_read(&self, channel_id: &str, seq: u64) -> Result<ReadState, ClientError> {
+        self.post(
+            &format!("/api/v1/channels/{channel_id}/read"),
+            &MarkReadRequest { seq },
+        )
+        .await
+    }
+
+    /// `GET /account/mentions`: what notifies the caller, newest first, in
+    /// one server or all; `before` is the last message id of the page before.
+    ///
+    /// # Errors
+    /// On transport failure or an API error.
+    pub async fn mentions(
+        &self,
+        server_id: Option<&str>,
+        before: Option<&str>,
+    ) -> Result<ListMentionsResponse, ClientError> {
+        let mut query = Vec::new();
+        if let Some(server) = server_id {
+            query.push(format!("server_id={}", url_encode(server)));
+        }
+        if let Some(before) = before {
+            query.push(format!("before={}", url_encode(before)));
+        }
+        let query = if query.is_empty() {
+            String::new()
+        } else {
+            format!("?{}", query.join("&"))
+        };
+        self.get(&format!("/api/v1/account/mentions{query}")).await
     }
 
     // ---- Personal DMs and the MLS delivery service (e2ee spec section 11) ----

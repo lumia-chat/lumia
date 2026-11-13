@@ -47,6 +47,96 @@ pub struct StoredMessage {
     pub notice: String,
     /// Who a notice is about; empty for a message.
     pub notice_account_id: Vec<u8>,
+    /// What it quotes (architecture 6.6).
+    pub reply: Option<StoredQuote>,
+    /// Whom it mentions, and where in its body.
+    pub mentions: Vec<StoredMention>,
+    /// Its reactions, each emoji with who reacted, in the order first used.
+    pub reactions: Vec<StoredReaction>,
+}
+
+/// A quote of another message of the conversation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredQuote {
+    /// The message quoted.
+    pub message_id: Vec<u8>,
+    /// Its author.
+    pub author_account_id: Vec<u8>,
+    /// What of it was quoted; empty once it is deleted.
+    pub text: String,
+    /// The message quoted was deleted, and the text with it.
+    pub original_deleted: bool,
+}
+
+/// A mention: an account (empty for everyone) and its byte range in the body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredMention {
+    /// The account mentioned; empty when it is everyone.
+    pub account_id: Vec<u8>,
+    /// Whether it mentions everyone.
+    pub everyone: bool,
+    /// Byte offsets into the body, half-open.
+    pub start: u32,
+    /// End of the range.
+    pub end: u32,
+}
+
+/// One emoji's reactions to a message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredReaction {
+    /// The emoji.
+    pub reaction: String,
+    /// Who reacted with it.
+    pub account_ids: Vec<Vec<u8>>,
+}
+
+impl StoredMessage {
+    /// A message as the instance gave it, in an event or a snapshot.
+    #[must_use]
+    pub fn of(m: &crate::proto::Message) -> Self {
+        let (notice, notice_account_id) = notice_of(m);
+        Self {
+            message_id: m.message_id.clone(),
+            channel_id: m.channel_id.clone(),
+            seq: m.seq,
+            author_account_id: m.author_account_id.clone(),
+            body: m.body.clone(),
+            created_at_micros: crate::wire::micros(m.created_at.as_ref()).unwrap_or(0),
+            deleted: m.deleted_at.is_some(),
+            notice,
+            notice_account_id,
+            reply: m.reply_to.as_ref().map(|q| StoredQuote {
+                message_id: q.message_id.clone(),
+                author_account_id: q.author_account_id.clone(),
+                text: q.text.clone(),
+                original_deleted: q.original_deleted,
+            }),
+            mentions: m.mentions.iter().filter_map(mention_of).collect(),
+            reactions: m
+                .reactions
+                .iter()
+                .map(|r| StoredReaction {
+                    reaction: r.reaction.clone(),
+                    account_ids: r.account_ids.clone(),
+                })
+                .collect(),
+        }
+    }
+}
+
+fn mention_of(m: &crate::proto::Mention) -> Option<StoredMention> {
+    use crate::proto::mention::Target;
+    let (account_id, everyone) = match m.target.as_ref()? {
+        Target::AccountId(id) => (id.clone(), false),
+        Target::Everyone(true) => (Vec::new(), true),
+        _ => return None,
+    };
+    Some(StoredMention {
+        account_id,
+        everyone,
+        start: m.start,
+        end: m.end,
+    })
 }
 
 /// A message's notice, as [`StoredMessage`] keeps it: its kind in lower
