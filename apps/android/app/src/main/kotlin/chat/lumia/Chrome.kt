@@ -83,6 +83,11 @@ sealed class Screen {
     data class NewChannel(val serverId: String) : Screen()
     data class Invite(val serverId: String) : Screen()
     data class ServerSettings(val serverId: String) : Screen()
+    data class Browse(val serverId: String) : Screen()
+    data class Members(val channelId: String) : Screen()
+    data class AddPeople(val channelId: String) : Screen()
+    data class NewServerDm(val serverId: String) : Screen()
+    data class YourSettings(val serverId: String) : Screen()
 }
 
 // Where the shell is, as Android can keep it while the activity is made
@@ -111,6 +116,11 @@ private fun Screen.kept(): String = when (this) {
     is Screen.NewChannel -> "new-channel $serverId"
     is Screen.Invite -> "invite $serverId"
     is Screen.ServerSettings -> "server-settings $serverId"
+    is Screen.Browse -> "browse $serverId"
+    is Screen.Members -> "members $channelId"
+    is Screen.AddPeople -> "add-people $channelId"
+    is Screen.NewServerDm -> "new-server-dm $serverId"
+    is Screen.YourSettings -> "your-settings $serverId"
 }
 
 /** The screen a kept word names; none for a word this build does not know, and the stack is that much shorter. */
@@ -128,6 +138,11 @@ private fun screenOf(kept: String): Screen? {
         "new-channel" -> Screen.NewChannel(id)
         "invite" -> Screen.Invite(id)
         "server-settings" -> Screen.ServerSettings(id)
+        "browse" -> Screen.Browse(id)
+        "members" -> Screen.Members(id)
+        "add-people" -> Screen.AddPeople(id)
+        "new-server-dm" -> Screen.NewServerDm(id)
+        "your-settings" -> Screen.YourSettings(id)
         else -> null
     }
 }

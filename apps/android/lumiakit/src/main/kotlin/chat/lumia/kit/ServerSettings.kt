@@ -16,6 +16,9 @@ const val SERVER_NAME_REFUSED = "A server name is 1 to 100 characters."
 /** What a member without `MANAGE_SERVER` is told. */
 const val SERVER_SETTINGS_DENIED = "You cannot change this server's settings."
 
+/** What a refused choice of default channels reads as (architecture 6.8). */
+const val DEFAULT_CHANNELS_REFUSED = "Default channels must be public channels of this server."
+
 /** The most bytes of a picture the instance takes (`Lumia.Media`); a bigger one is not sent. */
 const val PICTURE_MAX_BYTES = 8 * 1024 * 1024
 
@@ -71,6 +74,7 @@ object Retention {
 fun serverSettingsRefused(code: String?, field: String?): String? = when {
     code == "PERMISSION_DENIED" -> SERVER_SETTINGS_DENIED
     code == "INVALID_ARGUMENT" && field == "name" -> SERVER_NAME_REFUSED
+    code == "INVALID_ARGUMENT" && field == "default_channels" -> DEFAULT_CHANNELS_REFUSED
     else -> null
 }
 

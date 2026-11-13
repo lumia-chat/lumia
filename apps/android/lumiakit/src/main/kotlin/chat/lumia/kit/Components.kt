@@ -14,6 +14,7 @@ import androidx.compose.animation.core.keyframes
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -146,7 +147,10 @@ fun LumiaMessageRow(
     deleted: Boolean = false,
     place: BlockPlace = BlockPlace.Alone,
     measures: Measures = Measures.Comfortable,
+    onAuthor: (() -> Unit)? = null,
 ) {
+    // Who wrote it, tapped on the avatar or the name: their profile card, where a screen offers one.
+    val authorTap = if (onAuthor != null) Modifier.clickable(onClickLabel = "view $author's profile", role = Role.Button, onClick = onAuthor) else Modifier
     val body = @Composable { modifier: Modifier ->
         Text(
             if (deleted) "(deleted)" else text,
@@ -173,14 +177,35 @@ fun LumiaMessageRow(
     }
     Row(modifier = frame, horizontalArrangement = Arrangement.spacedBy(measures.beside), verticalAlignment = Alignment.Top) {
         // The name beside it says who; the initials would only be read out before it.
-        Box(Modifier.clearAndSetSemantics {}) { LumiaAvatar(initialsOf(author), tone, measures.avatar) }
+        Box(Modifier.clip(CircleShape).then(authorTap).clearAndSetSemantics {}) { LumiaAvatar(initialsOf(author), tone, measures.avatar) }
         Column(verticalArrangement = Arrangement.spacedBy(measures.within), modifier = Modifier.weight(1f)) {
             Row(horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space8), verticalAlignment = Alignment.Bottom) {
-                Text(author, style = LumiaTokens.textAuthor.style, color = LumiaTokens.inkEmphasis.color)
+                Text(author, style = LumiaTokens.textAuthor.style, color = LumiaTokens.inkEmphasis.color, modifier = authorTap)
                 Text(time, style = LumiaTokens.textMeta.style, color = LumiaTokens.inkQuiet.color)
             }
             body(Modifier)
         }
+    }
+}
+
+/**
+ * A notice the instance posted in a channel (architecture 6.8): "Ada added
+ * Grace", one quiet line in the message text's column, with no avatar and
+ * nothing to do with it, and the time after it. One stop for a screen
+ * reader, the words then the time.
+ */
+@Composable
+fun LumiaNoticeRow(text: String, time: String, measures: Measures = Measures.Comfortable) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .semantics(mergeDescendants = true) {}
+            .padding(start = LumiaTokens.space16 + measures.avatar + measures.beside, end = LumiaTokens.space16, top = measures.blockGap + measures.within, bottom = measures.within),
+        horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space8),
+        verticalAlignment = Alignment.Bottom,
+    ) {
+        Text(text, style = LumiaTokens.textMeta.style, color = LumiaTokens.inkMuted.color, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+        Text(time, style = LumiaTokens.textMeta.style, color = LumiaTokens.inkQuiet.color)
     }
 }
 

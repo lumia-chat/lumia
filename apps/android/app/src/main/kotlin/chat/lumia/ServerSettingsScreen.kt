@@ -223,6 +223,8 @@ fun ServerSettingsScreen(session: LumiaSession, server: ServerSummary?, back: ()
                     LumiaPrimaryButton("Save", Modifier.fillMaxWidth(), enabled = !retentionBusy && server != null && retention != kept) { saveRetention() }
                 }
             }
+            // The channels every newcomer joins (architecture 6.8).
+            if (server != null) DefaultChannelsCard(session, server)
         }
     }
 }

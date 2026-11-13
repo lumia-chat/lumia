@@ -31,6 +31,7 @@ import uniffi.lumia_ffi.MessageSummary
 import uniffi.lumia_ffi.RosterSummary
 import uniffi.lumia_ffi.SnapshotSummary
 import uniffi.lumia_ffi.ChannelSummary
+import uniffi.lumia_ffi.ChannelAddSummary
 
 sealed class ConnectionState(val label: String) {
     data object Idle : ConnectionState("not connected")
@@ -80,6 +81,17 @@ class LumiaSession(
     /** Everyone this account shares a server with, by account id. */
     var people by mutableStateOf<Map<String, MemberSummary>>(emptyMap())
         private set
+    /** A server's members, by server id: the names a channel's members list and the pickers show. */
+    var serverMembers by mutableStateOf<Map<String, List<MemberSummary>>>(emptyMap())
+        private set
+    /**
+     * Channels opened that the snapshot does not hold (yet): a public one
+     * previewed from Browse, a server DM just started. The channel screen
+     * finds one here when the snapshot has none by its id.
+     */
+    val previews = mutableStateMapOf<String, ChannelSummary>()
+    /** The server channels the gateway loop has been told of, so one gained later is subscribed to once. */
+    private val subscribed = mutableSetOf<String>()
     /** Public profiles looked up one at a time; null once the instance refused one. */
     private val profiles = mutableStateMapOf<String, MemberSummary?>()
     private val profilesInFlight = mutableSetOf<String>()
@@ -144,9 +156,73 @@ class LumiaSession(
         return server.serverId
     }
 
-    /** A text channel in the server, listed once the snapshot is refreshed; returns its id. */
-    suspend fun createChannel(serverId: String, name: String): String {
-        val channel = client.call { createChannel(serverId, name) }
+    /** A text channel in the server, private when asked (architecture 6.8), listed once the snapshot is refreshed; returns its id. */
+    suspend fun createChannel(serverId: String, name: String, private: Boolean = false): String {
+        val channel = client.call { createChannel(serverId, name, private) }
+        refreshSnapshot()
+        return channel.channelId
+    }
+
+    // Channel membership (architecture 6.8)
+
+    /** A channel by id: the snapshot's, else one opened without being in it. */
+    fun channelOf(channelId: String): ChannelSummary? =
+        snapshot?.channels?.firstOrNull { it.channelId == channelId } ?: previews[channelId]
+
+    /** Whether this account is in a channel: the snapshot holds the channels it is in. */
+    fun isIn(channelId: String): Boolean = snapshot?.channels?.any { it.channelId == channelId } == true
+
+    /** The public channels of a server this account is not in, each with how many are in it. */
+    suspend fun browseChannels(serverId: String): List<ChannelSummary> = client.call { browseChannels(serverId) }
+
+    /**
+     * Opens a channel this account is not in, read-only (as `READ_HISTORY`
+     * allows): kept among the previews and subscribed to, so its messages
+     * come as any channel's do.
+     */
+    fun preview(channel: ChannelSummary) {
+        previews[channel.channelId] = channel
+        if (events != null && subscribed.add(channel.channelId)) {
+            scope.launch { runCatching { client.call { subscribe(channel.channelId) } } }
+        }
+    }
+
+    /** Joins a public channel, or one this account was invited to; the snapshot it answers with lists it. */
+    suspend fun joinChannel(channelId: String) { took(client.call { joinChannel(channelId) }) }
+
+    /** Leaves a channel, a default one included. */
+    suspend fun leaveChannel(channelId: String) { took(client.call { leaveChannel(channelId) }) }
+
+    /** No to an invitation. */
+    suspend fun dismissInvitation(channelId: String) { took(client.call { dismissChannelInvitation(channelId) }) }
+
+    /** Who is in a channel, as account ids. */
+    suspend fun channelMembers(channelId: String): List<String> = client.call { channelMembers(channelId) }
+
+    /** Members of the server added to a channel, or invited when they take adds that way. */
+    suspend fun addChannelMembers(channelId: String, accountIds: List<String>): ChannelAddSummary = client.call { addChannelMembers(channelId, accountIds) }
+
+    /** Someone taken out of a channel (`MANAGE_CHANNELS`). */
+    suspend fun removeChannelMember(channelId: String, accountId: String) { client.call { removeChannelMember(channelId, accountId) } }
+
+    /** This account's own switches in a server; null leaves one as it is. */
+    suspend fun updateMembership(serverId: String, channelAddsByInvitation: Boolean?, serverDmsOff: Boolean?) {
+        took(client.call { updateMembership(serverId, channelAddsByInvitation, serverDmsOff) })
+    }
+
+    /** The server's default channels, exactly [channelIds]. */
+    suspend fun setDefaultChannels(serverId: String, channelIds: List<String>) {
+        took(client.call { setDefaultChannels(serverId, channelIds) })
+    }
+
+    /**
+     * The 1:1 server DM with a member, started if there is none (architecture
+     * 6.4): kept among the previews until the snapshot has it, and subscribed
+     * to; returns its id.
+     */
+    suspend fun openServerDm(serverId: String, accountId: String): String {
+        val channel = client.call { openServerDm(serverId, accountId) }
+        preview(channel)
         refreshSnapshot()
         return channel.channelId
     }
@@ -173,6 +249,24 @@ class LumiaSession(
     private fun took(snap: SnapshotSummary) {
         if (leaving || !signedIn) return
         snapshot = snap
+        subscribeGained()
+    }
+
+    /**
+     * The gateway loop subscribes to the channels the snapshot had when it
+     * started; one gained since (created, joined, added, a server DM begun
+     * or received) is subscribed to as the snapshot that lists it is taken,
+     * once, so its messages come live and not only after a restart.
+     */
+    private fun subscribeGained() {
+        val snap = snapshot ?: return
+        if (events == null) return
+        for (id in toSubscribe(snap.channels, subscribed)) {
+            subscribed.add(id)
+            scope.launch { runCatching { client.call { subscribe(id) } } }
+        }
+        // A preview the account has since joined is the snapshot's now.
+        for (c in snap.channels) previews.remove(c.channelId)
     }
 
     /** Where a picture this instance names is, to draw; none for none, or for one that is not the instance's own (`pictureAddress`). */
@@ -232,6 +326,8 @@ class LumiaSession(
                 dmLogs.clear()
                 roster = null
                 people = emptyMap()
+                serverMembers = emptyMap()
+                previews.clear()
                 profiles.clear()
                 serverPresence.clear()
                 lastError = null
@@ -313,7 +409,11 @@ class LumiaSession(
             refreshPeople(snap.servers.map { it.serverId })
             refreshDmChannels()
             if (events == null) {
-                start(snap.channels.filter { it.kind !in personalKinds }.map { it.channelId })
+                // With any channel opened to read before the loop ran.
+                val held = snap.channels.filter { it.kind !in personalKinds }.map { it.channelId }
+                start(held + previews.keys.filter { it !in held })
+            } else {
+                subscribeGained()
             }
         } catch (e: Exception) {
             // A session that is over goes back to sign-in. Anything else is said
@@ -336,6 +436,7 @@ class LumiaSession(
         }
         if (leaving || !signedIn) return
         snapshot = snap
+        subscribeGained()
         refreshPeople(snap.servers.map { it.serverId })
     }
 
@@ -355,10 +456,14 @@ class LumiaSession(
 
     private suspend fun refreshPeople(serverIds: List<String>) {
         val found = mutableMapOf<String, MemberSummary>()
+        val byServer = mutableMapOf<String, List<MemberSummary>>()
         for (id in serverIds) {
-            for (m in runCatching { client.call { members(id, "") } }.getOrDefault(emptyList())) found[m.accountId] = m
+            val members = runCatching { client.call { members(id, "") } }.getOrDefault(emptyList())
+            byServer[id] = members
+            for (m in members) found[m.accountId] = m
         }
         people = found
+        serverMembers = byServer
     }
 
     // Actions
@@ -453,6 +558,8 @@ class LumiaSession(
 
     private fun start(channelIds: List<String>) {
         val stream = client.start(channelIds)
+        subscribed.clear()
+        subscribed.addAll(channelIds)
         connection = ConnectionState.Connecting
         events = scope.launch {
             stream.collect { handle(it) }

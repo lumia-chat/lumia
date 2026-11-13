@@ -98,6 +98,17 @@ import uniffi.lumia_ffi.MemberSummary
 import uniffi.lumia_ffi.ServerSummary
 import chat.lumia.kit.LumiaCard
 import chat.lumia.kit.LumiaChoice
+import chat.lumia.kit.LumiaNoticeRow
+import chat.lumia.kit.SERVER_DM
+import chat.lumia.kit.CANNOT_CREATE_CHANNELS
+import chat.lumia.kit.noticeText
+import chat.lumia.kit.notInChannel
+import chat.lumia.kit.otherIn
+import chat.lumia.kit.serverDmNote
+import androidx.compose.material.icons.filled.Group
+import androidx.compose.material3.Switch
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.ui.semantics.Role
 
 // Conversation
 
@@ -175,43 +186,94 @@ fun ConversationScreen(session: LumiaSession, channelId: String, density: Densit
 
 // Channel
 
+/**
+ * A server's channel or server DM. A channel this account is not in (one
+ * opened from Browse) reads as any does, with a bar in place of the
+ * composer to join it (architecture 6.8); a server DM is titled by the other
+ * person and says once, at its top, whose it is (architecture 6.4). Notices
+ * are one quiet line each; an author's avatar or name opens their profile
+ * card.
+ */
 @Composable
-fun ChannelScreen(session: LumiaSession, channelId: String, density: Density, back: () -> Unit) {
+fun ChannelScreen(session: LumiaSession, channelId: String, density: Density, back: () -> Unit, push: (Screen) -> Unit) {
     val scope = rememberCoroutineScope()
     val measures = Measures.of(density)
     var draft by rememberSaveable { mutableStateOf("") }
     var error by rememberSaveable { mutableStateOf("") }
-    val channel = session.snapshot?.channels?.firstOrNull { it.channelId == channelId }
+    var joining by remember { mutableStateOf(false) }
+    var card by remember { mutableStateOf<String?>(null) }
+    val channel = session.channelOf(channelId)
     val server = session.snapshot?.servers?.firstOrNull { it.serverId == channel?.serverId }
     val messages = session.messages[channelId] ?: emptyList()
     val name = channel?.name ?: "channel"
+    val dm = channel?.kind == SERVER_DM
+    val other = channel?.let { otherIn(it, session.me) }
+    val title = if (dm) channel?.let { session.conversationName(it) } ?: "Conversation" else "# $name"
+    val member = session.isIn(channelId)
     val listState = rememberLazyListState()
-    val places = remember(messages) { blockPlaces(messages.map { Stamp(it.authorAccountId, it.createdAtMicros) }) }
+    // A notice is never in a block, and the message after one opens its own.
+    val places = remember(messages) { blockPlaces(messages.map { Stamp(if (it.notice.isEmpty()) it.authorAccountId else "notice:${it.messageId}", it.createdAtMicros) }) }
 
     LaunchedEffect(channelId) { session.refreshMessages(channelId) }
     LaunchedEffect(messages.size) { if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size + 1) }
 
-    PanelScreen(back = server?.name ?: "the server", onBack = back, title = "# $name", subtitle = server?.name) {
+    fun join() {
+        scope.launch {
+            joining = true
+            error = ""
+            try { session.joinChannel(channelId) } catch (e: Exception) { error = e.lumiaMessage } finally { joining = false }
+        }
+    }
+
+    PanelScreen(
+        back = server?.name ?: "the server", onBack = back, title = title, subtitle = server?.name,
+        lead = if (dm) ({ LumiaAvatar(initialsOf(title), AvatarTone.of(other ?: channelId), LumiaTokens.avatarMd) }) else null,
+        actions = if (!dm && channel != null) listOf(Triple(Icons.Filled.Group, "Members") { push(Screen.Members(channelId)) }) else emptyList(),
+    ) {
         Column(Modifier.fillMaxSize().imePadding()) {
             LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth(), contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = LumiaTokens.space8)) {
-                if (messages.isEmpty()) item { LumiaEmptyState(Icons.Filled.ChatBubbleOutline, "Nothing here yet", "Say something.") }
+                if (dm) item { Column(Modifier.padding(horizontal = LumiaTokens.space16, vertical = LumiaTokens.space8)) { LumiaNotice(Icons.Filled.Shield, text = serverDmNote(server?.name ?: "this server")) } }
+                if (messages.isEmpty()) item { LumiaEmptyState(Icons.Filled.ChatBubbleOutline, "Nothing here yet", if (member) "Say something." else null) }
                 else item { LumiaDayDivider("Today", measures) }
                 itemsIndexed(messages, key = { _, m -> m.messageId }) { i, m ->
-                    LumiaMessageRow(session.nameOf(m.authorAccountId), AvatarTone.of(m.authorAccountId), timeOfMicros(m.createdAtMicros), m.body, m.deleted, places[i], measures)
+                    if (m.notice.isNotEmpty()) {
+                        noticeText(m.notice, session.nameOf(m.authorAccountId), session.nameOf(m.noticeAccountId))?.let { LumiaNoticeRow(it, timeOfMicros(m.createdAtMicros), measures) }
+                    } else {
+                        LumiaMessageRow(session.nameOf(m.authorAccountId), AvatarTone.of(m.authorAccountId), timeOfMicros(m.createdAtMicros), m.body, m.deleted, places[i], measures, onAuthor = if (server != null) ({ card = m.authorAccountId }) else null)
+                    }
                 }
-                if (error.isNotEmpty()) item { LumiaErrorText(error) }
+                if (error.isNotEmpty()) item { Column(Modifier.padding(horizontal = LumiaTokens.space16)) { LumiaErrorText(error) } }
             }
-            // Every edit that leaves something in the composer says this person is typing;
-            // emptied is not typing (a send). The core spaces what is sent.
-            LumiaComposer(draft, { draft = it; if (it.isNotBlank()) session.typed(channelId) }, "Message #$name") {
-                val body = draft.trim()
-                if (body.isEmpty()) return@LumiaComposer
-                draft = ""
-                error = ""
-                scope.launch { try { session.sendMessage(channelId, body) } catch (e: Exception) { error = e.lumiaMessage } }
+            if (member || channel == null) {
+                // Every edit that leaves something in the composer says this person is typing;
+                // emptied is not typing (a send). The core spaces what is sent.
+                LumiaComposer(draft, { draft = it; if (it.isNotBlank()) session.typed(channelId) }, if (dm) "Message $title" else "Message #$name") {
+                    val body = draft.trim()
+                    if (body.isEmpty()) return@LumiaComposer
+                    draft = ""
+                    error = ""
+                    scope.launch { try { session.sendMessage(channelId, body) } catch (e: Exception) { error = e.lumiaMessage } }
+                }
+            } else {
+                // Not in it: read it, and join from here (architecture 6.8).
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = LumiaTokens.space16)
+                        .background(LumiaTokens.inset.color, RoundedCornerShape(LumiaTokens.radius12))
+                        .padding(start = LumiaTokens.space14, end = LumiaTokens.space8, top = LumiaTokens.space8, bottom = LumiaTokens.space8),
+                    horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space12),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(notInChannel(name), style = LumiaTokens.textBody.style, color = LumiaTokens.inkBody.color, modifier = Modifier.weight(1f))
+                    LumiaPrimaryButton("Join", enabled = !joining) { join() }
+                }
             }
-            ComposerFoot(session.typingIn(channelId))
+            ComposerFoot(if (member) session.typingIn(channelId) else emptyList())
         }
+    }
+
+    val shown = card
+    if (shown != null && server != null) {
+        ProfileCard(session, server, shown, onDismiss = { card = null }, openChannel = { push(Screen.Channel(it)) }, openConversation = { push(Screen.Conversation(it)) })
     }
 }
 
@@ -436,6 +498,7 @@ fun NewChannelScreen(session: LumiaSession, server: ServerSummary?, back: () -> 
     var name by rememberSaveable { mutableStateOf("") }
     var error by rememberSaveable { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
+    var private by rememberSaveable { mutableStateOf(false) }
 
     fun create() {
         val id = server?.serverId ?: return
@@ -443,18 +506,32 @@ fun NewChannelScreen(session: LumiaSession, server: ServerSummary?, back: () -> 
             busy = true
             error = ""
             try {
-                opened(session.createChannel(id, name))
+                opened(session.createChannel(id, name, private))
             } catch (e: Exception) {
-                error = if (e.lumiaCode == "PERMISSION_DENIED") "You cannot add channels to this server." else e.lumiaMessage
+                error = if (e.lumiaCode == "PERMISSION_DENIED") CANNOT_CREATE_CHANNELS else e.lumiaMessage
             } finally {
                 busy = false
             }
         }
     }
 
-    PanelScreen(back = server?.name ?: "Server", onBack = back, title = "New channel", subtitle = "A text channel everyone in ${server?.name ?: "the server"} can see") {
+    PanelScreen(back = server?.name ?: "Server", onBack = back, title = "Create a channel", subtitle = "A text channel in ${server?.name ?: "the server"}") {
         LazyColumn(Modifier.fillMaxSize().imePadding().navigationBarsPadding(), contentPadding = androidx.compose.foundation.layout.PaddingValues(LumiaTokens.space16), verticalArrangement = Arrangement.spacedBy(LumiaTokens.space12)) {
             item { LumiaField("Name", name, { name = it }, placeholder = "general") }
+            // Private from the start (architecture 6.8): only those added see it.
+            item {
+                Row(
+                    Modifier.fillMaxWidth().toggleable(value = private, role = Role.Switch) { private = it },
+                    horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space12),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(LumiaTokens.space2)) {
+                        Text("Private", style = LumiaTokens.textMember.style, color = LumiaTokens.ink.color)
+                        Text("Only people added can see it.", style = LumiaTokens.textMeta.style, color = LumiaTokens.inkSecondary.color)
+                    }
+                    Switch(checked = private, onCheckedChange = null, colors = lumiaSwitchColors())
+                }
+            }
             if (error.isNotEmpty()) item { LumiaErrorText(error) }
             item { LumiaPrimaryButton("Create", Modifier.fillMaxWidth(), enabled = !busy && name.isNotBlank()) { create() } }
         }

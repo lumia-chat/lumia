@@ -63,14 +63,15 @@ class MainActivity : ComponentActivity() {
             browserReturn(intent)?.let { store.browserReturn = it }
         }
         // A debug build signs in from the launch intent's extras, for the
-        // smoke run (scripts/smoke.sh): LUMIA_DEV_INSTANCE, _HANDLE, _PASSWORD, _SCREEN.
+        // smoke run (scripts/smoke.sh): LUMIA_DEV_INSTANCE, _HANDLE, _PASSWORD, _SCREEN,
+        // and _CHANNEL, the name of the channel a screen about one opens on.
         // LUMIA_DEV_APPEARANCE (light, dark, system) and LUMIA_DEV_DENSITY
         // (comfortable, compact) are how that launch looks, and are not kept.
         // LUMIA_DEV_PUSH is an endpoint that stands in for a distributor's:
         // each sign-in's registration hands it over (`PushSetup.standIn`),
         // so the smoke can see a subscription held, removed and made again.
         val dev = if (BuildConfig.DEBUG) {
-            listOf("LUMIA_DEV_INSTANCE", "LUMIA_DEV_HANDLE", "LUMIA_DEV_PASSWORD", "LUMIA_DEV_SCREEN", "LUMIA_DEV_APPEARANCE", "LUMIA_DEV_DENSITY", "LUMIA_DEV_PUSH")
+            listOf("LUMIA_DEV_INSTANCE", "LUMIA_DEV_HANDLE", "LUMIA_DEV_PASSWORD", "LUMIA_DEV_SCREEN", "LUMIA_DEV_APPEARANCE", "LUMIA_DEV_DENSITY", "LUMIA_DEV_PUSH", "LUMIA_DEV_CHANNEL")
                 .mapNotNull { key -> intent.getStringExtra(key)?.let { key to it } }.toMap()
         } else emptyMap()
         if (launched) {
@@ -95,7 +96,7 @@ class MainActivity : ComponentActivity() {
                 )
                 onDispose {}
             }
-            LumiaTheme(dark) { Root(store, devScreen = dev["LUMIA_DEV_SCREEN"]) }
+            LumiaTheme(dark) { Root(store, devScreen = dev["LUMIA_DEV_SCREEN"], devChannel = dev["LUMIA_DEV_CHANNEL"]) }
         }
     }
 
@@ -143,14 +144,14 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun Root(store: AppStore, devScreen: String?) {
+fun Root(store: AppStore, devScreen: String?, devChannel: String? = null) {
     Box(Modifier.fillMaxSize().background(LumiaTokens.bg.color)) {
         val session = store.session
         when {
             store.opening -> CircularProgressIndicator(Modifier.align(Alignment.Center), color = LumiaTokens.accent.color)
             devScreen == "signin" -> SignInScreen(store)
             devScreen == "link" && session != null -> LinkScreen(store, session)
-            store.route == Route.APP && session != null && session.signedIn -> Shell(store, session, devScreen)
+            store.route == Route.APP && session != null && session.signedIn -> Shell(store, session, devScreen, devChannel)
             store.route == Route.LINK && session != null -> LinkScreen(store, session)
             else -> SignInScreen(store)
         }
