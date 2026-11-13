@@ -78,6 +78,7 @@ The owner cannot be kicked, banned, or stripped of roles by anyone.
 
 Membership sits on top of resolution (architecture 6.8), in `Lumia.Authz.Access.permissions/4`, the one place the rule is written:
 
+- Editing a message is its author's alone (with `SEND_MESSAGES`); deleting one is its author's or a `MANAGE_MESSAGES` holder's (with `VIEW_CHANNEL`, so a moderator who is not in the channel may still delete there). The instance checks the message's author on both, and refuses a notice as not found.
 - In a server's text channel, an account not in it holds none of `SEND_MESSAGES`, `SEND_IN_THREADS`, `ATTACH_FILES`, `ADD_REACTIONS` and `START_CALLS`, whatever resolution gave; it keeps the rest, so a public channel can be read before joining and a moderator keeps `MANAGE_MESSAGES`.
 - In a private channel, being in it adds `VIEW_CHANNEL` for a `member` (not a `guest`): a private channel's people need no overwrite each, so its size is not bound by the overwrite limit (section 10). A guest sees what overwrites grant it, here as anywhere.
 - A `SERVER_DM` is its members' alone: each holds `VIEW_CHANNEL`, `READ_HISTORY`, `SEND_MESSAGES`, `SEND_IN_THREADS`, `ATTACH_FILES`, `ADD_REACTIONS` and `START_CALLS`, without the writes while either has blocked the other, and anyone else, an administrator included, gets `NOT_FOUND`.

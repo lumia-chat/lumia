@@ -244,6 +244,8 @@ message QuoteReply {
   bytes author_account_id = 2;
   string text = 3;
   bool original_deleted = 4;
+  // The author quoted is not notified (the reply bar's "@ On" switch, off).
+  bool silent = 5;
 }
 
 // Someone came into a channel or went from it.
