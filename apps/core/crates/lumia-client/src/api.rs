@@ -1750,9 +1750,14 @@ impl Api {
             )
             .await?;
         // Twice at most: a pair taken from another call or another process
-        // may itself have run out, and then it is this call's to rotate.
+        // may itself have run out, and then it is this call's to rotate. A
+        // call that presents credentials of its own is refused for those,
+        // never for the pair, which it is not to spend.
         for _ in 0..2 {
-            if answer.0 != StatusCode::UNAUTHORIZED || sent_with.is_none() {
+            if answer.0 != StatusCode::UNAUTHORIZED
+                || sent_with.is_none()
+                || presents_credentials(path)
+            {
                 break;
             }
             match api_error(answer.0, &answer.1) {
@@ -1809,6 +1814,18 @@ impl Api {
         let bytes = response.bytes().await?;
         Ok((status, bytes.to_vec()))
     }
+}
+
+/// Whether a call presents credentials of its own (a password, a magic
+/// link's token, an identity's proof, a passkey's assertion, a refresh
+/// token, a new account's): its 401 is about those, not about the session's
+/// access token, so it is not retried with a refreshed pair.
+fn presents_credentials(path: &str) -> bool {
+    path.starts_with("/api/v1/auth/sign-in/")
+        || path.starts_with("/api/v1/auth/passkey/assert/")
+        || path == "/api/v1/auth/refresh"
+        || path == "/api/v1/accounts"
+        || path == "/api/v1/accounts/by-identity"
 }
 
 /// An answer with nothing in it to decode: success, or the error it carries.
@@ -1943,6 +1960,8 @@ mod tests {
                             }
                             _ => refused(ErrorCode::SessionRevoked),
                         }
+                    } else if head.starts_with("post /api/v1/auth/sign-in/password") {
+                        refused(ErrorCode::Unauthenticated)
                     } else if head.contains("authorization: bearer a2") {
                         (200, Vec::new())
                     } else {
@@ -2006,6 +2025,26 @@ mod tests {
         api.account_snapshot().await.expect("the call is answered");
         assert_eq!(*presented.lock().unwrap(), ["r1"], "never `r0`");
         assert_eq!(api.tokens().refresh.as_deref(), Some("r2"));
+    }
+
+    /// A sign-in with the wrong password, made while the last session's pair
+    /// is still held (a sign-out on its way, as the desktop's live test hit
+    /// on a runner). Its refusal is about the password: it used to be taken
+    /// for an expired token, the held pair was presented, and the person read
+    /// "session revoked" for a typo.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_refused_sign_in_is_not_retried_with_the_held_pair() {
+        let (base, presented) = instance();
+        let api = Api::new(&base).with_tokens(Tokens {
+            access: Some("a1".into()),
+            refresh: Some("r1".into()),
+        });
+        let answer = api.sign_in("ada", "wrong", vec![1; 16]).await;
+        assert!(
+            matches!(&answer, Err(crate::ClientError::Api { code, .. }) if code == "UNAUTHENTICATED"),
+            "{answer:?}"
+        );
+        assert!(presented.lock().unwrap().is_empty(), "no pair presented");
     }
 
     /// The gateway loop rotates on its own account, with no call of its to
