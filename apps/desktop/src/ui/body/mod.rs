@@ -51,16 +51,44 @@ thread_local! {
 /// The body of a message. `selectable` is off for a send that is still pending: its text
 /// cannot be selected and its links do not open.
 pub fn view(source: &str, selectable: bool, look: Look) -> El {
-    view_with(source, selectable, &[], look)
+    view_with(source, selectable, &[], Drawn::default(), look)
+}
+
+/// How a body is drawn besides its source.
+#[derive(Clone, Copy)]
+pub struct Drawn<'a> {
+    /// The type at the message size chosen in Preferences.
+    pub ty: &'a t::MessageType,
+    /// What a copy writes before the body's first text when the selection takes that from
+    /// its start with others: the author and time of a row that draws neither as text a
+    /// selection takes (one line, `timeline`).
+    pub head: Option<&'a str>,
+}
+
+impl Default for Drawn<'_> {
+    fn default() -> Self {
+        Self {
+            ty: &t::MESSAGE_TYPE,
+            head: None,
+        }
+    }
 }
 
 /// [`view`] with the words of the message's mentions (`@ada`), drawn as pills.
-pub fn view_with(source: &str, selectable: bool, mentions: &[String], look: Look) -> El {
+pub fn view_with(
+    source: &str,
+    selectable: bool,
+    mentions: &[String],
+    drawn: Drawn<'_>,
+    look: Look,
+) -> El {
     let blocks = parse(source);
     let body = Body {
         look,
+        ty: *drawn.ty,
         selectable,
         first: Cell::new(true),
+        head: Cell::new(drawn.head.map(str::to_owned)),
         mentions: mentions.to_vec(),
     };
     body.blocks(&blocks, None, "", false)
@@ -92,14 +120,18 @@ fn standing(text: &str, words: &str) -> Vec<std::ops::Range<usize>> {
 }
 
 /// A line of the timeline that is not a message's text but belongs in a copy of it: the
-/// placeholder of a deleted message. Selectable, and placed as a body's only paragraph is.
-pub fn note(content: &str, color: Color, look: Look) -> El {
-    text(content)
-        .font(t::TEXT_MESSAGE)
+/// placeholder of a deleted message. Selectable, and placed as a body's only paragraph is,
+/// with [`Drawn::head`] before it in a copy as a body's first text has it.
+pub fn note(content: &str, color: Color, drawn: Drawn<'_>, look: Look) -> El {
+    let note = text(content)
+        .font(drawn.ty.message)
         .color(color)
         .selectable(true)
-        .selection_color(look.c.accent_soft)
-        .copy_breaks(1, 2)
+        .selection_color(look.c.accent_soft);
+    match drawn.head {
+        Some(head) => note.copy_breaks(2, 2).copy_prefix(format!("{head}\n")),
+        None => note.copy_breaks(1, 2),
+    }
 }
 
 /// Opens a link from a message in the browser. Only web links: a message is text someone
@@ -123,10 +155,13 @@ struct Lead<'a> {
 
 struct Body {
     look: Look,
+    ty: t::MessageType,
     selectable: bool,
     /// No text of this body has been drawn yet: the first follows the message's author
     /// and time without a blank line.
     first: Cell<bool>,
+    /// [`Drawn::head`], until the first text takes it.
+    head: Cell<Option<String>>,
     /// The words of the message's mentions, drawn as pills.
     mentions: Vec<String>,
 }
@@ -216,7 +251,7 @@ impl Body {
                         tight: k > 0 || in_item,
                     };
                     let marker = text(marker)
-                        .font(t::TEXT_MESSAGE)
+                        .font(self.ty.message)
                         .color(c.ink_secondary)
                         .w(t::SPACE_28)
                         .pr(t::SPACE_8)
@@ -276,7 +311,7 @@ impl Body {
     fn para(&self, inline: &Inline) -> El {
         let c = self.look.c;
         let mut para = rich(inline.text.clone(), self.spans(inline))
-            .font(t::TEXT_MESSAGE)
+            .font(self.ty.message)
             .color(c.ink_body)
             .wrap_anywhere()
             .w_full();
@@ -334,7 +369,7 @@ impl Body {
                 Style::Strong => span.weight(t::WEIGHT_STRONG),
                 Style::Code => span
                     .mono()
-                    .size(t::TEXT_MESSAGE.size * t::CODE_SCALE)
+                    .size(self.ty.code_inline)
                     .bg(c.inset, t::CODE_PAD),
                 Style::Pad => span.size(pad_size()),
                 // A line through the text, drawn by the paragraph.
@@ -377,7 +412,7 @@ impl Body {
             _ => Vec::new(),
         };
         rich(code.to_owned(), spans)
-            .font(t::TEXT_CODE)
+            .font(self.ty.code)
             .color(self.look.c.ink_body)
             .wrap_anywhere()
             .w_full()
@@ -385,9 +420,13 @@ impl Body {
 
     /// The newlines a copy leaves before and after a block: a blank line around it, but one
     /// newline around the text that opens a list item, and after the message's author and
-    /// time, which the first text of a body follows.
+    /// time, which the first text of a body follows. A body that carries its author and time
+    /// itself ([`Drawn::head`]) has the blank line before them.
     fn breaks(&self, lead: Option<Lead>) -> (u8, u8) {
-        let first = self.first.replace(false);
+        let head = self.head.take();
+        let headed = head.is_some();
+        self.head.set(head);
+        let first = self.first.replace(false) && !headed;
         let tight = first || lead.is_some_and(|l| l.tight);
         (
             if tight { 1 } else { 2 },
@@ -395,7 +434,8 @@ impl Body {
         )
     }
 
-    /// `drawn`, a text, selectable, with what a copy writes around it.
+    /// `drawn`, a text, selectable, with what a copy writes around it: the body's head
+    /// before the first text, then its own prefix.
     fn copied(&self, drawn: El, prefix: &str, before: u8, after: u8) -> El {
         if !self.selectable {
             return drawn;
@@ -404,10 +444,10 @@ impl Body {
             .selectable(true)
             .selection_color(self.look.c.accent_soft)
             .copy_breaks(before, after);
-        if prefix.is_empty() {
-            drawn
-        } else {
-            drawn.copy_prefix(prefix)
+        match self.head.take() {
+            Some(head) => drawn.copy_prefix(format!("{head}\n{prefix}")),
+            None if prefix.is_empty() => drawn,
+            None => drawn.copy_prefix(prefix),
         }
     }
 }

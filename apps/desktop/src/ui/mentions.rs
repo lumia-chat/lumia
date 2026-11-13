@@ -157,9 +157,21 @@ fn item(s: &State, message: &MessageSummary, look: Look) -> El {
             .child(text(at.clone()).font(t::TEXT_META).color(c.ink_muted)),
     );
     if let Some(quote) = &entry.reply {
-        content = content.child(replies::reference_line(s, quote, 0.0, look));
+        content = content.child(replies::reference_line(
+            s,
+            quote,
+            0.0,
+            &t::MESSAGE_TYPE,
+            look,
+        ));
     }
-    content = content.child(body::view_with(&entry.body, false, &words, look));
+    content = content.child(body::view_with(
+        &entry.body,
+        false,
+        &words,
+        body::Drawn::default(),
+        look,
+    ));
     let (channel_id, message_id) = (message.channel_id.clone(), message.message_id.clone());
     col()
         .key(format!("mention-{}", message.message_id))

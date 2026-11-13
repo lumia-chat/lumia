@@ -80,7 +80,7 @@ pub fn view_with(s: &State, chrome: Chrome<'_>, extras: Extras, look: Look) -> E
     pane.child(if let Some(instead) = extras.instead_of_composer {
         instead
     } else if extras.composer_disabled {
-        composer_off(&chrome.placeholder, look)
+        composer_off(&chrome.placeholder, &timeline::type_of(s), look)
     } else {
         composer(s, &chrome.placeholder, look)
     })
@@ -157,7 +157,7 @@ pub fn header_with(
 
 /// The composer of a conversation that takes no words yet: its frame, with the reason where
 /// the words would go.
-fn composer_off(reason: &str, look: Look) -> El {
+fn composer_off(reason: &str, ty: &t::MessageType, look: Look) -> El {
     let c = look.c;
     let frame = row()
         .key("composer-box")
@@ -174,7 +174,7 @@ fn composer_off(reason: &str, look: Look) -> El {
         .child(
             text(reason)
                 .key("composer")
-                .font(t::TEXT_MESSAGE)
+                .font(ty.message)
                 .color(c.ink_muted)
                 .truncate()
                 .grow(1.0)
@@ -297,15 +297,17 @@ fn composer(s: &State, placeholder: &str, look: Look) -> El {
     let c = look.c;
     let accent = c.accent;
     let can_send = !s.draft.text.trim().is_empty();
-    let input = text_input(&s.draft, t::TEXT_MESSAGE)
+    // The words at the size chosen for messages, as they will be drawn once sent.
+    let ty = timeline::type_of(s);
+    let input = text_input(&s.draft, ty.message)
         .key("composer")
         .label(placeholder)
         .placeholder(placeholder, c.ink_muted)
         .color(c.ink_field)
         .caret(accent, c.accent_soft)
         .w_full()
-        .min_h(t::SPACE_24)
-        .max_h(t::SPACE_24 * 8.0)
+        .min_h(ty.message.line_height)
+        .max_h(ty.message.line_height * 8.0)
         .on_edit(|s: &mut State| &mut s.draft)
         .on_input_key(|s: &mut State, key, tx| s.composer_key(key) || s.composer_up(key, tx))
         .on_input_change(|s: &mut State, _| s.follow_mention())

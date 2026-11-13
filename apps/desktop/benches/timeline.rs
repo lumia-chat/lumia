@@ -1,5 +1,6 @@
 //! Windowless frame costs of the message list over 1,000 varied messages, at 120 Hz:
-//! `cargo bench --features profile --bench timeline [-- WORKLOAD]`.
+//! `cargo bench --features profile --bench timeline [-- WORKLOAD] [--minimal]`, the last
+//! drawing the rows as the Minimal preset does (one line) instead of the default's blocks.
 //!
 //! Each workload drives a `Runtime` the way a window would and reads this thread's CPU clock
 //! around every frame: input dispatch, the view, commit, layout, text and draw-list building.
@@ -69,8 +70,16 @@ fn body(i: usize) -> String {
     }
 }
 
+/// Whether the run draws one-line rows (`--minimal`).
+fn minimal() -> bool {
+    std::env::args().any(|a| a == "--minimal")
+}
+
 fn state() -> State {
     let mut state = common::signed_in();
+    if minimal() {
+        state.settings.apply(lumia_shell::settings::Preset::Minimal);
+    }
     let now = chrono::Utc::now().timestamp_micros();
     let minute = 60_000_000;
     state.session.entries = (0..MESSAGES)
@@ -197,8 +206,15 @@ fn main() {
         let start = rune::thread_cpu_ms();
         rt.frame(0.0);
         let first = rune::thread_cpu_ms() - start;
+        // How many rows a screen holds, which is most of what a frame that scrolls costs:
+        // a layout of shorter rows mounts more of them for the same distance.
+        let rows = rt
+            .elements()
+            .iter()
+            .filter(|e| e.key.as_deref().is_some_and(|k| k.starts_with("message-m")))
+            .count();
         println!(
-            "open       building the state {made:.1} ms, the first frame {first:.1} ms (fonts load in it)"
+            "open       building the state {made:.1} ms, the first frame {first:.1} ms (fonts load in it), {rows} rows mounted"
         );
     }
     // What mounting a row adds over the kit's cached build: the source parsed and its

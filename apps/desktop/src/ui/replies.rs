@@ -22,6 +22,7 @@ use super::components::{
 use crate::app::State;
 use crate::app::replies::Choice;
 use crate::session::{Entry, display_name};
+use crate::settings::Layout;
 use crate::tokens::{self as t, icons};
 
 /// The connector of a reply's line of reference: from under the reply's avatar up and over
@@ -45,8 +46,13 @@ fn connector(look: Look) -> El {
 /// from under the avatar, the quoted person's small avatar and name ("@" and the name when
 /// it is this account), and the quoted text on one line. Pressing it finds the original; a
 /// deleted original says so instead. `indent` puts the connector under the reply's avatar.
-pub fn reference_line(s: &State, quote: &QuoteSummary, indent: f32, look: Look) -> El {
-    let c = look.c;
+pub fn reference_line(
+    s: &State,
+    quote: &QuoteSummary,
+    indent: f32,
+    ty: &t::MessageType,
+    look: Look,
+) -> El {
     let line = row()
         .key("quote")
         .w_full()
@@ -54,9 +60,49 @@ pub fn reference_line(s: &State, quote: &QuoteSummary, indent: f32, look: Look) 
         .gap(t::SPACE_6)
         .items_center()
         .child(connector(look));
+    reference(s, quote, line, true, ty, look)
+}
+
+/// A reply's line of reference in a one-line row, over the message at its text's start:
+/// `↳ Priya: first words…`, without the connector or the avatars. It is `height` tall,
+/// which the row's time and name keep clear of above them.
+pub fn reference_short(
+    s: &State,
+    quote: &QuoteSummary,
+    height: f32,
+    ty: &t::MessageType,
+    look: Look,
+) -> El {
+    let line = row()
+        .key("quote")
+        .w_full()
+        .h(height)
+        .gap(t::SPACE_4)
+        .items_center()
+        .child(
+            text("↳")
+                .font(ty.reference)
+                .color(look.c.ink_muted)
+                .a11y_hidden(),
+        );
+    reference(s, quote, line, false, ty, look)
+}
+
+/// What both lines of reference hold after their start: who is quoted, with their avatar
+/// when `avatar`, and the quoted words, or that the original was deleted.
+fn reference(
+    s: &State,
+    quote: &QuoteSummary,
+    line: El,
+    avatar: bool,
+    ty: &t::MessageType,
+    look: Look,
+) -> El {
+    let c = look.c;
     if quote.original_deleted {
-        return line
-            .child(
+        let mut line = line;
+        if avatar {
+            line = line.child(
                 el().size(t::REFERENCE_AVATAR, t::REFERENCE_AVATAR)
                     .radius(t::REFERENCE_AVATAR / 2.0)
                     .fill(c.chip)
@@ -68,38 +114,42 @@ pub fn reference_line(s: &State, quote: &QuoteSummary, indent: f32, look: Look) 
                             .radius(1.0)
                             .fill(c.ink_muted),
                     ),
-            )
-            .child(
-                rune::rich(
-                    "Original message was deleted",
-                    vec![rune::Span::new(0, "Original message was deleted".len()).italic()],
-                )
-                .font(t::TEXT_REFERENCE)
-                .color(c.ink_muted),
             );
+        }
+        return line.child(
+            rune::rich(
+                "Original message was deleted",
+                vec![rune::Span::new(0, "Original message was deleted".len()).italic()],
+            )
+            .font(ty.reference)
+            .color(c.ink_muted),
+        );
     }
     let mine = quote.author_account_id == s.session.me();
     let name =
         (!quote.author_account_id.is_empty()).then(|| s.session.name_of(&quote.author_account_id));
     let mut line = line;
     if let Some(name) = &name {
-        line = line
-            .child(el().a11y_hidden().child(avatar_of(
+        if avatar {
+            line = line.child(el().a11y_hidden().child(avatar_of(
                 s,
                 name,
                 &quote.author_account_id,
                 t::REFERENCE_AVATAR,
                 look,
-            )))
-            .child(
-                text(if mine {
-                    format!("@{name}")
-                } else {
-                    name.clone()
-                })
-                .font(t::TEXT_LINK_SM)
-                .color(if mine { c.accent_ink } else { c.ink_body }),
-            );
+            )));
+        }
+        let shown = match (mine, avatar) {
+            (true, true) => format!("@{name}"),
+            (true, false) => format!("@{name}:"),
+            (false, true) => name.clone(),
+            (false, false) => format!("{name}:"),
+        };
+        line = line.child(text(shown).font(ty.link_sm).color(if mine {
+            c.accent_ink
+        } else {
+            c.ink_body
+        }));
     }
     let id = quote.message_id.clone();
     let label = match (&name, mine) {
@@ -116,7 +166,7 @@ pub fn reference_line(s: &State, quote: &QuoteSummary, indent: f32, look: Look) 
         .on_press(move |s: &mut State| s.jump_to(&id))
         .child(
             text(quote.text.replace('\n', " "))
-                .font(t::TEXT_REFERENCE)
+                .font(ty.reference)
                 .color(c.ink_muted)
                 .group_color(c.ink_body)
                 .truncate()
@@ -161,7 +211,7 @@ fn reacted_words(s: &State, reaction: &ReactionSummary) -> String {
 
 /// A message's reactions as chips, the one this account has in the accent, with the way to
 /// add another at the end.
-pub fn reactions(s: &State, entry: &Entry, look: Look) -> El {
+pub fn reactions(s: &State, entry: &Entry, ty: &t::MessageType, look: Look) -> El {
     let c = look.c;
     let mut chips = row()
         .key("reactions")
@@ -174,30 +224,31 @@ pub fn reactions(s: &State, entry: &Entry, look: Look) -> El {
     for (n, reaction) in entry.reactions.iter().enumerate() {
         let (id, emoji) = (entry.id.clone(), reaction.reaction.clone());
         let words = reacted_words(s, reaction);
-        let mut chip =
-            row()
-                .key(format!("reaction-{n}"))
-                .h(t::SPACE_28)
-                .px(t::SPACE_10)
-                .gap(t::SPACE_6)
-                .items_center()
-                .radius(t::RADIUS_PILL)
-                .role("button")
-                .label(format!("{words}, {}", reaction.count))
-                .help(words)
-                .checked(reaction.me)
-                .cursor(Cursor::Pointer)
-                .focusable(true)
-                .focus_ring(2.0, 0.0, c.focus)
-                .on_press(move |s: &mut State| s.react_with(&id, &emoji))
-                .child(text(reaction.reaction.clone()).font(t::TEXT_COMPACT))
-                .child(text(reaction.count.to_string()).font(t::TEXT_LABEL).color(
-                    if reaction.me {
+        let mut chip = row()
+            .key(format!("reaction-{n}"))
+            .min_h(t::SPACE_28)
+            .px(t::SPACE_10)
+            .gap(t::SPACE_6)
+            .items_center()
+            .radius(t::RADIUS_PILL)
+            .role("button")
+            .label(format!("{words}, {}", reaction.count))
+            .help(words)
+            .checked(reaction.me)
+            .cursor(Cursor::Pointer)
+            .focusable(true)
+            .focus_ring(2.0, 0.0, c.focus)
+            .on_press(move |s: &mut State| s.react_with(&id, &emoji))
+            .child(text(reaction.reaction.clone()).font(ty.reaction))
+            .child(
+                text(reaction.count.to_string())
+                    .font(ty.reaction_count)
+                    .color(if reaction.me {
                         c.accent_ink
                     } else {
                         c.ink_body
-                    },
-                ));
+                    }),
+            );
         chip = if reaction.me {
             chip.fill(c.accent_soft).border(1.0, c.reaction_on_border)
         } else {
@@ -296,13 +347,19 @@ pub fn toolbar(s: &State, entry_id: &str, look: Look) -> El {
         .child(more);
     // As the board hangs it, its top 14 over the row's top edge (its end at the row's, where
     // the board's is 16 in: an anchored overlay takes no margin). The pointer moving onto it
-    // stays on the list, so the row stays the one under it.
+    // stays on the list, so the row stays the one under it. A one-line row is not as tall as
+    // the bar, which hung so would cover the end of its words: there it hangs over the row
+    // above, overlapping this one by a little, so the pointer still reaches it directly.
     let tall = t::TOOLBAR_BUTTON + 2.0 * 3.0 + 2.0;
+    let overlap = match s.settings.layout {
+        Layout::Grouped => tall - t::SPACE_14,
+        Layout::OneLine => t::SPACE_4,
+    };
     shadowed(bar, look.shadows.floating).anchored_fit(
         super::timeline::frame_key(entry_id),
         Side::Top,
         Align::End,
-        t::SPACE_14 - tall,
+        -overlap,
     )
 }
 

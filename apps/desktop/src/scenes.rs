@@ -14,6 +14,7 @@ mod replies;
 use crate::app::{HomeView, Route, State};
 use crate::session::servers::ServerUpdate;
 use crate::session::{Connection, Update};
+use crate::settings::{FontSize, Preset};
 
 /// A scene: its name for `--scene`, and what it does to the state.
 pub type Scene = (&'static str, fn(&mut State));
@@ -248,16 +249,39 @@ pub const SCENES: &[Scene] = &[
     ("edit-message", replies::edit_message),
     ("delete-message", replies::delete_message),
     ("mentions", replies::mentions),
-    // The same conversation at the other density. Set on the state, not through
-    // `set_density`: a scene does not write the person's settings.
+    // The same conversation with the other presets, and at the largest font size. Set on
+    // the state, not through `apply_preset`: a scene does not write the person's settings.
     ("blocks-compact", |s| {
         blocks(s);
-        s.settings.density = crate::settings::Density::Compact;
-        s.session.revision += 1;
+        s.settings.apply(Preset::Compact);
+    }),
+    ("blocks-minimal", |s| {
+        blocks(s);
+        s.settings.apply(Preset::Minimal);
+    }),
+    ("blocks-font-20", |s| {
+        blocks(s);
+        s.settings.font_size = FontSize::ALL[FontSize::ALL.len() - 1];
+    }),
+    ("blocks-avatars-hidden", |s| {
+        blocks(s);
+        s.settings.avatars = crate::settings::Avatars::Hidden;
+    }),
+    // Replies, reactions, a mention and the "New" line in one line.
+    ("replies-minimal", |s| {
+        replies::replies(s);
+        s.settings.apply(Preset::Minimal);
     }),
     ("preferences", |s| {
         servers_sample(s);
         s.go_home(HomeView::Preferences);
+    }),
+    // Minimal with one change, which no preset matches.
+    ("preferences-custom", |s| {
+        servers_sample(s);
+        s.go_home(HomeView::Preferences);
+        s.settings.apply(Preset::Minimal);
+        s.settings.spacing = crate::settings::Spacing::Cozy;
     }),
     ("sign-in-browser", sign_in_browser),
     ("sign-in-waiting", |s| {
@@ -903,6 +927,18 @@ pub fn blocks(state: &mut State) {
             edited: false,
         })
         .collect();
+    // A message changed after it was sent, and someone joining between two blocks.
+    state.session.entries[4].edited = true;
+    let joined = Entry {
+        id: "k-joined".into(),
+        author_account_id: "cy".into(),
+        body: String::new(),
+        at_micros: minutes_ago(20),
+        notice: "joined".into(),
+        edited: false,
+        ..state.session.entries[4].clone()
+    };
+    state.session.entries.insert(5, joined);
     state.session.pending = vec![Pending {
         id: "k-pending".into(),
         channel_id: "general".into(),

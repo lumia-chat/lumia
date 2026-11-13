@@ -22,6 +22,11 @@ pub(crate) fn set_badge(_label: Option<&str>) -> bool {
     false
 }
 
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+pub(crate) fn clock_24_hour() -> Option<bool> {
+    None
+}
+
 pub(crate) struct Updater(Infallible);
 
 impl Updater {

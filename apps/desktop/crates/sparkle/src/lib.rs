@@ -32,10 +32,11 @@
 //! Off macOS the same functions exist and [`Updater::start`] always answers
 //! [`Unavailable::Unsupported`].
 //!
-//! Three functions here are not Sparkle's: [`set_appearance`] and [`set_scroll_bars`], what
-//! the shell's Preferences ask of AppKit, and [`set_badge`], the count on the Dock icon. They
-//! are here because this is the crate that may write the message sends, not because they
-//! have anything to do with updates.
+//! Four functions here are not Sparkle's: [`set_appearance`] and [`set_scroll_bars`], what
+//! the shell's Preferences ask of AppKit, [`set_badge`], the count on the Dock icon, and
+//! [`clock_24_hour`], whether the system shows times on a 24-hour clock. They are here
+//! because this is the crate that may write the message sends, not because they have
+//! anything to do with updates.
 
 use std::fmt;
 use std::marker::PhantomData;
@@ -99,6 +100,12 @@ pub fn set_scroll_bars(scroll_bars: ScrollBars) -> bool {
 /// not macOS, not the main thread, or a process with no application (a test).
 pub fn set_badge(label: Option<&str>) -> bool {
     system::set_badge(label)
+}
+
+/// Whether the system shows times on a 24-hour clock, as its region and the "24-hour time"
+/// switch in System Settings say together. `None` when it cannot say: not macOS.
+pub fn clock_24_hour() -> Option<bool> {
+    system::clock_24_hour()
 }
 
 /// Why there is no updater. The first three are how most launches go and are nothing to
@@ -235,6 +242,13 @@ mod tests {
         assert!(!set_appearance(Appearance::Dark));
         assert!(!set_scroll_bars(ScrollBars::Always));
         assert!(!set_badge(Some("3")));
+    }
+
+    /// The Mac always has an answer, from any thread, whichever this machine's clock is;
+    /// the other platforms never do.
+    #[test]
+    fn the_clock_is_read_on_a_mac_alone() {
+        assert_eq!(clock_24_hour().is_some(), cfg!(target_os = "macos"));
     }
 
     #[test]

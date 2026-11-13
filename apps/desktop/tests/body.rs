@@ -548,6 +548,53 @@ fn command_a_takes_the_conversation_and_command_c_copies_it_as_a_transcript() {
     );
 }
 
+/// One line draws each message's time and name before its words, and a copy still reads
+/// as grouped: a block's author and time once, on a line over its first body.
+#[test]
+fn one_line_copies_as_grouped_does() {
+    let mut state = signed_in();
+    let now = chrono::Utc::now().timestamp_micros();
+    state.session.entries = vec![
+        message("m0", "grace", "First of the block.", now - 3 * MINUTE),
+        message("m1", "grace", "- a list\n- of two", now - 2 * MINUTE),
+        message("m2", "me", "An answer.", now - MINUTE),
+        message("m3", "grace", "Gone.", now),
+    ];
+    state.session.entries[3].deleted = true;
+    state.settings.apply(lumia_shell::settings::Preset::Minimal);
+    state.session.revision += 1;
+    let mut rt = runtime(state);
+    // The time and the name are drawn on each line, the block's second included.
+    assert!(rt.find("message-m1/time").is_some());
+    let answer = head(&rt, 2).replace("Grace Hopper", "Ada Lovelace");
+    let transcript = format!(
+        "{}\nFirst of the block.\n\n- a list\n- of two\n\n{answer}\nAn answer.\n\n{}\n(deleted)",
+        head(&rt, 0),
+        head(&rt, 3).replace("Ada Lovelace", "Grace Hopper"),
+    );
+    let g = glyphs(&rt, "message-m0/body/b0");
+    click(&mut rt, before(g[2]));
+    command(&mut rt, 'a');
+    assert_copied(&rt.selected_text().unwrap(), &transcript);
+    // A drag within a block takes no head; one into the next block takes that block's.
+    let first = glyphs(&rt, "message-m0/body/b0");
+    let item = glyphs(&rt, "message-m1/body/b0/i1/b0");
+    let answered = glyphs(&rt, "message-m2/body/b0");
+    let (from, to) = (
+        before(first[5]),
+        after(glyphs(&rt, "message-m1/body/b0/i0/b0")[2]),
+    );
+    assert_copied(&drag(&mut rt, from, to), "of the block.\n\n- a li");
+    let (from, to) = (before(item[0]), after(answered[1]));
+    assert_copied(
+        &drag(&mut rt, from, to),
+        &format!("- of two\n\n{answer}\nAn"),
+    );
+    // A selection inside one body takes neither.
+    let (from, to) = (before(answered[0]), after(answered[1]));
+    assert_copied(&drag(&mut rt, from, to), "An");
+}
+
 #[test]
 fn a_selection_reaches_rows_scrolled_out_of_the_mounted_window() {
     let bodies: Vec<String> = (0..400).map(|i| format!("Message number {i}.")).collect();

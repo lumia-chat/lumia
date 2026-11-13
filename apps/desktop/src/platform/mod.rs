@@ -74,6 +74,8 @@ static HANDLE: OnceLock<AppHandle<State>> = OnceLock::new();
 /// is no frame to remember.
 static WINDOWED: AtomicBool = AtomicBool::new(false);
 static FRAMED: AtomicBool = AtomicBool::new(false);
+/// Whether the system's clock has been read since launch (`follow_clock`).
+static CLOCK_READ: AtomicBool = AtomicBool::new(false);
 /// What decides the menu bar's items: where the app stands (`menu::standing`), and what
 /// the updater says when there is one.
 type MenuFor = ((bool, bool), Option<menu::Updates>);
@@ -222,6 +224,20 @@ pub fn open_url(state: &mut State, url: &str, _tx: &mut Tx) {
 /// `App::on_focus`: the window gained or lost the keyboard focus.
 pub fn focus(state: &mut State, focused: bool, _tx: &mut Tx) {
     state.window_focused(focused);
+    // Read again each time the window comes in front: System Settings, where the clock is
+    // changed, was in front instead.
+    if focused && WINDOWED.load(Ordering::Relaxed) {
+        follow_clock(state);
+    }
+}
+
+/// Has the timeline's times follow the system's clock, 12 or 24 hours. Only a real window:
+/// a test or a headless picture keeps the 12-hour clock whatever this machine's is.
+fn follow_clock(state: &mut State) {
+    CLOCK_READ.store(true, Ordering::Relaxed);
+    if let Some(clock_24) = lumia_sparkle::clock_24_hour() {
+        state.set_clock_24(clock_24);
+    }
 }
 
 /// `AppSpec::poll`: the state's own poll, then what it owes the system.
@@ -246,6 +262,10 @@ pub fn settle(state: &mut State, tx: &mut Tx) -> bool {
     if WINDOWED.load(Ordering::Relaxed) {
         system::follow(state);
         badge(state);
+        if !CLOCK_READ.load(Ordering::Relaxed) {
+            follow_clock(state);
+            changed = true;
+        }
     }
     sync_menu(state);
     updates::follow(tx);

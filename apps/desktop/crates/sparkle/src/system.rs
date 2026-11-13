@@ -13,9 +13,15 @@
 //!   system again; then the notification AppKit posts when that setting changes, which
 //!   is what makes the toolkit read it again.
 //!
+//! - **The clock.** Whether times read on 24 hours: Foundation's own answer for the
+//!   person's locale, which carries System Settings' "24-hour time" switch as well as the
+//!   region (`+[NSDateFormatter dateFormatFromTemplate:options:locale:]` with the template
+//!   `j`, "the hour as this locale writes it", gives `H` or `k` for a 24-hour clock).
+//!
 //! Every `unsafe` block is one message send or one call, on the main thread
 //! (`MainThreadMarker`, taken at the top of each function), to a receiver the runtime or
-//! Foundation just handed over.
+//! Foundation just handed over. The clock's are the exception for the thread: both are
+//! Foundation class methods that are safe from any thread.
 
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject};
@@ -122,4 +128,23 @@ pub(crate) fn set_badge(label: Option<&str>) -> bool {
     // badge away) and returns nothing. Main thread, checked above.
     let _: () = unsafe { msg_send![&*tile, setBadgeLabel: label.as_deref()] };
     true
+}
+
+pub(crate) fn clock_24_hour() -> Option<bool> {
+    let formatters = AnyClass::get(c"NSDateFormatter")?;
+    let locales = AnyClass::get(c"NSLocale")?;
+    // SAFETY: `+[NSLocale currentLocale]` takes nothing and returns the person's locale,
+    // with the overrides System Settings makes to it. A Foundation class method, safe from
+    // any thread.
+    let locale: Option<Retained<AnyObject>> = unsafe { msg_send![locales, currentLocale] };
+    let locale = locale?;
+    let template = ns_string!("j");
+    // SAFETY: `+[NSDateFormatter dateFormatFromTemplate:options:locale:]` takes an
+    // `NSString` template, an `NSUInteger` that must be 0 and a nullable `NSLocale` (the one
+    // just returned), and returns an `NSString` or nil, which `Option<Retained<_>>` reads. A
+    // Foundation class method, safe from any thread.
+    let format: Option<Retained<NSString>> = unsafe {
+        msg_send![formatters, dateFormatFromTemplate: template, options: 0usize, locale: &*locale]
+    };
+    Some(format?.to_string().contains(['H', 'k']))
 }

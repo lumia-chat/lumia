@@ -208,6 +208,77 @@ pub fn initials(size: f32) -> TextStyle {
     }
 }
 
+/// Rune's line height for a style that names none, as a multiple of its size.
+const AUTO_LINE: f32 = 1.25;
+
+/// A style's line height in points, whether it names one or takes Rune's.
+pub const fn line_height(style: TextStyle) -> f32 {
+    if style.line_height > 0.0 {
+        style.line_height
+    } else {
+        style.size * AUTO_LINE
+    }
+}
+
+/// `style` at `scale` times its size, its line height and its tracking with it.
+const fn scaled(style: TextStyle, scale: f32) -> TextStyle {
+    TextStyle {
+        size: style.size * scale,
+        line_height: line_height(style) * scale,
+        tracking: style.tracking * scale,
+        ..style
+    }
+}
+
+/// The texts of a message's row, and the composer's, at a message size (Preferences' Font
+/// size): each of the styles the row draws at the design system's 15, scaled by the size over
+/// 15, its line height with it. Avatars and the room around texts are not scaled.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MessageType {
+    /// The message's own text, and the composer's.
+    pub message: TextStyle,
+    pub author: TextStyle,
+    /// Times, "(edited)", a notice, why something was refused.
+    pub meta: TextStyle,
+    /// A day's divider, and the "New" line at the author's weight.
+    pub section: TextStyle,
+    pub section_strong: TextStyle,
+    /// A reply's line of reference: the quoted words, and the quoted person's name (or a
+    /// pending send's "Dismiss", the same small link).
+    pub reference: TextStyle,
+    pub link_sm: TextStyle,
+    /// A reaction's emoji, and its count.
+    pub reaction: TextStyle,
+    pub reaction_count: TextStyle,
+    /// A code block, and inline code's size.
+    pub code: TextStyle,
+    pub code_inline: f32,
+}
+
+impl MessageType {
+    /// The styles at a message size of `size` points.
+    pub const fn at(size: f32) -> Self {
+        let k = size / TEXT_MESSAGE.size;
+        Self {
+            message: scaled(TEXT_MESSAGE, k),
+            author: scaled(TEXT_AUTHOR, k),
+            meta: scaled(TEXT_META, k),
+            section: scaled(TEXT_SECTION, k),
+            section_strong: scaled(TEXT_SECTION_STRONG, k),
+            reference: scaled(TEXT_REFERENCE, k),
+            link_sm: scaled(TEXT_LINK_SM, k),
+            reaction: scaled(TEXT_COMPACT, k),
+            reaction_count: scaled(TEXT_LABEL, k),
+            code: scaled(TEXT_CODE, k),
+            code_inline: TEXT_MESSAGE.size * k * CODE_SCALE,
+        }
+    }
+}
+
+/// The styles at the design system's message size, where the font size is not a setting
+/// (the Mentions page).
+pub const MESSAGE_TYPE: MessageType = MessageType::at(TEXT_MESSAGE.size);
+
 // What a message body (`ui::body`) needs that the design system does not name yet: it has no
 // code style and no syntax palette. Derived here so the view holds no literal.
 

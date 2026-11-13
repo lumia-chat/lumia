@@ -57,7 +57,8 @@ pub enum HomeView {
     NewMessage,
     Devices,
     Profile,
-    /// How Lumia looks on this computer (`settings`: appearance, density, scroll bars).
+    /// How Lumia looks on this computer (`settings`: appearance, how messages are drawn,
+    /// scroll bars).
     Preferences,
     AddServer,
     /// The messages in every server that notify this account (architecture 6.6).
@@ -137,6 +138,10 @@ pub struct State {
     pub aside_open: bool,
     /// Quote replies, reactions and mentions (`replies`).
     pub replies: replies::Replies,
+    /// Whether the system shows times on a 24-hour clock, which the timeline's times
+    /// follow. A real launch reads it from the system whenever the window comes in front
+    /// (`platform`); a test and a headless picture keep the 12-hour clock.
+    pub clock_24: bool,
 }
 
 impl State {
@@ -174,6 +179,7 @@ impl State {
             window_width: None,
             aside_open: false,
             replies: replies::Replies::default(),
+            clock_24: false,
         }
     }
 
@@ -314,11 +320,42 @@ impl State {
         }
     }
 
-    pub fn set_density(&mut self, density: settings::Density) {
-        if self.settings.density != density {
-            self.settings.density = density;
+    /// Writes a preset's values over the message settings (the font size stays).
+    pub fn apply_preset(&mut self, preset: settings::Preset) {
+        self.change_display(|settings| settings.apply(preset));
+    }
+
+    pub fn set_layout(&mut self, layout: settings::Layout) {
+        self.change_display(|settings| settings.layout = layout);
+    }
+
+    pub fn set_spacing(&mut self, spacing: settings::Spacing) {
+        self.change_display(|settings| settings.spacing = spacing);
+    }
+
+    pub fn set_avatars(&mut self, avatars: settings::Avatars) {
+        self.change_display(|settings| settings.avatars = avatars);
+    }
+
+    pub fn set_font_size(&mut self, font_size: settings::FontSize) {
+        self.change_display(|settings| settings.font_size = font_size);
+    }
+
+    /// Changes how messages are drawn and keeps it, when `change` changes anything.
+    fn change_display(&mut self, change: impl FnOnce(&mut Settings)) {
+        let before = (self.settings.display(), self.settings.font_size);
+        change(&mut self.settings);
+        if (self.settings.display(), self.settings.font_size) != before {
             self.settings.save(&self.data_dir);
-            // The list keeps the rows it has built: these are of another size now.
+            // The list keeps the rows it has built: these are drawn otherwise now.
+            self.session.revision += 1;
+        }
+    }
+
+    /// Follows the system's clock, 12 or 24 hours.
+    pub fn set_clock_24(&mut self, clock_24: bool) {
+        if self.clock_24 != clock_24 {
+            self.clock_24 = clock_24;
             self.session.revision += 1;
         }
     }
