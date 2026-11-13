@@ -64,7 +64,9 @@ b="$work/b"
 "$cli" --data-dir "$b" account create-by-identity --handle "bo$stamp" >/dev/null
 "$cli" --data-dir "$b" join "$invite" >/dev/null
 "$cli" --data-dir "$b" send "$channel" "Hello across instances $stamp" --mention "$me" >/dev/null
-"$cli" --data-dir "$a" channels "$server" | grep -q "general  head=1" || { echo "FAIL: the message did not land on the community"; exit 1; }
+# Two events: the member's arrival in the default channel ("joined",
+# architecture 6.8), then the message.
+"$cli" --data-dir "$a" channels "$server" | grep -q "general  head=2" || { echo "FAIL: the message did not land on the community"; exit 1; }
 echo "a member joined through an invite and posted; the community has the message"
 
 # Two devices of one identity each add a device at a different instance:
