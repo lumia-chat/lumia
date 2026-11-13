@@ -545,12 +545,8 @@ class LumiaSession(
      */
     val editRefusals = mutableStateMapOf<String, String>()
 
-    /**
-     * The edit sent last and not yet back: a refusal the gateway sends while
-     * it waits is that edit's. The core's `editMessage` answers no command
-     * id to match the refusal by, so this is the nearest the phone can say.
-     */
-    private var editWaiting: Pair<String, String>? = null
+    /** Edits sent, by the command id `editMessage` answers, which a refusal names: the message each was for. */
+    private val editsSent = mutableMapOf<String, String>()
 
     /**
      * Edits one of this account's messages of a server's channel, with the
@@ -560,13 +556,11 @@ class LumiaSession(
      */
     fun editMessage(channelId: String, messageId: String, body: String) {
         editRefusals.remove(messageId)
-        editWaiting = channelId to messageId
         scope.launch {
             try {
                 val mentions = mentionsIn(channelId, body)
-                client.call { editMessage(channelId, messageId, body, mentions) }
+                editsSent[client.call { editMessage(channelId, messageId, body, mentions) }] = messageId
             } catch (e: Exception) {
-                if (editWaiting?.second == messageId) editWaiting = null
                 editRefusals[messageId] = notSaved(e.lumiaMessage)
             }
         }
@@ -879,8 +873,6 @@ class LumiaSession(
                 watchPresence(watchingServerIds)
             }
             is ClientEvent.Applied -> {
-                // The edit waited for is back: its channel's edit (which names no message).
-                editWaiting?.let { (channel, _) -> if (channel == event.channelId && event.events.any { it.kind == "message_edited" }) editWaiting = null }
                 refreshMessages(event.channelId)
                 refreshReads()
                 // Someone joined, left, was added or removed: who the @ list marks has changed.
@@ -915,13 +907,8 @@ class LumiaSession(
             // permission, a quote of a message that is gone. The screen says it; an
             // edit's refusal, under its message.
             is ClientEvent.Error -> {
-                val edit = editWaiting
-                if (edit != null) {
-                    editWaiting = null
-                    editRefusals[edit.second] = notSaved(event.message)
-                } else {
-                    lastError = event.message
-                }
+                val edited = editsSent.remove(event.commandId)
+                if (edited != null) editRefusals[edited] = notSaved(event.message) else lastError = event.message
             }
             is ClientEvent.Acked, is ClientEvent.SubscriptionFailed, is ClientEvent.DmNote -> Unit
         }
