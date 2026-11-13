@@ -14,8 +14,8 @@ import kotlin.math.abs
 
 // Blocks
 
-/** Who wrote a message and when, in microseconds since the epoch. */
-data class Stamp(val author: String, val atMicros: Long)
+/** Who wrote a message and when, in microseconds since the epoch, and whether it quotes another (architecture 6.6). */
+data class Stamp(val author: String, val atMicros: Long, val quotes: Boolean = false)
 
 /** How long after a message another from the same person still goes in its block. */
 const val BLOCK_WITHIN_MICROS: Long = 5L * 60 * 1_000_000
@@ -50,9 +50,13 @@ data class BlockPlace(
     }
 }
 
-/** Each message's place in its block, for a conversation's messages oldest first. */
+/**
+ * Each message's place in its block, for a conversation's messages oldest
+ * first. A message that quotes another joins no block: it opens one of its
+ * own, under its name.
+ */
 fun blockPlaces(stamps: List<Stamp>, zone: ZoneId = ZoneId.systemDefault()): List<BlockPlace> {
-    val joined = stamps.indices.map { i -> i > 0 && joins(stamps[i - 1], stamps[i], zone) }
+    val joined = stamps.indices.map { i -> i > 0 && !stamps[i].quotes && joins(stamps[i - 1], stamps[i], zone) }
     return stamps.indices.map { i -> BlockPlace(opens = !joined[i], closes = i + 1 >= stamps.size || !joined[i + 1]) }
 }
 

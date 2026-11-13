@@ -32,6 +32,9 @@ import uniffi.lumia_ffi.RosterSummary
 import uniffi.lumia_ffi.SnapshotSummary
 import uniffi.lumia_ffi.ChannelSummary
 import uniffi.lumia_ffi.ChannelAddSummary
+import uniffi.lumia_ffi.MentionSummary
+import uniffi.lumia_ffi.QuoteSummary
+import uniffi.lumia_ffi.ReadStateSummary
 
 sealed class ConnectionState(val label: String) {
     data object Idle : ConnectionState("not connected")
@@ -46,6 +49,9 @@ val personalKinds = setOf("PERSONAL_DM", "PERSONAL_GROUP_DM")
 
 /** How soon after a gateway loop's end another end does not start the loop again: the longest the desktop shell waits between its attempts. */
 private const val RESTART_EVERY_MS = 30_000L
+
+/** How many of a channel's newest messages are read from the store at a time. */
+private const val MESSAGE_PAGE = 200u
 
 /** Where a sign-in through the system browser returns to, with `magic={token}` (architecture 6.3). */
 const val BROWSER_SIGN_IN_RETURN = "lumia://sign-in"
@@ -250,6 +256,7 @@ class LumiaSession(
         if (leaving || !signedIn) return
         snapshot = snap
         subscribeGained()
+        scope.launch { refreshReads() }
     }
 
     /**
@@ -332,6 +339,12 @@ class LumiaSession(
                 serverPresence.clear()
                 lastError = null
                 showTyping(Typing())
+                readStates = emptyMap()
+                badge = 0
+                marked.clear()
+                mentionLists.clear()
+                channelMemberIds.clear()
+                messageLimits.clear()
             },
         )
     }
@@ -406,6 +419,7 @@ class LumiaSession(
             if (leaving || !signedIn) return
             snapshot = snap
             hasIdentity = client.hasIdentity
+            refreshReads()
             refreshPeople(snap.servers.map { it.serverId })
             refreshDmChannels()
             if (events == null) {
@@ -437,11 +451,16 @@ class LumiaSession(
         if (leaving || !signedIn) return
         snapshot = snap
         subscribeGained()
+        refreshReads()
         refreshPeople(snap.servers.map { it.serverId })
     }
 
+    /** How many of a channel's newest messages are read from the store: a page, and more once a jump looks further back. */
+    private val messageLimits = mutableMapOf<String, UInt>()
+
     suspend fun refreshMessages(channelId: String) {
-        runCatching { client.call { messages(channelId, 200u) } }.getOrNull()?.let { messages[channelId] = it }
+        val limit = messageLimits[channelId] ?: MESSAGE_PAGE
+        runCatching { client.call { messages(channelId, limit) } }.getOrNull()?.let { messages[channelId] = it }
     }
 
     suspend fun refreshDmChannels() {
@@ -468,14 +487,181 @@ class LumiaSession(
 
     // Actions
 
-    suspend fun sendMessage(channelId: String, body: String) {
-        client.call { sendMessage(channelId, body) }
+    /**
+     * Sends a message to a server's channel or server DM, quoting [reply]
+     * or nothing, with the mentions its body makes of the server's members
+     * (and of everyone, for one who may), as the core finds them; a server
+     * DM mentions nobody, both being told of every message anyway. Answers
+     * who it mentioned that is not in the channel, so not notified, as far
+     * as who is in it is known (`loadChannelMembers`).
+     */
+    suspend fun sendMessageWith(channelId: String, body: String, reply: QuoteSummary?): List<String> {
+        val channel = channelOf(channelId)
+        var mentions = emptyList<MentionSummary>()
+        if (channel?.kind == TEXT) {
+            val everyone = snapshot?.servers?.any { it.serverId == channel.serverId && it.canMentionEveryone } == true
+            val members = serverMembers[channel.serverId] ?: emptyList()
+            mentions = client.call { findMentions(body, members, everyone) }
+        }
+        val outside = outsideOf(mentions, channelMemberIds[channelId], me)
+        client.call { sendMessageWith(channelId, body, mentions, reply) }
         refreshMessages(channelId)
+        return outside
     }
 
-    suspend fun dmSend(channelId: String, body: String) {
-        client.call { dmSend(channelId, body) }
+    /** Sends to a personal conversation, quoting [quote] or nothing (inside the encryption). */
+    suspend fun dmSendWith(channelId: String, body: String, quote: QuoteSummary?) {
+        client.call { dmSendWith(channelId, body, quote) }
         refreshDmLog(channelId)
+    }
+
+    // Reactions (architecture 6.6)
+
+    /**
+     * Adds this account's reaction to a message of a server's channel, or
+     * takes it away when it has it already. Sent through the gateway; the
+     * change comes back as the channel's event, and a refusal (not one
+     * emoji, the message gone) as an error the screen shows.
+     */
+    fun react(channelId: String, messageId: String, emoji: String) {
+        val remove = removes(messages[channelId]?.firstOrNull { it.messageId == messageId }?.reactions ?: emptyList(), emoji)
+        scope.launch {
+            try { client.call { react(channelId, messageId, emoji, remove) } } catch (e: Exception) { lastError = e.lumiaMessage }
+        }
+    }
+
+    /** The same in a personal conversation, inside its encryption. */
+    fun dmReact(channelId: String, messageId: String, emoji: String) {
+        val remove = removes(dmLogs[channelId]?.messages?.firstOrNull { it.messageId == messageId }?.reactions ?: emptyList(), emoji)
+        scope.launch {
+            try {
+                client.call { dmReact(channelId, messageId, emoji, remove) }
+                refreshDmLog(channelId)
+            } catch (e: Exception) {
+                lastError = e.lumiaMessage
+            }
+        }
+    }
+
+    /** The error a screen showed, gone. */
+    fun clearError() { lastError = null }
+
+    // Read state (architecture 6.6)
+
+    /** Where this account has read each conversation, by channel id: the core's live count. */
+    var readStates by mutableStateOf<Map<String, ReadStateSummary>>(emptyMap())
+        private set
+
+    /** Everything unread that is for this account: the app's badge. */
+    var badge by mutableStateOf(0)
+        private set
+
+    /**
+     * What the counts changing does beyond the screens: the delivered
+     * notifications of conversations now read go, and the rest carry the
+     * badge (`PushRegistrar.settle`). The store's to say, holding the context.
+     */
+    var readsChanged: ((Collection<ReadStateSummary>, Int) -> Unit)? = null
+
+    private val marked = mutableMapOf<String, Marked>()
+
+    /** Reads the counts again from the core: after a snapshot, every event applied, and every place this phone moves. */
+    suspend fun refreshReads() {
+        if (leaving || !signedIn) return
+        val states = runCatching { client.call { readStates() } }.getOrNull() ?: return
+        val now = states.associateBy { it.channelId }
+        val total = runCatching { client.call { badge() }.toInt() }.getOrDefault(badgeOf(states))
+        if (now == readStates && total == badge) return
+        readStates = now
+        badge = total
+        readsChanged?.invoke(states, total)
+    }
+
+    /** What is unread in a conversation, and how much of it is for this account. */
+    fun unread(channelId: String): Unread = unreadOf(readStates, channelId)
+
+    /**
+     * This account has read a conversation through [seq], its newest message
+     * on screen with the app in front. Nothing when that moves nothing, or
+     * when it was marked through there less than a second ago (`shouldMark`).
+     */
+    fun markRead(channelId: String, seq: ULong) {
+        val now = SystemClock.elapsedRealtime()
+        if (!shouldMark(readStates[channelId], seq, marked[channelId], now)) return
+        marked[channelId] = Marked(seq, now)
+        scope.launch {
+            try {
+                client.call { markRead(channelId, seq) }
+                refreshReads()
+            } catch (e: Exception) {
+                if (e.endsSession) sessionEnded()
+            }
+        }
+    }
+
+    /** A Mentions list as far as it has been read: the messages, whether the instance has older ones, and how the last read went. */
+    data class MentionsList(
+        val messages: List<MessageSummary> = emptyList(),
+        val more: Boolean = false,
+        val loading: Boolean = false,
+        val loaded: Boolean = false,
+        val error: String? = null,
+    )
+
+    /** The Mentions lists, by server id; `""` is every server's (Home's). */
+    val mentionLists = mutableStateMapOf<String, MentionsList>()
+
+    /** Reads the first page of a Mentions list, or ([more]) the next after what it holds. Null [serverId] is every server's. */
+    fun loadMentions(serverId: String?, more: Boolean) {
+        val key = serverId ?: ""
+        val list = mentionLists[key] ?: MentionsList()
+        if (list.loading || (more && !list.more)) return
+        mentionLists[key] = list.copy(loading = true)
+        val before = if (more) list.messages.lastOrNull()?.messageId else null
+        scope.launch {
+            try {
+                val page = client.call { mentions(serverId, before) }
+                val held = mentionLists[key] ?: MentionsList()
+                mentionLists[key] = MentionsList(if (more) held.messages + page.messages else page.messages, page.hasMore, loading = false, loaded = true)
+            } catch (e: Exception) {
+                mentionLists[key] = (mentionLists[key] ?: MentionsList()).copy(loading = false, loaded = true, error = e.lumiaMessage)
+            }
+        }
+    }
+
+    /**
+     * Finds a message of a channel for a jump (a quote's original, a mention
+     * opened from its page): true once it is among the messages held,
+     * reading further back in the store a page at a time, up to
+     * [SEEK_PAGES] pages, for one that is not.
+     */
+    suspend fun reveal(channelId: String, messageId: String): Boolean {
+        repeat(SEEK_PAGES + 1) { page ->
+            val held = messages[channelId]
+            if (held?.any { it.messageId == messageId } == true) return true
+            if (page == SEEK_PAGES) return false
+            val limit = messageLimits[channelId] ?: MESSAGE_PAGE
+            // The store has nothing older than what it gave.
+            if (held != null && held.size.toUInt() < limit) return false
+            messageLimits[channelId] = limit + MESSAGE_PAGE
+            refreshMessages(channelId)
+        }
+        return false
+    }
+
+    /** Who is in each channel whose members were asked for, by channel id: the @ list marks those not in it, and a send names them. */
+    val channelMemberIds = mutableStateMapOf<String, Set<String>>()
+
+    /** Asks who is in a channel, for its @ list and the bar after a send. */
+    suspend fun loadChannelMembers(channelId: String) {
+        runCatching { client.call { channelMembers(channelId) } }.getOrNull()?.let { channelMemberIds[channelId] = it.toSet() }
+    }
+
+    /** A person's name when one is known, else none: who reacted, named or "Someone". */
+    fun knownNameOf(accountId: String): String? {
+        if (accountId.isNotEmpty() && accountId == me) return selfName
+        val p = people[accountId] ?: profileOf(accountId) ?: return null
+        return chat.lumia.kit.nameOf(p).ifEmpty { null }
     }
 
     suspend fun dmRejoin(channelId: String) {
@@ -624,6 +810,9 @@ class LumiaSession(
             }
             is ClientEvent.Applied -> {
                 refreshMessages(event.channelId)
+                refreshReads()
+                // Someone joined, left, was added or removed: who the @ list marks has changed.
+                if (event.channelId in channelMemberIds && event.events.any { it.message?.notice?.isNotEmpty() == true }) loadChannelMembers(event.channelId)
                 // Whoever's message arrived has finished typing it. Written with the
                 // messages, nothing suspending between, so no frame shows one without the other.
                 var now = typing
@@ -637,7 +826,7 @@ class LumiaSession(
             is ClientEvent.Closed -> { connection = ConnectionState.Closed(event.reason); events = null }
             is ClientEvent.DmSubscribed -> { refreshDmChannels(); refreshDmLog(event.channelId) }
             is ClientEvent.DmReady -> { refreshDmChannels(); refreshDmLog(event.channelId) }
-            is ClientEvent.DmOperation -> refreshDmLog(event.channelId)
+            is ClientEvent.DmOperation -> { refreshDmLog(event.channelId); refreshReads() }
             is ClientEvent.DmDelivered -> for (id in dmLogs.keys.toList()) refreshDmLog(id)
             is ClientEvent.DmError -> lastError = event.message
             is ClientEvent.PresenceDiff -> {
@@ -650,7 +839,10 @@ class LumiaSession(
             is ClientEvent.Typing -> if (event.accountId != me) {
                 showTyping(typing.began(event.channelId, event.accountId, event.untilMicros))
             }
-            is ClientEvent.Acked, is ClientEvent.Error, is ClientEvent.SubscriptionFailed, is ClientEvent.DmNote -> Unit
+            // A command refused: a reaction that is not one emoji, @everyone without the
+            // permission, a quote of a message that is gone. The screen says it.
+            is ClientEvent.Error -> lastError = event.message
+            is ClientEvent.Acked, is ClientEvent.SubscriptionFailed, is ClientEvent.DmNote -> Unit
         }
     }
 

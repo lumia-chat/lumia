@@ -6,6 +6,7 @@
 package chat.lumia.push
 
 import chat.lumia.kit.PushRegistrar
+import chat.lumia.kit.pushBadge
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -31,8 +32,14 @@ class LumiaPushService : PushService() {
 
     override fun onMessage(message: PushMessage, instance: String) {
         val context = applicationContext
-        val host = runCatching { JSONObject(String(message.content)).optString("instance") }.getOrNull()
-        scope.launch { PushRegistrar.received(context, host) }
+        val notice = runCatching { JSONObject(String(message.content)) }.getOrNull()
+        val host = notice?.optString("instance")
+        // Every notice carries the account's badge; a read (`"kind": "read"`) carries only that, and shows nothing.
+        val badge = pushBadge(notice?.opt("badge"))
+        scope.launch {
+            if (notice?.optString("kind") == "read") PushRegistrar.readElsewhere(context, host, badge)
+            else PushRegistrar.received(context, host, badge)
+        }
     }
 
     override fun onRegistrationFailed(reason: FailedReason, instance: String) {

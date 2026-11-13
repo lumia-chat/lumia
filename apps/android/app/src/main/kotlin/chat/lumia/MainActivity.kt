@@ -80,6 +80,8 @@ class MainActivity : ComponentActivity() {
         }
         setContent {
             LaunchedEffect(Unit) {
+                // A read push reaches a process the app has not opened a session in: the stand-in goes first.
+                if (launched && dev["LUMIA_DEV_SCREEN"] == "readpush") readStandIn()
                 // Once for the store; an activity made again waits for it or finds it done.
                 store.reopen(dev)
                 if (launched && dev["LUMIA_DEV_SCREEN"] == "notify") notifyStandIn()
@@ -140,6 +142,19 @@ class MainActivity : ComponentActivity() {
         val content = PushRegistrar.received(applicationContext, null)
         val text = content?.let { "${it.title}\n${it.body}\n${it.channelId}\n${it.kind}\n" } ?: "none\n"
         File(store.dataDirectory, "notification.txt").writeText(text)
+    }
+
+    /**
+     * The stand-in for a read push (`kind=read`) reaching a process with no
+     * session open, as a cold FCM or UnifiedPush delivery does: the call the
+     * receivers make for one, before the store reopens anything, which shows
+     * nothing; the conversations whose notifications it took away are
+     * written to read.txt, a line each.
+     */
+    private suspend fun readStandIn() {
+        store.foregrounded = false
+        val gone = PushRegistrar.readElsewhere(applicationContext, null, null)
+        File(store.dataDirectory, "read.txt").writeText(gone.joinToString("") { "$it\n" }.ifEmpty { "none\n" })
     }
 }
 

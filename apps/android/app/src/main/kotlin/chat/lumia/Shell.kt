@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -33,6 +32,14 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import chat.lumia.kit.Unread
+import chat.lumia.kit.unreadIn
+import chat.lumia.kit.withUnread
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -169,6 +176,8 @@ fun Shell(store: AppStore, session: LumiaSession, devScreen: String?, devChannel
                 "serverdm" -> { place = Place.Server(first); if (dm != null) stack = listOf(Screen.Channel(dm.channelId)) }
                 "newdm" -> { place = Place.Server(first); stack = listOf(Screen.NewServerDm(first)) }
                 "yoursettings" -> { place = Place.Server(first); stack = listOf(Screen.YourSettings(first)) }
+                "mentions" -> { place = Place.Server(first); stack = listOf(Screen.Mentions(first)) }
+                "homementions" -> { place = Place.Home; stack = listOf(Screen.Mentions(null)) }
             }
         }
     }
@@ -213,9 +222,17 @@ fun Shell(store: AppStore, session: LumiaSession, devScreen: String?, devChannel
                 }
             }
         }
-        // A conversation's messages take the room Preferences chose for them.
-        is Screen.Conversation -> ConversationScreen(session, top.id, store.density, pop)
-        is Screen.Channel -> ChannelScreen(session, top.id, store.density, pop, push)
+        // A conversation's messages take the room Preferences chose for them. Each
+        // conversation is a screen of its own: what one holds (the draft, a quote
+        // being replied with) is not another's.
+        is Screen.Conversation -> key(top.id) { ConversationScreen(store, session, top.id, store.density, pop) }
+        is Screen.Channel -> key(top.id, top.at) { ChannelScreen(store, session, top.id, store.density, pop, push, top.at) }
+        // A mention opens its channel at it, in the Mentions page's place.
+        is Screen.Mentions -> MentionsScreen(session, top.serverId, pop) { channelId, messageId ->
+            val channel = session.channelOf(channelId)
+            if (channel != null && top.serverId == null) place = Place.Server(channel.serverId)
+            stack = stack.dropLast(1) + Screen.Channel(channelId, messageId)
+        }
         Screen.Requests -> RequestsScreen(session, pop, replace)
         Screen.Devices -> DevicesScreen(store, session, pop)
         Screen.Profile -> ProfileScreen(store, session, pop)
@@ -267,6 +284,11 @@ fun HomeScreen(store: AppStore, session: LumiaSession, push: (Screen) -> Unit) {
                     Tile("New", Icons.Filled.Edit, 0, Modifier.weight(1f)) { push(Screen.NewMessage) }
                 }
             }
+            // Every server's messages that notify this account (architecture 6.6): the badge less the personal conversations'.
+            item {
+                val personal = unreadIn(session.readStates, byHost.flatMap { it.second }.map { it.channelId }).mentions
+                Column(Modifier.padding(bottom = LumiaTokens.space8)) { MentionsRow((session.badge - personal).coerceAtLeast(0)) { push(Screen.Mentions(null)) } }
+            }
             if (!session.hasIdentity) {
                 item {
                     LumiaNotice(Icons.Filled.Shield, NoticeTone.ACCENT, action = "Link" to { store.route = Route.LINK }, text = "Personal messages are end-to-end encrypted. This phone has no device key yet; a device you already use approves it.")
@@ -299,8 +321,12 @@ fun ConversationRow(session: LumiaSession, channel: ChannelSummary, open: () -> 
         others.size > 1 -> "${session.nameOf(last.senderAccountId.ifEmpty { last.senderIdentityId })}: ${last.body}"
         else -> last.body
     }
+    // Unread: the last line in the strong ink, and the count (every message, in a DM) at the end.
+    val unread = session.unread(channel.channelId)
     Row(
-        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(LumiaTokens.radius12)).clickable(onClick = open).padding(LumiaTokens.space10),
+        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(LumiaTokens.radius12)).clickable(onClick = open)
+            .semantics(mergeDescendants = true) { contentDescription = withUnread("Conversation with $name", unread) }
+            .padding(LumiaTokens.space10),
         horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space12),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -310,8 +336,56 @@ fun ConversationRow(session: LumiaSession, channel: ChannelSummary, open: () -> 
                 Text(name, style = LumiaTokens.textAuthor.style, color = LumiaTokens.inkEmphasis.color, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                 if (last != null) Text(rowTimeOfMicros(last.sentAtMicros), style = LumiaTokens.textMeta.style, color = LumiaTokens.inkSecondary.color)
             }
-            Text(preview, style = LumiaTokens.textMember.style, color = LumiaTokens.inkSecondary.color, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Row(horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space8), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    preview,
+                    style = if (unread.unread > 0) LumiaTokens.textMember.style.copy(fontWeight = FontWeight(LumiaTokens.textSection.weight)) else LumiaTokens.textMember.style,
+                    color = if (unread.unread > 0) LumiaTokens.ink.color else LumiaTokens.inkSecondary.color,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
+                )
+                if (unread.mentions > 0) CountBadge(unread.mentions)
+            }
         }
+    }
+}
+
+/**
+ * A row of a sidebar: a channel, a server DM, Mentions. One with unread
+ * messages is in the strong ink and weight, and their count for this
+ * account at its end; [label] names it to a screen reader with that.
+ */
+@Composable
+fun NavRow(label: String, unread: Unread, open: () -> Unit, content: @Composable RowScope.(strong: Boolean) -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().height(LumiaTokens.controlHeight).clip(RoundedCornerShape(LumiaTokens.radius10)).clickable(onClick = open)
+            .semantics(mergeDescendants = true) { contentDescription = label }
+            .padding(horizontal = LumiaTokens.space10),
+        horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space8),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        content(unread.unread > 0)
+        if (unread.mentions > 0) CountBadge(unread.mentions)
+    }
+}
+
+/** A sidebar row's name: in the strong ink and weight while something in it is unread. */
+@Composable
+fun RowScope.NavName(name: String, strong: Boolean) {
+    Text(
+        name,
+        style = if (strong) LumiaTokens.textNav.style.copy(fontWeight = FontWeight(LumiaTokens.textSection.weight)) else LumiaTokens.textNav.style,
+        // The desktop's: the strong ink for unread, the quiet ink for the rest.
+        color = if (strong) LumiaTokens.ink.color else LumiaTokens.inkQuiet.color,
+        maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
+    )
+}
+
+/** The Mentions row at the top of a server's list and of Home's, with the count of those unread. */
+@Composable
+fun MentionsRow(mentions: Int, open: () -> Unit) {
+    NavRow(withUnread("Mentions", Unread(mentions, mentions)), Unread(0, mentions), open) {
+        Icon(Icons.Filled.AlternateEmail, contentDescription = null, tint = LumiaTokens.inkMuted.color, modifier = Modifier.size(LumiaTokens.space14))
+        NavName("Mentions", false)
     }
 }
 
@@ -375,6 +449,11 @@ fun ServerScreen(session: LumiaSession, server: ServerSummary, push: (Screen) ->
                 }
             }
             if (error.isNotEmpty()) item { LumiaErrorText(error) }
+            // The server's messages that notify this account (architecture 6.6), with how many are unread.
+            item {
+                val mentions = unreadIn(session.readStates, (channels + dms).map { it.channelId }).mentions
+                Column(Modifier.padding(bottom = LumiaTokens.space8)) { MentionsRow(mentions) { push(Screen.Mentions(server.serverId)) } }
+            }
             item {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.weight(1f)) { SectionTitle("Channels") }
@@ -394,16 +473,11 @@ fun ServerScreen(session: LumiaSession, server: ServerSummary, push: (Screen) ->
                 item { LumiaLinkButton("Browse channels", Modifier.padding(horizontal = LumiaTokens.space2)) { push(Screen.Browse(server.serverId)) } }
             }
             items(channels, key = { it.channelId }) { c ->
-                Row(
-                    modifier = Modifier.fillMaxWidth().height(LumiaTokens.controlHeight).clip(RoundedCornerShape(LumiaTokens.radius10)).clickable { push(Screen.Channel(c.channelId)) }.padding(horizontal = LumiaTokens.space10),
-                    horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space8),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
+                NavRow(withUnread(if (c.private) "${c.name}, private channel" else "${c.name} channel", session.unread(c.channelId)), session.unread(c.channelId), { push(Screen.Channel(c.channelId)) }) { strong ->
                     // A private channel wears a lock where a public one has its #.
-                    if (c.private) Icon(Icons.Filled.Lock, contentDescription = "Private", tint = LumiaTokens.inkMuted.color, modifier = Modifier.size(LumiaTokens.space12))
+                    if (c.private) Icon(Icons.Filled.Lock, contentDescription = null, tint = LumiaTokens.inkMuted.color, modifier = Modifier.size(LumiaTokens.space12))
                     else Text("#", style = LumiaTokens.textNav.style, color = LumiaTokens.inkMuted.color, modifier = Modifier.width(LumiaTokens.space12))
-                    Text(c.name, style = LumiaTokens.textNav.style, color = LumiaTokens.ink.color, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Spacer(Modifier.weight(1f))
+                    NavName(c.name, strong)
                 }
             }
             item {
@@ -415,14 +489,9 @@ fun ServerScreen(session: LumiaSession, server: ServerSummary, push: (Screen) ->
             items(dms, key = { it.channelId }) { c ->
                 val other = otherIn(c, session.me)
                 val name = session.conversationName(c)
-                Row(
-                    modifier = Modifier.fillMaxWidth().height(LumiaTokens.controlHeight).clip(RoundedCornerShape(LumiaTokens.radius10)).clickable { push(Screen.Channel(c.channelId)) }.padding(horizontal = LumiaTokens.space10),
-                    horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space8),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
+                NavRow(withUnread("Conversation with $name", session.unread(c.channelId)), session.unread(c.channelId), { push(Screen.Channel(c.channelId)) }) { strong ->
                     LumiaAvatar(initialsOf(name), AvatarTone.of(other ?: c.channelId), LumiaTokens.avatarSm)
-                    Text(name, style = LumiaTokens.textNav.style, color = LumiaTokens.ink.color, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Spacer(Modifier.weight(1f))
+                    NavName(name, strong)
                 }
             }
             item { LumiaLinkButton("Invite people", Modifier.padding(horizontal = LumiaTokens.space10, vertical = LumiaTokens.space4).padding(top = LumiaTokens.space8)) { push(Screen.Invite(server.serverId)) } }

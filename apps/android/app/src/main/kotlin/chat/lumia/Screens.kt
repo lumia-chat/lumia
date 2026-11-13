@@ -1,6 +1,6 @@
-// The screens pushed over the rail and sidebar, each a floating panel: a
-// conversation, a channel, requests, a new message, the person's profile,
-// preferences, devices. The same
+// The screens pushed over the rail and sidebar, each a floating panel:
+// requests, a new message, the person's profile, preferences, devices (the
+// conversations are Conversations.kt). The same
 // states, wording and error handling as the web's and the Apple apps'.
 package chat.lumia
 
@@ -18,26 +18,18 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AlternateEmail
-import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.Language
-import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.VpnKey
@@ -60,35 +52,26 @@ import chat.lumia.kit.Appearance
 import chat.lumia.kit.AvatarTone
 import chat.lumia.kit.Density
 import chat.lumia.kit.LumiaAvatar
-import chat.lumia.kit.LumiaComposer
-import chat.lumia.kit.LumiaDayDivider
 import chat.lumia.kit.LumiaDeviceRow
 import chat.lumia.kit.LumiaEmptyState
 import chat.lumia.kit.LumiaErrorText
 import chat.lumia.kit.LumiaField
 import chat.lumia.kit.LumiaLinkButton
-import chat.lumia.kit.LumiaMessageRow
 import chat.lumia.kit.LumiaNotice
 import chat.lumia.kit.LumiaPrimaryButton
 import chat.lumia.kit.LumiaRequestCard
 import chat.lumia.kit.LumiaSecondaryButton
 import chat.lumia.kit.LumiaSession
 import chat.lumia.kit.LumiaTokens
-import chat.lumia.kit.LumiaTypingLine
-import chat.lumia.kit.Measures
 import chat.lumia.kit.NoticeTone
 import chat.lumia.kit.Route
 import chat.lumia.kit.SectionTitle
-import chat.lumia.kit.Stamp
-import chat.lumia.kit.blockPlaces
 import chat.lumia.kit.dayOfMicros
 import chat.lumia.kit.initialsOf
 import chat.lumia.kit.lumiaCode
 import chat.lumia.kit.lumiaMessage
-import chat.lumia.kit.timeOfMicros
 import kotlinx.coroutines.launch
 import uniffi.lumia_ffi.DeviceSummary
-import uniffi.lumia_ffi.DmMessageSummary
 import uniffi.lumia_ffi.DmRequestSummary
 import androidx.compose.foundation.background
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -98,199 +81,10 @@ import uniffi.lumia_ffi.MemberSummary
 import uniffi.lumia_ffi.ServerSummary
 import chat.lumia.kit.LumiaCard
 import chat.lumia.kit.LumiaChoice
-import chat.lumia.kit.LumiaNoticeRow
-import chat.lumia.kit.SERVER_DM
 import chat.lumia.kit.CANNOT_CREATE_CHANNELS
-import chat.lumia.kit.noticeText
-import chat.lumia.kit.notInChannel
-import chat.lumia.kit.otherIn
-import chat.lumia.kit.serverDmNote
-import androidx.compose.material.icons.filled.Group
 import androidx.compose.material3.Switch
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.ui.semantics.Role
-
-// Conversation
-
-@Composable
-fun ConversationScreen(session: LumiaSession, channelId: String, density: Density, back: () -> Unit) {
-    val scope = rememberCoroutineScope()
-    val measures = Measures.of(density)
-    var draft by rememberSaveable { mutableStateOf("") }
-    var error by rememberSaveable { mutableStateOf("") }
-    val channel = session.snapshot?.channels?.firstOrNull { it.channelId == channelId }
-    val state = session.dmChannels.firstOrNull { it.channelId == channelId }
-    val log = session.dmLogs[channelId]
-    val others = channel?.participantAccountIds?.filter { it != session.me } ?: emptyList()
-    val title = channel?.let { session.conversationName(it) } ?: "Conversation"
-    val listState = rememberLazyListState()
-    // Whose a message is: this account's from any of its devices, else the sender's.
-    val me = session.me
-    val senderOf = { m: DmMessageSummary -> if (m.mine) me else m.senderAccountId.ifEmpty { m.senderIdentityId } }
-    val sent = log?.messages ?: emptyList()
-    val places = remember(sent, me) { blockPlaces(sent.map { Stamp(senderOf(it), it.sentAtMicros) }) }
-
-    LaunchedEffect(channelId) {
-        session.refreshDmChannels()
-        session.refreshDmLog(channelId)
-    }
-    LaunchedEffect(log?.messages?.size) {
-        val n = log?.messages?.size ?: 0
-        if (n > 0) listState.animateScrollToItem(n + 4)
-    }
-
-    PanelScreen(
-        back = "Home", onBack = back, title = title,
-        // The other side's pronouns, from their verified profile, then the host.
-        subtitle = listOf(others.map { session.pronounsOf(it) }.filter { it.isNotEmpty() }.joinToString(", "), channel?.host?.ifEmpty { null }?.let { "on $it" } ?: "").filter { it.isNotEmpty() }.joinToString(" · ").ifEmpty { null },
-        lead = { LumiaAvatar(initialsOf(title), AvatarTone.of(others.firstOrNull() ?: channelId), LumiaTokens.avatarMd) },
-    ) {
-        Column(Modifier.fillMaxSize().imePadding()) {
-            LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth(), contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = LumiaTokens.space8)) {
-                item {
-                    Column(Modifier.padding(horizontal = LumiaTokens.space16), verticalArrangement = Arrangement.spacedBy(LumiaTokens.space8)) {
-                        LumiaNotice(Icons.Filled.Shield, text = "Messages here are end-to-end encrypted. Only your devices and those of ${others.joinToString(", ") { session.nameOf(it) }} can read them.")
-                        if (state != null && !state.member) {
-                            LumiaNotice(Icons.Filled.Lock, NoticeTone.ACCENT, action = "Rejoin" to {
-                                scope.launch { error = ""; try { session.dmRejoin(channelId) } catch (e: Exception) { error = e.lumiaMessage } }
-                            }, text = "This device is not in the conversation's group yet. The device that created it sends a welcome; if that never comes, rejoin from the instance's group info.")
-                        }
-                        if (log != null && log.beforeJoin > 0u) {
-                            LumiaNotice(Icons.Filled.Lock, text = "${log.beforeJoin} earlier ${if (log.beforeJoin == 1u) "message was" else "messages were"} sent before this device joined and cannot be read here.")
-                        }
-                        if (log != null && log.undecryptable > 0u) LumiaNotice(Icons.Filled.Lock, text = "${log.undecryptable} could not be decrypted.")
-                    }
-                }
-                if (log != null && log.messages.isNotEmpty()) item { LumiaDayDivider("Messages", measures) }
-                itemsIndexed(sent, key = { _, m -> m.messageId }) { i, m ->
-                    val who = if (m.mine) session.selfName else if (m.senderAccountId.isNotEmpty() || others.size != 1) session.nameOf(m.senderAccountId) else session.nameOf(others[0])
-                    LumiaMessageRow(who, AvatarTone.of(senderOf(m)), timeOfMicros(m.sentAtMicros), m.body, m.deleted, places[i], measures)
-                }
-                if (error.isNotEmpty()) item { LumiaErrorText(error) }
-            }
-            val member = state?.member == true
-            LumiaComposer(draft, { draft = it }, if (member) "Message $title" else "Setting up the encrypted group…", enabled = member) {
-                val body = draft.trim()
-                if (body.isEmpty()) return@LumiaComposer
-                draft = ""
-                error = ""
-                scope.launch { try { session.dmSend(channelId, body) } catch (e: Exception) { error = e.lumiaMessage } }
-            }
-            // Nobody is shown typing in a personal conversation, and nothing is sent when this
-            // person does (protocol 6.7); the line keeps its room, so the composer sits where a
-            // channel's does and the boards draw it.
-            ComposerFoot(emptyList())
-        }
-    }
-}
-
-// Channel
-
-/**
- * A server's channel or server DM. A channel this account is not in (one
- * opened from Browse) reads as any does, with a bar in place of the
- * composer to join it (architecture 6.8); a server DM is titled by the other
- * person and says once, at its top, whose it is (architecture 6.4). Notices
- * are one quiet line each; an author's avatar or name opens their profile
- * card.
- */
-@Composable
-fun ChannelScreen(session: LumiaSession, channelId: String, density: Density, back: () -> Unit, push: (Screen) -> Unit) {
-    val scope = rememberCoroutineScope()
-    val measures = Measures.of(density)
-    var draft by rememberSaveable { mutableStateOf("") }
-    var error by rememberSaveable { mutableStateOf("") }
-    var joining by remember { mutableStateOf(false) }
-    var card by remember { mutableStateOf<String?>(null) }
-    val channel = session.channelOf(channelId)
-    val server = session.snapshot?.servers?.firstOrNull { it.serverId == channel?.serverId }
-    val messages = session.messages[channelId] ?: emptyList()
-    val name = channel?.name ?: "channel"
-    val dm = channel?.kind == SERVER_DM
-    val other = channel?.let { otherIn(it, session.me) }
-    val title = if (dm) channel?.let { session.conversationName(it) } ?: "Conversation" else "# $name"
-    val member = session.isIn(channelId)
-    val listState = rememberLazyListState()
-    // A notice is never in a block, and the message after one opens its own.
-    val places = remember(messages) { blockPlaces(messages.map { Stamp(if (it.notice.isEmpty()) it.authorAccountId else "notice:${it.messageId}", it.createdAtMicros) }) }
-
-    LaunchedEffect(channelId) { session.refreshMessages(channelId) }
-    LaunchedEffect(messages.size) { if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size + 1) }
-
-    fun join() {
-        scope.launch {
-            joining = true
-            error = ""
-            try { session.joinChannel(channelId) } catch (e: Exception) { error = e.lumiaMessage } finally { joining = false }
-        }
-    }
-
-    PanelScreen(
-        back = server?.name ?: "the server", onBack = back, title = title, subtitle = server?.name,
-        lead = if (dm) ({ LumiaAvatar(initialsOf(title), AvatarTone.of(other ?: channelId), LumiaTokens.avatarMd) }) else null,
-        actions = if (!dm && channel != null) listOf(Triple(Icons.Filled.Group, "Members") { push(Screen.Members(channelId)) }) else emptyList(),
-    ) {
-        Column(Modifier.fillMaxSize().imePadding()) {
-            LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth(), contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = LumiaTokens.space8)) {
-                if (dm) item { Column(Modifier.padding(horizontal = LumiaTokens.space16, vertical = LumiaTokens.space8)) { LumiaNotice(Icons.Filled.Shield, text = serverDmNote(server?.name ?: "this server")) } }
-                if (messages.isEmpty()) item { LumiaEmptyState(Icons.Filled.ChatBubbleOutline, "Nothing here yet", if (member) "Say something." else null) }
-                else item { LumiaDayDivider("Today", measures) }
-                itemsIndexed(messages, key = { _, m -> m.messageId }) { i, m ->
-                    if (m.notice.isNotEmpty()) {
-                        noticeText(m.notice, session.nameOf(m.authorAccountId), session.nameOf(m.noticeAccountId))?.let { LumiaNoticeRow(it, timeOfMicros(m.createdAtMicros), measures) }
-                    } else {
-                        LumiaMessageRow(session.nameOf(m.authorAccountId), AvatarTone.of(m.authorAccountId), timeOfMicros(m.createdAtMicros), m.body, m.deleted, places[i], measures, onAuthor = if (server != null) ({ card = m.authorAccountId }) else null)
-                    }
-                }
-                if (error.isNotEmpty()) item { Column(Modifier.padding(horizontal = LumiaTokens.space16)) { LumiaErrorText(error) } }
-            }
-            if (member || channel == null) {
-                // Every edit that leaves something in the composer says this person is typing;
-                // emptied is not typing (a send). The core spaces what is sent.
-                LumiaComposer(draft, { draft = it; if (it.isNotBlank()) session.typed(channelId) }, if (dm) "Message $title" else "Message #$name") {
-                    val body = draft.trim()
-                    if (body.isEmpty()) return@LumiaComposer
-                    draft = ""
-                    error = ""
-                    scope.launch { try { session.sendMessage(channelId, body) } catch (e: Exception) { error = e.lumiaMessage } }
-                }
-            } else {
-                // Not in it: read it, and join from here (architecture 6.8).
-                Row(
-                    Modifier.fillMaxWidth().padding(horizontal = LumiaTokens.space16)
-                        .background(LumiaTokens.inset.color, RoundedCornerShape(LumiaTokens.radius12))
-                        .padding(start = LumiaTokens.space14, end = LumiaTokens.space8, top = LumiaTokens.space8, bottom = LumiaTokens.space8),
-                    horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space12),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(notInChannel(name), style = LumiaTokens.textBody.style, color = LumiaTokens.inkBody.color, modifier = Modifier.weight(1f))
-                    LumiaPrimaryButton("Join", enabled = !joining) { join() }
-                }
-            }
-            ComposerFoot(if (member) session.typingIn(channelId) else emptyList())
-        }
-    }
-
-    val shown = card
-    if (shown != null && server != null) {
-        ProfileCard(session, server, shown, onDismiss = { card = null }, openChannel = { push(Screen.Channel(it)) }, openConversation = { push(Screen.Conversation(it)) })
-    }
-}
-
-/**
- * What is under a conversation's composer, to the foot of the panel: the
- * line that says who is typing. The navigation bar lies over the panel's
- * foot, and the line's own room there takes it in; the keyboard, when it
- * is up, covers the bar and is already under the screen (`imePadding`).
- * A composable of its own, so the keyboard's travel redraws this line and
- * not the messages.
- */
-@Composable
-private fun ComposerFoot(typing: List<String>) {
-    val bar = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-    val keyboard = WindowInsets.ime.asPaddingValues().calculateBottomPadding()
-    LumiaTypingLine(typing, systemFoot = (bar - keyboard).coerceAtLeast(0.dp))
-}
 
 // Requests
 

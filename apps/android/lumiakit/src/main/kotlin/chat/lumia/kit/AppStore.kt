@@ -87,6 +87,20 @@ class AppStore(context: Context) {
         prefs.edit().putString("appearance", appearance.stored).apply()
     }
 
+    /**
+     * What this phone has reacted with, newest first, for the picker's
+     * "Frequently used" (architecture 6.6): this phone's own, kept in the
+     * `lumia` preferences as `recent_emoji`, one a line, and sent nowhere.
+     */
+    var recentEmoji by mutableStateOf(stored("recent_emoji")?.lines()?.filter { it.isNotEmpty() } ?: emptyList())
+        private set
+
+    /** An emoji reacted with: first in "Frequently used" from now on. */
+    fun used(emoji: String) {
+        recentEmoji = usedEmoji(recentEmoji, emoji)
+        prefs.edit().putString("recent_emoji", recentEmoji.joinToString("\n")).apply()
+    }
+
     /** How much room messages take: at once, and at the next launch. */
     fun choose(density: Density) {
         this.density = density
@@ -153,6 +167,8 @@ class AppStore(context: Context) {
         val client = LumiaClient(url, dataDirectory)
         // The phone's push subscription is kept in its preferences, which the store can reach.
         val s = LumiaSession(client) { chosen -> PushRegistrar.left(context, client, chosen) }
+        // A conversation read, here or on another device: its delivered notifications go, and the rest carry the badge.
+        s.readsChanged = { states, badge -> PushRegistrar.settle(context, states, badge) }
         session = s
         savedInstance = url
         return s

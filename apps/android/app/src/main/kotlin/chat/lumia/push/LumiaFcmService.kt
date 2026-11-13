@@ -5,6 +5,7 @@
 package chat.lumia.push
 
 import chat.lumia.kit.PushRegistrar
+import chat.lumia.kit.pushBadge
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 import kotlinx.coroutines.CoroutineScope
@@ -22,6 +23,11 @@ class LumiaFcmService : FirebaseMessagingService() {
     override fun onMessageReceived(message: RemoteMessage) {
         val context = applicationContext
         val host = message.data["instance"]
-        scope.launch { PushRegistrar.received(context, host) }
+        // Every notice carries the account's badge; a read (`kind=read`) carries only that, and shows nothing.
+        val badge = pushBadge(message.data["badge"])
+        scope.launch {
+            if (message.data["kind"] == "read") PushRegistrar.readElsewhere(context, host, badge)
+            else PushRegistrar.received(context, host, badge)
+        }
     }
 }

@@ -27,6 +27,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import uniffi.lumia_ffi.NotificationContent
+import uniffi.lumia_ffi.ReadStateSummary
 
 /**
  * Where a tapped notification points: the channel and the kind (`dm` or
@@ -142,7 +143,7 @@ object PushRegistrar {
      * to drop, or one on its way as the sign-out happened): no notice, not
      * the generic one either. Returns what was posted, for the smoke's record.
      */
-    suspend fun received(context: Context, host: String?): NotificationContent? {
+    suspend fun received(context: Context, host: String?, badge: Int? = null): NotificationContent? {
         if (AppStore.current?.foregrounded == true) return null
         val saved = AppStore.savedInstance(context)
         if (saved == null || !pushIsFor(saved, host)) return null
@@ -152,12 +153,69 @@ object PushRegistrar {
             if (!client.signedIn) return null
             client.notificationContent(3000u)
         }.getOrNull()
-        post(context, content, host ?: "")
+        post(context, content, host ?: "", badge)
         return content
     }
 
-    /** The notification: the message, or the generic notice when the core had none. */
-    fun post(context: Context, content: NotificationContent?, host: String) {
+    /**
+     * A read push (`{"kind": "read", "badge": n}`, architecture 6.6 and
+     * 15.5): the account read a conversation further on another device.
+     * It shows nothing: the counts are read again, from the session the app
+     * holds when there is one (its snapshot, which `readsChanged` settles
+     * from) or else from a snapshot of a client of its own, and the
+     * delivered notifications of conversations now read go, the rest
+     * carrying the badge. Nothing for a push that is not this phone's, or
+     * for a phone signed out or signing out. Returns the conversations
+     * whose notifications went, for the smoke's record.
+     */
+    suspend fun readElsewhere(context: Context, host: String?, badge: Int?): Set<String> {
+        val saved = AppStore.savedInstance(context)
+        if (saved == null || !pushIsFor(saved, host)) return emptySet()
+        if (leftOrLeaving()) return emptySet()
+        val session = AppStore.current?.session
+        if (session != null && session.signedIn) {
+            withContext(Dispatchers.Main) { session.refreshSnapshot() }
+            return settle(context, session.readStates.values, session.badge)
+        }
+        val states = runCatching {
+            val client = LumiaClient(saved, AppStore.dataDirectory(context))
+            if (!client.signedIn) return emptySet()
+            client.call { snapshot() }.readStates
+        }.getOrNull()
+        return settle(context, states ?: emptyList(), badge ?: states?.let { badgeOf(it) } ?: return emptySet())
+    }
+
+    /**
+     * The delivered notifications as the counts now stand: those of
+     * conversations with nothing unread go (each is tagged with its
+     * channel), all of them when nothing that notifies is unread, and the
+     * rest carry [badge] as their number, which is the count a launcher
+     * shows where it shows one. Android has no badge of its own to set: a
+     * launcher counts what the notifications say. Returns the
+     * conversations whose notifications went.
+     */
+    fun settle(context: Context, states: Collection<ReadStateSummary>, badge: Int): Set<String> {
+        val manager = runCatching { context.getSystemService(NotificationManager::class.java) }.getOrNull() ?: return emptySet()
+        val ours = runCatching { manager.activeNotifications.filter { it.id == NOTIFICATION_ID } }.getOrDefault(emptyList())
+        if (ours.isEmpty()) return emptySet()
+        val read = if (badge == 0) ours.mapNotNull { it.tag }.toSet() else readNow(states, ours.mapNotNull { it.tag })
+        for (n in ours) {
+            if (badge == 0 || n.tag in read) {
+                manager.cancel(n.tag, n.id)
+            } else if (n.notification.number != badge) {
+                val again = Notification.Builder.recoverBuilder(context, n.notification).setNumber(badge).setOnlyAlertOnce(true).build()
+                manager.notify(n.tag, n.id, again)
+            }
+        }
+        return read
+    }
+
+    /** Every notification the app posts has this id, and its conversation's channel as its tag (the generic notice: [GENERIC_TAG]). */
+    private const val NOTIFICATION_ID = 1
+    private const val GENERIC_TAG = "lumia"
+
+    /** The notification: the message, or the generic notice when the core had none, numbered with the account's [badge] when the push carried one. */
+    fun post(context: Context, content: NotificationContent?, host: String, badge: Int? = null) {
         if (Build.VERSION.SDK_INT >= 33 &&
             context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) return
@@ -179,7 +237,7 @@ object PushRegistrar {
         val pending = open?.let {
             PendingIntent.getActivity(context, id, it, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         }
-        val notification = Notification.Builder(context, CHANNEL_ID)
+        val builder = Notification.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(content?.title ?: "Lumia")
             .setContentText(content?.body ?: "New message")
@@ -187,7 +245,8 @@ object PushRegistrar {
             .setAutoCancel(true)
             .setContentIntent(pending)
             .setCategory(Notification.CATEGORY_MESSAGE)
-            .build()
-        manager.notify(id, notification)
+        if (badge != null && badge > 0) builder.setNumber(badge)
+        // Tagged with its conversation, so reading that conversation, here or elsewhere, takes it away (`settle`).
+        manager.notify(content?.channelId?.ifEmpty { null } ?: GENERIC_TAG, NOTIFICATION_ID, builder.build())
     }
 }

@@ -63,6 +63,13 @@ import chat.lumia.kit.LumiaPicture
 import chat.lumia.kit.LumiaSession
 import chat.lumia.kit.LumiaTokens
 import chat.lumia.kit.initialsOf
+import chat.lumia.kit.personalKinds
+import chat.lumia.kit.serverDms
+import chat.lumia.kit.sidebarChannels
+import chat.lumia.kit.unreadIn
+import chat.lumia.kit.withUnread
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.widthIn
 
 /** Where the shell is: Home, or a server. */
 sealed class Place {
@@ -73,7 +80,10 @@ sealed class Place {
 /** A screen pushed over the rail and sidebar. */
 sealed class Screen {
     data class Conversation(val id: String) : Screen()
-    data class Channel(val id: String) : Screen()
+    /** A channel, opened at a message ([at], from a Mentions page) or at its newest. */
+    data class Channel(val id: String, val at: String? = null) : Screen()
+    /** The messages that notify this account, in a server or ([serverId] null) every server (architecture 6.6). */
+    data class Mentions(val serverId: String?) : Screen()
     data object Requests : Screen()
     data object Devices : Screen()
     data object Profile : Screen()
@@ -121,6 +131,7 @@ private fun Screen.kept(): String = when (this) {
     is Screen.AddPeople -> "add-people $channelId"
     is Screen.NewServerDm -> "new-server-dm $serverId"
     is Screen.YourSettings -> "your-settings $serverId"
+    is Screen.Mentions -> if (serverId == null) "mentions" else "mentions $serverId"
 }
 
 /** The screen a kept word names; none for a word this build does not know, and the stack is that much shorter. */
@@ -143,6 +154,7 @@ private fun screenOf(kept: String): Screen? {
         "add-people" -> Screen.AddPeople(id)
         "new-server-dm" -> Screen.NewServerDm(id)
         "your-settings" -> Screen.YourSettings(id)
+        "mentions" -> Screen.Mentions(id.ifEmpty { null })
         else -> null
     }
 }
@@ -153,17 +165,30 @@ val StackSaver: Saver<List<Screen>, Any> = listSaver(save = { stack -> stack.map
 @Composable
 fun PhoneRail(session: LumiaSession, place: Place, onAdd: () -> Unit, onAccount: (Screen) -> Unit, signingOut: Boolean, onSignOut: () -> Unit, onPlace: (Place) -> Unit) {
     val servers = session.snapshot?.servers ?: emptyList()
+    val channels = session.snapshot?.channels ?: emptyList()
+    // Home's badge: the requests that wait and the personal conversations' unread messages (every one counts, in a DM).
+    val requests = session.snapshot?.pendingRequests?.size ?: 0
+    val personal = unreadIn(session.readStates, channels.filter { it.kind in personalKinds }.map { it.channelId }).mentions
+    val homeLabel = when {
+        requests == 0 && personal == 0 -> "Home"
+        requests == 0 -> "Home, $personal unread"
+        personal == 0 -> "Home, $requests requests waiting"
+        else -> "Home, $requests requests waiting, $personal unread"
+    }
     Column(
         modifier = Modifier.width(LumiaTokens.railWidth).fillMaxHeight().background(LumiaTokens.rail.color).statusBarsPadding().padding(top = LumiaTokens.space8, bottom = LumiaTokens.space12),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(LumiaTokens.space12),
     ) {
-        RailTile(current = place == Place.Home, badge = session.snapshot?.pendingRequests?.size ?: 0, label = "Home", onClick = { onPlace(Place.Home) }) {
+        RailTile(current = place == Place.Home, badge = requests + personal, label = homeLabel, onClick = { onPlace(Place.Home) }) {
             Image(painterResource(R.drawable.logo), contentDescription = null, modifier = Modifier.size(32.dp))
         }
         Box(Modifier.width(24.dp).height(1.dp).background(LumiaTokens.railDivider.color))
         for (s in servers) {
-            RailTile(current = place == Place.Server(s.serverId), badge = 0, label = s.name, onClick = { onPlace(Place.Server(s.serverId)) }) {
+            // What is unread in it, its channels and server DMs: a mark at the rail's edge, and its count for this account over the tile's corner.
+            val unread = unreadIn(session.readStates, (sidebarChannels(channels, s.serverId) + serverDms(channels, s.serverId)).map { it.channelId })
+            val current = place == Place.Server(s.serverId)
+            RailTile(current = current, badge = unread.mentions, label = withUnread(s.name, unread), dot = unread.unread > 0 && !current, onClick = { onPlace(Place.Server(s.serverId)) }) {
                 // The server's picture, when it has one, over its initials, as a person's is drawn.
                 Text(initialsOf(s.name), style = LumiaTokens.titleMonogram.style, color = LumiaTokens.ink.color)
                 LumiaPicture(session.pictureOf(s.iconUrl), Modifier.matchParentSize())
@@ -255,33 +280,46 @@ private fun MenuItem(icon: ImageVector, label: String, onClick: () -> Unit) {
 }
 
 @Composable
-private fun RailTile(current: Boolean, badge: Int, label: String, onClick: () -> Unit, content: @Composable BoxScope.() -> Unit) {
+private fun RailTile(current: Boolean, badge: Int, label: String, dot: Boolean = false, onClick: () -> Unit, content: @Composable BoxScope.() -> Unit) {
     val shape = if (current) RoundedCornerShape(LumiaTokens.radius14) else CircleShape
-    Box(
-        modifier = Modifier
-            .size(LumiaTokens.tileSize)
-            .clip(shape)
-            .background(if (current) LumiaTokens.tabActive.color else LumiaTokens.tile.color)
-            .clickable(onClick = onClick)
-            .semantics { contentDescription = label },
-        contentAlignment = Alignment.Center,
-    ) {
-        content()
-        // The current one's ring, over what the tile holds, a picture too.
-        if (current) Box(Modifier.matchParentSize().border(2.dp, LumiaTokens.accent.color, shape))
-        if (badge > 0) {
-            Box(Modifier.align(Alignment.TopEnd)) { CountBadge(badge) }
+    // The unread mark sits at the rail's edge, outside the tile, so the tile is in a box as wide as the rail.
+    Box(Modifier.width(LumiaTokens.railWidth), contentAlignment = Alignment.Center) {
+        if (dot) {
+            Box(
+                Modifier.align(Alignment.CenterStart).width(LumiaTokens.space4).height(LumiaTokens.space8)
+                    .background(LumiaTokens.ink.color, RoundedCornerShape(topEnd = LumiaTokens.radiusPill, bottomEnd = LumiaTokens.radiusPill)),
+            )
+        }
+        Box {
+            Box(
+                modifier = Modifier
+                    .size(LumiaTokens.tileSize)
+                    .clip(shape)
+                    .background(if (current) LumiaTokens.tabActive.color else LumiaTokens.tile.color)
+                    .clickable(onClick = onClick)
+                    .semantics { contentDescription = label },
+                contentAlignment = Alignment.Center,
+            ) {
+                content()
+                // The current one's ring, over what the tile holds, a picture too.
+                if (current) Box(Modifier.matchParentSize().border(2.dp, LumiaTokens.accent.color, shape))
+            }
+            // Over the tile's corner, ringed in the rail's colour.
+            if (badge > 0) {
+                Box(Modifier.align(Alignment.TopEnd).offset(x = LumiaTokens.space4, y = -LumiaTokens.space4).border(2.dp, LumiaTokens.rail.color, CircleShape).padding(2.dp)) { CountBadge(badge) }
+            }
         }
     }
 }
 
+/** The design's count badge (`lu-badge--sm`): the accent's pill, the count on it, 99+ past that. (`unread` is the dot's colour, not a badge's.) */
 @Composable
 fun CountBadge(count: Int) {
     Box(
-        modifier = Modifier.heightIn(min = 18.dp).background(LumiaTokens.unread.color, CircleShape).padding(horizontal = LumiaTokens.space4),
+        modifier = Modifier.heightIn(min = 18.dp).widthIn(min = 18.dp).background(LumiaTokens.accent.color, RoundedCornerShape(LumiaTokens.radiusPill)).padding(horizontal = LumiaTokens.space4),
         contentAlignment = Alignment.Center,
     ) {
-        Text("$count", style = LumiaTokens.textCount.style, color = LumiaTokens.onAccent.color)
+        Text(if (count > 99) "99+" else "$count", style = LumiaTokens.textCount.style, color = LumiaTokens.onAccent.color)
     }
 }
 

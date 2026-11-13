@@ -41,7 +41,20 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.onLongClick
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -148,20 +161,50 @@ fun LumiaMessageRow(
     place: BlockPlace = BlockPlace.Alone,
     measures: Measures = Measures.Comfortable,
     onAuthor: (() -> Unit)? = null,
+    // What architecture 6.6 adds: the quote drawn above the words, where
+    // the body's mentions are (drawn as pills), the reactions under the
+    // words, the tint of a message that mentions this account or that a
+    // jump just reached, and the long press that opens its actions.
+    quote: (@Composable () -> Unit)? = null,
+    mentions: List<IntRange> = emptyList(),
+    reactions: (@Composable () -> Unit)? = null,
+    tinted: Boolean = false,
+    onLongPress: (() -> Unit)? = null,
 ) {
     // Who wrote it, tapped on the avatar or the name: their profile card, where a screen offers one.
     val authorTap = if (onAuthor != null) Modifier.clickable(onClickLabel = "view $author's profile", role = Role.Button, onClick = onAuthor) else Modifier
     val body = @Composable { modifier: Modifier ->
-        Text(
-            if (deleted) "(deleted)" else text,
-            style = LumiaTokens.textMessage.style,
-            color = if (deleted) LumiaTokens.inkQuiet.color else LumiaTokens.inkBody.color,
-            modifier = modifier,
-        )
+        Column(modifier, verticalArrangement = Arrangement.spacedBy(LumiaTokens.space4)) {
+            quote?.invoke()
+            if (deleted) {
+                Text("(deleted)", style = LumiaTokens.textMessage.style, color = LumiaTokens.inkQuiet.color)
+            } else {
+                LumiaBody(text, mentions)
+            }
+            if (reactions != null) Box(Modifier.padding(top = LumiaTokens.space2)) { reactions() }
+        }
     }
+    val accent = LumiaTokens.accent.color
+    val tint = LumiaTokens.accentSoft.color
     val frame = Modifier
         .fillMaxWidth()
-        .semantics(mergeDescendants = true) {}
+        .then(
+            if (tinted) {
+                // The accent's soft wash and a 2-point accent rule on its left edge.
+                Modifier.drawBehind {
+                    drawRect(tint)
+                    drawRect(accent, size = androidx.compose.ui.geometry.Size(LumiaTokens.space2.toPx(), size.height))
+                }
+            } else Modifier,
+        )
+        .then(
+            if (onLongPress != null) {
+                Modifier.pointerInput(onLongPress) { detectTapGestures(onLongPress = { onLongPress() }) }
+            } else Modifier,
+        )
+        .semantics(mergeDescendants = true) {
+            if (onLongPress != null) onLongClick(label = "Message actions") { onLongPress(); true }
+        }
         .padding(
             start = LumiaTokens.space16,
             end = LumiaTokens.space16,
@@ -185,6 +228,63 @@ fun LumiaMessageRow(
             }
             body(Modifier)
         }
+    }
+}
+
+/**
+ * A message's words, its mentions (by [mentions], where they are in the
+ * text) drawn as the design's `lu-mention` pill: the text as written, in
+ * the accent's ink and the strong weight, on the accent's soft wash with
+ * rounded ends.
+ */
+@Composable
+fun LumiaBody(text: String, mentions: List<IntRange>, modifier: Modifier = Modifier) {
+    if (mentions.isEmpty()) {
+        Text(text, style = LumiaTokens.textMessage.style, color = LumiaTokens.inkBody.color, modifier = modifier)
+        return
+    }
+    val ink = LumiaTokens.accentInk.color
+    val wash = LumiaTokens.accentSoft.color
+    val styled = remember(text, mentions, ink) {
+        buildAnnotatedString {
+            append(text)
+            for (r in mentions) addStyle(SpanStyle(color = ink, fontWeight = FontWeight(LumiaTokens.textSection.weight)), r.first, r.last + 1)
+        }
+    }
+    var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
+    Text(
+        styled,
+        style = LumiaTokens.textMessage.style,
+        color = LumiaTokens.inkBody.color,
+        onTextLayout = { layout = it },
+        modifier = modifier.drawBehind {
+            val l = layout ?: return@drawBehind
+            val outset = LumiaTokens.space2.toPx()
+            val corner = CornerRadius(LumiaTokens.radius6.toPx())
+            for (r in mentions) {
+                val start = r.first
+                val end = r.last + 1
+                if (end > l.layoutInput.text.length) continue
+                for (line in l.getLineForOffset(start)..l.getLineForOffset(end - 1)) {
+                    val left = if (line == l.getLineForOffset(start)) l.getHorizontalPosition(start, true) else l.getLineLeft(line)
+                    val right = if (line == l.getLineForOffset(end - 1)) l.getHorizontalPosition(end, true).takeIf { it > left } ?: l.getLineRight(line) else l.getLineRight(line)
+                    drawRoundRect(wash, Offset(left - outset, l.getLineTop(line)), Size(right - left + 2 * outset, l.getLineBottom(line) - l.getLineTop(line)), corner)
+                }
+            }
+        },
+    )
+}
+
+/** The "New messages" line, above the first message after where this account had read to: the accent's rule and words. */
+@Composable
+fun LumiaNewMessagesLine(measures: Measures = Measures.Comfortable) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = LumiaTokens.space16, vertical = measures.divider).semantics(mergeDescendants = true) {},
+        horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space12),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.weight(1f).height(1.dp).background(LumiaTokens.accent.color))
+        Text("New messages", style = LumiaTokens.textSection.style, color = LumiaTokens.accent.color)
     }
 }
 
@@ -237,6 +337,49 @@ fun LumiaComposer(text: String, onText: (String) -> Unit, placeholder: String, e
     ) {
         LumiaInput(text, onText, placeholder, enabled = enabled, modifier = Modifier.weight(1f).heightIn(min = 24.dp), maxLines = 8)
         LumiaPrimaryButton("Send", enabled = enabled && text.isNotBlank(), onClick = onSend)
+    }
+}
+
+/**
+ * The composer with where the caret is ([value]'s selection), for what
+ * follows it: the @ list completes the `@word` at the caret, and a reply
+ * puts the caret here ([focus]).
+ */
+@Composable
+fun LumiaComposer(
+    value: TextFieldValue,
+    onValue: (TextFieldValue) -> Unit,
+    placeholder: String,
+    enabled: Boolean = true,
+    focus: FocusRequester? = null,
+    onSend: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = LumiaTokens.space16)
+            .background(LumiaTokens.field.color, RoundedCornerShape(LumiaTokens.radius12))
+            .border(1.dp, LumiaTokens.borderComposer.color, RoundedCornerShape(LumiaTokens.radius12))
+            .padding(LumiaTokens.space10),
+        horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space8),
+        verticalAlignment = Alignment.Bottom,
+    ) {
+        BasicTextField(
+            value = value,
+            onValueChange = onValue,
+            modifier = Modifier.weight(1f).heightIn(min = 24.dp).then(if (focus != null) Modifier.focusRequester(focus) else Modifier),
+            enabled = enabled,
+            textStyle = LumiaTokens.textBody.style.copy(color = LumiaTokens.inkField.color),
+            cursorBrush = SolidColor(LumiaTokens.accent.color),
+            maxLines = 8,
+            decorationBox = { inner ->
+                Box {
+                    if (value.text.isEmpty()) Text(placeholder, style = LumiaTokens.textBody.style, color = LumiaTokens.inkMuted.color)
+                    inner()
+                }
+            },
+        )
+        LumiaPrimaryButton("Send", enabled = enabled && value.text.isNotBlank(), onClick = onSend)
     }
 }
 
