@@ -6,10 +6,16 @@
 // over the frame (the menus, the pickers, the profile card) is in
 // menus.tsx; Browse, Your settings and a channel's members in channels.tsx.
 //
-// The board draws more than the product has: search, threads, mentions
-// and saved, reactions, attachments, pins, calls, role tags, and the
-// composer's formatting, emoji and mention buttons. None of those is
-// drawn here until there is something behind it (plan step 6).
+// A conversation's messages and its composer are timeline.tsx's: quote
+// replies, reactions, mentions and the "New messages" line (architecture
+// 6.6). Read state is drawn here: unread channels in the strong ink, a
+// count of mentions on a row, a server's dot and count on the rail, the
+// Mentions row atop the sidebar (mentions.tsx), and the badge.
+//
+// The board draws more than the product has: search, threads, saved,
+// attachments, pins, calls, role tags, and the composer's formatting,
+// emoji and mention buttons. None of those is drawn here until there is
+// something behind it (plan step 6).
 import { For, Match, Show, Switch, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
 import { useNavigate, useSearch } from "@tanstack/solid-router";
 import {
@@ -20,28 +26,25 @@ import {
   AppShell,
   ChannelHeader,
   ChannelList,
-  Composer,
-  Divider,
   EmptyState,
   InvitationRow,
   JoinBar,
-  Message,
-  MessageList,
   Notice,
-  NoticeLine,
   SearchField,
   ServerHeader,
   ServerRail,
   type ChannelItem,
 } from "../design/components";
 import { signedOut, type ChannelSummary, type MessageSummary, type ServerSummary } from "../client/bridge";
-import { avatarSrc, checkPush, client, connection, loadMyStatus, membersQuery, messagesQuery, presence, customStatusOf, presenceOf, queryClient, sessionEnded, signOut, snapshotQuery, startGateway, tookSnapshot, typingIn, watchPresence } from "../client/state";
+import { avatarSrc, channelMembersQuery, checkPush, client, commandError, connection, loadMyStatus, loadOlderMessages, membersQuery, messagesQuery, presence, customStatusOf, presenceOf, queryClient, readStatesQuery, sessionEnded, signOut, snapshotQuery, startGateway, tookSnapshot, typingIn, watchPresence } from "../client/state";
 import { useNames } from "../client/names";
 import { preferences, setAsideHidden } from "../client/preferences";
 import { ConversationAside, HomeMain, HomeSidebar, type HomeView } from "./home";
 import { Overlay, myStatusDot, type Over } from "./menus";
 import { ServerSettings } from "./server-settings";
 import { BrowsePage, ChannelMembersAside, YourSettingsPage, channelRefusal, joinChannel } from "./channels";
+import { Compose, ComposerNote, Timeline, createMarkRead, invitedWords, notNotifiedWords, quoteOf, type Replying, type TimelineItem } from "./timeline";
+import { MentionsPage } from "./mentions";
 
 const TONES = ["peach", "blue", "purple", "mint", "amber", "sky", "stone", "green", "indigo"] as const;
 
@@ -122,14 +125,16 @@ export interface Block<T> {
  * the block of the one before it when the same person sent it within five
  * minutes of that one. Measured from the message before, not the block's
  * first, so a run of quick messages stays one block however long it goes
- * on. A message with no known author stands alone.
+ * on. A message with no known author stands alone, and one that `starts`
+ * says so (a quote reply) opens a block of its own, which those after it
+ * may join.
  */
-export function byBlock<T>(messages: T[], author: (m: T) => string, at: (m: T) => number): Block<T>[] {
+export function byBlock<T>(messages: T[], author: (m: T) => string, at: (m: T) => number, starts: (m: T) => boolean = () => false): Block<T>[] {
   const blocks: Block<T>[] = [];
   let before: T | undefined;
   for (const m of messages) {
     const last = blocks[blocks.length - 1];
-    if (last && before !== undefined && author(m) && author(m) === author(before) && Math.abs(at(m) - at(before)) < BLOCK_WITHIN_MICROS) last.rest.push(m);
+    if (last && before !== undefined && !starts(m) && author(m) && author(m) === author(before) && Math.abs(at(m) - at(before)) < BLOCK_WITHIN_MICROS) last.rest.push(m);
     else blocks.push({ first: m, rest: [] });
     before = m;
   }
@@ -171,17 +176,8 @@ export function App() {
   const [draft, setDraft] = createSignal("");
   const [error, setError] = createSignal("");
   const messages = messagesQuery(channelId);
-  const days = createMemo(() =>
-    byDay(messages.data ?? [], (m) => m.createdAtMicros).map((day) => ({
-      label: day.label,
-      // A notice has no one, so it joins no block and opens none.
-      blocks: byBlock(
-        day.messages,
-        (m) => (m.notice ? "" : m.authorAccountId),
-        (m) => m.createdAtMicros,
-      ),
-    })),
-  );
+  const readStates = readStatesQuery();
+  const stateOf = (id: string | undefined) => (id ? readStates.data?.byChannel.get(id) : undefined);
 
   const home = () => search().place === "home";
   const serverId = () => search().server ?? snapshot.data?.servers[0]?.serverId;
@@ -211,7 +207,7 @@ export function App() {
   // The server's settings in its main pane, until a channel or another server is chosen;
   // or another page there: Browse, or this account's own settings in the server.
   const [settingsOpen, setSettingsOpen] = createSignal(false);
-  const [page, setPage] = createSignal<"browse" | "you" | null>(null);
+  const [page, setPage] = createSignal<"browse" | "you" | "mentions" | null>(null);
   // A public channel this account is not in, open to read before joining (architecture 6.8).
   const [preview, setPreview] = createSignal<ChannelSummary | undefined>();
   const [joining, setJoining] = createSignal(false);
@@ -246,7 +242,13 @@ export function App() {
   const joined = () => listed().some((c) => c.channelId === channelId());
   const accountId = createMemo(() => snapshot.data?.accountId ?? "");
   const selfName = () => snapshot.data?.displayName || snapshot.data?.handle || "You";
-  const { nameOf, photoOf } = useNames(() => snapshot.data);
+  const { nameOf, photoOf, profile } = useNames(() => snapshot.data);
+  /** A name where one is known; undefined for an account nothing names. */
+  const knownName = (id: string): string | undefined => {
+    if (id && id === accountId()) return selfName();
+    const p = profile(id);
+    return p ? p.displayName || p.nickname || p.handle || undefined : undefined;
+  };
 
   // The gateway starts on every server channel the account can view; the
   // engine adds the personal DMs it knows, the account log the rest.
@@ -325,21 +327,164 @@ export function App() {
   const [over, setOver] = createSignal<Over | null>(null);
   const openPerson = (id: string, anchor: HTMLElement) => setOver({ kind: "person", anchor, accountId: id });
 
+  // Replying, the note a send leaves (someone mentioned is not in the
+  // channel), and a jump asked for from a Mentions page (architecture 6.6).
+  const [replying, setReplying] = createSignal<Replying | null>(null);
+  const [note, setNote] = createSignal<{ kind: "outside"; channelId: string; channel: string; ids: string[] } | { kind: "invited"; text: string } | null>(null);
+  const [noteError, setNoteError] = createSignal("");
+  const [noteBusy, setNoteBusy] = createSignal(false);
+  const [pendingJump, setPendingJump] = createSignal<{ channelId: string; messageId: string } | null>(null);
+  const [atEnd, setAtEnd] = createSignal(true);
+  let composerInput: HTMLInputElement | undefined;
+  createEffect(
+    on(channelId, () => {
+      setReplying(null);
+      setNote(null);
+      setNoteError("");
+      setAtEnd(true);
+    }),
+  );
+  const serverMembers = membersQuery(() => (home() ? undefined : serverId()));
+  const channelMembers = channelMembersQuery(() => (current()?.kind === "TEXT" && joined() ? channelId() : undefined));
+  // What the gateway refused of what this view sent (architecture 6.6: a mention of everyone without the permission, a quote of a message that is gone).
+  const sent = new Set<string>();
+  createEffect(
+    on(commandError, (err) => {
+      if (!err || !sent.has(err.commandId)) return;
+      sent.delete(err.commandId);
+      setError(err.code === "PERMISSION_DENIED" ? "You cannot do that in this channel." : /not_found/i.test(err.code + err.message) ? "The message you quoted is gone." : err.message || err.code);
+    }),
+  );
+
   const send = async () => {
     const id = channelId();
+    const ch = current();
     const body = draft().trim();
-    if (!id || !body) return;
+    if (!id || !ch || !body) return;
+    const reply = replying();
     setDraft("");
     setError("");
+    setReplying(null);
+    setNote(null);
+    setNoteError("");
     try {
-      await client().sendMessage(id, body);
+      const srv = server();
+      const isChannel = ch.kind === "TEXT";
+      // Typed or picked, every @handle of a member is a mention; a DM has none.
+      const mentions = isChannel && srv ? await client().findMentions(body, serverMembers.data ?? [], srv.canMentionEveryone) : [];
+      sent.add(await client().sendMessageWith(id, body, mentions, reply ? quoteOf(reply) : null));
       void queryClient.invalidateQueries({ queryKey: ["messages", id] });
+      const inChannel = channelMembers.data;
+      if (isChannel && inChannel) {
+        const outside = [...new Set(mentions.filter((m) => !m.everyone && m.accountId && !inChannel.includes(m.accountId)).map((m) => m.accountId))];
+        if (outside.length) setNote({ kind: "outside", channelId: id, channel: ch.name, ids: outside });
+      }
     } catch (e) {
       // The text comes back to the composer unless something new was typed meanwhile.
       setDraft((d) => d || body);
+      if (reply) setReplying((r) => r ?? reply);
       setError(e instanceof Error ? e.message : String(e));
     }
   };
+  /** Adds those a send mentioned to the channel; those who take adds as invitations are invited. */
+  const addOutside = async () => {
+    const n = note();
+    if (n?.kind !== "outside" || noteBusy()) return;
+    setNoteBusy(true);
+    setNoteError("");
+    try {
+      const outcome = await client().addChannelMembers(n.channelId, n.ids);
+      void queryClient.invalidateQueries({ queryKey: ["channelMembers", n.channelId] });
+      if (outcome.invitedAccountIds.length) {
+        const shown = { kind: "invited" as const, text: invitedWords(outcome.invitedAccountIds.map(nameOf), n.channel) };
+        setNote(shown);
+        setTimeout(() => setNote((now) => (now === shown ? null : now)), 4000);
+      } else setNote(null);
+    } catch (err) {
+      setNoteError(channelRefusal(err));
+    } finally {
+      setNoteBusy(false);
+    }
+  };
+  const noteShown = () => {
+    const n = note();
+    if (!n) return undefined;
+    if (n.kind === "invited") return <ComposerNote>{n.text}</ComposerNote>;
+    return (
+      <ComposerNote
+        error={noteError() || undefined}
+        actions={[
+          { label: `Add to #${n.channel}`, primary: true, disabled: noteBusy(), onClick: () => void addOutside() },
+          { label: "Dismiss", onClick: () => setNote(null) },
+        ]}
+      >
+        {notNotifiedWords(n.ids.map(nameOf), n.channel)}
+      </ComposerNote>
+    );
+  };
+  const startReply = (item: TimelineItem, text: string) => {
+    setReplying({ messageId: item.id, authorAccountId: item.authorId, name: item.authorId ? nameOf(item.authorId) : "", text });
+    composerInput?.focus();
+  };
+  const react = (item: TimelineItem, emoji: string, remove: boolean) => {
+    const id = channelId();
+    if (!id) return;
+    client()
+      .react(id, item.id, emoji, remove)
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+  };
+  const timelineItems = createMemo<TimelineItem[]>(() =>
+    (messages.data ?? []).map((m) => ({
+      id: m.messageId,
+      seq: m.seq,
+      authorId: m.authorAccountId,
+      blockKey: m.authorAccountId,
+      at: m.createdAtMicros,
+      body: m.body,
+      deleted: m.deleted,
+      notice: m.notice ? noticeWords(m, nameOf) : "",
+      reply: m.reply,
+      mentions: m.mentions,
+      reactions: m.reactions,
+      mentionsMe: m.mentionsMe,
+    })),
+  );
+  // Read while it is on screen: the window in front and the list at its newest message.
+  createMarkRead({
+    channelId,
+    newestSeq: () => messages.data?.[messages.data.length - 1]?.seq,
+    atEnd,
+    enabled: () => !home() && joined() && !settingsOpen() && !page(),
+    state: () => stateOf(channelId()),
+  });
+  /** Opens the channel a message is in, at the message: from a Mentions page. */
+  const toMessage = (m: MessageSummary) => {
+    const ch = snapshot.data?.channels.find((c) => c.channelId === m.channelId);
+    if (!ch || PERSONAL.has(ch.kind)) return;
+    if (home() || ch.serverId !== serverId()) goServer(ch.serverId);
+    openChannel(ch.channelId);
+    setPendingJump({ channelId: ch.channelId, messageId: m.messageId });
+  };
+  // The badge (architecture 6.6): the app's, where the browser has one, and the title's.
+  createEffect(
+    on(
+      () => readStates.data?.badge ?? 0,
+      (n) => {
+        document.title = n ? `(${n}) Lumia` : "Lumia";
+        const nav = navigator as Navigator & { setAppBadge?: (n: number) => Promise<void>; clearAppBadge?: () => Promise<void> };
+        if (n) void nav.setAppBadge?.(n).catch(() => {});
+        else void nav.clearAppBadge?.().catch(() => {});
+        // Nothing left unread: the notifications already shown go. (A push carries no conversation, so they cannot be told apart.)
+        if (!n && "serviceWorker" in navigator)
+          void navigator.serviceWorker
+            .getRegistration("/")
+            .then((r) => r?.getNotifications())
+            .then((list) => list?.forEach((x) => x.close()))
+            .catch(() => {});
+      },
+    ),
+  );
+  onCleanup(() => (document.title = "Lumia"));
   // Who else is typing here, by name (protocol 6.7).
   const typing = createMemo(() =>
     typingIn(channelId())
@@ -353,28 +498,59 @@ export function App() {
     if (id && text.trim()) void client().typing(id).catch(() => {});
   };
 
+  // Unread is the strong ink on a row that is not the one open; mentions, a count at its end.
+  const readMarks = (id: string, active: boolean) => {
+    const rs = stateOf(id);
+    return { unread: !active && (rs?.unread ?? 0) > 0, mentions: rs?.mentions || undefined };
+  };
   const items = createMemo<ChannelItem[]>(() =>
-    channels().map((c) => ({
-      name: c.name,
-      kind: c.private ? "private" : "channel",
-      active: c.channelId === channelId() && !settingsOpen() && !page(),
-      onClick: () => openChannel(c.channelId),
-    })),
+    channels().map((c) => {
+      const active = c.channelId === channelId() && !settingsOpen() && !page();
+      return {
+        name: c.name,
+        kind: c.private ? "private" : "channel",
+        active,
+        ...readMarks(c.channelId, active),
+        onClick: () => openChannel(c.channelId),
+      };
+    }),
   );
   const dmItems = createMemo<ChannelItem[]>(() =>
     serverDms().map((c) => {
       const partner = partnerOf(c);
+      const active = c.channelId === channelId() && !settingsOpen() && !page();
       return {
         name: nameOf(partner),
         kind: "dm",
         initials: initialsOf(nameOf(partner)),
         src: photoOf(partner),
         tone: toneFor(partner),
-        active: c.channelId === channelId() && !settingsOpen() && !page(),
+        active,
+        ...readMarks(c.channelId, active),
         onClick: () => openChannel(c.channelId),
       };
     }),
   );
+  /** A server's (or Home's personal) unread and mentions, summed over its conversations. */
+  const countsOf = (inPlace: (c: ChannelSummary) => boolean) => {
+    let unread = false;
+    let mentions = 0;
+    for (const c of snapshot.data?.channels ?? []) {
+      if (!inPlace(c)) continue;
+      const rs = stateOf(c.channelId);
+      if (rs?.unread) unread = true;
+      mentions += rs?.mentions ?? 0;
+    }
+    return { unread, mentions };
+  };
+  const serverCounts = (id: string | undefined) => countsOf((c) => c.serverId === id && !PERSONAL.has(c.kind));
+  const openMentions = () => {
+    setSettingsOpen(false);
+    setPage("mentions");
+    setPreview(undefined);
+    setReading(true);
+    setAsideOpen(false);
+  };
 
   const homeProps = () => ({
     snapshot: snapshot.data,
@@ -387,6 +563,7 @@ export function App() {
     asideShown: asideShown(),
     toggleAside,
     openPerson,
+    toMessage,
   });
 
   const leave = async () => {
@@ -409,7 +586,7 @@ export function App() {
           <ServerRail
             logoSrc="/brand/lumia-original-icon.svg"
             homeCurrent={home()}
-            homeUnread={snapshot.data?.pendingRequests.length || undefined}
+            homeUnread={(snapshot.data?.pendingRequests.length ?? 0) + countsOf((c) => PERSONAL.has(c.kind)).mentions || undefined}
             onHome={() => goHome("dm", undefined, false)}
             onAddServer={() => goHome("add")}
             servers={servers().map((s) => ({
@@ -417,6 +594,8 @@ export function App() {
               initials: initialsOf(s.name),
               src: avatarSrc(s.iconUrl),
               current: !home() && s.serverId === serverId(),
+              unread: serverCounts(s.serverId).unread,
+              mentions: serverCounts(s.serverId).mentions || undefined,
               onClick: () => goServer(s.serverId),
             }))}
             self={{
@@ -437,6 +616,9 @@ export function App() {
             <ServerHeader name={server()?.name ?? "Lumia"} onOpenMenu={server() ? (anchor) => setOver({ kind: "serverMenu", anchor }) : undefined} menuOpen={over()?.kind === "serverMenu"} onNewMessage={() => goHome("new")} />
             <ChannelList
               sections={[
+                {
+                  items: [{ name: "Mentions", icon: "mention", active: page() === "mentions", mentions: serverCounts(serverId()).mentions || undefined, onClick: openMentions }],
+                },
                 {
                   title: "Channels",
                   items: items(),
@@ -470,8 +652,13 @@ export function App() {
               <Match when={settingsOpen() && server()}>{(srv) => <ServerSettings server={srv()} snapshot={snapshot.data} back={() => setReading(false)} />}</Match>
               <Match when={page() === "browse" && server()}>{(srv) => <BrowsePage server={srv()} back={() => setReading(false)} open={openPreview} joined={openChannel} />}</Match>
               <Match when={page() === "you" && server()}>{(srv) => <YourSettingsPage server={srv()} back={() => setReading(false)} />}</Match>
+              <Match when={page() === "mentions" && server()}>{(srv) => <MentionsPage server={srv()} snapshot={snapshot.data} back={() => setReading(false)} open={toMessage} />}</Match>
               <Match when={current()}>
-                {(ch) => {
+                {(first) => {
+                  // The channel on screen, read from the memo rather than the Match's accessor: a page opened
+                  // over it (Mentions) moves the Switch on while what is drawn here still updates once.
+                  let shown = first();
+                  const ch = () => (shown = current() ?? shown);
                   const isDm = () => ch().kind === "SERVER_DM";
                   const title = () => (isDm() ? nameOf(partnerOf(ch())) : ch().name);
                   return (
@@ -488,47 +675,37 @@ export function App() {
                         <Notice icon="shield">Messages here are kept by {server()?.name ?? "this server"} and follow its message history settings. For an encrypted conversation, message privately.</Notice>
                       </Show>
                       <Show
-                        when={!messages.data || days().length > 0}
+                        when={!messages.data || timelineItems().length > 0}
                         fallback={
                           <div class="lu-page">
                             <EmptyState title={isDm() ? "No messages yet" : "Nothing here yet"}>{isDm() ? "Say hello." : joined() ? "Say something." : "Join to say something."}</EmptyState>
                           </div>
                         }
                       >
-                        <MessageList label={isDm() ? `Messages with ${title()}` : `Messages in #${ch().name}`} density={preferences().density}>
-                          <For each={days()}>
-                            {(day) => (
-                              <>
-                                <Divider variant="day" label={day.label} />
-                                <For each={day.blocks}>
-                                  {(block) => {
-                                    const first = block.first;
-                                    const t = timeOf(first.createdAtMicros);
-                                    if (first.notice) return <NoticeLine time={t.time} datetime={t.datetime}>{noticeWords(first, nameOf)}</NoticeLine>;
-                                    const author = () => nameOf(first.authorAccountId);
-                                    const said = (m: MessageSummary) => (m.deleted ? "(deleted)" : m.body);
-                                    return (
-                                      <Message
-                                        author={author()}
-                                        initials={initialsOf(author())}
-                                        src={photoOf(first.authorAccountId)}
-                                        tone={toneFor(first.authorAccountId)}
-                                        time={t.time}
-                                        datetime={t.datetime}
-                                        actions={false}
-                                        density={preferences().density}
-                                        onOpenProfile={(anchor) => openPerson(first.authorAccountId, anchor)}
-                                        parts={block.rest.map((m) => ({ time: shortTimeOf(m.createdAtMicros), datetime: timeOf(m.createdAtMicros).datetime, children: said(m) }))}
-                                      >
-                                        {said(first)}
-                                      </Message>
-                                    );
-                                  }}
-                                </For>
-                              </>
-                            )}
-                          </For>
-                        </MessageList>
+                        <Show when={ch().channelId} keyed>
+                          {(id) => (
+                            <Timeline
+                              items={timelineItems()}
+                              label={isDm() ? `Messages with ${title()}` : `Messages in #${ch().name}`}
+                              density={preferences().density}
+                              me={accountId()}
+                              authorName={(m) => nameOf(m.authorId)}
+                              authorPhoto={(m) => photoOf(m.authorId)}
+                              tone={(m) => toneFor(m.authorId)}
+                              onOpenProfile={(m, anchor) => openPerson(m.authorId, anchor)}
+                              openPerson={openPerson}
+                              knownName={knownName}
+                              readState={() => (readStates.data ? (stateOf(id) ?? undefined) : null)}
+                              canAct={joined()}
+                              onReply={startReply}
+                              onReact={react}
+                              jumpTo={pendingJump()?.channelId === id ? pendingJump()?.messageId : undefined}
+                              onJumped={() => setPendingJump(null)}
+                              loadOlder={() => loadOlderMessages(id)}
+                              onAtEnd={setAtEnd}
+                            />
+                          )}
+                        </Show>
                       </Show>
                       <Show when={error()}>
                         <p class="app__error" role="alert">
@@ -539,19 +716,21 @@ export function App() {
                         when={joined()}
                         fallback={<JoinBar channel={ch().name} busy={joining()} error={joinError() || undefined} onJoin={() => void join(ch().channelId)} />}
                       >
-                        <Composer
+                        <Compose
                           placeholder={isDm() ? `Message ${title()}` : `Message #${ch().name}`}
-                          tools={false}
                           typing={typing()}
                           value={draft()}
-                          onInput={(e) => typed(e.currentTarget.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
-                              e.preventDefault();
-                              void send();
-                            }
-                          }}
+                          onInput={typed}
                           onSend={() => void send()}
+                          replying={replying()}
+                          onCancelReply={() => setReplying(null)}
+                          mentions={
+                            !isDm() && server()
+                              ? { members: serverMembers.data ?? [], inChannel: new Set(channelMembers.data ?? []), channel: ch().name, canEveryone: !!server()?.canMentionEveryone }
+                              : undefined
+                          }
+                          note={noteShown()}
+                          inputRef={(el) => (composerInput = el)}
                         />
                       </Show>
                     </>
@@ -577,17 +756,22 @@ export function App() {
                   <MembersAside serverId={serverId() ?? ""} me={accountId()} openPerson={openPerson} />
                 </Match>
                 <Match when={current()?.kind === "TEXT" && server() && current()}>
-                  {(ch) => (
-                    <ChannelMembersAside
-                      server={server() as ServerSummary}
-                      channel={ch()}
-                      joined={joined()}
-                      me={accountId()}
-                      openPerson={openPerson}
-                      addPeople={(anchor) => setOver({ kind: "addPeople", anchor, channelId: ch().channelId })}
-                      left={() => setChannelId(channels().find((c) => c.channelId !== ch().channelId)?.channelId)}
-                    />
-                  )}
+                  {(first) => {
+                    // As the main pane's: from the memo, not the Match's accessor, while the Switch moves on.
+                    let shown = first();
+                    const ch = () => (shown = (current()?.kind === "TEXT" ? current() : undefined) ?? shown);
+                    return (
+                      <ChannelMembersAside
+                        server={server() as ServerSummary}
+                        channel={ch()}
+                        joined={joined()}
+                        me={accountId()}
+                        openPerson={openPerson}
+                        addPeople={(anchor) => setOver({ kind: "addPeople", anchor, channelId: ch().channelId })}
+                        left={() => setChannelId(channels().find((c) => c.channelId !== ch().channelId)?.channelId)}
+                      />
+                    );
+                  }}
                 </Match>
                 <Match when={!current()}>
                   <MembersAside serverId={serverId() ?? ""} me={accountId()} openPerson={openPerson} />

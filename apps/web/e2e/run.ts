@@ -955,6 +955,99 @@ async function membershipStep(which: string, stamp: number) {
   console.log(`  ${which}: found a channel in Browse, read it before joining, joined with its notice, left it, and wrote in a server DM opened from a profile card, in ${Date.now() - t0} ms`);
 }
 
+// Quote replies, reactions, mentions and read state (architecture 6.6):
+// Reply on a message puts its bar over the composer and the reply draws
+// the quote, which jumps back to the original; a reaction from the quick
+// row comes and goes; a mention picked from the @ list is drawn as a
+// pill; and the CLI, as the other member, mentions the browser's account
+// while the Mentions page is open: the channel's row, the Mentions row and
+// the title count it, the page lists it, and opening it from there shows
+// the "New messages" line and reads it, which takes the counts away.
+async function repliesStep(which: string, stamp: number) {
+  const ownerDir = resolve(work, `cli-replies-owner-${which}`);
+  const readerDir = resolve(work, `cli-replies-reader-${which}`);
+  const owner = `quoted${which}${stamp}`;
+  const reader = `quoter${which}${stamp}`;
+  lumia(ownerDir, "instance", "add", instance);
+  lumia(ownerDir, "account", "create", "--handle", owner, "--password", password);
+  const server = lumia(ownerDir, "server-create", `Replies ${stamp}`).match(/[0-9a-f-]{36}/)?.[0];
+  if (!server) throw new Error("no server id");
+  const general = lumia(ownerDir, "channel-create", server, "general").match(/[0-9a-f-]{36}/)?.[0];
+  if (!general) throw new Error("no channel id");
+  const code = lumia(ownerDir, "invite-create", server).trim().split(/\s+/)[0];
+  if (!code) throw new Error("no invite code");
+  lumia(readerDir, "instance", "add", instance);
+  lumia(readerDir, "account", "create", "--handle", reader, "--password", password);
+  lumia(readerDir, "join", code);
+  const readerId = lumia(readerDir, "whoami").trim();
+  lumia(ownerDir, "send", general, "Quote me, please.");
+  const { ctx, page } = await open(which, "replies");
+  const t0 = Date.now();
+  try {
+    await trustCard(page);
+    await page.getByLabel("Email or handle").fill(reader);
+    await page.getByRole("textbox", { name: "Password" }).fill(password);
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    const composer = page.getByPlaceholder("Message #general");
+    await composer.waitFor();
+    phase("quote reply");
+    const original = page.locator(".lu-msg__part", { has: page.locator(".lu-msg__body", { hasText: "Quote me, please." }) });
+    await original.hover();
+    await original.getByRole("button", { name: "Reply", exact: true }).click();
+    await page.locator(".lu-replybar", { hasText: `Replying to ${owner}` }).waitFor();
+    await composer.fill("Quoted it.");
+    await composer.press("Enter");
+    const reply = page.locator(".lu-msg__part", { has: page.locator(".lu-msg__body", { hasText: "Quoted it." }) });
+    await reply.locator(".lu-quote", { hasText: "Quote me, please." }).waitFor();
+    await reply.locator(".lu-quote", { hasText: owner }).waitFor();
+    if ((await page.locator(".lu-replybar").count()) > 0) throw new Error("the reply bar stayed after sending");
+    await reply.locator(".lu-quote").click();
+    await page.locator(".lu-msg__part.is-flash", { has: page.locator(".lu-msg__body", { hasText: "Quote me, please." }) }).waitFor();
+    await page.screenshot({ path: `${out}/${which}-replies-quote.png` });
+    phase("reaction");
+    await original.hover();
+    await original.getByRole("button", { name: "React with 👍" }).click();
+    const chip = original.getByRole("button", { name: "You reacted with 👍" });
+    await chip.waitFor();
+    if ((await chip.getAttribute("aria-pressed")) !== "true") throw new Error("this account's reaction is not drawn pressed");
+    await page.screenshot({ path: `${out}/${which}-replies-reaction.png` });
+    await chip.click();
+    await chip.waitFor({ state: "detached" });
+    phase("mention");
+    await composer.fill(`@${owner.slice(0, 7)}`);
+    const option = page.getByRole("option", { name: new RegExp(owner) });
+    await option.waitFor();
+    await page.screenshot({ path: `${out}/${which}-replies-list.png` });
+    await composer.press("Enter");
+    if ((await composer.inputValue()) !== `@${owner} `) throw new Error(`picking left ${JSON.stringify(await composer.inputValue())}`);
+    await composer.pressSequentially("have a look.");
+    await composer.press("Enter");
+    await page.locator(".lu-msg__body .lu-mention", { hasText: `@${owner}` }).waitFor();
+    phase("unread");
+    const sidebar = page.locator(".lu-shell__sidebar");
+    await sidebar.getByRole("link", { name: /^Mentions/ }).click();
+    await page.getByText("No mentions yet").waitFor();
+    lumia(ownerDir, "send", general, `Over to you, @${reader}.`, "--mention", readerId);
+    const row = sidebar.getByRole("link", { name: /general/ });
+    await row.getByLabel("1 mention").waitFor();
+    await sidebar.getByRole("link", { name: /^Mentions/ }).getByLabel("1 mention").waitFor();
+    await page.waitForFunction(() => document.title.startsWith("(1)"));
+    const entry = page.locator(".lu-mentionentry", { hasText: "Over to you" });
+    await entry.waitFor();
+    await page.screenshot({ path: `${out}/${which}-replies-unread.png` });
+    phase("read");
+    await entry.click();
+    await page.locator(".lu-divider--new", { hasText: "New messages" }).waitFor();
+    await row.getByLabel("1 mention").waitFor({ state: "detached" });
+    await page.waitForFunction(() => document.title === "Lumia");
+    if (await row.evaluate((el) => el.classList.contains("is-unread"))) throw new Error("the channel is still drawn unread once read");
+    await page.screenshot({ path: `${out}/${which}-replies-read.png` });
+  } finally {
+    await ctx.close();
+  }
+  console.log(`  ${which}: replied with a quote that jumps back, reacted and took it back, mentioned from the @ list, and a mention's counts went once it was read from the Mentions page, in ${Date.now() - t0} ms`);
+}
+
 // A session revoked from elsewhere (protocol 12), as "sign out everywhere"
 // or a reused refresh token does it: the gateway is told and its loop
 // ends, the page asks for the snapshot, is refused, and goes back to the
@@ -1476,6 +1569,7 @@ try {
       ["autoscroll", () => autoscrollStep(which, stamp)],
       ["aside", () => asideStep(which, stamp)],
       ["membership", () => membershipStep(which, stamp)],
+      ["replies", () => repliesStep(which, stamp)],
       ["push", () => webPush(which, `web${stamp}`, passwordDir, server, general, webAccount)],
       ["magic link", () => magicLink(which)],
       ["passkey", () => passkey(which, `web${stamp}`)],

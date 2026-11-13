@@ -4,6 +4,7 @@
 // the top. Not a product screen.
 import { For, Show, createSignal, onCleanup, onMount, type JSX } from "solid-js";
 import { applyPreferences } from "../client/preferences";
+import { QUICK_REACTIONS } from "../design/emoji";
 import {
   AppShell,
   Avatar,
@@ -17,8 +18,10 @@ import {
   Checkbox,
   Choice,
   Composer,
+  ComposerNote,
   DeviceList,
   Divider,
+  EmojiPicker,
   EmptyState,
   Icon,
   IconButton,
@@ -26,6 +29,8 @@ import {
   JoinBar,
   MemberList,
   Mention,
+  MentionEntry,
+  MentionList,
   Menu,
   MenuHead,
   MenuItem,
@@ -33,6 +38,7 @@ import {
   MenuRadio,
   MenuRule,
   Message,
+  MessageActions,
   MessageList,
   Notice,
   NoticeLine,
@@ -40,7 +46,10 @@ import {
   Pop,
   ProfileCard,
   QuickTiles,
+  Quote,
+  QuoteReplyButton,
   ReactionChip,
+  ReplyBar,
   RequestCard,
   SearchField,
   SearchTrigger,
@@ -1037,6 +1046,112 @@ function Pieces() {
           <NoticeLine time="9:41 AM">{PEOPLE.maya.name} added {PEOPLE.leo.name}</NoticeLine>
           <NoticeLine time="9:44 AM">{PEOPLE.leo.name} left</NoticeLine>
           <JoinBar channel="random" />
+        </div>
+      </section>
+      <section>
+        <h2>Replies, reactions, mentions and read state: a quote, mention pills, a row that names you, reactions, the toolbar, “New messages”</h2>
+        <div class="pieces__row" style={{ "flex-direction": "column", "align-items": "stretch", "max-width": "720px" }}>
+          <MessageList>
+            <Message
+              author={PEOPLE.maya.name}
+              initials="MC"
+              tone="peach"
+              time="9:04 AM"
+              datetime="2026-11-13T09:04"
+              actions={false}
+              onOpenProfile={() => {}}
+              id="g1"
+              reactions={[
+                { emoji: "👍", label: "👍", count: 3, selected: true, who: "You, Devon and Sam reacted with 👍" },
+                { emoji: "🎉", label: "🎉", count: 5, who: "Devon, Sam and 3 others reacted with 🎉" },
+              ]}
+              onAddReaction={() => {}}
+              parts={[{ time: "9:05", datetime: "2026-11-13T09:05", children: "The flows are in the design channel.", id: "g2" }]}
+            >
+              Morning all. The new onboarding flow is ready for a look before standup.
+            </Message>
+            <Divider variant="new" label="New messages" />
+            <Message
+              author={PEOPLE.devon.name}
+              initials="DP"
+              tone="purple"
+              time="9:12 AM"
+              datetime="2026-11-13T09:12"
+              actions={false}
+              onOpenProfile={() => {}}
+              mentioned
+              quote={<Quote author={PEOPLE.maya.name} text="Morning all. The new onboarding flow is ready for a look before standup, and the copy is in the doc beside it so we can go through both together." onOpen={() => {}} />}
+            >
+              <p>
+                Looks great. <Mention onOpen={() => {}}>@ryan</Mention> can you check the copy on the second screen?
+              </p>
+            </Message>
+            <Message author={PEOPLE.sam.name} initials="SO" tone="mint" time="9:20 AM" datetime="2026-11-13T09:20" actions={false} onOpenProfile={() => {}} quote={<Quote deleted text="" />}>
+              Agreed with the above.
+            </Message>
+          </MessageList>
+          <div class="pieces__row">
+            <MessageActions floating={false} quick={QUICK_REACTIONS.map((emoji, i) => ({ emoji, on: i === 0 }))} onReply={() => {}} />
+            <QuoteReplyButton inline />
+          </div>
+        </div>
+        <h2>Over the composer: replying, a note after sending, the @ list</h2>
+        <div class="pieces__row" style={{ "flex-direction": "column", "align-items": "stretch", "max-width": "720px" }}>
+          <div style={{ position: "relative", "padding-top": "300px" }}>
+            <Composer
+              placeholder="Message #design"
+              tools={false}
+              above={
+                <>
+                  <MentionList
+                    id="gallery-mentions"
+                    active={1}
+                    options={[
+                      { id: "everyone", name: "everyone", everyone: true, note: "Notify everyone in #design" },
+                      { id: "1", name: PEOPLE.maya.name, handle: "maya", initials: "MC", tone: "peach" },
+                      { id: "2", name: "Mateo Ruiz", handle: "mateo", initials: "MR", tone: "sky", note: "Not in #design" },
+                    ]}
+                  />
+                  <ReplyBar name={PEOPLE.maya.name} text="Morning all. The new onboarding flow is ready for a look before standup." />
+                </>
+              }
+            />
+          </div>
+          <Composer
+            placeholder="Message #design"
+            tools={false}
+            above={
+              <ComposerNote actions={[{ label: "Add to #design", primary: true }, { label: "Dismiss" }]}>
+                Mateo and Priya aren’t in #design, so they won’t be notified.
+              </ComposerNote>
+            }
+          />
+          <Composer placeholder="Message #design" tools={false} above={<ComposerNote>Invited Mateo to #design.</ComposerNote>} />
+          <Composer placeholder="Message #design" tools={false} above={<ComposerNote error="You cannot do that in this channel." actions={[{ label: "Add to #design", primary: true }, { label: "Dismiss" }]}>Mateo isn’t in #design, so they won’t be notified.</ComposerNote>} />
+        </div>
+        <h2>The emoji picker, the Mentions row and unread in the sidebar, a Mentions page’s item</h2>
+        <div class="pieces__row pieces__row--top">
+          <EmojiPicker frequent={QUICK_REACTIONS} />
+          <div style={{ width: "240px" }}>
+            <ChannelList
+              sections={[
+                { items: [{ name: "Mentions", icon: "mention", mentions: 3 }] },
+                {
+                  title: "Channels",
+                  items: [{ name: "general", active: true }, { name: "design", unread: true, mentions: 2 }, { name: "random", unread: true }, { name: "announcements" }],
+                },
+              ]}
+            />
+          </div>
+          <ul class="lu-mentionentries" style={{ width: "420px" }}>
+            <MentionEntry where="Acme · #design">
+              <Message author={PEOPLE.devon.name} initials="DP" tone="purple" time="Yesterday, 4:30 PM" actions={false} quote={<Quote author="Ryan Winchester" text="Can someone look at the second screen?" />}>
+                <p>
+                  <Mention>@ryan</Mention> done, it reads well now.
+                </p>
+              </Message>
+            </MentionEntry>
+          </ul>
         </div>
       </section>
     </div>

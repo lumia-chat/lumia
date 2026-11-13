@@ -31,6 +31,8 @@ export interface ServerSummary {
   canManageChannels: boolean;
   /** Whether it may start server DMs there. */
   canStartDms: boolean;
+  /** Whether it may mention everyone there (`MENTION_EVERYONE`), and so is offered `@everyone` (architecture 6.6). */
+  canMentionEveryone: boolean;
   /** Its own switches there: adds to channels wait as invitations; nobody may start a server DM with it. */
   channelAddsByInvitation: boolean;
   serverDmsOff: boolean;
@@ -131,6 +133,46 @@ export interface SnapshotSummary {
   pendingRequests: DmRequestSummary[];
   /** Channels this account was asked into and has not answered. */
   channelInvitations: ChannelInvitationSummary[];
+  /** Where this account has read each conversation, as the instance counted it; `readStates` keeps it current. */
+  readStates: ReadStateSummary[];
+}
+/** A quote of another message of the conversation (architecture 6.6). */
+export interface QuoteSummary {
+  messageId: string;
+  /** Its author; in a personal conversation, empty where unknown. */
+  authorAccountId: string;
+  /** What of it was quoted; empty once it is deleted. */
+  text: string;
+  originalDeleted: boolean;
+}
+/** A mention: an account, or everyone, and its UTF-8 byte range in the body (half-open). */
+export interface MentionSummary {
+  /** Empty when it is everyone. */
+  accountId: string;
+  everyone: boolean;
+  start: number;
+  end: number;
+}
+/** One emoji's reactions to a message, in the order each was first used. */
+export interface ReactionSummary {
+  reaction: string;
+  count: number;
+  /** Whether this account is among them. */
+  me: boolean;
+  /** Who reacted, as many as are known. */
+  accountIds: string[];
+}
+/** A conversation's read state: the last event read, how many messages others sent after it, and how many of those notify (in a DM, every one). */
+export interface ReadStateSummary {
+  channelId: string;
+  readSeq: number;
+  unread: number;
+  mentions: number;
+}
+/** A page of the messages that notify this account, newest first. */
+export interface MentionsPage {
+  messages: MessageSummary[];
+  hasMore: boolean;
 }
 export interface StatusSummary {
   status: string;
@@ -166,6 +208,8 @@ export interface DmMessageSummary {
   edited: boolean;
   deleted: boolean;
   mine: boolean;
+  reply: QuoteSummary | null;
+  reactions: ReactionSummary[];
 }
 export interface DmLogSummary {
   messages: DmMessageSummary[];
@@ -189,6 +233,11 @@ export interface MessageSummary {
   /** A notice (architecture 6.8): `joined`, `added`, `left` or `removed`, done by the author, about `noticeAccountId`; empty for a message. */
   notice: string;
   noticeAccountId: string;
+  reply: QuoteSummary | null;
+  mentions: MentionSummary[];
+  reactions: ReactionSummary[];
+  /** It mentions this account or everyone, or quotes one of its messages. */
+  mentionsMe: boolean;
 }
 export interface EventSummary {
   seq: number;
@@ -508,6 +557,35 @@ export class Bridge {
   sendMessage(channelId: string, body: string): Promise<string> {
     return this.call("sendMessage", channelId, body);
   }
+  /** Sends a message with its mentions and what it quotes (only `messageId` and `text` are read); the client-minted message id. */
+  sendMessageWith(channelId: string, body: string, mentions: MentionSummary[], replyTo: QuoteSummary | null): Promise<string> {
+    return this.call("sendMessageWith", channelId, body, mentions, replyTo);
+  }
+  /** The mentions a body makes: each `@handle` of one of `members`, and `@everyone` when `everyone`. */
+  findMentions(body: string, members: MemberSummary[], everyone: boolean): Promise<MentionSummary[]> {
+    // A query's members are a store's proxies, which a worker message cannot carry: plain copies go.
+    return this.call("findMentions", body, members.map((m) => ({ ...m })), everyone);
+  }
+  /** Adds this account's reaction to a message of a server channel, or takes it away. */
+  react(channelId: string, messageId: string, emoji: string, remove: boolean): Promise<void> {
+    return this.call("react", channelId, messageId, emoji, remove);
+  }
+  /** Every conversation's read state as this client counts it. */
+  readStates(): Promise<ReadStateSummary[]> {
+    return this.call("readStates");
+  }
+  /** What notifies this account and is unread, everywhere. */
+  badge(): Promise<number> {
+    return this.call("badge");
+  }
+  /** Read through `seq`; the state as the instance then counts it. */
+  markRead(channelId: string, seq: number): Promise<ReadStateSummary> {
+    return this.call("markRead", channelId, seq);
+  }
+  /** The messages that notify this account, newest first, in one server or (`null`) all; `before` is the last message id of the page before. */
+  mentions(serverId: string | null, before: string | null): Promise<MentionsPage> {
+    return this.call("mentions", serverId, before);
+  }
   foreground(): Promise<void> {
     return this.call("foreground");
   }
@@ -558,6 +636,13 @@ export class Bridge {
   }
   dmSend(channelId: string, body: string): Promise<void> {
     return this.call("dmSend", channelId, body);
+  }
+  /** Sends a message in a personal DM quoting another, or nothing. */
+  dmSendWith(channelId: string, body: string, quote: QuoteSummary | null): Promise<void> {
+    return this.call("dmSendWith", channelId, body, quote);
+  }
+  dmReact(channelId: string, messageId: string, emoji: string, remove: boolean): Promise<void> {
+    return this.call("dmReact", channelId, messageId, emoji, remove);
   }
   dmDelete(channelId: string, messageId: string): Promise<void> {
     return this.call("dmDelete", channelId, messageId);

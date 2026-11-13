@@ -2,9 +2,9 @@
 // signed in to, the account snapshot and a channel's messages as queries
 // that the gateway's events invalidate. Screens read these and call the
 // bridge; nothing here renders.
-import { QueryClient, createQuery, useQueryClient } from "@tanstack/solid-query";
+import { QueryClient, createInfiniteQuery, createQuery, useQueryClient } from "@tanstack/solid-query";
 import { createSignal } from "solid-js";
-import { Bridge, ClientError, claimOwnership, type ClientEvent, type MemberSummary, type Opened, type SnapshotSummary, type StatusSummary } from "./bridge";
+import { Bridge, ClientError, claimOwnership, type ClientEvent, type MemberSummary, type Opened, type ReadStateSummary, type SnapshotSummary, type StatusSummary } from "./bridge";
 
 export const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: Infinity, retry: false } },
@@ -335,8 +335,15 @@ export async function signOut(): Promise<void> {
   if (o) setOpened({ ...o, signedIn: false });
 }
 
+// The last command the gateway refused, for the view that sent it to say so.
+const [commandError, setCommandError] = createSignal<{ commandId: string; code: string; message: string } | null>(null);
+export { commandError };
+
 function onGatewayEvent(e: ClientEvent): void {
   switch (e.kind) {
+    case "error":
+      setCommandError({ commandId: e.commandId, code: e.code, message: e.message });
+      break;
     case "welcomed":
       setConnection("connected");
       void queryClient.invalidateQueries({ queryKey: ["snapshot"] });
@@ -354,6 +361,9 @@ function onGatewayEvent(e: ClientEvent): void {
     }
     case "applied":
       void queryClient.invalidateQueries({ queryKey: ["messages", e.channelId] });
+      void queryClient.invalidateQueries({ queryKey: ["readStates"] });
+      // A message that names this account lands on the Mentions pages.
+      if (e.events.some((event) => event.kind === "message_created")) void queryClient.invalidateQueries({ queryKey: ["mentions"] });
       // Someone came or went (architecture 6.8): who is in the channel is asked again.
       if (e.events.some((event) => event.message?.notice)) void queryClient.invalidateQueries({ queryKey: ["channelMembers", e.channelId] });
       for (const event of e.events) if (event.message) stopTyping(e.channelId, event.message.authorAccountId);
@@ -363,6 +373,8 @@ function onGatewayEvent(e: ClientEvent): void {
       break;
     case "accountApplied":
       void queryClient.invalidateQueries({ queryKey: ["snapshot"] });
+      // Another device read something.
+      void queryClient.invalidateQueries({ queryKey: ["readStates"] });
       void queryClient.invalidateQueries({ queryKey: ["dmChannels"] });
       break;
     case "snapshotTaken":
@@ -392,6 +404,7 @@ function onGatewayEvent(e: ClientEvent): void {
       break;
     case "dmOperation":
       void queryClient.invalidateQueries({ queryKey: ["dm", e.channelId] });
+      void queryClient.invalidateQueries({ queryKey: ["readStates"] });
       break;
     case "dmDelivered":
       void queryClient.invalidateQueries({ queryKey: ["dm"] });
@@ -407,7 +420,45 @@ function onGatewayEvent(e: ClientEvent): void {
 export function snapshotQuery() {
   return createQuery(() => ({
     queryKey: ["snapshot"],
-    queryFn: () => client().snapshot(),
+    queryFn: async () => {
+      const snapshot = await client().snapshot();
+      // A snapshot recounts where everything was read.
+      void queryClient.invalidateQueries({ queryKey: ["readStates"] });
+      return snapshot;
+    },
+  }));
+}
+
+/** Read state by conversation, and the badge (architecture 6.6): what the core counts, asked again after every event that can move it. */
+export interface ReadStates {
+  byChannel: Map<string, ReadStateSummary>;
+  badge: number;
+}
+
+export function readStatesQuery() {
+  return createQuery(() => ({
+    queryKey: ["readStates"],
+    queryFn: async (): Promise<ReadStates> => {
+      const [states, badge] = await Promise.all([client().readStates(), client().badge()]);
+      return { byChannel: new Map(states.map((s) => [s.channelId, s])), badge };
+    },
+  }));
+}
+
+/** Reads a conversation through `seq` and takes the counts the instance answers with. */
+export async function markRead(channelId: string, seq: number): Promise<void> {
+  await client().markRead(channelId, seq);
+  await queryClient.invalidateQueries({ queryKey: ["readStates"] });
+}
+
+/** The messages that notify this account, newest first, in one server or every one, a page at a time. */
+export function mentionsQuery(serverId: () => string | null) {
+  return createInfiniteQuery(() => ({
+    queryKey: ["mentions", serverId() ?? "all"],
+    queryFn: ({ pageParam }: { pageParam: string | null }) => client().mentions(serverId(), pageParam),
+    initialPageParam: null as string | null,
+    getNextPageParam: (last: { messages: { messageId: string }[]; hasMore: boolean }) => (last.hasMore ? (last.messages[last.messages.length - 1]?.messageId ?? null) : null),
+    staleTime: 0,
   }));
 }
 
@@ -512,12 +563,30 @@ export function tookSnapshot(snapshot: SnapshotSummary): void {
   queryClient.setQueryData(["snapshot"], snapshot);
 }
 
+/** How many of a channel's newest messages are read from the store: a page of 200, more as a jump to an older one asks. */
+const MESSAGE_PAGE = 200;
+const [messagePages, setMessagePages] = createSignal<Map<string, number>>(new Map());
+
 export function messagesQuery(channelId: () => string | undefined) {
-  return createQuery(() => ({
-    queryKey: ["messages", channelId()],
-    queryFn: () => client().messages(channelId() as string, 200),
-    enabled: !!channelId(),
-  }));
+  return createQuery(() => {
+    const id = channelId();
+    const pages = (id && messagePages().get(id)) || 1;
+    return {
+      queryKey: ["messages", id],
+      queryFn: () => client().messages(id as string, MESSAGE_PAGE * pages),
+      enabled: !!id,
+    };
+  });
+}
+
+/** Reads one more page of a channel's older messages from the store; false when there were no more. */
+export async function loadOlderMessages(channelId: string): Promise<boolean> {
+  const pages = messagePages().get(channelId) ?? 1;
+  const before = queryClient.getQueryData<unknown[]>(["messages", channelId])?.length ?? 0;
+  if (before < MESSAGE_PAGE * pages) return false;
+  setMessagePages(new Map(messagePages()).set(channelId, pages + 1));
+  const after = await queryClient.fetchQuery({ queryKey: ["messages", channelId], queryFn: () => client().messages(channelId, MESSAGE_PAGE * (pages + 1)) });
+  return after.length > before;
 }
 
 export { useQueryClient };

@@ -7,9 +7,10 @@
 // instead of `className`, `for` instead of `htmlFor`, `style` objects with
 // CSS property names.
 
-import { For, Show, children, createEffect, createSignal, createUniqueId, on, onCleanup, onMount, splitProps, type JSX } from "solid-js";
+import { For, Show, children, createEffect, createMemo, createSignal, createUniqueId, on, onCleanup, onMount, splitProps, type JSX } from "solid-js";
 import { Dynamic, Portal } from "solid-js/web";
 import { ICONS } from "./icons";
+import { emojiMatches, loadEmoji, type EmojiGroup } from "./emoji";
 
 export type Tone = "peach" | "blue" | "purple" | "mint" | "amber" | "sky" | "stone" | "green" | "indigo";
 export type Status = "online" | "away" | "dnd";
@@ -147,8 +148,12 @@ export function IconButton(props: IconButtonProps) {
 }
 
 export interface ReactionChipProps {
-  icon: IconName;
+  /** A board's glyph for the reaction; in the product the reaction is an emoji, drawn as text. */
+  icon?: IconName;
+  emoji?: string;
   label: string;
+  /** Who reacted, as the tooltip and the accessible name: "Ada and Bo reacted with 👍". */
+  who?: string;
   count: number;
   selected?: boolean;
   defaultSelected?: boolean;
@@ -166,6 +171,8 @@ export function ReactionChip(props: ReactionChipProps) {
     <button
       type="button"
       aria-pressed={on()}
+      aria-label={props.who}
+      title={props.who}
       class={cx("lu-reaction", on() && "is-on", props.class)}
       onClick={() => {
         const next = !on();
@@ -173,8 +180,14 @@ export function ReactionChip(props: ReactionChipProps) {
         props.onToggle?.(next);
       }}
     >
-      <Icon name={props.icon} size={14} strokeWidth={2} />
-      <span class="lu-sr">{props.label},</span>
+      <Show when={props.emoji} fallback={<Show when={props.icon}>{(icon) => <Icon name={icon()} size={14} strokeWidth={2} />}</Show>}>
+        <span class="lu-reaction__emoji" aria-hidden="true">
+          {props.emoji}
+        </span>
+      </Show>
+      <Show when={!props.who}>
+        <span class="lu-sr">{props.label},</span>
+      </Show>
       <span>{shown()}</span>
     </button>
   );
@@ -320,11 +333,14 @@ export interface ComposerProps extends JSX.InputHTMLAttributes<HTMLInputElement>
   tools?: boolean;
   onSend?: () => void;
   onAttach?: () => void;
+  /** What stands over the field: the reply bar, a note after sending, the @ list (which floats over the conversation). */
+  above?: JSX.Element;
+  inputRef?: (el: HTMLInputElement) => void;
 }
 
 /** Message bar with tools, send and a hint row. */
 export function Composer(props: ComposerProps) {
-  const [local, input] = splitProps(props, ["placeholder", "label", "typing", "hint", "tools", "id", "onSend", "onAttach", "class"]);
+  const [local, input] = splitProps(props, ["placeholder", "label", "typing", "hint", "tools", "id", "onSend", "onAttach", "class", "above", "inputRef"]);
   const fid = fieldId(local.id);
   const placeholder = () => local.placeholder ?? "Message";
   const hint = () => local.hint ?? "Return to send";
@@ -332,6 +348,7 @@ export function Composer(props: ComposerProps) {
   const typing = () => (Array.isArray(local.typing) ? (local.typing.length ? local.typing : undefined) : local.typing || undefined);
   return (
     <div class={cx("lu-composer", local.class)}>
+      {local.above}
       <div class={cx("lu-composer__field", !tools() && "is-bare")}>
         <Show when={tools()}>
           <IconButton icon="plus" label="Attach a file" class="lu-composer__attach" onClick={() => local.onAttach?.()} />
@@ -339,7 +356,7 @@ export function Composer(props: ComposerProps) {
         <label for={fid} class="lu-sr">
           {local.label ?? placeholder()}
         </label>
-        <input id={fid} type="text" placeholder={placeholder()} autocomplete="off" class="lu-composer__input" {...input} />
+        <input ref={(el) => local.inputRef?.(el)} id={fid} type="text" placeholder={placeholder()} autocomplete="off" class="lu-composer__input" {...input} />
         <Show when={tools()}>
           <IconButton glyph="Aa" label="Text formatting" />
           <IconButton icon="emoji" label="Emoji" />
@@ -714,41 +731,45 @@ export interface ChannelItem {
   tone?: Tone;
   status?: Status;
   people?: Person[];
+  /** A row that is a place rather than a conversation (Mentions) leads with its icon. */
+  icon?: IconName;
 }
 
 function RowLead(props: { item: ChannelItem }) {
   return (
-    <Show
-      when={props.item.kind === "dm"}
-      fallback={
-        <Show
-          when={props.item.kind === "group"}
-          fallback={
-            <Show when={props.item.kind === "private"} fallback={<span aria-hidden="true" class="lu-row__glyph lu-row__hash">#</span>}>
-              <Icon name="lock" size={11} strokeWidth={2.6} class="lu-row__glyph" />
-            </Show>
-          }
-        >
-          <span aria-hidden="true" class="lu-row__pair">
-            <For each={(props.item.people ?? []).slice(0, 2)}>
-              {(p) => (
-                <span class={cx("lu-avatar", "lu-tone-" + (p.tone ?? "blue"))}>
-                  <Face initials={p.initials} src={p.src} />
-                </span>
-              )}
-            </For>
-          </span>
-        </Show>
-      }
-    >
-      <Avatar initials={props.item.initials ?? ""} src={props.item.src} tone={props.item.tone} size={22} status={props.item.status} ring="bg" />
+    <Show when={!props.item.icon} fallback={<Icon name={props.item.icon as IconName} size={15} strokeWidth={2} class="lu-row__glyph lu-row__icon" />}>
+      <Show
+        when={props.item.kind === "dm"}
+        fallback={
+          <Show
+            when={props.item.kind === "group"}
+            fallback={
+              <Show when={props.item.kind === "private"} fallback={<span aria-hidden="true" class="lu-row__glyph lu-row__hash">#</span>}>
+                <Icon name="lock" size={11} strokeWidth={2.6} class="lu-row__glyph" />
+              </Show>
+            }
+          >
+            <span aria-hidden="true" class="lu-row__pair">
+              <For each={(props.item.people ?? []).slice(0, 2)}>
+                {(p) => (
+                  <span class={cx("lu-avatar", "lu-tone-" + (p.tone ?? "blue"))}>
+                    <Face initials={p.initials} src={p.src} />
+                  </span>
+                )}
+              </For>
+            </span>
+          </Show>
+        }
+      >
+        <Avatar initials={props.item.initials ?? ""} src={props.item.src} tone={props.item.tone} size={22} status={props.item.status} ring="bg" />
+      </Show>
     </Show>
   );
 }
 
 export interface ChannelListProps {
   /** `action` is the plus at the end of a section's title; `before` stands between the title and the rows. */
-  sections: { title: string; items: ChannelItem[]; action?: { label: string; onClick: (anchor: HTMLElement) => void; expanded?: boolean }; before?: JSX.Element; empty?: string }[];
+  sections: { title?: string; items: ChannelItem[]; action?: { label: string; onClick: (anchor: HTMLElement) => void; expanded?: boolean }; before?: JSX.Element; empty?: string }[];
   class?: string;
 }
 
@@ -759,10 +780,12 @@ export function ChannelList(props: ChannelListProps) {
       <For each={props.sections}>
         {(sec) => (
           <section>
-            <div class="lu-chlist__head">
-              <h2 class="lu-chlist__title">{sec.title}</h2>
-              <Show when={sec.action}>{(a) => <IconButton icon="plus" label={a().label} size={28} class="lu-chlist__add" aria-haspopup="menu" aria-expanded={a().expanded ? "true" : "false"} onClick={(e) => a().onClick(e.currentTarget)} />}</Show>
-            </div>
+            <Show when={sec.title}>
+              <div class="lu-chlist__head">
+                <h2 class="lu-chlist__title">{sec.title}</h2>
+                <Show when={sec.action}>{(a) => <IconButton icon="plus" label={a().label} size={28} class="lu-chlist__add" aria-haspopup="menu" aria-expanded={a().expanded ? "true" : "false"} onClick={(e) => a().onClick(e.currentTarget)} />}</Show>
+              </div>
+            </Show>
             {sec.before}
             <Show when={sec.empty && sec.items.length === 0}>
               <p class="lu-chlist__empty">{sec.empty}</p>
@@ -1194,15 +1217,19 @@ export function EmptyState(props: EmptyStateProps) {
 export interface MentionProps {
   children?: JSX.Element;
   href?: string;
+  /** The person's card, against the pill; a mention of everyone opens nothing. */
+  onOpen?: (pressed: HTMLElement) => void;
   class?: string;
 }
 
-/** Inline @mention. */
+/** Inline @mention: the text as written, tinted. */
 export function Mention(props: MentionProps) {
   return (
-    <a href={props.href ?? "#"} class={cx("lu-mention", props.class)}>
-      {props.children}
-    </a>
+    <Show when={props.onOpen} fallback={<Show when={props.href} fallback={<span class={cx("lu-mention", props.class)}>{props.children}</span>}><a href={props.href} class={cx("lu-mention", props.class)}>{props.children}</a></Show>}>
+      <button type="button" class={cx("lu-mention", props.class)} aria-haspopup="dialog" onClick={(e) => props.onOpen?.(e.currentTarget)}>
+        {props.children}
+      </button>
+    </Show>
   );
 }
 
@@ -1256,21 +1283,78 @@ export function ThreadSummary(props: ThreadSummaryProps) {
 }
 
 export interface MessageActionsProps {
-  onReact?: () => void;
+  /** The picker, against the button pressed. */
+  onReact?: (pressed: HTMLElement) => void;
   onThread?: () => void;
   onMore?: () => void;
+  /**
+   * The product's toolbar (architecture 6.6): a quick row of reactions,
+   * each pressed when this account has it, before Add reaction, and Reply
+   * after it. Without either the toolbar is the board's.
+   */
+  quick?: { emoji: string; on?: boolean }[];
+  onQuick?: (emoji: string, on: boolean) => void;
+  onReply?: () => void;
   floating?: boolean;
   class?: string;
 }
 
 /** Hover toolbar for a message. */
 export function MessageActions(props: MessageActionsProps) {
+  const board = () => props.quick === undefined && props.onReply === undefined;
   return (
     <div class={cx("lu-actions", (props.floating ?? true) && "is-floating", props.class)}>
-      <IconButton icon="reaction-add" label="Add reaction" size={30} onClick={() => props.onReact?.()} />
-      <IconButton icon="thread" label="Open thread" size={30} onClick={() => props.onThread?.()} />
-      <IconButton icon="more" label="More actions" size={30} onClick={() => props.onMore?.()} />
+      <For each={props.quick ?? []}>
+        {(q) => (
+          <button type="button" class="lu-actions__emoji" aria-label={"React with " + q.emoji} aria-pressed={!!q.on} title={"React with " + q.emoji} onClick={() => props.onQuick?.(q.emoji, !!q.on)}>
+            <span aria-hidden="true">{q.emoji}</span>
+          </button>
+        )}
+      </For>
+      <Show when={props.quick?.length}>
+        <span aria-hidden="true" class="lu-actions__rule"></span>
+      </Show>
+      <IconButton icon="reaction-add" label="Add reaction" size={30} aria-haspopup="dialog" onClick={(e) => props.onReact?.(e.currentTarget)} />
+      <Show when={props.onReply}>
+        <IconButton icon="reply" label="Reply" size={30} onClick={() => props.onReply?.()} />
+      </Show>
+      <Show when={board()}>
+        <IconButton icon="thread" label="Open thread" size={30} onClick={() => props.onThread?.()} />
+        <IconButton icon="more" label="More actions" size={30} onClick={() => props.onMore?.()} />
+      </Show>
     </div>
+  );
+}
+
+export interface QuoteProps {
+  /** The quoted message's author; a quote whose author is unknown (a personal DM) draws no name. */
+  author?: string;
+  text: string;
+  /** The original was deleted: the quote says so and leads nowhere. */
+  deleted?: boolean;
+  /** Goes to the original. */
+  onOpen?: () => void;
+  class?: string;
+}
+
+/** What a reply quotes, above its body: the accent bar, who wrote it, two lines of it. */
+export function Quote(props: QuoteProps) {
+  return (
+    <Show
+      when={!props.deleted}
+      fallback={
+        <div class={cx("lu-quote", "is-deleted", props.class)}>
+          <span class="lu-quote__text">Original message was deleted</span>
+        </div>
+      }
+    >
+      <button type="button" class={cx("lu-quote", props.class)} title="Go to the original message" onClick={() => props.onOpen?.()}>
+        <Show when={props.author}>
+          <span class="lu-quote__author">{props.author}</span>
+        </Show>
+        <span class="lu-quote__text">{props.text}</span>
+      </button>
+    </Show>
   );
 }
 
@@ -1301,7 +1385,18 @@ export interface MessageProps {
   datetime?: string;
   children?: JSX.Element | string[];
   reactions?: ReactionChipProps[];
-  onAddReaction?: () => void;
+  /** The `lu-reaction-add` after the chips, which opens the picker against itself. */
+  onAddReaction?: (pressed: HTMLElement) => void;
+  /** What it quotes, above its body (`Quote`). */
+  quote?: JSX.Element;
+  /** The first message's own toolbar (`MessageActions`), shown over it alone on hover; each part has its own. */
+  tools?: JSX.Element;
+  /** The message's id, which a jump to it finds (`data-message-id`). */
+  id?: string;
+  /** It names this account or everyone, or quotes it: the row is tinted, with the accent bar. */
+  mentioned?: boolean;
+  /** Jumped to: the row's highlight, for a moment. */
+  flash?: boolean;
   attachment?: AttachmentProps;
   thread?: ThreadSummaryProps;
   highlighted?: boolean;
@@ -1327,6 +1422,29 @@ export interface MessagePart {
   time?: string;
   datetime?: string;
   children?: JSX.Element | string[];
+  id?: string;
+  quote?: JSX.Element;
+  reactions?: ReactionChipProps[];
+  onAddReaction?: (pressed: HTMLElement) => void;
+  tools?: JSX.Element;
+  mentioned?: boolean;
+  flash?: boolean;
+}
+
+/** One message's reactions, and the button that adds another. */
+function Reactions(props: { reactions?: ReactionChipProps[]; onAdd?: (pressed: HTMLElement) => void }) {
+  return (
+    <Show when={props.reactions && props.reactions.length}>
+      <div class="lu-msg__reactions">
+        <For each={props.reactions}>{(r) => <ReactionChip {...r} />}</For>
+        <Show when={props.onAdd}>
+          <button type="button" aria-label="Add reaction" aria-haspopup="dialog" class="lu-reaction-add" onClick={(e) => props.onAdd?.(e.currentTarget)}>
+            <Icon name="reaction-add" size={15} strokeWidth={1.9} />
+          </button>
+        </Show>
+      </div>
+    </Show>
+  );
 }
 
 /** One message, or one person's run of them as a block. */
@@ -1343,52 +1461,56 @@ export function Message(props: MessageProps) {
         </button>
       </Show>
       <div class="lu-msg__main">
-        <div class="lu-msg__head">
-          <Show when={props.onOpenProfile} fallback={<span class="lu-msg__author">{props.author}</span>}>
-            <button type="button" class="lu-msg__author lu-msg__name" aria-haspopup="dialog" onClick={(e) => props.onOpenProfile?.(e.currentTarget)}>
-              {props.author}
-            </button>
+        <div class={cx("lu-msg__part", "lu-msg__part--first", props.mentioned && "is-mentioned", props.flash && "is-flash")} data-message-id={props.id}>
+          <div class="lu-msg__head">
+            <Show when={props.onOpenProfile} fallback={<span class="lu-msg__author">{props.author}</span>}>
+              <button type="button" class="lu-msg__author lu-msg__name" aria-haspopup="dialog" onClick={(e) => props.onOpenProfile?.(e.currentTarget)}>
+                {props.author}
+              </button>
+            </Show>
+            <Show when={compact() ? undefined : props.tag}>{(tag) => <Tag tone={tag().tone ?? "neutral"}>{tag().label}</Tag>}</Show>
+            <Show when={props.time}>
+              <time datetime={props.datetime} class="lu-msg__time">
+                {props.time}
+              </time>
+            </Show>
+          </div>
+          {props.quote}
+          <div class="lu-msg__body">
+            <Paras>{props.children}</Paras>
+          </div>
+          <Show when={!props.parts?.length}>
+            <Show when={props.attachment}>{(a) => <Attachment {...a()} />}</Show>
+            <Show when={props.thread}>{(t) => <ThreadSummary {...t()} />}</Show>
           </Show>
-          <Show when={compact() ? undefined : props.tag}>{(tag) => <Tag tone={tag().tone ?? "neutral"}>{tag().label}</Tag>}</Show>
-          <Show when={props.time}>
-            <time datetime={props.datetime} class="lu-msg__time">
-              {props.time}
-            </time>
-          </Show>
-        </div>
-        <div class="lu-msg__body">
-          <Paras>{props.children}</Paras>
+          <Reactions reactions={props.reactions} onAdd={props.onAddReaction} />
+          {props.tools}
         </div>
         <For each={props.parts ?? []}>
           {(part) => (
-            <div class="lu-msg__part">
+            <div class={cx("lu-msg__part", part.mentioned && "is-mentioned", part.flash && "is-flash")} data-message-id={part.id}>
               <Show when={part.time}>
                 <time datetime={part.datetime} class="lu-msg__parttime">
                   <span class="lu-sr">{props.author}, </span>
                   {part.time}
                 </time>
               </Show>
+              {part.quote}
               <div class="lu-msg__body">
                 <Paras>{part.children}</Paras>
               </div>
+              <Reactions reactions={part.reactions} onAdd={part.onAddReaction} />
+              {part.tools}
             </div>
           )}
         </For>
-        <Show when={props.attachment}>{(a) => <Attachment {...a()} />}</Show>
-        <Show when={props.thread}>{(t) => <ThreadSummary {...t()} />}</Show>
-        <Show when={props.reactions && props.reactions.length}>
-          <div class="lu-msg__reactions">
-            <For each={props.reactions}>{(r) => <ReactionChip {...r} />}</For>
-            <Show when={props.onAddReaction}>
-              <button type="button" aria-label="Add reaction" class="lu-reaction-add" onClick={() => props.onAddReaction?.()}>
-                <Icon name="reaction-add" size={15} strokeWidth={1.9} />
-              </button>
-            </Show>
-          </div>
+        <Show when={props.parts?.length}>
+          <Show when={props.attachment}>{(a) => <Attachment {...a()} />}</Show>
+          <Show when={props.thread}>{(t) => <ThreadSummary {...t()} />}</Show>
         </Show>
       </div>
       <Show when={(props.actions ?? true) && !compact()}>
-        <MessageActions onReact={props.onReact} onThread={props.onThread} onMore={props.onMore} />
+        <MessageActions onReact={() => props.onReact?.()} onThread={props.onThread} onMore={props.onMore} />
       </Show>
     </article>
   );
@@ -1452,13 +1574,16 @@ export interface MessageListProps {
   /** Compact halves the room between blocks, inside one and around a day's divider. */
   density?: "comfortable" | "compact";
   children?: JSX.Element;
+  /** The pane that scrolls, and its scrolling: whether it is at its newest end, where a jump goes. */
+  scrollRef?: (el: HTMLDivElement) => void;
+  onScroll?: () => void;
   class?: string;
 }
 
 /** Bottom-anchored scrolling log. */
 export function MessageList(props: MessageListProps) {
   return (
-    <div class={cx("lu-msglist", props.density === "compact" && "lu-msglist--compact", props.class)}>
+    <div ref={(el) => props.scrollRef?.(el)} onScroll={() => props.onScroll?.()} class={cx("lu-msglist", props.density === "compact" && "lu-msglist--compact", props.class)}>
       <div role="log" aria-label={props.label ?? "Messages"} class="lu-msglist__log">
         {props.children}
       </div>
@@ -1525,6 +1650,263 @@ export function ThreadPanel(props: ThreadPanelProps) {
         </Show>
       </div>
     </div>
+  );
+}
+
+/* ── Replies, reactions, mentions (architecture 6.6) ─────── */
+
+export interface ReplyBarProps {
+  /** Who wrote what is quoted; none where that is not known. */
+  name?: string;
+  text: string;
+  onCancel?: () => void;
+  class?: string;
+}
+
+/** Over the composer while replying: who is quoted, one line of it, and the way out. */
+export function ReplyBar(props: ReplyBarProps) {
+  return (
+    <div class={cx("lu-replybar", props.class)} role="status">
+      <div class="lu-replybar__text">
+        <p class="lu-replybar__who">
+          Replying to <Show when={props.name} fallback="a message">{(name) => <strong>{name()}</strong>}</Show>
+        </p>
+        <p class="lu-replybar__quote">{props.text}</p>
+      </div>
+      <IconButton icon="close" label="Cancel reply" size={28} strokeWidth={2} onClick={() => props.onCancel?.()} />
+    </div>
+  );
+}
+
+export interface ComposerNoteProps {
+  children?: JSX.Element;
+  actions?: { label: string; onClick?: () => void; primary?: boolean; disabled?: boolean }[];
+  error?: string;
+  class?: string;
+}
+
+/** A line over the composer after sending, with what can be done about it: "Ada isn’t in #design, so they won’t be notified." */
+export function ComposerNote(props: ComposerNoteProps) {
+  return (
+    <div class={cx("lu-composernote", props.class)} role="status">
+      <p class="lu-composernote__text">{props.children}</p>
+      <Show when={props.actions?.length}>
+        <div class="lu-composernote__actions">
+          <For each={props.actions}>
+            {(a) =>
+              a.primary ? (
+                <Button size="sm" disabled={a.disabled} onClick={() => a.onClick?.()}>
+                  {a.label}
+                </Button>
+              ) : (
+                <Button variant="text" disabled={a.disabled} onClick={() => a.onClick?.()}>
+                  {a.label}
+                </Button>
+              )
+            }
+          </For>
+        </div>
+      </Show>
+      <Show when={props.error}>
+        <p class="lu-composernote__error" role="alert">
+          {props.error}
+        </p>
+      </Show>
+    </div>
+  );
+}
+
+export interface MentionOption {
+  /** An account id, or `everyone`. */
+  id: string;
+  name: string;
+  handle?: string;
+  initials?: string;
+  src?: string;
+  tone?: Tone;
+  /** A muted word at the row's end: "Not in #design", "Notify everyone in #design". */
+  note?: string;
+  everyone?: boolean;
+}
+
+export interface MentionListProps {
+  /** The list's id, which the composer's field names as what it controls. */
+  id: string;
+  options: MentionOption[];
+  /** The row the arrow keys are on. */
+  active: number;
+  onPick?: (option: MentionOption) => void;
+  onActive?: (index: number) => void;
+  class?: string;
+}
+
+/** The @ list over the composer: who a mention can name, those in the channel first. */
+export function MentionList(props: MentionListProps) {
+  return (
+    <ul id={props.id} role="listbox" aria-label="People to mention" class={cx("lu-mentionlist", props.class)}>
+      <For each={props.options}>
+        {(o, i) => (
+          <li
+            id={props.id + "-" + i()}
+            role="option"
+            aria-selected={i() === props.active}
+            class={cx("lu-mentionlist__row", i() === props.active && "is-active")}
+            // The field keeps the focus; the press picks.
+            onMouseDown={(e) => e.preventDefault()}
+            onMouseMove={() => i() !== props.active && props.onActive?.(i())}
+            onClick={() => props.onPick?.(o)}
+          >
+            <Show
+              when={!o.everyone}
+              fallback={
+                <span class="lu-mentionlist__all" aria-hidden="true">
+                  <Icon name="mention" size={15} strokeWidth={2} />
+                </span>
+              }
+            >
+              <Avatar initials={o.initials ?? ""} src={o.src} tone={o.tone} size={28} />
+            </Show>
+            <span class="lu-mentionlist__name">{o.everyone ? "@everyone" : o.name}</span>
+            <Show when={o.handle && !o.everyone}>
+              <span class="lu-mentionlist__handle">@{o.handle}</span>
+            </Show>
+            <Show when={o.note}>
+              <span class="lu-mentionlist__note">{o.note}</span>
+            </Show>
+          </li>
+        )}
+      </For>
+    </ul>
+  );
+}
+
+export interface EmojiPickerProps {
+  /** This device's most used, for "Frequently used". */
+  frequent: string[];
+  onPick?: (emoji: string) => void;
+  class?: string;
+}
+
+/** Every emoji by Unicode's groups, searchable, with what this device uses most at the top. */
+export function EmojiPicker(props: EmojiPickerProps) {
+  const [groups, setGroups] = createSignal<EmojiGroup[] | null>(null);
+  const [failed, setFailed] = createSignal(false);
+  const [query, setQuery] = createSignal("");
+  onMount(() => {
+    loadEmoji()
+      .then(setGroups)
+      .catch(() => setFailed(true));
+  });
+  const named = createMemo(() => {
+    const names = new Map<string, string>();
+    for (const g of groups() ?? []) for (const e of g.emoji) names.set(e.emoji, e.name);
+    return names;
+  });
+  const found = createMemo(() => (query().trim() ? (groups() ?? []).flatMap((g) => g.emoji.filter((e) => emojiMatches(e, query()))) : null));
+  const cell = (emoji: string, name: string) => (
+    <button type="button" class="lu-emojipicker__emoji" aria-label={name} title={name} onClick={() => props.onPick?.(emoji)}>
+      {emoji}
+    </button>
+  );
+  return (
+    <section role="dialog" aria-label="Emoji" class={cx("lu-emojipicker", props.class)}>
+      <div class="lu-emojipicker__search">
+        <SearchField label="Search emoji" value={query()} onInput={(e) => setQuery(e.currentTarget.value)} />
+      </div>
+      <div class="lu-emojipicker__scroll">
+        <Show when={!failed()} fallback={<p class="lu-emojipicker__none">The emoji could not be loaded.</p>}>
+          <Show
+            when={found()}
+            fallback={
+              <>
+                <h3 class="lu-emojipicker__group">Frequently used</h3>
+                <div class="lu-emojipicker__grid">
+                  <For each={props.frequent}>{(e) => cell(e, named().get(e) ?? e)}</For>
+                </div>
+                <For each={groups() ?? []}>
+                  {(g) => (
+                    <>
+                      <h3 class="lu-emojipicker__group">{g.name}</h3>
+                      <div class="lu-emojipicker__grid">
+                        <For each={g.emoji}>{(e) => cell(e.emoji, e.name)}</For>
+                      </div>
+                    </>
+                  )}
+                </For>
+              </>
+            }
+          >
+            {(list) => (
+              <Show when={list().length > 0} fallback={<p class="lu-emojipicker__none">No emoji match that.</p>}>
+                <div class="lu-emojipicker__grid">
+                  <For each={list()}>{(e) => cell(e.emoji, e.name)}</For>
+                </div>
+              </Show>
+            )}
+          </Show>
+        </Show>
+      </div>
+    </section>
+  );
+}
+
+export interface QuoteReplyButtonProps {
+  /** Where the selection ends, in the window. */
+  left?: number;
+  top?: number;
+  /** In the flow instead of over the window (the gallery). */
+  inline?: boolean;
+  onPress?: () => void;
+  class?: string;
+}
+
+/** Beside text selected in one message: quotes just that. */
+export function QuoteReplyButton(props: QuoteReplyButtonProps) {
+  const button = () => (
+    <button
+      type="button"
+      class={cx("lu-quotereply", props.inline && "lu-quotereply--inline", props.class)}
+      style={props.inline ? undefined : { left: (props.left ?? 0) + "px", top: (props.top ?? 0) + "px" }}
+      // A press must not take the selection away before it is read.
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={() => props.onPress?.()}
+    >
+      <Icon name="reply" size={15} strokeWidth={2} />
+      Quote reply
+    </button>
+  );
+  return (
+    <Show when={!props.inline} fallback={button()}>
+      <Portal>{button()}</Portal>
+    </Show>
+  );
+}
+
+export interface MentionEntryProps {
+  /** Where it was said: "#design", or "Acme · #design" across servers. */
+  where: string;
+  onOpen?: () => void;
+  /** The message, drawn as in the timeline. */
+  children?: JSX.Element;
+  class?: string;
+}
+
+/** One item of a Mentions page: where, over the message; pressing it goes there. */
+export function MentionEntry(props: MentionEntryProps) {
+  return (
+    <li class={cx("lu-mentionentry", props.class)} onClick={() => props.onOpen?.()}>
+      <button
+        type="button"
+        class="lu-mentionentry__where"
+        onClick={(e) => {
+          e.stopPropagation();
+          props.onOpen?.();
+        }}
+      >
+        {props.where}
+      </button>
+      {props.children}
+    </li>
   );
 }
 

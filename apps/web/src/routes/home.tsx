@@ -1,7 +1,7 @@
 // Home: personal DMs grouped by the instance that hosts them, message
 // requests, this identity's devices, and starting a conversation. From
 // the "Home", "Requests" and "Devices" boards in the gallery.
-import { For, Show, createEffect, createMemo, createSignal } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, on } from "solid-js";
 import {
   Avatar,
   Button,
@@ -9,13 +9,9 @@ import {
   ChannelHeader,
   Checkbox,
   ChannelList,
-  Composer,
   DeviceList,
-  Divider,
   EmptyState,
   MemberList,
-  Message,
-  MessageList,
   Notice,
   QuickTiles,
   RequestCard,
@@ -28,14 +24,16 @@ import {
   type ChannelItem,
   type DeviceEntry,
 } from "../design/components";
-import { ClientError, type ChannelSummary, type DeviceSummary, type DmMessageSummary, type InvitePreviewSummary, type MemberSummary, type PasskeySummary, type ProfileSummary, type SnapshotSummary } from "../client/bridge";
-import { SERVED_BY_INSTANCE, avatarSrc, client, pictureRefusal, savedInstance, dmChannelsQuery, dmMessagesQuery, enableNotifications, hasIdentityQuery, myStatus, peopleQuery, pushState, queryClient, rosterQuery, setMyStatus, snapshotQuery } from "../client/state";
+import { ClientError, type ChannelSummary, type DeviceSummary, type DmMessageSummary, type InvitePreviewSummary, type MemberSummary, type MessageSummary, type PasskeySummary, type ProfileSummary, type SnapshotSummary } from "../client/bridge";
+import { SERVED_BY_INSTANCE, avatarSrc, client, pictureRefusal, savedInstance, dmChannelsQuery, dmMessagesQuery, enableNotifications, hasIdentityQuery, myStatus, peopleQuery, pushState, queryClient, readStatesQuery, rosterQuery, setMyStatus, snapshotQuery } from "../client/state";
 import { useNames } from "../client/names";
 import { preferences, setAppearance, setDensity, type Appearance, type Density } from "../client/preferences";
 import { addPasskey, passkeysAvailable } from "../client/passkeys";
-import { byBlock, byDay, initialsOf, shortTimeOf, timeOf, toneFor } from "./app";
+import { initialsOf, toneFor } from "./app";
+import { Compose, Timeline, createMarkRead, quoteOf, type Replying, type TimelineItem } from "./timeline";
+import { MentionsPage } from "./mentions";
 
-export type HomeView = "dm" | "requests" | "devices" | "profile" | "preferences" | "new" | "add";
+export type HomeView = "dm" | "requests" | "devices" | "profile" | "preferences" | "new" | "add" | "mentions";
 
 export interface HomeProps {
   snapshot: SnapshotSummary | undefined;
@@ -52,6 +50,8 @@ export interface HomeProps {
   toggleAside: () => void;
   /** The profile card of an account, against what was pressed. */
   openPerson: (accountId: string, anchor: HTMLElement) => void;
+  /** Opens the channel a message is in, at the message (from Mentions). */
+  toMessage: (m: MessageSummary) => void;
 }
 
 /**
@@ -89,6 +89,9 @@ function conversationName(c: ChannelSummary, me: string, nameOf: (id: string) =>
 export function HomeSidebar(props: HomeProps) {
   const { nameOf, photoOf } = useNames(() => props.snapshot);
   const me = () => props.snapshot?.accountId ?? "";
+  const readStates = readStatesQuery();
+  // Every server's mentions, for the Mentions item.
+  const serverMentions = createMemo(() => (props.snapshot?.channels ?? []).filter((c) => !PERSONAL.has(c.kind)).reduce((n, c) => n + (readStates.data?.byChannel.get(c.channelId)?.mentions ?? 0), 0));
   const byHost = createMemo(() => {
     const groups = new Map<string, ChannelSummary[]>();
     for (const c of props.snapshot?.channels ?? []) {
@@ -104,6 +107,8 @@ export function HomeSidebar(props: HomeProps) {
       items: channels.map((c): ChannelItem => {
         const others = c.participantAccountIds.filter((id) => id !== me());
         const name = conversationName(c, me(), nameOf);
+        const active = props.view === "dm" && c.channelId === props.channelId;
+        const rs = readStates.data?.byChannel.get(c.channelId);
         return {
           name,
           kind: others.length > 1 ? "group" : "dm",
@@ -111,7 +116,9 @@ export function HomeSidebar(props: HomeProps) {
           src: others.length === 1 ? photoOf(others[0] ?? "") : undefined,
           tone: toneFor(others[0] ?? c.channelId),
           people: others.map((id) => ({ name: nameOf(id), initials: initialsOf(nameOf(id)), src: photoOf(id), tone: toneFor(id) })),
-          active: props.view === "dm" && c.channelId === props.channelId,
+          active,
+          unread: !active && (rs?.unread ?? 0) > 0,
+          mentions: rs?.mentions || undefined,
           onClick: () => props.go("dm", c.channelId),
         };
       }),
@@ -128,8 +135,9 @@ export function HomeSidebar(props: HomeProps) {
           { icon: "compose", label: "New", onClick: () => props.go("new") },
         ]}
       />
-      <Show when={sections().length > 0} fallback={<p class="app__empty app__empty--side">No conversations yet.</p>}>
-        <ChannelList sections={sections()} />
+      <ChannelList sections={[{ items: [{ name: "Mentions", icon: "mention", active: props.view === "mentions", mentions: serverMentions() || undefined, onClick: () => props.go("mentions") }] }, ...sections()]} />
+      <Show when={sections().length === 0}>
+        <p class="app__empty app__empty--side">No conversations yet.</p>
       </Show>
       <Button size="sm" block class="app__foot" onClick={() => props.go("add")}>
         Add a server
@@ -245,8 +253,20 @@ export function HomeMain(props: HomeProps) {
   const identity = hasIdentityQuery();
   return (
     <Show
-      when={props.view !== "add" && props.view !== "devices" && props.view !== "profile" && props.view !== "preferences"}
-      fallback={props.view === "add" ? <AddServer {...props} /> : props.view === "profile" ? <Profile {...props} /> : props.view === "preferences" ? <Preferences {...props} /> : <Devices {...props} />}
+      when={props.view !== "add" && props.view !== "devices" && props.view !== "profile" && props.view !== "preferences" && props.view !== "mentions"}
+      fallback={
+        props.view === "add" ? (
+          <AddServer {...props} />
+        ) : props.view === "profile" ? (
+          <Profile {...props} />
+        ) : props.view === "preferences" ? (
+          <Preferences {...props} />
+        ) : props.view === "mentions" ? (
+          <MentionsPage snapshot={props.snapshot} back={props.back} open={props.toMessage} />
+        ) : (
+          <Devices {...props} />
+        )
+      }
     >
       <Show when={identity.data !== false} fallback={<NoIdentity toLink={props.toLink} back={props.back} />}>
         {props.view === "requests" ? <Requests {...props} /> : props.view === "new" ? <NewMessage {...props} /> : <Conversation {...props} />}
@@ -269,45 +289,93 @@ function NoIdentity(props: { toLink: () => void; back: () => void }) {
 }
 
 function Conversation(props: HomeProps) {
-  const { nameOf, photoOf } = useNames(() => props.snapshot);
+  const { nameOf, photoOf, profile } = useNames(() => props.snapshot);
   const me = () => props.snapshot?.accountId ?? "";
   const channel = createMemo(() => props.snapshot?.channels.find((c) => c.channelId === props.channelId));
   const dms = dmChannelsQuery(() => true);
   const state = createMemo(() => dms.data?.find((d) => d.channelId === props.channelId));
   const log = dmMessagesQuery(() => props.channelId);
+  const readStates = readStatesQuery();
   const [draft, setDraft] = createSignal("");
   const [error, setError] = createSignal("");
+  const [replying, setReplying] = createSignal<Replying | null>(null);
+  const [atEnd, setAtEnd] = createSignal(true);
+  let composerInput: HTMLInputElement | undefined;
+  createEffect(
+    on(
+      () => props.channelId,
+      () => {
+        setReplying(null);
+        setAtEnd(true);
+      },
+    ),
+  );
   const title = createMemo(() => (channel() ? conversationName(channel() as ChannelSummary, me(), nameOf) : "Conversation"));
   const participants = createMemo(() => (channel()?.participantAccountIds ?? []).map((id) => ({ id, name: nameOf(id) })));
   // A one-to-one conversation has one other sender, named even when the
   // engine has not yet tied the identity to an account.
   const others = () => participants().filter((p) => p.id !== me());
   const who = (m: DmMessageSummary) => (m.mine ? nameOf(me()) : m.senderAccountId || others().length !== 1 ? nameOf(m.senderAccountId) : (others()[0]?.name ?? "Someone"));
-  // By day, and each day's by block: one person's quick messages under one name.
-  const days = createMemo(() =>
-    byDay(log.data?.messages ?? [], (m) => m.sentAtMicros).map((day) => ({
-      label: day.label,
-      blocks: byBlock(
-        day.messages,
-        (m) => (m.mine ? me() : m.senderAccountId || m.senderIdentityId),
-        (m) => m.sentAtMicros,
-      ),
+  const byId = createMemo(() => new Map((log.data?.messages ?? []).map((m) => [m.messageId, m])));
+  const items = createMemo<TimelineItem[]>(() =>
+    (log.data?.messages ?? []).map((m) => ({
+      id: m.messageId,
+      seq: m.seq,
+      authorId: m.mine ? me() : m.senderAccountId,
+      blockKey: m.mine ? me() : m.senderAccountId || m.senderIdentityId,
+      at: m.sentAtMicros,
+      body: m.body,
+      deleted: m.deleted,
+      notice: "",
+      reply: m.reply,
+      mentions: [],
+      reactions: m.reactions,
+      mentionsMe: false,
     })),
   );
+  const knownName = (id: string): string | undefined => {
+    if (id && id === me()) return nameOf(id);
+    const p = profile(id);
+    return p ? p.displayName || p.nickname || p.handle || undefined : undefined;
+  };
+  // Read while it is on screen (architecture 6.6): its position needs no decryption.
+  createMarkRead({
+    channelId: () => props.channelId,
+    newestSeq: () => log.data?.messages[log.data.messages.length - 1]?.seq,
+    atEnd,
+    enabled: () => props.view === "dm" && !!state()?.member,
+    state: () => (props.channelId ? readStates.data?.byChannel.get(props.channelId) : undefined),
+  });
 
   const send = async () => {
     const id = props.channelId;
     const body = draft().trim();
     if (!id || !body) return;
+    const reply = replying();
     setDraft("");
     setError("");
+    setReplying(null);
     try {
-      await client().dmSend(id, body);
+      await client().dmSendWith(id, body, reply ? quoteOf(reply) : null);
     } catch (e) {
       // The text comes back to the composer unless something new was typed meanwhile.
       setDraft((d) => d || body);
+      if (reply) setReplying((r) => r ?? reply);
       setError(e instanceof Error ? e.message : String(e));
     }
+  };
+  const react = (item: TimelineItem, emoji: string, remove: boolean) => {
+    const id = props.channelId;
+    if (!id) return;
+    client()
+      .dmReact(id, item.id, emoji, remove)
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+  };
+  const startReply = (item: TimelineItem, text: string) => {
+    const m = byId().get(item.id);
+    // The quote's author where the engine knows it; a personal DM's may be unknown.
+    setReplying({ messageId: item.id, authorAccountId: item.authorId, name: m ? who(m) : "", text });
+    composerInput?.focus();
   };
   const rejoin = async () => {
     if (!props.channelId) return;
@@ -325,73 +393,66 @@ function Conversation(props: HomeProps) {
       {(ch) => (
         <>
           <ChannelHeader kind="dm" name={title()} topic={ch().host ? `on ${ch().host}` : undefined} onBack={props.back} backLabel="Back to Home" actions={[{ icon: "members", label: props.asideShown ? "Hide details" : "Show details", pressed: props.asideShown, onClick: props.toggleAside }]} />
-          <MessageList density={preferences().density}>
-            <Notice icon="shield">
-              Messages here are end-to-end encrypted. Only your devices and those of {participants().filter((p) => p.id !== me()).map((p) => p.name).join(", ") || "the other participants"} can read them.
-            </Notice>
-            <Show when={state() && !state()?.member}>
-              <Notice icon="lock" tone="accent" action={{ label: "Rejoin", onClick: () => void rejoin() }}>
-                This device is not in the conversation's group yet. The device that created it sends a welcome; if that never comes, rejoin from the instance's group info.
-              </Notice>
-            </Show>
-            <Show when={(log.data?.beforeJoin ?? 0) > 0}>
-              <Notice icon="lock">
-                {log.data?.beforeJoin} earlier {log.data?.beforeJoin === 1 ? "message was" : "messages were"} sent before this device joined and cannot be read here.
-              </Notice>
-            </Show>
-            <Show when={(log.data?.undecryptable ?? 0) > 0}>
-              <Notice icon="lock">{log.data?.undecryptable} could not be decrypted.</Notice>
-            </Show>
-            <For each={days()}>
-              {(day) => (
-                <>
-                  <Divider variant="day" label={day.label} />
-                  <For each={day.blocks}>
-                    {(block) => {
-                      const first = block.first;
-                      const t = timeOf(first.sentAtMicros);
-                      const said = (m: DmMessageSummary) => (m.deleted ? "(deleted)" : m.body);
-                      const account = () => (first.mine ? me() : first.senderAccountId);
-                      return (
-                        <Message
-                          author={who(first)}
-                          initials={initialsOf(who(first))}
-                          src={account() ? photoOf(account()) : undefined}
-                          tone={toneFor(first.mine ? me() : first.senderAccountId || first.senderIdentityId)}
-                          time={t.time}
-                          datetime={t.datetime}
-                          actions={false}
-                          density={preferences().density}
-                          onOpenProfile={account() ? (anchor) => props.openPerson(account(), anchor) : undefined}
-                          parts={block.rest.map((m) => ({ time: shortTimeOf(m.sentAtMicros), datetime: timeOf(m.sentAtMicros).datetime, children: said(m) }))}
-                        >
-                          {said(first)}
-                        </Message>
-                      );
-                    }}
-                  </For>
-                </>
-              )}
-            </For>
-            <Show when={error()}>
-              <p class="auth__error" role="alert">
-                {error()}
-              </p>
-            </Show>
-          </MessageList>
-          <Composer
+          <Show when={ch().channelId} keyed>
+            {(id) => (
+              <Timeline
+                items={items()}
+                label={`Messages with ${title()}`}
+                density={preferences().density}
+                me={me()}
+                authorName={(m) => {
+                  const dm = byId().get(m.id);
+                  return dm ? who(dm) : nameOf(m.authorId);
+                }}
+                authorPhoto={(m) => (m.authorId ? photoOf(m.authorId) : undefined)}
+                tone={(m) => toneFor(m.blockKey)}
+                onOpenProfile={(m, anchor) => props.openPerson(m.authorId, anchor)}
+                openPerson={props.openPerson}
+                knownName={knownName}
+                readState={() => (readStates.data ? (readStates.data.byChannel.get(id) ?? undefined) : null)}
+                canAct={!!state()?.member}
+                onReply={startReply}
+                onReact={react}
+                onAtEnd={setAtEnd}
+                before={
+                  <>
+                    <Notice icon="shield">
+                      Messages here are end-to-end encrypted. Only your devices and those of {others().map((p) => p.name).join(", ") || "the other participants"} can read them.
+                    </Notice>
+                    <Show when={state() && !state()?.member}>
+                      <Notice icon="lock" tone="accent" action={{ label: "Rejoin", onClick: () => void rejoin() }}>
+                        This device is not in the conversation's group yet. The device that created it sends a welcome; if that never comes, rejoin from the instance's group info.
+                      </Notice>
+                    </Show>
+                    <Show when={(log.data?.beforeJoin ?? 0) > 0}>
+                      <Notice icon="lock">
+                        {log.data?.beforeJoin} earlier {log.data?.beforeJoin === 1 ? "message was" : "messages were"} sent before this device joined and cannot be read here.
+                      </Notice>
+                    </Show>
+                    <Show when={(log.data?.undecryptable ?? 0) > 0}>
+                      <Notice icon="lock">{log.data?.undecryptable} could not be decrypted.</Notice>
+                    </Show>
+                  </>
+                }
+                after={
+                  <Show when={error()}>
+                    <p class="auth__error" role="alert">
+                      {error()}
+                    </p>
+                  </Show>
+                }
+              />
+            )}
+          </Show>
+          <Compose
             placeholder={state()?.member ? `Message ${title()}` : "Setting up the encrypted group…"}
-            tools={false}
             disabled={!state()?.member}
             value={draft()}
-            onInput={(e) => setDraft(e.currentTarget.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
-                e.preventDefault();
-                void send();
-              }
-            }}
+            onInput={setDraft}
             onSend={() => void send()}
+            replying={replying()}
+            onCancelReply={() => setReplying(null)}
+            inputRef={(el) => (composerInput = el)}
           />
         </>
       )}

@@ -57,6 +57,7 @@
 .lu-reaction.is-on { background: var(--accent-soft); border-color: var(--reaction-on-border); color: var(--accent-ink); }
 .lu-reaction-add { width: 28px; height: 28px; border-radius: var(--radius-pill); color: var(--ink-muted); display: inline-flex; align-items: center; justify-content: center; }
 .lu-reaction-add:hover { background: var(--hover-icon); color: var(--ink-field); }
+.lu-reaction__emoji { font-size: 15px; line-height: 1; }
 
 /* ── TextField ── */
 .lu-textfield { display: flex; flex-direction: column; gap: var(--space-6); }
@@ -204,6 +205,7 @@ h1.lu-serverhead__name:hover { background: none; }
 .lu-row--person { gap: var(--space-10); height: 34px; }
 .lu-row__name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .lu-row__hash { width: 10px; }
+.lu-row__icon { margin: 0 -2px; }
 .lu-row.is-read { color: var(--ink-quiet); font-weight: 400; }
 .lu-row.is-read .lu-row__glyph { color: var(--ink-faint); }
 .lu-row.is-unread { color: var(--ink); font-weight: 600; }
@@ -235,7 +237,7 @@ h1.lu-serverhead__name:hover { background: none; }
 .lu-chhead__back, .lu-chhead__narrow { display: none; }
 
 /* ── Message ── */
-.lu-msg { position: relative; display: flex; gap: 14px; padding: 8px 12px; border-radius: var(--radius-12); }
+.lu-msg { position: relative; isolation: isolate; display: flex; gap: 14px; padding: 8px 12px; border-radius: var(--radius-12); --msg-lead: calc(var(--avatar-lg) + 14px + 12px); --msg-pad-y: 8px; }
 .lu-msg--default:hover { background: var(--hover-message); }
 .lu-msg.is-highlighted { background: var(--accent-wash); }
 .lu-msg .lu-avatar { font-size: 14px; }
@@ -266,8 +268,15 @@ h1.lu-serverhead__name:hover { background: none; }
 .lu-actions { display: inline-flex; gap: var(--space-2); padding: 3px; background: var(--raised); border: 1px solid var(--line-strong); border-radius: var(--radius-10); box-shadow: var(--shadow-popover); }
 .lu-actions .lu-iconbtn { color: var(--icon-strong); }
 .lu-actions .lu-iconbtn:hover { color: var(--ink-field); }
-.lu-actions.is-floating { position: absolute; top: -14px; right: 16px; opacity: 0; transition: opacity .12s ease; }
-.lu-msg:hover .lu-actions.is-floating, .lu-msg:focus-within .lu-actions.is-floating { opacity: 1; }
+.lu-actions.is-floating { position: absolute; top: -14px; right: 16px; opacity: 0; pointer-events: none; transition: opacity .12s ease; }
+.lu-msg:hover > .lu-actions.is-floating, .lu-msg:focus-within > .lu-actions.is-floating { opacity: 1; pointer-events: auto; }
+/* In the product each message of a block has its own toolbar, over it alone. */
+.lu-msg__part > .lu-actions.is-floating { right: var(--space-4); z-index: 2; }
+.lu-msg__part:hover > .lu-actions.is-floating, .lu-msg__part:focus-within > .lu-actions.is-floating { opacity: 1; pointer-events: auto; }
+.lu-actions__emoji { flex: none; width: 30px; height: 30px; padding: 0; border: 0; border-radius: var(--radius-7); background: none; display: inline-flex; align-items: center; justify-content: center; font: inherit; font-size: 17px; line-height: 1; cursor: pointer; }
+.lu-actions__emoji:hover { background: var(--hover-icon); }
+.lu-actions__emoji[aria-pressed="true"] { background: var(--accent-soft); }
+.lu-actions__rule { flex: none; align-self: center; width: 1px; height: 18px; margin: 0 var(--space-2); background: var(--line); }
 
 /* ── SystemMessage ── */
 .lu-sysmsg { display: flex; align-items: center; gap: 14px; padding: 6px 12px; }
@@ -299,13 +308,15 @@ h1.lu-serverhead__name:hover { background: none; }
 .lu-threadsum__count { font-size: 13.5px; font-weight: 700; color: var(--accent-ink); }
 .lu-threadsum__last { font-size: 12.5px; color: var(--ink-secondary); }
 .lu-mention { color: var(--accent-ink); background: var(--accent-soft); padding: 1px 6px; border-radius: var(--radius-6); font-weight: 600; text-decoration: none; }
+button.lu-mention { font: inherit; font-weight: 600; border: 0; margin: 0; cursor: pointer; }
+button.lu-mention:hover { text-decoration: underline; text-underline-offset: 3px; }
 
 /* ── MessageList ── */
 .lu-msglist { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column-reverse; }
 .lu-msglist__log { display: flex; flex-direction: column; gap: var(--space-8); padding: 14px 14px 8px; }
 /* Compact (Preferences): the small avatar, and half the room between blocks, inside one and around a day's divider. */
 .lu-msglist--compact .lu-msglist__log { gap: var(--space-4); }
-.lu-msglist--compact .lu-msg--default { gap: var(--space-10); padding: var(--space-4) 12px; }
+.lu-msglist--compact .lu-msg--default { gap: var(--space-10); padding: var(--space-4) 12px; --msg-lead: calc(var(--avatar-sm) + var(--space-10) + 12px); --msg-pad-y: var(--space-4); }
 .lu-msglist--compact .lu-msg--default .lu-msg__main, .lu-msglist--compact .lu-msg--default .lu-msg__part { gap: var(--space-2); }
 .lu-msglist--compact .lu-msg--default .lu-avatar { font-size: 10px; }
 .lu-msglist--compact .lu-msg__parttime { width: var(--avatar-sm); margin-right: var(--space-10); font-size: 9.5px; }
@@ -547,3 +558,60 @@ h1.lu-serverhead__name:hover { background: none; }
 .lu-stage--surface { background: var(--surface); }
 .lu-stage__row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-12); }
 .lu-stage__col { display: flex; flex-direction: column; gap: var(--space-12); }
+
+/* ── Replies, reactions, mentions (architecture 6.6) ── */
+/* A row that names the reader, and one jumped to: the row's whole width, behind the message. */
+.lu-msg__part::before { content: ""; position: absolute; z-index: -1; top: calc(var(--space-2) * -1); bottom: calc(var(--space-2) * -1); left: calc(var(--msg-lead) * -1); right: -12px; background: transparent; pointer-events: none; transition: background-color .8s ease; }
+.lu-msg__part--first::before { top: calc(var(--msg-pad-y) * -1); }
+.lu-msg__part:last-child::before { bottom: calc(var(--msg-pad-y) * -1); }
+.lu-msg__part.is-mentioned::before { background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent); }
+.lu-msg__part.is-flash::before { background: var(--accent-wash); box-shadow: inset 2px 0 0 var(--accent); transition: none; }
+.lu-quote { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; max-width: min(100%, 560px); margin: 2px 0; padding: var(--space-4) var(--space-12) var(--space-4) var(--space-10); border: 0; border-left: 3px solid var(--accent); border-radius: 0 var(--radius-8) var(--radius-8) 0; background: var(--inset); font: inherit; font-family: var(--font-sans); text-align: left; cursor: pointer; }
+.lu-quote:hover { background: var(--hover-row); }
+.lu-quote__author { font-size: 13px; font-weight: 700; color: var(--ink-emphasis); }
+.lu-quote__text { font-size: 13.5px; line-height: 1.45; color: var(--ink-secondary); display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.lu-quote.is-deleted { cursor: default; border-left-color: var(--line-strong); }
+.lu-quote.is-deleted:hover { background: var(--inset); }
+.lu-quote.is-deleted .lu-quote__text { color: var(--ink-muted); }
+.lu-composer { position: relative; }
+.lu-replybar, .lu-composernote { display: flex; align-items: center; gap: var(--space-10); margin-bottom: var(--space-6); padding: var(--space-8) var(--space-8) var(--space-8) var(--space-14); border-radius: var(--radius-12); background: var(--inset); }
+.lu-replybar { border-left: 3px solid var(--accent); border-radius: 0 var(--radius-12) var(--radius-12) 0; }
+.lu-replybar__text { flex: 1; min-width: 0; }
+.lu-replybar__who { margin: 0; font-size: 12.5px; color: var(--ink-muted); }
+.lu-replybar__who strong { font-weight: 700; color: var(--ink-emphasis); }
+.lu-replybar__quote { margin: 2px 0 0; font-size: 13.5px; color: var(--ink-body); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lu-composernote { flex-wrap: wrap; padding-right: var(--space-14); }
+.lu-composernote__text { flex: 1 1 240px; margin: 0; font-size: 13.5px; line-height: 1.4; color: var(--ink-body); }
+.lu-composernote__actions { display: flex; align-items: center; gap: var(--space-14); }
+.lu-composernote__error { flex-basis: 100%; margin: 0; font-size: 13px; color: var(--dnd); }
+.lu-mentionlist { position: absolute; left: var(--space-24); right: var(--space-24); bottom: 100%; z-index: 5; list-style: none; margin: 0 0 var(--space-6); padding: var(--space-6); display: flex; flex-direction: column; gap: 1px; max-height: 336px; overflow-y: auto; background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--radius-14); box-shadow: var(--shadow-floating); font-family: var(--font-sans); }
+.lu-mentionlist__row { display: flex; align-items: center; gap: var(--space-10); padding: var(--space-6) var(--space-8); border-radius: var(--radius-8); font-size: 14px; color: var(--ink); cursor: pointer; }
+.lu-mentionlist__row.is-active { background: var(--hover-member); }
+.lu-mentionlist__name { min-width: 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lu-mentionlist__handle { flex: none; font-size: 13px; color: var(--ink-muted); white-space: nowrap; }
+.lu-mentionlist__note { flex: none; margin-left: auto; padding-left: var(--space-8); font-size: 12.5px; color: var(--ink-muted); white-space: nowrap; }
+.lu-mentionlist__all { flex: none; width: 28px; height: 28px; border-radius: var(--radius-round); background: var(--accent-soft); color: var(--accent-ink); display: flex; align-items: center; justify-content: center; }
+.lu-emojipicker { width: 352px; height: 420px; display: flex; flex-direction: column; overflow: hidden; background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--radius-18); box-shadow: var(--shadow-floating); color: var(--ink); font-family: var(--font-sans); }
+.lu-emojipicker__search { flex: none; padding: var(--space-12) var(--space-12) var(--space-4); }
+.lu-emojipicker__scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 0 var(--space-8) var(--space-12); }
+.lu-emojipicker__group { position: sticky; top: 0; z-index: 1; margin: 0; padding: var(--space-10) var(--space-4) var(--space-4); background: var(--surface); font-size: 12.5px; font-weight: 600; color: var(--ink-muted); }
+.lu-emojipicker__grid { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: var(--space-2); }
+.lu-emojipicker__emoji { aspect-ratio: 1; display: flex; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: var(--radius-8); background: none; font: inherit; font-size: 22px; line-height: 1; cursor: pointer; }
+.lu-emojipicker__emoji:hover { background: var(--hover-icon); }
+.lu-emojipicker__none { margin: 0; padding: var(--space-16) var(--space-6); font-size: 13.5px; color: var(--ink-quiet); }
+.lu-quotereply { position: fixed; z-index: 25; display: inline-flex; align-items: center; gap: var(--space-6); height: 30px; padding: 0 var(--space-10); border: 1px solid var(--line-strong); border-radius: var(--radius-8); background: var(--raised); box-shadow: var(--shadow-popover); color: var(--ink-body); font: inherit; font-family: var(--font-sans); font-size: 13px; font-weight: 600; white-space: nowrap; cursor: pointer; }
+.lu-quotereply:hover { background: var(--hover-secondary); color: var(--ink); }
+.lu-quotereply--inline { position: static; }
+.lu-mentionentries { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-8); }
+.lu-mentionentry { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-10) var(--space-2) var(--space-2); border: 1px solid var(--line); border-radius: var(--radius-14); background: var(--surface); cursor: pointer; }
+.lu-mentionentry:hover { background: var(--hover-member); }
+.lu-mentionentry .lu-msg:hover { background: none; }
+.lu-mentionentry__where { align-self: flex-start; margin: 0 var(--space-12); padding: 0; border: 0; border-radius: var(--radius-6); background: none; font: inherit; font-family: var(--font-sans); font-size: 12.5px; font-weight: 600; color: var(--ink-muted); cursor: pointer; }
+.lu-mentionentry__where:hover { color: var(--ink); }
+@media (max-width: 719px) {
+  .lu-mentionlist { left: 12px; right: 12px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lu-msg__part::before { transition: none; }
+}
+.lu-msg__part.is-mentioned .lu-mention { box-shadow: inset 0 0 0 1px var(--reaction-on-border); }
