@@ -77,7 +77,7 @@ fn refusal(failure: &Failure) -> String {
 /// Why a server DM was not opened.
 pub fn dm_refusal(failure: &Failure) -> String {
     match failure.code.as_str() {
-        "FAILED_PRECONDITION" => "They don't take messages here.".into(),
+        "FAILED_PRECONDITION" => "They don’t take messages here.".into(),
         "PERMISSION_DENIED" => "You cannot message people in this server.".into(),
         "NOT_FOUND" => "You cannot message them here.".into(),
         _ => failure.message.clone(),

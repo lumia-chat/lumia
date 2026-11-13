@@ -100,7 +100,7 @@ fn browse_lists_a_channel_read_before_joining_and_joined() {
     // A row opens the channel to read: "Join" stands where the composer would.
     press(&mut rt, "browse-random");
     assert_eq!(rt.state.session.channel(), Some("random"));
-    assert!(words(&rt).contains("You're not in #random"));
+    assert!(words(&rt).contains("You’re not in #random"));
     assert!(rt.find("composer").is_none());
     assert!(
         rt.find("leave-channel").is_none(),
@@ -211,7 +211,7 @@ fn messaging_someone_in_the_server_lists_who_takes_it() {
             }),
         },
     );
-    assert!(words(&rt).contains("They don't take messages here."));
+    assert!(words(&rt).contains("They don’t take messages here."));
 }
 
 #[test]
@@ -316,7 +316,7 @@ fn the_card_offers_a_server_dm_first_and_a_personal_one_beside_it() {
     settle(&mut rt);
     press(&mut rt, "member-grace");
     assert!(rt.find("card-message").is_none());
-    assert!(words(&rt).contains("Doesn't take messages here"));
+    assert!(words(&rt).contains("Doesn’t take messages here"));
     assert!(rt.find("card-message-privately").is_some());
 }
 

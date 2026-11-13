@@ -392,7 +392,7 @@ fn ways_to_talk(s: &State, name: &str, found: Option<&MemberSummary>, look: Look
         );
     } else if !takes {
         ways = ways.child(
-            text("Doesn't take messages here")
+            text("Doesn’t take messages here")
                 .font(t::TEXT_META)
                 .color(c.ink_muted)
                 .w_full()

@@ -142,7 +142,7 @@ pub fn join_bar(s: &State, channel: &ChannelSummary, look: Look) -> El {
         .radius(t::RADIUS_16)
         .fill(c.inset)
         .child(
-            text(format!("You're not in #{}", channel.name))
+            text(format!("You’re not in #{}", channel.name))
                 .font(t::TEXT_COMPACT)
                 .color(c.ink_secondary)
                 .truncate()
