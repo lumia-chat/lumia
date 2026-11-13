@@ -105,6 +105,30 @@ public final class LumiaSession {
     @ObservationIgnored private var profilesInFlight: Set<String> = []
     public private(set) var lastError: String?
 
+    // Quote replies, reactions, mentions and read state (architecture 6.6;
+    // `Reads.swift` has what reads and changes these).
+    /// Where this account has read each conversation, as the core counts it.
+    public internal(set) var reads = ReadCounts()
+    /// The Mentions pages read so far, by server id; "" is Home's, every server's.
+    public internal(set) var mentionsPages: [String: MentionsList] = [:]
+    /// Where a conversation open now had been read to when it was opened,
+    /// while some of it was unread: its "New messages" line, until it is left.
+    public internal(set) var newSince: [String: UInt64] = [:]
+    /// Who is in a server's channel, as far as it has been asked, for the @
+    /// list and the bar after a send.
+    public internal(set) var channelMemberIDs: [String: Set<String>] = [:]
+    /// What the instance refused of a command sent through the gateway (a
+    /// reaction that is not one emoji, @everyone without the permission, a
+    /// quote of a message that is gone), until it is read.
+    public internal(set) var commandError: String?
+    /// A message to show once its conversation is on screen: a mention
+    /// opened from a Mentions page.
+    public var pendingReveal: Reveal?
+    /// How many of a channel's newest messages are read from the store: a
+    /// page, and more as a jump to an older message asks.
+    @ObservationIgnored var messageLimits: [String: UInt32] = [:]
+    @ObservationIgnored var readMarks = ReadMarks()
+
     private var events: Task<Void, Never>?
     /// A gateway loop is being started: a second asking meanwhile (the
     /// shell's first load and a return to the foreground, say) starts none.
@@ -388,6 +412,14 @@ public final class LumiaSession {
         previewed = [:]
         profiles = [:]
         lastError = nil
+        reads = ReadCounts()
+        mentionsPages = [:]
+        newSince = [:]
+        channelMemberIDs = [:]
+        commandError = nil
+        pendingReveal = nil
+        messageLimits = [:]
+        readMarks = ReadMarks()
         typing.clear()
         scheduleTypingExpiry()
         pushLedger.forget()
@@ -494,6 +526,7 @@ public final class LumiaSession {
         do {
             let snap = try await client.snapshot()
             snapshot = snap
+            reads = ReadCounts(snap.readStates)
             hasIdentity = await client.hasIdentity
             await refreshPeople(serverIDs: snap.servers.map(\.serverId))
             await refreshDmChannels()
@@ -515,6 +548,7 @@ public final class LumiaSession {
         do {
             let snap = try await client.snapshot()
             take(snap)
+            reads = ReadCounts(snap.readStates)
             await refreshPeople(serverIDs: snap.servers.map(\.serverId))
         } catch {
             await loadFailed(error)
@@ -536,7 +570,8 @@ public final class LumiaSession {
     }
 
     public func refreshMessages(channelID: String) async {
-        if let list = try? await client.messages(channelID: channelID) { messages[channelID] = list }
+        let limit = messageLimits[channelID] ?? Replies.pageSize
+        if let list = try? await client.messages(channelID: channelID, limit: limit) { messages[channelID] = list }
     }
 
     public func refreshDmChannels() async {
@@ -744,12 +779,21 @@ public final class LumiaSession {
                 typing.stopped(channelID: channelId, accountID: message.authorAccountId)
             }
             scheduleTypingExpiry()
+            // A notice changes who is in the channel.
+            if events.contains(where: { !($0.message?.notice.isEmpty ?? true) }), channelMemberIDs[channelId] != nil {
+                await loadChannelMembers(channelID: channelId)
+            }
             await refreshMessages(channelID: channelId)
+            await refreshReads()
         case let .snapshotTaken(channelId, _):
             await refreshMessages(channelID: channelId)
         case .accountApplied:
+            // Another device may have read something.
+            await refreshReads()
             await refreshSnapshot()
             await refreshDmChannels()
+        case let .error(_, message, _):
+            commandError = message
         case let .reconnecting(attempt, _, _):
             connection = .reconnecting(attempt: attempt)
         case let .disconnected(reason, _):
@@ -762,6 +806,7 @@ public final class LumiaSession {
             await refreshDmLog(channelID: channelId)
         case let .dmOperation(channelId, _, _, _):
             await refreshDmLog(channelID: channelId)
+            await refreshReads()
         case .dmDelivered:
             for id in dmLogs.keys { await refreshDmLog(channelID: id) }
         case let .dmError(message):
@@ -782,7 +827,7 @@ public final class LumiaSession {
         case let .typing(channelId, accountId, untilMicros):
             typing.began(channelID: channelId, accountID: accountId, untilMicros: untilMicros, me: me)
             scheduleTypingExpiry()
-        case .acked, .error, .subscriptionFailed, .dmNote:
+        case .acked, .subscriptionFailed, .dmNote:
             break
         }
     }

@@ -54,6 +54,7 @@ struct ShellView: View {
                 case let .addPeople(channelID): AddPeopleScreen(session: session, channelID: channelID)
                 case let .newServerDM(serverID): NewServerDMScreen(session: session, serverID: serverID, path: $path)
                 case let .yourSettings(serverID): YourSettingsScreen(session: session, serverID: serverID)
+                case let .mentions(serverID): MentionsScreen(session: session, serverID: serverID) { openMention($0, from: serverID) }
                 }
             }
         }
@@ -65,8 +66,14 @@ struct ShellView: View {
         }
         .environment(\.openPerson, OpenPerson { person = $0 })
         .task {
+            PushRegistrar.shared.session = session
             await session.load()
             PushRegistrar.shared.register()
+        }
+        // The app icon's badge follows the counts, and a conversation read
+        // here or elsewhere takes its notifications with it (architecture 6.6).
+        .onChange(of: session.reads) { before, after in
+            PushRegistrar.shared.readsChanged(before: before, after: after)
         }
         .task(id: PushRegistrar.shared.token) { await PushRegistrar.shared.subscribe(session) }
         // The server on screen is the one whose presence this client wants (protocol 6.7).
@@ -87,14 +94,16 @@ struct ShellView: View {
             #if DEBUG
             // The smoke run (scripts/smoke-ios.sh) opens one screen per launch
             // through LUMIA_DEV_SCREEN: home, server, channel, requests, devices, profile,
-            // preferences, new, add, newchannel, invite, serversettings, and for channel membership
+            // preferences, new, add, newchannel, invite, serversettings, mentions (the server's Mentions page),
+            // homementions (Home's; `channel` opens LUMIA_DEV_CHANNEL's channel when it names one), and for channel membership
             // browse, preview (Browse's first channel, read-only), members, addpeople and profilecard
             // (of the channel LUMIA_DEV_CHANNEL names, else the first; the card is its first member
             // but this account, or LUMIA_DEV_PERSON's handle), serverdm (the first server DM), newdm
             // and yoursettings; the push smoke opens the account's first personal conversation with `conversation`. (LUMIA_DEV_APPEARANCE and LUMIA_DEV_DENSITY
             // choose how that launch looks: `Preferences` in LumiaKit reads them.)
             if let first = ids.first, let screen = ProcessInfo.processInfo.environment["LUMIA_DEV_SCREEN"] {
-                let channel = snapshot?.channels.first { $0.serverId == first && !personalKinds.contains($0.kind) }
+                let named = ProcessInfo.processInfo.environment["LUMIA_DEV_CHANNEL"].flatMap { name in snapshot?.channels.first { $0.serverId == first && $0.name == name } }
+                let channel = named ?? snapshot?.channels.first { $0.serverId == first && !personalKinds.contains($0.kind) }
                 let conversation = snapshot?.channels.first { personalKinds.contains($0.kind) }
                 switch screen {
                 case "home": place = .home
@@ -110,6 +119,8 @@ struct ShellView: View {
                 case "newchannel": place = .server(id: first); path = [.newChannel(serverID: first)]
                 case "invite": place = .server(id: first); path = [.invite(serverID: first)]
                 case "serversettings": place = .server(id: first); path = [.serverSettings(serverID: first)]
+                case "mentions": place = .server(id: first); path = [.mentions(serverID: first)]
+                case "homementions": place = .home; path = [.mentions(serverID: nil)]
                 default: devMembershipScreen(screen, serverID: first)
                 }
             }
@@ -161,6 +172,20 @@ struct ShellView: View {
     }
     #endif
 
+    /// A mention tapped on a Mentions page: its channel, at it. From a
+    /// server's page the channel is pushed over it; from Home's, its server
+    /// is opened with the channel on it.
+    private func openMention(_ m: MessageSummary, from serverID: String?) {
+        guard let channel = session.channel(m.channelId) else { return }
+        session.pendingReveal = Reveal(channelID: m.channelId, messageID: m.messageId)
+        if serverID != nil {
+            path.append(.channel(id: channel.channelId))
+        } else {
+            place = .server(id: channel.serverId)
+            path = [.channel(id: channel.channelId)]
+        }
+    }
+
     /// The conversation a tapped notification names, once the snapshot has
     /// it (a cold start loads first): a DM opens from Home, a mention opens
     /// its channel in its server. The generic notice names none and the app
@@ -202,6 +227,8 @@ struct HomeScreen: View {
             SideHeader(title: "Home", action: ("square.and.pencil", "New message", { path.append(.newMessage) }))
             ScrollView {
                 VStack(alignment: .leading, spacing: LumiaTokens.space12) {
+                    // Every server's messages that mention this account or reply to it (architecture 6.6).
+                    MentionsRow(count: session.homeMentions) { path.append(.mentions(serverID: nil)) }
                     HStack(spacing: LumiaTokens.space6) {
                         Tile(label: "Requests", icon: "at", count: session.snapshot?.pendingRequests.count ?? 0) { path.append(.requests) }
                         Tile(label: "Devices", icon: "shield") { path.append(.devices) }
@@ -255,16 +282,24 @@ struct ConversationRow: View {
     private var last: DmMessageSummary? { session.dmLogs[channel.channelId]?.messages.last }
 
     var body: some View {
+        // Unread: the name and last line in the strong ink and weight, and how many at the end.
+        let unread = session.unread(channel.channelId)
+        let bold = unread.unread > 0
         Button(action: open) {
             HStack(spacing: LumiaTokens.space12) {
                 LumiaAvatar(initials: initials(of: name), tone: .of(others.first ?? channel.channelId), size: LumiaTokens.avatarLg)
                 VStack(alignment: .leading, spacing: LumiaTokens.space2) {
                     HStack(alignment: .firstTextBaseline, spacing: LumiaTokens.space8) {
-                        Text(name).font(LumiaTokens.textAuthor.font).foregroundStyle(LumiaTokens.inkEmphasis.color).lineLimit(1)
+                        Text(name).font(LumiaTokens.textAuthor.font).fontWeight(bold ? .bold : nil).foregroundStyle(LumiaTokens.inkEmphasis.color).lineLimit(1)
                         Spacer(minLength: 0)
                         if let last { Text(rowTime(ofMicros: last.sentAtMicros)).font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkSecondary.color) }
                     }
-                    Text(preview).font(LumiaTokens.textMember.font).foregroundStyle(LumiaTokens.inkSecondary.color).lineLimit(1)
+                    HStack(spacing: LumiaTokens.space8) {
+                        Text(preview).font(LumiaTokens.textMember.font).fontWeight(bold ? .semibold : nil)
+                            .foregroundStyle(bold ? LumiaTokens.inkBody.color : LumiaTokens.inkSecondary.color).lineLimit(1)
+                        Spacer(minLength: 0)
+                        if unread.mentions > 0 { LumiaCountBadge(unread.mentions) }
+                    }
                 }
             }
             .padding(LumiaTokens.space10)
@@ -272,6 +307,7 @@ struct ConversationRow: View {
             .contentShape(RoundedRectangle(cornerRadius: LumiaTokens.radius12))
         }
         .buttonStyle(.plain)
+        .modifier(UnreadLabel(unread: unread))
     }
 
     private var preview: String {

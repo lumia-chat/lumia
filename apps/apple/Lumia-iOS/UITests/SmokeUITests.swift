@@ -616,6 +616,178 @@ final class SmokeUITests: XCTestCase {
         sleep(10)
     }
 
+    /// Quote replies, reactions, mentions and read state by hand
+    /// (scripts/smoke-replies.sh), signed in as the owner of a server where
+    /// Ada has written: #design unread with a mention, which opens at its
+    /// "New messages" line and is read once its newest message is on screen;
+    /// a reply to Ada's message from a long press's actions; a reaction
+    /// chip tapped on and off; one added from the emoji picker; Bo picked
+    /// from the @ list, marked as not in #general, and added from the bar
+    /// after the send; and the server's Mentions page, whose item opens its
+    /// channel. Each step waits for the smoke to look (`<step>.seen`):
+    /// `sidebar`, `newline`, `read`, `actions`, `replied`, `reacted`,
+    /// `unreacted`, `mentioned`, `added`, `mentionspage`.
+    func testRepliesReactionsMentionsAndReads() throws {
+        let env = ProcessInfo.processInfo.environment
+        let steps = try XCTUnwrap(env["LUMIA_UITEST_STEPS"])
+        let bo = try XCTUnwrap(env["LUMIA_UITEST_OTHER"])
+        let reached = { (step: String) in self.reached(step, under: steps) }
+        let app = launch(screen: "server")
+        let anything = app.descendants(matching: .any)
+        func labelled(_ words: String) -> XCUIElement { anything.matching(NSPredicate(format: "label == %@", words)).firstMatch }
+        func starting(_ words: String) -> XCUIElement { anything.matching(NSPredicate(format: "label BEGINSWITH %@", words)).firstMatch }
+        let backButton = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Back to ")).firstMatch
+        let mentionsRow = app.buttons["mentions-row"]
+        // The composer, by its identifier: with text in it, it reports no placeholder.
+        let field = app.textFields["composer"]
+        func sidebar() {
+            while backButton.exists { backButton.tap(); sleep(1) }
+            XCTAssertTrue(mentionsRow.waitForExistence(timeout: 10), "not back at the server's sidebar")
+        }
+        func waitFor(_ element: XCUIElement, value: String, _ why: String) {
+            let done = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", value), object: element)
+            XCTAssertEqual(XCTWaiter().wait(for: [done], timeout: 20), .completed, "\(why): \(element.value as? String ?? "nil")")
+        }
+
+        // The sidebar: Mentions with the server's count, #design unread with its mention.
+        XCTAssertTrue(mentionsRow.waitForExistence(timeout: 90), "no Mentions row at the top of the server's sidebar")
+        XCTAssertEqual(mentionsRow.label, "Mentions")
+        XCTAssertTrue((mentionsRow.value as? String ?? "").contains("mention"), "the Mentions row has no count: \(mentionsRow.value ?? "nil")")
+        let design = app.buttons["design"]
+        XCTAssertTrue(design.waitForExistence(timeout: 20), "no #design in the sidebar")
+        waitFor(design, value: "1 mention", "#design is not unread with one mention")
+        reached("sidebar")
+
+        // #design opens at its "New messages" line, and is read with its newest message on screen.
+        design.tap()
+        XCTAssertTrue(labelled("New messages").waitForExistence(timeout: 20), "no New messages line in #design")
+        reached("newline")
+        sleep(3)
+        backButton.tap()
+        waitFor(design, value: "", "#design is still unread after it was read")
+        reached("read")
+
+        // A long press on Ada's message: its actions; Reply puts the quote over the composer.
+        app.buttons["general"].tap()
+        let ada = anything.matching(NSPredicate(format: "label BEGINSWITH %@ AND value == %@", "Ada Lovelace, ", "Morning all, the review is at ten.")).firstMatch
+        XCTAssertTrue(ada.waitForExistence(timeout: 30), "no message of Ada's in #general")
+        ada.press(forDuration: 1.0)
+        for words in ["React with 👍", "React with 😢", "Reply", "Add reaction", "Copy text"] {
+            XCTAssertTrue(app.buttons[words].waitForExistence(timeout: 10), "the message's actions have no \(words)")
+        }
+        reached("actions")
+        app.buttons["Reply"].tap()
+        XCTAssertTrue(starting("Replying to Ada Lovelace").waitForExistence(timeout: 10), "no quote over the composer")
+        XCTAssertTrue(app.buttons["Cancel reply"].exists)
+        if app.buttons["Continue"].exists { app.buttons["Continue"].tap() }
+        field.typeText("On it, thanks.")
+        app.buttons["Send"].tap()
+        let reply = anything.matching(NSPredicate(format: "label CONTAINS %@ AND value == %@", "Quote of Ada Lovelace: Morning all", "On it, thanks.")).firstMatch
+        XCTAssertTrue(reply.waitForExistence(timeout: 20), "the reply is not drawn with its quote")
+        XCTAssertFalse(app.buttons["Cancel reply"].exists, "the quote is still over the composer after the send")
+        reached("replied")
+
+        // A reaction chip: this account's added by a tap, and taken away by another.
+        let thumbs = labelled("Ada Lovelace reacted with 👍, 1")
+        XCTAssertTrue(thumbs.waitForExistence(timeout: 10), "no 👍 chip of Ada's")
+        thumbs.tap()
+        let mine = labelled("You and Ada Lovelace reacted with 👍, 2")
+        XCTAssertTrue(mine.waitForExistence(timeout: 20), "the chip did not add this account's 👍")
+        XCTAssertTrue(mine.isSelected, "the chip with this account's reaction does not say so")
+        reached("reacted")
+        mine.tap()
+        XCTAssertTrue(labelled("Ada Lovelace reacted with 👍, 1").waitForExistence(timeout: 20), "the chip did not take this account's 👍 away")
+        reached("unreacted")
+
+        // Quote reply: a word selected in the actions' copy of the message, quoted alone.
+        ada.press(forDuration: 1.0)
+        let words = app.textViews.firstMatch
+        XCTAssertTrue(words.waitForExistence(timeout: 10), "the message's actions do not show its words")
+        words.doubleTap()
+        let quoteReply = anything.matching(NSPredicate(format: "label == %@", "Quote reply")).firstMatch
+        if !quoteReply.waitForExistence(timeout: 10) { print("the app with words selected:\n" + app.debugDescription) }
+        XCTAssertTrue(quoteReply.exists, "the selection's menu has no Quote reply")
+        quoteReply.tap()
+        let partial = starting("Replying to Ada Lovelace")
+        XCTAssertTrue(partial.waitForExistence(timeout: 10), "Quote reply put no quote over the composer")
+        XCTAssertFalse(partial.label.contains("Morning all, the review is at ten."), "Quote reply quoted the whole message: \(partial.label)")
+        app.buttons["Cancel reply"].tap()
+
+        // The picker, from the chips' Add reaction: found by name.
+        app.buttons.matching(NSPredicate(format: "label == %@", "Add reaction")).firstMatch.tap()
+        let search = app.textFields["Search emoji"]
+        XCTAssertTrue(search.waitForExistence(timeout: 10), "no emoji picker")
+        XCTAssertTrue(labelled("Frequently used").exists, "the picker has no Frequently used")
+        search.tap()
+        search.typeText("rocket")
+        app.buttons["rocket"].firstMatch.tap()
+        XCTAssertTrue(labelled("You reacted with 🚀, 1").waitForExistence(timeout: 20), "the picker's 🚀 is not on the message")
+
+        // The @ list: Bo, who is not in #general, picked; the bar after the send adds him.
+        // (A new simulator's keyboard first explains sliding to type.)
+        if app.buttons["Continue"].exists { app.buttons["Continue"].tap() }
+        if !field.waitForExistence(timeout: 10) { print("the app without its composer:\n" + app.debugDescription) }
+        field.tap()
+        field.typeText("@bo")
+        let pick = starting("Bo Diddley @\(bo)")
+        XCTAssertTrue(pick.waitForExistence(timeout: 10), "the @ list does not offer Bo")
+        XCTAssertTrue(pick.label.hasSuffix("Not in #general"), "Bo is not marked as outside #general: \(pick.label)")
+        pick.tap()
+        XCTAssertEqual(field.value as? String, "@\(bo) ")
+        field.typeText("please look")
+        app.buttons["Send"].tap()
+        let bar = labelled("Bo Diddley isn’t in #general, so they won’t be notified.")
+        XCTAssertTrue(bar.waitForExistence(timeout: 20), "no bar saying Bo was not notified")
+        reached("mentioned")
+        app.buttons["Add to #general"].tap()
+        let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: bar)
+        XCTAssertEqual(XCTWaiter().wait(for: [gone], timeout: 20), .completed, "the bar stayed after Bo was added")
+        reached("added")
+
+        // The server's Mentions: Ada's messages for this account, each opening its channel.
+        sidebar()
+        mentionsRow.tap()
+        let item = anything.matching(NSPredicate(format: "label BEGINSWITH %@", "Ada Lovelace in #general")).firstMatch
+        XCTAssertTrue(item.waitForExistence(timeout: 20), "the Mentions page lists nothing of Ada's in #general")
+        reached("mentionspage")
+        item.tap()
+        XCTAssertTrue(field.waitForExistence(timeout: 20), "the mention did not open #general")
+    }
+
+    /// The read wake (scripts/smoke-replies.sh, architecture 15.5): with
+    /// notifications allowed and the app in the background, the smoke
+    /// delivers three, one of #design (LUMIA_UITEST_READ), one of #general
+    /// (LUMIA_UITEST_UNREAD) and the generic notice, and reads #design from
+    /// elsewhere; then the read push arrives, here through the debug
+    /// build's `lumia://dev/read-push?badge=N` (LUMIA_UITEST_WAKE), since
+    /// `simctl push` refuses a silent push. Notification Center lists the
+    /// notification of #general and no longer the one of #design. Steps:
+    /// `wake-ready`, `woken`.
+    func testTheReadWakeTakesAwayWhatIsRead() throws {
+        let env = ProcessInfo.processInfo.environment
+        let steps = try XCTUnwrap(env["LUMIA_UITEST_STEPS"])
+        let read = try XCTUnwrap(env["LUMIA_UITEST_READ"])
+        let unread = try XCTUnwrap(env["LUMIA_UITEST_UNREAD"])
+        let wake = try XCTUnwrap(env["LUMIA_UITEST_WAKE"].flatMap(URL.init(string:)))
+        let app = launch(screen: "server")
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let allow = springboard.buttons["Allow"]
+        if allow.waitForExistence(timeout: 60) { allow.tap() }
+        XCTAssertTrue(app.buttons["mentions-row"].waitForExistence(timeout: 60), "the app did not open on the server")
+        sleep(3)
+        // Not running, as an app the system has suspended or ended is when a wake matters.
+        app.terminate()
+        reached("wake-ready", under: steps)
+        app.open(wake)
+        let open = springboard.buttons["Open"]
+        if open.waitForExistence(timeout: 5) { open.tap() }
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 20))
+        sleep(5)
+        XCTAssertTrue(listed(unread, over: app, within: 10), "the notification of #general, still unread, is gone")
+        XCTAssertFalse(listed(read, over: app, within: 0), "the notification of #design, read elsewhere, is still listed")
+        reached("woken", under: steps)
+    }
+
     /// A server's channel with someone else in it (scripts/smoke-typing.sh,
     /// which launches the app on the channel through LUMIA_DEV_SCREEN). The
     /// other person, LUMIA_UITEST_OTHER, has sent LUMIA_UITEST_ROWS messages

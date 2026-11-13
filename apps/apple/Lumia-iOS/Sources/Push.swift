@@ -81,9 +81,74 @@ final class PushRegistrar {
     func signedOut() {
         target = nil
         token = nil
+        session = nil
         UIApplication.shared.unregisterForRemoteNotifications()
         UNUserNotificationCenter.current().removeAllDeliveredNotifications()
+        UNUserNotificationCenter.current().setBadgeCount(0)
     }
+
+    // MARK: Read state (architecture 6.6 and 15.5)
+
+    /// The signed-in session, while the shell is on screen: a read push asks it for the counts.
+    weak var session: LumiaSession?
+
+    /// The counts changed in the app (a snapshot, a message, a mark here or
+    /// another device's read through the account log): the badge follows
+    /// them, and the notifications of the conversations now read go.
+    func readsChanged(before: ReadCounts, after: ReadCounts) {
+        let center = UNUserNotificationCenter.current()
+        center.setBadgeCount(Int(after.badge))
+        let read = ReadNotifications.newlyRead(before: before, after: after)
+        guard !read.isEmpty else { return }
+        Task {
+            let ids = await center.deliveredNotifications().filter { read.contains(Self.channel(of: $0) ?? "") }.map(\.request.identifier)
+            if !ids.isEmpty {
+                Self.log.info("removing \(ids.count) delivered notifications of conversations read")
+                center.removeDeliveredNotifications(withIdentifiers: ids)
+            }
+        }
+    }
+
+    /// A read push (`"kind": "read"`, silent, content-available): the
+    /// account read something on another device. The badge becomes what it
+    /// carries, and the notifications already delivered of conversations
+    /// with nothing unread now go, by the counts a snapshot gives; every one
+    /// of them when the badge is 0, since then nothing that notifies is unread.
+    func readPush(badge: Int?, host: String?) async {
+        let center = UNUserNotificationCenter.current()
+        if let badge { try? await center.setBadgeCount(badge) }
+        let states = await counts(host: host)
+        let delivered = await center.deliveredNotifications().map { (id: $0.request.identifier, channelID: Self.channel(of: $0)) }
+        // No badge in the push: only the counts decide.
+        let ids = ReadNotifications.toRemove(delivered: delivered, states: states, badge: badge.map { UInt32(max(0, $0)) } ?? 1)
+        Self.log.info("read push: badge \(badge ?? -1), \(ids.count) of \(delivered.count) delivered notifications removed")
+        if !ids.isEmpty { center.removeDeliveredNotifications(withIdentifiers: ids) }
+    }
+
+    /// The account's counts as the instance has them now: through the
+    /// session the app holds, or, woken in the background with none, a
+    /// client opened on the same stores as the notification extension does.
+    private func counts(host: String?) async -> ReadCounts? {
+        if let session, session.signedIn {
+            await session.refreshSnapshot()
+            return session.reads
+        }
+        guard let host,
+              let url = AppStore.baseURL(forHost: host) ?? AppStore.baseURL(forHost: host.replacingOccurrences(of: ":", with: "_")),
+              let client = try? LumiaClient(baseURL: url, dataDirectory: AppStore.dataDirectory),
+              await client.signedIn,
+              let snap = try? await client.snapshot() else { return nil }
+        return ReadCounts(snap.readStates)
+    }
+
+    /// The conversation a delivered notification is of, as the extension wrote it.
+    private static func channel(of n: UNNotification) -> String? {
+        let content = n.request.content
+        if let id = content.userInfo["channel_id"] as? String, !id.isEmpty { return id }
+        return content.threadIdentifier.isEmpty ? nil : content.threadIdentifier
+    }
+
+    private static let log = Logger(subsystem: "chat.lumia", category: "push")
 }
 
 final class PushDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
@@ -95,6 +160,15 @@ final class PushDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCen
 
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
         Task { @MainActor in PushRegistrar.shared.received(deviceToken) }
+    }
+
+    /// A background push: the read wake (architecture 15.5), which shows nothing.
+    func application(_ application: UIApplication, didReceiveRemoteNotification userInfo: [AnyHashable: Any]) async -> UIBackgroundFetchResult {
+        guard userInfo["kind"] as? String == "read" else { return .noData }
+        let badge = (userInfo["aps"] as? [String: Any])?["badge"] as? Int
+        let host = userInfo["instance"] as? String
+        await PushRegistrar.shared.readPush(badge: badge, host: host)
+        return .newData
     }
 
     func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {

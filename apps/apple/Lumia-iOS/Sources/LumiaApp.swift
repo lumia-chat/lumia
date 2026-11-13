@@ -60,6 +60,20 @@ struct RootView: View {
         // for what the system draws over them (a sheet, a menu, the
         // keyboard); nil is the phone's own, followed as it changes.
         .preferredColorScheme(preferences.appearance.colorScheme)
+        #if DEBUG
+        // The simulator's `simctl push` refuses a silent push, so a smoke
+        // stands in for the read wake with `lumia://dev/read-push?badge=N`:
+        // the same handling, without the system's delivery.
+        .onOpenURL { url in
+            guard url.host() == "dev", url.path() == "/read-push" else { return }
+            let badge = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "badge" }?.value.flatMap(Int.init)
+            Task {
+                // Opened cold, as a wake would find it: once the saved instance is open.
+                for _ in 0..<100 where store.opening { try? await Task.sleep(for: .milliseconds(100)) }
+                await PushRegistrar.shared.readPush(badge: badge, host: store.session?.host)
+            }
+        }
+        #endif
         .onChange(of: store.session?.signedIn) { _, signedIn in
             if signedIn == false { PushRegistrar.shared.signedOut() }
         }

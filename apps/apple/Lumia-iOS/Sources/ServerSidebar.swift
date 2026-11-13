@@ -1,4 +1,5 @@
-// A server's sidebar beside the rail (architecture 6.8): its invitations,
+// A server's sidebar beside the rail (architecture 6.8): its Mentions row
+// with the server's count (architecture 6.6), its invitations,
 // the channels this account is in under a Channels heading whose +
 // offers Create a channel and Browse channels, its server DMs under a
 // Direct messages heading whose + picks a member to message, and the
@@ -26,6 +27,9 @@ struct ServerScreen: View {
             SideHeader(title: server.name, meta: session.host, action: ("square.and.pencil", "New message", { path.append(.newMessage) }))
             ScrollView {
                 VStack(alignment: .leading, spacing: LumiaTokens.space2) {
+                    // This server's messages that mention this account or reply to it (architecture 6.6).
+                    MentionsRow(count: session.serverUnread(server.serverId).mentions) { path.append(.mentions(serverID: server.serverId)) }
+                        .padding(.bottom, LumiaTokens.space8)
                     ForEach(invitations, id: \.channel.channelId) { invitation in
                         InvitationRow(
                             line: Membership.invitationLine(channel: invitation.channel.name, inviter: session.name(of: invitation.invitedByAccountId)),
@@ -51,7 +55,7 @@ struct ServerScreen: View {
                             .padding(.horizontal, LumiaTokens.space10)
                     }
                     ForEach(channels, id: \.channelId) { c in
-                        SidebarRow(label: c.name, open: { path.append(.channel(id: c.channelId)) }) {
+                        SidebarRow(label: c.name, unread: session.unread(c.channelId), open: { path.append(.channel(id: c.channelId)) }) {
                             ChannelGlyph(isPrivate: c.private)
                         }
                     }
@@ -61,7 +65,7 @@ struct ServerScreen: View {
                     ForEach(dms, id: \.channelId) { c in
                         let other = Membership.other(in: c, me: session.me)
                         let name = session.name(of: other)
-                        SidebarRow(label: name, open: { path.append(.channel(id: c.channelId)) }) {
+                        SidebarRow(label: name, unread: session.unread(c.channelId), open: { path.append(.channel(id: c.channelId)) }) {
                             LumiaAvatar(initials: initials(of: name), tone: .of(other), size: LumiaTokens.avatarXs)
                                 .accessibilityHidden(true)
                         }
@@ -163,8 +167,11 @@ struct ChannelGlyph: View {
 }
 
 /// A row of a server's sidebar: a glyph and a name.
+/// One with unread messages is drawn in the strong ink and weight, with
+/// their count for this account at its end (architecture 6.6).
 struct SidebarRow<Glyph: View>: View {
     let label: String
+    var unread: (unread: UInt32, mentions: UInt32) = (0, 0)
     let open: () -> Void
     @ViewBuilder let glyph: () -> Glyph
 
@@ -172,14 +179,28 @@ struct SidebarRow<Glyph: View>: View {
         Button(action: open) {
             HStack(spacing: LumiaTokens.space8) {
                 glyph()
-                Text(label).font(LumiaTokens.textNav.font).foregroundStyle(LumiaTokens.ink.color).lineLimit(1)
+                Text(label).font(LumiaTokens.textNav.font)
+                    .fontWeight(unread.unread > 0 ? .semibold : nil)
+                    .foregroundStyle(unread.unread > 0 ? LumiaTokens.inkEmphasis.color : LumiaTokens.ink.color).lineLimit(1)
                 Spacer(minLength: 0)
+                if unread.mentions > 0 { LumiaCountBadge(unread.mentions) }
             }
             .padding(.horizontal, LumiaTokens.space10)
             .frame(height: LumiaTokens.controlHeight)
             .contentShape(RoundedRectangle(cornerRadius: LumiaTokens.radius10))
         }
         .buttonStyle(.plain)
+        .modifier(UnreadLabel(unread: unread))
+    }
+}
+
+/// What assistive technology hears of a row with something unread in it:
+/// its name as its contents give it, then "unread" or "2 mentions" as its value.
+struct UnreadLabel: ViewModifier {
+    let unread: (unread: UInt32, mentions: UInt32)
+
+    func body(content: Content) -> some View {
+        content.accessibilityValue(Replies.unreadWords(unread: unread.unread, mentions: unread.mentions))
     }
 }
 

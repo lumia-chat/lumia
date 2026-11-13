@@ -13,9 +13,12 @@ import SwiftUI
 public struct MessageStamp: Equatable, Sendable {
     public let authorID: String
     public let atMicros: Int64
+    /// It quotes another message: it opens a block of its own, under its
+    /// name (architecture 6.6), which the next may join.
+    public let quotes: Bool
 
-    public init(authorID: String, atMicros: Int64) {
-        self.authorID = authorID; self.atMicros = atMicros
+    public init(authorID: String, atMicros: Int64, quotes: Bool = false) {
+        self.authorID = authorID; self.atMicros = atMicros; self.quotes = quotes
     }
 
     var date: Date { Date(timeIntervalSince1970: Double(atMicros) / 1_000_000) }
@@ -56,7 +59,7 @@ public enum MessageBlocks {
 
     /// Each message's place, in the order given (oldest first).
     public static func places(_ stamps: [MessageStamp], calendar: Calendar = .current) -> [MessagePlace] {
-        let joined = stamps.indices.map { i in i > 0 && joins(stamps[i - 1], stamps[i], calendar: calendar) }
+        let joined = stamps.indices.map { i in i > 0 && !stamps[i].quotes && joins(stamps[i - 1], stamps[i], calendar: calendar) }
         return stamps.indices.map { i in
             MessagePlace(
                 opens: !joined[i],

@@ -95,7 +95,7 @@ public func noticeText(kind: String, actor: String, subject: String) -> String? 
 /// A message's stamp for its block: a notice is a block of its own, and
 /// the message after it opens one.
 public func messageStamp(_ m: MessageSummary) -> MessageStamp {
-    MessageStamp(authorID: m.notice.isEmpty ? m.authorAccountId : "notice:\(m.messageId)", atMicros: m.createdAtMicros)
+    MessageStamp(authorID: m.notice.isEmpty ? m.authorAccountId : "notice:\(m.messageId)", atMicros: m.createdAtMicros, quotes: m.reply != nil)
 }
 
 /// The channels the gateway loop is subscribed to. The loop starts on

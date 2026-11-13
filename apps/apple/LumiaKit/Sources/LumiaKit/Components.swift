@@ -127,10 +127,16 @@ public struct LumiaMessageRow: View {
     public var measures = MessageMeasures.of(.standard)
     /// Opens who wrote it (their profile card), from the avatar or the name; nil where there is none to open.
     public var openAuthor: (() -> Void)?
+    /// What architecture 6.6 adds: whom the body mentions (drawn as pills,
+    /// each opening its person through `openPerson`), the quote above it,
+    /// the reactions under it, a tint when it is for this account (or a jump
+    /// has just reached it), and its actions: a long press opens them,
+    /// `reply` and `addReaction` are also offered to assistive technology.
+    public var extras = MessageExtras()
     @State private var hovering = false
 
-    public init(author: String, tone: AvatarTone, time: String, text: String, deleted: Bool = false, place: MessagePlace = MessagePlace(), measures: MessageMeasures = .of(.standard), openAuthor: (() -> Void)? = nil) {
-        self.author = author; self.tone = tone; self.time = time; self.text = text; self.deleted = deleted; self.place = place; self.measures = measures; self.openAuthor = openAuthor
+    public init(author: String, tone: AvatarTone, time: String, text: String, deleted: Bool = false, place: MessagePlace = MessagePlace(), measures: MessageMeasures = .of(.standard), openAuthor: (() -> Void)? = nil, extras: MessageExtras = MessageExtras()) {
+        self.author = author; self.tone = tone; self.time = time; self.text = text; self.deleted = deleted; self.place = place; self.measures = measures; self.openAuthor = openAuthor; self.extras = extras
     }
 
     /// Whose a row is and when, as assistive technology hears it before the message.
@@ -138,7 +144,42 @@ public struct LumiaMessageRow: View {
 
     private var said: String { deleted ? "(deleted)" : text }
 
+    private var label: String {
+        let heading = Self.heading(author: author, time: time)
+        guard let quote = extras.quote, !deleted else { return heading }
+        return "\(heading). " + (quote.deleted ? Replies.originalDeleted : Replies.quoteLabel(name: quote.name, text: quote.text))
+    }
+
     public var body: some View {
+        VStack(alignment: .leading, spacing: LumiaTokens.space4) {
+            main
+            if !extras.reactions.isEmpty, !deleted {
+                LumiaReactionChips(reactions: extras.reactions, toggle: extras.toggle, add: extras.addReaction)
+                    .padding(.leading, measures.avatar + measures.beside)
+            }
+        }
+        .padding(.horizontal, LumiaTokens.space12)
+        .padding(.top, place.opens ? measures.edge : measures.within)
+        .padding(.bottom, place.closes ? measures.edge : measures.within)
+        .background {
+            ZStack(alignment: .leading) {
+                background
+                // A message for this account: the accent's rule at its edge.
+                if extras.tinted { LumiaTokens.accent.color.frame(width: LumiaTokens.space2) }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: LumiaTokens.radius12))
+            .accessibilityHidden(true)
+        }
+        .onHover { hovering = $0 }
+        .padding(.bottom, place.closes ? measures.blockGap : 0)
+    }
+
+    private var background: Color {
+        if extras.tinted || extras.flashed { return LumiaTokens.accentSoft.color }
+        return hovering ? LumiaTokens.hoverMessage.color : .clear
+    }
+
+    private var main: some View {
         HStack(alignment: .top, spacing: measures.beside) {
             if place.opens {
                 LumiaAvatar(initials: initials(of: author), tone: tone, size: measures.avatar)
@@ -156,29 +197,73 @@ public struct LumiaMessageRow: View {
                         Text(time).font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkMuted.color)
                     }
                 }
-                Text(said)
-                    .font(LumiaTokens.textMessage.font)
-                    .lineSpacing(MessageMeasures.leading)
-                    .foregroundStyle(deleted ? LumiaTokens.inkQuiet.color : LumiaTokens.inkBody.color)
-                    .italic(deleted)
-                    .textSelection(.enabled)
+                if let quote = extras.quote, !deleted { LumiaQuoteBlock(quote: quote) }
+                MessageBodyText(text: said, mentions: deleted ? [] : extras.mentions, deleted: deleted, openPerson: extras.openPerson)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .padding(.horizontal, LumiaTokens.space12)
-        .padding(.top, place.opens ? measures.edge : measures.within)
-        .padding(.bottom, place.closes ? measures.edge : measures.within)
-        .background(hovering ? LumiaTokens.hoverMessage.color : .clear, in: RoundedRectangle(cornerRadius: LumiaTokens.radius12))
-        .onHover { hovering = $0 }
+        // The whole row takes the long press, not only its words.
+        .contentShape(Rectangle())
+        .onLongPressGesture(minimumDuration: 0.4) { if !deleted { extras.actions?() } }
         // One stop per message, the same whether or not the row shows its
-        // name and time: "Grace Hopper, 12:01 PM", then what was said.
+        // name and time: "Grace Hopper, 12:01 PM", then what was said. A
+        // quote is said after the time; the reactions are stops of their own.
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Self.heading(author: author, time: time))
+        .accessibilityLabel(label)
         .accessibilityValue(said)
         .accessibilityActions {
+            if !deleted {
+                if let reply = extras.reply { Button("Reply", action: reply) }
+                if let add = extras.addReaction { Button("Add reaction", action: add) }
+                if let actions = extras.actions { Button("Message actions", action: actions) }
+                if let open = extras.quote?.open, extras.quote?.deleted == false { Button("Go to the original", action: open) }
+            }
             if let openAuthor { Button("Open \(author)’s profile", action: openAuthor) }
         }
-        .padding(.bottom, place.closes ? measures.blockGap : 0)
+    }
+}
+
+/// What a message row draws beside its words (architecture 6.6).
+public struct MessageExtras {
+    public var mentions: [MentionSummary] = []
+    public var quote: QuoteDisplay?
+    public var reactions: [ReactionDisplay] = []
+    /// It mentions this account or everyone, or quotes this account.
+    public var tinted = false
+    /// A jump has just reached it.
+    public var flashed = false
+    public var toggle: (String) -> Void = { _ in }
+    public var addReaction: (() -> Void)?
+    public var reply: (() -> Void)?
+    public var actions: (() -> Void)?
+    public var openPerson: ((String) -> Void)?
+
+    public init() {}
+}
+
+/// A quote as a row draws it: its author's name (nil for one not known),
+/// the text, whether the original is gone, and the jump to it.
+public struct QuoteDisplay {
+    public let name: String?
+    public let text: String
+    public let deleted: Bool
+    public let open: (() -> Void)?
+
+    public init(name: String?, text: String, deleted: Bool, open: (() -> Void)?) {
+        self.name = name; self.text = text; self.deleted = deleted; self.open = open
+    }
+}
+
+/// One emoji's chip: how many, whether this account is among them, and who.
+public struct ReactionDisplay: Identifiable {
+    public let emoji: String
+    public let count: UInt32
+    public let me: Bool
+    public let words: String
+    public var id: String { emoji }
+
+    public init(emoji: String, count: UInt32, me: Bool, words: String) {
+        self.emoji = emoji; self.count = count; self.me = me; self.words = words
     }
 }
 
@@ -268,32 +353,44 @@ public struct LumiaTypingHint: View {
     }
 }
 
-public struct LumiaComposer: View {
+public struct LumiaComposer<Above: View>: View {
     @Binding var text: String
     let placeholder: String
     let disabled: Bool
     let hint: String?
     let typing: [String]?
+    let focused: FocusState<Bool>.Binding?
     let send: () -> Void
+    @ViewBuilder let above: () -> Above
 
     /// `typing` names those typing in the conversation, for the line under
     /// the field: nil where there is never such a line (a personal
     /// conversation), and empty where nobody is typing just now, which
     /// keeps the line's room so the field does not move when someone starts.
-    public init(text: Binding<String>, placeholder: String, disabled: Bool = false, hint: String? = "Return to send", typing: [String]? = nil, send: @escaping () -> Void) {
-        self._text = text; self.placeholder = placeholder; self.disabled = disabled; self.hint = hint; self.typing = typing; self.send = send
+    /// `above` is what stands over the field (the quote being replied with,
+    /// the @ list, the bar after a send); `focused`, where given, is whether
+    /// the field has the keyboard.
+    public init(text: Binding<String>, placeholder: String, disabled: Bool = false, hint: String? = "Return to send", typing: [String]? = nil, focused: FocusState<Bool>.Binding? = nil, send: @escaping () -> Void, @ViewBuilder above: @escaping () -> Above) {
+        self._text = text; self.placeholder = placeholder; self.disabled = disabled; self.hint = hint; self.typing = typing; self.focused = focused; self.send = send; self.above = above
     }
 
     private var canSend: Bool { !disabled && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
+    @ViewBuilder private var field: some View {
+        let base = TextField(placeholder, text: $text, axis: .vertical)
+        if let focused { base.focused(focused) } else { base }
+    }
+
     public var body: some View {
         VStack(alignment: .leading, spacing: LumiaTokens.space8) {
+            above()
             HStack(alignment: .center, spacing: LumiaTokens.space2) {
                 Image(systemName: "plus")
                     .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(LumiaTokens.inkQuiet.color)
                     .frame(width: 36, height: 36)
-                TextField(placeholder, text: $text, axis: .vertical)
+                field
+                    .accessibilityIdentifier("composer")
                     .textFieldStyle(.plain)
                     .lineLimit(1...8)
                     .font(LumiaTokens.textMessage.font)
@@ -343,6 +440,12 @@ public struct LumiaComposer: View {
         .padding(.horizontal, LumiaTokens.space24)
         .padding(.top, LumiaTokens.space4)
         .padding(.bottom, LumiaTokens.space14)
+    }
+}
+
+public extension LumiaComposer where Above == EmptyView {
+    init(text: Binding<String>, placeholder: String, disabled: Bool = false, hint: String? = "Return to send", typing: [String]? = nil, send: @escaping () -> Void) {
+        self.init(text: text, placeholder: placeholder, disabled: disabled, hint: hint, typing: typing, focused: nil, send: send) { EmptyView() }
     }
 }
 

@@ -113,6 +113,25 @@ public actor LumiaClient {
     public func stop() { inner.stop() }
     public func subscribe(channelID: String) throws { try inner.subscribe(channelId: channelID) }
     public func sendMessage(channelID: String, body: String) throws -> String { try inner.sendMessage(channelId: channelID, body: body) }
+    /// Quote replies, reactions, mentions and read state (architecture 6.6):
+    /// a message with its mentions and what it quotes (only the quote's id
+    /// and text are read), the mentions a body makes as the core finds
+    /// them, a reaction added or taken away, the read counts and the badge
+    /// as this client counts them, a conversation read through `seq`, and a
+    /// page of the messages that notify this account.
+    public func sendMessageWith(channelID: String, body: String, mentions: [MentionSummary], replyTo: QuoteSummary?) throws -> String {
+        try inner.sendMessageWith(channelId: channelID, body: body, mentions: mentions, replyTo: replyTo)
+    }
+    public func findMentions(body: String, members: [MemberSummary], everyone: Bool) -> [MentionSummary] {
+        inner.findMentions(body: body, members: members, everyone: everyone)
+    }
+    public func react(channelID: String, messageID: String, emoji: String, remove: Bool) throws {
+        try inner.react(channelId: channelID, messageId: messageID, emoji: emoji, remove: remove)
+    }
+    public func readStates() -> [ReadStateSummary] { inner.readStates() }
+    public func badge() -> UInt32 { inner.badge() }
+    public func markRead(channelID: String, seq: UInt64) throws -> ReadStateSummary { try inner.markRead(channelId: channelID, seq: seq) }
+    public func mentions(serverID: String?, before: String?) throws -> MentionsPage { try inner.mentions(serverId: serverID, before: before) }
     public func foreground() throws { try inner.foreground() }
     /// Going to the background: releases the single-writer lock (architecture 15.5).
     public func background() { inner.background() }
@@ -177,6 +196,10 @@ public actor LumiaClient {
     public func dmRequest(accountID: String) throws -> DmRequestSummary { try inner.dmRequest(accountId: accountID) }
     public func dmRespond(requestID: String, response: String) throws -> DmResponse { try inner.dmRespond(requestId: requestID, response: response) }
     public func dmSend(channelID: String, body: String) throws { try inner.dmSend(channelId: channelID, body: body) }
+    public func dmSendWith(channelID: String, body: String, quote: QuoteSummary?) throws { try inner.dmSendWith(channelId: channelID, body: body, quote: quote) }
+    public func dmReact(channelID: String, messageID: String, emoji: String, remove: Bool) throws {
+        try inner.dmReact(channelId: channelID, messageId: messageID, emoji: emoji, remove: remove)
+    }
     public func dmDelete(channelID: String, messageID: String) throws { try inner.dmDelete(channelId: channelID, messageId: messageID) }
     public func dmRejoin(channelID: String) throws { try inner.dmRejoin(channelId: channelID) }
     public func dmMessages(channelID: String) throws -> DmLogSummary { try inner.dmMessages(channelId: channelID) }

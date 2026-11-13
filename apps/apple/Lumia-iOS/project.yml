@@ -57,6 +57,10 @@ targets:
         # A launch screen from the plist (no storyboard): the app's
         # background colour, drawn until the first frame.
         UILaunchScreen: {}
+        # The read wake (architecture 15.5): a silent push when the account
+        # reads something on another device, for the badge and to take away
+        # the notifications of what is now read.
+        UIBackgroundModes: [remote-notification]
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         UISupportedInterfaceOrientations~ipad: [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
         NSHumanReadableCopyright: ""

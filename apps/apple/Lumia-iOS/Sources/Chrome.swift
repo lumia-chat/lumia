@@ -29,6 +29,8 @@ enum Screen: Hashable {
     case addPeople(channelID: String)
     case newServerDM(serverID: String)
     case yourSettings(serverID: String)
+    /// A server's Mentions page, or Home's (every server's) for nil.
+    case mentions(serverID: String?)
 }
 
 struct PhoneRail: View {
@@ -43,14 +45,18 @@ struct PhoneRail: View {
 
     var body: some View {
         VStack(spacing: LumiaTokens.space12) {
-            tile(current: place == .home, badge: session.snapshot?.pendingRequests.count ?? 0, label: "Home") {
+            // Home's count: the requests that wait and the personal conversations' unread messages.
+            tile(current: place == .home, badge: (session.snapshot?.pendingRequests.count ?? 0) + Int(session.personalMentions), label: "Home") {
                 place = .home
             } content: {
                 Image("Logo").resizable().scaledToFit().padding(LumiaTokens.space6)
             }
             Rectangle().fill(LumiaTokens.railDivider.color).frame(width: 24, height: 1)
             ForEach(servers, id: \.serverId) { s in
-                tile(current: place == .server(id: s.serverId), badge: 0, label: s.name) {
+                // What is unread in it: a mark at the rail's edge, and its count for this account on the tile.
+                let unread = session.serverUnread(s.serverId)
+                let current = place == .server(id: s.serverId)
+                tile(current: current, badge: Int(unread.mentions), mentionBadge: true, unread: unread.unread && !current, label: s.name, value: Replies.unreadWords(unread: unread.unread ? 1 : 0, mentions: unread.mentions)) {
                     place = .server(id: s.serverId)
                 } content: {
                     // The server's picture over its initials, when it has one (architecture 6.7).
@@ -95,7 +101,7 @@ struct PhoneRail: View {
         .background(LumiaTokens.rail.color.ignoresSafeArea())
     }
 
-    private func tile<C: View>(current: Bool, badge: Int, label: String, action: @escaping () -> Void, @ViewBuilder content: () -> C) -> some View {
+    private func tile<C: View>(current: Bool, badge: Int, mentionBadge: Bool = false, unread: Bool = false, label: String, value: String = "", action: @escaping () -> Void, @ViewBuilder content: () -> C) -> some View {
         Button(action: action) {
             content()
                 .frame(width: LumiaTokens.tileSize, height: LumiaTokens.tileSize)
@@ -104,11 +110,23 @@ struct PhoneRail: View {
                 .clipShape(RoundedRectangle(cornerRadius: current ? LumiaTokens.radius14 : LumiaTokens.radiusRound))
                 .overlay(RoundedRectangle(cornerRadius: current ? LumiaTokens.radius14 : LumiaTokens.radiusRound).stroke(current ? LumiaTokens.accent.color : .clear, lineWidth: 2))
                 .overlay(alignment: .topTrailing) {
-                    if badge > 0 { CountBadge(badge).offset(x: 4, y: -4) }
+                    if badge > 0 {
+                        Group { if mentionBadge { LumiaCountBadge(UInt32(badge)) } else { CountBadge(badge) } }.offset(x: 4, y: -4)
+                    }
+                }
+                // Something unread in a server not on screen: the small mark at the rail's edge.
+                .overlay(alignment: .leading) {
+                    if unread {
+                        Capsule().fill(LumiaTokens.ink.color)
+                            .frame(width: LumiaTokens.space4, height: LumiaTokens.space8)
+                            .offset(x: -(LumiaTokens.railWidth - LumiaTokens.tileSize) / 2)
+                            .accessibilityHidden(true)
+                    }
                 }
         }
         .buttonStyle(.plain)
         .accessibilityLabel(label)
+        .accessibilityValue(value)
         .accessibilityAddTraits(current ? .isSelected : [])
     }
 }
