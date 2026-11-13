@@ -862,6 +862,23 @@ impl Client {
             .map_err(js)
     }
 
+    /// The mentions `body` makes of `members` (`MemberSummary` objects),
+    /// and of everyone when `everyone`: `[{accountId, everyone, start,
+    /// end}]`, UTF-8 byte ranges.
+    ///
+    /// # Errors
+    /// When `members` is not a list of members.
+    #[wasm_bindgen(js_name = findMentions)]
+    pub fn find_mentions(
+        &self,
+        body: String,
+        members: JsValue,
+        everyone: bool,
+    ) -> Result<JsValue, JsError> {
+        let members: Vec<lumia_client::app::MemberSummary> = from_js(members)?.unwrap_or_default();
+        to_js(&lumia_client::app::find_mentions(&body, &members, everyone))
+    }
+
     /// Adds this account's reaction to a message, or takes it away.
     ///
     /// # Errors

@@ -284,6 +284,62 @@ pub fn magic_token_of(text: &str) -> String {
     }
 }
 
+/// The mentions a message's body makes (architecture 6.6): each `@handle`
+/// of one of `members`, matched without regard to case, and `@everyone`
+/// when `everyone` (this account may mention everyone), with its byte range.
+/// An `@` counts at the start or after anything but a letter, digit or
+/// underscore (so an address like `ada@example.com` is none), and a handle
+/// ends where its characters do, less a trailing `.` or `-` that matches
+/// nobody (`@ada.` at a sentence's end is Ada).
+#[must_use]
+pub fn find_mentions(body: &str, members: &[MemberSummary], everyone: bool) -> Vec<MentionSummary> {
+    let handle_char = |c: char| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-');
+    let mut found = Vec::new();
+    let mut before: Option<char> = None;
+    for (at, c) in body.char_indices() {
+        let starts = c == '@' && !before.is_some_and(|b| b.is_alphanumeric() || b == '_');
+        before = Some(c);
+        if !starts {
+            continue;
+        }
+        let rest = &body[at + 1..];
+        let mut word = &rest[..rest.find(|c: char| !handle_char(c)).unwrap_or(rest.len())];
+        loop {
+            if word.is_empty() {
+                break;
+            }
+            let end = u32::try_from(at + 1 + word.len()).unwrap_or(u32::MAX);
+            let start = u32::try_from(at).unwrap_or(u32::MAX);
+            if everyone && word.eq_ignore_ascii_case("everyone") {
+                found.push(MentionSummary {
+                    account_id: String::new(),
+                    everyone: true,
+                    start,
+                    end,
+                });
+                break;
+            }
+            if let Some(m) = members
+                .iter()
+                .find(|m| !m.handle.is_empty() && m.handle.eq_ignore_ascii_case(word))
+            {
+                found.push(MentionSummary {
+                    account_id: m.account_id.clone(),
+                    everyone: false,
+                    start,
+                    end,
+                });
+                break;
+            }
+            match word.strip_suffix(['.', '-']) {
+                Some(shorter) => word = shorter,
+                None => break,
+            }
+        }
+    }
+    found
+}
+
 /// The code inside an invite link, or the text itself when it is a bare
 /// code: `https://host/invite/abc` and `abc` both give `abc`.
 #[must_use]
@@ -3740,6 +3796,57 @@ fn writer_generation(store: &SqliteStore) -> Result<u64, ClientError> {
         .meta_get("writer_generation")?
         .and_then(|s| s.parse().ok())
         .unwrap_or(0))
+}
+
+#[cfg(test)]
+mod mention_tests {
+    use super::{find_mentions, MemberSummary};
+
+    fn member(id: &str, handle: &str) -> MemberSummary {
+        MemberSummary {
+            account_id: id.into(),
+            handle: handle.into(),
+            display_name: String::new(),
+            nickname: String::new(),
+            pronouns: String::new(),
+            bio: String::new(),
+            avatar_url: String::new(),
+            channel_adds_by_invitation: false,
+            server_dms_off: false,
+        }
+    }
+
+    #[test]
+    fn handles_and_everyone_are_found_with_their_byte_ranges() {
+        let people = [member("a", "ada"), member("b", "bo.k")];
+        let found = |body: &str, everyone| {
+            find_mentions(body, &people, everyone)
+                .into_iter()
+                .map(|m| {
+                    (
+                        m.account_id,
+                        m.everyone,
+                        &body[m.start as usize..m.end as usize],
+                    )
+                })
+                .map(|(id, e, text)| (id, e, text.to_string()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            found("hi @Ada and @bo.k.", false),
+            [
+                ("a".into(), false, "@Ada".into()),
+                ("b".into(), false, "@bo.k".into())
+            ]
+        );
+        assert_eq!(found("é @ada", false)[0].2, "@ada");
+        assert!(found("mail ada@ada.com or @nobody", false).is_empty());
+        assert!(found("@everyone look", false).is_empty());
+        assert_eq!(
+            found("(@everyone) look", true),
+            [(String::new(), true, "@everyone".into())]
+        );
+    }
 }
 
 #[cfg(test)]
