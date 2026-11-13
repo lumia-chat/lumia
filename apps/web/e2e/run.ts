@@ -887,6 +887,74 @@ async function asideStep(which: string, stamp: number) {
   console.log(`  ${which}: put the member list away and back in a wide window and kept it across a reload, slid it over a narrow one and put it away by the shade and by Escape, in ${Date.now() - t0} ms`);
 }
 
+// Being in channels and server DMs (architecture 6.8 and 6.4): a member
+// is in the server's default channel only, finds another in Browse,
+// reads it before joining with Join where the composer would be, joins
+// (and its notice says so), leaves, and from the owner's profile card
+// opens a server DM, which says whose it is, and writes in it.
+async function membershipStep(which: string, stamp: number) {
+  const ownerDir = resolve(work, `cli-members-owner-${which}`);
+  const memberDir = resolve(work, `cli-members-member-${which}`);
+  const owner = `keeper${which}${stamp}`;
+  const member = `joiner${which}${stamp}`;
+  lumia(ownerDir, "instance", "add", instance);
+  lumia(ownerDir, "account", "create", "--handle", owner, "--password", password);
+  const server = lumia(ownerDir, "server-create", `Members ${stamp}`).match(/[0-9a-f-]{36}/)?.[0];
+  if (!server) throw new Error("no server id");
+  lumia(ownerDir, "channel-create", server, "general");
+  const design = lumia(ownerDir, "channel-create", server, "design").match(/[0-9a-f-]{36}/)?.[0];
+  if (!design) throw new Error("no channel id");
+  lumia(ownerDir, "send", design, "Read me before you join.");
+  const code = lumia(ownerDir, "invite-create", server).trim().split(/\s+/)[0];
+  if (!code) throw new Error("no invite code");
+  lumia(memberDir, "instance", "add", instance);
+  lumia(memberDir, "account", "create", "--handle", member, "--password", password);
+  lumia(memberDir, "join", code);
+  const { ctx, page } = await open(which, "membership");
+  const t0 = Date.now();
+  try {
+    await trustCard(page);
+    await page.getByLabel("Email or handle").fill(member);
+    await page.getByRole("textbox", { name: "Password" }).fill(password);
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await page.getByPlaceholder("Message #general").waitFor();
+    const sidebar = page.locator(".lu-shell__sidebar");
+    if ((await sidebar.getByRole("link", { name: "design" }).count()) > 0) throw new Error("design is listed before joining it");
+    phase("browse");
+    await page.getByRole("button", { name: "Add channels" }).click();
+    await page.getByRole("menuitem", { name: "Browse channels" }).click();
+    await page.getByRole("button", { name: "design, 1 member" }).click();
+    phase("preview");
+    await page.getByText("You’re not in #design").waitFor();
+    await page.getByText("Read me before you join.").waitFor();
+    if ((await page.getByPlaceholder("Message #design").count()) > 0) throw new Error("a composer before joining");
+    await page.screenshot({ path: `${out}/${which}-membership-preview.png` });
+    phase("join");
+    await page.locator(".lu-joinbar").getByRole("button", { name: "Join" }).click();
+    await page.getByPlaceholder("Message #design").waitFor();
+    await page.getByText(`${member} joined`).waitFor();
+    await sidebar.getByRole("link", { name: "design" }).waitFor();
+    await page.screenshot({ path: `${out}/${which}-membership-joined.png` });
+    phase("leave");
+    await page.getByRole("button", { name: "Leave channel" }).click();
+    await sidebar.getByRole("link", { name: "design" }).waitFor({ state: "detached" });
+    await page.getByPlaceholder("Message #general").waitFor();
+    phase("server DM");
+    await page.locator(".lu-shell__aside").getByRole("button", { name: new RegExp(`^${owner}`) }).click();
+    await page.getByRole("button", { name: "Message privately" }).waitFor();
+    await page.getByRole("button", { name: `Message ${owner}` }).click();
+    await page.getByText("Messages here are kept by").waitFor();
+    await page.getByPlaceholder(`Message ${owner}`).fill("Just between us and the server.");
+    await page.keyboard.press("Enter");
+    await page.getByText("Just between us and the server.").waitFor();
+    await sidebar.getByRole("link", { name: owner }).waitFor();
+    await page.screenshot({ path: `${out}/${which}-membership-dm.png` });
+  } finally {
+    await ctx.close();
+  }
+  console.log(`  ${which}: found a channel in Browse, read it before joining, joined with its notice, left it, and wrote in a server DM opened from a profile card, in ${Date.now() - t0} ms`);
+}
+
 // A session revoked from elsewhere (protocol 12), as "sign out everywhere"
 // or a reused refresh token does it: the gateway is told and its loop
 // ends, the page asks for the snapshot, is refused, and goes back to the
@@ -945,7 +1013,7 @@ async function create(which: string, handle: string, stamp: number) {
     await page.getByRole("button", { name: "Create, join or discover servers" }).click();
     await page.getByLabel("Name").fill(`Made ${stamp}`);
     await page.getByRole("button", { name: "Create", exact: true }).click();
-    await page.getByText("No channel yet").waitFor();
+    await page.getByText("No channel open").waitFor();
     if ((await page.getByText(`Made ${stamp}`).count()) === 0) throw new Error("the new server is not shown");
     phase("channel");
     await page.getByRole("button", { name: /server menu/ }).click();
@@ -1407,6 +1475,7 @@ try {
       ["server settings", () => serverSettings(which, stamp)],
       ["autoscroll", () => autoscrollStep(which, stamp)],
       ["aside", () => asideStep(which, stamp)],
+      ["membership", () => membershipStep(which, stamp)],
       ["push", () => webPush(which, `web${stamp}`, passwordDir, server, general, webAccount)],
       ["magic link", () => magicLink(which)],
       ["passkey", () => passkey(which, `web${stamp}`)],

@@ -4,7 +4,7 @@
 // bridge; nothing here renders.
 import { QueryClient, createQuery, useQueryClient } from "@tanstack/solid-query";
 import { createSignal } from "solid-js";
-import { Bridge, ClientError, claimOwnership, type ClientEvent, type MemberSummary, type Opened, type StatusSummary } from "./bridge";
+import { Bridge, ClientError, claimOwnership, type ClientEvent, type MemberSummary, type Opened, type SnapshotSummary, type StatusSummary } from "./bridge";
 
 export const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: Infinity, retry: false } },
@@ -161,9 +161,23 @@ let listening = false;
  * refuses. A failed start reports on `connection` and leaves `started`
  * off, so the next snapshot can try again.
  */
+/** The channels the gateway loop has been asked for, since it last started. */
+let subscribed = new Set<string>();
+
 export async function startGateway(channelIds: string[]): Promise<void> {
-  if (started() || gatewayHeld) return;
+  if (gatewayHeld) return;
+  if (started()) {
+    // A channel gained since the loop started (made, joined, added, a new
+    // server DM): the loop subscribes only to what it was started with.
+    for (const id of channelIds) {
+      if (subscribed.has(id)) continue;
+      subscribed.add(id);
+      void client().subscribe(id).catch(() => subscribed.delete(id));
+    }
+    return;
+  }
   setStarted(true);
+  subscribed = new Set(channelIds);
   setConnection("connecting");
   gatewayStartedAt = Date.now();
   const b = client();
@@ -340,6 +354,8 @@ function onGatewayEvent(e: ClientEvent): void {
     }
     case "applied":
       void queryClient.invalidateQueries({ queryKey: ["messages", e.channelId] });
+      // Someone came or went (architecture 6.8): who is in the channel is asked again.
+      if (e.events.some((event) => event.message?.notice)) void queryClient.invalidateQueries({ queryKey: ["channelMembers", e.channelId] });
       for (const event of e.events) if (event.message) stopTyping(e.channelId, event.message.authorAccountId);
       break;
     case "typing":
@@ -471,6 +487,29 @@ export function membersQuery(serverId: () => string | undefined) {
     queryFn: () => client().members(serverId() as string),
     enabled: !!serverId(),
   }));
+}
+
+/** Who is in a channel, as account ids (architecture 6.8). */
+export function channelMembersQuery(channelId: () => string | undefined) {
+  return createQuery(() => ({
+    queryKey: ["channelMembers", channelId()],
+    queryFn: () => client().channelMembers(channelId() as string),
+    enabled: !!channelId(),
+  }));
+}
+
+/** The public channels of a server this account is not in, as Browse lists them. */
+export function browseQuery(serverId: () => string | undefined, enabled: () => boolean = () => true) {
+  return createQuery(() => ({
+    queryKey: ["browse", serverId()],
+    queryFn: () => client().browseChannels(serverId() as string),
+    enabled: !!serverId() && enabled(),
+  }));
+}
+
+/** Takes a snapshot a call answered with, as a fresh one is taken. */
+export function tookSnapshot(snapshot: SnapshotSummary): void {
+  queryClient.setQueryData(["snapshot"], snapshot);
 }
 
 export function messagesQuery(channelId: () => string | undefined) {

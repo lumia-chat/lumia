@@ -27,6 +27,13 @@ export interface ServerSummary {
   retentionDays: number;
   /** Whether this account may change the server's settings (architecture 6.7). */
   canManage: boolean;
+  /** Whether it may create channels there (architecture 6.8). */
+  canManageChannels: boolean;
+  /** Whether it may start server DMs there. */
+  canStartDms: boolean;
+  /** Its own switches there: adds to channels wait as invitations; nobody may start a server DM with it. */
+  channelAddsByInvitation: boolean;
+  serverDmsOff: boolean;
 }
 /** A WebAuthn ceremony's start: the challenge's id and the options as the browser's JSON. */
 export interface PasskeyChallengeSummary {
@@ -86,6 +93,24 @@ export interface ChannelSummary {
   lastSeq: number;
   participantAccountIds: string[];
   host: string;
+  /** TEXT: entered only by being added (architecture 6.8). */
+  private: boolean;
+  /** TEXT: joined by every newcomer to the server. */
+  isDefault: boolean;
+  /** How many are in it, where a listing says (Browse); 0 elsewhere. */
+  memberCount: number;
+  topic: string;
+}
+/** An invitation into a channel, waiting for this account's yes (architecture 6.8). */
+export interface ChannelInvitationSummary {
+  channel: ChannelSummary;
+  invitedByAccountId: string;
+  createdAtMicros: number;
+}
+/** Who an add brought in at once, and who it invited instead. */
+export interface ChannelAddSummary {
+  addedAccountIds: string[];
+  invitedAccountIds: string[];
 }
 export interface DmRequestSummary {
   requestId: string;
@@ -104,6 +129,8 @@ export interface SnapshotSummary {
   servers: ServerSummary[];
   channels: ChannelSummary[];
   pendingRequests: DmRequestSummary[];
+  /** Channels this account was asked into and has not answered. */
+  channelInvitations: ChannelInvitationSummary[];
 }
 export interface StatusSummary {
   status: string;
@@ -119,6 +146,9 @@ export interface MemberSummary {
   bio: string;
   /** The account's picture: a path on this instance (`/api/v1/avatars/…`); empty for none. */
   avatarUrl: string;
+  /** Their switches in the server listed (architecture 6.8). */
+  channelAddsByInvitation: boolean;
+  serverDmsOff: boolean;
 }
 export interface DmChannelSummary {
   channelId: string;
@@ -156,6 +186,9 @@ export interface MessageSummary {
   body: string;
   createdAtMicros: number;
   deleted: boolean;
+  /** A notice (architecture 6.8): `joined`, `added`, `left` or `removed`, done by the author, about `noticeAccountId`; empty for a message. */
+  notice: string;
+  noticeAccountId: string;
 }
 export interface EventSummary {
   seq: number;
@@ -321,8 +354,42 @@ export class Bridge {
   createServer(name: string): Promise<ServerSummary> {
     return this.call("createServer", name);
   }
-  createChannel(serverId: string, name: string): Promise<ChannelSummary> {
-    return this.call("createChannel", serverId, name);
+  createChannel(serverId: string, name: string, isPrivate = false): Promise<ChannelSummary> {
+    return this.call("createChannel", serverId, name, isPrivate);
+  }
+  /** The public channels of a server this account can see and is not in, with their counts (architecture 6.8). */
+  browseChannels(serverId: string): Promise<ChannelSummary[]> {
+    return this.call("browseChannels", serverId);
+  }
+  joinChannel(channelId: string): Promise<SnapshotSummary> {
+    return this.call("joinChannel", channelId);
+  }
+  leaveChannel(channelId: string): Promise<SnapshotSummary> {
+    return this.call("leaveChannel", channelId);
+  }
+  /** Who is in a channel, as account ids. */
+  channelMembers(channelId: string): Promise<string[]> {
+    return this.call("channelMembers", channelId);
+  }
+  addChannelMembers(channelId: string, accountIds: string[]): Promise<ChannelAddSummary> {
+    return this.call("addChannelMembers", channelId, accountIds);
+  }
+  removeChannelMember(channelId: string, accountId: string): Promise<void> {
+    return this.call("removeChannelMember", channelId, accountId);
+  }
+  dismissChannelInvitation(channelId: string): Promise<SnapshotSummary> {
+    return this.call("dismissChannelInvitation", channelId);
+  }
+  /** This account's switches in a server; one left out stays. */
+  updateMembership(serverId: string, channelAddsByInvitation?: boolean, serverDmsOff?: boolean): Promise<SnapshotSummary> {
+    return this.call("updateMembership", serverId, channelAddsByInvitation, serverDmsOff);
+  }
+  /** The 1:1 server DM with a member, started if need be (architecture 6.4). */
+  openServerDm(serverId: string, accountId: string): Promise<ChannelSummary> {
+    return this.call("openServerDm", serverId, accountId);
+  }
+  setDefaultChannels(serverId: string, channelIds: string[]): Promise<SnapshotSummary> {
+    return this.call("setDefaultChannels", serverId, channelIds);
   }
   passkeyRegisterStart(): Promise<PasskeyChallengeSummary> {
     return this.call("passkeyRegisterStart");

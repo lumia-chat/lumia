@@ -1,13 +1,16 @@
 // What opens over the Quiet Split: the menu under a server's name and
-// the two popovers it leads to (a new channel, invite links), the
+// the popovers it leads to (a new channel, invite links), the Channels
+// heading's plus (create a channel, browse them), "Add people" to a
+// channel and "Message someone" in a server (architecture 6.8), the
 // account menu on the rail's self avatar, and the profile card a
 // member's row or a message's author opens. From the Quiet Split and
 // Profile card boards; the popovers, which have no board, are drawn in
 // the card's vocabulary. One is open at a time, held by the app shell.
-import { For, Match, Show, Switch, createSignal } from "solid-js";
-import { Button, Choice, Menu, MenuHead, MenuItem, MenuLabel, MenuRadio, MenuRule, Pop, Popover, ProfileCard, TextField, type IconName, type Status } from "../design/components";
-import { ClientError, type InviteSummary, type ServerSummary, type SnapshotSummary } from "../client/bridge";
-import { avatarSrc, client, connection, customStatusOf, myStatus, presenceOf, queryClient, setMyStatus } from "../client/state";
+import { For, Match, Show, Switch, createMemo, createSignal } from "solid-js";
+import { Button, Checkbox, Choice, Menu, MenuHead, MenuItem, MenuLabel, MenuRadio, MenuRule, PickRow, Pop, Popover, ProfileCard, SearchField, TextField, type IconName, type Status } from "../design/components";
+import { ClientError, type InviteSummary, type MemberSummary, type ServerSummary, type SnapshotSummary } from "../client/bridge";
+import { avatarSrc, channelMembersQuery, client, connection, customStatusOf, membersQuery, myStatus, presenceOf, queryClient, setMyStatus } from "../client/state";
+import { channelRefusal, dmRefusal } from "./channels";
 import { useNames } from "../client/names";
 import { initialsOf, toneFor } from "./app";
 import { messagePerson } from "./home";
@@ -16,6 +19,9 @@ import { messagePerson } from "./home";
 export type Over =
   | { kind: "serverMenu"; anchor: HTMLElement }
   | { kind: "newChannel"; anchor: HTMLElement }
+  | { kind: "channelsMenu"; anchor: HTMLElement }
+  | { kind: "addPeople"; anchor: HTMLElement; channelId: string }
+  | { kind: "newDm"; anchor: HTMLElement }
   | { kind: "invite"; anchor: HTMLElement }
   | { kind: "account"; anchor: HTMLElement }
   | { kind: "person"; anchor: HTMLElement; accountId: string };
@@ -28,6 +34,11 @@ export interface OverlayProps {
   open: (over: Over) => void;
   close: () => void;
   onChannelCreated: (channelId: string) => void;
+  /** A channel or a server DM of the server on screen, to open. */
+  toChannel: (channelId: string) => void;
+  toBrowse: () => void;
+  /** This account's own settings in the server on screen (architecture 6.8). */
+  toYourSettings: () => void;
   onConversation: (channelId: string) => void;
   toProfile: () => void;
   toPreferences: () => void;
@@ -48,8 +59,29 @@ export function Overlay(props: OverlayProps) {
               <MenuItem icon="member-joined" onSelect={() => props.open({ kind: "invite", anchor: props.over.anchor })}>
                 Invite people
               </MenuItem>
-              <MenuItem icon="hash" onSelect={() => props.open({ kind: "newChannel", anchor: props.over.anchor })}>
-                New channel
+              <MenuItem
+                icon="search"
+                onSelect={() => {
+                  props.close();
+                  props.toBrowse();
+                }}
+              >
+                Browse channels
+              </MenuItem>
+              <Show when={server().canManageChannels}>
+                <MenuItem icon="hash" onSelect={() => props.open({ kind: "newChannel", anchor: props.over.anchor })}>
+                  New channel
+                </MenuItem>
+              </Show>
+              <MenuRule />
+              <MenuItem
+                icon="user"
+                onSelect={() => {
+                  props.close();
+                  props.toYourSettings();
+                }}
+              >
+                Your settings in {server().name}
               </MenuItem>
               <Show when={server().canManage}>
                 <MenuItem
@@ -67,6 +99,32 @@ export function Overlay(props: OverlayProps) {
         )}
       </Match>
       <Match when={props.over.kind === "newChannel" && props.server}>{(server) => <NewChannel server={server()} anchor={props.over.anchor} close={props.close} onCreated={props.onChannelCreated} />}</Match>
+      <Match when={props.over.kind === "channelsMenu" && props.server}>
+        {(server) => (
+          <Popover anchor={props.over.anchor} onClose={props.close} closeLabel="Close menu">
+            <Menu label="Channels" compact>
+              <Show when={server().canManageChannels}>
+                <MenuItem icon="plus" onSelect={() => props.open({ kind: "newChannel", anchor: props.over.anchor })}>
+                  Create a channel
+                </MenuItem>
+              </Show>
+              <MenuItem
+                icon="search"
+                onSelect={() => {
+                  props.close();
+                  props.toBrowse();
+                }}
+              >
+                Browse channels
+              </MenuItem>
+            </Menu>
+          </Popover>
+        )}
+      </Match>
+      <Match when={props.over.kind === "addPeople" && props.server && props.over}>
+        {(over) => <AddPeople server={props.server as ServerSummary} snapshot={props.snapshot} channelId={(over() as Extract<Over, { kind: "addPeople" }>).channelId} anchor={props.over.anchor} close={props.close} />}
+      </Match>
+      <Match when={props.over.kind === "newDm" && props.server}>{(server) => <NewDm {...props} server={server()} />}</Match>
       <Match when={props.over.kind === "invite" && props.server}>{(server) => <Invites server={server()} anchor={props.over.anchor} close={props.close} />}</Match>
       <Match when={props.over.kind === "account"}>
         <AccountMenu {...props} />
@@ -79,6 +137,7 @@ export function Overlay(props: OverlayProps) {
 // A new channel in the server on screen, opened once made.
 function NewChannel(props: { server: ServerSummary; anchor: HTMLElement; close: () => void; onCreated: (channelId: string) => void }) {
   const [name, setName] = createSignal("");
+  const [isPrivate, setPrivate] = createSignal(false);
   const [error, setError] = createSignal("");
   const [busy, setBusy] = createSignal(false);
   const create = async (e: Event) => {
@@ -87,7 +146,7 @@ function NewChannel(props: { server: ServerSummary; anchor: HTMLElement; close: 
     setBusy(true);
     setError("");
     try {
-      const channel = await client().createChannel(props.server.serverId, name().trim());
+      const channel = await client().createChannel(props.server.serverId, name().trim(), isPrivate());
       await queryClient.invalidateQueries({ queryKey: ["snapshot"] });
       props.onCreated(channel.channelId);
     } catch (err) {
@@ -98,9 +157,13 @@ function NewChannel(props: { server: ServerSummary; anchor: HTMLElement; close: 
   };
   return (
     <Popover anchor={props.anchor} onClose={props.close}>
-      <Pop title="New channel" subtitle={`A text channel everyone in ${props.server.name} can see.`}>
+      <Pop title="New channel" subtitle={isPrivate() ? "A text channel only the people in it can see." : `A text channel everyone in ${props.server.name} can see.`}>
         <form class="lu-pop__form" onSubmit={(e) => void create(e)}>
           <TextField label="Name" value={name()} onInput={(e) => setName(e.currentTarget.value)} placeholder="general" autocomplete="off" />
+          <div class="app__switch">
+            <Checkbox label="Private" checked={isPrivate()} onChange={(e) => setPrivate(e.currentTarget.checked)} />
+            <p class="auth__note">Only people added can see it.</p>
+          </div>
           <Show when={error()}>
             <p class="lu-pop__error" role="alert">
               {error()}
@@ -328,6 +391,34 @@ function PersonCard(props: OverlayProps & { accountId: string }) {
     ).filter((d) => d.text.trim() && d.text !== name());
   const [note, setNote] = createSignal("");
   const [busy, setBusy] = createSignal(false);
+  // In a server, a server DM first (architecture 6.4), unless they turned those off there.
+  const members = membersQuery(() => props.server?.serverId);
+  const takes = () => !(members.data ?? []).find((m) => m.accountId === props.accountId)?.serverDmsOff;
+  const inServer = async () => {
+    const server = props.server;
+    if (!server) return;
+    setBusy(true);
+    setNote("");
+    try {
+      const channel = await client().openServerDm(server.serverId, props.accountId);
+      await queryClient.invalidateQueries({ queryKey: ["snapshot"] });
+      props.close();
+      props.toChannel(channel.channelId);
+    } catch (err) {
+      setNote(dmRefusal(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const first = () => name().split(/\s+/)[0] || name();
+  const action = () => {
+    if (me()) return undefined;
+    if (!props.server) return { label: `Message ${first()}`, onClick: () => void message(), disabled: busy() };
+    if (!takes() || !props.server.canStartDms) return undefined;
+    return { label: `Message ${first()}`, onClick: () => void inServer(), disabled: busy() };
+  };
+  const secondary = () => (me() || !props.server ? undefined : { label: "Message privately", onClick: () => void message(), disabled: busy() });
+  const cardNote = () => note() || (props.server && !me() && !takes() ? "Doesn’t take messages here" : "");
   const message = async () => {
     setBusy(true);
     setNote("");
@@ -361,10 +452,120 @@ function PersonCard(props: OverlayProps & { accountId: string }) {
         // Presence is a server's to say; at Home there is none to show.
         status={props.server ? (presenceOf(props.server.serverId, props.accountId) ?? null) : undefined}
         details={details()}
-        note={note() || undefined}
-        action={me() ? undefined : { label: `Message ${name().split(/\s+/)[0] || name()}`, onClick: () => void message(), disabled: busy() }}
+        note={cardNote() || undefined}
+        action={action()}
+        secondary={secondary()}
         onClose={props.close}
       />
+    </Popover>
+  );
+}
+
+/** The server's members whose name or handle has `filter` in it, by name, without this account. */
+function others(members: MemberSummary[] | undefined, me: string | undefined, filter: string): MemberSummary[] {
+  const wanted = filter.trim().toLowerCase();
+  const nameOf = (m: MemberSummary) => m.displayName || m.nickname || m.handle || m.accountId.slice(0, 8);
+  return (members ?? [])
+    .filter((m) => m.accountId !== me && (!wanted || nameOf(m).toLowerCase().includes(wanted) || m.handle.toLowerCase().includes(wanted)))
+    .sort((a, b) => nameOf(a).localeCompare(nameOf(b)));
+}
+
+// "Add people" to a channel: the server's members not in it, ticked and
+// added together; one who takes adds as invitations is marked so.
+function AddPeople(props: { server: ServerSummary; snapshot: SnapshotSummary | undefined; channelId: string; anchor: HTMLElement; close: () => void }) {
+  const members = membersQuery(() => props.server.serverId);
+  const inside = channelMembersQuery(() => props.channelId);
+  const channel = () => (props.snapshot?.channels ?? []).find((c) => c.channelId === props.channelId);
+  const [filter, setFilter] = createSignal("");
+  const [chosen, setChosen] = createSignal<string[]>([]);
+  const [busy, setBusy] = createSignal(false);
+  const [error, setError] = createSignal("");
+  const candidates = createMemo(() => others(members.data, props.snapshot?.accountId, filter()).filter((m) => !(inside.data ?? []).includes(m.accountId)));
+  const toggle = (id: string) => setChosen((now) => (now.includes(id) ? now.filter((x) => x !== id) : [...now, id]));
+  const add = async () => {
+    if (busy() || !chosen().length) return;
+    setBusy(true);
+    setError("");
+    try {
+      await client().addChannelMembers(props.channelId, chosen());
+      void queryClient.invalidateQueries({ queryKey: ["channelMembers", props.channelId] });
+      props.close();
+    } catch (err) {
+      const ce = err instanceof ClientError ? err : null;
+      setError(ce?.code === "INVALID_ARGUMENT" ? "Someone chosen cannot see this channel." : channelRefusal(err));
+      setBusy(false);
+    }
+  };
+  return (
+    <Popover anchor={props.anchor} onClose={props.close}>
+      <Pop title="Add people" subtitle={`To #${channel()?.name ?? "this channel"}.`}>
+        <div class="lu-pop__form">
+          <SearchField label="Find a member" value={filter()} onInput={(e) => setFilter(e.currentTarget.value)} />
+          <Show when={candidates().length > 0} fallback={<p class="auth__note">Everyone here is in this channel already.</p>}>
+            <ul class="lu-picklist" aria-label="People to add">
+              <For each={candidates()}>
+                {(m) => {
+                  const name = m.displayName || m.nickname || m.handle || m.accountId.slice(0, 8);
+                  return <PickRow name={name} initials={initialsOf(name)} src={avatarSrc(m.avatarUrl)} tone={toneFor(m.accountId)} note={m.channelAddsByInvitation ? "Will be invited" : undefined} checked={chosen().includes(m.accountId)} onPick={() => toggle(m.accountId)} />;
+                }}
+              </For>
+            </ul>
+          </Show>
+          <Show when={error()}>
+            <p class="lu-pop__error" role="alert">
+              {error()}
+            </p>
+          </Show>
+          <Button variant="primary" size="md" block disabled={busy() || chosen().length === 0} onClick={() => void add()}>
+            {chosen().length > 1 ? `Add ${chosen().length} people` : "Add"}
+          </Button>
+        </div>
+      </Pop>
+    </Popover>
+  );
+}
+
+// "Message someone" in a server: its members, one to open a server DM
+// with; one who turned server DMs off cannot be chosen.
+function NewDm(props: OverlayProps & { server: ServerSummary }) {
+  const members = membersQuery(() => props.server.serverId);
+  const [filter, setFilter] = createSignal("");
+  const [busy, setBusy] = createSignal(false);
+  const [error, setError] = createSignal("");
+  const open = async (id: string) => {
+    if (busy()) return;
+    setBusy(true);
+    setError("");
+    try {
+      const channel = await client().openServerDm(props.server.serverId, id);
+      await queryClient.invalidateQueries({ queryKey: ["snapshot"] });
+      props.close();
+      props.toChannel(channel.channelId);
+    } catch (err) {
+      setError(dmRefusal(err));
+      setBusy(false);
+    }
+  };
+  return (
+    <Popover anchor={props.over.anchor} onClose={props.close}>
+      <Pop title="Message someone" subtitle={`A conversation ${props.server.name} keeps.`}>
+        <div class="lu-pop__form">
+          <SearchField label="Find a member" value={filter()} onInput={(e) => setFilter(e.currentTarget.value)} />
+          <ul class="lu-picklist" aria-label="Members">
+            <For each={others(members.data, props.snapshot?.accountId, filter())}>
+              {(m) => {
+                const name = m.displayName || m.nickname || m.handle || m.accountId.slice(0, 8);
+                return <PickRow name={name} initials={initialsOf(name)} src={avatarSrc(m.avatarUrl)} tone={toneFor(m.accountId)} note={m.serverDmsOff ? "Unavailable" : undefined} disabled={m.serverDmsOff || busy()} onPick={() => void open(m.accountId)} />;
+              }}
+            </For>
+          </ul>
+          <Show when={error()}>
+            <p class="lu-pop__error" role="alert">
+              {error()}
+            </p>
+          </Show>
+        </div>
+      </Pop>
     </Popover>
   );
 }

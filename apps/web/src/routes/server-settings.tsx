@@ -1,5 +1,6 @@
-// A server's settings (architecture 6.7): its picture and name, and how
-// long it keeps its messages. Offered from the menu under the server's
+// A server's settings (architecture 6.7): its picture and name, the
+// channels newcomers join (architecture 6.8), and how long it keeps its
+// messages. Offered from the menu under the server's
 // name to whoever may change them (`canManage`, from the account's own
 // membership); the instance decides all the same. Shown in the server's
 // main pane until a channel is chosen. No board draws it: it is the
@@ -9,6 +10,7 @@ import { Button, Card, ChannelHeader, SegmentedTabs, TextField } from "../design
 import { ClientError, type ServerSummary, type SnapshotSummary } from "../client/bridge";
 import { avatarSrc, client, pictureRefusal, queryClient } from "../client/state";
 import { initialsOf } from "./app";
+import { DefaultChannelsCard } from "./channels";
 
 /** The choices offered, in days; 0 keeps messages for ever. */
 export const RETENTION_CHOICES = [0, 365, 90, 30];
@@ -31,7 +33,7 @@ function settingRefusal(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-export function ServerSettings(props: { server: ServerSummary; back: () => void }) {
+export function ServerSettings(props: { server: ServerSummary; snapshot: SnapshotSummary | undefined; back: () => void }) {
   // The snapshot each call answers with is the account as it now is: the
   // rail and the sidebar follow at once.
   const took = (snap: SnapshotSummary) => queryClient.setQueryData(["snapshot"], snap);
@@ -188,6 +190,7 @@ export function ServerSettings(props: { server: ServerSummary; back: () => void 
             </Button>
           </form>
         </Card>
+        <DefaultChannelsCard server={props.server} snapshot={props.snapshot} />
         <Card title="Message history" subtitle="How long this server keeps its messages.">
           <div class="auth__form">
             <SegmentedTabs

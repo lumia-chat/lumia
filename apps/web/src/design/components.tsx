@@ -481,6 +481,8 @@ export interface MemberEntry {
   tag?: string;
   /** Whatever names the person to the screen; handed back by `onOpen`. */
   id?: string;
+  /** Something to do to them, at the row's end: "Remove". */
+  action?: { label: string; description: string; disabled?: boolean; onClick: () => void };
 }
 
 export interface MemberListProps {
@@ -530,6 +532,13 @@ export function MemberList(props: MemberListProps) {
                         </Show>
                       </span>
                     </button>
+                    <Show when={m.action}>
+                      {(a) => (
+                        <Button variant="text" size="sm" class="lu-member__action" disabled={a().disabled} aria-label={a().description} onClick={() => a().onClick()}>
+                          {a().label}
+                        </Button>
+                      )}
+                    </Show>
                   </li>
                 )}
               </For>
@@ -738,7 +747,8 @@ function RowLead(props: { item: ChannelItem }) {
 }
 
 export interface ChannelListProps {
-  sections: { title: string; items: ChannelItem[] }[];
+  /** `action` is the plus at the end of a section's title; `before` stands between the title and the rows. */
+  sections: { title: string; items: ChannelItem[]; action?: { label: string; onClick: (anchor: HTMLElement) => void; expanded?: boolean }; before?: JSX.Element; empty?: string }[];
   class?: string;
 }
 
@@ -749,7 +759,14 @@ export function ChannelList(props: ChannelListProps) {
       <For each={props.sections}>
         {(sec) => (
           <section>
-            <h2 class="lu-chlist__title">{sec.title}</h2>
+            <div class="lu-chlist__head">
+              <h2 class="lu-chlist__title">{sec.title}</h2>
+              <Show when={sec.action}>{(a) => <IconButton icon="plus" label={a().label} size={28} class="lu-chlist__add" aria-haspopup="menu" aria-expanded={a().expanded ? "true" : "false"} onClick={(e) => a().onClick(e.currentTarget)} />}</Show>
+            </div>
+            {sec.before}
+            <Show when={sec.empty && sec.items.length === 0}>
+              <p class="lu-chlist__empty">{sec.empty}</p>
+            </Show>
             <ul class="lu-chlist__list">
               <For each={sec.items}>
                 {(it) => {
@@ -879,6 +896,161 @@ export function Notice(props: NoticeProps) {
       <p class="lu-notice__text">{props.children}</p>
       <Show when={props.action}>{(a) => <Button variant="text" onClick={() => a().onClick?.()}>{a().label}</Button>}</Show>
     </div>
+  );
+}
+
+/* ── Channel membership (architecture 6.8) ─────────────────── */
+
+export interface NoticeLineProps {
+  /** What happened: "Grace joined". */
+  children?: JSX.Element;
+  time: string;
+  datetime?: string;
+  class?: string;
+}
+
+/** A notice in a conversation: someone came or went. No avatar, nothing to do with it. */
+export function NoticeLine(props: NoticeLineProps) {
+  return (
+    <div class={cx("lu-noticeline", props.class)} role="listitem">
+      <Icon name="member-joined" size={14} class="lu-noticeline__glyph" />
+      <span class="lu-noticeline__text">{props.children}</span>
+      <time class="lu-noticeline__time" datetime={props.datetime}>
+        {props.time}
+      </time>
+    </div>
+  );
+}
+
+export interface JoinBarProps {
+  /** The channel's name, without its hash. */
+  channel: string;
+  busy?: boolean;
+  error?: string;
+  onJoin?: () => void;
+  class?: string;
+}
+
+/** Where the composer would be in a channel read before joining. */
+export function JoinBar(props: JoinBarProps) {
+  return (
+    <div class={cx("lu-joinbar", props.class)}>
+      <div class="lu-joinbar__box">
+        <p class="lu-joinbar__text">You’re not in #{props.channel}</p>
+        <Button variant="primary" size="md" disabled={props.busy} onClick={() => props.onJoin?.()}>
+          Join
+        </Button>
+      </div>
+      <Show when={props.error}>
+        <p class="lu-joinbar__error" role="alert">
+          {props.error}
+        </p>
+      </Show>
+    </div>
+  );
+}
+
+export interface InvitationRowProps {
+  channel: string;
+  by: string;
+  busy?: boolean;
+  onJoin?: () => void;
+  onDismiss?: () => void;
+  class?: string;
+}
+
+/** An invitation into a channel in the sidebar, with the way in and the way to say no. */
+export function InvitationRow(props: InvitationRowProps) {
+  return (
+    <div class={cx("lu-invitation", props.class)} role="group" aria-label={`${props.by} invited you to ${props.channel}`}>
+      <p class="lu-invitation__text">
+        #{props.channel} · {props.by} invited you
+      </p>
+      <div class="lu-invitation__actions">
+        <Button size="sm" disabled={props.busy} onClick={() => props.onJoin?.()}>
+          Join
+        </Button>
+        <Button variant="text" size="sm" onClick={() => props.onDismiss?.()}>
+          Dismiss
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+export interface BrowseRowProps {
+  name: string;
+  topic?: string;
+  count: number;
+  busy?: boolean;
+  onOpen?: () => void;
+  onJoin?: () => void;
+  class?: string;
+}
+
+/** A channel in Browse: its name, topic and how many are in it, and Join. */
+export function BrowseRow(props: BrowseRowProps) {
+  const count = () => (props.count === 1 ? "1 member" : `${props.count} members`);
+  return (
+    <li class={cx("lu-browse", props.class)}>
+      <button type="button" class="lu-browse__open" onClick={() => props.onOpen?.()} aria-label={`${props.name}, ${count()}`}>
+        <span class="lu-browse__name">
+          <span aria-hidden="true" class="lu-browse__hash">
+            #
+          </span>
+          {props.name}
+        </span>
+        <span class="lu-browse__meta">{[props.topic, count()].filter(Boolean).join(" · ")}</span>
+      </button>
+      <Button variant="primary" size="md" disabled={props.busy} onClick={() => props.onJoin?.()}>
+        Join
+      </Button>
+    </li>
+  );
+}
+
+export interface PickRowProps {
+  name: string;
+  initials: string;
+  src?: string;
+  tone?: Tone;
+  /** A word at the end: "Will be invited", "Unavailable". */
+  note?: string;
+  /** Ticked or not, for a picker of several; left out for one that picks one. */
+  checked?: boolean;
+  disabled?: boolean;
+  onPick?: () => void;
+  class?: string;
+}
+
+/** A person in a picker: "Add people", "Message someone". */
+export function PickRow(props: PickRowProps) {
+  return (
+    <li>
+      <button
+        type="button"
+        class={cx("lu-pick", props.class)}
+        role={props.checked !== undefined ? "checkbox" : undefined}
+        aria-checked={props.checked !== undefined ? (props.checked ? "true" : "false") : undefined}
+        disabled={props.disabled}
+        onClick={() => props.onPick?.()}
+      >
+        <Show when={props.checked !== undefined}>
+          <span aria-hidden="true" class={cx("lu-pick__box", props.checked && "is-checked")}>
+            <Show when={props.checked}>
+              <Icon name="check" size={12} strokeWidth={3} />
+            </Show>
+          </span>
+        </Show>
+        <Avatar initials={props.initials} src={props.src} tone={props.tone} size={28} />
+        <span class="lu-pick__name">{props.name}</span>
+        <Show when={props.note}>
+          <Tag tone="accent" size="sm">
+            {props.note}
+          </Tag>
+        </Show>
+      </button>
+    </li>
   );
 }
 
@@ -1714,6 +1886,8 @@ export interface ProfileCardProps {
   /** A line over the action: what pressing it led to. */
   note?: string;
   action?: { label: string; onClick?: () => void; disabled?: boolean };
+  /** A second way, beside or under the first: "Message privately". */
+  secondary?: { label: string; onClick?: () => void; disabled?: boolean };
   onClose?: () => void;
   class?: string;
 }
@@ -1769,14 +1943,23 @@ export function ProfileCard(props: ProfileCardProps) {
             {props.note}
           </p>
         </Show>
-        <Show when={props.action}>
-          {(a) => (
-            <div class="lu-pcard__actions">
-              <Button variant="primary" size="md" disabled={a().disabled} onClick={() => a().onClick?.()}>
-                {a().label}
-              </Button>
-            </div>
-          )}
+        <Show when={props.action || props.secondary}>
+          <div class={cx("lu-pcard__actions", props.action && props.secondary && "lu-pcard__actions--two")}>
+            <Show when={props.action}>
+              {(a) => (
+                <Button variant="primary" size="md" disabled={a().disabled} onClick={() => a().onClick?.()}>
+                  {a().label}
+                </Button>
+              )}
+            </Show>
+            <Show when={props.secondary}>
+              {(a) => (
+                <Button variant="secondary" size="md" disabled={a().disabled} onClick={() => a().onClick?.()}>
+                  {a().label}
+                </Button>
+              )}
+            </Show>
+          </div>
         </Show>
       </div>
     </section>

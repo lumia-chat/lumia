@@ -9,6 +9,7 @@ import {
   Avatar,
   AvatarStack,
   Badge,
+  BrowseRow,
   Button,
   Card,
   ChannelHeader,
@@ -21,6 +22,8 @@ import {
   EmptyState,
   Icon,
   IconButton,
+  InvitationRow,
+  JoinBar,
   MemberList,
   Mention,
   Menu,
@@ -32,6 +35,8 @@ import {
   Message,
   MessageList,
   Notice,
+  NoticeLine,
+  PickRow,
   Pop,
   ProfileCard,
   QuickTiles,
@@ -1002,6 +1007,36 @@ function Pieces() {
               </Button>
             </div>
           </Pop>
+        </div>
+      </section>
+      <section>
+        <h2>Being in channels: an invitation, Browse, a picker, notices, the join bar, a server DM's card</h2>
+        <div class="pieces__row pieces__row--top">
+          <div style={{ width: "240px" }}>
+            <InvitationRow channel="research" by={PEOPLE.maya.name} />
+          </div>
+          <ul class="lu-browselist" style={{ width: "420px" }}>
+            <BrowseRow name="random" topic="Anything at all" count={12} />
+            <BrowseRow name="music" count={1} />
+          </ul>
+          <Pop title="Add people" subtitle="To #general.">
+            <div class="lu-pop__form">
+              <ul class="lu-picklist">
+                <PickRow name={PEOPLE.leo.name} initials="LM" tone="sky" note="Will be invited" checked />
+                <PickRow name={PEOPLE.maya.name} initials="MC" tone="peach" checked={false} />
+                <PickRow name="Cy Twombly" initials="CT" tone="amber" note="Unavailable" disabled />
+              </ul>
+              <Button variant="primary" size="md" block>
+                Add
+              </Button>
+            </div>
+          </Pop>
+          <ProfileCard name={PEOPLE.maya.name} initials="MC" tone="peach" handle="maya" status="online" action={{ label: "Message Maya" }} secondary={{ label: "Message privately" }} />
+        </div>
+        <div class="pieces__row" style={{ "flex-direction": "column", "align-items": "stretch", "max-width": "640px" }}>
+          <NoticeLine time="9:41 AM">{PEOPLE.maya.name} added {PEOPLE.leo.name}</NoticeLine>
+          <NoticeLine time="9:44 AM">{PEOPLE.leo.name} left</NoticeLine>
+          <JoinBar channel="random" />
         </div>
       </section>
     </div>

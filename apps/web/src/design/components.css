@@ -140,6 +140,8 @@
 .lu-members__title { margin: 0; padding: 8px 10px 6px; font-size: 12.5px; font-weight: 600; color: var(--ink-muted); }
 .lu-members__title.is-later { padding-top: 14px; }
 .lu-members__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
+.lu-members__list > li { position: relative; }
+.lu-member__action { position: absolute; top: 50%; right: var(--space-10); transform: translateY(-50%); }
 .lu-member { width: 100%; display: flex; align-items: center; gap: var(--space-12); padding: 6px 10px; border-radius: var(--radius-10); color: inherit; text-align: left; text-decoration: none; }
 .lu-member:hover { background: var(--hover-member); }
 .lu-member__text { display: flex; flex-direction: column; min-width: 0; }
@@ -193,6 +195,9 @@ h1.lu-serverhead__name:hover { background: none; }
 /* ── ChannelList ── */
 .lu-chlist { display: flex; flex-direction: column; gap: var(--space-12); }
 .lu-chlist__title { margin: 0; padding: 4px 10px 6px; font-size: 12.5px; font-weight: 600; color: var(--ink-muted); }
+.lu-chlist__head { display: flex; align-items: center; justify-content: space-between; padding-right: var(--space-4); }
+.lu-chlist__head .lu-chlist__title { flex: 1; min-width: 0; }
+.lu-chlist__empty { margin: 0; padding: 0 10px 6px; font-size: 12.5px; line-height: 1.4; color: var(--ink-quiet); }
 .lu-chlist__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
 .lu-row { display: flex; align-items: center; gap: var(--space-8); height: var(--row-height); padding: 0 10px; border-radius: var(--radius-8); font-size: 14.5px; text-decoration: none; }
 .lu-row:hover { background: var(--hover-row); }
@@ -389,6 +394,37 @@ h1.lu-serverhead__name:hover { background: none; }
 /* ── Notice ── */
 .lu-notice { display: flex; align-items: center; gap: var(--space-10); margin: 0 24px 8px; padding: 10px 14px; border-radius: var(--radius-12); background: var(--inset); color: var(--ink-secondary); font-size: 13.5px; line-height: 1.4; }
 .lu-notice--accent { background: var(--accent-soft); color: var(--accent-ink); }
+
+/* Channel membership: notices, the join bar, invitations, Browse, pickers (architecture 6.8). */
+.lu-noticeline { display: flex; align-items: center; gap: var(--space-12); padding: var(--space-4) var(--space-12); font-size: 12.5px; color: var(--ink-muted); }
+.lu-noticeline__glyph { flex: none; width: 34px; color: var(--ink-faint); }
+.lu-noticeline__text { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lu-noticeline__time { color: var(--ink-faint); }
+.lu-joinbar { padding: var(--space-4) 24px 14px; }
+.lu-joinbar__box { display: flex; align-items: center; gap: var(--space-12); padding: var(--space-10) var(--space-16); border-radius: var(--radius-16); background: var(--inset); }
+.lu-joinbar__text { flex: 1; min-width: 0; margin: 0; font-size: 14px; color: var(--ink-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lu-joinbar__error { margin: var(--space-6) 0 0; font-size: 13px; color: var(--dnd); }
+.lu-invitation { display: flex; flex-direction: column; gap: var(--space-6); margin: 0 0 var(--space-8); padding: var(--space-8) var(--space-10); border-radius: var(--radius-10); background: var(--inset); }
+.lu-invitation__text { margin: 0; font-size: 12.5px; line-height: 1.4; color: var(--ink-body); }
+.lu-invitation__actions { display: flex; align-items: center; gap: var(--space-8); }
+.lu-browselist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-8); }
+.lu-browse { display: flex; align-items: center; gap: var(--space-12); padding: var(--space-12) var(--space-14); border-radius: var(--radius-12); background: var(--surface); border: 1px solid var(--line); }
+.lu-browse:hover { background: var(--hover-member); }
+.lu-browse__open { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--space-2); padding: 0; border: 0; background: none; text-align: start; color: inherit; font: inherit; cursor: pointer; }
+.lu-browse__name { font-size: 15px; font-weight: 600; color: var(--ink); }
+.lu-browse__hash { margin-right: var(--space-6); color: var(--ink-faint); }
+.lu-browse__meta { font-size: 12.5px; color: var(--ink-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lu-picklist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); max-height: 288px; overflow-y: auto; }
+.lu-pick { display: flex; align-items: center; gap: var(--space-10); width: 100%; padding: var(--space-6) var(--space-8); border: 0; border-radius: var(--radius-8); background: none; color: var(--ink); font: inherit; font-size: 14px; text-align: start; cursor: pointer; }
+.lu-pick:hover:not(:disabled) { background: var(--hover-member); }
+.lu-pick:disabled { cursor: default; color: var(--ink-muted); }
+.lu-pick__name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lu-pick__box { flex: none; display: grid; place-items: center; width: 18px; height: 18px; border-radius: var(--radius-5); border: 1px solid var(--border-form); background: var(--field); color: var(--on-accent); }
+.lu-pick__box.is-checked { background: var(--accent); border-color: var(--accent); }
+.lu-memberfoot { padding: var(--space-6) var(--space-14) var(--space-14); display: flex; flex-direction: column; gap: var(--space-6); }
+.lu-memberfoot .lu-btn { width: 100%; }
+.lu-memberadd { padding: var(--space-12) var(--space-14) 0; }
+.lu-memberadd .lu-btn { width: 100%; }
 .lu-notice__glyph { flex: none; }
 .lu-notice__text { flex: 1; min-width: 0; margin: 0; }
 
@@ -468,6 +504,8 @@ h1.lu-serverhead__name:hover { background: none; }
 .lu-pcard__detail dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .lu-pcard__note { margin: 0; font-size: 13px; line-height: 1.4; color: var(--ink-secondary); }
 .lu-pcard__actions { display: flex; gap: var(--space-8); }
+.lu-pcard__actions--two { flex-direction: column; }
+.lu-pcard__actions .lu-btn--secondary { flex: 1; min-width: 0; height: 40px; font-size: 14.5px; }
 .lu-pcard__actions .lu-btn--primary { flex: 1; min-width: 0; height: 40px; font-size: 14.5px; box-shadow: none; }
 
 /* ── A popover that asks for something: a title, a line under it, a small form ── */

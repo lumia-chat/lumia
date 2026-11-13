@@ -1,14 +1,16 @@
 // The app shell on the Quiet Split (the design canvas's board): a server
-// with its channels, or Home (home.tsx) with personal DMs, requests and
+// with the channels this account is in and its server DMs (architecture
+// 6.8 and 6.4), or Home (home.tsx) with personal DMs, requests and
 // devices, chosen by the route's search params. Over the account
 // snapshot and the local store through the client worker. What opens
-// over the frame (the menus, the profile card) is in menus.tsx.
+// over the frame (the menus, the pickers, the profile card) is in
+// menus.tsx; Browse, Your settings and a channel's members in channels.tsx.
 //
 // The board draws more than the product has: search, threads, mentions
 // and saved, reactions, attachments, pins, calls, role tags, and the
 // composer's formatting, emoji and mention buttons. None of those is
 // drawn here until there is something behind it (plan step 6).
-import { For, Show, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
+import { For, Match, Show, Switch, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
 import { useNavigate, useSearch } from "@tanstack/solid-router";
 import {
   SidePanel,
@@ -21,20 +23,25 @@ import {
   Composer,
   Divider,
   EmptyState,
+  InvitationRow,
+  JoinBar,
   Message,
   MessageList,
+  Notice,
+  NoticeLine,
   SearchField,
   ServerHeader,
   ServerRail,
   type ChannelItem,
 } from "../design/components";
 import { signedOut, type ChannelSummary, type MessageSummary, type ServerSummary } from "../client/bridge";
-import { avatarSrc, checkPush, client, connection, loadMyStatus, membersQuery, messagesQuery, presence, customStatusOf, presenceOf, queryClient, sessionEnded, signOut, snapshotQuery, startGateway, typingIn, watchPresence } from "../client/state";
+import { avatarSrc, checkPush, client, connection, loadMyStatus, membersQuery, messagesQuery, presence, customStatusOf, presenceOf, queryClient, sessionEnded, signOut, snapshotQuery, startGateway, tookSnapshot, typingIn, watchPresence } from "../client/state";
 import { useNames } from "../client/names";
 import { preferences, setAsideHidden } from "../client/preferences";
 import { ConversationAside, HomeMain, HomeSidebar, type HomeView } from "./home";
 import { Overlay, myStatusDot, type Over } from "./menus";
 import { ServerSettings } from "./server-settings";
+import { BrowsePage, ChannelMembersAside, YourSettingsPage, channelRefusal, joinChannel } from "./channels";
 
 const TONES = ["peach", "blue", "purple", "mint", "amber", "sky", "stone", "green", "indigo"] as const;
 
@@ -129,6 +136,24 @@ export function byBlock<T>(messages: T[], author: (m: T) => string, at: (m: T) =
   return blocks;
 }
 
+/** What a notice says (architecture 6.8): "Grace joined", "Ada added Bo". */
+export function noticeWords(m: MessageSummary, nameOf: (id: string) => string): string {
+  const who = nameOf(m.authorAccountId);
+  const about = nameOf(m.noticeAccountId);
+  switch (m.notice) {
+    case "joined":
+      return `${who} joined`;
+    case "added":
+      return `${who} added ${about}`;
+    case "left":
+      return `${who} left`;
+    case "removed":
+      return `${who} removed ${about}`;
+    default:
+      return "";
+  }
+}
+
 export interface AppSearch {
   place?: "home";
   view?: HomeView;
@@ -149,9 +174,10 @@ export function App() {
   const days = createMemo(() =>
     byDay(messages.data ?? [], (m) => m.createdAtMicros).map((day) => ({
       label: day.label,
+      // A notice has no one, so it joins no block and opens none.
       blocks: byBlock(
         day.messages,
-        (m) => m.authorAccountId,
+        (m) => (m.notice ? "" : m.authorAccountId),
         (m) => m.createdAtMicros,
       ),
     })),
@@ -182,8 +208,15 @@ export function App() {
   };
   document.addEventListener("keydown", onEscape);
   onCleanup(() => document.removeEventListener("keydown", onEscape));
-  // The server's settings in its main pane, until a channel or another server is chosen.
+  // The server's settings in its main pane, until a channel or another server is chosen;
+  // or another page there: Browse, or this account's own settings in the server.
   const [settingsOpen, setSettingsOpen] = createSignal(false);
+  const [page, setPage] = createSignal<"browse" | "you" | null>(null);
+  // A public channel this account is not in, open to read before joining (architecture 6.8).
+  const [preview, setPreview] = createSignal<ChannelSummary | undefined>();
+  const [joining, setJoining] = createSignal(false);
+  const [joinError, setJoinError] = createSignal("");
+  const [invitationError, setInvitationError] = createSignal("");
   const goHome = (view: HomeView, dm?: string, read = true) => {
     setReading(read);
     setAsideOpen(false);
@@ -191,6 +224,8 @@ export function App() {
   };
   const goServer = (id: string) => {
     setSettingsOpen(false);
+    setPage(null);
+    setPreview(undefined);
     setReading(false);
     setAsideOpen(false);
     void navigate({ to: "/app", search: { server: id } });
@@ -198,8 +233,17 @@ export function App() {
 
   const servers = createMemo<ServerSummary[]>(() => snapshot.data?.servers ?? []);
   const server = createMemo(() => servers().find((s) => s.serverId === serverId()));
-  const channels = createMemo<ChannelSummary[]>(() => (snapshot.data?.channels ?? []).filter((c) => c.serverId === serverId() && !PERSONAL.has(c.kind)));
-  const current = createMemo(() => channels().find((c) => c.channelId === channelId()));
+  // The channels this account is in, and its server DMs there.
+  const listed = createMemo<ChannelSummary[]>(() => (snapshot.data?.channels ?? []).filter((c) => c.serverId === serverId() && !PERSONAL.has(c.kind)));
+  const channels = createMemo(() => listed().filter((c) => c.kind === "TEXT"));
+  const serverDms = createMemo(() => listed().filter((c) => c.kind === "SERVER_DM"));
+  const invitations = createMemo(() => (snapshot.data?.channelInvitations ?? []).filter((i) => i.channel.serverId === serverId()));
+  const current = createMemo(() => {
+    const id = channelId();
+    if (!id) return undefined;
+    return listed().find((c) => c.channelId === id) ?? (preview()?.channelId === id ? preview() : undefined);
+  });
+  const joined = () => listed().some((c) => c.channelId === channelId());
   const accountId = createMemo(() => snapshot.data?.accountId ?? "");
   const selfName = () => snapshot.data?.displayName || snapshot.data?.handle || "You";
   const { nameOf, photoOf } = useNames(() => snapshot.data);
@@ -215,11 +259,55 @@ export function App() {
       },
     ),
   );
+  // A channel left or taken away goes; one being read before joining stays.
   createEffect(
-    on(channels, (list) => {
-      if (!list.some((c) => c.channelId === channelId())) setChannelId(list[0]?.channelId);
+    on(listed, (list) => {
+      const reading = preview();
+      if (reading && reading.channelId === channelId()) return;
+      if (!list.some((c) => c.channelId === channelId())) setChannelId(channels()[0]?.channelId);
     }),
   );
+  /** Puts a channel or a server DM on screen. */
+  const openChannel = (id: string) => {
+    setChannelId(id);
+    setSettingsOpen(false);
+    setPage(null);
+    if (preview()?.channelId !== id) setPreview(undefined);
+    setJoinError("");
+    setReading(true);
+    setAsideOpen(false);
+  };
+  /** Reads a channel Browse listed, before joining it. */
+  const openPreview = (channel: ChannelSummary) => {
+    setPreview(channel);
+    void client().subscribe(channel.channelId).catch(() => {});
+    openChannel(channel.channelId);
+  };
+  const join = async (id: string) => {
+    if (joining()) return;
+    setJoining(true);
+    setJoinError("");
+    setInvitationError("");
+    const outcome = await joinChannel(id);
+    setJoining(false);
+    if ("error" in outcome) {
+      setJoinError(outcome.error);
+      setInvitationError(outcome.error);
+      return;
+    }
+    if (preview()?.channelId === id) setPreview(undefined);
+    openChannel(id);
+  };
+  const dismiss = async (id: string) => {
+    setInvitationError("");
+    try {
+      tookSnapshot(await client().dismissChannelInvitation(id));
+    } catch (err) {
+      setInvitationError(channelRefusal(err));
+    }
+  };
+  /** The other person of a server DM. */
+  const partnerOf = (c: ChannelSummary) => c.participantAccountIds.find((id) => id !== accountId()) ?? "";
   // A session the instance no longer takes (revoked, or run out) leaves
   // nothing here that works: back to sign-in, which says why.
   let ending = false;
@@ -268,15 +356,24 @@ export function App() {
   const items = createMemo<ChannelItem[]>(() =>
     channels().map((c) => ({
       name: c.name,
-      kind: "channel",
-      active: c.channelId === channelId(),
-      onClick: () => {
-        setChannelId(c.channelId);
-        setSettingsOpen(false);
-        setReading(true);
-        setAsideOpen(false);
-      },
+      kind: c.private ? "private" : "channel",
+      active: c.channelId === channelId() && !settingsOpen() && !page(),
+      onClick: () => openChannel(c.channelId),
     })),
+  );
+  const dmItems = createMemo<ChannelItem[]>(() =>
+    serverDms().map((c) => {
+      const partner = partnerOf(c);
+      return {
+        name: nameOf(partner),
+        kind: "dm",
+        initials: initialsOf(nameOf(partner)),
+        src: photoOf(partner),
+        tone: toneFor(partner),
+        active: c.channelId === channelId() && !settingsOpen() && !page(),
+        onClick: () => openChannel(c.channelId),
+      };
+    }),
   );
 
   const homeProps = () => ({
@@ -338,106 +435,164 @@ export function App() {
         sidebar={
           <Show when={!home()} fallback={<HomeSidebar {...homeProps()} />}>
             <ServerHeader name={server()?.name ?? "Lumia"} onOpenMenu={server() ? (anchor) => setOver({ kind: "serverMenu", anchor }) : undefined} menuOpen={over()?.kind === "serverMenu"} onNewMessage={() => goHome("new")} />
-            <Show when={items().length > 0} fallback={<p class="app__empty app__empty--side">No channels yet. Add one from the menu under the server’s name.</p>}>
-              <ChannelList sections={[{ title: "Channels", items: items() }]} />
-            </Show>
+            <ChannelList
+              sections={[
+                {
+                  title: "Channels",
+                  items: items(),
+                  action: { label: "Add channels", expanded: over()?.kind === "channelsMenu", onClick: (anchor) => setOver({ kind: "channelsMenu", anchor }) },
+                  empty: "You are in no channels here. Browse them with the plus.",
+                  before: (
+                    <Show when={invitations().length > 0}>
+                      <div class="app__invitations" role="list" aria-label="Invitations">
+                        <For each={invitations()}>{(i) => <InvitationRow channel={i.channel.name} by={nameOf(i.invitedByAccountId)} busy={joining()} onJoin={() => void join(i.channel.channelId)} onDismiss={() => void dismiss(i.channel.channelId)} />}</For>
+                        <Show when={invitationError()}>
+                          <p class="app__error" role="alert">
+                            {invitationError()}
+                          </p>
+                        </Show>
+                      </div>
+                    </Show>
+                  ),
+                },
+                {
+                  title: "Direct messages",
+                  items: dmItems(),
+                  action: server()?.canStartDms ? { label: "Message someone", expanded: over()?.kind === "newDm", onClick: (anchor) => setOver({ kind: "newDm", anchor }) } : undefined,
+                },
+              ]}
+            />
           </Show>
         }
         main={
           <Show when={!home()} fallback={<HomeMain {...homeProps()} />}>
-            <Show
-              when={settingsOpen() ? server() : undefined}
-              fallback={
-              <Show
-                when={current()}
-                fallback={
-                  <>
-                    <ChannelHeader kind="page" name={server()?.name ?? "Lumia"} actions={[]} onBack={() => setReading(false)} />
-                    <div class="lu-page">
-                      <EmptyState icon="hash" title="No channel yet">
-                        Add a channel from the menu under the server’s name, or a server with the rail’s plus.
-                      </EmptyState>
-                    </div>
-                  </>
-                }
-              >
-                {(ch) => (
-                  <>
-                    <ChannelHeader name={ch().name} onBack={() => setReading(false)} backLabel={`Back to ${server()?.name ?? "the server"}`} actions={[{ icon: "members", label: asideShown() ? "Hide members" : "Show members", pressed: asideShown(), onClick: toggleAside }]} />
-                    <Show
-                      when={!messages.data || days().length > 0}
-                      fallback={
-                        <div class="lu-page">
-                          <EmptyState title="Nothing here yet">Say something.</EmptyState>
-                        </div>
-                      }
-                    >
-                      <MessageList label={`Messages in #${ch().name}`} density={preferences().density}>
-                        <For each={days()}>
-                          {(day) => (
-                            <>
-                              <Divider variant="day" label={day.label} />
-                              <For each={day.blocks}>
-                                {(block) => {
-                                  const first = block.first;
-                                  const t = timeOf(first.createdAtMicros);
-                                  const author = () => nameOf(first.authorAccountId);
-                                  const said = (m: MessageSummary) => (m.deleted ? "(deleted)" : m.body);
-                                  return (
-                                    <Message
-                                      author={author()}
-                                      initials={initialsOf(author())}
-                                      src={photoOf(first.authorAccountId)}
-                                      tone={toneFor(first.authorAccountId)}
-                                      time={t.time}
-                                      datetime={t.datetime}
-                                      actions={false}
-                                      density={preferences().density}
-                                      onOpenProfile={(anchor) => openPerson(first.authorAccountId, anchor)}
-                                      parts={block.rest.map((m) => ({ time: shortTimeOf(m.createdAtMicros), datetime: timeOf(m.createdAtMicros).datetime, children: said(m) }))}
-                                    >
-                                      {said(first)}
-                                    </Message>
-                                  );
-                                }}
-                              </For>
-                            </>
-                          )}
-                        </For>
-                      </MessageList>
-                    </Show>
-                    <Show when={error()}>
-                      <p class="app__error" role="alert">
-                        {error()}
-                      </p>
-                    </Show>
-                    <Composer
-                      placeholder={`Message #${ch().name}`}
-                      tools={false}
-                      typing={typing()}
-                      value={draft()}
-                      onInput={(e) => typed(e.currentTarget.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
-                          e.preventDefault();
-                          void send();
+            <Switch>
+              <Match when={settingsOpen() && server()}>{(srv) => <ServerSettings server={srv()} snapshot={snapshot.data} back={() => setReading(false)} />}</Match>
+              <Match when={page() === "browse" && server()}>{(srv) => <BrowsePage server={srv()} back={() => setReading(false)} open={openPreview} joined={openChannel} />}</Match>
+              <Match when={page() === "you" && server()}>{(srv) => <YourSettingsPage server={srv()} back={() => setReading(false)} />}</Match>
+              <Match when={current()}>
+                {(ch) => {
+                  const isDm = () => ch().kind === "SERVER_DM";
+                  const title = () => (isDm() ? nameOf(partnerOf(ch())) : ch().name);
+                  return (
+                    <>
+                      <ChannelHeader
+                        name={title()}
+                        topic={isDm() ? undefined : ch().topic || undefined}
+                        kind={isDm() ? "page" : ch().private ? "private" : "channel"}
+                        onBack={() => setReading(false)}
+                        backLabel={`Back to ${server()?.name ?? "the server"}`}
+                        actions={isDm() ? [] : [{ icon: "members", label: asideShown() ? "Hide members" : "Show members", pressed: asideShown(), onClick: toggleAside }]}
+                      />
+                      <Show when={isDm()}>
+                        <Notice icon="shield">Messages here are kept by {server()?.name ?? "this server"} and follow its message history settings. For an encrypted conversation, message privately.</Notice>
+                      </Show>
+                      <Show
+                        when={!messages.data || days().length > 0}
+                        fallback={
+                          <div class="lu-page">
+                            <EmptyState title={isDm() ? "No messages yet" : "Nothing here yet"}>{isDm() ? "Say hello." : joined() ? "Say something." : "Join to say something."}</EmptyState>
+                          </div>
                         }
-                      }}
-                      onSend={() => void send()}
-                    />
-                  </>
-                )}
-              </Show>
-              }
-            >
-              {(s) => <ServerSettings server={s()} back={() => setReading(false)} />}
-            </Show>
+                      >
+                        <MessageList label={isDm() ? `Messages with ${title()}` : `Messages in #${ch().name}`} density={preferences().density}>
+                          <For each={days()}>
+                            {(day) => (
+                              <>
+                                <Divider variant="day" label={day.label} />
+                                <For each={day.blocks}>
+                                  {(block) => {
+                                    const first = block.first;
+                                    const t = timeOf(first.createdAtMicros);
+                                    if (first.notice) return <NoticeLine time={t.time} datetime={t.datetime}>{noticeWords(first, nameOf)}</NoticeLine>;
+                                    const author = () => nameOf(first.authorAccountId);
+                                    const said = (m: MessageSummary) => (m.deleted ? "(deleted)" : m.body);
+                                    return (
+                                      <Message
+                                        author={author()}
+                                        initials={initialsOf(author())}
+                                        src={photoOf(first.authorAccountId)}
+                                        tone={toneFor(first.authorAccountId)}
+                                        time={t.time}
+                                        datetime={t.datetime}
+                                        actions={false}
+                                        density={preferences().density}
+                                        onOpenProfile={(anchor) => openPerson(first.authorAccountId, anchor)}
+                                        parts={block.rest.map((m) => ({ time: shortTimeOf(m.createdAtMicros), datetime: timeOf(m.createdAtMicros).datetime, children: said(m) }))}
+                                      >
+                                        {said(first)}
+                                      </Message>
+                                    );
+                                  }}
+                                </For>
+                              </>
+                            )}
+                          </For>
+                        </MessageList>
+                      </Show>
+                      <Show when={error()}>
+                        <p class="app__error" role="alert">
+                          {error()}
+                        </p>
+                      </Show>
+                      <Show
+                        when={joined()}
+                        fallback={<JoinBar channel={ch().name} busy={joining()} error={joinError() || undefined} onJoin={() => void join(ch().channelId)} />}
+                      >
+                        <Composer
+                          placeholder={isDm() ? `Message ${title()}` : `Message #${ch().name}`}
+                          tools={false}
+                          typing={typing()}
+                          value={draft()}
+                          onInput={(e) => typed(e.currentTarget.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+                              e.preventDefault();
+                              void send();
+                            }
+                          }}
+                          onSend={() => void send()}
+                        />
+                      </Show>
+                    </>
+                  );
+                }}
+              </Match>
+              <Match when={true}>
+                <ChannelHeader kind="page" name={server()?.name ?? "Lumia"} actions={[]} onBack={() => setReading(false)} />
+                <div class="lu-page">
+                  <EmptyState icon="hash" title="No channel open">
+                    Choose one in the sidebar, or browse the server’s channels with the plus beside Channels.
+                  </EmptyState>
+                </div>
+              </Match>
+            </Switch>
           </Show>
         }
         aside={
-          <Show when={home() ? (search().view ?? "dm") === "dm" && search().dm : server()}>
+          <Show when={home() ? (search().view ?? "dm") === "dm" && search().dm : server() && current()?.kind !== "SERVER_DM"}>
             <Show when={!home()} fallback={<ConversationAside {...homeProps()} />}>
-              <MembersAside serverId={serverId() ?? ""} me={accountId()} openPerson={openPerson} />
+              <Switch>
+                <Match when={settingsOpen() || page()}>
+                  <MembersAside serverId={serverId() ?? ""} me={accountId()} openPerson={openPerson} />
+                </Match>
+                <Match when={current()?.kind === "TEXT" && server() && current()}>
+                  {(ch) => (
+                    <ChannelMembersAside
+                      server={server() as ServerSummary}
+                      channel={ch()}
+                      joined={joined()}
+                      me={accountId()}
+                      openPerson={openPerson}
+                      addPeople={(anchor) => setOver({ kind: "addPeople", anchor, channelId: ch().channelId })}
+                      left={() => setChannelId(channels().find((c) => c.channelId !== ch().channelId)?.channelId)}
+                    />
+                  )}
+                </Match>
+                <Match when={!current()}>
+                  <MembersAside serverId={serverId() ?? ""} me={accountId()} openPerson={openPerson} />
+                </Match>
+              </Switch>
             </Show>
           </Show>
         }
@@ -452,13 +607,27 @@ export function App() {
             close={() => setOver(null)}
             onChannelCreated={(id) => {
               setOver(null);
-              setChannelId(id);
+              openChannel(id);
+            }}
+            toChannel={(id) => {
+              setOver(null);
+              openChannel(id);
+            }}
+            toBrowse={() => {
+              setSettingsOpen(false);
+              setPage("browse");
+              setReading(true);
+            }}
+            toYourSettings={() => {
+              setSettingsOpen(false);
+              setPage("you");
               setReading(true);
             }}
             onConversation={(id) => goHome("dm", id)}
             toProfile={() => goHome("profile")}
             toPreferences={() => goHome("preferences")}
             toServerSettings={() => {
+              setPage(null);
               setSettingsOpen(true);
               setReading(true);
             }}
