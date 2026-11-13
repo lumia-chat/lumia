@@ -347,8 +347,28 @@ public struct EmojiEntry: Equatable, Sendable, Identifiable {
 }
 
 /// The picker's emoji (`EmojiData.swift`, Unicode's list up to Unicode 16
-/// in the default skin tone), by Unicode's groups in its order.
+/// in the default skin tone), by Unicode's groups in its order, less those
+/// newer than the running system draws: the app runs from iOS 17, and an
+/// emoji the system's font lacks draws as a box.
 public enum EmojiCatalog {
+    /// The newest Unicode version whose emoji `os` draws: 16.0 from iOS 18.4
+    /// (and macOS 15.4), 15.1 from iOS 17.4 (macOS 14.4), else 15.0.
+    public static func newest(drawnBy os: OperatingSystemVersion, macOS: Bool) -> (Int, Int) {
+        let at = { (major: Int, minor: Int) in (os.majorVersion, os.minorVersion) >= (major, minor) }
+        if macOS ? at(15, 4) : at(18, 4) { return (16, 0) }
+        if macOS ? at(14, 4) : at(17, 4) { return (15, 1) }
+        return (15, 0)
+    }
+
+    /// What this system draws.
+    public static let newestDrawn: (Int, Int) = {
+        #if os(macOS)
+        newest(drawnBy: ProcessInfo.processInfo.operatingSystemVersion, macOS: true)
+        #else
+        newest(drawnBy: ProcessInfo.processInfo.operatingSystemVersion, macOS: false)
+        #endif
+    }()
+
     public static let groupNames = ["Smileys & emotion", "People & body", "Animals & nature", "Food & drink", "Travel & places", "Activities", "Objects", "Symbols", "Flags"]
     /// How many a search shows at most.
     public static let found = 64
@@ -357,7 +377,9 @@ public enum EmojiCatalog {
         var by = Array(repeating: [EmojiEntry](), count: groupNames.count)
         for line in emojiData.split(separator: "\n") {
             let parts = line.split(separator: "\t", omittingEmptySubsequences: false)
-            guard parts.count == 4, let group = Int(parts[1]), by.indices.contains(group) else { continue }
+            guard parts.count == 5, let group = Int(parts[1]), by.indices.contains(group) else { continue }
+            let version = parts[4].split(separator: ".").compactMap { Int($0) }
+            guard version.count == 2, (version[0], version[1]) <= newestDrawn else { continue }
             by[group].append(EmojiEntry(emoji: String(parts[0]), name: String(parts[2]), keywords: parts[3].split(separator: " ").map(String.init)))
         }
         return zip(groupNames, by).map { ($0, $1) }

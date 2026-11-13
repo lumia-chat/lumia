@@ -185,6 +185,12 @@ final class RepliesTests: XCTestCase {
 
     func testFrequentlyUsedStartsWithWhatThisPhoneChose() {
         XCTAssertEqual(FrequentEmoji.list(recent: []), Replies.quick)
+        // The emoji a system draws: Unicode 16's from iOS 18.4, 15.1's from 17.4.
+        let ios = { (major: Int, minor: Int) in OperatingSystemVersion(majorVersion: major, minorVersion: minor, patchVersion: 0) }
+        XCTAssertTrue(EmojiCatalog.newest(drawnBy: ios(18, 4), macOS: false) == (16, 0))
+        XCTAssertTrue(EmojiCatalog.newest(drawnBy: ios(18, 3), macOS: false) == (15, 1))
+        XCTAssertTrue(EmojiCatalog.newest(drawnBy: ios(17, 0), macOS: false) == (15, 0))
+        XCTAssertTrue(EmojiCatalog.newest(drawnBy: ios(15, 4), macOS: true) == (16, 0))
         XCTAssertEqual(FrequentEmoji.list(recent: ["🦀", "👍"]), ["🦀", "👍", "❤️", "😂", "🎉", "😮", "😢"])
         let recent = FrequentEmoji.used("🦀", recent: ["👍", "🦀"])
         XCTAssertEqual(recent, ["🦀", "👍"])
