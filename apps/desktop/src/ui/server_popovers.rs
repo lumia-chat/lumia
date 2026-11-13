@@ -1,35 +1,49 @@
-//! The popovers the server's menu opens: "New channel" and "Invite people". Each is
-//! returned from `ui::overlay`, so it mounts at the window's root, under the server's name.
+//! The popovers of a server: "New channel" and "Invite people" from the menu under its
+//! name, the Channels heading's menu (create a channel, browse them), "Add people" to the
+//! channel on screen and "Message someone" in the server (architecture 6.8). Each is
+//! returned from `ui::overlay`, so it mounts at the window's root beside what opened it.
 
 use chrono::{DateTime, Local};
-use lumia_client::app::{InviteSummary, ServerSummary};
-use rune::{El, ScrollSpec, col, row, text};
+use lumia_client::app::{InviteSummary, MemberSummary, ServerSummary};
+use rune::{Align, Cursor, El, ScrollSpec, Side, col, el, icon, row, text, text_input};
 
 use super::components::{
-    Look, error_text, field, link_button, popover, primary_button, segmented, small_button,
+    Look, avatar_of, check_row, error_text, field, link_button, menu, menu_glyph, menu_item,
+    popover, primary_button, segmented, small_button, tag,
 };
 use super::menus::SERVER_TITLE;
 use crate::app::State;
-use crate::tokens::{self as t};
+use crate::session::display_name;
+use crate::tokens::{self as t, icons};
 use crate::ui::scroll::WithScrollBar;
 
 const CHANNEL_WIDTH: f32 = 320.0;
 const INVITE_WIDTH: f32 = 380.0;
+
+/// The keys of the controls the sidebar's and the aside's popovers hang from.
+pub const CHANNELS_PLUS: &str = "channels-plus";
+pub const DMS_PLUS: &str = "dms-plus";
+pub const ADD_PEOPLE: &str = "add-people";
 
 fn current(s: &State) -> Option<&ServerSummary> {
     let id = s.server_id()?;
     s.session.servers().iter().find(|x| x.server_id == id)
 }
 
-/// A text channel in the server on screen, by name; it opens once made.
-pub fn new_channel(s: &State, look: Look) -> Option<El> {
+/// A text channel in the server on screen, by name, hung from `anchor`; it opens once made.
+pub fn new_channel(s: &State, anchor: &str, look: Look) -> Option<El> {
     let server = current(s)?;
     let form = &s.server_forms.channel;
+    let private = form.private;
     let mut surface = popover(
         "new-channel-popover",
-        SERVER_TITLE,
+        anchor,
         "New channel",
-        &format!("A text channel everyone in {} can see.", server.name),
+        &if private {
+            "A text channel only the people in it can see.".to_string()
+        } else {
+            format!("A text channel everyone in {} can see.", server.name)
+        },
         CHANNEL_WIDTH,
         look,
     )
@@ -40,6 +54,14 @@ pub fn new_channel(s: &State, look: Look) -> Option<El> {
         "general",
         |s| &mut s.server_forms.channel.name,
         |s, _| s.create_channel(),
+        look,
+    ))
+    .child(check_row(
+        "channel-private",
+        "Private",
+        Some("Only people added can see it."),
+        private,
+        move |s: &mut State| s.set_channel_private(!private),
         look,
     ));
     if !form.error.is_empty() {
@@ -52,6 +74,297 @@ pub fn new_channel(s: &State, look: Look) -> Option<El> {
         State::create_channel,
         look,
     )))
+}
+
+/// The Channels heading's plus: a channel to create, for whoever may, and Browse.
+pub fn channels_menu(s: &State, look: Look) -> Option<El> {
+    let server = current(s)?;
+    let mut items = menu(
+        "channels-menu",
+        CHANNELS_PLUS,
+        "Channels",
+        Side::Bottom,
+        Align::Start,
+        look,
+    );
+    if server.can_manage_channels {
+        items = items.child(menu_item(
+            "menu-create-channel",
+            Some(menu_glyph(&icons::PLUS, look)),
+            "Create a channel",
+            None,
+            State::open_new_channel_here,
+            look,
+        ));
+    }
+    Some(items.child(menu_item(
+        "menu-browse-channels",
+        Some(menu_glyph(&icons::SEARCH, look)),
+        "Browse channels",
+        None,
+        State::open_browse,
+        look,
+    )))
+}
+
+/// The server's members whose name or handle has `filter` in it, by name, without this
+/// account.
+fn others<'a>(s: &'a State, server_id: &str, filter: &str) -> Vec<&'a MemberSummary> {
+    let wanted = filter.trim().to_lowercase();
+    let mut all: Vec<&MemberSummary> = s
+        .session
+        .members
+        .get(server_id)
+        .map(|m| m.iter().collect())
+        .unwrap_or_default();
+    all.retain(|m| {
+        m.account_id != s.session.me()
+            && (wanted.is_empty()
+                || display_name(m).to_lowercase().contains(&wanted)
+                || m.handle.to_lowercase().contains(&wanted))
+    });
+    all.sort_by_cached_key(|m| display_name(m).to_lowercase());
+    all
+}
+
+/// A search field over a picker's list.
+fn find(
+    key: &'static str,
+    edit: &rune::TextEdit,
+    focus: impl Fn(&mut State) -> &mut rune::TextEdit + 'static,
+    look: Look,
+) -> El {
+    let c = look.c;
+    row()
+        .key(format!("{key}-box"))
+        .w_full()
+        .h(t::CONTROL_SMALL)
+        .px(t::SPACE_12)
+        .gap(t::SPACE_8)
+        .items_center()
+        .radius(t::RADIUS_10)
+        .fill(c.field)
+        .border(1.0, c.border_composer)
+        .focus_within_ring(1.0, -1.0, c.border_active)
+        .child(icon(&icons::SEARCH, t::SPACE_16).color(c.ink_quiet))
+        .child(
+            text_input(edit, t::TEXT_MENU)
+                .key(key)
+                .label("Find a member")
+                .placeholder("Find a member", c.ink_muted)
+                .color(c.ink_field)
+                .caret(c.accent, c.accent_soft)
+                .grow(1.0)
+                .min_w(0.0)
+                .on_edit(focus),
+        )
+}
+
+/// A picker's list, scrolling when the window is short for it.
+fn picker_list(key: &'static str, label: &str, rows: Vec<El>, look: Look) -> El {
+    let mut list = col()
+        .key(key)
+        .w_full()
+        .gap(t::SPACE_2)
+        .role("list")
+        .label(label);
+    for row in rows {
+        list = list.child(row);
+    }
+    col()
+        .key(format!("{key}-scroll"))
+        .w_full()
+        .max_h(t::SPACE_24 * 12.0)
+        .shrink()
+        .min_h(0.0)
+        .scroll(ScrollSpec {
+            stick_bottom: false,
+        })
+        .child(list)
+        .with_scroll_bar(key, look)
+}
+
+/// What choosing a row of a picker does; none for one that cannot be chosen.
+type Choose = Option<Box<dyn Fn(&mut State)>>;
+
+/// One person in a picker: their avatar and name, and `note` at the end when there is one.
+fn person_row(
+    s: &State,
+    key: String,
+    member: &MemberSummary,
+    note: Option<&str>,
+    selected: Option<bool>,
+    press: Choose,
+    look: Look,
+) -> El {
+    let c = look.c;
+    let name = display_name(member);
+    let mut item = row()
+        .key(key)
+        .w_full()
+        .px(t::SPACE_8)
+        .py(t::SPACE_6)
+        .gap(t::SPACE_10)
+        .items_center()
+        .radius(t::RADIUS_8)
+        .role("listitem")
+        .label(match note {
+            Some(note) => format!("{name}, {}", note.to_lowercase()),
+            None => name.clone(),
+        });
+    if let Some(selected) = selected {
+        let mut tick = el()
+            .size(t::SPACE_18, t::SPACE_18)
+            .radius(t::RADIUS_5)
+            .center()
+            .a11y_hidden();
+        tick = if selected {
+            tick.fill(c.accent)
+                .child(icon(&icons::CHECK, t::SPACE_14).color(c.on_accent))
+        } else {
+            tick.fill(c.field).border(1.0, c.border_form)
+        };
+        item = item.role("checkbox").checked(selected).child(tick);
+    }
+    item = item
+        .child(avatar_of(s, &name, &member.account_id, t::AVATAR_SM, look))
+        .child(
+            text(name)
+                .font(t::TEXT_MEMBER)
+                .color(if press.is_some() { c.ink } else { c.ink_muted })
+                .truncate()
+                .grow(1.0)
+                .min_w(0.0),
+        );
+    if let Some(note) = note {
+        item = item.child(tag(note, look));
+    }
+    match press {
+        Some(press) => item
+            .hover(c.hover_member)
+            .cursor(Cursor::Pointer)
+            .focusable(true)
+            .focus_ring(2.0, 0.0, c.focus)
+            .on_press(move |s: &mut State| press(s)),
+        None => item.disabled(true),
+    }
+}
+
+/// "Add people" to the channel on screen: the server's members not in it, ticked and added
+/// together; one who takes adds as invitations is marked so (architecture 6.8).
+pub fn add_people(s: &State, look: Look) -> Option<El> {
+    let server = current(s)?;
+    let form = &s.channel_forms.add;
+    let channel = s.session.channel_summary(&form.channel_id)?;
+    let inside = s
+        .session
+        .channel_members
+        .get(&form.channel_id)
+        .cloned()
+        .unwrap_or_default();
+    let rows: Vec<El> = others(s, &server.server_id, &form.filter.text)
+        .into_iter()
+        .filter(|m| !inside.contains(&m.account_id))
+        .map(|m| {
+            let id = m.account_id.clone();
+            let chosen = form.chosen.contains(&id);
+            person_row(
+                s,
+                format!("add-{id}"),
+                m,
+                m.channel_adds_by_invitation.then_some("Will be invited"),
+                Some(chosen),
+                Some(Box::new(move |s: &mut State| s.toggle_chosen(&id))),
+                look,
+            )
+        })
+        .collect();
+    let empty = rows.is_empty();
+    let mut surface = popover(
+        "add-people-popover",
+        ADD_PEOPLE,
+        "Add people",
+        &format!("To #{}.", channel.name),
+        INVITE_WIDTH,
+        look,
+    )
+    .child(find(
+        "add-people-find",
+        &form.filter,
+        |s| &mut s.channel_forms.add.filter,
+        look,
+    ));
+    surface = if empty {
+        surface.child(
+            text("Everyone here is in this channel already.")
+                .font(t::TEXT_META)
+                .color(look.c.ink_quiet)
+                .wrap()
+                .w_full(),
+        )
+    } else {
+        surface.child(picker_list("add-people-list", "People to add", rows, look))
+    };
+    if !form.error.is_empty() {
+        surface = surface.child(error_text(&form.error, look));
+    }
+    let count = form.chosen.len();
+    Some(surface.child(primary_button(
+        "add-chosen",
+        &match count {
+            0 | 1 => "Add".to_string(),
+            n => format!("Add {n} people"),
+        },
+        !form.busy && count > 0,
+        State::add_chosen,
+        look,
+    )))
+}
+
+/// "Message someone" in the server on screen: its members, one to open a server DM with;
+/// one who turned server DMs off cannot be chosen.
+pub fn new_dm(s: &State, look: Look) -> Option<El> {
+    let server = current(s)?;
+    let form = &s.channel_forms.new_dm;
+    let rows: Vec<El> = others(s, &server.server_id, &form.filter.text)
+        .into_iter()
+        .map(|m| {
+            let id = m.account_id.clone();
+            let press: Choose = if m.server_dms_off {
+                None
+            } else {
+                Some(Box::new(move |s: &mut State| s.message_in_server(&id)))
+            };
+            person_row(
+                s,
+                format!("dm-{}", m.account_id),
+                m,
+                m.server_dms_off.then_some("Unavailable"),
+                None,
+                press,
+                look,
+            )
+        })
+        .collect();
+    let mut surface = popover(
+        "new-dm-popover",
+        DMS_PLUS,
+        "Message someone",
+        &format!("A conversation {} keeps.", server.name),
+        CHANNEL_WIDTH,
+        look,
+    )
+    .child(find(
+        "new-dm-find",
+        &form.filter,
+        |s| &mut s.channel_forms.new_dm.filter,
+        look,
+    ))
+    .child(picker_list("new-dm-list", "Members", rows, look));
+    if !form.error.is_empty() {
+        surface = surface.child(error_text(&form.error, look));
+    }
+    Some(surface)
 }
 
 /// Invites to the server on screen: a new link with an expiry and a use limit, to copy; a

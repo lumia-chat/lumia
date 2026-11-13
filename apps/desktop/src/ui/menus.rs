@@ -3,10 +3,13 @@
 //! is returned from `ui::overlay`, so it mounts at the window's root beside its anchor.
 //!
 //! Where they leave the boards. The server's name has no menu drawn, only its chevron; this
-//! one holds what the shell can do to a server, its settings for whoever may change them. The account menu has no Preferences and no
-//! Keyboard shortcuts, which the shell does not have, and has Devices, which it does. The
-//! card has no team, no local time and no call button, none of which the product knows; it
-//! shows the pronouns, the custom status and the bio of the person's verified profile.
+//! one holds what the shell can do in a server: invite, browse its channels, make one (for
+//! whoever may), this account's own settings there, and the server's settings for whoever
+//! may change them. The account menu has no Keyboard shortcuts, which the shell does not
+//! have, and has Devices, which it does. The card has no team, no local time and no call
+//! button, none of which the product knows; it shows the pronouns, the custom status and the
+//! bio of the person's verified profile, and in a server offers a server DM first and a
+//! personal conversation beside it (architecture 6.4).
 
 use lumia_client::app::MemberSummary;
 use rune::{Align, Cursor, El, Side, col, el, icon, row, text};
@@ -46,11 +49,29 @@ pub fn server(s: &State, look: Look) -> Option<El> {
         look,
     ))
     .child(menu_item(
-        "menu-new-channel",
-        Some(menu_glyph(&icons::HASH, look)),
-        "New channel",
+        "menu-browse",
+        Some(menu_glyph(&icons::SEARCH, look)),
+        "Browse channels",
         None,
-        State::open_new_channel,
+        State::open_browse,
+        look,
+    ));
+    if server.can_manage_channels {
+        items = items.child(menu_item(
+            "menu-new-channel",
+            Some(menu_glyph(&icons::HASH, look)),
+            "New channel",
+            None,
+            State::open_new_channel,
+            look,
+        ));
+    }
+    items = items.child(menu_rule(look)).child(menu_item(
+        "menu-your-settings",
+        Some(menu_glyph(&icons::USER, look)),
+        &format!("Your settings in {}", server.name),
+        None,
+        State::open_your_settings,
         look,
     ));
     // Offered to whoever may change them; the instance decides all the same.
@@ -311,17 +332,7 @@ pub fn person(s: &State, look: Look) -> Option<El> {
         card = card.child(details);
     }
     if !me {
-        let first = name.split_whitespace().next().unwrap_or(&name).to_string();
-        card = card.child(
-            action_button(
-                "card-message",
-                &format!("Message {first}"),
-                true,
-                State::message_person,
-                look,
-            )
-            .w_full(),
-        );
+        card = card.child(ways_to_talk(s, &name, found, look));
     }
 
     Some(
@@ -341,6 +352,65 @@ pub fn person(s: &State, look: Look) -> Option<El> {
         .label(format!("{name}, profile"))
         .child(banner)
         .child(card),
+    )
+}
+
+/// How to talk to the person on the card. In a server, a server DM first ("Message"),
+/// unless they turned those off there, and a personal conversation beside it ("Message
+/// privately"); at Home, the personal one alone.
+fn ways_to_talk(s: &State, name: &str, found: Option<&MemberSummary>, look: Look) -> El {
+    let first = name.split_whitespace().next().unwrap_or(name).to_string();
+    let in_server = s.server_id().is_some();
+    if !in_server {
+        return action_button(
+            "card-message",
+            &format!("Message {first}"),
+            true,
+            State::message_person,
+            look,
+        )
+        .w_full();
+    }
+    let c = look.c;
+    let form = &s.channel_forms;
+    let mut ways = col().w_full().gap(t::SPACE_8);
+    let server = s
+        .server_id()
+        .and_then(|id| s.session.servers().iter().find(|x| x.server_id == id));
+    let takes = !found.is_some_and(|p| p.server_dms_off);
+    let may = server.is_some_and(|x| x.can_start_dms);
+    if takes && may {
+        ways = ways.child(
+            action_button(
+                "card-message",
+                &format!("Message {first}"),
+                !form.dm_busy,
+                State::message_person_here,
+                look,
+            )
+            .w_full(),
+        );
+    } else if !takes {
+        ways = ways.child(
+            text("Doesn't take messages here")
+                .font(t::TEXT_META)
+                .color(c.ink_muted)
+                .w_full()
+                .align(Align::Center),
+        );
+    }
+    if !form.dm_error.is_empty() {
+        ways = ways.child(super::components::error_text(&form.dm_error, look));
+    }
+    ways.child(
+        super::components::secondary_button(
+            "card-message-privately",
+            "Message privately",
+            true,
+            State::message_person,
+            look,
+        )
+        .w_full(),
     )
 }
 

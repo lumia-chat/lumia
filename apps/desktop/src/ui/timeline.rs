@@ -25,7 +25,7 @@
 use std::borrow::Cow;
 
 use chrono::{DateTime, Local, NaiveDate};
-use rune::{Cursor, El, GrowthSpec, ScrollSpec, col, el, row, text};
+use rune::{Cursor, El, GrowthSpec, ScrollSpec, col, el, icon, row, text};
 
 use super::body;
 use super::components::{Look, avatar_of};
@@ -33,7 +33,7 @@ use super::scroll::WithScrollBar;
 use crate::app::State;
 use crate::session::{Entry, Pending};
 use crate::settings::Density;
-use crate::tokens::{self as t};
+use crate::tokens::{self as t, icons};
 
 /// How close to the oldest row on screen the reader gets before the page before it is read.
 const OLDER_WITHIN: usize = 20;
@@ -160,9 +160,11 @@ fn clock(micros: i64) -> String {
     local(micros).format("%-I:%M %p").to_string()
 }
 
-/// Who wrote row `i` and when, whether the store holds it or it is still being sent.
+/// Who wrote row `i` and when, whether the store holds it or it is still being sent. A
+/// notice has no one, so it joins no block and opens none.
 fn stamp(s: &State, i: usize) -> Option<(&str, i64)> {
     match s.session.entries.get(i) {
+        Some(entry) if !entry.notice.is_empty() => Some(("", entry.at_micros)),
         Some(entry) => Some((entry.author_account_id.as_str(), entry.at_micros)),
         None => s
             .session
@@ -347,8 +349,60 @@ fn message_frame(
     )
 }
 
+/// What a notice says (architecture 6.8): "Grace joined", "Ada added Grace".
+pub fn notice_words(s: &State, entry: &Entry) -> String {
+    let who = s.session.name_of(&entry.author_account_id);
+    let about = s.session.name_of(&entry.notice_about);
+    match entry.notice.as_str() {
+        "joined" => format!("{who} joined"),
+        "added" => format!("{who} added {about}"),
+        "left" => format!("{who} left"),
+        "removed" => format!("{who} removed {about}"),
+        _ => String::new(),
+    }
+}
+
+/// A notice's row: a quiet line with its time, no avatar and nothing to do with it.
+fn notice_row(s: &State, entry: &Entry, look: Look) -> El {
+    let c = look.c;
+    let m = Measures::of(s.settings.density);
+    let words = notice_words(s, entry);
+    row()
+        .key(entry.id.clone())
+        .w_full()
+        .px(t::SPACE_12)
+        .py(t::SPACE_4)
+        .gap(m.beside)
+        .items_center()
+        .role("listitem")
+        .label(format!("{words}, {}", clock(entry.at_micros)))
+        .child(
+            el().w(m.avatar)
+                .center()
+                .a11y_hidden()
+                .child(icon(&icons::MEMBER_JOINED, t::SPACE_14).color(c.ink_faint)),
+        )
+        .child(
+            text(words)
+                .font(t::TEXT_META)
+                .color(c.ink_muted)
+                .truncate()
+                .shrink()
+                .min_w(0.0),
+        )
+        .child(
+            text(clock(entry.at_micros))
+                .font(t::TEXT_META)
+                .color(c.ink_faint)
+                .a11y_hidden(),
+        )
+}
+
 fn stored_row(s: &State, i: usize, entry: &Entry, place: Place, look: Look) -> El {
     let c = look.c;
+    if !entry.notice.is_empty() {
+        return with_divider(s, i, entry, place, notice_row(s, entry, look), look);
+    }
     let author = s.session.name_of(&entry.author_account_id);
     let content = if entry.deleted {
         body::note("(deleted)", c.ink_quiet, look)
@@ -363,9 +417,14 @@ fn stored_row(s: &State, i: usize, entry: &Entry, place: Place, look: Look) -> E
         selectable: true,
     };
     let row = message_frame(s, &entry.id, head, content.key("body"), place, look);
-    // The divider lives in the first row of its day: a row of its own would vanish when the
-    // list unmounts it. So does the word that older messages are on their way, in the
-    // oldest row.
+    with_divider(s, i, entry, place, row, look)
+}
+
+/// A stored row in its slot. The divider lives in the first row of its day: a row of its
+/// own would vanish when the list unmounts it. So does the word that older messages are on
+/// their way, in the oldest row.
+fn with_divider(s: &State, i: usize, entry: &Entry, place: Place, row: El, look: Look) -> El {
+    let c = look.c;
     let day = local(entry.at_micros).date_naive();
     let previous = i
         .checked_sub(1)

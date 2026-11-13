@@ -500,12 +500,12 @@ fn a_server_with_no_channel_says_where_to_add_one() {
     press(&mut rt, "server-bare");
     let shown = words(&rt);
     assert!(
-        shown.contains("No channels yet. Add one from the menu under the server’s name."),
+        shown.contains("You are in no channels here. Browse them with the plus."),
         "{shown}"
     );
     assert!(
         shown.contains(
-            "Add a channel from the menu under the server’s name, or a server with the rail’s plus."
+            "Choose one in the sidebar, or browse the server’s channels with the plus beside Channels."
         ),
         "{shown}"
     );
@@ -556,7 +556,7 @@ fn the_new_channel_popover_opens_traps_focus_and_closes() {
     assert!(
         visited
             .iter()
-            .all(|k| k == "channel-name" || k == "create-channel"),
+            .all(|k| k == "channel-name" || k == "channel-private" || k == "create-channel"),
         "{visited:?}"
     );
     assert!(visited.iter().any(|k| k == "create-channel"), "{visited:?}");

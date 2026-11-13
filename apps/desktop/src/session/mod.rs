@@ -10,10 +10,12 @@
 //! This file is the account, its servers and the conversation on screen. What belongs to
 //! one part of the product lives beside it and reports through its own update type:
 //! [`dms`] (personal conversations), [`servers`] (making and joining servers, channels,
-//! invites) and [`identity`] (devices, linking, the profile and status).
+//! invites), [`channels`] (being in channels, and server DMs) and [`identity`] (devices,
+//! linking, the profile and status).
 
 pub mod avatars;
 pub mod browser;
+pub mod channels;
 pub mod dms;
 pub mod identity;
 pub mod notices;
@@ -121,6 +123,7 @@ pub enum Update {
     SignedOut,
     Dm(dms::DmUpdate),
     Server(servers::ServerUpdate),
+    Channel(channels::ChannelUpdate),
     Identity(identity::IdentityUpdate),
     Browser(browser::BrowserUpdate),
     Notice(notices::NoticeUpdate),
@@ -154,6 +157,10 @@ pub struct Entry {
     pub body: String,
     pub at_micros: i64,
     pub deleted: bool,
+    /// A notice the instance posted (architecture 6.8): `joined`, `added`, `left` or
+    /// `removed`, about `notice_about`, done by the author. Empty for a message.
+    pub notice: String,
+    pub notice_about: String,
 }
 
 impl From<MessageSummary> for Entry {
@@ -165,6 +172,8 @@ impl From<MessageSummary> for Entry {
             body: m.body,
             at_micros: m.created_at_micros,
             deleted: m.deleted,
+            notice: m.notice,
+            notice_about: m.notice_account_id,
         }
     }
 }
@@ -295,6 +304,14 @@ pub struct Session {
     pub revision: u64,
     /// The pictures of the people on screen, as bytes ([`avatars`]).
     pub avatars: avatars::Avatars,
+    /// A public channel this account is not in, open to read before joining (architecture
+    /// 6.8): what Browse said of it.
+    pub previewing: Option<ChannelSummary>,
+    /// Who is in a server's channels, by channel id, as last asked.
+    pub channel_members: HashMap<String, Vec<String>>,
+    /// The public channels of a server this account is not in, by server id, as Browse
+    /// last listed them.
+    pub browse: HashMap<String, Vec<ChannelSummary>>,
     /// Personal conversations.
     pub dm: dms::DmState,
     /// This device's identity, its roster and profile.
@@ -356,6 +373,9 @@ impl Session {
             pending: Vec::new(),
             revision: 0,
             avatars: avatars::Avatars::default(),
+            previewing: None,
+            channel_members: HashMap::new(),
+            browse: HashMap::new(),
             dm: dms::DmState::default(),
             identity: identity::IdentityState::default(),
             last_error: None,
@@ -643,7 +663,7 @@ impl Session {
         });
         let strangers: HashSet<&str> = entries
             .iter()
-            .map(|e| e.author_account_id.as_str())
+            .flat_map(|e| [e.author_account_id.as_str(), e.notice_about.as_str()])
             .filter(|id| {
                 !id.is_empty() && !self.people.contains_key(*id) && !self.profiles.contains_key(*id)
             })
@@ -915,17 +935,56 @@ impl Session {
         self.snapshot.as_ref().map_or(&[], |s| s.servers.as_slice())
     }
 
-    /// A server's channels, without the personal conversations a snapshot also lists.
+    /// The text channels of a server this account is in (architecture 6.8), in the
+    /// sidebar's order.
     pub fn channels_of<'a>(
         &'a self,
         server_id: &'a str,
     ) -> impl Iterator<Item = &'a ChannelSummary> {
-        let all = self
-            .snapshot
+        self.listed()
+            .filter(move |c| c.server_id == server_id && c.kind == "TEXT")
+    }
+
+    /// The server DMs this account has in a server (architecture 6.4).
+    pub fn server_dms_of<'a>(
+        &'a self,
+        server_id: &'a str,
+    ) -> impl Iterator<Item = &'a ChannelSummary> {
+        self.listed()
+            .filter(move |c| c.server_id == server_id && c.kind == "SERVER_DM")
+    }
+
+    /// The other person of a server DM: its participant who is not this account.
+    pub fn dm_partner<'a>(&'a self, channel: &'a ChannelSummary) -> &'a str {
+        channel
+            .participant_account_ids
+            .iter()
+            .find(|id| *id != self.me())
+            .map_or("", String::as_str)
+    }
+
+    /// Whether this account is in the channel: the snapshot lists it.
+    pub fn joined(&self, channel_id: &str) -> bool {
+        self.listed().any(|c| c.channel_id == channel_id)
+    }
+
+    /// The invitations into a server's channels this account has not answered.
+    pub fn invitations_of<'a>(
+        &'a self,
+        server_id: &'a str,
+    ) -> impl Iterator<Item = &'a app::ChannelInvitationSummary> {
+        self.snapshot
             .as_ref()
-            .map_or(&[][..], |s| s.channels.as_slice());
-        all.iter()
-            .filter(move |c| c.server_id == server_id && !PERSONAL_KINDS.contains(&c.kind.as_str()))
+            .map_or(&[][..], |s| s.channel_invitations.as_slice())
+            .iter()
+            .filter(move |i| i.channel.server_id == server_id)
+    }
+
+    fn listed(&self) -> impl Iterator<Item = &ChannelSummary> {
+        self.snapshot
+            .as_ref()
+            .map_or(&[][..], |s| s.channels.as_slice())
+            .iter()
     }
 
     /// The personal conversations the snapshot lists, in its order.
@@ -938,12 +997,15 @@ impl Session {
             .filter(|c| PERSONAL_KINDS.contains(&c.kind.as_str()))
     }
 
+    /// A channel the snapshot lists, or the one being previewed.
     pub fn channel_summary(&self, channel_id: &str) -> Option<&ChannelSummary> {
-        self.snapshot
-            .as_ref()?
-            .channels
-            .iter()
+        self.listed()
             .find(|c| c.channel_id == channel_id)
+            .or_else(|| {
+                self.previewing
+                    .as_ref()
+                    .filter(|c| c.channel_id == channel_id)
+            })
     }
 
     /// The open conversation's sends that the store does not hold yet.
@@ -1063,6 +1125,7 @@ impl Session {
             Update::SignedOut => {}
             Update::Dm(update) => self.apply_dm(update),
             Update::Server(update) => self.apply_server(update),
+            Update::Channel(update) => self.apply_channel(update),
             Update::Identity(update) => self.apply_identity(update),
             Update::Browser(update) => self.apply_browser(update),
             Update::Notice(_) => {}
@@ -1082,6 +1145,14 @@ impl Session {
                 // Whoever's message arrived has finished typing it.
                 for message in events.iter().filter_map(|e| e.message.as_ref()) {
                     self.stop_typing(channel_id, &message.author_account_id);
+                }
+                // Someone came or went: who is in the channel is asked again.
+                let notices = events
+                    .iter()
+                    .filter_map(|e| e.message.as_ref())
+                    .any(|m| !m.notice.is_empty());
+                if notices && self.channel_members.contains_key(channel_id) {
+                    self.channel_members(channel_id);
                 }
                 if self.channel() == Some(channel_id.as_str()) {
                     self.read_entries();

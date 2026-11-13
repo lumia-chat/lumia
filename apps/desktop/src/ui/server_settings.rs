@@ -1,5 +1,5 @@
-//! A server's settings (architecture 6.7, `app::server_settings`): its picture and name, and
-//! how long it keeps its messages. Drawn in the server's main pane in place of the channel,
+//! A server's settings (architecture 6.7, `app::server_settings`): its picture and name, the
+//! channels newcomers join (architecture 6.8), and how long it keeps its messages. Drawn in the server's main pane in place of the channel,
 //! for whoever the menu under the server's name offers them to; a channel chosen in the
 //! sidebar goes back to it.
 //!
@@ -20,6 +20,7 @@ use crate::tokens as t;
 pub fn view(s: &State, server: &ServerSummary, look: Look) -> El {
     let content = page_column()
         .child(overview(s, server, look))
+        .child(super::channels::defaults_card(s, server, look))
         .child(history(s, server, look));
     titled_page(
         "server-settings",

@@ -2,6 +2,7 @@
 //! its methods; nothing here talks to the session's runtime or the network.
 
 pub mod body;
+mod channels;
 pub mod components;
 mod conversation;
 mod home;
@@ -68,8 +69,14 @@ fn autoscroll_mark(at: [f32; 2], look: Look) -> El {
 /// The surface for the open popover. Each belongs to the part of the product that opens it.
 fn overlay(s: &State, popover: Popover, look: Look) -> Option<El> {
     match popover {
-        Popover::NewChannel => server_popovers::new_channel(s, look),
+        Popover::NewChannel => server_popovers::new_channel(s, menus::SERVER_TITLE, look),
+        Popover::NewChannelHere => {
+            server_popovers::new_channel(s, server_popovers::CHANNELS_PLUS, look)
+        }
         Popover::Invite => server_popovers::invite(s, look),
+        Popover::ChannelsMenu => server_popovers::channels_menu(s, look),
+        Popover::AddPeople => server_popovers::add_people(s, look),
+        Popover::NewDm => server_popovers::new_dm(s, look),
         Popover::ServerMenu => menus::server(s, look),
         Popover::Account => menus::account(s, look),
         Popover::Person => menus::person(s, look),

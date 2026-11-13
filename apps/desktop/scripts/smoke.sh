@@ -57,7 +57,9 @@ grep -q "$two" "$work/tree.json" || fail "the other member is not listed"
 # The composer through the window's own handlers: a scripted press, typing and Return.
 run --scene live --script "$here/send.json" --tree "$work/sent.json" --at 4.0 2>"$work/sent.log"
 grep -q "Typed into the" "$work/sent.json" || fail "the message typed into the composer is not on screen"
-$b channels "$server" | grep "#general" | grep -q "head=4" || fail "the typed message did not reach the instance"
+# Five events: the second account's arrival in the default channel ("joined",
+# architecture 6.8), the three messages sent above, and the one typed.
+$b channels "$server" | grep "#general" | grep -q "head=5" || fail "the typed message did not reach the instance"
 
 # Every test, the live ones included (tests/live*.rs): sending and reading back, history
 # paged from the store and the instance and scrolled to in the real list, linking this

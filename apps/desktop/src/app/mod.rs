@@ -10,6 +10,7 @@
 pub mod account;
 pub mod aside;
 pub mod autoscroll;
+pub mod channels;
 pub mod home;
 pub mod links;
 pub mod menu;
@@ -64,7 +65,15 @@ pub enum HomeView {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Popover {
     NewChannel,
+    /// "New channel" from the Channels heading's menu, hung from its plus.
+    NewChannelHere,
     Invite,
+    /// The Channels heading's plus: create a channel, browse them.
+    ChannelsMenu,
+    /// "Add people" to the channel on screen.
+    AddPeople,
+    /// "Message someone" in the server on screen.
+    NewDm,
     /// The menu under a server's name in the sidebar.
     ServerMenu,
     /// The menu the rail's self avatar opens.
@@ -102,6 +111,8 @@ pub struct State {
     typing_wake: Option<i64>,
     pub home: home::Home,
     pub server_forms: server::ServerForms,
+    /// Being in channels, and server DMs (`channels`).
+    pub channel_forms: channels::ChannelForms,
     pub account: account::Account,
     /// The system browser and the `lumia:` links it comes back on.
     pub links: links::Links,
@@ -143,6 +154,7 @@ impl State {
             typing_wake: None,
             home: home::Home::default(),
             server_forms: server::ServerForms::default(),
+            channel_forms: channels::ChannelForms::default(),
             account: account::Account::default(),
             links: links::Links::default(),
             notices: notices::Notices::default(),
@@ -171,6 +183,8 @@ impl State {
     /// Puts a server on screen with its first channel.
     pub fn select_server(&mut self, server_id: &str) {
         self.close_server_settings();
+        self.close_page();
+        self.session.previewing = None;
         self.aside_open = false;
         self.place = Place::Server(server_id.to_string());
         self.placed = true;
@@ -194,7 +208,12 @@ impl State {
 
     pub fn select_channel(&mut self, channel_id: &str) {
         self.close_server_settings();
+        self.close_page();
+        if self.session.joined(channel_id) {
+            self.session.previewing = None;
+        }
         self.session.open_channel(channel_id);
+        self.session.channel_members(channel_id);
         self.draft.clear();
         self.remember_channel();
     }
@@ -249,6 +268,7 @@ impl State {
 
     /// Opens the profile card of `account_id` beside the control keyed `anchor`.
     pub fn open_person(&mut self, account_id: &str, anchor: &str) {
+        self.channel_forms.dm_error.clear();
         self.person = Some(Person {
             account_id: account_id.to_string(),
             anchor: anchor.to_string(),
@@ -256,8 +276,8 @@ impl State {
         self.open_popover(Popover::Person);
     }
 
-    /// The card's "Message": New message at Home, already asking for the conversation, so
-    /// it opens there or the page says a request went out.
+    /// The card's "Message privately": New message at Home, already asking for the
+    /// conversation, so it opens there or the page says a request went out.
     pub fn message_person(&mut self) {
         let Some(person) = self.person.take() else {
             return;
@@ -352,6 +372,7 @@ impl State {
         self.draft.clear();
         self.home = home::Home::default();
         self.server_forms = server::ServerForms::default();
+        self.channel_forms = channels::ChannelForms::default();
         self.account = account::Account::default();
     }
 
@@ -366,8 +387,8 @@ impl State {
             if let Some(last) = self.settings.last_channel.clone()
                 && self
                     .session
-                    .channels_of(&last.server_id)
-                    .any(|c| c.channel_id == last.channel_id)
+                    .channel_summary(&last.channel_id)
+                    .is_some_and(|c| c.server_id == last.server_id)
             {
                 self.select_server(&last.server_id);
                 self.select_channel(&last.channel_id);
@@ -391,12 +412,13 @@ impl State {
             }
             return;
         }
-        let still_there = self.session.channel().is_some_and(|id| {
-            self.session
-                .channels_of(&server)
-                .any(|c| c.channel_id == id)
-        });
-        if !still_there {
+        // A channel left or taken away goes; one being read before joining stays.
+        let still_there = self
+            .session
+            .channel()
+            .is_some_and(|id| self.session.channel_summary(id).is_some());
+        let elsewhere = self.server_settings_open() || self.server_page().is_some();
+        if !still_there && !elsewhere {
             self.select_server(&server);
         }
     }
@@ -426,6 +448,7 @@ impl State {
             }
             Update::Dm(update) => self.react_dm(update),
             Update::Server(update) => self.react_server(update),
+            Update::Channel(update) => self.react_channel(update),
             Update::Identity(update) => self.react_identity(update),
             Update::Browser(update) => self.react_browser(update),
             Update::Notice(update) => self.react_notice(update),

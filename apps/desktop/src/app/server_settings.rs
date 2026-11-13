@@ -103,6 +103,8 @@ impl State {
             return;
         };
         self.close_popover();
+        self.close_page();
+        self.load_defaults(&server.server_id);
         self.server_forms.settings = ServerSettings {
             server_id: Some(server.server_id.clone()),
             name: TextEdit::new(&server.name),

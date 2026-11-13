@@ -130,6 +130,7 @@ pub fn view(s: &State, look: Look) -> El {
             notices,
             empty_glyph: Some(&icons::LOCK),
             composer_disabled: !writable,
+            instead_of_composer: None,
         },
         look,
     )

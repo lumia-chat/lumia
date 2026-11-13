@@ -95,6 +95,84 @@ pub const SCENES: &[Scene] = &[
         }));
         s.server_forms.invite.emailed = "pat@example.com".into();
     }),
+    // Being in channels, and server DMs (`ui/channels.rs`, architecture 6.8).
+    ("channels", channels_sample),
+    ("channels-menu", |s| {
+        channels_sample(s);
+        s.open_channels_menu();
+    }),
+    ("browse", |s| {
+        use crate::session::channels::ChannelUpdate;
+        channels_sample(s);
+        s.open_browse();
+        let channel = |id: &str, name: &str, topic: &str, count| ChannelSummary {
+            channel_id: id.into(),
+            server_id: "acme".into(),
+            name: name.into(),
+            kind: "TEXT".into(),
+            last_seq: 0,
+            participant_account_ids: Vec::new(),
+            host: String::new(),
+            private: false,
+            is_default: false,
+            member_count: count,
+            topic: topic.into(),
+        };
+        s.receive(&Update::Channel(ChannelUpdate::Browse {
+            server_id: "acme".into(),
+            channels: Ok(vec![
+                channel("random", "random", "Anything at all", 12),
+                channel("research", "research", "Papers worth reading", 4),
+                channel("music", "music", "", 1),
+            ]),
+        }));
+    }),
+    ("channel-preview", |s| {
+        use crate::session::channels::ChannelUpdate;
+        channels_sample(s);
+        let random = ChannelSummary {
+            channel_id: "random".into(),
+            server_id: "acme".into(),
+            name: "random".into(),
+            kind: "TEXT".into(),
+            last_seq: 0,
+            participant_account_ids: Vec::new(),
+            host: String::new(),
+            private: false,
+            is_default: false,
+            member_count: 12,
+            topic: "Anything at all".into(),
+        };
+        s.receive(&Update::Channel(ChannelUpdate::Browse {
+            server_id: "acme".into(),
+            channels: Ok(vec![random]),
+        }));
+        s.preview_channel("random");
+    }),
+    ("server-dm", |s| {
+        channels_sample(s);
+        s.select_channel("dm-grace");
+        s.session.entries.clear();
+        s.session.revision += 1;
+    }),
+    ("add-people", |s| {
+        channels_sample(s);
+        s.open_add_people();
+        s.toggle_chosen("bo");
+    }),
+    ("new-dm", |s| {
+        channels_sample(s);
+        s.open_new_dm();
+    }),
+    ("your-settings", |s| {
+        channels_sample(s);
+        s.open_your_settings();
+        s.set_adds_by_invitation(true);
+    }),
+    ("person-in-server", |s| {
+        channels_sample(s);
+        s.open_person("grace", "member-grace");
+    }),
     // The menus and the profile card (`ui/menus.rs`).
     ("server-menu", |s| {
         servers_sample(s);
@@ -218,8 +296,8 @@ fn servers_sample(state: &mut State) {
                 icon_url: String::new(),
                 retention_days: 0,
                 can_manage: true,
-                can_manage_channels: false,
-                can_start_dms: false,
+                can_manage_channels: true,
+                can_start_dms: true,
                 channel_adds_by_invitation: false,
                 server_dms_off: false,
             },
@@ -254,8 +332,98 @@ fn servers_sample(state: &mut State) {
                 "she/her",
                 "Compilers, and the nanosecond in my pocket.",
             ),
+            MemberSummary {
+                channel_adds_by_invitation: true,
+                ..member("bo", "bo", "Bo Diddley", "", "")
+            },
+            MemberSummary {
+                server_dms_off: true,
+                ..member("cy", "cy", "Cy Twombly", "", "")
+            },
         ],
     });
+    for channel in ["general", "design"] {
+        state
+            .session
+            .channel_members
+            .insert(channel.into(), vec!["me".into(), "grace".into()]);
+    }
+}
+
+/// [`servers_sample`] with what being in channels adds (architecture 6.8): a private
+/// channel, a server DM with Grace, an invitation from her, and in #general the notices of
+/// people coming and going between messages.
+fn channels_sample(state: &mut State) {
+    use crate::session::Entry;
+    use lumia_client::app::ChannelInvitationSummary;
+    servers_sample(state);
+    let channel = |id: &str, name: &str| ChannelSummary {
+        channel_id: id.into(),
+        server_id: "acme".into(),
+        name: name.into(),
+        kind: "TEXT".into(),
+        last_seq: 0,
+        participant_account_ids: Vec::new(),
+        host: String::new(),
+        private: false,
+        is_default: false,
+        member_count: 0,
+        topic: String::new(),
+    };
+    if let Some(mut snapshot) = state.session.snapshot.clone() {
+        snapshot.channels.insert(
+            2,
+            ChannelSummary {
+                private: true,
+                ..channel("secret", "launch-plans")
+            },
+        );
+        snapshot.channels.push(ChannelSummary {
+            kind: "SERVER_DM".into(),
+            participant_account_ids: vec!["me".into(), "grace".into()],
+            ..channel("dm-grace", "")
+        });
+        snapshot.channel_invitations.push(ChannelInvitationSummary {
+            channel: channel("research", "research"),
+            invited_by_account_id: "grace".into(),
+            created_at_micros: 0,
+        });
+        state.receive(&Update::Snapshot(Ok(snapshot)));
+    }
+    state.select_channel("general");
+    let now = chrono::Utc::now().timestamp_micros();
+    let entry = |id: &str, author: &str, body: &str, ago: i64, notice: &str, about: &str| Entry {
+        id: id.into(),
+        seq: 0,
+        author_account_id: author.into(),
+        body: body.into(),
+        at_micros: now - ago * 60_000_000,
+        deleted: false,
+        notice: notice.into(),
+        notice_about: about.into(),
+    };
+    state.session.entries = vec![
+        entry("n1", "grace", "", 40, "joined", "grace"),
+        entry(
+            "m1",
+            "grace",
+            "Morning. The build is green again.",
+            38,
+            "",
+            "",
+        ),
+        entry("n2", "me", "", 20, "added", "bo"),
+        entry(
+            "m2",
+            "me",
+            "Bo, welcome: this is where we talk about the release.",
+            19,
+            "",
+            "",
+        ),
+        entry("n3", "cy", "", 5, "left", "cy"),
+    ];
+    state.session.revision += 1;
 }
 
 /// The account card of an instance that names an OIDC provider, with the buttons that sign
@@ -701,6 +869,8 @@ pub fn blocks(state: &mut State) {
             body: (*body).into(),
             at_micros: minutes_ago(*ago),
             deleted: false,
+            notice: String::new(),
+            notice_about: String::new(),
         })
         .collect();
     state.session.pending = vec![Pending {
@@ -786,6 +956,8 @@ pub fn bodies(state: &mut State) {
             body: (*body).into(),
             at_micros: now - ((BODIES.len() - i) as i64) * 60_000_000,
             deleted: false,
+            notice: String::new(),
+            notice_about: String::new(),
         })
         .collect();
     state.session.revision += 1;

@@ -17,7 +17,7 @@ use rune::{
 use lumia_client::app::ServerSummary;
 
 use crate::app::State;
-use crate::tokens::{self as t, Colors, Shadows};
+use crate::tokens::{self as t, Colors, Shadows, icons};
 
 /// The colours and shadows of the window's appearance, handed down the view.
 #[derive(Clone, Copy)]
@@ -729,6 +729,71 @@ pub fn notice(glyph: &'static Icon, words: impl Into<String>, look: Look) -> El 
                 .grow(1.0)
                 .min_w(0.0),
         )
+}
+
+/// A choice that is on or off: a box that holds a tick when it is on, the words beside it,
+/// and a quieter line under them when there is one. The whole row toggles it.
+pub fn check_row(
+    key: impl Into<String>,
+    label: &str,
+    caption: Option<&str>,
+    checked: bool,
+    press: impl Fn(&mut State) + 'static,
+    look: Look,
+) -> El {
+    let c = look.c;
+    let mut tick = el()
+        .size(t::SPACE_18, t::SPACE_18)
+        .radius(t::RADIUS_5)
+        .center()
+        .a11y_hidden();
+    tick = if checked {
+        tick.fill(c.accent)
+            .child(icon(&icons::CHECK, t::SPACE_14).color(c.on_accent))
+    } else {
+        tick.fill(c.field).border(1.0, c.border_form)
+    };
+    // The box sits on the label's line; the caption goes under the label, not the box.
+    let line = row()
+        .w_full()
+        .gap(t::SPACE_10)
+        .items_center()
+        .child(tick)
+        .child(
+            text(label)
+                .font(t::TEXT_MEMBER)
+                .color(c.ink)
+                .wrap()
+                .grow(1.0)
+                .min_w(0.0),
+        );
+    let mut whole = col()
+        .key(key)
+        .w_full()
+        .gap(t::SPACE_2)
+        .px(t::SPACE_6)
+        .py(t::SPACE_6)
+        .radius(t::RADIUS_8)
+        .hover(c.hover_member)
+        .role("checkbox")
+        .label(label)
+        .checked(checked)
+        .cursor(Cursor::Pointer)
+        .focusable(true)
+        .focus_ring(2.0, 0.0, c.focus)
+        .on_press(press)
+        .child(line);
+    if let Some(caption) = caption {
+        whole = whole.child(
+            text(caption)
+                .font(t::TEXT_META)
+                .color(c.ink_secondary)
+                .wrap()
+                .w_full()
+                .pl(t::SPACE_18 + t::SPACE_10),
+        );
+    }
+    whole
 }
 
 /// A row of choices where one is chosen, as the design's segmented tabs: `options` are

@@ -45,6 +45,8 @@ pub struct AddServer {
 #[derive(Debug, Default)]
 pub struct NewChannel {
     pub name: TextEdit,
+    /// Only those added see it (architecture 6.8).
+    pub private: bool,
     pub busy: bool,
     pub error: String,
 }
@@ -147,7 +149,18 @@ impl State {
             return;
         }
         self.server_forms.channel.error.clear();
+        self.server_forms.channel.private = false;
         self.open_popover(Popover::NewChannel);
+    }
+
+    /// Opens "New channel" from the Channels heading's menu.
+    pub fn open_new_channel_here(&mut self) {
+        if self.server_id().is_none() {
+            return;
+        }
+        self.server_forms.channel.error.clear();
+        self.server_forms.channel.private = false;
+        self.open_popover(Popover::NewChannelHere);
     }
 
     /// Creates the channel named in the popover in the server on screen; it opens once the
@@ -162,7 +175,13 @@ impl State {
         }
         form.busy = true;
         form.error.clear();
-        self.session.create_channel(&server_id, &form.name.text);
+        self.session
+            .create_channel(&server_id, &form.name.text, form.private);
+    }
+
+    /// Whether the new channel is private.
+    pub fn set_channel_private(&mut self, private: bool) {
+        self.server_forms.channel.private = private;
     }
 
     // ---- Invite people ----------------------------------------------------------------
@@ -297,7 +316,10 @@ impl State {
                 match channel {
                     Ok(channel) => {
                         form.name.clear();
-                        if self.popover == Some(Popover::NewChannel) {
+                        if matches!(
+                            self.popover,
+                            Some(Popover::NewChannel | Popover::NewChannelHere)
+                        ) {
                             self.close_popover();
                         }
                         self.server_forms.opening = Some(Opening::Channel {
@@ -377,6 +399,15 @@ impl State {
         }
     }
 
+    /// Opens a channel or a server DM of `server_id` once the snapshot lists it.
+    pub(super) fn open_made_channel(&mut self, server_id: &str, channel_id: &str) {
+        self.server_forms.opening = Some(Opening::Channel {
+            server_id: server_id.to_string(),
+            channel_id: channel_id.to_string(),
+        });
+        self.open_made();
+    }
+
     /// Opens the server or the channel just made, once the snapshot lists it: called when a
     /// call answers and after every snapshot. The person lands there only if they are still
     /// where they asked; someone who has gone elsewhere is left there.
@@ -401,11 +432,7 @@ impl State {
                 server_id,
                 channel_id,
             }) => {
-                let listed = self
-                    .session
-                    .channels_of(&server_id)
-                    .any(|c| c.channel_id == channel_id);
-                if !listed {
+                if !self.session.joined(&channel_id) {
                     return;
                 }
                 self.server_forms.opening = None;

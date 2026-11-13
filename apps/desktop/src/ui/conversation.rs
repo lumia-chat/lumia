@@ -26,7 +26,8 @@ pub struct Chrome<'a> {
     pub aside: Option<&'a str>,
 }
 
-/// What a personal conversation says besides; a channel has none of it.
+/// What a conversation says besides its messages: a personal one's topic and what to know
+/// before reading, a server DM's note, a channel's "Join" in place of the composer.
 #[derive(Default)]
 pub struct Extras {
     /// The line beside the title (the other side's pronouns, the host).
@@ -37,14 +38,11 @@ pub struct Extras {
     pub empty_glyph: Option<&'static Icon>,
     /// The composer takes no words yet; the placeholder says why.
     pub composer_disabled: bool,
+    /// What stands where the composer would: a channel read before joining has "Join".
+    pub instead_of_composer: Option<El>,
 }
 
-/// The panel for the conversation on screen.
-pub fn view(s: &State, chrome: Chrome<'_>, look: Look) -> El {
-    view_with(s, chrome, Extras::default(), look)
-}
-
-/// [`view`] with what a personal conversation adds.
+/// The panel for the conversation on screen, with what `extras` adds around it.
 pub fn view_with(s: &State, chrome: Chrome<'_>, extras: Extras, look: Look) -> El {
     let list = if timeline::is_empty(s) {
         empty_state(
@@ -79,7 +77,9 @@ pub fn view_with(s: &State, chrome: Chrome<'_>, extras: Extras, look: Look) -> E
     if let Some(error) = &s.session.last_error {
         pane = pane.child(el().w_full().px(t::SPACE_24).child(error_text(error, look)));
     }
-    pane.child(if extras.composer_disabled {
+    pane.child(if let Some(instead) = extras.instead_of_composer {
+        instead
+    } else if extras.composer_disabled {
         composer_off(&chrome.placeholder, look)
     } else {
         composer(s, &chrome.placeholder, look)

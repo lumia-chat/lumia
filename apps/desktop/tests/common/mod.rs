@@ -162,8 +162,8 @@ pub fn snapshot() -> SnapshotSummary {
                 icon_url: String::new(),
                 retention_days: 0,
                 can_manage: true,
-                can_manage_channels: false,
-                can_start_dms: false,
+                can_manage_channels: true,
+                can_start_dms: true,
                 channel_adds_by_invitation: false,
                 server_dms_off: false,
             },
@@ -174,7 +174,7 @@ pub fn snapshot() -> SnapshotSummary {
                 retention_days: 0,
                 can_manage: false,
                 can_manage_channels: false,
-                can_start_dms: false,
+                can_start_dms: true,
                 channel_adds_by_invitation: false,
                 server_dms_off: false,
             },
@@ -211,6 +211,8 @@ pub fn message(id: &str, author: &str, body: &str, micros: i64) -> Entry {
         body: body.into(),
         at_micros: micros,
         deleted: false,
+        notice: String::new(),
+        notice_about: String::new(),
     }
 }
 
@@ -234,5 +236,12 @@ pub fn signed_in() -> State {
         message("m3", "stranger", "Who am I?", now),
     ];
     state.session.revision += 1;
+    // Who is in each channel, as the instance would say (architecture 6.8).
+    for channel in ["general", "design"] {
+        state
+            .session
+            .channel_members
+            .insert(channel.into(), vec!["me".to_string(), "grace".to_string()]);
+    }
     state
 }

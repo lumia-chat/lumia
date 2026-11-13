@@ -143,10 +143,10 @@ fn ones_own_card_says_so_and_offers_no_message() {
 }
 
 #[test]
-fn message_on_a_card_goes_to_a_new_message_and_asks_for_the_conversation() {
+fn message_privately_on_a_card_goes_to_a_new_message_and_asks_for_the_conversation() {
     let mut rt = runtime(signed_in());
     press(&mut rt, "member-grace");
-    press(&mut rt, "card-message");
+    press(&mut rt, "card-message-privately");
     assert_eq!(rt.state.place, Place::Home);
     assert_eq!(rt.state.home_view, HomeView::NewMessage);
     assert!(rt.state.popover.is_none() && rt.state.person.is_none());
@@ -165,7 +165,7 @@ fn find_a_member_lists_who_it_matches_by_name_or_handle() {
     assert!(rt.find("member-grace").is_some());
     assert!(rt.find("member-me").is_none());
     assert!(
-        words(&rt).contains("2 in this server"),
+        words(&rt).contains("2 in this channel"),
         "the heading still counts everyone"
     );
 

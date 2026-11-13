@@ -124,7 +124,7 @@ fn the_shell_lands_on_the_first_server_and_its_first_channel() {
         "Grace Hopper",
         "Ada Lovelace",
         "Members",
-        "2 in this server",
+        "2 in this channel",
         "Today",
         "Reading it now.",
     ] {

@@ -44,7 +44,7 @@ pub fn view(s: &State, look: Look) -> El {
         Some(server) => (
             server::sidebar(s, server, look),
             server::main(s, server, look),
-            Some(server::members(s, server, look)),
+            server::aside(s, server, look),
         ),
         None => (
             home::sidebar(s, look),

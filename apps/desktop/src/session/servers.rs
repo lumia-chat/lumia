@@ -84,12 +84,13 @@ impl Session {
         });
     }
 
-    /// Creates a text channel in a server ([`ServerUpdate::ChannelCreated`]).
-    pub fn create_channel(&self, server_id: &str, name: &str) {
+    /// Creates a text channel in a server, private when asked
+    /// ([`ServerUpdate::ChannelCreated`]).
+    pub fn create_channel(&self, server_id: &str, name: &str, private: bool) {
         let Some(app) = self.client() else { return };
         let (server_id, name) = (server_id.to_string(), name.trim().to_string());
         self.task(async move {
-            let channel = app.create_channel(&server_id, &name, false).await;
+            let channel = app.create_channel(&server_id, &name, private).await;
             Update::Server(ServerUpdate::ChannelCreated {
                 server_id,
                 channel: channel.map_err(Failure::from),
