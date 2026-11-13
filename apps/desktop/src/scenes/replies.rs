@@ -23,6 +23,7 @@ fn entry(id: &str, seq: u64, author: &str, body: &str, ago: i64) -> Entry {
         mentions: Vec::new(),
         reactions: Vec::new(),
         mentions_me: false,
+        edited: false,
     }
 }
 
@@ -190,4 +191,28 @@ pub fn mentions(state: &mut State) {
         },
     );
     state.open_server_mentions();
+}
+
+/// `message-menu`: this account's message under the pointer with its "More actions" open.
+pub fn message_menu(state: &mut State) {
+    message_toolbar(state);
+    state.open_message_menu("r2");
+}
+
+/// `edit-message`: this account's message being edited in place.
+pub fn edit_message(state: &mut State) {
+    replies(state);
+    state.replies.replying = None;
+    state.replies.outside = None;
+    let mut field = rune::TextEdit::new("After linking, as far as I can see.");
+    field.set_caret(field.text.len());
+    state.replies.editing = Some(("r2".into(), field));
+    state.session.revision += 1;
+}
+
+/// `delete-message`: "Delete this message?" for this account's message.
+pub fn delete_message(state: &mut State) {
+    message_toolbar(state);
+    state.replies.deleting = Some("r2".into());
+    state.open_popover(crate::app::Popover::DeleteMessage);
 }

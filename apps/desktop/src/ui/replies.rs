@@ -1,83 +1,128 @@
 //! What quote replies, reactions and mentions add to the conversation panel (architecture
-//! 6.6), the same on the web: a quote above a message's words and the chips of its reactions
-//! under them, the toolbar over a message under the pointer (six quick reactions, Add
-//! reaction, Reply), the "Quote reply" button over a selection inside one message, and over
-//! the composer the quote being replied with, the @ list and the bar naming those a message
-//! mentioned who are not in its channel.
+//! 6.6), drawn as the design canvas's "Inline replies" board has them, the same on the web: a
+//! reply's line of reference above it and the chips of a message's reactions under its words,
+//! the toolbar over the message under the pointer (Add reaction, Reply, More actions, whose
+//! menu edits, copies and deletes), "Delete this message?", the "Quote reply" button over a
+//! selection inside one message, and in the composer the strip of the message being replied
+//! to (with its "@ On" switch), the @ list and the bar naming those a message mentioned who
+//! are not in its channel.
 //!
-//! The toolbar shows while the pointer is on its message. Its buttons are out of the Tab
-//! order: a timeline of messages each with eight stops would be no way to move through it.
-//! Reaching a message's actions from the keyboard is not built yet (plan step 9).
+//! The toolbar shows while the pointer is on its message, and over the message being replied
+//! to. Its buttons are out of the Tab order: a timeline of messages each with three stops
+//! would be no way to move through it. Reaching a message's actions from the keyboard is not
+//! built yet (plan step 9).
 
 use lumia_client::app::{QuoteSummary, ReactionSummary};
-use rune::{Cursor, El, Side, col, el, icon, row, text};
+use rune::{Align, Cursor, El, Side, col, el, icon, row, text};
 
 use super::components::{
-    AVATAR_CARD_WIDTH, Look, avatar_of, error_text, link_button, shadowed, small_button,
+    AVATAR_CARD_WIDTH, Look, avatar_of, error_text, link_button, menu, menu_glyph, menu_item,
+    popover, primary_button, secondary_button, shadowed, small_button,
 };
 use crate::app::State;
-use crate::app::replies::{Choice, QUICK};
+use crate::app::replies::Choice;
 use crate::session::{Entry, display_name};
 use crate::tokens::{self as t, icons};
 
-/// A quote above a message's words: the accent's rule, the quoted author and the text,
-/// two lines at most. Pressing it finds the original; a deleted original says so instead.
-pub fn quote_block(s: &State, quote: &QuoteSummary, look: Look) -> El {
+/// The connector of a reply's line of reference: from under the reply's avatar up and over
+/// to the quoted person (the board's 26 by 12 stroke, `M1 12V7a5 5 0 0 1 5-5h19`, drawn as a
+/// box with two sides and one round corner).
+fn connector(look: Look) -> El {
+    el().w(t::SPACE_24 + t::SPACE_2)
+        .h(t::SPACE_12)
+        .mt(t::SPACE_8)
+        .a11y_hidden()
+        .child(
+            el().mt(1.0)
+                .w(t::SPACE_24 + 1.0)
+                .h(t::SPACE_12 - 1.0)
+                .border_sides([t::SPACE_2, 0.0, 0.0, t::SPACE_2], look.c.border_hover)
+                .corners([t::RADIUS_6, 0.0, 0.0, 0.0]),
+        )
+}
+
+/// A reply's line of reference, above its row (the "Inline replies" board): the connector
+/// from under the avatar, the quoted person's small avatar and name ("@" and the name when
+/// it is this account), and the quoted text on one line. Pressing it finds the original; a
+/// deleted original says so instead. `indent` puts the connector under the reply's avatar.
+pub fn reference_line(s: &State, quote: &QuoteSummary, indent: f32, look: Look) -> El {
     let c = look.c;
-    let rule = el()
-        .w(t::SPACE_2)
-        .h_full()
-        .radius(t::SPACE_2)
-        .fill(c.accent);
-    let mut words = col().grow(1.0).min_w(0.0).gap(t::SPACE_2);
-    if quote.original_deleted {
-        return row()
-            .key("quote")
-            .w_full()
-            .gap(t::SPACE_8)
-            .child(rule.fill(c.line_strong))
-            .child(
-                text("Original message was deleted")
-                    .font(t::TEXT_META)
-                    .color(c.ink_muted),
-            );
-    }
-    let name =
-        (!quote.author_account_id.is_empty()).then(|| s.session.name_of(&quote.author_account_id));
-    if let Some(name) = &name {
-        words = words.child(
-            text(name.clone())
-                .font(t::TEXT_SECTION)
-                .color(c.ink_emphasis),
-        );
-    }
-    words = words.child(
-        text(quote.text.clone())
-            .font(t::TEXT_COMPACT)
-            .color(c.ink_secondary)
-            .max_lines(2)
-            .w_full(),
-    );
-    let id = quote.message_id.clone();
-    let label = match &name {
-        Some(name) => format!("Quote of {name}: {}. Go to the original", quote.text),
-        None => format!("Quote: {}. Go to the original", quote.text),
-    };
-    row()
+    let line = row()
         .key("quote")
         .w_full()
-        .gap(t::SPACE_8)
-        .py(t::SPACE_2)
-        .radius(t::RADIUS_8)
-        .hover(c.hover_row)
+        .pl(indent)
+        .gap(t::SPACE_6)
+        .items_center()
+        .child(connector(look));
+    if quote.original_deleted {
+        return line
+            .child(
+                el().size(t::REFERENCE_AVATAR, t::REFERENCE_AVATAR)
+                    .radius(t::REFERENCE_AVATAR / 2.0)
+                    .fill(c.chip)
+                    .center()
+                    .a11y_hidden()
+                    .child(
+                        el().w(t::SPACE_8 + 1.0)
+                            .h(t::SPACE_2)
+                            .radius(1.0)
+                            .fill(c.ink_muted),
+                    ),
+            )
+            .child(
+                rune::rich(
+                    "Original message was deleted",
+                    vec![rune::Span::new(0, "Original message was deleted".len()).italic()],
+                )
+                .font(t::TEXT_REFERENCE)
+                .color(c.ink_muted),
+            );
+    }
+    let mine = quote.author_account_id == s.session.me();
+    let name =
+        (!quote.author_account_id.is_empty()).then(|| s.session.name_of(&quote.author_account_id));
+    let mut line = line;
+    if let Some(name) = &name {
+        line = line
+            .child(el().a11y_hidden().child(avatar_of(
+                s,
+                name,
+                &quote.author_account_id,
+                t::REFERENCE_AVATAR,
+                look,
+            )))
+            .child(
+                text(if mine {
+                    format!("@{name}")
+                } else {
+                    name.clone()
+                })
+                .font(t::TEXT_LINK_SM)
+                .color(if mine { c.accent_ink } else { c.ink_body }),
+            );
+    }
+    let id = quote.message_id.clone();
+    let label = match (&name, mine) {
+        (_, true) => format!("Replying to you: {}. Jump to message", quote.text),
+        (Some(name), false) => format!("Replying to {name}: {}. Jump to message", quote.text),
+        (None, false) => format!("Replying to: {}. Jump to message", quote.text),
+    };
+    line.hover_group()
         .role("button")
         .label(label)
         .cursor(Cursor::Pointer)
         .focusable(true)
         .focus_ring(2.0, 0.0, c.focus)
         .on_press(move |s: &mut State| s.jump_to(&id))
-        .child(rule)
-        .child(words)
+        .child(
+            text(quote.text.replace('\n', " "))
+                .font(t::TEXT_REFERENCE)
+                .color(c.ink_muted)
+                .group_color(c.ink_body)
+                .truncate()
+                .shrink()
+                .min_w(0.0),
+        )
 }
 
 /// Who reacted with an emoji, for its chip's tooltip: "You and Ada reacted with 👍".
@@ -180,60 +225,187 @@ pub fn reactions(s: &State, entry: &Entry, look: Look) -> El {
     )
 }
 
-/// The toolbar over the message under the pointer: the six quick reactions, Add reaction
-/// and Reply, inside the top end of its row (so the pointer on it is still on the row).
-pub fn toolbar(entry_id: &str, look: Look) -> El {
+/// The toolbar over the message under the pointer, or over the one being replied to: Add
+/// reaction, Reply (the board's pressed pill while this message is being replied to) and More
+/// actions, at the row's top end and inside it (so the pointer on it is still on the row).
+pub fn toolbar(s: &State, entry_id: &str, look: Look) -> El {
     let c = look.c;
-    let button = |key: String, label: String| {
+    let button = |key: String, label: &str, glyph: &'static rune::Icon| {
         el().key(key)
-            .size(t::ICON_BUTTON, t::ICON_BUTTON)
-            .radius(t::RADIUS_9)
+            .size(t::TOOLBAR_BUTTON, t::TOOLBAR_BUTTON)
+            .radius(t::RADIUS_7)
             .center()
             .role("button")
-            .label(label.clone())
+            .label(label)
             .help(label)
             .hover(c.hover_icon)
+            .hover_group()
             .cursor(Cursor::Pointer)
+            .child(
+                icon(glyph, t::SPACE_16)
+                    .color(c.icon_strong)
+                    .group_color(c.ink_field),
+            )
     };
-    let mut bar = row()
+    let anchor = format!("react-{entry_id}");
+    let (id, at) = (entry_id.to_string(), anchor.clone());
+    let add = button(anchor, "Add reaction", &icons::EMOJI)
+        .on_press(move |s: &mut State| s.open_picker(&id, &at));
+    let replying = s
+        .replies
+        .replying
+        .as_ref()
+        .is_some_and(|q| q.message_id == entry_id);
+    let id = entry_id.to_string();
+    let reply = if replying {
+        row()
+            .key(format!("reply-{entry_id}"))
+            .h(t::TOOLBAR_BUTTON)
+            .pl(t::SPACE_8)
+            .pr(t::SPACE_10)
+            .gap(t::SPACE_6)
+            .items_center()
+            .radius(t::RADIUS_7)
+            .fill(c.accent_soft)
+            .role("button")
+            .label("Reply")
+            .checked(true)
+            .cursor(Cursor::Pointer)
+            .on_press(State::cancel_reply)
+            .child(icon(&icons::REPLY, t::SPACE_16).color(c.accent_ink))
+            .child(text("Reply").font(t::TEXT_LINK_SM).color(c.accent_ink))
+    } else {
+        button(format!("reply-{entry_id}"), "Reply", &icons::REPLY)
+            .on_press_tx(move |s: &mut State, tx| s.reply_to(&id, None, tx))
+    };
+    let id = entry_id.to_string();
+    let more = button(format!("more-{entry_id}"), "More actions", &icons::MORE)
+        .on_press(move |s: &mut State| s.open_message_menu(&id));
+    let bar = row()
         .key("actions")
-        .padding(t::SPACE_2)
+        .padding(3.0)
         .gap(t::SPACE_2)
         .items_center()
         .radius(t::RADIUS_10)
-        .fill(c.surface)
+        .fill(c.raised)
         .border(1.0, c.line_strong)
         .role("toolbar")
-        .label("Message actions");
-    for (n, emoji) in QUICK.iter().enumerate() {
-        let id = entry_id.to_string();
-        bar = bar.child(
-            button(format!("quick-{n}"), format!("React with {emoji}"))
-                .on_press(move |s: &mut State| s.react_with(&id, emoji))
-                .child(text(*emoji).font(t::TEXT_MESSAGE)),
-        );
-    }
-    bar = bar.child(el().w(1.0).h(t::SPACE_18).mx(t::SPACE_2).fill(c.line));
-    let anchor = format!("react-{entry_id}");
-    let (id, at) = (entry_id.to_string(), anchor.clone());
-    bar = bar.child(
-        button(anchor, "Add reaction".into())
-            .on_press(move |s: &mut State| s.open_picker(&id, &at))
-            .child(icon(&icons::REACTION_ADD, t::SPACE_16).color(c.ink_quiet)),
-    );
-    let id = entry_id.to_string();
-    bar = bar.child(
-        button(format!("reply-{entry_id}"), "Reply".into())
-            .on_press_tx(move |s: &mut State, tx| s.reply_to(&id, None, tx))
-            .child(icon(&icons::REPLY, t::SPACE_16).color(c.ink_quiet)),
-    );
-    // Above the row's top edge by the bar's own height less its padding: inside the row.
-    let tall = t::ICON_BUTTON + 2.0 * t::SPACE_2 + 2.0;
+        .label("Message actions")
+        .child(add)
+        .child(reply)
+        .child(more);
+    // As the board hangs it, its top 14 over the row's top edge (its end at the row's, where
+    // the board's is 16 in: an anchored overlay takes no margin). The pointer moving onto it
+    // stays on the list, so the row stays the one under it.
+    let tall = t::TOOLBAR_BUTTON + 2.0 * 3.0 + 2.0;
     shadowed(bar, look.shadows.floating).anchored_fit(
         super::timeline::frame_key(entry_id),
         Side::Top,
-        rune::Align::End,
-        -(tall + t::SPACE_2),
+        Align::End,
+        t::SPACE_14 - tall,
+    )
+}
+
+/// The "More actions" menu of a message: Edit message (this account's own), Copy text, and
+/// Delete message (its own, or another's for a moderator; Shift deletes without asking).
+pub fn message_menu(s: &State, look: Look) -> Option<El> {
+    let id = s.replies.menu_for.clone()?;
+    let entry = s.session.entries.iter().find(|e| e.id == id)?;
+    let mine = entry.author_account_id == s.session.me();
+    let mut list = menu(
+        "message-menu",
+        &format!("more-{id}"),
+        "Message actions",
+        Side::Bottom,
+        Align::End,
+        look,
+    );
+    if mine {
+        let at = id.clone();
+        list = list.child(
+            menu_item(
+                "menu-edit",
+                Some(menu_glyph(&icons::COMPOSE, look)),
+                "Edit message",
+                None,
+                move |_s: &mut State| {},
+                look,
+            )
+            .on_press_tx(move |s: &mut State, tx| s.begin_edit(&at, tx)),
+        );
+    }
+    let at = id.clone();
+    list = list.child(
+        menu_item(
+            "menu-copy",
+            Some(menu_glyph(&icons::FILE, look)),
+            "Copy text",
+            None,
+            move |_s: &mut State| {},
+            look,
+        )
+        .on_press_tx(move |s: &mut State, tx| s.copy_message(&at, tx)),
+    );
+    if s.session.may_delete(entry) {
+        let at = id.clone();
+        list = list.child(
+            menu_item(
+                "menu-delete",
+                Some(icon(&icons::CLOSE, t::SPACE_16).color(look.c.dnd)),
+                "Delete message",
+                None,
+                move |_s: &mut State| {},
+                look,
+            )
+            .on_press_tx(move |s: &mut State, tx| s.delete_from_menu(&at, tx)),
+        );
+    }
+    Some(list)
+}
+
+/// "Delete this message?": the message's first line, and Cancel or Delete.
+pub fn delete_dialog(s: &State, look: Look) -> Option<El> {
+    let id = s.replies.deleting.clone()?;
+    let entry = s.session.entries.iter().find(|e| e.id == id)?;
+    let first = entry.body.lines().next().unwrap_or_default().to_string();
+    Some(
+        popover(
+            "delete-message",
+            &super::timeline::frame_key(&id),
+            "Delete this message?",
+            "It goes for everyone in the conversation.",
+            super::components::CARD_WIDTH,
+            look,
+        )
+        .child(
+            text(first)
+                .font(t::TEXT_COMPACT)
+                .color(look.c.ink_muted)
+                .max_lines(2)
+                .w_full(),
+        )
+        .child(
+            row()
+                .w_full()
+                .gap(t::SPACE_8)
+                // Both a pane's button high (40), as the profile card's pair.
+                .child(
+                    secondary_button("delete-cancel", "Cancel", true, State::close_popover, look)
+                        .h(t::CONTROL_PANE),
+                )
+                .child(
+                    primary_button(
+                        "delete-confirm",
+                        "Delete",
+                        true,
+                        State::confirm_delete,
+                        look,
+                    )
+                    .h(t::CONTROL_PANE)
+                    .shrink()
+                    .min_w(0.0),
+                ),
+        ),
     )
 }
 
@@ -267,51 +439,81 @@ pub fn quote_button(message_id: &str, words: &str, at: [f32; 2], look: Look) -> 
     )
 }
 
-/// Over the composer while replying: "Replying to Ada", the quote on a line, and the way
-/// out of it.
-pub fn reply_bar(s: &State, quote: &QuoteSummary, look: Look) -> El {
+/// The strip inside the composer's frame while replying (the board's): "Replying to Name",
+/// the "@ On" switch (whether the reply notifies them) and the way out of it.
+pub fn reply_strip(s: &State, quote: &QuoteSummary, look: Look) -> El {
     let c = look.c;
     let name = s.session.name_of(&quote.author_account_id);
-    let close = el()
-        .key("cancel-reply")
-        .size(t::SPACE_24, t::SPACE_24)
-        .radius(t::RADIUS_8)
-        .center()
-        .role("button")
-        .label("Cancel reply")
-        .help("Cancel reply")
-        .hover(c.hover_icon)
-        .cursor(Cursor::Pointer)
-        .focusable(true)
-        .focus_ring(2.0, 0.0, c.focus)
-        .on_press(State::cancel_reply)
-        .child(icon(&icons::CLOSE, t::SPACE_14).color(c.ink_quiet));
-    let first = rune::rich(
+    let words = rune::rich(
         format!("Replying to {name}"),
         vec![
             rune::Span::new("Replying to ".len(), "Replying to ".len() + name.len())
                 .weight(t::WEIGHT_STRONG)
-                .color(c.ink_emphasis),
+                .color(c.ink),
         ],
     )
-    .font(t::TEXT_META)
-    .color(c.ink_muted)
-    .truncate();
-    bar(
-        "reply-bar",
-        col()
-            .grow(1.0)
-            .min_w(0.0)
-            .gap(t::SPACE_2)
-            .child(first)
-            .child(
-                text(quote.text.clone())
-                    .font(t::TEXT_COMPACT)
-                    .color(c.ink_secondary)
-                    .truncate(),
-            ),
-        Some(close),
-        look,
+    .font(t::TEXT_STRIP)
+    .color(c.ink_secondary)
+    .truncate()
+    .grow(1.0)
+    .min_w(0.0);
+    let mut strip = row()
+        .key("reply-bar")
+        .w_full()
+        .pl(t::SPACE_14)
+        .pr(t::SPACE_8)
+        .py(t::SPACE_6 + 1.0)
+        .gap(t::SPACE_10)
+        .items_center()
+        .fill(c.inset)
+        .border_sides([0.0, 0.0, 1.0, 0.0], c.border_composer)
+        .child(icon(&icons::REPLY, t::SPACE_14 + 1.0).color(c.ink_secondary))
+        .child(words);
+    // No switch on a reply to oneself: there is nobody to notify.
+    if quote.author_account_id != s.session.me() {
+        let on = !quote.silent;
+        strip = strip.child(
+            row()
+                .key("reply-mention")
+                .h(t::SPACE_28)
+                .px(t::SPACE_10)
+                .gap(t::SPACE_4)
+                .items_center()
+                .radius(t::RADIUS_PILL)
+                .fill(if on { c.accent_soft } else { c.chip })
+                .role("button")
+                .label(format!("Mention {name}"))
+                .checked(on)
+                .cursor(Cursor::Pointer)
+                .focusable(true)
+                .focus_ring(2.0, 0.0, c.focus)
+                .on_press(State::toggle_reply_mention)
+                .child(icon(&icons::MENTION, t::SPACE_12 + 1.0).color(if on {
+                    c.accent_ink
+                } else {
+                    c.ink_quiet
+                }))
+                .child(
+                    text(if on { "On" } else { "Off" })
+                        .font(t::TEXT_SECTION_STRONG)
+                        .color(if on { c.accent_ink } else { c.ink_quiet }),
+                ),
+        );
+    }
+    strip.child(
+        el().key("cancel-reply")
+            .size(t::SPACE_28, t::SPACE_28)
+            .radius(t::RADIUS_8)
+            .center()
+            .role("button")
+            .label("Cancel reply")
+            .help("Cancel reply")
+            .hover(c.hover_icon)
+            .cursor(Cursor::Pointer)
+            .focusable(true)
+            .focus_ring(2.0, 0.0, c.focus)
+            .on_press(State::cancel_reply)
+            .child(icon(&icons::CLOSE, t::SPACE_14).color(c.ink_quiet)),
     )
 }
 

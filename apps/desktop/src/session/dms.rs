@@ -456,6 +456,7 @@ impl Session {
                     body: m.body.clone(),
                     at_micros: m.sent_at_micros,
                     deleted: m.deleted,
+                    edited: m.edited,
                     notice: String::new(),
                     notice_about: String::new(),
                     reply: m.reply.clone(),

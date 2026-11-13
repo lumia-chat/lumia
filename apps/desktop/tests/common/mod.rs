@@ -222,6 +222,7 @@ pub fn message(id: &str, author: &str, body: &str, micros: i64) -> Entry {
         mentions: Vec::new(),
         reactions: Vec::new(),
         mentions_me: false,
+        edited: false,
     }
 }
 

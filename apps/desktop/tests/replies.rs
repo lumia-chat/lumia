@@ -85,14 +85,14 @@ fn the_toolbar_sits_at_the_top_end_of_the_row_under_the_pointer() {
     hover(&mut rt, "m2");
     let row = rect(&rt, "message-m2");
     let bar = rect(&rt, "actions");
-    // Inside the row's top end: its right edge at the row's, its top within the row.
+    // At the row's top end as the board hangs it: over its top edge, at its right one.
     assert!(
         (bar[0] + bar[2] - (row[0] + row[2])).abs() < 1.0,
         "{bar:?} in {row:?}"
     );
     assert!(
-        bar[1] >= row[1] - 1.0 && bar[1] < row[1] + row[3],
-        "{bar:?} in {row:?}"
+        bar[1] < row[1] && bar[1] + bar[3] > row[1],
+        "{bar:?} over the top of {row:?}"
     );
 }
 
@@ -147,7 +147,7 @@ fn a_quote_and_reactions_are_drawn_with_who_reacted() {
     let rt = runtime(state);
     let all = words(&rt);
     assert!(
-        all.contains("Quote of Grace Hopper: Shipped on Friday."),
+        all.contains("Replying to Grace Hopper: Shipped on Friday.. Jump to message"),
         "{all}"
     );
     assert!(
@@ -273,4 +273,96 @@ fn a_mention_opens_its_channel_at_it() {
     press(&mut rt, "mention-m1");
     assert_eq!(rt.state.session.channel(), Some("general"));
     assert!(rt.state.server_page().is_none());
+}
+
+#[test]
+fn the_toolbar_has_add_reaction_reply_and_more_and_reply_is_pressed_while_replying() {
+    let mut rt = runtime(signed_in());
+    hover(&mut rt, "m1");
+    for key in ["react-m1", "reply-m1", "more-m1"] {
+        assert!(rt.find(key).is_some(), "{key}");
+    }
+    assert!(rt.find("quick-0").is_none(), "no quick reactions");
+    press(&mut rt, "reply-m1");
+    // Replying: the strip in the composer with its switch, and the hint.
+    let all = words(&rt);
+    assert!(all.contains("Replying to Grace Hopper"), "{all}");
+    assert!(
+        all.contains("Return to send · Esc to cancel the reply"),
+        "{all}"
+    );
+    assert!(!rt.state.replies.replying.as_ref().unwrap().silent);
+    press(&mut rt, "reply-mention");
+    assert!(
+        rt.state.replies.replying.as_ref().unwrap().silent,
+        "switched off"
+    );
+    assert!(words(&rt).contains("Off"));
+}
+
+#[test]
+fn a_mention_is_drawn_as_the_persons_name() {
+    let mut state = signed_in();
+    state.session.entries[0].body = "@grace see this".into();
+    state.session.entries[0].mentions = vec![MentionSummary {
+        account_id: "grace".into(),
+        everyone: false,
+        start: 0,
+        end: 6,
+    }];
+    state.session.revision += 1;
+    let rt = runtime(state);
+    let all = words(&rt);
+    assert!(all.contains("@Grace Hopper see this"), "{all}");
+}
+
+#[test]
+fn an_own_message_is_edited_in_place_and_up_edits_the_last() {
+    let mut rt = runtime(signed_in());
+    // m2 is this account's.
+    hover(&mut rt, "m2");
+    press(&mut rt, "more-m2");
+    assert!(rt.find("menu-edit").is_some());
+    assert!(rt.find("menu-delete").is_some());
+    press(&mut rt, "menu-edit");
+    assert!(rt.find("edit-m2").is_some(), "the body is a field");
+    assert!(words(&rt).contains("Esc to cancel · Return to save"));
+    key(&mut rt, Key::Escape);
+    assert!(rt.find("edit-m2").is_none());
+
+    // Up in the empty composer edits this account's newest message.
+    press(&mut rt, "composer");
+    key(&mut rt, Key::Up);
+    assert_eq!(
+        rt.state.replies.editing.as_ref().map(|(id, _)| id.as_str()),
+        Some("m2")
+    );
+}
+
+#[test]
+fn another_s_message_offers_no_edit_and_deleting_asks_first() {
+    let mut rt = runtime(signed_in());
+    hover(&mut rt, "m1");
+    press(&mut rt, "more-m1");
+    assert!(rt.find("menu-edit").is_none(), "not this account's");
+    assert!(rt.find("menu-copy").is_some());
+    // Not a moderator in the fixture: no delete of another's.
+    assert!(rt.find("menu-delete").is_none());
+    key(&mut rt, Key::Escape);
+
+    hover(&mut rt, "m2");
+    press(&mut rt, "more-m2");
+    press(&mut rt, "menu-delete");
+    assert!(words(&rt).contains("Delete this message?"));
+    press(&mut rt, "delete-cancel");
+    assert!(rt.find("delete-message").is_none());
+}
+
+#[test]
+fn an_edited_message_says_so() {
+    let mut state = signed_in();
+    state.session.entries[1].edited = true;
+    state.session.revision += 1;
+    let rt = runtime(state);
+    assert!(rt.find("message-m2/edited").is_some() || words(&rt).contains("(edited)"));
 }

@@ -161,6 +161,8 @@ pub struct Entry {
     pub body: String,
     pub at_micros: i64,
     pub deleted: bool,
+    /// Its author has edited it: "(edited)".
+    pub edited: bool,
     /// A notice the instance posted (architecture 6.8): `joined`, `added`, `left` or
     /// `removed`, about `notice_about`, done by the author. Empty for a message.
     pub notice: String,
@@ -184,6 +186,7 @@ impl From<MessageSummary> for Entry {
             body: m.body,
             at_micros: m.created_at_micros,
             deleted: m.deleted,
+            edited: m.edited,
             notice: m.notice,
             notice_about: m.notice_account_id,
             reply: m.reply,
@@ -870,7 +873,7 @@ impl Session {
 
     /// The mentions `body` makes in a server's channel: of its members, and of everyone when
     /// this account may. None in a server DM, where both are told of every message anyway.
-    fn mentions_in(&self, channel_id: &str, body: &str) -> Vec<MentionSummary> {
+    pub(crate) fn mentions_in(&self, channel_id: &str, body: &str) -> Vec<MentionSummary> {
         let Some(channel) = self.channel_summary(channel_id) else {
             return Vec::new();
         };
@@ -1247,6 +1250,15 @@ impl Session {
                 if self.channel() == Some(channel_id.as_str()) {
                     self.read_entries();
                 }
+                // The edit or delete on its way has landed when its message has changed.
+                if let Some((id, was)) = &self.reads.editing
+                    && self
+                        .entries
+                        .iter()
+                        .any(|e| e.id == *id && (e.deleted || e.body != *was))
+                {
+                    self.reads.editing = None;
+                }
                 self.refresh_reads();
             }
             AppEvent::SnapshotTaken { channel_id, .. } => {
@@ -1281,6 +1293,10 @@ impl Session {
             } => {
                 if let Some(pending) = self.pending.iter_mut().find(|p| p.id == *command_id) {
                     pending.failed = Some(message.clone());
+                    self.revision += 1;
+                } else if let Some((id, _)) = self.reads.editing.take() {
+                    // Not a send's: the edit or the delete on its way.
+                    self.reads.refused = Some((id, message.clone()));
                     self.revision += 1;
                 }
             }

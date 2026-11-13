@@ -358,7 +358,7 @@ impl Body {
                     spans.push(
                         Span::new(range.start, range.end)
                             .color(c.accent_ink)
-                            .weight(t::WEIGHT_STRONG)
+                            .weight(t::TEXT_LINK_SM.weight)
                             .bg(c.accent_soft, t::CODE_PAD),
                     );
                 }

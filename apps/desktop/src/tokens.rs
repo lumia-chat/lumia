@@ -109,6 +109,28 @@ pub const TEXT_NAV_ACTIVE: TextStyle = TextStyle {
     weight: TEXT_AUTHOR.weight,
     ..TEXT_NAV
 };
+/// A button of the message toolbar (30, on the "Inline replies" board): a small icon
+/// button, less than `ICON_BUTTON`'s 34.
+pub const TOOLBAR_BUTTON: f32 = SPACE_24 + SPACE_6;
+/// The quoted person's avatar on a reply's line of reference (18).
+pub const REFERENCE_AVATAR: f32 = SPACE_18;
+/// The text of a reply's line of reference (13 at 400): the small link's size at the body's
+/// weight; its name is `TEXT_LINK_SM` (13 at 600).
+pub const TEXT_REFERENCE: TextStyle = TextStyle {
+    weight: TEXT_BODY.weight,
+    ..TEXT_LINK_SM
+};
+/// The reply strip in the composer (13.5 at 400): the label's size at the body's weight.
+pub const TEXT_STRIP: TextStyle = TextStyle {
+    weight: TEXT_BODY.weight,
+    ..TEXT_LABEL
+};
+/// The section size at the author's weight (12.5 at 700): the reply strip's "@ On" and the
+/// "New" divider.
+pub const TEXT_SECTION_STRONG: TextStyle = TextStyle {
+    weight: TEXT_AUTHOR.weight,
+    ..TEXT_SECTION
+};
 /// A row of the sidebar with unread messages: `text-nav` at 600, the boards' unread row
 /// (the secondary button's weight at the same size).
 pub const TEXT_NAV_UNREAD: TextStyle = TextStyle {

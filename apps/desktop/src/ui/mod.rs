@@ -51,7 +51,7 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
         .then(|| s.toolbar_for())
         .flatten()
         .filter(|id| s.session.entries.iter().any(|e| e.id == *id))
-        .map(|id| replies::toolbar(id, look));
+        .map(|id| replies::toolbar(s, id, look));
     let screen = match toolbar {
         Some(toolbar) => screen.child(toolbar),
         None => screen,
@@ -116,5 +116,7 @@ fn overlay(s: &State, popover: Popover, look: Look) -> Option<El> {
         Popover::Account => menus::account(s, look),
         Popover::Person => menus::person(s, look),
         Popover::EmojiPicker => emoji::picker(s, look),
+        Popover::MessageMenu => replies::message_menu(s, look),
+        Popover::DeleteMessage => replies::delete_dialog(s, look),
     }
 }

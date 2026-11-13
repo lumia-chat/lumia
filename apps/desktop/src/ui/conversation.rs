@@ -283,9 +283,13 @@ fn composer_hint(s: &State, look: Look) -> El {
         line.child(typing_hint(&typing, look))
     };
     line.child(
-        text("Return to send")
-            .font(t::TEXT_META)
-            .color(look.c.ink_muted),
+        text(if s.replies.replying.is_some() {
+            "Return to send · Esc to cancel the reply"
+        } else {
+            "Return to send"
+        })
+        .font(t::TEXT_META)
+        .color(look.c.ink_muted),
     )
 }
 
@@ -303,7 +307,7 @@ fn composer(s: &State, placeholder: &str, look: Look) -> El {
         .min_h(t::SPACE_24)
         .max_h(t::SPACE_24 * 8.0)
         .on_edit(|s: &mut State| &mut s.draft)
-        .on_input_key(|s: &mut State, key, _| s.composer_key(key))
+        .on_input_key(|s: &mut State, key, tx| s.composer_key(key) || s.composer_up(key, tx))
         .on_input_change(|s: &mut State, _| s.follow_mention())
         .on_submit(|s: &mut State, tx| s.send(tx));
     let mut send = el()
@@ -325,22 +329,15 @@ fn composer(s: &State, placeholder: &str, look: Look) -> El {
             .focus_ring(2.0, 2.0, c.focus)
             .on_press_tx(|s: &mut State, tx| s.send(tx));
     }
-    let mut frame = row()
-        .key("composer-box")
+    // One line is the board's 42 points with the words and the button centred in it; more
+    // lines grow the frame upwards from the button.
+    let line = row()
         .w_full()
         .items_end()
         .gap(t::SPACE_6)
         .pl(t::SPACE_16)
         .pr(t::SPACE_6)
         .py(t::SPACE_6)
-        .radius(t::RADIUS_16)
-        .fill(c.field)
-        .border(1.0, c.border_composer)
-        // The border takes room, as the board's does: 56 points with one line in it.
-        .border_layout()
-        .focus_within_ring(1.0, -1.0, c.border_active)
-        // One line is the board's 42 points with the words and the button centred in it; more
-        // lines grow the frame upwards from the button.
         .child(
             col()
                 .grow(1.0)
@@ -350,23 +347,38 @@ fn composer(s: &State, placeholder: &str, look: Look) -> El {
                 .child(input),
         )
         .child(el().h(t::COMPOSER_LINE).center().child(send));
+    // While replying, the strip of the message replied to is inside the frame, above the
+    // words (the "Inline replies" board), and the frame's border is the focused one.
+    let replying = s.replies.replying.as_ref();
+    let mut frame = col()
+        .key("composer-box")
+        .w_full()
+        .radius(t::RADIUS_16)
+        .clip_rounded(t::RADIUS_16)
+        .fill(c.field)
+        .border(
+            1.0,
+            if replying.is_some() {
+                c.border_active
+            } else {
+                c.border_composer
+            },
+        )
+        // The border takes room, as the board's does: 56 points with one line in it.
+        .border_layout()
+        .focus_within_ring(1.0, -1.0, c.border_active);
+    if let Some(quote) = replying {
+        frame = frame.child(replies::reply_strip(s, quote, look));
+    }
+    let mut frame = frame.child(line);
     for layer in look.shadows.composer {
         frame = frame.box_shadow(*layer);
     }
-    // Over the composer: the bar after a send, the quote being replied with. The @ list
-    // floats over the timeline instead (`ui::view`).
+    // Over the composer: the bar after a send. The @ list floats over the timeline instead
+    // (`ui::view`).
     let mut above = col().w_full().gap(t::SPACE_6);
     let mut any = false;
-    for part in [
-        replies::outside_bar(s, look),
-        s.replies
-            .replying
-            .as_ref()
-            .map(|quote| replies::reply_bar(s, quote, look)),
-    ]
-    .into_iter()
-    .flatten()
-    {
+    if let Some(part) = replies::outside_bar(s, look) {
         any = true;
         above = above.child(part);
     }

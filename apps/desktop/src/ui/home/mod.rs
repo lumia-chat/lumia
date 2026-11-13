@@ -158,15 +158,36 @@ fn tile(
     count: usize,
     look: Look,
 ) -> El {
-    let c = look.c;
-    let current = s.home_view == view;
-    let ink = if current { c.accent_ink } else { c.ink_body };
-    // Three across the sidebar's column.
-    let width = (SIDEBAR_WIDTH - t::SPACE_12 - t::SPACE_10 - 2.0 * t::SPACE_6) / 3.0;
     let name = match count {
         0 => label.to_string(),
         n => format!("{label}, {n} waiting"),
     };
+    quick_tile(
+        label,
+        &name,
+        glyph,
+        count,
+        s.home_view == view,
+        move |s: &mut State| s.go_home(view),
+        look,
+    )
+}
+
+/// A quick tile of a sidebar, three to a row: a glyph over a word, with a count when there
+/// is one. Home's, and a server's Mentions (the boards' Threads, Mentions and Saved).
+pub(crate) fn quick_tile(
+    label: &'static str,
+    name: &str,
+    glyph: &'static Icon,
+    count: usize,
+    current: bool,
+    press: impl Fn(&mut State) + 'static,
+    look: Look,
+) -> El {
+    let c = look.c;
+    let ink = if current { c.accent_ink } else { c.ink_body };
+    // Three across the sidebar's column.
+    let width = (SIDEBAR_WIDTH - t::SPACE_12 - t::SPACE_10 - 2.0 * t::SPACE_6) / 3.0;
     let mut tile = col()
         .key(format!("tile-{}", label.to_lowercase()))
         .w(width)
@@ -177,11 +198,11 @@ fn tile(
         .fill(c.surface)
         .hover_group()
         .role("button")
-        .label(name)
+        .label(name.to_string())
         .cursor(Cursor::Pointer)
         .focusable(true)
         .focus_ring(2.0, 2.0, c.focus)
-        .on_press(move |s: &mut State| s.go_home(view));
+        .on_press(press);
     if current {
         tile = tile.border(1.0, c.accent);
     } else {
@@ -268,7 +289,7 @@ fn conversation_row(s: &State, channel: &ChannelSummary, look: Look) -> El {
                 .min_w(0.0),
         );
     if mentions > 0 {
-        button = button.child(super::components::count_badge(mentions, true, look));
+        button = button.child(super::components::count_badge(mentions, false, look));
     }
     if active {
         button = button.fill(c.raised);

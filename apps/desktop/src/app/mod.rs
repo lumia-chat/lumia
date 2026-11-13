@@ -85,6 +85,10 @@ pub enum Popover {
     Person,
     /// The emoji picker, for the message `replies.picker` names.
     EmojiPicker,
+    /// A message's "More actions" menu, for the message `replies.menu_for` names.
+    MessageMenu,
+    /// "Delete this message?", for the message `replies.deleting` names.
+    DeleteMessage,
 }
 
 /// Whose profile card is open, and the control it hangs from.

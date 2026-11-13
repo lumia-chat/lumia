@@ -66,6 +66,11 @@ pub struct Reads {
     seeking: Option<(String, u32)>,
     /// The message found, for the window to scroll to and mark; taken by it.
     pub found: Option<String>,
+    /// An edit sent and not yet back: the message, and what it was edited from. A refusal
+    /// that arrives meanwhile is the edit's.
+    pub editing: Option<(String, String)>,
+    /// Why the instance refused an edit or a delete, under the message it was for.
+    pub refused: Option<(String, String)>,
     /// The conversation just opened has a "New messages" line the window has not yet
     /// scrolled to; taken by it.
     pub land: bool,
@@ -236,6 +241,80 @@ impl Session {
                 });
             }
         }
+    }
+
+    /// Edits one of this account's messages in the open conversation: its new body, with the
+    /// mentions it makes found again. The store has it when the edit comes back; a refusal
+    /// meanwhile is kept in [`Reads::refused`].
+    pub fn edit(&mut self, message_id: &str, body: &str) {
+        let (Some(app), Some(conversation)) = (self.client(), self.conversation.clone()) else {
+            return;
+        };
+        let body = body.trim().to_string();
+        let was = self
+            .entries
+            .iter()
+            .find(|e| e.id == message_id)
+            .map(|e| e.body.clone())
+            .unwrap_or_default();
+        self.reads.editing = Some((message_id.to_string(), was));
+        self.reads.refused = None;
+        match conversation {
+            Conversation::Channel(channel_id) => {
+                let mentions = self.mentions_in(&channel_id, &body);
+                match app.edit_message(&channel_id, message_id, &body, &mentions) {
+                    Ok(()) => {}
+                    Err(error) => self.last_error = Some(format!("Not saved: {error}")),
+                }
+            }
+            Conversation::Dm(channel_id) => {
+                let message_id = message_id.to_string();
+                self.task_local(move || async move {
+                    let result = app.dm_edit(&channel_id, &message_id, &body).await;
+                    Update::Read(ReadUpdate::Reacted(result.map_err(Failure::from)))
+                });
+            }
+        }
+    }
+
+    /// Deletes a message of the open conversation: this account's own, or another's for one
+    /// holding `MANAGE_MESSAGES` in a server's channel.
+    pub fn delete(&mut self, message_id: &str) {
+        let (Some(app), Some(conversation)) = (self.client(), self.conversation.clone()) else {
+            return;
+        };
+        self.reads.editing = Some((message_id.to_string(), String::new()));
+        self.reads.refused = None;
+        match conversation {
+            Conversation::Channel(channel_id) => {
+                if let Err(error) = app.delete_message(&channel_id, message_id) {
+                    self.last_error = Some(format!("Not deleted: {error}"));
+                }
+            }
+            Conversation::Dm(channel_id) => {
+                let message_id = message_id.to_string();
+                self.task_local(move || async move {
+                    let result = app.dm_delete(&channel_id, &message_id).await;
+                    Update::Read(ReadUpdate::Reacted(result.map_err(Failure::from)))
+                });
+            }
+        }
+    }
+
+    /// Whether this account may delete a message of the open conversation: its own, or in a
+    /// server's channel where it holds `MANAGE_MESSAGES`.
+    pub fn may_delete(&self, entry: &Entry) -> bool {
+        if entry.author_account_id == self.me() {
+            return true;
+        }
+        let Some(Conversation::Channel(id)) = &self.conversation else {
+            return false;
+        };
+        self.channel_summary(id).is_some_and(|c| {
+            self.servers()
+                .iter()
+                .any(|s| s.server_id == c.server_id && s.can_manage_messages)
+        })
     }
 
     /// Finds a message of the open conversation, reading further back for it if it is not

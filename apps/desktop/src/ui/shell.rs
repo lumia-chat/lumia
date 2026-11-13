@@ -175,7 +175,12 @@ fn rail(s: &State, current: Option<&ServerSummary>, look: Look) -> El {
     for server in s.session.servers() {
         let active = current.is_some_and(|x| x.server_id == server.server_id);
         let id = server.server_id.clone();
-        let mut tile = rail_button(format!("server-{}", server.server_id), &server.name, look)
+        let (any, mentions) = s.session.server_unread(&server.server_id);
+        let named = match (any, mentions) {
+            (_, 0) if any => format!("{}, unread messages", server.name),
+            _ => super::server::with_unread(&server.name, (mentions, mentions)),
+        };
+        let mut tile = rail_button(format!("server-{}", server.server_id), &named, look)
             .radius(t::TILE_SIZE / 2.0)
             .fill(if active { c.raised } else { c.tile })
             .on_press(move |s: &mut State| s.select_server(&id));
@@ -200,21 +205,18 @@ fn rail(s: &State, current: Option<&ServerSummary>, look: Look) -> El {
         }
         // What is unread in it: a mark at the rail's edge, and its count for this account
         // over the tile's corner.
-        let (any, mentions) = s.session.server_unread(&server.server_id);
         let mut slot = el().child(tile);
-        if any && !active {
+        // The board's: a dot at the tile's top right for unread with nothing for this
+        // account, the count there when there is (the badge covers the dot).
+        if any && !active && mentions == 0 {
+            let dot = t::SPACE_10 + 1.0;
             slot = slot.child(
-                el().pin(
-                    Some(-(t::RAIL_WIDTH - t::TILE_SIZE) / 2.0),
-                    Some((t::TILE_SIZE - t::SPACE_8) / 2.0),
-                    None,
-                    None,
-                )
-                .w(t::SPACE_4)
-                .h(t::SPACE_8)
-                .radius(t::RADIUS_PILL)
-                .fill(c.ink)
-                .a11y_hidden(),
+                el().pin(None, Some(0.0), Some(0.0), None)
+                    .size(dot, dot)
+                    .radius(dot / 2.0)
+                    .fill(c.unread)
+                    .border(2.0, c.rail)
+                    .a11y_hidden(),
             );
         }
         if mentions > 0 {

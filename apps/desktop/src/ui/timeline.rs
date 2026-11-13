@@ -306,14 +306,17 @@ struct Head<'a> {
     selectable: bool,
 }
 
-/// What a stored message's row has besides its words: the toolbar and the selection it
-/// hears, its tint.
+/// What a stored message's row has besides its words.
 #[derive(Default)]
 struct Decor {
-    /// The message, for its toolbar and its selection; none for a send on its way.
+    /// The message, for its toolbar; none for a send on its way.
     id: Option<String>,
-    /// It mentions this account, or a jump has just reached it.
+    /// It mentions this account, or a jump has just reached it: `accent-wash`.
     tint: bool,
+    /// It is the message being replied to: lit as under the pointer while the reply is made.
+    lit: bool,
+    /// A reply's line of reference, above the row.
+    reference: Option<El>,
 }
 
 /// The message whose body a selected text is in: the row under the list (keyed by the
@@ -352,7 +355,7 @@ fn message_frame(
     // A block's rows touch, and are a paragraph's distance apart between them: the board
     // draws a block's messages as the paragraphs of one.
     let within = m.under_name / 2.0;
-    let mut frame = row()
+    let mut frame = col()
         // Its own key, apart from its slot's in the list (which holds a day's divider too): the
         // toolbar over the row under the pointer is anchored to it, and an anchor is found by
         // its key alone.
@@ -361,17 +364,17 @@ fn message_frame(
         .px(t::SPACE_12)
         .pt(if place.opens { m.edge } else { within })
         .pb(if place.closes { m.edge } else { within })
-        .gap(m.beside)
+        .gap(t::SPACE_2)
         .radius(t::RADIUS_12)
         .hover(c.hover_message)
         .role("listitem");
     if decor.tint {
-        frame = frame.fill(c.accent_soft).child(
-            el().pin(Some(0.0), Some(0.0), None, Some(0.0))
-                .w(t::SPACE_2)
-                .fill(c.accent)
-                .a11y_hidden(),
-        );
+        frame = frame.fill(c.accent_wash);
+    } else if decor.lit {
+        frame = frame.fill(c.hover_message);
+    }
+    if let Some(reference) = decor.reference {
+        frame = frame.child(reference);
     }
     if let Some(id) = decor.id {
         // The toolbar over the row under the pointer is drawn at the root (`ui::view`), so a
@@ -393,10 +396,13 @@ fn message_frame(
                     .label(format!("{author}, {time}"))
                     .group_opacity(0.0, 1.0),
             );
-        return frame
-            .hover_group()
-            .child(when)
-            .child(col().grow(1.0).min_w(0.0).child(content));
+        return frame.hover_group().child(
+            row()
+                .w_full()
+                .gap(m.beside)
+                .child(when)
+                .child(col().grow(1.0).min_w(0.0).child(content)),
+        );
     }
     let part = |part: El, before: u8| {
         if selectable {
@@ -430,13 +436,15 @@ fn message_frame(
         .items_center()
         .child(part(name, 2))
         .child(part(time, 1));
-    frame.child(picture).child(
-        col()
-            .grow(1.0)
-            .min_w(0.0)
-            .gap(m.under_name)
-            .child(head)
-            .child(content),
+    frame.child(
+        row().w_full().gap(m.beside).child(picture).child(
+            col()
+                .grow(1.0)
+                .min_w(0.0)
+                .gap(m.under_name)
+                .child(head)
+                .child(content),
+        ),
     )
 }
 
@@ -507,36 +515,146 @@ fn stored_row(s: &State, i: usize, entry: &Entry, place: Place, look: Look) -> E
         short_time: short_clock(entry.at_micros),
         selectable: true,
     };
+    let m = Measures::of(s.settings.density);
     let decor = Decor {
         id: (!entry.deleted).then(|| entry.id.clone()),
         tint: entry.mentions_me || s.flashed(&entry.id),
+        lit: s
+            .replies
+            .replying
+            .as_ref()
+            .is_some_and(|q| q.message_id == entry.id),
+        // The connector starts under the avatar's centre.
+        reference: entry
+            .reply
+            .as_ref()
+            .map(|quote| replies::reference_line(s, quote, m.avatar / 2.0 - 1.0, look)),
     };
     let row = message_frame(s, &entry.id, head, content, place, decor, look);
     with_divider(s, i, entry, place, row, look)
 }
 
-/// A message's words with what architecture 6.6 adds: its quote above them, its mentions as
-/// pills in them, and its reactions under them.
-fn message_content(s: &State, entry: &Entry, look: Look) -> El {
-    let words: Vec<String> = entry
+/// What a message's body shows: its source with each mention's words in it as `@` and the
+/// person's name (architecture 6.6; `@everyone` as it is), escaped so the name stays text, and
+/// those words, for the renderer to draw as pills.
+fn shown_body(s: &State, entry: &Entry) -> (String, Vec<String>) {
+    let mut mentions: Vec<_> = entry
         .mentions
         .iter()
-        .filter_map(|m| entry.body.get(m.start as usize..m.end as usize))
-        .map(str::to_string)
+        .filter(|m| {
+            entry.body.is_char_boundary(m.start as usize)
+                && entry.body.is_char_boundary(m.end as usize)
+        })
+        .filter(|m| m.start < m.end && (m.end as usize) <= entry.body.len())
         .collect();
-    let body = body::view_with(&entry.body, true, &words, look).key("body");
-    if entry.reply.is_none() && entry.reactions.is_empty() {
-        return body;
+    mentions.sort_by_key(|m| m.start);
+    let mut source = String::with_capacity(entry.body.len());
+    let mut words = Vec::new();
+    let mut at = 0usize;
+    for m in mentions {
+        let (start, end) = (m.start as usize, m.end as usize);
+        if start < at {
+            continue;
+        }
+        source.push_str(&entry.body[at..start]);
+        let shown = if m.everyone {
+            "@everyone".to_string()
+        } else {
+            format!("@{}", s.session.name_of(&m.account_id))
+        };
+        for ch in shown.chars() {
+            if "\\`*_[]~#>|<".contains(ch) {
+                source.push('\\');
+            }
+            source.push(ch);
+        }
+        words.push(shown);
+        at = end;
     }
+    source.push_str(&entry.body[at..]);
+    (source, words)
+}
+
+/// A message's words with what architecture 6.6 adds: its mentions as pills in them,
+/// "(edited)" after them, and its reactions under them; in their place the field while this
+/// account edits it, and under them why an edit or a delete of it was refused.
+fn message_content(s: &State, entry: &Entry, look: Look) -> El {
+    let c = look.c;
+    let editing = s
+        .replies
+        .editing
+        .as_ref()
+        .filter(|(id, _)| *id == entry.id)
+        .map(|(_, field)| field);
     let mut content = col().w_full().gap(t::SPACE_4);
-    if let Some(quote) = &entry.reply {
-        content = content.child(replies::quote_block(s, quote, look));
+    match editing {
+        Some(field) => content = content.child(edit_field(&entry.id, field, look)),
+        None => {
+            let (source, words) = shown_body(s, entry);
+            content = content.child(body::view_with(&source, true, &words, look).key("body"));
+            if entry.edited {
+                content = content.child(
+                    text("(edited)")
+                        .key("edited")
+                        .font(t::TEXT_META)
+                        .color(c.ink_muted)
+                        .label("edited"),
+                );
+            }
+        }
     }
-    content = content.child(body);
+    if let Some((_, why)) = s
+        .session
+        .reads
+        .refused
+        .as_ref()
+        .filter(|(id, _)| *id == entry.id)
+    {
+        content = content.child(
+            text(format!("Not saved: {why}"))
+                .font(t::TEXT_META)
+                .color(c.dnd)
+                .role("status"),
+        );
+    }
     if !entry.reactions.is_empty() {
         content = content.child(replies::reactions(s, entry, look).mt(t::SPACE_2));
     }
     content
+}
+
+/// A message being edited in place: the field with its body, and how to leave it.
+fn edit_field(id: &str, field: &rune::TextEdit, look: Look) -> El {
+    let c = look.c;
+    col()
+        .w_full()
+        .gap(t::SPACE_6)
+        .child(
+            col()
+                .w_full()
+                .px(t::SPACE_12)
+                .py(t::SPACE_8)
+                .radius(t::RADIUS_12)
+                .fill(c.field)
+                .border(1.0, c.border_active)
+                .child(
+                    rune::text_input(field, t::TEXT_MESSAGE)
+                        .key(format!("edit-{id}"))
+                        .label("Edit message")
+                        .color(c.ink_field)
+                        .caret(c.accent, c.accent_soft)
+                        .w_full()
+                        .min_h(t::SPACE_24)
+                        .max_h(t::SPACE_24 * 8.0)
+                        .on_edit(State::edit_field)
+                        .on_input_key(|s: &mut State, key, tx| s.edit_key(key, tx)),
+                ),
+        )
+        .child(
+            text("Esc to cancel · Return to save")
+                .font(t::TEXT_META)
+                .color(c.ink_muted),
+        )
 }
 
 /// A stored row in its slot. The divider lives in the first row of its day: a row of its
@@ -574,17 +692,23 @@ fn with_divider(s: &State, i: usize, entry: &Entry, place: Place, row: El, look:
 /// The "New messages" line, above the first message after where this account had read to.
 fn new_line(m: Measures, look: Look) -> El {
     let c = look.c;
+    // The board's: a rule in `accent-line`, then "New"; nothing after the word.
     row()
         .key("new-messages")
         .w_full()
         .px(t::SPACE_10)
-        .py(m.divider)
+        .py(m.divider.min(t::SPACE_6))
         .gap(t::SPACE_12)
         .items_center()
         .role("separator")
         .label("New messages")
-        .child(el().grow(1.0).h(1.0).fill(c.accent))
-        .child(text("New messages").font(t::TEXT_SECTION).color(c.accent))
+        .child(el().grow(1.0).h(1.0).fill(c.accent_line))
+        .child(
+            text("New")
+                .font(t::TEXT_SECTION_STRONG)
+                .color(c.accent_ink)
+                .a11y_hidden(),
+        )
 }
 
 /// What the list holds a message's row in: the row, with the room under a block's last.
@@ -599,14 +723,7 @@ fn slot(place: Place, m: Measures) -> El {
 /// A send the store does not hold yet: dimmed until it does, with the refusal when there was one.
 fn pending_row(s: &State, pending: &Pending, place: Place, look: Look) -> El {
     let c = look.c;
-    let mut body = body::view(&pending.body, false, look).key("body");
-    if let Some(quote) = &pending.reply {
-        body = col()
-            .w_full()
-            .gap(t::SPACE_4)
-            .child(replies::quote_block(s, quote, look))
-            .child(body);
-    }
+    let body = body::view(&pending.body, false, look).key("body");
     let content = match &pending.failed {
         None => col().w_full().opacity(0.5).child(body),
         Some(why) => {
@@ -656,7 +773,13 @@ fn pending_row(s: &State, pending: &Pending, place: Place, look: Look) -> El {
         head,
         content,
         place,
-        Decor::default(),
+        Decor {
+            reference: pending
+                .reply
+                .as_ref()
+                .map(|quote| replies::reference_line(s, quote, m.avatar / 2.0 - 1.0, look)),
+            ..Decor::default()
+        },
         look,
     ))
 }

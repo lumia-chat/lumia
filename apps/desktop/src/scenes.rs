@@ -244,6 +244,9 @@ pub const SCENES: &[Scene] = &[
     ("mention-list", replies::mention_list),
     ("emoji-picker", replies::emoji_picker),
     ("message-toolbar", replies::message_toolbar),
+    ("message-menu", replies::message_menu),
+    ("edit-message", replies::edit_message),
+    ("delete-message", replies::delete_message),
     ("mentions", replies::mentions),
     // The same conversation at the other density. Set on the state, not through
     // `set_density`: a scene does not write the person's settings.
@@ -417,6 +420,7 @@ fn channels_sample(state: &mut State) {
         mentions: Vec::new(),
         reactions: Vec::new(),
         mentions_me: false,
+        edited: false,
     };
     state.session.entries = vec![
         entry("n1", "grace", "", 40, "joined", "grace"),
@@ -896,6 +900,7 @@ pub fn blocks(state: &mut State) {
             mentions: Vec::new(),
             reactions: Vec::new(),
             mentions_me: false,
+            edited: false,
         })
         .collect();
     state.session.pending = vec![Pending {
@@ -991,6 +996,7 @@ pub fn bodies(state: &mut State) {
             mentions: Vec::new(),
             reactions: Vec::new(),
             mentions_me: false,
+            edited: false,
         })
         .collect();
     state.session.revision += 1;

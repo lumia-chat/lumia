@@ -101,17 +101,26 @@ pub fn sidebar(s: &State, server: &ServerSummary, look: Look) -> El {
     } else {
         section_label("Direct messages", t::SPACE_14, look)
     };
+    // The boards' quick tiles under the server's name: Threads, Mentions and Saved, of which
+    // Mentions is built.
     let (_, mentions) = s.session.server_unread(&server.server_id);
-    let mentions_row = nav_row(
-        "server-mentions".into(),
-        "Mentions",
-        &with_unread("Mentions", (mentions, mentions)),
-        NavLead::Icon(&icons::MENTION),
-        s.server_page() == Some(ServerPage::Mentions),
-        (0, mentions),
-        State::open_server_mentions,
-        look,
-    );
+    let tiles = row()
+        .key("tiles")
+        .w_full()
+        .gap(t::SPACE_6)
+        .pb(t::SPACE_12)
+        .child(
+            super::home::quick_tile(
+                "Mentions",
+                &with_unread("Mentions", (mentions, mentions)),
+                &icons::MENTION,
+                mentions as usize,
+                s.server_page() == Some(ServerPage::Mentions),
+                State::open_server_mentions,
+                look,
+            )
+            .key("server-mentions"),
+        );
     let body = col()
         .key("channels")
         .w_full()
@@ -120,7 +129,6 @@ pub fn sidebar(s: &State, server: &ServerSummary, look: Look) -> El {
         .scroll(ScrollSpec {
             stick_bottom: false,
         })
-        .child(el().w_full().pb(t::SPACE_8).child(mentions_row))
         .child(channels)
         .child(col().w_full().child(messages).child(dms))
         .with_scroll_bar("channels", look);
@@ -132,6 +140,7 @@ pub fn sidebar(s: &State, server: &ServerSummary, look: Look) -> El {
         |s| s.go_home(HomeView::NewMessage),
         look,
     );
+    let body = col().w_full().grow(1.0).min_h(0.0).child(tiles).child(body);
     sidebar_frame(
         s,
         &server.name,
@@ -242,7 +251,7 @@ pub(super) fn nav_row(
                 .min_w(0.0),
         );
     if mentions > 0 {
-        item = item.child(count_badge(mentions, true, look));
+        item = item.child(count_badge(mentions, false, look));
     }
     if active {
         item = item.fill(c.raised);

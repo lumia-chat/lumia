@@ -45,6 +45,12 @@ pub struct Replies {
     pub newest_visible: bool,
     /// The message under the pointer, which the toolbar is over.
     pub hovered: Option<String>,
+    /// The message being edited in place, and what its field holds.
+    pub editing: Option<(String, TextEdit)>,
+    /// The message whose "More actions" menu is open.
+    pub menu_for: Option<String>,
+    /// The message "Delete this message?" asks about.
+    pub deleting: Option<String>,
 }
 
 /// An `@word` in the draft, from its `@` to the caret.
@@ -135,14 +141,27 @@ impl State {
         }
     }
 
-    /// The message the toolbar is over: the one under the pointer, or the one whose picker
-    /// it opened (which hangs from it).
+    /// The message the toolbar is over: the one whose picker or menu it opened (which hangs
+    /// from it), the one under the pointer, or the one being replied to. None while a message
+    /// is being edited.
     pub fn toolbar_for(&self) -> Option<&str> {
+        if self.replies.editing.is_some() {
+            return None;
+        }
         match (&self.popover, &self.replies.picker) {
             (Some(Popover::EmojiPicker), Some(picker)) if picker.anchor.starts_with("react-") => {
                 Some(picker.message_id.as_str())
             }
-            (None, _) => self.replies.hovered.as_deref(),
+            (Some(Popover::MessageMenu | Popover::DeleteMessage), _) => self
+                .replies
+                .menu_for
+                .as_deref()
+                .or(self.replies.deleting.as_deref()),
+            (None, _) => self.replies.hovered.as_deref().or(self
+                .replies
+                .replying
+                .as_ref()
+                .map(|q| q.message_id.as_str())),
             _ => None,
         }
     }
@@ -150,6 +169,132 @@ impl State {
     /// "Cancel reply", or Escape in the composer.
     pub fn cancel_reply(&mut self) {
         self.replies.replying = None;
+    }
+
+    /// The reply bar's "@ On" switch: whether the reply notifies the person it quotes.
+    pub fn toggle_reply_mention(&mut self) {
+        if let Some(quote) = &mut self.replies.replying {
+            quote.silent = !quote.silent;
+        }
+    }
+
+    /// "More actions" on a message: its menu, under the button.
+    pub fn open_message_menu(&mut self, message_id: &str) {
+        self.replies.menu_for = Some(message_id.to_string());
+        self.open_popover(Popover::MessageMenu);
+    }
+
+    /// "Edit message": the message's body becomes a field where it is, holding the body.
+    pub fn begin_edit(&mut self, message_id: &str, tx: &mut Tx) {
+        let Some(entry) = self.session.entries.iter().find(|e| e.id == message_id) else {
+            return;
+        };
+        if entry.author_account_id != self.session.me() || entry.deleted || !entry.notice.is_empty()
+        {
+            return;
+        }
+        let mut field = TextEdit::new(entry.body.clone());
+        field.set_caret(entry.body.len());
+        self.replies.editing = Some((message_id.to_string(), field));
+        self.close_popover();
+        // The row shows the field now: rebuilt.
+        self.session.revision += 1;
+        tx.focus(format!("edit-{message_id}"), false);
+    }
+
+    /// Escape in the field: the message as it was.
+    pub fn cancel_edit(&mut self, tx: &mut Tx) {
+        if self.replies.editing.take().is_some() {
+            self.session.revision += 1;
+            tx.focus("composer", false);
+        }
+    }
+
+    /// Return in the field: the edit is sent; emptied, it asks to delete instead.
+    pub fn save_edit(&mut self, tx: &mut Tx) {
+        let Some((id, field)) = self.replies.editing.take() else {
+            return;
+        };
+        self.session.revision += 1;
+        let body = field.text.trim();
+        let unchanged = self
+            .session
+            .entries
+            .iter()
+            .any(|e| e.id == id && e.body.trim() == body);
+        if body.is_empty() {
+            self.ask_delete(&id);
+        } else if !unchanged {
+            self.session.edit(&id, body);
+        }
+        tx.focus("composer", false);
+    }
+
+    /// Keys in the field being edited: Return saves, Escape cancels (Shift-Return a new line).
+    pub fn edit_key(&mut self, key: &KeyEvent, tx: &mut Tx) -> bool {
+        match key.key {
+            Key::Enter if !key.mods.shift => {
+                self.save_edit(tx);
+                true
+            }
+            Key::Escape => {
+                self.cancel_edit(tx);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// The text field of the message being edited, for its `on_edit`.
+    pub fn edit_field(&mut self) -> &mut TextEdit {
+        match &mut self.replies.editing {
+            Some((_, field)) => field,
+            // Gone between the frame and the edit: an edit to nothing kept.
+            None => &mut self.member_filter,
+        }
+    }
+
+    /// "Delete message": asked first, unless Shift is held.
+    pub fn delete_from_menu(&mut self, message_id: &str, tx: &mut Tx) {
+        if tx.mods().shift {
+            self.close_popover();
+            self.session.delete(message_id);
+        } else {
+            self.ask_delete(message_id);
+        }
+    }
+
+    fn ask_delete(&mut self, message_id: &str) {
+        self.replies.deleting = Some(message_id.to_string());
+        self.open_popover(Popover::DeleteMessage);
+    }
+
+    /// "Delete" in "Delete this message?".
+    pub fn confirm_delete(&mut self) {
+        if let Some(id) = self.replies.deleting.take() {
+            self.session.delete(&id);
+        }
+        self.close_popover();
+    }
+
+    /// "Copy text" in the menu.
+    pub fn copy_message(&mut self, message_id: &str, tx: &mut Tx) {
+        if let Some(entry) = self.session.entries.iter().find(|e| e.id == message_id) {
+            tx.copy(entry.body.clone());
+        }
+        self.close_popover();
+    }
+
+    /// This account's newest message in the open conversation that can be edited: what Up in
+    /// an empty composer edits.
+    fn last_own(&self) -> Option<String> {
+        let me = self.session.me();
+        self.session
+            .entries
+            .iter()
+            .rev()
+            .find(|e| e.author_account_id == me && !e.deleted && e.notice.is_empty())
+            .map(|e| e.id.clone())
     }
 
     /// The selection in the timeline changed: one inside a single message's body can be
@@ -302,6 +447,20 @@ impl State {
             return true;
         }
         false
+    }
+
+    /// Up in an empty composer: this account's newest message, edited in place.
+    pub fn composer_up(&mut self, key: &KeyEvent, tx: &mut Tx) -> bool {
+        if key.key != Key::Up || !self.draft.text.is_empty() || self.replies.mention.is_some() {
+            return false;
+        }
+        match self.last_own() {
+            Some(id) => {
+                self.begin_edit(&id, tx);
+                true
+            }
+            None => false,
+        }
     }
 
     /// The draft changed: what the @ list completes follows the caret.
