@@ -59,8 +59,12 @@ jobs:
           path: |
             apps/instance/deps
             apps/instance/_build
+            # In dev and test the app's priv is a link to apps/instance/priv, so the
+            # compiled image library is there and not under _build: without it, a
+            # restored build has the module and no library to load.
+            apps/instance/priv/native
             apps/instance/native/lumia_media/target
-          key: mix-${{ runner.os }}-${{ hashFiles('apps/instance/mix.lock', 'apps/instance/native/lumia_media/Cargo.lock') }}
+          key: mix-${{ runner.os }}-${{ hashFiles('apps/instance/mix.lock', 'apps/instance/native/lumia_media/src/**', 'apps/instance/native/lumia_media/Cargo.*') }}
           restore-keys: mix-${{ runner.os }}-
 
       # The backup and restore commands shell out to pg_dump and pg_restore

@@ -68,7 +68,11 @@ jobs:
           path: |
             apps/instance/deps
             apps/instance/_build
-          key: mix-dev-${{ runner.os }}-${{ hashFiles('apps/instance/mix.lock') }}
+            # In dev and test the app's priv is a link to apps/instance/priv, so the
+            # compiled image library is there and not under _build: without it, a
+            # restored build has the module and no library to load.
+            apps/instance/priv/native
+          key: mix-dev-${{ runner.os }}-${{ hashFiles('apps/instance/mix.lock', 'apps/instance/native/lumia_media/src/**', 'apps/instance/native/lumia_media/Cargo.*') }}
       # A registry snapshot saved by a cancelled run came back without a
       # crate; this action keeps the registry whole.
       - uses: Swatinem/rust-cache@v2
