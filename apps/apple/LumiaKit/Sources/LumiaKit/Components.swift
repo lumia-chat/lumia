@@ -125,10 +125,12 @@ public struct LumiaMessageRow: View {
     public var deleted = false
     public var place = MessagePlace()
     public var measures = MessageMeasures.of(.standard)
+    /// Opens who wrote it (their profile card), from the avatar or the name; nil where there is none to open.
+    public var openAuthor: (() -> Void)?
     @State private var hovering = false
 
-    public init(author: String, tone: AvatarTone, time: String, text: String, deleted: Bool = false, place: MessagePlace = MessagePlace(), measures: MessageMeasures = .of(.standard)) {
-        self.author = author; self.tone = tone; self.time = time; self.text = text; self.deleted = deleted; self.place = place; self.measures = measures
+    public init(author: String, tone: AvatarTone, time: String, text: String, deleted: Bool = false, place: MessagePlace = MessagePlace(), measures: MessageMeasures = .of(.standard), openAuthor: (() -> Void)? = nil) {
+        self.author = author; self.tone = tone; self.time = time; self.text = text; self.deleted = deleted; self.place = place; self.measures = measures; self.openAuthor = openAuthor
     }
 
     /// Whose a row is and when, as assistive technology hears it before the message.
@@ -140,6 +142,7 @@ public struct LumiaMessageRow: View {
         HStack(alignment: .top, spacing: measures.beside) {
             if place.opens {
                 LumiaAvatar(initials: initials(of: author), tone: tone, size: measures.avatar)
+                    .onTapGesture { openAuthor?() }
             } else {
                 // The avatar's column, empty: the message lines up under the block's first.
                 Color.clear.frame(width: measures.avatar, height: 0)
@@ -149,6 +152,7 @@ public struct LumiaMessageRow: View {
                     HStack(alignment: .firstTextBaseline, spacing: LumiaTokens.space8) {
                         // The boards' inks, as the desktop shell's row has them.
                         Text(author).font(LumiaTokens.textAuthor.font).foregroundStyle(LumiaTokens.ink.color)
+                            .onTapGesture { openAuthor?() }
                         Text(time).font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkMuted.color)
                     }
                 }
@@ -171,7 +175,37 @@ public struct LumiaMessageRow: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Self.heading(author: author, time: time))
         .accessibilityValue(said)
+        .accessibilityActions {
+            if let openAuthor { Button("Open \(author)’s profile", action: openAuthor) }
+        }
         .padding(.bottom, place.closes ? measures.blockGap : 0)
+    }
+}
+
+/// A notice the instance posted in a channel ("Ada added Grace"): one
+/// quiet line in the messages' column, with its time after it; no avatar
+/// and nothing to do with it. A block of its own (`messageStamp`).
+public struct LumiaNoticeRow: View {
+    public let text: String
+    public let time: String
+    public var measures = MessageMeasures.of(.standard)
+
+    public init(text: String, time: String, measures: MessageMeasures = .of(.standard)) {
+        self.text = text; self.time = time; self.measures = measures
+    }
+
+    public var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: LumiaTokens.space8) {
+            Text(text).font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkSecondary.color)
+            Text(time).font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkQuiet.color)
+            Spacer(minLength: 0)
+        }
+        // The message text's column: past the avatar's.
+        .padding(.leading, LumiaTokens.space12 + measures.avatar + measures.beside)
+        .padding(.trailing, LumiaTokens.space12)
+        .padding(.vertical, measures.within)
+        .padding(.bottom, measures.blockGap)
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -278,6 +312,7 @@ public struct LumiaComposer: View {
                 .buttonStyle(.plain)
                 .disabled(!canSend)
                 .keyboardShortcut(.return, modifiers: [])
+                .accessibilityLabel("Send")
                 .padding(.leading, LumiaTokens.space4)
             }
             .padding(.vertical, LumiaTokens.space6)
@@ -596,6 +631,57 @@ public struct LumiaField: View {
             .background(LumiaTokens.field.color, in: RoundedRectangle(cornerRadius: LumiaTokens.radius8))
             .overlay(RoundedRectangle(cornerRadius: LumiaTokens.radius8).stroke(LumiaTokens.borderForm.color))
         }
+    }
+}
+
+/// A switch with its label and a line under it saying what it does.
+public struct LumiaSwitch: View {
+    let label: String
+    let caption: String?
+    @Binding var isOn: Bool
+
+    public init(_ label: String, caption: String? = nil, isOn: Binding<Bool>) {
+        self.label = label; self.caption = caption; self._isOn = isOn
+    }
+
+    public var body: some View {
+        Toggle(isOn: $isOn) {
+            VStack(alignment: .leading, spacing: LumiaTokens.space2) {
+                Text(label).font(LumiaTokens.textMember.font).foregroundStyle(LumiaTokens.ink.color)
+                if let caption {
+                    Text(caption).font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkSecondary.color)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .tint(LumiaTokens.accent.color)
+    }
+}
+
+/// A box that is ticked or not, with its label: one of several chosen.
+public struct LumiaCheckRow<Label: View>: View {
+    let checked: Bool
+    let toggle: () -> Void
+    @ViewBuilder let label: () -> Label
+
+    public init(checked: Bool, toggle: @escaping () -> Void, @ViewBuilder label: @escaping () -> Label) {
+        self.checked = checked; self.toggle = toggle; self.label = label
+    }
+
+    public var body: some View {
+        Button(action: toggle) {
+            HStack(spacing: LumiaTokens.space12) {
+                Image(systemName: checked ? "checkmark.square.fill" : "square")
+                    .font(.system(size: 20))
+                    .foregroundStyle(checked ? LumiaTokens.accent.color : LumiaTokens.inkQuiet.color)
+                label()
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, LumiaTokens.space6)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(checked ? .isSelected : [])
     }
 }
 

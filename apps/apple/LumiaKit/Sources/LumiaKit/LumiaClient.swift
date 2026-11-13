@@ -62,8 +62,34 @@ public actor LumiaClient {
         try inner.setServerIcon(serverId: serverID, picture: picture, mediaType: mediaType)
     }
     public func removeServerIcon(serverID: String) throws -> SnapshotSummary { try inner.removeServerIcon(serverId: serverID) }
-    /// A text channel in a server this account may manage channels in.
-    public func createChannel(serverID: String, name: String) throws -> ChannelSummary { try inner.createChannel(serverId: serverID, name: name) }
+    /// A text channel in a server this account may manage channels in, private when asked.
+    public func createChannel(serverID: String, name: String, isPrivate: Bool) throws -> ChannelSummary {
+        try inner.createChannel(serverId: serverID, name: name, private: isPrivate)
+    }
+    /// Channel membership (architecture 6.8): the public channels of a
+    /// server this account is not in; joining, leaving; who is in a
+    /// channel, adding and removing them; an invitation turned down; this
+    /// account's own switches in a server; and the server's default
+    /// channels. Those that change the snapshot return it as it then is.
+    public func browseChannels(serverID: String) throws -> [ChannelSummary] { try inner.browseChannels(serverId: serverID) }
+    public func joinChannel(channelID: String) throws -> SnapshotSummary { try inner.joinChannel(channelId: channelID) }
+    public func leaveChannel(channelID: String) throws -> SnapshotSummary { try inner.leaveChannel(channelId: channelID) }
+    public func channelMembers(channelID: String) throws -> [String] { try inner.channelMembers(channelId: channelID) }
+    public func addChannelMembers(channelID: String, accountIDs: [String]) throws -> ChannelAddSummary {
+        try inner.addChannelMembers(channelId: channelID, accountIds: accountIDs)
+    }
+    public func removeChannelMember(channelID: String, accountID: String) throws { try inner.removeChannelMember(channelId: channelID, accountId: accountID) }
+    public func dismissChannelInvitation(channelID: String) throws -> SnapshotSummary { try inner.dismissChannelInvitation(channelId: channelID) }
+    public func updateMembership(serverID: String, channelAddsByInvitation: Bool?, serverDmsOff: Bool?) throws -> SnapshotSummary {
+        try inner.updateMembership(serverId: serverID, channelAddsByInvitation: channelAddsByInvitation, serverDmsOff: serverDmsOff)
+    }
+    public func setDefaultChannels(serverID: String, channelIDs: [String]) throws -> SnapshotSummary {
+        try inner.setDefaultChannels(serverId: serverID, channelIds: channelIDs)
+    }
+    /// The server DM with a member of the server, started if there is none (architecture 6.4).
+    public func openServerDM(serverID: String, accountID: String) throws -> ChannelSummary {
+        try inner.openServerDm(serverId: serverID, accountId: accountID)
+    }
     /// Asks the instance to mail a sign-in link to `email`.
     public func requestMagicLink(email: String) throws { try inner.requestMagicLink(email: email) }
     /// Signs in with the token from a magic-link mail (the code, or the whole link).

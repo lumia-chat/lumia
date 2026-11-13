@@ -395,6 +395,131 @@ final class SmokeUITests: XCTestCase {
         reached("member", under: steps)
     }
 
+    /// Channel membership by hand (scripts/smoke-membership.sh, which seeds
+    /// the server: an invitation into #design from Ada, #random to browse,
+    /// Ada taking adds as invitations, Grace in #general). Each step is
+    /// announced and waits for `<step>.seen`, the smoke reading the instance
+    /// at it: `invitation` (joined #design from the sidebar's row),
+    /// `browsed` (#random read from Browse, then joined from its bar),
+    /// `added` (Grace added to #random and Ada invited, from Add people),
+    /// `removed` (Grace removed by the row's swipe), `dm` (a server DM with
+    /// Ada from her profile card, and a message sent there), `switch` (Let
+    /// members of this server message me, off), `defaults` (#design made a
+    /// default channel) and `left` (#random left from its members).
+    func testChannelMembershipByHand() throws {
+        let steps = try XCTUnwrap(ProcessInfo.processInfo.environment["LUMIA_UITEST_STEPS"])
+        let app = launch(screen: "server")
+        let anything = app.descendants(matching: .any)
+        func labelled(_ words: String) -> XCUIElement { anything.matching(NSPredicate(format: "label == %@", words)).firstMatch }
+        func button(containing words: String) -> XCUIElement { app.buttons.matching(NSPredicate(format: "label CONTAINS %@", words)).firstMatch }
+        let backButton = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Back to ")).firstMatch
+        func back() { backButton.tap() }
+        /// Back to the server's sidebar, whatever is pushed over it.
+        func sidebar() {
+            while backButton.exists { backButton.tap(); sleep(1) }
+            XCTAssertTrue(labelled("Direct messages").waitForExistence(timeout: 10), "not back at the server's sidebar")
+        }
+
+        // The invitation, above the channels: Join opens #design with its composer.
+        XCTAssertTrue(labelled("Direct messages").waitForExistence(timeout: 90), "the server's sidebar has no Direct messages")
+        let invitation = anything.matching(NSPredicate(format: "label ENDSWITH %@", "invited you")).firstMatch
+        XCTAssertTrue(invitation.waitForExistence(timeout: 30), "no invitation in the sidebar")
+        XCTAssertTrue(invitation.label.hasPrefix("#design · "), "the invitation reads \"\(invitation.label)\"")
+        app.buttons["Join"].firstMatch.tap()
+        XCTAssertTrue(app.textFields["Message #design"].waitForExistence(timeout: 20), "joining from the invitation did not open #design with its composer")
+        reached("invitation", under: steps)
+        back()
+
+        // Browse: #random read before joining, the bar in place of the composer.
+        app.buttons["Add to Channels"].tap()
+        app.buttons["Browse channels"].firstMatch.tap()
+        let random = button(containing: "#random")
+        XCTAssertTrue(random.waitForExistence(timeout: 20), "Browse does not list #random")
+        XCTAssertTrue(random.label.contains("member"), "Browse does not say how many are in #random: \(random.label)")
+        random.tap()
+        XCTAssertTrue(labelled("You’re not in #random").waitForExistence(timeout: 20), "no bar saying the account is not in #random")
+        XCTAssertFalse(app.textFields["Message #random"].exists, "a composer in a channel the account is not in")
+        app.buttons["Join"].firstMatch.tap()
+        XCTAssertTrue(app.textFields["Message #random"].waitForExistence(timeout: 20), "joining from the bar did not bring the composer back")
+        reached("browsed", under: steps)
+
+        // Add people: Grace added, Ada invited.
+        app.buttons["Members"].tap()
+        app.buttons["Add people"].firstMatch.tap()
+        let grace = button(containing: "Grace Hopper")
+        let ada = button(containing: "Ada Lovelace")
+        XCTAssertTrue(grace.waitForExistence(timeout: 20), "Add people does not offer Grace")
+        XCTAssertTrue(ada.label.contains("Will be invited"), "Ada, who takes adds as invitations, is not marked: \(ada.label)")
+        XCTAssertFalse(app.buttons["Add"].isEnabled, "Add is offered with nobody chosen")
+        grace.tap()
+        ada.tap()
+        app.buttons["Add"].tap()
+        let graceRow = button(containing: "Grace Hopper")
+        XCTAssertTrue(graceRow.waitForExistence(timeout: 20), "Grace is not in #random's members after the add")
+        XCTAssertTrue(labelled("Members").exists, "Add did not go back to the members")
+        reached("added", under: steps)
+
+        // Removed by the row's swipe, as the owner may.
+        graceRow.swipeLeft()
+        app.buttons["Remove from #random"].tap()
+        let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: graceRow)
+        XCTAssertEqual(XCTWaiter().wait(for: [gone], timeout: 20), .completed, "Grace is still listed once removed")
+        reached("removed", under: steps)
+
+        // Ada's profile card from #general's members: Message opens the server DM.
+        sidebar()
+        XCTAssertTrue(app.buttons["Ada Lovelace"].firstMatch.exists, "no server DM with Ada in the sidebar")
+        app.buttons["general"].tap()
+        app.buttons["Members"].tap()
+        button(containing: "Ada Lovelace").tap()
+        XCTAssertTrue(app.buttons["Message privately"].waitForExistence(timeout: 10), "the profile card offers no Message privately")
+        app.buttons["Message"].tap()
+        let composer = app.textFields["Message Ada Lovelace"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 20), "Message did not open the server DM with Ada")
+        XCTAssertTrue(anything.matching(NSPredicate(format: "label BEGINSWITH %@", "Messages here are kept by ")).firstMatch.exists, "the server DM does not say whose it is")
+        composer.tap()
+        composer.typeText("Sent from the phone's server DM.")
+        app.buttons["Send"].tap()
+        XCTAssertTrue(anything.matching(NSPredicate(format: "value == %@", "Sent from the phone's server DM.")).firstMatch.waitForExistence(timeout: 20), "the message sent is not in the server DM")
+        reached("dm", under: steps)
+
+        // Your settings: server DMs off, saved as it is turned.
+        sidebar()
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Your settings in ")).firstMatch.tap()
+        let dms = app.switches.matching(NSPredicate(format: "label BEGINSWITH %@", "Let members of this server message me")).firstMatch
+        XCTAssertTrue(dms.waitForExistence(timeout: 10), "no switch for server DMs")
+        XCTAssertEqual(dms.value as? String, "1", "server DMs are not on to begin with")
+        // The switch itself, at the row's end: its words do not turn it.
+        dms.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
+        XCTAssertTrue(app.staticTexts["Saved."].waitForExistence(timeout: 10), "nothing says the switch was saved")
+        XCTAssertEqual(dms.value as? String, "0")
+        reached("switch", under: steps)
+        back()
+
+        // Default channels: #design too.
+        app.buttons["Server settings"].tap()
+        XCTAssertTrue(labelled("Default channels").waitForExistence(timeout: 20))
+        app.swipeUp()
+        app.swipeUp()
+        let design = button(containing: "#design")
+        XCTAssertTrue(design.waitForExistence(timeout: 10), "Default channels does not list #design")
+        XCTAssertFalse(design.isSelected)
+        design.tap()
+        app.buttons["save-defaults"].tap()
+        XCTAssertTrue(app.staticTexts["Saved."].waitForExistence(timeout: 10), "nothing says the default channels were saved")
+        reached("defaults", under: steps)
+        back()
+
+        // Leave #random from its members: back at the server, it is gone from the sidebar.
+        app.buttons["random"].tap()
+        app.buttons["Members"].tap()
+        app.buttons["Leave channel"].tap()
+        XCTAssertTrue(labelled("Direct messages").waitForExistence(timeout: 20), "leaving did not go back to the server")
+        let left = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: app.buttons["random"])
+        XCTAssertEqual(XCTWaiter().wait(for: [left], timeout: 20), .completed, "#random is still in the sidebar once left")
+        reached("left", under: steps)
+    }
+
     /// Announces a step to the smoke and waits until it says it has looked.
     private func reached(_ step: String, under steps: String, saying words: String? = nil) {
         try? (words ?? step).write(toFile: "\(steps)/\(step)", atomically: true, encoding: .utf8)

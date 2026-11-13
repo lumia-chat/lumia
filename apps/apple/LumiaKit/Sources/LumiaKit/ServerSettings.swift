@@ -73,12 +73,14 @@ public enum Retention {
 /// `code` and `details` as the error carries them, `message` its own words.
 public enum ServerSettingsRefusal {
     public static let notAllowed = "You cannot change this server's settings."
+    public static let defaultChannels = "Default channels must be public channels of this server."
 
     /// A name or retention refused.
     public static func settings(code: String?, details: [String: String], message: String) -> String {
         switch code {
         case "PERMISSION_DENIED": notAllowed
         case "INVALID_ARGUMENT" where details["field"] == "name": ServerName.refusal
+        case "INVALID_ARGUMENT" where details["field"] == "default_channels": defaultChannels
         default: message
         }
     }

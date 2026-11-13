@@ -11,6 +11,8 @@ struct ShellView: View {
     let session: LumiaSession
     @State private var place: Place = .home
     @State private var path: [Screen] = []
+    /// Whose profile card is open, over whatever is on screen.
+    @State private var person: PersonInServer?
 
     private var snapshot: SnapshotSummary? { session.snapshot }
     private var servers: [ServerSummary] { snapshot?.servers ?? [] }
@@ -37,7 +39,7 @@ struct ShellView: View {
             .navigationDestination(for: Screen.self) { screen in
                 switch screen {
                 case let .conversation(id): ConversationScreen(session: session, channelID: id)
-                case let .channel(id): ChannelScreen(session: session, channelID: id)
+                case let .channel(id): ChannelScreen(session: session, channelID: id, path: $path)
                 case .requests: RequestsScreen(session: session, path: $path)
                 case .devices: DevicesScreen(session: session)
                 case .profile: ProfileScreen(session: session)
@@ -47,9 +49,21 @@ struct ShellView: View {
                 case let .newChannel(serverID): NewChannelScreen(session: session, server: servers.first { $0.serverId == serverID }) { id in path = [.channel(id: id)] }
                 case let .invite(serverID): InviteScreen(session: session, server: servers.first { $0.serverId == serverID })
                 case let .serverSettings(serverID): ServerSettingsScreen(session: session, serverID: serverID)
+                case let .browse(serverID): BrowseScreen(session: session, serverID: serverID, path: $path)
+                case let .channelMembers(channelID): ChannelMembersScreen(session: session, channelID: channelID, path: $path)
+                case let .addPeople(channelID): AddPeopleScreen(session: session, channelID: channelID)
+                case let .newServerDM(serverID): NewServerDMScreen(session: session, serverID: serverID, path: $path)
+                case let .yourSettings(serverID): YourSettingsScreen(session: session, serverID: serverID)
                 }
             }
         }
+        .sheet(item: $person) { person in
+            ProfileCard(session: session, person: person) { screen in
+                self.person = nil
+                path.append(screen)
+            }
+        }
+        .environment(\.openPerson, OpenPerson { person = $0 })
         .task {
             await session.load()
             PushRegistrar.shared.register()
@@ -73,8 +87,11 @@ struct ShellView: View {
             #if DEBUG
             // The smoke run (scripts/smoke-ios.sh) opens one screen per launch
             // through LUMIA_DEV_SCREEN: home, server, channel, requests, devices, profile,
-            // preferences, new, add, newchannel, invite, serversettings; the push smoke opens the account's first personal
-            // conversation with `conversation`. (LUMIA_DEV_APPEARANCE and LUMIA_DEV_DENSITY
+            // preferences, new, add, newchannel, invite, serversettings, and for channel membership
+            // browse, preview (Browse's first channel, read-only), members, addpeople and profilecard
+            // (of the channel LUMIA_DEV_CHANNEL names, else the first; the card is its first member
+            // but this account, or LUMIA_DEV_PERSON's handle), serverdm (the first server DM), newdm
+            // and yoursettings; the push smoke opens the account's first personal conversation with `conversation`. (LUMIA_DEV_APPEARANCE and LUMIA_DEV_DENSITY
             // choose how that launch looks: `Preferences` in LumiaKit reads them.)
             if let first = ids.first, let screen = ProcessInfo.processInfo.environment["LUMIA_DEV_SCREEN"] {
                 let channel = snapshot?.channels.first { $0.serverId == first && !personalKinds.contains($0.kind) }
@@ -93,7 +110,7 @@ struct ShellView: View {
                 case "newchannel": place = .server(id: first); path = [.newChannel(serverID: first)]
                 case "invite": place = .server(id: first); path = [.invite(serverID: first)]
                 case "serversettings": place = .server(id: first); path = [.serverSettings(serverID: first)]
-                default: break
+                default: devMembershipScreen(screen, serverID: first)
                 }
             }
             #endif
@@ -109,6 +126,40 @@ struct ShellView: View {
         .onChange(of: PushRegistrar.shared.target) { _, _ in openTarget() }
         .onChange(of: channels.map(\.channelId)) { _, _ in openTarget() }
     }
+
+    #if DEBUG
+    /// The channel membership screens a smoke run opens (`LUMIA_DEV_SCREEN`).
+    private func devMembershipScreen(_ screen: String, serverID: String) {
+        let env = ProcessInfo.processInfo.environment
+        let named = env["LUMIA_DEV_CHANNEL"].flatMap { name in channels.first { $0.serverId == serverID && $0.name == name } }
+        guard let channel = named ?? Membership.channels(channels, serverID: serverID).first else { return }
+        place = .server(id: serverID)
+        switch screen {
+        case "browse": path = [.browse(serverID: serverID)]
+        case "members": path = [.channel(id: channel.channelId), .channelMembers(channelID: channel.channelId)]
+        case "addpeople": path = [.channel(id: channel.channelId), .channelMembers(channelID: channel.channelId), .addPeople(channelID: channel.channelId)]
+        case "serverdm": if let dm = Membership.serverDMs(channels, serverID: serverID).first { path = [.channel(id: dm.channelId)] }
+        case "newdm": path = [.newServerDM(serverID: serverID)]
+        case "yoursettings": path = [.yourSettings(serverID: serverID)]
+        case "preview":
+            Task {
+                guard let first = try? await session.browseChannels(serverID: serverID).first else { return }
+                session.preview(first)
+                path = [.browse(serverID: serverID), .channel(id: first.channelId)]
+            }
+        case "profilecard":
+            path = [.channel(id: channel.channelId), .channelMembers(channelID: channel.channelId)]
+            Task {
+                guard let ids = try? await session.channelMembers(channelID: channel.channelId) else { return }
+                let handle = env["LUMIA_DEV_PERSON"]
+                let members = session.serverMembers[serverID] ?? []
+                let chosen = handle.flatMap { h in members.first { $0.handle == h }?.accountId } ?? ids.first { $0 != session.me }
+                if let chosen { person = PersonInServer(accountID: chosen, serverID: serverID) }
+            }
+        default: break
+        }
+    }
+    #endif
 
     /// The conversation a tapped notification names, once the snapshot has
     /// it (a cold start loads first): a DM opens from Home, a mention opens
@@ -229,64 +280,5 @@ struct ConversationRow: View {
         if last.mine { return "You: \(last.body)" }
         if others.count > 1 { return "\(session.name(of: last.senderAccountId.isEmpty ? last.senderIdentityId : last.senderAccountId)): \(last.body)" }
         return last.body
-    }
-}
-
-// MARK: A server
-
-struct ServerScreen: View {
-    let session: LumiaSession
-    let server: ServerSummary
-    @Binding var path: [Screen]
-
-    private var channels: [ChannelSummary] {
-        (session.snapshot?.channels ?? []).filter { $0.serverId == server.serverId && !personalKinds.contains($0.kind) }
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            SideHeader(title: server.name, meta: session.host, action: ("square.and.pencil", "New message", { path.append(.newMessage) }))
-            ScrollView {
-                VStack(alignment: .leading, spacing: LumiaTokens.space2) {
-                    SectionTitle("Channels")
-                    if channels.isEmpty {
-                        Text("No channels yet. Add one with New channel below.")
-                            .font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkQuiet.color)
-                            .padding(LumiaTokens.space10)
-                    }
-                    ForEach(channels, id: \.channelId) { c in
-                        Button { path.append(.channel(id: c.channelId)) } label: {
-                            HStack(spacing: LumiaTokens.space8) {
-                                Text("#").font(LumiaTokens.textNav.font).foregroundStyle(LumiaTokens.inkMuted.color).frame(width: 12)
-                                Text(c.name).font(LumiaTokens.textNav.font).foregroundStyle(LumiaTokens.ink.color).lineLimit(1)
-                                Spacer(minLength: 0)
-                            }
-                            .padding(.horizontal, LumiaTokens.space10)
-                            .frame(height: LumiaTokens.controlHeight)
-                            .contentShape(RoundedRectangle(cornerRadius: LumiaTokens.radius10))
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    Button("New channel") { path.append(.newChannel(serverID: server.serverId)) }
-                        .buttonStyle(.lumiaLink)
-                        .padding(.horizontal, LumiaTokens.space10).padding(.top, LumiaTokens.space8)
-                    Button("Invite people") { path.append(.invite(serverID: server.serverId)) }
-                        .buttonStyle(.lumiaLink)
-                        .padding(.horizontal, LumiaTokens.space10).padding(.top, LumiaTokens.space4)
-                    // Offered to whoever may change them (architecture 6.7): the
-                    // account's own permission there, from the snapshot.
-                    if server.canManage {
-                        Button("Server settings") { path.append(.serverSettings(serverID: server.serverId)) }
-                            .buttonStyle(.lumiaLink)
-                            .padding(.horizontal, LumiaTokens.space10).padding(.top, LumiaTokens.space4)
-                    }
-                }
-                .padding(.horizontal, LumiaTokens.space12)
-                .padding(.bottom, LumiaTokens.space24)
-            }
-            Text(session.connection.label)
-                .font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkQuiet.color)
-                .padding(.horizontal, LumiaTokens.space16).padding(.vertical, LumiaTokens.space6)
-        }
     }
 }

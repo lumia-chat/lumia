@@ -109,37 +109,65 @@ struct ConversationScreen: View {
 
 // MARK: Channel
 
+/// A server's channel, or one of its DMs (architecture 6.4 and 6.8): the
+/// messages in blocks and the notices between them as one quiet line
+/// each. A channel this account is not in (opened from Browse) reads the
+/// same, with a bar to join in place of the composer; a server DM is
+/// titled by the other person and says once, at its top, whose it is.
 struct ChannelScreen: View {
     @Environment(Preferences.self) private var preferences
+    @Environment(\.openPerson) private var openPerson
     let session: LumiaSession
     let channelID: String
+    @Binding var path: [Screen]
     @State private var draft = ""
     @State private var error = ""
+    @State private var joining = false
 
     /// How much room the messages take: Preferences' density. The list
     /// only: the header, the composer and the typing line stay as they are.
     private var measures: MessageMeasures { .of(preferences.density) }
 
-    private var channel: ChannelSummary? { session.snapshot?.channels.first { $0.channelId == channelID } }
+    private var channel: ChannelSummary? { session.channel(channelID) }
     private var server: ServerSummary? { session.snapshot?.servers.first { $0.serverId == channel?.serverId } }
     private var messages: [MessageSummary] { session.messages[channelID] ?? [] }
     private var name: String { channel?.name ?? "channel" }
+    private var isDM: Bool { channel?.kind == serverDMKind }
+    /// Who a server DM is with.
+    private var other: String { channel.map { Membership.other(in: $0, me: session.me) } ?? "" }
+    private var title: String { isDM ? session.name(of: other) : "# \(name)" }
+    /// In it, rather than reading it from Browse.
+    private var member: Bool { session.isIn(channelID) }
 
     var body: some View {
-        PanelScreen(back: server?.name ?? "the server", title: "# \(name)", subtitle: server?.name) {
+        PanelScreen(back: server?.name ?? "the server", title: title, subtitle: server?.name, actions: isDM ? [] : [("person.2", "Members", { path.append(.channelMembers(channelID: channelID)) })], lead: {
+            if isDM { LumiaAvatar(initials: initials(of: title), tone: .of(other), size: LumiaTokens.avatarMd) }
+        }) {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
-                        if messages.isEmpty {
+                        if isDM {
+                            LumiaNotice(icon: "shield") { Text(Membership.serverDMNote(server: server?.name ?? "this server")) }
+                                .padding(.horizontal, LumiaTokens.space16)
+                                .padding(.vertical, LumiaTokens.space8)
+                        } else if messages.isEmpty {
                             LumiaEmptyState(icon: "bubble.left", title: "Nothing here yet") { Text("Say something.") }
                         }
                         // What one person sends close together is one block, and
-                        // each day's first message carries the day's divider.
-                        let places = MessageBlocks.places(messages.map { MessageStamp(authorID: $0.authorAccountId, atMicros: $0.createdAtMicros) })
+                        // each day's first message carries the day's divider; a
+                        // notice is a block of its own.
+                        let places = MessageBlocks.places(messages.map(messageStamp))
                         ForEach(Array(zip(messages, places)), id: \.0.messageId) { m, place in
                             if place.startsDay { LumiaDayDivider(label: dayLabel(ofMicros: m.createdAtMicros), measures: measures) }
-                            LumiaMessageRow(author: session.name(of: m.authorAccountId), tone: .of(m.authorAccountId), time: time(ofMicros: m.createdAtMicros), text: m.body, deleted: m.deleted, place: place, measures: measures)
-                                .id(m.messageId)
+                            if !m.notice.isEmpty {
+                                if let text = noticeText(kind: m.notice, actor: session.name(of: m.authorAccountId), subject: session.name(of: m.noticeAccountId)) {
+                                    LumiaNoticeRow(text: text, time: time(ofMicros: m.createdAtMicros), measures: measures)
+                                        .id(m.messageId)
+                                }
+                            } else {
+                                LumiaMessageRow(author: session.name(of: m.authorAccountId), tone: .of(m.authorAccountId), time: time(ofMicros: m.createdAtMicros), text: m.body, deleted: m.deleted, place: place, measures: measures, openAuthor: openAuthor(m.authorAccountId))
+                                    .id(m.messageId)
+                            }
                         }
                         if !error.isEmpty { LumiaErrorText(error).padding(.horizontal, LumiaTokens.space16) }
                     }
@@ -150,8 +178,12 @@ struct ChannelScreen: View {
                     if let last = messages.last { proxy.scrollTo(last.messageId, anchor: .bottom) }
                 }
             }
-            // Who is typing goes under the field, in a server's channel only (protocol 6.7).
-            LumiaComposer(text: $draft, placeholder: "Message #\(name)", hint: nil, typing: session.typingNames(in: channelID)) { Task { await send() } }
+            if member {
+                // Who is typing goes under the field, in a server's channel only (protocol 6.7).
+                LumiaComposer(text: $draft, placeholder: isDM ? "Message \(title)" : "Message #\(name)", hint: nil, typing: session.typingNames(in: channelID)) { Task { await send() } }
+            } else {
+                JoinBar(line: Membership.notIn(name), busy: joining) { Task { await join() } }
+            }
         }
         .task(id: channelID) { await session.refreshMessages(channelID: channelID) }
         // Every edit that leaves something in the field is typing; emptied
@@ -161,12 +193,48 @@ struct ChannelScreen: View {
         }
     }
 
+    /// Opens who wrote a message, in this server.
+    private func openAuthor(_ accountID: String) -> (() -> Void)? {
+        guard let serverID = channel?.serverId, !serverID.isEmpty, !accountID.isEmpty else { return nil }
+        return { openPerson(PersonInServer(accountID: accountID, serverID: serverID)) }
+    }
+
     private func send() async {
         let body = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !body.isEmpty else { return }
         draft = ""
         error = ""
         do { try await session.sendMessage(channelID: channelID, body: body) } catch { self.error = error.lumiaMessage }
+    }
+
+    /// In from the bar: the composer comes back and the channel is in the sidebar.
+    private func join() async {
+        joining = true
+        error = ""
+        defer { joining = false }
+        do { try await session.joinChannel(channelID: channelID) } catch { self.error = error.lumiaMessage }
+    }
+}
+
+/// In place of the composer of a channel this account is not in.
+struct JoinBar: View {
+    let line: String
+    let busy: Bool
+    let join: () -> Void
+
+    var body: some View {
+        HStack(spacing: LumiaTokens.space12) {
+            Text(line).font(LumiaTokens.textBody.font).foregroundStyle(LumiaTokens.inkBody.color)
+            Spacer(minLength: 0)
+            Button("Join", action: join).buttonStyle(.lumiaPrimary).disabled(busy)
+        }
+        .padding(.horizontal, LumiaTokens.space16)
+        .padding(.vertical, LumiaTokens.space12)
+        .background(LumiaTokens.inset.color, in: RoundedRectangle(cornerRadius: LumiaTokens.radius16))
+        .overlay(RoundedRectangle(cornerRadius: LumiaTokens.radius16).stroke(LumiaTokens.line.color))
+        .padding(.horizontal, LumiaTokens.space24)
+        .padding(.top, LumiaTokens.space4)
+        .padding(.bottom, LumiaTokens.space14)
     }
 }
 
@@ -353,21 +421,24 @@ struct AddServerScreen: View {
 
 // MARK: New channel
 
-/// A text channel in the server; it opens once made.
+/// A text channel in the server, public or private (architecture 6.8);
+/// it opens once made, with this account in it.
 struct NewChannelScreen: View {
     let session: LumiaSession
     let server: ServerSummary?
     let opened: (String) -> Void
     @State private var name = ""
+    @State private var isPrivate = false
     @State private var error = ""
     @State private var busy = false
 
     var body: some View {
-        PanelScreen(back: server?.name ?? "Server", title: "New channel", subtitle: "A text channel everyone in \(server?.name ?? "the server") can see") {
+        PanelScreen(back: server?.name ?? "Server", title: "Create a channel", subtitle: "A text channel in \(server?.name ?? "the server")") {
             ScrollView {
                 VStack(alignment: .leading, spacing: LumiaTokens.space12) {
                     LumiaField("Name", text: $name, placeholder: "general")
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    LumiaSwitch("Private", caption: "Only people added can see it.", isOn: $isPrivate)
                     if !error.isEmpty { LumiaErrorText(error) }
                     Button("Create") { Task { await create() } }
                         .buttonStyle(.lumiaPrimary).disabled(busy || name.trimmingCharacters(in: .whitespaces).isEmpty)
@@ -383,9 +454,9 @@ struct NewChannelScreen: View {
         error = ""
         defer { busy = false }
         do {
-            opened(try await session.createChannel(serverID: server.serverId, name: name))
+            opened(try await session.createChannel(serverID: server.serverId, name: name, isPrivate: isPrivate))
         } catch {
-            self.error = error.lumiaCode == "PERMISSION_DENIED" ? "You cannot add channels to this server." : error.lumiaMessage
+            self.error = MembershipRefusal.createChannel(code: error.lumiaCode, message: error.lumiaMessage)
         }
     }
 }
@@ -561,27 +632,44 @@ struct ServerSettingsScreen: View {
     @State private var retentionSaved = false
     // The form waits for the server: fields shown before it would be overwritten by it.
     @State private var loaded = false
+    // Default channels (architecture 6.8): the server's public channels, those
+    // this account is in and those Browse lists, and which of them are default.
+    @State private var publicChannels: [ChannelSummary]?
+    @State private var defaults = DefaultChannels([])
+    @State private var defaultsBusy = false
+    @State private var defaultsError = ""
+    @State private var defaultsSaved = false
 
     private var server: ServerSummary? { session.snapshot?.servers.first { $0.serverId == serverID } }
 
     var body: some View {
         PanelScreen(back: server?.name ?? "Server", title: "Server settings", subtitle: server?.name) {
-            ScrollView {
-                if let server, loaded {
-                    VStack(alignment: .leading, spacing: LumiaTokens.space12) {
-                        overview(server)
-                        history(server)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    if let server, loaded {
+                        VStack(alignment: .leading, spacing: LumiaTokens.space12) {
+                            overview(server)
+                            history(server)
+                            defaultChannels(server).id("defaults")
+                        }
+                        .padding(LumiaTokens.space16)
                     }
-                    .padding(LumiaTokens.space16)
                 }
+                .scrollDismissesKeyboard(.interactively)
+                #if DEBUG
+                // The smoke run's picture of the last card (`LUMIA_DEV_SCROLL=defaults`).
+                .onChange(of: publicChannels?.count) { _, _ in
+                    if ProcessInfo.processInfo.environment["LUMIA_DEV_SCROLL"] == "defaults" { proxy.scrollTo("defaults", anchor: .bottom) }
+                }
+                #endif
             }
-            .scrollDismissesKeyboard(.interactively)
         }
         .task(id: server?.serverId) {
             guard let server, !loaded else { return }
             name = server.name
             retention = server.retentionDays
             loaded = true
+            await loadDefaults(server)
         }
         .onChange(of: picked) { _, item in
             guard let item else { return }
@@ -660,6 +748,59 @@ struct ServerSettingsScreen: View {
             }
         }
         .onChange(of: retention) { _, _ in retentionSaved = false; retentionError = "" }
+    }
+
+    private func defaultChannels(_ server: ServerSummary) -> some View {
+        LumiaCard(title: "Default channels", subtitle: "New members join these channels.", width: nil) {
+            VStack(alignment: .leading, spacing: LumiaTokens.space4) {
+                if let publicChannels {
+                    if publicChannels.isEmpty {
+                        Text("This server has no public channels.").font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkSecondary.color)
+                    }
+                    ForEach(publicChannels, id: \.channelId) { c in
+                        LumiaCheckRow(checked: defaults.isChosen(c.channelId), toggle: { defaults.toggle(c.channelId); defaultsSaved = false; defaultsError = "" }) {
+                            Text("#\(c.name)").font(LumiaTokens.textMember.font).foregroundStyle(LumiaTokens.ink.color)
+                        }
+                    }
+                } else if !defaultsError.isEmpty {
+                    EmptyView()
+                } else {
+                    ProgressView()
+                }
+                if !defaultsError.isEmpty { LumiaErrorText(defaultsError) }
+                if defaultsSaved { Text("Saved.").font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkSecondary.color) }
+                Button { Task { await saveDefaults(server) } } label: { Text("Save").frame(maxWidth: .infinity) }
+                    .buttonStyle(.lumiaPrimary).disabled(defaultsBusy || !defaults.changed)
+                    .accessibilityHint("Saves which channels new members join")
+                    .accessibilityIdentifier("save-defaults")
+                    .padding(.top, LumiaTokens.space8)
+            }
+        }
+    }
+
+    private func loadDefaults(_ server: ServerSummary) async {
+        do {
+            let browsed = try await session.browseChannels(serverID: server.serverId)
+            let list = Membership.publicChannels(joined: session.snapshot?.channels ?? [], browsed: browsed, serverID: server.serverId)
+            publicChannels = list
+            defaults = DefaultChannels(list)
+        } catch {
+            defaultsError = ServerSettingsRefusal.settings(code: error.lumiaCode, details: error.lumiaDetails, message: error.lumiaMessage)
+        }
+    }
+
+    private func saveDefaults(_ server: ServerSummary) async {
+        defaultsError = ""
+        defaultsSaved = false
+        defaultsBusy = true
+        defer { defaultsBusy = false }
+        do {
+            try await session.setDefaultChannels(serverID: server.serverId, channelIDs: defaults.ids(in: publicChannels ?? []))
+            await loadDefaults(server)
+            defaultsSaved = true
+        } catch {
+            defaultsError = ServerSettingsRefusal.settings(code: error.lumiaCode, details: error.lumiaDetails, message: error.lumiaMessage)
+        }
     }
 
     private func saveName(_ server: ServerSummary) async {

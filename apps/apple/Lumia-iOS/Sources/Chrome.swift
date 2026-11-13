@@ -24,6 +24,11 @@ enum Screen: Hashable {
     case newChannel(serverID: String)
     case invite(serverID: String)
     case serverSettings(serverID: String)
+    case browse(serverID: String)
+    case channelMembers(channelID: String)
+    case addPeople(channelID: String)
+    case newServerDM(serverID: String)
+    case yourSettings(serverID: String)
 }
 
 struct PhoneRail: View {

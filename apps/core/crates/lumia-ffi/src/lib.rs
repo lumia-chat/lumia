@@ -124,6 +124,15 @@ pub struct ServerSummary {
     pub retention_days: u32,
     /// Whether this account may change the server's settings (architecture 6.7).
     pub can_manage: bool,
+    /// Whether it may create channels there and remove others from them
+    /// (`MANAGE_CHANNELS`, architecture 6.8).
+    pub can_manage_channels: bool,
+    /// Whether it may start server DMs there (`START_SERVER_DMS`).
+    pub can_start_dms: bool,
+    /// This account's own switches there: adds to channels wait as
+    /// invitations; nobody may start a server DM with it.
+    pub channel_adds_by_invitation: bool,
+    pub server_dms_off: bool,
 }
 
 impl From<app::ServerSummary> for ServerSummary {
@@ -134,6 +143,10 @@ impl From<app::ServerSummary> for ServerSummary {
             icon_url: s.icon_url,
             retention_days: s.retention_days,
             can_manage: s.can_manage,
+            can_manage_channels: s.can_manage_channels,
+            can_start_dms: s.can_start_dms,
+            channel_adds_by_invitation: s.channel_adds_by_invitation,
+            server_dms_off: s.server_dms_off,
         }
     }
 }
@@ -207,6 +220,14 @@ pub struct ChannelSummary {
     pub last_seq: u64,
     pub participant_account_ids: Vec<String>,
     pub host: String,
+    /// `TEXT`: made private, so entered only by being added (architecture 6.8).
+    pub private: bool,
+    /// `TEXT`: joined by every newcomer to the server.
+    pub is_default: bool,
+    /// How many are in it, where a listing says (Browse); 0 elsewhere.
+    pub member_count: u32,
+    /// The channel's topic; empty for none.
+    pub topic: String,
 }
 
 impl From<app::ChannelSummary> for ChannelSummary {
@@ -219,6 +240,45 @@ impl From<app::ChannelSummary> for ChannelSummary {
             last_seq: c.last_seq,
             participant_account_ids: c.participant_account_ids,
             host: c.host,
+            private: c.private,
+            is_default: c.is_default,
+            member_count: c.member_count,
+            topic: c.topic,
+        }
+    }
+}
+
+/// An invitation into a channel, waiting for this account's yes
+/// (architecture 6.8): join the channel to take it, dismiss it to say no.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ChannelInvitationSummary {
+    pub channel: ChannelSummary,
+    pub invited_by_account_id: String,
+    pub created_at_micros: i64,
+}
+
+impl From<app::ChannelInvitationSummary> for ChannelInvitationSummary {
+    fn from(i: app::ChannelInvitationSummary) -> Self {
+        Self {
+            channel: i.channel.into(),
+            invited_by_account_id: i.invited_by_account_id,
+            created_at_micros: i.created_at_micros,
+        }
+    }
+}
+
+/// Who an add brought in at once, and who it invited instead.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ChannelAddSummary {
+    pub added_account_ids: Vec<String>,
+    pub invited_account_ids: Vec<String>,
+}
+
+impl From<app::ChannelAddSummary> for ChannelAddSummary {
+    fn from(a: app::ChannelAddSummary) -> Self {
+        Self {
+            added_account_ids: a.added_account_ids,
+            invited_account_ids: a.invited_account_ids,
         }
     }
 }
@@ -258,6 +318,8 @@ pub struct SnapshotSummary {
     pub servers: Vec<ServerSummary>,
     pub channels: Vec<ChannelSummary>,
     pub pending_requests: Vec<DmRequestSummary>,
+    /// Channels this account was asked into and has not answered.
+    pub channel_invitations: Vec<ChannelInvitationSummary>,
 }
 
 impl From<app::SnapshotSummary> for SnapshotSummary {
@@ -270,6 +332,7 @@ impl From<app::SnapshotSummary> for SnapshotSummary {
             servers: s.servers.into_iter().map(Into::into).collect(),
             channels: s.channels.into_iter().map(Into::into).collect(),
             pending_requests: s.pending_requests.into_iter().map(Into::into).collect(),
+            channel_invitations: s.channel_invitations.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -288,6 +351,11 @@ pub struct MemberSummary {
     /// to resolve against the instance's address), an absolute URL from a
     /// signed profile issued elsewhere (not to be fetched unasked), or empty.
     pub avatar_url: String,
+    /// Their switches in the server listed (architecture 6.8): an add
+    /// becomes an invitation; nobody may start a server DM with them.
+    /// False for a public profile.
+    pub channel_adds_by_invitation: bool,
+    pub server_dms_off: bool,
 }
 
 impl From<app::MemberSummary> for MemberSummary {
@@ -300,6 +368,8 @@ impl From<app::MemberSummary> for MemberSummary {
             pronouns: m.pronouns,
             bio: m.bio,
             avatar_url: m.avatar_url,
+            channel_adds_by_invitation: m.channel_adds_by_invitation,
+            server_dms_off: m.server_dms_off,
         }
     }
 }
@@ -314,6 +384,11 @@ pub struct MessageSummary {
     pub body: String,
     pub created_at_micros: i64,
     pub deleted: bool,
+    /// A notice the instance posted (architecture 6.8): `joined`, `added`,
+    /// `left` or `removed`, with an empty body; empty for a message. The
+    /// author is who did it, `notice_account_id` who it is about.
+    pub notice: String,
+    pub notice_account_id: String,
 }
 
 impl From<app::MessageSummary> for MessageSummary {
@@ -326,6 +401,8 @@ impl From<app::MessageSummary> for MessageSummary {
             body: m.body,
             created_at_micros: m.created_at_micros,
             deleted: m.deleted,
+            notice: m.notice,
+            notice_account_id: m.notice_account_id,
         }
     }
 }
@@ -1034,11 +1111,121 @@ impl Client {
         Ok(self.runtime.block_on(self.app.create_server(&name))?.into())
     }
 
-    /// `POST /channels`: a text channel in a server this account may manage channels in.
-    pub fn create_channel(&self, server_id: String, name: String) -> Res<ChannelSummary> {
+    /// `POST /channels`: a text channel in a server this account may
+    /// manage channels in, private when asked (architecture 6.8).
+    pub fn create_channel(
+        &self,
+        server_id: String,
+        name: String,
+        private: bool,
+    ) -> Res<ChannelSummary> {
         Ok(self
             .runtime
-            .block_on(self.app.create_channel(&server_id, &name, false))?
+            .block_on(self.app.create_channel(&server_id, &name, private))?
+            .into())
+    }
+
+    /// `GET /servers/{id}/channels/browse`: the public channels of a server
+    /// this account can see and is not in, each with how many are in it.
+    pub fn browse_channels(&self, server_id: String) -> Res<Vec<ChannelSummary>> {
+        Ok(self
+            .runtime
+            .block_on(self.app.browse_channels(&server_id))?
+            .into_iter()
+            .map(Into::into)
+            .collect())
+    }
+
+    /// `POST /channels/{id}/join`. Returns the snapshot as it then is.
+    pub fn join_channel(&self, channel_id: String) -> Res<SnapshotSummary> {
+        Ok(self
+            .runtime
+            .block_on(self.app.join_channel(&channel_id))?
+            .into())
+    }
+
+    /// `POST /channels/{id}/leave`. Returns the snapshot as it then is.
+    pub fn leave_channel(&self, channel_id: String) -> Res<SnapshotSummary> {
+        Ok(self
+            .runtime
+            .block_on(self.app.leave_channel(&channel_id))?
+            .into())
+    }
+
+    /// `GET /channels/{id}/members`: who is in a channel, as account ids.
+    pub fn channel_members(&self, channel_id: String) -> Res<Vec<String>> {
+        Ok(self
+            .runtime
+            .block_on(self.app.channel_members(&channel_id))?)
+    }
+
+    /// `POST /channels/{id}/members`: members of the server added to a
+    /// channel, or invited when they take adds that way.
+    pub fn add_channel_members(
+        &self,
+        channel_id: String,
+        account_ids: Vec<String>,
+    ) -> Res<ChannelAddSummary> {
+        Ok(self
+            .runtime
+            .block_on(self.app.add_channel_members(&channel_id, &account_ids))?
+            .into())
+    }
+
+    /// `DELETE /channels/{id}/members/{account_id}`: someone taken out of a
+    /// channel (`MANAGE_CHANNELS`).
+    pub fn remove_channel_member(&self, channel_id: String, account_id: String) -> Res<()> {
+        Ok(self
+            .runtime
+            .block_on(self.app.remove_channel_member(&channel_id, &account_id))?)
+    }
+
+    /// `DELETE /channel-invitations/{channel_id}`: no to an invitation.
+    /// Returns the snapshot as it then is.
+    pub fn dismiss_channel_invitation(&self, channel_id: String) -> Res<SnapshotSummary> {
+        Ok(self
+            .runtime
+            .block_on(self.app.dismiss_channel_invitation(&channel_id))?
+            .into())
+    }
+
+    /// `PATCH /servers/{id}/membership`: this account's own switches in a
+    /// server; `None` leaves one as it is. Returns the snapshot as it then is.
+    pub fn update_membership(
+        &self,
+        server_id: String,
+        channel_adds_by_invitation: Option<bool>,
+        server_dms_off: Option<bool>,
+    ) -> Res<SnapshotSummary> {
+        Ok(self
+            .runtime
+            .block_on(self.app.update_membership(
+                &server_id,
+                channel_adds_by_invitation,
+                server_dms_off,
+            ))?
+            .into())
+    }
+
+    /// `POST /servers/{id}/dms`: the 1:1 server DM with a member, started
+    /// if there is none (architecture 6.4).
+    pub fn open_server_dm(&self, server_id: String, account_id: String) -> Res<ChannelSummary> {
+        Ok(self
+            .runtime
+            .block_on(self.app.open_server_dm(&server_id, &account_id))?
+            .into())
+    }
+
+    /// `PATCH /servers/{id}` with exactly `channel_ids` as the server's
+    /// default channels. Returns the snapshot as it then is.
+    pub fn set_default_channels(
+        &self,
+        server_id: String,
+        channel_ids: Vec<String>,
+    ) -> Res<SnapshotSummary> {
+        Ok(self
+            .runtime
+            .block_on(self.app.set_default_channels(&server_id, &channel_ids))?
             .into())
     }
 

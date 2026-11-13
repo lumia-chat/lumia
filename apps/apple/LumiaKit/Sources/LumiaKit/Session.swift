@@ -80,6 +80,12 @@ public final class LumiaSession {
     /// Custom status by server then account, beside the presence.
     public private(set) var serverCustomStatus: [String: [String: String]] = [:]
     private var watchingServerIDs: [String] = []
+    /// Channels this account is not in, opened to read from Browse, and
+    /// server DMs just begun, by id: what a screen finds that the snapshot
+    /// does not hold (yet).
+    public private(set) var previewed: [String: ChannelSummary] = [:]
+    /// The channels the gateway loop has been told of.
+    @ObservationIgnored private var subscriptions = ChannelSubscriptions()
     /// Who is typing in the servers' channels (protocol 6.7). A personal
     /// conversation never has anyone: the instance is not to learn who is
     /// writing there, and whether typing travels inside one is an open
@@ -215,11 +221,101 @@ public final class LumiaSession {
         return server.serverId
     }
 
-    /// A text channel in the server, listed once the snapshot is refreshed; returns its id.
-    public func createChannel(serverID: String, name: String) async throws -> String {
-        let channel = try await client.createChannel(serverID: serverID, name: name)
+    /// A text channel in the server, private when asked, listed once the
+    /// snapshot is refreshed; returns its id.
+    public func createChannel(serverID: String, name: String, isPrivate: Bool = false) async throws -> String {
+        let channel = try await client.createChannel(serverID: serverID, name: name, isPrivate: isPrivate)
         await refreshSnapshot()
         return channel.channelId
+    }
+
+    // MARK: Channel membership (architecture 6.8)
+
+    /// The public channels of a server this account can see and is not in.
+    public func browseChannels(serverID: String) async throws -> [ChannelSummary] {
+        try await client.browseChannels(serverID: serverID)
+    }
+
+    /// A channel this account is not in, opened to read (Browse): kept here
+    /// for the screen to find, and subscribed to so it reads as any channel.
+    public func preview(_ channel: ChannelSummary) {
+        previewed[channel.channelId] = channel
+        subscribe(channel.channelId)
+    }
+
+    /// A channel by id: the snapshot's, else one opened to read.
+    public func channel(_ channelID: String) -> ChannelSummary? {
+        snapshot?.channels.first { $0.channelId == channelID } ?? previewed[channelID]
+    }
+
+    /// Whether this account is in a channel: the snapshot holds the channels it is in.
+    public func isIn(_ channelID: String) -> Bool {
+        snapshot?.channels.contains { $0.channelId == channelID } ?? false
+    }
+
+    public func joinChannel(channelID: String) async throws {
+        take(try await client.joinChannel(channelID: channelID))
+    }
+
+    public func leaveChannel(channelID: String) async throws {
+        take(try await client.leaveChannel(channelID: channelID))
+    }
+
+    /// Who is in a channel, as account ids.
+    public func channelMembers(channelID: String) async throws -> [String] {
+        try await client.channelMembers(channelID: channelID)
+    }
+
+    public func addChannelMembers(channelID: String, accountIDs: [String]) async throws -> ChannelAddSummary {
+        try await client.addChannelMembers(channelID: channelID, accountIDs: accountIDs)
+    }
+
+    public func removeChannelMember(channelID: String, accountID: String) async throws {
+        try await client.removeChannelMember(channelID: channelID, accountID: accountID)
+    }
+
+    public func dismissChannelInvitation(channelID: String) async throws {
+        take(try await client.dismissChannelInvitation(channelID: channelID))
+    }
+
+    /// This account's own switches in a server; nil leaves one as it is.
+    public func updateMembership(serverID: String, channelAddsByInvitation: Bool? = nil, serverDmsOff: Bool? = nil) async throws {
+        take(try await client.updateMembership(serverID: serverID, channelAddsByInvitation: channelAddsByInvitation, serverDmsOff: serverDmsOff))
+    }
+
+    /// Exactly these as the server's default channels.
+    public func setDefaultChannels(serverID: String, channelIDs: [String]) async throws {
+        take(try await client.setDefaultChannels(serverID: serverID, channelIDs: channelIDs))
+    }
+
+    /// The server DM with a member, started if there is none; returns its
+    /// id. The account log brings it to the snapshot; until then it is held
+    /// as a channel opened, so it opens at once.
+    public func openServerDM(serverID: String, accountID: String) async throws -> String {
+        let channel = try await client.openServerDM(serverID: serverID, accountID: accountID)
+        previewed[channel.channelId] = channel
+        await refreshSnapshot()
+        return channel.channelId
+    }
+
+    /// A snapshot a call answered with: held, and the channels it gained subscribed to.
+    private func take(_ snap: SnapshotSummary) {
+        snapshot = snap
+        subscribeGained()
+    }
+
+    /// Subscribes to the snapshot's channels the gateway loop has not been
+    /// told of, while it runs (`ChannelSubscriptions`).
+    private func subscribeGained() {
+        guard events != nil, let snap = snapshot else { return }
+        for id in subscriptions.gained(snap.channels) {
+            Task { try? await client.subscribe(channelID: id) }
+        }
+    }
+
+    private func subscribe(_ channelID: String) {
+        guard events != nil, subscriptions.add(channelID) else { return }
+        Task { try? await client.subscribe(channelID: channelID) }
     }
 
     // MARK: Server settings (architecture 6.7)
@@ -289,6 +385,7 @@ public final class LumiaSession {
         serverPresence = [:]
         serverCustomStatus = [:]
         watchingServerIDs = []
+        previewed = [:]
         profiles = [:]
         lastError = nil
         typing.clear()
@@ -403,7 +500,11 @@ public final class LumiaSession {
             if events == nil, !starting {
                 starting = true
                 defer { starting = false }
-                try await start(channelIDs: snap.channels.filter { !personalKinds.contains($0.kind) }.map(\.channelId))
+                // With any channel opened to read before the loop ran.
+                let held = snap.channels.filter { !personalKinds.contains($0.kind) }.map(\.channelId)
+                try await start(channelIDs: held + previewed.keys.filter { !held.contains($0) })
+            } else {
+                subscribeGained()
             }
         } catch {
             await loadFailed(error)
@@ -413,7 +514,7 @@ public final class LumiaSession {
     public func refreshSnapshot() async {
         do {
             let snap = try await client.snapshot()
-            snapshot = snap
+            take(snap)
             await refreshPeople(serverIDs: snap.servers.map(\.serverId))
         } catch {
             await loadFailed(error)
@@ -554,6 +655,7 @@ public final class LumiaSession {
 
     private func start(channelIDs: [String]) async throws {
         let stream = try await client.start(channelIDs: channelIDs)
+        subscriptions.started(channelIDs)
         connection = .connecting
         let started = ContinuousClock.now
         events = Task { [weak self] in
@@ -582,6 +684,7 @@ public final class LumiaSession {
     public func stop() {
         events?.cancel()
         events = nil
+        subscriptions.clear()
         Task { await client.stop() }
         connection = .idle
     }

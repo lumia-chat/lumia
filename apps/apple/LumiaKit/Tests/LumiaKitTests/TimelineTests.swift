@@ -188,7 +188,7 @@ final class TimelineTests: XCTestCase {
     }
 
     private func message(by author: String, in channel: String) -> EventSummary {
-        EventSummary(seq: 1, kind: "MESSAGE_CREATED", message: MessageSummary(messageId: "m1", channelId: channel, seq: 1, authorAccountId: author, body: "Done.", createdAtMicros: 0, deleted: false))
+        EventSummary(seq: 1, kind: "MESSAGE_CREATED", message: MessageSummary(messageId: "m1", channelId: channel, seq: 1, authorAccountId: author, body: "Done.", createdAtMicros: 0, deleted: false, notice: "", noticeAccountId: ""))
     }
 
     @MainActor
