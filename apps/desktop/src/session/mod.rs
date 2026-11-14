@@ -741,6 +741,48 @@ impl Session {
         });
     }
 
+    /// Someone changed their name or picture ([`AppEvent::ProfileUpdated`], `now` the
+    /// account as others see it): wherever they are held (every server's member list, the
+    /// people the servers share, a looked-up profile) they take its handle, display name,
+    /// picture, pronouns and bio, each server's nickname and switches staying, and every row
+    /// draws again. A new picture is a new address, fetched as any other; an empty one is
+    /// the initials. Nothing is asked of the instance for it. Someone held nowhere (met only
+    /// in a personal conversation not looked up yet) is held as a looked-up profile.
+    ///
+    /// This account's own change also reaches the snapshot (the rail's avatar, the account
+    /// menu, Profile), and the signed profile is read again, which another device may have
+    /// signed anew; the Profile form keeps what is typed in it.
+    fn profile_updated(&mut self, now: &MemberSummary) {
+        let held = self
+            .members
+            .values_mut()
+            .flatten()
+            .chain(self.people.values_mut())
+            .chain(self.profiles.values_mut().flatten());
+        for person in held.filter(|p| p.account_id == now.account_id) {
+            person.handle.clone_from(&now.handle);
+            person.display_name.clone_from(&now.display_name);
+            person.avatar_url.clone_from(&now.avatar_url);
+            person.pronouns.clone_from(&now.pronouns);
+            person.bio.clone_from(&now.bio);
+        }
+        if now.account_id == self.me() {
+            if let Some(snapshot) = &mut self.snapshot {
+                snapshot.handle.clone_from(&now.handle);
+                snapshot.display_name.clone_from(&now.display_name);
+                snapshot.avatar_url.clone_from(&now.avatar_url);
+            }
+            if self.has_identity() {
+                self.load_profile();
+            }
+        } else if !self.people.contains_key(&now.account_id) {
+            self.profiles
+                .insert(now.account_id.clone(), Some(now.clone()));
+        }
+        self.want_pictures();
+        self.revision += 1;
+    }
+
     // ---- What the screens do --------------------------------------------------------
 
     /// Puts a server's channel on screen, from the local store.
@@ -1318,6 +1360,24 @@ impl Session {
                 self.refresh_reads();
                 self.load();
             }
+            AppEvent::ProfileUpdated {
+                account_id,
+                handle,
+                display_name,
+                avatar_url,
+                pronouns,
+                bio,
+            } => self.profile_updated(&MemberSummary {
+                account_id: account_id.clone(),
+                handle: handle.clone(),
+                display_name: display_name.clone(),
+                nickname: String::new(),
+                pronouns: pronouns.clone(),
+                bio: bio.clone(),
+                avatar_url: avatar_url.clone(),
+                channel_adds_by_invitation: false,
+                server_dms_off: false,
+            }),
             AppEvent::Error {
                 command_id,
                 message,
