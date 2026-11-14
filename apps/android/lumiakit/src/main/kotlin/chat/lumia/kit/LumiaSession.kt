@@ -517,7 +517,7 @@ class LumiaSession(
             snapshot = snap
             hasIdentity = client.hasIdentity
             refreshReads()
-            refreshPeople(snap.servers.map { it.serverId })
+            snap.servers.map { it.serverId }.let { refreshPeople(it, it) }
             refreshDmChannels()
             if (events == null) {
                 // With any channel opened to read before the loop ran.
@@ -538,7 +538,14 @@ class LumiaSession(
      * says the session is over ends it here as it does in `load`; any other
      * failure says nothing and leaves what is held on screen.
      */
-    suspend fun refreshSnapshot() {
+    /**
+     * Reads the snapshot again. Member lists are read only for servers newly
+     * in it, or for every server when [everyone]: a reconnect may have missed
+     * what changed. A name or picture changed since arrives by itself
+     * (`ProfileUpdated`), so another account event (a read on another
+     * device, say) costs no list.
+     */
+    suspend fun refreshSnapshot(everyone: Boolean = false) {
         val snap = try {
             client.call { snapshot() }
         } catch (e: Exception) {
@@ -551,7 +558,8 @@ class LumiaSession(
         subscribeGained()
         refreshReads()
         rereadShown(before, snap)
-        refreshPeople(snap.servers.map { it.serverId })
+        val ids = snap.servers.map { it.serverId }
+        refreshPeople(ids, if (everyone) ids else ids.filter { it !in serverMembers })
     }
 
     /** How many of a channel's newest messages are read from the store: a page, and more once a jump looks further back. */
@@ -572,16 +580,14 @@ class LumiaSession(
         runCatching { client.call { dmMessages(channelId) } }.getOrNull()?.let { dmLogs[channelId] = it }
     }
 
-    private suspend fun refreshPeople(serverIds: List<String>) {
-        val found = mutableMapOf<String, MemberSummary>()
-        val byServer = mutableMapOf<String, List<MemberSummary>>()
-        for (id in serverIds) {
-            val members = runCatching { client.call { members(id, "") } }.getOrDefault(emptyList())
-            byServer[id] = members
-            for (m in members) found[m.accountId] = m
+    /** The member lists of [serverIds], those of [fetch] read again and the rest kept; a server left goes. */
+    private suspend fun refreshPeople(serverIds: List<String>, fetch: List<String>) {
+        val byServer = serverMembers.filterKeys { it in serverIds }.toMutableMap()
+        for (id in fetch) {
+            byServer[id] = runCatching { client.call { members(id, "") } }.getOrDefault(emptyList())
         }
-        people = found
         serverMembers = byServer
+        people = serverIds.flatMap { byServer[it].orEmpty() }.associateBy { it.accountId }
     }
 
     // Actions
@@ -989,7 +995,7 @@ class LumiaSession(
         when (event) {
             is ClientEvent.Welcomed -> {
                 connection = ConnectionState.Connected
-                refreshSnapshot()
+                refreshSnapshot(everyone = true)
                 serverPresence.clear()
                 watchPresence(watchingServerIds)
             }

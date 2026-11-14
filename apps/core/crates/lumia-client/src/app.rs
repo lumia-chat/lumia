@@ -235,6 +235,42 @@ pub struct ProfileSummary {
     pub avatar_url: String,
 }
 
+/// The profile a Profile page shows: the newer of this device's signed
+/// profile (`local`) and the one the instance holds for the account
+/// (`held`). When the instance's is at least as new, the account's name and
+/// picture as they are now: another device, or a `PATCH /account` since,
+/// may have changed them. A newer one of this device's, not yet sent,
+/// shows as it is.
+fn shown_profile(
+    local: Option<&lumia_core::proto::SignedProfile>,
+    held: Option<&lumia_core::proto::Account>,
+) -> Result<Option<ProfileSummary>, ClientError> {
+    let mine = local.map(profile_summary).transpose()?;
+    let theirs = held
+        .and_then(|a| a.profile.as_ref())
+        .map(profile_summary)
+        .transpose()?;
+    let newer_here = match (&mine, &theirs) {
+        (Some(m), Some(t)) => m.version > t.version,
+        (Some(_), None) => true,
+        (None, _) => false,
+    };
+    if newer_here {
+        return Ok(mine);
+    }
+    let Some(account) = held else {
+        return Ok(theirs.or(mine));
+    };
+    let base = theirs.or(mine);
+    Ok(base.map(|p| ProfileSummary {
+        display_name: account.display_name.clone(),
+        avatar_url: account.avatar_url.clone(),
+        pronouns: account.pronouns.clone(),
+        bio: account.bio.clone(),
+        ..p
+    }))
+}
+
 fn profile_summary(
     signed: &lumia_core::proto::SignedProfile,
 ) -> Result<ProfileSummary, ClientError> {
@@ -3573,15 +3609,20 @@ impl App {
             let mut stores = self.identity.lock().await;
             device(&mut stores, &self.device_id).profile()?
         };
-        match local {
-            Some(signed) => Ok(Some(profile_summary(&signed)?)),
-            // Another device of the identity may have set one: the account
-            // holds it, and this device shows it until it signs its own.
-            None => match self.held_profile().await? {
-                Some(signed) => Ok(Some(profile_summary(&signed)?)),
-                None => Ok(None),
-            },
-        }
+        // The account as the instance holds it: its signed profile, set by
+        // any device of the identity, and its name and picture now (a
+        // `PATCH /account` after the profile stands over it). Not asked
+        // when signed out; when it cannot be asked, what this device has.
+        let held = if self.signed_in() {
+            match self.api.account_snapshot().await {
+                Ok(snap) => snap.account,
+                Err(e) if local.is_none() => return Err(e),
+                Err(_) => None,
+            }
+        } else {
+            None
+        };
+        shown_profile(local.as_ref(), held.as_ref())
     }
 
     /// The signed profile the instance holds for this account, when signed
@@ -4727,6 +4768,58 @@ mod kept_tests {
         ] {
             assert!(!is_own_avatar(&other), "{other}");
         }
+    }
+
+    fn signed(version: u64, name: &str) -> lumia_core::proto::SignedProfile {
+        lumia_core::proto::SignedProfile {
+            body: lumia_core::proto::ProfileBody {
+                version,
+                display_name: name.into(),
+                ..Default::default()
+            }
+            .encode_to_vec(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_profile_page_shows_the_account_as_it_is_unless_this_device_has_newer() {
+        let account = |profile: Option<lumia_core::proto::SignedProfile>, name: &str| {
+            lumia_core::proto::Account {
+                display_name: name.into(),
+                avatar_url: "/api/v1/avatars/now".into(),
+                profile,
+                ..Default::default()
+            }
+        };
+        let name = |p: Option<ProfileSummary>| p.map(|p| (p.version, p.display_name, p.avatar_url));
+        // Renamed with `PATCH /account` after this device signed version 3: the account's name.
+        let held = account(Some(signed(3, "Ada")), "Ada L.");
+        assert_eq!(
+            name(shown_profile(Some(&signed(3, "Ada")), Some(&held)).unwrap()),
+            Some((3, "Ada L.".into(), "/api/v1/avatars/now".into()))
+        );
+        // Another device signed version 5: its version, the account's name.
+        let held = account(Some(signed(5, "Countess")), "Countess");
+        assert_eq!(
+            name(shown_profile(Some(&signed(3, "Ada")), Some(&held)).unwrap()),
+            Some((5, "Countess".into(), "/api/v1/avatars/now".into()))
+        );
+        // This device signed a newer one, not yet sent: it shows as it is.
+        let held = account(Some(signed(3, "Ada")), "Ada");
+        assert_eq!(
+            name(shown_profile(Some(&signed(4, "Ada K.")), Some(&held)).unwrap()),
+            Some((4, "Ada K.".into(), String::new()))
+        );
+        // Signed out, or not asked: this device's.
+        assert_eq!(
+            name(shown_profile(Some(&signed(2, "Ada")), None).unwrap()),
+            Some((2, "Ada".into(), String::new()))
+        );
+        // Nothing signed anywhere: nothing to show.
+        assert!(shown_profile(None, Some(&account(None, "Ada")))
+            .unwrap()
+            .is_none());
     }
 
     #[test]

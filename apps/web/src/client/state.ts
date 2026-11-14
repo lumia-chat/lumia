@@ -5,7 +5,7 @@
 import { QueryClient, createInfiniteQuery, createQuery, useQueryClient } from "@tanstack/solid-query";
 import { createSignal } from "solid-js";
 import { Bridge, ClientError, claimOwnership, type ClientEvent, type MemberSummary, type MessageSummary, type Opened, type ReadStateSummary, type SnapshotSummary, type StatusSummary } from "./bridge";
-import { type ProfileUpdate, membersWithProfile, peopleWithProfile, snapshotWithProfile, withProfile } from "./profiles";
+import { type ProfileUpdate, membersWithProfile, peopleWithProfile, profileLog, snapshotWithProfile, withProfile } from "./profiles";
 
 export const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: Infinity, retry: false } },
@@ -379,7 +379,9 @@ function onGatewayEvent(e: ClientEvent): void {
       void queryClient.invalidateQueries({ queryKey: ["dmChannels"] });
       break;
     case "profileUpdated":
-      // Written in where the page holds the person, not asked again (issue #15).
+      // Written in where the page holds the person, not asked again (issue #15),
+      // and kept for a list already being fetched, whose answer may be older.
+      profileUpdates.add(e);
       queryClient.setQueriesData<MemberSummary[]>({ queryKey: ["members"] }, (list) => membersWithProfile(list, e));
       queryClient.setQueriesData<Map<string, MemberSummary>>({ queryKey: ["people"] }, (people) => peopleWithProfile(people, e));
       queryClient.setQueryData<SnapshotSummary>(["snapshot"], (snapshot) => snapshotWithProfile(snapshot, e));
@@ -491,16 +493,20 @@ export function dmMessagesQuery(channelId: () => string | undefined) {
   }));
 }
 
+// The profile updates that arrived, for a fetch begun before one to catch up with it.
+const profileUpdates = profileLog();
+
 /** Everyone this account shares a server with, by account id. */
 export function peopleQuery(serverIds: () => string[]) {
   return createQuery(() => ({
     queryKey: ["people", serverIds().join(",")],
     queryFn: async () => {
+      const from = profileUpdates.mark();
       const people = new Map<string, MemberSummary>();
       for (const id of serverIds()) {
         for (const m of await client().members(id)) people.set(m.accountId, m);
       }
-      return people;
+      return profileUpdates.since(from, people, (held, p) => peopleWithProfile(held, p) ?? held);
     },
     enabled: serverIds().length > 0,
   }));
@@ -517,9 +523,10 @@ export function profileOf(accountId: string): MemberSummary | null | undefined {
   if (!accountId) return null;
   if (profiles.has(accountId)) return profiles.get(accountId);
   profiles.set(accountId, undefined); // in flight
+  const from = profileUpdates.mark();
   void client()
     .account(accountId)
-    .then((p) => profiles.set(accountId, p))
+    .then((p) => profiles.set(accountId, profileUpdates.since(from, p, withProfile)))
     .catch((e: unknown) => {
       // Not visible stays null; any other failure is retried on the next read.
       if (e instanceof ClientError && e.code === "NOT_FOUND") profiles.set(accountId, null);
@@ -556,7 +563,11 @@ export function rosterQuery(enabled: () => boolean) {
 export function membersQuery(serverId: () => string | undefined) {
   return createQuery(() => ({
     queryKey: ["members", serverId()],
-    queryFn: () => client().members(serverId() as string),
+    queryFn: async () => {
+      const from = profileUpdates.mark();
+      const list = await client().members(serverId() as string);
+      return profileUpdates.since(from, list, (held, p) => membersWithProfile(held, p) ?? held);
+    },
     enabled: !!serverId(),
   }));
 }

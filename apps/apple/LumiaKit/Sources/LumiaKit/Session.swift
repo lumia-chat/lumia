@@ -568,7 +568,8 @@ public final class LumiaSession {
             hold(snap)
             reads = ReadCounts(snap.readStates)
             hasIdentity = await client.hasIdentity
-            await refreshPeople(serverIDs: snap.servers.map(\.serverId))
+            let ids = snap.servers.map(\.serverId)
+            await refreshPeople(serverIDs: ids, fetching: ids)
             await refreshDmChannels()
             if events == nil, !starting {
                 starting = true
@@ -584,12 +585,18 @@ public final class LumiaSession {
         }
     }
 
-    public func refreshSnapshot() async {
+    /// Reads the snapshot again. Member lists are read only for servers
+    /// newly in it, or for every server with `everyone`: a reconnect may
+    /// have missed what changed. A name or picture changed since arrives by
+    /// itself (`profileUpdated`), so another account event (a read on
+    /// another device, say) costs no list.
+    public func refreshSnapshot(everyone: Bool = false) async {
         do {
             let snap = try await client.snapshot()
             take(snap)
             reads = ReadCounts(snap.readStates)
-            await refreshPeople(serverIDs: snap.servers.map(\.serverId))
+            let ids = snap.servers.map(\.serverId)
+            await refreshPeople(serverIDs: ids, fetching: everyone ? ids : ids.filter { serverMembers[$0] == nil })
         } catch {
             await loadFailed(error)
         }
@@ -624,13 +631,16 @@ public final class LumiaSession {
         if let log = try? await client.dmMessages(channelID: channelID) { dmLogs[channelID] = log }
     }
 
-    private func refreshPeople(serverIDs: [String]) async {
+    /// The member lists of `serverIDs`, those of `fetching` read again and
+    /// the rest kept; a server left goes.
+    private func refreshPeople(serverIDs: [String], fetching: [String]) async {
+        var byServer = serverMembers.filter { serverIDs.contains($0.key) }
+        for id in fetching {
+            byServer[id] = (try? await client.members(serverID: id)) ?? []
+        }
         var found: [String: MemberSummary] = [:]
-        var byServer: [String: [MemberSummary]] = [:]
         for id in serverIDs {
-            let members = (try? await client.members(serverID: id)) ?? []
-            byServer[id] = members
-            for m in members { found[m.accountId] = m }
+            for m in byServer[id] ?? [] { found[m.accountId] = m }
         }
         people = found
         serverMembers = byServer
@@ -839,7 +849,7 @@ public final class LumiaSession {
             serverCustomStatus = [:]
             watchPresence(serverIDs: watchingServerIDs)
             connection = .connected
-            await refreshSnapshot()
+            await refreshSnapshot(everyone: true)
         case let .applied(channelId, events):
             // Whoever's message arrived has finished typing it.
             for message in events.compactMap(\.message) {

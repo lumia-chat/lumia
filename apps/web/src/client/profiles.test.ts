@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { MemberSummary, SnapshotSummary } from "./bridge";
-import { type ProfileUpdate, membersWithProfile, peopleWithProfile, snapshotWithProfile, withProfile } from "./profiles";
+import { type ProfileUpdate, membersWithProfile, peopleWithProfile, profileLog, snapshotWithProfile, withProfile } from "./profiles";
 
 const PICTURE = "/api/v1/avatars/" + "a".repeat(64);
 const NEW_PICTURE = "/api/v1/avatars/" + "b".repeat(64);
@@ -67,5 +67,36 @@ describe("a changed profile", () => {
     expect(now?.servers).toBe(snapshot.servers);
     expect(snapshotWithProfile(snapshot, { ...renamed, accountId: "grace" })).toBe(snapshot);
     expect(snapshotWithProfile(undefined, renamed)).toBeUndefined();
+  });
+});
+
+describe("a fetch begun before an update", () => {
+  const listed = (log: ReturnType<typeof profileLog>, from: number, list: MemberSummary[]) =>
+    log.since(from, list, (held, p) => membersWithProfile(held, p) ?? held);
+
+  test("brings an answer from before it up to date", () => {
+    const log = profileLog();
+    const from = log.mark();
+    // The update arrives while the list is being asked for; the answer is the old one.
+    log.add(renamed);
+    expect(listed(log, from, [ada, grace]).map((m) => m.displayName)).toEqual(["Ada Lovelace", "Grace"]);
+  });
+
+  test("leaves one begun after it alone, the instance's answer having it already", () => {
+    const log = profileLog();
+    log.add(renamed);
+    const list = [ada, grace];
+    expect(listed(log, log.mark(), list)).toBe(list);
+  });
+
+  test("applies updates in the order they came, and holds only the newest", () => {
+    const log = profileLog(2);
+    const from = log.mark();
+    log.add({ ...renamed, displayName: "One" });
+    log.add({ ...renamed, displayName: "Two" });
+    expect(listed(log, from, [ada])[0]?.displayName).toBe("Two");
+    log.add({ ...renamed, accountId: "grace", displayName: "Grace H." });
+    // The first has gone; the two newest are held.
+    expect(listed(log, from, [ada, grace]).map((m) => m.displayName)).toEqual(["Two", "Grace H."]);
   });
 });

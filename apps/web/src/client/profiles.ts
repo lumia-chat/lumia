@@ -32,3 +32,25 @@ export function snapshotWithProfile(snapshot: SnapshotSummary | undefined, p: Pr
   if (!snapshot || snapshot.accountId !== p.accountId) return snapshot;
   return { ...snapshot, handle: p.handle, displayName: p.displayName, avatarUrl: p.avatarUrl };
 }
+
+/**
+ * The updates as they came, numbered, so a fetch begun before one (a member
+ * list asked of the instance, say) can bring its answer up to date: it notes
+ * `mark()` as it starts and passes what it got through `since`. The newest
+ * `keep` are held, far more than can arrive while one fetch is out.
+ */
+export function profileLog(keep = 200) {
+  let last = 0;
+  const held: { n: number; p: ProfileUpdate }[] = [];
+  return {
+    add(p: ProfileUpdate): void {
+      held.push({ n: ++last, p });
+      if (held.length > keep) held.shift();
+    },
+    mark: (): number => last,
+    since<T>(mark: number, value: T, apply: (value: T, p: ProfileUpdate) => T): T {
+      for (const { n, p } of held) if (n > mark) value = apply(value, p);
+      return value;
+    },
+  };
+}
