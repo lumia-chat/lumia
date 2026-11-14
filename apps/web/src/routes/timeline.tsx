@@ -6,10 +6,12 @@
 // the member list names them, its reactions, its own toolbar (Add
 // reaction, Reply, More actions with Edit message, Copy text and Delete
 // message), "(edited)", the "New" line, a jump to a quoted message, and
-// "Quote reply" beside a selection. A message of this account's is edited
+// "Quote reply" beside a selection. A body is the core's blocks
+// (`MessageBody`, issue #18), a long one collapsed until it is opened, which
+// lasts while the conversation does. A message of this account's is edited
 // where it is drawn, and a delete asks first unless Shift is held. The
 // composer over a conversation is here too, with the reply bar atop its
-// frame, the @ list and the note after a send.
+// frame, the @ list, the note after a send and the counter near the limit.
 import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount, type JSX } from "solid-js";
 import {
   ComposerNote,
@@ -21,6 +23,7 @@ import {
   MentionList,
   Message,
   MessageActions,
+  MessageBody,
   MessageEdit,
   MessageList,
   MessageMenu,
@@ -34,8 +37,9 @@ import {
   type Tone,
 } from "../design/components";
 import { frequentEmoji, usedEmoji } from "../design/emoji";
-import { ClientError, type MemberSummary, type MentionSummary, type QuoteSummary, type ReactionSummary, type ReadStateSummary } from "../client/bridge";
-import { avatarSrc, markRead } from "../client/state";
+import { ClientError, type BodyBlock, type MemberSummary, type MentionSummary, type MessageRoom, type QuoteSummary, type ReactionSummary, type ReadStateSummary } from "../client/bridge";
+import { avatarSrc, client, markRead } from "../client/state";
+import { composing } from "../design/body";
 import type { Display } from "../client/preferences";
 import { byBlock, byDay, initialsOf, shortTimeOf, timeOf, toneFor } from "./app";
 
@@ -49,6 +53,8 @@ export interface TimelineItem {
   blockKey: string;
   at: number;
   body: string;
+  /** The body as the core reads it, which is what is drawn. */
+  blocks: BodyBlock[];
   deleted: boolean;
   /** Its author edited it: "(edited)". */
   edited: boolean;
@@ -180,6 +186,22 @@ export function createMarkRead(opts: { channelId: () => string | undefined; newe
     last.set(id, Date.now());
     void markRead(id, seq).catch((e) => console.warn("mark read:", e));
   });
+}
+
+/** A draft's room under the instance's limit as the core counts it, asked again as the text changes; the latest answer wins. */
+function createRoom(text: () => string): () => MessageRoom | undefined {
+  const [room, setRoom] = createSignal<MessageRoom>();
+  let asked = 0;
+  createEffect(
+    on(text, (t) => {
+      const n = ++asked;
+      client()
+        .messageRoom(t)
+        .then((r) => n === asked && setRoom(r))
+        .catch((e) => console.warn("message room:", e));
+    }),
+  );
+  return room;
 }
 
 export interface TimelineProps {
@@ -365,14 +387,27 @@ export function Timeline(props: TimelineProps) {
     if (body !== m.body.trim()) props.onEdit(m, body);
   };
   // The message taken up for editing comes into view (Up in the composer edits one that may be off screen).
+  // Its text is counted against the limit as it changes, from the body it opens with.
+  const [editText, setEditText] = createSignal("");
+  const editRoom = createRoom(editText);
   createEffect(
     on(
       () => props.editing,
       (id) => {
+        setEditText(id ? (byId().get(id)?.body ?? "") : "");
         if (id) void frame().then(() => find(id)?.scrollIntoView({ block: "nearest" }));
       },
     ),
   );
+  // The long bodies opened, while the conversation is open.
+  const [expanded, setExpanded] = createSignal<ReadonlySet<string>>(new Set());
+  const expand = (id: string, open: boolean) =>
+    setExpanded((was) => {
+      const now = new Set(was);
+      if (open) now.add(id);
+      else now.delete(id);
+      return now;
+    });
 
   const reference = (m: TimelineItem) => (
     <Show when={m.reply}>
@@ -400,22 +435,20 @@ export function Timeline(props: TimelineProps) {
       fallback={
         <>
           <Show when={!m.deleted} fallback={<p>(deleted)</p>}>
-            <p>
-              <For each={bodySegments(m.body, m.mentions)}>
-                {(s) => (
-                  <Show when={s.mention} fallback={s.text}>
-                    {(mention) => <Mention onOpen={mention().everyone || !mention().accountId ? undefined : (anchor) => props.openPerson(mention().accountId, anchor)}>{mentionWords(s.text, mention(), props.knownName)}</Mention>}
+            <MessageBody
+              blocks={m.blocks}
+              mention={(index, typed) => {
+                const mention = m.mentions[index];
+                return (
+                  <Show when={mention} fallback={<Mention>{typed}</Mention>}>
+                    {(mention) => <Mention onOpen={mention().everyone || !mention().accountId ? undefined : (anchor) => props.openPerson(mention().accountId, anchor)}>{mentionWords(typed, mention(), props.knownName)}</Mention>}
                   </Show>
-                )}
-              </For>
-              <Show when={m.edited}>
-                {" "}
-                <span class="lu-msg__edited">
-                  <span aria-hidden="true">(edited)</span>
-                  <span class="lu-sr">edited</span>
-                </span>
-              </Show>
-            </p>
+                );
+              }}
+              edited={m.edited}
+              expanded={expanded().has(m.id)}
+              onExpanded={(open) => expand(m.id, open)}
+            />
           </Show>
           <Show when={props.refused?.messageId === m.id ? props.refused : undefined}>
             {(r) => (
@@ -427,7 +460,7 @@ export function Timeline(props: TimelineProps) {
         </>
       }
     >
-      <MessageEdit value={m.body} onSave={(text) => save(m, text)} onCancel={() => props.onEditing(undefined)} />
+      <MessageEdit value={m.body} onSave={(text) => save(m, text)} onCancel={() => props.onEditing(undefined)} onText={setEditText} room={editRoom()} />
     </Show>
   );
   const chips = (m: TimelineItem): ReactionChipProps[] =>
@@ -651,15 +684,25 @@ export interface ComposeProps {
   mentions?: MentionSource;
   /** What a send left to say, over the field. */
   note?: JSX.Element;
-  inputRef?: (el: HTMLInputElement) => void;
+  inputRef?: (el: HTMLTextAreaElement) => void;
 }
 
 const MENTION_LIST_MAX = 8;
 let listIds = 0;
 
-/** The composer over a conversation: the reply bar atop its frame, the @ list over it, and a note after a send. */
+/**
+ * The composer over a conversation: the reply bar atop its frame, the @
+ * list over it, and a note after a send. Return sends and Shift+Return
+ * adds a line; near the limit the counter shows, and over it nothing is
+ * sent and the draft stays.
+ */
 export function Compose(props: ComposeProps) {
-  let input: HTMLInputElement | undefined;
+  let input: HTMLTextAreaElement | undefined;
+  const room = createRoom(() => props.value);
+  const over = () => (room()?.left ?? 0) < 0;
+  const send = () => {
+    if (!over()) props.onSend();
+  };
   const listId = `lu-mentions-${++listIds}`;
   const [at, setAt] = createSignal<{ start: number; query: string } | null>(null);
   const [active, setActive] = createSignal(0);
@@ -715,12 +758,11 @@ export function Compose(props: ComposeProps) {
       disabled={props.disabled}
       typing={props.typing}
       value={props.value}
+      room={room()}
       inputRef={(el) => {
         input = el;
         props.inputRef?.(el);
       }}
-      role={props.mentions ? "combobox" : undefined}
-      aria-expanded={props.mentions ? open() : undefined}
       aria-controls={open() ? listId : undefined}
       aria-autocomplete={props.mentions ? "list" : undefined}
       aria-activedescendant={open() ? `${listId}-${active()}` : undefined}
@@ -738,7 +780,7 @@ export function Compose(props: ComposeProps) {
             setActive((i) => (i + (e.key === "ArrowDown" ? 1 : n - 1)) % n);
             return;
           }
-          if ((e.key === "Enter" || e.key === "Tab") && !e.isComposing) {
+          if ((e.key === "Enter" || e.key === "Tab") && !composing(e)) {
             e.preventDefault();
             const o = options()[active()];
             if (o) pick(o);
@@ -755,20 +797,20 @@ export function Compose(props: ComposeProps) {
           props.onCancelReply();
           return;
         }
-        if (e.key === "ArrowUp" && !e.currentTarget.value && props.onEditLast && !e.isComposing) {
+        if (e.key === "ArrowUp" && !e.currentTarget.value && props.onEditLast && !composing(e)) {
           e.preventDefault();
           props.onEditLast();
           return;
         }
-        if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+        if (e.key === "Enter" && !e.shiftKey && !composing(e)) {
           e.preventDefault();
-          props.onSend();
+          send();
         }
       }}
       onKeyUp={(e) => {
         if (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "Home" || e.key === "End") look();
       }}
-      onSend={props.onSend}
+      onSend={send}
       hint={props.replying ? "Return to send · Esc to cancel the reply" : undefined}
       above={
         <>

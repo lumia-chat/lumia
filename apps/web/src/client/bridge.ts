@@ -183,6 +183,36 @@ export interface MentionSummary {
   start: number;
   end: number;
 }
+/**
+ * A message body read by the core (`client.parseBody`, protocol 14): its
+ * blocks, as `lumia_core::body::DisplayBlock` serializes them. Ranges are
+ * UTF-16 code units of the paragraph's `text`, as JavaScript counts.
+ */
+export type BodyBlock =
+  | { kind: "para"; text: string; runs: BodyRun[]; links: BodyLink[] }
+  /** A fenced code block: the first word after its fence, if any, and its lines. */
+  | { kind: "code"; lang?: string | null; text: string }
+  | { kind: "quote"; blocks: BodyBlock[] }
+  /** Ordered from `start` when it has one; each item a run of blocks. */
+  | { kind: "list"; start?: number | null; items: BodyBlock[][] };
+/** A styled stretch of a paragraph. Runs may overlap (a mention in bold). */
+export interface BodyRun {
+  start: number;
+  end: number;
+  /** `mention`: `index` is its place in the message's `mentions`, and its text is the mention as typed. */
+  style: { kind: "emphasis" | "strong" | "strike" | "code" } | { kind: "mention"; index: number };
+}
+/** A web link: the stretch of text it is, and where it goes (only ever http or https; the core keeps no other). */
+export interface BodyLink {
+  start: number;
+  end: number;
+  url: string;
+}
+/** How much room a draft has under the instance's limit (`client.messageRoom`): shown from 90% of it; `left` negative is how many characters too long. */
+export interface MessageRoom {
+  shown: boolean;
+  left: number;
+}
 /** One emoji's reactions to a message, in the order each was first used. */
 export interface ReactionSummary {
   reaction: string;
@@ -240,6 +270,8 @@ export interface DmMessageSummary {
   mine: boolean;
   reply: QuoteSummary | null;
   reactions: ReactionSummary[];
+  /** The body read into blocks, which the worker adds to every message it hands the page. */
+  blocks: BodyBlock[];
 }
 export interface DmLogSummary {
   messages: DmMessageSummary[];
@@ -270,6 +302,8 @@ export interface MessageSummary {
   mentionsMe: boolean;
   /** Its author has edited it ("(edited)"). */
   edited: boolean;
+  /** The body read into blocks, which the worker adds to every message it hands the page. */
+  blocks: BodyBlock[];
 }
 export interface EventSummary {
   seq: number;
@@ -630,6 +664,10 @@ export class Bridge {
   findMentions(body: string, members: MemberSummary[], everyone: boolean): Promise<MentionSummary[]> {
     // A query's members are a store's proxies, which a worker message cannot carry: plain copies go.
     return this.call("findMentions", body, members.map((m) => ({ ...m })), everyone);
+  }
+  /** The room a draft has under the instance's limit, for the composer's counter. */
+  messageRoom(body: string): Promise<MessageRoom> {
+    return this.call("messageRoom", body);
   }
   /** Edits one of this account's messages in a server's channel: its new body and the mentions it makes. Answers the command id an `error` event names if it is refused. */
   editMessage(channelId: string, messageId: string, body: string, mentions: MentionSummary[]): Promise<string> {

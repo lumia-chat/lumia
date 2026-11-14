@@ -53,7 +53,38 @@ async function dispatch(method: string, args: unknown[]): Promise<unknown> {
   }
   const fn = (client as unknown as Record<string, unknown>)[method];
   if (typeof fn !== "function") throw new Error(`unknown method ${method}`);
-  return await (fn as (...a: unknown[]) => unknown).apply(client, args);
+  const result = await (fn as (...a: unknown[]) => unknown).apply(client, args);
+  const messages = BODIES[method]?.(result);
+  if (messages) for (const m of messages) m.blocks = blocksOf(client, m.body, m.mentions ?? []);
+  return result;
+}
+
+// Every message handed to the page carries its body read into blocks by
+// the core (protocol 14), so the page draws them and parses nothing: the
+// calls that answer messages, and where in each answer they are.
+type Drawn = { body: string; mentions?: { start: number; end: number }[]; blocks?: unknown };
+const BODIES: Record<string, (result: unknown) => Drawn[] | undefined> = {
+  messages: (r) => r as Drawn[],
+  olderMessages: (r) => (r as { messages: Drawn[] }).messages,
+  mentions: (r) => (r as { messages: Drawn[] }).messages,
+  dmMessages: (r) => (r as { messages: Drawn[] }).messages,
+};
+
+// A conversation's messages are read again after every event in it, and
+// most of them have not changed: each body is read once, kept by its text
+// and its mentions' ranges.
+const read = new Map<string, unknown>();
+const READ_KEPT = 4000;
+
+function blocksOf(c: Client, body: string, mentions: { start: number; end: number }[]): unknown {
+  const key = mentions.map((m) => `${m.start}-${m.end}`).join(",") + "\u0000" + body;
+  let blocks = read.get(key);
+  if (blocks === undefined) {
+    blocks = c.parseBody(body, mentions);
+    if (read.size >= READ_KEPT) read.clear();
+    read.set(key, blocks);
+  }
+  return blocks;
 }
 
 self.onmessage = async (e: MessageEvent<Call>) => {

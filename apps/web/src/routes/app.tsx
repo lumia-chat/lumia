@@ -345,7 +345,7 @@ export function App() {
   // A message of this account's being edited where it is drawn, and what the instance refused of an edit or a delete.
   const [editing, setEditing] = createSignal<string | undefined>();
   const [refused, setRefused] = createSignal<Refusal | null>(null);
-  let composerInput: HTMLInputElement | undefined;
+  let composerInput: HTMLTextAreaElement | undefined;
   createEffect(
     on(channelId, () => {
       setReplying(null);
@@ -492,6 +492,7 @@ export function App() {
       blockKey: m.authorAccountId,
       at: m.createdAtMicros,
       body: m.body,
+      blocks: m.blocks,
       deleted: m.deleted,
       edited: m.edited,
       mine: !!m.authorAccountId && m.authorAccountId === accountId(),

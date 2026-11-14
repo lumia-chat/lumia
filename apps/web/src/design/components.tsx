@@ -11,6 +11,8 @@ import { For, Show, children, createEffect, createMemo, createSignal, createUniq
 import { Dynamic, Portal } from "solid-js/web";
 import { ICONS } from "./icons";
 import { emojiMatches, loadEmoji, type EmojiGroup } from "./emoji";
+import { COLLAPSED_LINES, collapsedLines, composing, linesOf, roomWords, stretches, type Piece } from "./body";
+import type { BodyBlock, MessageRoom } from "../client/bridge";
 
 export type Tone = "peach" | "blue" | "purple" | "mint" | "amber" | "sky" | "stone" | "green" | "indigo";
 export type Status = "online" | "away" | "dnd";
@@ -323,7 +325,7 @@ export function TypingIndicator(props: TypingIndicatorProps) {
   );
 }
 
-export interface ComposerProps extends JSX.InputHTMLAttributes<HTMLInputElement> {
+export interface ComposerProps extends JSX.TextareaHTMLAttributes<HTMLTextAreaElement> {
   placeholder?: string;
   label?: string;
   /** Who is typing, named under the field. */
@@ -337,19 +339,34 @@ export interface ComposerProps extends JSX.InputHTMLAttributes<HTMLInputElement>
   above?: JSX.Element;
   /** The strip atop the field's own frame (the reply bar), which then has the active border. */
   bar?: JSX.Element;
-  inputRef?: (el: HTMLInputElement) => void;
+  /** The draft's room under the instance's limit (the core's `messageRoom`): its counter at the hint row's end, and over the limit Send is off. */
+  room?: MessageRoom;
+  inputRef?: (el: HTMLTextAreaElement) => void;
 }
 
-/** Message bar with tools, send and a hint row. */
+/**
+ * Message bar with tools, send and a hint row. The field keeps the lines
+ * typed or pasted into it and grows with them to eight, then scrolls
+ * inside itself.
+ */
 export function Composer(props: ComposerProps) {
-  const [local, input] = splitProps(props, ["placeholder", "label", "typing", "hint", "tools", "id", "onSend", "onAttach", "class", "above", "bar", "inputRef"]);
+  const [local, input] = splitProps(props, ["placeholder", "label", "typing", "hint", "tools", "id", "onSend", "onAttach", "class", "above", "bar", "room", "inputRef", "value"]);
   const fid = fieldId(local.id);
+  const count = fieldId();
   const placeholder = () => local.placeholder ?? "Message";
   const hint = () => local.hint ?? "Return to send";
   const tools = () => local.tools ?? true;
   const typing = () => (Array.isArray(local.typing) ? (local.typing.length ? local.typing : undefined) : local.typing || undefined);
+  const over = () => (local.room?.left ?? 0) < 0;
   // Read once: the frame's class and its contents both ask.
   const bar = children(() => local.bar);
+  let field: HTMLTextAreaElement | undefined;
+  const fit = () => fitField(field);
+  // A draft set from outside (sent, put back) and a field drawn wider or narrower are measured again.
+  createEffect(on(() => local.value, fit));
+  onMount(() => {
+    if (field) onCleanup(watchSize(field, fit));
+  });
   return (
     <div class={cx("lu-composer", local.class)}>
       {local.above}
@@ -363,26 +380,101 @@ export function Composer(props: ComposerProps) {
           <label for={fid} class="lu-sr">
             {local.label ?? placeholder()}
           </label>
-          <input ref={(el) => local.inputRef?.(el)} id={fid} type="text" placeholder={placeholder()} autocomplete="off" class="lu-composer__input" {...input} />
+          <textarea
+            ref={(el) => {
+              field = el;
+              el.addEventListener("input", fit);
+              local.inputRef?.(el);
+            }}
+            id={fid}
+            rows={1}
+            placeholder={placeholder()}
+            autocomplete="off"
+            class="lu-composer__input"
+            value={local.value ?? ""}
+            aria-describedby={local.room?.shown ? count : undefined}
+            {...input}
+          />
           <Show when={tools()}>
             <IconButton glyph="Aa" label="Text formatting" />
             <IconButton icon="emoji" label="Emoji" />
             <IconButton icon="mention" label="Mention someone" strokeWidth={1.9} />
           </Show>
-          <IconButton icon="send" variant="send" size={40} label="Send message" class="lu-composer__send" onClick={() => local.onSend?.()} />
+          <IconButton icon="send" variant="send" size={40} label="Send message" class="lu-composer__send" disabled={over()} onClick={() => local.onSend?.()} />
         </div>
       </div>
-      <Show when={typing() || hint()}>
-        <div class="lu-composer__hint" aria-live="polite">
-          <Show when={typing()} fallback={<span></span>}>
-            {(name) => <TypingIndicator name={name()} />}
-          </Show>
-          <Show when={hint()}>
+      <Show when={typing() || hint() || local.room?.shown}>
+        <div class="lu-composer__hint">
+          <span class="lu-composer__typing" aria-live="polite">
+            <Show when={typing()}>{(name) => <TypingIndicator name={name()} />}</Show>
+          </span>
+          <Show when={!local.room?.shown && hint()}>
             <span>{hint()}</span>
           </Show>
+          <DraftRoom id={count} room={local.room} />
         </div>
       </Show>
     </div>
+  );
+}
+
+/** A field's height to its lines: as many as it has, up to what its stylesheet's `max-height` allows, past which it scrolls. */
+function fitField(field: HTMLTextAreaElement | undefined) {
+  if (!field) return;
+  field.style.height = "auto";
+  field.style.height = field.scrollHeight + "px";
+}
+
+// One observer for every element that wants its size watched (a body for
+// whether it is long, a field for its lines): each is told its own.
+const sized = new WeakMap<Element, () => void>();
+let sizes: ResizeObserver | undefined;
+function watchSize(el: Element, then: () => void): () => void {
+  sizes ??= new ResizeObserver((entries) => {
+    for (const e of entries) sized.get(e.target)?.();
+  });
+  sized.set(el, then);
+  sizes.observe(el);
+  return () => {
+    sizes?.unobserve(el);
+    sized.delete(el);
+  };
+}
+
+export interface DraftRoomProps {
+  /** The room the core gives the draft (`messageRoom`). */
+  room?: MessageRoom;
+  id?: string;
+  class?: string;
+}
+
+/**
+ * A draft's counter, from 90% of the instance's limit: "1,204 characters
+ * left", or past it "3 characters too long" in the danger ink. Assistive
+ * technology is told once as the draft goes over, not at every key.
+ */
+export function DraftRoom(props: DraftRoomProps) {
+  const over = () => (props.room?.left ?? 0) < 0;
+  const [said, setSaid] = createSignal("");
+  createEffect(
+    on(over, (now, was) => {
+      if (now && !was) setSaid(`This message is ${roomWords(props.room?.left ?? 0)}.`);
+      else if (!now) setSaid("");
+    }),
+  );
+  return (
+    <>
+      <Show when={props.room?.shown ? props.room : undefined}>
+        {(room) => (
+          <span id={props.id} class={cx("lu-draftroom", room().left < 0 && "is-over", props.class)}>
+            {roomWords(room().left)}
+          </span>
+        )}
+      </Show>
+      <span class="lu-sr" aria-live="polite">
+        {said()}
+      </span>
+    </>
   );
 }
 
@@ -1735,18 +1827,19 @@ export interface MessageEditProps {
   onSave: (text: string) => void;
   /** Escape. */
   onCancel: () => void;
+  /** The text as it is typed, for its room under the limit. */
+  onText?: (text: string) => void;
+  /** The text's room under the instance's limit: the composer's counter, and over the limit Return saves nothing. */
+  room?: MessageRoom;
   class?: string;
 }
 
-/** A message's body being edited where it is drawn: Return saves, Escape cancels. */
+/** A message's body being edited where it is drawn: Return saves, Shift+Return adds a line, Escape cancels. */
 export function MessageEdit(props: MessageEditProps) {
   let field: HTMLTextAreaElement | undefined;
   const hint = fieldId();
-  const fit = () => {
-    if (!field) return;
-    field.style.height = "auto";
-    field.style.height = field.scrollHeight + "px";
-  };
+  const count = fieldId();
+  const fit = () => fitField(field);
   onMount(() => {
     if (!field) return;
     fit();
@@ -1760,25 +1853,196 @@ export function MessageEdit(props: MessageEditProps) {
         ref={field}
         class="lu-msgedit__field"
         aria-label="Edit message"
-        aria-describedby={hint}
+        aria-describedby={props.room?.shown ? `${hint} ${count}` : hint}
         rows={1}
         value={props.value}
-        onInput={fit}
+        onInput={(e) => {
+          fit();
+          props.onText?.(e.currentTarget.value);
+        }}
         onKeyDown={(e) => {
           if (e.key === "Escape") {
             e.preventDefault();
             e.stopPropagation();
             props.onCancel();
-          } else if (e.key === "Enter" && !e.isComposing) {
-            // As the composer: Return sends, and a line of its own is not something it makes.
+          } else if (e.key === "Enter" && !e.shiftKey && !composing(e)) {
+            // As the composer: Return saves, and over the limit the edit stays as it is.
             e.preventDefault();
-            props.onSave(e.currentTarget.value);
+            if ((props.room?.left ?? 0) >= 0) props.onSave(e.currentTarget.value);
           }
         }}
       />
-      <p id={hint} class="lu-msgedit__hint">
-        Esc to cancel · Return to save
-      </p>
+      <div class="lu-msgedit__foot">
+        <p id={hint} class="lu-msgedit__hint">
+          Esc to cancel · Return to save
+        </p>
+        <DraftRoom id={count} room={props.room} />
+      </div>
+    </div>
+  );
+}
+
+export interface MessageBodyProps {
+  /** The body as the core reads it (`client.parseBody`). */
+  blocks: BodyBlock[];
+  /** A mention as drawn, by its place in the message's mentions and its text as typed; a pill of that text when not given. */
+  mention?: (index: number, typed: string) => JSX.Element;
+  /** "(edited)" after the last paragraph's words, or on a line of its own after a body that ends in something else. */
+  edited?: boolean;
+  /** A long body drawn whole, "Show less" under it; collapsed, "Show more". Kept by the body itself when not given. */
+  expanded?: boolean;
+  onExpanded?: (expanded: boolean) => void;
+  class?: string;
+}
+
+/**
+ * A message's body, the protocol's Markdown subset as the core reads it
+ * (issue #18): paragraphs keep the lines typed and break a word too long
+ * for the row; emphasis, strong, struck and inline code; links, which open
+ * in a new tab; mentions as pills; a code block that scrolls sideways
+ * rather than wrap, with Copy in its corner; a quote beside its rule;
+ * lists with their markers. A body taller than fourteen lines as drawn is
+ * drawn at its first ten, fading out, with "Show more" under it.
+ */
+export function MessageBody(props: MessageBodyProps) {
+  const frame = fieldId();
+  let content: HTMLDivElement | undefined;
+  const [lines, setLines] = createSignal(0);
+  const [own, setOwn] = createSignal(false);
+  const open = () => props.expanded ?? own();
+  const long = () => collapsedLines(lines()) !== undefined;
+  onMount(() => {
+    const el = content;
+    if (!el) return;
+    // Lines as drawn, at this width and size: the height over the body's line height.
+    onCleanup(watchSize(el, () => setLines(linesOf(el.offsetHeight, parseFloat(getComputedStyle(el).lineHeight)))));
+  });
+  const edited = () => (
+    <span class="lu-msg__edited">
+      <span aria-hidden="true">(edited)</span>
+      <span class="lu-sr">edited</span>
+    </span>
+  );
+  const piece = (p: Piece): JSX.Element => {
+    let drawn: JSX.Element = p.mention === undefined ? p.text : <>{props.mention ? props.mention(p.mention, p.text) : <Mention>{p.text}</Mention>}</>;
+    if (p.code) drawn = <code class="lu-body__inline">{drawn}</code>;
+    if (p.strike) drawn = <s>{drawn}</s>;
+    if (p.emphasis) drawn = <em>{drawn}</em>;
+    if (p.strong) drawn = <strong>{drawn}</strong>;
+    return drawn;
+  };
+  const block = (b: BodyBlock, last: boolean): JSX.Element => {
+    switch (b.kind) {
+      case "para":
+        return (
+          <p class="lu-body__para">
+            <For each={stretches(b.text, b.runs, b.links)}>
+              {(s) => (
+                <Show when={s.url} fallback={<For each={s.pieces}>{piece}</For>}>
+                  {(url) => (
+                    <a class="lu-body__link" href={url()} target="_blank" rel="noopener noreferrer" title={url()} onClick={(e) => e.stopPropagation()}>
+                      <For each={s.pieces}>{piece}</For>
+                    </a>
+                  )}
+                </Show>
+              )}
+            </For>
+            <Show when={last && props.edited}>
+              {" "}
+              {edited()}
+            </Show>
+          </p>
+        );
+      case "code":
+        return <CodeBlock text={b.text} />;
+      case "quote":
+        return <blockquote class="lu-body__quote">{blocks(b.blocks)}</blockquote>;
+      case "list": {
+        const start = b.start ?? undefined;
+        const items = (
+          <For each={b.items}>
+            {(item, k) => (
+              <li class="lu-body__item">
+                <span class="lu-body__marker" aria-hidden="true">
+                  {start === undefined ? "•" : `${start + k()}.`}
+                </span>
+                {blocks(item)}
+              </li>
+            )}
+          </For>
+        );
+        return start === undefined ? (
+          <ul class="lu-body__list" role="list">
+            {items}
+          </ul>
+        ) : (
+          <ol class="lu-body__list" role="list" start={start}>
+            {items}
+          </ol>
+        );
+      }
+    }
+  };
+  const blocks = (list: BodyBlock[], top = false) => <div class="lu-body__blocks">{list.map((b, i) => block(b, top && i === list.length - 1))}</div>;
+  const endsInPara = () => props.blocks[props.blocks.length - 1]?.kind === "para";
+  return (
+    <div class={cx("lu-body", props.class)}>
+      <div id={frame} class={cx("lu-body__frame", long() && !open() && "is-collapsed")} style={long() && !open() ? { "max-height": `calc(var(--body-line) * ${COLLAPSED_LINES})` } : undefined}>
+        <div ref={content} class="lu-body__content">
+          {blocks(props.blocks, true)}
+          <Show when={props.edited && !endsInPara()}>
+            <p class="lu-body__para lu-body__after">{edited()}</p>
+          </Show>
+        </div>
+      </div>
+      <Show when={long()}>
+        <button
+          type="button"
+          class="lu-body__more"
+          aria-expanded={open()}
+          aria-controls={frame}
+          onClick={(e) => {
+            e.stopPropagation();
+            const next = !open();
+            setOwn(next);
+            props.onExpanded?.(next);
+          }}
+        >
+          {open() ? "Show less" : "Show more"}
+        </button>
+      </Show>
+    </div>
+  );
+}
+
+/** A code block of a body: its lines as typed, scrolling sideways rather than wrap, and Copy in its corner under the pointer or the keyboard. */
+function CodeBlock(props: { text: string }) {
+  const [copied, setCopied] = createSignal(false);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  onCleanup(() => clearTimeout(timer));
+  const copy = (e: MouseEvent) => {
+    e.stopPropagation();
+    void navigator.clipboard?.writeText(props.text).then(
+      () => {
+        setCopied(true);
+        clearTimeout(timer);
+        timer = setTimeout(() => setCopied(false), 1500);
+      },
+      () => {},
+    );
+  };
+  return (
+    <div class="lu-body__code">
+      {/* Focusable, so a keyboard can scroll a long line into view. */}
+      <pre class="lu-body__pre" tabindex="0">
+        <code>{props.text}</code>
+      </pre>
+      <button type="button" class="lu-body__copy" aria-label="Copy code" onClick={copy}>
+        {copied() ? "Copied" : "Copy"}
+      </button>
+      <span class="lu-sr" aria-live="polite">
+        {copied() ? "Copied" : ""}
+      </span>
     </div>
   );
 }

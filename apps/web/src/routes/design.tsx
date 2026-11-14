@@ -4,6 +4,7 @@
 // the top. Not a product screen.
 import { For, Show, createSignal, onCleanup, onMount, type JSX } from "solid-js";
 import { applyPreferences } from "../client/preferences";
+import type { BodyBlock, BodyLink, BodyRun } from "../client/bridge";
 import { QUICK_REACTIONS } from "../design/emoji";
 import {
   AppShell,
@@ -39,6 +40,7 @@ import {
   MenuRule,
   Message,
   MessageActions,
+  MessageBody,
   MessageList,
   Notice,
   NoticeLine,
@@ -1105,6 +1107,64 @@ export function DesignGallery() {
   );
 }
 
+/** A sample paragraph as the core gives one: `text`, with each mark's words found in it styled or linked. */
+function para(text: string, ...marks: { words: string; style?: BodyRun["style"]; url?: string }[]): BodyBlock {
+  const runs: BodyRun[] = [];
+  const links: BodyLink[] = [];
+  for (const m of marks) {
+    const start = text.indexOf(m.words);
+    const end = start + m.words.length;
+    if (m.style) runs.push({ start, end, style: m.style });
+    if (m.url) links.push({ start, end, url: m.url });
+  }
+  return { kind: "para", text, runs, links };
+}
+
+// A long message, a code block with a line wider than any row, a quote, lists and the inline styles (issue #18).
+const LONG_BODY: BodyBlock[] = [
+  para("Notes from the planning call, so nobody has to scroll the recording:", { words: "planning call", style: { kind: "strong" } }),
+  {
+    kind: "list",
+    start: 1,
+    items: [
+      [para("Onboarding ships Thursday, behind the flag until support has read the new copy.")],
+      [para("The importer keeps its old path for one more release; after that it goes.")],
+      [para("Search stays out of scope this quarter."), { kind: "list", items: [[para("Ask again in January.")], [para("Sam owns the write-up.")]] }],
+      [para("Mobile gets the same composer: Return sends on the web and the desktop, the phones keep their own key.")],
+    ],
+  },
+  para("Open questions\nWho reviews the copy before Thursday?\nDo we need a second migration window?\nCan the flag go per server rather than per instance?\nWhat does support want to see in the dashboard?", { words: "Open questions", style: { kind: "strong" } }),
+  para("Decisions\nThe flag is per server.\nSupport reads the copy on Wednesday.\nThe second migration window waits until someone asks for it.", { words: "Decisions", style: { kind: "strong" } }),
+  para("Everything else is in the doc, and the recording is pinned in #planning for anyone who wants the long version."),
+];
+const CODE_BODY: BodyBlock[] = [
+  para("The handler that answers it, and the line that is too long for any screen:"),
+  {
+    kind: "code",
+    lang: "rust",
+    text: "fn refuse(body: &str, max: u32) -> Result<(), ClientError> {\n    if !body::fits(body, max) {\n        return Err(ClientError::TooLong { over: body::room(body, max).left.unsigned_abs(), max }); // the instance would answer PAYLOAD_TOO_LARGE all the same, so the core says it before the round trip\n    }\n    Ok(())\n}",
+  },
+];
+const QUOTE_BODY: BodyBlock[] = [
+  { kind: "quote", blocks: [para("A message is someone else’s text: draw what they wrote, not what a document would be.")] },
+  para("Agreed, and the quote keeps its own lines too."),
+];
+const LONG_URL = "https://example.com/a/very/long/path/that/keeps/going/and/going/and/going/until/it/is/wider/than/the/row";
+const STYLED_BODY: BodyBlock[] = [
+  para(
+    "@Ryan the build is mostly green: run it again after Friday today, with bun run check, and the notes are on lumia.chat/docs.",
+    { words: "@Ryan", style: { kind: "mention", index: 0 } },
+    { words: "mostly", style: { kind: "emphasis" } },
+    { words: "run it again", style: { kind: "strong" } },
+    { words: "Friday", style: { kind: "strike" } },
+    { words: "bun run check", style: { kind: "code" } },
+    { words: "lumia.chat/docs", url: "https://lumia.chat/docs" },
+  ),
+  para(`A word with no room to break: ${LONG_URL}`, { words: LONG_URL, url: LONG_URL }),
+];
+const EDITED_CODE: BodyBlock[] = [para("Fixed the typo:"), { kind: "code", text: "bun run e2e" }];
+const PASTE = "A paste of many lines keeps them all:\nline two\nline three\nline four\nline five\nline six\nline seven\nline eight\nline nine, past which the field scrolls\nline ten\nline eleven";
+
 function Pieces() {
   return (
     <div class="pieces">
@@ -1355,6 +1415,38 @@ function Pieces() {
           <MessageList>
             <Message author={PEOPLE.self.name} initials="RW" tone="indigo" time="9:30 AM" datetime="2026-11-13T09:30" actions={false} onOpenProfile={() => {}}>
               <MessageEdit value="Sure, after standup works. I’ll bring the second screen." onSave={() => {}} onCancel={() => {}} />
+            </Message>
+          </MessageList>
+        </div>
+        <h2>Long messages, code blocks and long pastes: a long body collapsed and the same opened, a code block with a line too long for the row (Copy under the pointer), a quote, lists, the inline styles, “(edited)” after a code block</h2>
+        {/* Not wrapped: a wrapping row is as wide as its widest line, and a code block's is wider than any row. */}
+        <div class="pieces__row" style={{ "flex-direction": "column", "flex-wrap": "nowrap", "align-items": "stretch", "max-width": "720px" }}>
+          <MessageList>
+            <Message author={PEOPLE.maya.name} initials="MC" tone="peach" time="9:40 AM" datetime="2026-11-14T09:40" actions={false} onOpenProfile={() => {}}>
+              <MessageBody blocks={LONG_BODY} expanded={false} />
+            </Message>
+            <Message author={PEOPLE.maya.name} initials="MC" tone="peach" time="9:40 AM" datetime="2026-11-14T09:40" actions={false} onOpenProfile={() => {}} mentioned>
+              <MessageBody blocks={LONG_BODY} expanded />
+            </Message>
+            <Message author={PEOPLE.devon.name} initials="DP" tone="purple" time="9:44 AM" datetime="2026-11-14T09:44" actions={false} onOpenProfile={() => {}} parts={[{ time: "9:45", datetime: "2026-11-14T09:45", children: <MessageBody blocks={EDITED_CODE} edited /> }]}>
+              <MessageBody blocks={CODE_BODY} />
+            </Message>
+            <Message author={PEOPLE.sam.name} initials="SO" tone="mint" time="9:50 AM" datetime="2026-11-14T09:50" actions={false} onOpenProfile={() => {}}>
+              <MessageBody blocks={QUOTE_BODY} />
+            </Message>
+            <Message author={PEOPLE.leo.name} initials="LM" tone="sky" time="9:52 AM" datetime="2026-11-14T09:52" actions={false} onOpenProfile={() => {}}>
+              <MessageBody blocks={STYLED_BODY} mention={() => <Mention onOpen={() => {}}>@{PEOPLE.self.name}</Mention>} edited />
+            </Message>
+          </MessageList>
+        </div>
+        <h2>The composer near the limit and over it (Send off), a paste of many lines (eight shown, then it scrolls), an edit over the limit</h2>
+        <div class="pieces__row" style={{ "flex-direction": "column", "align-items": "stretch", "max-width": "720px" }}>
+          <Composer placeholder="Message #design" tools={false} value="The release notes, nearly at the limit." room={{ shown: true, left: 1204 }} />
+          <Composer placeholder="Message #design" tools={false} value="The release notes, past the limit." room={{ shown: true, left: -37 }} />
+          <Composer placeholder="Message #design" tools={false} value={PASTE} />
+          <MessageList>
+            <Message author={PEOPLE.self.name} initials="RW" tone="indigo" time="9:55 AM" datetime="2026-11-14T09:55" actions={false} onOpenProfile={() => {}}>
+              <MessageEdit value="The whole log, pasted in again." room={{ shown: true, left: -1 }} onSave={() => {}} onCancel={() => {}} />
             </Message>
           </MessageList>
         </div>

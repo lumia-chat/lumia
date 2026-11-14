@@ -303,7 +303,7 @@ function Conversation(props: HomeProps) {
   // One of this identity's messages being edited where it is drawn, and an edit or a delete that failed.
   const [editing, setEditing] = createSignal<string | undefined>();
   const [refused, setRefused] = createSignal<Refusal | null>(null);
-  let composerInput: HTMLInputElement | undefined;
+  let composerInput: HTMLTextAreaElement | undefined;
   createEffect(
     on(
       () => props.channelId,
@@ -330,6 +330,7 @@ function Conversation(props: HomeProps) {
       blockKey: m.mine ? me() : m.senderAccountId || m.senderIdentityId,
       at: m.sentAtMicros,
       body: m.body,
+      blocks: m.blocks,
       deleted: m.deleted,
       edited: m.edited,
       mine: m.mine,

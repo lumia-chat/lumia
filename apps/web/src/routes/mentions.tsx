@@ -3,14 +3,14 @@
 // Mentions row atop its sidebar, or across every server from Home. Each
 // item is where it was said over the message as the timeline draws it;
 // pressing it opens the channel at that message.
-import { For, Show, createMemo } from "solid-js";
-import { ChannelHeader, EmptyState, Mention, MentionEntry, Message, ReplyRef } from "../design/components";
+import { For, Show, createMemo, createSignal } from "solid-js";
+import { ChannelHeader, EmptyState, Mention, MentionEntry, Message, MessageBody, ReplyRef } from "../design/components";
 import type { MessageSummary, ServerSummary, SnapshotSummary } from "../client/bridge";
 import { mentionsQuery } from "../client/state";
 import { useNames } from "../client/names";
 import { preferences } from "../client/preferences";
 import { dayLabel, initialsOf, timeOf, toneFor } from "./app";
-import { bodySegments, mentionWords } from "./timeline";
+import { mentionWords } from "./timeline";
 
 export interface MentionsPageProps {
   /** The server whose mentions these are; every server's at Home. */
@@ -42,6 +42,8 @@ export function MentionsPage(props: MentionsPageProps) {
     const p = profile(id);
     return p ? p.displayName || p.nickname || p.handle || undefined : undefined;
   };
+  // The long bodies opened, while the page is open.
+  const [expanded, setExpanded] = createSignal<ReadonlySet<string>>(new Set());
   // A page more as the end comes into view.
   const onScroll = (e: Event & { currentTarget: HTMLDivElement }) => {
     const el = e.currentTarget;
@@ -92,16 +94,23 @@ export function MentionsPage(props: MentionsPageProps) {
                     {m.deleted ? (
                       "(deleted)"
                     ) : (
-                      <p>
-                        <For each={bodySegments(m.body, m.mentions)}>{(s) => <Show when={s.mention} fallback={s.text}>{(mention) => <Mention>{mentionWords(s.text, mention(), quoted)}</Mention>}</Show>}</For>
-                        <Show when={m.edited}>
-                          {" "}
-                          <span class="lu-msg__edited">
-                            <span aria-hidden="true">(edited)</span>
-                            <span class="lu-sr">edited</span>
-                          </span>
-                        </Show>
-                      </p>
+                      <MessageBody
+                        blocks={m.blocks}
+                        mention={(index, typed) => {
+                          const mention = m.mentions[index];
+                          return <Mention>{mention ? mentionWords(typed, mention, quoted) : typed}</Mention>;
+                        }}
+                        edited={m.edited}
+                        expanded={expanded().has(m.messageId)}
+                        onExpanded={(open) =>
+                          setExpanded((was) => {
+                            const now = new Set(was);
+                            if (open) now.add(m.messageId);
+                            else now.delete(m.messageId);
+                            return now;
+                          })
+                        }
+                      />
                     )}
                   </Message>
                 </MentionEntry>

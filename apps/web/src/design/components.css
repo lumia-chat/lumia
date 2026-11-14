@@ -94,7 +94,12 @@
 .lu-composer { padding: 4px var(--space-24) 14px; }
 .lu-composer__field { display: flex; align-items: center; gap: var(--space-2); padding: 6px 6px 6px 8px; border: 1px solid var(--border-composer); border-radius: var(--radius-16); background: var(--field); box-shadow: var(--shadow-composer); }
 .lu-composer__field:focus-within { border-color: var(--border-active); }
-.lu-composer__input { flex: 1; min-width: 0; height: 42px; padding: 0 8px; border: 0; outline: none; background: transparent; font: inherit; font-size: calc(15px * var(--msg-scale, 1)); color: var(--ink-field); }
+/* A field of lines: one 42 tall, growing with its text to eight lines, then scrolling inside itself. */
+.lu-composer__input { --composer-line: calc(15px * var(--msg-scale, 1) * 1.5); flex: 1; min-width: 0; display: block; height: 42px; min-height: 42px; max-height: calc(var(--composer-line) * 7 + 42px); padding: calc((42px - var(--composer-line)) / 2) 8px; border: 0; outline: none; background: transparent; font: inherit; font-size: calc(15px * var(--msg-scale, 1)); line-height: var(--composer-line); color: var(--ink-field); resize: none; overflow-y: auto; }
+/* Its buttons stay on the last line as it grows: each centred on a line 42 tall. */
+.lu-composer__field { align-items: flex-end; }
+.lu-composer__field > .lu-iconbtn--36 { margin-bottom: 3px; }
+.lu-composer__field > .lu-iconbtn--40 { margin-bottom: 1px; }
 .lu-composer__field .lu-composer__attach { color: var(--ink-secondary); }
 .lu-composer__send { margin-left: 4px; }
 .lu-composer__field.is-bare .lu-composer__input { padding-left: 10px; }
@@ -102,6 +107,10 @@
 .lu-composer__frame.has-bar { display: flex; flex-direction: column; border: 1px solid var(--border-active); border-radius: var(--radius-16); background: var(--field); box-shadow: var(--shadow-composer); overflow: hidden; }
 .lu-composer__frame.has-bar > .lu-composer__field { border: 0; border-radius: 0; background: transparent; box-shadow: none; }
 .lu-composer__hint { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; padding: 8px 8px 0; font-size: 12.5px; color: var(--ink-muted); }
+.lu-composer__typing { min-width: 0; }
+/* A draft's counter near the limit, at the trailing edge; over it, in the danger ink. */
+.lu-draftroom { margin-inline-start: auto; font-size: 12.5px; font-variant-numeric: tabular-nums; color: var(--ink-muted); white-space: nowrap; }
+.lu-draftroom.is-over { color: var(--danger); font-weight: 600; }
 .lu-typing { display: inline-flex; align-items: center; gap: var(--space-8); font-size: 12.5px; color: var(--ink-muted); }
 .lu-typing strong { font-weight: 600; color: var(--ink-emphasis); }
 .lu-typing__text { min-width: 0; }
@@ -681,6 +690,56 @@ button.lu-replyref { cursor: pointer; }
 .lu-msgedit__field { display: block; width: 100%; min-height: 44px; max-height: 50vh; padding: 9px 12px; border: 1px solid var(--border-active); border-radius: var(--radius-12); background: var(--field); font: inherit; font-family: var(--font-sans); font-size: calc(15px * var(--msg-scale, 1)); line-height: 1.6; color: var(--ink-field); resize: none; overflow-y: auto; box-sizing: border-box; }
 .lu-msgedit__field:focus { outline: none; }
 .lu-msg__body .lu-msgedit__hint { margin: 0; font-size: calc(12.5px * var(--msg-scale, 1)); color: var(--ink-muted); }
+.lu-msgedit__foot { display: flex; align-items: baseline; flex-wrap: wrap; gap: var(--space-4) var(--space-12); }
+.lu-msgedit__foot .lu-draftroom { font-size: calc(12.5px * var(--msg-scale, 1)); }
+
+/* ── A message's body (issue #18): the protocol's Markdown subset as the core reads it ── */
+/* Its measures follow the message size (Preferences). The design system ships no monospaced face, so code is in the platform's own, as the desktop shell draws it. */
+.lu-body { --body-size: calc(15px * var(--msg-scale, 1)); --body-line: calc(var(--body-size) * 1.6); --body-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; align-self: stretch; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-2); font-size: var(--body-size); line-height: var(--body-line); color: var(--ink-body); }
+.lu-msg--reply .lu-body, .lu-msg--parent .lu-body { --body-size: 14px; --body-line: calc(14px * 1.5); }
+.lu-body__frame { align-self: stretch; min-width: 0; }
+/* Collapsed: its first lines (the height is set with them), the last fading into whatever the row is drawn on: its hover, the wash of a mention. The mask is alpha, not a colour. */
+.lu-body__frame.is-collapsed { overflow: clip; -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - var(--body-line) * 1.5), transparent); mask-image: linear-gradient(to bottom, #000 calc(100% - var(--body-line) * 1.5), transparent); }
+.lu-body__content { min-width: 0; }
+/* Paragraphs 4 apart, anything else 8 from what is around it; in a list item, paragraphs 8 apart and a nested list 4 under its line. */
+.lu-body .lu-body__blocks > * + * { margin-top: var(--space-8); }
+.lu-body .lu-body__blocks > .lu-body__para + .lu-body__para { margin-top: var(--space-4); }
+.lu-body .lu-body__item > .lu-body__blocks > .lu-body__para + .lu-body__para { margin-top: var(--space-8); }
+.lu-body .lu-body__item > .lu-body__blocks > * + .lu-body__list { margin-top: var(--space-4); }
+.lu-body .lu-body__after { margin-top: var(--space-4); }
+/* The lines typed kept, and a word too long for the row broken rather than run out of it. */
+.lu-body .lu-body__para { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.lu-body em { font-style: italic; }
+.lu-body strong { font-weight: 700; }
+.lu-body s { text-decoration: line-through; }
+.lu-body__inline { padding: 0 3.5px; border-radius: var(--radius-5); background: var(--inset); font-family: var(--body-mono); font-size: 0.9em; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+.lu-body__link { color: var(--link); text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--link) 40%, transparent); text-underline-offset: 3px; border-radius: var(--radius-5); }
+.lu-body__link:hover { color: var(--link-hover); text-decoration-color: currentColor; }
+.lu-body__link .lu-mention { text-decoration: none; }
+/* A code block: never wrapped, never scrolled up and down; a long line scrolls sideways inside it. */
+.lu-body__code { position: relative; min-width: 0; border: 1px solid var(--line); border-radius: var(--radius-12); background: var(--inset); }
+.lu-body__pre { margin: 0; padding: var(--space-10) var(--space-12); overflow-x: auto; overflow-y: hidden; border-radius: inherit; white-space: pre; tab-size: 4; font-family: var(--body-mono); font-size: calc(13px * var(--msg-scale, 1)); line-height: calc(20px * var(--msg-scale, 1)); color: var(--ink-body); }
+.lu-body__pre:focus-visible { outline-offset: -2px; }
+.lu-body__pre code { font: inherit; }
+.lu-body__copy { position: absolute; top: var(--space-6); right: var(--space-6); height: 26px; padding: 0 var(--space-8); border: 1px solid var(--line-strong); border-radius: var(--radius-7); background: var(--raised); box-shadow: var(--shadow-popover); color: var(--ink-secondary); font: inherit; font-family: var(--font-sans); font-size: 12px; font-weight: 600; line-height: 1; cursor: pointer; opacity: 0; transition: opacity .12s ease; }
+.lu-body__copy:hover { background: var(--hover-secondary); color: var(--ink-field); }
+.lu-body__code:hover .lu-body__copy, .lu-body__code:focus-within .lu-body__copy { opacity: 1; }
+/* Where nothing hovers, it is always there. */
+@media (hover: none) {
+  .lu-body__copy { opacity: 1; }
+}
+/* A quote: its blocks beside a rule at the leading edge. */
+.lu-body__quote { position: relative; margin: 0; padding-inline-start: var(--space-14); }
+.lu-body__quote::before { content: ""; position: absolute; inset-block: 0; inset-inline-start: 0; width: var(--space-2); border-radius: var(--space-2); background: var(--line-strong); }
+/* A list: each item's marker ("•" or "3.") in a column of its own, the item's blocks beside it. */
+.lu-body__list { margin: 0; padding: 0; list-style: none; }
+.lu-body__item { display: flex; }
+.lu-body__item + .lu-body__item { margin-top: var(--space-4); }
+.lu-body__marker { flex: none; width: var(--space-28); padding-inline-end: var(--space-8); text-align: end; font-variant-numeric: tabular-nums; color: var(--ink-secondary); }
+.lu-body__item > .lu-body__blocks { flex: 1; min-width: 0; }
+/* "Show more" under a collapsed body, "Show less" under it opened. */
+.lu-body__more { padding: 0; border: 0; border-radius: var(--radius-6); background: none; font: inherit; font-family: var(--font-sans); font-size: calc(13px * var(--msg-scale, 1)); font-weight: 600; line-height: 1.4; color: var(--accent-ink); cursor: pointer; }
+.lu-body__more:hover { text-decoration: underline; text-underline-offset: 3px; }
 .lu-msg__body .lu-msg__refused { margin: 0; font-size: calc(13px * var(--msg-scale, 1)); line-height: 1.4; color: var(--dnd); }
 /* "Delete this message?": its line quoted under the title, Cancel and Delete at its end. */
 .lu-pop--confirm { width: 360px; }
@@ -729,5 +788,6 @@ button.lu-replyref { cursor: pointer; }
 }
 @media (prefers-reduced-motion: reduce) {
   .lu-msg__part::before { transition: none; }
+  .lu-body__copy { transition: none; }
 }
 .lu-msg__part.is-mentioned .lu-mention { box-shadow: inset 0 0 0 1px var(--reaction-on-border); }
