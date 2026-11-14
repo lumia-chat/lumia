@@ -95,6 +95,10 @@ case "$prefix" in */) ;; *) prefix="$prefix/" ;; esac
 private=${SPARKLE_KEY_PATH:-}
 if [ -n "$private" ] && [ ! -f "$private" ]; then echo "dist: no key file at $private"; exit 1; fi
 if $release; then
+  # The AppImage compares the feed's version with its own, which is Cargo.toml's: a tag that
+  # disagrees would have every copy offered its own release again.
+  manifest=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$crate/Cargo.toml" | head -1)
+  [ "$version" = "$manifest" ] || { echo "dist: --release $version, but Cargo.toml is $manifest (make the Version commit first)"; exit 1; }
   [ -n "$feed" ] || { echo "dist: --release needs a feed (LUMIA_UPDATE_FEED is empty)"; exit 1; }
   [ -n "$private" ] || { echo "dist: --release needs SPARKLE_KEY_PATH"; exit 1; }
 fi
