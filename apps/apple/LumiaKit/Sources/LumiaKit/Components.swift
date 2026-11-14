@@ -175,7 +175,7 @@ public struct LumiaMessageRow: View {
 
     /// The body as the core reads it, once a drawing for the words and what
     /// assistive technology hears of them.
-    private var blocks: [BodyBlock] { deleted ? [] : parseBody(body: text, mentions: extras.mentions) }
+    private var blocks: [BodyBlock] { deleted ? [] : BodyBlocks.parsed(text, mentions: extras.mentions) }
 
     private var editing: Bool { extras.edit != nil && !deleted }
     private var oneLine: Bool { measures.layout == .oneLine }
@@ -653,7 +653,8 @@ public struct LumiaComposer<Above: View>: View {
     }
 
     public var body: some View {
-        let left = room?(text)
+        // What is counted is what is sent: the draft without its blanks at either end.
+        let left = room?(text.trimmingCharacters(in: .whitespacesAndNewlines))
         let canSend = canSend(left)
         let counted = left?.shown == true
         VStack(alignment: .leading, spacing: LumiaTokens.space8) {

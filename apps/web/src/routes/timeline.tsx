@@ -379,8 +379,11 @@ export function Timeline(props: TimelineProps) {
     if (now) props.onDelete(item);
     else setConfirming({ anchor, item });
   };
-  const save = (m: TimelineItem, text: string) => {
+  const save = async (m: TimelineItem, text: string) => {
     const body = text.trim();
+    // Asked of the core for this very text, before the field goes: a counter answered for an
+    // earlier text must not let an edit over the limit close and be lost.
+    if (body && (await client().messageRoom(body)).left < 0) return;
     props.onEditing(undefined);
     // Nothing left is a delete, which asks first.
     if (!body) return askDelete(m, find(m.id), false);
@@ -389,7 +392,8 @@ export function Timeline(props: TimelineProps) {
   // The message taken up for editing comes into view (Up in the composer edits one that may be off screen).
   // Its text is counted against the limit as it changes, from the body it opens with.
   const [editText, setEditText] = createSignal("");
-  const editRoom = createRoom(editText);
+  // What is counted is what is saved: the text without its blanks at either end.
+  const editRoom = createRoom(() => editText().trim());
   createEffect(
     on(
       () => props.editing,
@@ -698,8 +702,11 @@ let listIds = 0;
  */
 export function Compose(props: ComposeProps) {
   let input: HTMLTextAreaElement | undefined;
-  const room = createRoom(() => props.value);
+  // What is counted is what is sent: the draft without its blanks at either end.
+  const room = createRoom(() => props.value.trim());
   const over = () => (room()?.left ?? 0) < 0;
+  // A counter answered for an earlier text can let one over the limit through: the core
+  // refuses it then, and the send puts the draft back with why.
   const send = () => {
     if (!over()) props.onSend();
   };
@@ -817,6 +824,10 @@ export function Compose(props: ComposeProps) {
           <Show when={open()}>
             <MentionList id={listId} options={options()} active={active()} onActive={setActive} onPick={pick} />
           </Show>
+          {/* A textarea cannot be a combobox, so nothing says the list opened: this does. */}
+          <span class="lu-sr" aria-live="polite">
+            {open() ? `${options().length} to mention, Up and Down to choose, Return to pick` : ""}
+          </span>
           {props.note}
         </>
       }

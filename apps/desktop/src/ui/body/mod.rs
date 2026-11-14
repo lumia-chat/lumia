@@ -34,12 +34,12 @@
 //!   link's text need not say where it goes.)
 //! - A folded body whole: what the fold hides is still its text.
 //!
-//! A mention (architecture 6.6) is drawn as the design system's pill: the message gives
-//! each one's range in its source, which the parser does not keep, so the words of each
-//! (`@ada`) are found again in the paragraphs drawn, where they stand as a word and outside
-//! code.
+//! A mention (architecture 6.6) is drawn as the design system's pill: the core reads the
+//! source with the message's mention ranges (`parse_with`) and gives each paragraph the
+//! ranges of its mentions, none inside code or a link.
 
 use std::cell::Cell;
+use std::ops::Range;
 
 use rune::text::RichLayoutOptions;
 use rune::{
@@ -47,8 +47,8 @@ use rune::{
 };
 use rune_kit::syntax::{self, SyntaxTheme};
 
-pub use lumia_client::body::{Block, Inline, Style, is_web, parse};
-use lumia_client::body::{PAD, standing};
+use lumia_client::body::PAD;
+pub use lumia_client::body::{Block, Inline, Style, is_web, parse, parse_with};
 
 use super::components::Look;
 use crate::app::State;
@@ -130,22 +130,21 @@ impl Default for Drawn<'_> {
     }
 }
 
-/// [`view`] with the words of the message's mentions (`@ada`), drawn as pills.
+/// [`view`] with the message's mentions, their byte ranges of `source`, drawn as pills.
 pub fn view_with(
     source: &str,
     selectable: bool,
-    mentions: &[String],
+    mentions: &[Range<usize>],
     drawn: Drawn<'_>,
     look: Look,
 ) -> El {
-    let blocks = parse(source);
+    let blocks = parse_with(source, mentions);
     let body = Body {
         look,
         ty: *drawn.ty,
         selectable,
         first: Cell::new(true),
         head: Cell::new(drawn.head.map(str::to_owned)),
-        mentions: mentions.to_vec(),
         edited: Cell::new(false),
         id: drawn.id.map(str::to_owned),
         copied: drawn.copied,
@@ -164,8 +163,8 @@ pub fn view_with(
 
 /// Whether "(edited)" can follow a body's words on its last line: it ends in a paragraph,
 /// not in code, a quote or a list, after which it stands on a line of its own.
-pub fn edited_inline(source: &str) -> bool {
-    ends_in_paragraph(&parse(source))
+pub fn edited_inline(source: &str, mentions: &[Range<usize>]) -> bool {
+    ends_in_paragraph(&parse_with(source, mentions))
 }
 
 fn ends_in_paragraph(blocks: &[Block]) -> bool {
@@ -218,8 +217,6 @@ struct Body {
     first: Cell<bool>,
     /// [`Drawn::head`], until the first text takes it.
     head: Cell<Option<String>>,
-    /// The words of the message's mentions, drawn as pills.
-    mentions: Vec<String>,
     /// The next paragraph drawn ends with "(edited)": set for the body's last.
     edited: Cell<bool>,
     /// [`Drawn::id`].
@@ -502,21 +499,14 @@ impl Body {
                 span
             });
         }
-        // Mentions last, over what they stand in, but never inside code.
-        for words in &self.mentions {
-            for range in standing(&inline.text, words) {
-                let in_code = inline.runs.iter().any(|(run, style)| {
-                    matches!(style, Style::Code) && run.start < range.end && range.start < run.end
-                });
-                if !in_code {
-                    spans.push(
-                        Span::new(range.start, range.end)
-                            .color(c.accent_ink)
-                            .weight(t::TEXT_LINK_SM.weight)
-                            .bg(c.accent_soft, t::CODE_PAD),
-                    );
-                }
-            }
+        // Mentions last, over what they stand in; the core marks none inside code or a link.
+        for (range, _) in &inline.mentions {
+            spans.push(
+                Span::new(range.start, range.end)
+                    .color(c.accent_ink)
+                    .weight(t::TEXT_LINK_SM.weight)
+                    .bg(c.accent_soft, t::CODE_PAD),
+            );
         }
         spans
     }
@@ -629,9 +619,25 @@ impl Body {
                     // and a quarter (an ideograph is an em, an emoji a little more).
                     let size = self.ty.message.size;
                     let per_line = (width / (size * 1.25)).floor().max(1.0) as usize;
-                    let typed = inline.text.split('\n');
-                    let most: usize = typed
-                        .map(|words| words.chars().count().div_ceil(per_line).max(1))
+                    // A typed line that fits is one line. One that wraps wraps at its words,
+                    // so a line can end well short of the edge, but any two lines in a row
+                    // hold more than a line's worth (the word moved down did not fit in what
+                    // was left): twice its characters over a line, and one more, bound it.
+                    // A tab counts as the eight it can take.
+                    let most: usize = inline
+                        .text
+                        .split('\n')
+                        .map(|words| {
+                            let chars = words
+                                .chars()
+                                .map(|c| if c == '\t' { 8 } else { 1 })
+                                .sum::<usize>();
+                            if chars <= per_line {
+                                1
+                            } else {
+                                (2 * chars).div_ceil(per_line) + 1
+                            }
+                        })
                         .sum();
                     most as f32 * line
                 }

@@ -233,8 +233,8 @@ fun ConversationScreen(store: AppStore, session: LumiaSession, channelId: String
     // The long messages opened while the conversation is.
     val expanded = remember { mutableStateMapOf<String, Boolean>() }
     // The room the draft and the field being edited have under the instance's limit.
-    val room = remember(draft.text) { session.roomOf(draft.text) }
-    val editRoom = remember(editing, editDraft.text) { if (editing == null) null else session.roomOf(editDraft.text) }
+    val room = remember(draft.text) { session.roomOf(draft.text.trim()) }
+    val editRoom = remember(editing, editDraft.text) { if (editing == null) null else session.roomOf(editDraft.text.trim()) }
     val places = remember(sent, me) { blockPlaces(sent.map { Stamp(senderOf(it), it.sentAtMicros, quotes = it.reply != null) }) }
     // Where this account had read to as the conversation opened, while some of it was unread: the line stays until it is left.
     val readTo = remember { session.readStates[channelId]?.takeIf { it.unread > 0u }?.readSeq }
@@ -429,8 +429,8 @@ fun ChannelScreen(store: AppStore, session: LumiaSession, channelId: String, dis
     // The long messages opened while the channel is.
     val expanded = remember { mutableStateMapOf<String, Boolean>() }
     // The room the draft and the field being edited have under the instance's limit.
-    val room = remember(draft.text) { session.roomOf(draft.text) }
-    val editRoom = remember(editing, editDraft.text) { if (editing == null) null else session.roomOf(editDraft.text) }
+    val room = remember(draft.text) { session.roomOf(draft.text.trim()) }
+    val editRoom = remember(editing, editDraft.text) { if (editing == null) null else session.roomOf(editDraft.text.trim()) }
     val name = channel?.name ?: "channel"
     val dm = channel?.kind == SERVER_DM
     val other = channel?.let { otherIn(it, session.me) }

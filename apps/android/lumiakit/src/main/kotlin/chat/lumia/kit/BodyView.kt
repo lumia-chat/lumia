@@ -23,6 +23,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -64,6 +65,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
+import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import uniffi.lumia_ffi.BodyBlock
 import uniffi.lumia_ffi.BodyInline
@@ -330,7 +332,7 @@ private fun CopyButton(text: String) {
                 onClick { copy(); true }
             }
             .clickable(role = Role.Button, onClick = copy)
-            .widthIn(min = 44.dp)
+            .widthIn(min = LumiaTokens.tileSize)
             .padding(horizontal = LumiaTokens.space10, vertical = LumiaTokens.space8),
     )
 }
@@ -347,44 +349,46 @@ private fun Collapsing(expanded: Boolean, onExpanded: (Boolean) -> Unit, modifie
     val style = LumiaTokens.textMessage.scaled
     val measurer = rememberTextMeasurer()
     val line = remember(style, measurer) { measurer.measure("A", style).size.height }
-    var collapsible by remember { mutableStateOf(false) }
-    val clipped = collapsible && !expanded
-    Column(modifier) {
-        Layout(
-            content = content,
-            modifier = Modifier
-                .clipToBounds()
-                .then(
-                    if (!clipped) Modifier else Modifier
-                        // Drawn apart, so the fade takes the words away and leaves what is under them.
+    // Where the words are cut, 0 for nowhere: set as they are measured and read as they are
+    // drawn, so a long body has its fade and its button in the frame it first appears in.
+    val cut = remember { mutableFloatStateOf(0f) }
+    Layout(
+        contents = listOf(
+            {
+                Column(
+                    // Drawn apart, so the fade takes the words away and leaves what is under them.
+                    Modifier
                         .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
                         .drawWithContent {
                             drawContent()
-                            val fade = line * FADE_LINES
-                            // A mask, not a colour drawn: opaque keeps the words, clear takes them away.
-                            drawRect(
-                                Brush.verticalGradient(listOf(Color.Black, Color.Transparent), startY = size.height - fade, endY = size.height),
-                                blendMode = BlendMode.DstIn,
-                            )
+                            val at = cut.floatValue
+                            if (at > 0f) {
+                                // A mask, not a colour drawn: opaque keeps the words, clear takes
+                                // them away, everything under the cut too.
+                                drawRect(
+                                    Brush.verticalGradient(listOf(Color.Black, Color.Transparent), startY = at - line * FADE_LINES, endY = at),
+                                    blendMode = BlendMode.DstIn,
+                                )
+                            }
                         },
-                ),
-        ) { measurables, constraints ->
-            val placeables = measurables.map { it.measure(constraints.copy(minHeight = 0, maxHeight = Constraints.Infinity)) }
-            val width = placeables.maxOfOrNull { it.width } ?: 0
-            val full = placeables.sumOf { it.height }
-            val lines = if (line > 0) (full + line - 1) / line else 0
-            val collapses = collapses(lines)
-            if (collapses != collapsible) collapsible = collapses
-            val height = if (collapses && !expanded) minOf(full, COLLAPSED_LINES * line) else full
-            layout(width.coerceIn(constraints.minWidth, constraints.maxWidth), height.coerceAtLeast(constraints.minHeight)) {
-                var y = 0
-                for (p in placeables) {
-                    p.placeRelative(0, y)
-                    y += p.height
-                }
-            }
+                ) { content() }
+            },
+            { ShowMore(expanded, onExpanded) },
+        ),
+        modifier = modifier.clipToBounds(),
+    ) { (words, more), constraints ->
+        val body = words.first().measure(constraints.copy(minHeight = 0, maxHeight = Constraints.Infinity))
+        // Lines to the nearest, as the other clients count them.
+        val lines = if (line > 0) (body.height.toFloat() / line).roundToInt() else 0
+        val collapses = collapses(lines)
+        val shown = if (collapses && !expanded) minOf(body.height, COLLAPSED_LINES * line) else body.height
+        cut.floatValue = if (shown < body.height) shown.toFloat() else 0f
+        val button = if (collapses) more.first().measure(constraints.copy(minWidth = 0, minHeight = 0)) else null
+        val height = shown + (button?.height ?: 0)
+        layout(body.width.coerceIn(constraints.minWidth, constraints.maxWidth), height.coerceAtLeast(constraints.minHeight)) {
+            body.placeRelative(0, 0)
+            button?.placeRelative(0, shown)
         }
-        if (collapsible) ShowMore(expanded, onExpanded)
     }
 }
 

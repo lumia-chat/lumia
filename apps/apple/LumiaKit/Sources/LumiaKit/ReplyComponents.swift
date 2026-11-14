@@ -448,7 +448,8 @@ public struct LumiaMessageEditor: View {
     }
 
     public var body: some View {
-        let left = room?(draft)
+        // What is counted is what is saved: the text without its blanks at either end.
+        let left = room?(draft.trimmingCharacters(in: .whitespacesAndNewlines))
         let over = MessageCounter.over(left)
         VStack(alignment: .leading, spacing: LumiaTokens.space6) {
             TextField("", text: $draft, axis: .vertical)
@@ -470,7 +471,7 @@ public struct LumiaMessageEditor: View {
                     guard MessageEdits.returnTyped(old: old, new: new) else { return }
                     if newline { newline = false; return }
                     draft = old
-                    if !MessageCounter.over(room?(old)) { save() }
+                    if !MessageCounter.over(room?(old.trimmingCharacters(in: .whitespacesAndNewlines))) { save() }
                 }
                 .announcesGoingOver(left)
                 .accessibilityLabel("Edit message")

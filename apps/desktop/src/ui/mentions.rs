@@ -142,11 +142,10 @@ fn item(s: &State, message: &MessageSummary, look: Look) -> El {
         .with_timezone(&chrono::Local)
         .format("%b %-d, %-I:%M %p")
         .to_string();
-    let words: Vec<String> = entry
+    let mentions: Vec<std::ops::Range<usize>> = entry
         .mentions
         .iter()
-        .filter_map(|m| entry.body.get(m.start as usize..m.end as usize))
-        .map(str::to_string)
+        .map(|m| m.start as usize..m.end as usize)
         .collect();
     let place = place_of(s, message);
     let mut content = col().grow(1.0).min_w(0.0).gap(t::SPACE_4).child(
@@ -168,7 +167,7 @@ fn item(s: &State, message: &MessageSummary, look: Look) -> El {
     content = content.child(body::view_with(
         &entry.body,
         false,
-        &words,
+        &mentions,
         body::Drawn::default(),
         look,
     ));

@@ -117,7 +117,7 @@ struct Changer {
     /// nothing left asks to delete instead.
     func save(_ ref: MessageRef) {
         // Over the instance's limit the field stays, holding its words.
-        guard !MessageCounter.over(session.client.messageRoom(changes.draft)) else { return }
+        guard !MessageCounter.over(session.client.messageRoom(changes.draft.trimmingCharacters(in: .whitespacesAndNewlines))) else { return }
         switch MessageEdits.outcome(original: ref.body, draft: changes.draft) {
         case .unchanged:
             changes.editing = nil

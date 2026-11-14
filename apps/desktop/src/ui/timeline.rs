@@ -45,6 +45,8 @@
 //! such rows or 4 MiB; and while a selection spans many unmounted rows, each scrolled
 //! frame that mounts rows costs more (`benches/timeline.rs` measures it).
 
+use std::ops::Range;
+
 use std::borrow::Cow;
 
 use chrono::{DateTime, Local, NaiveDate};
@@ -823,7 +825,7 @@ fn stored_row(s: &State, i: usize, entry: &Entry, place: Place, look: Look) -> E
 /// What a message's body shows: its source with each mention's words in it as `@` and the
 /// person's name (architecture 6.6; `@everyone` as it is), escaped so the name stays text, and
 /// those words, for the renderer to draw as pills.
-fn shown_body(s: &State, entry: &Entry) -> (String, Vec<String>) {
+fn shown_body(s: &State, entry: &Entry) -> (String, Vec<Range<usize>>) {
     let mut mentions: Vec<_> = entry
         .mentions
         .iter()
@@ -835,7 +837,7 @@ fn shown_body(s: &State, entry: &Entry) -> (String, Vec<String>) {
         .collect();
     mentions.sort_by_key(|m| m.start);
     let mut source = String::with_capacity(entry.body.len());
-    let mut words = Vec::new();
+    let mut ranges = Vec::new();
     let mut at = 0usize;
     for m in mentions {
         let (start, end) = (m.start as usize, m.end as usize);
@@ -843,22 +845,19 @@ fn shown_body(s: &State, entry: &Entry) -> (String, Vec<String>) {
             continue;
         }
         source.push_str(&entry.body[at..start]);
-        let shown = if m.everyone {
-            "@everyone".to_string()
+        // The core reads a mention as one unit, so a name needs no escaping.
+        let from = source.len();
+        if m.everyone {
+            source.push_str("@everyone");
         } else {
-            format!("@{}", s.session.name_of(&m.account_id))
-        };
-        for ch in shown.chars() {
-            if "\\`*_[]~#>|<".contains(ch) {
-                source.push('\\');
-            }
-            source.push(ch);
+            source.push('@');
+            source.push_str(&s.session.name_of(&m.account_id));
         }
-        words.push(shown);
+        ranges.push(from..source.len());
         at = end;
     }
     source.push_str(&entry.body[at..]);
-    (source, words)
+    (source, ranges)
 }
 
 /// A message's words with what architecture 6.6 adds: its mentions as pills in them,
@@ -880,15 +879,15 @@ fn message_content(s: &State, entry: &Entry, drawn: body::Drawn<'_>, look: Look)
             content = content.child(edit_field(&entry.id, field, room, ty, look));
         }
         None => {
-            let (source, words) = shown_body(s, entry);
+            let (source, mentions) = shown_body(s, entry);
             // "(edited)" follows the words on their last line when they end in a paragraph,
             // and stands on a line of its own after code, a quote or a list.
-            let inline = entry.edited && body::edited_inline(&source);
+            let inline = entry.edited && body::edited_inline(&source, &mentions);
             let drawn = body::Drawn {
                 edited: inline,
                 ..drawn
             };
-            let body = body::view_with(&source, true, &words, drawn, look);
+            let body = body::view_with(&source, true, &mentions, drawn, look);
             content = content.child(body.key("body"));
             if entry.edited && !inline {
                 content = content.child(

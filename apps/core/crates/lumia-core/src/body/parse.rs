@@ -42,6 +42,9 @@ pub struct Inline {
     pub runs: Vec<(Range<usize>, Style)>,
     /// Web links: their text's range and where they go.
     pub links: Vec<(Range<usize>, String)>,
+    /// The message's mentions ([`super::parse_with`]): each one's range of the text and its
+    /// place among the mentions the body was read with. Never inside code or a link.
+    pub mentions: Vec<(Range<usize>, u32)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -90,6 +93,11 @@ impl Inline {
                 .links
                 .iter()
                 .filter_map(|(r, url)| Some((clip(r)?, url.clone())))
+                .collect(),
+            mentions: self
+                .mentions
+                .iter()
+                .filter_map(|(r, index)| Some((clip(r)?, *index)))
                 .collect(),
         }
     }
@@ -1135,6 +1143,7 @@ mod tests {
                     text: "[1]: https://example.com/plan".into(),
                     runs: Vec::new(),
                     links: vec![(5..29, "https://example.com/plan".into())],
+                    mentions: Vec::new(),
                 }),
             ]
         );

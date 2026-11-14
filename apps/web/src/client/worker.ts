@@ -72,18 +72,28 @@ const BODIES: Record<string, (result: unknown) => Drawn[] | undefined> = {
 
 // A conversation's messages are read again after every event in it, and
 // most of them have not changed: each body is read once, kept by its text
-// and its mentions' ranges.
+// and its mentions' ranges, the least recently drawn let go first once the
+// kept bodies come to READ_KEPT_BYTES.
 const read = new Map<string, unknown>();
-const READ_KEPT = 4000;
+const READ_KEPT_BYTES = 4 * 1024 * 1024;
+let readBytes = 0;
 
 function blocksOf(c: Client, body: string, mentions: { start: number; end: number }[]): unknown {
   const key = mentions.map((m) => `${m.start}-${m.end}`).join(",") + "\u0000" + body;
   let blocks = read.get(key);
   if (blocks === undefined) {
     blocks = c.parseBody(body, mentions);
-    if (read.size >= READ_KEPT) read.clear();
-    read.set(key, blocks);
+    readBytes += key.length;
+    while (readBytes > READ_KEPT_BYTES && read.size > 0) {
+      const oldest = read.keys().next().value as string;
+      read.delete(oldest);
+      readBytes -= oldest.length;
+    }
+  } else {
+    // Drawn again: to the back of the line.
+    read.delete(key);
   }
+  read.set(key, blocks);
   return blocks;
 }
 

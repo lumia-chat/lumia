@@ -1,8 +1,9 @@
 //! A message body (protocol 14): its Markdown subset read into blocks, the same for every
 //! client, and the size limit a draft is held to.
 //!
-//! [`parse`] is the grammar (protocol 16 asked for one implementation the clients share).
-//! The desktop draws its [`Block`]s directly. The other clients draw [`display`]'s blocks:
+//! [`parse`] is the grammar (protocol 16 asked for one implementation the clients share), and
+//! [`parse_with`] the same with a message's mentions marked by their ranges. The desktop
+//! draws its [`Block`]s directly. The other clients draw [`display`]'s blocks:
 //! the same, with ranges in UTF-16 code units (what Swift's `NSRange`, Kotlin's
 //! `AnnotatedString` and JavaScript's strings count), inline code without the padding the
 //! desktop draws around it, and the message's mentions marked as runs of their own.
@@ -45,11 +46,19 @@ impl Room {
 /// characters, so the two are reconciled here once: over the limit, it is exactly how many
 /// characters from the end must go; under it, the bytes left at the draft's own bytes per
 /// character, so a draft in Japanese counts down three bytes to a character and one in
-/// English one.
+/// English one. Below 90%, where no counter shows, `left` is the bytes left.
 pub fn room(body: &str, max: u32) -> Room {
     let max = max as usize;
     let bytes = body.len();
     let shown = bytes * 10 >= max * COUNTER_FROM_TENTHS;
+    // No counter shows below 90%: what is left then is never read, so it is the bytes left,
+    // and a draft is not cut into characters on every key typed into it.
+    if !shown {
+        return Room {
+            shown,
+            left: i64::try_from(max - bytes).unwrap_or(i64::MAX),
+        };
+    }
     if bytes > max {
         let mut cut = 0;
         let mut kept = bytes;
@@ -146,23 +155,29 @@ const STAND_IN: u32 = 0x10_0000;
 /// How many mentions can stand in (the area's size, less its two noncharacters).
 const STAND_INS: usize = 0xFFFE;
 
-/// Parses `src` for a client other than the desktop. `mentions` are the message's mention
-/// ranges, in bytes of `src` as the protocol gives them; each comes out as a run of
-/// [`DisplayStyle::Mention`], unless it is inside code, where it is code. A mention is read
-/// as one unit, so the Markdown inside a name (`@a_b_`) is not Markdown. A range that is not
-/// on character boundaries, overlaps another or runs past the end is not marked.
-pub fn display(src: &str, mentions: &[Range<usize>]) -> Vec<DisplayBlock> {
-    let marked = stand_ins(src, mentions);
-    let blocks = match &marked {
-        Some((source, _)) => parse(source),
-        None => parse(src),
+/// Parses `src` with the message's mentions: `mentions` are their ranges, in bytes of `src`
+/// as the protocol gives them, and each comes out in its paragraph's [`Inline::mentions`]
+/// with its index among them, unless it is inside code or a link, where it is that code's or
+/// that address's text. A mention is read as one unit, so the Markdown inside a name
+/// (`@_ada_`) is not Markdown. A range that is not on character boundaries, overlaps another
+/// or runs past the end is not a mention.
+pub fn parse_with(src: &str, mentions: &[Range<usize>]) -> Vec<Block> {
+    let Some((source, typed)) = stand_ins(src, mentions) else {
+        return parse(src);
     };
-    let typed = marked
-        .as_ref()
-        .map_or(&[][..], |(_, typed)| typed.as_slice());
-    blocks
+    parse(&source)
         .into_iter()
-        .map(|block| display_block(block, typed))
+        .map(|block| put_back_block(block, &typed))
+        .collect()
+}
+
+/// Parses `src` for a client other than the desktop: [`parse_with`]'s blocks with their
+/// ranges in UTF-16, inline code without its padding, and each mention a run of
+/// [`DisplayStyle::Mention`].
+pub fn display(src: &str, mentions: &[Range<usize>]) -> Vec<DisplayBlock> {
+    parse_with(src, mentions)
+        .into_iter()
+        .map(display_block)
         .collect()
 }
 
@@ -191,10 +206,10 @@ fn stand_ins(src: &str, mentions: &[Range<usize>]) -> Option<(String, Vec<(u32, 
         if range.start < at {
             continue;
         }
-        out.push_str(&src[at..range.start]);
         let Some(c) = char::from_u32(STAND_IN + index) else {
             continue;
         };
+        out.push_str(&src[at..range.start]);
         out.push(c);
         typed.push((index, src[range.clone()].to_owned()));
         at = range.end;
@@ -203,24 +218,20 @@ fn stand_ins(src: &str, mentions: &[Range<usize>]) -> Option<(String, Vec<(u32, 
         return None;
     }
     out.push_str(&src[at..]);
+    typed.sort_by_key(|(index, _)| *index);
     Some((out, typed))
 }
 
-/// What the stand-in `c` stood for, if it is one.
+/// What the stand-in `c` stood for, if it is one. `typed` is sorted by index.
 fn stood_for(c: char, typed: &[(u32, String)]) -> Option<(u32, &str)> {
     let index = u32::from(c).checked_sub(STAND_IN)?;
-    typed
-        .iter()
-        .find(|(i, _)| *i == index)
-        .map(|(i, text)| (*i, text.as_str()))
+    let at = typed.binary_search_by_key(&index, |(i, _)| *i).ok()?;
+    typed.get(at).map(|(i, text)| (*i, text.as_str()))
 }
 
 /// `text` with each stand-in put back as what it stood for: in code, and in a link's
 /// address, a mention is the text it was typed as.
 fn put_back(text: &str, typed: &[(u32, String)]) -> String {
-    if typed.is_empty() {
-        return text.to_owned();
-    }
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
         match stood_for(c, typed) {
@@ -231,74 +242,133 @@ fn put_back(text: &str, typed: &[(u32, String)]) -> String {
     out
 }
 
-fn display_block(block: Block, typed: &[(u32, String)]) -> DisplayBlock {
+fn put_back_block(block: Block, typed: &[(u32, String)]) -> Block {
     match block {
-        Block::Para(inline) => DisplayBlock::Para(display_inline(&inline, typed)),
-        Block::Code { lang, text } => DisplayBlock::Code {
+        Block::Para(inline) => Block::Para(put_back_inline(&inline, typed)),
+        Block::Code { lang, text } => Block::Code {
             lang,
             text: put_back(&text, typed),
         },
-        Block::Quote(blocks) => DisplayBlock::Quote {
-            blocks: blocks
+        Block::Quote(blocks) => Block::Quote(
+            blocks
                 .into_iter()
-                .map(|b| display_block(b, typed))
+                .map(|b| put_back_block(b, typed))
                 .collect(),
-        },
-        Block::List { start, items } => DisplayBlock::List {
+        ),
+        Block::List { start, items } => Block::List {
             start,
             items: items
                 .into_iter()
-                .map(|item| item.into_iter().map(|b| display_block(b, typed)).collect())
+                .map(|item| item.into_iter().map(|b| put_back_block(b, typed)).collect())
                 .collect(),
         },
     }
 }
 
-/// An inline in UTF-16, without inline code's padding, its stand-ins put back.
-fn display_inline(inline: &Inline, typed: &[(u32, String)]) -> DisplayInline {
+/// Marks the bytes `ranges` cover, in one pass over each range.
+fn covered<'a>(len: usize, ranges: impl Iterator<Item = &'a Range<usize>>) -> Vec<bool> {
+    let mut marks = vec![false; len];
+    for r in ranges {
+        if let Some(bytes) = marks.get_mut(r.start..r.end.min(len)) {
+            bytes.fill(true);
+        }
+    }
+    marks
+}
+
+/// A paragraph with its stand-ins put back: their words in the text, every range moved to
+/// match, and each one outside code and links in [`Inline::mentions`].
+fn put_back_inline(inline: &Inline, typed: &[(u32, String)]) -> Inline {
     let src = &inline.text;
+    let len = src.len();
+    let code = covered(
+        len,
+        inline
+            .runs
+            .iter()
+            .filter(|(_, style)| matches!(style, Style::Code))
+            .map(|(r, _)| r),
+    );
+    let linked = covered(len, inline.links.iter().map(|(r, _)| r));
+    // Where each byte boundary of the paragraph lands in the new text.
+    let mut at = vec![0usize; len + 1];
+    let mut text = String::with_capacity(len);
+    let mut mentions = Vec::new();
+    for (i, c) in src.char_indices() {
+        at[i] = text.len();
+        match stood_for(c, typed) {
+            Some((index, words)) => {
+                let start = text.len();
+                text.push_str(words);
+                let quoted = code.get(i).copied().unwrap_or(false)
+                    || linked.get(i).copied().unwrap_or(false);
+                if !quoted {
+                    mentions.push((start..text.len(), index));
+                }
+            }
+            None => text.push(c),
+        }
+    }
+    at[len] = text.len();
+    let moved = |r: &Range<usize>| {
+        at.get(r.start).copied().unwrap_or(0)..at.get(r.end).copied().unwrap_or(0)
+    };
+    Inline {
+        runs: inline
+            .runs
+            .iter()
+            .map(|(r, style)| (moved(r), *style))
+            .collect(),
+        links: inline
+            .links
+            .iter()
+            .map(|(r, url)| (moved(r), put_back(url, typed)))
+            .collect(),
+        mentions,
+        text,
+    }
+}
+
+fn display_block(block: Block) -> DisplayBlock {
+    match block {
+        Block::Para(inline) => DisplayBlock::Para(display_inline(&inline)),
+        Block::Code { lang, text } => DisplayBlock::Code { lang, text },
+        Block::Quote(blocks) => DisplayBlock::Quote {
+            blocks: blocks.into_iter().map(display_block).collect(),
+        },
+        Block::List { start, items } => DisplayBlock::List {
+            start,
+            items: items
+                .into_iter()
+                .map(|item| item.into_iter().map(display_block).collect())
+                .collect(),
+        },
+    }
+}
+
+/// An inline in UTF-16, without inline code's padding.
+fn display_inline(inline: &Inline) -> DisplayInline {
+    let src = &inline.text;
+    let pad = covered(
+        src.len(),
+        inline
+            .runs
+            .iter()
+            .filter(|(_, style)| matches!(style, Style::Pad))
+            .map(|(r, _)| r),
+    );
     // Where each byte boundary of the source lands in the output, in UTF-16 units; the
     // padding's bytes land where the padding would have started.
     let mut at = vec![0u32; src.len() + 1];
     let mut text = String::with_capacity(src.len());
     let mut units = 0u32;
-    let mut mentions = Vec::new();
-    let pads: Vec<Range<usize>> = inline
-        .runs
-        .iter()
-        .filter(|(_, style)| *style == Style::Pad)
-        .map(|(r, _)| r.clone())
-        .collect();
-    let in_code = |i: usize| {
-        inline
-            .runs
-            .iter()
-            .any(|(r, style)| *style == Style::Code && r.contains(&i))
-    };
     for (i, c) in src.char_indices() {
         at[i] = units;
-        if pads.iter().any(|r| r.contains(&i)) {
+        if pad.get(i).copied().unwrap_or(false) {
             continue;
         }
-        let piece = match stood_for(c, typed) {
-            Some((index, words)) => {
-                let start = units;
-                let len = utf16_len(words);
-                if !in_code(i) {
-                    mentions.push(DisplayRun {
-                        start,
-                        end: start + len,
-                        style: DisplayStyle::Mention { index },
-                    });
-                }
-                text.push_str(words);
-                units += len;
-                continue;
-            }
-            None => c,
-        };
-        text.push(piece);
-        units += u32::try_from(piece.len_utf16()).unwrap_or(0);
+        text.push(c);
+        units += u32::try_from(c.len_utf16()).unwrap_or(0);
     }
     at[src.len()] = units;
     let span = |r: &Range<usize>| -> Option<(u32, u32)> {
@@ -320,7 +390,14 @@ fn display_inline(inline: &Inline, typed: &[(u32, String)]) -> DisplayInline {
             Some(DisplayRun { start, end, style })
         })
         .collect();
-    runs.extend(mentions);
+    runs.extend(inline.mentions.iter().filter_map(|(r, index)| {
+        let (start, end) = span(r)?;
+        Some(DisplayRun {
+            start,
+            end,
+            style: DisplayStyle::Mention { index: *index },
+        })
+    }));
     let links = inline
         .links
         .iter()
@@ -329,44 +406,11 @@ fn display_inline(inline: &Inline, typed: &[(u32, String)]) -> DisplayInline {
             Some(DisplayLink {
                 start,
                 end,
-                url: put_back(url, typed),
+                url: url.clone(),
             })
         })
         .collect();
     DisplayInline { text, runs, links }
-}
-
-fn utf16_len(s: &str) -> u32 {
-    u32::try_from(s.encode_utf16().count()).unwrap_or(u32::MAX)
-}
-
-/// Where `words` stand in `text` as a word of their own: not inside another word, and not
-/// running on into the characters a handle has. The desktop finds a mention's words in
-/// the paragraphs it draws this way.
-pub fn standing(text: &str, words: &str) -> Vec<Range<usize>> {
-    let handle = |c: char| c.is_alphanumeric() || matches!(c, '_' | '.' | '-');
-    let mut found = Vec::new();
-    let mut from = 0;
-    if words.is_empty() {
-        return found;
-    }
-    while let Some(at) = text[from..].find(words) {
-        let start = from + at;
-        let end = start + words.len();
-        let opens = text[..start]
-            .chars()
-            .next_back()
-            .is_none_or(|c| !c.is_alphanumeric() && c != '_');
-        let closes = text[end..]
-            .chars()
-            .next()
-            .is_none_or(|c| !handle(c) || matches!(c, '.' | '-'));
-        if opens && closes {
-            found.push(start..end);
-        }
-        from = end;
-    }
-    found
 }
 
 #[cfg(test)]
@@ -526,6 +570,64 @@ mod tests {
             inline.links.first().map(|l| l.url.as_str()),
             Some("https://lumia.chat/@ada")
         );
+        // Its words are the address's, not a pill inside the link.
+        assert!(
+            !inline
+                .runs
+                .iter()
+                .any(|r| matches!(r.style, DisplayStyle::Mention { .. })),
+            "{:?}",
+            inline.runs
+        );
+    }
+
+    #[test]
+    fn parse_with_marks_mentions_by_their_bytes_for_the_desktop() {
+        let src = "**@_ada_** and `@bo` and @é";
+        let blocks = parse_with(src, &[2..8, 16..19, 25..28]);
+        let Some(Block::Para(inline)) = blocks.first() else {
+            panic!("{blocks:?}");
+        };
+        // The name's underscores are not emphasis, and the mention in code is code.
+        assert!(inline.text.starts_with("@_ada_ and "), "{:?}", inline.text);
+        let marked: Vec<&str> = inline
+            .mentions
+            .iter()
+            .map(|(r, _)| &inline.text[r.clone()])
+            .collect();
+        assert_eq!(marked, ["@_ada_", "@é"]);
+        assert_eq!(
+            inline.mentions.iter().map(|(_, i)| *i).collect::<Vec<_>>(),
+            [0, 2]
+        );
+        assert!(inline
+            .runs
+            .iter()
+            .any(|(r, style)| *style == Style::Strong && &inline.text[r.clone()] == "@_ada_"));
+    }
+
+    #[test]
+    fn many_inline_code_spans_parse_in_a_moment() {
+        let src = "`x` ".repeat(4_000);
+        let started = std::time::Instant::now();
+        let blocks = display(&src, &[]);
+        assert!(!blocks.is_empty());
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(1),
+            "{:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn below_ninety_percent_the_room_is_the_bytes_left() {
+        assert_eq!(
+            room(&"日".repeat(10), 100),
+            Room {
+                shown: false,
+                left: 70
+            }
+        );
     }
 
     #[test]
@@ -572,13 +674,5 @@ mod tests {
                 text: "fn x() {}".into()
             })
         );
-    }
-
-    #[test]
-    fn standing_finds_words_on_their_own() {
-        assert_eq!(standing("@ada and @adam", "@ada"), vec![0..4]);
-        assert_eq!(standing("@ada.", "@ada"), vec![0..4]);
-        assert!(standing("x@ada", "@ada").is_empty());
-        assert!(standing("anything", "").is_empty());
     }
 }

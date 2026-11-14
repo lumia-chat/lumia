@@ -45,7 +45,7 @@ public struct MessageBodyText: View {
 
     /// `text` read by the core; a deleted message's placeholder is drawn as it is.
     public init(text: String, mentions: [MentionSummary], deleted: Bool = false, edited: Bool = false, name: @escaping (String) -> String = { _ in "" }, openPerson: ((String) -> Void)? = nil, scale: CGFloat = 1) {
-        let blocks = deleted ? [BodyBlock.para(inline: BodyInline(text: text, runs: [], links: []))] : parseBody(body: text, mentions: mentions)
+        let blocks = deleted ? [BodyBlock.para(inline: BodyInline(text: text, runs: [], links: []))] : BodyBlocks.parsed(text, mentions: mentions)
         self.init(blocks: blocks, mentions: deleted ? [] : mentions, deleted: deleted, edited: edited, name: name, openPerson: openPerson, scale: scale)
     }
 
@@ -342,7 +342,7 @@ struct LumiaCopyCode: View {
                 .font(LumiaTokens.textLinkSm.font(scale: scale))
                 .foregroundStyle(LumiaTokens.inkSecondary.color)
                 .padding(.horizontal, LumiaTokens.space10)
-                .frame(minWidth: 44, minHeight: BodyType.codeStrip * scale)
+                .frame(minWidth: LumiaTokens.tileSize, minHeight: BodyType.codeStrip * scale)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

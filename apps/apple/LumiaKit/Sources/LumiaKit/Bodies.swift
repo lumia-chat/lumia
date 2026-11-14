@@ -131,6 +131,29 @@ public enum BodyText {
 }
 
 public enum BodyBlocks {
+    /// The blocks `parseBody` reads from a body and its mentions, read once: a row is drawn
+    /// again at every change around it (a hover, a reaction, the typing line), and the same
+    /// body need not cross into the core each time. `NSCache` lets them go under pressure.
+    public static func parsed(_ body: String, mentions: [MentionSummary]) -> [BodyBlock] {
+        let key = (mentions.map { "\($0.start)-\($0.end)" }.joined(separator: ",") + "\u{0}" + body) as NSString
+        if let held = cache.object(forKey: key) { return held.blocks }
+        let blocks = parseBody(body: body, mentions: mentions)
+        cache.setObject(Held(blocks), forKey: key, cost: body.utf8.count)
+        return blocks
+    }
+
+    private final class Held {
+        let blocks: [BodyBlock]
+        init(_ blocks: [BodyBlock]) { self.blocks = blocks }
+    }
+
+    /// NSCache is safe to use from any thread; Swift does not know it.
+    nonisolated(unsafe) private static let cache: NSCache<NSString, Held> = {
+        let cache = NSCache<NSString, Held>()
+        cache.totalCostLimit = 4 * 1024 * 1024
+        return cache
+    }()
+
     /// A list item's marker: "•", or its number counting from `start`.
     public static func marker(start: UInt64?, at k: Int) -> String {
         start.map { "\($0 + UInt64(k))." } ?? "•"
