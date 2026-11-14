@@ -20,6 +20,9 @@ import AppKit
 enum BodyType {
     static let code = LumiaTokens.textMessage.size - LumiaTokens.space2
     static let inlineCode: CGFloat = 0.9
+    /// A code block's strip over its lines (its language and Copy), and the language's size.
+    static let codeStrip: CGFloat = 36
+    static let codeLabel: CGFloat = 12
 }
 
 /// A message's words as the core reads them (`parseBody`), its mentions
@@ -113,8 +116,8 @@ struct BodyBlocksView: View {
         switch block {
         case let .para(inline):
             BodyParagraph(inline: inline, edited: edited, look: look)
-        case let .code(_, text):
-            LumiaCodeBlock(text: text, scale: look.scale)
+        case let .code(lang, text):
+            LumiaCodeBlock(text: text, lang: lang, scale: look.scale)
         case let .quote(inner):
             // The rule as tall as what it quotes.
             HStack(alignment: .top, spacing: 0) {
@@ -277,30 +280,45 @@ struct BodyChipRenderer: TextRenderer {
 
 /// A fenced code block: its lines in the mono face on the inset ground,
 /// never wrapped (a long line scrolls the block sideways, inside itself)
-/// and never scrolled up and down (it is as tall as its lines), with Copy
-/// in its top corner, always shown on a phone.
+/// and never scrolled up and down (it is as tall as its lines). On a phone
+/// Copy is always shown, so it sits in a strip of its own over the code,
+/// with the language the fence names, and never covers a line.
 public struct LumiaCodeBlock: View {
     let text: String
+    let lang: String?
     let scale: CGFloat
 
-    public init(text: String, scale: CGFloat = 1) { self.text = text; self.scale = scale }
+    public init(text: String, lang: String? = nil, scale: CGFloat = 1) { self.text = text; self.lang = lang; self.scale = scale }
 
     public var body: some View {
-        ScrollView(.horizontal) {
-            Text(verbatim: text)
-                .font(.system(size: BodyType.code * scale, design: .monospaced))
-                .foregroundStyle(LumiaTokens.inkBody.color)
-                .italic(false)
-                .fixedSize()
-                .padding(.horizontal, LumiaTokens.space12)
-                .padding(.vertical, LumiaTokens.space10)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: LumiaTokens.space8) {
+                Text(verbatim: lang ?? "")
+                    .font(.system(size: BodyType.codeLabel * scale, design: .monospaced))
+                    .foregroundStyle(LumiaTokens.inkMuted.color)
+                    .lineLimit(1)
+                    .accessibilityHidden(lang == nil)
+                Spacer(minLength: 0)
+                LumiaCopyCode(text: text, scale: scale)
+            }
+            .padding(.leading, LumiaTokens.space12)
+            .padding(.trailing, LumiaTokens.space4)
+            .frame(minHeight: BodyType.codeStrip * scale)
+            .overlay(alignment: .bottom) { Rectangle().fill(LumiaTokens.line.color).frame(height: 1) }
+            ScrollView(.horizontal) {
+                Text(verbatim: text)
+                    .font(.system(size: BodyType.code * scale, design: .monospaced))
+                    .foregroundStyle(LumiaTokens.inkBody.color)
+                    .italic(false)
+                    .fixedSize()
+                    .padding(.horizontal, LumiaTokens.space12)
+                    .padding(.vertical, LumiaTokens.space10)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(LumiaTokens.inset.color, in: RoundedRectangle(cornerRadius: LumiaTokens.radius12))
+        .clipShape(RoundedRectangle(cornerRadius: LumiaTokens.radius12))
         .overlay(RoundedRectangle(cornerRadius: LumiaTokens.radius12).stroke(LumiaTokens.line.color))
-        .overlay(alignment: .topTrailing) {
-            LumiaCopyCode(text: text, scale: scale).padding(LumiaTokens.space6)
-        }
     }
 }
 
@@ -323,11 +341,9 @@ struct LumiaCopyCode: View {
             Text(copied ? CodeCopy.copied : CodeCopy.copy)
                 .font(LumiaTokens.textLinkSm.font(scale: scale))
                 .foregroundStyle(LumiaTokens.inkSecondary.color)
-                .padding(.horizontal, LumiaTokens.space8)
-                .padding(.vertical, LumiaTokens.space4)
-                .background(LumiaTokens.surface.color, in: RoundedRectangle(cornerRadius: LumiaTokens.radius6))
-                .overlay(RoundedRectangle(cornerRadius: LumiaTokens.radius6).stroke(LumiaTokens.lineStrong.color))
-                .contentShape(RoundedRectangle(cornerRadius: LumiaTokens.radius6))
+                .padding(.horizontal, LumiaTokens.space10)
+                .frame(minWidth: 44, minHeight: BodyType.codeStrip * scale)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(CodeCopy.label)

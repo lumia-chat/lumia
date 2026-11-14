@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
@@ -158,7 +159,7 @@ private fun Blocks(blocks: List<BodyBlock>, drawing: Drawing, inItem: Boolean, e
 private fun Block(block: BodyBlock, drawing: Drawing, inItem: Boolean, edited: Boolean) {
     when (block) {
         is BodyBlock.Para -> Paragraph(block.inline, drawing, edited)
-        is BodyBlock.Code -> CodeBlock(block.text)
+        is BodyBlock.Code -> CodeBlock(block.text, block.lang)
         is BodyBlock.Quote -> {
             // A rule at the leading edge, the quote's blocks beside it.
             val rule = LumiaTokens.lineStrong.color
@@ -244,19 +245,40 @@ private fun DrawScope.washes(l: TextLayoutResult, ranges: List<IntRange>, color:
  * A code block: its lines in the mono face on the inset ground, as the
  * desktop draws one (padding 12 by 10, radius 12, the line's border). A
  * line too long for the row does not wrap: the block scrolls sideways
- * inside itself, and is as tall as its lines. Copy is in its top right
- * corner, always shown on a phone.
+ * inside itself, and is as tall as its lines. On a phone Copy is always
+ * shown, so it sits in a strip of its own over the code, with the
+ * language the fence names, and never covers a line.
  */
 @Composable
-private fun CodeBlock(text: String) {
+private fun CodeBlock(text: String, lang: String?) {
     val shape = RoundedCornerShape(LumiaTokens.radius12)
-    Box(
+    val rule = LumiaTokens.line.color
+    Column(
         Modifier
             .fillMaxWidth()
             .clip(shape)
             .background(LumiaTokens.inset.color, shape)
             .border(1.dp, LumiaTokens.line.color, shape),
     ) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .heightIn(min = CODE_STRIP)
+                .drawBehind {
+                    drawLine(rule, Offset(0f, size.height - 0.5f), Offset(size.width, size.height - 0.5f), 1.dp.toPx())
+                }
+                .padding(start = LumiaTokens.space12, end = LumiaTokens.space4),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                lang.orEmpty(),
+                style = LumiaTokens.textTag.style.copy(fontFamily = FontFamily.Monospace, fontWeight = FontWeight(LumiaTokens.textMessage.weight)),
+                color = LumiaTokens.inkMuted.color,
+                maxLines = 1,
+                modifier = Modifier.weight(1f),
+            )
+            CopyButton(text)
+        }
         Text(
             text,
             // The mono face a step under the message text, as the desktop's `TEXT_CODE`.
@@ -268,17 +290,19 @@ private fun CodeBlock(text: String) {
                 .horizontalScroll(rememberScrollState())
                 .padding(horizontal = LumiaTokens.space12, vertical = LumiaTokens.space10),
         )
-        CopyButton(text, Modifier.align(Alignment.TopEnd).padding(LumiaTokens.space4))
     }
 }
 
+/** The height of a code block's strip over its lines: its language and Copy. */
+private val CODE_STRIP = 36.dp
+
 /**
  * "Copy": the block's text to the clipboard, then "Copied" for a moment,
- * which a screen reader is told; "Copy code" to it. On the raised ground,
- * so a line scrolled under it does not show through.
+ * which a screen reader is told; "Copy code" to it. A text button in the
+ * code block's strip, as tall as the strip and at least 44 wide.
  */
 @Composable
-private fun CopyButton(text: String, modifier: Modifier) {
+private fun CopyButton(text: String) {
     val clipboard = LocalClipboardManager.current
     val view = LocalView.current
     var copied by remember { mutableStateOf(false) }
@@ -297,17 +321,17 @@ private fun CopyButton(text: String, modifier: Modifier) {
         if (copied) COPIED else COPY,
         style = LumiaTokens.textTag.style,
         color = LumiaTokens.inkSecondary.color,
-        modifier = modifier
+        textAlign = TextAlign.Center,
+        modifier = Modifier
             .clip(shape)
-            .background(LumiaTokens.raised.color, shape)
-            .border(1.dp, LumiaTokens.line.color, shape)
             .clearAndSetSemantics {
                 contentDescription = COPY_CODE
                 role = Role.Button
                 onClick { copy(); true }
             }
             .clickable(role = Role.Button, onClick = copy)
-            .padding(horizontal = LumiaTokens.space8, vertical = LumiaTokens.space4),
+            .widthIn(min = 44.dp)
+            .padding(horizontal = LumiaTokens.space10, vertical = LumiaTokens.space8),
     )
 }
 
