@@ -54,6 +54,7 @@ import chat.lumia.kit.Avatars
 import chat.lumia.kit.FONT_SIZES
 import chat.lumia.kit.Layout
 import chat.lumia.kit.Preset
+import chat.lumia.kit.Reactions
 import chat.lumia.kit.Spacing
 import chat.lumia.kit.fontSizeNamed
 import chat.lumia.kit.storedAs
@@ -603,6 +604,7 @@ fun ProfileScreen(store: AppStore, session: LumiaSession, back: () -> Unit) {
  * in one line, which draws none. Images and embeds have no control until
  * there is something they change. The six font sizes are the same
  * segmented choice as the rest: six short numbers fit a phone's width.
+ * Reactions, after them, draws a message's chips or none.
  */
 @Composable
 fun PreferencesScreen(store: AppStore, back: () -> Unit) {
@@ -654,6 +656,13 @@ fun PreferencesScreen(store: AppStore, back: () -> Unit) {
                         FONT_SIZES.map { "$it" to "$it" },
                         "${display.fontSize}",
                         { name -> fontSizeNamed(name)?.let { store.choose(display.copy(fontSize = it)) } },
+                    )
+                }
+                Setting("Reactions") {
+                    LumiaChoice(
+                        listOf(Reactions.SHOWN.stored to "Shown", Reactions.HIDDEN.stored to "Hidden"),
+                        display.reactions.stored,
+                        { name -> storedAs<Reactions>(name)?.let { store.choose(display.copy(reactions = it)) } },
                     )
                 }
             }

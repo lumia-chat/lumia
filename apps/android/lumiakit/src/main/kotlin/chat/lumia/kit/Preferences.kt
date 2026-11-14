@@ -1,8 +1,8 @@
 // What the Preferences screen chooses, as plain values `src/test` checks on
 // the JVM: light, dark or as the phone is, and how a conversation's
 // messages are drawn (`Display`): their layout, the room around them, their
-// avatars, the size of their text, and whether pictures and link previews
-// are drawn or left as links. Comfortable, Compact and Minimal are presets
+// avatars, the size of their text, whether pictures and link previews are
+// drawn or left as links, and whether their reactions are drawn. Comfortable, Compact and Minimal are presets
 // that write those values and are not kept themselves. Each setting is
 // stored under the name every client stores it by. They are this phone's
 // and not the account's: `AppStore` keeps them beside the saved instance,
@@ -84,6 +84,16 @@ enum class Shown(override val stored: String) : Stored {
     LINK("link"),
 }
 
+/**
+ * Whether a message's reactions are drawn under it. Hidden takes the chips
+ * away and nothing else: Add reaction stays in a message's actions, and a
+ * reaction added while hidden is there, only not drawn.
+ */
+enum class Reactions(override val stored: String) : Stored {
+    SHOWN("shown"),
+    HIDDEN("hidden"),
+}
+
 /** The message text's sizes Preferences offers, smallest first. */
 val FONT_SIZES = listOf(13, 14, 15, 16, 18, 20)
 
@@ -94,7 +104,7 @@ const val DEFAULT_FONT_SIZE = 15
 fun fontSizeNamed(stored: String?): Int? = stored?.toIntOrNull()?.takeIf { it in FONT_SIZES }
 
 /**
- * How this phone draws a conversation's messages: six settings, each read
+ * How this phone draws a conversation's messages: seven settings, each read
  * on its own and each its default when what is stored under it is missing
  * or not understood. The defaults are Comfortable at the design's 15.
  */
@@ -105,6 +115,7 @@ data class Display(
     val fontSize: Int = DEFAULT_FONT_SIZE,
     val images: Shown = Shown.SHOWN,
     val embeds: Shown = Shown.SHOWN,
+    val reactions: Reactions = Reactions.SHOWN,
 ) {
     /** The preset whose values these all are, or null, which the page shows as "Custom". */
     val preset: Preset? get() = Preset.entries.firstOrNull { it.matches(this) }
@@ -116,7 +127,11 @@ data class Display(
         avatars = preset.avatars,
         images = preset.images,
         embeds = preset.embeds,
+        reactions = preset.reactions,
     )
+
+    /** The reactions a message's row draws: all of them shown, none hidden, so no row and no room for one. */
+    fun <R> drawn(reactions: List<R>): List<R> = if (this.reactions == Reactions.SHOWN) reactions else emptyList()
 
     /** How much larger than the design every text in a message row, and the composer's, is drawn. */
     val textScale: Float get() = fontSize / DEFAULT_FONT_SIZE.toFloat()
@@ -132,6 +147,7 @@ data class Display(
         FONT_SIZE to fontSize.toString(),
         IMAGES to images.stored,
         EMBEDS to embeds.stored,
+        REACTIONS to reactions.stored,
     )
 
     companion object {
@@ -141,9 +157,10 @@ data class Display(
         const val FONT_SIZE = "font_size"
         const val IMAGES = "images"
         const val EMBEDS = "embeds"
+        const val REACTIONS = "reactions"
 
         /** The keys the settings are kept under. */
-        val KEYS = listOf(LAYOUT, SPACING, AVATARS, FONT_SIZE, IMAGES, EMBEDS)
+        val KEYS = listOf(LAYOUT, SPACING, AVATARS, FONT_SIZE, IMAGES, EMBEDS, REACTIONS)
 
         /**
          * What is kept reads as ([stored] gives what is under a key, or
@@ -159,6 +176,7 @@ data class Display(
                 fontSize = fontSizeNamed(stored(FONT_SIZE)) ?: d.fontSize,
                 images = storedAs<Shown>(stored(IMAGES)) ?: d.images,
                 embeds = storedAs<Shown>(stored(EMBEDS)) ?: d.embeds,
+                reactions = storedAs<Reactions>(stored(REACTIONS)) ?: d.reactions,
             )
         }
     }
@@ -177,10 +195,11 @@ enum class Preset(
     val avatars: Avatars,
     val images: Shown,
     val embeds: Shown,
+    val reactions: Reactions,
 ) : Stored {
-    COMFORTABLE("comfortable", "Comfortable", Layout.GROUPED, Spacing.ROOMY, Avatars.LARGE, Shown.SHOWN, Shown.SHOWN),
-    COMPACT("compact", "Compact", Layout.GROUPED, Spacing.COZY, Avatars.SMALL, Shown.SHOWN, Shown.SHOWN),
-    MINIMAL("minimal", "Minimal", Layout.ONE_LINE, Spacing.TIGHT, Avatars.HIDDEN, Shown.LINK, Shown.LINK);
+    COMFORTABLE("comfortable", "Comfortable", Layout.GROUPED, Spacing.ROOMY, Avatars.LARGE, Shown.SHOWN, Shown.SHOWN, Reactions.SHOWN),
+    COMPACT("compact", "Compact", Layout.GROUPED, Spacing.COZY, Avatars.SMALL, Shown.SHOWN, Shown.SHOWN, Reactions.SHOWN),
+    MINIMAL("minimal", "Minimal", Layout.ONE_LINE, Spacing.TIGHT, Avatars.HIDDEN, Shown.LINK, Shown.LINK, Reactions.HIDDEN);
 
     /** Whether [display] is this preset: every value it writes, but the avatars in one line, which draws none. */
     fun matches(display: Display): Boolean =
@@ -188,7 +207,8 @@ enum class Preset(
             display.spacing == spacing &&
             (layout == Layout.ONE_LINE || display.avatars == avatars) &&
             display.images == images &&
-            display.embeds == embeds
+            display.embeds == embeds &&
+            display.reactions == reactions
 
     companion object {
         /** The preset named this, for a debug launch. */

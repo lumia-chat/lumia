@@ -25,7 +25,7 @@ class PreferencesTest {
     fun aPhoneThatHasChosenNothingFollowsTheSystemAndIsComfortableAt15() {
         assertEquals(Appearance.SYSTEM, Appearance.of(null))
         val d = Display.read { null }
-        assertEquals(Display(Layout.GROUPED, Spacing.ROOMY, Avatars.LARGE, 15, Shown.SHOWN, Shown.SHOWN), d)
+        assertEquals(Display(Layout.GROUPED, Spacing.ROOMY, Avatars.LARGE, 15, Shown.SHOWN, Shown.SHOWN, Reactions.SHOWN), d)
         assertEquals(Preset.COMFORTABLE, d.preset)
         assertEquals(1f, d.textScale)
     }
@@ -37,11 +37,12 @@ class PreferencesTest {
         assertEquals(listOf("roomy", "cozy", "tight"), Spacing.entries.map { it.stored })
         assertEquals(listOf("large", "small", "hidden"), Avatars.entries.map { it.stored })
         assertEquals(listOf("shown", "link"), Shown.entries.map { it.stored })
+        assertEquals(listOf("shown", "hidden"), Reactions.entries.map { it.stored })
         assertEquals(listOf(13, 14, 15, 16, 18, 20), FONT_SIZES)
-        assertEquals(listOf("layout", "spacing", "avatars", "font_size", "images", "embeds"), Display.KEYS)
+        assertEquals(listOf("layout", "spacing", "avatars", "font_size", "images", "embeds", "reactions"), Display.KEYS)
         val minimal = Display().with(Preset.MINIMAL).copy(fontSize = 18)
         assertEquals(
-            mapOf("layout" to "one_line", "spacing" to "tight", "avatars" to "hidden", "font_size" to "18", "images" to "link", "embeds" to "link"),
+            mapOf("layout" to "one_line", "spacing" to "tight", "avatars" to "hidden", "font_size" to "18", "images" to "link", "embeds" to "link", "reactions" to "hidden"),
             minimal.written(),
         )
         // Nothing is stored for a preset, and nothing under the old density.
@@ -52,8 +53,8 @@ class PreferencesTest {
     @Test
     fun whatIsStoredReadsBackAsItWas() {
         for (layout in Layout.entries) for (spacing in Spacing.entries) for (avatars in Avatars.entries)
-            for (size in FONT_SIZES) for (images in Shown.entries) for (embeds in Shown.entries) {
-                val d = Display(layout, spacing, avatars, size, images, embeds)
+            for (size in FONT_SIZES) for (images in Shown.entries) for (embeds in Shown.entries) for (reactions in Reactions.entries) {
+                val d = Display(layout, spacing, avatars, size, images, embeds, reactions)
                 assertEquals(d, Display.read(d.written()::get))
             }
         for (choice in Appearance.entries) assertEquals(choice, Appearance.of(choice.stored))
@@ -73,9 +74,18 @@ class PreferencesTest {
                 "font_size" to "17",
                 "images" to "link",
                 "embeds" to " link",
+                "reactions" to "Hidden",
             )::get,
         )
-        assertEquals(Display(Layout.GROUPED, Spacing.TIGHT, Avatars.LARGE, 15, Shown.LINK, Shown.SHOWN), read)
+        assertEquals(Display(Layout.GROUPED, Spacing.TIGHT, Avatars.LARGE, 15, Shown.LINK, Shown.SHOWN, Reactions.SHOWN), read)
+        for (reactions in listOf("", "HIDDEN", "hide", "link", "none", " hidden")) {
+            assertEquals("reactions from \"$reactions\"", Reactions.SHOWN, Display.read(mapOf("reactions" to reactions)::get).reactions)
+        }
+        // Missing, beside the rest stored: shown, and the rest as they were.
+        assertEquals(
+            Display(Layout.ONE_LINE, Spacing.TIGHT, Avatars.HIDDEN, 15, Shown.LINK, Shown.LINK, Reactions.SHOWN),
+            Display.read(mapOf("layout" to "one_line", "spacing" to "tight", "avatars" to "hidden", "images" to "link", "embeds" to "link")::get),
+        )
         for (size in listOf("", "12", "21", "15.0", "fifteen", "-15")) {
             assertEquals("font size from \"$size\"", 15, Display.read(mapOf("font_size" to size)::get).fontSize)
         }
@@ -94,10 +104,12 @@ class PreferencesTest {
 
     @Test
     fun aPresetWritesItsValuesAndNotTheFontSize() {
-        val start = Display(Layout.ONE_LINE, Spacing.TIGHT, Avatars.SMALL, 18, Shown.LINK, Shown.SHOWN)
-        assertEquals(Display(Layout.GROUPED, Spacing.ROOMY, Avatars.LARGE, 18, Shown.SHOWN, Shown.SHOWN), start.with(Preset.COMFORTABLE))
-        assertEquals(Display(Layout.GROUPED, Spacing.COZY, Avatars.SMALL, 18, Shown.SHOWN, Shown.SHOWN), start.with(Preset.COMPACT))
-        assertEquals(Display(Layout.ONE_LINE, Spacing.TIGHT, Avatars.HIDDEN, 18, Shown.LINK, Shown.LINK), start.with(Preset.MINIMAL))
+        val start = Display(Layout.ONE_LINE, Spacing.TIGHT, Avatars.SMALL, 18, Shown.LINK, Shown.SHOWN, Reactions.HIDDEN)
+        assertEquals(Display(Layout.GROUPED, Spacing.ROOMY, Avatars.LARGE, 18, Shown.SHOWN, Shown.SHOWN, Reactions.SHOWN), start.with(Preset.COMFORTABLE))
+        assertEquals(Display(Layout.GROUPED, Spacing.COZY, Avatars.SMALL, 18, Shown.SHOWN, Shown.SHOWN, Reactions.SHOWN), start.with(Preset.COMPACT))
+        assertEquals(Display(Layout.ONE_LINE, Spacing.TIGHT, Avatars.HIDDEN, 18, Shown.LINK, Shown.LINK, Reactions.HIDDEN), start.with(Preset.MINIMAL))
+        // Reactions: shown in Comfortable and Compact, hidden in Minimal.
+        assertEquals(listOf(Reactions.SHOWN, Reactions.SHOWN, Reactions.HIDDEN), Preset.entries.map { Display().with(it).reactions })
         for (preset in Preset.entries) {
             for (size in FONT_SIZES) assertEquals(preset, Display(fontSize = size).with(preset).preset)
         }
@@ -117,6 +129,30 @@ class PreferencesTest {
         assertEquals(Preset.COMPACT, compact.copy(fontSize = 20).preset)
         // Put back, it is the preset again.
         assertEquals(Preset.COMPACT, compact.copy(spacing = Spacing.TIGHT).copy(spacing = Spacing.COZY).preset)
+    }
+
+    @Test
+    fun reactionsAreComparedLikeEveryOtherValue() {
+        val minimal = Display().with(Preset.MINIMAL)
+        assertEquals(Preset.MINIMAL, minimal.preset)
+        // Minimal with its reactions shown is no preset: Custom.
+        assertNull(minimal.copy(reactions = Reactions.SHOWN).preset)
+        // Comfortable and Compact with theirs hidden are none either.
+        assertNull(Display().copy(reactions = Reactions.HIDDEN).preset)
+        assertNull(Display().with(Preset.COMPACT).copy(reactions = Reactions.HIDDEN).preset)
+        // Hidden again, it is Minimal again, whatever the avatars in one line.
+        assertEquals(Preset.MINIMAL, minimal.copy(reactions = Reactions.SHOWN, avatars = Avatars.LARGE).copy(reactions = Reactions.HIDDEN).preset)
+    }
+
+    @Test
+    fun hiddenReactionsDrawNoneAndShownDrawsEveryOne() {
+        val reactions = listOf("👍", "🎉")
+        assertEquals(reactions, Display().drawn(reactions))
+        assertEquals(reactions, Display().with(Preset.COMPACT).drawn(reactions))
+        assertEquals(emptyList<String>(), Display().with(Preset.MINIMAL).drawn(reactions))
+        // In grouped too: it is the setting and not the layout that hides them.
+        assertEquals(emptyList<String>(), Display(reactions = Reactions.HIDDEN).drawn(reactions))
+        assertEquals(reactions, Display().with(Preset.MINIMAL).copy(reactions = Reactions.SHOWN).drawn(reactions))
     }
 
     @Test

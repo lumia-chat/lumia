@@ -278,15 +278,16 @@ private fun Minus() {
 /**
  * A message's reactions as the design's chips: the emoji and how many,
  * the one this account has in the accent; a tap toggles this account's,
- * a long press says who reacted ("You and Ada reacted with 👍"). After
- * them, Add reaction opens the picker.
+ * a long press says who reacted ("You and Ada reacted with 👍", [me] being
+ * this account and [nameOf] the others). After them, Add reaction opens the
+ * picker. Not drawn at all while Preferences hides reactions (`Display.drawn`).
  */
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
-fun ReactionChips(session: LumiaSession, reactions: List<ReactionSummary>, onToggle: (String) -> Unit, onAdd: () -> Unit) {
+fun ReactionChips(reactions: List<ReactionSummary>, me: String, nameOf: (String) -> String?, onToggle: (String) -> Unit, onAdd: () -> Unit) {
     FlowRow(horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space6), verticalArrangement = Arrangement.spacedBy(LumiaTokens.space6)) {
         for (r in reactions) {
-            val words = reactedWords(r, session.me, session::knownNameOf)
+            val words = reactedWords(r, me, nameOf)
             val shape = RoundedCornerShape(LumiaTokens.radiusPill)
             TooltipBox(
                 positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
