@@ -707,6 +707,18 @@ pub enum AppEvent {
     AccountApplied {
         count: usize,
     },
+    /// Someone's name or picture changed (`ProfileUpdated` on this
+    /// account's log, its own included): the account as others see it.
+    /// The kept member lists have it already; what shows the person draws
+    /// it again, and a new picture is a new address to fetch.
+    ProfileUpdated {
+        account_id: String,
+        handle: String,
+        display_name: String,
+        avatar_url: String,
+        pronouns: String,
+        bio: String,
+    },
     Acked {
         command_id: String,
         seq: u64,
@@ -961,6 +973,25 @@ fn event_summary(e: &Event) -> EventSummary {
         kind: kind.into(),
         message,
     }
+}
+
+/// The people an account log's events say changed their name or picture.
+fn profiles_updated(events: &[lumia_core::proto::AccountEvent]) -> Vec<AppEvent> {
+    events
+        .iter()
+        .filter_map(|e| match &e.payload {
+            Some(account_event::Payload::ProfileUpdated(p)) => p.account.as_ref(),
+            _ => None,
+        })
+        .map(|a| AppEvent::ProfileUpdated {
+            account_id: wire::display(&a.account_id),
+            handle: a.handle.clone(),
+            display_name: a.display_name.clone(),
+            avatar_url: a.avatar_url.clone(),
+            pronouns: a.pronouns.clone(),
+            bio: a.bio.clone(),
+        })
+        .collect()
 }
 
 fn app_event(ev: GatewayEvent) -> AppEvent {
@@ -2381,6 +2412,45 @@ impl App {
         Ok(members)
     }
 
+    /// The people of `profiles` ([`AppEvent::ProfileUpdated`]) as they now
+    /// are, in every member list kept: an offline launch names them so.
+    /// Each server's nickname and switches are its own and stay.
+    fn keep_profiles(&self, profiles: &[AppEvent]) {
+        if profiles.is_empty() {
+            return;
+        }
+        let Some(mut all) = self
+            .kept::<HashMap<String, Vec<MemberSummary>>>(KEPT_MEMBERS)
+            .ok()
+            .flatten()
+        else {
+            return;
+        };
+        for profile in profiles {
+            let AppEvent::ProfileUpdated {
+                account_id,
+                handle,
+                display_name,
+                avatar_url,
+                pronouns,
+                bio,
+            } = profile
+            else {
+                continue;
+            };
+            for member in all.values_mut().flatten() {
+                if member.account_id == *account_id {
+                    member.handle.clone_from(handle);
+                    member.display_name.clone_from(display_name);
+                    member.avatar_url.clone_from(avatar_url);
+                    member.pronouns.clone_from(pronouns);
+                    member.bio.clone_from(bio);
+                }
+            }
+        }
+        self.keep(KEPT_MEMBERS, &all);
+    }
+
     /// The members last listed for a server, kept as [`App::kept_snapshot`]
     /// is; empty when it was never listed.
     ///
@@ -2570,6 +2640,8 @@ impl App {
                                 inner.reads.read_elsewhere(&r.channel_id, r.seq);
                             }
                         }
+                        drop(inner);
+                        app.keep_profiles(&profiles_updated(events));
                     }
                     _ => {}
                 }
@@ -2636,7 +2708,14 @@ impl App {
                         }),
                     }
                 }
+                let profiles = match &ev {
+                    GatewayEvent::AccountApplied(events) => profiles_updated(events),
+                    _ => Vec::new(),
+                };
                 task_sink(app_event(ev));
+                for profile in profiles {
+                    task_sink(profile);
+                }
             }
         });
         inner.commands = Some(tx);
@@ -4648,6 +4727,58 @@ mod kept_tests {
         ] {
             assert!(!is_own_avatar(&other), "{other}");
         }
+    }
+
+    #[test]
+    fn a_profile_update_is_kept_in_every_member_list_with_each_servers_nickname() {
+        let app = app();
+        let member = |id: &str, name: &str, nickname: &str| MemberSummary {
+            account_id: id.into(),
+            handle: name.to_lowercase(),
+            display_name: name.into(),
+            nickname: nickname.into(),
+            pronouns: String::new(),
+            bio: String::new(),
+            avatar_url: String::new(),
+            channel_adds_by_invitation: false,
+            server_dms_off: false,
+        };
+        let event = lumia_core::proto::AccountEvent {
+            payload: Some(account_event::Payload::ProfileUpdated(
+                lumia_core::proto::ProfileUpdated {
+                    account: Some(lumia_core::proto::Account {
+                        account_id: vec![7; 16],
+                        handle: "ada".into(),
+                        display_name: "Ada Lovelace".into(),
+                        avatar_url: "/api/v1/avatars/new".into(),
+                        ..Default::default()
+                    }),
+                },
+            )),
+            ..Default::default()
+        };
+        let profiles = profiles_updated(&[event]);
+        let [AppEvent::ProfileUpdated { account_id, .. }] = profiles.as_slice() else {
+            panic!("{profiles:?}");
+        };
+        let ada = account_id.clone();
+        let mut all = HashMap::new();
+        all.insert(
+            "s".to_string(),
+            vec![member(&ada, "Ada", ""), member("grace", "Grace", "")],
+        );
+        all.insert("t".to_string(), vec![member(&ada, "Ada", "Countess")]);
+        app.keep(KEPT_MEMBERS, &all);
+        app.keep_profiles(&profiles);
+        let s = app.kept_members("s").unwrap();
+        assert_eq!(s[0].display_name, "Ada Lovelace");
+        assert_eq!(s[0].avatar_url, "/api/v1/avatars/new");
+        assert_eq!(s[1].display_name, "Grace", "nobody else changes");
+        let t = app.kept_members("t").unwrap();
+        assert_eq!(
+            (t[0].display_name.as_str(), t[0].nickname.as_str()),
+            ("Ada Lovelace", "Countess")
+        );
     }
 
     #[test]

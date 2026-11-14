@@ -966,6 +966,17 @@ pub enum ClientEvent {
     AccountApplied {
         count: u64,
     },
+    /// Someone's name or picture changed: the account as others see it.
+    /// The kept member lists have it already; what shows the person draws
+    /// it again.
+    ProfileUpdated {
+        account_id: String,
+        handle: String,
+        display_name: String,
+        avatar_url: String,
+        pronouns: String,
+        bio: String,
+    },
     Acked {
         command_id: String,
         seq: u64,
@@ -1132,6 +1143,21 @@ impl From<app::AppEvent> for ClientEvent {
             },
             E::AccountApplied { count } => Self::AccountApplied {
                 count: count as u64,
+            },
+            E::ProfileUpdated {
+                account_id,
+                handle,
+                display_name,
+                avatar_url,
+                pronouns,
+                bio,
+            } => Self::ProfileUpdated {
+                account_id,
+                handle,
+                display_name,
+                avatar_url,
+                pronouns,
+                bio,
             },
             E::Acked { command_id, seq } => Self::Acked { command_id, seq },
             E::Error {

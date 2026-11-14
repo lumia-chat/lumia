@@ -68,7 +68,8 @@ defmodule Lumia.Accounts do
   else can take it, and it can go back. `{:error, :already_exists}` for a
   handle another account has or holds, `{:error, :invalid_argument}` for
   one that is not a handle or a name that is too long. `ProfileUpdated`
-  goes on the account's log.
+  goes on the account's log, and on the logs of everyone who shares a
+  server or a conversation with it (`Lumia.Workers.ProfileUpdated`).
 
   The display name set here stands until a signed profile sets another
   (`put_profile/2`), and the other way round: the later of the two is the
@@ -115,11 +116,22 @@ defmodule Lumia.Accounts do
            |> taken_as_exists(),
          :ok <- if(renamed?, do: hold(account), else: :ok),
          {:ok, _} <-
-           append_event(
-             account.id,
-             {:profile_updated, %V1.ProfileUpdated{account: Lumia.Proto.account(updated)}}
-           ) do
+           profile_changed(updated) do
       {:ok, updated}
+    end
+  end
+
+  # `ProfileUpdated` on the account's own log, with the change, and on the
+  # logs of everyone who shares a server or a conversation with it, by a job
+  # once it commits (`Lumia.Workers.ProfileUpdated`).
+  defp profile_changed(%Account{} = updated) do
+    with {:ok, event} <-
+           append_event(
+             updated.id,
+             {:profile_updated, %V1.ProfileUpdated{account: Lumia.Proto.account(updated)}}
+           ),
+         {:ok, _job} <- Lumia.Workers.ProfileUpdated.schedule(updated.id) do
+      {:ok, event}
     end
   end
 
@@ -131,7 +143,7 @@ defmodule Lumia.Accounts do
   keeps that as a blob (`Lumia.Blobs`) and names it in the account's
   `avatar_url` as a path on this instance, `#{@avatar_path}<address>`.
   The picture it replaces is removed, and `ProfileUpdated` goes on the
-  account's log.
+  account's log and those of everyone who can see it.
 
   `{:error, {:failed_precondition, "blobs"}}` on an instance that keeps
   no blobs; `{:error, reason}` from `Lumia.Media.avatar/1` for a file
@@ -166,10 +178,7 @@ defmodule Lumia.Accounts do
       Tx.transact(fn ->
         with {:ok, updated} <- account |> Ecto.Changeset.change(avatar_url: url) |> Repo.update(),
              {:ok, _} <-
-               append_event(
-                 account.id,
-                 {:profile_updated, %V1.ProfileUpdated{account: Lumia.Proto.account(updated)}}
-               ) do
+               profile_changed(updated) do
           {:ok, updated}
         end
       end)
@@ -269,7 +278,8 @@ defmodule Lumia.Accounts do
   @doc """
   Takes a new signed profile for an identity-bound account: verified against
   the identity's held roster, newer than the one held, then the account's
-  display name and avatar, with `ProfileUpdated` on its log.
+  display name and avatar, with `ProfileUpdated` on its log and those of
+  everyone who can see it.
   """
   def put_profile(%Account{identity_id: identity_id} = account, %V1.SignedProfile{} = signed)
       when is_binary(identity_id) do
@@ -300,10 +310,7 @@ defmodule Lumia.Accounts do
            )
            |> Repo.update(),
          {:ok, _} <-
-           append_event(
-             account.id,
-             {:profile_updated, %V1.ProfileUpdated{account: Lumia.Proto.account(updated)}}
-           ) do
+           profile_changed(updated) do
       Tx.after_commit(fn -> drop_avatar(account.avatar_url, updated.avatar_url) end)
       {:ok, updated}
     end
