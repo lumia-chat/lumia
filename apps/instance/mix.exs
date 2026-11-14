@@ -4,7 +4,7 @@ defmodule Lumia.MixProject do
   def project do
     [
       app: :lumia,
-      version: "0.7.1",
+      version: "0.8.0",
       elixir: "~> 1.20",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
