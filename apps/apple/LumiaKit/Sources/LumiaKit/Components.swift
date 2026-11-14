@@ -156,6 +156,8 @@ public struct LumiaMessageRow: View {
     /// long press opens them, and each is offered to assistive technology.
     public var extras = MessageExtras()
     @State private var hovering = false
+    /// The body is taller than a collapsed one, as drawn.
+    @State private var tall = false
 
     public init(author: String, tone: AvatarTone, picture: URL? = nil, time: String, text: String, deleted: Bool = false, place: MessagePlace = MessagePlace(), measures: MessageMeasures = .standard, openAuthor: (() -> Void)? = nil, extras: MessageExtras = MessageExtras()) {
         self.author = author; self.tone = tone; self.picture = picture; self.time = time; self.text = text; self.deleted = deleted; self.place = place; self.measures = measures; self.openAuthor = openAuthor; self.extras = extras
@@ -164,20 +166,27 @@ public struct LumiaMessageRow: View {
     /// Whose a row is and when, as assistive technology hears it before the message.
     public static func heading(author: String, time: String) -> String { "\(author), \(time)" }
 
-    /// What was said, as drawn: each mention by name.
-    private var said: String {
+    /// What was said, as drawn: the core's blocks, each mention by name.
+    private func said(_ blocks: [BodyBlock]) -> String {
         if deleted { return "(deleted)" }
-        let drawn = MentionSpans.drawn(body: text, mentions: extras.mentions, name: extras.name)
+        let drawn = BodyText.plain(blocks, mentions: extras.mentions, name: extras.name)
         return extras.edited ? "\(drawn), \(MessageEdits.editedLabel)" : drawn
     }
+
+    /// The body as the core reads it, once a drawing for the words and what
+    /// assistive technology hears of them.
+    private var blocks: [BodyBlock] { deleted ? [] : parseBody(body: text, mentions: extras.mentions) }
 
     private var editing: Bool { extras.edit != nil && !deleted }
     private var oneLine: Bool { measures.layout == .oneLine }
     private var scale: CGFloat { measures.text }
+    /// Show more or Show less is offered under the words.
+    private var collapsible: Bool { tall && extras.expand != nil && !deleted && !editing }
 
     public var body: some View {
+        let blocks = blocks
         Group {
-            if oneLine { line } else { grouped }
+            if oneLine { line(blocks) } else { grouped(blocks) }
         }
         .padding(.horizontal, LumiaTokens.space12)
         .padding(.top, place.opens && !oneLine ? measures.edge : measures.within)
@@ -189,7 +198,7 @@ public struct LumiaMessageRow: View {
         .padding(.bottom, place.closes && !oneLine ? measures.blockGap : 0)
     }
 
-    private var grouped: some View {
+    private func grouped(_ blocks: [BodyBlock]) -> some View {
         VStack(alignment: .leading, spacing: LumiaTokens.space2) {
             // The reference line's connector starts under the avatar's middle.
             if let quote = extras.quote, !deleted {
@@ -197,7 +206,11 @@ public struct LumiaMessageRow: View {
                     .padding(.leading, max(0, measures.avatar / 2 - 1))
             }
             VStack(alignment: .leading, spacing: LumiaTokens.space4) {
-                if editing { main } else { main.modifier(RowElement(label: Self.heading(author: author, time: time), value: said, actions: actions)) }
+                if editing { main(blocks) } else { main(blocks).modifier(RowElement(label: Self.heading(author: author, time: time), value: said(blocks), actions: actions(blocks))) }
+                if collapsible, let expand = extras.expand {
+                    LumiaShowMore(expanded: extras.expanded, scale: scale, toggle: expand)
+                        .padding(.leading, measures.gutter)
+                }
                 if !extras.reactions.isEmpty, !deleted, !editing {
                     LumiaReactionChips(reactions: extras.reactions, toggle: extras.toggle, add: extras.addReaction, scale: scale)
                         .padding(.leading, measures.gutter)
@@ -212,7 +225,7 @@ public struct LumiaMessageRow: View {
     /// One line: the time and the name, then the words in a column of their
     /// own with the reference over them and the reactions under them. The
     /// row's one stop is its words, which say whose they are and when.
-    private var line: some View {
+    private func line(_ blocks: [BodyBlock]) -> some View {
         OneLineLayout(gap: LumiaTokens.space8, spacing: LumiaTokens.space2) {
             HStack(alignment: .firstTextBaseline, spacing: LumiaTokens.space8) {
                 OneLineTime(time: time, scale: scale)
@@ -227,9 +240,12 @@ public struct LumiaMessageRow: View {
                 LumiaOneLineReference(quote: quote, scale: scale)
             }
             Group {
-                if editing { words } else { words.modifier(RowElement(label: Self.heading(author: author, time: time), value: said, actions: actions)) }
+                if editing { words(blocks) } else { words(blocks).modifier(RowElement(label: Self.heading(author: author, time: time), value: said(blocks), actions: actions(blocks))) }
             }
             .layoutValue(key: OneLineLayout.Words.self, value: true)
+            if collapsible, let expand = extras.expand {
+                LumiaShowMore(expanded: extras.expanded, scale: scale, toggle: expand)
+            }
             if !extras.reactions.isEmpty, !deleted, !editing {
                 LumiaReactionChips(reactions: extras.reactions, toggle: extras.toggle, add: extras.addReaction, scale: scale)
                     .padding(.top, LumiaTokens.space2)
@@ -247,7 +263,9 @@ public struct LumiaMessageRow: View {
         return hovering || extras.replying || editing ? LumiaTokens.hoverMessage.color : .clear
     }
 
-    private var actions: [(String, () -> Void)] {
+    /// What assistive technology can do with the row, its code blocks' Copy
+    /// among them, since the row is one stop and the buttons are inside it.
+    private func actions(_ blocks: [BodyBlock]) -> [(String, () -> Void)] {
         guard !deleted else { return openAuthor.map { [("Open \(author)’s profile", $0)] } ?? [] }
         var all: [(String, () -> Void)] = []
         if let reply = extras.reply { all.append((MessageAction.reply.words, reply)) }
@@ -255,25 +273,35 @@ public struct LumiaMessageRow: View {
         if let edit = extras.editMessage { all.append((MessageAction.edit.words, edit)) }
         if let delete = extras.deleteMessage { all.append((MessageAction.delete.words, delete)) }
         if let actions = extras.actions { all.append(("Message actions", actions)) }
+        let codes = BodyBlocks.codes(blocks)
+        for (n, code) in codes.enumerated() { all.append((CodeCopy.action(n, of: codes.count), { LumiaCopyCode.copy(code) })) }
         if let open = extras.quote?.open, extras.quote?.deleted == false { all.append(("Go to the original", open)) }
         if let openAuthor { all.append(("Open \(author)’s profile", openAuthor)) }
         return all
     }
 
-    /// The words, or the field in their place while they are edited.
-    @ViewBuilder private var words: some View {
+    /// The words, or the field in their place while they are edited; a
+    /// long body drawn short until its Show more.
+    @ViewBuilder private func words(_ blocks: [BodyBlock]) -> some View {
         if let edit = extras.edit, !deleted {
-            LumiaMessageEditor(draft: edit.draft, save: edit.save, cancel: edit.cancel, scale: scale)
+            LumiaMessageEditor(draft: edit.draft, save: edit.save, cancel: edit.cancel, room: edit.room, scale: scale)
         } else {
-            MessageBodyText(text: deleted ? "(deleted)" : text, mentions: deleted ? [] : extras.mentions, deleted: deleted, edited: extras.edited, name: extras.name, openPerson: extras.openPerson, scale: scale)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                // In one line the words are a subview of their own, so they take the long press themselves.
-                .contentShape(Rectangle())
-                .onLongPressGesture(minimumDuration: 0.4) { if !deleted { extras.actions?() } }
+            Group {
+                if deleted {
+                    MessageBodyText(text: "(deleted)", mentions: [], deleted: true, scale: scale)
+                } else {
+                    MessageBodyText(blocks: blocks, mentions: extras.mentions, edited: extras.edited, name: extras.name, openPerson: extras.openPerson, scale: scale)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .modifier(BodyCollapsing(measures: measures, expanded: extras.expanded || extras.expand == nil, tall: $tall))
+            // In one line the words are a subview of their own, so they take the long press themselves.
+            .contentShape(Rectangle())
+            .onLongPressGesture(minimumDuration: 0.4) { if !deleted { extras.actions?() } }
         }
     }
 
-    private var main: some View {
+    private func main(_ blocks: [BodyBlock]) -> some View {
         HStack(alignment: .top, spacing: measures.avatar > 0 ? measures.beside : 0) {
             if measures.avatar > 0 {
                 if place.opens {
@@ -293,7 +321,7 @@ public struct LumiaMessageRow: View {
                         Text(time).font(LumiaTokens.textMeta.font(scale: scale)).foregroundStyle(LumiaTokens.inkMuted.color)
                     }
                 }
-                words
+                words(blocks)
             }
         }
         // The whole row takes the long press, not only its words.
@@ -409,9 +437,11 @@ public struct MessageEdit {
     public let draft: Binding<String>
     public let save: () -> Void
     public let cancel: () -> Void
+    /// The room the words have under the instance's limit, for the counter.
+    public let room: ((String) -> MessageRoom)?
 
-    public init(draft: Binding<String>, save: @escaping () -> Void, cancel: @escaping () -> Void) {
-        self.draft = draft; self.save = save; self.cancel = cancel
+    public init(draft: Binding<String>, save: @escaping () -> Void, cancel: @escaping () -> Void, room: ((String) -> MessageRoom)? = nil) {
+        self.draft = draft; self.save = save; self.cancel = cancel; self.room = room
     }
 }
 
@@ -434,6 +464,10 @@ public struct MessageExtras {
     public var edit: MessageEdit?
     /// What the instance refused of its edit: "Not saved: …".
     public var notSaved: String?
+    /// A long body shown whole after its Show more, while the conversation is open.
+    public var expanded = false
+    /// Show more and Show less; nil draws a long body whole.
+    public var expand: (() -> Void)?
     public var toggle: (String) -> Void = { _ in }
     public var addReaction: (() -> Void)?
     public var reply: (() -> Void)?
@@ -587,6 +621,9 @@ public struct LumiaComposer<Above: View>: View {
     /// The message rows' text scale (Preferences' font size and the
     /// system's text size), which the field's words take too.
     var textScale: CGFloat = 1
+    /// The room a draft has under the instance's limit (the core's
+    /// `messageRoom`); nil counts nothing.
+    var room: ((String) -> MessageRoom)?
     let send: () -> Void
     @ViewBuilder let above: () -> Above
 
@@ -600,11 +637,15 @@ public struct LumiaComposer<Above: View>: View {
     /// the composer's frame over its field, which it rings in the active
     /// border; Escape cancels it. `editLast` is Up in an empty composer on
     /// a keyboard that has one: this account's newest message, edited.
-    public init(text: Binding<String>, placeholder: String, disabled: Bool = false, hint: String? = "Return to send", typing: [String]? = nil, focused: FocusState<Bool>.Binding? = nil, reply: ComposerReply? = nil, editLast: (() -> Void)? = nil, textScale: CGFloat = 1, send: @escaping () -> Void, @ViewBuilder above: @escaping () -> Above) {
-        self._text = text; self.placeholder = placeholder; self.disabled = disabled; self.hint = hint; self.typing = typing; self.focused = focused; self.reply = reply; self.editLast = editLast; self.textScale = textScale; self.send = send; self.above = above
+    /// Near the limit `room` sets the counter at the end of the line under
+    /// the field; over it Send and Return do nothing and the draft stays.
+    public init(text: Binding<String>, placeholder: String, disabled: Bool = false, hint: String? = "Return to send", typing: [String]? = nil, focused: FocusState<Bool>.Binding? = nil, reply: ComposerReply? = nil, editLast: (() -> Void)? = nil, textScale: CGFloat = 1, room: ((String) -> MessageRoom)? = nil, send: @escaping () -> Void, @ViewBuilder above: @escaping () -> Above) {
+        self._text = text; self.placeholder = placeholder; self.disabled = disabled; self.hint = hint; self.typing = typing; self.focused = focused; self.reply = reply; self.editLast = editLast; self.textScale = textScale; self.room = room; self.send = send; self.above = above
     }
 
-    private var canSend: Bool { !disabled && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    private func canSend(_ left: MessageRoom?) -> Bool {
+        !disabled && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !MessageCounter.over(left)
+    }
 
     @ViewBuilder private var field: some View {
         let base = TextField(placeholder, text: $text, axis: .vertical)
@@ -612,6 +653,9 @@ public struct LumiaComposer<Above: View>: View {
     }
 
     public var body: some View {
+        let left = room?(text)
+        let canSend = canSend(left)
+        let counted = left?.shown == true
         VStack(alignment: .leading, spacing: LumiaTokens.space8) {
             above()
             VStack(spacing: 0) {
@@ -628,7 +672,8 @@ public struct LumiaComposer<Above: View>: View {
                         .font(LumiaTokens.textMessage.font(scale: textScale))
                         .foregroundStyle(LumiaTokens.inkField.color)
                         .disabled(disabled)
-                        .onSubmit(send)
+                        .onSubmit { if !MessageCounter.over(left) { send() } }
+                        .announcesGoingOver(left)
                         .onKeyPress(.upArrow) {
                             guard text.isEmpty, let editLast else { return .ignored }
                             editLast()
@@ -662,10 +707,11 @@ public struct LumiaComposer<Above: View>: View {
             .clipShape(RoundedRectangle(cornerRadius: LumiaTokens.radius16))
             .overlay(RoundedRectangle(cornerRadius: LumiaTokens.radius16).stroke(reply == nil ? LumiaTokens.borderComposer.color : LumiaTokens.borderActive.color))
             .shadow(color: .black.opacity(0.08), radius: 14, y: 8)
-            if typing != nil || hint != nil {
+            if typing != nil || hint != nil || counted {
                 // The line under the field: who is typing at its start, as
-                // the boards have it, and what Return does at its end. A
-                // line of its type tall whether or not anyone is typing.
+                // the boards have it, and what Return does at its end, or
+                // near the limit the counter. A line of its type tall
+                // whether or not anyone is typing.
                 ZStack(alignment: .leading) {
                     Text(verbatim: " ").font(LumiaTokens.textMeta.font).hidden().accessibilityHidden(true)
                     HStack(spacing: LumiaTokens.space12) {
@@ -673,7 +719,9 @@ public struct LumiaComposer<Above: View>: View {
                             LumiaTypingHint(words: words)
                         }
                         Spacer(minLength: 0)
-                        if let hint {
+                        if let left, counted {
+                            LumiaMessageCounter(room: left)
+                        } else if let hint {
                             Text(hint).font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkMuted.color)
                         }
                     }

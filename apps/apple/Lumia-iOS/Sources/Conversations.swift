@@ -109,13 +109,15 @@ struct Changer {
     /// The field, for the message being edited.
     func edit(_ ref: MessageRef) -> MessageEdit? {
         guard changes.editing == ref.id else { return nil }
-        return MessageEdit(draft: $changes.draft, save: { save(ref) }, cancel: { changes.editing = nil })
+        return MessageEdit(draft: $changes.draft, save: { save(ref) }, cancel: { changes.editing = nil }, room: { session.client.messageRoom($0) })
     }
 
     /// Return or Save: the field goes at once and the message shows the new
     /// words when the edit comes back; nothing changed sends nothing, and
     /// nothing left asks to delete instead.
     func save(_ ref: MessageRef) {
+        // Over the instance's limit the field stays, holding its words.
+        guard !MessageCounter.over(session.client.messageRoom(changes.draft)) else { return }
         switch MessageEdits.outcome(original: ref.body, draft: changes.draft) {
         case .unchanged:
             changes.editing = nil
@@ -176,6 +178,8 @@ struct ConversationScreen: View {
     @State private var flash: String?
     @State private var newestVisible = false
     @State private var scroll: ScrollRequest?
+    /// The long messages shown whole after their Show more, while this conversation is open.
+    @State private var expanded: Set<String> = []
     @FocusState private var composing: Bool
     /// The message text at the system's text size, which the font size scales.
     @ScaledMetric(relativeTo: .body) private var systemText = LumiaTokens.textMessage.size
@@ -250,7 +254,7 @@ struct ConversationScreen: View {
             // it either: the instance is not to learn who is writing in a
             // personal conversation (protocol 6.7; an open item of the E2EE spec).
             // The reply bar has no "@ On" here: every message of a personal conversation notifies.
-            LumiaComposer(text: $draft, placeholder: member ? "Message \(title)" : "Setting up the encrypted group…", disabled: !member, hint: nil, focused: $composing, reply: replying.map { _ in ComposerReply(name: replyingTo, mention: nil) { replying = nil } }, editLast: editLast, textScale: measures.text) {
+            LumiaComposer(text: $draft, placeholder: member ? "Message \(title)" : "Setting up the encrypted group…", disabled: !member, hint: nil, focused: $composing, reply: replying.map { _ in ComposerReply(name: replyingTo, mention: nil) { replying = nil } }, editLast: editLast, textScale: measures.text, room: { session.client.messageRoom($0) }) {
                 Task { await send() }
             } above: {
                 EmptyView()
@@ -266,6 +270,7 @@ struct ConversationScreen: View {
             MessageSheetView(sheet: sheet, react: react, reply: { m, part in startReply(id: m.id, name: m.authorName, body: m.drawn, part: part) }, chose: { changes.chosen = ($0, $1) })
         }
         .deleteConfirmation(changer)
+        .onChange(of: channelID) { _, _ in expanded = [] }
     }
 
     /// Whose a message is, for its block and its avatar's tone:
@@ -304,6 +309,8 @@ struct ConversationScreen: View {
         x.replying = replying?.messageId == m.messageId
         x.edited = m.edited
         x.notSaved = session.editRefusals[m.messageId]
+        x.expanded = expanded.contains(m.messageId)
+        x.expand = { expanded.formSymmetricDifference([m.messageId]) }
         guard member else { return x }
         let ref = ref(m)
         x.edit = changer.edit(ref)
@@ -348,7 +355,8 @@ struct ConversationScreen: View {
 
     private func send() async {
         let body = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !body.isEmpty else { return }
+        // Over the instance's limit the draft stays, as the counter says.
+        guard !body.isEmpty, !MessageCounter.over(session.client.messageRoom(body)) else { return }
         let quote = replying
         draft = ""
         replying = nil
@@ -387,6 +395,8 @@ struct ChannelScreen: View {
     @State private var flash: String?
     @State private var newestVisible = false
     @State private var scroll: ScrollRequest?
+    /// The long messages shown whole after their Show more, while this conversation is open.
+    @State private var expanded: Set<String> = []
     @FocusState private var composing: Bool
     /// The message text at the system's text size, which the font size scales.
     @ScaledMetric(relativeTo: .body) private var systemText = LumiaTokens.textMessage.size
@@ -465,7 +475,7 @@ struct ChannelScreen: View {
             }
             if member {
                 // Who is typing goes under the field, in a server's channel only (protocol 6.7).
-                LumiaComposer(text: $draft, placeholder: isDM ? "Message \(title)" : "Message #\(name)", hint: nil, typing: session.typingNames(in: channelID), focused: $composing, reply: replyBar, editLast: editLast, textScale: measures.text) {
+                LumiaComposer(text: $draft, placeholder: isDM ? "Message \(title)" : "Message #\(name)", hint: nil, typing: session.typingNames(in: channelID), focused: $composing, reply: replyBar, editLast: editLast, textScale: measures.text, room: { session.client.messageRoom($0) }) {
                     Task { await send() }
                 } above: {
                     composerBars
@@ -492,6 +502,7 @@ struct ChannelScreen: View {
             MessageSheetView(sheet: sheet, react: react, reply: { m, part in startReply(id: m.id, authorID: m.authorID, body: m.drawn, part: part) }, chose: { changes.chosen = ($0, $1) })
         }
         .deleteConfirmation(changer)
+        .onChange(of: channelID) { _, _ in expanded = [] }
     }
 
     /// The reply bar inside the composer, with its "@ On" for a reply to
@@ -562,6 +573,8 @@ struct ChannelScreen: View {
         x.replying = replying?.messageId == m.messageId
         x.edited = m.edited
         x.notSaved = session.editRefusals[m.messageId]
+        x.expanded = expanded.contains(m.messageId)
+        x.expand = { expanded.formSymmetricDifference([m.messageId]) }
         if let serverID = channel?.serverId, !serverID.isEmpty {
             x.openPerson = { openPerson(PersonInServer(accountID: $0, serverID: serverID)) }
         }
@@ -620,7 +633,8 @@ struct ChannelScreen: View {
 
     private func send() async {
         let body = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !body.isEmpty else { return }
+        // Over the instance's limit the draft stays, as the counter says.
+        guard !body.isEmpty, !MessageCounter.over(session.client.messageRoom(body)) else { return }
         // "@ On" turned off: the reply notifies nobody.
         var quote = replying
         if let q = quote { quote?.silent = Replies.offersMentionSwitch(quotedAuthor: q.authorAccountId, me: session.me, personal: false) && !mentionOn }

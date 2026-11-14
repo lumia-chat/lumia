@@ -234,6 +234,11 @@ public actor LumiaClient {
     public nonisolated func railFolderOf(_ items: [RailItem], serverID: String) -> String? { inner.railFolderOf(items: items, serverId: serverID) }
     public nonisolated func railFolderWords(_ names: [String]) -> String { inner.railFolderWords(names: names) }
 
+    /// The room a draft has under the instance's limit (protocol 14), for
+    /// the composer's counter on every key: it reads only the limit the
+    /// welcome gave, so it runs where it is asked.
+    public nonisolated func messageRoom(_ body: String) -> MessageRoom { inner.messageRoom(body: body) }
+
     public func dmChannels() throws -> [DmChannelSummary] { try inner.dmChannels() }
     public func dmOpen(accountIDs: [String]) throws -> DmOpened { try inner.dmOpen(accountIds: accountIDs) }
     public func dmRequest(accountID: String) throws -> DmRequestSummary { try inner.dmRequest(accountId: accountID) }

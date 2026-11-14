@@ -1,124 +1,13 @@
 // The pieces architecture 6.6 adds to a conversation, after the design
 // system's (apps/web/src/design/components.tsx and components.css) and the
-// "Inline replies" and phone boards: a message body with its mentions as
-// pills by name and "(edited)", a reply's reference line above it, the
-// reaction chips under it, the reply bar inside the composer, the bar over
+// "Inline replies" and phone boards (the body itself, its mentions as pills
+// by name, is `BodyComponents.swift`): a reply's reference line above it,
+// the reaction chips under it, the reply bar inside the composer, the bar over
 // it after a send that mentioned people outside the channel, the @ list,
 // the "New" line, the count badges and the field a message becomes while
 // edited. Tokens only.
 import LumiaFFI
 import SwiftUI
-
-/// A message's words, its mentions drawn as the design's `lu-mention`
-/// pills: `@` and the person's name (`name` gives it; a mention of someone
-/// not known stays as written), the accent's ink on its soft fill, with the
-/// pill's rounded ends where the system can draw them (iOS 18), a plain
-/// fill before. A pill naming a person opens them through `openPerson`
-/// where given. An edited message says so after its last word. `scale`
-/// is the message rows' text scale, the leading growing with it.
-public struct MessageBodyText: View {
-    let text: String
-    let mentions: [MentionSummary]
-    let deleted: Bool
-    let edited: Bool
-    let name: (String) -> String
-    let openPerson: ((String) -> Void)?
-    let scale: CGFloat
-
-    public init(text: String, mentions: [MentionSummary], deleted: Bool = false, edited: Bool = false, name: @escaping (String) -> String = { _ in "" }, openPerson: ((String) -> Void)? = nil, scale: CGFloat = 1) {
-        self.text = text; self.mentions = mentions; self.deleted = deleted; self.edited = edited; self.name = name; self.openPerson = openPerson; self.scale = scale
-    }
-
-    static let scheme = "lumia-mention"
-    /// The pill's room either side of the name: a narrow space that does
-    /// not break, as near as running words come to the design's padding.
-    static let pad = "\u{202F}"
-
-    private func pill(_ segment: BodySegment, _ mention: MentionSummary, filled: Bool) -> AttributedString {
-        // One pill, never cut across two lines: its spaces do not break.
-        let said = segment.drawn(name: name).replacingOccurrences(of: " ", with: "\u{00A0}")
-        var part = AttributedString(Self.pad + said + Self.pad)
-        part.swiftUI.foregroundColor = LumiaTokens.accentInk.color
-        part.swiftUI.font = LumiaTokens.textMessage.font(scale: scale).weight(.semibold)
-        if filled { part.swiftUI.backgroundColor = LumiaTokens.accentSoft.color }
-        if !mention.everyone, openPerson != nil { part.link = URL(string: "\(Self.scheme):\(mention.accountId)") }
-        return part
-    }
-
-    /// The words as one `Text`, so they wrap as one paragraph; `rounded`
-    /// marks the pills for the renderer that draws their ends.
-    private func words(rounded: Bool) -> Text {
-        var all = Text(verbatim: "")
-        for segment in MentionSpans.segments(body: text, mentions: deleted ? [] : mentions) {
-            guard let mention = segment.mention else {
-                all = all + Text(verbatim: segment.text)
-                continue
-            }
-            if rounded, #available(iOS 18, macOS 15, *) {
-                all = all + Text(pill(segment, mention, filled: false)).customAttribute(MentionPill())
-            } else {
-                all = all + Text(pill(segment, mention, filled: true))
-            }
-        }
-        if edited, !deleted {
-            all = all + Text(verbatim: " " + MessageEdits.edited).font(LumiaTokens.textMeta.font(scale: scale)).foregroundStyle(LumiaTokens.inkMuted.color)
-        }
-        return all
-    }
-
-    public var body: some View {
-        Group {
-            if #available(iOS 18, macOS 15, *) {
-                words(rounded: true).textRenderer(MentionPillRenderer(fill: LumiaTokens.accentSoft.color))
-            } else {
-                words(rounded: false)
-            }
-        }
-        .font(LumiaTokens.textMessage.font(scale: scale))
-        .lineSpacing(MessageMeasures.leading * scale)
-        .foregroundStyle(deleted ? LumiaTokens.inkQuiet.color : LumiaTokens.inkBody.color)
-        .italic(deleted)
-        .tint(LumiaTokens.accentInk.color)
-        .environment(\.openURL, OpenURLAction { url in
-            guard url.scheme == Self.scheme else { return .discarded }
-            openPerson?(url.absoluteString.replacingOccurrences(of: "\(Self.scheme):", with: ""))
-            return .handled
-        })
-    }
-}
-
-/// Marks a mention's run for `MentionPillRenderer`.
-@available(iOS 18, macOS 15, *)
-struct MentionPill: TextAttribute {}
-
-/// Draws each mention's pill under its words: the soft fill with the
-/// design's 6-point corners, a point over and under the line.
-@available(iOS 18, macOS 15, *)
-struct MentionPillRenderer: TextRenderer {
-    let fill: Color
-
-    func draw(layout: Text.Layout, in ctx: inout GraphicsContext) {
-        for line in layout {
-            // A mention may be several runs on a line: one pill for them all.
-            var pill: CGRect?
-            func close() {
-                if let rect = pill {
-                    ctx.fill(Path(roundedRect: rect.insetBy(dx: 0, dy: -LumiaTokens.space2 / 2), cornerRadius: LumiaTokens.radius6), with: .color(fill))
-                }
-                pill = nil
-            }
-            for run in line {
-                if run[MentionPill.self] != nil {
-                    pill = pill.map { $0.union(run.typographicBounds.rect) } ?? run.typographicBounds.rect
-                } else {
-                    close()
-                }
-            }
-            close()
-            for run in line { ctx.draw(run) }
-        }
-    }
-}
 
 /// A reply's reference line, above its message (the "Inline replies"
 /// board): a connector from the avatar below, the quoted person's small
@@ -536,25 +425,31 @@ public struct LumiaCountBadge: View {
 }
 
 /// A message's words as a field, in place of them while its author edits it
-/// (architecture 6.6): the design's text field, growing with what it holds,
-/// with the keyboard and the caret at its end. Return saves and Escape
-/// cancels on a keyboard that has them (Shift-Return a new line); a phone's
-/// own keyboard saves with its Return, and the line under the field says
-/// Cancel and Save as buttons, since a phone has no Escape to name.
+/// (architecture 6.6): the design's text field, growing with what it holds
+/// up to 12 lines, with the keyboard and the caret at its end. Return saves
+/// and Escape cancels on a keyboard that has them (Shift-Return a new line);
+/// a phone's own keyboard saves with its Return, and the line under the
+/// field says Cancel and Save as buttons, since a phone has no Escape to
+/// name. Near the instance's limit (`room`) the counter stands at that
+/// line's end, and over it Save and Return do nothing and the words stay.
 public struct LumiaMessageEditor: View {
     @Binding var draft: String
     let save: () -> Void
     let cancel: () -> Void
+    /// The room a draft has under the limit; nil counts nothing.
+    let room: ((String) -> MessageRoom)?
     /// The message rows' text scale, which the words keep while edited.
     let scale: CGFloat
     @FocusState private var focused: Bool
     @State private var newline = false
 
-    public init(draft: Binding<String>, save: @escaping () -> Void, cancel: @escaping () -> Void, scale: CGFloat = 1) {
-        self._draft = draft; self.save = save; self.cancel = cancel; self.scale = scale
+    public init(draft: Binding<String>, save: @escaping () -> Void, cancel: @escaping () -> Void, room: ((String) -> MessageRoom)? = nil, scale: CGFloat = 1) {
+        self._draft = draft; self.save = save; self.cancel = cancel; self.room = room; self.scale = scale
     }
 
     public var body: some View {
+        let left = room?(draft)
+        let over = MessageCounter.over(left)
         VStack(alignment: .leading, spacing: LumiaTokens.space6) {
             TextField("", text: $draft, axis: .vertical)
                 .focused($focused)
@@ -575,14 +470,21 @@ public struct LumiaMessageEditor: View {
                     guard MessageEdits.returnTyped(old: old, new: new) else { return }
                     if newline { newline = false; return }
                     draft = old
-                    save()
+                    if !MessageCounter.over(room?(old)) { save() }
                 }
+                .announcesGoingOver(left)
                 .accessibilityLabel("Edit message")
                 .accessibilityIdentifier("message-editor")
             HStack(spacing: LumiaTokens.space4) {
                 Button("Cancel", action: cancel)
                 Text(verbatim: "·").accessibilityHidden(true)
                 Button("Save", action: save).fontWeight(.semibold).foregroundStyle(LumiaTokens.accentInk.color)
+                    .disabled(over)
+                    .opacity(over ? 0.5 : 1)
+                if let left, left.shown {
+                    Spacer(minLength: LumiaTokens.space8)
+                    LumiaMessageCounter(room: left, scale: scale)
+                }
             }
             .buttonStyle(.plain)
             .font(LumiaTokens.textMeta.font(scale: scale))

@@ -37,22 +37,16 @@ struct RootView: View {
 
     var body: some View {
         Group {
-            // Opening, or signing out: once Sign out is tapped nothing of the
-            // account is on screen, so there is no second tap and nothing to
-            // ask of a session that is ending.
-            if store.opening || store.signingOut {
-                ProgressView().controlSize(.large)
-            } else if devScreen == "signin" {
-                SignInView()
-            } else if devScreen == "link", let session = store.session {
-                LinkView(session: session)
-            } else if store.route == .app, let session = store.session, session.signedIn {
-                ShellView(session: session)
-            } else if store.route == .link, let session = store.session {
-                LinkView(session: session)
+            #if DEBUG
+            if let devScreen, devScreen.hasPrefix("bodies") {
+                // No instance: message bodies alone (DevScenes.swift).
+                BodiesScene(part: devScreen)
             } else {
-                SignInView()
+                screen
             }
+            #else
+            screen
+            #endif
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(LumiaTokens.bg.color)
@@ -81,6 +75,25 @@ struct RootView: View {
         // on, so one that lands before any session is opened is not shown.
         .onChange(of: store.session?.signedIn == true && !store.signingOut, initial: true) { _, held in
             PushRegistrar.shared.signedIn = held
+        }
+    }
+
+    @ViewBuilder private var screen: some View {
+        // Opening, or signing out: once Sign out is tapped nothing of the
+        // account is on screen, so there is no second tap and nothing to
+        // ask of a session that is ending.
+        if store.opening || store.signingOut {
+            ProgressView().controlSize(.large)
+        } else if devScreen == "signin" {
+            SignInView()
+        } else if devScreen == "link", let session = store.session {
+            LinkView(session: session)
+        } else if store.route == .app, let session = store.session, session.signedIn {
+            ShellView(session: session)
+        } else if store.route == .link, let session = store.session {
+            LinkView(session: session)
+        } else {
+            SignInView()
         }
     }
 }
