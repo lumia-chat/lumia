@@ -104,7 +104,7 @@ pub fn sidebar(s: &State, server: &ServerSummary, look: Look) -> El {
             format!("dm-{}", dm.channel_id),
             &name,
             &with_unread(&format!("Conversation with {name}"), unread),
-            NavLead::Avatar(partner),
+            NavLead::Avatar(avatar_of(s, &name, &partner, t::AVATAR_XS, look)),
             open == Some(dm.channel_id.as_str()),
             unread,
             move |s: &mut State| s.select_channel(&id),
@@ -179,7 +179,8 @@ pub fn sidebar(s: &State, server: &ServerSummary, look: Look) -> El {
 /// other person's avatar in a server DM, or a glyph (Mentions).
 pub(super) enum NavLead {
     Glyph(&'static str, bool),
-    Avatar(String),
+    /// A person's avatar, drawn with their picture where there is one (`avatar_of`).
+    Avatar(El),
     Icon(&'static rune::Icon),
 }
 
@@ -235,10 +236,7 @@ pub(super) fn nav_row(
             .color(lead_ink)
             .w(t::SPACE_10)
             .a11y_hidden(),
-        NavLead::Avatar(id) => {
-            el().a11y_hidden()
-                .child(super::components::avatar(name, &id, t::AVATAR_XS, look))
-        }
+        NavLead::Avatar(avatar) => el().a11y_hidden().child(avatar),
         NavLead::Icon(glyph) => el()
             .w(t::SPACE_10)
             .center()

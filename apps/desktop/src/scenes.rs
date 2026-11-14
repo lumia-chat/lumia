@@ -99,6 +99,24 @@ pub const SCENES: &[Scene] = &[
     }),
     // Being in channels, and server DMs (`ui/channels.rs`, architecture 6.8).
     ("channels", channels_sample),
+    // People's pictures (`avatar_of`): Grace with one, drawn in her server DM's sidebar row,
+    // the member list and her messages. The brand's icon stands in for her picture.
+    ("pictures", |s| {
+        use crate::session::avatars::AvatarUpdate;
+        channels_sample(s);
+        let url = format!("/api/v1/avatars/{}", "9a".repeat(32));
+        if let Some(grace) = s.session.people.get_mut("grace") {
+            grace.avatar_url.clone_from(&url);
+        }
+        s.receive(&Update::Avatar(AvatarUpdate::Fetched {
+            url,
+            bytes: Ok(std::sync::Arc::from(
+                &include_bytes!("../../../assets/brand/lumia-original-icon.png")[..],
+            )),
+        }));
+        s.tick(chrono::Utc::now().timestamp_micros());
+        s.pictures.wait();
+    }),
     ("channels-menu", |s| {
         channels_sample(s);
         s.open_channels_menu();
