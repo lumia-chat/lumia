@@ -304,6 +304,8 @@ pub fn channel_members(
         .gap(t::SPACE_6)
         .items_center()
         .border_sides([0.0, 0.0, 1.0, 0.0], c.line)
+        // The top of the window: it moves the window, as the conversation's header does.
+        .window_drag()
         .child(
             text("Members")
                 .font(t::TEXT_TAB)

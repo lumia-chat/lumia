@@ -217,6 +217,8 @@ pub fn aside(s: &State, look: Look) -> Option<El> {
         .px(t::SPACE_18)
         .items_center()
         .border_sides([0.0, 0.0, 1.0, 0.0], c.line)
+        // The top of the window: it moves the window, as the conversation's header does.
+        .window_drag()
         .child(
             text("Details")
                 .font(t::TEXT_TAB)

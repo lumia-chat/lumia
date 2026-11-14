@@ -769,3 +769,66 @@ fn a_revoked_session_goes_back_to_sign_in_and_says_why() {
         );
     }
 }
+
+/// Where a press at `(x, y)` takes the window: a drag, or nothing.
+fn drags(rt: &mut rune::Runtime<State>, (x, y): (f32, f32)) -> bool {
+    rt.pointer_down(x, y);
+    let drag = rt.take_titlebar_action().is_some();
+    rt.pointer_up(x, y);
+    settle(rt);
+    drag
+}
+
+#[test]
+fn the_top_of_the_window_moves_it_wherever_there_is_no_control() {
+    let mut rt = runtime(signed_in());
+    let rect = |rt: &rune::Runtime<State>, key: &str| {
+        rt.elements()
+            .into_iter()
+            .find(|e| e.key.as_deref() == Some(key))
+            .unwrap_or_else(|| panic!("no {key}"))
+            .rect
+    };
+    let [rail_x, _, rail_w, _] = rect(&rt, "rail");
+    let [side_x, ..] = rect(&rt, "sidebar");
+    let [title_x, title_y, title_w, title_h] = rect(&rt, "server-title");
+    let [head_x, head_y, head_w, head_h] = rect(&rt, "header");
+    let [aside_x, aside_y, aside_w, _] = rect(&rt, "aside");
+    // The band, from the window's left edge to its right: the rail's top, the sidebar's top
+    // and the row beside its title, the window's top edge over the panels, the conversation's
+    // header and the members' heading.
+    for (what, at) in [
+        ("the rail's top", (rail_x + rail_w / 2.0, 12.0)),
+        ("the sidebar's top", (side_x + 4.0, 4.0)),
+        (
+            "beside the server's name",
+            (title_x + title_w + 8.0, title_y + title_h / 2.0),
+        ),
+        ("the top edge over the conversation", (head_x + 40.0, 3.0)),
+        (
+            "the conversation's header",
+            (head_x + head_w * 0.6, head_y + head_h / 2.0),
+        ),
+        (
+            "the members' heading",
+            (aside_x + aside_w - 40.0, aside_y + 20.0),
+        ),
+    ] {
+        assert!(
+            drags(&mut rt, at),
+            "{what} at {at:?} does not move the window"
+        );
+    }
+    // Its controls keep their presses, and what is under it never moves the window.
+    // Pressed, each does its own thing (a menu, a page), put away again with Escape; Home last,
+    // since it leaves the server.
+    for key in ["composer", "server-title", "new-message", "home"] {
+        let at = rt.find(key).unwrap_or_else(|| panic!("no {key}"));
+        assert!(!drags(&mut rt, at), "{key} moved the window");
+        rt.key(KeyEvent {
+            key: Key::Escape,
+            mods: Mods::default(),
+        });
+        settle(&mut rt);
+    }
+}

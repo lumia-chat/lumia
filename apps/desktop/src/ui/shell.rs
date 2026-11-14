@@ -63,6 +63,14 @@ pub fn view(s: &State, look: Look) -> El {
                 s.set_window_width(width);
             }
         })
+        // The window's top edge, behind everything: what shows of it, the gutter over the
+        // panels, moves the window as the bands beside it do.
+        .child(
+            el().key("top-edge")
+                .pin(Some(0.0), Some(0.0), Some(0.0), None)
+                .h(t::SPACE_8)
+                .window_drag(),
+        )
         .child(rail(s, current, look))
         .child(sidebar)
         .child(
@@ -265,8 +273,9 @@ pub fn sidebar_frame(
         .shrink()
         .min_w(0.0)
         .role("heading");
+    // As wide as its words, so the rest of the row moves the window.
     let mut titled = row()
-        .grow(1.0)
+        .shrink()
         .min_w(0.0)
         .h(t::TITLE_ROW_HEIGHT)
         .px(t::SPACE_8)
@@ -294,18 +303,33 @@ pub fn sidebar_frame(
         .gap(t::SPACE_6)
         .items_center()
         .window_drag()
-        .child(titled);
+        .child(titled)
+        .child(el().grow(1.0).h(t::TITLE_ROW_HEIGHT));
     if let Some(trailing) = trailing {
         title_row = title_row.child(trailing);
     }
+    // The band over the list, from edge to edge, moves the window: the top of the window, as
+    // the rail's top and the conversation's header are. The list under it keeps its presses.
+    let band = col()
+        .w_full()
+        .pt(SIDEBAR_TOP)
+        .pl(t::SPACE_12)
+        .pr(t::SPACE_10)
+        .window_drag()
+        .child(title_row);
     col()
         .key("sidebar")
         .w(SIDEBAR_WIDTH)
         .h_full()
-        .pt(SIDEBAR_TOP)
         .pb(t::SPACE_14)
-        .pl(t::SPACE_12)
-        .pr(t::SPACE_10)
-        .child(title_row)
-        .child(body)
+        .child(band)
+        .child(
+            col()
+                .w_full()
+                .grow(1.0)
+                .min_h(0.0)
+                .pl(t::SPACE_12)
+                .pr(t::SPACE_10)
+                .child(body),
+        )
 }
