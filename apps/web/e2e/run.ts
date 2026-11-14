@@ -1459,6 +1459,99 @@ async function editingStep(which: string, stamp: number) {
   console.log(`  ${which}: edited its own message in place ("(edited)"), took it up again with Up and put it down with Escape, deleted one after the question and one at once with Shift, and was offered neither on someone else's, in ${Date.now() - t0} ms`);
 }
 
+// Long messages, code blocks and long pastes (#18): a message over 14 lines
+// shows 10 and opens with Show more; a code block keeps its long line on one
+// line, scrolling sideways, and copies its text; a pasted draft keeps its
+// lines; a draft over the instance's 16,384 bytes is counted and not sent,
+// and one at the limit is.
+async function longStep(which: string, stamp: number) {
+  const ownerDir = resolve(work, `cli-long-owner-${which}`);
+  const owner = `pastes${which}${stamp}`;
+  const reader = `reads${which}${stamp}`;
+  lumia(ownerDir, "instance", "add", instance);
+  lumia(ownerDir, "account", "create", "--handle", owner, "--password", password);
+  const server = lumia(ownerDir, "server-create", `Long ${stamp}`).match(/[0-9a-f-]{36}/)?.[0];
+  if (!server) throw new Error("no server id");
+  const general = lumia(ownerDir, "channel-create", server, "general").match(/[0-9a-f-]{36}/)?.[0];
+  if (!general) throw new Error("no channel id");
+  const code = lumia(ownerDir, "invite-create", server).trim().split(/\s+/)[0];
+  if (!code) throw new Error("no invite code");
+  const readerDir = resolve(work, `cli-long-reader-${which}`);
+  lumia(readerDir, "instance", "add", instance);
+  lumia(readerDir, "account", "create", "--handle", reader, "--password", password);
+  lumia(readerDir, "join", code);
+  const lines = Array.from({ length: 30 }, (_, i) => `Release note ${i + 1} of 30.`).join("\n");
+  lumia(ownerDir, "send", general, lines);
+  const wide = `let message = format!("{}: ${"the loader could not relocate the section ".repeat(6)}", name);`;
+  lumia(ownerDir, "send", general, "The line that fails:\n\n```rust\n" + wide + "\nassert!(message.len() < 120);\n```");
+  const { ctx, page } = await open(which, "long");
+  if (which === "chromium") await ctx.grantPermissions(["clipboard-read", "clipboard-write"]);
+  const t0 = Date.now();
+  try {
+    await trustCard(page);
+    await page.getByLabel("Email or handle").fill(reader);
+    await page.getByRole("textbox", { name: "Password" }).fill(password);
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    const composer = page.getByPlaceholder("Message #general");
+    await composer.waitFor();
+    const part = (text: string) => page.locator(".lu-msg__part", { has: page.locator(".lu-msg__body", { hasText: text }) });
+    phase("collapsed");
+    const notes = part("Release note 1 of 30.");
+    const more = notes.getByRole("button", { name: "Show more" });
+    await more.waitFor();
+    if ((await more.getAttribute("aria-expanded")) !== "false") throw new Error("Show more does not say it is collapsed");
+    const frame = notes.locator(".lu-body__frame");
+    const line = await frame.evaluate((el) => parseFloat(getComputedStyle(el).lineHeight));
+    const folded = (await frame.boundingBox())?.height ?? 0;
+    if (Math.abs(folded - 10 * line) > 2) throw new Error(`a folded body is ${folded} px, not ten lines of ${line}`);
+    await page.screenshot({ path: `${out}/${which}-long-folded.png` });
+    await more.click();
+    const less = notes.getByRole("button", { name: "Show less" });
+    await less.waitFor();
+    const opened = (await frame.boundingBox())?.height ?? 0;
+    if (opened < 29 * line) throw new Error(`an opened body is ${opened} px, under thirty lines of ${line}`);
+    phase("code");
+    const block = part("The line that fails:").locator(".lu-body__code");
+    const pre = block.locator(".lu-body__pre");
+    const box = await pre.evaluate((el) => ({ sw: el.scrollWidth, cw: el.clientWidth, sh: el.scrollHeight, ch: el.clientHeight, text: el.textContent ?? "" }));
+    if (box.sw <= box.cw) throw new Error(`the long line wrapped: ${box.sw} wide in ${box.cw}`);
+    if (box.sh > box.ch) throw new Error(`a code block scrolls up and down: ${box.sh} in ${box.ch}`);
+    if (!box.text.includes(wide)) throw new Error("the code block's line is not as typed");
+    await block.hover();
+    const copy = block.getByRole("button", { name: "Copy code" });
+    await copy.click();
+    await copy.getByText("Copied").waitFor();
+    if (which === "chromium") {
+      const held = await page.evaluate(() => navigator.clipboard.readText());
+      if (held !== `${wide}\nassert!(message.len() < 120);`) throw new Error(`Copy wrote ${JSON.stringify(held)}`);
+    }
+    await page.screenshot({ path: `${out}/${which}-long-code.png` });
+    phase("paste");
+    await composer.fill("one\ntwo\nthree");
+    await composer.press("Enter");
+    const pasted = part("one").locator(".lu-body__para").first();
+    await pasted.waitFor();
+    if ((await pasted.innerText()) !== "one\ntwo\nthree") throw new Error(`a pasted draft lost its lines: ${JSON.stringify(await pasted.innerText())}`);
+    phase("limit");
+    const room = page.locator(".lu-draftroom");
+    const send = page.getByRole("button", { name: "Send message" });
+    await composer.fill("x".repeat(16_385));
+    await room.filter({ hasText: "1 character too long" }).waitFor();
+    if (!(await send.isDisabled())) throw new Error("Send is offered over the limit");
+    await page.screenshot({ path: `${out}/${which}-long-over.png` });
+    await composer.press("Enter");
+    if ((await composer.inputValue()).length !== 16_385) throw new Error("Return over the limit took the draft");
+    await composer.fill("y".repeat(16_384));
+    await room.filter({ hasText: "0 characters left" }).waitFor();
+    await composer.press("Enter");
+    await page.waitForFunction(() => (document.querySelector('textarea[placeholder="Message #general"]') as HTMLTextAreaElement | null)?.value === "");
+    await part("yyyyyyyyyy").getByRole("button", { name: "Show more" }).waitFor();
+  } finally {
+    await ctx.close();
+  }
+  console.log(`  ${which}: folded thirty lines to ten and opened them, kept a code block's long line on one line and copied it, kept a paste's lines, refused a draft a character over the limit and sent one at it, in ${Date.now() - t0} ms`);
+}
+
 // A session revoked from elsewhere (protocol 12), as "sign out everywhere"
 // or a reused refresh token does it: the gateway is told and its loop
 // ends, the page asks for the snapshot, is refused, and goes back to the
@@ -1983,6 +2076,7 @@ try {
       ["membership", () => membershipStep(which, stamp)],
       ["replies", () => repliesStep(which, stamp)],
       ["editing", () => editingStep(which, stamp)],
+      ["long", () => longStep(which, stamp)],
       ["history", () => historyStep(which, stamp)],
       ["push", () => webPush(which, `web${stamp}`, passwordDir, server, general, webAccount)],
       ["magic link", () => magicLink(which)],

@@ -346,7 +346,11 @@ fn composer(s: &State, placeholder: &str, look: Look) -> El {
         .disabled(!can_send)
         .child(icon(&icons::SEND, t::SPACE_18).color(c.on_accent));
     // The board draws the button at full strength over an empty field, so it is not
-    // dimmed here either; it is only inert until there is something to send.
+    // dimmed there, only inert until there is something to send. Over the limit it is
+    // dimmed, as the web and the phones draw it: the words are there and cannot go.
+    if room.over() {
+        send = send.opacity(0.45);
+    }
     if can_send {
         send = send
             .cursor(Cursor::Pointer)

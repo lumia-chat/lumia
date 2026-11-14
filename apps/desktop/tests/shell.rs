@@ -681,6 +681,7 @@ fn the_composer_counts_from_ninety_percent_and_refuses_a_send_over_the_limit() {
         .find(|e| e.key.as_deref() == Some("send"))
         .unwrap();
     assert!(!send.focusable, "Send is off");
+    assert!(send.opacity < 0.5, "and dimmed, as on the web and the phones");
     // So long a draft is eight lines of the composer, scrolling inside it.
     let line = lumia_shell::tokens::MESSAGE_TYPE.message.line_height;
     let frame = rt
