@@ -174,6 +174,7 @@ fun MemberRow(
     onClick: (() -> Unit)? = null,
     onLongClick: (() -> Unit)? = null,
     trailing: (@Composable () -> Unit)? = null,
+    picture: String? = null,
 ) {
     val dot = when (status) {
         "ONLINE" -> LumiaTokens.online.color
@@ -190,7 +191,7 @@ fun MemberRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box {
-            LumiaAvatar(initialsOf(name), tone, LumiaTokens.avatarMd)
+            LumiaAvatar(initialsOf(name), tone, LumiaTokens.avatarMd, picture)
             if (dot != null) {
                 Box(Modifier.align(Alignment.BottomEnd).size(LumiaTokens.space10).background(LumiaTokens.surface.color, CircleShape).padding(LumiaTokens.space2).background(dot, CircleShape))
             }
@@ -287,6 +288,7 @@ fun ChannelMembersScreen(
                         onClick = { card = id },
                         onLongClick = if (canRemove) ({ menu = id }) else null,
                         trailing = if (canRemove) ({ MemberRemoveButton("Remove ${session.nameOf(id)} from #$name", enabled = !busy) { remove(id) } }) else null,
+                        picture = session.avatarOf(id),
                     )
                     DropdownMenu(expanded = menu == id, onDismissRequest = { menu = null }, containerColor = LumiaTokens.surface.color) {
                         DropdownMenuItem(
@@ -371,7 +373,7 @@ fun AddPeopleScreen(session: LumiaSession, channelId: String, back: () -> Unit) 
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Box(Modifier.weight(1f)) {
-                            MemberRow(nameOf(m), "@${m.handle}", AvatarTone.of(m.accountId), null, tag = addTag(m))
+                            MemberRow(nameOf(m), "@${m.handle}", AvatarTone.of(m.accountId), null, tag = addTag(m), picture = session.avatarOf(m.accountId))
                         }
                         Checkbox(checked = on, onCheckedChange = null, colors = CheckboxDefaults.colors(checkedColor = LumiaTokens.accent.color, checkmarkColor = LumiaTokens.onAccent.color, uncheckedColor = LumiaTokens.borderForm.color))
                     }
@@ -426,6 +428,7 @@ fun NewServerDmScreen(session: LumiaSession, server: ServerSummary?, back: () ->
                     tag = if (takes) null else "Unavailable",
                     dim = !takes,
                     onClick = if (takes && busy == null) ({ message(m) }) else null,
+                    picture = session.avatarOf(m.accountId),
                 )
             }
         }
@@ -495,7 +498,7 @@ fun ProfileCard(
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = LumiaTokens.surface.color) {
         Column(Modifier.padding(start = LumiaTokens.space24, end = LumiaTokens.space24, bottom = LumiaTokens.space40), verticalArrangement = Arrangement.spacedBy(LumiaTokens.space16)) {
             Row(horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space14), verticalAlignment = Alignment.CenterVertically) {
-                LumiaAvatar(initialsOf(name), AvatarTone.of(accountId), LumiaTokens.avatarLg)
+                LumiaAvatar(initialsOf(name), AvatarTone.of(accountId), LumiaTokens.avatarLg, session.avatarOf(accountId))
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(LumiaTokens.space2)) {
                     Row(horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space6), verticalAlignment = Alignment.CenterVertically) {
                         Text(name, style = LumiaTokens.titleAuth.style, color = LumiaTokens.ink.color, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))

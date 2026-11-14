@@ -280,6 +280,15 @@ class LumiaSession(
     fun pictureOf(path: String): String? = pictureAddress(client.baseUrl, path)
 
     /**
+     * Where a person's picture is, to draw over their initials: their own
+     * from the snapshot, anyone else's from the servers' member lists or a
+     * looked-up profile (`avatarPathOf`, the lookup `nameOf` already asks
+     * for); none for none or one not on this instance.
+     */
+    fun avatarOf(accountId: String): String? =
+        pictureOf(avatarPathOf(accountId, me, snapshot?.avatarUrl ?: "", people[accountId], ::profileOf))
+
+    /**
      * Signs out because the person chose to: the phone's push subscription
      * removed, the session revoked on the instance, the tokens and what was
      * held of the account forgotten, and no line on the sign-in screen,

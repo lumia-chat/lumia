@@ -200,7 +200,7 @@ fun ReferenceLine(session: LumiaSession, quote: QuoteSummary, measures: Measures
             return@Row
         }
         if (name != null) {
-            LumiaAvatar(initialsOf(name), AvatarTone.of(quote.authorAccountId), RefAvatar)
+            LumiaAvatar(initialsOf(name), AvatarTone.of(quote.authorAccountId), RefAvatar, session.avatarOf(quote.authorAccountId))
             Text(
                 referenceName(quote.authorAccountId, session.me, name),
                 style = small(LumiaTokens.textSection.weight),
@@ -587,7 +587,7 @@ private val NameMost: Dp = LumiaTokens.avatarLg * 4
  * marked when not in the channel. A tap picks.
  */
 @Composable
-fun MentionList(choices: List<MentionChoice>, channel: String, onPick: (MentionChoice) -> Unit) {
+fun MentionList(choices: List<MentionChoice>, channel: String, pictureOf: (String) -> String?, onPick: (MentionChoice) -> Unit) {
     val shape = RoundedCornerShape(LumiaTokens.radius14)
     Column(
         Modifier
@@ -617,7 +617,7 @@ fun MentionList(choices: List<MentionChoice>, channel: String, onPick: (MentionC
                     MentionChoice.Everyone -> Box(Modifier.size(LumiaTokens.avatarXs).background(LumiaTokens.accentSoft.color, CircleShape), contentAlignment = Alignment.Center) {
                         Icon(Icons.Filled.AlternateEmail, contentDescription = null, tint = LumiaTokens.accentInk.color, modifier = Modifier.size(LumiaTokens.space14))
                     }
-                    is MentionChoice.Member -> LumiaAvatar(initialsOf(name), AvatarTone.of(choice.member.accountId), LumiaTokens.avatarXs)
+                    is MentionChoice.Member -> LumiaAvatar(initialsOf(name), AvatarTone.of(choice.member.accountId), LumiaTokens.avatarXs, pictureOf(choice.member.accountId))
                 }
                 // The name as it comes (up to half the row), the handle in what is left, the note at the end.
                 Text(name, style = LumiaTokens.textCompact.style, color = LumiaTokens.ink.color, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = NameMost))

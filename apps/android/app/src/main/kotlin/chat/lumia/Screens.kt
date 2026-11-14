@@ -138,6 +138,7 @@ fun RequestsScreen(session: LumiaSession, back: () -> Unit, replace: (List<Scree
                         tone = AvatarTone.of(r.fromAccountId),
                         meta = meta(r),
                         busy = busy == r.requestId,
+                        picture = session.avatarOf(r.fromAccountId),
                         accept = { respond(r.requestId, "accept") },
                         decline = { respond(r.requestId, "decline") },
                         block = { respond(r.requestId, "block") },
@@ -188,7 +189,7 @@ fun NewMessageScreen(session: LumiaSession, back: () -> Unit, replace: (List<Scr
                 items(list, key = { it.accountId }) { p ->
                     val name = p.displayName.ifEmpty { p.handle }
                     Row(Modifier.fillMaxWidth().padding(vertical = LumiaTokens.space4), horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space10), verticalAlignment = Alignment.CenterVertically) {
-                        LumiaAvatar(initialsOf(name), AvatarTone.of(p.accountId), LumiaTokens.avatarSm)
+                        LumiaAvatar(initialsOf(name), AvatarTone.of(p.accountId), LumiaTokens.avatarSm, session.avatarOf(p.accountId))
                         Column(Modifier.weight(1f)) {
                             Text(name, style = LumiaTokens.textMember.style, color = LumiaTokens.ink.color, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             Text("@${p.handle}", style = LumiaTokens.textMeta.style, color = LumiaTokens.inkQuiet.color)

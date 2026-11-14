@@ -87,13 +87,20 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import uniffi.lumia_ffi.DeviceSummary
 
+/**
+ * A person's avatar: their initials on their tone, and their [picture]
+ * (an address `LumiaSession.avatarOf` gives) drawn over them in the same
+ * circle once it is here; the initials show until then, and for no
+ * picture or one that cannot be had.
+ */
 @Composable
-fun LumiaAvatar(initials: String, tone: AvatarTone, size: Dp = LumiaTokens.avatarMd) {
+fun LumiaAvatar(initials: String, tone: AvatarTone, size: Dp = LumiaTokens.avatarMd, picture: String? = null) {
     Box(
         modifier = Modifier.size(size).background(tone.fill.color, CircleShape),
         contentAlignment = Alignment.Center,
     ) {
         Text(initials, style = TextStyle(fontSize = (size.value * 0.4f).sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold), color = tone.ink.color)
+        if (picture != null) LumiaPicture(picture, Modifier.matchParentSize().clip(CircleShape))
     }
 }
 
@@ -177,6 +184,8 @@ fun LumiaMessageRow(
     deleted: Boolean = false,
     place: BlockPlace = BlockPlace.Alone,
     measures: Measures = Measures.Comfortable,
+    // The author's picture over their initials (`LumiaSession.avatarOf`).
+    picture: String? = null,
     onAuthor: (() -> Unit)? = null,
     // What architecture 6.6 adds: the reply's reference line over the
     // avatar's row, where the body's mentions are (drawn as pills), the
@@ -273,7 +282,7 @@ fun LumiaMessageRow(
         } else {
             Row(horizontalArrangement = Arrangement.spacedBy(measures.beside), verticalAlignment = Alignment.Top) {
                 // The name beside it says who; the initials would only be read out before it.
-                Box(Modifier.clip(CircleShape).then(authorTap).clearAndSetSemantics {}) { LumiaAvatar(initialsOf(author), tone, avatar) }
+                Box(Modifier.clip(CircleShape).then(authorTap).clearAndSetSemantics {}) { LumiaAvatar(initialsOf(author), tone, avatar, picture) }
                 head(Modifier.weight(1f))
             }
         }
@@ -706,6 +715,7 @@ fun LumiaRequestCard(
     tone: AvatarTone,
     meta: String,
     busy: Boolean,
+    picture: String? = null,
     accept: () -> Unit,
     decline: () -> Unit,
     block: () -> Unit,
@@ -719,7 +729,7 @@ fun LumiaRequestCard(
         verticalArrangement = Arrangement.spacedBy(LumiaTokens.space10),
     ) {
         Row(horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space12), verticalAlignment = Alignment.CenterVertically) {
-            LumiaAvatar(initialsOf(name), tone, LumiaTokens.avatarLg)
+            LumiaAvatar(initialsOf(name), tone, LumiaTokens.avatarLg, picture)
             Column(verticalArrangement = Arrangement.spacedBy(LumiaTokens.space2)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space6), verticalAlignment = Alignment.Bottom) {
                     Text(name, style = LumiaTokens.textAuthor.style, color = LumiaTokens.inkEmphasis.color)

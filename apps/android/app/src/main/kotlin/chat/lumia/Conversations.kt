@@ -225,6 +225,8 @@ fun ConversationScreen(store: AppStore, session: LumiaSession, channelId: String
     val me = session.me
     val senderOf = { m: DmMessageSummary -> if (m.mine) me else m.senderAccountId.ifEmpty { m.senderIdentityId } }
     val whoOf = { m: DmMessageSummary -> if (m.mine) session.selfName else if (m.senderAccountId.isNotEmpty() || others.size != 1) session.nameOf(m.senderAccountId) else session.nameOf(others[0]) }
+    // Their picture, by the account `whoOf` names; none for a sender known only by an identity among several.
+    val pictureOf = { m: DmMessageSummary -> session.avatarOf(if (m.mine) me else m.senderAccountId.ifEmpty { others.singleOrNull() ?: "" }) }
     val sent = log?.messages ?: emptyList()
     val places = remember(sent, me) { blockPlaces(sent.map { Stamp(senderOf(it), it.sentAtMicros, quotes = it.reply != null) }) }
     // Where this account had read to as the conversation opened, while some of it was unread: the line stays until it is left.
@@ -286,7 +288,7 @@ fun ConversationScreen(store: AppStore, session: LumiaSession, channelId: String
         back = "Home", onBack = back, title = title,
         // The other side's pronouns, from their verified profile, then the host.
         subtitle = listOf(others.map { session.pronounsOf(it) }.filter { it.isNotEmpty() }.joinToString(", "), channel?.host?.ifEmpty { null }?.let { "on $it" } ?: "").filter { it.isNotEmpty() }.joinToString(" · ").ifEmpty { null },
-        lead = { LumiaAvatar(initialsOf(title), AvatarTone.of(others.firstOrNull() ?: channelId), LumiaTokens.avatarMd) },
+        lead = { LumiaAvatar(initialsOf(title), AvatarTone.of(others.firstOrNull() ?: channelId), LumiaTokens.avatarMd, others.singleOrNull()?.let { session.avatarOf(it) }) },
     ) {
         Column(Modifier.fillMaxSize().imePadding()) {
             LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(vertical = LumiaTokens.space8)) {
@@ -310,6 +312,7 @@ fun ConversationScreen(store: AppStore, session: LumiaSession, channelId: String
                         if (i == newLine) LumiaNewMessagesLine(measures)
                         LumiaMessageRow(
                             whoOf(m), AvatarTone.of(senderOf(m)), timeOfMicros(m.sentAtMicros, clock), m.body, m.deleted, places[i], measures,
+                            picture = pictureOf(m),
                             reference = m.reply?.let { q -> @Composable { ReferenceLine(session, q, measures) { jump(q.messageId) } } },
                             edited = m.edited && !m.deleted,
                             reactions = if (m.reactions.isNotEmpty() && !m.deleted) ({ ReactionChips(session, m.reactions, { react(m.messageId, it) }, { pickerFor = m.messageId }) }) else null,
@@ -533,7 +536,7 @@ fun ChannelScreen(store: AppStore, session: LumiaSession, channelId: String, dis
 
     PanelScreen(
         back = server?.name ?: "the server", onBack = back, title = title, subtitle = server?.name,
-        lead = if (dm) ({ LumiaAvatar(initialsOf(title), AvatarTone.of(other ?: channelId), LumiaTokens.avatarMd) }) else null,
+        lead = if (dm) ({ LumiaAvatar(initialsOf(title), AvatarTone.of(other ?: channelId), LumiaTokens.avatarMd, other?.let { session.avatarOf(it) }) }) else null,
         actions = if (!dm && channel != null) listOf(Triple(Icons.Filled.Group, "Members") { push(Screen.Members(channelId)) }) else emptyList(),
     ) {
         Column(Modifier.fillMaxSize().imePadding()) {
@@ -551,6 +554,7 @@ fun ChannelScreen(store: AppStore, session: LumiaSession, channelId: String, dis
                             val drawn = drawnBody(m.body, m.mentions, session::knownNameOf)
                             LumiaMessageRow(
                                 session.nameOf(m.authorAccountId), AvatarTone.of(m.authorAccountId), timeOfMicros(m.createdAtMicros, clock), drawn.text, m.deleted, places[i], measures,
+                                picture = session.avatarOf(m.authorAccountId),
                                 onAuthor = if (server != null) ({ card = m.authorAccountId }) else null,
                                 reference = m.reply?.let { q -> @Composable { ReferenceLine(session, q, measures) { scope.launch { reveal(q.messageId) } } } },
                                 mentions = drawn.mentions,
@@ -571,7 +575,7 @@ fun ChannelScreen(store: AppStore, session: LumiaSession, channelId: String, dis
             if (member || channel == null) {
                 val missed = outside
                 if (choices.isNotEmpty() && query != null) {
-                    MentionList(choices, name) { choice ->
+                    MentionList(choices, name, session::avatarOf) { choice ->
                         val picked = pickMention(draft.text, query, choice)
                         draft = TextFieldValue(picked.text, TextRange(picked.caret))
                     }
@@ -726,7 +730,7 @@ private fun MentionItem(session: LumiaSession, m: MessageSummary, home: Boolean,
     ) {
         Text(place, style = LumiaTokens.textSection.style, color = LumiaTokens.inkMuted.color)
         Row(horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space12)) {
-            LumiaAvatar(initialsOf(author), AvatarTone.of(m.authorAccountId), LumiaTokens.avatarMd)
+            LumiaAvatar(initialsOf(author), AvatarTone.of(m.authorAccountId), LumiaTokens.avatarMd, session.avatarOf(m.authorAccountId))
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(LumiaTokens.space4)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space8), verticalAlignment = Alignment.Bottom) {
                     Text(author, style = LumiaTokens.textAuthor.style, color = LumiaTokens.ink.color)

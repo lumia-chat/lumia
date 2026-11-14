@@ -230,7 +230,7 @@ private fun AccountMenu(session: LumiaSession, onOpen: (Screen) -> Unit, signing
             Modifier.clip(CircleShape).clickable(enabled = !signingOut, onClickLabel = "open the menu", role = Role.Button) { open = true }
                 .semantics { contentDescription = session.selfName + ", your account" },
         ) {
-            LumiaAvatar(initialsOf(session.selfName), AvatarTone.of(session.me), LumiaTokens.avatarSelf)
+            LumiaAvatar(initialsOf(session.selfName), AvatarTone.of(session.me), LumiaTokens.avatarSelf, session.avatarOf(session.me))
         }
         if (open && !signingOut) {
             Popup(alignment = Alignment.BottomStart, offset = IntOffset(beside, 0), onDismissRequest = { open = false }, properties = PopupProperties(focusable = true)) {

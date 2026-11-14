@@ -339,7 +339,7 @@ fun ConversationRow(session: LumiaSession, channel: ChannelSummary, open: () -> 
         horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space12),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        LumiaAvatar(initialsOf(name), AvatarTone.of(others.firstOrNull() ?: channel.channelId), LumiaTokens.avatarLg)
+        LumiaAvatar(initialsOf(name), AvatarTone.of(others.firstOrNull() ?: channel.channelId), LumiaTokens.avatarLg, others.singleOrNull()?.let { session.avatarOf(it) })
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(LumiaTokens.space2)) {
             Row(horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space8), verticalAlignment = Alignment.Bottom) {
                 Text(name, style = LumiaTokens.textAuthor.style, color = LumiaTokens.inkEmphasis.color, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
@@ -531,7 +531,7 @@ fun ServerScreen(session: LumiaSession, server: ServerSummary, push: (Screen) ->
                 val other = otherIn(c, session.me)
                 val name = session.conversationName(c)
                 NavRow(withUnread("Conversation with $name", session.unread(c.channelId)), session.unread(c.channelId), { push(Screen.Channel(c.channelId)) }) { strong ->
-                    LumiaAvatar(initialsOf(name), AvatarTone.of(other ?: c.channelId), LumiaTokens.avatarSm)
+                    LumiaAvatar(initialsOf(name), AvatarTone.of(other ?: c.channelId), LumiaTokens.avatarSm, other?.let { session.avatarOf(it) })
                     NavName(name, strong)
                 }
             }
