@@ -230,6 +230,14 @@ enum AccountCmd {
         #[arg(long)]
         handle: String,
     },
+    /// Change this account's display name (`--name ""` clears it), its
+    /// picture from a file (`--picture`), or both.
+    Update {
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        picture: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -411,6 +419,32 @@ async fn run(cli: Cli) -> Result<(), ClientError> {
             let tokens = device(&mut ctx).create_account(&api, &handle).await?;
             save_tokens(&mut ctx, &tokens)?;
             println!("created {handle} bound to this identity and signed in");
+            Ok(())
+        }
+        Cmd::Account {
+            action: AccountCmd::Update { name, picture },
+        } => {
+            if let Some(name) = name {
+                let account = api.update_account(None, Some(name)).await?;
+                println!("named {:?}", account.display_name);
+            }
+            if let Some(path) = picture {
+                let media_type = match path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(str::to_ascii_lowercase)
+                    .as_deref()
+                {
+                    Some("png") => "image/png",
+                    Some("gif") => "image/gif",
+                    Some("webp") => "image/webp",
+                    _ => "image/jpeg",
+                };
+                let picture = std::fs::read(&path)
+                    .map_err(|e| ClientError::State(format!("{}: {e}", path.display())))?;
+                let account = api.put_avatar(picture, media_type).await?;
+                println!("picture {}", account.avatar_url);
+            }
             Ok(())
         }
         Cmd::Identity { action } => identity_cmd(&mut ctx, &api, action).await,
