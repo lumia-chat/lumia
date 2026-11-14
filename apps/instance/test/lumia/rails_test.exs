@@ -83,6 +83,8 @@ defmodule Lumia.RailsTest do
     {:ok, d} = Servers.create_server(ctx.me.id, "D")
     :ok = leave(ctx.a, ctx.me)
     assert order(Rails.rail(ctx.me.id)) == [ctx.b.id, ctx.c.id, d.id]
+    # The snapshot tidies by the memberships it reads itself, in the same order.
+    assert order(Snapshots.account(ctx.me.id).rail) == [ctx.b.id, ctx.c.id, d.id]
   end
 
   test "a server left and joined again lands at the end, not back in its folder", ctx do
@@ -97,6 +99,9 @@ defmodule Lumia.RailsTest do
 
     {:ok, _} = Servers.add_member(x.id, ctx.me.id, friend.id)
     assert order(Rails.rail(ctx.me.id)) == [{:folder, [ctx.a.id]}, ctx.b.id, ctx.c.id, x.id]
+
+    assert order(Snapshots.account(ctx.me.id).rail) ==
+             [{:folder, [ctx.a.id]}, ctx.b.id, ctx.c.id, x.id]
   end
 
   test "what tidying cannot make right is refused", ctx do

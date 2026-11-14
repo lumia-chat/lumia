@@ -28,7 +28,12 @@ defmodule Lumia.Snapshots do
     account = Repo.get!(Account, account_id)
     seq = account.last_seq
 
-    memberships = Repo.all(from m in Member, where: m.account_id == ^account_id)
+    # In the order they were joined, which the rail is tidied by.
+    memberships =
+      from(m in Member, where: m.account_id == ^account_id)
+      |> Lumia.Rails.joined_order()
+      |> Repo.all()
+
     server_ids = Enum.map(memberships, & &1.server_id)
     servers = Repo.all(from s in Server, where: s.id in ^server_ids)
 
@@ -62,7 +67,7 @@ defmodule Lumia.Snapshots do
       pending_requests: Enum.map(Lumia.Dms.pending_requests_to(account_id), &Proto.dm_request/1),
       channel_invitations: Lumia.Channels.invitations(account_id),
       read_states: Lumia.Reads.states(account_id),
-      rail: Lumia.Rails.rail(account_id)
+      rail: Lumia.Rails.rail(account_id, server_ids)
     }
   end
 

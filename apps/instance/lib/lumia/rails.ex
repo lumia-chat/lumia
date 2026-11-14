@@ -31,16 +31,23 @@ defmodule Lumia.Rails do
   @doc "The nine tones a folder may have."
   def tones, do: @tones
 
-  @doc "The account's rail, tidied against the servers it is in now."
-  def rail(account_id) do
+  @doc """
+  The account's rail, tidied against the servers it is in now: `joined`,
+  their ids in the order it joined them, when the caller has read them
+  already (the snapshot has), else read here.
+  """
+  def rail(account_id, joined \\ nil) do
     saved =
       case Repo.get(AccountRail, account_id) do
         %AccountRail{rail: bytes} -> V1.Rail.decode(bytes)
         nil -> %V1.Rail{}
       end
 
-    tidy(saved, joined(account_id))
+    tidy(saved, joined || joined(account_id))
   end
+
+  @doc "The order `joined/1` reads the account's memberships in, for a caller reading them itself."
+  def joined_order(query), do: order_by(query, [m], asc: m.joined_at, asc: m.server_id)
 
   @doc """
   Keeps `rail` as the account's arrangement, tidied, and tells its devices
@@ -100,12 +107,9 @@ defmodule Lumia.Rails do
 
   # The servers the account is in, in the order it joined them.
   defp joined(account_id) do
-    Repo.all(
-      from m in Member,
-        where: m.account_id == ^account_id,
-        order_by: [asc: m.joined_at, asc: m.server_id],
-        select: m.server_id
-    )
+    from(m in Member, where: m.account_id == ^account_id, select: m.server_id)
+    |> joined_order()
+    |> Repo.all()
   end
 
   @doc false
