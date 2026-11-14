@@ -32,6 +32,13 @@ class LumiaClient(val baseUrl: String, dataDirectory: File) {
     suspend fun <T> call(block: Client.() -> T): T = withContext(Dispatchers.IO) { inner.block() }
 
     /**
+     * One of the client's calls that are values only, reaching nothing and
+     * waiting on nothing (the rail's `rail…` edits and words), where it is
+     * asked: a screen needs the answer as it draws.
+     */
+    fun <T> now(block: Client.() -> T): T = inner.block()
+
+    /**
      * For a push receiver: what the notification should say, after syncing
      * and decrypting under the exclusive writer lock (tried for `timeoutMs`);
      * null when the app holds the lock or nothing new was found.

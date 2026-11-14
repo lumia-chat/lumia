@@ -218,7 +218,7 @@ fun Shell(store: AppStore, session: LumiaSession, devScreen: String?, devChannel
 
     when (val top = stack.lastOrNull()) {
         null -> Row(Modifier.fillMaxSize().background(LumiaTokens.bg.color)) {
-            PhoneRail(session, place, onAdd = { push(Screen.AddServer) }, onAccount = push, signingOut = store.signingOut, onSignOut = store::signOut) { place = it }
+            PhoneRail(store, session, place, onAdd = { push(Screen.AddServer) }, onAccount = push, signingOut = store.signingOut, onSignOut = store::signOut) { place = it }
             when (val p = place) {
                 Place.Home -> HomeScreen(store, session, push)
                 is Place.Server -> {

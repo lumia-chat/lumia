@@ -34,7 +34,9 @@ import uniffi.lumia_ffi.ChannelSummary
 import uniffi.lumia_ffi.ChannelAddSummary
 import uniffi.lumia_ffi.MentionSummary
 import uniffi.lumia_ffi.QuoteSummary
+import uniffi.lumia_ffi.RailItem
 import uniffi.lumia_ffi.ReadStateSummary
+import uniffi.lumia_ffi.Client
 
 sealed class ConnectionState(val label: String) {
     data object Idle : ConnectionState("not connected")
@@ -257,6 +259,51 @@ class LumiaSession(
         took(client.call { setShowDeleted(serverId, show) })
     }
 
+    // The rail (architecture 6.9)
+
+    /** An arrangement sent and not yet answered, drawn in the snapshot's place so a move shows at once. */
+    private var railSent by mutableStateOf<List<RailItem>?>(null)
+    private var railSends = 0
+
+    /** The rail as drawn: every server placed once, the arrangement last sent while it is on its way, else the snapshot's. */
+    val rail: List<RailItem> get() = railSent ?: snapshot?.rail ?: emptyList()
+
+    /** Why the last arrangement sent was not kept, for the rail to say once (`takeRailError`). */
+    var railError by mutableStateOf<String?>(null)
+        private set
+
+    fun takeRailError(): String? = railError.also { railError = null }
+
+    /**
+     * An edit of the rail, one of the client's `rail…` calls on the rail as
+     * drawn: drawn at once and kept by `arrangeRail`, whose snapshot is
+     * taken (the account log carries it to the account's other devices).
+     * Returns the rail it made, or null when it changed nothing. Refused or
+     * not reached, the snapshot's rail is drawn again and `railError` says
+     * why; a later edit sent meanwhile is drawn until it is answered.
+     */
+    fun arrange(edit: Client.(List<RailItem>) -> List<RailItem>): List<RailItem>? {
+        val before = rail
+        val next = client.now { edit(before) }
+        if (next == before) return null
+        railSent = next
+        val sent = ++railSends
+        scope.launch {
+            try {
+                val snap = client.call { arrangeRail(next) }
+                if (sent == railSends) railSent = null
+                took(snap)
+            } catch (e: Exception) {
+                if (sent == railSends) railSent = null
+                if (e.endsSession) sessionEnded() else railError = e.lumiaMessage
+            }
+        }
+        return next
+    }
+
+    /** One of the client's calls that are values only (`railPositionOf`, `railFolderWords`, …). */
+    fun <T> railNow(block: Client.() -> T): T = client.now(block)
+
     private fun took(snap: SnapshotSummary) {
         if (leaving || !signedIn) return
         val before = snapshot
@@ -381,6 +428,8 @@ class LumiaSession(
                 mentionLists.clear()
                 channelMemberIds.clear()
                 messageLimits.clear()
+                railSent = null
+                railError = null
             },
         )
     }

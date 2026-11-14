@@ -5,7 +5,9 @@
 # with two of its own; installs the debug build, launches it signed in as
 # the first account (the LUMIA_DEV_* extras a debug build honours, through
 # the launch intent) and screenshots each screen the LUMIA_DEV_SCREEN
-# switch can open. Then Preferences: dark, Compact, Minimal (light and
+# switch can open. Then the rail: a second server dragged onto the first
+# makes a folder the instance keeps, a tap opens it, Folder settings names
+# it and Delete folder takes it away. Then Preferences: dark, Compact, Minimal (light and
 # dark) and the font size at 20 as a launch can be told to look
 # (LUMIA_DEV_APPEARANCE, LUMIA_DEV_PRESET, LUMIA_DEV_FONT_SIZE), and by taps
 # from the account menu, the screen kept as the phone is turned, Minimal
@@ -274,6 +276,90 @@ alive=$(running)
 "$cli" --data-dir "$data" send "$channel" "Still here?" >/dev/null
 for screen in server channel requests devices profile preferences new add newchannel invite serversettings browse members addpeople newdm profilecard yoursettings signin link; do shoot "$screen" 7; done
 [ -n "$alive" ] || { echo "FAIL: the app was not running after launch"; exit 1; }
+
+# The rail's order and folders (architecture 6.9). A second server of the
+# phone's account, long pressed and dragged onto the first's middle, makes
+# a folder of the two, which the instance keeps and the phone draws closed;
+# a tap opens it, which only the phone keeps (`open_folders`); the folder's
+# menu, a long press let go, offers Folder settings, whose name the
+# instance keeps, and Delete folder, which leaves its servers where it was,
+# the first first, so the rest of the script finds the rail as it was.
+# The middle of the first thing whose description starts with <text>
+# (a tile's says what is unread after its name), or how far down it starts.
+starts() { # <screen> <text> [top]
+  printf '%s' "$1" | python3 -c '
+import re, sys
+want, fact = sys.argv[1], sys.argv[2]
+for node in re.findall(r"<node [^>]*>", sys.stdin.read()):
+    if "content-desc=\"%s" % want in node:
+        x0, y0, x1, y1 = (int(n) for n in re.search(r"bounds=\"\[(\d+),(\d+)\]\[(\d+),(\d+)\]\"", node).groups())
+        print(y0 if fact == "top" else "%d %d" % ((x0 + x1) // 2, (y0 + y1) // 2))
+        break
+' "$2" "${3:-middle}"
+}
+# A long press at <x> <y>, moved to the other two in steps, and let go there.
+drag() { # <x> <y> <x> <y>
+  "$adb" shell input motionevent DOWN "$1" "$2"
+  sleep 1
+  for i in 1 2 3 4 5 6 7 8; do "$adb" shell input motionevent MOVE "$(($1 + ($3 - $1) * i / 8))" "$(($2 + ($4 - $2) * i / 8))"; done
+  sleep 0.5
+  "$adb" shell input motionevent UP "$3" "$4"
+  sleep 1
+}
+# A long press let go without moving: a tile's menu.
+hold() { # <x> <y>
+  "$adb" shell input motionevent DOWN "$1" "$2"
+  sleep 1
+  "$adb" shell input motionevent UP "$1" "$2"
+  sleep 1
+}
+# The folders on the account's rail as the instance keeps them: a name and its servers a line.
+folders() { # <token>
+  curl -s -H "accept: application/json" -H "authorization: Bearer $1" "$instance/api/v1/account/snapshot" \
+    | field '"\n".join(e["folder"].get("name", "") + " " + ",".join(e["folder"]["serverIds"]) for e in d.get("rail", {}).get("entries", []) if "folder" in e)'
+}
+rail_server=$("$cli" --data-dir "$data" server-create "Rail smoke" | grep -oE "[0-9a-f-]{36}" | head -1)
+launch server 0
+await 'content-desc="Rail smoke' || { shot rail; echo "FAIL: the rail does not show a server made after launch; see $work/rail.png"; exit 1; }
+seen=$(ui)
+# shellcheck disable=SC2046
+drag $(starts "$seen" "Rail smoke") $(starts "$seen" "Android smoke")
+await 'content-desc="Folder, Android smoke and Rail smoke' || { shot rail-folder; echo "FAIL: a server dragged onto another made no folder of the two; see $work/rail-folder.png"; exit 1; }
+shot rail-folder
+rail_token=$(sign_in)
+[ "$(folders "$rail_token")" = " $server,$rail_server" ] || { echo "FAIL: the instance does not keep the folder the drag made: $(folders "$rail_token")"; exit 1; }
+# shellcheck disable=SC2046
+"$adb" shell input tap $(starts "$(ui)" "Folder, Android smoke and Rail smoke")
+await 'content-desc="Rail smoke' || { shot rail-open; echo "FAIL: a tap did not open the folder; see $work/rail-open.png"; exit 1; }
+shot rail-open
+stored | grep -qE 'name="open_folders">[0-9a-f-]{36}<' || { echo "FAIL: the phone does not keep the folder open: $(stored)"; exit 1; }
+# shellcheck disable=SC2046
+hold $(starts "$(ui)" "Folder, Android smoke and Rail smoke")
+await "Folder settings…" || { shot rail-menu; echo "FAIL: a long press let go did not open the folder's menu; see $work/rail-menu.png"; exit 1; }
+shot rail-menu
+tap "Folder settings…"
+await "Without a name it reads as its servers." || { echo "FAIL: Folder settings did not open"; exit 1; }
+# The empty name field shows the folder's words in its place.
+tap "Android smoke and Rail smoke"
+"$adb" shell input text "Smokes"
+"$adb" shell input keyevent 111
+sleep 1
+shot rail-settings
+tap Save
+await 'content-desc="Folder, Smokes' || { shot rail-named; echo "FAIL: the folder does not read as the name saved; see $work/rail-named.png"; exit 1; }
+[ "$(folders "$rail_token")" = "Smokes $server,$rail_server" ] || { echo "FAIL: the instance does not have the folder's name: $(folders "$rail_token")"; exit 1; }
+# shellcheck disable=SC2046
+hold $(starts "$(ui)" "Folder, Smokes")
+await "Delete folder" || { echo "FAIL: the folder's menu has no Delete folder"; exit 1; }
+tap "Delete folder"
+for _ in $(seq 1 10); do [ -z "$(folders "$rail_token")" ] && break; sleep 1; done
+[ -z "$(folders "$rail_token")" ] || { echo "FAIL: the instance still has the folder deleted: $(folders "$rail_token")"; exit 1; }
+seen=$(ui)
+case "$seen" in *'content-desc="Folder,'*) shot rail-deleted; echo "FAIL: the rail still draws the folder deleted; see $work/rail-deleted.png"; exit 1 ;; esac
+[ "$(starts "$seen" "Android smoke" top)" -lt "$(starts "$seen" "Rail smoke" top)" ] 2>/dev/null \
+  || { shot rail-deleted; echo "FAIL: the deleted folder's servers are not where it was, in its order; see $work/rail-deleted.png"; exit 1; }
+shot rail-deleted
+echo "  rail: ok (a drag onto a server made a folder, kept by the instance; a tap opened it, kept by the phone; Folder settings named it and the instance has the name; Delete folder left its servers in its place)"
 
 # Preferences. First how a launch can be told to look, for the eye: the
 # Preferences screen dark on a light phone, and the channel in Compact and

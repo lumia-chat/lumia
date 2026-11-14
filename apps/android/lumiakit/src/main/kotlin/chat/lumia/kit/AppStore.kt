@@ -23,6 +23,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
+import uniffi.lumia_ffi.RailItem
 
 /** What the app shows. */
 enum class Route { SIGN_IN, LINK, APP }
@@ -100,6 +101,24 @@ class AppStore(context: Context) {
     fun used(emoji: String) {
         recentEmoji = usedEmoji(recentEmoji, emoji)
         prefs.edit().putString("recent_emoji", recentEmoji.joinToString("\n")).apply()
+    }
+
+    /**
+     * The rail's folders open on this phone (architecture 6.9: whether a
+     * folder is open is the device's, not the account's), kept in the
+     * `lumia` preferences as `open_folders`, one id a line, and sent
+     * nowhere. A folder no longer on the rail is forgotten at the next
+     * change.
+     */
+    var openFolders by mutableStateOf(openFoldersOf(stored("open_folders")))
+        private set
+
+    /** A folder opened or closed: at once, and at the next launch. */
+    fun toggleFolder(folderId: String, rail: List<RailItem>) {
+        openFolders = if (folderId in openFolders) openFolders - folderId else openFolders + folderId
+        val kept = openFoldersStored(openFolders, rail)
+        openFolders = openFoldersOf(kept)
+        prefs.edit().putString("open_folders", kept).apply()
     }
 
     /**

@@ -1,19 +1,17 @@
-// The phone's chrome, after the phone boards: the rail beside a sidebar as
-// one screen, and the floating panel a pushed screen draws itself in (a
-// header with the back button, a title and subtitle, and actions).
+// The phone's chrome, after the phone boards: where the shell is and the
+// screens over it, the account menu the rail's own avatar opens (the rail
+// is `Rail.kt`), the count badge, the sidebar's header and tiles, and the
+// floating panel a pushed screen draws itself in (a header with the back
+// button, a title and subtitle, and actions).
 package chat.lumia
 
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -27,7 +25,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Logout
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Tune
@@ -46,7 +43,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.paneTitle
@@ -59,15 +55,9 @@ import androidx.compose.ui.window.PopupProperties
 import chat.lumia.kit.AvatarTone
 import chat.lumia.kit.LumiaAvatar
 import chat.lumia.kit.LumiaIconButton
-import chat.lumia.kit.LumiaPicture
 import chat.lumia.kit.LumiaSession
 import chat.lumia.kit.LumiaTokens
 import chat.lumia.kit.initialsOf
-import chat.lumia.kit.personalKinds
-import chat.lumia.kit.serverDms
-import chat.lumia.kit.sidebarChannels
-import chat.lumia.kit.unreadIn
-import chat.lumia.kit.withUnread
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.widthIn
 
@@ -162,46 +152,6 @@ private fun screenOf(kept: String): Screen? {
 val PlaceSaver: Saver<Place, String> = Saver(save = { it.kept() }, restore = { placeOf(it) })
 val StackSaver: Saver<List<Screen>, Any> = listSaver(save = { stack -> stack.map { it.kept() } }, restore = { kept -> kept.mapNotNull(::screenOf) })
 
-@Composable
-fun PhoneRail(session: LumiaSession, place: Place, onAdd: () -> Unit, onAccount: (Screen) -> Unit, signingOut: Boolean, onSignOut: () -> Unit, onPlace: (Place) -> Unit) {
-    val servers = session.snapshot?.servers ?: emptyList()
-    val channels = session.snapshot?.channels ?: emptyList()
-    // Home's badge: the requests that wait and the personal conversations' unread messages (every one counts, in a DM).
-    val requests = session.snapshot?.pendingRequests?.size ?: 0
-    val personal = unreadIn(session.readStates, channels.filter { it.kind in personalKinds }.map { it.channelId }).mentions
-    val homeLabel = when {
-        requests == 0 && personal == 0 -> "Home"
-        requests == 0 -> "Home, $personal unread"
-        personal == 0 -> "Home, $requests requests waiting"
-        else -> "Home, $requests requests waiting, $personal unread"
-    }
-    Column(
-        modifier = Modifier.width(LumiaTokens.railWidth).fillMaxHeight().background(LumiaTokens.rail.color).statusBarsPadding().padding(top = LumiaTokens.space8, bottom = LumiaTokens.space12),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(LumiaTokens.space12),
-    ) {
-        RailTile(current = place == Place.Home, badge = requests + personal, label = homeLabel, home = true, onClick = { onPlace(Place.Home) }) {
-            Image(painterResource(R.drawable.logo), contentDescription = null, modifier = Modifier.size(32.dp))
-        }
-        Box(Modifier.width(24.dp).height(1.dp).background(LumiaTokens.railDivider.color))
-        for (s in servers) {
-            // What is unread in it, its channels and server DMs: a mark at the rail's edge, and its count for this account over the tile's corner.
-            val unread = unreadIn(session.readStates, (sidebarChannels(channels, s.serverId) + serverDms(channels, s.serverId)).map { it.channelId })
-            val current = place == Place.Server(s.serverId)
-            RailTile(current = current, badge = unread.mentions, label = withUnread(s.name, unread), dot = unread.unread > 0 && unread.mentions == 0 && !current, onClick = { onPlace(Place.Server(s.serverId)) }) {
-                // The server's picture, when it has one, over its initials, as a person's is drawn.
-                Text(initialsOf(s.name), style = LumiaTokens.titleMonogram.style, color = LumiaTokens.ink.color)
-                LumiaPicture(session.pictureOf(s.iconUrl), Modifier.matchParentSize())
-            }
-        }
-        RailTile(current = false, badge = 0, label = "Add a server", onClick = onAdd) {
-            Icon(Icons.Filled.Add, contentDescription = null, tint = LumiaTokens.inkSecondary.color, modifier = Modifier.size(20.dp))
-        }
-        Spacer(Modifier.weight(1f))
-        AccountMenu(session, onAccount, signingOut, onSignOut)
-    }
-}
-
 /** The design's compact menu is this wide (`.lu-menu--compact`); `tokens.json` has no name for it. */
 private val MenuWidth = 220.dp
 
@@ -220,7 +170,7 @@ private val MenuWidth = 220.dp
  * to do with a session that is going.
  */
 @Composable
-private fun AccountMenu(session: LumiaSession, onOpen: (Screen) -> Unit, signingOut: Boolean, onSignOut: () -> Unit) {
+internal fun AccountMenu(session: LumiaSession, onOpen: (Screen) -> Unit, signingOut: Boolean, onSignOut: () -> Unit) {
     var open by remember { mutableStateOf(false) }
     val shape = RoundedCornerShape(LumiaTokens.radius14)
     // Past the rail's edge: the avatar is in the middle of it.
@@ -276,49 +226,6 @@ private fun MenuItem(icon: ImageVector, label: String, onClick: () -> Unit) {
     ) {
         Icon(icon, contentDescription = null, tint = LumiaTokens.inkBody.color, modifier = Modifier.size(18.dp))
         Text(label, style = LumiaTokens.textCompact.style, color = LumiaTokens.inkBody.color)
-    }
-}
-
-/** The rail's unread dot (11 across, the phone boards'). */
-private val RailDot = (LumiaTokens.space10 + LumiaTokens.space12) / 2
-
-/**
- * A tile of the rail. A server with something unread and nothing for this
- * account has the unread dot at the tile's top right; with mentions, their
- * count over the corner, a little further out ([home]'s further still, as
- * the boards place it); each ringed in the rail's colour.
- */
-@Composable
-private fun RailTile(current: Boolean, badge: Int, label: String, dot: Boolean = false, home: Boolean = false, onClick: () -> Unit, content: @Composable BoxScope.() -> Unit) {
-    val shape = if (current) RoundedCornerShape(LumiaTokens.radius14) else CircleShape
-    Box(Modifier.width(LumiaTokens.railWidth), contentAlignment = Alignment.Center) {
-        Box {
-            Box(
-                modifier = Modifier
-                    .size(LumiaTokens.tileSize)
-                    .clip(shape)
-                    .background(if (current) LumiaTokens.tabActive.color else LumiaTokens.tile.color)
-                    .clickable(onClick = onClick)
-                    .semantics { contentDescription = label },
-                contentAlignment = Alignment.Center,
-            ) {
-                content()
-                // The current one's ring, over what the tile holds, a picture too.
-                if (current) Box(Modifier.matchParentSize().border(2.dp, LumiaTokens.accent.color, shape))
-            }
-            if (dot && badge == 0) {
-                Box(
-                    Modifier.align(Alignment.TopEnd).size(RailDot)
-                        .background(LumiaTokens.unread.color, CircleShape)
-                        .border(LumiaTokens.space2, LumiaTokens.rail.color, CircleShape),
-                )
-            }
-            // Over the tile's corner: 4 out, Home's 5.
-            if (badge > 0) {
-                val out = if (home) (LumiaTokens.space4 + LumiaTokens.space6) / 2 else LumiaTokens.space4
-                Box(Modifier.align(Alignment.TopEnd).offset(x = out, y = -out)) { CountBadge(badge, BadgeSize.RAIL) }
-            }
-        }
     }
 }
 
