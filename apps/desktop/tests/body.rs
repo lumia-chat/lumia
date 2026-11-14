@@ -536,8 +536,9 @@ fn a_long_message_folds_to_ten_lines_and_show_more_opens_it() {
 fn lines_are_counted_as_wrapped_at_the_rows_width() {
     let line = lumia_shell::tokens::MESSAGE_TYPE.message.line_height;
     let words = |n: usize| vec!["wrapping"; n].join(" ");
-    // From about 11 lines to about 18, in steps of less than a line, in either layout.
-    let sizes: Vec<usize> = (64..=94).step_by(3).collect();
+    // From under 14 lines to over 15, in steps of less than a line, in either layout and in
+    // either font: the Mac's and Linux's faces wrap the same words to different lines.
+    let sizes: Vec<usize> = (40..=100).step_by(3).collect();
     let bodies: Vec<String> = sizes.iter().map(|&n| words(n)).collect();
     let refs: Vec<&str> = bodies.iter().map(String::as_str).collect();
     for minimal in [false, true] {
