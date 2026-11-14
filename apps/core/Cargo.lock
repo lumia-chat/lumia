@@ -2162,7 +2162,7 @@ checksum = "4050469837a6ff301cd14c1f8f24f88549e6d548f24f64e2148eb0f72cebc51f"
 
 [[package]]
 name = "lumia-cli"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "base64 0.22.1",
  "clap",
@@ -2184,7 +2184,7 @@ dependencies = [
 
 [[package]]
 name = "lumia-client"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek 3.0.0",
@@ -2219,7 +2219,7 @@ dependencies = [
 
 [[package]]
 name = "lumia-core"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "base64 0.22.1",
  "bip39",
@@ -2248,7 +2248,7 @@ dependencies = [
 
 [[package]]
 name = "lumia-ffi"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "lumia-client",
  "lumia-core",
@@ -2260,7 +2260,7 @@ dependencies = [
 
 [[package]]
 name = "lumia-proto"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "prost",
  "prost-build",
@@ -2270,7 +2270,7 @@ dependencies = [
 
 [[package]]
 name = "lumia-wasm"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "js-sys",
  "lumia-client",
@@ -4067,7 +4067,7 @@ dependencies = [
 
 [[package]]
 name = "uniffi-bindgen"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "uniffi",
 ]

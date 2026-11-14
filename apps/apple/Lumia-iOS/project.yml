@@ -20,7 +20,7 @@ settings:
     SWIFT_STRICT_CONCURRENCY: minimal
     CODE_SIGN_STYLE: Automatic
     DEVELOPMENT_TEAM: UZAQ69P4MG
-    MARKETING_VERSION: "0.7.0"
+    MARKETING_VERSION: "0.7.1"
     CURRENT_PROJECT_VERSION: "1"
     # The core's simulator slice is arm64 (core.sh --ios); an Intel
     # simulator would need an x86_64 build of it too.
