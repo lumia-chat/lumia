@@ -155,7 +155,13 @@ function QuietSplit() {
                   { name: "design", unread: true, mentions: 1 },
                   { name: "engineering", unread: true },
                   { name: "random" },
+                ],
+              },
+              {
+                title: "Private",
+                items: [
                   { name: "leadership", kind: "private" },
+                  { name: "northstar-launch", kind: "private", unread: true },
                 ],
               },
               {

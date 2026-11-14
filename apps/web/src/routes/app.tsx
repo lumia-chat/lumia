@@ -563,6 +563,7 @@ export function App() {
       };
     }),
   );
+  const privateItems = createMemo(() => items().filter((i) => i.kind === "private"));
   const dmItems = createMemo<ChannelItem[]>(() =>
     serverDms().map((c) => {
       const partner = partnerOf(c);
@@ -679,9 +680,9 @@ export function App() {
               sections={[
                 {
                   title: "Channels",
-                  items: items(),
+                  items: items().filter((i) => i.kind !== "private"),
                   action: { label: "Add channels", expanded: over()?.kind === "channelsMenu", onClick: (anchor) => setOver({ kind: "channelsMenu", anchor }) },
-                  empty: "You are in no channels here. Browse them with the plus.",
+                  empty: items().length ? undefined : "You are in no channels here. Browse them with the plus.",
                   before: (
                     <Show when={invitations().length > 0}>
                       <div class="app__invitations" role="list" aria-label="Invitations">
@@ -695,6 +696,8 @@ export function App() {
                     </Show>
                   ),
                 },
+                // The boards' Private, between Channels and Direct messages, only when there are any.
+                ...(privateItems().length ? [{ title: "Private", items: privateItems() }] : []),
                 {
                   title: "Direct messages",
                   items: dmItems(),
