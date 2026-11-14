@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -358,6 +359,30 @@ fun ConversationRow(session: LumiaSession, channel: ChannelSummary, open: () -> 
 }
 
 /**
+ * A heading's control, as the boards' headings have none to make them taller: laid out only
+ * as tall as the heading's words (24), the button keeping its 44 for a finger beyond that.
+ */
+@Composable
+private fun HeadingAction(content: @Composable () -> Unit) {
+    Box(Modifier.height(LumiaTokens.space24), contentAlignment = Alignment.Center) {
+        Box(Modifier.wrapContentSize(unbounded = true)) { content() }
+    }
+}
+
+/** A channel's row in a server's sidebar: `#`, or a lock for a private one, and its name. */
+@Composable
+private fun ChannelRow(session: LumiaSession, c: ChannelSummary, push: (Screen) -> Unit) {
+    NavRow(withUnread(if (c.private) "${c.name}, private channel" else "${c.name} channel", session.unread(c.channelId)), session.unread(c.channelId), { push(Screen.Channel(c.channelId)) }) { strong ->
+        // A private channel wears a lock where a public one has its #.
+        // The glyph is the muted ink while unread, the faint one once read (the boards').
+        val glyph = if (strong) LumiaTokens.inkMuted.color else LumiaTokens.inkFaint.color
+        if (c.private) Icon(Icons.Filled.Lock, contentDescription = null, tint = glyph, modifier = Modifier.size(LumiaTokens.space12))
+        else Text("#", style = LumiaTokens.textNav.style, color = glyph, modifier = Modifier.width(LumiaTokens.space12))
+        NavName(c.name, strong)
+    }
+}
+
+/**
  * A row of a sidebar: a channel, a server DM, Mentions. One with unread
  * messages is in the strong ink and weight, and their count for this
  * account at its end; [label] names it to a screen reader with that.
@@ -365,7 +390,8 @@ fun ConversationRow(session: LumiaSession, channel: ChannelSummary, open: () -> 
 @Composable
 fun NavRow(label: String, unread: Unread, open: () -> Unit, content: @Composable RowScope.(strong: Boolean) -> Unit) {
     Row(
-        modifier = Modifier.fillMaxWidth().height(LumiaTokens.controlHeight).clip(RoundedCornerShape(LumiaTokens.radius10)).clickable(onClick = open)
+        // The phone boards' rows: 44 high.
+        modifier = Modifier.fillMaxWidth().height(LumiaTokens.tileSize).clip(RoundedCornerShape(LumiaTokens.radius10)).clickable(onClick = open)
             .semantics(mergeDescendants = true) { contentDescription = label }
             .padding(horizontal = LumiaTokens.space10),
         horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space8),
@@ -471,7 +497,7 @@ fun ServerScreen(session: LumiaSession, server: ServerSummary, push: (Screen) ->
             item {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.weight(1f)) { SectionTitle("Channels") }
-                    Box {
+                    HeadingAction {
                         LumiaIconButton(Icons.Filled.Add, "Add channels") { adding = true }
                         DropdownMenu(expanded = adding, onDismissRequest = { adding = false }, containerColor = LumiaTokens.surface.color) {
                             if (server.canManageChannels) {
@@ -486,20 +512,19 @@ fun ServerScreen(session: LumiaSession, server: ServerSummary, push: (Screen) ->
                 item { Text("No channels yet.", style = LumiaTokens.textMeta.style, color = LumiaTokens.inkQuiet.color, modifier = Modifier.padding(horizontal = LumiaTokens.space10)) }
                 item { LumiaLinkButton("Browse channels", Modifier.padding(horizontal = LumiaTokens.space2)) { push(Screen.Browse(server.serverId)) } }
             }
-            items(channels, key = { it.channelId }) { c ->
-                NavRow(withUnread(if (c.private) "${c.name}, private channel" else "${c.name} channel", session.unread(c.channelId)), session.unread(c.channelId), { push(Screen.Channel(c.channelId)) }) { strong ->
-                    // A private channel wears a lock where a public one has its #.
-                    // The glyph is the muted ink while unread, the faint one once read (the boards').
-                    val glyph = if (strong) LumiaTokens.inkMuted.color else LumiaTokens.inkFaint.color
-                    if (c.private) Icon(Icons.Filled.Lock, contentDescription = null, tint = glyph, modifier = Modifier.size(LumiaTokens.space12))
-                    else Text("#", style = LumiaTokens.textNav.style, color = glyph, modifier = Modifier.width(LumiaTokens.space12))
-                    NavName(c.name, strong)
-                }
+            items(channels.filter { !it.private }, key = { it.channelId }) { c -> ChannelRow(session, c, push) }
+            // The boards' Private, between Channels and Direct messages, only when there are any;
+            // no plus, since Create a channel makes one private. Sections stand 12 apart, as the
+            // boards have them.
+            val privates = channels.filter { it.private }
+            if (privates.isNotEmpty()) {
+                item { Box(Modifier.fillMaxWidth().padding(top = LumiaTokens.space12)) { SectionTitle("Private") } }
+                items(privates, key = { it.channelId }) { c -> ChannelRow(session, c, push) }
             }
             item {
-                Row(Modifier.fillMaxWidth().padding(top = LumiaTokens.space8), verticalAlignment = Alignment.CenterVertically) {
+                Row(Modifier.fillMaxWidth().padding(top = LumiaTokens.space12), verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.weight(1f)) { SectionTitle("Direct messages") }
-                    if (server.canStartDms) LumiaIconButton(Icons.Filled.Add, "Message someone here") { push(Screen.NewServerDm(server.serverId)) }
+                    if (server.canStartDms) HeadingAction { LumiaIconButton(Icons.Filled.Add, "Message someone here") { push(Screen.NewServerDm(server.serverId)) } }
                 }
             }
             items(dms, key = { it.channelId }) { c ->
@@ -510,12 +535,14 @@ fun ServerScreen(session: LumiaSession, server: ServerSummary, push: (Screen) ->
                     NavName(name, strong)
                 }
             }
-            item { LumiaLinkButton("Invite people", Modifier.padding(horizontal = LumiaTokens.space10, vertical = LumiaTokens.space4).padding(top = LumiaTokens.space8)) { push(Screen.Invite(server.serverId)) } }
+            // What the server offers this account, a section's distance under the last; each link
+            // keeps the button's own height for a finger and nothing more around it.
+            item { LumiaLinkButton("Invite people", Modifier.padding(start = LumiaTokens.space2, top = LumiaTokens.space12)) { push(Screen.Invite(server.serverId)) } }
             // Every member's own switches here (architecture 6.8).
-            item { LumiaLinkButton("Your settings in ${server.name}", Modifier.padding(horizontal = LumiaTokens.space10, vertical = LumiaTokens.space4)) { push(Screen.YourSettings(server.serverId)) } }
+            item { LumiaLinkButton("Your settings in ${server.name}", Modifier.padding(start = LumiaTokens.space2)) { push(Screen.YourSettings(server.serverId)) } }
             // Offered to whoever may change them: the owner, or a member whose roles grant MANAGE_SERVER (architecture 6.7).
             if (server.canManage) {
-                item { LumiaLinkButton("Server settings", Modifier.padding(horizontal = LumiaTokens.space10, vertical = LumiaTokens.space4)) { push(Screen.ServerSettings(server.serverId)) } }
+                item { LumiaLinkButton("Server settings", Modifier.padding(start = LumiaTokens.space2)) { push(Screen.ServerSettings(server.serverId)) } }
             }
         }
         Text(session.connection.label, style = LumiaTokens.textMeta.style, color = LumiaTokens.inkQuiet.color, modifier = Modifier.navigationBarsPadding().padding(horizontal = LumiaTokens.space16, vertical = LumiaTokens.space6))
