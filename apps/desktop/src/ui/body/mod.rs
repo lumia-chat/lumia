@@ -63,6 +63,9 @@ pub struct Drawn<'a> {
     /// its start with others: the author and time of a row that draws neither as text a
     /// selection takes (one line, `timeline`).
     pub head: Option<&'a str>,
+    /// The message was edited: "(edited)" follows its last paragraph's words, in the small
+    /// muted type and left out of a copy ([`edited_inline`] says whether it can).
+    pub edited: bool,
 }
 
 impl Default for Drawn<'_> {
@@ -70,6 +73,7 @@ impl Default for Drawn<'_> {
         Self {
             ty: &t::MESSAGE_TYPE,
             head: None,
+            edited: false,
         }
     }
 }
@@ -90,9 +94,24 @@ pub fn view_with(
         first: Cell::new(true),
         head: Cell::new(drawn.head.map(str::to_owned)),
         mentions: mentions.to_vec(),
+        edited: Cell::new(false),
     };
-    body.blocks(&blocks, None, "", false)
+    let edited = drawn.edited && ends_in_paragraph(&blocks);
+    body.blocks_marked(&blocks, edited)
 }
+
+/// Whether "(edited)" can follow a body's words on its last line: it ends in a paragraph,
+/// not in code, a quote or a list, after which it stands on a line of its own.
+pub fn edited_inline(source: &str) -> bool {
+    ends_in_paragraph(&parse(source))
+}
+
+fn ends_in_paragraph(blocks: &[Block]) -> bool {
+    matches!(blocks.last(), Some(Block::Para(_)))
+}
+
+/// What follows an edited message's words.
+const EDITED: &str = " (edited)";
 
 /// Where `words` stand in `text` as a word of their own: not inside another word, and not
 /// running on into the characters a handle has.
@@ -164,11 +183,30 @@ struct Body {
     head: Cell<Option<String>>,
     /// The words of the message's mentions, drawn as pills.
     mentions: Vec<String>,
+    /// The next paragraph drawn ends with "(edited)": set for the body's last.
+    edited: Cell<bool>,
 }
 
 impl Body {
     /// `blocks` in a column. `lead` is for the first of them, when they are a list item's;
     /// `indent` is what a copy writes before each of the others.
+    /// The body's top-level blocks, the last paragraph carrying "(edited)" when `edited`.
+    fn blocks_marked(&self, blocks: &[Block], edited: bool) -> El {
+        let mut column = col().w_full();
+        for (i, block) in blocks.iter().enumerate() {
+            let after_para = i > 0 && matches!(blocks[i - 1], Block::Para(_));
+            let gap = match block {
+                _ if i == 0 => 0.0,
+                Block::Para(_) if after_para => t::SPACE_4,
+                _ => t::SPACE_8,
+            };
+            self.edited.set(edited && i + 1 == blocks.len());
+            let drawn = self.block(block, None, "", false);
+            column = column.child(drawn.key(format!("b{i}")).mt(gap));
+        }
+        column
+    }
+
     fn blocks(&self, blocks: &[Block], lead: Option<Lead>, indent: &str, in_item: bool) -> El {
         let mut column = col().w_full();
         for (i, block) in blocks.iter().enumerate() {
@@ -310,7 +348,20 @@ impl Body {
     /// A paragraph: its text with its styles, its links pressable.
     fn para(&self, inline: &Inline) -> El {
         let c = self.look.c;
-        let mut para = rich(inline.text.clone(), self.spans(inline))
+        let edited = self.edited.replace(false);
+        let (words, mut spans) = (inline.text.clone(), self.spans(inline));
+        let words = if edited {
+            spans.push(
+                Span::new(words.len(), words.len() + EDITED.len())
+                    .size(self.ty.meta.size)
+                    .color(c.ink_muted),
+            );
+            format!("{words}{EDITED}")
+        } else {
+            words
+        };
+        let end = words.len();
+        let mut para = rich(words, spans)
             .font(self.ty.message)
             .color(c.ink_body)
             .wrap_anywhere()
@@ -342,7 +393,15 @@ impl Body {
         }
         // Assistive technology reads the words, not the spacing drawn around inline code.
         if padded {
-            para = para.label(inline.plain());
+            para = para.label(if edited {
+                format!("{}{EDITED}", inline.plain())
+            } else {
+                inline.plain()
+            });
+        }
+        // A copy takes what was said, not that it was changed.
+        if edited && self.selectable {
+            para = para.uncopied(end - EDITED.len()..end);
         }
         para
     }

@@ -744,6 +744,7 @@ fn stored_row(s: &State, i: usize, entry: &Entry, place: Place, look: Look) -> E
     let drawn = body::Drawn {
         ty: &m.ty,
         head: head.as_deref(),
+        edited: false,
     };
     let content = if entry.deleted {
         body::note("(deleted)", c.ink_quiet, drawn, look).key("body")
@@ -829,9 +830,16 @@ fn message_content(s: &State, entry: &Entry, drawn: body::Drawn<'_>, look: Look)
         Some(field) => content = content.child(edit_field(&entry.id, field, ty, look)),
         None => {
             let (source, words) = shown_body(s, entry);
+            // "(edited)" follows the words on their last line when they end in a paragraph,
+            // and stands on a line of its own after code, a quote or a list.
+            let inline = entry.edited && body::edited_inline(&source);
+            let drawn = body::Drawn {
+                edited: inline,
+                ..drawn
+            };
             let body = body::view_with(&source, true, &words, drawn, look);
             content = content.child(body.key("body"));
-            if entry.edited {
+            if entry.edited && !inline {
                 content = content.child(
                     text("(edited)")
                         .key("edited")
@@ -970,6 +978,7 @@ fn pending_row(s: &State, pending: &Pending, place: Place, look: Look) -> El {
     let drawn = body::Drawn {
         ty: &m.ty,
         head: None,
+        edited: false,
     };
     let body = body::view_with(&pending.body, false, &[], drawn, look).key("body");
     let content = match &pending.failed {
