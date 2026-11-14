@@ -243,8 +243,21 @@ export interface RailMenuProps {
   anchor: HTMLElement;
   snapshot: SnapshotSummary | undefined;
   close: () => void;
-  /** Folder settings, over the same tile. */
-  toSettings: (folderId: string) => void;
+  /** Folder settings, over the same tile, or over `anchor`. */
+  toSettings: (folderId: string, anchor?: HTMLElement) => void;
+}
+
+// The tile of `id` once the rail draws it, for a second at most.
+function drawnTile(id: string): Promise<HTMLElement | null> {
+  return new Promise((resolve) => {
+    let frames = 60;
+    const look = () => {
+      const tile = document.querySelector<HTMLElement>(`.lu-rail [data-rail-tile="${id}"]`);
+      if (tile || --frames <= 0) resolve(tile);
+      else requestAnimationFrame(look);
+    };
+    look();
+  });
 }
 
 /** A server's menu (Move up, Move down, New folder, Move to folder ›, Remove from folder) or a folder's (Move up, Move down, Folder settings…, Delete folder). */
@@ -303,7 +316,11 @@ export function RailMenu(props: RailMenuProps) {
                       props.close();
                       void client()
                         .railNewFolderId()
-                        .then((folderId) => editRail({ op: "newFolder", args: { serverId: props.id, folderId } }, props.id));
+                        .then((folderId) => {
+                          void editRail({ op: "newFolder", args: { serverId: props.id, folderId } }, props.id);
+                          // Its Folder settings open, to name it at once (a folder made by a drag opens none).
+                          void drawnTile(folderId).then((tile) => tile && props.toSettings(folderId, tile));
+                        });
                     }}
                   >
                     New folder

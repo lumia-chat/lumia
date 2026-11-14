@@ -1003,6 +1003,11 @@ async function railStep(which: string, stamp: number) {
     await page.keyboard.press("Shift+F10");
     await page.getByRole("menuitem", { name: "New folder" }).click();
     await folder("Rail B").waitFor();
+    // Its Folder settings open, to name it at once; left as it is.
+    const made = page.getByRole("dialog", { name: "Folder settings" });
+    await made.waitFor();
+    await made.getByRole("button", { name: "Cancel" }).click();
+    await made.waitFor({ state: "detached" });
     phase("move to folder");
     await tile("Rail A").click({ button: "right" });
     await page.getByRole("menuitem", { name: "Move to folder" }).click();

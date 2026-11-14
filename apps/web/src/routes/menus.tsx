@@ -141,7 +141,7 @@ export function Overlay(props: OverlayProps) {
             anchor={props.over.anchor}
             snapshot={props.snapshot}
             close={props.close}
-            toSettings={(folderId) => props.open({ kind: "folderSettings", anchor: props.over.anchor, folderId })}
+            toSettings={(folderId, anchor) => props.open({ kind: "folderSettings", anchor: anchor ?? props.over.anchor, folderId })}
           />
         )}
       </Match>
