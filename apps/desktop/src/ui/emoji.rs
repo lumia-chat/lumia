@@ -18,7 +18,8 @@ const WIDTH: f32 = CELL * COLUMNS as f32 + 2.0 * t::SPACE_10;
 /// Its list's height: about seven rows.
 const LIST_HEIGHT: f32 = CELL * 7.0;
 /// The newest emoji offered: Unicode 16, which current macOS, iOS and Windows draw (this
-/// Mac's macOS 27 has none of Unicode 18's).
+/// Mac's macOS 27 has none of Unicode 18's), as does the Noto Color Emoji that Linux builds
+/// carry (`build.rs`).
 const NEWEST: (u32, u32) = (16, 0);
 
 /// Whether the system's emoji font can be expected to draw `e`.

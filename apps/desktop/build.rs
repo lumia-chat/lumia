@@ -200,19 +200,31 @@ fn type_styles(tokens: &Value, src: &mut String) {
     src.push('\n');
 }
 
-/// The faces the tokens list, unpacked from WOFF2 beside the generated source.
+/// The faces the tokens list, unpacked from WOFF2 beside the generated source, and on Linux
+/// the colour emoji face. Rune takes its emoji there from one family, "Noto Color Emoji",
+/// found by name and never through fontconfig's fallback, so a system with another emoji
+/// font (Twemoji) or none drew every emoji as an empty box (#16). The app's own face goes by
+/// that name, so Rune finds it among the app's fonts whatever the system has.
 fn fonts(tokens: &Value, assets: &Path, out: &Path, src: &mut String) {
-    src.push_str("/// The faces `assets/design/tokens.json` lists, as TrueType.\npub const FONTS: &[&[u8]] = &[\n");
-    for font in list(tokens, "type", "fonts") {
-        let Some(file) = font["file"].as_str() else {
-            continue;
-        };
-        let from = assets.join(file);
+    src.push_str("/// The faces `assets/design/tokens.json` lists, and on Linux Noto Color Emoji, as TrueType.\npub const FONTS: &[&[u8]] = &[\n");
+    let mut files: Vec<PathBuf> = list(tokens, "type", "fonts")
+        .iter()
+        .filter_map(|font| font["file"].as_str())
+        .map(|file| assets.join(file))
+        .collect();
+    // Where Rune reads the Linux symbol families: neither Apple's systems nor Windows.
+    let vendor = env::var("CARGO_CFG_TARGET_VENDOR").unwrap_or_default();
+    let os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    if vendor != "apple" && os != "windows" {
+        let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap_or_default());
+        files.push(manifest.join("fonts/NotoColorEmoji.woff2"));
+    }
+    for from in files {
         println!("cargo:rerun-if-changed={}", from.display());
         let packed = fs::read(&from).unwrap_or_else(|e| fail(&from, &e));
         let unpacked = wuff::decompress_woff2(&packed)
             .unwrap_or_else(|e| panic!("{}: not WOFF2: {e:?}", from.display()));
-        let name = Path::new(file).with_extension("ttf");
+        let name = from.with_extension("ttf");
         let name = name
             .file_name()
             .and_then(|n| n.to_str())

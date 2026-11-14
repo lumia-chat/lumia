@@ -89,7 +89,8 @@ tar -C "$work" -czf "$dist/$name.tar.gz" "$name"
 # The .deb. What the program cannot do without is a dependency: the three libraries ldd
 # names, and Vulkan's loader, since Vulkan is the only way the shell draws on Linux. What
 # it uses if it is there (Wayland or X11, Mesa's Vulkan drivers where the GPU's vendor
-# ships none, the fonts for scripts its own faces lack) is recommended.
+# ships none, the fonts for scripts its own faces lack) is recommended. Its colour emoji it
+# carries (`build.rs`), since Rune would take no other.
 mkdir -p "$pkg/DEBIAN"
 cat >"$pkg/DEBIAN/control" <<CONTROL
 Package: lumia
@@ -98,7 +99,7 @@ Architecture: $deb_arch
 Maintainer: The Lumia project <https://github.com/lumia-chat/lumia/issues>
 Installed-Size: $(du -sk "$pkg/usr" | cut -f1)
 Depends: libc6, libgcc-s1, libxkbcommon0, libvulkan1
-Recommends: libwayland-client0, libx11-6, libxcursor1, libxi6, libxrandr2, libx11-xcb1, libxkbcommon-x11-0, mesa-vulkan-drivers, fonts-noto-cjk, fonts-noto-color-emoji
+Recommends: libwayland-client0, libx11-6, libxcursor1, libxi6, libxrandr2, libx11-xcb1, libxkbcommon-x11-0, mesa-vulkan-drivers, fonts-noto-cjk
 Section: net
 Priority: optional
 Homepage: https://lumia.chat

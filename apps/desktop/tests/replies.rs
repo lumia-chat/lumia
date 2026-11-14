@@ -171,6 +171,23 @@ fn the_picker_finds_an_emoji_by_name() {
     assert!(rt.find("s0").is_some());
 }
 
+/// Rune takes Linux's emoji from one family, "Noto Color Emoji", and only by that name, so
+/// a system with Twemoji or none drew every emoji as an empty box (#16). The app carries it.
+#[cfg(not(any(target_vendor = "apple", windows)))]
+#[test]
+fn linux_builds_carry_the_emoji_face_rune_looks_for() {
+    let name: Vec<u8> = "Noto Color Emoji"
+        .encode_utf16()
+        .flat_map(u16::to_be_bytes)
+        .collect();
+    assert!(
+        lumia_shell::tokens::FONTS
+            .iter()
+            .any(|face| face.windows(name.len()).any(|w| w == name.as_slice())),
+        "no face named Noto Color Emoji among the app's fonts"
+    );
+}
+
 #[test]
 fn the_at_list_completes_a_handle_and_marks_who_is_not_in_the_channel() {
     let mut rt = runtime(with_bo());
