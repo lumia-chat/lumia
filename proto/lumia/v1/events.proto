@@ -168,6 +168,7 @@ message AccountEvent {
     ChannelInvitation channel_invited = 35; // someone asked this account into a channel (architecture 6.8)
     ChannelInvitationRemoved channel_invitation_removed = 36; // answered, dismissed or gone
     ReadPositionUpdated read_position_updated = 37; // this account read a conversation further, on some device
+    RailArranged rail_arranged = 38;        // this account arranged its rail, on some device (architecture 6.9)
   }
 }
 
@@ -178,6 +179,7 @@ message ChannelAdded { Channel channel = 1; }
 message ChannelRemoved { bytes channel_id = 1; }
 // The server as it now is (architecture 6.7).
 message ServerUpdated { Server server = 1; }
+message RailArranged { Rail rail = 1; }
 // An add waiting for its member's yes, because they take adds to channels
 // as invitations (architecture 6.8).
 message ChannelInvitation {

@@ -66,6 +66,20 @@ defmodule LumiaWeb.AccountController do
     end
   end
 
+  @doc "`PUT /account/rail`: the caller's rail arrangement, whole; answers it as kept (`Lumia.Rails.arrange/2`, architecture 6.9)."
+  def put_rail(conn, _params) do
+    with {:ok, rail} <- ProtoConn.decode(conn, Lumia.V1.Rail),
+         {:ok, kept} <- Lumia.Rails.arrange(conn.assigns.current_account_id, rail) do
+      ProtoConn.render(conn, kept)
+    else
+      {:error, {:invalid_argument, field}} ->
+        ProtoConn.render_error(conn, :invalid_argument, %{"field" => field})
+
+      other ->
+        other
+    end
+  end
+
   @doc "Another account's public profile, when the caller may see it (`Lumia.Accounts.visible_to?/2`)."
   def show(conn, %{"account_id" => account_id}) do
     caller = conn.assigns.current_account_id

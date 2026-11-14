@@ -277,3 +277,28 @@ message TypingIndicator {
   // Clients stop showing it when this passes; servers set ~8 seconds ahead.
   google.protobuf.Timestamp until = 3;
 }
+
+// The server rail as the account arranged it (architecture 6.9): its servers
+// in order, some gathered in folders. The account's own; every device follows.
+message Rail {
+  repeated RailEntry entries = 1;
+}
+
+message RailEntry {
+  oneof entry {
+    bytes server_id = 1;
+    RailFolder folder = 2;
+  }
+}
+
+// A folder of servers on the rail. Folders hold servers only.
+message RailFolder {
+  // Client-minted, UUIDv7.
+  bytes folder_id = 1;
+  // Up to 50 characters once trimmed; empty for none.
+  string name = 2;
+  // One of the nine avatar tones: peach, blue, purple, mint, amber, sky,
+  // stone, green, indigo.
+  string tone = 3;
+  repeated bytes server_ids = 4;
+}

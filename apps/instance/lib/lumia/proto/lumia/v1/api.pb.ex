@@ -674,6 +674,7 @@ defmodule Lumia.V1.AccountSnapshot do
     json_name: "channelInvitations"
 
   field :read_states, 11, repeated: true, type: Lumia.V1.ReadState, json_name: "readStates"
+  field :rail, 12, type: Lumia.V1.Rail
 end
 
 defmodule Lumia.V1.ReadState do

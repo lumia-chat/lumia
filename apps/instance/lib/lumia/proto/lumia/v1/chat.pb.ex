@@ -364,3 +364,39 @@ defmodule Lumia.V1.TypingIndicator do
   field :account_id, 2, type: :bytes, json_name: "accountId"
   field :until, 3, type: Google.Protobuf.Timestamp
 end
+
+defmodule Lumia.V1.Rail do
+  @moduledoc false
+
+  use Protobuf, full_name: "lumia.v1.Rail", protoc_gen_elixir_version: "0.17.1", syntax: :proto3
+
+  field :entries, 1, repeated: true, type: Lumia.V1.RailEntry
+end
+
+defmodule Lumia.V1.RailEntry do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.RailEntry",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  oneof(:entry, 0)
+
+  field :server_id, 1, type: :bytes, json_name: "serverId", oneof: 0
+  field :folder, 2, type: Lumia.V1.RailFolder, oneof: 0
+end
+
+defmodule Lumia.V1.RailFolder do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.RailFolder",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :folder_id, 1, type: :bytes, json_name: "folderId"
+  field :name, 2, type: :string
+  field :tone, 3, type: :string
+  field :server_ids, 4, repeated: true, type: :bytes, json_name: "serverIds"
+end

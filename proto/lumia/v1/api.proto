@@ -393,6 +393,9 @@ message AccountSnapshot {
   // Where the account has read each conversation it is shown, with what is
   // unread after that (architecture 6.6).
   repeated ReadState read_states = 11;
+  // The rail as the account arranged it, tidied: every server it is in
+  // placed once (architecture 6.9).
+  Rail rail = 12;
 }
 
 // A conversation's read state for the caller: the last event read, how many

@@ -61,7 +61,8 @@ defmodule Lumia.Snapshots do
       channels: channels,
       pending_requests: Enum.map(Lumia.Dms.pending_requests_to(account_id), &Proto.dm_request/1),
       channel_invitations: Lumia.Channels.invitations(account_id),
-      read_states: Lumia.Reads.states(account_id)
+      read_states: Lumia.Reads.states(account_id),
+      rail: Lumia.Rails.rail(account_id)
     }
   end
 

@@ -378,6 +378,8 @@ defmodule Lumia.V1.AccountEvent do
     type: Lumia.V1.ReadPositionUpdated,
     json_name: "readPositionUpdated",
     oneof: 0
+
+  field :rail_arranged, 38, type: Lumia.V1.RailArranged, json_name: "railArranged", oneof: 0
 end
 
 defmodule Lumia.V1.MembershipAdded do
@@ -446,6 +448,17 @@ defmodule Lumia.V1.ServerUpdated do
     syntax: :proto3
 
   field :server, 1, type: Lumia.V1.Server
+end
+
+defmodule Lumia.V1.RailArranged do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.RailArranged",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :rail, 1, type: Lumia.V1.Rail
 end
 
 defmodule Lumia.V1.ChannelInvitation do

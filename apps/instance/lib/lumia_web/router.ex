@@ -70,6 +70,7 @@ defmodule LumiaWeb.Router do
     put "/account/avatar", AccountController, :put_avatar
     delete "/account/avatar", AccountController, :delete_avatar
     put "/account/profile", AccountController, :put_profile
+    put "/account/rail", AccountController, :put_rail
     get "/account/events", AccountController, :events
     get "/account/mentions", AccountController, :mentions
     get "/accounts/:account_id", AccountController, :show
