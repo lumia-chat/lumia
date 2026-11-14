@@ -297,16 +297,17 @@ jobs:
 
   # Lumia's apt and dnf repository (apps/desktop/scripts/linux-repo.sh),
   # made from the published release's .deb and .rpm files, signed, and
-  # deployed to GitHub Pages, which the packages add to the system as they
-  # install. Only when both Linux builds succeeded: a site missing one
+  # deployed to GitHub Pages at https://packages.lumia.chat (the domain is
+  # the Pages site's setting, not a file here), which the packages add to
+  # the system as they install. Only when both Linux builds succeeded: a site missing one
   # architecture would leave its systems failing to update. The site holds
   # this release alone.
   #
   # Written on 2026-11-14 and not yet run on a runner: the script built and
   # signed the site in an ubuntu:24.04 container, from which apt on Ubuntu
-  # and dnf on Fedora installed and updated the package. Needs Pages set to
-  # deploy from GitHub Actions in the repository's settings, and the
-  # LINUX_REPO_KEY secret.
+  # and dnf on Fedora installed and updated the package. Pages deploys from
+  # GitHub Actions with the domain set, and LINUX_REPO_KEY is set (both
+  # 2026-11-14).
   packages:
     needs: [publish, linux]
     if: ${{ !cancelled() && needs.publish.result == 'success' && needs.linux.result == 'success' }}

@@ -34,7 +34,7 @@
 #                           .deb and .rpm add to the system as they install (an apt source
 #                           and a dnf repository, with packaging/linux/lumia-archive-key.asc
 #                           to check it by), so a package downloaded from the release updates
-#                           too; https://lumia-chat.github.io/lumia by default. Empty: none.
+#                           too; https://packages.lumia.chat by default. Empty: none.
 #
 # Needs: the Rust toolchain in rust-toolchain.toml with libxkbcommon-dev and
 # libwayland-dev (unless --bin), dpkg-deb, rpmbuild (Debian's and Ubuntu's `rpm` package),
@@ -86,7 +86,7 @@ esac
 
 feed=${LUMIA_UPDATE_FEED-https://github.com/lumia-chat/lumia/releases/latest/download/appcast-linux-$arch.xml}
 key=${LUMIA_UPDATE_KEY:-GRG890/GstHa+rDtxagnkw6PqSKwmK6D2CwImxkD4yw=}
-repo=${LUMIA_REPO_URL-https://lumia-chat.github.io/lumia}
+repo=${LUMIA_REPO_URL-https://packages.lumia.chat}
 repo=${repo%/}
 repo_key="$crate/packaging/linux/lumia-archive-key.asc"
 [ -z "$repo" ] || [ -f "$repo_key" ] || { echo "dist: no repository key at $repo_key"; exit 1; }

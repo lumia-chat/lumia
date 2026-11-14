@@ -23,7 +23,7 @@
 #                           a file). Its public half must be packaging/linux/lumia-archive-key.asc,
 #                           which the packages carry; the script stops otherwise.
 #   LUMIA_REPO_URL          where the site is served, for the page's instructions
-#                           (https://lumia-chat.github.io/lumia by default, as the packages
+#                           (https://packages.lumia.chat by default, as the packages
 #                           are built with)
 #
 # Needs: gpg, apt-ftparchive (apt-utils), rpm with rpmsign, createrepo_c, gzip.
@@ -44,7 +44,7 @@ crate=$(cd "$here/.." && pwd)
 in=${1:?a directory holding a release .deb and .rpm files}
 out=${2:?the directory to make the site in}
 key=${LINUX_REPO_KEY_PATH:?LINUX_REPO_KEY_PATH, the repository key}
-url=${LUMIA_REPO_URL:-https://lumia-chat.github.io/lumia}
+url=${LUMIA_REPO_URL:-https://packages.lumia.chat}
 url=${url%/}
 public="$crate/packaging/linux/lumia-archive-key.asc"
 for tool in gpg gpgv apt-ftparchive rpm rpmsign createrepo_c gzip; do
