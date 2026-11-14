@@ -5,7 +5,8 @@
 //! Only macOS has a menu bar to put these in; elsewhere the same actions are on screen
 //! (Sign out at the sidebar's foot, Change instance on the sign-in card). The update items
 //! exist only while there is an updater, which is a bundled app on macOS
-//! (`platform::updates`): a bare binary's menu does not offer what it cannot do.
+//! (`platform::updates`): a bare binary's menu does not offer what it cannot do. The Linux
+//! AppImage's updater has the same two choices on Preferences (`app::updates`).
 
 use rune::{MenuItem, Tx};
 

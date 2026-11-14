@@ -16,16 +16,23 @@
 //! The scroll bar's card is drawn on macOS only: there the choice is carried out by the
 //! system's own setting, made for this app alone (`platform::system`). Rune gives an app
 //! no say in it anywhere else, and a control that does nothing is worse than none.
+//!
+//! The Updates card is drawn where the shell carries its own updater (`app::updates`: the
+//! Linux AppImage). On macOS the same choices are Sparkle's, in the application menu; a
+//! package from a repository is updated by the package manager, and the card is not drawn.
 
-use rune::{El, col, text};
+use rune::{El, col, row, text};
 
 use super::devices::{page, page_column};
 use crate::app::State;
+use crate::app::updates::{Phase, Updater};
 use crate::settings::{
-    Appearance, Avatars, FontSize, Layout, Preset, Reactions, ScrollBars, Spacing,
+    Appearance, Avatars, FontSize, Layout, Preset, Reactions, ScrollBars, Spacing, UpdateChecks,
 };
 use crate::tokens as t;
-use crate::ui::components::{Look, card, segmented};
+use crate::ui::components::{
+    Look, action_button, card, check_row, error_text, secondary_button, segmented,
+};
 
 pub fn view(s: &State, look: Look) -> El {
     let mut content = page_column()
@@ -33,6 +40,9 @@ pub fn view(s: &State, look: Look) -> El {
         .child(messages(s, look));
     if scroll_bars_can_be_chosen() {
         content = content.child(scroll_bars(s, look));
+    }
+    if let Some(updater) = &s.updater {
+        content = content.child(updates(s, updater, look));
     }
     page(
         "preferences",
@@ -223,6 +233,86 @@ fn scroll_bars(s: &State, look: Look) -> El {
         ],
         s.settings.scroll_bars,
         |s: &mut State, choice| s.set_scroll_bars(choice),
+        look,
+    ))
+}
+
+fn updates(s: &State, updater: &Updater, look: Look) -> El {
+    let c = look.c;
+    let current = env!("CARGO_PKG_VERSION");
+    let status = match &updater.phase {
+        Phase::Idle => format!("This is Lumia {current}."),
+        Phase::Checking => "Checking for updates…".to_string(),
+        Phase::UpToDate => format!("Lumia {current} is the newest release."),
+        Phase::Available(version) => format!("Lumia {version} is available."),
+        Phase::Downloading(version) => format!("Downloading Lumia {version}…"),
+        Phase::Ready(version) => {
+            format!("Lumia {version} is ready. Restart Lumia to start using it.")
+        }
+        Phase::Failed(_) => format!("This is Lumia {current}."),
+    };
+    let mut buttons = row()
+        .gap(t::SPACE_10)
+        .items_center()
+        .child(secondary_button(
+            "check-for-updates",
+            "Check for updates",
+            !updater.busy(),
+            State::check_for_updates,
+            look,
+        ));
+    match updater.phase {
+        Phase::Available(_) => {
+            buttons = buttons.child(action_button(
+                "install-update",
+                "Update",
+                true,
+                State::install_update,
+                look,
+            ));
+        }
+        Phase::Ready(_) => {
+            buttons = buttons.child(action_button(
+                "restart-to-update",
+                "Restart",
+                true,
+                State::restart_to_update,
+                look,
+            ));
+        }
+        _ => {}
+    }
+    let mut card = card(
+        "Updates",
+        "Lumia updates itself from its releases on GitHub, each one signed.",
+        look,
+    )
+    .key("updates-card")
+    .w_full()
+    .child(
+        text(status)
+            .key("update-status")
+            .font(t::TEXT_COMPACT)
+            .color(c.ink_secondary)
+            .wrap()
+            .role("status"),
+    );
+    if let Phase::Failed(why) = &updater.phase {
+        card = card.child(error_text(&format!("Could not update: {why}"), look));
+    }
+    let daily = s.settings.update_checks == UpdateChecks::Daily;
+    card.child(buttons).child(check_row(
+        "check-updates-automatically",
+        "Check for updates automatically",
+        Some("Once a day. Nothing is downloaded until you choose Update."),
+        daily,
+        move |s: &mut State| {
+            s.set_update_checks(if daily {
+                UpdateChecks::Off
+            } else {
+                UpdateChecks::Daily
+            });
+        },
         look,
     ))
 }

@@ -8,8 +8,8 @@
 # allowed (its manifest says why). Both are default members, so a bare `cargo test`,
 # `cargo clippy` or `cargo fmt` here covers it too.
 [workspace]
-members = [".", "crates/sparkle"]
-default-members = [".", "crates/sparkle"]
+members = [".", "crates/sparkle", "crates/appcast"]
+default-members = [".", "crates/sparkle", "crates/appcast"]
 
 [package]
 name = "lumia-shell"
@@ -19,6 +19,8 @@ rust-version = "1.99"
 license = "Apache-2.0"
 description = "The Lumia desktop shell: the client core behind a Rune interface (architecture section 13)"
 publish = false
+# The workspace has a second binary, the release's `lumia-appcast`; `cargo run` is the app.
+default-run = "lumia"
 
 [[bin]]
 name = "lumia"
@@ -57,6 +59,12 @@ serde_json = "1"
 getrandom = "0.4"
 # The emoji picker's list, names and groups (Unicode's, fully qualified; src/ui/emoji.rs).
 emojis = "0.9.1"
+
+# The Linux AppImage's updater (`src/platform/appimage.rs`): the signed feed, and the feed and
+# the download fetched on a thread of their own. Elsewhere Sparkle or a package manager updates.
+[target.'cfg(target_os = "linux")'.dependencies]
+lumia-appcast = { path = "crates/appcast" }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "blocking"] }
 
 [build-dependencies]
 serde_json = "1"

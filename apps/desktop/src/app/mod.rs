@@ -21,6 +21,7 @@ pub mod replies;
 pub mod server;
 pub mod server_settings;
 pub mod sign_in;
+pub mod updates;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -154,6 +155,9 @@ pub struct State {
     /// follow. A real launch reads it from the system whenever the window comes in front
     /// (`platform`); a test and a headless picture keep the 12-hour clock.
     pub clock_24: bool,
+    /// The updater the window shows, where the platform has one of its own (`updates`):
+    /// the Linux AppImage. None everywhere else, macOS included, where Sparkle has its own.
+    pub updater: Option<updates::Updater>,
 }
 
 impl State {
@@ -194,6 +198,7 @@ impl State {
             replies: replies::Replies::default(),
             rail: rail::RailUi::default(),
             clock_24: false,
+            updater: None,
         }
     }
 

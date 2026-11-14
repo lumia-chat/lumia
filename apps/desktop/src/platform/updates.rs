@@ -6,8 +6,9 @@
 //!
 //! Only a real launch of the bundled app has one. Sparkle is loaded from the bundle at run
 //! time, so a bare `cargo run` binary, a test and a headless run have no updater and the
-//! menu has no update items; Windows and Linux have none until their own updaters exist
-//! (plan step 9). The daily check of the feed is the one request the app makes to anything
+//! menu has no update items. Windows has none until its own updater exists (plan step 9);
+//! the Linux AppImage's is `platform::appimage`, shown on screen since Linux has no menu
+//! bar. The daily check of the feed is the one request the app makes to anything
 //! but the person's instances, and "Check for updates automatically" is how they turn it
 //! off.
 

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?><!-- sparkle-sign-warning:
+IMPORTANT: This file was signed by Sparkle. Any modifications to this file requires re-signing this file with generate_appcast or sign_update! The signed signature will be embedded at the end of this file.
+--><rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+<channel><title>Lumia</title><item><title>0.10.0</title><sparkle:version>0.10.0</sparkle:version><enclosure url="https://x/Lumia.AppImage" length="5" type="application/octet-stream" sparkle:edSignature="abc"></enclosure></item></channel>
+</rss><!-- sparkle-signatures:
+edSignature: gB8w8uUMLQ/v+NOrwRfG7lcWYm18y0QNPNVNjqwXK3YoFNm5z3RCg9HoO3o+CzE7qDunG17hpSRqiJQJkaxKDQ==
+length: 623
+-->

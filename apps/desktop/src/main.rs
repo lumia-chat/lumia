@@ -28,6 +28,9 @@ fn main() {
             .unwrap_or_default(),
         links: links.clone(),
     };
+    // A copy that "Restart" started after an update waits for the one it replaces.
+    #[cfg(target_os = "linux")]
+    platform::appimage::wait_for_previous();
     let mut hold = match instance::claim(&settings::data_dir(), &launch, headless) {
         Claim::First(hold) => hold,
         // The copy already running took this launch's links and came forward.

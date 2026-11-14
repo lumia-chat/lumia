@@ -1,0 +1,50 @@
+<!doctype html>
+<!-- The page at the top of Lumia's package repository (scripts/linux-repo.sh fills in the
+     @…@ values). Installing the package from here adds the repository to the system, so
+     there is one command per system and no key or source to add by hand. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lumia for Linux</title>
+<style>
+  :root { --bg: #ffffff; --ink: #111827; --muted: #4b5563; --code: #f3f4f6; --edge: #e5e7eb; --accent: #2563eb; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0f131a; --ink: #f3f4f6; --muted: #9ca3af; --code: #1a2029; --edge: #272e39; --accent: #60a5fa; }
+  }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.55 system-ui, sans-serif; }
+  main { max-width: 44rem; margin: 0 auto; padding: 3rem 1rem 4rem; }
+  h1 { font-size: 1.9rem; margin: 0 0 .25rem; }
+  h2 { font-size: 1.15rem; margin: 2.25rem 0 .5rem; }
+  p, li { color: var(--muted); }
+  a { color: var(--accent); }
+  pre { background: var(--code); border: 1px solid var(--edge); border-radius: 10px; padding: .85rem 1rem; overflow-x: auto; color: var(--ink); }
+  code { font: .9rem/1.5 ui-monospace, monospace; overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<main>
+<h1>Lumia for Linux</h1>
+<p>Lumia @VERSION@, a preview: it has been built and tested without a screen, and nobody has used it on a Linux desktop yet. Please <a href="https://github.com/lumia-chat/lumia/issues">say what you find</a>.</p>
+
+<h2>Debian and Ubuntu</h2>
+<p>For an Arm computer, put <code>arm64</code> in place of <code>amd64</code>.</p>
+<pre><code>curl -fLO @URL@/apt/pool/main/lumia_@VERSION@_amd64.deb
+sudo apt install ./lumia_@VERSION@_amd64.deb</code></pre>
+<p>The package adds this repository to apt as it installs, so Lumia updates with the rest of the system.</p>
+
+<h2>Fedora and other dnf systems</h2>
+<p>For an Arm computer, put <code>aarch64</code> in place of <code>x86_64</code>, both times.</p>
+<pre><code>sudo dnf install @URL@/rpm/x86_64/lumia-@VERSION@-1.x86_64.rpm</code></pre>
+<p>The package adds this repository to dnf; the first update asks you to accept its key.</p>
+
+<h2>Anywhere else</h2>
+<p>The AppImage from the <a href="https://github.com/lumia-chat/lumia/releases/latest">latest release</a> runs on its own and updates itself. Make it executable and open it; it needs FUSE, which most desktops have.</p>
+
+<h2>The key</h2>
+<p>The repository is signed with <a href="lumia-archive-key.asc">this key</a>, whose fingerprint is:</p>
+<pre><code>@FINGERPRINT@</code></pre>
+<p>Lumia needs a Vulkan driver, and fonts for Chinese, Japanese and Korean if you read them. Your data is in <code>~/.local/share/chat.lumia</code>.</p>
+</main>
+</body>
+</html>

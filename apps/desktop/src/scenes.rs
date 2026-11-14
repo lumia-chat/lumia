@@ -315,6 +315,14 @@ pub const SCENES: &[Scene] = &[
         s.settings.apply(Preset::Minimal);
         s.settings.spacing = crate::settings::Spacing::Cozy;
     }),
+    // The Linux AppImage's updater having found a release: Preferences' card and the
+    // sidebar's foot.
+    ("updates", |s| {
+        servers_sample(s);
+        s.go_home(HomeView::Preferences);
+        s.updater = Some(crate::app::updates::Updater::default());
+        s.react_update(crate::app::updates::Report::Checked(Some("0.10.0".into())));
+    }),
     ("sign-in-browser", sign_in_browser),
     ("sign-in-waiting", |s| {
         sign_in_browser(s);

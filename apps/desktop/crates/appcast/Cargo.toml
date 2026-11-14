@@ -1,0 +1,34 @@
+# The update feed outside macOS (architecture section 13, "How the desktop shell updates
+# itself"): a Sparkle appcast, signed as Sparkle signs one, read and checked by the Linux
+# updater and written by the release. Sparkle's own tools run only on a Mac; this is the
+# same format and the same key, so one feed format and one key stay true on every desktop.
+#
+# The library is what the shell links (parse a feed, check its signature and a download's,
+# compare versions); the binary is the release's (`lumia-appcast write`), which the Linux
+# job runs to sign the feed beside the AppImage. Nothing here touches the network or the
+# disk beyond the files the binary is named.
+[package]
+name = "lumia-appcast"
+version = "0.9.0"
+edition = "2024"
+rust-version = "1.99"
+license = "Apache-2.0"
+description = "The Lumia desktop shell's update feed: a Sparkle appcast signed with Ed25519, read and written off macOS"
+publish = false
+
+[[bin]]
+name = "lumia-appcast"
+path = "src/main.rs"
+
+# The versions already in Cargo.lock.
+[dependencies]
+base64 = "0.22"
+ed25519-dalek = "3"
+roxmltree = "0.21"
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"

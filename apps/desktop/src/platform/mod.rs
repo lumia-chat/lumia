@@ -16,8 +16,9 @@
 //! - **Menus.** Only macOS has a menu bar; elsewhere [`sync_menu`] finds none and the
 //!   same actions are on screen.
 //! - **Updates.** On macOS the bundled app updates itself with Sparkle ([`updates`]),
-//!   which adds two items to the application menu; a bare binary has neither. Windows and
-//!   Linux have no updater yet.
+//!   which adds two items to the application menu; a bare binary has neither. On Linux the
+//!   AppImage updates itself (`appimage`, with an Updates card in Preferences), and a deb
+//!   or rpm is updated by the package manager. Windows has no updater yet.
 //! - **The frame.** AppKit saves and restores it (`rune-mac`); Windows and Linux open at
 //!   the default size and need their own saved frame in `settings.json`.
 //! - **Notifications.** `rune-notify` posts on macOS from a bundled app and on Windows
@@ -35,6 +36,8 @@
 //!   do, so messages keep arriving and a click on the Dock icon brings the window back.
 //!   Elsewhere closing the window quits, until there is a tray icon to come back from.
 
+#[cfg(target_os = "linux")]
+pub mod appimage;
 pub mod instance;
 mod system;
 pub mod updates;
@@ -162,6 +165,8 @@ pub fn attach(
         updates::start();
         sync_menu(state);
     });
+    #[cfg(target_os = "linux")]
+    appimage::start(&handle);
     trace(|| format!("notifications can_post={}", rune_notify::available()));
     let _ = HANDLE.set(handle);
 }
@@ -269,6 +274,8 @@ pub fn settle(state: &mut State, tx: &mut Tx) -> bool {
     }
     sync_menu(state);
     updates::follow(tx);
+    #[cfg(target_os = "linux")]
+    appimage::pay(state, tx);
     changed
 }
 

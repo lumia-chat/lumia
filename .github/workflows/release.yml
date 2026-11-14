@@ -10,13 +10,18 @@
 # appcast.xml) never points at a half-built release. Three jobs do not
 # gate it: the Windows and Linux previews, which nobody has run on those
 # systems and which are waited for but may fail, and the iOS upload,
-# which can be re-sent without a new tag (ios-upload.yml).
+# which can be re-sent without a new tag (ios-upload.yml). Once it is
+# published, the Linux packages go to the apt and dnf repository on
+# GitHub Pages (the packages job), when both Linux builds succeeded.
 #
 # The version is the tag without its v. Secrets: DEVELOPER_ID_P12 and
 # DEVELOPER_ID_P12_PASSWORD (the Developer ID Application certificate with
 # its key, base64 of the .p12), ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_P8 (the
 # App Store Connect API key, base64 of the .p8; notarization and the iOS
-# upload), SPARKLE_PRIVATE_KEY (the appcast's EdDSA key),
+# upload), SPARKLE_PRIVATE_KEY (the appcast's EdDSA key, which signs the
+# Linux AppImage's feed too), LINUX_REPO_KEY (the package repository's
+# GPG key, armoured; its public half is
+# apps/desktop/packaging/linux/lumia-archive-key.asc),
 # ANDROID_KEYSTORE (the release keystore, base64 of the .jks),
 # ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD, and
 # GOOGLE_SERVICES_JSON (the Firebase project's file, for FCM; optional, the
@@ -208,12 +213,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
-  # The desktop shell for Linux: a tarball and a .deb, both previews (the
-  # head of scripts/dist-linux.sh says why), one pair per architecture. Built
-  # on the oldest Ubuntu the runners offer, so the binary runs on a glibc as
-  # old as that one's. The script's steps ran in ubuntu:22.04 and 24.04
-  # containers on arm64 before this job was written; on x86-64 it has not
-  # run, and the frame is drawn by a software driver that may refuse the
+  # The desktop shell for Linux: an AppImage that updates itself, with its
+  # signed appcast, and a .deb and an .rpm that update from the package
+  # repository, all previews (the head of scripts/dist-linux.sh says why),
+  # one set per architecture. Built on the oldest Ubuntu the runners offer,
+  # so the binary runs on a glibc as old as that one's. The script's steps
+  # ran in ubuntu:22.04 containers on arm64 before this job was changed; on
+  # x86-64 the frame is drawn by a software driver that may refuse the
   # shell's shaders there (shell.yml says more), so that step may fail
   # without failing the job.
   linux:
@@ -229,7 +235,7 @@ jobs:
       - name: System packages
         run: |
           sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libwayland-dev imagemagick desktop-file-utils mesa-vulkan-drivers fonts-noto-cjk fonts-noto-color-emoji
+          sudo apt-get install -y libxkbcommon-dev libwayland-dev imagemagick desktop-file-utils rpm squashfs-tools mesa-vulkan-drivers fonts-noto-cjk fonts-noto-color-emoji
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.99.1"
@@ -237,7 +243,12 @@ jobs:
         with:
           workspaces: apps/desktop
           key: linux-release
-      - run: apps/desktop/scripts/dist-linux.sh "${GITHUB_REF_NAME#v}"
+      - run: printf '%s' "$SPARKLE_PRIVATE_KEY" > "$RUNNER_TEMP/sparkle.key"
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+      - run: apps/desktop/scripts/dist-linux.sh "${GITHUB_REF_NAME#v}" --release
+        env:
+          SPARKLE_KEY_PATH: ${{ runner.temp }}/sparkle.key
       # The package installed as a person would install it, and its program
       # drawing the first screen.
       - name: Install the package and draw a frame
@@ -247,8 +258,12 @@ jobs:
           LUMIA_DATA_DIR: ${{ runner.temp }}/lumia
         run: |
           sudo apt-get install -y ./apps/desktop/out/dist/Lumia-*-preview.deb
-          VK_ICD_FILENAMES=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -1) lumia --snap "$RUNNER_TEMP/sign-in.png"
+          lvp=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -1)
+          VK_ICD_FILENAMES=$lvp lumia --snap "$RUNNER_TEMP/sign-in.png"
           test -s "$RUNNER_TEMP/sign-in.png"
+          # The AppImage, unpacked by its own runtime (a runner has no FUSE).
+          VK_ICD_FILENAMES=$lvp APPIMAGE_EXTRACT_AND_RUN=1 ./apps/desktop/out/dist/Lumia-linux-*-preview.AppImage --snap "$RUNNER_TEMP/appimage.png"
+          test -s "$RUNNER_TEMP/appimage.png"
       - run: gh release upload "$GITHUB_REF_NAME" apps/desktop/out/dist/*
         env:
           GH_TOKEN: ${{ github.token }}
@@ -279,6 +294,57 @@ jobs:
       - run: gh release upload "$GITHUB_REF_NAME" apps/desktop/out/dist/*
         env:
           GH_TOKEN: ${{ github.token }}
+
+  # Lumia's apt and dnf repository (apps/desktop/scripts/linux-repo.sh),
+  # made from the published release's .deb and .rpm files, signed, and
+  # deployed to GitHub Pages, which the packages add to the system as they
+  # install. Only when both Linux builds succeeded: a site missing one
+  # architecture would leave its systems failing to update. The site holds
+  # this release alone.
+  #
+  # Written on 2026-11-14 and not yet run on a runner: the script built and
+  # signed the site in an ubuntu:24.04 container, from which apt on Ubuntu
+  # and dnf on Fedora installed and updated the package. Needs Pages set to
+  # deploy from GitHub Actions in the repository's settings, and the
+  # LINUX_REPO_KEY secret.
+  packages:
+    needs: [publish, linux]
+    if: ${{ !cancelled() && needs.publish.result == 'success' && needs.linux.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y apt-utils rpm createrepo-c gnupg
+      - name: The release's packages
+        run: gh release download "$GITHUB_REF_NAME" --pattern '*-preview.deb' --pattern '*-preview.rpm' -D "$RUNNER_TEMP/packages"
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: The repository
+        run: |
+          printf '%s\n' "$LINUX_REPO_KEY" > "$RUNNER_TEMP/repo.key"
+          apps/desktop/scripts/linux-repo.sh "$RUNNER_TEMP/packages" "$RUNNER_TEMP/site"
+          rm "$RUNNER_TEMP/repo.key"
+        env:
+          LINUX_REPO_KEY: ${{ secrets.LINUX_REPO_KEY }}
+          LINUX_REPO_KEY_PATH: ${{ runner.temp }}/repo.key
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: ${{ runner.temp }}/site
+      - id: deploy
+        uses: actions/deploy-pages@v4
 
   # Waits for every job that attaches something, and publishes when the two
   # that gate the release succeeded, whatever became of the previews.

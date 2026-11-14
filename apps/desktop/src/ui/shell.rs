@@ -12,9 +12,10 @@
 use lumia_client::app::ServerSummary;
 use rune::{Cursor, Edge, El, Transition, col, el, icon, row, text};
 
-use super::components::{Look, avatar_of, shadowed, status_dot};
+use super::components::{Look, avatar_of, notice, shadowed, small_button, status_dot};
 use super::menus::{SELF_AVATAR, SERVER_TITLE};
 use super::{home, server};
+use crate::app::updates::Phase;
 use crate::app::{HomeView, Place, Popover, State};
 use crate::session::Connection;
 use crate::tokens::{self as t, icons};
@@ -317,7 +318,7 @@ pub fn sidebar_frame(
         .pr(t::SPACE_10)
         .window_drag()
         .child(title_row);
-    col()
+    let mut sidebar = col()
         .key("sidebar")
         .w(SIDEBAR_WIDTH)
         .h_full()
@@ -331,5 +332,48 @@ pub fn sidebar_frame(
                 .pl(t::SPACE_12)
                 .pr(t::SPACE_10)
                 .child(body),
-        )
+        );
+    if let Some(waiting) = update_waiting(s, look) {
+        sidebar = sidebar.child(
+            col()
+                .w_full()
+                .pt(t::SPACE_10)
+                .pl(t::SPACE_12)
+                .pr(t::SPACE_10)
+                .child(waiting),
+        );
+    }
+    sidebar
+}
+
+/// A release the updater found, or put in place, waiting for the person (`app::updates`):
+/// at the sidebar's foot, wherever they are, since the daily check finds it while they are
+/// elsewhere. Preferences says the same with more.
+fn update_waiting(s: &State, look: Look) -> Option<El> {
+    let (words, label, press): (String, &str, fn(&mut State)) =
+        match s.updater.as_ref()?.waiting()? {
+            Phase::Available(version) => (
+                format!("Lumia {version} is available."),
+                "Update",
+                State::install_update,
+            ),
+            Phase::Ready(version) => (
+                format!("Lumia {version} is ready."),
+                "Restart",
+                State::restart_to_update,
+            ),
+            _ => return None,
+        };
+    Some(
+        notice(&icons::ARROW_DOWN, words, look)
+            .key("update-waiting")
+            .items_center()
+            .child(small_button(
+                "update-waiting-action",
+                label,
+                true,
+                move |s, _| press(s),
+                look,
+            )),
+    )
 }

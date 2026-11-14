@@ -39,12 +39,14 @@ The bundled app updates itself with [Sparkle](https://sparkle-project.org) (arch
 
 ## Windows and Linux
 
-The same program builds for both, and a release tag publishes it for both as previews: nobody has run it on either desktop. What it lacks there is at the head of `src/platform/mod.rs` and in the `README.txt` each package carries (`packaging/`).
+The same program builds for both, and a release tag publishes it for both as previews: nobody has run it on either desktop. What it lacks there is at the head of `src/platform/mod.rs`.
 
 ```sh
-scripts/dist-linux.sh 0.3.0      # on Linux: out/dist/Lumia-0.3.0-linux-<arch>-preview.tar.gz and .deb
+scripts/dist-linux.sh 0.3.0      # on Linux: out/dist/Lumia-linux-<arch>-preview.AppImage, Lumia-0.3.0-linux-<arch>-preview.deb and .rpm
+scripts/linux-repo.sh IN OUT     # the signed apt and dnf repository from a release's .deb and .rpm files
 scripts/dist-windows.sh 0.3.0    # on Linux with MinGW-w64: out/dist/Lumia-0.3.0-windows-x86_64-preview.zip
 ```
 
-- **Linux.** Needs `libxkbcommon-dev` and `libwayland-dev` to build, and a Vulkan driver to run: the shell draws with nothing else there, and its headless flags need one too (Mesa's `lvp` software driver will do, `VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.*.json`). The `.deb` installs `/usr/bin/lumia`, a launcher entry that takes `lumia:` links, and the icon. Built on Ubuntu 22.04 it runs there and on anything newer.
+- **Linux.** Needs `libxkbcommon-dev` and `libwayland-dev` to build, and a Vulkan driver to run: the shell draws with nothing else there, and its headless flags need one too (Mesa's `lvp` software driver will do, `VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.*.json`). Each package installs `/usr/bin/lumia`, a launcher entry that takes `lumia:` links, and the icon. Built on Ubuntu 22.04 it runs there and on anything newer.
+- **Linux updates.** The AppImage updates itself: it reads `appcast-linux-<arch>.xml` from the latest release, signed with the Mac's key in Sparkle's format (`crates/appcast`), and on the person's Update puts the checked download in place of itself (`src/platform/appimage.rs`). With `SPARKLE_KEY_PATH` the script writes that feed; `LUMIA_UPDATE_FEED` and `LUMIA_UPDATE_KEY` are compiled in. The `.deb` and `.rpm` add Lumia's package repository (`LUMIA_REPO_URL`, GitHub Pages by default) as they install, and update with the system from then on.
 - **Windows.** Cross-built from Linux (`rustup target add x86_64-pc-windows-gnu`, `gcc-mingw-w64-x86-64`), because that is what can be reproduced without a Windows machine. The zip holds `Lumia.exe` and nothing else it needs; there is no installer, no signature and no registered link type.

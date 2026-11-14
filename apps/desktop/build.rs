@@ -17,6 +17,10 @@ fn main() {
     let out = PathBuf::from(env::var("OUT_DIR").unwrap_or_default());
     let tokens_path = assets.join("design/tokens.json");
     println!("cargo:rerun-if-changed={}", tokens_path.display());
+    // The Linux updater's feed and key are compiled in (`platform::appimage`), so a change to
+    // either builds the binary again.
+    println!("cargo:rerun-if-env-changed=LUMIA_UPDATE_FEED");
+    println!("cargo:rerun-if-env-changed=LUMIA_UPDATE_KEY");
     let tokens: Value =
         serde_json::from_str(&read(&tokens_path)).unwrap_or_else(|e| fail(&tokens_path, &e));
 

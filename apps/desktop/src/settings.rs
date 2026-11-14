@@ -76,6 +76,25 @@ pub struct Settings {
     /// each device's own). A folder no longer on the rail is dropped as the rail is drawn.
     #[serde(deserialize_with = "or_default")]
     pub open_folders: Vec<String>,
+    /// Whether the updater looks at the release feed once a day without being asked, where
+    /// the shell has an updater of its own on screen (the Linux AppImage; Sparkle keeps the
+    /// Mac's choice itself). On unless turned off: the check is the one request the app
+    /// makes to anything but the person's instances, so it is theirs to stop.
+    #[serde(deserialize_with = "or_default")]
+    pub update_checks: UpdateChecks,
+    /// When that check last ran, in seconds since 1970, so a day is counted across
+    /// launches and a launch does not check again.
+    #[serde(deserialize_with = "or_default")]
+    pub last_update_check: Option<i64>,
+}
+
+/// Whether the release feed is checked once a day.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UpdateChecks {
+    #[default]
+    Daily,
+    Off,
 }
 
 /// Light, dark, or whichever the system is in.
