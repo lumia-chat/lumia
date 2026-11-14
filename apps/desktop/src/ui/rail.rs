@@ -160,7 +160,11 @@ fn server_slot(
                 } else {
                     t::TEXT_MONOGRAM_REST
                 })
-                .color(if active { c.ink_selected } else { c.ink }),
+                .color(if active {
+                    c.ink_selected
+                } else {
+                    t::monogram_ink(&server.server_id, c)
+                }),
         );
     }
     if let Some(picture) = picture {
@@ -318,11 +322,10 @@ fn mini(s: &State, server: &ServerSummary, look: Look) -> El {
         .center();
     let picture = s.picture_at(&server.icon_url);
     if !picture.is_some_and(drawn) {
-        let (_, ink) = t::tone(&server.server_id, c);
         cell = cell.child(
             text(initials(&server.name))
                 .font(t::TEXT_FOLDER_MINI)
-                .color(ink),
+                .color(t::monogram_ink(&server.server_id, c)),
         );
     }
     if let Some(picture) = picture {
@@ -351,6 +354,12 @@ pub fn drag_layer(s: &State, look: Look) -> Option<El> {
                 .fill(c.accent),
         );
     }
+    let is_server = s.session.servers().iter().any(|x| x.server_id == drag.id);
+    let ink = if is_server {
+        t::monogram_ink(&drag.id, c)
+    } else {
+        c.ink
+    };
     let ghost = shadowed(
         el().key("rail-ghost")
             .absolute(drag.at[0], drag.at[1])
@@ -361,7 +370,7 @@ pub fn drag_layer(s: &State, look: Look) -> Option<El> {
             .child(
                 text(initials(&s.rail_name(&drag.id)))
                     .font(t::TEXT_MONOGRAM_REST)
-                    .color(c.ink),
+                    .color(ink),
             ),
         look.shadows.floating,
     );
@@ -421,7 +430,7 @@ fn line_y(s: &State, folder: Option<&str>, before: Option<&str>) -> Option<f32> 
 pub fn rail_menu(s: &State, look: Look) -> Option<El> {
     let id = s.rail.menu_for.clone()?;
     let items = s.session.rail();
-    let in_folder = rail::folder_of(&items, &id);
+    let in_folder = rail::folder_of(items, &id);
     let is_folder = items
         .iter()
         .any(|item| matches!(item, RailItem::Folder { folder_id, .. } if *folder_id == id));
@@ -561,7 +570,7 @@ pub fn rail_menu(s: &State, look: Look) -> Option<El> {
 pub fn move_to_folder(s: &State, look: Look) -> Option<El> {
     let id = s.rail.menu_for.clone()?;
     let items = s.session.rail();
-    let in_folder = rail::folder_of(&items, &id);
+    let in_folder = rail::folder_of(items, &id);
     let mut list = menu(
         "move-to-folder-menu",
         &tile_key(s, &id),
@@ -570,7 +579,7 @@ pub fn move_to_folder(s: &State, look: Look) -> Option<El> {
         Align::Start,
         look,
     );
-    for item in &items {
+    for item in items {
         let RailItem::Folder {
             folder_id, tone, ..
         } = item

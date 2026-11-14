@@ -44,6 +44,16 @@ pub fn tone(id: &str, c: &Colors) -> (Color, Color) {
     tones(c)[lumia_client::rail::tone_index(id)]
 }
 
+/// A server's initials on `tile`: the ink of the tone its id hashes to, or the design
+/// system's `tile-ink-*` for the tones it names one for (the rail boards' monograms).
+pub fn monogram_ink(id: &str, c: &Colors) -> Color {
+    match lumia_client::rail::TONES[lumia_client::rail::tone_index(id)] {
+        "indigo" => c.tile_ink_indigo,
+        "green" => c.tile_ink_green,
+        _ => tone(id, c).1,
+    }
+}
+
 /// The ground and ink of a tone by its name (a rail folder's); peach for one not known.
 pub fn tone_named(name: &str, c: &Colors) -> (Color, Color) {
     let at = lumia_client::rail::TONES

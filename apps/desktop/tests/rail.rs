@@ -354,18 +354,16 @@ fn the_rail_waits_for_the_last_answer_and_goes_back_when_it_is_refused() {
             sent: last,
             result: Err(Failure {
                 code: "INVALID_ARGUMENT".into(),
-                message: "Too many folders".into(),
-                details: Default::default(),
+                message: "invalid argument".into(),
+                details: [("field".to_string(), "folders".to_string())].into(),
             }),
         }));
     });
     settle(&mut rt);
     assert_eq!(shape(&rt), kept);
-    assert!(
-        rt.state
-            .session
-            .last_error
-            .as_deref()
-            .is_some_and(|e| e.contains("Too many folders"))
+    // In the web's words, not the instance's.
+    assert_eq!(
+        rt.state.session.last_error.as_deref(),
+        Some("The rail was not saved: There can be at most 100 folders.")
     );
 }

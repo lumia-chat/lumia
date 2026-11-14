@@ -507,7 +507,7 @@ impl Session {
             self.members.insert(server.server_id.clone(), members);
         }
         let channels = server_channels(&snapshot);
-        self.snapshot = Some(snapshot);
+        self.hold_snapshot(snapshot);
         self.want_pictures();
         self.start(&channels);
     }
@@ -1152,7 +1152,7 @@ impl Session {
                     .snapshot
                     .as_ref()
                     .is_none_or(|old| ids(&old.servers) != ids(&snapshot.servers));
-                self.snapshot = Some(snapshot.clone());
+                self.hold_snapshot(snapshot.clone());
                 self.load_failures = 0;
                 self.last_error = None;
                 if !self.loop_held {

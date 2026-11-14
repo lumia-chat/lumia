@@ -279,7 +279,7 @@ impl Session {
                         person.display_name.clone_from(&snapshot.display_name);
                     }
                 }
-                self.snapshot = Some(snapshot.clone());
+                self.hold_snapshot(snapshot.clone());
             }
             IdentityUpdate::LinkRequested(_)
             | IdentityUpdate::MagicLinkSent(_)

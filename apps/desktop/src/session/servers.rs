@@ -261,7 +261,7 @@ impl Session {
                 result: Ok(snapshot),
                 ..
             } => {
-                self.snapshot = Some(snapshot.clone());
+                self.hold_snapshot(snapshot.clone());
                 self.want_pictures();
                 // Whether deleted messages are read may have changed (architecture 6.7).
                 self.read_entries();

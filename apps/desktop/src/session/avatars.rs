@@ -252,7 +252,7 @@ impl Session {
                         person.avatar_url.clone_from(&snapshot.avatar_url);
                     }
                 }
-                self.snapshot = Some(snapshot.clone());
+                self.hold_snapshot(snapshot.clone());
                 self.want_pictures();
             }
             AvatarUpdate::Saved(Err(_)) => {}

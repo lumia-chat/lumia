@@ -225,12 +225,12 @@ pub fn target(
 impl State {
     /// The rail as the session has it.
     fn rail_items(&self) -> Vec<RailItem> {
-        self.session.rail()
+        self.session.rail().to_vec()
     }
 
     /// A server's name, or a folder's (its own, else its servers').
     pub fn rail_name(&self, id: &str) -> String {
-        self.name_in(&self.rail_items(), id)
+        self.name_in(self.session.rail(), id)
     }
 
     /// [`State::rail_name`] in the rail `items`.
@@ -273,7 +273,8 @@ impl State {
     /// Opens a closed folder, closes an open one; this computer remembers which.
     pub fn toggle_folder(&mut self, id: &str) {
         let live: Vec<String> = self
-            .rail_items()
+            .session
+            .rail()
             .iter()
             .filter(|item| matches!(item, RailItem::Folder { .. }))
             .map(|item| rail::id_of(item).to_string())
