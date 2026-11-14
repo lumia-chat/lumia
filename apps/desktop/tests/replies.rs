@@ -158,6 +158,29 @@ fn a_quote_and_reactions_are_drawn_with_who_reacted() {
     assert!(rt.find("add-reaction-m2").is_some());
 }
 
+/// The original, already read, is reached in the frame of the press. A window draws no
+/// frame it isn't asked for, so one left to the next `poll` waited for whatever woke the
+/// window next, a second or two (#14); this runtime has no `poll` at all.
+#[test]
+fn a_quote_jumps_to_its_original_in_the_frame_it_is_pressed() {
+    let mut state = signed_in();
+    state.session.entries[2].reply = Some(QuoteSummary {
+        message_id: "m1".into(),
+        author_account_id: "grace".into(),
+        text: "Shipped on Friday.".into(),
+        original_deleted: false,
+        silent: false,
+    });
+    state.session.revision += 1;
+    let mut rt = runtime(state);
+    let (x, y) = rt.find("quote").expect("the reply's reference line");
+    rt.pointer_move(x, y);
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    rt.frame(1.0 / 60.0);
+    assert!(rt.state.flashed("m1"));
+}
+
 #[test]
 fn the_picker_finds_an_emoji_by_name() {
     let mut rt = runtime(signed_in());

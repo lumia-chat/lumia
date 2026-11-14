@@ -163,7 +163,7 @@ fn reference(
         .cursor(Cursor::Pointer)
         .focusable(true)
         .focus_ring(2.0, 0.0, c.focus)
-        .on_press(move |s: &mut State| s.jump_to(&id))
+        .on_press_tx(move |s: &mut State, tx| s.jump_to(&id, tx))
         .child(
             text(quote.text.replace('\n', " "))
                 .font(ty.reference)

@@ -187,7 +187,7 @@ fn item(s: &State, message: &MessageSummary, look: Look) -> El {
         .cursor(Cursor::Pointer)
         .focusable(true)
         .focus_ring(2.0, 0.0, c.focus)
-        .on_press(move |s: &mut State| s.open_mention(&channel_id, &message_id))
+        .on_press_tx(move |s: &mut State, tx| s.open_mention(&channel_id, &message_id, tx))
         .child(text(place).font(t::TEXT_SECTION).color(c.ink_muted))
         .child(
             row()

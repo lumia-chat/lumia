@@ -635,7 +635,7 @@ impl State {
     }
 
     /// A mention pressed on a Mentions page: its channel, at it.
-    pub fn open_mention(&mut self, channel_id: &str, message_id: &str) {
+    pub fn open_mention(&mut self, channel_id: &str, message_id: &str, tx: &mut Tx) {
         let Some(server_id) = self
             .session
             .channel_summary(channel_id)
@@ -648,11 +648,15 @@ impl State {
         }
         self.select_channel(channel_id);
         self.session.reveal(message_id);
+        self.show_found(tx);
     }
 
-    /// Jumps to a message of the open conversation: a quote's original.
-    pub fn jump_to(&mut self, message_id: &str) {
+    /// Jumps to a message of the open conversation: a quote's original. One already read is
+    /// shown in the frame of the press: `poll`, which shows what a later page finds, runs
+    /// before a frame's input, and no frame might follow for a second or more (#14).
+    pub fn jump_to(&mut self, message_id: &str, tx: &mut Tx) {
         self.session.reveal(message_id);
+        self.show_found(tx);
     }
 
     /// Whether the message is the one a jump just reached.
