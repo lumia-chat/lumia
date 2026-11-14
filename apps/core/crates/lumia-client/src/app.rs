@@ -2801,8 +2801,10 @@ impl App {
     /// Keeps `items` as this account's rail (`PUT /account/rail`,
     /// architecture 6.9): the whole of it, the latest write winning; its
     /// other devices hear of it through the account log. Make `items` with
-    /// the edits in [`crate::rail`]. Returns the account's snapshot as it
-    /// then is, its rail as the instance kept it.
+    /// the edits in [`crate::rail`]. Returns the account's snapshot with its
+    /// rail as the instance kept it: the last snapshot read, the instance's
+    /// answer standing in for a read of its own, since the `RailArranged`
+    /// this write raises has every client read the snapshot again anyway.
     ///
     /// # Errors
     /// `INVALID_ARGUMENT` with `details.field` (`name`, `tone`, `folder_id`,
@@ -2828,8 +2830,25 @@ impl App {
             }
             kept
         };
-        kept?;
-        self.snapshot().await
+        let kept = kept?;
+        let Some(mut summary) = self.kept::<SnapshotSummary>(KEPT_SNAPSHOT).ok().flatten() else {
+            return self.snapshot().await;
+        };
+        summary.rail = crate::rail::from_proto(&kept);
+        {
+            let inner = self.lock();
+            let rails = &inner.rails;
+            // A later one on its way is newer than this answer ([`RailSends`]).
+            if let Some(latest) = &rails.latest {
+                if rails.sent > rails.answered {
+                    summary.rail = latest.clone();
+                }
+            }
+            summary.read_states = inner.reads.summaries();
+        }
+        let summary = summary.arranged();
+        self.keep(KEPT_SNAPSHOT, &summary);
+        Ok(summary)
     }
 
     /// Whether a server's deleted messages keep their place as "(deleted)"
