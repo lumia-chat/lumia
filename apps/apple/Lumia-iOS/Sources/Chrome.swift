@@ -149,10 +149,11 @@ struct SideHeader: View {
 
     var body: some View {
         HStack(spacing: LumiaTokens.space4) {
-            VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 1) {
                 Text(title).font(LumiaTokens.titleServer.font).foregroundStyle(LumiaTokens.ink.color).lineLimit(1)
                 if let meta { Text(meta).font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkSecondary.color).lineLimit(1) }
             }
+            .frame(minHeight: LumiaTokens.tileSize)
             Spacer(minLength: 0)
             if let action {
                 Button(action: action.run) {
@@ -164,9 +165,12 @@ struct SideHeader: View {
                 .accessibilityLabel(action.label)
             }
         }
-        .padding(.leading, LumiaTokens.space16)
+        // The phone boards' header: 4 over it and 8 under it, its words 20 in (its row's 12 and
+        // the title's own 8), so what follows does not touch the address under the name.
+        .padding(.leading, LumiaTokens.space12 + LumiaTokens.space8)
         .padding(.trailing, LumiaTokens.space6)
-        .padding(.vertical, LumiaTokens.space4)
+        .padding(.top, LumiaTokens.space4)
+        .padding(.bottom, LumiaTokens.space8)
     }
 }
 

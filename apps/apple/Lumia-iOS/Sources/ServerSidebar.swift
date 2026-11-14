@@ -62,20 +62,24 @@ struct ServerScreen: View {
                             .buttonStyle(.lumiaLink)
                             .padding(.horizontal, LumiaTokens.space10)
                     }
-                    ForEach(channels, id: \.channelId) { c in
-                        let unread = session.unread(c.channelId)
-                        SidebarRow(label: c.name, unread: unread, open: { path.append(.channel(id: c.channelId)) }) {
-                            ChannelGlyph(isPrivate: c.private, unread: unread.unread > 0)
-                        }
+                    ForEach(channels.filter { !$0.private }, id: \.channelId) { c in channelRow(c) }
+                    // The boards' Private, between Channels and Direct messages, only when there
+                    // are any; no plus, since Create a channel makes one private. Sections stand
+                    // 12 apart, as the boards have them.
+                    let privates = channels.filter(\.private)
+                    if !privates.isEmpty {
+                        HeadingWithAdd(title: "Private")
+                            .padding(.top, LumiaTokens.space12)
+                        ForEach(privates, id: \.channelId) { c in channelRow(c) }
                     }
                     // The server's own conversations, kept by it (architecture 6.4).
                     HeadingWithAdd(title: "Direct messages", single: server.canStartDms ? ("Message someone", { path.append(.newServerDM(serverID: server.serverId)) }) : nil)
-                        .padding(.top, LumiaTokens.space8)
+                        .padding(.top, LumiaTokens.space12)
                     ForEach(dms, id: \.channelId) { c in
                         let other = Membership.other(in: c, me: session.me)
                         let name = session.name(of: other)
                         SidebarRow(label: name, unread: session.unread(c.channelId), open: { path.append(.channel(id: c.channelId)) }) {
-                            LumiaAvatar(initials: initials(of: name), tone: .of(other), size: LumiaTokens.avatarXs)
+                            LumiaAvatar(initials: initials(of: name), tone: .of(other), size: LumiaTokens.avatarSm)
                                 .accessibilityHidden(true)
                         }
                     }
@@ -100,6 +104,13 @@ struct ServerScreen: View {
             Text(session.connection.label)
                 .font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkQuiet.color)
                 .padding(.horizontal, LumiaTokens.space16).padding(.vertical, LumiaTokens.space6)
+        }
+    }
+
+    private func channelRow(_ c: ChannelSummary) -> some View {
+        let unread = session.unread(c.channelId)
+        return SidebarRow(label: c.name, unread: unread, open: { path.append(.channel(id: c.channelId)) }) {
+            ChannelGlyph(isPrivate: c.private, unread: unread.unread > 0)
         }
     }
 
@@ -151,11 +162,13 @@ struct HeadingWithAdd<Items: View>: View {
         }
     }
 
+    // No taller than the heading's words (the boards' headings have no control to make them
+    // taller), its target reaching a finger's 44 beyond what it draws.
     private var plus: some View {
         Image(systemName: "plus").font(.system(size: 14, weight: .semibold))
             .foregroundStyle(LumiaTokens.inkMuted.color)
-            .frame(width: LumiaTokens.controlHeight, height: LumiaTokens.controlHeight)
-            .contentShape(Rectangle())
+            .frame(width: LumiaTokens.tileSize, height: LumiaTokens.space24)
+            .contentShape(Rectangle().inset(by: -LumiaTokens.space10))
     }
 }
 
@@ -187,7 +200,7 @@ struct SidebarRow<Glyph: View>: View {
 
     var body: some View {
         Button(action: open) {
-            HStack(spacing: LumiaTokens.space8) {
+            HStack(spacing: LumiaTokens.space10) {
                 glyph()
                 Text(label).font(LumiaTokens.textNav.font)
                     .fontWeight(unread.unread > 0 ? .semibold : nil)
@@ -196,7 +209,8 @@ struct SidebarRow<Glyph: View>: View {
                 if unread.mentions > 0 { LumiaCountBadge(unread.mentions) }
             }
             .padding(.horizontal, LumiaTokens.space10)
-            .frame(height: LumiaTokens.controlHeight)
+            // The phone boards' rows: 44 high.
+            .frame(height: LumiaTokens.tileSize)
             .contentShape(RoundedRectangle(cornerRadius: LumiaTokens.radius10))
         }
         .buttonStyle(.plain)
