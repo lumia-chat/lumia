@@ -537,6 +537,25 @@ impl Api {
         Ok(bytes.to_vec())
     }
 
+    /// `PUT /account/rail`: the caller's rail, whole; answers it as kept.
+    ///
+    /// # Errors
+    /// `INVALID_ARGUMENT` with `details.field`; transport failure.
+    pub async fn put_rail(
+        &self,
+        rail: lumia_core::proto::Rail,
+    ) -> Result<lumia_core::proto::Rail, ClientError> {
+        let (status, bytes) = self
+            .send(
+                reqwest::Method::PUT,
+                "/api/v1/account/rail",
+                Some(rail.encode_to_vec()),
+                None,
+            )
+            .await?;
+        decoded(status, &bytes)
+    }
+
     /// `PUT /account/profile`: a new signed profile for the caller's account.
     ///
     /// # Errors

@@ -22,6 +22,7 @@ pub mod gateway;
 pub mod identity;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod keystore;
+pub mod rail;
 pub mod sqlite;
 pub mod time;
 pub mod transport;

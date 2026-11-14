@@ -905,6 +905,89 @@ impl Client {
             .map_err(js)
     }
 
+    /// Keeps `items` (`[{kind: "server", serverId} | {kind: "folder", folderId, name, tone,
+    /// serverIds}]`) as this account's rail, whole (architecture 6.9). Returns the snapshot.
+    ///
+    /// # Errors
+    /// When `items` is not a rail; `INVALID_ARGUMENT` with its field; transport failure.
+    #[wasm_bindgen(js_name = arrangeRail)]
+    pub async fn arrange_rail(&self, items: JsValue) -> Result<JsValue, JsError> {
+        let items: Vec<lumia_client::rail::RailItem> = from_js(items)?.unwrap_or_default();
+        to_js(&self.app.arrange_rail(&items).await.map_err(js_api)?)
+    }
+
+    /// Applies one rail edit (architecture 6.9) and answers the rail as it then is: `op` is
+    /// `moveTo` (`id`, `folder`, `before`), `merge` (`dragged`, `onto`, `folderId`),
+    /// `intoFolder` (`serverId`, `folder`), `outOfFolder` (`serverId`), `newFolder`
+    /// (`serverId`, `folderId`), `deleteFolder` (`folder`), `setFolder` (`folder`, `name`,
+    /// `tone`) or `step` (`id`, `by`). A new folder's id comes from `railNewFolderId`.
+    ///
+    /// # Errors
+    /// When `items` is not a rail or `op` is not one of these.
+    #[wasm_bindgen(js_name = railEdit)]
+    pub fn rail_edit(&self, items: JsValue, op: String, args: JsValue) -> Result<JsValue, JsError> {
+        use lumia_client::rail as r;
+        #[derive(serde::Deserialize, Default)]
+        #[serde(rename_all = "camelCase", default)]
+        struct Args {
+            id: String,
+            folder: Option<String>,
+            before: Option<String>,
+            dragged: String,
+            onto: String,
+            folder_id: String,
+            server_id: String,
+            name: String,
+            tone: String,
+            by: i32,
+        }
+        let items: Vec<r::RailItem> = from_js(items)?.unwrap_or_default();
+        let a: Args = from_js(args)?.unwrap_or_default();
+        let next = match op.as_str() {
+            "moveTo" => r::move_to(&items, &a.id, a.folder.as_deref(), a.before.as_deref()),
+            "merge" => r::merge(&items, &a.dragged, &a.onto, &a.folder_id),
+            "intoFolder" => r::into_folder(
+                &items,
+                &a.server_id,
+                a.folder.as_deref().unwrap_or_default(),
+            ),
+            "outOfFolder" => r::out_of_folder(&items, &a.server_id),
+            "newFolder" => r::new_folder(&items, &a.server_id, &a.folder_id),
+            "deleteFolder" => r::delete_folder(&items, a.folder.as_deref().unwrap_or_default()),
+            "setFolder" => r::set_folder(
+                &items,
+                a.folder.as_deref().unwrap_or_default(),
+                &a.name,
+                &a.tone,
+            ),
+            "step" => r::step(&items, &a.id, a.by),
+            other => return Err(JsError::new(&format!("not a rail edit: {other}"))),
+        };
+        to_js(&next)
+    }
+
+    /// A new folder's id (UUIDv7).
+    #[wasm_bindgen(js_name = railNewFolderId)]
+    pub fn rail_new_folder_id(&self) -> String {
+        lumia_core::wire::display(&lumia_core::wire::new_id())
+    }
+
+    /// The tone an id is drawn in, as every shell hashes it.
+    #[wasm_bindgen(js_name = railToneOf)]
+    pub fn rail_tone_of(&self, id: String) -> String {
+        lumia_client::rail::tone_of(&id)
+    }
+
+    /// How a folder with no name reads: "Acme, Lumia and 2 more".
+    ///
+    /// # Errors
+    /// When `names` is not a list of strings.
+    #[wasm_bindgen(js_name = railFolderWords)]
+    pub fn rail_folder_words(&self, names: JsValue) -> Result<String, JsError> {
+        let names: Vec<String> = from_js(names)?.unwrap_or_default();
+        Ok(lumia_client::rail::folder_words(&names))
+    }
+
     /// The mentions `body` makes of `members` (`MemberSummary` objects),
     /// and of everyone when `everyone`: `[{accountId, everyone, start,
     /// end}]`, UTF-8 byte ranges.

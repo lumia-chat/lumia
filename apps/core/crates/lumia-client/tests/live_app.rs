@@ -23,11 +23,17 @@ fn instance() -> Option<String> {
     base
 }
 
+/// A number no other call in this run shares: the clock here counts in microseconds, so two
+/// tests starting together read the same "nanoseconds" and made the same handle.
 fn stamp() -> u128 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
-        .as_nanos()
+        .as_micros()
+        * 1000
+        + u128::from(n % 1000)
 }
 
 /// A device: its stores in a directory of its own, as a shell keeps them.
@@ -917,4 +923,88 @@ async fn an_author_edits_and_a_moderator_deletes() {
             .any(|m| m.message_id == id && m.deleted),
         "the deleted message keeps its place where the server shows them"
     );
+}
+
+/// The rail as the account arranges it (architecture 6.9): kept by the instance, tidied, in
+/// the snapshot with its servers in order, and told through the account log.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_rail_is_arranged_kept_and_told() {
+    use lumia_client::rail::{self, RailItem};
+
+    let Some(base) = instance() else { return };
+    let device = Device::new(&base);
+    device
+        .app
+        .create_account(&format!("rail{}", stamp()), PASSWORD, None)
+        .await
+        .unwrap();
+    let a = device.app.create_server("A").await.unwrap().server_id;
+    let b = device.app.create_server("B").await.unwrap().server_id;
+    let c = device.app.create_server("C").await.unwrap().server_id;
+
+    // Nothing arranged: the order they were joined in.
+    let first = device.app.snapshot().await.unwrap();
+    assert_eq!(
+        rail::server_order(&first.rail),
+        vec![a.clone(), b.clone(), c.clone()]
+    );
+
+    let started = device.seen();
+    device.start(&[]).unwrap();
+    device
+        .wait_for(started, Duration::from_secs(10), welcomed)
+        .await
+        .expect("welcomed");
+
+    // C onto A makes a folder; B goes first.
+    let folder = lumia_core::wire::display(&lumia_core::wire::new_id());
+    let merged = rail::merge(&first.rail, &c, &a, &folder);
+    let arranged = rail::move_to(&merged, &b, None, Some(&folder));
+    let named = rail::set_folder(&arranged, &folder, "Work", "sky");
+    let told = device.seen();
+    let kept = device.app.arrange_rail(&named).await.unwrap();
+    assert_eq!(
+        kept.rail,
+        vec![
+            RailItem::Server {
+                server_id: b.clone()
+            },
+            RailItem::Folder {
+                folder_id: folder.clone(),
+                name: "Work".into(),
+                tone: "sky".into(),
+                server_ids: vec![a.clone(), c.clone()],
+            },
+        ]
+    );
+    let order: Vec<String> = kept.servers.iter().map(|s| s.server_id.clone()).collect();
+    assert_eq!(
+        order,
+        vec![b, a, c],
+        "the snapshot's servers follow the rail"
+    );
+    device
+        .wait_for(told, Duration::from_secs(10), account_applied)
+        .await
+        .expect("the arrangement is told through the account log");
+
+    // What the instance refuses comes back as its field.
+    let bad = rail::set_folder(&kept.rail, &folder, "Work", "sky")
+        .into_iter()
+        .map(|item| match item {
+            RailItem::Folder {
+                folder_id,
+                name,
+                server_ids,
+                ..
+            } => RailItem::Folder {
+                folder_id,
+                name,
+                tone: "red".into(),
+                server_ids,
+            },
+            other => other,
+        })
+        .collect::<Vec<_>>();
+    assert!(device.app.arrange_rail(&bad).await.is_err());
 }

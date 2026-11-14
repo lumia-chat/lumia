@@ -468,6 +468,26 @@ pub struct SnapshotSummary {
     /// counted it; [`App::read_states`] keeps it current.
     #[serde(default)]
     pub read_states: Vec<ReadStateSummary>,
+    /// The rail as this account arranged it, ready to draw: every server of
+    /// `servers` placed once, which are in its order (architecture 6.9).
+    #[serde(default)]
+    pub rail: Vec<crate::rail::RailItem>,
+}
+
+impl SnapshotSummary {
+    /// The rail tidied against the servers held, and the servers put in its order.
+    fn arranged(mut self) -> Self {
+        let ids: Vec<String> = self.servers.iter().map(|s| s.server_id.clone()).collect();
+        self.rail = crate::rail::tidy(&self.rail, &ids);
+        let order = crate::rail::server_order(&self.rail);
+        self.servers.sort_by_key(|s| {
+            order
+                .iter()
+                .position(|id| *id == s.server_id)
+                .unwrap_or(usize::MAX)
+        });
+        self
+    }
 }
 
 /// A person: a member of a server, or a public profile.
@@ -2145,7 +2165,13 @@ impl App {
                 })
                 .collect(),
             read_states: Vec::new(),
-        };
+            rail: snap
+                .rail
+                .as_ref()
+                .map(crate::rail::from_proto)
+                .unwrap_or_default(),
+        }
+        .arranged();
         let mut summary = summary;
         {
             let mut inner = self.lock();
@@ -2223,7 +2249,10 @@ impl App {
     /// # Errors
     /// On a store failure.
     pub fn kept_snapshot(&self) -> Result<Option<SnapshotSummary>, ClientError> {
-        let kept: Option<SnapshotSummary> = self.kept(KEPT_SNAPSHOT)?;
+        // One kept before arrangements reads as its servers in their order.
+        let kept: Option<SnapshotSummary> = self
+            .kept::<SnapshotSummary>(KEPT_SNAPSHOT)?
+            .map(SnapshotSummary::arranged);
         if let Some(snapshot) = &kept {
             self.note_shows_deleted(snapshot);
         }
@@ -2731,6 +2760,23 @@ impl App {
                 retention_days,
             )
             .await?;
+        self.snapshot().await
+    }
+
+    /// Keeps `items` as this account's rail (`PUT /account/rail`,
+    /// architecture 6.9): the whole of it, the latest write winning; its
+    /// other devices hear of it through the account log. Make `items` with
+    /// the edits in [`crate::rail`]. Returns the account's snapshot as it
+    /// then is, its rail as the instance kept it.
+    ///
+    /// # Errors
+    /// `INVALID_ARGUMENT` with `details.field` (`name`, `tone`, `folder_id`,
+    /// `folders`); transport failure.
+    pub async fn arrange_rail(
+        &self,
+        items: &[crate::rail::RailItem],
+    ) -> Result<SnapshotSummary, ClientError> {
+        self.api.put_rail(crate::rail::to_proto(items)).await?;
         self.snapshot().await
     }
 
@@ -4243,6 +4289,7 @@ mod kept_tests {
             pending_requests: Vec::new(),
             channel_invitations: Vec::new(),
             read_states: Vec::new(),
+            rail: Vec::new(),
         }
     }
 

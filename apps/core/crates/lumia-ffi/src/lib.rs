@@ -332,6 +332,74 @@ pub struct SnapshotSummary {
     pub channel_invitations: Vec<ChannelInvitationSummary>,
     /// Where this account has read each conversation (architecture 6.6).
     pub read_states: Vec<ReadStateSummary>,
+    /// The rail as this account arranged it, ready to draw: every server
+    /// placed once, `servers` in its order (architecture 6.9).
+    pub rail: Vec<RailItem>,
+}
+
+/// One tile of the rail between Home and +: a server, or a folder of servers
+/// (architecture 6.9). Edit a rail with `Client`'s `rail…` calls and keep it
+/// with `arrangeRail`.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum RailItem {
+    Server {
+        server_id: String,
+    },
+    Folder {
+        folder_id: String,
+        /// Empty for none: it reads as its servers (`railFolderWords`).
+        name: String,
+        /// One of the nine avatar tones.
+        tone: String,
+        server_ids: Vec<String>,
+    },
+}
+
+impl From<lumia_client::rail::RailItem> for RailItem {
+    fn from(item: lumia_client::rail::RailItem) -> Self {
+        use lumia_client::rail::RailItem as R;
+        match item {
+            R::Server { server_id } => Self::Server { server_id },
+            R::Folder {
+                folder_id,
+                name,
+                tone,
+                server_ids,
+            } => Self::Folder {
+                folder_id,
+                name,
+                tone,
+                server_ids,
+            },
+        }
+    }
+}
+
+impl From<RailItem> for lumia_client::rail::RailItem {
+    fn from(item: RailItem) -> Self {
+        match item {
+            RailItem::Server { server_id } => Self::Server { server_id },
+            RailItem::Folder {
+                folder_id,
+                name,
+                tone,
+                server_ids,
+            } => Self::Folder {
+                folder_id,
+                name,
+                tone,
+                server_ids,
+            },
+        }
+    }
+}
+
+fn rail_in(items: Vec<RailItem>) -> Vec<lumia_client::rail::RailItem> {
+    items.into_iter().map(Into::into).collect()
+}
+
+fn rail_out(items: Vec<lumia_client::rail::RailItem>) -> Vec<RailItem> {
+    items.into_iter().map(Into::into).collect()
 }
 
 impl From<app::SnapshotSummary> for SnapshotSummary {
@@ -346,6 +414,7 @@ impl From<app::SnapshotSummary> for SnapshotSummary {
             pending_requests: s.pending_requests.into_iter().map(Into::into).collect(),
             channel_invitations: s.channel_invitations.into_iter().map(Into::into).collect(),
             read_states: s.read_states.into_iter().map(Into::into).collect(),
+            rail: rail_out(s.rail),
         }
     }
 }
@@ -1601,6 +1670,136 @@ impl Client {
         Ok(self
             .app
             .send_message_with(&channel_id, &body, &mentions, reply_to.as_ref())?)
+    }
+
+    /// Keeps `items` as this account's rail, whole (architecture 6.9).
+    /// Returns the snapshot as it then is.
+    pub fn arrange_rail(&self, items: Vec<RailItem>) -> Res<SnapshotSummary> {
+        Ok(self
+            .runtime
+            .block_on(self.app.arrange_rail(&rail_in(items)))?
+            .into())
+    }
+
+    /// A new folder's id (UUIDv7).
+    pub fn rail_new_folder_id(&self) -> String {
+        lumia_core::wire::display(&lumia_core::wire::new_id())
+    }
+
+    /// A server or folder moved: into `folder` before `before` (or at its
+    /// end), or onto the rail before `before` (or at its end).
+    pub fn rail_move_to(
+        &self,
+        items: Vec<RailItem>,
+        id: String,
+        folder: Option<String>,
+        before: Option<String>,
+    ) -> Vec<RailItem> {
+        rail_out(lumia_client::rail::move_to(
+            &rail_in(items),
+            &id,
+            folder.as_deref(),
+            before.as_deref(),
+        ))
+    }
+
+    /// `dragged` dropped onto `onto`: a new folder of the two, or into
+    /// `onto`'s folder.
+    pub fn rail_merge(
+        &self,
+        items: Vec<RailItem>,
+        dragged: String,
+        onto: String,
+        folder_id: String,
+    ) -> Vec<RailItem> {
+        rail_out(lumia_client::rail::merge(
+            &rail_in(items),
+            &dragged,
+            &onto,
+            &folder_id,
+        ))
+    }
+
+    /// A server put at the end of a folder.
+    pub fn rail_into_folder(
+        &self,
+        items: Vec<RailItem>,
+        server_id: String,
+        folder: String,
+    ) -> Vec<RailItem> {
+        rail_out(lumia_client::rail::into_folder(
+            &rail_in(items),
+            &server_id,
+            &folder,
+        ))
+    }
+
+    /// A server taken out of its folder, to just after it.
+    pub fn rail_out_of_folder(&self, items: Vec<RailItem>, server_id: String) -> Vec<RailItem> {
+        rail_out(lumia_client::rail::out_of_folder(
+            &rail_in(items),
+            &server_id,
+        ))
+    }
+
+    /// A server in a folder of its own where it is ("New folder").
+    pub fn rail_new_folder(
+        &self,
+        items: Vec<RailItem>,
+        server_id: String,
+        folder_id: String,
+    ) -> Vec<RailItem> {
+        rail_out(lumia_client::rail::new_folder(
+            &rail_in(items),
+            &server_id,
+            &folder_id,
+        ))
+    }
+
+    /// A folder taken away, its servers left in its place.
+    pub fn rail_delete_folder(&self, items: Vec<RailItem>, folder: String) -> Vec<RailItem> {
+        rail_out(lumia_client::rail::delete_folder(&rail_in(items), &folder))
+    }
+
+    /// A folder's name and tone, from Folder settings.
+    pub fn rail_set_folder(
+        &self,
+        items: Vec<RailItem>,
+        folder: String,
+        name: String,
+        tone: String,
+    ) -> Vec<RailItem> {
+        rail_out(lumia_client::rail::set_folder(
+            &rail_in(items),
+            &folder,
+            &name,
+            &tone,
+        ))
+    }
+
+    /// Move up (`by` -1) or down (+1) where it is.
+    pub fn rail_step(&self, items: Vec<RailItem>, id: String, by: i32) -> Vec<RailItem> {
+        rail_out(lumia_client::rail::step(&rail_in(items), &id, by))
+    }
+
+    /// Where a tile stands, 1-based: on the rail, or in its folder.
+    pub fn rail_position_of(&self, items: Vec<RailItem>, id: String) -> Option<u32> {
+        lumia_client::rail::position_of(&rail_in(items), &id).and_then(|p| u32::try_from(p).ok())
+    }
+
+    /// The folder a server is in, if any.
+    pub fn rail_folder_of(&self, items: Vec<RailItem>, server_id: String) -> Option<String> {
+        lumia_client::rail::folder_of(&rail_in(items), &server_id)
+    }
+
+    /// The tone an id is drawn in (one of the nine), as every shell hashes it.
+    pub fn rail_tone_of(&self, id: String) -> String {
+        lumia_client::rail::tone_of(&id)
+    }
+
+    /// How a folder with no name reads: "Acme, Lumia and 2 more".
+    pub fn rail_folder_words(&self, names: Vec<String>) -> String {
+        lumia_client::rail::folder_words(&names)
     }
 
     /// The mentions `body` makes of `members`, and of everyone when

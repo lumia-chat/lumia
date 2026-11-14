@@ -379,6 +379,7 @@ pub(crate) fn servers_sample(state: &mut State) {
         pending_requests: Vec::new(),
         channel_invitations: Vec::new(),
         read_states: Vec::new(),
+        rail: Vec::new(),
     })));
     state.receive(&Update::Members {
         server_id: "acme".into(),
@@ -729,6 +730,7 @@ mod staged {
             ],
             channel_invitations: Vec::new(),
             read_states: Vec::new(),
+            rail: Vec::new(),
         }
     }
 
@@ -1018,6 +1020,7 @@ pub fn bodies(state: &mut State) {
         pending_requests: Vec::new(),
         channel_invitations: Vec::new(),
         read_states: Vec::new(),
+        rail: Vec::new(),
     })));
     let member = |id: &str, name: &str| MemberSummary {
         account_id: id.into(),
