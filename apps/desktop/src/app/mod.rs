@@ -25,7 +25,8 @@ pub mod sign_in;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use rune::{TextEdit, Tx, Waker};
+use lumia_client::body::Room;
+use rune::{LiveRegion, TextEdit, Tx, Waker};
 
 use crate::session::{Session, Update};
 use crate::settings::{self, Settings};
@@ -124,6 +125,8 @@ pub struct State {
     pub draft: TextEdit,
     /// What the draft held when [`State::tick`] last looked: a change since is typing.
     draft_seen: String,
+    /// The draft is over the limit on a message, as a screen reader was last told.
+    draft_over: bool,
     /// The moment the window has asked to be woken at, to stop showing someone typing.
     typing_wake: Option<i64>,
     pub home: home::Home,
@@ -176,6 +179,7 @@ impl State {
             member_filter: TextEdit::new(""),
             draft: TextEdit::new(""),
             draft_seen: String::new(),
+            draft_over: false,
             typing_wake: None,
             home: home::Home::default(),
             server_forms: server::ServerForms::default(),
@@ -377,9 +381,13 @@ impl State {
         }
     }
 
-    /// Sends the draft to the open conversation.
+    /// Sends the draft to the open conversation. Over the limit on a message it does
+    /// nothing: the counter under the composer says why, and the draft stays.
     pub fn send(&mut self, tx: &mut Tx) {
-        if self.draft.is_composing() || self.draft.text.trim().is_empty() {
+        if self.draft.is_composing()
+            || self.draft.text.trim().is_empty()
+            || self.session.room(&self.draft.text).over()
+        {
             return;
         }
         let reply = self.replies.replying.clone();
@@ -397,6 +405,17 @@ impl State {
         }
     }
 
+    /// After the draft changes: the @ list follows the caret, and a screen reader is told
+    /// when the draft goes over the limit on a message, once, not at every key after.
+    pub fn draft_changed(&mut self, tx: &mut Tx) {
+        self.follow_mention();
+        let room = self.session.room(&self.draft.text);
+        if room.over() && !self.draft_over {
+            tx.announce(room_words(room), LiveRegion::Polite);
+        }
+        self.draft_over = room.over();
+    }
+
     /// What the passing of time does, apart from anything the session reports: says this
     /// person is typing when the draft has changed since the last look (the composer has
     /// no hook of its own for an edit), and stops showing those whose typing has run out
@@ -404,6 +423,8 @@ impl State {
     pub fn tick(&mut self, now_micros: i64) -> bool {
         if self.draft.text != self.draft_seen {
             self.draft_seen.clone_from(&self.draft.text);
+            // Emptied by a send or another conversation, which the field does not report.
+            self.draft_over &= self.session.room(&self.draft.text).over();
             // Emptied is not typing: a send, or another channel.
             if !self.draft.text.trim().is_empty() {
                 self.session.typed();
@@ -581,6 +602,26 @@ pub fn init() -> State {
     state
 }
 
+/// What the counter under a field says of the room its words have (`Session::room`), as the
+/// other clients say it: "1,204 characters left", or "3 characters too long".
+pub fn room_words(room: Room) -> String {
+    let n = room.left.unsigned_abs();
+    let digits = n.to_string();
+    let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, digit) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            grouped.push(',');
+        }
+        grouped.push(digit);
+    }
+    let unit = if n == 1 { "character" } else { "characters" };
+    if room.over() {
+        format!("{grouped} {unit} too long")
+    } else {
+        format!("{grouped} {unit} left")
+    }
+}
+
 /// `AppSpec::setup`: the session's runtime threads wake the window through `waker`.
 pub fn setup(state: &mut State, waker: Waker) {
     state.session.set_wake(Arc::clone(&waker));
@@ -604,6 +645,7 @@ pub fn poll(state: &mut State, now: f64, tx: &mut Tx) -> bool {
     state.land(tx);
     let found = state.show_found(tx);
     if state.replies.flash.is_some()
+        || state.replies.copied.is_some()
         || state
             .replies
             .outside

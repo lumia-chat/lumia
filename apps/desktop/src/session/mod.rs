@@ -36,6 +36,7 @@ use lumia_client::app::{
     MessageSummary, Opener, Place, QuoteSummary, ReactionSummary, ServerSummary, SnapshotSummary,
     StoreName,
 };
+use lumia_client::body;
 use lumia_client::sqlite::SqliteStore;
 
 /// How many messages a page of a conversation is: what is read from the local store when it
@@ -325,6 +326,9 @@ pub struct Session {
     pub pending: Vec<Pending>,
     /// Bumped whenever `entries` or `pending` change, for a list that caches rows.
     pub revision: u64,
+    /// The messages of the open conversation shown whole though they are long enough to be
+    /// folded ("Show more"), by id: forgotten when another conversation opens.
+    pub unfolded: HashSet<String>,
     /// The pictures of the people on screen, as bytes ([`avatars`]).
     pub avatars: avatars::Avatars,
     /// A public channel this account is not in, open to read before joining (architecture
@@ -399,6 +403,7 @@ impl Session {
             entries: Vec::new(),
             pending: Vec::new(),
             revision: 0,
+            unfolded: HashSet::new(),
             avatars: avatars::Avatars::default(),
             previewing: None,
             channel_members: HashMap::new(),
@@ -751,6 +756,7 @@ impl Session {
         self.note_new_since(&conversation);
         self.conversation = Some(conversation);
         self.entries.clear();
+        self.unfolded.clear();
         self.reach = Reach {
             window: MESSAGE_PAGE,
             ..Reach::default()
@@ -813,6 +819,7 @@ impl Session {
     pub fn close_conversation(&mut self) {
         if self.conversation.take().is_some() {
             self.entries.clear();
+            self.unfolded.clear();
             self.reach = Reach::default();
             self.revision += 1;
         }
@@ -824,6 +831,17 @@ impl Session {
             Some(Conversation::Channel(id)) => Some(id),
             _ => None,
         }
+    }
+
+    /// How much room `draft` has under the instance's limit on a message (protocol 14), as
+    /// the core counts it: in characters, of the words a send would take (trimmed), against
+    /// what the instance's welcome said, or the protocol's limit before one has.
+    pub fn room(&self, draft: &str) -> body::Room {
+        let max = self
+            .app
+            .as_ref()
+            .map_or(body::MAX_MESSAGE_BYTES, |app| app.max_message_bytes());
+        body::room(draft.trim(), max)
     }
 
     /// Sends a message to the open conversation; it shows as pending until the store holds

@@ -263,6 +263,7 @@ pub const SCENES: &[Scene] = &[
     ("home-requests", home_requests),
     ("home-new-message", home_new_message),
     ("bodies", bodies),
+    ("long-messages", long_messages),
     ("blocks", blocks),
     // Quote replies, reactions, mentions and read state (architecture 6.6).
     ("replies", replies::replies),
@@ -913,6 +914,59 @@ pub const BODIES: &[&str] = &[
      and/going/until/it/is/wider/than/the/conversation/and/has/to/break/somewhere/in/the/middle\n\n\
      ```\nlet line = \"and a line of code that is longer than the block is wide, which wraps rather than running out of its frame\";\n```",
 ];
+
+/// The `long-messages` scene: the channel of [`bodies`] holding long messages (one folded,
+/// one that mentions this account folded into its wash, one opened with "Show more"), a code
+/// block wider than the conversation, and a draft over the limit on a message in the
+/// composer. `--snap out.png --scene long-messages --size 1180x1900`.
+pub fn long_messages(state: &mut State) {
+    bodies(state);
+    let lines = |n: usize, what: &str| {
+        (1..=n)
+            .map(|i| format!("{what}, line {i} of {n}."))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let said = [
+        ("grace", lines(30, "A long paste of release notes")),
+        (
+            "grace",
+            format!(
+                "@Ada Lovelace the build log, so you can see where it stops:\n\n{}",
+                lines(20, "A log")
+            ),
+        ),
+        ("grace", lines(18, "Opened with Show more")),
+        (
+            "me",
+            "And the line that fails, which is wider than the conversation:\n\n```rust\n\
+             let message = format!(\"{}: the loader could not relocate {} because the segment at {:#x} overlaps {}\", path, symbol, address, other);\n\
+             assert!(message.len() < 120);\n```"
+                .into(),
+        ),
+    ];
+    let template = state.session.entries[0].clone();
+    let now = chrono::Utc::now().timestamp_micros();
+    state.session.entries = said
+        .into_iter()
+        .enumerate()
+        .map(|(i, (author, body))| crate::session::Entry {
+            id: format!("l{i}"),
+            seq: i as u64,
+            author_account_id: author.into(),
+            body,
+            at_micros: now - (10 - i as i64) * 60_000_000,
+            ..template.clone()
+        })
+        .collect();
+    state.session.entries[1].mentions_me = true;
+    state.session.unfolded.insert("l2".into());
+    state.session.revision += 1;
+    let max = lumia_client::body::MAX_MESSAGE_BYTES as usize;
+    let mut draft = "A paste too long to send. ".repeat(max / 26 + 2);
+    draft.truncate(max + 41);
+    state.draft.replace_text(&draft);
+}
 
 /// The `blocks` scene: a channel where people send several messages close together, with no
 /// instance behind it. What one person sends within minutes is one block under one name; a

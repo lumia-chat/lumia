@@ -239,11 +239,19 @@ fn every_construct_of_the_subset_draws_its_text() {
         Some("A paragraph with emphasis, strong, strike and inline code.")
     );
 
+    // A code block is its text, and the button that copies it.
     assert_eq!(
         texts(&rt, "message-m1/body"),
-        ["fn main() {\n    println!(\"hi\");\n}"]
+        ["fn main() {\n    println!(\"hi\");\n}", "Copy"]
     );
-    assert_eq!(roles(&rt, "message-m1/body"), ["code", "text"]);
+    assert_eq!(
+        roles(&rt, "message-m1/body"),
+        ["code", "group", "group", "text", "group", "button", "text"]
+    );
+    assert_eq!(
+        element(&rt, "message-m1/body/b0/copy").label.as_deref(),
+        Some("Copy code")
+    );
 
     assert_eq!(
         texts(&rt, "message-m2/body"),
@@ -339,20 +347,223 @@ fn every_script_reaches_the_screen_as_it_was_sent() {
 #[test]
 fn a_word_wider_than_the_row_breaks_inside_itself() {
     let long = format!("https://example.com/{}", "long/".repeat(60));
-    let rt = conversation(&[&long, &format!("```\n{}\n```", "x".repeat(400))]);
-    for body in ["message-m0/body/b0", "message-m1/body/b0/code"] {
-        let text = element(&rt, body);
-        let row = element(&rt, &body[.."message-m0".len()]);
-        assert!(
-            text.rect[3] > 60.0,
-            "{body} takes several lines: {:?}",
-            text.rect
-        );
-        let right = glyphs(&rt, body).iter().map(|g| g.0).fold(0.0, f32::max);
-        assert!(
-            right < row.rect[0] + row.rect[2],
-            "{body} stays inside its row"
-        );
+    let rt = conversation(&[&long]);
+    let body = "message-m0/body/b0";
+    let text = element(&rt, body);
+    let row = element(&rt, "message-m0");
+    assert!(
+        text.rect[3] > 60.0,
+        "{body} takes several lines: {:?}",
+        text.rect
+    );
+    let right = glyphs(&rt, body).iter().map(|g| g.0).fold(0.0, f32::max);
+    assert!(
+        right < row.rect[0] + row.rect[2],
+        "{body} stays inside its row"
+    );
+}
+
+/// A code block's long line stays one line, and the block scrolls sideways to show the rest
+/// of it, its text still the conversation's to select.
+#[test]
+fn a_code_blocks_long_line_does_not_wrap_and_scrolls_sideways() {
+    let line = format!("let wide = \"{}\";", "x".repeat(400));
+    let mut rt = conversation(&[&format!("```rust\n{line}\nfn next() {{}}\n```"), "After."]);
+    let code = "message-m0/body/b0/scroll/code";
+    let block = element(&rt, "message-m0/body/b0").rect;
+    let text = element(&rt, code).rect;
+    // Two lines, as typed: as tall as two of them and far wider than the block.
+    let lines = glyphs(&rt, code);
+    let starts = lines.windows(2).filter(|w| w[1].1 - w[0].1 > 8.0).count();
+    assert_eq!(starts, 1, "the long line is one line");
+    assert!(text[2] > block[2] * 2.0, "{text:?} in {block:?}");
+    // What is past the block's edge is not drawn over the row beside it.
+    let row = element(&rt, "message-m0").rect;
+    let drawn_right = lines.iter().map(|g| g.0).fold(0.0, f32::max);
+    assert!(drawn_right <= row[0] + row[2], "nothing drawn past the row");
+
+    // A sideways swipe over it scrolls it, and the end of the line comes into the block.
+    let (x, y) = (block[0] + block[2] / 2.0, block[1] + block[3] / 2.0);
+    rt.pointer_move(x, y);
+    rt.wheel_xy(x, y, -10_000.0, 0.0);
+    settle(&mut rt);
+    let moved = element(&rt, code).rect;
+    assert!(
+        moved[0] + moved[2] < block[0] + block[2] + 1.0,
+        "scrolled to its end: {moved:?} in {block:?}"
+    );
+    let still = element(&rt, "message-m0/body/b0").rect;
+    assert!(
+        still.iter().zip(block).all(|(a, b)| (a - b).abs() < 1.0),
+        "the block stays put: {still:?}"
+    );
+
+    // Its text is still the conversation's to select: a drag from it into the next message
+    // takes the whole block as typed.
+    let next = glyphs(&rt, "message-m1/body/b0");
+    let first = glyphs(&rt, code)
+        .into_iter()
+        .find(|g| g.0 > block[0] && g.0 < block[0] + block[2])
+        .unwrap();
+    let copied = drag(&mut rt, before(first), after(next[0]));
+    assert!(
+        copied.ends_with(&format!("fn next() {{}}\n\n{}\nA", head(&rt, 1))),
+        "{copied:?}"
+    );
+}
+
+/// "Copy" in a code block's corner shows with the pointer over the block, puts the block's
+/// text on the clipboard without its fence, reads "Copied" for a moment and says so.
+#[test]
+fn a_code_blocks_copy_writes_its_text_and_says_copied() {
+    let code = "fn main() {\n    println!(\"hi\");\n}";
+    let mut rt = conversation(&[&format!("Try this:\n\n```rust\n{code}\n```"), "Thanks."]);
+    let clipboard = rune::clipboard::memory();
+    rt.use_clipboard(&clipboard);
+    let button = "message-m0/body/b1/copy";
+    let shown = |rt: &Runtime<State>| element(rt, button).opacity > 0.5;
+    assert!(!shown(&rt), "hidden until the pointer is over the block");
+    let block = element(&rt, "message-m0/body/b1").rect;
+    rt.pointer_move(block[0] + 20.0, block[1] + block[3] / 2.0);
+    settle(&mut rt);
+    assert!(shown(&rt), "shown with the pointer over the block");
+    let copy = element(&rt, button);
+    assert_eq!(
+        (copy.role, copy.label.as_deref()),
+        ("button", Some("Copy code"))
+    );
+    assert!(copy.focusable);
+    assert_eq!(texts(&rt, button), ["Copy"]);
+
+    press(&mut rt, button);
+    assert_eq!(clipboard.text().as_deref().map(String::as_str), Some(code));
+    assert_eq!(texts(&rt, button), ["Copied"]);
+    assert_eq!(announced(&rt).as_deref(), Some("Copied"));
+
+    // A moment later it reads "Copy" again.
+    rt.update(|s, _| {
+        if let Some((_, _, at)) = &mut s.replies.copied {
+            *at -= lumia_shell::app::replies::COPIED;
+        }
+        s.tick(chrono::Utc::now().timestamp_micros());
+    });
+    settle(&mut rt);
+    assert_eq!(texts(&rt, button), ["Copy"]);
+}
+
+/// A message taller than 14 lines is drawn 10 lines tall with "Show more" under it, which
+/// shows it whole and the row measured again; the list remembers that until another
+/// conversation opens. One 14 lines tall shows whole.
+#[test]
+fn a_long_message_folds_to_ten_lines_and_show_more_opens_it() {
+    let lines = |n: usize| {
+        (1..=n)
+            .map(|i| format!("Line {i} of a long message."))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let (long, fourteen) = (lines(30), lines(14));
+    let mut rt = conversation(&[&fourteen, &long, "After it."]);
+    let line = lumia_shell::tokens::MESSAGE_TYPE.message.line_height;
+    assert!(
+        rt.find("message-m0/body/more").is_none(),
+        "14 lines show whole"
+    );
+
+    // Folded: the button stands ten lines and a gap under the body's top.
+    let more = "message-m1/body/more";
+    let body = element(&rt, "message-m1/body").rect;
+    let button = element(&rt, more);
+    assert_eq!(
+        (button.role, button.label.as_deref()),
+        ("button", Some("Show more"))
+    );
+    let folded = button.rect[1] - body[1];
+    assert!(
+        (folded - (10.0 * line + 4.0)).abs() < 1.0,
+        "{folded} under the top, for lines of {line}"
+    );
+    let row = element(&rt, "message-m1").rect[3];
+    // The whole text is still the message's, for a copy and a screen reader.
+    assert_eq!(texts(&rt, "message-m1/body/b0"), [long.as_str()]);
+
+    press(&mut rt, more);
+    let button = element(&rt, more);
+    assert_eq!(button.label.as_deref(), Some("Show less"));
+    let opened = button.rect[1] - element(&rt, "message-m1/body").rect[1];
+    assert!(
+        (opened - (30.0 * line + 4.0)).abs() < 1.0,
+        "{opened} under the top"
+    );
+    let grown = element(&rt, "message-m1").rect[3] - row;
+    assert!(
+        (grown - 20.0 * line).abs() < 1.0,
+        "the row is measured again: {grown} taller"
+    );
+    // The next row moved with it, once the list's spring has run: it starts where this one
+    // ends.
+    for _ in 0..120 {
+        tick(&mut rt);
+    }
+    let (this, next) = (
+        element(&rt, "message-m1").rect,
+        element(&rt, "message-m2").rect,
+    );
+    assert!(next[1] >= this[1] + this[3], "{this:?} then {next:?}");
+
+    press(&mut rt, more);
+    assert_eq!(element(&rt, more).label.as_deref(), Some("Show more"));
+    assert!((element(&rt, "message-m1").rect[3] - row).abs() < 1.0);
+
+    // Opened, then another conversation and back: folded again.
+    press(&mut rt, more);
+    assert!(rt.state.session.unfolded.contains("m1"));
+    rt.update(|s, _| s.select_channel("design"));
+    settle(&mut rt);
+    assert!(rt.state.session.unfolded.is_empty());
+    rt.update(|s, _| {
+        s.select_channel("general");
+        s.session.entries = entries(&[&fourteen, &long, "After it."]);
+        s.session.revision += 1;
+    });
+    settle(&mut rt);
+    assert_eq!(element(&rt, more).label.as_deref(), Some("Show more"));
+}
+
+/// Lines are counted as drawn, at the row's width: a paragraph typed on one line folds once
+/// it wraps to more than 14, in both layouts.
+#[test]
+fn lines_are_counted_as_wrapped_at_the_rows_width() {
+    let line = lumia_shell::tokens::MESSAGE_TYPE.message.line_height;
+    let words = |n: usize| vec!["wrapping"; n].join(" ");
+    // From about 11 lines to about 18, in steps of less than a line, in either layout.
+    let sizes: Vec<usize> = (64..=94).step_by(3).collect();
+    let bodies: Vec<String> = sizes.iter().map(|&n| words(n)).collect();
+    let refs: Vec<&str> = bodies.iter().map(String::as_str).collect();
+    for minimal in [false, true] {
+        let mut state = signed_in();
+        state.session.entries = entries(&refs);
+        if minimal {
+            state.settings.apply(lumia_shell::settings::Preset::Minimal);
+        }
+        state.session.revision += 1;
+        let mut rt = runtime(state);
+        let mut drawn = Vec::new();
+        for i in 0..sizes.len() {
+            rt.update(move |_, tx| tx.scroll_into_view(format!("m{i}")));
+            settle(&mut rt);
+            let lines = (element(&rt, &format!("message-m{i}/body/b0")).rect[3] / line).round();
+            let folds = rt.find(&format!("message-m{i}/body/more")).is_some();
+            assert_eq!(
+                folds,
+                lines > 14.0,
+                "{lines} lines drawn, minimal: {minimal}"
+            );
+            drawn.push(lines);
+        }
+        for lines in [14.0, 15.0] {
+            assert!(drawn.contains(&lines), "{lines} lines among {drawn:?}");
+        }
     }
 }
 
@@ -475,6 +686,9 @@ fn a_drag_through_a_list_a_quote_and_a_code_block_copies_them_as_text() {
          > A quote,\n> on two lines.\n>\n> - with an item\n\n```rust\nfn main() {\n\tlet x = 1;\n}\n```\n\nAnd after.",
         "The next message.",
     ]);
+    // Long enough to be folded: opened, to drag through all of it.
+    rt.update(|s, _| s.unfold("m0"));
+    settle(&mut rt);
     let next = glyphs(&rt, "message-m1/body/b0");
     let first = start(&rt, "message-m0/body/b0");
     let copied = drag(&mut rt, first, after(next[2]));

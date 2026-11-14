@@ -379,6 +379,31 @@ fn an_own_message_is_edited_in_place_and_up_edits_the_last() {
     );
 }
 
+/// The field editing a message counts as the composer does, and over the limit on a message
+/// Return saves nothing and the field stays.
+#[test]
+fn an_edit_over_the_limit_is_counted_and_not_saved() {
+    let mut rt = runtime(signed_in());
+    hover(&mut rt, "m2");
+    press(&mut rt, "more-m2");
+    press(&mut rt, "menu-edit");
+    let max = lumia_client::body::MAX_MESSAGE_BYTES as usize;
+    rt.update(move |s, _| s.edit_field().replace_text("a".repeat(max)));
+    settle(&mut rt);
+    assert!(words(&rt).contains("0 characters left"));
+    type_text(&mut rt, "b");
+    assert!(words(&rt).contains("1 character too long"));
+    assert_eq!(announced(&rt).as_deref(), Some("1 character too long"));
+    key(&mut rt, Key::Enter);
+    assert!(rt.find("edit-m2").is_some(), "still editing");
+    assert!(rt.state.session.reads.editing.is_none(), "nothing sent");
+    // Cut back under it, Return saves.
+    key(&mut rt, Key::Backspace);
+    assert!(words(&rt).contains("0 characters left"));
+    key(&mut rt, Key::Enter);
+    assert!(rt.find("edit-m2").is_none());
+}
+
 #[test]
 fn another_s_message_offers_no_edit_and_deleting_asks_first() {
     let mut rt = runtime(signed_in());

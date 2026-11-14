@@ -1,13 +1,14 @@
 //! The conversation panel: a header, the timeline and the composer. A server's channel and a
 //! personal conversation are both drawn by it; [`Chrome`] is what differs between them.
 
+use lumia_client::body::Room;
 use rune::{Cursor, Cycle, El, Icon, Span, col, el, icon, rich, row, text, text_input};
 
 use super::components::{
     Look, empty_state, error_text, icon_button, panel, title_rule, topic as topic_line,
 };
 use super::{replies, timeline};
-use crate::app::State;
+use crate::app::{State, room_words};
 use crate::tokens::{self as t, icons};
 
 /// What a conversation's panel says around its messages.
@@ -267,9 +268,21 @@ fn typing_hint(names: &[String], look: Look) -> El {
         )
 }
 
+/// How many characters a field's words have left under the limit on a message, from 90% of
+/// it, or how many too many in the danger ink; nothing below 90%.
+pub fn counter(room: Room, look: Look) -> Option<El> {
+    let c = look.c;
+    room.shown.then(|| {
+        text(room_words(room))
+            .key("counter")
+            .font(t::TEXT_META)
+            .color(if room.over() { c.danger } else { c.ink_muted })
+    })
+}
+
 /// The line under the composer: who is typing at its start, as the board has it, and
-/// what Return does at its end.
-fn composer_hint(s: &State, look: Look) -> El {
+/// the counter and what Return does at its end.
+fn composer_hint(s: &State, room: Room, look: Look) -> El {
     let typing = s.session.typing_here();
     let mut line = row()
         .w_full()
@@ -282,6 +295,9 @@ fn composer_hint(s: &State, look: Look) -> El {
     } else {
         line.child(typing_hint(&typing, look))
     };
+    if let Some(counter) = counter(room, look) {
+        line = line.child(counter);
+    }
     line.child(
         text(if s.replies.replying.is_some() {
             "Return to send · Esc to cancel the reply"
@@ -293,10 +309,15 @@ fn composer_hint(s: &State, look: Look) -> El {
     )
 }
 
+/// How many lines the composer, and the field editing a message, grow to before they scroll.
+pub const COMPOSER_LINES: usize = 8;
+
 fn composer(s: &State, placeholder: &str, look: Look) -> El {
     let c = look.c;
     let accent = c.accent;
-    let can_send = !s.draft.text.trim().is_empty();
+    // Over the limit on a message there is nothing to send until the words are cut.
+    let room = s.session.room(&s.draft.text);
+    let can_send = !s.draft.text.trim().is_empty() && !room.over();
     // The words at the size chosen for messages, as they will be drawn once sent.
     let ty = timeline::type_of(s);
     let input = text_input(&s.draft, ty.message)
@@ -306,12 +327,14 @@ fn composer(s: &State, placeholder: &str, look: Look) -> El {
         .color(c.ink_field)
         .caret(accent, c.accent_soft)
         .w_full()
-        .min_h(ty.message.line_height)
-        .max_h(ty.message.line_height * 8.0)
         .on_edit(|s: &mut State| &mut s.draft)
         .on_input_key(|s: &mut State, key, tx| s.composer_key(key) || s.composer_up(key, tx))
-        .on_input_change(|s: &mut State, _| s.follow_mention())
+        .on_input_change(State::draft_changed)
         .on_submit(|s: &mut State, tx| s.send(tx));
+    // A line tall, growing with its lines up to eight, then scrolling inside with the caret
+    // in view. (A field's own `max_h` did not hold it: a long paste grew the frame over the
+    // conversation.)
+    let input = rune::auto_grow(input, 1, COMPOSER_LINES);
     let mut send = el()
         .key("send")
         .size(t::SEND_SIZE, t::SEND_SIZE)
@@ -392,5 +415,5 @@ fn composer(s: &State, placeholder: &str, look: Look) -> El {
     if any {
         column = column.child(above.pb(t::SPACE_6));
     }
-    column.child(frame).child(composer_hint(s, look))
+    column.child(frame).child(composer_hint(s, room, look))
 }

@@ -636,6 +636,74 @@ fn return_in_the_composer_sends_and_a_send_that_cannot_be_queued_keeps_the_draft
     assert!(words(&rt).contains("Not sent:"), "and the screen says so");
 }
 
+/// From 90% of the limit on a message the composer counts what is left; over it, the count
+/// is how many too many, in the danger ink, Send and Return do nothing and the draft stays,
+/// and a screen reader is told once as it goes over, not at every key after.
+#[test]
+fn the_composer_counts_from_ninety_percent_and_refuses_a_send_over_the_limit() {
+    let mut rt = runtime(signed_in());
+    let max = lumia_client::body::MAX_MESSAGE_BYTES as usize;
+    let counter = |rt: &lumia_shell::app::State| rt.session.room(&rt.draft.text);
+    press(&mut rt, "composer");
+    // 14,745 characters are under 90% of 16,384; 14,746 are not.
+    rt.update(move |s, _| s.draft.replace_text("a".repeat(max * 9 / 10)));
+    settle(&mut rt);
+    assert!(!counter(&rt.state).shown && rt.find("counter").is_none());
+    type_text(&mut rt, "a");
+    assert!(counter(&rt.state).shown);
+    let at = rt.find("counter").expect("the counter shows from 90%");
+    assert!(words(&rt).contains("1,638 characters left"), "{at:?}");
+
+    // One character left, then one too many.
+    rt.update(move |s, _| s.draft.replace_text("a".repeat(max - 1)));
+    settle(&mut rt);
+    assert!(words(&rt).contains("1 character left"));
+    assert_eq!(announced(&rt), None, "nothing said while it fits");
+    type_text(&mut rt, "bc");
+    assert!(words(&rt).contains("1 character too long"));
+    let danger = lumia_shell::tokens::colors(false).danger;
+    let shown = rt
+        .elements()
+        .into_iter()
+        .find(|e| e.key.as_deref() == Some("counter"))
+        .unwrap();
+    assert_eq!(shown.text_color, Some(danger));
+    assert_eq!(announced(&rt).as_deref(), Some("1 character too long"));
+    // Said once: another key over the limit changes the count, not what was said.
+    type_text(&mut rt, "d");
+    assert!(words(&rt).contains("2 characters too long"));
+    assert_eq!(announced(&rt).as_deref(), Some("1 character too long"));
+
+    // Send cannot be pressed, and Return sends nothing and keeps the draft.
+    let send = rt
+        .elements()
+        .into_iter()
+        .find(|e| e.key.as_deref() == Some("send"))
+        .unwrap();
+    assert!(!send.focusable, "Send is off");
+    // So long a draft is eight lines of the composer, scrolling inside it.
+    let line = lumia_shell::tokens::MESSAGE_TYPE.message.line_height;
+    let frame = rt
+        .elements()
+        .into_iter()
+        .find(|e| e.key.as_deref() == Some("composer-box"))
+        .unwrap();
+    assert!(
+        frame.rect[3] < 9.0 * line + 2.0 * lumia_shell::tokens::SPACE_6 + 2.0,
+        "{:?} for lines of {line}",
+        frame.rect
+    );
+    let draft = rt.state.draft.text.clone();
+    rt.key(KeyEvent {
+        key: Key::Enter,
+        mods: Mods::default(),
+    });
+    settle(&mut rt);
+    assert_eq!(rt.state.draft.text, draft, "the words are not lost");
+    assert!(rt.state.session.pending.is_empty());
+    assert!(!words(&rt).contains("Not sent:"), "nothing was tried");
+}
+
 /// A refresh of the snapshot fails when the network drops for a moment. Nothing the person
 /// did went wrong, so nothing is said over the composer, where it would read as a message
 /// that was not sent; the shell keeps what it holds.

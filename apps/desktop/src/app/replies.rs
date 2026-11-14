@@ -8,7 +8,7 @@
 use std::time::{Duration, Instant};
 
 use lumia_client::app::{MemberSummary, QuoteSummary};
-use rune::{Key, KeyEvent, TextEdit, Tx};
+use rune::{Key, KeyEvent, LiveRegion, TextEdit, Tx};
 
 use super::{Popover, State};
 use crate::session::display_name;
@@ -25,6 +25,8 @@ const LIST_ROWS: usize = 8;
 const FLASH: Duration = Duration::from_secs(1);
 /// How long the bar says who was invited before it goes.
 const SAID_FOR: Duration = Duration::from_secs(4);
+/// How long a code block's button reads "Copied".
+pub const COPIED: Duration = Duration::from_millis(1500);
 
 #[derive(Debug, Default)]
 pub struct Replies {
@@ -47,6 +49,12 @@ pub struct Replies {
     pub hovered: Option<String>,
     /// The message being edited in place, and what its field holds.
     pub editing: Option<(String, TextEdit)>,
+    /// What the field being edited holds is over the limit on a message, as a screen reader
+    /// was last told.
+    pub edit_over: bool,
+    /// The code block whose text was just copied: its message, its number in the body, and
+    /// when. Its button reads "Copied" until [`COPIED`] has passed.
+    pub copied: Option<(String, usize, Instant)>,
     /// The message whose "More actions" menu is open.
     pub menu_for: Option<String>,
     /// The message "Delete this message?" asks about.
@@ -196,6 +204,7 @@ impl State {
         let mut field = TextEdit::new(entry.body.clone());
         field.set_caret(entry.body.len());
         self.replies.editing = Some((message_id.to_string(), field));
+        self.replies.edit_over = false;
         self.close_popover();
         // The row shows the field now: rebuilt.
         self.session.revision += 1;
@@ -210,11 +219,17 @@ impl State {
         }
     }
 
-    /// Return in the field: the edit is sent; emptied, it asks to delete instead.
+    /// Return in the field: the edit is sent; emptied, it asks to delete instead. Over the
+    /// limit on a message it is not, and the field stays as it is.
     pub fn save_edit(&mut self, tx: &mut Tx) {
+        let over = |(_, field): &(String, TextEdit)| self.session.room(&field.text).over();
+        if self.replies.editing.as_ref().is_some_and(over) {
+            return;
+        }
         let Some((id, field)) = self.replies.editing.take() else {
             return;
         };
+        self.replies.edit_over = false;
         self.session.revision += 1;
         let body = field.text.trim();
         let unchanged = self
@@ -243,6 +258,39 @@ impl State {
             }
             _ => false,
         }
+    }
+
+    /// After the field being edited changes: a screen reader is told when it goes over the
+    /// limit on a message, once, not at every key after.
+    pub fn edit_changed(&mut self, tx: &mut Tx) {
+        let Some((_, field)) = &self.replies.editing else {
+            return;
+        };
+        let room = self.session.room(&field.text);
+        if room.over() && !self.replies.edit_over {
+            tx.announce(super::room_words(room), LiveRegion::Polite);
+        }
+        self.replies.edit_over = room.over();
+    }
+
+    /// A code block's "Copy": its text on the clipboard, its button reading "Copied" for a
+    /// moment, and a screen reader told so.
+    pub fn copy_code(&mut self, message_id: &str, block: usize, code: &str, tx: &mut Tx) {
+        tx.copy(code.to_string());
+        tx.announce("Copied", LiveRegion::Polite);
+        self.replies.copied = Some((message_id.to_string(), block, Instant::now()));
+        // The row reads "Copied" now: rebuilt.
+        self.session.revision += 1;
+    }
+
+    /// "Show more" under a folded message, and "Show less" under one shown whole.
+    pub fn unfold(&mut self, message_id: &str) {
+        let unfolded = &mut self.session.unfolded;
+        if !unfolded.remove(message_id) {
+            unfolded.insert(message_id.to_string());
+        }
+        // The row is drawn otherwise, and measured again.
+        self.session.revision += 1;
     }
 
     /// The text field of the message being edited, for its `on_edit`.
@@ -590,6 +638,16 @@ impl State {
             .is_some_and(|(_, at)| at.elapsed() >= SAID_FOR)
         {
             self.replies.outside = None;
+            changed = true;
+        }
+        if self
+            .replies
+            .copied
+            .as_ref()
+            .is_some_and(|(_, _, at)| at.elapsed() >= COPIED)
+        {
+            self.replies.copied = None;
+            self.session.revision += 1;
             changed = true;
         }
         if self.notices.in_front

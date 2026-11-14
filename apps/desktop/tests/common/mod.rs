@@ -83,6 +83,24 @@ pub fn type_text(rt: &mut Runtime<State>, text: &str) {
     settle(rt);
 }
 
+/// What the window's live region last said to a screen reader (`Tx::announce`), if anything.
+pub fn announced(rt: &Runtime<State>) -> Option<String> {
+    // The window's own region is the last of its children; a view's live texts come before.
+    let tree = rt.accessibility_json();
+    let region = tree["children"].as_array()?.last()?;
+    let live = region["states"].as_array().is_some_and(|states| {
+        states
+            .iter()
+            .any(|s| s == "live-polite" || s == "live-assertive")
+    });
+    if region["role"] != "status" || !live {
+        return None;
+    }
+    region["name"]
+        .as_str()
+        .map(|name| name.replace('\u{200b}', ""))
+}
+
 /// Every text and label on screen, to look for wording in.
 pub fn words(rt: &Runtime<State>) -> String {
     rt.elements()

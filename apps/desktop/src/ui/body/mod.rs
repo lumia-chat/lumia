@@ -5,10 +5,20 @@
 //! Here the timeline is the group, and a drag runs from one message into the next.
 //!
 //! The core's `parse` (`lumia_client::body`, shared with the other clients) reads the source
-//! into blocks and decides what is in the subset; this file draws them. A paragraph is one `rich` text; a code block is one text on the `inset` ground,
-//! wrapped at the block's width and coloured by the kit's highlighter for the languages it
-//! knows; a quote is its blocks beside a rule; a list is rows of a marker and the item's
-//! blocks. A word wider than the line breaks inside itself rather than run out of the row.
+//! into blocks and decides what is in the subset; this file draws them. A paragraph is one
+//! `rich` text; a quote is its blocks beside a rule; a list is rows of a marker and the
+//! item's blocks. A word wider than the line breaks inside itself rather than run out of the
+//! row. A code block is one text on the `inset` ground, coloured by the kit's highlighter for
+//! the languages it knows, whose lines never wrap: the block scrolls sideways inside itself
+//! (the wheel with Shift, or a trackpad; there is no bar, and the arrow keys are the text's),
+//! and is as tall as its lines. While the pointer is over it, or the keyboard is in it, a
+//! "Copy" button in its corner puts its text on the clipboard and reads "Copied" for a moment
+//! (`State::copy_code`, which says so to a screen reader too).
+//!
+//! A body more than [`FOLD_OVER`] lines tall, as drawn at the width it is given ([`Fold`]),
+//! is drawn [`FOLDED_LINES`] tall, its last line fading into whatever is behind the row (the
+//! mention wash too), with "Show more" under it; "Show less" folds it again. Whether it is
+//! open is the open conversation's (`Session::unfolded`). Only the timeline folds a body.
 //!
 //! What a copy takes, since a selection can now span messages (the timeline adds each
 //! message's author and time above its body):
@@ -22,6 +32,7 @@
 //!   around it.
 //! - A link as its text, not its address. (The address shows under the pointer, since a
 //!   link's text need not say where it goes.)
+//! - A folded body whole: what the fold hides is still its text.
 //!
 //! A mention (architecture 6.6) is drawn as the design system's pill: the message gives
 //! each one's range in its source, which the parser does not keep, so the words of each
@@ -30,11 +41,14 @@
 
 use std::cell::Cell;
 
-use rune::{Align, Color, El, Link, LinkPaint, Span, TextStyle, Tx, col, el, rich, row, text};
+use rune::text::RichLayoutOptions;
+use rune::{
+    Align, Color, Cursor, El, Link, LinkPaint, Span, TextStyle, Tx, col, el, rich, row, text,
+};
 use rune_kit::syntax::{self, SyntaxTheme};
 
-use lumia_client::body::{PAD, standing};
 pub use lumia_client::body::{Block, Inline, Style, is_web, parse};
+use lumia_client::body::{PAD, standing};
 
 use super::components::Look;
 use crate::app::State;
@@ -65,6 +79,42 @@ pub struct Drawn<'a> {
     /// The message was edited: "(edited)" follows its last paragraph's words, in the small
     /// muted type and left out of a copy ([`edited_inline`] says whether it can).
     pub edited: bool,
+    /// The message, for what its buttons act on: each code block's "Copy", and "Show more".
+    /// None draws neither, for a body inside something pressed as a whole (a Mentions item),
+    /// where a button would be a control inside a control.
+    pub id: Option<&'a str>,
+    /// How a body too tall to show whole is folded; none shows every body whole.
+    pub fold: Option<Fold>,
+    /// Which of its code blocks has just been copied, counting from its first: that one's
+    /// button reads "Copied".
+    pub copied: Option<usize>,
+}
+
+/// How [`Body::height`] takes a paragraph's lines: set as Rune will draw them, or the most
+/// its characters could take, which costs no text setting.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Wraps {
+    Set,
+    Most,
+}
+
+/// What decides whether a body is folded: the width it is laid out at, which sets how many
+/// lines it takes, and whether the reader has asked to see it whole.
+#[derive(Clone, Copy)]
+pub struct Fold {
+    pub width: f32,
+    pub open: bool,
+}
+
+/// A body drawn taller than this many lines of its type is folded until it is opened.
+pub const FOLD_OVER: usize = 14;
+/// How many lines a folded body shows.
+pub const FOLDED_LINES: usize = 10;
+
+/// How many lines a body `lines` tall shows while folded: [`FOLDED_LINES`] when it is taller
+/// than [`FOLD_OVER`], none when it shows whole anyway.
+pub fn folded_lines(lines: usize) -> Option<usize> {
+    (lines > FOLD_OVER).then_some(FOLDED_LINES)
 }
 
 impl Default for Drawn<'_> {
@@ -73,6 +123,9 @@ impl Default for Drawn<'_> {
             ty: &t::MESSAGE_TYPE,
             head: None,
             edited: false,
+            id: None,
+            fold: None,
+            copied: None,
         }
     }
 }
@@ -94,9 +147,19 @@ pub fn view_with(
         head: Cell::new(drawn.head.map(str::to_owned)),
         mentions: mentions.to_vec(),
         edited: Cell::new(false),
+        id: drawn.id.map(str::to_owned),
+        copied: drawn.copied,
+        codes: Cell::new(0),
     };
     let edited = drawn.edited && ends_in_paragraph(&blocks);
-    body.blocks_marked(&blocks, edited)
+    let whole = body.blocks_marked(&blocks, edited);
+    let (Some(fold), Some(id)) = (drawn.fold, drawn.id) else {
+        return whole;
+    };
+    match body.lines_at(&blocks, fold.width).and_then(folded_lines) {
+        Some(shown) => body.folded(whole, shown, fold.open, id),
+        None => whole,
+    }
 }
 
 /// Whether "(edited)" can follow a body's words on its last line: it ends in a paragraph,
@@ -159,6 +222,12 @@ struct Body {
     mentions: Vec<String>,
     /// The next paragraph drawn ends with "(edited)": set for the body's last.
     edited: Cell<bool>,
+    /// [`Drawn::id`].
+    id: Option<String>,
+    /// [`Drawn::copied`].
+    copied: Option<usize>,
+    /// How many code blocks have been drawn: the next one's number.
+    codes: Cell<usize>,
 }
 
 impl Body {
@@ -209,15 +278,32 @@ impl Body {
                 let prefix = lead.map_or(indent, |l| l.prefix);
                 let code = self.code(lang.as_deref(), text);
                 let code = self.copied(code, prefix, before, after);
-                col()
+                // The lines scroll sideways under the padding, so they run on to the frame's
+                // edges, which fade while there is more past them.
+                let lines = col()
+                    .key("scroll")
+                    .w_full()
+                    .scroll_x()
+                    .scroll_edge_fade(t::SPACE_16)
+                    .child(
+                        col()
+                            .px(t::SPACE_12)
+                            .py(t::SPACE_10)
+                            .child(code.key("code")),
+                    );
+                let mut block = col()
                     .role("code")
                     .w_full()
-                    .px(t::SPACE_12)
-                    .py(t::SPACE_10)
                     .radius(t::RADIUS_12)
                     .fill(c.inset)
                     .border(1.0, c.line)
-                    .child(code.key("code"))
+                    .border_layout()
+                    .child(lines);
+                let n = self.codes.replace(self.codes.get() + 1);
+                if let Some(id) = &self.id {
+                    block = block.hover_group().child(self.copy_button(id, n, text));
+                }
+                block
             }
             Block::Quote(inner) => {
                 let quoted = format!("{indent}> ");
@@ -447,8 +533,135 @@ impl Body {
         rich(code.to_owned(), spans)
             .font(self.ty.code)
             .color(self.look.c.ink_body)
-            .wrap_anywhere()
+    }
+
+    /// A code block's "Copy", in its top-right corner: shown while the pointer is over the
+    /// block or the keyboard is in it, and reading "Copied" just after a press.
+    fn copy_button(&self, id: &str, n: usize, code: &str) -> El {
+        let c = self.look.c;
+        let words = if self.copied == Some(n) {
+            "Copied"
+        } else {
+            "Copy"
+        };
+        let (id, code) = (id.to_owned(), code.to_owned());
+        el().pin(None, Some(t::SPACE_6), Some(t::SPACE_6), None)
+            .group_opacity(0.0, 1.0)
+            .child(
+                row()
+                    .key("copy")
+                    .h(t::SPACE_24)
+                    .px(t::SPACE_8)
+                    .center()
+                    .radius(t::RADIUS_6)
+                    .fill(c.surface)
+                    .border(1.0, c.line)
+                    .hover(c.hover_icon)
+                    .role("button")
+                    .label("Copy code")
+                    .cursor(Cursor::Pointer)
+                    .focusable(true)
+                    .focus_ring(2.0, 2.0, c.focus)
+                    // A press here leaves a selection in the conversation as it is.
+                    .keeps_text_selection()
+                    .on_press_tx(move |s: &mut State, tx| s.copy_code(&id, n, &code, tx))
+                    .child(text(words).font(self.ty.meta).color(c.ink_secondary)),
+            )
+    }
+
+    /// A body too tall to show whole: `shown` lines of it, the last fading into the row,
+    /// with the button that opens it; or, `open`, all of it with the button that folds it.
+    fn folded(&self, whole: El, shown: usize, open: bool, id: &str) -> El {
+        let c = self.look.c;
+        let line = self.ty.message.line_height;
+        let mut fold = col().w_full();
+        if !open {
+            fold = fold.h(line * shown as f32).clip_fade(0.0, 0.0, 0.0, line);
+        }
+        let words = if open { "Show less" } else { "Show more" };
+        let id = id.to_owned();
+        let button = el()
+            .key("more")
+            .role("button")
+            .label(words)
+            .expanded(open)
+            .cursor(Cursor::Pointer)
+            .focusable(true)
+            .focus_ring(2.0, 2.0, c.focus)
+            .radius(t::RADIUS_5)
+            .on_press(move |s: &mut State| s.unfold(&id))
+            .child(text(words).font(self.ty.link_sm).color(c.accent_ink));
+        col()
             .w_full()
+            .gap(t::SPACE_4)
+            .child(fold.child(whole))
+            .child(row().child(button))
+    }
+
+    /// How many lines of its type `blocks` take at `width`, as [`Body::blocks_marked`] lays
+    /// them out; none when they cannot take more than [`FOLD_OVER`] however their words
+    /// wrap, which spares setting the text of the short messages most are.
+    fn lines_at(&self, blocks: &[Block], width: f32) -> Option<usize> {
+        let line = self.ty.message.line_height;
+        let lines = |height: f32| (height / line).round() as usize;
+        if lines(self.height(blocks, width, false, Wraps::Most)) <= FOLD_OVER {
+            return None;
+        }
+        Some(lines(self.height(blocks, width, false, Wraps::Set)))
+    }
+
+    /// The height of `blocks` at `width`: [`Body::blocks`] measured rather than drawn, its
+    /// paragraphs set as they will be drawn or, cheaply, at the most lines they can take.
+    fn height(&self, blocks: &[Block], width: f32, in_item: bool, wraps: Wraps) -> f32 {
+        let line = self.ty.message.line_height;
+        let mut height = 0.0;
+        for (i, block) in blocks.iter().enumerate() {
+            let after_para = i > 0 && matches!(blocks[i - 1], Block::Para(_));
+            height += match block {
+                _ if i == 0 => 0.0,
+                Block::List { .. } if in_item => t::SPACE_4,
+                Block::Para(_) if after_para && !in_item => t::SPACE_4,
+                _ => t::SPACE_8,
+            };
+            height += match block {
+                Block::Para(inline) if wraps == Wraps::Most => {
+                    // No character in the faces a message is drawn in is wider than an em
+                    // and a quarter (an ideograph is an em, an emoji a little more).
+                    let size = self.ty.message.size;
+                    let per_line = (width / (size * 1.25)).floor().max(1.0) as usize;
+                    let typed = inline.text.split('\n');
+                    let most: usize = typed
+                        .map(|words| words.chars().count().div_ceil(per_line).max(1))
+                        .sum();
+                    most as f32 * line
+                }
+                Block::Para(inline) => {
+                    let options = RichLayoutOptions::new().wrap_anywhere();
+                    let spans = self.spans(inline);
+                    let style = self.ty.message;
+                    rune::text::measure_with(&inline.text, &spans, style, Some(width), options).1
+                }
+                // Its lines, never wrapped, inside its padding and its border.
+                Block::Code { text, .. } => {
+                    let lines = text.split('\n').count() as f32;
+                    lines * self.ty.code.line_height + 2.0 * (t::SPACE_10 + 1.0)
+                }
+                Block::Quote(inner) => {
+                    self.height(inner, width - t::SPACE_2 - t::SPACE_12, false, wraps)
+                }
+                Block::List { items, .. } => items
+                    .iter()
+                    .enumerate()
+                    .map(|(k, item)| {
+                        let gap = if k == 0 { 0.0 } else { t::SPACE_4 };
+                        gap + self
+                            .height(item, width - t::SPACE_28, true, wraps)
+                            .max(line)
+                    })
+                    .sum(),
+            };
+        }
+        height
     }
 
     /// The newlines a copy leaves before and after a block: a blank line around it, but one
@@ -504,4 +717,19 @@ fn pad_size() -> f32 {
     let size = first * t::CODE_PAD / wide(first);
     PAD_SIZE.set((epoch, size));
     size
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_body_folds_to_ten_lines_only_when_it_is_taller_than_fourteen() {
+        for lines in 0..=14 {
+            assert_eq!(folded_lines(lines), None, "{lines} lines show whole");
+        }
+        for lines in [15, 16, 30, 1_000] {
+            assert_eq!(folded_lines(lines), Some(10), "{lines} lines fold");
+        }
+    }
 }

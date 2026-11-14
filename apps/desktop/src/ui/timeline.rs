@@ -36,6 +36,10 @@
 //! the "Quote reply" button over it, and the row under the pointer, for the toolbar over it
 //! (both drawn at the root, `ui::view`, so that no row carries them).
 //!
+//! A body more than 14 lines tall is folded (`body` says how), stored or pending alike: the
+//! view reads the list's laid-out width, which re-runs it on a resize and not on a scroll,
+//! and gives each body the width its row lays it out at ([`fold_of`]).
+//!
 //! Two limits are Rune's (its issue 550): a copy that spans rows scrolled out of the
 //! mounted window builds them to read their text and stops, without saying so, at 10,000
 //! such rows or 4 MiB; and while a selection spans many unmounted rows, each scrolled
@@ -45,16 +49,20 @@ use std::borrow::Cow;
 
 use chrono::{DateTime, Local, NaiveDate};
 use lumia_client::app::QuoteSummary;
+use lumia_client::body::Room;
 use rune::{Cursor, El, GrowthSpec, ScrollSpec, col, el, icon, row, text};
 
 use super::body;
 use super::components::{Look, avatar_of};
-use super::replies;
 use super::scroll::WithScrollBar;
+use super::{conversation, replies};
 use crate::app::State;
 use crate::session::{Entry, Pending};
 use crate::settings::{Avatars, Layout, Settings, Spacing};
 use crate::tokens::{self as t, icons};
+
+/// The key of the list's scroll viewport, whose width the rows' bodies are measured at.
+const LIST: &str = "messages";
 
 /// How close to the oldest row on screen the reader gets before the page before it is read.
 const OLDER_WITHIN: usize = 20;
@@ -169,6 +177,10 @@ const BLOCK_WITHIN_MICROS: i64 = 5 * 60 * 1_000_000;
 pub fn view(s: &State, label: String, look: Look) -> El {
     let count = s.session.entries.len() + s.session.pending_here().count();
     let dark = look.dark;
+    // How wide the list is, which a long body is measured at to know whether it folds
+    // ([`fold_of`], in each row): read here as well, as laid out, so that the view and its
+    // rows run again when the window is resized, and not as it scrolls.
+    let _ = rune::memo::layout_with(LIST, |rect| rect[2].round());
     let rows = col()
         .key("rows")
         .w_full()
@@ -730,6 +742,39 @@ fn notice_row(s: &State, entry: &Entry, look: Look) -> El {
     }
 }
 
+/// How a message's body folds: at the width its row lays it out at, found from the list's
+/// as [`grouped_frame`] and [`line_frame`] place the body, and open when the reader has
+/// asked. None until the list has been laid out, and for a row built outside a view: a copy
+/// of a selection builds the rows the list has not mounted to read their text, which a fold
+/// does not change, and measuring there would start a text system of its own (a second and
+/// a half on a first Cmd+A, as its fonts load). A layout read is none there.
+fn fold_of(s: &State, id: &str, author: &str, m: Measures) -> Option<body::Fold> {
+    let list = rune::memo::layout_with(LIST, |rect| rect[2].round())?;
+    // The list's padding and the row's.
+    let inside = list - 2.0 * (t::SPACE_14 + t::SPACE_12);
+    let width = match m.layout {
+        Layout::Grouped => inside - m.avatar.map_or(0.0, |avatar| avatar + m.beside),
+        // The times' column and the name, with the room after each.
+        Layout::OneLine => {
+            let name = rune::text::measure(author, &[], m.ty.author, None).0;
+            inside - time_width(m.ty.meta, s.clock_24) - name - 2.0 * t::SPACE_8
+        }
+    };
+    Some(body::Fold {
+        width: width.max(1.0),
+        open: s.session.unfolded.contains(id),
+    })
+}
+
+/// Which of a message's code blocks was just copied, counting from its first.
+fn copied_in(s: &State, id: &str) -> Option<usize> {
+    s.replies
+        .copied
+        .as_ref()
+        .filter(|(message, _, _)| message == id)
+        .map(|(_, block, _)| *block)
+}
+
 fn stored_row(s: &State, i: usize, entry: &Entry, place: Place, look: Look) -> El {
     let c = look.c;
     if !entry.notice.is_empty() {
@@ -745,6 +790,9 @@ fn stored_row(s: &State, i: usize, entry: &Entry, place: Place, look: Look) -> E
         ty: &m.ty,
         head: head.as_deref(),
         edited: false,
+        id: Some(&entry.id),
+        fold: fold_of(s, &entry.id, &author, m),
+        copied: copied_in(s, &entry.id),
     };
     let content = if entry.deleted {
         body::note("(deleted)", c.ink_quiet, drawn, look).key("body")
@@ -827,7 +875,10 @@ fn message_content(s: &State, entry: &Entry, drawn: body::Drawn<'_>, look: Look)
         .map(|(_, field)| field);
     let mut content = col().w_full().gap(t::SPACE_4);
     match editing {
-        Some(field) => content = content.child(edit_field(&entry.id, field, ty, look)),
+        Some(field) => {
+            let room = s.session.room(&field.text);
+            content = content.child(edit_field(&entry.id, field, room, ty, look));
+        }
         None => {
             let (source, words) = shown_body(s, entry);
             // "(edited)" follows the words on their last line when they end in a paragraph,
@@ -870,9 +921,20 @@ fn message_content(s: &State, entry: &Entry, drawn: body::Drawn<'_>, look: Look)
     content
 }
 
-/// A message being edited in place: the field with its body, and how to leave it.
-fn edit_field(id: &str, field: &rune::TextEdit, ty: &t::MessageType, look: Look) -> El {
+/// A message being edited in place: the field with its body, and how to leave it, with the
+/// composer's counter at the end of that line from 90% of the limit on a message (over it,
+/// Return saves nothing).
+fn edit_field(id: &str, field: &rune::TextEdit, room: Room, ty: &t::MessageType, look: Look) -> El {
     let c = look.c;
+    let mut hint = row().w_full().gap(t::SPACE_12).items_center().child(
+        text("Esc to cancel · Return to save")
+            .font(ty.meta)
+            .color(c.ink_muted)
+            .grow(1.0),
+    );
+    if let Some(counter) = conversation::counter(room, look) {
+        hint = hint.child(counter);
+    }
     col()
         .w_full()
         .gap(t::SPACE_6)
@@ -884,24 +946,21 @@ fn edit_field(id: &str, field: &rune::TextEdit, ty: &t::MessageType, look: Look)
                 .radius(t::RADIUS_12)
                 .fill(c.field)
                 .border(1.0, c.border_active)
-                .child(
+                .child(rune::auto_grow(
                     rune::text_input(field, ty.message)
                         .key(format!("edit-{id}"))
                         .label("Edit message")
                         .color(c.ink_field)
                         .caret(c.accent, c.accent_soft)
                         .w_full()
-                        .min_h(ty.message.line_height)
-                        .max_h(ty.message.line_height * 8.0)
                         .on_edit(State::edit_field)
-                        .on_input_key(|s: &mut State, key, tx| s.edit_key(key, tx)),
-                ),
+                        .on_input_key(|s: &mut State, key, tx| s.edit_key(key, tx))
+                        .on_input_change(State::edit_changed),
+                    1,
+                    conversation::COMPOSER_LINES,
+                )),
         )
-        .child(
-            text("Esc to cancel · Return to save")
-                .font(ty.meta)
-                .color(c.ink_muted),
-        )
+        .child(hint)
 }
 
 /// A stored row in its slot. The divider lives in the first row of its day: a row of its
@@ -979,6 +1038,9 @@ fn pending_row(s: &State, pending: &Pending, place: Place, look: Look) -> El {
         ty: &m.ty,
         head: None,
         edited: false,
+        id: Some(&pending.id),
+        fold: fold_of(s, &pending.id, s.session.self_name(), m),
+        copied: copied_in(s, &pending.id),
     };
     let body = body::view_with(&pending.body, false, &[], drawn, look).key("body");
     let content = match &pending.failed {
