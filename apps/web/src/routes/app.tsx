@@ -647,6 +647,8 @@ export function App() {
               name: s.name,
               initials: initialsOf(s.name),
               src: avatarSrc(s.iconUrl),
+              // Its monogram in the ink of the tone its id hashes to, as the rail boards draw them.
+              ink: toneFor(s.serverId),
               current: !home() && s.serverId === serverId(),
               unread: serverCounts(s.serverId).unread,
               mentions: serverCounts(s.serverId).mentions || undefined,

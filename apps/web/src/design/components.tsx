@@ -593,7 +593,8 @@ export interface RailServer {
   /** The server's picture; its initials stand in without one, or while it fails to load. */
   src?: string;
   current?: boolean;
-  ink?: "default" | "indigo" | "green" | "amber";
+  /** Its initials' ink on the tile: a tone's, the design system's `tile-ink-*` where it names one. */
+  ink?: "default" | Tone;
   unread?: boolean;
   mentions?: number;
   onClick?: () => void;
@@ -2793,7 +2794,7 @@ export function MenuItem(props: MenuItemProps) {
         <span class="lu-menu__hint">{props.hint}</span>
       </Show>
       <Show when={props.submenu}>
-        <Icon name="chevron-down" size={14} strokeWidth={2.2} class="lu-menu__more" />
+        <Icon name="chevron-right" size={14} strokeWidth={2.2} class="lu-menu__more" />
       </Show>
     </button>
   );

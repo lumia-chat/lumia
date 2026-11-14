@@ -179,6 +179,12 @@
 .lu-tile-ink-indigo { color: var(--tile-ink-indigo); }
 .lu-tile-ink-green { color: var(--tile-ink-green); }
 .lu-tile-ink-amber { color: var(--tone-amber-ink); }
+.lu-tile-ink-peach { color: var(--tone-peach-ink); }
+.lu-tile-ink-blue { color: var(--tone-blue-ink); }
+.lu-tile-ink-purple { color: var(--tone-purple-ink); }
+.lu-tile-ink-mint { color: var(--tone-mint-ink); }
+.lu-tile-ink-sky { color: var(--tone-sky-ink); }
+.lu-tile-ink-stone { color: var(--tone-stone-ink); }
 .lu-rail__badge { position: absolute; right: -4px; top: -4px; padding: 0 5px; }
 .lu-rail__badge--home { right: -5px; top: -5px; }
 .lu-rail__dot { position: absolute; right: 0; top: 0; }
@@ -566,7 +572,7 @@ button.lu-mention:hover { text-decoration: underline; text-underline-offset: 3px
 .lu-menu__hint { font-size: 12.5px; color: var(--ink-muted); }
 .lu-menu__item.is-danger, .lu-menu__item.is-danger:hover { color: var(--danger); }
 .lu-menu__item.is-danger .lu-icon { color: var(--ink-quiet); }
-.lu-menu__item .lu-menu__more { color: var(--ink-faint); transform: rotate(-90deg); }
+.lu-menu__item .lu-menu__more { color: var(--ink-faint); }
 .lu-menu__item[aria-expanded="true"] { background: var(--hover-member); color: var(--ink); }
 .lu-menu--rail { width: 240px; }
 /* A menu and the one an item of it opened, side by side. */
