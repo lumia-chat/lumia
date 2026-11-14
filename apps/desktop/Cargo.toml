@@ -36,7 +36,9 @@ required-features = ["profile"]
 [dependencies]
 # Rune is pre-release and asks for a pinned rev of `dev`. Bump the four crates and the four
 # patches below together.
-rune = { git = "https://github.com/anomalyco/rune", rev = "74a3c8d4f4aadbdadcc8fae0aee5e36f42af1ccd", default-features = false, features = ["accessibility", "dbus", "metal-backend", "native-file-dialog", "svg"] }
+# `tooling` keeps `--snap` and the other headless runs in a release build (Rune's default since
+# 74a3c8d4 is debug builds only): the bundle and package checks draw a frame with the shipped binary.
+rune = { git = "https://github.com/anomalyco/rune", rev = "74a3c8d4f4aadbdadcc8fae0aee5e36f42af1ccd", default-features = false, features = ["accessibility", "dbus", "metal-backend", "native-file-dialog", "svg", "tooling"] }
 rune-kit = { git = "https://github.com/anomalyco/rune", rev = "74a3c8d4f4aadbdadcc8fae0aee5e36f42af1ccd" }
 # The window's remembered frame on macOS (`rune-mac`) and system notifications (`rune-notify`:
 # macOS and Windows; nothing posts elsewhere). Both at Rune's rev, bumped with it.
