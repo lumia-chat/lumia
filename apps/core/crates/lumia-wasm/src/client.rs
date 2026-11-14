@@ -969,7 +969,7 @@ impl Client {
     /// A new folder's id (UUIDv7).
     #[wasm_bindgen(js_name = railNewFolderId)]
     pub fn rail_new_folder_id(&self) -> String {
-        lumia_core::wire::display(&lumia_core::wire::new_id())
+        lumia_client::rail::new_folder_id()
     }
 
     /// The tone an id is drawn in, as every shell hashes it.

@@ -51,6 +51,12 @@ pub fn tone_of(id: &str) -> String {
     TONES[hash as usize % TONES.len()].to_string()
 }
 
+/// A new folder's id, minted here as every client-minted id is (UUIDv7).
+#[must_use]
+pub fn new_folder_id() -> String {
+    wire::display(&wire::new_id())
+}
+
 /// How a folder with no name reads: "Acme", "Acme and Lumia", "Acme, Lumia and Trail
 /// Runners", "Acme, Lumia and 2 more".
 #[must_use]

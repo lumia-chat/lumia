@@ -1683,7 +1683,7 @@ impl Client {
 
     /// A new folder's id (UUIDv7).
     pub fn rail_new_folder_id(&self) -> String {
-        lumia_core::wire::display(&lumia_core::wire::new_id())
+        lumia_client::rail::new_folder_id()
     }
 
     /// A server or folder moved: into `folder` before `before` (or at its
