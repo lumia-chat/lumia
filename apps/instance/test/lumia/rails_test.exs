@@ -85,6 +85,20 @@ defmodule Lumia.RailsTest do
     assert order(Rails.rail(ctx.me.id)) == [ctx.b.id, ctx.c.id, d.id]
   end
 
+  test "a server left and joined again lands at the end, not back in its folder", ctx do
+    friend = account("friend")
+    {:ok, x} = Servers.create_server(friend.id, "X")
+    {:ok, _} = Servers.add_member(x.id, ctx.me.id, friend.id)
+    rail = %V1.Rail{entries: [folder([x, ctx.a], name: "Work"), server(ctx.b), server(ctx.c)]}
+    assert {:ok, _} = Rails.arrange(ctx.me.id, rail)
+
+    assert :ok = Servers.remove_member(x.id, ctx.me.id, ctx.me.id, "left")
+    assert order(Rails.rail(ctx.me.id)) == [{:folder, [ctx.a.id]}, ctx.b.id, ctx.c.id]
+
+    {:ok, _} = Servers.add_member(x.id, ctx.me.id, friend.id)
+    assert order(Rails.rail(ctx.me.id)) == [{:folder, [ctx.a.id]}, ctx.b.id, ctx.c.id, x.id]
+  end
+
   test "what tidying cannot make right is refused", ctx do
     long = String.duplicate("x", 51)
     same = Proto.uuid(Ecto.UUID.generate())

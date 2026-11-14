@@ -191,6 +191,7 @@ defmodule Lumia.Servers do
       with {:ok, server} <- fetch_server(server_id),
            :ok <- check_removal(server, account_id, actor_id, reason),
            {1, _} <- delete_member(server_id, account_id),
+           :ok <- Lumia.Rails.forget(account_id, server_id),
            :ok <- leave_channels(server_id, account_id),
            channel_ids = viewable_channel_ids(server_id, account_id),
            :ok <- forget_viewer(account_id, channel_ids),

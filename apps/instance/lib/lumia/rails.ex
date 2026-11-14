@@ -8,8 +8,10 @@ defmodule Lumia.Rails do
   server it is not in is dropped, a server named twice is kept at its first
   place, a folder left empty goes, and a server it is in that the
   arrangement leaves out goes at the end, in the order it was joined. So a
-  server joined or created lands last, and one left disappears, with no
-  write when either happens: the arrangement is tidied as it is read.
+  server joined or created lands last, with no write, since the arrangement
+  is tidied as it is read. A server left is also taken out of what is kept
+  (`forget/2`, as the membership ends), so one joined again lands last too,
+  not back in its old place or folder.
   """
 
   import Ecto.Query
@@ -63,6 +65,38 @@ defmodule Lumia.Rails do
            Accounts.append_event(account_id, {:rail_arranged, %V1.RailArranged{rail: kept}}),
          do: {:ok, kept}
   end
+
+  @doc """
+  Takes a server the account has left out of its kept arrangement, a folder
+  left empty with it. Nobody is told: every read already leaves it out.
+  """
+  def forget(account_id, server_id) do
+    with %AccountRail{rail: bytes} = kept <- Repo.get(AccountRail, account_id) do
+      gone = Proto.uuid(server_id)
+      %V1.Rail{entries: entries} = V1.Rail.decode(bytes)
+
+      rail = %V1.Rail{
+        entries: Enum.flat_map(entries, &without(&1, gone))
+      }
+
+      kept
+      |> Ecto.Changeset.change(rail: V1.Rail.encode(rail), updated_at: DateTime.utc_now())
+      |> Repo.update!()
+    end
+
+    :ok
+  end
+
+  defp without(%V1.RailEntry{entry: {:server_id, gone}}, gone), do: []
+
+  defp without(%V1.RailEntry{entry: {:folder, %V1.RailFolder{} = folder}} = entry, gone) do
+    case Enum.reject(folder.server_ids, &(&1 == gone)) do
+      [] -> []
+      inside -> [%{entry | entry: {:folder, %{folder | server_ids: inside}}}]
+    end
+  end
+
+  defp without(entry, _gone), do: [entry]
 
   # The servers the account is in, in the order it joined them.
   defp joined(account_id) do
