@@ -444,7 +444,7 @@ impl Api {
         let req = UpdateServerRequest {
             name,
             retention_days,
-            default_channels: None,
+            ..Default::default()
         };
         let (status, bytes) = self
             .send(
@@ -1253,6 +1253,27 @@ impl Api {
     /// # Errors
     /// `PERMISSION_DENIED` without `MANAGE_SERVER`, `INVALID_ARGUMENT` with
     /// `default_channels`; transport failure.
+    pub async fn set_show_deleted(
+        &self,
+        server_id: &str,
+        show: bool,
+    ) -> Result<Server, ClientError> {
+        let req = UpdateServerRequest {
+            show_deleted: Some(show),
+            ..Default::default()
+        };
+        let (status, bytes) = self
+            .send(
+                reqwest::Method::PATCH,
+                &format!("/api/v1/servers/{server_id}"),
+                Some(req.encode_to_vec()),
+                None,
+            )
+            .await?;
+        decoded(status, &bytes)
+    }
+
+    /// `PATCH /servers/{server_id}` with only its default channels.
     pub async fn set_default_channels(
         &self,
         server_id: &str,

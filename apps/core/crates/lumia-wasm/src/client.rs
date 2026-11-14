@@ -317,6 +317,26 @@ impl Client {
         to_js(&self.app.create_server(&name).await.map_err(js)?)
     }
 
+    /// Whether a server's deleted messages keep their place as "(deleted)"
+    /// (architecture 6.7). Returns the snapshot as it then is.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` without `MANAGE_SERVER`; transport failure.
+    #[wasm_bindgen(js_name = setShowDeleted)]
+    pub async fn set_show_deleted(
+        &self,
+        server_id: String,
+        show: bool,
+    ) -> Result<JsValue, JsError> {
+        to_js(
+            &self
+                .app
+                .set_show_deleted(&server_id, show)
+                .await
+                .map_err(js_api)?,
+        )
+    }
+
     /// `PATCH /servers/{id}`: a server's name, how long it keeps messages in
     /// days (0 for ever), or both; one left out stays. The snapshot as it
     /// then is.

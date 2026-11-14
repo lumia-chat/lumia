@@ -887,15 +887,34 @@ async fn an_author_edits_and_a_moderator_deletes() {
 
     let gone = member.seen();
     owner.app.delete_message(&general, &id).unwrap();
+    // A server shows no deleted messages unless it says so (architecture 6.7).
     member
         .wait_for(gone, Duration::from_secs(10), |_| {
-            member
-                .app
-                .messages(&general, 50)
-                .unwrap()
-                .into_iter()
-                .find(|m| m.message_id == id && m.deleted)
+            let listed = member.app.messages(&general, 50).unwrap();
+            (!listed.is_empty() && !listed.iter().any(|m| m.message_id == id)).then_some(())
         })
         .await
-        .expect("the moderator's delete reaches the member");
+        .expect("the moderator's delete takes the message away for the member");
+
+    // Said so, the member reads it in its place as deleted, once its snapshot says it too.
+    owner.app.set_show_deleted(&server_id, true).await.unwrap();
+    let shown = member
+        .app
+        .snapshot()
+        .await
+        .unwrap()
+        .servers
+        .into_iter()
+        .find(|s| s.server_id == server_id)
+        .unwrap();
+    assert!(shown.show_deleted);
+    assert!(
+        member
+            .app
+            .messages(&general, 50)
+            .unwrap()
+            .iter()
+            .any(|m| m.message_id == id && m.deleted),
+        "the deleted message keeps its place where the server shows them"
+    );
 }

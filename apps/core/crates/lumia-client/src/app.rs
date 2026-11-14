@@ -10,7 +10,7 @@
 //! the UI); what differs per target (spawning, `Send` bounds) is confined
 //! to this module's `cfg` lines.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -112,6 +112,11 @@ pub struct ServerSummary {
     /// How long the server keeps its messages, in days; 0 for ever.
     #[serde(default)]
     pub retention_days: u32,
+    /// Whether a deleted message keeps its place as "(deleted)" there; off,
+    /// the core leaves deleted messages out of what it reads (architecture
+    /// 6.7).
+    #[serde(default)]
+    pub show_deleted: bool,
     /// Whether this account may change the server's settings: its owner,
     /// or a member whose roles grant `MANAGE_SERVER` or `ADMINISTRATOR`
     /// (architecture 6.7). What a shell offers; the instance decides.
@@ -158,6 +163,7 @@ impl ServerSummary {
             name: server.name.clone(),
             icon_url: server.icon_url.clone(),
             retention_days: server.retention_days,
+            show_deleted: server.show_deleted,
             can_manage: holds(Permission::ManageServer),
             can_manage_channels: holds(Permission::ManageChannels),
             can_start_dms: holds(Permission::StartServerDms),
@@ -839,6 +845,10 @@ fn request_summary(r: &DmRequest) -> DmRequestSummary {
 /// Past that a list is cut, and a shell wants a search, not a list.
 const MEMBER_PAGES: usize = 50;
 
+/// How many pages a read of messages goes on through while deleted ones
+/// left out keep it short (architecture 6.7).
+const DELETED_PAGES: usize = 10;
+
 /// Where the last snapshot and the last member lists are kept in the
 /// instance store's meta area (`App::kept_snapshot`, `App::kept_members`).
 const KEPT_SNAPSHOT: &str = "kept_snapshot";
@@ -1138,6 +1148,9 @@ struct Inner {
     /// Read state, as the last snapshot counted it and the events since
     /// have added to it (architecture 6.6).
     reads: Reads,
+    /// The channels whose server shows deleted messages (architecture 6.7),
+    /// as the last snapshot said; every other conversation leaves them out.
+    shows_deleted: HashSet<Vec<u8>>,
 }
 
 /// Read state as this client keeps it between snapshots.
@@ -1383,6 +1396,7 @@ impl App {
                 watching: Vec::new(),
                 typed: None,
                 reads: Reads::default(),
+                shows_deleted: HashSet::new(),
             }),
             identity: AsyncMutex::new(IdentityStores {
                 store: identity_store,
@@ -2155,8 +2169,25 @@ impl App {
                 .collect();
             summary.read_states = reads.summaries();
         }
+        self.note_shows_deleted(&summary);
         self.keep(KEPT_SNAPSHOT, &summary);
         Ok(summary)
+    }
+
+    /// Which channels draw their deleted messages: a server's, where it says so.
+    fn note_shows_deleted(&self, snapshot: &SnapshotSummary) {
+        let showing: HashSet<&str> = snapshot
+            .servers
+            .iter()
+            .filter(|s| s.show_deleted)
+            .map(|s| s.server_id.as_str())
+            .collect();
+        self.lock().shows_deleted = snapshot
+            .channels
+            .iter()
+            .filter(|c| showing.contains(c.server_id.as_str()))
+            .filter_map(|c| parse_uuid(&c.channel_id).ok())
+            .collect();
     }
 
     /// The last snapshot this device got, kept in the instance store so a
@@ -2167,7 +2198,11 @@ impl App {
     /// # Errors
     /// On a store failure.
     pub fn kept_snapshot(&self) -> Result<Option<SnapshotSummary>, ClientError> {
-        self.kept(KEPT_SNAPSHOT)
+        let kept: Option<SnapshotSummary> = self.kept(KEPT_SNAPSHOT)?;
+        if let Some(snapshot) = &kept {
+            self.note_shows_deleted(snapshot);
+        }
+        Ok(kept)
     }
 
     /// Writes `value` under `key` in the instance store. Best effort: what
@@ -2263,7 +2298,9 @@ impl App {
             .unwrap_or_default())
     }
 
-    /// The newest messages of a channel from the local store, oldest first.
+    /// The newest messages of a channel from the local store, oldest first,
+    /// without the deleted ones unless its server shows them (architecture
+    /// 6.7).
     ///
     /// # Errors
     /// On a store failure or a malformed id.
@@ -2272,13 +2309,7 @@ impl App {
         channel_id: &str,
         limit: u32,
     ) -> Result<Vec<MessageSummary>, ClientError> {
-        let id = parse_uuid(channel_id)?;
-        let inner = self.lock();
-        let rows = inner.reader.messages(&id, limit as usize)?;
-        Ok(rows
-            .iter()
-            .map(|m| stored_summary(m, &inner.reads.me))
-            .collect())
+        self.messages_before(channel_id, u64::MAX, limit)
     }
 
     /// The page of a channel's local messages above one already read: the
@@ -2294,10 +2325,26 @@ impl App {
     ) -> Result<Vec<MessageSummary>, ClientError> {
         let id = parse_uuid(channel_id)?;
         let inner = self.lock();
-        let rows = inner
-            .reader
-            .messages_before(&id, before_seq, limit as usize)?;
-        Ok(rows
+        let shown = inner.shows_deleted.contains(&id);
+        // Read back until `limit` messages that are there, or the store's
+        // first: a run of deleted ones left out must not end the page early,
+        // or a shell would take it for the start of the channel.
+        let mut kept: Vec<lumia_core::store::StoredMessage> = Vec::new();
+        let mut below = before_seq;
+        for _ in 0..DELETED_PAGES {
+            let rows = inner.reader.messages_before(&id, below, limit as usize)?;
+            let full = rows.len() == limit as usize;
+            below = rows.first().map_or(0, |m| m.seq);
+            let mut page: Vec<lumia_core::store::StoredMessage> =
+                rows.into_iter().filter(|m| shown || !m.deleted).collect();
+            page.append(&mut kept);
+            kept = page;
+            if kept.len() >= limit as usize || !full || below == 0 {
+                break;
+            }
+        }
+        let skip = kept.len().saturating_sub(limit as usize);
+        Ok(kept[skip..]
             .iter()
             .map(|m| stored_summary(m, &inner.reads.me))
             .collect())
@@ -2319,18 +2366,33 @@ impl App {
         before_seq: u64,
         limit: u32,
     ) -> Result<(Vec<MessageSummary>, bool), ClientError> {
-        let page = self
-            .api
-            .list_messages(channel_id, before_seq, limit)
-            .await?;
-        let me = self.lock().reads.me.clone();
-        Ok((
-            page.messages
+        let (me, shown) = {
+            let inner = self.lock();
+            let shown = parse_uuid(channel_id).is_ok_and(|id| inner.shows_deleted.contains(&id));
+            (inner.reads.me.clone(), shown)
+        };
+        // As `messages_before` does: pages read on while deleted messages left
+        // out leave this one short, so scrollback does not stop at them.
+        let mut found: Vec<MessageSummary> = Vec::new();
+        let mut below = before_seq;
+        let mut more = true;
+        for _ in 0..DELETED_PAGES {
+            let page = self.api.list_messages(channel_id, below, limit).await?;
+            more = page.has_more;
+            below = page.messages.first().map_or(0, |m| m.seq);
+            let mut these: Vec<MessageSummary> = page
+                .messages
                 .iter()
+                .filter(|m| shown || m.deleted_at.is_none())
                 .map(|m| message_summary(m, &me))
-                .collect(),
-            page.has_more,
-        ))
+                .collect();
+            these.append(&mut found);
+            found = these;
+            if found.len() >= limit as usize || !more || below == 0 {
+                break;
+            }
+        }
+        Ok((found, more))
     }
 
     /// Starts the gateway loop, subscribing to `channel_ids` from the
@@ -2643,6 +2705,24 @@ impl App {
                 name.map(|n| n.trim().to_string()),
                 retention_days,
             )
+            .await?;
+        self.snapshot().await
+    }
+
+    /// Whether a server's deleted messages keep their place as "(deleted)"
+    /// (architecture 6.7; off by default). Every member hears of it through
+    /// the account log. Returns the account's snapshot as it then is.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` without `MANAGE_SERVER` there; transport failure.
+    pub async fn set_show_deleted(
+        &self,
+        server_id: &str,
+        show: bool,
+    ) -> Result<SnapshotSummary, ClientError> {
+        let server_id = parse_uuid(server_id)?;
+        self.api
+            .set_show_deleted(&wire::display(&server_id), show)
             .await?;
         self.snapshot().await
     }
@@ -3782,8 +3862,11 @@ impl App {
                 DmStatus::Undecryptable => undecryptable += 1,
             }
         }
+        // No server governs a personal conversation: its deleted messages are
+        // left out, as a server's are by default (architecture 6.7).
         let messages = projection
             .messages()
+            .filter(|m| !m.deleted)
             .map(|m| DmMessageSummary {
                 message_id: wire::display(&m.message_id),
                 seq: m.seq,
@@ -4110,6 +4193,7 @@ mod kept_tests {
                 name: "Acme".into(),
                 icon_url: String::new(),
                 retention_days: 0,
+                show_deleted: false,
                 can_manage: false,
                 can_manage_channels: false,
                 can_start_dms: false,
@@ -4135,6 +4219,73 @@ mod kept_tests {
             channel_invitations: Vec::new(),
             read_states: Vec::new(),
         }
+    }
+
+    #[test]
+    fn deleted_messages_are_read_only_where_the_server_shows_them() {
+        use lumia_core::proto::{event, Event, Message, MessageCreated, MessageDeleted};
+        use lumia_core::store::{LogKind, Store, StoredEvent};
+        use prost::Message as _;
+
+        let app = app();
+        let id = "018f0000-0000-7000-8000-000000000001";
+        let ch = parse_uuid(id).unwrap();
+        let at = |seq: u64, payload: event::Payload| StoredEvent {
+            seq,
+            bytes: Event {
+                channel_id: ch.clone(),
+                seq,
+                payload: Some(payload),
+                ..Default::default()
+            }
+            .encode_to_vec(),
+        };
+        let mut events: Vec<StoredEvent> = (1..=30)
+            .map(|seq| {
+                at(
+                    seq,
+                    event::Payload::MessageCreated(MessageCreated {
+                        message: Some(Message {
+                            message_id: vec![seq as u8; 16],
+                            channel_id: ch.clone(),
+                            seq,
+                            body: format!("m{seq}"),
+                            ..Default::default()
+                        }),
+                    }),
+                )
+            })
+            .collect();
+        // The newest 20 are deleted: a page of 5 must read past them all.
+        for (i, seq) in (11..=30u64).enumerate() {
+            events.push(at(
+                31 + i as u64,
+                event::Payload::MessageDeleted(MessageDeleted {
+                    message_id: vec![seq as u8; 16],
+                    purge_cache: false,
+                }),
+            ));
+        }
+        app.lock()
+            .reader
+            .apply(LogKind::Channel, &ch, &events)
+            .unwrap();
+
+        // No snapshot yet, or the server's setting off: left out.
+        let page = app.messages(id, 5).unwrap();
+        let bodies: Vec<&str> = page.iter().map(|m| m.body.as_str()).collect();
+        assert_eq!(bodies, ["m6", "m7", "m8", "m9", "m10"]);
+        let older = app.messages_before(id, page[0].seq, 5).unwrap();
+        assert_eq!(older.first().map(|m| m.body.as_str()), Some("m1"));
+
+        // The server says to show them: they keep their places.
+        let mut showing = snapshot();
+        showing.servers[0].show_deleted = true;
+        showing.channels[0].channel_id = id.into();
+        app.note_shows_deleted(&showing);
+        let page = app.messages(id, 5).unwrap();
+        assert!(page.iter().all(|m| m.deleted));
+        assert_eq!(page.last().map(|m| m.seq), Some(30));
     }
 
     #[test]

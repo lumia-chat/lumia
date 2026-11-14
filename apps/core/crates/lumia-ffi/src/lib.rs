@@ -122,6 +122,9 @@ pub struct ServerSummary {
     pub icon_url: String,
     /// How long the server keeps its messages, in days; 0 for ever.
     pub retention_days: u32,
+    /// Whether a deleted message keeps its place as "(deleted)" there
+    /// (architecture 6.7); off, the core's reads leave deleted ones out.
+    pub show_deleted: bool,
     /// Whether this account may change the server's settings (architecture 6.7).
     pub can_manage: bool,
     /// Whether it may create channels there and remove others from them
@@ -146,6 +149,7 @@ impl From<app::ServerSummary> for ServerSummary {
             name: s.name,
             icon_url: s.icon_url,
             retention_days: s.retention_days,
+            show_deleted: s.show_deleted,
             can_manage: s.can_manage,
             can_manage_channels: s.can_manage_channels,
             can_start_dms: s.can_start_dms,
@@ -1239,6 +1243,15 @@ impl Client {
                 self.app
                     .update_server(&server_id, name.as_deref(), retention_days),
             )?
+            .into())
+    }
+
+    /// Whether a server's deleted messages keep their place as "(deleted)"
+    /// (architecture 6.7). Returns the snapshot as it then is.
+    pub fn set_show_deleted(&self, server_id: String, show: bool) -> Res<SnapshotSummary> {
+        Ok(self
+            .runtime
+            .block_on(self.app.set_show_deleted(&server_id, show))?
             .into())
     }
 
