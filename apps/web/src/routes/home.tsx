@@ -1,7 +1,7 @@
 // Home: personal DMs grouped by the instance that hosts them, message
 // requests, this identity's devices, and starting a conversation. From
 // the "Home", "Requests" and "Devices" boards in the gallery.
-import { For, Show, createEffect, createMemo, createSignal, on, type JSX } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, on, untrack, type JSX } from "solid-js";
 import {
   Avatar,
   Button,
@@ -688,19 +688,21 @@ function Profile(props: HomeProps) {
   // The account on this instance (protocol 9, `PATCH /account`): its
   // handle, and its display name where this browser holds no identity (one
   // that does keeps the name in the signed profile below). The fields take
-  // the snapshot's values once, not again over what is being typed.
+  // the snapshot's values, and follow them as they change (another device,
+  // issue #15) while they hold what was last taken; never over what is
+  // being typed.
   const [handle, setHandle] = createSignal("");
   const [accountName, setAccountName] = createSignal("");
   const [accountBusy, setAccountBusy] = createSignal(false);
   const [accountError, setAccountError] = createSignal("");
   const [accountSaved, setAccountSaved] = createSignal(false);
-  let seeded = false;
+  let taken: { handle: string; displayName: string } | undefined;
   createEffect(() => {
     const snap = snapshot.data;
-    if (!snap || seeded) return;
-    seeded = true;
-    setHandle(snap.handle);
-    setAccountName(snap.displayName);
+    if (!snap) return;
+    if (!taken || untrack(handle) === taken.handle) setHandle(snap.handle);
+    if (!taken || untrack(accountName) === taken.displayName) setAccountName(snap.displayName);
+    taken = { handle: snap.handle, displayName: snap.displayName };
   });
   const saveAccount = async (e: Event) => {
     e.preventDefault();

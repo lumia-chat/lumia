@@ -1480,6 +1480,66 @@ async function editingStep(which: string, stamp: number) {
   console.log(`  ${which}: edited its own message in place ("(edited)"), took it up again with Up and put it down with Escape, deleted one after the question and one at once with Shift, and was offered neither on someone else's, in ${Date.now() - t0} ms`);
 }
 
+// A changed name or picture (#15): someone in the browser account's server
+// renames themself and sets a picture from the CLI, and with the page open
+// and no reload, their message and the member list draw them as they now are.
+async function profileStep(which: string, stamp: number) {
+  const ownerDir = resolve(work, `cli-profile-owner-${which}`);
+  const otherDir = resolve(work, `cli-profile-other-${which}`);
+  const owner = `watches${which}${stamp}`;
+  const other = `renames${which}${stamp}`;
+  lumia(ownerDir, "instance", "add", instance);
+  lumia(ownerDir, "account", "create", "--handle", owner, "--password", password);
+  const server = lumia(ownerDir, "server-create", `Profile ${stamp}`).match(/[0-9a-f-]{36}/)?.[0];
+  if (!server) throw new Error("no server id");
+  const general = lumia(ownerDir, "channel-create", server, "general").match(/[0-9a-f-]{36}/)?.[0];
+  if (!general) throw new Error("no channel id");
+  const code = lumia(ownerDir, "invite-create", server).trim().split(/\s+/)[0];
+  if (!code) throw new Error("no invite code");
+  lumia(otherDir, "instance", "add", instance);
+  lumia(otherDir, "account", "create", "--handle", other, "--password", password);
+  lumia(otherDir, "join", code);
+  lumia(otherDir, "send", general, "Who am I now?");
+  const picture = resolve(work, `profile-${which}.png`);
+  await Bun.write(picture, png(64, [252, 103, 48]));
+  const { ctx, page } = await open(which, "profile");
+  const t0 = Date.now();
+  try {
+    await trustCard(page);
+    await page.getByLabel("Email or handle").fill(owner);
+    await page.getByRole("textbox", { name: "Password" }).fill(password);
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await page.getByPlaceholder("Message #general").waitFor();
+    const message = page.locator("article.lu-msg", { has: page.locator(".lu-msg__body", { hasText: "Who am I now?" }) });
+    const member = page.locator(".lu-shell__aside .lu-member", { hasText: other });
+    phase("before");
+    await message.locator(".lu-msg__author", { hasText: other }).waitFor();
+    await member.waitFor();
+    const photo = message.locator(".lu-avatar__photo");
+    if ((await photo.count()) > 0) throw new Error("a picture is drawn before one was set");
+    phase("renamed");
+    const name = `Renamed ${which} ${stamp}`;
+    lumia(otherDir, "account", "update", "--name", name, "--picture", picture);
+    await message.locator(".lu-msg__author", { hasText: name }).waitFor();
+    const renamed = page.locator(".lu-shell__aside .lu-member", { hasText: name });
+    await renamed.waitFor();
+    await photo.waitFor();
+    const src = await photo.getAttribute("src");
+    if (!src || !/\/api\/v1\/avatars\/[0-9a-f]{64}$/.test(src)) throw new Error(`the message's picture is ${src}`);
+    await renamed.locator(`.lu-avatar__photo[src="${src}"]`).waitFor();
+    await page.screenshot({ path: `${out}/${which}-profile-renamed.png` });
+    phase("again");
+    // A second picture is a new address, drawn in place of the first.
+    await Bun.write(picture, png(64, [48, 252, 103]));
+    lumia(otherDir, "account", "update", "--picture", picture);
+    await message.locator(`.lu-avatar__photo:not([src="${src}"])`).waitFor();
+    await renamed.locator(`.lu-avatar__photo:not([src="${src}"])`).waitFor();
+  } finally {
+    await ctx.close();
+  }
+  console.log(`  ${which}: a member renamed themself and set a picture, then another, and their message and the member list drew each at once, with no reload, in ${Date.now() - t0} ms`);
+}
+
 // Long messages, code blocks and long pastes (#18): a message over 14 lines
 // shows 10 and opens with Show more; a code block keeps its long line on one
 // line, scrolling sideways, and copies its text; a pasted draft keeps its
@@ -2097,6 +2157,7 @@ try {
       ["membership", () => membershipStep(which, stamp)],
       ["replies", () => repliesStep(which, stamp)],
       ["editing", () => editingStep(which, stamp)],
+      ["profile", () => profileStep(which, stamp)],
       ["long", () => longStep(which, stamp)],
       ["history", () => historyStep(which, stamp)],
       ["push", () => webPush(which, `web${stamp}`, passwordDir, server, general, webAccount)],

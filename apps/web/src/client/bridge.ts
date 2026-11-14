@@ -329,6 +329,8 @@ export type ClientEvent =
   | { kind: "welcomed"; accountId: string }
   | { kind: "applied"; channelId: string; events: EventSummary[] }
   | { kind: "accountApplied"; count: number }
+  /** Someone's name or picture changed, this account's own included (issue #15): the account as others see it, after the `accountApplied` it came in. */
+  | { kind: "profileUpdated"; accountId: string; handle: string; displayName: string; avatarUrl: string; pronouns: string; bio: string }
   | { kind: "acked"; commandId: string; seq: number }
   | { kind: "error"; code: string; message: string; commandId: string }
   | { kind: "subscriptionFailed"; channelId: string; message: string }

@@ -5,6 +5,7 @@
 import { QueryClient, createInfiniteQuery, createQuery, useQueryClient } from "@tanstack/solid-query";
 import { createSignal } from "solid-js";
 import { Bridge, ClientError, claimOwnership, type ClientEvent, type MemberSummary, type MessageSummary, type Opened, type ReadStateSummary, type SnapshotSummary, type StatusSummary } from "./bridge";
+import { type ProfileUpdate, membersWithProfile, peopleWithProfile, snapshotWithProfile, withProfile } from "./profiles";
 
 export const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: Infinity, retry: false } },
@@ -377,6 +378,13 @@ function onGatewayEvent(e: ClientEvent): void {
       void queryClient.invalidateQueries({ queryKey: ["readStates"] });
       void queryClient.invalidateQueries({ queryKey: ["dmChannels"] });
       break;
+    case "profileUpdated":
+      // Written in where the page holds the person, not asked again (issue #15).
+      queryClient.setQueriesData<MemberSummary[]>({ queryKey: ["members"] }, (list) => membersWithProfile(list, e));
+      queryClient.setQueriesData<Map<string, MemberSummary>>({ queryKey: ["people"] }, (people) => peopleWithProfile(people, e));
+      queryClient.setQueryData<SnapshotSummary>(["snapshot"], (snapshot) => snapshotWithProfile(snapshot, e));
+      profileUpdated(e);
+      break;
     case "snapshotTaken":
       void queryClient.invalidateQueries({ queryKey: ["messages", e.channelId] });
       break;
@@ -519,6 +527,14 @@ export function profileOf(accountId: string): MemberSummary | null | undefined {
     })
     .finally(() => setProfilesVersion((v) => v + 1));
   return undefined;
+}
+
+/** A public profile held, as the person now is; one not held is fetched as it is when first read. */
+function profileUpdated(p: ProfileUpdate): void {
+  const held = profiles.get(p.accountId);
+  if (!held) return;
+  profiles.set(p.accountId, withProfile(held, p));
+  setProfilesVersion((v) => v + 1);
 }
 
 export function hasIdentityQuery() {
