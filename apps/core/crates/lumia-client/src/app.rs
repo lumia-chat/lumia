@@ -1148,9 +1148,13 @@ struct Inner {
     /// Read state, as the last snapshot counted it and the events since
     /// have added to it (architecture 6.6).
     reads: Reads,
-    /// The channels whose server shows deleted messages (architecture 6.7),
-    /// as the last snapshot said; every other conversation leaves them out.
-    shows_deleted: HashSet<Vec<u8>>,
+    /// The servers that show deleted messages (architecture 6.7), as the last
+    /// snapshot said, and the server of each channel this client has heard
+    /// of: the snapshot's, and those Browse and a server DM begun named,
+    /// which a channel read before joining is. Every other conversation
+    /// leaves deleted messages out.
+    shows_deleted: HashSet<String>,
+    channel_servers: HashMap<Vec<u8>, String>,
 }
 
 /// Read state as this client keeps it between snapshots.
@@ -1397,6 +1401,7 @@ impl App {
                 typed: None,
                 reads: Reads::default(),
                 shows_deleted: HashSet::new(),
+                channel_servers: HashMap::new(),
             }),
             identity: AsyncMutex::new(IdentityStores {
                 store: identity_store,
@@ -1731,7 +1736,10 @@ impl App {
     ) -> Result<Vec<ChannelSummary>, ClientError> {
         let server_id = parse_uuid(server_id)?;
         let list = self.api.browse_channels(&wire::display(&server_id)).await?;
-        Ok(list.channels.iter().map(ChannelSummary::of).collect())
+        let channels: Vec<ChannelSummary> = list.channels.iter().map(ChannelSummary::of).collect();
+        // A channel read before joining is one of these.
+        self.note_channels(&channels);
+        Ok(channels)
     }
 
     /// `POST /channels/{id}/join`: a public channel this account can see,
@@ -1887,7 +1895,9 @@ impl App {
             .api
             .open_server_dm(&wire::display(&server_id), account_id)
             .await?;
-        Ok(ChannelSummary::of(&c))
+        let channel = ChannelSummary::of(&c);
+        self.note_channels(std::slice::from_ref(&channel));
+        Ok(channel)
     }
 
     /// `PATCH /servers/{id}` with exactly `channel_ids` as the server's
@@ -2174,20 +2184,35 @@ impl App {
         Ok(summary)
     }
 
-    /// Which channels draw their deleted messages: a server's, where it says so.
+    /// Which servers draw their deleted messages, and whose the snapshot's channels are.
     fn note_shows_deleted(&self, snapshot: &SnapshotSummary) {
-        let showing: HashSet<&str> = snapshot
+        let mut inner = self.lock();
+        inner.shows_deleted = snapshot
             .servers
             .iter()
             .filter(|s| s.show_deleted)
-            .map(|s| s.server_id.as_str())
+            .map(|s| s.server_id.clone())
             .collect();
-        self.lock().shows_deleted = snapshot
-            .channels
-            .iter()
-            .filter(|c| showing.contains(c.server_id.as_str()))
-            .filter_map(|c| parse_uuid(&c.channel_id).ok())
-            .collect();
+        drop(inner);
+        self.note_channels(&snapshot.channels);
+    }
+
+    /// Whose these channels are, for whether their deleted messages are read.
+    fn note_channels(&self, channels: &[ChannelSummary]) {
+        let mut inner = self.lock();
+        for c in channels.iter().filter(|c| !c.server_id.is_empty()) {
+            if let Ok(id) = parse_uuid(&c.channel_id) {
+                inner.channel_servers.insert(id, c.server_id.clone());
+            }
+        }
+    }
+
+    /// Whether a channel draws its deleted messages: its server's say.
+    fn shows_deleted(inner: &Inner, channel: &[u8]) -> bool {
+        inner
+            .channel_servers
+            .get(channel)
+            .is_some_and(|server| inner.shows_deleted.contains(server))
     }
 
     /// The last snapshot this device got, kept in the instance store so a
@@ -2325,7 +2350,7 @@ impl App {
     ) -> Result<Vec<MessageSummary>, ClientError> {
         let id = parse_uuid(channel_id)?;
         let inner = self.lock();
-        let shown = inner.shows_deleted.contains(&id);
+        let shown = Self::shows_deleted(&inner, &id);
         // Read back until `limit` messages that are there, or the store's
         // first: a run of deleted ones left out must not end the page early,
         // or a shell would take it for the start of the channel.
@@ -2368,7 +2393,7 @@ impl App {
     ) -> Result<(Vec<MessageSummary>, bool), ClientError> {
         let (me, shown) = {
             let inner = self.lock();
-            let shown = parse_uuid(channel_id).is_ok_and(|id| inner.shows_deleted.contains(&id));
+            let shown = parse_uuid(channel_id).is_ok_and(|id| Self::shows_deleted(&inner, &id));
             (inner.reads.me.clone(), shown)
         };
         // As `messages_before` does: pages read on while deleted messages left
@@ -4278,11 +4303,18 @@ mod kept_tests {
         let older = app.messages_before(id, page[0].seq, 5).unwrap();
         assert_eq!(older.first().map(|m| m.body.as_str()), Some("m1"));
 
-        // The server says to show them: they keep their places.
+        // The server says to show them, but the snapshot does not list this channel (one
+        // read before joining): still left out, since nothing names its server.
         let mut showing = snapshot();
         showing.servers[0].show_deleted = true;
-        showing.channels[0].channel_id = id.into();
         app.note_shows_deleted(&showing);
+        assert!(app.messages(id, 5).unwrap().iter().all(|m| !m.deleted));
+
+        // Browse names its server, whose say it follows: they keep their places.
+        app.note_channels(&[ChannelSummary {
+            channel_id: id.into(),
+            ..snapshot().channels[0].clone()
+        }]);
         let page = app.messages(id, 5).unwrap();
         assert!(page.iter().all(|m| m.deleted));
         assert_eq!(page.last().map(|m| m.seq), Some(30));
