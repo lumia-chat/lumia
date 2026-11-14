@@ -182,6 +182,10 @@ public struct LumiaMessageRow: View {
     private var scale: CGFloat { measures.text }
     /// Show more or Show less is offered under the words.
     private var collapsible: Bool { tall && extras.expand != nil && !deleted && !editing }
+    /// The reaction chips are drawn under the words. Hidden by Preferences,
+    /// they are not drawn at all, so they take no room and assistive
+    /// technology does not hear them; Add reaction stays among the actions.
+    private var chips: Bool { measures.reactions == .shown && !extras.reactions.isEmpty && !deleted && !editing }
 
     public var body: some View {
         let blocks = blocks
@@ -211,7 +215,7 @@ public struct LumiaMessageRow: View {
                     LumiaShowMore(expanded: extras.expanded, scale: scale, toggle: expand)
                         .padding(.leading, measures.gutter)
                 }
-                if !extras.reactions.isEmpty, !deleted, !editing {
+                if chips {
                     LumiaReactionChips(reactions: extras.reactions, toggle: extras.toggle, add: extras.addReaction, scale: scale)
                         .padding(.leading, measures.gutter)
                 }
@@ -246,7 +250,7 @@ public struct LumiaMessageRow: View {
             if collapsible, let expand = extras.expand {
                 LumiaShowMore(expanded: extras.expanded, scale: scale, toggle: expand)
             }
-            if !extras.reactions.isEmpty, !deleted, !editing {
+            if chips {
                 LumiaReactionChips(reactions: extras.reactions, toggle: extras.toggle, add: extras.addReaction, scale: scale)
                     .padding(.top, LumiaTokens.space2)
             }

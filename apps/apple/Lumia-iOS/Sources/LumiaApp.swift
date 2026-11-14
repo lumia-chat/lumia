@@ -41,6 +41,10 @@ struct RootView: View {
             if let devScreen, devScreen.hasPrefix("bodies") {
                 // No instance: message bodies alone (DevScenes.swift).
                 BodiesScene(part: devScreen)
+            } else if devScreen == "reactions" {
+                ReactionsScene()
+            } else if devScreen == "reactions-preferences" {
+                PreferencesScreen()
             } else {
                 screen
             }

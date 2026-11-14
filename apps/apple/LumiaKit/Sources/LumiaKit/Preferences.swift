@@ -1,8 +1,8 @@
 // Preferences: how Lumia looks on this phone. Light or dark (or as the
 // phone is), and how a conversation's messages are drawn: their layout,
-// the room between them, their avatars, their text's size, and (once
-// attachments and unfurling exist) whether images and embeds are shown or
-// left as links. Each takes effect as it is made and is kept in
+// the room between them, their avatars, their text's size, whether their
+// reactions are drawn, and (once attachments and unfurling exist) whether
+// images and embeds are shown or left as links. Each takes effect as it is made and is kept in
 // `UserDefaults` for the next launch, each on its own key and each read as
 // its default when missing or not understood. Comfortable, Compact and
 // Minimal are presets that write the message settings and are not stored
@@ -133,6 +133,25 @@ public enum MediaDisplay: String, CaseIterable, Sendable {
     public init(stored: String?) { self = stored.flatMap(MediaDisplay.init(rawValue:)) ?? .standard }
 }
 
+/// Whether a message's reactions are drawn under it. Hidden draws none of
+/// its chips, the way to add another among them, and leaves no room where
+/// they were; adding a reaction is still offered, by a long press and to
+/// assistive technology, and one added is simply not drawn.
+public enum ReactionVisibility: String, CaseIterable, Sendable {
+    case shown, hidden
+
+    public static let standard = ReactionVisibility.shown
+
+    public init(stored: String?) { self = stored.flatMap(ReactionVisibility.init(rawValue:)) ?? .standard }
+
+    public var label: String {
+        switch self {
+        case .shown: "Shown"
+        case .hidden: "Hidden"
+        }
+    }
+}
+
 /// The message text's size in points. Every text in a message row and the
 /// composer's are scaled by the same ratio over 15, on top of the system's
 /// text size; avatars and room are not.
@@ -174,13 +193,14 @@ public struct MessageDisplay: Equatable, Sendable {
     public var avatars: AvatarSize
     public var images: MediaDisplay
     public var embeds: MediaDisplay
+    public var reactions: ReactionVisibility
 
-    public init(layout: MessageLayout, spacing: MessageSpacing, avatars: AvatarSize, images: MediaDisplay, embeds: MediaDisplay) {
-        self.layout = layout; self.spacing = spacing; self.avatars = avatars; self.images = images; self.embeds = embeds
+    public init(layout: MessageLayout, spacing: MessageSpacing, avatars: AvatarSize, images: MediaDisplay, embeds: MediaDisplay, reactions: ReactionVisibility) {
+        self.layout = layout; self.spacing = spacing; self.avatars = avatars; self.images = images; self.embeds = embeds; self.reactions = reactions
     }
 
     /// Each setting's own default, which is Comfortable.
-    public static let standard = MessageDisplay(layout: .standard, spacing: .standard, avatars: .standard, images: .standard, embeds: .standard)
+    public static let standard = MessageDisplay(layout: .standard, spacing: .standard, avatars: .standard, images: .standard, embeds: .standard, reactions: .standard)
 }
 
 /// Comfortable, Compact and Minimal: names for a set of values, which
@@ -191,9 +211,9 @@ public enum MessagePreset: String, CaseIterable, Sendable {
 
     public var display: MessageDisplay {
         switch self {
-        case .comfortable: MessageDisplay(layout: .grouped, spacing: .roomy, avatars: .large, images: .shown, embeds: .shown)
-        case .compact: MessageDisplay(layout: .grouped, spacing: .cozy, avatars: .small, images: .shown, embeds: .shown)
-        case .minimal: MessageDisplay(layout: .oneLine, spacing: .tight, avatars: .hidden, images: .link, embeds: .link)
+        case .comfortable: MessageDisplay(layout: .grouped, spacing: .roomy, avatars: .large, images: .shown, embeds: .shown, reactions: .shown)
+        case .compact: MessageDisplay(layout: .grouped, spacing: .cozy, avatars: .small, images: .shown, embeds: .shown, reactions: .shown)
+        case .minimal: MessageDisplay(layout: .oneLine, spacing: .tight, avatars: .hidden, images: .link, embeds: .link, reactions: .hidden)
         }
     }
 
@@ -220,7 +240,8 @@ public enum MessagePreset: String, CaseIterable, Sendable {
 }
 
 /// How a conversation's rows are drawn: their layout, their avatar and
-/// room, which the spacing and the avatars choose, and their text's scale.
+/// room, which the spacing and the avatars choose, their text's scale, and
+/// whether their reactions are drawn.
 /// Roomy is the boards' room, cozy half of it, tight cozy with less over
 /// and between blocks.
 public struct MessageMeasures: Equatable, Sendable {
@@ -244,6 +265,8 @@ public struct MessageMeasures: Equatable, Sendable {
     /// What every text in a row is multiplied by: the font size over 15,
     /// times the system's text size.
     public var text: CGFloat = 1
+    /// Whether a row draws its reaction chips.
+    public var reactions = ReactionVisibility.standard
 
     public init(layout: MessageLayout = .grouped, avatar: CGFloat, edge: CGFloat, blockGap: CGFloat, beside: CGFloat, underName: CGFloat, divider: CGFloat, line: CGFloat = 0, text: CGFloat = 1) {
         self.layout = layout; self.avatar = avatar; self.edge = edge; self.blockGap = blockGap; self.beside = beside; self.underName = underName; self.divider = divider; self.line = line; self.text = text
@@ -286,6 +309,7 @@ public struct MessageMeasures: Equatable, Sendable {
     public static func of(_ display: MessageDisplay, fontSize: FontSize = .standard, system: CGFloat = 1) -> MessageMeasures {
         var m = of(spacing: display.spacing, avatars: display.avatars, layout: display.layout)
         m.text = fontSize.scale * system
+        m.reactions = display.reactions
         return m
     }
 
@@ -326,12 +350,16 @@ public final class Preferences {
         didSet { defaults.set(embeds.rawValue, forKey: Self.embedsKey) }
     }
 
+    public var reactions: ReactionVisibility {
+        didSet { defaults.set(reactions.rawValue, forKey: Self.reactionsKey) }
+    }
+
     /// The message settings a preset writes, together; set, each is stored.
     public var display: MessageDisplay {
-        get { MessageDisplay(layout: layout, spacing: spacing, avatars: avatars, images: images, embeds: embeds) }
+        get { MessageDisplay(layout: layout, spacing: spacing, avatars: avatars, images: images, embeds: embeds, reactions: reactions) }
         set {
             layout = newValue.layout; spacing = newValue.spacing; avatars = newValue.avatars
-            images = newValue.images; embeds = newValue.embeds
+            images = newValue.images; embeds = newValue.embeds; reactions = newValue.reactions
         }
     }
 
@@ -357,6 +385,7 @@ public final class Preferences {
     public nonisolated static let fontSizeKey = "font_size"
     public nonisolated static let imagesKey = "images"
     public nonisolated static let embedsKey = "embeds"
+    public nonisolated static let reactionsKey = "reactions"
 
     /// What a debug build's launch may name, for the smoke runs
     /// (`scripts/smoke-ios.sh`): `LUMIA_DEV_APPEARANCE` (light, dark or
@@ -385,6 +414,7 @@ public final class Preferences {
         avatars = named?.avatars ?? AvatarSize(stored: defaults.string(forKey: Self.avatarsKey))
         images = named?.images ?? MediaDisplay(stored: defaults.string(forKey: Self.imagesKey))
         embeds = named?.embeds ?? MediaDisplay(stored: defaults.string(forKey: Self.embedsKey))
+        reactions = named?.reactions ?? ReactionVisibility(stored: defaults.string(forKey: Self.reactionsKey))
         fontSize = environment["LUMIA_DEV_FONT_SIZE"].flatMap(Int.init).flatMap(FontSize.init)
             ?? FontSize(stored: defaults.object(forKey: Self.fontSizeKey))
     }

@@ -1,6 +1,7 @@
 // Preferences as values: what an appearance resolves to, what the presets
 // write and which one a set of values is, what each spacing and avatar
-// size measures, and the choices read and written with their defaults.
+// size measures, whether reactions are drawn, and the choices read and
+// written with their defaults.
 // The plan's "Display settings", the same on every client.
 import Foundation
 @testable import LumiaKit
@@ -38,6 +39,7 @@ final class PreferencesTests: XCTestCase {
         XCTAssertEqual(MessageSpacing.allCases.map(\.label), ["Roomy", "Cozy", "Tight"])
         XCTAssertEqual(AvatarSize.allCases.map(\.label), ["Large", "Small", "Hidden"])
         XCTAssertEqual(FontSize.choices.map(\.label), ["13", "14", "15", "16", "18", "20"])
+        XCTAssertEqual(ReactionVisibility.allCases.map(\.label), ["Shown", "Hidden"])
         XCTAssertEqual(MessagePreset.custom, "Custom: these settings match no preset.")
         // The stored words, the same on every client.
         XCTAssertEqual(Appearance.allCases.map(\.rawValue), ["light", "dark", "system"])
@@ -45,16 +47,17 @@ final class PreferencesTests: XCTestCase {
         XCTAssertEqual(MessageSpacing.allCases.map(\.rawValue), ["roomy", "cozy", "tight"])
         XCTAssertEqual(AvatarSize.allCases.map(\.rawValue), ["large", "small", "hidden"])
         XCTAssertEqual(MediaDisplay.allCases.map(\.rawValue), ["shown", "link"])
+        XCTAssertEqual(ReactionVisibility.allCases.map(\.rawValue), ["shown", "hidden"])
         XCTAssertEqual(FontSize.choices.map(\.points), [13, 14, 15, 16, 18, 20])
-        XCTAssertEqual([Preferences.layoutKey, Preferences.spacingKey, Preferences.avatarsKey, Preferences.fontSizeKey, Preferences.imagesKey, Preferences.embedsKey], ["layout", "spacing", "avatars", "font_size", "images", "embeds"])
+        XCTAssertEqual([Preferences.layoutKey, Preferences.spacingKey, Preferences.avatarsKey, Preferences.fontSizeKey, Preferences.imagesKey, Preferences.embedsKey, Preferences.reactionsKey], ["layout", "spacing", "avatars", "font_size", "images", "embeds", "reactions"])
     }
 
     // MARK: Presets
 
     func testEachPresetIsItsValues() {
-        XCTAssertEqual(MessagePreset.comfortable.display, MessageDisplay(layout: .grouped, spacing: .roomy, avatars: .large, images: .shown, embeds: .shown))
-        XCTAssertEqual(MessagePreset.compact.display, MessageDisplay(layout: .grouped, spacing: .cozy, avatars: .small, images: .shown, embeds: .shown))
-        XCTAssertEqual(MessagePreset.minimal.display, MessageDisplay(layout: .oneLine, spacing: .tight, avatars: .hidden, images: .link, embeds: .link))
+        XCTAssertEqual(MessagePreset.comfortable.display, MessageDisplay(layout: .grouped, spacing: .roomy, avatars: .large, images: .shown, embeds: .shown, reactions: .shown))
+        XCTAssertEqual(MessagePreset.compact.display, MessageDisplay(layout: .grouped, spacing: .cozy, avatars: .small, images: .shown, embeds: .shown, reactions: .shown))
+        XCTAssertEqual(MessagePreset.minimal.display, MessageDisplay(layout: .oneLine, spacing: .tight, avatars: .hidden, images: .link, embeds: .link, reactions: .hidden))
         // Each setting's own default is Comfortable's value.
         XCTAssertEqual(MessageDisplay.standard, MessagePreset.comfortable.display)
         for preset in MessagePreset.allCases { XCTAssertEqual(MessagePreset.matching(preset.display), preset) }
@@ -68,6 +71,7 @@ final class PreferencesTests: XCTestCase {
             for spacing in MessageSpacing.allCases where spacing != d.spacing { var x = d; x.spacing = spacing; changed.append(x) }
             for media in MediaDisplay.allCases where media != d.images { var x = d; x.images = media; changed.append(x) }
             for media in MediaDisplay.allCases where media != d.embeds { var x = d; x.embeds = media; changed.append(x) }
+            for reactions in ReactionVisibility.allCases where reactions != d.reactions { var x = d; x.reactions = reactions; changed.append(x) }
             if d.layout == .grouped {
                 for avatars in AvatarSize.allCases where avatars != d.avatars { var x = d; x.avatars = avatars; changed.append(x) }
             }
@@ -101,6 +105,7 @@ final class PreferencesTests: XCTestCase {
         XCTAssertEqual(defaults.string(forKey: Preferences.avatarsKey), "hidden")
         XCTAssertEqual(defaults.string(forKey: Preferences.imagesKey), "link")
         XCTAssertEqual(defaults.string(forKey: Preferences.embedsKey), "link")
+        XCTAssertEqual(defaults.string(forKey: Preferences.reactionsKey), "hidden")
         XCTAssertEqual(defaults.integer(forKey: Preferences.fontSizeKey), 18)
         XCTAssertFalse(defaults.dictionaryRepresentation().keys.contains("preset"))
         // A tweak is Custom; choosing nothing changes nothing.
@@ -113,6 +118,50 @@ final class PreferencesTests: XCTestCase {
         preferences.preset = .compact
         XCTAssertEqual(preferences.display, MessagePreset.compact.display)
         XCTAssertEqual(defaults.string(forKey: Preferences.imagesKey), "shown")
+        XCTAssertEqual(defaults.string(forKey: Preferences.reactionsKey), "shown")
+    }
+
+    // MARK: Reactions
+
+    func testReactionsAreShownButInMinimal() {
+        XCTAssertEqual(ReactionVisibility.standard, .shown)
+        XCTAssertEqual(MessageDisplay.standard.reactions, .shown)
+        XCTAssertEqual(MessagePreset.allCases.map(\.display.reactions), [.shown, .shown, .hidden])
+        // The rows are drawn by it: Minimal's draw no chips, the others' do.
+        XCTAssertEqual(MessageMeasures.standard.reactions, .shown)
+        XCTAssertEqual(MessagePreset.allCases.map { MessageMeasures.of($0.display).reactions }, [.shown, .shown, .hidden])
+    }
+
+    func testReactionsAreComparedLikeEveryOtherValue() {
+        // Minimal with its reactions shown is nobody's, and so is Comfortable with them hidden.
+        var minimal = MessagePreset.minimal.display
+        minimal.reactions = .shown
+        XCTAssertNil(MessagePreset.matching(minimal))
+        var comfortable = MessagePreset.comfortable.display
+        comfortable.reactions = .hidden
+        XCTAssertNil(MessagePreset.matching(comfortable))
+        // Chosen on the page after Minimal, they make it Custom; hidden again, it is Minimal.
+        let preferences = Preferences(defaults: scratch(), environment: [:])
+        preferences.preset = .minimal
+        XCTAssertEqual(preferences.reactions, .hidden)
+        XCTAssertEqual(preferences.measures().reactions, .hidden)
+        preferences.reactions = .shown
+        XCTAssertNil(preferences.preset)
+        XCTAssertEqual(preferences.measures().reactions, .shown)
+        preferences.reactions = .hidden
+        XCTAssertEqual(preferences.preset, .minimal)
+    }
+
+    func testReactionsMissingOrNotUnderstoodAreShown() {
+        let defaults = scratch()
+        XCTAssertEqual(Preferences(defaults: defaults, environment: [:]).reactions, .shown)
+        for stored: Any in ["Hidden", "none", "", "link", true, 0] {
+            defaults.set(stored, forKey: Preferences.reactionsKey)
+            XCTAssertEqual(Preferences(defaults: defaults, environment: [:]).reactions, .shown, "\(stored)")
+        }
+        defaults.set("hidden", forKey: Preferences.reactionsKey)
+        XCTAssertEqual(Preferences(defaults: defaults, environment: [:]).reactions, .hidden)
+        XCTAssertEqual(ReactionVisibility(stored: nil), .shown)
     }
 
     // MARK: Measures
@@ -203,11 +252,12 @@ final class PreferencesTests: XCTestCase {
         preferences.fontSize = FontSize(13)!
         preferences.images = .link
         preferences.embeds = .shown
+        preferences.reactions = .hidden
         XCTAssertEqual(defaults.string(forKey: Preferences.appearanceKey), "dark")
         // A second launch over the same store has them, before anything is asked.
         let again = Preferences(defaults: defaults, environment: [:])
         XCTAssertEqual(again.appearance, .dark)
-        XCTAssertEqual(again.display, MessageDisplay(layout: .oneLine, spacing: .cozy, avatars: .small, images: .link, embeds: .shown))
+        XCTAssertEqual(again.display, MessageDisplay(layout: .oneLine, spacing: .cozy, avatars: .small, images: .link, embeds: .shown, reactions: .hidden))
         XCTAssertEqual(again.fontSize.points, 13)
         XCTAssertNil(again.preset)
         // And back: System is stored as a choice, not as nothing.
@@ -278,9 +328,11 @@ final class PreferencesTests: XCTestCase {
         let named = Preferences(defaults: defaults, environment: ["LUMIA_DEV_APPEARANCE": "dark", "LUMIA_DEV_PRESET": "minimal", "LUMIA_DEV_FONT_SIZE": "20"])
         XCTAssertEqual(named.appearance, .dark)
         XCTAssertEqual(named.preset, .minimal)
+        XCTAssertEqual(named.reactions, .hidden)
         XCTAssertEqual(named.fontSize.points, 20)
         XCTAssertEqual(defaults.string(forKey: Preferences.appearanceKey), "light")
         XCTAssertNil(defaults.string(forKey: Preferences.layoutKey))
+        XCTAssertNil(defaults.string(forKey: Preferences.reactionsKey))
         XCTAssertEqual(defaults.integer(forKey: Preferences.fontSizeKey), 14)
         // The next launch without them reads what was there before.
         let next = Preferences(defaults: defaults, environment: [:])
@@ -297,7 +349,7 @@ final class PreferencesTests: XCTestCase {
     // The choices are this phone's and not the account's: ending the
     // session (signing out, or forgetting the instance) leaves them.
     func testSigningOutLeavesTheChoices() async {
-        let keys = [Preferences.appearanceKey, Preferences.layoutKey, Preferences.spacingKey, Preferences.avatarsKey, Preferences.fontSizeKey, Preferences.imagesKey, Preferences.embedsKey]
+        let keys = [Preferences.appearanceKey, Preferences.layoutKey, Preferences.spacingKey, Preferences.avatarsKey, Preferences.fontSizeKey, Preferences.imagesKey, Preferences.embedsKey, Preferences.reactionsKey]
         let before = keys.map { UserDefaults.standard.object(forKey: $0) }
         defer { for (key, value) in zip(keys, before) { UserDefaults.standard.set(value, forKey: key) } }
         let preferences = Preferences(defaults: .standard, environment: [:])

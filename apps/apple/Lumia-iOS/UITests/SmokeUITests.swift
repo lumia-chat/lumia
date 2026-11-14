@@ -67,6 +67,7 @@ final class SmokeUITests: XCTestCase {
             ("Spacing", ["Roomy", "Cozy", "Tight"]),
             ("Avatars", ["Large", "Small", "Hidden"]),
             ("Font size", ["13", "14", "15", "16", "18", "20"]),
+            ("Reactions", ["Shown", "Hidden"]),
         ]
         let labels = Dictionary(uniqueKeysWithValues: groups)
         /// What each group has selected, from the top; a group not drawn has none.
@@ -74,8 +75,8 @@ final class SmokeUITests: XCTestCase {
             Dictionary(uniqueKeysWithValues: groups.map { ($0.0, selected($0.0, of: $0.1)) })
         }
         let custom = "Custom: these settings match no preset."
-        let page = { (dark: String, preset: [String], layout: String, spacing: String, avatars: [String], size: String) -> [String: [String]] in
-            ["Appearance": [dark], "Preset": preset, "Layout": [layout], "Spacing": [spacing], "Avatars": avatars, "Font size": [size]]
+        let page = { (dark: String, preset: [String], layout: String, spacing: String, avatars: [String], size: String, reactions: String) -> [String: [String]] in
+            ["Appearance": [dark], "Preset": preset, "Layout": [layout], "Spacing": [spacing], "Avatars": avatars, "Font size": [size], "Reactions": [reactions]]
         }
 
         openPreferences()
@@ -88,19 +89,19 @@ final class SmokeUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts["Scroll bars"].exists, "a phone's scroll indicators are the system's")
         XCTAssertFalse(app.staticTexts["Images"].exists || app.staticTexts["Embeds"].exists, "no control until there is something for it to do")
         // As a new phone has them.
-        XCTAssertEqual(chosen(), page("System", ["Comfortable"], "Grouped", "Roomy", ["Large"], "15"))
+        XCTAssertEqual(chosen(), page("System", ["Comfortable"], "Grouped", "Roomy", ["Large"], "15", "Shown"))
         XCTAssertFalse(app.staticTexts[custom].exists)
 
         choice("Appearance", "Dark").tap()
-        // Minimal writes its values; one line has no avatars to choose.
+        // Minimal writes its values, reactions hidden among them; one line has no avatars to choose.
         choice("Preset", "Minimal").tap()
-        XCTAssertEqual(chosen(), page("Dark", ["Minimal"], "One line", "Tight", [], "15"))
+        XCTAssertEqual(chosen(), page("Dark", ["Minimal"], "One line", "Tight", [], "15", "Hidden"))
         XCTAssertFalse(choice("Avatars", "Large").exists, "one line draws no avatar")
         // A setting changed after it is Custom, and the font size is no preset's.
         choice("Font size", "18").tap()
         XCTAssertEqual(selected("Preset", of: labels["Preset"]!), ["Minimal"])
         choice("Spacing", "Cozy").tap()
-        XCTAssertEqual(chosen(), page("Dark", [], "One line", "Cozy", [], "18"))
+        XCTAssertEqual(chosen(), page("Dark", [], "One line", "Cozy", [], "18", "Hidden"))
         XCTAssertTrue(app.staticTexts[custom].waitForExistence(timeout: 5), "the screen does not say \"\(custom)\"")
         _ = reached("dark")
 
@@ -117,14 +118,14 @@ final class SmokeUITests: XCTestCase {
         openPreferences()
         app.collectionViews.buttons["Preferences"].tap()
         XCTAssertTrue(choice("Appearance", "Dark").waitForExistence(timeout: 10))
-        XCTAssertEqual(chosen(), page("Dark", [], "One line", "Cozy", [], "18"))
+        XCTAssertEqual(chosen(), page("Dark", [], "One line", "Cozy", [], "18", "Hidden"))
         XCTAssertTrue(app.staticTexts[custom].exists)
 
         // And back, as it is made: the phone's own appearance again, Comfortable at 15.
         choice("Appearance", "System").tap()
         choice("Preset", "Comfortable").tap()
         choice("Font size", "15").tap()
-        XCTAssertEqual(chosen(), page("System", ["Comfortable"], "Grouped", "Roomy", ["Large"], "15"))
+        XCTAssertEqual(chosen(), page("System", ["Comfortable"], "Grouped", "Roomy", ["Large"], "15", "Shown"))
         XCTAssertFalse(app.staticTexts[custom].exists)
         _ = reached("system")
     }

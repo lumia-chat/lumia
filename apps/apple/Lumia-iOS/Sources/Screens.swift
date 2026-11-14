@@ -882,8 +882,9 @@ struct ProfileScreen: View {
 // here is the account's or is sent to the instance. The other clients'
 // page in their words, without the desktop's scroll bars, which on a phone
 // are the system's. No board draws it, so it is the Profile screen's cards
-// with the design's segmented choice. Images and Embeds have no control
-// until attachments and unfurling exist.
+// with the design's segmented choice. Reactions, shown or hidden, come
+// after Font size. Images and Embeds have no control until attachments and
+// unfurling exist.
 struct PreferencesScreen: View {
     @Environment(Preferences.self) private var preferences
 
@@ -919,6 +920,9 @@ struct PreferencesScreen: View {
                             // Six segments of two digits fit the narrowest phone's card.
                             PreferenceRow("Font size") {
                                 LumiaSegmentedTabs("Font size", tabs: FontSize.choices.map { .init(id: $0, label: $0.label) }, selected: $preferences.fontSize)
+                            }
+                            PreferenceRow("Reactions") {
+                                LumiaSegmentedTabs("Reactions", tabs: ReactionVisibility.allCases.map { .init(id: $0, label: $0.label) }, selected: $preferences.reactions)
                             }
                         }
                     }

@@ -3,6 +3,9 @@
 // `bodies-composer`): message bodies as the core
 // reads them, every construct of the protocol's subset, a long one
 // collapsed and one shown whole, and the composer near and over the limit.
+// `reactions` is a few messages with reactions, a reply among them, drawn
+// as the launch's preset says (`LUMIA_DEV_PRESET=minimal` hides them), and
+// `reactions-preferences` the Preferences page where they are chosen.
 #if DEBUG
 import LumiaFFI
 import LumiaKit
@@ -79,6 +82,36 @@ struct BodiesScene: View {
         x.expanded = expanded.contains(id)
         x.expand = { expanded.formSymmetricDifference([id]) }
         return LumiaMessageRow(author: author, tone: .of(author), time: "12:04", text: text, measures: measures, extras: x)
+    }
+}
+
+struct ReactionsScene: View {
+    @Environment(Preferences.self) private var preferences
+    @ScaledMetric(relativeTo: .body) private var systemText = LumiaTokens.textMessage.size
+
+    private var measures: MessageMeasures { preferences.measures(system: systemText / LumiaTokens.textMessage.size) }
+
+    var body: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                LumiaDayDivider(label: "Today", measures: measures)
+                row("Ada Lovelace", "12:01", "The new build is up. Grouped or one line, the chips sit under the words.", place: MessagePlace(closes: false), reactions: [("👍", 2, true, "You and Ada Lovelace reacted with 👍"), ("🎉", 1, false, "Ada Lovelace reacted with 🎉")])
+                row("Ada Lovelace", "12:01", "A second message in the same block, with nothing on it.", place: MessagePlace(opens: false))
+                row("Grace Hopper", "12:03", "Looks right here.", quote: "The new build is up.", reactions: [("🚀", 3, false, "Ada Lovelace, Grace Hopper and 1 other reacted with 🚀")])
+                row("Grace Hopper", "12:04", "And the next message starts where the chips were when they are hidden.")
+            }
+            .padding(.vertical, LumiaTokens.space8)
+        }
+        .background(LumiaTokens.surface.color)
+    }
+
+    private func row(_ author: String, _ time: String, _ text: String, place: MessagePlace = MessagePlace(), quote: String? = nil, reactions: [(String, UInt32, Bool, String)] = []) -> some View {
+        var x = MessageExtras()
+        x.quote = quote.map { QuoteDisplay(authorID: "Ada Lovelace", name: "Ada Lovelace", text: $0, deleted: false, quotesMe: false, open: {}) }
+        x.reactions = reactions.map { ReactionDisplay(emoji: $0.0, count: $0.1, me: $0.2, words: $0.3) }
+        x.addReaction = {}
+        x.actions = {}
+        return LumiaMessageRow(author: author, tone: .of(author), time: time, text: text, place: place, measures: measures, extras: x)
     }
 }
 #endif
