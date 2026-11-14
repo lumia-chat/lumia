@@ -67,6 +67,17 @@ object Retention {
 }
 
 /**
+ * The servers whose "Show deleted messages" a snapshot changed, from each
+ * server's setting before and after (by server id); a server in only one
+ * of them changed nothing held. Their conversations are read again from
+ * the store, which leaves deleted messages out where the setting is off
+ * (architecture 6.7), so one on screen gains or loses its "(deleted)" lines
+ * at once.
+ */
+fun showDeletedChanged(before: Map<String, Boolean>, after: Map<String, Boolean>): Set<String> =
+    after.filter { (id, show) -> before[id]?.let { it != show } ?: false }.keys
+
+/**
  * The words for a refused change of a server's name or retention, by the
  * error's code and `details.field`; none for a refusal that has no words of
  * its own, which reads as the instance's message.

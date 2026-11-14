@@ -1,7 +1,9 @@
-// A server's settings (architecture 6.7): its picture and name, and how
-// long it keeps its messages. Offered from the server's channel list to
-// whoever may change them; the web's and the desktop's screen, in the
-// vocabulary of Profile: a card for each, a Save for each. Each change
+// A server's settings (architecture 6.7): its picture and name, how long
+// it keeps its messages and whether its deleted ones keep their place.
+// Offered from the server's channel list to whoever may change them; the
+// web's and the desktop's screen, in the vocabulary of Profile: a card for
+// each, a Save for each (the switch saved as it is turned, as Your
+// settings' are). Each change
 // answers with the snapshot as it then is, so the rail and the header show
 // it at once; other members hear of it through their account logs.
 package chat.lumia
@@ -93,6 +95,12 @@ fun ServerSettingsScreen(session: LumiaSession, server: ServerSummary?, back: ()
     var retentionError by rememberSaveable { mutableStateOf("") }
     var retentionSaved by rememberSaveable { mutableStateOf(false) }
 
+    // What the switch shows while a change is on its way, and after one is refused, what the server has.
+    var showDeleted by remember(server?.showDeleted) { mutableStateOf(server?.showDeleted ?: false) }
+    var showDeletedBusy by remember { mutableStateOf(false) }
+    var showDeletedError by rememberSaveable { mutableStateOf("") }
+    var showDeletedSaved by rememberSaveable { mutableStateOf(false) }
+
     fun pictureFailed(e: Exception) {
         pictureError = pictureRefused(e.lumiaCode, e.lumiaDetails["reason"]) ?: e.lumiaMessage
     }
@@ -175,6 +183,25 @@ fun ServerSettingsScreen(session: LumiaSession, server: ServerSummary?, back: ()
         }
     }
 
+    fun saveShowDeleted(show: Boolean) {
+        val id = server?.serverId ?: return
+        showDeleted = show
+        scope.launch {
+            showDeletedBusy = true
+            showDeletedError = ""
+            showDeletedSaved = false
+            try {
+                session.setShowDeleted(id, show)
+                showDeletedSaved = true
+            } catch (e: Exception) {
+                showDeleted = server.showDeleted
+                showDeletedError = serverSettingsRefused(e.lumiaCode, e.lumiaDetails["field"]) ?: e.lumiaMessage
+            } finally {
+                showDeletedBusy = false
+            }
+        }
+    }
+
     val picture = server?.let { session.pictureOf(it.iconUrl) }
     PanelScreen(back = name.ifEmpty { "Server" }, onBack = back, title = "Server settings", subtitle = name) {
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).navigationBarsPadding().imePadding().padding(LumiaTokens.space16), verticalArrangement = Arrangement.spacedBy(LumiaTokens.space12)) {
@@ -221,6 +248,15 @@ fun ServerSettingsScreen(session: LumiaSession, server: ServerSummary?, back: ()
                     if (retentionError.isNotEmpty()) LumiaErrorText(retentionError)
                     if (retentionSaved) Text("Saved.", style = LumiaTokens.textMeta.style, color = LumiaTokens.inkSecondary.color)
                     LumiaPrimaryButton("Save", Modifier.fillMaxWidth(), enabled = !retentionBusy && server != null && retention != kept) { saveRetention() }
+                    // Saved as it is turned; the core's reads leave deleted messages out where it is off.
+                    SwitchRow(
+                        "Show deleted messages",
+                        "Off, a deleted message disappears for everyone. On, it stays in its place as “(deleted)”.",
+                        showDeleted,
+                        !showDeletedBusy && server != null,
+                    ) { saveShowDeleted(it) }
+                    if (showDeletedError.isNotEmpty()) LumiaErrorText(showDeletedError)
+                    if (showDeletedSaved) Text("Saved.", style = LumiaTokens.textMeta.style, color = LumiaTokens.inkSecondary.color)
                 }
             }
             // The channels every newcomer joins (architecture 6.8).

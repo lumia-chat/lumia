@@ -252,11 +252,38 @@ class LumiaSession(
         took(client.call { removeServerIcon(serverId) })
     }
 
+    /** Whether the server's deleted messages keep their place as "(deleted)"; off, they are gone from its conversations. */
+    suspend fun setShowDeleted(serverId: String, show: Boolean) {
+        took(client.call { setShowDeleted(serverId, show) })
+    }
+
     private fun took(snap: SnapshotSummary) {
         if (leaving || !signedIn) return
+        val before = snapshot
         snapshot = snap
         subscribeGained()
-        scope.launch { refreshReads() }
+        scope.launch {
+            refreshReads()
+            rereadShown(before, snap)
+        }
+    }
+
+    /**
+     * The conversations held of a server whose "Show deleted messages" the
+     * snapshot changed, read again from the store, which leaves deleted
+     * messages out where it is off: one on screen gains or loses its
+     * "(deleted)" lines at once, here and on every member's phone, which
+     * has the change by its account log.
+     */
+    private suspend fun rereadShown(before: SnapshotSummary?, after: SnapshotSummary) {
+        val changed = showDeletedChanged(
+            before?.servers?.associate { it.serverId to it.showDeleted } ?: return,
+            after.servers.associate { it.serverId to it.showDeleted },
+        )
+        if (changed.isEmpty()) return
+        for (channel in after.channels) {
+            if (channel.serverId in changed && channel.channelId in messages) refreshMessages(channel.channelId)
+        }
     }
 
     /**
@@ -458,9 +485,11 @@ class LumiaSession(
             return
         }
         if (leaving || !signedIn) return
+        val before = snapshot
         snapshot = snap
         subscribeGained()
         refreshReads()
+        rereadShown(before, snap)
         refreshPeople(snap.servers.map { it.serverId })
     }
 

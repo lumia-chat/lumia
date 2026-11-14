@@ -580,9 +580,9 @@ fun YourSettingsScreen(session: LumiaSession, server: ServerSummary?, back: () -
     }
 }
 
-/** A switch with its label and the line under it, the whole row the switch to TalkBack. */
+/** A switch with its label and the line under it, the whole row the switch to TalkBack; Server settings has one too. */
 @Composable
-private fun SwitchRow(label: String, caption: String, on: Boolean, enabled: Boolean, onChange: (Boolean) -> Unit) {
+fun SwitchRow(label: String, caption: String, on: Boolean, enabled: Boolean, onChange: (Boolean) -> Unit) {
     Row(
         Modifier.fillMaxWidth().toggleable(value = on, enabled = enabled, role = Role.Switch, onValueChange = onChange),
         horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space12),

@@ -95,4 +95,14 @@ class ServerSettingsTest {
         assertNull(pictureAddress("https://chat.example.com", "/api/v1/avatars/../../$name"))
         assertNull(pictureAddress("https://chat.example.com", "/api/v1/blobs/$name"))
     }
+
+    @Test
+    fun aServerWhoseShowDeletedChangedIsReadAgain() {
+        val before = mapOf("a" to false, "b" to true, "c" to false)
+        assertEquals(setOf("a", "b"), showDeletedChanged(before, mapOf("a" to true, "b" to false, "c" to false)))
+        assertEquals(emptySet<String>(), showDeletedChanged(before, before))
+        // A server gained or left holds nothing to read again.
+        assertEquals(emptySet<String>(), showDeletedChanged(before, mapOf("d" to true)))
+        assertEquals(emptySet<String>(), showDeletedChanged(emptyMap(), mapOf("a" to true)))
+    }
 }

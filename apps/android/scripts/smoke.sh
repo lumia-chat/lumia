@@ -12,7 +12,8 @@
 # chosen and a setting changed after it, which is Custom, kept across a
 # launch and put back, the screen kept as the phone goes dark.
 # Then Server settings, as the server's owner: renamed, a shorter history
-# saved after it says what it deletes, a picture set from elsewhere and
+# saved after it says what it deletes, Show deleted messages turned on and
+# off again, each saved as it is turned, a picture set from elsewhere and
 # removed, and the rail drawing it (a plain member, at the very end, sees
 # the picture and is not offered the screen). Then the channel is read as assistive technology has it: each account's
 # messages in a row are one block, and the second account, typing through
@@ -155,14 +156,16 @@ turn() { # <0|1>
 running() { "$adb" shell pidof "$bundle" 2>/dev/null | tr -d '\r' || true; }
 # One fact about the first thing on screen whose text or description is the
 # one named: where its middle is, whether it is the choice made (a radio
-# button that is checked), how far down the screen it starts, or whether a
-# screen reader has it as a button (Compose gives what takes the tap a node
-# of the Button class beside the text, inside the one that is clickable).
-node() { # <text or description> <middle|chosen|top|button>
+# button that is checked), whether the switch it labels is on (the row that
+# takes the tap is what is checked, around the text), how far down the
+# screen it starts, or whether a screen reader has it as a button (Compose
+# gives what takes the tap a node of the Button class beside the text,
+# inside the one that is clickable).
+node() { # <text or description> <middle|chosen|on|top|button>
   fact "$(ui)" "$1" "$2"
 }
 # The same of a screen already read, for several facts about one screen.
-fact() { # <screen> <text or description> <middle|chosen|top|button>
+fact() { # <screen> <text or description> <middle|chosen|on|top|button>
   printf '%s' "$1" | python3 -c '
 import re, sys
 want, fact = sys.argv[1], sys.argv[2]
@@ -176,7 +179,9 @@ for node in nodes:
         x0, y0, x1, y1 = box(node)
         taps = sorted((box(n) for n in nodes if "clickable=\"true\"" in n and within(box(node), box(n))), key=lambda b: (b[2] - b[0]) * (b[3] - b[1]))
         button = bool(taps) and any("class=\"android.widget.Button\"" in n and within(box(n), taps[0]) for n in nodes)
-        print({"middle": "%d %d" % ((x0 + x1) // 2, (y0 + y1) // 2), "chosen": "yes" if "checked=\"true\"" in node else "no", "top": y0, "button": "yes" if button else "no"}[fact])
+        switch = sorted((n for n in nodes if "checkable=\"true\"" in n and within(box(node), box(n))), key=lambda n: (box(n)[2] - box(n)[0]) * (box(n)[3] - box(n)[1]))
+        on = bool(switch) and "checked=\"true\"" in switch[0]
+        print({"middle": "%d %d" % ((x0 + x1) // 2, (y0 + y1) // 2), "chosen": "yes" if "checked=\"true\"" in node else "no", "on": "yes" if on else "no", "top": y0, "button": "yes" if button else "no"}[fact])
         break
 ' "$2" "$3"
 }
@@ -393,7 +398,8 @@ echo "  preferences: ok (dark, Compact, Minimal and the font size 20 for a launc
 # Server settings (architecture 6.7), as the server's owner gets there:
 # under its channels, Server settings; the name changed and saved, and the
 # instance has it; a shorter history chosen, which says what it would
-# delete and changes nothing until Save, and then the instance has it. A
+# delete and changes nothing until Save, and then the instance has it;
+# Show deleted messages turned on and off, the instance having each. A
 # picture set from elsewhere (the CLI) reaches the open screen through the
 # account log, is removed there, and once set again the rail draws it. The
 # second account, a plain member, is not offered the screen: last, below.
@@ -448,6 +454,15 @@ at=$(below Save "30 days")
 # shellcheck disable=SC2086
 "$adb" shell input tap $at
 until_held retentionDays 0 30 || { echo "FAIL: the instance does not keep the server's messages for 30 days after Save"; exit 1; }
+# Show deleted messages, off by default, saved as it is turned: on, and the
+# instance has it; off again, as the rest of the script expects.
+[ "$(node "Show deleted messages" on)" = no ] || { echo "FAIL: Show deleted messages is not off for a new server"; exit 1; }
+tap "Show deleted messages"
+until_held showDeleted False True || { shot serversettings-deleted; echo "FAIL: the instance does not show deleted messages after the switch was turned on; see $work/serversettings-deleted.png"; exit 1; }
+[ "$(node "Show deleted messages" on)" = yes ] || { echo "FAIL: Show deleted messages is not on once turned"; exit 1; }
+shot serversettings-deleted
+tap "Show deleted messages"
+until_held showDeleted False False || { echo "FAIL: the instance still shows deleted messages after the switch was turned off"; exit 1; }
 "$cli" --data-dir "$data" server-update "$server" --icon "$picture" >/dev/null
 await 'text="Remove"' || { shot serversettings-picture; echo "FAIL: a picture set from elsewhere did not reach the open screen; see $work/serversettings-picture.png"; exit 1; }
 sleep 2
@@ -465,7 +480,7 @@ shot server-picture
 launch serversettings 7 --es LUMIA_DEV_APPEARANCE dark
 shot serversettings-dark
 "$adb" shell am force-stop "$bundle" >/dev/null 2>&1 || true
-echo "  server settings: ok (offered to the owner; renamed and the instance has it; 30 days said what it would delete, changed nothing until Save, and then the instance had it; a picture set elsewhere reached the open screen, Remove took it away, and set again the rail drew it)"
+echo "  server settings: ok (offered to the owner; renamed and the instance has it; 30 days said what it would delete, changed nothing until Save, and then the instance had it; Show deleted messages on and off, and the instance had each; a picture set elsewhere reached the open screen, Remove took it away, and set again the rail drew it)"
 
 # Blocks, in the channel: the second account's two messages in a row are
 # under its name once, and the second says whose it is and when to a
