@@ -7,6 +7,7 @@ defmodule Lumia.Servers.Server do
     field :name, :string
     field :icon_url, :string
     field :retention_days, :integer
+    field :show_deleted, :boolean, default: false
     belongs_to :owner, Lumia.Accounts.Account, foreign_key: :owner_account_id
     timestamps()
   end

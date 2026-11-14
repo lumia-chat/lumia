@@ -379,6 +379,7 @@ defmodule Lumia.V1.UpdateServerRequest do
   field :name, 1, proto3_optional: true, type: :string
   field :retention_days, 2, proto3_optional: true, type: :uint32, json_name: "retentionDays"
   field :default_channels, 3, type: Lumia.V1.ChannelIds, json_name: "defaultChannels"
+  field :show_deleted, 4, proto3_optional: true, type: :bool, json_name: "showDeleted"
 end
 
 defmodule Lumia.V1.ChannelIds do

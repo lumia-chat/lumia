@@ -171,6 +171,43 @@ defmodule LumiaWeb.ServerSettingsTest do
     end
   end
 
+  describe "showing deleted messages" do
+    test "is off for a new server, turned on and off by one who manages it, and told", ctx do
+      refute Lumia.Repo.get!(Lumia.Servers.Server, ctx.server.id).show_deleted
+
+      on =
+        patch_server(ctx.conn, ctx.owner, ctx.server, %V1.UpdateServerRequest{show_deleted: true})
+
+      assert %V1.Server{show_deleted: true} = V1.Server.decode(on.resp_body)
+      assert Lumia.Repo.get!(Lumia.Servers.Server, ctx.server.id).show_deleted
+      run_fan_out()
+      assert [%V1.Server{show_deleted: true}] = told(ctx.member)
+
+      # A request that names other settings leaves it as it is.
+      renamed =
+        patch_server(ctx.conn, ctx.owner, ctx.server, %V1.UpdateServerRequest{name: "Acme Co"})
+
+      assert %V1.Server{show_deleted: true} = V1.Server.decode(renamed.resp_body)
+
+      refused =
+        patch_server(ctx.conn, ctx.member, ctx.server, %V1.UpdateServerRequest{
+          show_deleted: false
+        })
+
+      assert refused.status == 403
+
+      off =
+        patch_server(ctx.conn, ctx.owner, ctx.server, %V1.UpdateServerRequest{show_deleted: false})
+
+      assert %V1.Server{show_deleted: false} = V1.Server.decode(off.resp_body)
+
+      assert Lumia.Repo.exists?(
+               from a in Lumia.Audit.Entry,
+                 where: a.action == "server.show_deleted"
+             )
+    end
+  end
+
   describe "the picture" do
     test "is put as a picture's bytes, served to anyone, replaced and removed", ctx do
       put = put_icon(ctx.conn, ctx.owner, ctx.server, @photo)

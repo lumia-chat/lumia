@@ -55,7 +55,8 @@ defmodule Lumia.Proto do
       icon_url: s.icon_url || "",
       owner_account_id: uuid(s.owner_account_id),
       created_at: timestamp(s.inserted_at),
-      retention_days: s.retention_days || 0
+      retention_days: s.retention_days || 0,
+      show_deleted: s.show_deleted || false
     }
   end
 

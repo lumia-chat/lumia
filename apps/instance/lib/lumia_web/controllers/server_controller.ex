@@ -50,13 +50,16 @@ defmodule LumiaWeb.ServerController do
   end
 
   @doc """
-  `PATCH /servers/{server_id}`: the server's name, its retention, either or
-  both (`Lumia.Servers.update_server/3`, architecture 6.7).
+  `PATCH /servers/{server_id}`: the server's name, its retention, whether it
+  shows deleted messages, any of them (`Lumia.Servers.update_server/3`, architecture 6.7).
   """
   def update(conn, %{"server_id" => server_id}) do
     with {:ok, _server} <- member_server(conn, server_id),
          {:ok, req} <- ProtoConn.decode(conn, V1.UpdateServerRequest),
-         changes = Map.reject(Map.take(req, [:name, :retention_days]), fn {_, v} -> is_nil(v) end),
+         changes =
+           Map.reject(Map.take(req, [:name, :retention_days, :show_deleted]), fn {_, v} ->
+             is_nil(v)
+           end),
          {:ok, _} <-
            set_defaults(server_id, conn.assigns.current_account_id, req.default_channels),
          {:ok, updated} <-

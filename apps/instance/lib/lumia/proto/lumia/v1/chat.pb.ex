@@ -138,6 +138,7 @@ defmodule Lumia.V1.Server do
   field :operator_name, 6, type: :string, json_name: "operatorName"
   field :host, 7, type: :string
   field :retention_days, 8, type: :uint32, json_name: "retentionDays"
+  field :show_deleted, 9, type: :bool, json_name: "showDeleted"
 end
 
 defmodule Lumia.V1.Role do

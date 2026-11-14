@@ -518,7 +518,8 @@ defmodule Lumia.Servers do
 
   @doc """
   Changes a server's settings: `:name`, `:retention_days` (0 keeps
-  messages for ever), either or both; a key left out is left as it is.
+  messages for ever), `:show_deleted`, any of them; a key left out is
+  left as it is.
   Needs `MANAGE_SERVER` (the owner and `ADMINISTRATOR` have it). Each
   setting changed is audited, and every member is told (`ServerUpdated`).
   """
@@ -607,6 +608,9 @@ defmodule Lumia.Servers do
       {:retention_days, days}, {:ok, acc} when is_integer(days) and days > 0 ->
         {:cont, {:ok, Map.put(acc, :retention_days, days)}}
 
+      {:show_deleted, show}, {:ok, acc} when is_boolean(show) ->
+        {:cont, {:ok, Map.put(acc, :show_deleted, show)}}
+
       {key, _}, _ ->
         {:halt, {:error, {:invalid_argument, Atom.to_string(key)}}}
     end)
@@ -618,6 +622,7 @@ defmodule Lumia.Servers do
       for {key, action} <- [
             name: "server.name",
             retention_days: "server.retention",
+            show_deleted: "server.show_deleted",
             icon_url: "server.icon"
           ],
           Map.get(before, key) != Map.get(after_change, key),

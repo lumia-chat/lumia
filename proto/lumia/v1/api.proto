@@ -254,6 +254,8 @@ message UpdateServerRequest {
   // The channels every newcomer joins, all of them public text channels of
   // this server; empty for none (architecture 6.8).
   ChannelIds default_channels = 3;
+  // Whether deleted messages keep their place as "(deleted)".
+  optional bool show_deleted = 4;
 }
 
 message ChannelIds { repeated bytes channel_ids = 1; }
