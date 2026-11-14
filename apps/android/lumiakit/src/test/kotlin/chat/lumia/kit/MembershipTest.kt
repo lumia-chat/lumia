@@ -6,11 +6,14 @@ package chat.lumia.kit
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import uniffi.lumia_ffi.ChannelInvitationSummary
 import uniffi.lumia_ffi.ChannelSummary
+import uniffi.lumia_ffi.ClientEvent
 import uniffi.lumia_ffi.MemberSummary
+import uniffi.lumia_ffi.SnapshotSummary
 
 private fun channel(id: String, server: String = "s", kind: String = TEXT, name: String = id, private: Boolean = false, isDefault: Boolean = false, participants: List<String> = emptyList()) =
     ChannelSummary(id, server, name, kind, 0uL, participants, "", private, isDefault, 0u, "")
@@ -111,5 +114,66 @@ class MembershipTest {
         val all = listOf(channel("general"), channel("dm", kind = SERVER_DM), channel("p", server = "", kind = "PERSONAL_DM"), channel("new"))
         assertEquals(listOf("dm", "new"), toSubscribe(all, setOf("general")))
         assertEquals(emptyList<String>(), toSubscribe(all, setOf("general", "dm", "new")))
+    }
+
+    private val newPicture = "/api/v1/avatars/" + "3".repeat(64)
+
+    private fun ada(display: String = "Ada Lovelace", avatar: String = newPicture) =
+        ClientEvent.ProfileUpdated("ada", "ada", display, avatar, "she/her", "Engines.")
+
+    @Test
+    fun aChangedNameAndPictureAreWrittenIntoEveryListHeldWithEachServersNickname() {
+        val byServer = mapOf(
+            "s" to listOf(member("ada", "Ada"), member("grace", "Grace")),
+            "t" to listOf(member("ada", "Ada", nickname = "Countess", byInvitation = true, dmsOff = true)),
+            "u" to listOf(member("grace", "Grace")),
+        )
+        val people = mapOf("ada" to member("ada", "Ada", nickname = "Countess"), "grace" to member("grace", "Grace"))
+        val lists = byServer.updatedBy(ada())
+        val held = people.updatedBy(ada())
+
+        // Drawn as they now are, by name and by picture, in every list that has them.
+        assertEquals("Ada Lovelace", nameOf(lists.getValue("s")[0]))
+        assertEquals("Ada Lovelace", nameOf(held.getValue("ada")))
+        assertEquals(newPicture, avatarPathOf("ada", "me", "", held["ada"]) { null })
+        assertEquals(newPicture, lists.getValue("t")[0].avatarUrl)
+        assertEquals(listOf("she/her", "she/her"), listOf(lists.getValue("s")[0].pronouns, held.getValue("ada").pronouns))
+        assertEquals("Engines.", lists.getValue("t")[0].bio)
+        // The server's own: the nickname and the switches stay.
+        val t = lists.getValue("t")[0]
+        assertEquals(Triple("Countess", true, true), Triple(t.nickname, t.channelAddsByInvitation, t.serverDmsOff))
+        assertEquals("Countess", held.getValue("ada").nickname)
+        // A picture cleared is none, and the avatar its initials.
+        assertEquals("", avatarPathOf("ada", "me", "", people.updatedBy(ada(avatar = ""))["ada"]) { null })
+    }
+
+    @Test
+    fun aChangedNameChangesNothingElse() {
+        val grace = member("grace", "Grace")
+        val byServer = mapOf("s" to listOf(member("ada", "Ada"), grace), "u" to listOf(grace))
+        val people = mapOf("ada" to member("ada", "Ada"), "grace" to grace)
+        val lists = byServer.updatedBy(ada())
+        val held = people.updatedBy(ada())
+        assertSame(grace, lists.getValue("s")[1])
+        assertSame(byServer.getValue("u"), lists.getValue("u"))
+        assertSame(grace, held.getValue("grace"))
+        assertEquals(byServer.keys, lists.keys)
+        assertEquals(people.keys, held.keys)
+        // Someone nothing holds: the same lists and people, and nobody added.
+        val stranger = ClientEvent.ProfileUpdated("eve", "eve", "Eve", newPicture, "", "")
+        assertSame(byServer, byServer.updatedBy(stranger))
+        assertSame(people, people.updatedBy(stranger))
+        assertSame(grace, grace.updatedBy(ada()))
+    }
+
+    @Test
+    fun thisAccountsOwnChangeIsTheSnapshotsToo() {
+        val snap = SnapshotSummary("ada", "ada", "Ada", "", emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList())
+        val now = snap.updatedBy(ada())
+        assertEquals(Triple("ada", "Ada Lovelace", newPicture), Triple(now.handle, now.displayName, now.avatarUrl))
+        assertEquals(newPicture, avatarPathOf("ada", "ada", now.avatarUrl, null) { null })
+        assertEquals("", snap.avatarUrl)
+        // Someone else's change leaves this account's snapshot as it was.
+        assertSame(snap, snap.updatedBy(ClientEvent.ProfileUpdated("grace", "grace", "Grace H", newPicture, "", "")))
     }
 }

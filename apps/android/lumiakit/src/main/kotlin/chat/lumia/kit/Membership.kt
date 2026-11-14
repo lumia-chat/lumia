@@ -3,13 +3,16 @@
 // sidebar lists, the words a notice, a count, an invitation and a server
 // DM's note read as, who the add-people and DM pickers offer, the default
 // channels Server settings chooses among, the words a refusal reads as,
-// and which channels the gateway is still to be told of. The same rules and
-// words as the iOS app's `Membership.swift`.
+// which channels the gateway is still to be told of, and a person's
+// changed name or picture written into what is held of them. The same
+// rules and words as the iOS app's `Membership.swift`.
 package chat.lumia.kit
 
 import uniffi.lumia_ffi.ChannelInvitationSummary
 import uniffi.lumia_ffi.ChannelSummary
+import uniffi.lumia_ffi.ClientEvent
 import uniffi.lumia_ffi.MemberSummary
+import uniffi.lumia_ffi.SnapshotSummary
 
 /** A server's DM channel: one of its members with another (architecture 6.4). */
 const val SERVER_DM = "SERVER_DM"
@@ -137,3 +140,33 @@ fun serverDmRefused(code: String?, name: String): String? = when (code) {
  */
 fun toSubscribe(channels: List<ChannelSummary>, subscribed: Set<String>): List<String> =
     channels.filter { it.kind !in personalKinds && it.channelId !in subscribed }.map { it.channelId }
+
+// A changed name or picture (issue #15)
+
+/**
+ * This member as [profile] says they now are, when it is them: the
+ * account's own fields (handle, display name, picture, pronouns, bio)
+ * written over; the server's nickname and switches are the server's and
+ * stay. Anyone else as they were.
+ */
+fun MemberSummary.updatedBy(profile: ClientEvent.ProfileUpdated): MemberSummary =
+    if (accountId != profile.accountId) this
+    else copy(handle = profile.handle, displayName = profile.displayName, avatarUrl = profile.avatarUrl, pronouns = profile.pronouns, bio = profile.bio)
+
+/** People by account id with [profile]'s person as they now are; the same map when it does not hold them. */
+fun Map<String, MemberSummary>.updatedBy(profile: ClientEvent.ProfileUpdated): Map<String, MemberSummary> {
+    val held = this[profile.accountId] ?: return this
+    return this + (profile.accountId to held.updatedBy(profile))
+}
+
+/** Member lists by server with [profile]'s person as they now are in each; a list without them, and the whole when none has them, the same. */
+@JvmName("listsUpdatedBy")
+fun Map<String, List<MemberSummary>>.updatedBy(profile: ClientEvent.ProfileUpdated): Map<String, List<MemberSummary>> {
+    if (values.none { list -> list.any { it.accountId == profile.accountId } }) return this
+    return mapValues { (_, list) -> if (list.any { it.accountId == profile.accountId }) list.map { it.updatedBy(profile) } else list }
+}
+
+/** The snapshot with this account's own name and picture as [profile] says, when it is for this account; else the same. */
+fun SnapshotSummary.updatedBy(profile: ClientEvent.ProfileUpdated): SnapshotSummary =
+    if (accountId != profile.accountId) this
+    else copy(handle = profile.handle, displayName = profile.displayName, avatarUrl = profile.avatarUrl)

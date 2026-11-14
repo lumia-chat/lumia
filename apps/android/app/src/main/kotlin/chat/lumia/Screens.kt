@@ -521,12 +521,19 @@ fun ProfileScreen(store: AppStore, session: LumiaSession, back: () -> Unit) {
     // would be overwritten by it, typing and all.
     var loaded by remember { mutableStateOf(false) }
 
-    LaunchedEffect(Unit) {
-        session.status()?.let { status = it.status; customStatus = it.customStatus }
-        profile = runCatching { session.profile() }.getOrNull()
-        displayName = profile?.displayName ?: ""
-        pronouns = profile?.pronouns ?: ""
-        bio = profile?.bio ?: ""
+    // Read again when this account's name or picture changes, here or on
+    // another device (issue #15): a field still as the profile had it takes
+    // the new value, and one being typed in stays the person's.
+    LaunchedEffect(session.ownProfileChanges) {
+        val first = !loaded
+        if (first) session.status()?.let { status = it.status; customStatus = it.customStatus }
+        val held = runCatching { session.profile() }.getOrNull()
+        if (!first && held == null) return@LaunchedEffect
+        val before = profile
+        profile = held
+        if (first || displayName == (before?.displayName ?: "")) displayName = held?.displayName ?: ""
+        if (first || pronouns == (before?.pronouns ?: "")) pronouns = held?.pronouns ?: ""
+        if (first || bio == (before?.bio ?: "")) bio = held?.bio ?: ""
         loaded = true
     }
 

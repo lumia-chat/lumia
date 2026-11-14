@@ -897,6 +897,28 @@ class LumiaSession(
         return (people[accountId] ?: profileOf(accountId))?.pronouns ?: ""
     }
 
+    /** How often this account's own name or picture has changed while the session ran, here or elsewhere: Profile reads its profile again. */
+    var ownProfileChanges by mutableStateOf(0)
+        private set
+
+    /**
+     * Someone's name or picture changed (issue #15): they are written as
+     * they now are into everything held of them, every server's member
+     * list, the people, a looked-up profile and, for this account, the
+     * snapshot, so whatever draws them draws them again at once with
+     * nothing asked of the instance. Each server's nickname stays. A new
+     * picture is a new address, fetched as any is; none is the initials.
+     */
+    private fun profileUpdated(profile: ClientEvent.ProfileUpdated) {
+        people = people.updatedBy(profile)
+        serverMembers = serverMembers.updatedBy(profile)
+        profiles[profile.accountId]?.let { profiles[profile.accountId] = it.updatedBy(profile) }
+        val snap = snapshot ?: return
+        if (snap.accountId != profile.accountId) return
+        snapshot = snap.updatedBy(profile)
+        ownProfileChanges++
+    }
+
     fun conversationName(channel: ChannelSummary): String {
         val others = channel.participantAccountIds.filter { it != me }
         if (others.isEmpty()) return "Just you"
@@ -984,6 +1006,7 @@ class LumiaSession(
             }
             is ClientEvent.SnapshotTaken -> refreshMessages(event.channelId)
             is ClientEvent.AccountApplied -> { refreshSnapshot(); refreshDmChannels() }
+            is ClientEvent.ProfileUpdated -> profileUpdated(event)
             is ClientEvent.Reconnecting -> connection = ConnectionState.Reconnecting(event.attempt)
             is ClientEvent.Disconnected -> connection = ConnectionState.Disconnected(event.reason)
             is ClientEvent.Closed -> { connection = ConnectionState.Closed(event.reason); events = null }
