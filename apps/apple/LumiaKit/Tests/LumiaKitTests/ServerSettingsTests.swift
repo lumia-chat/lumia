@@ -56,6 +56,16 @@ final class ServerSettingsTests: XCTestCase {
         XCTAssertNil(Retention.warning(chosen: 90, current: 90))
     }
 
+    func testShowDeletedChangedNamesTheServersToReadAgain() {
+        let was = [(serverID: "a", show: false), (serverID: "b", show: true), (serverID: "c", show: false)]
+        XCTAssertEqual(ShowDeleted.changed(from: was, to: was), [])
+        // Turned on in a, off in b; c as it was; d new, with nothing read under it yet.
+        let now = [(serverID: "a", show: true), (serverID: "b", show: false), (serverID: "c", show: false), (serverID: "d", show: true)]
+        XCTAssertEqual(ShowDeleted.changed(from: was, to: now), ["a", "b"])
+        // The first snapshot changes nothing that was read.
+        XCTAssertEqual(ShowDeleted.changed(from: [], to: now), [])
+    }
+
     func testSettingsRefusals() {
         XCTAssertEqual(ServerSettingsRefusal.settings(code: "PERMISSION_DENIED", details: [:], message: "no"), "You cannot change this server's settings.")
         XCTAssertEqual(ServerSettingsRefusal.settings(code: "INVALID_ARGUMENT", details: ["field": "name"], message: "bad"), "A server name is 1 to 100 characters.")

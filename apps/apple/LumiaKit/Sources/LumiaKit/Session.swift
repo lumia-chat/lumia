@@ -329,8 +329,28 @@ public final class LumiaSession {
 
     /// A snapshot a call answered with: held, and the channels it gained subscribed to.
     private func take(_ snap: SnapshotSummary) {
-        snapshot = snap
+        hold(snap)
         subscribeGained()
+    }
+
+    /// A snapshot held in place of the last; the conversations of a server
+    /// whose Show deleted messages it changes are read again under it.
+    private func hold(_ snap: SnapshotSummary) {
+        let shown = (snapshot?.servers ?? []).map { (serverID: $0.serverId, show: $0.showDeleted) }
+        snapshot = snap
+        rereadShown(was: shown)
+    }
+
+    /// A server whose Show deleted messages changed (here or, through the
+    /// account log, elsewhere): the lists held of its channels were read
+    /// under the old setting, so they are read again under the new one.
+    private func rereadShown(was: [(serverID: String, show: Bool)]) {
+        guard let snap = snapshot else { return }
+        let changed = ShowDeleted.changed(from: was, to: snap.servers.map { (serverID: $0.serverId, show: $0.showDeleted) })
+        guard !changed.isEmpty else { return }
+        let channels = snap.channels + Array(previewed.values)
+        let held = channels.filter { changed.contains($0.serverId) && messages[$0.channelId] != nil }.map(\.channelId)
+        for id in Set(held) { Task { await refreshMessages(channelID: id) } }
     }
 
     /// Subscribes to the snapshot's channels the gateway loop has not been
@@ -354,17 +374,24 @@ public final class LumiaSession {
     /// is held, so the rail and the screen show the change at once; other
     /// members hear of it through their account logs.
     public func updateServer(serverID: String, name: String?, retentionDays: UInt32?) async throws {
-        snapshot = try await client.updateServer(serverID: serverID, name: name.map(ServerName.trimmed), retentionDays: retentionDays)
+        hold(try await client.updateServer(serverID: serverID, name: name.map(ServerName.trimmed), retentionDays: retentionDays))
     }
 
     /// Makes a file's bytes, as chosen, the server's picture; the instance makes its own square of it.
     public func setServerIcon(serverID: String, picture: Data, mediaType: String) async throws {
-        snapshot = try await client.setServerIcon(serverID: serverID, picture: picture, mediaType: mediaType)
+        hold(try await client.setServerIcon(serverID: serverID, picture: picture, mediaType: mediaType))
     }
 
     /// Takes the server's picture away.
     public func removeServerIcon(serverID: String) async throws {
-        snapshot = try await client.removeServerIcon(serverID: serverID)
+        hold(try await client.removeServerIcon(serverID: serverID))
+    }
+
+    /// Whether the server's deleted messages keep their place as
+    /// "(deleted)"; the snapshot it answers with is held, and the server's
+    /// conversations held here are read again under it.
+    public func setShowDeleted(serverID: String, show: Bool) async throws {
+        take(try await client.setShowDeleted(serverID: serverID, show: show))
     }
 
     /// Where a picture this instance names is (`pictureURL(_:base:)`); nil for none.
@@ -530,7 +557,7 @@ public final class LumiaSession {
     public func load() async {
         do {
             let snap = try await client.snapshot()
-            snapshot = snap
+            hold(snap)
             reads = ReadCounts(snap.readStates)
             hasIdentity = await client.hasIdentity
             await refreshPeople(serverIDs: snap.servers.map(\.serverId))

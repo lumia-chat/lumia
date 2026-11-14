@@ -330,8 +330,10 @@ final class SmokeUITests: XCTestCase {
     /// becomes LUMIA_UITEST_RENAME and 30 days is chosen, which says what it
     /// will delete before Save and nothing after. The smoke then gives the
     /// server a picture from elsewhere, which the screen and the rail draw.
+    /// Show deleted messages, off, is turned on.
     /// Steps (each waits for `<step>.seen`): `open`, `warning`, `saved`
     /// (the smoke reads the server from the instance and sets the picture),
+    /// `shown` (the smoke reads `showDeleted` from the instance),
     /// `picture`, and `rail`, which carries where the server's tile is, as
     /// fractions of the window: "x y width height".
     func testServerSettingsAreChangedHere() throws {
@@ -395,6 +397,23 @@ final class SmokeUITests: XCTestCase {
         XCTAssertFalse(saveRetention.isEnabled, "Save is still offered once the retention is saved")
         XCTAssertEqual(choices.filter { choice($0).isSelected }, ["30 days"])
         reached("saved", under: steps)
+
+        // Show deleted messages, off for a new server, saved as it is turned.
+        let caption = "Off, a deleted message disappears for everyone. On, it stays in its place as “(deleted)”."
+        let shown = app.switches.matching(NSPredicate(format: "label BEGINSWITH %@", "Show deleted messages")).firstMatch
+        if !shown.exists { app.swipeUp() }
+        XCTAssertTrue(shown.waitForExistence(timeout: 10), "no switch for Show deleted messages")
+        XCTAssertTrue(shown.label.contains(caption), "the switch does not say what it does: \(shown.label)")
+        XCTAssertEqual(shown.value as? String, "0", "a new server shows its deleted messages")
+        // The switch itself, at the row's end: its words do not turn it.
+        shown.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
+        let on = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "1"), object: shown)
+        XCTAssertEqual(XCTWaiter().wait(for: [on], timeout: 10), .completed, "the switch did not turn on")
+        let saved = app.staticTexts["show-deleted-saved"]
+        XCTAssertTrue(saved.waitForExistence(timeout: 20), "nothing under the switch says it was saved")
+        XCTAssertEqual(saved.label, "Saved.")
+        XCTAssertEqual(shown.value as? String, "1", "the switch went back: the instance refused it")
+        reached("shown", under: steps)
 
         // The smoke has given the server a picture from elsewhere; the
         // account event brings it here.
@@ -664,7 +683,9 @@ final class SmokeUITests: XCTestCase {
     /// message); a reply to it from there, with the reply bar's "@ On"
     /// turned off, drawn under its reference line; a reaction chip tapped on
     /// and off; one added through Add reaction's picker; the reply edited in
-    /// place and then deleted after the confirmation; Bo picked from the @
+    /// place and then deleted after the confirmation, which takes its row
+    /// away with no "(deleted)" left, the server not showing deleted
+    /// messages; Bo picked from the @
     /// list, marked as not in #general, and added from the bar after the
     /// send; and the server's Mentions tile, whose page's item opens its
     /// channel. Each step waits for the smoke to look (`<step>.seen`):
@@ -794,7 +815,8 @@ final class SmokeUITests: XCTestCase {
             XCTAssertTrue(app.buttons[words].waitForExistence(timeout: 10), "one's own message's actions have no \(words)")
         }
         app.buttons["Edit message"].tap()
-        let editor = app.textFields["message-editor"]
+        // By its identifier and of any type: a field that grows is a text view on iOS 17 and a text field later.
+        let editor = anything.matching(identifier: "message-editor").firstMatch
         XCTAssertTrue(editor.waitForExistence(timeout: 10), "Edit message put no field where the words were")
         XCTAssertEqual(editor.value as? String, "On it, thanks.")
         reached("editing")
@@ -816,6 +838,14 @@ final class SmokeUITests: XCTestCase {
         confirm.buttons["Delete"].tap()
         let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: edited)
         XCTAssertEqual(XCTWaiter().wait(for: [gone], timeout: 20), .completed, "the deleted message is still drawn with its words")
+        // The server does not show deleted messages (off by default,
+        // architecture 6.7): the row is gone, with no "(deleted)" in its
+        // place, and so is the draft the owner deleted before; Ada's reply
+        // to that draft still says what became of it.
+        let tombstone = anything.matching(NSPredicate(format: "label BEGINSWITH %@ AND value == %@", "Robin Owner, ", "(deleted)")).firstMatch
+        XCTAssertFalse(tombstone.exists, "the deleted reply is drawn as (deleted) in a server that does not show deleted messages")
+        XCTAssertFalse(anything.matching(NSPredicate(format: "label == %@ OR value == %@", "(deleted)", "(deleted)")).firstMatch.exists, "something is drawn as (deleted) in #general")
+        XCTAssertTrue(labelled("Original message was deleted").exists, "Ada's reply to the deleted draft does not say it was deleted")
         reached("deleted")
 
         // The @ list: Bo, who is not in #general, picked; the bar after the send adds him.

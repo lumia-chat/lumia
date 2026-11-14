@@ -13,7 +13,9 @@
 # screen, a reply made from a long press carrying its quote and sent with
 # "@ On" off (silent), a reaction added and taken away again, the reply
 # edited in place (its new words and edited_at on the instance) and then
-# deleted after the confirmation (deleted_at), a mention picked from the @
+# deleted after the confirmation (deleted_at, and its row gone from the
+# screen with no "(deleted)", the server's Show deleted messages being off,
+# as is the draft deleted in the seed), a mention picked from the @
 # list of someone not in the channel and "Add to #general" adding them.
 # Last, the read wake: three notifications
 # delivered to the app in the background, #design read from elsewhere, and
@@ -89,7 +91,7 @@ invite=$(c owner invite-create "$server" | grep -oE "https?://[^ ]+" | head -1)
 person ada "ada$stamp" "Ada Lovelace" --invite "$invite"
 person bo "bo$stamp" "Bo Diddley" --invite "$invite"
 to=$(token "$owner"); ta=$(token "ada$stamp"); tb=$(token "bo$stamp")
-owner_id=$(c owner whoami | uuid); ada_id=$(c ada whoami | uuid); bo_id=$(c bo whoami | uuid)
+owner_id=$(c owner whoami | uuid); bo_id=$(c bo whoami | uuid)
 channel_id() { py "d = d.get('channel', d); print(d['channelId'])"; }
 design=$(api "$to" POST /channels "{\"serverId\":\"$server\",\"kind\":\"TEXT\",\"name\":\"design\"}" | channel_id)
 random=$(api "$to" POST /channels "{\"serverId\":\"$server\",\"kind\":\"TEXT\",\"name\":\"random\"}" | channel_id)
@@ -245,7 +247,7 @@ m = [x for x in d.get('messages', []) if x.get('messageId') == '$reply_id']
 print(bool(m and m[0].get('deletedAt')))")
 # Only deleted_at: the history over HTTP still gives a deleted message's words (2026-11-13).
 [ "$gone" = "True" ] || fail "the reply deleted after the confirmation is not deleted on the instance"
-echo "the reply deleted after the confirmation: deleted_at on the instance"
+echo "the reply deleted after the confirmation: deleted_at on the instance, and gone from the screen with no (deleted) in its place"
 seen deleted
 
 reached mentioned 60

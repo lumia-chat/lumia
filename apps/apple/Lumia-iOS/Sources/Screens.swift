@@ -424,6 +424,11 @@ struct ServerSettingsScreen: View {
     @State private var retentionBusy = false
     @State private var retentionError = ""
     @State private var retentionSaved = false
+    // Show deleted messages: saved as it is turned, put back on a refusal.
+    @State private var showDeleted = false
+    @State private var showDeletedBusy = false
+    @State private var showDeletedError = ""
+    @State private var showDeletedSaved = false
     // The form waits for the server: fields shown before it would be overwritten by it.
     @State private var loaded = false
     // Default channels (architecture 6.8): the server's public channels, those
@@ -462,6 +467,7 @@ struct ServerSettingsScreen: View {
             guard let server, !loaded else { return }
             name = server.name
             retention = server.retentionDays
+            showDeleted = server.showDeleted
             loaded = true
             await loadDefaults(server)
         }
@@ -539,6 +545,17 @@ struct ServerSettingsScreen: View {
                     .buttonStyle(.lumiaPrimary).disabled(retentionBusy || retention == server.retentionDays)
                     .accessibilityHint("Saves how long this server keeps its messages")
                     .accessibilityIdentifier("save-retention")
+                LumiaSwitch("Show deleted messages", caption: "Off, a deleted message disappears for everyone. On, it stays in its place as “(deleted)”.", isOn: Binding(get: { showDeleted }, set: { on in
+                    showDeleted = on
+                    Task { await saveShowDeleted(on) }
+                }))
+                .disabled(showDeletedBusy)
+                .padding(.top, LumiaTokens.space4)
+                if !showDeletedError.isEmpty { LumiaErrorText(showDeletedError) }
+                if showDeletedSaved {
+                    Text("Saved.").font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkSecondary.color)
+                        .accessibilityIdentifier("show-deleted-saved")
+                }
             }
         }
         .onChange(of: retention) { _, _ in retentionSaved = false; retentionError = "" }
@@ -624,6 +641,21 @@ struct ServerSettingsScreen: View {
             retentionSaved = true
         } catch {
             retentionError = ServerSettingsRefusal.settings(code: error.lumiaCode, details: error.lumiaDetails, message: error.lumiaMessage)
+        }
+    }
+
+    /// The switch as it now is; on a refusal it goes back to what the server has.
+    private func saveShowDeleted(_ on: Bool) async {
+        showDeletedError = ""
+        showDeletedSaved = false
+        showDeletedBusy = true
+        defer { showDeletedBusy = false }
+        do {
+            try await session.setShowDeleted(serverID: serverID, show: on)
+            showDeletedSaved = true
+        } catch {
+            showDeletedError = ServerSettingsRefusal.settings(code: error.lumiaCode, details: error.lumiaDetails, message: error.lumiaMessage)
+            if let server { showDeleted = server.showDeleted }
         }
     }
 

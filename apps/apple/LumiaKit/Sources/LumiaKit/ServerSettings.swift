@@ -69,6 +69,18 @@ public enum Retention {
     }
 }
 
+/// Show deleted messages (architecture 6.7): off, the core's reads leave a
+/// server's deleted messages out; on, each keeps its place as "(deleted)".
+public enum ShowDeleted {
+    /// The servers whose setting is not what it was: the lists held of
+    /// their channels were read under the old one and are read again. A
+    /// server not held before has nothing read under it yet.
+    public static func changed(from old: [(serverID: String, show: Bool)], to new: [(serverID: String, show: Bool)]) -> Set<String> {
+        let was = Dictionary(old.map { ($0.serverID, $0.show) }, uniquingKeysWith: { a, _ in a })
+        return Set(new.filter { s in was[s.serverID].map { $0 != s.show } ?? false }.map(\.serverID))
+    }
+}
+
 /// What the screen says when the instance refuses a server's settings:
 /// `code` and `details` as the error carries them, `message` its own words.
 public enum ServerSettingsRefusal {

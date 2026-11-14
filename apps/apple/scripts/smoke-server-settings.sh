@@ -4,7 +4,8 @@
 # sets how long it keeps messages through the screen
 # (LumiaUITests/SmokeUITests/testServerSettingsAreChangedHere), and this
 # script reads both back from the instance: the name with the release CLI,
-# the retention over HTTP. Then it gives the server a picture with the CLI,
+# the retention over HTTP. The screen then turns Show deleted messages on,
+# which the script reads back over HTTP. Then it gives the server a picture with the CLI,
 # as another of the owner's clients would; the screen and the rail must
 # draw it, which is checked by the colour at the middle of the rail's
 # tile. Last, the phone signs in as a member the owner invited, who may not
@@ -51,6 +52,7 @@ token=$(curl -s -H "content-type: application/json" -H "accept: application/json
   python3 -c "import sys, json; print(json.load(sys.stdin)['accessToken'])")
 server_field() { curl -s -H "accept: application/json" -H "authorization: Bearer $token" "$instance/api/v1/servers/$server" | field "$1"; }
 [ "$(server_field 'd.get("retentionDays", 0)')" = "0" ] || { echo "FAIL: a new server does not keep its messages for ever"; exit 1; }
+[ "$(server_field 'd.get("showDeleted", False)')" = "False" ] || { echo "FAIL: a new server shows its deleted messages"; exit 1; }
 
 udid=$(xcrun simctl list devices available -j | python3 -c "
 import json,sys
@@ -139,6 +141,11 @@ icon=$(server_field 'd.get("iconUrl", "")')
 [ -n "$icon" ] || { echo "FAIL: the instance has no picture for the server after server-update --icon"; exit 1; }
 echo "the server's picture is $icon"
 seen saved
+reached shown 60
+shown=$(server_field 'd.get("showDeleted", False)')
+[ "$shown" = "True" ] || { echo "FAIL: the instance does not show the server's deleted messages after the switch was turned on (showDeleted $shown)"; exit 1; }
+echo "Show deleted messages turned on through the screen: showDeleted on the instance"
+seen shown
 reached picture 60
 seen picture
 echo "the picture set elsewhere reached the screen: it is labelled and Remove is offered"
@@ -177,4 +184,4 @@ seen member
 passed
 echo "a member who may not change them is not offered Server settings"
 xcrun simctl terminate "$udid" "$bundle" 2>/dev/null || true
-echo "smoke-server-settings: ok (renamed and retention set through the screen and read back from the instance, a picture set elsewhere drawn on the screen and the rail, and nothing offered to a member; screenshots under $work)"
+echo "smoke-server-settings: ok (renamed, retention set and Show deleted messages turned on through the screen and read back from the instance, a picture set elsewhere drawn on the screen and the rail, and nothing offered to a member; screenshots under $work)"

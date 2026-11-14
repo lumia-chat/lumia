@@ -62,6 +62,10 @@ public actor LumiaClient {
         try inner.setServerIcon(serverId: serverID, picture: picture, mediaType: mediaType)
     }
     public func removeServerIcon(serverID: String) throws -> SnapshotSummary { try inner.removeServerIcon(serverId: serverID) }
+    /// Whether the server's deleted messages keep their place as "(deleted)"; returns the snapshot as it then is.
+    public func setShowDeleted(serverID: String, show: Bool) throws -> SnapshotSummary {
+        try inner.setShowDeleted(serverId: serverID, show: show)
+    }
     /// A text channel in a server this account may manage channels in, private when asked.
     public func createChannel(serverID: String, name: String, isPrivate: Bool) throws -> ChannelSummary {
         try inner.createChannel(serverId: serverID, name: name, private: isPrivate)
