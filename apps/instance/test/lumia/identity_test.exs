@@ -443,7 +443,7 @@ defmodule Lumia.IdentityTest do
         device_id: Proto.uuid(Ecto.UUID.generate())
       }
 
-      assert {:error, :payload_too_large} = Identity.create_link_bundle(big)
+      assert {:error, {:payload_too_large, 65_536}} = Identity.create_link_bundle(big)
     end
   end
 

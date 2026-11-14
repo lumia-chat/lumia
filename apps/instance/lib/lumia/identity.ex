@@ -481,9 +481,14 @@ defmodule Lumia.Identity do
   @doc "Stores an encrypted link bundle and returns its single-use code."
   def create_link_bundle(%V1.CreateLinkBundleRequest{} = req) do
     cond do
-      byte_size(req.ciphertext) > @link_bundle_max_bytes -> {:error, :payload_too_large}
-      byte_size(req.device_id) != 16 -> {:error, :invalid_argument}
-      true -> insert_bundle(req, 3)
+      byte_size(req.ciphertext) > @link_bundle_max_bytes ->
+        {:error, {:payload_too_large, @link_bundle_max_bytes}}
+
+      byte_size(req.device_id) != 16 ->
+        {:error, :invalid_argument}
+
+      true ->
+        insert_bundle(req, 3)
     end
   end
 

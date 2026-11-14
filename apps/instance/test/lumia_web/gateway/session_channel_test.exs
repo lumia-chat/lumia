@@ -264,6 +264,7 @@ defmodule LumiaWeb.Gateway.SessionChannelTest do
       assert welcome.recovery_generation == Lumia.Instance.recovery_generation()
       assert welcome.heartbeat_interval_seconds == 30
       assert welcome.session_id == Proto.uuid(session.id)
+      assert welcome.limits.max_message_bytes == Lumia.Events.max_message_bytes()
     end
 
     test "heartbeats are echoed", %{socket: socket} do
@@ -595,6 +596,18 @@ defmodule LumiaWeb.Gateway.SessionChannelTest do
       assert command_id == cmd.command_id
       assert_push "frame", {:event_bytes, bytes}
       assert %V1.Event{seq: 1, command_id: ^command_id} = V1.Event.decode(bytes)
+    end
+
+    test "a body over the limit is refused with PAYLOAD_TOO_LARGE and the limit", ctx do
+      {_, socket} = join!(ctx.socket)
+      cmd = send_message(ctx.channel.id, String.duplicate("x", 16_385))
+      send_frame(socket, {:command, cmd})
+
+      assert_push "frame", %V1.ServerFrame{
+        frame: {:error, %V1.Error{code: :PAYLOAD_TOO_LARGE, details: %{"max" => "16384"}} = error}
+      }
+
+      assert error.command_id == cmd.command_id
     end
 
     test "a member without SEND_MESSAGES is denied", ctx do

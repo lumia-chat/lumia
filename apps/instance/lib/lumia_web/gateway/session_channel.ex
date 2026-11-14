@@ -84,7 +84,10 @@ defmodule LumiaWeb.Gateway.SessionChannel do
       recovery_generation: Instance.recovery_generation(),
       server_time: Proto.timestamp(DateTime.utc_now()),
       heartbeat_interval_seconds: @heartbeat_seconds,
-      limits: %V1.Limits{max_subscriptions: @max_subscriptions, max_message_bytes: 16_384},
+      limits: %V1.Limits{
+        max_subscriptions: @max_subscriptions,
+        max_message_bytes: Lumia.Events.max_message_bytes()
+      },
       key_package_count:
         Mls.key_package_count(socket.assigns.account_id, socket.assigns.device_id)
     }
@@ -737,6 +740,12 @@ defmodule LumiaWeb.Gateway.SessionChannel do
   defp push_command_error(socket, {:failed_precondition, state}, command_id) do
     push_error(socket, :FAILED_PRECONDITION, "failed precondition", command_id, %{
       "state" => state
+    })
+  end
+
+  defp push_command_error(socket, {:payload_too_large, max}, command_id) do
+    push_error(socket, :PAYLOAD_TOO_LARGE, "payload too large", command_id, %{
+      "max" => Integer.to_string(max)
     })
   end
 

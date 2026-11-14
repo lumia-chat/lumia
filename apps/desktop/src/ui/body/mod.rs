@@ -4,8 +4,8 @@
 //! selection group of its own, so a drag stopped at the end of the message it began in.
 //! Here the timeline is the group, and a drag runs from one message into the next.
 //!
-//! `parse` reads the source into blocks and decides what is in the subset; this file draws
-//! them. A paragraph is one `rich` text; a code block is one text on the `inset` ground,
+//! The core's `parse` (`lumia_client::body`, shared with the other clients) reads the source
+//! into blocks and decides what is in the subset; this file draws them. A paragraph is one `rich` text; a code block is one text on the `inset` ground,
 //! wrapped at the block's width and coloured by the kit's highlighter for the languages it
 //! knows; a quote is its blocks beside a rule; a list is rows of a marker and the item's
 //! blocks. A word wider than the line breaks inside itself rather than run out of the row.
@@ -28,14 +28,13 @@
 //! (`@ada`) are found again in the paragraphs drawn, where they stand as a word and outside
 //! code.
 
-mod parse;
-
 use std::cell::Cell;
 
 use rune::{Align, Color, El, Link, LinkPaint, Span, TextStyle, Tx, col, el, rich, row, text};
 use rune_kit::syntax::{self, SyntaxTheme};
 
-pub use parse::{Block, Inline, Style, is_web, parse};
+use lumia_client::body::{PAD, standing};
+pub use lumia_client::body::{Block, Inline, Style, is_web, parse};
 
 use super::components::Look;
 use crate::app::State;
@@ -112,31 +111,6 @@ fn ends_in_paragraph(blocks: &[Block]) -> bool {
 
 /// What follows an edited message's words.
 const EDITED: &str = " (edited)";
-
-/// Where `words` stand in `text` as a word of their own: not inside another word, and not
-/// running on into the characters a handle has.
-fn standing(text: &str, words: &str) -> Vec<std::ops::Range<usize>> {
-    let handle = |c: char| c.is_alphanumeric() || matches!(c, '_' | '.' | '-');
-    let mut found = Vec::new();
-    let mut from = 0;
-    while let Some(at) = text[from..].find(words) {
-        let start = from + at;
-        let end = start + words.len();
-        let opens = text[..start]
-            .chars()
-            .next_back()
-            .is_none_or(|c| !c.is_alphanumeric() && c != '_');
-        let closes = text[end..]
-            .chars()
-            .next()
-            .is_none_or(|c| !handle(c) || matches!(c, '.' | '-'));
-        if opens && closes {
-            found.push(start..end);
-        }
-        from = end;
-    }
-    found
-}
 
 /// A line of the timeline that is not a message's text but belongs in a copy of it: the
 /// placeholder of a deleted message. Selectable, and placed as a body's only paragraph is,
@@ -521,7 +495,7 @@ fn pad_size() -> f32 {
         return size;
     }
     let font = t::TEXT_MESSAGE;
-    let probe = parse::PAD.repeat(64);
+    let probe = PAD.repeat(64);
     let wide = |size: f32| {
         let style = TextStyle { size, ..font };
         (rune::text::measure(&probe, &[], style, None).0 / 64.0).max(0.1)

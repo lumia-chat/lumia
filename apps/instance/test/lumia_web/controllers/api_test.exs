@@ -631,6 +631,13 @@ defmodule LumiaWeb.ApiTest do
 
       assert bad.status == 400
       assert %V1.Error{code: :INVALID_ARGUMENT} = decode(bad, V1.Error)
+
+      long = send_message(ctx.general.id, String.duplicate("x", 16_385))
+      too_large = post_proto(ctx.conn, "/api/v1/channels/#{ctx.general.id}/commands", long)
+      assert too_large.status == 413
+
+      assert %V1.Error{code: :PAYLOAD_TOO_LARGE, details: %{"max" => "16384"}} =
+               decode(too_large, V1.Error)
     end
 
     test "account events are listed after a cursor", ctx do

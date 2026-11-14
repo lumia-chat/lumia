@@ -31,6 +31,13 @@ defmodule Lumia.Events do
   # The most of a message a quote keeps, in characters (architecture 6.6).
   @quote_max 2_000
 
+  # The largest message body, in bytes of UTF-8 (protocol 14); `Welcome.limits`
+  # tells clients, and a longer one is refused with `PAYLOAD_TOO_LARGE`.
+  @max_message_bytes 16_384
+
+  @doc "The largest message body the instance accepts, in bytes of UTF-8."
+  def max_message_bytes, do: @max_message_bytes
+
   @doc "Creates a channel. Spike-level; the real context lives elsewhere later."
   def create_channel(kind \\ "text") do
     Repo.insert(%Channel{kind: kind})
@@ -47,10 +54,22 @@ defmodule Lumia.Events do
   """
   def append(channel_id, actor, %V1.Command{} = command, opts \\ []) do
     case Proto.from_uuid(command.command_id) do
-      nil -> {:error, :invalid_argument}
-      command_id -> append(channel_id, actor, command, command_id, opts)
+      nil ->
+        {:error, :invalid_argument}
+
+      command_id ->
+        with :ok <- fits(command), do: append(channel_id, actor, command, command_id, opts)
     end
   end
+
+  # A message body over the limit is refused before anything is written.
+  defp fits(%V1.Command{op: {op, %{body: body}}}) when op in [:send_message, :edit_message] do
+    if byte_size(body) > @max_message_bytes,
+      do: {:error, {:payload_too_large, @max_message_bytes}},
+      else: :ok
+  end
+
+  defp fits(_command), do: :ok
 
   defp append(channel_id, actor, command, command_id, opts) do
     fingerprint = fingerprint(actor, command)

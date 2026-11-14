@@ -30,6 +30,7 @@ pub mod writer;
 
 pub use futures_channel;
 pub use futures_util;
+pub use lumia_core::body;
 
 /// Errors from the native layer.
 #[derive(Debug, thiserror::Error)]
@@ -81,6 +82,15 @@ pub enum ClientError {
     /// Required local state is missing.
     #[error("{0}")]
     State(String),
+    /// A message body over the instance's limit (protocol 14), refused
+    /// before it is sent: `over` is how many characters must go.
+    #[error("this message is {over} characters too long")]
+    TooLong {
+        /// Characters to cut for it to fit.
+        over: u64,
+        /// The limit, in bytes of UTF-8.
+        max: u32,
+    },
 }
 
 impl From<reqwest::Error> for ClientError {

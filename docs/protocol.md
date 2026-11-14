@@ -385,6 +385,10 @@ A proof is accepted exactly once. The full roster rules, the add and revoke flow
 
 `Message.body` is UTF-8 text in a Markdown subset: paragraphs, `*emphasis*`, `**strong**`, `~~strike~~`, inline `` `code` ``, fenced code blocks with an optional language, `> quotes`, ordered and unordered lists, and links. No raw HTML, no images (attachments carry images), no headings, no tables. Mentions are not in the text; they are `Mention` entries with byte offsets into the body, so a display name change never rewrites history. Servers validate that offsets fall on UTF-8 boundaries.
 
+A body is at most `Welcome.limits.max_message_bytes` bytes of UTF-8 (16,384). The instance refuses a longer `SendMessage` or `EditMessage` with `PAYLOAD_TOO_LARGE` and `details.max`; the core refuses it before sending, a personal DM's included, whose ciphertext the instance cannot measure. A quote keeps at most 2,000 characters of its original.
+
+The grammar's one implementation is the core's (`lumia_core::body`), which every client draws from. It decides what the subset leaves open: a single newline is a line break, a bare web address is a link, reference-style links and indented code stay as typed, and a single tilde is not strike. Whatever is outside the subset stays as typed.
+
 ## 15. Encrypted channels
 
 For `PERSONAL_DM` and `PERSONAL_GROUP_DM`:
@@ -398,7 +402,6 @@ For `PERSONAL_DM` and `PERSONAL_GROUP_DM`:
 
 ## 16. Open items
 
-- The exact Markdown grammar (section 14) needs a reference implementation shared by the server validator and the Rust core renderer.
 - `ChannelSnapshot.messages` page size and whether snapshots are cacheable server-side.
 - Whether `HighWaterMarkRequest` with an empty channel list is bounded by `Limits.max_subscriptions` or by a separate cap.
 - MCP tool and resource definitions.

@@ -988,6 +988,45 @@ impl Client {
         Ok(lumia_client::rail::folder_words(&names))
     }
 
+    /// The largest message body the instance takes, in bytes of UTF-8.
+    #[wasm_bindgen(js_name = maxMessageBytes)]
+    pub fn max_message_bytes(&self) -> u32 {
+        self.app.max_message_bytes()
+    }
+
+    /// The room `body` has under the instance's limit, for the composer's
+    /// counter: `{shown, left}`, `left` negative when it is that many
+    /// characters too long.
+    ///
+    /// # Errors
+    /// Never in practice; marshalling.
+    #[wasm_bindgen(js_name = messageRoom)]
+    pub fn message_room(&self, body: String) -> Result<JsValue, JsError> {
+        to_js(&lumia_client::body::room(
+            &body,
+            self.app.max_message_bytes(),
+        ))
+    }
+
+    /// `body` read into blocks (protocol 14) with `mentions` (`[{start,
+    /// end}]`, byte ranges) marked; ranges in the blocks are UTF-16, as
+    /// JavaScript counts. `[{kind: "para", text, runs: [{start, end,
+    /// style: {kind, index?}}], links: [{start, end, url}]} | {kind:
+    /// "code", lang, text} | {kind: "quote", blocks} | {kind: "list",
+    /// start, items: [[block]]}]`.
+    ///
+    /// # Errors
+    /// When `mentions` is not a list of ranges.
+    #[wasm_bindgen(js_name = parseBody)]
+    pub fn parse_body(&self, body: String, mentions: JsValue) -> Result<JsValue, JsError> {
+        let mentions: Vec<MentionSummary> = from_js(mentions)?.unwrap_or_default();
+        let ranges: Vec<std::ops::Range<usize>> = mentions
+            .iter()
+            .map(|m| m.start as usize..m.end as usize)
+            .collect();
+        to_js(&lumia_client::body::display(&body, &ranges))
+    }
+
     /// The mentions `body` makes of `members` (`MemberSummary` objects),
     /// and of everyone when `everyone`: `[{accountId, everyone, start,
     /// end}]`, UTF-8 byte ranges.

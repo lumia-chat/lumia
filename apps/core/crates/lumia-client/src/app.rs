@@ -12,10 +12,12 @@
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use futures_util::lock::Mutex as AsyncMutex;
 use futures_util::StreamExt as _;
+use lumia_core::body;
 use lumia_core::keystore::Keystore;
 use lumia_core::mls::projection::Projection;
 use lumia_core::proto::{
@@ -1326,6 +1328,9 @@ pub struct App {
     writer: Option<WriterLock>,
     /// Held while an arrangement of the rail is sent: they go one at a time.
     rail_turn: AsyncMutex<()>,
+    /// The largest message body the instance takes, in bytes: its
+    /// `Welcome.limits`, or the protocol's until one arrives.
+    max_message_bytes: AtomicU32,
 }
 
 impl std::fmt::Debug for App {
@@ -1445,6 +1450,7 @@ impl App {
                 rails: RailSends::default(),
             }),
             rail_turn: AsyncMutex::new(()),
+            max_message_bytes: AtomicU32::new(body::MAX_MESSAGE_BYTES),
             identity: AsyncMutex::new(IdentityStores {
                 store: identity_store,
                 keys: identity_keys,
@@ -2545,6 +2551,15 @@ impl App {
                             .reader
                             .meta_set(gateway::ACCOUNT_META, &hex::encode(&w.account_id));
                         inner.reads.me = w.account_id.clone();
+                        drop(inner);
+                        if let Some(max) = w
+                            .limits
+                            .as_ref()
+                            .map(|l| l.max_message_bytes)
+                            .filter(|max| *max > 0)
+                        {
+                            app.max_message_bytes.store(max, Ordering::Relaxed);
+                        }
                     }
                     GatewayEvent::Applied(events) => app.lock().reads.count(events),
                     GatewayEvent::AccountApplied(events) => {
@@ -2963,6 +2978,26 @@ impl App {
         self.send_command(GatewayCommand::Typing(channel))
     }
 
+    /// The largest message body the instance takes, in bytes of UTF-8
+    /// (protocol 14): what its `Welcome` said, or the protocol's own
+    /// until one has. A composer counts against it with
+    /// [`lumia_core::body::room`].
+    pub fn max_message_bytes(&self) -> u32 {
+        self.max_message_bytes.load(Ordering::Relaxed)
+    }
+
+    /// Refuses a body over the limit before anything is sent or written.
+    fn fits(&self, text: &str) -> Result<(), ClientError> {
+        let max = self.max_message_bytes();
+        if body::fits(text, max) {
+            return Ok(());
+        }
+        Err(ClientError::TooLong {
+            over: body::room(text, max).left.unsigned_abs(),
+            max,
+        })
+    }
+
     /// Sends a message; returns the client-minted message id.
     ///
     /// # Errors
@@ -2985,6 +3020,7 @@ impl App {
         mentions: &[MentionSummary],
         reply_to: Option<&QuoteSummary>,
     ) -> Result<String, ClientError> {
+        self.fits(body)?;
         let channel = parse_uuid(channel_id)?;
         let id = wire::new_id();
         let mentions = mentions
@@ -3038,6 +3074,7 @@ impl App {
         body: &str,
         mentions: &[MentionSummary],
     ) -> Result<String, ClientError> {
+        self.fits(body)?;
         let channel = parse_uuid(channel_id)?;
         let mentions = mentions
             .iter()
@@ -3874,6 +3911,7 @@ impl App {
         body: &str,
         quote: Option<&QuoteSummary>,
     ) -> Result<String, ClientError> {
+        self.fits(body)?;
         let channel = parse_uuid(channel_id)?;
         let quote = quote
             .map(|q| {
@@ -3933,6 +3971,7 @@ impl App {
         message_id: &str,
         body: &str,
     ) -> Result<(), ClientError> {
+        self.fits(body)?;
         let channel = parse_uuid(channel_id)?;
         let message = parse_uuid(message_id)?;
         let engine = self.dm_engine_ready().await?;
@@ -4322,6 +4361,23 @@ mod kept_tests {
     fn app() -> Arc<App> {
         let opener: Opener = Arc::new(|_| SqliteStore::in_memory());
         App::open("http://127.0.0.1:9", Place::Native, opener).unwrap()
+    }
+
+    #[test]
+    fn a_body_over_the_limit_is_refused_before_it_is_sent() {
+        let app = app();
+        assert_eq!(app.max_message_bytes(), body::MAX_MESSAGE_BYTES);
+        let channel = "01a1da65-e156-7245-b673-417136cc841d";
+        let over = "a".repeat(body::MAX_MESSAGE_BYTES as usize + 3);
+        let refused = |e: Result<String, ClientError>| matches!(e, Err(ClientError::TooLong { over: 3, max }) if max == body::MAX_MESSAGE_BYTES);
+        assert!(refused(app.send_message(channel, &over)));
+        assert!(refused(app.edit_message(channel, channel, &over, &[])));
+        // At the limit it goes on to the gateway, which is not started here.
+        let at = "a".repeat(body::MAX_MESSAGE_BYTES as usize);
+        assert!(!matches!(
+            app.send_message(channel, &at),
+            Err(ClientError::TooLong { .. })
+        ));
     }
 
     fn snapshot() -> SnapshotSummary {

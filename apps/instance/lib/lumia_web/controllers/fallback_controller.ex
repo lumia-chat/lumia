@@ -35,6 +35,9 @@ defmodule LumiaWeb.FallbackController do
         "quota" => Integer.to_string(Lumia.History.quota_bytes())
       })
 
+  def call(conn, {:error, {:payload_too_large, max}}),
+    do: ProtoConn.render_error(conn, :payload_too_large, %{"max" => Integer.to_string(max)})
+
   def call(conn, {:error, {:invalid_argument, field}}) when is_binary(field),
     do: ProtoConn.render_error(conn, :invalid_argument, %{"field" => field})
 

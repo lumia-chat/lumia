@@ -49,7 +49,6 @@ lumia-client = { path = "../core/crates/lumia-client" }
 # Off macOS, and in a bare binary, it is the same surface with nothing behind it.
 lumia-sparkle = { path = "crates/sparkle" }
 # Message bodies (`ui::body`): the version Rune's kit locked, CommonMark and strikethrough only.
-pulldown-cmark = { version = "0.13.6", default-features = false }
 tokio = { version = "1", features = ["rt-multi-thread", "time"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 serde = { version = "1", features = ["derive"] }

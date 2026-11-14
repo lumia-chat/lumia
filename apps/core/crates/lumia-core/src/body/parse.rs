@@ -1,5 +1,5 @@
 //! A message body's source to blocks: the protocol's Markdown subset (protocol 14) and
-//! nothing else. No toolkit type appears here.
+//! nothing else, read the same way for every client.
 //!
 //! `pulldown-cmark` reads CommonMark, which is more than the subset, so the walk hands back
 //! as typed whatever the subset does not have: a heading keeps its `#`, raw HTML its tags,
@@ -104,7 +104,7 @@ impl Inline {
     }
 }
 
-/// Whether a link's destination is a web address, the only kind the shell opens: other
+/// Whether a link's destination is a web address, the only kind a client opens: other
 /// schemes can start other programs, and a relative one has nothing to be relative to.
 pub fn is_web(url: &str) -> bool {
     let rest = ["https://", "http://"].iter().find_map(|scheme| {
@@ -451,21 +451,21 @@ impl Builder<'_> {
         if !self.level() {
             return;
         }
-        if let Some(heading) = &mut self.heading
-            && heading.last.is_none()
-        {
-            heading.last = Some(at);
-            let marker = self.src.get(heading.range.start..at).unwrap_or_default();
-            let marker = marker.trim_start().to_owned();
-            self.push(&marker);
-        }
+        let Some(heading) = self.heading.as_mut().filter(|h| h.last.is_none()) else {
+            return;
+        };
+        heading.last = Some(at);
+        let marker = self.src.get(heading.range.start..at).unwrap_or_default();
+        let marker = marker.trim_start().to_owned();
+        self.push(&marker);
     }
 
     /// After a piece of a heading's text ending at `at`.
     fn after(&mut self, at: usize) {
-        if self.level()
-            && let Some(heading) = &mut self.heading
-        {
+        if !self.level() {
+            return;
+        }
+        if let Some(heading) = &mut self.heading {
             heading.last = Some(at);
         }
     }
@@ -478,10 +478,10 @@ impl Builder<'_> {
     }
 
     fn close(&mut self, at: usize) {
-        if let Some(line) = &mut self.line
-            && let Some(open) = line.open.pop()
-        {
-            end_run(&mut line.inline, open);
+        if let Some(line) = &mut self.line {
+            if let Some(open) = line.open.pop() {
+                end_run(&mut line.inline, open);
+            }
         }
         self.after(at);
     }
@@ -982,7 +982,7 @@ mod tests {
             assert_eq!(
                 typed(other),
                 other,
-                "a link the shell will not open stays as typed"
+                "a link a client will not open stays as typed"
             );
         }
         // Around text, and with its own text unread.

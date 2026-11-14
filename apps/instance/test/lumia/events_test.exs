@@ -106,6 +106,30 @@ defmodule Lumia.EventsTest do
       assert %Message{body: "final", edited_at: %DateTime{}} = Repo.get!(Message, message_id)
     end
 
+    test "a body over 16,384 bytes is refused, sent or edited, and nothing is written", ctx do
+      # "é" is two bytes of UTF-8: the limit counts bytes, not characters.
+      at_limit = String.duplicate("é", 8_192)
+      over = at_limit <> "x"
+
+      assert {:error, {:payload_too_large, 16_384}} =
+               Events.append(ctx.channel.id, ctx.actor, send_message(ctx.channel.id, over))
+
+      assert Repo.aggregate(Command, :count) == 0
+
+      cmd = send_message(ctx.channel.id, at_limit)
+      assert {:ok, %{seq: 1}} = Events.append(ctx.channel.id, ctx.actor, cmd)
+      message_id = Proto.from_uuid(cmd.command_id)
+
+      assert {:error, {:payload_too_large, 16_384}} =
+               Events.append(
+                 ctx.channel.id,
+                 ctx.actor,
+                 edit_message(ctx.channel.id, message_id, over)
+               )
+
+      assert %Message{body: ^at_limit, edited_at: nil} = Repo.get!(Message, message_id)
+    end
+
     test "deletes tombstone the message and redact the create event", ctx do
       cmd = send_message(ctx.channel.id, "secret")
       {:ok, _} = Events.append(ctx.channel.id, ctx.actor, cmd)

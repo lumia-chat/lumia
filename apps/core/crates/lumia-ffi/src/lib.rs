@@ -18,6 +18,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use lumia_client::app::{self, App, EventSink, Opener, Place, StoreName};
+use lumia_client::body;
 use lumia_client::sqlite::SqliteStore;
 use lumia_client::ClientError;
 use lumia_core::proto::PushKind;
@@ -517,6 +518,135 @@ impl From<QuoteSummary> for app::QuoteSummary {
             text: q.text,
             original_deleted: q.original_deleted,
             silent: q.silent,
+        }
+    }
+}
+
+/// A block of a message body as the core reads its Markdown subset
+/// (protocol 14): the same grammar on every client.
+#[derive(Debug, Clone, PartialEq, uniffi::Enum)]
+pub enum BodyBlock {
+    Para {
+        inline: BodyInline,
+    },
+    /// A fenced code block: the first word after its fence, if any, and
+    /// its lines.
+    Code {
+        lang: Option<String>,
+        text: String,
+    },
+    Quote {
+        blocks: Vec<BodyBlock>,
+    },
+    /// A list, ordered from `start` when it has one.
+    List {
+        start: Option<u64>,
+        items: Vec<BodyListItem>,
+    },
+}
+
+/// One item of a list: its blocks.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct BodyListItem {
+    pub blocks: Vec<BodyBlock>,
+}
+
+/// A paragraph's text and what styles it. Ranges are UTF-16 code units of
+/// `text`, as `NSRange` and `AnnotatedString` count.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct BodyInline {
+    pub text: String,
+    pub runs: Vec<BodyRun>,
+    /// Web links, which the client opens.
+    pub links: Vec<BodyLink>,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct BodyRun {
+    pub start: u32,
+    pub end: u32,
+    pub style: BodyStyle,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct BodyLink {
+    pub start: u32,
+    pub end: u32,
+    pub url: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum BodyStyle {
+    Emphasis,
+    Strong,
+    Strike,
+    Code,
+    /// The mention at `index` of those the body was read with: its text is
+    /// the mention as typed, which the client replaces with the name.
+    Mention {
+        index: u32,
+    },
+}
+
+/// How much room a draft has under the instance's limit, as the composer's
+/// counter shows it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+pub struct MessageRoom {
+    /// Whether the counter shows: from 90% of the limit.
+    pub shown: bool,
+    /// Characters left, or when negative, how many too long: Send is
+    /// refused below zero.
+    pub left: i64,
+}
+
+impl From<body::DisplayBlock> for BodyBlock {
+    fn from(block: body::DisplayBlock) -> Self {
+        let blocks = |blocks: Vec<body::DisplayBlock>| blocks.into_iter().map(Into::into).collect();
+        match block {
+            body::DisplayBlock::Para(inline) => Self::Para {
+                inline: BodyInline {
+                    text: inline.text,
+                    runs: inline
+                        .runs
+                        .into_iter()
+                        .map(|r| BodyRun {
+                            start: r.start,
+                            end: r.end,
+                            style: match r.style {
+                                body::DisplayStyle::Emphasis => BodyStyle::Emphasis,
+                                body::DisplayStyle::Strong => BodyStyle::Strong,
+                                body::DisplayStyle::Strike => BodyStyle::Strike,
+                                body::DisplayStyle::Code => BodyStyle::Code,
+                                body::DisplayStyle::Mention { index } => {
+                                    BodyStyle::Mention { index }
+                                }
+                            },
+                        })
+                        .collect(),
+                    links: inline
+                        .links
+                        .into_iter()
+                        .map(|l| BodyLink {
+                            start: l.start,
+                            end: l.end,
+                            url: l.url,
+                        })
+                        .collect(),
+                },
+            },
+            body::DisplayBlock::Code { lang, text } => Self::Code { lang, text },
+            body::DisplayBlock::Quote { blocks: inner } => Self::Quote {
+                blocks: blocks(inner),
+            },
+            body::DisplayBlock::List { start, items } => Self::List {
+                start,
+                items: items
+                    .into_iter()
+                    .map(|item| BodyListItem {
+                        blocks: blocks(item),
+                    })
+                    .collect(),
+            },
         }
     }
 }
@@ -1102,6 +1232,20 @@ impl std::fmt::Debug for Client {
 }
 
 type Res<T> = Result<T, LumiaError>;
+
+/// `body` read into blocks with `mentions` marked, as
+/// [`Client::parse_body`], for a view that has no client.
+#[uniffi::export]
+pub fn parse_body(body: String, mentions: Vec<MentionSummary>) -> Vec<BodyBlock> {
+    let ranges: Vec<std::ops::Range<usize>> = mentions
+        .iter()
+        .map(|m| m.start as usize..m.end as usize)
+        .collect();
+    body::display(&body, &ranges)
+        .into_iter()
+        .map(Into::into)
+        .collect()
+}
 
 #[uniffi::export]
 impl Client {
@@ -1800,6 +1944,27 @@ impl Client {
     /// How a folder with no name reads: "Acme, Lumia and 2 more".
     pub fn rail_folder_words(&self, names: Vec<String>) -> String {
         lumia_client::rail::folder_words(&names)
+    }
+
+    /// The largest message body the instance takes, in bytes of UTF-8.
+    pub fn max_message_bytes(&self) -> u32 {
+        self.app.max_message_bytes()
+    }
+
+    /// The room `body` has under the instance's limit, for the composer's
+    /// counter.
+    pub fn message_room(&self, body: String) -> MessageRoom {
+        let room = body::room(&body, self.app.max_message_bytes());
+        MessageRoom {
+            shown: room.shown,
+            left: room.left,
+        }
+    }
+
+    /// `body` read into blocks, with `mentions` (the message's, by their
+    /// byte ranges) marked as runs.
+    pub fn parse_body(&self, body: String, mentions: Vec<MentionSummary>) -> Vec<BodyBlock> {
+        parse_body(body, mentions)
     }
 
     /// The mentions `body` makes of `members`, and of everyone when

@@ -82,6 +82,7 @@ defmodule LumiaWeb.ProtoConn do
   defp code_and_status(:conflict), do: {:CONFLICT, 409}
   defp code_and_status(:already_exists), do: {:ALREADY_EXISTS, 409}
   defp code_and_status(:limit_exceeded), do: {:FAILED_PRECONDITION, 400}
+  defp code_and_status(:payload_too_large), do: {:PAYLOAD_TOO_LARGE, 413}
   defp code_and_status(:resource_exhausted), do: {:RESOURCE_EXHAUSTED, 507}
   defp code_and_status(:rate_limited), do: {:RATE_LIMITED, 429}
   defp code_and_status(_), do: {:INTERNAL, 500}
