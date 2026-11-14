@@ -6,6 +6,7 @@
 // `reactions` is a few messages with reactions, a reply among them, drawn
 // as the launch's preset says (`LUMIA_DEV_PRESET=minimal` hides them), and
 // `reactions-preferences` the Preferences page where they are chosen.
+// `profile-updated` is a changed name drawn at once (issue #15).
 #if DEBUG
 import LumiaFFI
 import LumiaKit
@@ -112,6 +113,40 @@ struct ReactionsScene: View {
         x.addReaction = {}
         x.actions = {}
         return LumiaMessageRow(author: author, tone: .of(author), time: time, text: text, place: place, measures: measures, extras: x)
+    }
+}
+
+/// `profile-updated`: a server's members and a few messages, and two
+/// seconds in, Ada's `ProfileUpdate` (issue #15) written over the list as
+/// the session writes it: her rows draw her new name and handle at once,
+/// her server nickname stays, and Grace is as she was.
+struct ProfileUpdatedScene: View {
+    @State private var members = [
+        MemberSummary(accountId: "ada", handle: "ada", displayName: "Ada", nickname: "Countess", pronouns: "", bio: "", avatarUrl: "", channelAddsByInvitation: false, serverDmsOff: false),
+        MemberSummary(accountId: "grace", handle: "grace", displayName: "Grace Hopper", nickname: "", pronouns: "", bio: "", avatarUrl: "", channelAddsByInvitation: false, serverDmsOff: false),
+    ]
+
+    private func name(_ id: String) -> String {
+        members.first { $0.accountId == id }.map { $0.displayName.isEmpty ? $0.handle : $0.displayName } ?? id
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(members, id: \.accountId) { m in
+                    LumiaMemberRow(name: name(m.accountId), subtitle: "@\(m.handle) · nickname \(m.nickname.isEmpty ? "none" : m.nickname)", tone: .of(m.accountId))
+                }
+                LumiaDayDivider(label: "Today")
+                LumiaMessageRow(author: name("ada"), tone: .of("ada"), time: "12:01", text: "Changing my name now.")
+                LumiaMessageRow(author: name("grace"), tone: .of("grace"), time: "12:02", text: "Go on.")
+            }
+            .padding(.vertical, LumiaTokens.space8)
+        }
+        .background(LumiaTokens.surface.color)
+        .task {
+            try? await Task.sleep(for: .seconds(2))
+            members = ProfileUpdate(accountID: "ada", handle: "countess", displayName: "Ada Lovelace", avatarURL: "", pronouns: "she/her", bio: "").applied(to: members)
+        }
     }
 }
 #endif

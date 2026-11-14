@@ -71,9 +71,9 @@ public final class LumiaSession {
     public private(set) var dmLogs: [String: DmLogSummary] = [:]
     public private(set) var roster: RosterSummary?
     /// Everyone this account shares a server with, by account id.
-    public private(set) var people: [String: MemberSummary] = [:]
+    public internal(set) var people: [String: MemberSummary] = [:]
     /// A server's members, by server id, for the members aside.
-    public private(set) var serverMembers: [String: [MemberSummary]] = [:]
+    public internal(set) var serverMembers: [String: [MemberSummary]] = [:]
     /// Who is present in the servers on screen (protocol 6.7), by server
     /// then account: `ONLINE`, `AWAY` or `DO_NOT_DISTURB`.
     public private(set) var serverPresence: [String: [String: String]] = [:]
@@ -97,7 +97,7 @@ public final class LumiaSession {
     /// This device's clock, in microseconds since the epoch; a test's own.
     var nowMicros: @MainActor () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1_000_000) }
     /// Public profiles looked up one at a time; nil once the instance refused one.
-    private var profiles: [String: MemberSummary?] = [:]
+    var profiles: [String: MemberSummary?] = [:]
     /// The lookups on their way. Not something a view watches: a view asks
     /// for a profile while drawing itself, and were the asking a change,
     /// two views naming the same stranger would redraw each other without
@@ -732,6 +732,21 @@ public final class LumiaSession {
         return (people[accountID] ?? profile(of: accountID))?.pronouns ?? ""
     }
 
+    /// Someone changed their name or picture (issue #15): written over
+    /// what is held of them (the servers' lists, the people, a profile
+    /// looked up, and for this account the snapshot), so everything that
+    /// draws them redraws as they now are, with no member list read again.
+    /// Someone not held is read as they are when first asked for.
+    func apply(_ update: ProfileUpdate) {
+        let id = update.accountID
+        if let p = people[id] { people[id] = update.applied(to: p) }
+        for (serverID, members) in serverMembers where members.contains(where: { $0.accountId == id }) {
+            serverMembers[serverID] = update.applied(to: members)
+        }
+        if case let .some(.some(p)) = profiles[id] { profiles[id] = .some(update.applied(to: p)) }
+        if let snap = snapshot, snap.accountId == id { snapshot = update.applied(to: snap) }
+    }
+
     public func conversationName(_ channel: ChannelSummary) -> String {
         let others = channel.participantAccountIds.filter { $0 != me }
         if others.isEmpty { return "Just you" }
@@ -844,6 +859,8 @@ public final class LumiaSession {
             await refreshReads()
             await refreshSnapshot()
             await refreshDmChannels()
+        case let .profileUpdated(accountId, handle, displayName, avatarUrl, pronouns, bio):
+            apply(ProfileUpdate(accountID: accountId, handle: handle, displayName: displayName, avatarURL: avatarUrl, pronouns: pronouns, bio: bio))
         case let .error(_, message, commandId):
             if let edited = editsSent.refused(command: commandId) {
                 editRefusals[edited] = MessageEdits.notSaved(message)

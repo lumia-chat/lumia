@@ -45,6 +45,8 @@ struct RootView: View {
                 ReactionsScene()
             } else if devScreen == "reactions-preferences" {
                 PreferencesScreen()
+            } else if devScreen == "profile-updated" {
+                ProfileUpdatedScene()
             } else {
                 screen
             }
