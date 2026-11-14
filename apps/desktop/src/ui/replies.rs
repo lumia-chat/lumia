@@ -523,6 +523,9 @@ pub fn reply_strip(s: &State, quote: &QuoteSummary, look: Look) -> El {
         .gap(t::SPACE_10)
         .items_center()
         .fill(c.inset)
+        // Its own top corners, the composer frame's inside its 1-point border: the frame's
+        // rounded clip does not reach a child's fill, which drew square over its corners.
+        .corners([t::RADIUS_16 - 1.0, t::RADIUS_16 - 1.0, 0.0, 0.0])
         .border_sides([0.0, 0.0, 1.0, 0.0], c.border_composer)
         .child(icon(&icons::REPLY, t::SPACE_14 + 1.0).color(c.ink_secondary))
         .child(words);
