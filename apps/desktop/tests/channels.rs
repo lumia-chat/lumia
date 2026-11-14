@@ -362,7 +362,10 @@ fn the_default_channels_are_chosen_in_the_servers_settings() {
 #[test]
 fn private_channels_have_a_section_of_their_own() {
     let mut rt = runtime(signed_in());
-    assert!(rt.find("private-channels").is_none(), "a Private heading with nothing under it");
+    assert!(
+        rt.find("private-channels").is_none(),
+        "a Private heading with nothing under it"
+    );
     take(
         &mut rt,
         changed(|s| {
@@ -374,9 +377,14 @@ fn private_channels_have_a_section_of_their_own() {
     );
     // In Private, between Channels and Direct messages, and not among the public channels.
     let (_, channels) = rt.find("channel-design").expect("design listed");
-    let (_, leads) = rt.find("channel-leads").expect("the private channel listed");
+    let (_, leads) = rt
+        .find("channel-leads")
+        .expect("the private channel listed");
     let (_, dms) = rt.find("server-dms").expect("the server DMs listed");
-    assert!(channels < leads && leads < dms, "Private is not between the two");
+    assert!(
+        channels < leads && leads < dms,
+        "Private is not between the two"
+    );
     assert!(rt.find("private-channels").is_some());
     assert!(words(&rt).contains("Private"));
 }
