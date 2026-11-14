@@ -61,6 +61,14 @@ final class RailTests: XCTestCase {
         XCTAssertEqual(servers, ["a"])
     }
 
+    func testARefusalIsSaidInTheWebsWords() {
+        let folders = LumiaError.Api(code: "INVALID_ARGUMENT", detail: "invalid argument", details: ["field": "folders"])
+        XCTAssertEqual(RailWords.refusal(folders), "There can be at most 100 folders.")
+        let name = LumiaError.Api(code: "INVALID_ARGUMENT", detail: "invalid argument", details: ["field": "name"])
+        XCTAssertEqual(RailWords.refusal(name), "A folder's name is up to 50 characters.")
+        XCTAssertEqual(RailWords.refusal(LumiaError.Other(detail: "offline")), "offline")
+    }
+
     func testOpenFoldersAreKeptAsOneStringOfIds() {
         var open = OpenFolders(stored: "")
         XCTAssertFalse(open.isOpen("F"))

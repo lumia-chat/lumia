@@ -125,7 +125,7 @@ struct PhoneRail: View {
             }
         }
         .sheet(item: $settings) { settingsSheet($0) }
-        .alert("Not saved", isPresented: Binding(get: { session.railError != nil }, set: { if !$0 { session.railErrorRead() } })) {
+        .alert(RailWords.notSaved, isPresented: Binding(get: { session.railError != nil }, set: { if !$0 { session.railErrorRead() } })) {
             Button("OK", role: .cancel) {}
         } message: {
             Text(session.railError ?? "")
@@ -144,7 +144,8 @@ struct PhoneRail: View {
             tileState(id, radius: LumiaTokens.radius14) {
                 square(current: current || target?.highlight == id) {
                     LumiaPictureOver(url: session.pictureURL(s.iconUrl)) {
-                        Text(initials(of: s.name)).font(LumiaTokens.titleMonogram.font).foregroundStyle(LumiaTokens.ink.color)
+                        Text(initials(of: s.name)).font(LumiaTokens.titleMonogram.font)
+                            .foregroundStyle(current ? LumiaTokens.ink.color : AvatarTone.of(id).monogram.color)
                     }
                 }
                 .overlay(alignment: .topTrailing) { badge(current ? 0 : Int(unread.mentions), unread: unread.unread && !current) }
@@ -241,7 +242,7 @@ struct PhoneRail: View {
         let s = server(id)
         return LumiaPictureOver(url: session.pictureURL(s?.iconUrl ?? "")) {
             Text(initials(of: s?.name ?? "")).font(.system(size: LumiaTokens.space6, weight: .heavy))
-                .foregroundStyle(AvatarTone.of(id).ink.color)
+                .foregroundStyle(AvatarTone.of(id).monogram.color)
         }
         .frame(width: LumiaTokens.space14, height: LumiaTokens.space14)
         .background(LumiaTokens.tile.color, in: RoundedRectangle(cornerRadius: LumiaTokens.space4))
@@ -328,7 +329,7 @@ struct PhoneRail: View {
         } else if let s = server(id) {
             square(current: false) {
                 LumiaPictureOver(url: session.pictureURL(s.iconUrl)) {
-                    Text(initials(of: s.name)).font(LumiaTokens.titleMonogram.font).foregroundStyle(LumiaTokens.ink.color)
+                    Text(initials(of: s.name)).font(LumiaTokens.titleMonogram.font).foregroundStyle(AvatarTone.of(id).monogram.color)
                 }
             }
         }

@@ -41,6 +41,17 @@ public enum AvatarTone: String, CaseIterable, Sendable {
         case .indigo: LumiaTokens.toneIndigoInk
         }
     }
+
+    /// A server's initials on `tile` in this tone, as the rail boards draw
+    /// them: the design system's `tile-ink-*` where it names one, else the
+    /// tone's ink.
+    public var monogram: LumiaColor {
+        switch self {
+        case .indigo: LumiaTokens.tileInkIndigo
+        case .green: LumiaTokens.tileInkGreen
+        default: ink
+        }
+    }
 }
 
 public func initials(of name: String) -> String {

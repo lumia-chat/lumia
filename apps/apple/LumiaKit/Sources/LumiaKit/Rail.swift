@@ -88,6 +88,17 @@ public enum RailWords {
     public static let nameCaption = "Without a name it reads as its servers."
     /// The most characters a folder's name keeps, once trimmed (the core's).
     public static let nameMax = 50
+
+    /// The alert over a rail the instance did not keep, and why, in the web's words.
+    public static let notSaved = "The rail was not saved"
+    public static func refusal(_ error: Error) -> String {
+        guard error.lumiaCode == "INVALID_ARGUMENT" else { return error.lumiaMessage }
+        switch error.lumiaDetails["field"] {
+        case "name": return "A folder's name is up to 50 characters."
+        case "folders": return "There can be at most 100 folders."
+        default: return error.lumiaMessage
+        }
+    }
 }
 
 public extension AvatarTone {
@@ -282,7 +293,7 @@ public extension LumiaSession {
         } catch {
             guard edit == railEdits else { return }
             railSending = nil
-            railError = error.lumiaMessage
+            railError = RailWords.refusal(error)
         }
     }
 
