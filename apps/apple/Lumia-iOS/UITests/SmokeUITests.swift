@@ -4,7 +4,7 @@
 // look into Notification Center, and read a screen as assistive technology
 // does. scripts/smoke-push.sh,
 // scripts/smoke-typing.sh, scripts/smoke-preferences.sh,
-// scripts/smoke-signout.sh and scripts/smoke-server-settings.sh run these tests with the app signed in
+// scripts/smoke-signout.sh, scripts/smoke-server-settings.sh and scripts/smoke-rail.sh run these tests with the app signed in
 // (the LUMIA_DEV_* environment, passed through xcodebuild's TEST_RUNNER_
 // prefix).
 import XCTest
@@ -567,6 +567,100 @@ final class SmokeUITests: XCTestCase {
         let left = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: app.buttons["random"])
         XCTAssertEqual(XCTWaiter().wait(for: [left], timeout: 20), .completed, "#random is still in the sidebar once left")
         reached("left", under: steps)
+    }
+
+    /// The rail's order and folders by hand (scripts/smoke-rail.sh, which
+    /// seeds Acme, the folder Work of Northwind Studio, Open Source Guild,
+    /// Design Systems Club and Lumia Beta, and Trail Runners, with three
+    /// mentions in Work's servers and Northwind unread). Each step is
+    /// announced and waits for `<step>.seen`, the smoke reading the rail from
+    /// the instance at it: `closed` (Work one tile, its count three), `open`
+    /// (tapped open, its servers in it), `menu` (Trail Runners' menu open),
+    /// `moved` (Trail Runners moved up by it, over Work), `made` (Acme in a
+    /// folder of its own by New folder, whose settings open and are
+    /// cancelled), `settings` (Folder settings… from that folder's menu,
+    /// Weekend typed and Sky chosen), `named` (saved) and
+    /// `dragged` (Lumia Beta dragged out of Work to just over it).
+    func testRailOrderAndFolders() throws {
+        let steps = try XCTUnwrap(ProcessInfo.processInfo.environment["LUMIA_UITEST_STEPS"])
+        let app = launch(screen: "server")
+        let anything = app.descendants(matching: .any)
+        let work = app.buttons["Folder, Work"]
+        XCTAssertTrue(work.waitForExistence(timeout: 90), "no folder called Work on the rail")
+        XCTAssertEqual(work.value as? String, "collapsed, 3 mentions")
+        XCTAssertFalse(app.buttons["Northwind Studio"].exists, "a closed folder's servers are on the rail")
+        XCTAssertTrue(app.buttons["Acme"].isSelected, "the server on screen is not Acme")
+        reached("closed", under: steps)
+
+        work.tap()
+        let northwind = app.buttons["Northwind Studio"]
+        XCTAssertTrue(northwind.waitForExistence(timeout: 5), "Work opened shows none of its servers")
+        XCTAssertEqual(northwind.value as? String, "unread")
+        XCTAssertEqual(app.buttons["Open Source Guild"].value as? String, "2 mentions")
+        XCTAssertEqual(work.value as? String, "expanded, 3 mentions")
+        reached("open", under: steps)
+
+        // A long press let go opens the tile's menu, the system's sheet.
+        let trail = app.buttons["Trail Runners"]
+        trail.press(forDuration: 1.0)
+        for item in ["Move up", "New folder", "Move to folder…"] {
+            XCTAssertTrue(app.buttons[item].waitForExistence(timeout: 5), "Trail Runners' menu has no \(item)")
+        }
+        XCTAssertFalse(app.buttons["Move down"].exists, "the last tile can move down")
+        XCTAssertFalse(app.buttons["Remove from folder"].exists, "a server in no folder can be removed from one")
+        reached("menu", under: steps)
+        app.buttons["Move up"].tap()
+        XCTAssertTrue(above(trail, work), "Trail Runners did not move over Work")
+        reached("moved", under: steps)
+
+        // New folder: Acme in one of its own, whose settings follow.
+        app.buttons["Acme"].press(forDuration: 1.0)
+        XCTAssertTrue(app.buttons["New folder"].waitForExistence(timeout: 5))
+        app.buttons["New folder"].tap()
+        let name = app.textFields["Name"]
+        XCTAssertTrue(name.waitForExistence(timeout: 10), "Folder settings did not open for the new folder")
+        XCTAssertEqual(name.placeholderValue, "Acme", "the name's placeholder is not its servers")
+        XCTAssertTrue(anything.matching(NSPredicate(format: "label == %@", "Without a name it reads as its servers.")).firstMatch.exists)
+        for tone in ["Peach", "Blue", "Purple", "Mint", "Amber", "Sky", "Stone", "Green", "Indigo"] {
+            XCTAssertTrue(app.buttons[tone].exists, "no \(tone) among the colours")
+        }
+        XCTAssertEqual(["Peach", "Blue", "Purple", "Mint", "Amber", "Sky", "Stone", "Green", "Indigo"].filter { app.buttons[$0].isSelected }.count, 1, "not one colour chosen")
+        app.buttons["Cancel"].tap()
+        let made = app.buttons["Folder, Acme"]
+        XCTAssertTrue(made.waitForExistence(timeout: 10), "no folder of Acme on the rail")
+        reached("made", under: steps)
+
+        // Folder settings… from the folder's menu: a name and a colour.
+        made.press(forDuration: 1.0)
+        for item in ["Move down", "Folder settings…", "Delete folder"] {
+            XCTAssertTrue(app.buttons[item].waitForExistence(timeout: 5), "the folder's menu has no \(item)")
+        }
+        app.buttons["Folder settings…"].tap()
+        XCTAssertTrue(name.waitForExistence(timeout: 10))
+        name.tap()
+        name.typeText("Weekend")
+        app.buttons["Sky"].tap()
+        XCTAssertTrue(app.buttons["Sky"].isSelected)
+        reached("settings", under: steps)
+        app.buttons["Save"].tap()
+        XCTAssertTrue(app.buttons["Folder, Weekend"].waitForExistence(timeout: 10), "the folder is not called Weekend")
+        reached("named", under: steps)
+
+        // A drag: Lumia Beta out of Work, dropped just over Work's glyph, which is between Trail Runners and Work.
+        let beta = app.buttons["Lumia Beta"]
+        XCTAssertTrue(beta.exists)
+        beta.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 1.0, thenDragTo: work.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: -0.25)))
+        XCTAssertTrue(above(beta, work), "Lumia Beta was not dragged out over Work")
+        reached("dragged", under: steps)
+    }
+
+    /// Whether `a` comes to stand over `b`, within ten seconds.
+    private func above(_ a: XCUIElement, _ b: XCUIElement) -> Bool {
+        for _ in 0..<50 {
+            if a.exists, b.exists, a.frame.minY < b.frame.minY { return true }
+            usleep(200_000)
+        }
+        return false
     }
 
     /// Announces a step to the smoke and waits until it says it has looked.

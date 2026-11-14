@@ -134,6 +134,14 @@ public final class LumiaSession {
     @ObservationIgnored var messageLimits: [String: UInt32] = [:]
     @ObservationIgnored var readMarks = ReadMarks()
 
+    // The rail's order and folders (architecture 6.9; `Rail.swift`).
+    /// A rail edited here and not yet answered: drawn in place of the snapshot's.
+    var railSending: [RailItem]?
+    /// Which edit is the latest, so an answer to an older one changes nothing.
+    @ObservationIgnored var railEdits = 0
+    /// What the instance refused of a rail edited here, until it is read.
+    public internal(set) var railError: String?
+
     private var events: Task<Void, Never>?
     /// A gateway loop is being started: a second asking meanwhile (the
     /// shell's first load and a return to the foreground, say) starts none.
@@ -328,7 +336,7 @@ public final class LumiaSession {
     }
 
     /// A snapshot a call answered with: held, and the channels it gained subscribed to.
-    private func take(_ snap: SnapshotSummary) {
+    func take(_ snap: SnapshotSummary) {
         hold(snap)
         subscribeGained()
     }

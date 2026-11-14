@@ -202,6 +202,38 @@ public actor LumiaClient {
     public func pushSubscribe(platform: String, token: String) throws { try inner.pushSubscribe(platform: platform, token: token, p256dh: "", auth: "") }
     public func pushUnsubscribe(platform: String) throws { try inner.pushUnsubscribe(platform: platform) }
 
+    /// The rail (architecture 6.9): kept whole, answering the snapshot as
+    /// it then is; and its edits, the core's, as values over the rail as it
+    /// is, which touch nothing and so run where they are asked.
+    public func arrangeRail(items: [RailItem]) throws -> SnapshotSummary { try inner.arrangeRail(items: items) }
+    public nonisolated func railMoveTo(_ items: [RailItem], id: String, folder: String?, before: String?) -> [RailItem] {
+        inner.railMoveTo(items: items, id: id, folder: folder, before: before)
+    }
+    public nonisolated func railMerge(_ items: [RailItem], dragged: String, onto: String) -> [RailItem] {
+        inner.railMerge(items: items, dragged: dragged, onto: onto, folderId: inner.railNewFolderId())
+    }
+    public nonisolated func railIntoFolder(_ items: [RailItem], serverID: String, folder: String) -> [RailItem] {
+        inner.railIntoFolder(items: items, serverId: serverID, folder: folder)
+    }
+    public nonisolated func railOutOfFolder(_ items: [RailItem], serverID: String) -> [RailItem] {
+        inner.railOutOfFolder(items: items, serverId: serverID)
+    }
+    public nonisolated func railNewFolder(_ items: [RailItem], serverID: String) -> [RailItem] {
+        inner.railNewFolder(items: items, serverId: serverID, folderId: inner.railNewFolderId())
+    }
+    public nonisolated func railDeleteFolder(_ items: [RailItem], folder: String) -> [RailItem] {
+        inner.railDeleteFolder(items: items, folder: folder)
+    }
+    public nonisolated func railSetFolder(_ items: [RailItem], folder: String, name: String, tone: String) -> [RailItem] {
+        inner.railSetFolder(items: items, folder: folder, name: name, tone: tone)
+    }
+    public nonisolated func railStep(_ items: [RailItem], id: String, by: Int32) -> [RailItem] {
+        inner.railStep(items: items, id: id, by: by)
+    }
+    public nonisolated func railPositionOf(_ items: [RailItem], id: String) -> UInt32? { inner.railPositionOf(items: items, id: id) }
+    public nonisolated func railFolderOf(_ items: [RailItem], serverID: String) -> String? { inner.railFolderOf(items: items, serverId: serverID) }
+    public nonisolated func railFolderWords(_ names: [String]) -> String { inner.railFolderWords(names: names) }
+
     public func dmChannels() throws -> [DmChannelSummary] { try inner.dmChannels() }
     public func dmOpen(accountIDs: [String]) throws -> DmOpened { try inner.dmOpen(accountIds: accountIDs) }
     public func dmRequest(accountID: String) throws -> DmRequestSummary { try inner.dmRequest(accountId: accountID) }

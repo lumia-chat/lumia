@@ -1,6 +1,6 @@
-// The phone's chrome, after the iOS boards: the rail beside a sidebar as
-// one screen, and the floating panel a pushed screen draws itself in
-// (a header with the back button, a title and subtitle, and actions).
+// The phone's chrome, after the iOS boards: what the rail (`Rail.swift`)
+// and the sidebar share, and the floating panel a pushed screen draws
+// itself in (a header with the back button, a title and subtitle, and actions).
 import LumiaFFI
 import LumiaKit
 import SwiftUI
@@ -31,103 +31,6 @@ enum Screen: Hashable {
     case yourSettings(serverID: String)
     /// A server's Mentions page, or Home's (every server's) for nil.
     case mentions(serverID: String?)
-}
-
-struct PhoneRail: View {
-    @Environment(AppStore.self) private var store
-    let session: LumiaSession
-    @Binding var place: Place
-    let add: () -> Void
-    /// Opens one of the account's own screens, from the menu on the avatar.
-    let open: (Screen) -> Void
-
-    private var servers: [ServerSummary] { session.snapshot?.servers ?? [] }
-
-    var body: some View {
-        VStack(spacing: LumiaTokens.space12) {
-            // Home's count: the requests that wait and the personal conversations' unread messages.
-            tile(current: place == .home, badge: (session.snapshot?.pendingRequests.count ?? 0) + Int(session.personalMentions), badgeOut: LumiaTokens.space10 / 2, label: "Home") {
-                place = .home
-            } content: {
-                Image("Logo").resizable().scaledToFit().padding(LumiaTokens.space6)
-            }
-            Rectangle().fill(LumiaTokens.railDivider.color).frame(width: 24, height: 1)
-            ForEach(servers, id: \.serverId) { s in
-                // What is unread in a server not on screen (the board's): its
-                // count for this account on the tile, else a dot at its top end.
-                let unread = session.serverUnread(s.serverId)
-                let current = place == .server(id: s.serverId)
-                tile(current: current, badge: current ? 0 : Int(unread.mentions), unread: unread.unread && !current, label: s.name, value: Replies.unreadWords(unread: unread.unread ? 1 : 0, mentions: unread.mentions)) {
-                    place = .server(id: s.serverId)
-                } content: {
-                    // The server's picture over its initials, when it has one (architecture 6.7).
-                    LumiaPictureOver(url: session.pictureURL(s.iconUrl)) {
-                        Text(initials(of: s.name)).font(LumiaTokens.titleMonogram.font).foregroundStyle(LumiaTokens.ink.color)
-                    }
-                }
-            }
-            tile(current: false, badge: 0, label: "Add a server", action: add) {
-                Image(systemName: "plus").font(.system(size: 18, weight: .medium)).foregroundStyle(LumiaTokens.inkSecondary.color)
-            }
-            Spacer()
-            // The account menu, in the web's and the desktop shell's order.
-            // No board draws one for a phone, so it is the system's menu:
-            // the glyphs are the system's for the design's user, preferences,
-            // shield and sign-out, and `fixed` keeps the order when it opens
-            // upwards. Sign out is last, under a rule, as it is there, and
-            // asks nothing first, as there: signing in brings back all that
-            // goes. The system marks an item that ends something as
-            // destructive, which is how it draws its own Sign Out.
-            Menu {
-                Button { open(.profile) } label: { Label("View profile", systemImage: "person") }
-                Button { open(.preferences) } label: { Label("Preferences", systemImage: "slider.horizontal.3") }
-                Button { open(.devices) } label: { Label("Devices", systemImage: "shield") }
-                Divider()
-                Button(role: .destructive) {
-                    Task { await store.signOut() }
-                } label: {
-                    Label("Sign out", systemImage: "rectangle.portrait.and.arrow.right")
-                }
-            } label: {
-                LumiaAvatar(initials: initials(of: session.selfName), tone: .of(session.me), size: LumiaTokens.avatarSelf, picture: session.picture(of: session.me))
-            }
-            .menuOrder(.fixed)
-            .buttonStyle(.plain)
-            .accessibilityLabel(session.selfName + ", account")
-        }
-        .padding(.top, LumiaTokens.space8)
-        .padding(.bottom, LumiaTokens.space12)
-        .frame(width: LumiaTokens.railWidth)
-        .frame(maxHeight: .infinity)
-        .background(LumiaTokens.rail.color.ignoresSafeArea())
-    }
-
-    /// A rail tile. Its count sits over its top end, `badgeOut` past it (the
-    /// boards' 4 for a server, 5 for Home), ringed in the rail's colour; a
-    /// server with something unread and no count has the dot there instead.
-    private func tile<C: View>(current: Bool, badge: Int, badgeOut: CGFloat = LumiaTokens.space4, unread: Bool = false, label: String, value: String = "", action: @escaping () -> Void, @ViewBuilder content: () -> C) -> some View {
-        Button(action: action) {
-            content()
-                .frame(width: LumiaTokens.tileSize, height: LumiaTokens.tileSize)
-                .background(current ? LumiaTokens.tabActive.color : LumiaTokens.tile.color, in: RoundedRectangle(cornerRadius: current ? LumiaTokens.radius14 : LumiaTokens.radiusRound))
-                // A server's picture takes the tile's shape.
-                .clipShape(RoundedRectangle(cornerRadius: current ? LumiaTokens.radius14 : LumiaTokens.radiusRound))
-                .overlay(RoundedRectangle(cornerRadius: current ? LumiaTokens.radius14 : LumiaTokens.radiusRound).stroke(current ? LumiaTokens.accent.color : .clear, lineWidth: 2))
-                .overlay(alignment: .topTrailing) {
-                    if badge > 0 {
-                        LumiaCountBadge(UInt32(badge), style: .ringed)
-                            .alignmentGuide(.top) { $0[.top] + badgeOut }
-                            .alignmentGuide(.trailing) { $0[.trailing] - badgeOut }
-                    } else if unread {
-                        UnreadDot()
-                    }
-                }
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(label)
-        .accessibilityValue(value)
-        .accessibilityAddTraits(current ? .isSelected : [])
-    }
 }
 
 /// A server's unread mark on the rail: a dot at its tile's top end, 11
