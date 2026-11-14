@@ -2,7 +2,8 @@
 //! and the sends the store does not hold yet, with a divider above each day's first message.
 //! The same list draws a server's channel and a personal conversation.
 //!
-//! How the rows are drawn is Preferences' (`settings`: layout, spacing, avatars, font size).
+//! How the rows are drawn is Preferences' (`settings`: layout, spacing, avatars, font size,
+//! and whether reactions are drawn).
 //! **Grouped**, the default: messages one person sends close together are one block, as the
 //! board's are: the avatar, the name and the time once, over the first, and the rest under
 //! it at a paragraph's distance ([`joins`] says what "close together" is). Each message is
@@ -29,10 +30,10 @@
 //! not selectable at all.
 //!
 //! A message carries what architecture 6.6 adds (`replies`): its quote above its words, its
-//! reactions under them, the toolbar while the pointer is on it, a tint and an accent rule
-//! when it mentions this account, and a brief one when a jump has just reached it. Above the
-//! first message after where this account had read to when the conversation opened stands
-//! the "New messages" line. A selection inside one message's body is told to the state, for
+//! reactions under them (unless Preferences hides them), the toolbar while the pointer is on
+//! it, a tint and an accent rule when it mentions this account, and a brief one when a jump
+//! has just reached it. Above the first message after where this account had read to when
+//! the conversation opened stands the "New messages" line. A selection inside one message's body is told to the state, for
 //! the "Quote reply" button over it, and the row under the pointer, for the toolbar over it
 //! (both drawn at the root, `ui::view`, so that no row carries them).
 //!
@@ -60,7 +61,7 @@ use super::scroll::WithScrollBar;
 use super::{conversation, replies};
 use crate::app::State;
 use crate::session::{Entry, Pending};
-use crate::settings::{Avatars, Layout, Settings, Spacing};
+use crate::settings::{Avatars, Layout, Reactions, Settings, Spacing};
 use crate::tokens::{self as t, icons};
 
 /// The key of the list's scroll viewport, whose width the rows' bodies are measured at.
@@ -914,7 +915,8 @@ fn message_content(s: &State, entry: &Entry, drawn: body::Drawn<'_>, look: Look)
                 .role("status"),
         );
     }
-    if !entry.reactions.is_empty() {
+    // Preferences can hide them (Minimal does): no row, and no room kept for one.
+    if s.settings.reactions == Reactions::Shown && !entry.reactions.is_empty() {
         content = content.child(replies::reactions(s, entry, ty, look).mt(t::SPACE_2));
     }
     content

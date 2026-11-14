@@ -13,6 +13,7 @@ use rune::{Key, KeyEvent, LiveRegion, TextEdit, Tx};
 use super::{Popover, State};
 use crate::session::display_name;
 use crate::session::reads::quote_of;
+use crate::settings::Reactions;
 
 /// The quick reactions, in the toolbar over a message and first in the picker's
 /// "Frequently used".
@@ -360,6 +361,13 @@ impl State {
         recent.insert(0, emoji.to_string());
         recent.truncate(RECENT);
         self.settings.save(&self.data_dir);
+    }
+
+    /// Preferences' Reactions: whether messages' reactions are drawn under them. One of the
+    /// message settings (`set_layout` and the rest), here beside the reactions themselves.
+    /// Hidden takes away the chips and not the toolbar's "Add reaction".
+    pub fn set_reactions(&mut self, reactions: Reactions) {
+        self.change_display(|settings| settings.reactions = reactions);
     }
 
     /// "Add reaction": the picker for a message, hung from the control keyed `anchor`.

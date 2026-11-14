@@ -292,10 +292,17 @@ pub const SCENES: &[Scene] = &[
         blocks(s);
         s.settings.avatars = crate::settings::Avatars::Hidden;
     }),
-    // Replies, reactions, a mention and the "New" line in one line.
+    // Comfortable with the reactions hidden: no chips, and no room where they were.
+    ("blocks-reactions-hidden", |s| {
+        blocks(s);
+        s.settings.reactions = crate::settings::Reactions::Hidden;
+    }),
+    // Replies, reactions, a mention and the "New" line in one line: Minimal, with the
+    // reactions it hides shown.
     ("replies-minimal", |s| {
         replies::replies(s);
         s.settings.apply(Preset::Minimal);
+        s.settings.reactions = crate::settings::Reactions::Shown;
     }),
     ("preferences", |s| {
         servers_sample(s);
@@ -971,7 +978,7 @@ pub fn long_messages(state: &mut State) {
 /// The `blocks` scene: a channel where people send several messages close together, with no
 /// instance behind it. What one person sends within minutes is one block under one name; a
 /// longer pause, another person or a send still on its way each show what they do to it.
-/// Under the composer, someone is typing.
+/// One message has reactions, which Minimal hides. Under the composer, someone is typing.
 pub fn blocks(state: &mut State) {
     use crate::session::{Entry, Pending};
     use lumia_client::app::AppEvent;
@@ -1010,6 +1017,21 @@ pub fn blocks(state: &mut State) {
             edited: false,
         })
         .collect();
+    // Reactions to a message in the middle of a block, one of them this account's.
+    state.session.entries[2].reactions = vec![
+        lumia_client::app::ReactionSummary {
+            reaction: "🎉".into(),
+            count: 2,
+            me: true,
+            account_ids: vec!["me".into(), "cy".into()],
+        },
+        lumia_client::app::ReactionSummary {
+            reaction: "❤️".into(),
+            count: 1,
+            me: false,
+            account_ids: vec!["cy".into()],
+        },
+    ];
     // A message changed after it was sent, and someone joining between two blocks.
     state.session.entries[4].edited = true;
     let joined = Entry {

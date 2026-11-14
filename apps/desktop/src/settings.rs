@@ -61,6 +61,9 @@ pub struct Settings {
     pub images: Media,
     #[serde(deserialize_with = "or_default")]
     pub embeds: Media,
+    /// Whether a message's reactions are drawn under it.
+    #[serde(deserialize_with = "or_default")]
+    pub reactions: Reactions,
     #[serde(deserialize_with = "or_default")]
     pub scroll_bars: ScrollBars,
     /// The member list (or a conversation's details) put away from a wide window's row by
@@ -142,6 +145,16 @@ pub enum Media {
     Link,
 }
 
+/// Whether a message's reactions are drawn under it. Hidden, the row of chips is not drawn
+/// and leaves no room; reacting is still there, in the toolbar over the message.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Reactions {
+    #[default]
+    Shown,
+    Hidden,
+}
+
 /// The size of a message's text in points, one of [`FontSize::ALL`]. Every text of a
 /// message's row, and the composer's, is drawn at this over 15 of its own size.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -208,6 +221,7 @@ pub struct Display {
     pub avatars: Avatars,
     pub images: Media,
     pub embeds: Media,
+    pub reactions: Reactions,
 }
 
 impl Preset {
@@ -215,7 +229,7 @@ impl Preset {
 
     /// What the preset writes. Comfortable is a new computer's, and what the shell drew
     /// before there were settings; Compact is the smaller avatar with half the room;
-    /// Minimal is a line for each message, with nothing drawn in it.
+    /// Minimal is a line for each message, with nothing drawn in it or under it.
     pub fn values(self) -> Display {
         match self {
             Preset::Comfortable => Display {
@@ -224,6 +238,7 @@ impl Preset {
                 avatars: Avatars::Large,
                 images: Media::Shown,
                 embeds: Media::Shown,
+                reactions: Reactions::Shown,
             },
             Preset::Compact => Display {
                 layout: Layout::Grouped,
@@ -231,6 +246,7 @@ impl Preset {
                 avatars: Avatars::Small,
                 images: Media::Shown,
                 embeds: Media::Shown,
+                reactions: Reactions::Shown,
             },
             Preset::Minimal => Display {
                 layout: Layout::OneLine,
@@ -238,6 +254,7 @@ impl Preset {
                 avatars: Avatars::Hidden,
                 images: Media::Link,
                 embeds: Media::Link,
+                reactions: Reactions::Hidden,
             },
         }
     }
@@ -300,6 +317,7 @@ impl Settings {
             avatars: self.avatars,
             images: self.images,
             embeds: self.embeds,
+            reactions: self.reactions,
         }
     }
 
@@ -311,12 +329,14 @@ impl Settings {
             avatars,
             images,
             embeds,
+            reactions,
         } = preset.values();
         self.layout = layout;
         self.spacing = spacing;
         self.avatars = avatars;
         self.images = images;
         self.embeds = embeds;
+        self.reactions = reactions;
     }
 
     /// The saved settings; the defaults when there are none or they do not parse.
@@ -393,6 +413,32 @@ mod tests {
     }
 
     #[test]
+    fn reactions_are_shown_but_in_minimal_and_compared_like_the_rest() {
+        assert_eq!(Settings::default().reactions, Reactions::Shown);
+        let shown: Vec<Reactions> = Preset::ALL
+            .into_iter()
+            .map(|preset| preset.values().reactions)
+            .collect();
+        assert_eq!(
+            shown,
+            [Reactions::Shown, Reactions::Shown, Reactions::Hidden]
+        );
+        // Minimal with them shown is custom, and so is Comfortable or Compact without them.
+        let tweaked = Display {
+            reactions: Reactions::Shown,
+            ..Preset::Minimal.values()
+        };
+        assert_eq!(Preset::matching(tweaked), None);
+        for preset in [Preset::Comfortable, Preset::Compact] {
+            let tweaked = Display {
+                reactions: Reactions::Hidden,
+                ..preset.values()
+            };
+            assert_eq!(Preset::matching(tweaked), None, "{preset:?}");
+        }
+    }
+
+    #[test]
     fn in_one_line_the_avatars_are_not_compared() {
         for avatars in [Avatars::Large, Avatars::Small, Avatars::Hidden] {
             let display = Display {
@@ -422,6 +468,7 @@ mod tests {
             ("font_size", serde_json::json!(18)),
             ("images", serde_json::json!("link")),
             ("embeds", serde_json::json!("link")),
+            ("reactions", serde_json::json!("hidden")),
         ] {
             assert_eq!(kept[key], value, "{key}");
         }
@@ -442,7 +489,8 @@ mod tests {
                 "avatars": "small",
                 "font_size": 17,
                 "images": "link",
-                "embeds": null
+                "embeds": null,
+                "reactions": "folded"
             }"#,
         )
         .unwrap();
@@ -454,11 +502,13 @@ mod tests {
         assert_eq!(read.font_size, FontSize::default());
         assert_eq!(read.images, Media::Link);
         assert_eq!(read.embeds, Media::Shown);
+        assert_eq!(read.reactions, Reactions::Shown);
         // Missing, as in a file from before them: the defaults, Comfortable at 15, whatever
         // the density was.
         let read: Settings = serde_json::from_str(r#"{"density": "compact"}"#).unwrap();
         assert_eq!(Preset::matching(read.display()), Some(Preset::Comfortable));
         assert_eq!(read.font_size.points(), 15);
+        assert_eq!(read.reactions, Reactions::Shown);
     }
 
     #[test]

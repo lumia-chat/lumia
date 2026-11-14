@@ -9,9 +9,10 @@
 mod common;
 
 use common::*;
+use lumia_client::app::ReactionSummary;
 use lumia_shell::app::{HomeView, State};
 use lumia_shell::settings::{
-    Appearance, Avatars, FontSize, Layout, Preset, ScrollBars, Settings, Spacing,
+    Appearance, Avatars, FontSize, Layout, Preset, Reactions, ScrollBars, Settings, Spacing,
 };
 use lumia_shell::tokens;
 use rune::{Env, Runtime};
@@ -91,6 +92,8 @@ fn the_account_menu_leads_to_preferences_and_each_choice_is_kept() {
         "Small",
         "Hidden",
         "Font size",
+        "Reactions",
+        "Shown",
     ] {
         assert!(shown.contains(expected), "{expected:?} in:\n{shown}");
     }
@@ -103,6 +106,8 @@ fn the_account_menu_leads_to_preferences_and_each_choice_is_kept() {
     assert_eq!(s.display(), Preset::Comfortable.values());
     assert_eq!(preset_shown(&mut rt), Some(0));
     assert!(chosen(&rt, "font-size-2"));
+    assert_eq!(rt.state.settings.reactions, Reactions::Shown);
+    assert!(chosen(&rt, "reactions-0"));
     assert!(rt.find("preset-custom").is_none());
     // Images and embeds have no control while the shell draws neither.
     assert!(!shown.contains("Images") && !shown.contains("Embeds"));
@@ -148,8 +153,10 @@ fn a_preset_writes_its_values_and_a_change_after_it_is_custom() {
         assert_eq!(preset_shown(&mut rt), Some(i), "{preset:?}");
         assert!(rt.find("preset-custom").is_none());
     }
-    // Minimal is one line, where there are no avatars to choose.
+    // Minimal is one line, where there are no avatars to choose, with the reactions hidden.
     assert_eq!(rt.state.settings.layout, Layout::OneLine);
+    assert_eq!(rt.state.settings.reactions, Reactions::Hidden);
+    assert!(chosen(&rt, "reactions-1"));
     assert!(rt.find("avatars").is_none());
     assert!(!words(&rt).contains("Avatars"));
 
@@ -187,6 +194,21 @@ fn a_preset_writes_its_values_and_a_change_after_it_is_custom() {
         20,
         "a preset keeps it"
     );
+
+    // Reactions are compared like the rest: hidden, Compact is custom...
+    press(&mut rt, "reactions-1");
+    assert_eq!(rt.state.settings.reactions, Reactions::Hidden);
+    assert!(chosen(&rt, "reactions-1"));
+    assert_eq!(preset_shown(&mut rt), None);
+    assert!(words(&rt).contains("Custom: these settings match no preset."));
+    // ...and shown again, Compact.
+    press(&mut rt, "reactions-0");
+    assert_eq!(rt.state.settings.reactions, Reactions::Shown);
+    assert_eq!(preset_shown(&mut rt), Some(1));
+    // Minimal with them shown is custom too.
+    press(&mut rt, "preset-2");
+    press(&mut rt, "reactions-0");
+    assert_eq!(preset_shown(&mut rt), None);
 }
 
 #[test]
@@ -199,13 +221,26 @@ fn each_message_setting_is_kept_across_a_launch() {
     press(&mut rt, "layout-0");
     press(&mut rt, "avatars-2");
     press(&mut rt, "font-size-4");
+    press(&mut rt, "reactions-1");
     let set = (
         rt.state.settings.display(),
         rt.state.settings.font_size.points(),
     );
     assert_eq!(
-        (set.0.layout, set.0.spacing, set.0.avatars, set.1),
-        (Layout::Grouped, Spacing::Cozy, Avatars::Hidden, 18)
+        (
+            set.0.layout,
+            set.0.spacing,
+            set.0.avatars,
+            set.0.reactions,
+            set.1
+        ),
+        (
+            Layout::Grouped,
+            Spacing::Cozy,
+            Avatars::Hidden,
+            Reactions::Hidden,
+            18
+        )
     );
     let kept = Settings::load(rt.state.data_dir());
     assert_eq!((kept.display(), kept.font_size.points()), set);
@@ -456,4 +491,85 @@ fn the_font_size_changes_the_text_and_not_the_avatars() {
         s.font_size = FontSize::new(20).unwrap();
     });
     assert!(height(&line_20) > height(&line_15) + 3.0 * 5.0);
+}
+
+/// The conversation, with Grace's first message reacted to by this account and by her.
+fn reacted(set: impl FnOnce(&mut Settings)) -> Runtime<State> {
+    let mut rt = conversation(set);
+    rt.update(|s, _| {
+        s.session.entries[0].reactions = vec![ReactionSummary {
+            reaction: "👍".into(),
+            count: 2,
+            me: true,
+            account_ids: vec!["me".into(), "grace".into()],
+        }];
+        s.session.revision += 1;
+    });
+    settle(&mut rt);
+    rt
+}
+
+/// Whether the row keyed `row` draws a row of reaction chips.
+fn chips(rt: &Runtime<State>, row: &str) -> bool {
+    rt.elements()
+        .into_iter()
+        .any(|e| e.key.as_deref() == Some("reactions") && e.path.contains(&format!("/{row}/")))
+}
+
+#[test]
+fn hidden_reactions_are_not_drawn_or_read_and_leave_no_room() {
+    let reaction = "You and Grace Hopper reacted with 👍, 2";
+    // Shown, a new computer's: the chips under the words, and their "Add reaction".
+    let shown = reacted(|_| {});
+    assert!(chips(&shown, "c0"));
+    assert!(shown.find("add-reaction-c0").is_some());
+    assert!(words(&shown).contains(reaction));
+
+    // Hidden: neither, nothing for a screen reader, and the row as tall as one never
+    // reacted to.
+    let mut hidden = reacted(|s| s.reactions = Reactions::Hidden);
+    assert!(!chips(&hidden, "c0"));
+    assert!(hidden.find("add-reaction-c0").is_none());
+    assert!(!words(&hidden).contains("reacted with"));
+    let plain = conversation(|_| {});
+    assert_eq!(
+        rect(&hidden, "rows", "message-c0")[3],
+        rect(&plain, "rows", "message-c0")[3],
+        "no room kept for them"
+    );
+    assert!((height(&hidden) - height(&plain)).abs() < 1.0);
+
+    // Reacting is still there, in the toolbar over the message (the pointer on the row's
+    // middle: the slot keyed `c0` has the day's divider over it).
+    let row = rect(&hidden, "rows", "message-c0");
+    hidden.pointer_move(row[0] + row[2] / 2.0, row[1] + row[3] / 2.0);
+    settle(&mut hidden);
+    press(&mut hidden, "react-c0");
+    assert_eq!(
+        hidden.state.popover,
+        Some(lumia_shell::app::Popover::EmojiPicker)
+    );
+    // A reaction that arrives while they are hidden is not drawn either.
+    hidden.update(|s, _| {
+        s.close_popover();
+        s.session.entries[1].reactions = s.session.entries[0].reactions.clone();
+        s.session.revision += 1;
+    });
+    settle(&mut hidden);
+    assert!(!chips(&hidden, "c1"));
+    // Shown again, both are.
+    hidden.update(|s, _| s.set_reactions(Reactions::Shown));
+    settle(&mut hidden);
+    assert!(chips(&hidden, "c0") && chips(&hidden, "c1"));
+
+    // In one line the same: Minimal hides them, and shown they are under the words.
+    let minimal = reacted(|s| s.apply(Preset::Minimal));
+    assert!(!chips(&minimal, "c0"));
+    assert!(!words(&minimal).contains("reacted with"));
+    let one_line = reacted(|s| {
+        s.apply(Preset::Minimal);
+        s.reactions = Reactions::Shown;
+    });
+    assert!(chips(&one_line, "c0"));
+    assert!(words(&one_line).contains(reaction));
 }

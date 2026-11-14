@@ -10,7 +10,8 @@
 //! settings under it and is not kept itself: the segment lit is the preset whose values all
 //! match, and when none does, none is lit and a line says so. Images and embeds are set by
 //! the presets with no control of their own, since the shell draws neither yet; the avatars'
-//! control is not drawn in one line, which has none.
+//! control is not drawn in one line, which has none. Reactions, shown or hidden (Minimal
+//! hides them), comes last, after the font size.
 //!
 //! The scroll bar's card is drawn on macOS only: there the choice is carried out by the
 //! system's own setting, made for this app alone (`platform::system`). Rune gives an app
@@ -20,7 +21,9 @@ use rune::{El, col, text};
 
 use super::devices::{page, page_column};
 use crate::app::State;
-use crate::settings::{Appearance, Avatars, FontSize, Layout, Preset, ScrollBars, Spacing};
+use crate::settings::{
+    Appearance, Avatars, FontSize, Layout, Preset, Reactions, ScrollBars, Spacing,
+};
 use crate::tokens as t;
 use crate::ui::components::{Look, card, segmented};
 
@@ -184,6 +187,18 @@ fn messages(s: &State, look: Look) -> El {
             &sizes,
             s.settings.font_size,
             |s: &mut State, choice| s.set_font_size(choice),
+            look,
+        ),
+        look,
+    ))
+    .child(labelled(
+        "Reactions",
+        segmented(
+            "reactions",
+            "Reactions",
+            &[(Reactions::Shown, "Shown"), (Reactions::Hidden, "Hidden")],
+            s.settings.reactions,
+            |s: &mut State, choice| s.set_reactions(choice),
             look,
         ),
         look,
