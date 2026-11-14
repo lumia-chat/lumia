@@ -230,6 +230,11 @@ impl State {
 
     /// A server's name, or a folder's (its own, else its servers').
     pub fn rail_name(&self, id: &str) -> String {
+        self.name_in(&self.rail_items(), id)
+    }
+
+    /// [`State::rail_name`] in the rail `items`.
+    fn name_in(&self, items: &[RailItem], id: &str) -> String {
         let server_name = |id: &str| {
             self.session
                 .servers()
@@ -240,7 +245,7 @@ impl State {
         if let Some(name) = server_name(id) {
             return name;
         }
-        self.rail_items()
+        items
             .iter()
             .find_map(|item| match item {
                 RailItem::Folder {
@@ -307,7 +312,10 @@ impl State {
                 }
                 let [x, y] = drag.window_point();
                 let items = self.rail_items();
-                let found = target(&items, &self.settings.open_folders, &self.rail.spots, id, y)
+                // Off the rail, a drop is nowhere: let go there, the tile stays.
+                let found = (x <= crate::tokens::RAIL_WIDTH)
+                    .then(|| target(&items, &self.settings.open_folders, &self.rail.spots, id, y))
+                    .flatten()
                     // Over somewhere that changes nothing, there is nothing to show.
                     .filter(|t| dropped(&items, id, t, "") != items);
                 self.popover = None;
@@ -345,50 +353,68 @@ impl State {
 
     fn drop_on(&mut self, id: &str, target: &Target, tx: &mut Tx) {
         let items = self.rail_items();
-        let folder_id = rail::new_folder_id();
-        let next = dropped(&items, id, target, &folder_id);
-        let name = self.rail_name(id);
-        let said = match target {
-            Target::Onto(onto) if is_folder(&items, onto) => {
-                format!("{name} moved into {}", self.rail_name(onto))
-            }
-            Target::Onto(onto) => match rail::folder_of(&items, onto) {
-                Some(folder) => format!("{name} moved into {}", self.rail_name(&folder)),
-                None => format!("New folder with {} and {name}", self.rail_name(onto)),
-            },
-            Target::Between { .. } => String::new(),
-        };
-        self.arrange(next, id, said, tx);
+        let next = dropped(&items, id, target, &rail::new_folder_id());
+        self.arrange(next, id, None, tx);
     }
 
-    /// Sends `next` as the rail and says what became of `id`: `said`, or its new place.
-    fn arrange(&mut self, next: Vec<RailItem>, id: &str, said: String, tx: &mut Tx) {
+    /// Sends `next` as the rail and says what became of `id`: `said`, or what moved where,
+    /// in the web's words.
+    fn arrange(&mut self, next: Vec<RailItem>, id: &str, said: Option<String>, tx: &mut Tx) {
+        let before = self.rail_items();
+        let said = said.unwrap_or_else(|| self.describe(&before, &next, id));
         self.session.arrange_rail(next);
-        let items = self.rail_items();
-        let said = if said.is_empty() {
-            let name = self.rail_name(id);
-            let at = rail::position_of(&items, id).unwrap_or(1);
-            match rail::folder_of(&items, id) {
-                Some(folder) => {
-                    let total = items
-                        .iter()
-                        .find_map(|item| match item {
-                            RailItem::Folder {
-                                folder_id,
-                                server_ids,
-                                ..
-                            } if *folder_id == folder => Some(server_ids.len()),
-                            _ => None,
-                        })
-                        .unwrap_or(at);
-                    format!("{name}, {at} of {total} in {}", self.rail_name(&folder))
-                }
-                None => format!("{name}, {at} of {} on the rail", items.len()),
-            }
-        } else {
-            said
+        if !said.is_empty() {
+            tx.announce(said, LiveRegion::Polite);
+        }
+    }
+
+    /// "Acme moved to position 3", "… moved to position 2 in Work", "… moved into Work",
+    /// "… moved into a new folder with Lumia", "… moved out of Work".
+    fn describe(&self, before: &[RailItem], after: &[RailItem], id: &str) -> String {
+        let place = |items: &[RailItem]| {
+            let at = rail::position_of(items, id)?;
+            Some((rail::folder_of(items, id), at))
         };
-        tx.announce(said, LiveRegion::Polite);
+        let (Some((was, _)), Some((now, at))) = (place(before), place(after)) else {
+            return String::new();
+        };
+        let name = self.name_in(before, id);
+        match (&was, &now) {
+            (_, Some(folder)) if was.as_ref() != Some(folder) => {
+                if before.iter().any(|item| rail::id_of(item) == folder) {
+                    return format!("{name} moved into {}", self.name_in(before, folder));
+                }
+                let others: Vec<String> = after
+                    .iter()
+                    .find_map(|item| match item {
+                        RailItem::Folder {
+                            folder_id,
+                            server_ids,
+                            ..
+                        } if folder_id == folder => Some(server_ids.clone()),
+                        _ => None,
+                    })
+                    .unwrap_or_default()
+                    .iter()
+                    .filter(|s| *s != id)
+                    .map(|s| self.name_in(before, s))
+                    .collect();
+                if others.is_empty() {
+                    format!("{name} moved into a new folder")
+                } else {
+                    format!(
+                        "{name} moved into a new folder with {}",
+                        rail::folder_words(&others)
+                    )
+                }
+            }
+            (Some(folder), None) => format!("{name} moved out of {}", self.name_in(before, folder)),
+            (_, Some(folder)) => format!(
+                "{name} moved to position {at} in {}",
+                self.name_in(after, folder)
+            ),
+            (_, None) => format!("{name} moved to position {at}"),
+        }
     }
 
     // ---- The menus ----------------------------------------------------------------------
@@ -416,7 +442,7 @@ impl State {
     pub fn rail_step(&mut self, by: i32, tx: &mut Tx) {
         let Some(id) = self.menu_target() else { return };
         let next = rail::step(&self.rail_items(), &id, by);
-        self.arrange(next, &id, String::new(), tx);
+        self.arrange(next, &id, None, tx);
     }
 
     /// "New folder": the server in a folder of its own, where it is, with its Folder
@@ -425,8 +451,7 @@ impl State {
         let Some(id) = self.menu_target() else { return };
         let folder = rail::new_folder_id();
         let next = rail::new_folder(&self.rail_items(), &id, &folder);
-        let said = format!("New folder with {}", self.rail_name(&id));
-        self.arrange(next, &id, said, tx);
+        self.arrange(next, &id, None, tx);
         self.rail.menu_for = Some(folder);
         self.open_folder_settings();
     }
@@ -435,37 +460,26 @@ impl State {
     pub fn rail_into_folder(&mut self, folder: &str, tx: &mut Tx) {
         let Some(id) = self.menu_target() else { return };
         let next = rail::into_folder(&self.rail_items(), &id, folder);
-        let said = format!(
-            "{} moved into {}",
-            self.rail_name(&id),
-            self.rail_name(folder)
-        );
-        self.arrange(next, &id, said, tx);
+        self.arrange(next, &id, None, tx);
     }
 
     /// "Remove from folder": the server just after its folder on the rail.
     pub fn rail_out_of_folder(&mut self, tx: &mut Tx) {
         let Some(id) = self.menu_target() else { return };
-        let items = self.rail_items();
-        let Some(folder) = rail::folder_of(&items, &id) else {
-            return;
-        };
-        let said = format!(
-            "{} taken out of {}",
-            self.rail_name(&id),
-            self.rail_name(&folder)
-        );
-        let next = rail::out_of_folder(&items, &id);
-        self.arrange(next, &id, said, tx);
+        let next = rail::out_of_folder(&self.rail_items(), &id);
+        self.arrange(next, &id, None, tx);
     }
 
     /// "Delete folder": its servers stay where it was.
     pub fn rail_delete_folder(&mut self, tx: &mut Tx) {
         let Some(id) = self.menu_target() else { return };
-        let said = format!("{} deleted, its servers kept", self.rail_name(&id));
+        let said = format!(
+            "{} deleted; its servers are where it was",
+            self.rail_name(&id)
+        );
         let next = rail::delete_folder(&self.rail_items(), &id);
         self.settings.open_folders.retain(|f| *f != id);
-        self.arrange(next, &id, said, tx);
+        self.arrange(next, &id, Some(said), tx);
     }
 
     /// "Folder settings…": its name and tone, to change.
@@ -506,19 +520,15 @@ impl State {
             &self.rail.name.text,
             &self.rail.tone,
         );
-        let said = format!("Folder saved as {}", {
-            let name = self.rail.name.text.trim();
-            if name.is_empty() {
-                "its servers' names".to_string()
+        let named = self.rail.name.text.trim().to_string();
+        let said = format!(
+            "Folder {} saved",
+            if named.is_empty() {
+                self.rail_name(&id)
             } else {
-                name.to_string()
+                named
             }
-        });
-        self.arrange(next, &id, said, tx);
-    }
-
-    /// Escape on the rail while a tile is dragged: back where it was.
-    pub fn cancel_rail_drag(&mut self) {
-        self.rail.drag = None;
+        );
+        self.arrange(next, &id, Some(said), tx);
     }
 }

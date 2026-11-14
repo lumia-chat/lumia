@@ -91,7 +91,9 @@ impl Session {
         }
         self.rail.pending = None;
         match result {
-            Ok(snapshot) => self.snapshot = Some(snapshot.clone()),
+            // Taken as any snapshot is: a server or channel it lists that is new is
+            // subscribed, its members asked for.
+            Ok(snapshot) => self.apply(&Update::Snapshot(Ok(snapshot.clone()))),
             Err(failure) => {
                 self.last_error = Some(format!("The rail was not saved: {}", failure.message));
             }

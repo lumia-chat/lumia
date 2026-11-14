@@ -297,6 +297,20 @@ fn a_server_dropped_onto_a_server_makes_a_folder_of_the_two() {
 }
 
 #[test]
+fn a_tile_let_go_off_the_rail_stays_where_it_was() {
+    let mut rt = arranged();
+    let before = shape(&rt);
+    // At the height of a place it could go, but over the conversation.
+    let (_, y) = at(&rt, "server-trail", 0.9);
+    let to = (400.0, y);
+    drag_to(&mut rt, "server-acme", to);
+    assert!(rt.find("rail-line").is_none() && rt.find("rail-ghost").is_some());
+    release(&mut rt, to);
+    assert_eq!(shape(&rt), before);
+    assert!(rt.state.session.rail.pending.is_none());
+}
+
+#[test]
 fn escape_puts_a_dragged_tile_back() {
     let mut rt = arranged();
     let before = shape(&rt);

@@ -41,7 +41,7 @@ fn tones(c: &Colors) -> [(Color, Color); 9] {
 /// The avatar ground and ink an id hashes to: the web's `toneFor` and LumiaKit's
 /// `AvatarTone.of`, so a person is the same colour on every client.
 pub fn tone(id: &str, c: &Colors) -> (Color, Color) {
-    tone_named(&lumia_client::rail::tone_of(id), c)
+    tones(c)[lumia_client::rail::tone_index(id)]
 }
 
 /// The ground and ink of a tone by its name (a rail folder's); peach for one not known.
