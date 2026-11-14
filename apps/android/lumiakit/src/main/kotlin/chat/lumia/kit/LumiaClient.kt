@@ -33,8 +33,9 @@ class LumiaClient(val baseUrl: String, dataDirectory: File) {
 
     /**
      * One of the client's calls that are values only, reaching nothing and
-     * waiting on nothing (the rail's `rail…` edits and words), where it is
-     * asked: a screen needs the answer as it draws.
+     * waiting on nothing (the rail's `rail…` edits and words, a draft's
+     * `messageRoom`), where it is asked: a screen needs the answer as it
+     * draws.
      */
     fun <T> now(block: Client.() -> T): T = inner.block()
 

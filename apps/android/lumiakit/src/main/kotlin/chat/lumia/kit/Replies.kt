@@ -313,14 +313,19 @@ fun drawnBody(body: String, mentions: List<MentionSummary>, nameOf: (String) -> 
     for ((range, mention) in found) {
         if (range.first < at) continue
         text.append(body, at, range.first)
-        val name = if (mention.everyone) null else nameOf(mention.accountId)?.ifEmpty { null }
-        val words = name?.let { "@$it" } ?: body.substring(range)
+        val words = mentionWords(mention, body.substring(range), nameOf)
         ranges.add(text.length until text.length + words.length)
         text.append(words)
         at = range.last + 1
     }
     text.append(body, at, body.length)
     return Drawn(text.toString(), ranges)
+}
+
+/** A mention as drawn: `@` and the person's name as the member list shows it, `@everyone` and one with no name known as [typed]. */
+fun mentionWords(mention: MentionSummary, typed: String, nameOf: (String) -> String?): String {
+    val name = if (mention.everyone) null else nameOf(mention.accountId)?.ifEmpty { null }
+    return name?.let { "@$it" } ?: typed
 }
 
 /** Each of [mentions] with where it is in [body] as the text is indexed here, those that land on characters' edges. */

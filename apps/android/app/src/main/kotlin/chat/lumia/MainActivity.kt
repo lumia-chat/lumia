@@ -100,7 +100,11 @@ class MainActivity : ComponentActivity() {
                 )
                 onDispose {}
             }
-            LumiaTheme(dark) { Root(store, devScreen = dev["LUMIA_DEV_SCREEN"], devChannel = dev["LUMIA_DEV_CHANNEL"]) }
+            LumiaTheme(dark) {
+                // `bodies` needs no instance: sample messages, for how a body is drawn.
+                if (dev["LUMIA_DEV_SCREEN"] == "bodies") BodySamples()
+                else Root(store, devScreen = dev["LUMIA_DEV_SCREEN"], devChannel = dev["LUMIA_DEV_CHANNEL"])
+            }
         }
     }
 

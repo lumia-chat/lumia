@@ -1,0 +1,6 @@
+# What a binding needs said differently in its language.
+
+[bindings.kotlin.rename]
+# A variant is a class nested in its sealed class in Kotlin, and one named
+# `List` hides kotlin.collections.List from the fields of every variant.
+"BodyBlock.List" = "ListBlock"

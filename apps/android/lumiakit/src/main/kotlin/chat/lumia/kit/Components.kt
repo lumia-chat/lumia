@@ -41,14 +41,8 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.pointer.pointerInput
@@ -58,7 +52,6 @@ import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.Placeable
 import androidx.compose.ui.layout.layoutId
 import androidx.compose.ui.semantics.onLongClick
-import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -86,6 +79,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import uniffi.lumia_ffi.DeviceSummary
+import uniffi.lumia_ffi.MentionSummary
+import uniffi.lumia_ffi.MessageRoom
 
 /**
  * A person's avatar: their initials on their tone, and their [picture]
@@ -188,14 +183,18 @@ fun LumiaMessageRow(
     picture: String? = null,
     onAuthor: (() -> Unit)? = null,
     // What architecture 6.6 adds: the reply's reference line over the
-    // avatar's row, where the body's mentions are (drawn as pills), the
-    // "(edited)" after its words, the reactions under them, the field it
-    // is edited in where its words were, a line under it (an edit
-    // refused), the wash of a message for this account or that a jump
-    // just reached, and the long press that opens its actions.
+    // avatar's row, the body's mentions (drawn as pills, by the names
+    // `nameOf` gives), the "(edited)" after its words, the reactions under
+    // them, the field it is edited in where its words were, a line under
+    // it (an edit refused), the wash of a message for this account or that
+    // a jump just reached, and the long press that opens its actions.
     reference: (@Composable () -> Unit)? = null,
-    mentions: List<IntRange> = emptyList(),
+    mentions: List<MentionSummary> = emptyList(),
+    nameOf: (String) -> String? = { null },
     edited: Boolean = false,
+    // A long body collapsed (`LumiaBody`), and whether this one is open.
+    expanded: Boolean = false,
+    onExpanded: ((Boolean) -> Unit)? = null,
     reactions: (@Composable () -> Unit)? = null,
     editor: (@Composable () -> Unit)? = null,
     under: (@Composable () -> Unit)? = null,
@@ -210,7 +209,7 @@ fun LumiaMessageRow(
             when {
                 editor != null -> editor()
                 deleted -> Text("(deleted)", style = LumiaTokens.textMessage.scaled, color = LumiaTokens.inkQuiet.color)
-                else -> LumiaBody(text, mentions, edited = edited)
+                else -> LumiaBody(text, mentions = mentions, nameOf = nameOf, edited = edited, expanded = expanded, onExpanded = onExpanded)
             }
             if (reactions != null && editor == null) Box(Modifier.padding(top = LumiaTokens.space2)) { reactions() }
             under?.invoke()
@@ -345,86 +344,6 @@ private const val LineReference = "reference"
 private const val LineWords = "words"
 
 /**
- * A message's words, its mentions (by [mentions], where they are in the
- * text) drawn as the design's `lu-mention` pill: the text, `@` and the
- * person's name, in the accent's ink and the strong weight, on the
- * accent's soft wash, reaching 6 past the words and 1 over the line, with
- * the radius 6. The pill's room beside the words is a thin space each side
- * of them, inside the pill, so it does not run over its neighbours; a
- * screen reader has the text without them. An [edited] message's words are
- * followed by "(edited)", smaller and quieter, on its last line.
- */
-@Composable
-fun LumiaBody(text: String, mentions: List<IntRange>, modifier: Modifier = Modifier, edited: Boolean = false) {
-    val ink = LumiaTokens.accentInk.color
-    val wash = LumiaTokens.accentSoft.color
-    val quiet = LumiaTokens.inkMuted.color
-    val scale = LocalTextScale.current
-    // The text drawn, thin spaces and all, and where each pill is in it.
-    val (styled, pills) = remember(text, mentions, ink, quiet, edited, scale) {
-        val pills = mutableListOf<IntRange>()
-        val styled = buildAnnotatedString {
-            var at = 0
-            for (r in mentions.sortedBy { it.first }) {
-                if (r.first < at || r.last >= text.length) continue
-                append(text, at, r.first)
-                val start = length
-                append(THIN_SPACE)
-                pushStyle(SpanStyle(color = ink, fontWeight = FontWeight(LumiaTokens.textSection.weight)))
-                append(text, r.first, r.last + 1)
-                pop()
-                append(THIN_SPACE)
-                pills.add(start until length)
-                at = r.last + 1
-            }
-            append(text, at, text.length)
-            if (edited) {
-                append(" ")
-                pushStyle(SpanStyle(color = quiet, fontSize = LumiaTokens.textMeta.size.scaled(scale)))
-                append(EDITED)
-                pop()
-            }
-        }
-        styled to pills.toList()
-    }
-    var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
-    Text(
-        styled,
-        style = LumiaTokens.textMessage.scaled,
-        color = LumiaTokens.inkBody.color,
-        onTextLayout = { layout = it },
-        modifier = modifier
-            .then(if (pills.isNotEmpty() || edited) Modifier.semantics { contentDescription = if (edited) "$text, $EDITED_LABEL" else text } else Modifier)
-            .then(
-                if (pills.isEmpty()) Modifier else Modifier.drawBehind {
-                    val l = layout ?: return@drawBehind
-                    val corner = CornerRadius(LumiaTokens.radius6.toPx())
-                    val over = LumiaTokens.space2.toPx() / 2
-                    for (r in pills) {
-                        val start = r.first
-                        val end = r.last + 1
-                        if (end > l.layoutInput.text.length) continue
-                        // The thin space is part of the 6 the pill reaches past the words.
-                        val thin = l.getHorizontalPosition(start + 1, true) - l.getHorizontalPosition(start, true)
-                        val reach = (LumiaTokens.space6.toPx() - thin).coerceAtLeast(0f)
-                        val first = l.getLineForOffset(start)
-                        val last = l.getLineForOffset(end - 1)
-                        for (line in first..last) {
-                            val left = if (line == first) l.getHorizontalPosition(start, true) - reach else l.getLineLeft(line)
-                            val right = if (line == last) l.getHorizontalPosition(end, true).takeIf { it > left } ?: l.getLineRight(line) else l.getLineRight(line)
-                            val end2 = if (line == last) right + reach else right
-                            drawRoundRect(wash, Offset(left, l.getLineTop(line) - over), Size(end2 - left, l.getLineBottom(line) - l.getLineTop(line) + 2 * over), corner)
-                        }
-                    }
-                },
-            ),
-    )
-}
-
-/** The room inside a mention's pill, each side of its words. */
-private const val THIN_SPACE = " "
-
-/**
  * The unread divider, above the first message after where this account
  * had read to: a rule in the accent's line, then "New" in the accent's
  * ink, and nothing after the word. "New messages" to a screen reader.
@@ -516,6 +435,10 @@ fun LumiaComposer(text: String, onText: (String) -> Unit, placeholder: String, e
  * puts the caret here ([focus]). A [header] is drawn inside its frame over
  * the field (the reply bar), and the frame's border is the active one
  * while it is ([active]). [onKey] sees a hardware keyboard's keys first.
+ * The field keeps the draft's line breaks and grows to 8 lines, then
+ * scrolls inside itself. [room] is the core's for the draft
+ * (`LumiaSession.roomOf`): its counter under the field near the limit,
+ * and over it, Send refused and the draft kept.
  */
 @Composable
 fun LumiaComposer(
@@ -527,6 +450,7 @@ fun LumiaComposer(
     header: (@Composable () -> Unit)? = null,
     active: Boolean = false,
     onKey: ((KeyEvent) -> Boolean)? = null,
+    room: MessageRoom? = null,
     onSend: () -> Unit,
 ) {
     val shape = RoundedCornerShape(LumiaTokens.radius16)
@@ -562,8 +486,9 @@ fun LumiaComposer(
                     }
                 },
             )
-            LumiaPrimaryButton("Send", enabled = enabled && value.text.isNotBlank(), onClick = onSend)
+            LumiaPrimaryButton("Send", enabled = enabled && value.text.isNotBlank() && !isOver(room), onClick = onSend)
         }
+        LumiaCounter(room, Modifier.padding(start = LumiaTokens.space10, end = LumiaTokens.space10, bottom = LumiaTokens.space8))
     }
 }
 

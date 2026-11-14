@@ -27,6 +27,7 @@ import uniffi.lumia_ffi.MemberSummary
 import uniffi.lumia_ffi.PasskeySummary
 import uniffi.lumia_ffi.ProfileSummary
 import uniffi.lumia_ffi.StatusSummary
+import uniffi.lumia_ffi.MessageRoom
 import uniffi.lumia_ffi.MessageSummary
 import uniffi.lumia_ffi.RosterSummary
 import uniffi.lumia_ffi.SnapshotSummary
@@ -303,6 +304,17 @@ class LumiaSession(
 
     /** One of the client's calls that are values only (`railPositionOf`, `railFolderWords`, …). */
     fun <T> railNow(block: Client.() -> T): T = client.now(block)
+
+    /**
+     * The room [draft] has under the instance's limit (the core's
+     * `messageRoom`, protocol 14) while its counter shows, from 90% of the
+     * limit; null before. Asked at every key, so a draft too short to be
+     * near (`mayNearLimit`) is not handed to the core at all.
+     */
+    fun roomOf(draft: String): MessageRoom? {
+        if (!mayNearLimit(draft.length, client.now { maxMessageBytes() })) return null
+        return client.now { messageRoom(draft) }.takeIf { it.shown }
+    }
 
     private fun took(snap: SnapshotSummary) {
         if (leaving || !signedIn) return

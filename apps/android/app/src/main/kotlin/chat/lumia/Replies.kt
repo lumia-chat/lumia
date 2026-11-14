@@ -107,6 +107,7 @@ import chat.lumia.kit.AvatarTone
 import chat.lumia.kit.DELETE_QUESTION
 import chat.lumia.kit.EmojiSet
 import chat.lumia.kit.LumiaAvatar
+import chat.lumia.kit.LumiaCounter
 import chat.lumia.kit.LumiaErrorText
 import chat.lumia.kit.LumiaInput
 import chat.lumia.kit.LumiaLinkButton
@@ -118,6 +119,7 @@ import chat.lumia.kit.Measures
 import chat.lumia.kit.MentionChoice
 import chat.lumia.kit.ORIGINAL_DELETED
 import chat.lumia.kit.initialsOf
+import chat.lumia.kit.isOver
 import chat.lumia.kit.mentionNote
 import chat.lumia.kit.mentionSwitchLabel
 import chat.lumia.kit.mentionSwitchWord
@@ -126,6 +128,7 @@ import chat.lumia.kit.reactedWords
 import chat.lumia.kit.referenceName
 import chat.lumia.kit.referenceWords
 import chat.lumia.kit.replyingTo
+import uniffi.lumia_ffi.MessageRoom
 import uniffi.lumia_ffi.QuoteSummary
 import uniffi.lumia_ffi.ReactionSummary
 
@@ -419,12 +422,16 @@ private fun EmojiCell(emoji: String, name: String, onPick: (String) -> Unit) {
 /**
  * The field a message is edited in, where its words were: the design's
  * text field (the field's fill, the active border, the radius 12), growing
- * with its text, holding the words with the caret at their end. Under it,
- * Cancel and Save, a phone having no Escape or Return to say: a hardware
- * keyboard's Return saves (Shift-Return is a new line) and Escape cancels.
+ * with its text to 12 lines and then scrolling inside itself, holding the
+ * words with the caret at their end. Under it, Cancel and Save, a phone
+ * having no Escape or Return to say: a hardware keyboard's Return saves
+ * (Shift-Return is a new line) and Escape cancels. [room] is the core's
+ * for what it holds: the composer's counter under it near the limit, and
+ * over it, Save and Return refused and the words kept.
  */
 @Composable
-fun EditField(value: TextFieldValue, onValue: (TextFieldValue) -> Unit, onSave: () -> Unit, onCancel: () -> Unit) {
+fun EditField(value: TextFieldValue, onValue: (TextFieldValue) -> Unit, room: MessageRoom?, onSave: () -> Unit, onCancel: () -> Unit) {
+    val over = isOver(room)
     val focus = remember { FocusRequester() }
     val shape = RoundedCornerShape(LumiaTokens.radius12)
     LaunchedEffect(Unit) { focus.requestFocus() }
@@ -438,7 +445,7 @@ fun EditField(value: TextFieldValue, onValue: (TextFieldValue) -> Unit, onSave: 
                 .onPreviewKeyEvent { e ->
                     if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                     when {
-                        e.key == Key.Enter && !e.isShiftPressed -> { onSave(); true }
+                        e.key == Key.Enter && !e.isShiftPressed -> { if (!over) onSave(); true }
                         e.key == Key.Escape -> { onCancel(); true }
                         else -> false
                     }
@@ -449,10 +456,12 @@ fun EditField(value: TextFieldValue, onValue: (TextFieldValue) -> Unit, onSave: 
                 .padding(horizontal = LumiaTokens.space12, vertical = LumiaTokens.space8),
             textStyle = LumiaTokens.textMessage.scaled.copy(color = LumiaTokens.inkField.color),
             cursorBrush = SolidColor(LumiaTokens.accent.color),
+            maxLines = 12,
         )
+        LumiaCounter(room, Modifier.padding(horizontal = LumiaTokens.space12))
         Row(horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space4), verticalAlignment = Alignment.CenterVertically) {
             LumiaLinkButton("Cancel", onClick = onCancel)
-            LumiaLinkButton("Save", onClick = onSave)
+            LumiaLinkButton("Save", enabled = !over, onClick = onSave)
         }
     }
 }

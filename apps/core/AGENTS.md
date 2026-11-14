@@ -7,7 +7,7 @@ This is the Lumia client core: the Rust that every client shares (architecture s
 - `lumia-client`: the transport (HTTP, the gateway loop), SQLite store, identity flows and DM engine, for native targets and wasm32. Only `transport.rs`, `time.rs` and the manifest's target tables differ per target; everything else is one code path. The wasm32 build needs `AR_wasm32_unknown_unknown` set to `llvm-ar` (README). `tests/live_app.rs` drives `App` against a running instance (`LUMIA_TEST_INSTANCE`, skipped without it) for what only one can show: a second account on the same device, a sign-in over a held session with the gateway running, `stop`.
 - `lumia-cli`: the headless client binary and the scenario suite.
 - `lumia-ffi` (UniFFI) and `lumia-wasm` (wasm-bindgen): marshalling only, no logic. Both wrap `lumia_client::app::App`, the one shell-facing client (open, sign in, snapshot, gateway loop with an event sink, identity, push, DMs); a method a shell needs goes on `App`, and the binding crates only convert types.
-- `uniffi-bindgen`: the binary that generates the Swift (and later Kotlin) bindings from `lumia-ffi`'s metadata; `apps/apple/scripts/core.sh` runs it.
+- `uniffi-bindgen`: the binary that generates the Swift and Kotlin bindings from `lumia-ffi`'s metadata; `apps/apple/scripts/core.sh` and `apps/android/scripts/core.sh` run it. `lumia-ffi/uniffi.toml` renames what a language cannot take as it is: in Kotlin, `BodyBlock.List` is `BodyBlock.ListBlock`, a variant named `List` hiding `kotlin.collections.List` from the fields of every variant.
 
 ## Rules
 
