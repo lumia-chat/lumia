@@ -781,6 +781,14 @@ async function serverSettings(which: string, stamp: number) {
       await page.screenshot({ path: `${out}/${which}-server-settings.png` });
       await history.getByRole("button", { name: "Save", exact: true }).click();
       await history.getByText("Saved.").waitFor();
+      phase("show deleted");
+      // Off for a new server; saved as it is turned (architecture 6.7).
+      const showDeleted = history.getByRole("checkbox", { name: "Show deleted messages" });
+      if (await showDeleted.isChecked()) throw new Error("Show deleted messages is on for a new server");
+      await showDeleted.check();
+      // Disabled while it is saved; on again and still ticked once the instance has it.
+      for (let i = 0; i < 100 && ((await showDeleted.isDisabled()) || !(await showDeleted.isChecked())); i++) await Bun.sleep(100);
+      if (!(await showDeleted.isChecked())) throw new Error("Show deleted messages did not stay on");
       phase("picture");
       await page.getByLabel("Server picture").setInputFiles({ name: "logo.png", mimeType: "image/png", buffer: png(64, [240, 120, 40]) });
       await overview.getByText("Saved.").waitFor();
@@ -791,12 +799,12 @@ async function serverSettings(which: string, stamp: number) {
       await ctx.close();
     }
   }
-  // The instance has all three, as a member asks for the server.
+  // The instance has all four, as a member asks for the server.
   const json = { "content-type": "application/json", accept: "application/json" };
   const pair = (await (await fetch(`${instance}/api/v1/auth/sign-in/password`, { method: "POST", headers: json, body: JSON.stringify({ handleOrEmail: member, password }) })).json()) as { accessToken?: string };
   if (!pair.accessToken) throw new Error("the suite could not sign in as the member");
-  const held = (await (await fetch(`${instance}/api/v1/servers/${server}`, { headers: { ...json, authorization: `Bearer ${pair.accessToken}` } })).json()) as { name?: string; retentionDays?: number; iconUrl?: string };
-  if (held.name !== `Renamed ${stamp}` || held.retentionDays !== 30 || !held.iconUrl) throw new Error(`the instance holds ${JSON.stringify(held)}`);
+  const held = (await (await fetch(`${instance}/api/v1/servers/${server}`, { headers: { ...json, authorization: `Bearer ${pair.accessToken}` } })).json()) as { name?: string; retentionDays?: number; iconUrl?: string; showDeleted?: boolean };
+  if (held.name !== `Renamed ${stamp}` || held.retentionDays !== 30 || !held.iconUrl || held.showDeleted !== true) throw new Error(`the instance holds ${JSON.stringify(held)}`);
   {
     const { ctx, page } = await open(which, "settings-member");
     try {
@@ -1263,7 +1271,8 @@ async function editingStep(which: string, stamp: number) {
     await ask.getByRole("button", { name: "Delete", exact: true }).click();
     await ask.waitFor({ state: "detached" });
     await part("Second draft").waitFor({ state: "detached" });
-    await page.locator(".lu-msg__body", { hasText: /^\(deleted\)$/ }).first().waitFor();
+    // The server shows no deleted messages unless it says so (architecture 6.7): gone, no "(deleted)".
+    if ((await page.locator(".lu-msg__body", { hasText: /^\(deleted\)$/ }).count()) > 0) throw new Error("a deleted message kept its place in a server that does not show them");
     phase("shift delete");
     await composer.fill("Gone at once.");
     await composer.press("Enter");

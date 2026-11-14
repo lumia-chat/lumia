@@ -25,6 +25,8 @@ export interface ServerSummary {
   iconUrl: string;
   /** How long the server keeps its messages, in days; 0 for ever. */
   retentionDays: number;
+  /** Whether a deleted message keeps its place as "(deleted)" (architecture 6.7); off, the core's reads leave it out. */
+  showDeleted: boolean;
   /** Whether this account may change the server's settings (architecture 6.7). */
   canManage: boolean;
   /** Whether it may create channels there (architecture 6.8). */
@@ -520,6 +522,10 @@ export class Bridge {
    */
   updateServer(serverId: string, name?: string, retentionDays?: number): Promise<SnapshotSummary> {
     return this.call("updateServer", serverId, name, retentionDays);
+  }
+  /** Whether a server's deleted messages keep their place as "(deleted)" (architecture 6.7). */
+  setShowDeleted(serverId: string, show: boolean): Promise<SnapshotSummary> {
+    return this.call("setShowDeleted", serverId, show);
   }
   /** `PUT /servers/{id}/icon`: as `setAvatar`, for a server's picture. */
   setServerIcon(serverId: string, picture: Uint8Array, mediaType: string): Promise<SnapshotSummary> {

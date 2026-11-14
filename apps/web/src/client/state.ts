@@ -421,9 +421,14 @@ export function snapshotQuery() {
   return createQuery(() => ({
     queryKey: ["snapshot"],
     queryFn: async () => {
+      const before = queryClient.getQueryData<SnapshotSummary>(["snapshot"]);
       const snapshot = await client().snapshot();
       // A snapshot recounts where everything was read.
       void queryClient.invalidateQueries({ queryKey: ["readStates"] });
+      // A server that now shows its deleted messages, or no longer does, changes what the core reads of it (architecture 6.7).
+      const showing = (s?: SnapshotSummary) => new Map((s?.servers ?? []).map((v) => [v.serverId, v.showDeleted]));
+      const was = showing(before);
+      if (before && snapshot.servers.some((v) => was.get(v.serverId) !== v.showDeleted)) void queryClient.invalidateQueries({ queryKey: ["messages"] });
       return snapshot;
     },
   }));

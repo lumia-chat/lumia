@@ -6,7 +6,7 @@
 // main pane until a channel is chosen. No board draws it: it is the
 // Profile page's cards, worded as the desktop shell's and the phones'.
 import { Show, createEffect, createMemo, createSignal, on } from "solid-js";
-import { Button, Card, ChannelHeader, SegmentedTabs, TextField } from "../design/components";
+import { Button, Card, ChannelHeader, Checkbox, SegmentedTabs, TextField } from "../design/components";
 import { ClientError, type ServerSummary, type SnapshotSummary } from "../client/bridge";
 import { avatarSrc, client, pictureRefusal, queryClient } from "../client/state";
 import { initialsOf } from "./app";
@@ -77,6 +77,24 @@ export function ServerSettings(props: { server: ServerSummary; snapshot: Snapsho
       setRetentionError(settingRefusal(err));
     } finally {
       setRetentionBusy(false);
+    }
+  };
+
+  // "Show deleted messages": saved as it is turned, apart from the retention's Save (architecture 6.7).
+  const [deletedBusy, setDeletedBusy] = createSignal(false);
+  const [deletedError, setDeletedError] = createSignal("");
+  const toggleDeleted = async (show: boolean) => {
+    if (deletedBusy()) return;
+    setDeletedBusy(true);
+    setDeletedError("");
+    try {
+      took(await client().setShowDeleted(props.server.serverId, show));
+      // What the core reads of every conversation here has changed.
+      void queryClient.invalidateQueries({ queryKey: ["messages"] });
+    } catch (err) {
+      setDeletedError(settingRefusal(err));
+    } finally {
+      setDeletedBusy(false);
     }
   };
 
@@ -218,6 +236,15 @@ export function ServerSettings(props: { server: ServerSummary; snapshot: Snapsho
             <Button variant="primary" size="md" disabled={retentionBusy() || retention() === props.server.retentionDays} onClick={() => void saveRetention()}>
               Save
             </Button>
+            <div class="app__switch">
+              <Checkbox label="Show deleted messages" checked={props.server.showDeleted} disabled={deletedBusy()} onChange={(e) => void toggleDeleted(e.currentTarget.checked)} />
+              <p class="auth__note">Off, a deleted message disappears for everyone. On, it stays in its place as “(deleted)”.</p>
+            </div>
+            <Show when={deletedError()}>
+              <p class="auth__error" role="alert">
+                {deletedError()}
+              </p>
+            </Show>
           </div>
         </Card>
       </div>
