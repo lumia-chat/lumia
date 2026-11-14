@@ -244,6 +244,7 @@ impl SqliteStore {
             .map_err(backend)?;
         conn.execute_batch(SCHEMA).map_err(backend)?;
         add_missing_columns(&conn)?;
+        refetch_what_was_kept_short(&conn)?;
         Ok(Self { conn })
     }
 
@@ -875,6 +876,51 @@ fn add_missing_columns(conn: &Connection) -> Result<(), StoreError> {
     Ok(())
 }
 
+/// What a server channel's rows keep of its events, as a number raised whenever
+/// `materialize` learns to keep something an older store let go: 1 is quotes, mentions,
+/// reactions and edits (architecture 6.6).
+const MATERIALIZED: u32 = 1;
+
+// A store kept by an older core has server channels' messages without what it did not yet
+// keep, and cannot make it up: the events it kept were encoded again after decoding, which
+// drops the fields that core did not know. So those channels are fetched again, as on a new
+// device: their messages, reactions, events and cursors go, and the gateway, finding no
+// cursor, reads them from the instance. Personal conversations are not touched; their
+// events are ciphertext that cannot be read twice, and no message row is ever theirs.
+fn refetch_what_was_kept_short(conn: &Connection) -> Result<(), StoreError> {
+    // Read and cleared under one write lock: the gateway's connection and the DM engine's
+    // open the same file, and only the first may do this.
+    let tx = rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)
+        .map_err(backend)?;
+    let at = tx
+        .query_row(
+            "SELECT value FROM meta WHERE key = 'materialized'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(backend)?
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(0);
+    if at >= MATERIALIZED {
+        return tx.commit().map_err(backend);
+    }
+    tx.execute_batch(
+        "DELETE FROM events WHERE kind = 0 AND log_id IN (SELECT DISTINCT channel_id FROM messages);
+         DELETE FROM cursors WHERE kind = 0 AND log_id IN (SELECT DISTINCT channel_id FROM messages);
+         DELETE FROM reactions;
+         DELETE FROM messages;",
+    )
+    .map_err(backend)?;
+    tx.execute(
+        "INSERT INTO meta (key, value) VALUES ('materialized', ?1)
+         ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+        params![MATERIALIZED.to_string()],
+    )
+    .map_err(backend)?;
+    tx.commit().map_err(backend)
+}
+
 /// Mentions as a row keeps them: `[[account id in hex, everyone, start, end]]`.
 fn mentions_json(mentions: &[StoredMention]) -> String {
     let rows: Vec<(String, bool, u32, u32)> = mentions
@@ -1262,7 +1308,9 @@ mod tests {
                created_at_micros INTEGER NOT NULL,
                deleted INTEGER NOT NULL DEFAULT 0
              );
-             INSERT INTO messages VALUES (x'01', x'02', 1, x'03', 'old', 0, 0);",
+             INSERT INTO messages VALUES (x'01', x'02', 1, x'03', 'old', 0, 0);
+             CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             INSERT INTO meta VALUES ('materialized', '1');",
         )
         .unwrap();
         let store = SqliteStore::init(conn).unwrap();
@@ -1273,6 +1321,59 @@ mod tests {
         );
         // Opening it again finds the columns there and leaves them.
         add_missing_columns(&store.conn).unwrap();
+    }
+
+    #[test]
+    fn a_store_kept_by_an_older_core_fetches_its_server_channels_again() {
+        let ch = vec![1u8; 16];
+        let dm = vec![9u8; 16];
+        let path =
+            std::env::temp_dir().join(format!("lumia-refetch-{}.sqlite", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        {
+            let mut store = SqliteStore::open(&path).unwrap();
+            store
+                .apply(
+                    LogKind::Channel,
+                    &ch,
+                    &[created(&ch, 1, "a"), created(&ch, 2, "b")],
+                )
+                .unwrap();
+            // A personal conversation's cursor, whose events are never message rows.
+            store
+                .conn
+                .execute(
+                    "INSERT INTO cursors (kind, log_id, seq) VALUES (0, ?1, 5)",
+                    params![dm],
+                )
+                .unwrap();
+            // As an older core left it: no mark of what its rows keep.
+            store
+                .conn
+                .execute("DELETE FROM meta WHERE key = 'materialized'", [])
+                .unwrap();
+        }
+        let store = SqliteStore::open(&path).unwrap();
+        assert!(
+            store.messages(&ch, 10).unwrap().is_empty(),
+            "the old rows are gone"
+        );
+        assert_eq!(
+            store.cursors(LogKind::Channel).unwrap(),
+            vec![(dm.clone(), 5)],
+            "the server channel is read again from the start; the personal one is kept"
+        );
+        drop(store);
+        // Once marked, a later open keeps what is there.
+        let mut store = SqliteStore::open(&path).unwrap();
+        store
+            .apply(LogKind::Channel, &ch, &[created(&ch, 1, "a")])
+            .unwrap();
+        drop(store);
+        let store = SqliteStore::open(&path).unwrap();
+        assert_eq!(store.messages(&ch, 10).unwrap().len(), 1);
+        drop(store);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
