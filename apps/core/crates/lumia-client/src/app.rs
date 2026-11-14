@@ -479,13 +479,13 @@ impl SnapshotSummary {
     fn arranged(mut self) -> Self {
         let ids: Vec<String> = self.servers.iter().map(|s| s.server_id.clone()).collect();
         self.rail = crate::rail::tidy(&self.rail, &ids);
-        let order = crate::rail::server_order(&self.rail);
-        self.servers.sort_by_key(|s| {
-            order
-                .iter()
-                .position(|id| *id == s.server_id)
-                .unwrap_or(usize::MAX)
-        });
+        let order: HashMap<String, usize> = crate::rail::server_order(&self.rail)
+            .into_iter()
+            .enumerate()
+            .map(|(at, id)| (id, at))
+            .collect();
+        self.servers
+            .sort_by_key(|s| order.get(&s.server_id).copied().unwrap_or(usize::MAX));
         self
     }
 }
@@ -1175,6 +1175,24 @@ struct Inner {
     /// leaves deleted messages out.
     shows_deleted: HashSet<String>,
     channel_servers: HashMap<Vec<u8>, String>,
+    /// The rail arrangements this client sent ([`App::arrange_rail`]).
+    rails: RailSends,
+}
+
+/// The arrangements of the rail this client has sent: how many, how many
+/// were answered, and the last one sent while it stands.
+///
+/// They go one at a time, in the order they were made, so the instance keeps
+/// the last (latest write wins). A snapshot read while one is on its way, or
+/// begun before one was answered, may hold the rail as it was before; it
+/// shows the last one sent instead, so a shell drawing it does not put an
+/// edit back or make the next edit from a rail the instance no longer keeps.
+#[derive(Debug, Default)]
+struct RailSends {
+    sent: u64,
+    answered: u64,
+    /// `None` once the last one sent was refused.
+    latest: Option<Vec<crate::rail::RailItem>>,
 }
 
 /// Read state as this client keeps it between snapshots.
@@ -1306,6 +1324,8 @@ pub struct App {
     /// fetches).
     dm: Mutex<Option<Arc<AsyncMutex<DmEngine>>>>,
     writer: Option<WriterLock>,
+    /// Held while an arrangement of the rail is sent: they go one at a time.
+    rail_turn: AsyncMutex<()>,
 }
 
 impl std::fmt::Debug for App {
@@ -1422,7 +1442,9 @@ impl App {
                 reads: Reads::default(),
                 shows_deleted: HashSet::new(),
                 channel_servers: HashMap::new(),
+                rails: RailSends::default(),
             }),
+            rail_turn: AsyncMutex::new(()),
             identity: AsyncMutex::new(IdentityStores {
                 store: identity_store,
                 keys: identity_keys,
@@ -2141,6 +2163,7 @@ impl App {
     /// # Errors
     /// On transport or API failure.
     pub async fn snapshot(&self) -> Result<SnapshotSummary, ClientError> {
+        let answered = self.lock().rails.answered;
         let snap = self.api.account_snapshot().await?;
         let account = snap.account.unwrap_or_default();
         let summary = SnapshotSummary {
@@ -2173,6 +2196,18 @@ impl App {
         }
         .arranged();
         let mut summary = summary;
+        {
+            // An arrangement on its way, or answered since this was asked
+            // for, is newer than the instance's rail here ([`RailSends`]).
+            let inner = self.lock();
+            let rails = &inner.rails;
+            if let Some(latest) = &rails.latest {
+                if rails.sent > rails.answered || rails.answered > answered {
+                    summary.rail = latest.clone();
+                    summary = summary.arranged();
+                }
+            }
+        }
         {
             let mut inner = self.lock();
             let reads = &mut inner.reads;
@@ -2776,7 +2811,24 @@ impl App {
         &self,
         items: &[crate::rail::RailItem],
     ) -> Result<SnapshotSummary, ClientError> {
-        self.api.put_rail(crate::rail::to_proto(items)).await?;
+        let turn = {
+            let rails = &mut self.lock().rails;
+            rails.sent += 1;
+            rails.latest = Some(items.to_vec());
+            rails.sent
+        };
+        let kept = {
+            let _turn = self.rail_turn.lock().await;
+            let kept = self.api.put_rail(crate::rail::to_proto(items)).await;
+            let rails = &mut self.lock().rails;
+            rails.answered = rails.answered.max(turn);
+            // Refused, the last one sent is not what the instance keeps.
+            if kept.is_err() && turn == rails.sent {
+                rails.latest = None;
+            }
+            kept
+        };
+        kept?;
         self.snapshot().await
     }
 

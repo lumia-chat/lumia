@@ -980,7 +980,7 @@ async fn the_rail_is_arranged_kept_and_told() {
     let order: Vec<String> = kept.servers.iter().map(|s| s.server_id.clone()).collect();
     assert_eq!(
         order,
-        vec![b, a, c],
+        vec![b, a.clone(), c],
         "the snapshot's servers follow the rail"
     );
     device
@@ -1007,4 +1007,22 @@ async fn the_rail_is_arranged_kept_and_told() {
         })
         .collect::<Vec<_>>();
     assert!(device.app.arrange_rail(&bad).await.is_err());
+
+    // Two made quickly, with a snapshot read meanwhile: they are kept in the order they were
+    // made, and the snapshot shows the later one while it is on its way.
+    let up = rail::step(&kept.rail, &folder, -1);
+    let swapped = rail::step(&up, &a, 1);
+    let (one, two, between) = tokio::join!(
+        device.app.arrange_rail(&up),
+        device.app.arrange_rail(&swapped),
+        device.app.snapshot(),
+    );
+    one.unwrap();
+    assert_eq!(two.unwrap().rail, swapped);
+    assert_eq!(between.unwrap().rail, swapped);
+    assert_eq!(
+        device.app.snapshot().await.unwrap().rail,
+        swapped,
+        "the instance keeps the last one made"
+    );
 }

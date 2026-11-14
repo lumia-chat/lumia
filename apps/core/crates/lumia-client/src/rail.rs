@@ -45,10 +45,16 @@ pub const NAME_MAX: usize = 50;
 /// takes its first server's.
 #[must_use]
 pub fn tone_of(id: &str) -> String {
+    TONES[tone_index(id)].to_string()
+}
+
+/// [`tone_of`] as its place in [`TONES`], for a shell that draws one per avatar each frame.
+#[must_use]
+pub fn tone_index(id: &str) -> usize {
     let hash = id.encode_utf16().fold(0u32, |h, unit| {
         h.wrapping_mul(31).wrapping_add(u32::from(unit))
     });
-    TONES[hash as usize % TONES.len()].to_string()
+    hash as usize % TONES.len()
 }
 
 /// A new folder's id, minted here as every client-minted id is (UUIDv7).
@@ -229,6 +235,10 @@ pub fn move_to(
     folder: Option<&str>,
     before: Option<&str>,
 ) -> Vec<RailItem> {
+    // Before itself is where it is.
+    if before == Some(id) {
+        return items.to_vec();
+    }
     let mut next = items.to_vec();
     let Some(moving) = take(&mut next, id) else {
         return items.to_vec();
@@ -261,7 +271,12 @@ pub fn move_to(
 /// that folder before it instead.
 #[must_use]
 pub fn merge(items: &[RailItem], dragged: &str, onto: &str, folder_id: &str) -> Vec<RailItem> {
-    if dragged == onto {
+    // A folder goes between tiles only, never into one.
+    if dragged == onto
+        || items
+            .iter()
+            .any(|item| matches!(item, RailItem::Folder { folder_id, .. } if folder_id == dragged))
+    {
         return items.to_vec();
     }
     if let Some(folder) = folder_of(items, onto) {
@@ -490,6 +505,10 @@ mod tests {
         );
         assert_eq!(move_to(&rail, "F", Some("F"), None), rail);
         assert_eq!(move_to(&rail, "nope", None, None), rail);
+        // Before itself is where it is, on the rail or in its folder: a drop just under
+        // the tile above it changes nothing.
+        assert_eq!(move_to(&rail, "d", None, Some("d")), rail);
+        assert_eq!(move_to(&rail, "b", Some("F"), Some("b")), rail);
     }
 
     #[test]
@@ -513,6 +532,8 @@ mod tests {
             vec![s("b"), f("F", &["a", "c"])]
         );
         assert_eq!(merge(&rail, "a", "a", "G"), rail);
+        // A folder is never dropped onto a tile.
+        assert_eq!(merge(&rail, "F", "a", "G"), rail);
     }
 
     #[test]
