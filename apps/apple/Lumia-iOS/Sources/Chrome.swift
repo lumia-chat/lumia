@@ -89,7 +89,7 @@ struct PhoneRail: View {
                     Label("Sign out", systemImage: "rectangle.portrait.and.arrow.right")
                 }
             } label: {
-                LumiaAvatar(initials: initials(of: session.selfName), tone: .of(session.me), size: LumiaTokens.avatarSelf)
+                LumiaAvatar(initials: initials(of: session.selfName), tone: .of(session.me), size: LumiaTokens.avatarSelf, picture: session.picture(of: session.me))
             }
             .menuOrder(.fixed)
             .buttonStyle(.plain)

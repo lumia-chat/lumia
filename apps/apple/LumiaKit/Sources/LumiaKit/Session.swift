@@ -679,6 +679,18 @@ public final class LumiaSession {
         return nil
     }
 
+    /// The picture an account names (`avatarPath`): this account's own, else
+    /// what the shared servers say, else a looked-up profile's; empty for none.
+    public func avatarURL(of accountID: String) -> String {
+        avatarPath(of: accountID, me: me, own: snapshot?.avatarUrl ?? "", listed: { people[$0] }, lookedUp: profile(of:))
+    }
+
+    /// Where an account's picture is, for its avatar: only on this instance
+    /// (`pictureURL(_:base:)`); nil for none or one named elsewhere.
+    public func picture(of accountID: String) -> URL? {
+        pictureURL(avatarURL(of: accountID))
+    }
+
     /// A person's pronouns, from the verified profile the instance showed; empty when none.
     public func pronouns(of accountID: String) -> String {
         if accountID.isEmpty { return "" }

@@ -79,7 +79,7 @@ struct ServerScreen: View {
                         let other = Membership.other(in: c, me: session.me)
                         let name = session.name(of: other)
                         SidebarRow(label: name, unread: session.unread(c.channelId), open: { path.append(.channel(id: c.channelId)) }) {
-                            LumiaAvatar(initials: initials(of: name), tone: .of(other), size: LumiaTokens.avatarSm)
+                            LumiaAvatar(initials: initials(of: name), tone: .of(other), size: LumiaTokens.avatarSm, picture: session.picture(of: other))
                                 .accessibilityHidden(true)
                         }
                     }

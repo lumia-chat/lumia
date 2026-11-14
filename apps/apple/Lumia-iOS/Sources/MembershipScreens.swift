@@ -149,7 +149,7 @@ struct ChannelMembersScreen: View {
                     let line = memberLine(session, id)
                     HStack(spacing: 2) {
                         Button { if let s = channel?.serverId { openPerson(PersonInServer(accountID: id, serverID: s)) } } label: {
-                            LumiaMemberRow(name: line.name, subtitle: line.handle, tone: .of(id), tag: id == session.me ? "You" : nil, status: channel.flatMap { session.presence(of: id, in: $0.serverId) })
+                            LumiaMemberRow(name: line.name, subtitle: line.handle, tone: .of(id), picture: session.picture(of: id), tag: id == session.me ? "You" : nil, status: channel.flatMap { session.presence(of: id, in: $0.serverId) })
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
@@ -259,7 +259,7 @@ struct AddPeopleScreen: View {
                     ForEach(candidates, id: \.accountId) { m in
                         let line = memberLine(session, m.accountId)
                         LumiaCheckRow(checked: chosen.contains(m.accountId), toggle: { toggle(m.accountId) }) {
-                            LumiaAvatar(initials: initials(of: line.name), tone: .of(m.accountId), size: LumiaTokens.avatarSm)
+                            LumiaAvatar(initials: initials(of: line.name), tone: .of(m.accountId), size: LumiaTokens.avatarSm, picture: session.picture(of: m.accountId))
                             VStack(alignment: .leading, spacing: 0) {
                                 HStack(spacing: LumiaTokens.space6) {
                                     Text(line.name).font(LumiaTokens.textMember.font).foregroundStyle(LumiaTokens.ink.color)
@@ -327,7 +327,7 @@ struct NewServerDMScreen: View {
                         let line = memberLine(session, m.accountId)
                         Button { Task { await open(m) } } label: {
                             HStack(spacing: LumiaTokens.space10) {
-                                LumiaAvatar(initials: initials(of: line.name), tone: .of(m.accountId), size: LumiaTokens.avatarSm)
+                                LumiaAvatar(initials: initials(of: line.name), tone: .of(m.accountId), size: LumiaTokens.avatarSm, picture: session.picture(of: m.accountId))
                                 VStack(alignment: .leading, spacing: 0) {
                                     Text(line.name).font(LumiaTokens.textMember.font).foregroundStyle(LumiaTokens.ink.color)
                                     if let handle = line.handle { Text(handle).font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkQuiet.color) }
@@ -453,7 +453,7 @@ struct ProfileCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: LumiaTokens.space16) {
             HStack(spacing: LumiaTokens.space14) {
-                LumiaAvatar(initials: initials(of: name), tone: .of(person.accountID), size: LumiaTokens.avatarLg)
+                LumiaAvatar(initials: initials(of: name), tone: .of(person.accountID), size: LumiaTokens.avatarLg, picture: session.picture(of: person.accountID))
                 VStack(alignment: .leading, spacing: LumiaTokens.space2) {
                     HStack(spacing: LumiaTokens.space6) {
                         Text(name).font(LumiaTokens.titleAuth.font).foregroundStyle(LumiaTokens.ink.color)

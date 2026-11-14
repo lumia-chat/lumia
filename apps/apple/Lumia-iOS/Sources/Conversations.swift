@@ -194,7 +194,7 @@ struct ConversationScreen: View {
 
     var body: some View {
         PanelScreen(back: "Home", title: title, subtitle: [others.map { session.pronouns(of: $0) }.filter { !$0.isEmpty }.joined(separator: ", "), (channel?.host).flatMap { $0.isEmpty ? nil : "on \($0)" } ?? ""].filter { !$0.isEmpty }.joined(separator: " · ").nilIfEmpty, lead: {
-            LumiaAvatar(initials: initials(of: title), tone: .of(others.first ?? channelID), size: LumiaTokens.avatarMd)
+            LumiaAvatar(initials: initials(of: title), tone: .of(others.first ?? channelID), size: LumiaTokens.avatarMd, picture: others.count == 1 ? session.picture(of: others[0]) : nil)
         }) {
             ScrollViewReader { proxy in
                 ScrollView {
@@ -226,7 +226,7 @@ struct ConversationScreen: View {
                         ForEach(Array(zip(sent, places)), id: \.0.messageId) { m, place in
                             if place.startsDay { LumiaDayDivider(label: dayLabel(ofMicros: m.sentAtMicros), measures: measures) }
                             if line == m.messageId { LumiaNewMessagesLine(scale: measures.text).id(NewMessagesLine.words) }
-                            LumiaMessageRow(author: who(m), tone: .of(authorID(of: m)), time: time(ofMicros: m.sentAtMicros), text: m.body, deleted: m.deleted, place: place, measures: measures, extras: extras(m))
+                            LumiaMessageRow(author: who(m), tone: .of(authorID(of: m)), picture: session.picture(of: accountID(of: m)), time: time(ofMicros: m.sentAtMicros), text: m.body, deleted: m.deleted, place: place, measures: measures, extras: extras(m))
                                 .id(m.messageId)
                         }
                         if !error.isEmpty { LumiaErrorText(error).padding(.horizontal, LumiaTokens.space16) }
@@ -278,6 +278,14 @@ struct ConversationScreen: View {
         return others.count == 1 ? others[0] : m.senderIdentityId
     }
 
+    /// The account a message is from, for its picture: none when it is
+    /// known only by its identity (a group's), which keeps its initials.
+    private func accountID(of m: DmMessageSummary) -> String {
+        if m.mine { return session.me }
+        if !m.senderAccountId.isEmpty { return m.senderAccountId }
+        return others.count == 1 ? others[0] : ""
+    }
+
     private func who(_ m: DmMessageSummary) -> String {
         m.mine ? session.selfName : (!m.senderAccountId.isEmpty || others.count != 1 ? session.name(of: m.senderAccountId) : session.name(of: others[0]))
     }
@@ -290,7 +298,7 @@ struct ConversationScreen: View {
     private func extras(_ m: DmMessageSummary) -> MessageExtras {
         var x = MessageExtras()
         // A quote whose author is not known draws no name.
-        x.quote = m.reply.map { q in QuoteDisplay(authorID: q.authorAccountId, name: q.authorAccountId.isEmpty ? nil : session.name(of: q.authorAccountId), text: q.text, deleted: q.originalDeleted, quotesMe: q.authorAccountId == session.me, open: { jump(q.messageId) }) }
+        x.quote = m.reply.map { q in QuoteDisplay(authorID: q.authorAccountId, name: q.authorAccountId.isEmpty ? nil : session.name(of: q.authorAccountId), picture: session.picture(of: q.authorAccountId), text: q.text, deleted: q.originalDeleted, quotesMe: q.authorAccountId == session.me, open: { jump(q.messageId) }) }
         x.reactions = reactionDisplays(m.reactions, session: session)
         x.flashed = flash == m.messageId
         x.replying = replying?.messageId == m.messageId
@@ -409,7 +417,7 @@ struct ChannelScreen: View {
 
     var body: some View {
         PanelScreen(back: server?.name ?? "the server", title: title, subtitle: server?.name, actions: isDM ? [] : [("person.2", "Members", { path.append(.channelMembers(channelID: channelID)) })], lead: {
-            if isDM { LumiaAvatar(initials: initials(of: title), tone: .of(other), size: LumiaTokens.avatarMd) }
+            if isDM { LumiaAvatar(initials: initials(of: title), tone: .of(other), size: LumiaTokens.avatarMd, picture: session.picture(of: other)) }
         }) {
             ScrollViewReader { proxy in
                 ScrollView {
@@ -435,7 +443,7 @@ struct ChannelScreen: View {
                                         .id(m.messageId)
                                 }
                             } else {
-                                LumiaMessageRow(author: session.name(of: m.authorAccountId), tone: .of(m.authorAccountId), time: time(ofMicros: m.createdAtMicros), text: m.body, deleted: m.deleted, place: place, measures: measures, openAuthor: openAuthor(m.authorAccountId), extras: extras(m))
+                                LumiaMessageRow(author: session.name(of: m.authorAccountId), tone: .of(m.authorAccountId), picture: session.picture(of: m.authorAccountId), time: time(ofMicros: m.createdAtMicros), text: m.body, deleted: m.deleted, place: place, measures: measures, openAuthor: openAuthor(m.authorAccountId), extras: extras(m))
                                     .id(m.messageId)
                             }
                         }
@@ -531,7 +539,7 @@ struct ChannelScreen: View {
         case .everyone:
             return .init(id: "everyone", name: "@everyone", handle: "", note: MentionList.everyoneNote(channel: name), tone: nil)
         case let .member(m, inside):
-            return .init(id: m.accountId, name: session.name(of: m.accountId), handle: "@\(m.handle)", note: inside ? "" : MentionList.notIn(channel: name), tone: .of(m.accountId))
+            return .init(id: m.accountId, name: session.name(of: m.accountId), handle: "@\(m.handle)", note: inside ? "" : MentionList.notIn(channel: name), tone: .of(m.accountId), picture: session.picture(of: m.accountId))
         }
     }
 
@@ -547,7 +555,7 @@ struct ChannelScreen: View {
         var x = MessageExtras()
         x.mentions = m.mentions
         x.name = { knownName($0, session: session) }
-        x.quote = m.reply.map { q in QuoteDisplay(authorID: q.authorAccountId, name: q.authorAccountId.isEmpty ? nil : session.name(of: q.authorAccountId), text: q.text, deleted: q.originalDeleted, quotesMe: q.authorAccountId == session.me, open: { jump(q.messageId) }) }
+        x.quote = m.reply.map { q in QuoteDisplay(authorID: q.authorAccountId, name: q.authorAccountId.isEmpty ? nil : session.name(of: q.authorAccountId), picture: session.picture(of: q.authorAccountId), text: q.text, deleted: q.originalDeleted, quotesMe: q.authorAccountId == session.me, open: { jump(q.messageId) }) }
         x.reactions = reactionDisplays(m.reactions, session: session)
         x.tinted = m.mentionsMe
         x.flashed = flash == m.messageId

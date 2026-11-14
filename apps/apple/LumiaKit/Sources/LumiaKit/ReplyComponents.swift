@@ -155,7 +155,7 @@ public struct LumiaReplyReference: View {
                 HStack(spacing: LumiaTokens.space6) {
                     ReplyConnector()
                     if let name = quote.name {
-                        LumiaAvatar(initials: initials(of: name), tone: .of(quote.authorID), size: Self.mark)
+                        LumiaAvatar(initials: initials(of: name), tone: .of(quote.authorID), size: Self.mark, picture: quote.picture)
                         Text(Replies.referenceName(name, quotesMe: quote.quotesMe)).font(LumiaTokens.textLinkSm.font(scale: scale))
                             .foregroundStyle(quote.quotesMe ? LumiaTokens.accentInk.color : LumiaTokens.inkBody.color)
                             .lineLimit(1).fixedSize()
@@ -439,9 +439,10 @@ public struct LumiaMentionList: View {
         public let handle: String
         public let note: String
         public let tone: AvatarTone?
+        public let picture: URL?
 
-        public init(id: String, name: String, handle: String, note: String, tone: AvatarTone?) {
-            self.id = id; self.name = name; self.handle = handle; self.note = note; self.tone = tone
+        public init(id: String, name: String, handle: String, note: String, tone: AvatarTone?, picture: URL? = nil) {
+            self.id = id; self.name = name; self.handle = handle; self.note = note; self.tone = tone; self.picture = picture
         }
     }
 
@@ -456,7 +457,7 @@ public struct LumiaMentionList: View {
                 Button { pick(n) } label: {
                     HStack(spacing: LumiaTokens.space10) {
                         if let tone = row.tone {
-                            LumiaAvatar(initials: initials(of: row.name), tone: tone, size: LumiaTokens.avatarXs)
+                            LumiaAvatar(initials: initials(of: row.name), tone: tone, size: LumiaTokens.avatarXs, picture: row.picture)
                         } else {
                             Image(systemName: "at").font(.system(size: 12, weight: .semibold))
                                 .foregroundStyle(LumiaTokens.accentInk.color)

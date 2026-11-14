@@ -352,12 +352,12 @@ struct MentionsScreen: View {
                 Text(where_).font(LumiaTokens.textSection.font).foregroundStyle(LumiaTokens.inkMuted.color)
                 // The reply's reference line, as the conversation draws it; the item itself is the jump.
                 if let q = m.reply {
-                    LumiaReplyReference(quote: QuoteDisplay(authorID: q.authorAccountId, name: q.authorAccountId.isEmpty ? nil : session.name(of: q.authorAccountId), text: q.text, deleted: q.originalDeleted, quotesMe: q.authorAccountId == session.me, open: nil))
+                    LumiaReplyReference(quote: QuoteDisplay(authorID: q.authorAccountId, name: q.authorAccountId.isEmpty ? nil : session.name(of: q.authorAccountId), picture: session.picture(of: q.authorAccountId), text: q.text, deleted: q.originalDeleted, quotesMe: q.authorAccountId == session.me, open: nil))
                         .padding(.leading, LumiaTokens.avatarMd / 2 - 1)
                         .allowsHitTesting(false)
                 }
                 HStack(alignment: .top, spacing: LumiaTokens.space12) {
-                    LumiaAvatar(initials: initials(of: author), tone: .of(m.authorAccountId), size: LumiaTokens.avatarMd)
+                    LumiaAvatar(initials: initials(of: author), tone: .of(m.authorAccountId), size: LumiaTokens.avatarMd, picture: session.picture(of: m.authorAccountId))
                     VStack(alignment: .leading, spacing: LumiaTokens.space4) {
                         HStack(alignment: .firstTextBaseline, spacing: LumiaTokens.space8) {
                             Text(author).font(LumiaTokens.textAuthor.font).foregroundStyle(LumiaTokens.ink.color)

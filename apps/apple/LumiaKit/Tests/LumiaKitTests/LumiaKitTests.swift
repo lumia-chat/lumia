@@ -12,6 +12,35 @@ final class LumiaKitTests: XCTestCase {
         XCTAssertEqual(AvatarTone.of("abc"), AvatarTone.of("abc"))
     }
 
+    // A person's picture: this account's own from its snapshot, anyone
+    // else's from the servers' lists, and a profile looked up only when no
+    // server lists them; only the instance's own pictures are fetched.
+    func testAPersonsPictureIsOwnThenListedThenLookedUp() {
+        let base = URL(string: "https://chat.example.com")!
+        let own = "/api/v1/avatars/" + String(repeating: "a", count: 64)
+        let ada = "/api/v1/avatars/" + String(repeating: "b", count: 64)
+        let grace = "/api/v1/avatars/" + String(repeating: "c", count: 64)
+        func person(_ id: String, _ avatar: String) -> MemberSummary {
+            MemberSummary(accountId: id, handle: id, displayName: id, nickname: "", pronouns: "", bio: "", avatarUrl: avatar, channelAddsByInvitation: false, serverDmsOff: false)
+        }
+        let listed = ["me": person("me", "/api/v1/avatars/stale"), "ada": person("ada", ada), "bo": person("bo", "")]
+        let profiles = ["ada": person("ada", "/api/v1/avatars/profile"), "bo": person("bo", grace), "grace": person("grace", grace), "eve": person("eve", "https://elsewhere.example/eve.png")]
+        var askedFor: [String] = []
+        func path(_ id: String) -> String {
+            avatarPath(of: id, me: "me", own: own, listed: { listed[$0] }, lookedUp: { askedFor.append($0); return profiles[$0] })
+        }
+        XCTAssertEqual(path("me"), own, "this account's own, from the snapshot, before any list")
+        XCTAssertEqual(path("ada"), ada, "a server's list before a profile")
+        XCTAssertEqual(path("bo"), "", "listed with none: none, not a profile's")
+        XCTAssertEqual(path("grace"), grace, "no server lists her: her profile's")
+        XCTAssertEqual(path("nobody"), "")
+        XCTAssertEqual(path(""), "", "no account")
+        XCTAssertEqual(askedFor, ["grace", "nobody"], "profiles are looked up only for those no server lists")
+        XCTAssertEqual(pictureURL(path("grace"), base: base)?.absoluteString, "https://chat.example.com\(grace)")
+        XCTAssertNil(pictureURL(path("eve"), base: base), "a picture named on another host is not fetched")
+        XCTAssertNil(pictureURL(path("bo"), base: base))
+    }
+
     func testTokensResolve() {
         XCTAssertEqual(LumiaTokens.space16, 16)
         XCTAssertNotEqual(LumiaTokens.bg.light, LumiaTokens.bg.dark)

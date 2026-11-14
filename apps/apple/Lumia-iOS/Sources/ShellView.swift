@@ -287,7 +287,7 @@ struct ConversationRow: View {
         let bold = unread.unread > 0
         Button(action: open) {
             HStack(spacing: LumiaTokens.space12) {
-                LumiaAvatar(initials: initials(of: name), tone: .of(others.first ?? channel.channelId), size: LumiaTokens.avatarLg)
+                LumiaAvatar(initials: initials(of: name), tone: .of(others.first ?? channel.channelId), size: LumiaTokens.avatarLg, picture: others.count == 1 ? session.picture(of: others[0]) : nil)
                 VStack(alignment: .leading, spacing: LumiaTokens.space2) {
                     // The board's: the name at 700 while unread and 600 after, the
                     // last line in the body's ink while unread and muted after.

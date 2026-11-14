@@ -4,6 +4,8 @@
 # two messages with the release CLI, and someone else in that channel who
 # writes a long message, replies to the account's and reacts to it (so a
 # channel has two names, a message that wraps, a reference and chips),
+# gives both a picture (scripts/picture.py, sent over HTTP) and has the
+# other open a server DM with the account, so the avatars are pictures,
 # installs the debug app, launches it
 # signed in as that account (the LUMIA_DEV_* environment a debug build
 # honours, passed through simctl's SIMCTL_CHILD_ prefix), and screenshots
@@ -56,7 +58,24 @@ invite=$("$cli" --data-dir "$data" invite-create "$server" | grep -oE "https?://
 "$cli" --data-dir "$other" send "$channel" "Same core, same answers." --reply-to "$first" --quote "The iOS app reads this through the same core." >/dev/null
 "$cli" --data-dir "$other" react "$channel" "$first" "👍" >/dev/null
 "$cli" --data-dir "$other" react "$channel" "$first" "🎉" >/dev/null
-echo "seeded $handle, server $server, channel $channel"
+# Pictures for both, over HTTP as an app sends them, and a server DM the
+# other opens with the account, so the avatars drawn are pictures.
+token() {
+  curl -s -f -H "content-type: application/json" -H "accept: application/json" \
+    -d "{\"handleOrEmail\":\"$1\",\"password\":\"$password\"}" "$instance/api/v1/auth/sign-in/password" |
+    python3 -c "import sys, json; print(json.load(sys.stdin)['accessToken'])"
+}
+python3 "$here/picture.py" "$work/mine.png" 20,110,90 240,200,60
+python3 "$here/picture.py" "$work/theirs.png" 200,60,120 60,90,220
+for who in "$handle:mine" "priya$stamp:theirs"; do
+  curl -s -f -X PUT -H "content-type: image/png" -H "accept: application/json" -H "authorization: Bearer $(token "${who%%:*}")" \
+    --data-binary "@$work/${who#*:}.png" "$instance/api/v1/account/avatar" >/dev/null || { echo "FAIL: no picture for ${who%%:*}"; exit 1; }
+done
+me=$("$cli" --data-dir "$data" whoami | grep -oE "[0-9a-f-]{36}" | head -1)
+dm=$(curl -s -f -X POST -H "content-type: application/json" -H "accept: application/json" -H "authorization: Bearer $(token "priya$stamp")" \
+  -d "{\"accountId\":\"$me\"}" "$instance/api/v1/servers/$server/dms" | python3 -c "import sys, json; d = json.load(sys.stdin); d = d.get('channel', d); print(d['channelId'])")
+"$cli" --data-dir "$other" send "$dm" "Got a minute after lunch?" >/dev/null
+echo "seeded $handle, server $server, channel $channel, server DM $dm"
 
 # A booted simulator of that name, or boot one; any iPhone when none has
 # that name (the CI runner's are whatever its Xcode ships).
@@ -90,7 +109,7 @@ shoot home 8
 alive=$(xcrun simctl spawn "$udid" launchctl list 2>/dev/null | grep -c "$bundle" || true)
 # The app sends nothing; the CLI's message lands in its view when the gateway is up.
 "$cli" --data-dir "$data" send "$channel" "Still here?" >/dev/null
-for screen in server channel requests devices profile preferences new add newchannel invite serversettings signin link; do shoot "$screen" 6; done
+for screen in server channel members serverdm profilecard requests devices profile preferences new add newchannel invite serversettings signin link; do shoot "$screen" 6; done
 # As Preferences can make them: dark, and the channel's messages compact,
 # minimal (one line) light and dark, at the largest font size, and both.
 shoot preferences 6 dark

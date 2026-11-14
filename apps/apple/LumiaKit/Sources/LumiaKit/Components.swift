@@ -5,26 +5,36 @@
 import LumiaFFI
 import SwiftUI
 
+/// A person: their initials on their tone, and their picture over them when
+/// they have one (`LumiaSession.picture(of:)`), as the desktop shell's
+/// `avatar_of` draws them. The initials show while it loads and in its place
+/// when it cannot be had.
 public struct LumiaAvatar: View {
     public let initials: String
     public let tone: AvatarTone
     public var size: CGFloat = LumiaTokens.avatarMd
+    /// Their picture on the instance; nil for none.
+    public var picture: URL?
 
-    public init(initials: String, tone: AvatarTone, size: CGFloat = LumiaTokens.avatarMd) {
-        self.initials = initials; self.tone = tone; self.size = size
+    public init(initials: String, tone: AvatarTone, size: CGFloat = LumiaTokens.avatarMd, picture: URL? = nil) {
+        self.initials = initials; self.tone = tone; self.size = size; self.picture = picture
     }
 
     public var body: some View {
-        Text(initials)
-            .font(.system(size: size * 0.4, weight: .semibold, design: .rounded))
-            .foregroundStyle(tone.ink.color)
-            .frame(width: size, height: size)
-            .background(tone.fill.color, in: Circle())
+        LumiaPictureOver(url: picture) {
+            Text(initials)
+                .font(.system(size: size * 0.4, weight: .semibold, design: .rounded))
+                .foregroundStyle(tone.ink.color)
+                .frame(width: size, height: size)
+                .background(tone.fill.color, in: Circle())
+        }
+        .frame(width: size, height: size)
+        .clipShape(Circle())
     }
 }
 
-/// A picture the instance keeps (a server's) drawn over what stands for it,
-/// as people's avatars are on the web and the desktop: what is under shows
+/// A picture the instance keeps (a server's or a person's) drawn over what
+/// stands for it, as on the web and the desktop: what is under shows
 /// while the picture loads, and in its place when there is none or it
 /// cannot be had. Fills the frame it is given; whoever draws it clips it to
 /// its shape.
@@ -37,13 +47,15 @@ public struct LumiaPictureOver<Under: View>: View {
     }
 
     public var body: some View {
-        ZStack {
-            under()
-            if let url {
-                AsyncImage(url: url) { phase in
-                    if let image = phase.image { image.resizable().scaledToFill() } else { Color.clear }
-                }
+        // What is under goes once the picture is drawn, as the desktop
+        // shell's does: a picture with transparency, or one drawn faded (an
+        // absent member's), would show it through.
+        if let url {
+            AsyncImage(url: url) { phase in
+                if let image = phase.image { image.resizable().scaledToFill() } else { under() }
             }
+        } else {
+            under()
         }
     }
 }
@@ -127,6 +139,8 @@ public struct LumiaEmptyState<Content: View>: View {
 public struct LumiaMessageRow: View {
     public let author: String
     public let tone: AvatarTone
+    /// The author's picture, over their initials; nil for none.
+    public var picture: URL?
     public let time: String
     public let text: String
     public var deleted = false
@@ -143,8 +157,8 @@ public struct LumiaMessageRow: View {
     public var extras = MessageExtras()
     @State private var hovering = false
 
-    public init(author: String, tone: AvatarTone, time: String, text: String, deleted: Bool = false, place: MessagePlace = MessagePlace(), measures: MessageMeasures = .standard, openAuthor: (() -> Void)? = nil, extras: MessageExtras = MessageExtras()) {
-        self.author = author; self.tone = tone; self.time = time; self.text = text; self.deleted = deleted; self.place = place; self.measures = measures; self.openAuthor = openAuthor; self.extras = extras
+    public init(author: String, tone: AvatarTone, picture: URL? = nil, time: String, text: String, deleted: Bool = false, place: MessagePlace = MessagePlace(), measures: MessageMeasures = .standard, openAuthor: (() -> Void)? = nil, extras: MessageExtras = MessageExtras()) {
+        self.author = author; self.tone = tone; self.picture = picture; self.time = time; self.text = text; self.deleted = deleted; self.place = place; self.measures = measures; self.openAuthor = openAuthor; self.extras = extras
     }
 
     /// Whose a row is and when, as assistive technology hears it before the message.
@@ -263,7 +277,7 @@ public struct LumiaMessageRow: View {
         HStack(alignment: .top, spacing: measures.avatar > 0 ? measures.beside : 0) {
             if measures.avatar > 0 {
                 if place.opens {
-                    LumiaAvatar(initials: initials(of: author), tone: tone, size: measures.avatar)
+                    LumiaAvatar(initials: initials(of: author), tone: tone, size: measures.avatar, picture: picture)
                         .onTapGesture { openAuthor?() }
                 } else {
                     // The avatar's column, empty: the message lines up under the block's first.
@@ -438,13 +452,15 @@ public struct MessageExtras {
 public struct QuoteDisplay {
     public let authorID: String
     public let name: String?
+    /// The quoted person's picture; nil for none.
+    public let picture: URL?
     public let text: String
     public let deleted: Bool
     public let quotesMe: Bool
     public let open: (() -> Void)?
 
-    public init(authorID: String, name: String?, text: String, deleted: Bool, quotesMe: Bool, open: (() -> Void)?) {
-        self.authorID = authorID; self.name = name; self.text = text; self.deleted = deleted; self.quotesMe = quotesMe; self.open = open
+    public init(authorID: String, name: String?, picture: URL? = nil, text: String, deleted: Bool, quotesMe: Bool, open: (() -> Void)?) {
+        self.authorID = authorID; self.name = name; self.picture = picture; self.text = text; self.deleted = deleted; self.quotesMe = quotesMe; self.open = open
     }
 }
 
@@ -728,12 +744,13 @@ public struct LumiaMemberRow: View {
     let name: String
     let subtitle: String?
     let tone: AvatarTone
+    let picture: URL?
     let tag: String?
     /// `ONLINE`, `AWAY` or `DO_NOT_DISTURB`, shown as a dot; nil for not here.
     let status: String?
 
-    public init(name: String, subtitle: String? = nil, tone: AvatarTone, tag: String? = nil, status: String? = nil) {
-        self.name = name; self.subtitle = subtitle; self.tone = tone; self.tag = tag; self.status = status
+    public init(name: String, subtitle: String? = nil, tone: AvatarTone, picture: URL? = nil, tag: String? = nil, status: String? = nil) {
+        self.name = name; self.subtitle = subtitle; self.tone = tone; self.picture = picture; self.tag = tag; self.status = status
     }
 
     private var dot: Color? {
@@ -747,7 +764,7 @@ public struct LumiaMemberRow: View {
 
     public var body: some View {
         HStack(spacing: LumiaTokens.space12) {
-            LumiaAvatar(initials: initials(of: name), tone: tone, size: LumiaTokens.avatarMd)
+            LumiaAvatar(initials: initials(of: name), tone: tone, size: LumiaTokens.avatarMd, picture: picture)
                 .overlay(alignment: .bottomTrailing) {
                     if let dot {
                         Circle().fill(dot).frame(width: 10, height: 10)
@@ -824,20 +841,21 @@ public struct LumiaRequestCard: View {
     let name: String
     let handle: String?
     let tone: AvatarTone
+    let picture: URL?
     let meta: String
     let busy: Bool
     let accept: () -> Void
     let decline: () -> Void
     let block: () -> Void
 
-    public init(name: String, handle: String?, tone: AvatarTone, meta: String, busy: Bool, accept: @escaping () -> Void, decline: @escaping () -> Void, block: @escaping () -> Void) {
-        self.name = name; self.handle = handle; self.tone = tone; self.meta = meta; self.busy = busy
+    public init(name: String, handle: String?, tone: AvatarTone, picture: URL? = nil, meta: String, busy: Bool, accept: @escaping () -> Void, decline: @escaping () -> Void, block: @escaping () -> Void) {
+        self.name = name; self.handle = handle; self.tone = tone; self.picture = picture; self.meta = meta; self.busy = busy
         self.accept = accept; self.decline = decline; self.block = block
     }
 
     public var body: some View {
         HStack(spacing: LumiaTokens.space12) {
-            LumiaAvatar(initials: initials(of: name), tone: tone, size: LumiaTokens.avatarLg)
+            LumiaAvatar(initials: initials(of: name), tone: tone, size: LumiaTokens.avatarLg, picture: picture)
             VStack(alignment: .leading, spacing: LumiaTokens.space2) {
                 Text(name).font(LumiaTokens.textAuthor.font).foregroundStyle(LumiaTokens.inkEmphasis.color)
                 if let handle, !handle.isEmpty {

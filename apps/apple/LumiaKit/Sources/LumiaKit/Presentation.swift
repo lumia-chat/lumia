@@ -1,6 +1,7 @@
 // Presentation helpers shared by the layouts: initials, the avatar tone an
 // id hashes to (the same nine as the web), times.
 import Foundation
+import LumiaFFI
 import SwiftUI
 
 public enum AvatarTone: String, CaseIterable, Sendable {
@@ -46,6 +47,18 @@ public func initials(of name: String) -> String {
     let parts = name.split(whereSeparator: \.isWhitespace).prefix(2)
     let s = parts.compactMap { $0.first.map { String($0).uppercased() } }.joined()
     return s.isEmpty ? "?" : s
+}
+
+/// The picture an account names, as the desktop shell's `avatar_url_of`
+/// has it: this account's own from its snapshot (`own`); anyone else's from
+/// what the servers list of them (`listed`), else from their profile looked
+/// up (`lookedUp`, asked only when no server lists them). Empty for none, and
+/// for no account. It is a path as the instance said it; `pictureURL(_:base:)`
+/// decides whether it is fetched at all.
+func avatarPath(of accountID: String, me: String, own: String, listed: (String) -> MemberSummary?, lookedUp: (String) -> MemberSummary?) -> String {
+    guard !accountID.isEmpty else { return "" }
+    if accountID == me { return own }
+    return (listed(accountID) ?? lookedUp(accountID))?.avatarUrl ?? ""
 }
 
 public func time(ofMicros micros: Int64) -> String {

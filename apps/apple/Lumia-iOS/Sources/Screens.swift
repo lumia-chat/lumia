@@ -57,6 +57,7 @@ struct RequestsScreen: View {
                                 name: session.name(of: r.fromAccountId),
                                 handle: (session.people[r.fromAccountId] ?? session.profile(of: r.fromAccountId))?.handle,
                                 tone: .of(r.fromAccountId),
+                                picture: session.picture(of: r.fromAccountId),
                                 meta: meta(r),
                                 busy: busy == r.requestId,
                                 accept: { Task { await respond(r.requestId, "accept") } },
@@ -97,6 +98,7 @@ struct RequestRow: View {
     let name: String
     let handle: String?
     let tone: AvatarTone
+    let picture: URL?
     let meta: String
     let busy: Bool
     let accept: () -> Void
@@ -106,7 +108,7 @@ struct RequestRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: LumiaTokens.space10) {
             HStack(spacing: LumiaTokens.space12) {
-                LumiaAvatar(initials: initials(of: name), tone: tone, size: LumiaTokens.avatarLg)
+                LumiaAvatar(initials: initials(of: name), tone: tone, size: LumiaTokens.avatarLg, picture: picture)
                 VStack(alignment: .leading, spacing: LumiaTokens.space2) {
                     HStack(alignment: .firstTextBaseline, spacing: LumiaTokens.space6) {
                         Text(name).font(LumiaTokens.textAuthor.font).foregroundStyle(LumiaTokens.inkEmphasis.color)
@@ -692,7 +694,7 @@ struct NewMessageScreen: View {
                         ForEach(list, id: \.accountId) { p in
                             let name = p.displayName.isEmpty ? p.handle : p.displayName
                             HStack(spacing: LumiaTokens.space10) {
-                                LumiaAvatar(initials: initials(of: name), tone: .of(p.accountId), size: LumiaTokens.avatarSm)
+                                LumiaAvatar(initials: initials(of: name), tone: .of(p.accountId), size: LumiaTokens.avatarSm, picture: session.picture(of: p.accountId))
                                 VStack(alignment: .leading, spacing: 0) {
                                     Text(name).font(LumiaTokens.textMember.font).foregroundStyle(LumiaTokens.ink.color)
                                     Text("@\(p.handle)").font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkQuiet.color)
@@ -752,7 +754,9 @@ struct ProfileScreen: View {
     @State private var loaded = false
 
     var body: some View {
-        PanelScreen(back: "Home", title: "Profile", subtitle: "How people see you", actions: []) {
+        PanelScreen(back: "Home", title: "Profile", subtitle: "How people see you", actions: [], lead: {
+            LumiaAvatar(initials: initials(of: session.selfName), tone: .of(session.me), size: LumiaTokens.avatarMd, picture: session.picture(of: session.me))
+        }) {
             ScrollView {
                 VStack(alignment: .leading, spacing: LumiaTokens.space12) {
                     LumiaCard(title: "Status", subtitle: "What people see beside your name in a server's member list.", width: nil) {
