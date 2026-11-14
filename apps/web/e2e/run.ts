@@ -628,7 +628,8 @@ async function account(which: string, taken: string, stamp: number) {
 // the system is in and "System" follows it again; Compact draws the
 // small avatar and a block in less room; both are this browser's and are
 // still there after a reload. An account of its own with three quick
-// messages, so the channel is one block of known size.
+// messages, so the channel is one block of known size, the second with a
+// reaction, which Minimal does not draw.
 async function preferencesStep(which: string, stamp: number) {
   const dir = resolve(work, `cli-preferences-${which}`);
   const handle = `pref${which}${stamp}`;
@@ -648,6 +649,13 @@ async function preferencesStep(which: string, stamp: number) {
     await page.getByRole("textbox", { name: "Password" }).fill(password);
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
     await page.getByText(`Three of ${stamp}`).waitFor();
+    const part = (line: string) => page.locator(".lu-msglist .lu-msg__part", { has: page.locator(".lu-msg__body", { hasText: `${line} of ${stamp}` }) });
+    await part("Two").hover();
+    await part("Two").getByRole("toolbar", { name: "Message actions" }).getByRole("button", { name: "Add reaction" }).click();
+    const picker = page.getByRole("dialog", { name: "Emoji" });
+    await picker.getByLabel("Search emoji").fill("thumbs up");
+    await picker.getByRole("button", { name: "thumbs up", exact: true }).first().click();
+    await part("Two").getByRole("button", { name: "You reacted with 👍" }).waitFor();
     const block = () =>
       page.evaluate(() => {
         const message = document.querySelector(".lu-msglist .lu-msg");
@@ -685,6 +693,7 @@ async function preferencesStep(which: string, stamp: number) {
     await goto(page, `${base}/app`);
     await page.getByText(`Three of ${stamp}`).waitFor();
     if ((await ground()) !== DARK) throw new Error(`after a reload the ground is ${await ground()}: Dark was not kept`);
+    await part("Two").getByRole("button", { name: "You reacted with 👍" }).waitFor();
     const compact = await block();
     if (compact.avatar !== 28) throw new Error(`a compact message's avatar is ${compact.avatar} wide`);
     if (compact.height >= comfortable.height) throw new Error(`a compact block is ${compact.height} tall and a comfortable one ${comfortable.height}`);
@@ -702,6 +711,12 @@ async function preferencesStep(which: string, stamp: number) {
     if ((await preset.locator('[aria-selected="true"]').count()) !== 0) throw new Error("Custom still selects a preset");
     await page.getByRole("tablist", { name: "Spacing" }).getByRole("tab", { name: "Tight" }).click();
     if ((await preset.getByRole("tab", { name: "Minimal" }).getAttribute("aria-selected")) !== "true") throw new Error("Minimal's values again are not Minimal");
+    const reactions = page.getByRole("tablist", { name: "Reactions" });
+    if ((await reactions.getByRole("tab", { name: "Hidden" }).getAttribute("aria-selected")) !== "true") throw new Error("Minimal did not hide reactions");
+    await reactions.getByRole("tab", { name: "Shown" }).click();
+    await page.getByText("Custom: these settings match no preset.").waitFor();
+    await reactions.getByRole("tab", { name: "Hidden" }).click();
+    if ((await preset.getByRole("tab", { name: "Minimal" }).getAttribute("aria-selected")) !== "true") throw new Error("reactions hidden again are not Minimal");
     await goto(page, `${base}/app`);
     await page.getByText(`Three of ${stamp}`).waitFor();
     const lines = await page.evaluate(() =>
@@ -721,6 +736,12 @@ async function preferencesStep(which: string, stamp: number) {
       if (!l.time || !l.name) throw new Error(`a line's time and name are not on its text's first line: ${JSON.stringify(l)}`);
       if (l.size !== "20px") throw new Error(`the text is ${l.size} at font size 20`);
     }
+    // Hidden reactions: no chips, no add chip, no room kept for them, and Add reaction still in the toolbar.
+    if ((await page.locator(".lu-msglist .lu-reaction, .lu-msglist .lu-reaction-add").count()) !== 0) throw new Error("Minimal drew a reaction");
+    const [two, three] = [(await part("Two").boundingBox())?.height, (await part("Three").boundingBox())?.height];
+    if (!two || !three || Math.abs(two - three) > 0.5) throw new Error(`the line with a hidden reaction is ${two} tall and the one without ${three}`);
+    await part("Two").hover();
+    await part("Two").getByRole("toolbar", { name: "Message actions" }).getByRole("button", { name: "Add reaction" }).waitFor();
     await page.screenshot({ path: `${out}/${which}-minimal.png` });
     phase("kept through sign-out");
     await page.getByRole("button", { name: /account menu/ }).click();
@@ -730,7 +751,7 @@ async function preferencesStep(which: string, stamp: number) {
   } finally {
     await ctx.close();
   }
-  console.log(`  ${which}: opened Preferences from the account menu, chose each appearance against the system's, drew a block compact and then as Minimal's lines at 20, Custom between, and kept them through a reload and a sign-out, in ${Date.now() - t0} ms`);
+  console.log(`  ${which}: opened Preferences from the account menu, chose each appearance against the system's, drew a block compact with its reaction and then as Minimal's lines at 20 with none, Custom between, and kept them through a reload and a sign-out, in ${Date.now() - t0} ms`);
 }
 
 // A server's settings (architecture 6.7): its owner renames it, keeps its

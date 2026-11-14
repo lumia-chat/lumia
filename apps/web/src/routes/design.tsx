@@ -1165,6 +1165,45 @@ const STYLED_BODY: BodyBlock[] = [
 const EDITED_CODE: BodyBlock[] = [para("Fixed the typo:"), { kind: "code", text: "bun run e2e" }];
 const PASTE = "A paste of many lines keeps them all:\nline two\nline three\nline four\nline five\nline six\nline seven\nline eight\nline nine, past which the field scrolls\nline ten\nline eleven";
 
+/** Minimal's lines; with reactions hidden a message is handed no chips, as the timeline hands it none. */
+function OneLine(props: { label: string; reactions: boolean }) {
+  return (
+    <MessageList label={props.label} layout="one_line" spacing="tight" avatars="hidden" class="pieces__list">
+      <NoticeLine time="10:02 AM" datetime="2026-11-02T10:02">
+        Leo Martins joined
+      </NoticeLine>
+      <Message
+        layout="one_line"
+        author={PEOPLE.leo.name}
+        initials="LM"
+        tone="sky"
+        time="10:08 AM"
+        datetime="2026-11-02T10:08"
+        actions={false}
+        onOpenProfile={() => {}}
+        parts={[{ time: "10:09 AM", datetime: "2026-11-02T10:09", children: "Also: who do I ask about a desk by the windows? The ones by the plants get the morning light and I would happily trade a monitor for one.", reactions: props.reactions ? [{ emoji: "👋", label: "Wave", count: 3 }] : [] }]}
+      >
+        Thank you all, what a warm welcome! My calendar is open for coffee chats this week.
+      </Message>
+      <Message
+        layout="one_line"
+        author={PEOPLE.priya.name}
+        initials="PR"
+        tone="peach"
+        time="10:11 AM"
+        datetime="2026-11-02T10:11"
+        actions={false}
+        mentioned
+        onOpenProfile={() => {}}
+        reference={<ReplyRef name={PEOPLE.leo.name} initials="LM" tone="sky" text="Also: who do I ask about a desk by the windows?" />}
+        reactions={props.reactions ? [{ emoji: "👍", label: "Thumbs up", count: 1, defaultSelected: true }] : []}
+      >
+        Ask Sam, they keep the seating plan.
+      </Message>
+    </MessageList>
+  );
+}
+
 function Pieces() {
   return (
     <div class="pieces">
@@ -1226,39 +1265,12 @@ function Pieces() {
         </MessageList>
       </section>
       <section>
-        <h2>Minimal: one line, Tight</h2>
-        <MessageList label="Minimal" layout="one_line" spacing="tight" avatars="hidden" class="pieces__list">
-          <NoticeLine time="10:02 AM" datetime="2026-11-02T10:02">
-            Leo Martins joined
-          </NoticeLine>
-          <Message
-            layout="one_line"
-            author={PEOPLE.leo.name}
-            initials="LM"
-            tone="sky"
-            time="10:08 AM"
-            datetime="2026-11-02T10:08"
-            actions={false}
-            onOpenProfile={() => {}}
-            parts={[{ time: "10:09 AM", datetime: "2026-11-02T10:09", children: "Also: who do I ask about a desk by the windows? The ones by the plants get the morning light and I would happily trade a monitor for one.", reactions: [{ emoji: "👋", label: "Wave", count: 3 }] }]}
-          >
-            Thank you all, what a warm welcome! My calendar is open for coffee chats this week.
-          </Message>
-          <Message
-            layout="one_line"
-            author={PEOPLE.priya.name}
-            initials="PR"
-            tone="peach"
-            time="10:11 AM"
-            datetime="2026-11-02T10:11"
-            actions={false}
-            mentioned
-            onOpenProfile={() => {}}
-            reference={<ReplyRef name={PEOPLE.leo.name} initials="LM" tone="sky" text="Also: who do I ask about a desk by the windows?" />}
-          >
-            Ask Sam, they keep the seating plan.
-          </Message>
-        </MessageList>
+        <h2>Minimal: one line, Tight, reactions hidden</h2>
+        <OneLine label="Minimal" reactions={false} />
+      </section>
+      <section>
+        <h2>The same lines with reactions shown (Custom)</h2>
+        <OneLine label="One line" reactions />
       </section>
       <section>
         <h2>Over the frame: the account menu, a server's menu, the profile card, a popover</h2>

@@ -208,7 +208,7 @@ export interface TimelineProps {
   items: TimelineItem[];
   label: string;
   /** How messages are drawn (Preferences). */
-  display: Pick<Display, "layout" | "spacing" | "avatars">;
+  display: Pick<Display, "layout" | "spacing" | "avatars" | "reactions">;
   me: string;
   authorName: (item: TimelineItem) => string;
   authorPhoto: (item: TimelineItem) => string | undefined;
@@ -467,17 +467,21 @@ export function Timeline(props: TimelineProps) {
       <MessageEdit value={m.body} onSave={(text) => save(m, text)} onCancel={() => props.onEditing(undefined)} onText={setEditText} room={editRoom()} />
     </Show>
   );
+  // Hidden (Preferences), a message draws no chips and so no row and no
+  // add chip after them; Add reaction stays in its toolbar.
   const chips = (m: TimelineItem): ReactionChipProps[] =>
-    m.reactions
-      .filter((r) => r.count > 0)
-      .map((r) => ({
-        emoji: r.reaction,
-        label: r.reaction,
-        count: r.count,
-        selected: r.me,
-        who: reactedWords(r, props.me, props.knownName),
-        onToggle: props.canAct ? () => react(m, r.reaction, r.me) : undefined,
-      }));
+    props.display.reactions === "hidden"
+      ? []
+      : m.reactions
+          .filter((r) => r.count > 0)
+          .map((r) => ({
+            emoji: r.reaction,
+            label: r.reaction,
+            count: r.count,
+            selected: r.me,
+            who: reactedWords(r, props.me, props.knownName),
+            onToggle: props.canAct ? () => react(m, r.reaction, r.me) : undefined,
+          }));
   const tools = (m: TimelineItem) => (
     <Show when={props.canAct && !m.deleted && props.editing !== m.id}>
       <MessageActions

@@ -27,7 +27,7 @@ import {
 import { ClientError, type ChannelSummary, type DeviceSummary, type DmMessageSummary, type InvitePreviewSummary, type MemberSummary, type MessageSummary, type PasskeySummary, type ProfileSummary, type SnapshotSummary } from "../client/bridge";
 import { SERVED_BY_INSTANCE, avatarSrc, client, pictureRefusal, savedInstance, dmChannelsQuery, dmMessagesQuery, enableNotifications, hasIdentityQuery, myStatus, peopleQuery, pushState, queryClient, readStatesQuery, rosterQuery, setMyStatus, snapshotQuery } from "../client/state";
 import { useNames } from "../client/names";
-import { FONT_SIZES, choosePreset, preferences, presetOf, setAppearance, setPreferences, type Appearance, type Avatars, type FontSize, type Layout, type Preset, type Spacing } from "../client/preferences";
+import { FONT_SIZES, choosePreset, preferences, presetOf, setAppearance, setPreferences, type Appearance, type Avatars, type FontSize, type Layout, type Preset, type Reactions, type Spacing } from "../client/preferences";
 import { addPasskey, passkeysAvailable } from "../client/passkeys";
 import { initialsOf, toneFor } from "./app";
 import { Compose, Timeline, createMarkRead, quoteOf, thrownRefusal, type Refusal, type Replying, type TimelineItem } from "./timeline";
@@ -1031,6 +1031,17 @@ function Preferences(props: HomeProps) {
                 tabs={FONT_SIZES.map((size) => ({ id: String(size), label: String(size) }))}
                 value={String(preferences().fontSize)}
                 onChange={(id) => setPreferences({ fontSize: Number(id) as FontSize })}
+              />
+            </PreferenceRow>
+            <PreferenceRow label="Reactions">
+              <SegmentedTabs
+                label="Reactions"
+                tabs={[
+                  { id: "shown", label: "Shown" },
+                  { id: "hidden", label: "Hidden" },
+                ]}
+                value={preferences().reactions}
+                onChange={(id) => setPreferences({ reactions: id as Reactions })}
               />
             </PreferenceRow>
           </div>

@@ -4,7 +4,7 @@
 // in its storage, never sent to the instance, and still there after
 // signing out.
 //
-// How messages are drawn is six settings, and Comfortable, Compact and
+// How messages are drawn is seven settings, and Comfortable, Compact and
 // Minimal are presets that write their values: what is kept is the
 // values, and the preset shown is the one they match (plan step 9,
 // "Display settings").
@@ -20,6 +20,8 @@ export type Spacing = "roomy" | "cozy" | "tight";
 export type Avatars = "large" | "small" | "hidden";
 /** Shown where they are, or a link in their place. Nothing has either yet: no control until attachments and unfurling exist. */
 export type Media = "shown" | "link";
+/** A message's reaction chips under it, or none and no room kept for them; Add reaction stays in its toolbar either way. */
+export type Reactions = "shown" | "hidden";
 export type Preset = "comfortable" | "compact" | "minimal";
 
 /** The message text's size; every text in a message row, and the composer's, scales with it over 15. */
@@ -30,6 +32,7 @@ export interface Display {
   layout: Layout;
   spacing: Spacing;
   avatars: Avatars;
+  reactions: Reactions;
   images: Media;
   embeds: Media;
 }
@@ -43,16 +46,16 @@ export interface Preferences extends Display {
 
 /** What each preset writes. Font size is never part of one: it is often a need, and trying Compact should not undo it. */
 export const PRESETS: Record<Preset, Display> = {
-  comfortable: { layout: "grouped", spacing: "roomy", avatars: "large", images: "shown", embeds: "shown" },
-  compact: { layout: "grouped", spacing: "cozy", avatars: "small", images: "shown", embeds: "shown" },
-  minimal: { layout: "one_line", spacing: "tight", avatars: "hidden", images: "link", embeds: "link" },
+  comfortable: { layout: "grouped", spacing: "roomy", avatars: "large", reactions: "shown", images: "shown", embeds: "shown" },
+  compact: { layout: "grouped", spacing: "cozy", avatars: "small", reactions: "shown", images: "shown", embeds: "shown" },
+  minimal: { layout: "one_line", spacing: "tight", avatars: "hidden", reactions: "hidden", images: "link", embeds: "link" },
 };
 
 /** The preset these values are, or none ("Custom"). One line draws no avatar, so there they are not compared. */
 export function presetOf(d: Display): Preset | undefined {
   return (Object.keys(PRESETS) as Preset[]).find((name) => {
     const p = PRESETS[name];
-    return p.layout === d.layout && p.spacing === d.spacing && p.images === d.images && p.embeds === d.embeds && (d.layout === "one_line" || p.avatars === d.avatars);
+    return p.layout === d.layout && p.spacing === d.spacing && p.reactions === d.reactions && p.images === d.images && p.embeds === d.embeds && (d.layout === "one_line" || p.avatars === d.avatars);
   });
 }
 
@@ -78,6 +81,7 @@ export function readPreferences(stored: string | null): Preferences {
     spacing: oneOf(kept.spacing, ["roomy", "cozy", "tight"], DEFAULTS.spacing),
     avatars: oneOf(kept.avatars, ["large", "small", "hidden"], DEFAULTS.avatars),
     fontSize: oneOf(kept.fontSize, FONT_SIZES, DEFAULTS.fontSize),
+    reactions: oneOf(kept.reactions, ["shown", "hidden"], DEFAULTS.reactions),
     images: oneOf(kept.images, ["shown", "link"], DEFAULTS.images),
     embeds: oneOf(kept.embeds, ["shown", "link"], DEFAULTS.embeds),
     asideHidden: kept.asideHidden === true,
