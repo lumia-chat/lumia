@@ -139,7 +139,31 @@ export interface SnapshotSummary {
   channelInvitations: ChannelInvitationSummary[];
   /** Where this account has read each conversation, as the instance counted it; `readStates` keeps it current. */
   readStates: ReadStateSummary[];
+  /** The rail as this account arranged it, ready to draw (architecture 6.9): every server of `servers` placed once, which are in its order. */
+  rail: RailItem[];
 }
+/** One tile of the rail between Home and +: a server, or a folder of servers (architecture 6.9). */
+export type RailItem =
+  | { kind: "server"; serverId: string }
+  | {
+      kind: "folder";
+      folderId: string;
+      /** Empty for none: it reads as its servers (`railFolderWords`). */
+      name: string;
+      /** One of the nine avatar tones. */
+      tone: string;
+      serverIds: string[];
+    };
+/** One rail edit (`railEdit`) and what it takes. */
+export type RailEdit =
+  | { op: "moveTo"; args: { id: string; folder?: string; before?: string } }
+  | { op: "merge"; args: { dragged: string; onto: string; folderId: string } }
+  | { op: "intoFolder"; args: { serverId: string; folder: string } }
+  | { op: "outOfFolder"; args: { serverId: string } }
+  | { op: "newFolder"; args: { serverId: string; folderId: string } }
+  | { op: "deleteFolder"; args: { folder: string } }
+  | { op: "setFolder"; args: { folder: string; name: string; tone: string } }
+  | { op: "step"; args: { id: string; by: -1 | 1 } };
 /** A quote of another message of the conversation (architecture 6.6). */
 export interface QuoteSummary {
   messageId: string;
@@ -526,6 +550,31 @@ export class Bridge {
   /** Whether a server's deleted messages keep their place as "(deleted)" (architecture 6.7). */
   setShowDeleted(serverId: string, show: boolean): Promise<SnapshotSummary> {
     return this.call("setShowDeleted", serverId, show);
+  }
+  /**
+   * `PUT /account/rail`: keeps `items` as this account's rail, whole
+   * (architecture 6.9); its other devices hear of it through the account
+   * log. Resolves to the snapshot, its rail as the instance kept it.
+   * `INVALID_ARGUMENT` with `details.field` (`name`, `tone`, `folder_id`, `folders`).
+   */
+  arrangeRail(items: RailItem[]): Promise<SnapshotSummary> {
+    return this.call("arrangeRail", items);
+  }
+  /** One rail edit by the core's rules, answering the rail as it is to be (nothing is sent; `arrangeRail` keeps it). */
+  railEdit(items: RailItem[], edit: RailEdit): Promise<RailItem[]> {
+    return this.call("railEdit", items, edit.op, edit.args);
+  }
+  /** A new folder's id (UUIDv7). */
+  railNewFolderId(): Promise<string> {
+    return this.call("railNewFolderId");
+  }
+  /** The tone a folder made from this server gets. */
+  railToneOf(id: string): Promise<string> {
+    return this.call("railToneOf", id);
+  }
+  /** How a folder with no name reads: "Acme, Lumia and 2 more". */
+  railFolderWords(names: string[]): Promise<string> {
+    return this.call("railFolderWords", names);
   }
   /** `PUT /servers/{id}/icon`: as `setAvatar`, for a server's picture. */
   setServerIcon(serverId: string, picture: Uint8Array, mediaType: string): Promise<SnapshotSummary> {

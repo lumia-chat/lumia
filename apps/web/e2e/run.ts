@@ -947,6 +947,172 @@ async function asideStep(which: string, stamp: number) {
   console.log(`  ${which}: put the member list away and back in a wide window and kept it across a reload, slid it over a narrow one and put it away by the shade and by Escape, in ${Date.now() - t0} ms`);
 }
 
+// The rail's order and folders (architecture 6.9): three servers in the
+// order they were made; one moved up by its menu; a folder made by the
+// menu (New folder, then Move to folder for another), opened and closed,
+// named and given a tone in Folder settings, and kept across a reload with
+// whether it is open; the instance's snapshot has it. Then a server taken
+// out by the menu, a drag that Escape puts back, and a real drag of one
+// server onto another, which makes a folder of the two.
+async function railStep(which: string, stamp: number) {
+  const dir = resolve(work, `cli-rail-${which}`);
+  const handle = `rail${which}${stamp}`;
+  lumia(dir, "instance", "add", instance);
+  lumia(dir, "account", "create", "--handle", handle, "--password", password);
+  for (const name of ["Rail A", "Rail B", "Rail C"]) {
+    const id = lumia(dir, "server-create", name).match(/[0-9a-f-]{36}/)?.[0];
+    if (!id) throw new Error("no server id");
+    lumia(dir, "channel-create", id, "general");
+  }
+  const { ctx, page } = await open(which, "rail");
+  const t0 = Date.now();
+  try {
+    await trustCard(page);
+    await page.getByLabel("Email or handle").fill(handle);
+    await page.getByRole("textbox", { name: "Password" }).fill(password);
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await page.getByPlaceholder("Message #general").waitFor();
+    const rail = page.locator("nav.lu-rail");
+    const tile = (name: string) => rail.getByRole("button", { name: new RegExp(`^${name}(,|$)`) });
+    const folder = (label: string) => rail.getByRole("button", { name: new RegExp(`^Folder, ${label}(,|$)`) });
+    // Every tile's name, in order, without its counts.
+    const order = async () => (await rail.locator("[data-rail-tile]").evaluateAll((els) => els.map((e) => (e.getAttribute("aria-label") ?? "").replace(/, (unread messages|\d+ mentions?)$/, "")))).join(" | ");
+    const expect = async (want: string, what: string) => {
+      for (let i = 0; i < 50 && (await order()) !== want; i++) await Bun.sleep(100);
+      const got = await order();
+      if (got !== want) throw new Error(`${what}: the rail reads ${got}, not ${want}`);
+    };
+    const said = async (want: RegExp) => {
+      const live = rail.locator("[aria-live=polite]");
+      for (let i = 0; i < 50 && !want.test((await live.textContent()) ?? ""); i++) await Bun.sleep(100);
+      const got = (await live.textContent()) ?? "";
+      if (!want.test(got)) throw new Error(`announced "${got}", not ${want}`);
+    };
+    phase("order");
+    await expect("Rail A | Rail B | Rail C", "as made");
+    phase("move up");
+    await tile("Rail C").click({ button: "right" });
+    await page.getByRole("menu", { name: "Rail C" }).waitFor();
+    await page.screenshot({ path: `${out}/${which}-rail-menu.png` });
+    await page.getByRole("menuitem", { name: "Move up" }).click();
+    await expect("Rail A | Rail C | Rail B", "Rail C moved up");
+    await said(/^Rail C moved to position 2$/);
+    phase("new folder");
+    // The keyboard's way to a tile's menu.
+    await tile("Rail B").focus();
+    await page.keyboard.press("Shift+F10");
+    await page.getByRole("menuitem", { name: "New folder" }).click();
+    await folder("Rail B").waitFor();
+    phase("move to folder");
+    await tile("Rail A").click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Move to folder" }).click();
+    await page.getByRole("menu", { name: "Move to folder" }).getByRole("menuitem", { name: "Rail B" }).click();
+    await folder("Rail B and Rail A").waitFor();
+    await said(/^Rail A moved into Rail B$/);
+    phase("open and close");
+    await folder("Rail B and Rail A").click();
+    await rail.getByRole("list", { name: "Rail B and Rail A" }).waitFor();
+    if ((await folder("Rail B and Rail A").getAttribute("aria-expanded")) !== "true") throw new Error("an open folder does not say so");
+    await expect("Rail C | Folder, Rail B and Rail A | Rail B | Rail A", "open");
+    await page.screenshot({ path: `${out}/${which}-rail-open.png` });
+    await folder("Rail B and Rail A").click();
+    await rail.getByRole("list", { name: "Rail B and Rail A" }).waitFor({ state: "detached" });
+    await expect("Rail C | Folder, Rail B and Rail A", "closed");
+    await page.screenshot({ path: `${out}/${which}-rail-closed.png` });
+    await folder("Rail B and Rail A").click();
+    phase("folder settings");
+    await folder("Rail B and Rail A").click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Folder settings…" }).click();
+    const dialog = page.getByRole("dialog", { name: "Folder settings" });
+    await dialog.waitFor();
+    if ((await dialog.getByLabel("Name").getAttribute("placeholder")) !== "Rail B and Rail A") throw new Error("the name's placeholder is not the folder's servers");
+    await dialog.getByLabel("Name").fill("Work");
+    await dialog.getByRole("radio", { name: "Sky" }).click();
+    await page.screenshot({ path: `${out}/${which}-rail-settings.png` });
+    await dialog.getByRole("button", { name: "Save" }).click();
+    await folder("Work").waitFor();
+    phase("kept");
+    // Kept before the reload: the instance has answered.
+    const signIn = async () => {
+      const json = { "content-type": "application/json", accept: "application/json" };
+      const pair = (await (await fetch(`${instance}/api/v1/auth/sign-in/password`, { method: "POST", headers: json, body: JSON.stringify({ handleOrEmail: handle, password }) })).json()) as { accessToken?: string };
+      if (!pair.accessToken) throw new Error("the suite could not sign in");
+      return async () => (await (await fetch(`${instance}/api/v1/account/snapshot`, { headers: { ...json, authorization: `Bearer ${pair.accessToken}` } })).json()) as { rail?: { entries?: { serverId?: string; folder?: { name?: string; tone?: string; serverIds?: string[] } }[] } };
+    };
+    const snapshot = await signIn();
+    const folders = async () => (await snapshot()).rail?.entries?.flatMap((e) => (e.folder ? [e.folder] : [])) ?? [];
+    for (let i = 0; i < 50 && !(await folders()).some((f) => f.name === "Work"); i++) await Bun.sleep(100);
+    const work1 = (await folders()).find((f) => f.name === "Work");
+    if (work1?.tone !== "sky" || work1.serverIds?.length !== 2) throw new Error(`the instance holds ${JSON.stringify(await snapshot())}`);
+    await page.reload();
+    await page.getByPlaceholder("Message #general").waitFor();
+    await expect("Rail C | Folder, Work | Rail B | Rail A", "after a reload, open");
+    if (!(await rail.locator(".lu-rail__group.lu-tone-sky").count())) throw new Error("the folder is not in its tone");
+    phase("out of the folder");
+    await tile("Rail A").click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Remove from folder" }).click();
+    await expect("Rail C | Folder, Work | Rail B | Rail A", "Rail A out of Work");
+    await said(/^Rail A moved out of Work$/);
+    await folder("Work").click();
+    await expect("Rail C | Folder, Work | Rail A", "Work closed");
+    phase("drag");
+    // Where a tile is; asked again while it is drawn anew.
+    const boxOf = async (what: ReturnType<typeof tile>) => {
+      for (let i = 0; i < 20; i++) {
+        const box = await what.boundingBox().catch(() => null);
+        if (box) return box;
+        await Bun.sleep(100);
+      }
+      throw new Error("a tile is not on the rail");
+    };
+    const middle = async (name: string) => {
+      const box = await boxOf(tile(name));
+      return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+    };
+    const from = await middle("Rail A");
+    const to = await middle("Rail C");
+    // Escape puts it back.
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    await page.mouse.move(from.x, from.y - 20, { steps: 4 });
+    await page.mouse.move(to.x, to.y, { steps: 8 });
+    await rail.locator(".is-onto").waitFor();
+    await page.keyboard.press("Escape");
+    await rail.locator(".is-onto").waitFor({ state: "detached" });
+    await page.mouse.up();
+    await expect("Rail C | Folder, Work | Rail A", "a drag Escape put back");
+    // Onto a server: a folder of the two, no name, Folder settings not opened.
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    await page.mouse.move(from.x, from.y - 20, { steps: 4 });
+    await page.mouse.move(to.x, to.y, { steps: 8 });
+    await rail.locator(".is-onto").waitFor();
+    await page.screenshot({ path: `${out}/${which}-rail-drag.png` });
+    await page.mouse.up();
+    await folder("Rail C and Rail A").waitFor();
+    await expect("Folder, Rail C and Rail A | Folder, Work", "dragged onto Rail C");
+    if (await page.getByRole("dialog").count()) throw new Error("a folder made by a drag opened its settings");
+    for (let i = 0; i < 50 && (await folders()).length !== 2; i++) await Bun.sleep(100);
+    const kept = await folders();
+    if (kept.length !== 2 || kept[0]?.serverIds?.length !== 2 || kept[0]?.name) throw new Error(`the instance holds ${JSON.stringify(await snapshot())}`);
+    // Between: Work dragged above the new folder.
+    const work = await boxOf(folder("Work"));
+    const top = await boxOf(folder("Rail C and Rail A"));
+    await page.mouse.move(work.x + work.width / 2, work.y + work.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(work.x + work.width / 2, work.y - 10, { steps: 4 });
+    await page.mouse.move(top.x + top.width / 2, top.y + 4, { steps: 8 });
+    await rail.locator(".lu-rail__line").waitFor();
+    await page.screenshot({ path: `${out}/${which}-rail-between.png` });
+    await page.mouse.up();
+    await expect("Folder, Work | Folder, Rail C and Rail A", "Work dragged first");
+    await said(/^Work moved to position 1$/);
+  } finally {
+    await ctx.close();
+  }
+  console.log(`  ${which}: moved a server by its menu, made a folder by the menu and moved another into it, opened, closed, named and toned it, kept it across a reload as the instance has it, took a server out, dragged one onto another and a folder above it, in ${Date.now() - t0} ms`);
+}
+
 // Being in channels and server DMs (architecture 6.8 and 6.4): a member
 // is in the server's default channel only, finds another in Browse,
 // reads it before joining with Join where the composer would be, joins
@@ -1808,6 +1974,7 @@ try {
       ["server settings", () => serverSettings(which, stamp)],
       ["autoscroll", () => autoscrollStep(which, stamp)],
       ["aside", () => asideStep(which, stamp)],
+      ["rail", () => railStep(which, stamp)],
       ["membership", () => membershipStep(which, stamp)],
       ["replies", () => repliesStep(which, stamp)],
       ["editing", () => editingStep(which, stamp)],

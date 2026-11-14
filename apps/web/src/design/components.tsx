@@ -586,6 +586,8 @@ export function MemberList(props: MemberListProps) {
 /* ── Navigation ──────────────────────────────────────────── */
 
 export interface RailServer {
+  /** What its menu and a drag name it by; without one it neither drags nor has a menu. */
+  id?: string;
   name: string;
   initials: string;
   /** The server's picture; its initials stand in without one, or while it fails to load. */
@@ -597,13 +599,47 @@ export interface RailServer {
   onClick?: () => void;
 }
 
+/** The nine tones, in the order the core hashes an id over (a folder's tone is one of them). */
+export const TONES: Tone[] = ["peach", "blue", "purple", "mint", "amber", "sky", "stone", "green", "indigo"];
+
+export interface RailFolder {
+  id: string;
+  /** Its name, or how it reads without one ("Acme, Lumia and 2 more"). */
+  label: string;
+  tone: Tone;
+  /** Open, it is its glyph and then its servers in a column of its tone. */
+  open?: boolean;
+  servers: RailServer[];
+  onToggle?: () => void;
+}
+
+/** A tile between Home and +: a server, or a folder of servers (architecture 6.9). */
+export type RailTile = ({ kind: "server" } & RailServer) | ({ kind: "folder" } & RailFolder);
+
+/**
+ * Where a dragged tile would land: between tiles, on the rail or in an
+ * open folder (`folder`), before `before` or at the end; or onto a tile,
+ * a server's or a folder's (`folder`).
+ */
+export type RailDrop = { kind: "between"; folder?: string; before?: string } | { kind: "onto"; id: string; folder: boolean };
+
 export interface ServerRailProps {
   logoSrc: string;
   homeLabel?: string;
   homeUnread?: number;
   /** Home is the current place (no server is). */
   homeCurrent?: boolean;
+  /** Servers alone, in order; `items` draws folders too. */
   servers?: RailServer[];
+  items?: RailTile[];
+  /** A tile's menu was asked for (right-click, Shift+F10, the context menu key). */
+  onMenu?: (id: string, anchor: HTMLElement) => void;
+  /** A tile was dragged and let go somewhere it can go; without this nothing drags. */
+  onDrop?: (id: string, drop: RailDrop) => void;
+  /** What the last move did, said politely to assistive technology. */
+  announce?: string;
+  /** A drag held still, for the gallery: the tile lifted, where it would land, and its ghost's place in the rail. */
+  still?: { id: string; drop: RailDrop | null; ghost: { left: number; top: number } };
   /**
    * The signed-in person at the foot of the rail. `offline` is the dot of
    * someone who is not connected; `menuOpen` says the button's menu is up;
@@ -615,14 +651,246 @@ export interface ServerRailProps {
   class?: string;
 }
 
-/** The far-left server rail. */
+/** ", 3 mentions", ", unread messages" or nothing: what a tile's label adds. */
+function railCounts(mentions: number | undefined, unread: boolean | undefined): string {
+  return mentions ? ", " + mentions + (mentions === 1 ? " mention" : " mentions") : unread ? ", unread messages" : "";
+}
+
+// How far apart the rail's tiles are, halved: where a line between two goes.
+const RAIL_HALF_GAP = 6;
+
+type RailDrag = { id: string; kind: "server" | "folder"; x: number; y: number; grabX: number; grabY: number; drop: RailDrop | null; line: number | null };
+
+/** The far-left server rail: Home, the servers and folders as the account arranged them, +, and the account. */
 export function ServerRail(props: ServerRailProps) {
   const homeLabel = () => props.homeLabel ?? "Lumia Home — personal messages";
+  const items = (): RailTile[] => props.items ?? (props.servers ?? []).map((s) => ({ kind: "server" as const, ...s }));
+  let nav: HTMLElement | undefined;
+  const [drag, setDrag] = createSignal<RailDrag | null>(null);
+  const [stillLine, setStillLine] = createSignal<number | null>(null);
+
+  const tileEl = (id: string) => nav?.querySelector<HTMLElement>(`[data-rail-tile="${id}"]`) ?? null;
+  const itemEl = (id: string) => nav?.querySelector<HTMLElement>(`[data-rail-item="${id}"]`) ?? null;
+  // Where a line for `drop` goes, from the rail's top; none for a drop onto a tile.
+  const lineFor = (drop: RailDrop | null): number | null => {
+    if (!nav || !drop || drop.kind !== "between") return null;
+    const top = nav.getBoundingClientRect().top;
+    if (drop.before) {
+      const el = drop.folder ? tileEl(drop.before) : itemEl(drop.before);
+      return el ? el.getBoundingClientRect().top - RAIL_HALF_GAP - top : null;
+    }
+    const level = [...nav.querySelectorAll<HTMLElement>(drop.folder ? `[data-rail-in="${drop.folder}"]` : "[data-rail-item]")];
+    const last = level[level.length - 1];
+    return last ? last.getBoundingClientRect().bottom + RAIL_HALF_GAP - top : null;
+  };
+  // Where a tile dragged to (x, y) would land. Over a tile, its top or bottom
+  // quarter is between and its middle half onto; a folder goes only between
+  // the rail's own items. Over itself, or off the rail, nowhere.
+  const dropAt = (x: number, y: number, d: RailDrag): RailDrop | null => {
+    if (!nav) return null;
+    const r = nav.getBoundingClientRect();
+    if (x < r.left - 24 || x > r.right + 24 || y < r.top || y > r.bottom) return null;
+    const folderDrag = d.kind === "folder";
+    const els = [...nav.querySelectorAll<HTMLElement>(folderDrag ? "[data-rail-item]" : "[data-rail-tile]")];
+    const idOf = (el: HTMLElement) => (folderDrag ? el.dataset.railItem : el.dataset.railTile) ?? "";
+    const el = els.find((e) => y < e.getBoundingClientRect().bottom + RAIL_HALF_GAP);
+    if (!el) return els.length ? { kind: "between" } : null;
+    const id = idOf(el);
+    if (id === d.id) return null;
+    const b = el.getBoundingClientRect();
+    const rel = (y - b.top) / b.height;
+    const kind = el.dataset.railKind;
+    const inFolder = folderDrag ? undefined : el.dataset.railIn;
+    if (!folderDrag && rel >= 0.25 && rel <= 0.75) return { kind: "onto", id, folder: kind === "folder" };
+    if (folderDrag ? rel < 0.5 : rel < 0.25) return { kind: "between", folder: inFolder, before: id };
+    // Under an open folder's glyph: its first place.
+    if (!folderDrag && el.dataset.railOpen) {
+      const first = nav.querySelector<HTMLElement>(`[data-rail-in="${id}"]`);
+      return { kind: "between", folder: id, before: first?.dataset.railTile };
+    }
+    const level = els.filter((e) => (folderDrag ? true : (e.dataset.railIn ?? "") === (inFolder ?? "")));
+    const next = level[level.indexOf(el) + 1];
+    return { kind: "between", folder: inFolder, before: next ? idOf(next) : undefined };
+  };
+
+  let press: { id: string; kind: "server" | "folder"; x: number; y: number; el: HTMLElement } | null = null;
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key !== "Escape") return;
+    e.preventDefault();
+    e.stopPropagation();
+    end();
+  };
+  const onMove = (e: PointerEvent) => {
+    if (!press) return;
+    let d = drag();
+    if (!d) {
+      if (Math.hypot(e.clientX - press.x, e.clientY - press.y) < 5) return;
+      const b = press.el.getBoundingClientRect();
+      d = { id: press.id, kind: press.kind, x: e.clientX, y: e.clientY, grabX: press.x - b.left, grabY: press.y - b.top, drop: null, line: null };
+      document.addEventListener("keydown", onKey, true);
+    }
+    const drop = dropAt(e.clientX, e.clientY, d);
+    setDrag({ ...d, x: e.clientX, y: e.clientY, drop, line: lineFor(drop) });
+  };
+  const onUp = () => {
+    const d = drag();
+    end();
+    if (!d) return;
+    // The press that ends a drag is not a click on the tile it began on.
+    const swallow = (e: MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    window.addEventListener("click", swallow, true);
+    setTimeout(() => window.removeEventListener("click", swallow, true), 0);
+    if (d.drop) props.onDrop?.(d.id, d.drop);
+  };
+  const end = () => {
+    press = null;
+    setDrag(null);
+    window.removeEventListener("pointermove", onMove);
+    window.removeEventListener("pointerup", onUp);
+    window.removeEventListener("pointercancel", end);
+    document.removeEventListener("keydown", onKey, true);
+  };
+  onCleanup(end);
+  onMount(() => {
+    // The gallery's still drag: its line once the tiles are laid out.
+    if (props.still) requestAnimationFrame(() => setStillLine(lineFor(props.still?.drop ?? null)));
+  });
+  const down = (e: PointerEvent & { currentTarget: HTMLElement }, id: string | undefined, kind: "server" | "folder") => {
+    if (!id || !props.onDrop || props.still || e.button !== 0 || e.pointerType === "touch") return;
+    press = { id, kind, x: e.clientX, y: e.clientY, el: e.currentTarget };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", end);
+  };
+  // A tile's menu: right-click, Shift+F10 or the context menu key.
+  const menuKeys = (e: KeyboardEvent & { currentTarget: HTMLElement }, id: string | undefined) => {
+    if (!id || !props.onMenu || !((e.key === "F10" && e.shiftKey) || e.key === "ContextMenu")) return;
+    e.preventDefault();
+    props.onMenu(id, e.currentTarget);
+  };
+  const menuClick = (e: MouseEvent & { currentTarget: HTMLElement }, id: string | undefined) => {
+    if (!id || !props.onMenu) return;
+    e.preventDefault();
+    props.onMenu(id, e.currentTarget);
+  };
+
+  const shown = () => (props.still ? { id: props.still.id, drop: props.still.drop } : drag());
+  const lifted = (id: string | undefined) => !!id && shown()?.id === id;
+  const onto = (id: string | undefined) => {
+    const d = shown()?.drop;
+    return !!id && d?.kind === "onto" && d.id === id;
+  };
+  const line = () => (props.still ? stillLine() : drag()?.line ?? null);
+  const find = (id: string): RailTile | undefined => {
+    for (const t of items()) {
+      if (t.kind === "server" ? t.id === id : t.id === id) return t;
+      if (t.kind === "folder") {
+        const s = t.servers.find((x) => x.id === id);
+        if (s) return { kind: "server", ...s };
+      }
+    }
+    return undefined;
+  };
+
+  const serverTile = (s: RailServer, folder?: string) => (
+    <button
+      type="button"
+      aria-label={s.name + railCounts(s.mentions, s.unread)}
+      aria-current={s.current ? "true" : undefined}
+      onClick={() => s.onClick?.()}
+      onPointerDown={(e) => down(e, s.id, "server")}
+      onContextMenu={(e) => menuClick(e, s.id)}
+      onKeyDown={(e) => menuKeys(e, s.id)}
+      data-rail-tile={s.id}
+      data-rail-kind="server"
+      data-rail-in={folder}
+      class={cx("lu-rail__server", s.current && "is-current", s.src && "has-photo", "lu-tile-ink-" + (s.ink ?? "default"), lifted(s.id) && "is-lifted", onto(s.id) && "is-onto")}
+    >
+      <Face initials={s.initials} src={s.src} />
+      <Show when={s.mentions} fallback={<Show when={s.unread}><Badge dot ring="rail" class="lu-rail__dot" /></Show>}>
+        <Badge count={s.mentions} ring="rail" aria-hidden="true" class="lu-rail__badge" />
+      </Show>
+    </button>
+  );
+  const minis = (f: RailFolder) => (
+    <For each={f.servers.slice(0, 4)}>
+      {(s) => (
+        <span class={cx("lu-rail__mini", "lu-tile-ink-" + (s.ink ?? "default"))}>
+          <Face initials={s.initials} src={s.src} />
+        </span>
+      )}
+    </For>
+  );
+  const folderTile = (f: RailFolder) => {
+    const mentions = () => f.servers.reduce((n, s) => n + (s.mentions ?? 0), 0);
+    const unread = () => f.servers.some((s) => s.unread);
+    return (
+      <button
+        type="button"
+        aria-label={"Folder, " + f.label + railCounts(mentions(), unread())}
+        aria-expanded="false"
+        onClick={() => f.onToggle?.()}
+        onPointerDown={(e) => down(e, f.id, "folder")}
+        onContextMenu={(e) => menuClick(e, f.id)}
+        onKeyDown={(e) => menuKeys(e, f.id)}
+        data-rail-tile={f.id}
+        data-rail-kind="folder"
+        class={cx("lu-rail__folder", "lu-tone-" + f.tone, lifted(f.id) && "is-lifted", onto(f.id) && "is-onto")}
+      >
+        {minis(f)}
+        <Show when={mentions()} fallback={<Show when={unread()}><Badge dot ring="rail" class="lu-rail__dot" /></Show>}>
+          <Badge count={mentions()} ring="rail" aria-hidden="true" class="lu-rail__badge" />
+        </Show>
+      </button>
+    );
+  };
+  const openFolder = (f: RailFolder) => (
+    <div class={cx("lu-rail__group", "lu-tone-" + f.tone, lifted(f.id) && "is-lifted")}>
+      <button
+        type="button"
+        aria-label={"Folder, " + f.label}
+        aria-expanded="true"
+        onClick={() => f.onToggle?.()}
+        onPointerDown={(e) => down(e, f.id, "folder")}
+        onContextMenu={(e) => menuClick(e, f.id)}
+        onKeyDown={(e) => menuKeys(e, f.id)}
+        data-rail-tile={f.id}
+        data-rail-kind="folder"
+        data-rail-open="true"
+        class={cx("lu-rail__folderhead", onto(f.id) && "is-onto")}
+      >
+        <Icon name="folder" size={18} strokeWidth={1.9} />
+      </button>
+      <ul class="lu-rail__inner" aria-label={f.label}>
+        <For each={f.servers}>{(s) => <li>{serverTile(s, f.id)}</li>}</For>
+      </ul>
+    </div>
+  );
+  const ghost = () => {
+    const d = shown();
+    if (!d) return null;
+    const t = find(d.id);
+    if (!t) return null;
+    const at = props.still ? props.still.ghost : drag() ? { left: drag()!.x - drag()!.grabX, top: drag()!.y - drag()!.grabY } : null;
+    return at ? { t, at } : null;
+  };
+  const ghostBody = (t: RailTile) =>
+    t.kind === "server" ? (
+      <span class={cx("lu-rail__server", t.src && "has-photo", "lu-tile-ink-" + (t.ink ?? "default"))}>
+        <Face initials={t.initials} src={t.src} />
+      </span>
+    ) : (
+      <span class={cx("lu-rail__folder", "lu-tone-" + t.tone)}>{minis(t)}</span>
+    );
+
   return (
-    <nav aria-label="Home and servers" class={cx("lu-rail", props.class)}>
+    <nav ref={nav} aria-label="Home and servers" class={cx("lu-rail", drag() && "is-dragging", props.class)}>
       <button type="button" class={cx("lu-rail__home", props.homeCurrent && "is-current")} aria-current={props.homeCurrent ? "true" : undefined} onClick={() => props.onHome?.()} aria-label={homeLabel() + (props.homeUnread ? ", " + props.homeUnread + " unread" : "")}>
         <Show when={props.logoSrc}>
-          <img src={props.logoSrc} alt="" width={36} height={36} />
+          <img src={props.logoSrc} alt="" width={36} height={36} draggable={false} />
         </Show>
         <Show when={props.homeUnread}>
           <Badge count={props.homeUnread} ring="rail" aria-hidden="true" class="lu-rail__badge lu-rail__badge--home" />
@@ -630,26 +898,12 @@ export function ServerRail(props: ServerRailProps) {
       </button>
       <span aria-hidden="true" class="lu-rail__divider"></span>
       <ul class="lu-rail__list">
-        <For each={props.servers ?? []}>
-          {(s) => {
-            const extra = () => (s.mentions ? ", " + s.mentions + (s.mentions === 1 ? " mention" : " mentions") : s.unread ? ", unread messages" : "");
-            return (
-              <li>
-                <button
-                  type="button"
-                  aria-label={s.name + extra()}
-                  aria-current={s.current ? "true" : undefined}
-                  onClick={() => s.onClick?.()}
-                  class={cx("lu-rail__server", s.current && "is-current", s.src && "has-photo", "lu-tile-ink-" + (s.ink ?? "default"))}
-                >
-                  <Face initials={s.initials} src={s.src} />
-                  <Show when={s.mentions} fallback={<Show when={s.unread}><Badge dot ring="rail" class="lu-rail__dot" /></Show>}>
-                    <Badge count={s.mentions} ring="rail" aria-hidden="true" class="lu-rail__badge" />
-                  </Show>
-                </button>
-              </li>
-            );
-          }}
+        <For each={items()}>
+          {(t) => (
+            <li data-rail-item={t.id} data-rail-kind={t.kind}>
+              {t.kind === "server" ? serverTile(t) : t.open ? openFolder(t) : folderTile(t)}
+            </li>
+          )}
         </For>
       </ul>
       <button type="button" aria-label="Create, join or discover servers" class="lu-rail__add" onClick={() => props.onAddServer?.()}>
@@ -663,7 +917,45 @@ export function ServerRail(props: ServerRailProps) {
           </button>
         )}
       </Show>
+      <Show when={line() !== null}>
+        <span aria-hidden="true" class="lu-rail__line" style={{ top: line() + "px" }}></span>
+      </Show>
+      <Show when={ghost()}>
+        {(g) =>
+          props.still ? (
+            <span aria-hidden="true" class="lu-rail__ghost is-still" style={{ left: g().at.left + "px", top: g().at.top + "px" }}>
+              {ghostBody(g().t)}
+            </span>
+          ) : (
+            <Portal>
+              <span aria-hidden="true" class="lu-rail__ghost" style={{ left: g().at.left + "px", top: g().at.top + "px" }}>
+                {ghostBody(g().t)}
+              </span>
+            </Portal>
+          )
+        }
+      </Show>
+      <div class="lu-sr" role="status" aria-live="polite">
+        {props.announce}
+      </div>
     </nav>
+  );
+}
+
+export interface RailNoteProps {
+  text: string;
+  onDismiss?: () => void;
+}
+
+/** What went wrong with the rail (a move not kept), beside it until dismissed. */
+export function RailNote(props: RailNoteProps) {
+  return (
+    <Portal>
+      <div class="lu-railnote" role="alert">
+        <p class="lu-railnote__text">{props.text}</p>
+        <IconButton icon="close" label="Dismiss" size={28} strokeWidth={2} onClick={() => props.onDismiss?.()} />
+      </div>
+    </Portal>
   );
 }
 
@@ -2318,9 +2610,10 @@ export interface PopoverProps {
    * `below` hangs it under the anchor with their left edges in line (over
    * it when there is no room under, beside it at the window's end);
    * `beside` stands it to the anchor's right with their feet in line, as
-   * the account menu stands by the rail.
+   * the account menu stands by the rail; `right` stands it to the anchor's
+   * right with their tops in line, as a rail tile's menu.
    */
-  placement?: "below" | "beside";
+  placement?: "below" | "beside" | "right";
   closeLabel?: string;
   onClose: () => void;
   children?: JSX.Element;
@@ -2345,6 +2638,9 @@ export function Popover(props: PopoverProps) {
     if (r && props.placement === "beside") {
       left = r.right + 12;
       top = r.bottom - h;
+    } else if (r && props.placement === "right") {
+      left = r.right + 12;
+      top = r.top;
     } else if (r && r.right + w + 16 > vw && r.left - w - 12 >= 8) {
       left = r.left - w - 12;
       top = r.top - 8;
@@ -2419,7 +2715,7 @@ export interface MenuProps {
 /** A menu: the arrow keys, Home and End move through its items. */
 export function Menu(props: MenuProps) {
   const onKeyDown = (e: KeyboardEvent & { currentTarget: HTMLDivElement }) => {
-    const items = [...e.currentTarget.querySelectorAll<HTMLElement>('[role^="menuitem"]')];
+    const items = [...e.currentTarget.querySelectorAll<HTMLElement>('[role^="menuitem"]:not(:disabled)')];
     const i = items.indexOf(document.activeElement as HTMLElement);
     const next = e.key === "ArrowDown" ? (i + 1) % items.length : e.key === "ArrowUp" ? (i - 1 + items.length) % items.length : e.key === "Home" ? 0 : e.key === "End" ? items.length - 1 : -1;
     if (next < 0) return;
@@ -2466,17 +2762,33 @@ export interface MenuItemProps {
   hint?: string;
   /** The press, which says whether Shift was held. */
   onSelect?: (e: MouseEvent) => void;
+  disabled?: boolean;
+  /** Something that cannot be taken back, in the danger ink: "Delete folder". */
+  danger?: boolean;
+  /** It opens a menu of its own beside this one (`expanded` while that is open): a chevron at its end. */
+  submenu?: { expanded: boolean };
   children?: JSX.Element;
 }
 
 /** A command in a menu. */
 export function MenuItem(props: MenuItemProps) {
   return (
-    <button type="button" role="menuitem" class="lu-menu__item" onClick={(e) => props.onSelect?.(e)}>
+    <button
+      type="button"
+      role="menuitem"
+      class={cx("lu-menu__item", props.danger && "is-danger")}
+      disabled={props.disabled}
+      aria-haspopup={props.submenu ? "menu" : undefined}
+      aria-expanded={props.submenu ? props.submenu.expanded : undefined}
+      onClick={(e) => props.onSelect?.(e)}
+    >
       <Show when={props.icon}>{(icon) => <Icon name={icon()} size={16} strokeWidth={1.9} />}</Show>
       <span class="lu-menu__text">{props.children}</span>
       <Show when={props.hint}>
         <span class="lu-menu__hint">{props.hint}</span>
+      </Show>
+      <Show when={props.submenu}>
+        <Icon name="chevron-down" size={14} strokeWidth={2.2} class="lu-menu__more" />
       </Show>
     </button>
   );
@@ -2652,6 +2964,91 @@ export function Choice<T extends string | number>(props: ChoiceProps<T>) {
         </For>
       </div>
     </div>
+  );
+}
+
+const TONE_WORD: Record<Tone, string> = { peach: "Peach", blue: "Blue", purple: "Purple", mint: "Mint", amber: "Amber", sky: "Sky", stone: "Stone", green: "Green", indigo: "Indigo" };
+
+export interface ToneSwatchesProps {
+  label: string;
+  value: Tone;
+  onChange?: (tone: Tone) => void;
+  class?: string;
+}
+
+/** The nine tones as round swatches, one chosen: a radio group the arrow keys move through. */
+export function ToneSwatches(props: ToneSwatchesProps) {
+  const pick = (e: KeyboardEvent & { currentTarget: HTMLDivElement }) => {
+    const step = e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : e.key === "ArrowLeft" || e.key === "ArrowUp" ? -1 : 0;
+    if (!step) return;
+    e.preventDefault();
+    const next = TONES[(TONES.indexOf(props.value) + step + TONES.length) % TONES.length] ?? "blue";
+    props.onChange?.(next);
+    e.currentTarget.querySelector<HTMLElement>(`[data-tone="${next}"]`)?.focus();
+  };
+  return (
+    <div role="radiogroup" aria-label={props.label} class={cx("lu-swatches", props.class)} onKeyDown={pick}>
+      <For each={TONES}>
+        {(t) => (
+          <button type="button" role="radio" aria-checked={props.value === t} aria-label={TONE_WORD[t]} tabindex={props.value === t ? 0 : -1} data-tone={t} class={cx("lu-swatch", "lu-tone-" + t)} onClick={() => props.onChange?.(t)}>
+            <Show when={props.value === t}>
+              <Icon name="check" size={14} strokeWidth={2.6} />
+            </Show>
+          </button>
+        )}
+      </For>
+    </div>
+  );
+}
+
+export interface FolderSettingsProps {
+  name: string;
+  /** How the folder reads without a name: the field's placeholder. */
+  words: string;
+  tone: Tone;
+  onName?: (name: string) => void;
+  onTone?: (tone: Tone) => void;
+  onCancel?: () => void;
+  onSave?: () => void;
+  class?: string;
+}
+
+/** A folder's name and tone (architecture 6.9), opened from its menu. */
+export function FolderSettings(props: FolderSettingsProps) {
+  const hid = fieldId();
+  const lid = fieldId();
+  return (
+    <section role="dialog" aria-labelledby={hid} class={cx("lu-pop", "lu-pop--folder", props.class)}>
+      <h2 id={hid} class="lu-pop__title">
+        Folder settings
+      </h2>
+      <form
+        class="lu-pop__form lu-folderset"
+        onSubmit={(e) => {
+          e.preventDefault();
+          props.onSave?.();
+        }}
+      >
+        <div class="lu-folderset__name">
+          <TextField label="Name" value={props.name} placeholder={props.words} maxLength={50} autocomplete="off" onInput={(e) => props.onName?.(e.currentTarget.value)} />
+          <p class="lu-folderset__hint">Without a name it reads as its servers.</p>
+        </div>
+        <div class="lu-folderset__tone">
+          <span id={lid} class="lu-folderset__legend">
+            Colour
+          </span>
+          <ToneSwatches label="Colour" value={props.tone} onChange={(t) => props.onTone?.(t)} />
+        </div>
+        <div class="lu-pop__actions">
+          <Button variant="secondary" size="md" onClick={() => props.onCancel?.()}>
+            Cancel
+          </Button>
+          <Button variant="primary" size="md" type="submit">
+            Save
+          </Button>
+        </div>
+      </form>
+    </section>
   );
 }
 

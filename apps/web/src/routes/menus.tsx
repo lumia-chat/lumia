@@ -3,7 +3,8 @@
 // heading's plus (create a channel, browse them), "Add people" to a
 // channel and "Message someone" in a server (architecture 6.8), the
 // account menu on the rail's self avatar, and the profile card a
-// member's row or a message's author opens. From the Quiet Split and
+// member's row or a message's author opens; and a rail tile's menu and
+// Folder settings, which are rail.tsx's. From the Quiet Split and
 // Profile card boards; the popovers, which have no board, are drawn in
 // the card's vocabulary. One is open at a time, held by the app shell.
 import { For, Match, Show, Switch, createMemo, createSignal } from "solid-js";
@@ -14,6 +15,7 @@ import { channelRefusal, dmRefusal } from "./channels";
 import { useNames } from "../client/names";
 import { initialsOf, toneFor } from "./app";
 import { messagePerson } from "./home";
+import { FolderSettingsPop, RailMenu } from "./rail";
 
 /** What is open over the frame, and the element it opened from. */
 export type Over =
@@ -24,7 +26,9 @@ export type Over =
   | { kind: "newDm"; anchor: HTMLElement }
   | { kind: "invite"; anchor: HTMLElement }
   | { kind: "account"; anchor: HTMLElement }
-  | { kind: "person"; anchor: HTMLElement; accountId: string };
+  | { kind: "person"; anchor: HTMLElement; accountId: string }
+  | { kind: "railMenu"; anchor: HTMLElement; id: string }
+  | { kind: "folderSettings"; anchor: HTMLElement; folderId: string };
 
 export interface OverlayProps {
   over: Over;
@@ -130,6 +134,20 @@ export function Overlay(props: OverlayProps) {
         <AccountMenu {...props} />
       </Match>
       <Match when={props.over.kind === "person" && props.over}>{(over) => <PersonCard {...props} accountId={(over() as Extract<Over, { kind: "person" }>).accountId} />}</Match>
+      <Match when={props.over.kind === "railMenu" && props.over}>
+        {(over) => (
+          <RailMenu
+            id={(over() as Extract<Over, { kind: "railMenu" }>).id}
+            anchor={props.over.anchor}
+            snapshot={props.snapshot}
+            close={props.close}
+            toSettings={(folderId) => props.open({ kind: "folderSettings", anchor: props.over.anchor, folderId })}
+          />
+        )}
+      </Match>
+      <Match when={props.over.kind === "folderSettings" && props.over}>
+        {(over) => <FolderSettingsPop folderId={(over() as Extract<Over, { kind: "folderSettings" }>).folderId} anchor={props.over.anchor} snapshot={props.snapshot} close={props.close} />}
+      </Match>
     </Switch>
   );
 }

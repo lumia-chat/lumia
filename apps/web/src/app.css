@@ -16,6 +16,17 @@ a { color: var(--link); }
 /* The "Inline replies" board, at its size. */
 .gallery-replies { box-sizing: border-box; width: 960px; height: 800px; display: flex; padding: var(--space-24); background: var(--bg); }
 .gallery-replies__panel { flex: 1; min-height: 0; }
+/* The Server folders board: rails 520 tall in rounded frames, then the menus and Folder settings. */
+.gallery-folders { box-sizing: border-box; width: 1440px; min-height: 900px; display: flex; flex-direction: column; gap: var(--space-28); padding: var(--space-40) calc(var(--space-24) * 2); background: var(--bg); color: var(--ink); font-family: var(--font-sans); font-size: 15px; }
+.gallery-folders header h1 { margin: 0 0 var(--space-4); font-family: var(--font-display); font-size: 24px; font-weight: 700; letter-spacing: -0.01em; }
+.gallery-folders header p, .gallery-folders__note { margin: 0; font-size: 12.5px; color: var(--ink-muted); }
+.gallery-folders__row { display: flex; gap: var(--space-28); align-items: flex-start; }
+.gallery-folders__rails { display: flex; gap: calc(var(--space-10) * 2); }
+.gallery-folders__side { display: flex; flex-direction: column; gap: calc(var(--space-10) * 2); }
+.gallery-folders__figure { margin: 0; display: flex; flex-direction: column; gap: var(--space-12); align-items: center; }
+.gallery-folders__figure figcaption { width: 132px; font-size: 12.5px; line-height: 1.4; color: var(--ink-muted); text-align: center; }
+.gallery-folders__rail.lu-rail { min-height: 520px; border-radius: var(--radius-16); }
+.gallery-folders .lu-pop--folder { box-shadow: var(--shadow-floating); }
 .gallery-auth { min-height: 900px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-24); padding: var(--space-24); background: var(--bg); }
 .gallery-auth__logo { width: 150px; height: 138px; overflow: hidden; position: relative; }
 .gallery-auth__logo img { position: absolute; width: 246px; height: 246px; left: -49px; top: -57px; }

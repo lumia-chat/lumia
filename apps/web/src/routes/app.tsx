@@ -11,7 +11,8 @@
 // (architecture 6.6). Read state is drawn here: unread channels in the
 // strong ink, a count of mentions on a row, a server's dot and count on
 // the rail, the Mentions tile atop the sidebar (mentions.tsx), and the
-// badge.
+// badge. The rail's order and folders, its drags and its tiles' menus are
+// rail.tsx's (architecture 6.9).
 //
 // The board draws more than the product has: search, threads, saved,
 // attachments, pins, calls, role tags, and the composer's formatting,
@@ -32,6 +33,7 @@ import {
   JoinBar,
   Notice,
   QuickTiles,
+  RailNote,
   SearchField,
   ServerHeader,
   ServerRail,
@@ -47,6 +49,7 @@ import { ServerSettings } from "./server-settings";
 import { BrowsePage, ChannelMembersAside, YourSettingsPage, channelRefusal, joinChannel } from "./channels";
 import { Compose, ComposerNote, Timeline, createMarkRead, invitedWords, notNotifiedWords, quoteOf, refusalWords, type Refusal, type Replying, type TimelineItem } from "./timeline";
 import { MentionsPage } from "./mentions";
+import { dismissRailNote, dropOnRail, railNote, railSaid, railTiles } from "./rail";
 
 const TONES = ["peach", "blue", "purple", "mint", "amber", "sky", "stone", "green", "indigo"] as const;
 
@@ -638,7 +641,7 @@ export function App() {
             homeUnread={(snapshot.data?.pendingRequests.length ?? 0) + countsOf((c) => PERSONAL.has(c.kind)).mentions || undefined}
             onHome={() => goHome("dm", undefined, false)}
             onAddServer={() => goHome("add")}
-            servers={servers().map((s) => ({
+            items={railTiles(snapshot.data, (s) => ({
               name: s.name,
               initials: initialsOf(s.name),
               src: avatarSrc(s.iconUrl),
@@ -647,6 +650,9 @@ export function App() {
               mentions: serverCounts(s.serverId).mentions || undefined,
               onClick: () => goServer(s.serverId),
             }))}
+            onMenu={(id, anchor) => setOver({ kind: "railMenu", anchor, id })}
+            onDrop={(id, drop) => void dropOnRail(id, drop)}
+            announce={railSaid()}
             self={{
               name: selfName(),
               initials: initialsOf(selfName()),
@@ -898,6 +904,7 @@ export function App() {
           />
         )}
       </Show>
+      <Show when={railNote()}>{(text) => <RailNote text={text()} onDismiss={dismissRailNote} />}</Show>
     </>
   );
 }

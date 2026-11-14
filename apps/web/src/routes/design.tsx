@@ -66,8 +66,12 @@ import {
   TextField,
   ThreadPanel,
   TypingIndicator,
+  FolderSettings,
   icons,
   type IconName,
+  type RailDrop,
+  type RailServer,
+  type RailTile,
   type Tone,
 } from "../design/components";
 
@@ -989,15 +993,95 @@ function PhoneBoard() {
   );
 }
 
+// The canvas's "Server folders" boards (1440 by 900): the rail with a
+// folder closed and open, a tile dragged between two and onto one, a
+// server's and a folder's menu, and Folder settings.
+const WORK: RailServer[] = [
+  { id: "ns", name: "Northwind Studio", initials: "NS", ink: "indigo", unread: true },
+  { id: "os", name: "Open Source Guild", initials: "OS", ink: "green", mentions: 2 },
+  { id: "ds", name: "Design Systems Club", initials: "DS" },
+  { id: "lb", name: "Lumia Beta", initials: "LB", mentions: 1 },
+];
+
+function folderRail(open: boolean): RailTile[] {
+  return [
+    { kind: "server", id: "acme", name: "Acme", initials: "A", current: true },
+    { kind: "folder", id: "work", label: "Work", tone: "mint", open, servers: WORK },
+    { kind: "server", id: "tr", name: "Trail Runners", initials: "TR", ink: "amber" },
+  ];
+}
+
+function FoldersFigure(props: { caption: string; items: RailTile[]; still?: { id: string; drop: RailDrop | null; ghost: { left: number; top: number } } }) {
+  return (
+    <figure class="gallery-folders__figure">
+      <ServerRail logoSrc="/brand/lumia-original-icon.svg" class="gallery-folders__rail" items={props.items} still={props.still} />
+      <figcaption>{props.caption}</figcaption>
+    </figure>
+  );
+}
+
+function FoldersBoard() {
+  return (
+    <div class="gallery-folders">
+      <header>
+        <h1>Server rail: order and folders</h1>
+        <p>Drag a server to move it, onto another to make a folder. Home stays first and + last. The arrangement is this account’s, the same on every device.</p>
+      </header>
+      <div class="gallery-folders__row">
+        <div class="gallery-folders__rails">
+          <FoldersFigure caption="A closed folder: its first four servers, its tone, and its servers’ mentions added up." items={folderRail(false)} />
+          <FoldersFigure caption="Open: the folder’s glyph, then its servers in its tone. Open or closed is kept on each device." items={folderRail(true)} />
+          <FoldersFigure caption="Between: a tile’s top or bottom quarter, shown as a line in the accent. Escape puts it back." items={folderRail(false)} still={{ id: "tr", drop: { kind: "between", before: "work" }, ghost: { left: 34, top: 140 } }} />
+          <FoldersFigure caption="Onto: a tile’s middle half. Onto a server makes a folder of the two; onto a folder adds to it." items={folderRail(false)} still={{ id: "tr", drop: { kind: "onto", id: "acme", folder: false }, ghost: { left: 36, top: 70 } }} />
+        </div>
+        <div class="gallery-folders__side">
+          <div class="pieces__row pieces__row--top">
+            <div class="lu-menupair">
+              <Menu label="Open Source Guild" class="lu-menu--rail">
+                <MenuLabel>Open Source Guild</MenuLabel>
+                <MenuItem icon="arrow-up">Move up</MenuItem>
+                <MenuItem icon="arrow-down">Move down</MenuItem>
+                <MenuRule />
+                <MenuItem icon="folder-plus">New folder</MenuItem>
+                <MenuItem icon="folder-plus" submenu={{ expanded: true }}>
+                  Move to folder
+                </MenuItem>
+                <MenuItem icon="folder-remove">Remove from folder</MenuItem>
+              </Menu>
+              <Menu label="Move to folder" class="lu-menu--rail">
+                <MenuItem icon="folder">Games</MenuItem>
+                <MenuItem icon="folder">Acme and Trail Runners</MenuItem>
+              </Menu>
+            </div>
+            <Menu label="Work" class="lu-menu--rail">
+              <MenuLabel>Work</MenuLabel>
+              <MenuItem icon="arrow-up">Move up</MenuItem>
+              <MenuItem icon="arrow-down">Move down</MenuItem>
+              <MenuRule />
+              <MenuItem icon="preferences">Folder settings…</MenuItem>
+              <MenuRule />
+              <MenuItem icon="trash" danger>
+                Delete folder
+              </MenuItem>
+            </Menu>
+          </div>
+          <FolderSettings name="Work" words="Northwind Studio, Open Source Guild and 2 more" tone="mint" />
+          <p class="gallery-folders__note">A tile’s menu (right-click, Shift+F10 or the context menu key): the keyboard’s way to do everything a drag does.</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function DesignGallery() {
   const { theme, apply } = useTheme();
-  const [board, setBoard] = createSignal<"split" | "replies" | "home" | "requests" | "devices" | "signin" | "phone" | "pieces">("split");
+  const [board, setBoard] = createSignal<"split" | "replies" | "home" | "requests" | "devices" | "signin" | "phone" | "folders" | "pieces">("split");
   return (
     <div class="gallery">
       <header class="gallery__bar">
         <strong>Lumia design system</strong>
         <nav class="gallery__nav" aria-label="Boards">
-          <For each={[["split", "Quiet Split"], ["replies", "Inline replies"], ["home", "Home"], ["requests", "Requests"], ["devices", "Devices"], ["signin", "Sign in"], ["phone", "Phone"], ["pieces", "Pieces"]] as const}>
+          <For each={[["split", "Quiet Split"], ["replies", "Inline replies"], ["home", "Home"], ["requests", "Requests"], ["devices", "Devices"], ["signin", "Sign in"], ["phone", "Phone"], ["folders", "Server folders"], ["pieces", "Pieces"]] as const}>
             {([id, label]) => (
               <button type="button" class="gallery__tab" aria-pressed={board() === id} onClick={() => setBoard(id)}>
                 {label}
@@ -1015,7 +1099,7 @@ export function DesignGallery() {
         </nav>
       </header>
       <div class="gallery__board">
-        {board() === "split" ? <QuietSplit /> : board() === "replies" ? <RepliesBoard /> : board() === "home" ? <HomeBoard view="dm" /> : board() === "requests" ? <HomeBoard view="requests" /> : board() === "devices" ? <HomeBoard view="devices" /> : board() === "signin" ? <SignIn /> : board() === "phone" ? <PhoneBoard /> : <Pieces />}
+        {board() === "split" ? <QuietSplit /> : board() === "replies" ? <RepliesBoard /> : board() === "home" ? <HomeBoard view="dm" /> : board() === "requests" ? <HomeBoard view="requests" /> : board() === "devices" ? <HomeBoard view="devices" /> : board() === "signin" ? <SignIn /> : board() === "phone" ? <PhoneBoard /> : board() === "folders" ? <FoldersBoard /> : <Pieces />}
       </div>
     </div>
   );

@@ -4,9 +4,9 @@
 .lu-btn, .lu-iconbtn, .lu-reaction, .lu-reaction-add, .lu-textfield, .lu-searchfield, .lu-searchtrigger, .lu-check, .lu-composer,
 .lu-rail, .lu-serverhead, .lu-quick, .lu-chlist, .lu-segtabs, .lu-chhead, .lu-msg, .lu-sysmsg, .lu-divider, .lu-attach, .lu-threadsum,
 .lu-actions, .lu-mention, .lu-avatar, .lu-badge, .lu-tag, .lu-members, .lu-panel, .lu-card, .lu-shell, .lu-thread, .lu-typing, .lu-msglist,
-.lu-menu, .lu-pcard, .lu-pop, .lu-choice { font-family: var(--font-sans); }
+.lu-menu, .lu-pcard, .lu-pop, .lu-choice, .lu-rail__ghost, .lu-railnote { font-family: var(--font-sans); }
 .lu-btn, .lu-iconbtn, .lu-reaction, .lu-reaction-add, .lu-searchtrigger, .lu-threadsum, .lu-textfield__reveal, .lu-segtabs__tab,
-.lu-rail__home, .lu-rail__server, .lu-rail__add, .lu-rail__self, .lu-serverhead__name, .lu-member, .lu-msg__name, .lu-msg__avatar,
+.lu-rail__home, .lu-rail__server, .lu-rail__folder, .lu-rail__folderhead, .lu-rail__add, .lu-rail__self, .lu-swatch, .lu-serverhead__name, .lu-member, .lu-msg__name, .lu-msg__avatar,
 .lu-menu__item, .lu-choice__option { font: inherit; font-family: var(--font-sans); color: inherit; background: none; border: 0; padding: 0; margin: 0; cursor: pointer; }
 .lu-icon { display: block; flex: none; }
 .lu-sr { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
@@ -170,7 +170,7 @@
 .lu-rail__list { align-self: stretch; min-height: 0; list-style: none; margin: -6px 0; padding: 6px 0; display: flex; flex-direction: column; align-items: center; gap: var(--space-12); overflow-y: auto; scrollbar-width: none; }
 .lu-rail__list:empty { display: none; }
 .lu-rail__list > li { flex: none; }
-.lu-rail__server { position: relative; width: var(--tile-size); height: var(--tile-size); border-radius: var(--radius-round); background: var(--tile); font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center; transition: transform .15s ease; }
+.lu-rail__server { position: relative; width: var(--tile-size); height: var(--tile-size); border-radius: var(--radius-14); background: var(--tile); font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center; transition: transform .15s ease; }
 .lu-rail__home:hover, .lu-rail__server:not(.is-current):hover, .lu-rail__add:hover { transform: translateY(-1px); }
 .lu-rail__home.is-current { box-shadow: var(--ring-current); }
 .lu-rail__server.is-current { background: var(--raised); color: var(--ink-selected); box-shadow: var(--ring-current); font-family: var(--font-display); font-size: 18px; font-weight: 800; }
@@ -182,11 +182,34 @@
 .lu-rail__badge { position: absolute; right: -4px; top: -4px; padding: 0 5px; }
 .lu-rail__badge--home { right: -5px; top: -5px; }
 .lu-rail__dot { position: absolute; right: 0; top: 0; }
-.lu-rail__add { width: var(--tile-size); height: var(--tile-size); border-radius: var(--radius-round); border: 1.5px dashed var(--border-dashed); color: var(--ink-quiet); display: flex; align-items: center; justify-content: center; transition: transform .15s ease; }
+.lu-rail__add { width: var(--tile-size); height: var(--tile-size); border-radius: var(--radius-14); border: 1.5px dashed var(--border-dashed); color: var(--ink-quiet); display: flex; align-items: center; justify-content: center; transition: transform .15s ease; }
 .lu-rail__spacer { flex: 1; }
 .lu-rail__home, .lu-rail__add, .lu-rail__divider, .lu-rail__self { flex: none; }
 .lu-rail__self { border-radius: var(--radius-round); }
 .lu-rail__self .lu-avatar__status { width: 12px; height: 12px; }
+/* The rail's order and folders (architecture 6.9; the Server folders boards). Tiles are rounded squares; a picture fills its square. */
+.lu-rail { position: relative; -webkit-user-select: none; user-select: none; }
+.lu-rail.is-dragging, .lu-rail.is-dragging * { cursor: grabbing; }
+.lu-rail__list > li { display: flex; justify-content: center; }
+.lu-rail__server .lu-avatar__photo, .lu-rail__mini .lu-avatar__photo { border-radius: 0; }
+.lu-rail__folder { position: relative; flex: none; width: var(--tile-size); height: var(--tile-size); border-radius: var(--radius-14); padding: var(--space-6); display: grid; grid-template-columns: 14px 14px; grid-auto-rows: 14px; gap: var(--space-4); align-content: center; justify-content: center; box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 15%, transparent); transition: transform .15s ease; }
+.lu-rail__folder:hover { transform: translateY(-1px); }
+.lu-rail__mini { width: 14px; height: 14px; border-radius: 4px; overflow: hidden; background: var(--tile); font-size: 6px; font-weight: 800; line-height: 1; display: flex; align-items: center; justify-content: center; }
+.lu-rail__group { width: 52px; display: flex; flex-direction: column; align-items: center; gap: var(--space-10); padding: var(--space-4) 0 var(--space-8); border-radius: var(--radius-18); }
+.lu-rail__folderhead { width: var(--tile-size); height: 32px; border-radius: var(--radius-12); display: flex; align-items: center; justify-content: center; }
+.lu-rail__folderhead:hover { background: color-mix(in srgb, currentColor 8%, transparent); }
+.lu-rail__inner { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; align-items: center; gap: var(--space-10); }
+.lu-rail__inner > li { display: flex; justify-content: center; }
+/* A drag: the tile's place held by a dashed outline, a line in the accent where it would go between, a ring on what it would go onto. */
+.lu-rail .is-lifted { background: none; box-shadow: none; color: transparent; outline: 1.5px dashed var(--border-dashed); outline-offset: -1.5px; transform: none; }
+.lu-rail .is-lifted > * { visibility: hidden; }
+.lu-rail .is-onto, .lu-rail .is-onto:hover { box-shadow: var(--ring-current); transform: scale(1.06); }
+.lu-rail__line { position: absolute; left: 50%; z-index: 1; width: 36px; height: 4px; margin: -2px 0 0 -18px; border-radius: 2px; background: var(--accent); pointer-events: none; }
+.lu-rail__ghost { position: fixed; z-index: 40; display: flex; border-radius: var(--radius-14); box-shadow: var(--shadow-floating); transform: scale(1.06); pointer-events: none; }
+.lu-rail__ghost.is-still { position: absolute; }
+.lu-rail__ghost > .lu-rail__server, .lu-rail__ghost > .lu-rail__folder { cursor: grabbing; }
+.lu-railnote { position: fixed; z-index: 30; left: calc(var(--rail-width) + var(--space-8)); bottom: var(--space-16); max-width: 340px; display: flex; align-items: center; gap: var(--space-8); padding: var(--space-6) var(--space-6) var(--space-6) var(--space-14); background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--radius-12); box-shadow: var(--shadow-floating); }
+.lu-railnote__text { margin: 0; flex: 1; font-size: 13px; line-height: 1.4; color: var(--ink-body); }
 
 /* ── ServerHeader ── */
 .lu-serverhead { display: flex; align-items: center; gap: var(--space-6); padding-bottom: 10px; }
@@ -443,7 +466,7 @@ button.lu-mention:hover { text-decoration: underline; text-underline-offset: 3px
 @media (prefers-reduced-motion: reduce) {
   .lu-shell__aside, .lu-shell__scrim { transition: none !important; }
   .lu-typing__dots span { animation: none; }
-  .lu-rail__home, .lu-rail__server, .lu-rail__add { transition: none; }
+  .lu-rail__home, .lu-rail__server, .lu-rail__folder, .lu-rail__add { transition: none; }
   .lu-actions.is-floating { transition: none; }
   .lu-msg__parttime { transition: none; }
 }
@@ -541,6 +564,13 @@ button.lu-mention:hover { text-decoration: underline; text-underline-offset: 3px
 .lu-menu__text { flex: 1; min-width: 0; }
 .lu-menu__check { color: var(--accent-ink); }
 .lu-menu__hint { font-size: 12.5px; color: var(--ink-muted); }
+.lu-menu__item.is-danger, .lu-menu__item.is-danger:hover { color: var(--danger); }
+.lu-menu__item.is-danger .lu-icon { color: var(--ink-quiet); }
+.lu-menu__item .lu-menu__more { color: var(--ink-faint); transform: rotate(-90deg); }
+.lu-menu__item[aria-expanded="true"] { background: var(--hover-member); color: var(--ink); }
+.lu-menu--rail { width: 240px; }
+/* A menu and the one an item of it opened, side by side. */
+.lu-menupair { display: flex; align-items: flex-start; gap: var(--space-4); }
 
 /* ── Profile card ── */
 .lu-pcard { width: 300px; display: flex; flex-direction: column; overflow: hidden auto; background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--radius-18); box-shadow: var(--shadow-floating); color: var(--ink); font-size: 15px; }
@@ -581,6 +611,17 @@ button.lu-mention:hover { text-decoration: underline; text-underline-offset: 3px
 .lu-pop__link { flex: 1; min-width: 0; height: 38px; padding: 0 12px; border: 1px solid var(--border); border-radius: var(--radius-10); background: var(--field); font: inherit; font-size: 13px; color: var(--ink-field); }
 .lu-pop .lu-btn--primary.lu-btn--md { height: 40px; font-size: 14.5px; box-shadow: none; }
 .lu-pop .lu-btn--secondary.lu-btn--md { height: 40px; }
+.lu-pop__actions { display: flex; justify-content: flex-end; gap: var(--space-8); }
+/* Folder settings (the Server folders board): a name, the tone as nine swatches, Cancel and Save. */
+.lu-pop--folder { width: 320px; gap: var(--space-16); padding: calc(var(--space-10) * 2); }
+.lu-folderset { gap: var(--space-16); }
+.lu-folderset__name { display: flex; flex-direction: column; gap: var(--space-6); }
+.lu-folderset__hint { margin: 0; font-size: 12.5px; color: var(--ink-muted); }
+.lu-folderset__tone { display: flex; flex-direction: column; gap: var(--space-8); }
+.lu-folderset__legend { font-size: 13.5px; font-weight: 600; color: var(--ink-body); }
+.lu-swatches { display: flex; flex-wrap: wrap; gap: var(--space-6); }
+.lu-swatch { width: 24px; height: 24px; border-radius: var(--radius-round); box-shadow: inset 0 0 0 1px var(--line-strong); display: flex; align-items: center; justify-content: center; }
+.lu-swatch[aria-checked="true"] { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent); }
 
 /* ── Choice: one of a few, as the segmented tabs draw a selection ── */
 .lu-choice { display: flex; flex-direction: column; gap: var(--space-6); }
