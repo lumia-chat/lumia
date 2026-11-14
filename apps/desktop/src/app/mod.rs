@@ -16,6 +16,7 @@ pub mod links;
 pub mod menu;
 pub mod notices;
 pub mod pictures;
+pub mod rail;
 pub mod replies;
 pub mod server;
 pub mod server_settings;
@@ -90,6 +91,12 @@ pub enum Popover {
     MessageMenu,
     /// "Delete this message?", for the message `replies.deleting` names.
     DeleteMessage,
+    /// A rail tile's menu, for the server or folder `rail.menu_for` names.
+    RailMenu,
+    /// "Move to folder", from a server's menu on the rail.
+    MoveToFolder,
+    /// A folder's name and tone, for the folder `rail.editing` names.
+    FolderSettings,
 }
 
 /// Whose profile card is open, and the control it hangs from.
@@ -138,6 +145,8 @@ pub struct State {
     pub aside_open: bool,
     /// Quote replies, reactions and mentions (`replies`).
     pub replies: replies::Replies,
+    /// The rail's drag, its menus and Folder settings (`rail`).
+    pub rail: rail::RailUi,
     /// Whether the system shows times on a 24-hour clock, which the timeline's times
     /// follow. A real launch reads it from the system whenever the window comes in front
     /// (`platform`); a test and a headless picture keep the 12-hour clock.
@@ -179,6 +188,7 @@ impl State {
             window_width: None,
             aside_open: false,
             replies: replies::Replies::default(),
+            rail: rail::RailUi::default(),
             clock_24: false,
         }
     }
@@ -517,6 +527,7 @@ impl State {
             Update::Avatar(update) => self.react_avatar(update),
             Update::Gateway(event) => self.react_gateway(event),
             Update::Read(_)
+            | Update::Rail(_)
             | Update::Members { .. }
             | Update::Older { .. }
             | Update::Profile { .. }

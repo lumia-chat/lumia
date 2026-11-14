@@ -69,6 +69,10 @@ pub struct Settings {
     /// The emoji this computer reacted with, most recent first: the emoji picker's
     /// "Frequently used" row.
     pub recent_emoji: Vec<String>,
+    /// The rail's folders open on this computer, by id (architecture 6.9: open or closed is
+    /// each device's own). A folder no longer on the rail is dropped as the rail is drawn.
+    #[serde(deserialize_with = "or_default")]
+    pub open_folders: Vec<String>,
 }
 
 /// Light, dark, or whichever the system is in.

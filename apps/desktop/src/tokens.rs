@@ -23,10 +23,9 @@ pub fn shadows(dark: bool) -> &'static Shadows {
     if dark { &DARK_SHADOWS } else { &LIGHT_SHADOWS }
 }
 
-/// The avatar ground and ink an id hashes to: the web's `toneFor` and LumiaKit's
-/// `AvatarTone.of`, so a person is the same colour on every client.
-pub fn tone(id: &str, c: &Colors) -> (Color, Color) {
-    let tones = [
+/// The nine tones, ground and ink, in `lumia_client::rail::TONES`' order.
+fn tones(c: &Colors) -> [(Color, Color); 9] {
+    [
         (c.tone_peach, c.tone_peach_ink),
         (c.tone_blue, c.tone_blue_ink),
         (c.tone_purple, c.tone_purple_ink),
@@ -36,11 +35,22 @@ pub fn tone(id: &str, c: &Colors) -> (Color, Color) {
         (c.tone_stone, c.tone_stone_ink),
         (c.tone_green, c.tone_green_ink),
         (c.tone_indigo, c.tone_indigo_ink),
-    ];
-    let hash = id.encode_utf16().fold(0u32, |h, unit| {
-        h.wrapping_mul(31).wrapping_add(u32::from(unit))
-    });
-    tones[hash as usize % tones.len()]
+    ]
+}
+
+/// The avatar ground and ink an id hashes to: the web's `toneFor` and LumiaKit's
+/// `AvatarTone.of`, so a person is the same colour on every client.
+pub fn tone(id: &str, c: &Colors) -> (Color, Color) {
+    tone_named(&lumia_client::rail::tone_of(id), c)
+}
+
+/// The ground and ink of a tone by its name (a rail folder's); peach for one not known.
+pub fn tone_named(name: &str, c: &Colors) -> (Color, Color) {
+    let at = lumia_client::rail::TONES
+        .iter()
+        .position(|tone| *tone == name)
+        .unwrap_or(0);
+    tones(c)[at]
 }
 
 // ---- What the boards draw that the design system names only in a usage line, or not at all --
@@ -180,6 +190,38 @@ pub const TEXT_MONOGRAM_REST: TextStyle = TextStyle {
     weight: TEXT_AUTHOR.weight,
     ..TEXT_LINK_SM
 };
+
+// ---- The rail's folders, from the Server folders board ------------------------------------
+
+/// A closed folder's small server (14 square, radius 4), four to a tile, 4 apart.
+pub const FOLDER_MINI: f32 = SPACE_14;
+/// The board's radius 4: half the menu row's `radius-8`; no radius token is that small.
+pub const FOLDER_MINI_RADIUS: f32 = RADIUS_8 / 2.0;
+/// A small server's initials (6 at 800): the count style at half its size, as near as the
+/// type tokens come.
+pub const TEXT_FOLDER_MINI: TextStyle = TextStyle {
+    size: TEXT_COUNT.size / 2.0 + 0.5,
+    line_height: 0.0,
+    ..TEXT_COUNT
+};
+/// An open folder's column (52 wide), 4 over its head and 8 under its last server.
+pub const FOLDER_COLUMN: f32 = TILE_SIZE + SPACE_8;
+/// An open folder's head (44 by 32, at `radius-12`) and the gap under it and between its
+/// servers (10).
+pub const FOLDER_HEAD: f32 = ROW_HEIGHT;
+pub const FOLDER_GAP: f32 = SPACE_10;
+/// The line a drag between two tiles shows (36 by 4, radius 2).
+pub const RAIL_LINE: f32 = SPACE_24 + SPACE_12;
+/// A folder's colour in Folder settings (24 across).
+pub const TONE_SWATCH: f32 = SPACE_24;
+/// A closed folder's edge: its tone's ink at 15%, the board's `#…26` inset line.
+pub fn folder_edge(ink: Color) -> Color {
+    Color { a: 0.15, ..ink }
+}
+/// A tile while it is dragged, in its place: a third of its strength.
+pub const DRAGGED_OPACITY: f32 = 0.35;
+/// Folder settings (320 wide).
+pub const FOLDER_SETTINGS_WIDTH: f32 = SPACE_40 * 8.0;
 
 /// The initials on an avatar `size` points across. The boards set them at 700 in a size per
 /// avatar that no token names: 14 on 40, 13 on 38, 12.5 on 34, 10 on 28, 9 on 22. Three of

@@ -20,6 +20,7 @@ pub mod channels;
 pub mod dms;
 pub mod identity;
 pub mod notices;
+pub mod rail;
 pub mod reads;
 pub mod servers;
 
@@ -132,6 +133,7 @@ pub enum Update {
     Notice(notices::NoticeUpdate),
     Avatar(avatars::AvatarUpdate),
     Read(reads::ReadUpdate),
+    Rail(rail::RailUpdate),
 }
 
 /// What is on screen to read and write: a server's channel, or a personal conversation.
@@ -339,6 +341,8 @@ pub struct Session {
     pub identity: identity::IdentityState,
     /// Read state, the Mentions lists and the message being found.
     pub reads: reads::Reads,
+    /// The rail's arrangement on its way to the instance.
+    pub rail: rail::RailState,
     pub last_error: Option<String>,
 }
 
@@ -402,6 +406,7 @@ impl Session {
             dm: dms::DmState::default(),
             identity: identity::IdentityState::default(),
             reads: reads::Reads::default(),
+            rail: rail::RailState::default(),
             last_error: None,
         })
     }
@@ -543,6 +548,7 @@ impl Session {
         self.pending.clear();
         self.dm = dms::DmState::default();
         self.identity = identity::IdentityState::default();
+        self.rail.forget();
         self.revision += 1;
     }
 
@@ -1135,12 +1141,17 @@ impl Session {
                 let channels = server_channels(snapshot);
                 // Members are asked for again only when the servers changed, and once
                 // after a launch that began from what was kept.
-                let servers_changed = self.snapshot.as_ref().is_none_or(|old| {
-                    old.servers
-                        .iter()
-                        .map(|s| &s.server_id)
-                        .ne(snapshot.servers.iter().map(|s| &s.server_id))
-                });
+                // The rail's order is not a change of servers.
+                let ids = |servers: &[ServerSummary]| {
+                    let mut ids: Vec<String> =
+                        servers.iter().map(|s| s.server_id.clone()).collect();
+                    ids.sort_unstable();
+                    ids
+                };
+                let servers_changed = self
+                    .snapshot
+                    .as_ref()
+                    .is_none_or(|old| ids(&old.servers) != ids(&snapshot.servers));
                 self.snapshot = Some(snapshot.clone());
                 self.load_failures = 0;
                 self.last_error = None;
@@ -1225,6 +1236,7 @@ impl Session {
             Update::Notice(_) => {}
             Update::Avatar(update) => self.apply_avatar(update),
             Update::Read(update) => self.apply_read(update),
+            Update::Rail(update) => self.apply_rail(update),
         }
     }
 

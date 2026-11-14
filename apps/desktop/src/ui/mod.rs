@@ -10,6 +10,7 @@ mod home;
 mod link;
 mod mentions;
 mod menus;
+mod rail;
 mod replies;
 mod scroll;
 mod server;
@@ -73,6 +74,12 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
             screen = screen.child(replies::quote_button(id, words, at, look));
         }
     }
+    // A rail tile being dragged, over everything.
+    if s.route == Route::Shell
+        && let Some(layer) = rail::drag_layer(s, look)
+    {
+        screen = screen.child(layer);
+    }
     match s.autoscroll.origin() {
         Some(at) => screen.child(autoscroll_mark(at, look)),
         None => screen,
@@ -118,5 +125,8 @@ fn overlay(s: &State, popover: Popover, look: Look) -> Option<El> {
         Popover::EmojiPicker => emoji::picker(s, look),
         Popover::MessageMenu => replies::message_menu(s, look),
         Popover::DeleteMessage => replies::delete_dialog(s, look),
+        Popover::RailMenu => rail::rail_menu(s, look),
+        Popover::MoveToFolder => rail::move_to_folder(s, look),
+        Popover::FolderSettings => rail::folder_settings(s, look),
     }
 }

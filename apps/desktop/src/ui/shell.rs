@@ -4,15 +4,15 @@
 //! [`super::server`] in a server.
 //!
 //! The board draws the window's traffic lights at the head of the rail, with the Home tile
-//! under them; [`TRAFFIC_LIGHTS`] is where the real ones are put to match. Where the frame
-//! leaves the board: nothing lifts on hover, and the rail has no unread dot or mention
-//! count on a server, which the session does not count. The self avatar opens the account
-//! menu (`menus::account`), and its dot says whether the gateway is connected.
+//! under them; [`TRAFFIC_LIGHTS`] is where the real ones are put to match. Between Home and
+//! **+** are the servers and folders as the account arranged them ([`super::rail`]). Where
+//! the frame leaves the board: nothing lifts on hover. The self avatar opens the account menu
+//! (`menus::account`), and its dot says whether the gateway is connected.
 
 use lumia_client::app::ServerSummary;
 use rune::{Cursor, Edge, El, Transition, col, el, icon, row, text};
 
-use super::components::{Look, avatar_of, circled, drawn, initials, shadowed, status_dot};
+use super::components::{Look, avatar_of, shadowed, status_dot};
 use super::menus::{SELF_AVATAR, SERVER_TITLE};
 use super::{home, server};
 use crate::app::{HomeView, Place, Popover, State};
@@ -172,66 +172,15 @@ fn rail(s: &State, current: Option<&ServerSummary>, look: Look) -> El {
     rail = rail
         .child(home)
         .child(el().w(t::SPACE_24).h(1.0).fill(c.rail_divider));
-    for server in s.session.servers() {
-        let active = current.is_some_and(|x| x.server_id == server.server_id);
-        let id = server.server_id.clone();
-        let (any, mentions) = s.session.server_unread(&server.server_id);
-        let named = match (any, mentions) {
-            (_, 0) if any => format!("{}, unread messages", server.name),
-            _ => super::server::with_unread(&server.name, (mentions, mentions)),
-        };
-        let mut tile = rail_button(format!("server-{}", server.server_id), &named, look)
-            .radius(t::TILE_SIZE / 2.0)
-            .fill(if active { c.raised } else { c.tile })
-            .on_press(move |s: &mut State| s.select_server(&id));
-        // The server's picture once this computer holds it; its initials until it is drawn.
-        let picture = s.picture_at(&server.icon_url);
-        if !picture.is_some_and(drawn) {
-            tile = tile.child(
-                text(initials(&server.name))
-                    .font(if active {
-                        t::TITLE_MONOGRAM
-                    } else {
-                        t::TEXT_MONOGRAM_REST
-                    })
-                    .color(if active { c.ink_selected } else { c.ink }),
-            );
-        }
-        if let Some(picture) = picture {
-            tile = tile.child(circled(picture, t::TILE_SIZE).a11y_hidden());
-        }
-        if active {
-            tile = shadowed(tile, look.shadows.ring_current);
-        }
-        // What is unread in it: a mark at the rail's edge, and its count for this account
-        // over the tile's corner.
-        let mut slot = el().child(tile);
-        // The board's: a dot at the tile's top right for unread with nothing for this
-        // account, the count there when there is (the badge covers the dot).
-        if any && !active && mentions == 0 {
-            let dot = t::SPACE_10 + 1.0;
-            slot = slot.child(
-                el().pin(None, Some(0.0), Some(0.0), None)
-                    .size(dot, dot)
-                    .radius(dot / 2.0)
-                    .fill(c.unread)
-                    .border(2.0, c.rail)
-                    .a11y_hidden(),
-            );
-        }
-        if mentions > 0 {
-            slot = slot.child(rail_badge(
-                mentions as usize,
-                super::server::with_unread(&server.name, (mentions, mentions)),
-                look,
-            ));
-        }
-        rail = rail.child(slot);
-    }
+    rail = rail.child(super::rail::servers(
+        s,
+        current.map(|x| x.server_id.as_str()),
+        look,
+    ));
     // Adding a server is not one yet: a dashed outline on the rail itself.
     rail = rail.child(
         rail_button("add-server", "Add a server", look)
-            .radius(t::TILE_SIZE / 2.0)
+            .radius(t::RADIUS_14)
             .border(1.5, c.border_dashed)
             .border_dash(t::SPACE_4, t::SPACE_4)
             .on_press(|s: &mut State| s.go_home(HomeView::AddServer))
@@ -271,7 +220,7 @@ fn rail(s: &State, current: Option<&ServerSummary>, look: Look) -> El {
 
 /// A count over a rail tile's corner, ringed in the rail's colour (the board has it 5 out; 4
 /// is the nearest step).
-fn rail_badge(count: usize, label: String, look: Look) -> El {
+pub fn rail_badge(count: usize, label: String, look: Look) -> El {
     let c = look.c;
     el().pin(None, Some(-t::SPACE_4), Some(-t::SPACE_4), None)
         .h(t::BADGE)

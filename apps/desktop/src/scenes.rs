@@ -9,6 +9,7 @@ use lumia_client::app::{
 };
 
 mod account;
+mod rail;
 mod replies;
 
 use crate::app::{HomeView, Route, State};
@@ -232,6 +233,11 @@ pub const SCENES: &[Scene] = &[
         s.tick(chrono::Utc::now().timestamp_micros());
         s.pictures.wait();
     }),
+    // The rail as an account arranged it (`ui/rail.rs`, architecture 6.9).
+    ("rail-folders", rail::folders),
+    ("rail-menu", rail::server_menu),
+    ("folder-menu", rail::folder_menu),
+    ("folder-settings", rail::folder_settings),
     ("person-card", |s| {
         servers_sample(s);
         s.open_person("grace", "member-grace");
