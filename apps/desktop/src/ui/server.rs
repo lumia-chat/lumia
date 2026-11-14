@@ -20,24 +20,30 @@ use crate::session::display_name;
 use crate::tokens::{self as t, icons};
 use crate::ui::scroll::WithScrollBar;
 
-/// The server's name; the invitations waiting, its channels this account is in and its
-/// server DMs (architecture 6.8 and 6.4), each section with its plus.
+/// The server's name; the invitations waiting, its channels this account is in (public, then
+/// private under a heading of their own, as the boards draw them) and its server DMs
+/// (architecture 6.8 and 6.4), each section with its plus where it has one.
 pub fn sidebar(s: &State, server: &ServerSummary, look: Look) -> El {
     let c = look.c;
     let open = s.session.channel();
-    let mut list = col()
-        .key("channels")
-        .w_full()
-        .gap(t::SPACE_2)
-        .role("list")
-        .label("Channels");
-    let mut any = false;
+    let channel_list = |key: &str, label: &str| {
+        col()
+            .key(key)
+            .w_full()
+            .gap(t::SPACE_2)
+            .role("list")
+            .label(label)
+    };
+    let (mut list, mut private) = (
+        channel_list("channel-list", "Channels"),
+        channel_list("private-channels", "Private channels"),
+    );
+    let (mut any, mut any_private) = (false, false);
     for channel in s.session.channels_of(&server.server_id) {
-        any = true;
         let id = channel.channel_id.clone();
         let glyph = if channel.private { "" } else { "#" };
         let unread = s.session.unread(&channel.channel_id);
-        list = list.child(nav_row(
+        let row = nav_row(
             format!("channel-{}", channel.channel_id),
             &channel.name,
             &with_unread(&format!("{} channel", channel.name), unread),
@@ -46,7 +52,14 @@ pub fn sidebar(s: &State, server: &ServerSummary, look: Look) -> El {
             unread,
             move |s: &mut State| s.select_channel(&id),
             look,
-        ));
+        );
+        if channel.private {
+            any_private = true;
+            private = private.child(row);
+        } else {
+            any = true;
+            list = list.child(row);
+        }
     }
     let mut channels = col()
         .w_full()
@@ -59,7 +72,7 @@ pub fn sidebar(s: &State, server: &ServerSummary, look: Look) -> El {
         ))
         .child(invitations(s, server, look))
         .child(list);
-    if !any {
+    if !any && !any_private {
         channels = channels.child(
             text("You are in no channels here. Browse them with the plus.")
                 .font(t::TEXT_META)
@@ -68,6 +81,14 @@ pub fn sidebar(s: &State, server: &ServerSummary, look: Look) -> El {
                 .padding(t::SPACE_10),
         );
     }
+    // The boards' Private: the private channels this account is in, under a heading with no
+    // plus (Create a channel makes one private), drawn only when there are any.
+    let private = any_private.then(|| {
+        col()
+            .w_full()
+            .child(section_label("Private", t::SPACE_4, look))
+            .child(private)
+    });
     let mut dms = col()
         .key("server-dms")
         .w_full()
@@ -121,15 +142,18 @@ pub fn sidebar(s: &State, server: &ServerSummary, look: Look) -> El {
             )
             .key("server-mentions"),
         );
+    // The boards' sections stand 12 apart: Channels, Private, Direct messages.
     let body = col()
         .key("channels")
         .w_full()
         .grow(1.0)
         .min_h(0.0)
+        .gap(t::SPACE_12)
         .scroll(ScrollSpec {
             stick_bottom: false,
         })
         .child(channels)
+        .children(private)
         .child(col().w_full().child(messages).child(dms))
         .with_scroll_bar("channels", look);
     // The board's control beside the name: a message to someone, which is Home's to start.
