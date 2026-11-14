@@ -85,21 +85,32 @@ export function folderLabel(snapshot: SnapshotSummary | undefined, folder: Folde
   return folder.name || wordsFor(folder.serverIds.map((id) => nameOf(snapshot, id)));
 }
 
-// The tiles drawn last time, by id: one that has not changed is handed back
-// as it was, so the rail keeps its elements (and a drag or the focus its
-// tile) when the snapshot is read again.
-const drawn = new Map<string, { json: string; tile: object }>();
-function same<T extends object>(key: string, tile: T): T {
-  const json = JSON.stringify(tile);
-  const was = drawn.get(key);
-  if (was && was.json === json) return was.tile as T;
-  drawn.set(key, { json, tile });
-  return tile;
-}
+/**
+ * The tiles a rail drew last time, by id: one that has not changed is handed
+ * back as it was, so the rail keeps its elements (and a drag or the focus its
+ * tile) when the snapshot is read again. One per mounted rail, so a tile's
+ * handlers are never an earlier page's; tiles gone from the rail are dropped.
+ */
+export type RailCache = { tiles: Map<string, { json: string; tile: object }> };
+export const railCache = (): RailCache => ({ tiles: new Map() });
 
 /** The rail ready for `ServerRail`: each server drawn by `server`, folders with their label and whether they are open. */
-export function railTiles(snapshot: SnapshotSummary | undefined, server: (s: ServerSummary) => RailServer): RailTile[] {
+export function railTiles(snapshot: SnapshotSummary | undefined, server: (s: ServerSummary) => RailServer, cache: RailCache): RailTile[] {
   if (!snapshot) return [];
+  const next = new Map<string, { json: string; tile: object }>();
+  const same = <T extends object>(key: string, tile: T): T => {
+    const json = JSON.stringify(tile);
+    const was = cache.tiles.get(key);
+    const kept = was && was.json === json ? (was.tile as T) : tile;
+    next.set(key, { json, tile: kept });
+    return kept;
+  };
+  const tiles = drawTiles(snapshot, server, same);
+  cache.tiles = next;
+  return tiles;
+}
+
+function drawTiles(snapshot: SnapshotSummary, server: (s: ServerSummary) => RailServer, same: <T extends object>(key: string, tile: T) => T): RailTile[] {
   const byId = new Map(snapshot.servers.map((s) => [s.serverId, s]));
   return railOf(snapshot).flatMap((item): RailTile[] => {
     if (item.kind === "server") {

@@ -37,7 +37,9 @@ import {
   SearchField,
   ServerHeader,
   ServerRail,
+  TONES,
   type ChannelItem,
+  type Tone,
 } from "../design/components";
 import { signedOut, type ChannelSummary, type MessageSummary, type ServerSummary } from "../client/bridge";
 import { avatarSrc, channelMembersQuery, checkPush, client, commandError, connection, loadMyStatus, loadOlderMessages, membersQuery, messagesQuery, presence, customStatusOf, presenceOf, queryClient, readStatesQuery, sessionEnded, signOut, snapshotQuery, startGateway, tookSnapshot, typingIn, watchPresence } from "../client/state";
@@ -49,11 +51,10 @@ import { ServerSettings } from "./server-settings";
 import { BrowsePage, ChannelMembersAside, YourSettingsPage, channelRefusal, joinChannel } from "./channels";
 import { Compose, ComposerNote, Timeline, createMarkRead, invitedWords, notNotifiedWords, quoteOf, refusalWords, type Refusal, type Replying, type TimelineItem } from "./timeline";
 import { MentionsPage } from "./mentions";
-import { dismissRailNote, dropOnRail, railNote, railSaid, railTiles } from "./rail";
+import { dismissRailNote, dropOnRail, railCache, railNote, railSaid, railTiles } from "./rail";
 
-const TONES = ["peach", "blue", "purple", "mint", "amber", "sky", "stone", "green", "indigo"] as const;
-
-export function toneFor(id: string): (typeof TONES)[number] {
+/** The tone an id is drawn in: the core's hash over the nine tones, as every client has it. */
+export function toneFor(id: string): Tone {
   let h = 0;
   for (const c of id) h = (h * 31 + c.charCodeAt(0)) >>> 0;
   return TONES[h % TONES.length] ?? "blue";
@@ -175,6 +176,7 @@ const PERSONAL = new Set(["PERSONAL_DM", "PERSONAL_GROUP_DM"]);
 
 export function App() {
   const navigate = useNavigate();
+  const tileCache = railCache();
   const search = useSearch({ from: "/app" }) as () => AppSearch;
   const snapshot = snapshotQuery();
   const [channelId, setChannelId] = createSignal<string | undefined>();
@@ -649,7 +651,7 @@ export function App() {
               unread: serverCounts(s.serverId).unread,
               mentions: serverCounts(s.serverId).mentions || undefined,
               onClick: () => goServer(s.serverId),
-            }))}
+            }), tileCache)}
             onMenu={(id, anchor) => setOver({ kind: "railMenu", anchor, id })}
             onDrop={(id, drop) => void dropOnRail(id, drop)}
             announce={railSaid()}

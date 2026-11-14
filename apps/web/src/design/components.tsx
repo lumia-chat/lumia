@@ -714,11 +714,22 @@ export function ServerRail(props: ServerRailProps) {
   };
 
   let press: { id: string; kind: "server" | "folder"; x: number; y: number; el: HTMLElement } | null = null;
+  // The press that ends a drag is not a click on the tile it began on.
+  const swallowClick = () => {
+    const swallow = (e: MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    window.addEventListener("click", swallow, true);
+    setTimeout(() => window.removeEventListener("click", swallow, true), 0);
+  };
   const onKey = (e: KeyboardEvent) => {
     if (e.key !== "Escape") return;
     e.preventDefault();
     e.stopPropagation();
     end();
+    // Cancelled, the button still comes up: over the tile, that is no click either.
+    window.addEventListener("pointerup", swallowClick, { capture: true, once: true });
   };
   const onMove = (e: PointerEvent) => {
     if (!press) return;
@@ -736,13 +747,7 @@ export function ServerRail(props: ServerRailProps) {
     const d = drag();
     end();
     if (!d) return;
-    // The press that ends a drag is not a click on the tile it began on.
-    const swallow = (e: MouseEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-    };
-    window.addEventListener("click", swallow, true);
-    setTimeout(() => window.removeEventListener("click", swallow, true), 0);
+    swallowClick();
     if (d.drop) props.onDrop?.(d.id, d.drop);
   };
   const end = () => {
@@ -786,7 +791,7 @@ export function ServerRail(props: ServerRailProps) {
   const line = () => (props.still ? stillLine() : drag()?.line ?? null);
   const find = (id: string): RailTile | undefined => {
     for (const t of items()) {
-      if (t.kind === "server" ? t.id === id : t.id === id) return t;
+      if (t.id === id) return t;
       if (t.kind === "folder") {
         const s = t.servers.find((x) => x.id === id);
         if (s) return { kind: "server", ...s };
