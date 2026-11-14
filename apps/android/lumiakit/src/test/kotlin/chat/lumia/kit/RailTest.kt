@@ -18,6 +18,15 @@ class RailTest {
     private val rail = listOf(server("acme"), folder("work", "nw", "guild", "design"), server("trail"))
 
     @Test
+    fun aRefusalIsSaidInTheWebsWords() {
+        val folders = uniffi.lumia_ffi.LumiaException.Api("INVALID_ARGUMENT", "invalid argument", mapOf("field" to "folders"))
+        assertEquals("The rail was not saved: There can be at most 100 folders.", railRefusal(folders))
+        val name = uniffi.lumia_ffi.LumiaException.Api("INVALID_ARGUMENT", "invalid argument", mapOf("field" to "name"))
+        assertEquals("The rail was not saved: A folder's name is up to 50 characters.", railRefusal(name))
+        assertEquals("The rail was not saved: offline", railRefusal(uniffi.lumia_ffi.LumiaException.Other("offline")))
+    }
+
+    @Test
     fun aToneIsKeptByItsNameAndAnUnknownOneIsTheIdsHash() {
         assertEquals(AvatarTone.MINT, toneNamed("mint", "x"))
         assertEquals(AvatarTone.INDIGO, toneNamed("indigo", "x"))

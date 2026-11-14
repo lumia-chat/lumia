@@ -295,7 +295,7 @@ class LumiaSession(
                 took(snap)
             } catch (e: Exception) {
                 if (sent == railSends) railSent = null
-                if (e.endsSession) sessionEnded() else railError = e.lumiaMessage
+                if (e.endsSession) sessionEnded() else railError = railRefusal(e)
             }
         }
         return next

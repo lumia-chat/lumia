@@ -638,7 +638,7 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawRing(color: Col
 @Composable
 private fun ServerFace(session: LumiaSession, server: ServerSummary) {
     Box(Modifier.size(LumiaTokens.tileSize), contentAlignment = Alignment.Center) {
-        Text(initialsOf(server.name), style = LumiaTokens.textLinkSm.style.copy(fontWeight = FontWeight.Bold), color = AvatarTone.of(server.serverId).ink.color)
+        Text(initialsOf(server.name), style = LumiaTokens.textLinkSm.style.copy(fontWeight = FontWeight.Bold), color = AvatarTone.of(server.serverId).monogram.color)
         LumiaPicture(session.pictureOf(server.iconUrl), Modifier.matchParentSize())
     }
 }
@@ -658,7 +658,7 @@ private fun FolderFaces(session: LumiaSession, servers: List<ServerSummary>) {
             Row(horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space4)) {
                 for (s in row) {
                     Box(Modifier.size(Mini).clip(RoundedCornerShape(LumiaTokens.space4)).background(LumiaTokens.tile.color), contentAlignment = Alignment.Center) {
-                        Text(initialsOf(s.name), style = style, color = AvatarTone.of(s.serverId).ink.color, maxLines = 1)
+                        Text(initialsOf(s.name), style = style, color = AvatarTone.of(s.serverId).monogram.color, maxLines = 1)
                         LumiaPicture(session.pictureOf(s.iconUrl), Modifier.matchParentSize())
                     }
                 }

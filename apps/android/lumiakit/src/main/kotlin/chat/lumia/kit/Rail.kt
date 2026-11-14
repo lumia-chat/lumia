@@ -8,6 +8,18 @@ package chat.lumia.kit
 
 import uniffi.lumia_ffi.RailItem
 
+/** Why an arrangement was not kept, in the web's words. */
+fun railRefusal(e: Throwable): String {
+    val words = (e as? uniffi.lumia_ffi.LumiaException.Api)?.takeIf { it.code == "INVALID_ARGUMENT" }?.let {
+        when (it.details["field"]) {
+            "name" -> "A folder's name is up to 50 characters."
+            "folders" -> "There can be at most 100 folders."
+            else -> null
+        }
+    }
+    return "The rail was not saved: ${words ?: e.lumiaMessage}"
+}
+
 /** The tone a folder keeps by name ("mint"); a name this build does not know is the one [id] hashes to, as a server's is. */
 fun toneNamed(name: String, id: String): AvatarTone =
     AvatarTone.entries.firstOrNull { it.stored == name } ?: AvatarTone.of(id)

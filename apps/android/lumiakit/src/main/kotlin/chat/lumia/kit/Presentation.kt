@@ -43,6 +43,14 @@ enum class AvatarTone {
             INDIGO -> LumiaTokens.toneIndigoInk
         }
 
+    /** A server's initials on `tile` in this tone, as the rail boards draw them: the design system's `tile-ink-*` where it names one, else the tone's ink. */
+    val monogram: LumiaColor
+        get() = when (this) {
+            INDIGO -> LumiaTokens.tileInkIndigo
+            GREEN -> LumiaTokens.tileInkGreen
+            else -> ink
+        }
+
     companion object {
         /** The web's `toneFor`: a stable hash of the id over the nine tones. */
         fun of(id: String): AvatarTone {
