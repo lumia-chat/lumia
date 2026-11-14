@@ -215,18 +215,28 @@ fn stood_for(c: char, typed: &[(u32, String)]) -> Option<(u32, &str)> {
         .map(|(i, text)| (*i, text.as_str()))
 }
 
+/// `text` with each stand-in put back as what it stood for: in code, and in a link's
+/// address, a mention is the text it was typed as.
+fn put_back(text: &str, typed: &[(u32, String)]) -> String {
+    if typed.is_empty() {
+        return text.to_owned();
+    }
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match stood_for(c, typed) {
+            Some((_, words)) => out.push_str(words),
+            None => out.push(c),
+        }
+    }
+    out
+}
+
 fn display_block(block: Block, typed: &[(u32, String)]) -> DisplayBlock {
     match block {
         Block::Para(inline) => DisplayBlock::Para(display_inline(&inline, typed)),
         Block::Code { lang, text } => DisplayBlock::Code {
             lang,
-            text: text
-                .chars()
-                .map(|c| match stood_for(c, typed) {
-                    Some((_, text)) => text.to_owned(),
-                    None => c.to_string(),
-                })
-                .collect(),
+            text: put_back(&text, typed),
         },
         Block::Quote(blocks) => DisplayBlock::Quote {
             blocks: blocks
@@ -319,7 +329,7 @@ fn display_inline(inline: &Inline, typed: &[(u32, String)]) -> DisplayInline {
             Some(DisplayLink {
                 start,
                 end,
-                url: url.clone(),
+                url: put_back(url, typed),
             })
         })
         .collect();
@@ -503,6 +513,18 @@ mod tests {
                 lang: None,
                 text: "@bo".into()
             })
+        );
+    }
+
+    #[test]
+    fn a_mention_inside_a_web_address_is_part_of_its_address() {
+        let src = "see https://lumia.chat/@ada now";
+        let blocks = display(src, &[src.find('@').map_or(0..0, |at| at..at + 4)]);
+        let inline = para(&blocks);
+        assert_eq!(inline.text, src);
+        assert_eq!(
+            inline.links.first().map(|l| l.url.as_str()),
+            Some("https://lumia.chat/@ada")
         );
     }
 
