@@ -1154,6 +1154,8 @@ impl Session {
                 self.dm_snapshot_applied();
                 self.want_pictures();
                 self.refresh_reads();
+                // A server's show_deleted may have changed, which decides what the core reads.
+                self.read_entries();
             }
             Update::Snapshot(Err(failure)) => {
                 if failure.signed_out() {

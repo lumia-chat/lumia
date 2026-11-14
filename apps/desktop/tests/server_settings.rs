@@ -221,3 +221,39 @@ fn a_servers_picture_stands_alone_once_drawn() {
         .count();
     assert_eq!(pictures, 2, "on the rail and on the page");
 }
+
+#[test]
+fn deleted_messages_are_shown_or_not_as_the_switch_says_saved_as_it_is_turned() {
+    let mut rt = runtime(signed_in());
+    open_settings(&mut rt);
+    let shown = words(&rt);
+    assert!(shown.contains("Show deleted messages"));
+    assert!(shown.contains("Off, a deleted message disappears for everyone."));
+    assert!(
+        !rt.state.session.servers()[0].show_deleted,
+        "off by default"
+    );
+
+    press(&mut rt, "show-deleted");
+    assert!(
+        rt.state.server_forms.settings.show_deleted.busy,
+        "sent at once, with no Save"
+    );
+    answer(
+        &mut rt,
+        Setting::ShowDeleted,
+        Ok(changed(|s| s.show_deleted = true)),
+    );
+    assert!(rt.state.session.servers()[0].show_deleted);
+    assert!(!rt.state.server_forms.settings.show_deleted.busy);
+
+    // A refusal is said under it, and the server stays as it was.
+    press(&mut rt, "show-deleted");
+    answer(
+        &mut rt,
+        Setting::ShowDeleted,
+        Err(refused("PERMISSION_DENIED", None)),
+    );
+    assert!(rt.state.session.servers()[0].show_deleted);
+    assert!(!rt.state.server_forms.settings.show_deleted.error.is_empty());
+}

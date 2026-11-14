@@ -27,6 +27,7 @@ pub enum Setting {
     Name,
     Retention,
     Picture,
+    ShowDeleted,
 }
 
 /// What a finished server-management call reports.
@@ -205,6 +206,21 @@ impl Session {
         });
     }
 
+    /// Whether a server's deleted messages keep their place as "(deleted)"
+    /// ([`ServerUpdate::SettingSaved`]; architecture 6.7).
+    pub fn set_show_deleted(&self, server_id: &str, show: bool) {
+        let Some(app) = self.client() else { return };
+        let server_id = server_id.to_string();
+        self.task(async move {
+            let result = app.set_show_deleted(&server_id, show).await;
+            Update::Server(ServerUpdate::SettingSaved {
+                server_id,
+                setting: Setting::ShowDeleted,
+                result: result.map_err(Failure::from),
+            })
+        });
+    }
+
     /// Sends the file at `path` to be a server's picture ([`ServerUpdate::SettingSaved`]).
     pub fn set_server_icon(&self, server_id: &str, path: &Path) {
         let Some(app) = self.client() else { return };
@@ -247,6 +263,8 @@ impl Session {
             } => {
                 self.snapshot = Some(snapshot.clone());
                 self.want_pictures();
+                // Whether deleted messages are read may have changed (architecture 6.7).
+                self.read_entries();
             }
             // The account now has something the snapshot does not list yet.
             ServerUpdate::ServerCreated(Ok(_))

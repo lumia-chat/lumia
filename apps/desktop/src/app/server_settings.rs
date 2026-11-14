@@ -73,6 +73,7 @@ pub struct ServerSettings {
     pub retention: u32,
     pub retention_saving: Saving,
     pub picture: Saving,
+    pub show_deleted: Saving,
 }
 
 /// Why a setting was not changed.
@@ -142,6 +143,27 @@ impl State {
         let form = &mut self.server_forms.settings;
         form.retention = days;
         form.retention_saving.saved = false;
+    }
+
+    /// Turns "Show deleted messages" over, saved at once (architecture 6.7).
+    pub fn toggle_show_deleted(&mut self) {
+        let Some(server_id) = self.settings_server() else {
+            return;
+        };
+        if self.server_forms.settings.show_deleted.busy {
+            return;
+        }
+        let Some(show) = self
+            .session
+            .servers()
+            .iter()
+            .find(|s| s.server_id == server_id)
+            .map(|s| !s.show_deleted)
+        else {
+            return;
+        };
+        self.server_forms.settings.show_deleted = Saving::started();
+        self.session.set_show_deleted(&server_id, show);
     }
 
     pub fn save_server_retention(&mut self) {
@@ -216,6 +238,7 @@ impl State {
             Setting::Name => &mut form.name_saving,
             Setting::Retention => &mut form.retention_saving,
             Setting::Picture => &mut form.picture,
+            Setting::ShowDeleted => &mut form.show_deleted,
         };
         *saving = Saving::default();
         match result {
@@ -225,7 +248,7 @@ impl State {
                     match setting {
                         Setting::Name => form.name = TextEdit::new(&server.name),
                         Setting::Retention => form.retention = server.retention_days,
-                        Setting::Picture => {}
+                        Setting::Picture | Setting::ShowDeleted => {}
                     }
                 }
             }

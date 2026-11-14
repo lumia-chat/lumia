@@ -10,7 +10,8 @@ use lumia_client::app::ServerSummary;
 use rune::{El, Tx, col, row, text};
 
 use super::components::{
-    Look, card, error_text, field, primary_button, segmented, server_picture, small_button,
+    Look, card, check_row, error_text, field, primary_button, segmented, server_picture,
+    small_button,
 };
 use super::home::{action, page_column, titled_page};
 use crate::app::State;
@@ -166,11 +167,24 @@ fn history(s: &State, server: &ServerSummary, look: Look) -> El {
     } else if form.retention_saving.saved {
         card = card.child(quiet("Saved.", look));
     }
-    card.child(action(primary_button(
+    card = card.child(action(primary_button(
         "save-retention",
         "Save",
         !form.retention_saving.busy && form.retention != server.retention_days,
         State::save_server_retention,
         look,
-    )))
+    )));
+    // Saved as it is turned, apart from the retention's Save (architecture 6.7).
+    card = card.child(check_row(
+        "show-deleted",
+        "Show deleted messages",
+        Some("Off, a deleted message disappears for everyone. On, it stays in its place as “(deleted)”."),
+        server.show_deleted,
+        State::toggle_show_deleted,
+        look,
+    ));
+    if !form.show_deleted.error.is_empty() {
+        card = card.child(error_text(&form.show_deleted.error, look));
+    }
+    card
 }
