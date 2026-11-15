@@ -115,6 +115,52 @@ impl Phrase {
     }
 }
 
+/// How many words a person is asked for to show they hold the phrase
+/// (identity spec 4.1 step 7).
+pub const QUIZ_WORDS: usize = 3;
+
+impl Phrase {
+    /// [`QUIZ_WORDS`] distinct positions, 1 to 24, in ascending order, chosen
+    /// at random: the words to ask for.
+    ///
+    /// # Errors
+    /// When randomness is unavailable.
+    pub fn quiz() -> Result<Vec<usize>, IdentityError> {
+        let mut picked: Vec<usize> = Vec::with_capacity(QUIZ_WORDS);
+        while picked.len() < QUIZ_WORDS {
+            let mut byte = [0u8; 1];
+            random(&mut byte)?;
+            // 240 is the largest multiple of 24 under 256: no position is
+            // likelier than another.
+            if byte[0] >= 240 {
+                continue;
+            }
+            let position = usize::from(byte[0] % 24) + 1;
+            if !picked.contains(&position) {
+                picked.push(position);
+            }
+        }
+        picked.sort_unstable();
+        Ok(picked)
+    }
+
+    /// Whether `answers` are this phrase's words at `positions` (1-based),
+    /// in order, ignoring case and the space around them. A position out of
+    /// range, or a count that does not match, is not an answer.
+    #[must_use]
+    pub fn answers(&self, positions: &[usize], answers: &[String]) -> bool {
+        let words: Vec<&str> = self.mnemonic.words().collect();
+        positions.len() == answers.len()
+            && !positions.is_empty()
+            && positions.iter().zip(answers).all(|(position, answer)| {
+                position
+                    .checked_sub(1)
+                    .and_then(|i| words.get(i))
+                    .is_some_and(|word| word.eq_ignore_ascii_case(answer.trim()))
+            })
+    }
+}
+
 impl Derived {
     /// The identity id: BLAKE3-256 of the root public key.
     #[must_use]
@@ -149,6 +195,30 @@ mod tests {
         let phrase = Phrase::from_entropy(&[0u8; 32]).unwrap();
         assert!(phrase.words().starts_with("abandon abandon abandon"));
         assert!(phrase.words().ends_with("abandon art"));
+    }
+
+    #[test]
+    fn the_quiz_asks_three_distinct_positions_and_checks_their_words() {
+        for _ in 0..50 {
+            let quiz = Phrase::quiz().unwrap();
+            assert_eq!(quiz.len(), QUIZ_WORDS);
+            assert!(quiz.windows(2).all(|w| w[0] < w[1]));
+            assert!(quiz.iter().all(|p| (1..=24).contains(p)));
+        }
+        let phrase = Phrase::from_entropy(&[0u8; 32]).unwrap();
+        let words: Vec<String> = phrase.words().split(' ').map(str::to_string).collect();
+        let right = vec![
+            words[0].clone(),
+            format!(" {} ", words[11].to_uppercase()),
+            words[23].clone(),
+        ];
+        assert!(phrase.answers(&[1, 12, 24], &right));
+        let wrong = vec![words[0].clone(), words[11].clone(), "zoo".to_string()];
+        assert!(!phrase.answers(&[1, 12, 24], &wrong));
+        assert!(!phrase.answers(&[1, 12], &right));
+        assert!(!phrase.answers(&[0, 12, 24], &right));
+        assert!(!phrase.answers(&[1, 12, 25], &right));
+        assert!(!phrase.answers(&[], &[]));
     }
 
     #[test]

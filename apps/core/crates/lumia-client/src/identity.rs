@@ -31,6 +31,10 @@ use crate::ClientError;
 
 const B64: base64::engine::GeneralPurpose = base64::engine::general_purpose::STANDARD;
 
+/// The keystore entry for a phrase this device made and keeps until the
+/// person confirms it (spec 4.1 step 7).
+const UNCONFIRMED_PHRASE: &str = "unconfirmed_phrase";
+
 /// Everything the flows touch for one instance.
 pub struct Device<'a, S: Store, K: Keystore> {
     /// The local store (identity id and roster live in its meta area).
@@ -66,6 +70,31 @@ impl<S: Store, K: Keystore> Device<'_, S, K> {
     /// # Errors
     /// On keystore, store, or randomness failure.
     pub fn create(&mut self, label: &str) -> Result<Created, ClientError> {
+        let phrase = Phrase::generate()?;
+        let identity_id = self.create_from(&phrase, label, DeviceKind::Native, "", false)?;
+        Ok(Created {
+            phrase: phrase.words(),
+            identity_id,
+        })
+    }
+
+    /// [`Device::create`] from a phrase already made, as a device of `kind`
+    /// (a WEB one scoped to `origin`). With `keep`, the phrase's entropy
+    /// stays in the keystore until [`Device::forget_phrase`], so a native
+    /// device can show it later and have it confirmed (spec 4.1 steps 4
+    /// and 7); a web device never keeps it. Returns the identity id, hex.
+    ///
+    /// # Errors
+    /// When this device already holds an identity, or on keystore or store
+    /// failure.
+    pub fn create_from(
+        &mut self,
+        phrase: &Phrase,
+        label: &str,
+        kind: DeviceKind,
+        origin: &str,
+        keep: bool,
+    ) -> Result<String, ClientError> {
         if self.store.meta_get("roster")?.is_some() {
             return Err(ClientError::State(
                 "this device already has an identity; its roster and backup key would be \
@@ -74,7 +103,6 @@ impl<S: Store, K: Keystore> Device<'_, S, K> {
                     .into(),
             ));
         }
-        let phrase = Phrase::generate()?;
         let derived = phrase.derive();
         let identity_id = derived.identity_id();
         let device_key = self.device_key_or_generate()?;
@@ -84,8 +112,8 @@ impl<S: Store, K: Keystore> Device<'_, S, K> {
             &NewDevice {
                 device_id: self.device_id.clone(),
                 public_key: device_key.verifying_key().to_bytes().to_vec(),
-                kind: DeviceKind::Native,
-                web_origin: String::new(),
+                kind,
+                web_origin: origin.to_string(),
                 label: label.to_string(),
                 added_at: now(),
             },
@@ -103,11 +131,65 @@ impl<S: Store, K: Keystore> Device<'_, S, K> {
         let roster = sign_roster(&body, Signer::Root(&derived.root));
 
         self.keystore.put("backup_key", &derived.backup_key)?;
+        if keep {
+            self.keystore.put(UNCONFIRMED_PHRASE, &phrase.entropy())?;
+        }
         self.save_roster(&identity_id, &roster)?;
-        Ok(Created {
-            phrase: phrase.words(),
-            identity_id: hex::encode(identity_id),
-        })
+        Ok(hex::encode(identity_id))
+    }
+
+    /// The phrase this device made and keeps until it is confirmed, if it
+    /// still does (spec 4.1 step 7).
+    ///
+    /// # Errors
+    /// On keystore failure, or kept bytes that are not a phrase's entropy.
+    pub fn kept_phrase(&self) -> Result<Option<Phrase>, ClientError> {
+        match self.keystore.get(UNCONFIRMED_PHRASE)? {
+            None => Ok(None),
+            Some(entropy) => Ok(Some(Phrase::from_entropy(&entropy)?)),
+        }
+    }
+
+    /// Deletes the kept phrase: the person has confirmed they hold it.
+    ///
+    /// # Errors
+    /// On keystore failure.
+    pub fn forget_phrase(&mut self) -> Result<(), ClientError> {
+        self.keystore.delete(UNCONFIRMED_PHRASE)?;
+        Ok(())
+    }
+
+    /// Deletes the backup key: a web device uses it within one flow and
+    /// never keeps it (spec 7).
+    ///
+    /// # Errors
+    /// On keystore failure.
+    pub fn forget_backup_key(&mut self) -> Result<(), ClientError> {
+        self.keystore.delete("backup_key")?;
+        Ok(())
+    }
+
+    /// Binds the signed-in account to this device's identity under a
+    /// reauth token already in hand (spec 4.6), one a sign-in carried or
+    /// [`Api::reauth`] gave.
+    ///
+    /// # Errors
+    /// On API failure: a spent token, or `CONFLICT` when the account is
+    /// bound to another identity.
+    pub async fn link_account_with(&self, api: &Api, reauth: &str) -> Result<(), ClientError> {
+        let proof = self.prove(api, ChallengePurpose::LinkAccount).await?;
+        api.link_identity(proof, reauth).await
+    }
+
+    /// Starting over (spec 4.7): the signed-in account, bound to another
+    /// identity, moved to this device's.
+    ///
+    /// # Errors
+    /// On API failure: a spent token, or `ALREADY_EXISTS` when this
+    /// identity is another account's there.
+    pub async fn rebind_account(&self, api: &Api, reauth: &str) -> Result<(), ClientError> {
+        let proof = self.prove(api, ChallengePurpose::LinkAccount).await?;
+        api.rebind_identity(proof, reauth).await
     }
 
     /// The signed profile this identity carries, if one was set.
@@ -539,6 +621,24 @@ impl<S: Store, K: Keystore> Device<'_, S, K> {
         phrase: &str,
         label: &str,
     ) -> Result<TokenPair, ClientError> {
+        self.recover_as(api, phrase, label, DeviceKind::Native, "")
+            .await
+    }
+
+    /// [`Device::recover`] as a device of `kind`, a WEB one scoped to
+    /// `origin` (spec 7: the flagship's origin only, which the shell keeps
+    /// to; a web device then forgets the backup key).
+    ///
+    /// # Errors
+    /// As [`Device::recover`].
+    pub async fn recover_as(
+        &mut self,
+        api: &Api,
+        phrase: &str,
+        label: &str,
+        kind: DeviceKind,
+        origin: &str,
+    ) -> Result<TokenPair, ClientError> {
         let derived = Phrase::parse(phrase)?.derive();
         let root_public = derived.root.verifying_key().to_bytes().to_vec();
         let device_key = self.device_key_or_generate()?;
@@ -548,8 +648,8 @@ impl<S: Store, K: Keystore> Device<'_, S, K> {
             let device = NewDevice {
                 device_id: device_id.clone(),
                 public_key: device_public.clone(),
-                kind: DeviceKind::Native,
-                web_origin: String::new(),
+                kind,
+                web_origin: origin.to_string(),
                 label: label.to_string(),
                 added_at: now(),
             };

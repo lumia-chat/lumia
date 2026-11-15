@@ -1149,7 +1149,7 @@ impl Client {
         self.app.foreground().map_err(js)
     }
 
-    // ---- Identity (a web device is linked from a native one) ----
+    // ---- Identity (identity spec 7: linked, created, or restored on the flagship's origin) ----
 
     /// Whether this device holds an identity roster.
     #[must_use]
@@ -1174,6 +1174,132 @@ impl Client {
     #[wasm_bindgen(js_name = identityClaim)]
     pub async fn identity_claim(&self, code: String) -> Result<JsValue, JsError> {
         to_js(&self.app.identity_claim(&code).await.map_err(js)?)
+    }
+
+    /// The identity the signed-in account is bound to here, hex, or null.
+    ///
+    /// # Errors
+    /// When not signed in, or on transport failure.
+    #[wasm_bindgen(js_name = accountIdentity)]
+    pub async fn account_identity(&self) -> Result<Option<String>, JsError> {
+        self.app.account_identity().await.map_err(js_api)
+    }
+
+    /// Whether a reauth token is in hand for identity operations.
+    #[must_use]
+    #[wasm_bindgen(js_name = hasReauth)]
+    pub fn has_reauth(&self) -> bool {
+        self.app.has_reauth()
+    }
+
+    /// Reauth by the account's password.
+    ///
+    /// # Errors
+    /// `UNAUTHENTICATED` for a wrong one.
+    #[wasm_bindgen(js_name = reauthPassword)]
+    pub async fn reauth_password(&self, password: String) -> Result<(), JsError> {
+        self.app.reauth_password(&password).await.map_err(js_api)
+    }
+
+    /// Reauth by a TOTP code, or by the mailed code when `mailed`.
+    ///
+    /// # Errors
+    /// `UNAUTHENTICATED` for a wrong one.
+    #[wasm_bindgen(js_name = reauthCode)]
+    pub async fn reauth_code(&self, code: String, mailed: bool) -> Result<(), JsError> {
+        self.app.reauth_code(&code, mailed).await.map_err(js_api)
+    }
+
+    /// Mails six digits to the account's address for `reauthCode`.
+    ///
+    /// # Errors
+    /// `FAILED_PRECONDITION` (`no_email`), `POLICY_DENIED`, `RATE_LIMITED`.
+    #[wasm_bindgen(js_name = reauthMailCode)]
+    pub async fn reauth_mail_code(&self) -> Result<(), JsError> {
+        self.app.reauth_mail_code().await.map_err(js_api)
+    }
+
+    /// The URL of a fresh OIDC login landing at `returnTo` with `?reauth=`.
+    ///
+    /// # Errors
+    /// `FAILED_PRECONDITION` (`no_oidc`).
+    #[wasm_bindgen(js_name = reauthOidcUrl)]
+    pub async fn reauth_oidc_url(&self, return_to: String) -> Result<String, JsError> {
+        self.app.reauth_oidc_url(&return_to).await.map_err(js_api)
+    }
+
+    /// Holds the reauth token an OIDC login landed with.
+    #[wasm_bindgen(js_name = reauthTake)]
+    pub fn reauth_take(&self, token: String) {
+        self.app.reauth_take(&token);
+    }
+
+    /// A new phrase held in memory, shown and confirmed before the identity
+    /// is made: a browser keeps none (identity spec 7).
+    ///
+    /// # Errors
+    /// When randomness is unavailable.
+    #[wasm_bindgen(js_name = identityNewPhrase)]
+    pub fn identity_new_phrase(&self) -> Result<String, JsError> {
+        self.app.identity_new_phrase().map_err(js)
+    }
+
+    /// Three positions, 1 to 24, to ask the person for.
+    ///
+    /// # Errors
+    /// When there is no phrase to confirm.
+    #[wasm_bindgen(js_name = identityPhraseQuiz)]
+    pub async fn identity_phrase_quiz(&self) -> Result<Vec<u32>, JsError> {
+        self.app.identity_phrase_quiz().await.map_err(js)
+    }
+
+    /// Checks the words for the quiz's positions.
+    ///
+    /// # Errors
+    /// When there is no phrase or quiz.
+    #[wasm_bindgen(js_name = identityPhraseConfirm)]
+    pub async fn identity_phrase_confirm(&self, words: Vec<String>) -> Result<bool, JsError> {
+        self.app.identity_phrase_confirm(words).await.map_err(js)
+    }
+
+    /// Sets up private messages here from the confirmed phrase, the account
+    /// bound under the reauth in hand. Returns the identity id, hex.
+    ///
+    /// # Errors
+    /// Without a confirmed phrase, without reauth, or when the account
+    /// already has an identity.
+    #[wasm_bindgen(js_name = identitySetup)]
+    pub async fn identity_setup(&self, label: String) -> Result<String, JsError> {
+        self.app.identity_setup(&label).await.map_err(js_api)
+    }
+
+    /// Starting over: the account moved to an identity made here.
+    ///
+    /// # Errors
+    /// As `identitySetup`; `ALREADY_EXISTS`.
+    #[wasm_bindgen(js_name = identityStartOver)]
+    pub async fn identity_start_over(&self, label: String) -> Result<String, JsError> {
+        self.app.identity_start_over(&label).await.map_err(js_api)
+    }
+
+    /// Restores the identity from its phrase here: only on the flagship's
+    /// origin, which the page keeps to (identity spec 7).
+    ///
+    /// # Errors
+    /// A phrase that is not the identity's; API failure.
+    #[wasm_bindgen(js_name = identityRecover)]
+    pub async fn identity_recover(
+        &self,
+        phrase: String,
+        label: String,
+    ) -> Result<JsValue, JsError> {
+        to_js(
+            &self
+                .app
+                .identity_recover(&phrase, &label)
+                .await
+                .map_err(js_api)?,
+        )
     }
 
     /// Signs in by identity proof with the roster this device holds.

@@ -1026,3 +1026,188 @@ async fn the_rail_is_arranged_kept_and_told() {
         "the instance keeps the last one made"
     );
 }
+
+// ---- Setting up private messages (identity spec 4.1, 4.3, 4.7; issue #20) ----
+
+fn web_device(base: &str) -> Device {
+    let mut device = Device::new(base);
+    let at = device.dir.clone();
+    let opener: Opener = Arc::new(move |name| {
+        SqliteStore::open(&at.join(match name {
+            StoreName::Instance => "web-store.sqlite",
+            StoreName::Keys => "web-keys.sqlite",
+            StoreName::IdentityStore => "web-identity.sqlite",
+            StoreName::IdentityKeys => "web-identity-keys.sqlite",
+        }))
+    });
+    // The instance's own origin: a WEB device's proofs are taken there.
+    let origin = base.trim_end_matches('/').to_string();
+    device.app = App::open(base, Place::Web { origin }, opener).unwrap();
+    device
+}
+
+impl Device {
+    /// The same device with its app opened again over the same stores.
+    fn reopen(&mut self, base: &str) {
+        self.app.stop();
+        let at = self.dir.clone();
+        let opener: Opener = Arc::new(move |name| {
+            SqliteStore::open(&at.join(match name {
+                StoreName::Instance => "store.sqlite",
+                StoreName::Keys => "keys.sqlite",
+                StoreName::IdentityStore => "identity.sqlite",
+                StoreName::IdentityKeys => "identity-keys.sqlite",
+            }))
+        });
+        self.app = App::open(base, Place::Native, opener).unwrap();
+    }
+}
+
+/// The words at the quiz's positions.
+fn answers(phrase: &str, quiz: &[u32]) -> Vec<String> {
+    let words: Vec<&str> = phrase.split(' ').collect();
+    quiz.iter()
+        .map(|p| words[*p as usize - 1].to_string())
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_native_sign_up_sets_up_silently_and_the_phrase_is_confirmed_later() {
+    let Some(base) = instance() else { return };
+    let mut phone = Device::new(&base);
+    let handle = format!("setup{}", stamp());
+    phone
+        .app
+        .create_account(&handle, PASSWORD, None)
+        .await
+        .unwrap();
+    // The sign-up proved a password: its answer carried a reauth token.
+    assert!(phone.app.has_reauth());
+    assert_eq!(phone.app.account_identity().await.unwrap(), None);
+
+    let identity = phone.app.identity_setup("Phone").await.unwrap();
+    assert_eq!(
+        phone.app.account_identity().await.unwrap(),
+        Some(identity.clone())
+    );
+    assert!(!phone.app.has_reauth(), "binding spent the token");
+
+    // Kept until confirmed, across the app opening again, and it is the
+    // phrase of this identity's root.
+    assert!(phone.app.identity_phrase_unconfirmed().await.unwrap());
+    let phrase = phone.app.identity_phrase().await.unwrap().unwrap();
+    let derived = lumia_core::identity::phrase::Phrase::parse(&phrase)
+        .unwrap()
+        .derive();
+    assert_eq!(hex::encode(derived.identity_id()), identity);
+    phone.reopen(&base);
+    assert_eq!(
+        phone.app.identity_phrase().await.unwrap(),
+        Some(phrase.clone())
+    );
+
+    // A wrong word asks other positions.
+    let quiz = phone.app.identity_phrase_quiz().await.unwrap();
+    assert_eq!(quiz.len(), 3);
+    assert_eq!(
+        phone.app.identity_phrase_quiz().await.unwrap(),
+        quiz,
+        "the same until answered"
+    );
+    let mut wrong = answers(&phrase, &quiz);
+    wrong[2] = "zoo".into();
+    assert!(!phone.app.identity_phrase_confirm(wrong).await.unwrap());
+    let quiz = phone.app.identity_phrase_quiz().await.unwrap();
+    assert!(phone
+        .app
+        .identity_phrase_confirm(answers(&phrase, &quiz))
+        .await
+        .unwrap());
+    assert!(!phone.app.identity_phrase_unconfirmed().await.unwrap());
+    assert_eq!(phone.app.identity_phrase().await.unwrap(), None);
+
+    // Setting up again is a no-op for the device that holds it.
+    assert_eq!(phone.app.identity_setup("Phone").await.unwrap(), identity);
+
+    // Another device of the same account is sent to link or restore,
+    // never given a second identity.
+    let laptop = Device::new(&base);
+    laptop.app.sign_in(&handle, PASSWORD, None).await.unwrap();
+    assert!(matches!(
+        laptop.app.identity_setup("Laptop").await,
+        Err(lumia_client::ClientError::AccountHasIdentity)
+    ));
+    assert!(!laptop.app.has_identity());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_browser_confirms_the_phrase_before_it_sets_up_and_keeps_none() {
+    let Some(base) = instance() else { return };
+    let browser = web_device(&base);
+    let handle = format!("websetup{}", stamp());
+    browser
+        .app
+        .create_account(&handle, PASSWORD, None)
+        .await
+        .unwrap();
+    assert!(browser.app.identity_setup("Browser").await.is_err());
+
+    let phrase = browser.app.identity_new_phrase().unwrap();
+    assert!(
+        browser.app.identity_setup("Browser").await.is_err(),
+        "an unconfirmed phrase sets nothing up"
+    );
+    let quiz = browser.app.identity_phrase_quiz().await.unwrap();
+    assert!(browser
+        .app
+        .identity_phrase_confirm(answers(&phrase, &quiz))
+        .await
+        .unwrap());
+    let identity = browser.app.identity_setup("Browser").await.unwrap();
+    assert_eq!(
+        browser.app.account_identity().await.unwrap(),
+        Some(identity)
+    );
+    assert!(!browser.app.identity_phrase_unconfirmed().await.unwrap());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_phrase_restores_on_a_new_device_and_starting_over_moves_the_account() {
+    let Some(base) = instance() else { return };
+    let phone = Device::new(&base);
+    let handle = format!("restore{}", stamp());
+    phone
+        .app
+        .create_account(&handle, PASSWORD, None)
+        .await
+        .unwrap();
+    let identity = phone.app.identity_setup("Phone").await.unwrap();
+    let phrase = phone.app.identity_phrase().await.unwrap().unwrap();
+
+    // Every device gone but the phrase: a new one restores it, alone.
+    let replacement = Device::new(&base);
+    let roster = replacement
+        .app
+        .identity_recover(&phrase, "Replacement")
+        .await
+        .unwrap();
+    assert_eq!(roster.identity_id, identity);
+    assert!(replacement.app.signed_in());
+    assert_eq!(
+        replacement.app.account_identity().await.unwrap(),
+        Some(identity.clone())
+    );
+
+    // Neither device nor phrase: start over, under the sign-in's reauth.
+    let fresh = Device::new(&base);
+    fresh.app.sign_in(&handle, PASSWORD, None).await.unwrap();
+    let new = fresh.app.identity_start_over("Fresh").await.unwrap();
+    assert_ne!(new, identity);
+    assert_eq!(fresh.app.account_identity().await.unwrap(), Some(new));
+    assert!(matches!(
+        fresh.app.identity_start_over("Fresh").await,
+        Err(lumia_client::ClientError::ReauthNeeded)
+    ));
+    fresh.app.reauth_password(PASSWORD).await.unwrap();
+    assert!(fresh.app.has_reauth());
+}

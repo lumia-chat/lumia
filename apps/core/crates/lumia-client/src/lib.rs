@@ -82,6 +82,16 @@ pub enum ClientError {
     /// Required local state is missing.
     #[error("{0}")]
     State(String),
+    /// An identity operation needs a fresh reauth this session does not
+    /// hold (identity spec 10): the shell asks for the password, a code, a
+    /// passkey or an OIDC login, then calls again.
+    #[error("confirm it is you first")]
+    ReauthNeeded,
+    /// The account is bound to an identity this device does not hold: the
+    /// shell offers to link this device or restore from the phrase, never
+    /// to set up a second identity.
+    #[error("this account already has private messages set up on another device")]
+    AccountHasIdentity,
     /// A message body over the instance's limit (protocol 14), refused
     /// before it is sent: `over` is how many characters must go.
     #[error("this message is {over} characters too long")]

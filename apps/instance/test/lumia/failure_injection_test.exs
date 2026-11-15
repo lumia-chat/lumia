@@ -35,14 +35,19 @@ defmodule Lumia.FailureInjectionTest do
       "lumia-core identity::safety::tests::a_root_rotation_changes_the_safety_number (the safety number); the verifier and the instance's acceptance are tagged"
   }
 
+  # Cases that are the client's alone, with no instance half to tag, and
+  # the test that covers them.
+  @client_only %{
+    {:identity, 17} =>
+      "lumia-client tests/live_app.rs a_native_sign_up_sets_up_silently_and_the_phrase_is_confirmed_later (against a running instance)"
+  }
+
   # Cases with no test yet, each with the reason. Shrinking this map is the
   # work; a case may not be both pending and covered.
   @pending %{
     {:authorization, 7} => "bot tokens and their scopes (authorization section 8) are not built",
     {:authorization, 8} =>
-      "the NOT_FOUND half is covered; the override endpoints (authorization section 7) are not built",
-    {:identity, 17} =>
-      "the core does not keep an unconfirmed phrase's entropy yet (identity section 4.1, #20)"
+      "the NOT_FOUND half is covered; the override endpoints (authorization section 7) are not built"
   }
 
   # The pending cases whose instance half is covered and tagged anyway.
@@ -69,6 +74,13 @@ defmodule Lumia.FailureInjectionTest do
       flunk("#{inspect(key)} is named as covered elsewhere but no spec lists it")
     end
 
+    for {key, _} <- @client_only do
+      assert key in keys, "#{inspect(key)} is named as the client's but no spec lists it"
+
+      refute Map.has_key?(covered, key) or Map.has_key?(@pending, key),
+             "#{inspect(key)} is named as the client's alone, so it is neither tagged nor pending"
+    end
+
     for key <- @partly_covered do
       assert Map.has_key?(@pending, key) and Map.has_key?(covered, key),
              "#{inspect(key)} is listed as partly covered: it needs a pending reason and a tag"
@@ -82,6 +94,7 @@ defmodule Lumia.FailureInjectionTest do
       for {spec, n, text} <- cases,
           not Map.has_key?(covered, {spec, n}),
           not Map.has_key?(@pending, {spec, n}),
+          not Map.has_key?(@client_only, {spec, n}),
           do: "#{spec} #{n}: #{text}"
 
     assert missing == [], "cases without a tagged test:\n" <> Enum.join(missing, "\n")

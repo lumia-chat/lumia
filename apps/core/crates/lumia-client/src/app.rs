@@ -1246,6 +1246,21 @@ struct Inner {
     channel_servers: HashMap<Vec<u8>, String>,
     /// The rail arrangements this client sent ([`App::arrange_rail`]).
     rails: RailSends,
+    /// The reauth token the last sign-in carried or a reauth gave, until an
+    /// identity operation spends it (identity spec 10). Memory only.
+    reauth: Option<String>,
+    /// A phrase made before its identity, held in memory only: the web's
+    /// sign-up shows and confirms it first (identity spec 4.1 step 7).
+    held_phrase: Option<HeldPhrase>,
+    /// The positions last asked for, of the held or kept phrase.
+    quiz: Option<Vec<usize>>,
+}
+
+/// A phrase made and not yet an identity's, and whether the person has
+/// shown they hold it.
+struct HeldPhrase {
+    entropy: Vec<u8>,
+    confirmed: bool,
 }
 
 /// The arrangements of the rail this client has sent: how many, how many
@@ -1515,6 +1530,9 @@ impl App {
                 shows_deleted: HashSet::new(),
                 channel_servers: HashMap::new(),
                 rails: RailSends::default(),
+                reauth: None,
+                held_phrase: None,
+                quiz: None,
             }),
             rail_turn: AsyncMutex::new(()),
             max_message_bytes: AtomicU32::new(body::MAX_MESSAGE_BYTES),
@@ -3795,6 +3813,375 @@ impl App {
         Ok(roster_summary(&roster, &self.device_id))
     }
 
+    // ---- Setting up (identity spec 4.1, 4.3, 4.7; architecture 5.4) ----
+
+    /// The identity the signed-in account is bound to on this instance,
+    /// hex, or none: what tells "set up here" from "link this device"
+    /// (`Account.identity_id`).
+    ///
+    /// # Errors
+    /// When not signed in, or on transport failure.
+    pub async fn account_identity(&self) -> Result<Option<String>, ClientError> {
+        let snap = self.api.account_snapshot().await?;
+        Ok(snap
+            .account
+            .map(|a| a.identity_id)
+            .filter(|id| !id.is_empty())
+            .map(hex::encode))
+    }
+
+    /// Whether a reauth token is in hand for identity operations.
+    #[must_use]
+    pub fn has_reauth(&self) -> bool {
+        self.lock().reauth.is_some()
+    }
+
+    /// Reauth by the account's password.
+    ///
+    /// # Errors
+    /// `UNAUTHENTICATED` for a wrong one; transport failure.
+    pub async fn reauth_password(&self, password: &str) -> Result<(), ClientError> {
+        let resp = self.api.reauth_password(password).await?;
+        self.lock().reauth = Some(resp.reauth_token);
+        Ok(())
+    }
+
+    /// Reauth by a TOTP code, or by the code [`App::reauth_mail_code`]
+    /// mailed (`mailed`).
+    ///
+    /// # Errors
+    /// `UNAUTHENTICATED` for a wrong one; transport failure.
+    pub async fn reauth_code(&self, code: &str, mailed: bool) -> Result<(), ClientError> {
+        use lumia_core::proto::reauth_request::Credential;
+        let credential = if mailed {
+            Credential::MagicCode(code.trim().into())
+        } else {
+            Credential::TotpCode(code.trim().into())
+        };
+        let resp = self
+            .api
+            .reauth(lumia_core::proto::ReauthRequest {
+                credential: Some(credential),
+                ..Default::default()
+            })
+            .await?;
+        self.lock().reauth = Some(resp.reauth_token);
+        Ok(())
+    }
+
+    /// Mails six digits to the account's address for [`App::reauth_code`].
+    ///
+    /// # Errors
+    /// `FAILED_PRECONDITION` (`no_email`), `POLICY_DENIED`, `RATE_LIMITED`.
+    pub async fn reauth_mail_code(&self) -> Result<(), ClientError> {
+        self.api.reauth_mail_code().await
+    }
+
+    /// The URL of a fresh login at the account's OIDC provider, which lands
+    /// at `return_to` with `?reauth={token}` for [`App::reauth_take`].
+    ///
+    /// # Errors
+    /// `FAILED_PRECONDITION` (`no_oidc`); transport failure.
+    pub async fn reauth_oidc_url(&self, return_to: &str) -> Result<String, ClientError> {
+        self.api.reauth_oidc_start(return_to).await
+    }
+
+    /// Holds a reauth token an OIDC login landed with.
+    pub fn reauth_take(&self, token: &str) {
+        self.lock().reauth = Some(token.trim().to_string()).filter(|t| !t.is_empty());
+    }
+
+    fn take_reauth(&self) -> Result<String, ClientError> {
+        self.lock().reauth.take().ok_or(ClientError::ReauthNeeded)
+    }
+
+    /// A new phrase held in memory, for a flow that shows and confirms it
+    /// before the identity is made (the web's sign-up): its words. Making
+    /// another forgets the last.
+    ///
+    /// # Errors
+    /// When randomness is unavailable.
+    pub fn identity_new_phrase(&self) -> Result<String, ClientError> {
+        let phrase = lumia_core::identity::phrase::Phrase::generate()?;
+        let mut inner = self.lock();
+        inner.held_phrase = Some(HeldPhrase {
+            entropy: phrase.entropy(),
+            confirmed: false,
+        });
+        inner.quiz = None;
+        Ok(phrase.words())
+    }
+
+    /// The phrase this device keeps until it is confirmed (a native device
+    /// that set up silently), or none once it is. A shell shows it only
+    /// after the device's own unlock.
+    ///
+    /// # Errors
+    /// On a keystore failure.
+    pub async fn identity_phrase(&self) -> Result<Option<String>, ClientError> {
+        let mut stores = self.identity.lock().await;
+        Ok(device(&mut stores, &self.device_id)
+            .kept_phrase()?
+            .map(|p| p.words()))
+    }
+
+    /// Whether the phrase still waits to be confirmed: what the reminders
+    /// on Home and Devices follow.
+    ///
+    /// # Errors
+    /// On a keystore failure.
+    pub async fn identity_phrase_unconfirmed(&self) -> Result<bool, ClientError> {
+        Ok(self.identity_phrase().await?.is_some())
+    }
+
+    /// Three positions (1 to 24) to ask for, of the held phrase, else the
+    /// kept one. The same until answered.
+    ///
+    /// # Errors
+    /// When there is no phrase to ask about.
+    pub async fn identity_phrase_quiz(&self) -> Result<Vec<u32>, ClientError> {
+        if self.quiz_phrase().await?.is_none() {
+            return Err(ClientError::State("there is no phrase to confirm".into()));
+        }
+        let mut inner = self.lock();
+        let quiz = match &inner.quiz {
+            Some(quiz) => quiz.clone(),
+            None => {
+                let quiz = lumia_core::identity::phrase::Phrase::quiz()?;
+                inner.quiz = Some(quiz.clone());
+                quiz
+            }
+        };
+        Ok(quiz
+            .into_iter()
+            .map(|p| u32::try_from(p).unwrap_or(0))
+            .collect())
+    }
+
+    /// Checks the words given for [`App::identity_phrase_quiz`]'s positions.
+    /// Right: a kept phrase is deleted and the reminders end, or a held one
+    /// is marked confirmed. Wrong: the next quiz asks other positions, and
+    /// the shell shows the phrase again (identity spec 4.1 step 7).
+    ///
+    /// # Errors
+    /// When there is no phrase or no quiz to answer; on a keystore failure.
+    pub async fn identity_phrase_confirm(&self, words: Vec<String>) -> Result<bool, ClientError> {
+        let phrase = self
+            .quiz_phrase()
+            .await?
+            .ok_or_else(|| ClientError::State("there is no phrase to confirm".into()))?;
+        let quiz = self
+            .lock()
+            .quiz
+            .take()
+            .ok_or_else(|| ClientError::State("ask for the quiz first".into()))?;
+        if !phrase.answers(&quiz, &words) {
+            return Ok(false);
+        }
+        let held = {
+            let mut inner = self.lock();
+            match inner.held_phrase.as_mut() {
+                Some(held) => {
+                    held.confirmed = true;
+                    true
+                }
+                None => false,
+            }
+        };
+        if !held {
+            let mut stores = self.identity.lock().await;
+            device(&mut stores, &self.device_id).forget_phrase()?;
+        }
+        Ok(true)
+    }
+
+    async fn quiz_phrase(
+        &self,
+    ) -> Result<Option<lumia_core::identity::phrase::Phrase>, ClientError> {
+        let held = self.lock().held_phrase.as_ref().map(|h| h.entropy.clone());
+        if let Some(entropy) = held {
+            return Ok(Some(lumia_core::identity::phrase::Phrase::from_entropy(
+                &entropy,
+            )?));
+        }
+        let mut stores = self.identity.lock().await;
+        device(&mut stores, &self.device_id).kept_phrase()
+    }
+
+    /// Sets up private messages on this device for the signed-in account
+    /// (identity spec 4.1): an identity made here unless this device holds
+    /// one, the account bound to it, and the identity backup written.
+    ///
+    /// The phrase: a held one ([`App::identity_new_phrase`]) is used once
+    /// confirmed; without one, a native device makes one and keeps it until
+    /// confirmed, and a web device refuses (it shows and confirms the phrase
+    /// first, keeping none). Binding an account takes a reauth token in
+    /// hand, the sign-in's or a reauth's, else fails with
+    /// [`ClientError::ReauthNeeded`]; a second call after that binds without making
+    /// another identity.
+    ///
+    /// # Errors
+    /// [`ClientError::AccountHasIdentity`] when the account is bound to another
+    /// identity (the shell offers link and restore); [`ClientError::ReauthNeeded`];
+    /// a web device without a confirmed phrase; API or store failure.
+    pub async fn identity_setup(&self, label: &str) -> Result<String, ClientError> {
+        let bound = self
+            .api
+            .account_snapshot()
+            .await?
+            .account
+            .map(|a| a.identity_id);
+        let bound = bound.filter(|id| !id.is_empty());
+        let mine = self.held_identity_id().await?;
+        if let Some(bound) = &bound {
+            if mine.as_ref() == Some(bound) {
+                return Ok(hex::encode(bound));
+            }
+            return Err(ClientError::AccountHasIdentity);
+        }
+        let identity_id = match mine {
+            Some(id) => hex::encode(id),
+            None => self.make_identity(label).await?,
+        };
+        let reauth = self.take_reauth()?;
+        let api = self.api.clone();
+        {
+            let mut stores = self.identity.lock().await;
+            device(&mut stores, &self.device_id)
+                .link_account_with(&api, &reauth)
+                .await?;
+        }
+        self.after_identity().await?;
+        Ok(identity_id)
+    }
+
+    /// Starting over (identity spec 4.7): the signed-in account, bound to
+    /// an identity this person can no longer reach, moved to this device's,
+    /// made here as [`App::identity_setup`] makes one when there is none.
+    /// Needs a reauth token in hand. A shell says first whether contacts
+    /// will see a key change.
+    ///
+    /// # Errors
+    /// [`ClientError::ReauthNeeded`]; `ALREADY_EXISTS` when this device's identity is
+    /// another account's there; a web device without a confirmed phrase;
+    /// API or store failure.
+    pub async fn identity_start_over(&self, label: &str) -> Result<String, ClientError> {
+        let identity_id = match self.held_identity_id().await? {
+            Some(id) => hex::encode(id),
+            None => self.make_identity(label).await?,
+        };
+        let reauth = self.take_reauth()?;
+        let api = self.api.clone();
+        {
+            let mut stores = self.identity.lock().await;
+            device(&mut stores, &self.device_id)
+                .rebind_account(&api, &reauth)
+                .await?;
+        }
+        self.after_identity().await?;
+        Ok(identity_id)
+    }
+
+    /// Restores the identity from its phrase on this device, every other
+    /// device of it revoked (identity spec 4.3), and signs in by it. A web
+    /// device forgets the backup key after; a shell offers this on the web
+    /// only on the flagship's origin (spec 7).
+    ///
+    /// # Errors
+    /// A phrase that is not the identity's, or was rotated away; API failure.
+    pub async fn identity_recover(
+        &self,
+        phrase: &str,
+        label: &str,
+    ) -> Result<RosterSummary, ClientError> {
+        let (kind, origin) = self.device_kind();
+        let api = self.api.clone();
+        let mut stores = self.identity.lock().await;
+        let mut dev = device(&mut stores, &self.device_id);
+        let pair = dev.recover_as(&api, phrase, label, kind, &origin).await?;
+        if kind == DeviceKind::Web {
+            dev.forget_backup_key()?;
+        }
+        let roster = dev.roster()?;
+        drop(stores);
+        self.take_session(&pair).await?;
+        self.announce_device().await;
+        Ok(roster_summary(&roster, &self.device_id))
+    }
+
+    fn device_kind(&self) -> (DeviceKind, String) {
+        match &self.place {
+            Place::Web { origin } => (DeviceKind::Web, origin.clone()),
+            Place::Native => (DeviceKind::Native, String::new()),
+        }
+    }
+
+    async fn held_identity_id(&self) -> Result<Option<Vec<u8>>, ClientError> {
+        let mut stores = self.identity.lock().await;
+        let dev = device(&mut stores, &self.device_id);
+        if dev.store.meta_get("roster")?.is_none() {
+            return Ok(None);
+        }
+        Ok(Some(dev.roster()?.identity_id))
+    }
+
+    /// Makes this device's identity from the held, confirmed phrase, or on
+    /// a native device from a new one it keeps until confirmed.
+    async fn make_identity(&self, label: &str) -> Result<String, ClientError> {
+        use lumia_core::identity::phrase::Phrase;
+        let (kind, origin) = self.device_kind();
+        let held = self.lock().held_phrase.take();
+        let (phrase, keep) = match held {
+            Some(HeldPhrase {
+                entropy,
+                confirmed: true,
+            }) => (Phrase::from_entropy(&entropy)?, false),
+            Some(unconfirmed) => {
+                self.lock().held_phrase = Some(unconfirmed);
+                return Err(ClientError::State("confirm the phrase first".into()));
+            }
+            None if kind == DeviceKind::Web => {
+                return Err(ClientError::State(
+                    "a browser shows and confirms the phrase before it sets up".into(),
+                ))
+            }
+            None => (Phrase::generate()?, true),
+        };
+        let mut stores = self.identity.lock().await;
+        device(&mut stores, &self.device_id).create_from(&phrase, label, kind, &origin, keep)
+    }
+
+    /// After this device's identity is bound: the identity backup written
+    /// (a web device then forgets the backup key, spec 7), and its key
+    /// packages published when the gateway already runs.
+    async fn after_identity(&self) -> Result<(), ClientError> {
+        let account = self.api.account_snapshot().await?.account;
+        let accounts = account
+            .map(|a| {
+                vec![lumia_core::proto::HostAccount {
+                    host: self.host.clone(),
+                    account_id: a.account_id,
+                }]
+            })
+            .unwrap_or_default();
+        let api = self.api.clone();
+        {
+            let mut stores = self.identity.lock().await;
+            let mut dev = device(&mut stores, &self.device_id);
+            let written = dev.write_backup(&api, accounts).await;
+            if self.device_kind().0 == DeviceKind::Web {
+                dev.forget_backup_key()?;
+            }
+            // The identity stands without its backup; the next native write
+            // brings it up to date.
+            if let Err(e) = written {
+                tracing::warn!("identity backup not written: {e}");
+            }
+        }
+        self.announce_device().await;
+        Ok(())
+    }
+
     // ---- Push ----
 
     /// Registers this device's Web Push subscription with the instance.
@@ -4229,6 +4616,9 @@ impl App {
     async fn take_session(&self, pair: &TokenPair) -> Result<(), ClientError> {
         let held = self.api.tokens();
         self.save_tokens(pair)?;
+        // A reauth token is the session's that earned it: a new session
+        // brings its own or none (identity spec 10).
+        self.lock().reauth = Some(pair.reauth_token.clone()).filter(|t| !t.is_empty());
         if held.access.is_some() {
             let _ = self.api.revoke(held).await;
         }

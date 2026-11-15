@@ -2221,6 +2221,91 @@ impl Client {
             .into())
     }
 
+    // ---- Setting up (identity spec 4.1, 4.3, 4.7) ----
+
+    /// The identity the signed-in account is bound to here, hex, or none.
+    pub fn account_identity(&self) -> Res<Option<String>> {
+        Ok(self.runtime.block_on(self.app.account_identity())?)
+    }
+
+    /// Whether a reauth token is in hand for identity operations.
+    pub fn has_reauth(&self) -> bool {
+        self.app.has_reauth()
+    }
+
+    /// Reauth by the account's password.
+    pub fn reauth_password(&self, password: String) -> Res<()> {
+        Ok(self.runtime.block_on(self.app.reauth_password(&password))?)
+    }
+
+    /// Reauth by a TOTP code, or by the mailed code when `mailed`.
+    pub fn reauth_code(&self, code: String, mailed: bool) -> Res<()> {
+        Ok(self.runtime.block_on(self.app.reauth_code(&code, mailed))?)
+    }
+
+    /// Mails six digits to the account's address for `reauth_code`.
+    pub fn reauth_mail_code(&self) -> Res<()> {
+        Ok(self.runtime.block_on(self.app.reauth_mail_code())?)
+    }
+
+    /// The URL of a fresh OIDC login landing at `return_to` with `?reauth=`.
+    pub fn reauth_oidc_url(&self, return_to: String) -> Res<String> {
+        Ok(self
+            .runtime
+            .block_on(self.app.reauth_oidc_url(&return_to))?)
+    }
+
+    /// Holds the reauth token an OIDC login landed with.
+    pub fn reauth_take(&self, token: String) {
+        self.app.reauth_take(&token);
+    }
+
+    /// The phrase kept until confirmed, or none once it is. Shown only after
+    /// the device's own unlock.
+    pub fn identity_phrase(&self) -> Res<Option<String>> {
+        Ok(self.runtime.block_on(self.app.identity_phrase())?)
+    }
+
+    /// Whether the phrase still waits to be confirmed (the reminders).
+    pub fn identity_phrase_unconfirmed(&self) -> Res<bool> {
+        Ok(self
+            .runtime
+            .block_on(self.app.identity_phrase_unconfirmed())?)
+    }
+
+    /// Three positions, 1 to 24, to ask the person for.
+    pub fn identity_phrase_quiz(&self) -> Res<Vec<u32>> {
+        Ok(self.runtime.block_on(self.app.identity_phrase_quiz())?)
+    }
+
+    /// Checks the words for the quiz's positions; right ends the reminders.
+    pub fn identity_phrase_confirm(&self, words: Vec<String>) -> Res<bool> {
+        Ok(self
+            .runtime
+            .block_on(self.app.identity_phrase_confirm(words))?)
+    }
+
+    /// Sets up private messages here: an identity made unless held, the
+    /// account bound to it under the reauth in hand. Returns its id, hex.
+    pub fn identity_setup(&self, label: String) -> Res<String> {
+        Ok(self.runtime.block_on(self.app.identity_setup(&label))?)
+    }
+
+    /// Starting over: the account moved to this device's identity.
+    pub fn identity_start_over(&self, label: String) -> Res<String> {
+        Ok(self
+            .runtime
+            .block_on(self.app.identity_start_over(&label))?)
+    }
+
+    /// Restores the identity from its phrase here and signs in by it.
+    pub fn identity_recover(&self, phrase: String, label: String) -> Res<RosterSummary> {
+        Ok(self
+            .runtime
+            .block_on(self.app.identity_recover(&phrase, &label))?
+            .into())
+    }
+
     // ---- Push ----
 
     /// Registers this device's push token with the instance: `platform`

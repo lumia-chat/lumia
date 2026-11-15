@@ -60,6 +60,7 @@ use lumia_core::proto::{
     PutHistoryManifestRequest, PutIdentityBackupRequest, RespondDmRequestRequest,
     SendDmRequestRequest, SignedHistoryManifest,
 };
+use lumia_core::proto::{ReauthOidcStartRequest, ReauthOidcStartResponse, RebindIdentityRequest};
 use prost::Message;
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use reqwest::StatusCode;
@@ -592,6 +593,69 @@ impl Api {
             &ReauthRequest {
                 credential: Some(reauth_request::Credential::Password(password.into())),
                 ..Default::default()
+            },
+        )
+        .await
+    }
+
+    /// `POST /auth/reauth` with any credential (identity spec 10): a TOTP
+    /// code, a mailed code, or a passkey assertion with its challenge.
+    ///
+    /// # Errors
+    /// On transport failure or an API error (`UNAUTHENTICATED` for a wrong one).
+    pub async fn reauth(&self, req: ReauthRequest) -> Result<ReauthResponse, ClientError> {
+        self.post("/api/v1/auth/reauth", &req).await
+    }
+
+    /// `POST /auth/reauth/magic-link`: six digits mailed to the account's
+    /// address, for [`Api::reauth`].
+    ///
+    /// # Errors
+    /// `FAILED_PRECONDITION` (`no_email`), `POLICY_DENIED` when the instance
+    /// sends no mail, `RATE_LIMITED`, or transport failure.
+    pub async fn reauth_mail_code(&self) -> Result<(), ClientError> {
+        self.empty(
+            reqwest::Method::POST,
+            "/api/v1/auth/reauth/magic-link",
+            None,
+        )
+        .await
+    }
+
+    /// `POST /auth/reauth/oidc/start`: the provider's URL for a fresh login,
+    /// landing at `return_to` with `?reauth={token}`.
+    ///
+    /// # Errors
+    /// `FAILED_PRECONDITION` (`no_oidc`) for an account not bound to the
+    /// provider, or transport failure.
+    pub async fn reauth_oidc_start(&self, return_to: &str) -> Result<String, ClientError> {
+        let resp: ReauthOidcStartResponse = self
+            .post(
+                "/api/v1/auth/reauth/oidc/start",
+                &ReauthOidcStartRequest {
+                    return_to: return_to.into(),
+                },
+            )
+            .await?;
+        Ok(resp.url)
+    }
+
+    /// `POST /identity/rebind`: starting over (identity spec 4.7), the
+    /// signed-in account moved to the identity the proof is for.
+    ///
+    /// # Errors
+    /// `ALREADY_EXISTS` for an identity bound to another account there,
+    /// `FAILED_PRECONDITION` (`unbound`), or transport failure.
+    pub async fn rebind_identity(
+        &self,
+        proof: IdentityProof,
+        reauth_token: &str,
+    ) -> Result<(), ClientError> {
+        self.post_empty(
+            "/api/v1/identity/rebind",
+            &RebindIdentityRequest {
+                proof: Some(proof),
+                reauth_token: reauth_token.into(),
             },
         )
         .await
