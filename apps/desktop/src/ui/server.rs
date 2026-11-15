@@ -8,8 +8,8 @@ use lumia_client::app::{ChannelSummary, MemberSummary, ServerSummary};
 use rune::{Cursor, El, ScrollSpec, col, el, icon, row, text, text_input};
 
 use super::components::{
-    Look, avatar_of, count_badge, error_text, icon_button, link_button, notice, panel,
-    section_label, small_button, status_dot, tag,
+    Look, avatar_of, count_badge, error_text, icon_button, link_button, panel, section_label,
+    small_button, status_dot, tag, toned_notice,
 };
 use super::conversation::{self, Chrome};
 use super::server_popovers as popovers;
@@ -434,18 +434,18 @@ pub fn main(s: &State, server: &ServerSummary, look: Look) -> El {
     )
 }
 
-/// A server DM: titled by the other person, with what it is said once at its top
-/// (architecture 6.4).
+/// A server DM: titled by the other person beside the server it is in, with what it is said
+/// once at its top (architecture 6.4).
 fn server_dm(s: &State, server: &ServerSummary, channel: &ChannelSummary, look: Look) -> El {
     let partner = s.session.dm_partner(channel);
     let name = s.session.name_of(partner);
-    let note = notice(
-        &icons::SHIELD,
+    let note = toned_notice(
+        &icons::EYE,
         format!(
             "Messages here are kept by {} and follow its message history settings. For an encrypted conversation, message privately.",
             server.name
         ),
-        look,
+        t::caution(look.c),
     )
     .key("server-dm-note");
     conversation::view_with(
@@ -459,6 +459,8 @@ fn server_dm(s: &State, server: &ServerSummary, channel: &ChannelSummary, look: 
             aside: None,
         },
         conversation::Extras {
+            // Whose the conversation is, beside who it is with.
+            topic: Some(server.name.clone()),
             notices: vec![note],
             empty_glyph: Some(&icons::USER),
             ..conversation::Extras::default()

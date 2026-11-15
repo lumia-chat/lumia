@@ -256,6 +256,20 @@ pub fn caution(c: &Colors) -> Caution {
     }
 }
 
+/// The green of what is end-to-end encrypted: a personal conversation's notice. A caution's
+/// shape in the green tone, its ink at 25% for the edge and on the glyph and the words.
+pub fn secure(c: &Colors) -> Caution {
+    Caution {
+        fill: c.tone_green,
+        edge: Color {
+            a: 0.25,
+            ..c.tone_green_ink
+        },
+        ink: c.tone_green_ink,
+        glyph: c.tone_green_ink,
+    }
+}
+
 /// A word of the recovery phrase on screen: the body's size in the mono slot, at the
 /// author's weight (the boards' JetBrains Mono 500 at 15, which the design system ships
 /// no face for).

@@ -802,6 +802,28 @@ pub fn notice(glyph: &'static Icon, words: impl Into<String>, look: Look) -> El 
         )
 }
 
+/// A notice in a tone (`t::secure`, `t::caution`): what kind of conversation this is, said so
+/// it is seen. The quiet notice's measures, on the tone's ground with its edge.
+pub fn toned_notice(glyph: &'static Icon, words: impl Into<String>, tone: t::Caution) -> El {
+    row()
+        .w_full()
+        .px(t::SPACE_14)
+        .py(t::SPACE_10)
+        .gap(t::SPACE_10)
+        .radius(t::RADIUS_12)
+        .fill(tone.fill)
+        .border(1.0, tone.edge)
+        .child(icon(glyph, t::SPACE_16).color(tone.glyph))
+        .child(
+            text(words)
+                .font(t::TEXT_COMPACT)
+                .color(tone.ink)
+                .wrap()
+                .grow(1.0)
+                .min_w(0.0),
+        )
+}
+
 /// A choice that is on or off: a box that holds a tick when it is on, the words beside it,
 /// and a quieter line under them when there is one. The whole row toggles it.
 pub fn check_row(

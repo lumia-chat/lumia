@@ -15,7 +15,7 @@ use super::{action_button, at, no_identity, person};
 use crate::app::{HomeView, State};
 use crate::tokens::{self as t, icons};
 use crate::ui::components::{
-    Look, empty_state, error_text, notice, panel, section_label, small_button, tag,
+    Look, empty_state, error_text, notice, panel, section_label, small_button, tag, toned_notice,
 };
 use crate::ui::conversation::{self, Chrome, Extras};
 use crate::ui::scroll::WithScrollBar;
@@ -66,13 +66,13 @@ pub fn view(s: &State, look: Look) -> El {
             .collect::<Vec<_>>()
             .join(", ")
     };
-    let mut notices = vec![notice(
+    let mut notices = vec![toned_notice(
         &icons::SHIELD,
         format!(
             "Messages here are end-to-end encrypted. Only your devices and those of {readers} \
              can read them."
         ),
-        look,
+        t::secure(look.c),
     )];
     if member == Some(false) {
         notices.push(rejoin_notice(s, look));
