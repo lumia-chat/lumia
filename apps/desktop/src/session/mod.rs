@@ -1406,6 +1406,8 @@ impl Session {
                 channel_adds_by_invitation: false,
                 server_dms_off: false,
             }),
+            // Linking's to follow (`State::link_session_moved`).
+            AppEvent::LinkSessionUpdated { .. } => {}
             AppEvent::Error {
                 command_id,
                 message,

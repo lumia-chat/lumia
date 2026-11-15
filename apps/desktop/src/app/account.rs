@@ -5,14 +5,14 @@
 //!
 //! Linking this computer, signed in to the account, is by a prompt on the account's devices
 //! that hold the identity (identity spec 4.2.1): it opens a session at once, and follows it
-//! ([`Prompted`]) on every account event and every two seconds ([`super::prompts::due`])
+//! ([`Prompted`]) whenever it moves (`LinkSessionUpdated`) and every two seconds ([`super::prompts::due`])
 //! until it ends. From sign-in, with no account signed in to hold a session, it is the
 //! copied request and the typed code (4.2), which "Link another way" also offers under the
 //! waiting screen.
 
 use std::path::Path;
 
-use lumia_client::app::LinkProgress;
+use lumia_client::app::{LINK_GIVEN_UP, LinkProgress};
 use rune::{FileDialogOptions, TextEdit, Tx};
 
 use super::{HomeView, Place, Popover, Route, State};
@@ -39,7 +39,7 @@ pub struct Link {
     /// The copied request and the typed code, chosen under the waiting screen.
     pub another_way: bool,
     /// A question to the instance about the session is on its way; `again` asks once more
-    /// when it lands, for an account event that came meanwhile.
+    /// when it lands, for a move of the session that came meanwhile.
     pub asking: bool,
     pub again: bool,
     /// When the session was last asked about, in microseconds.
@@ -86,7 +86,7 @@ impl Prompted {
         }
     }
 
-    /// Whether a session is open and followed: asked about on every account event and
+    /// Whether a session is open and followed: asked about whenever it moves and
     /// every two seconds.
     pub fn followed(&self) -> bool {
         matches!(self, Self::Waiting | Self::Compare(_))
@@ -557,6 +557,9 @@ impl State {
             return;
         }
         match update {
+            // Given up, or started again, while it opened: the core declined that session,
+            // and the answer that counts is the later one's.
+            IdentityUpdate::LinkStarted(Err(failure)) if failure.message == LINK_GIVEN_UP => {}
             IdentityUpdate::LinkStarted(answer) => {
                 let form = &mut self.account.link;
                 // Given up meanwhile: the session it opened is declined too.

@@ -37,10 +37,17 @@ fn progress(stage: &str, digits: &str) -> LinkProgress {
     }
 }
 
+/// A refusal as the instance sends it: a step out of turn says which in `details.state`,
+/// anything else in `details.reason`.
 fn failure(code: &str, reason: Option<&str>, message: &str) -> Failure {
     let mut details = HashMap::new();
     if let Some(reason) = reason {
-        details.insert("reason".to_string(), reason.to_string());
+        let key = if code == "FAILED_PRECONDITION" {
+            "state"
+        } else {
+            "reason"
+        };
+        details.insert(key.to_string(), reason.to_string());
     }
     Failure {
         code: code.into(),
@@ -148,7 +155,7 @@ fn a_computer_signed_in_links_by_a_prompt_and_compares_the_digits() {
 }
 
 #[test]
-fn the_session_is_asked_about_every_two_seconds_and_on_account_events_one_at_a_time() {
+fn the_session_is_asked_about_every_two_seconds_and_when_it_moves_one_at_a_time() {
     let mut rt = waiting();
     let at = rt.state.account.link.asked_at;
     assert!(!rt.state.account.link.asking);
@@ -156,11 +163,19 @@ fn the_session_is_asked_about_every_two_seconds_and_on_account_events_one_at_a_t
     rt.state.tick(at + POLL);
     assert!(rt.state.account.link.asking, "asked after two seconds");
     assert_eq!(rt.state.account.link.asked_at, at + POLL);
-    assert_eq!(rt.state.prompt_wake(at + POLL), Some(POLL));
+    // Nothing to wake for while the question is on its way, however long it takes.
+    assert_eq!(rt.state.prompt_wake(at + 3 * POLL), None);
 
-    // An account event while the question is on its way asks once more when it lands.
+    // Another account event asks nothing; the session moving while the question is on its
+    // way asks once more when it lands.
     rt.update(|s, _| {
         s.receive(&Update::Gateway(AppEvent::AccountApplied { count: 1 }));
+    });
+    assert!(!rt.state.account.link.again);
+    rt.update(|s, _| {
+        s.receive(&Update::Gateway(AppEvent::LinkSessionUpdated {
+            session_id: "s".into(),
+        }));
     });
     assert!(rt.state.account.link.again);
     receive(
@@ -274,6 +289,27 @@ fn cancelling_while_it_opens_forgets_the_late_answer() {
     );
     assert_eq!(rt.state.route, Route::Shell);
     assert_eq!(rt.state.account.link.prompted, Prompted::Idle);
+}
+
+#[test]
+fn a_start_given_up_while_it_opened_does_not_end_the_one_after() {
+    let mut rt = elsewhere();
+    press(&mut rt, "setup-link");
+    press(&mut rt, "link-cancel");
+    press(&mut rt, "setup-link");
+    assert_eq!(rt.state.account.link.prompted, Prompted::Starting);
+    // The first start's answer: the core declined its session.
+    receive(
+        &mut rt,
+        IdentityUpdate::LinkStarted(Err(failure("", None, lumia_client::app::LINK_GIVEN_UP))),
+    );
+    assert_eq!(rt.state.account.link.prompted, Prompted::Starting);
+    assert!(rt.state.account.link.error.is_empty());
+    receive(
+        &mut rt,
+        IdentityUpdate::LinkStarted(Ok(progress("waiting", ""))),
+    );
+    assert_eq!(rt.state.account.link.prompted, Prompted::Waiting);
 }
 
 #[test]
@@ -497,6 +533,17 @@ fn refusals_are_worded_and_a_failed_question_changes_nothing() {
     );
     shows(&rt, &["Another of your devices answered it first."]);
     assert!(!rt.state.prompts.busy);
+
+    press(&mut rt, "prompt-continue");
+    receive(
+        &mut rt,
+        IdentityUpdate::PromptAnswered(Err(failure(
+            "FAILED_PRECONDITION",
+            Some("declined"),
+            "declined",
+        ))),
+    );
+    shows(&rt, &["It was declined on another of your devices."]);
 
     receive(&mut rt, IdentityUpdate::Prompts(Ok(vec![phone("compare")])));
     press(&mut rt, "prompt-match");

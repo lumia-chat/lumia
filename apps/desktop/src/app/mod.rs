@@ -582,8 +582,11 @@ impl State {
                     self.device_removed();
                 }
                 self.react_gateway(event);
-                if matches!(event, lumia_client::app::AppEvent::AccountApplied { .. }) {
-                    self.account_event();
+                if matches!(
+                    event,
+                    lumia_client::app::AppEvent::LinkSessionUpdated { .. }
+                ) {
+                    self.link_session_moved();
                 }
             }
             Update::Read(_)

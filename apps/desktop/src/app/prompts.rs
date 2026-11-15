@@ -4,8 +4,9 @@
 //! then show the same six digits, and "They match" approves the new device and hands it its
 //! code; "Not me" and "They don’t match" decline it. What the prompt says at each stage is
 //! here ([`title`], [`line`]), with when the sessions are asked about: at launch and
-//! sign-in once this computer is set up, when the window comes in front, on every account
-//! event, and every two seconds ([`due`]) while a prompt is open.
+//! sign-in once this computer is set up, when the window comes in front, whenever a link
+//! session moves (`LinkSessionUpdated`), and every two seconds ([`due`]) while a prompt is
+//! open and no question about it is on its way.
 //!
 //! "They match" approves without this computer's own unlock first, as Approve a device on
 //! Devices does: Rune reaches no system prompt (Touch ID, Windows Hello, polkit), and the
@@ -125,18 +126,23 @@ pub fn linked(prompt: &LinkPrompt) -> String {
     format!("{name} is linked.")
 }
 
-/// Why a call on a prompt was refused.
+/// Why a call on a prompt was refused. A link session's step out of turn says which in
+/// `details.state` (protocol section 10).
 fn refusal(failure: &Failure) -> String {
+    let state = failure.details.get("state").map(String::as_str);
     let reason = failure.details.get("reason").map(String::as_str);
-    match (failure.code.as_str(), reason) {
-        ("FAILED_PRECONDITION", Some("answered")) => {
+    match (failure.code.as_str(), state, reason) {
+        ("FAILED_PRECONDITION", Some("answered"), _) => {
             "Another of your devices answered it first.".into()
         }
+        ("FAILED_PRECONDITION", Some("declined"), _) => {
+            "It was declined on another of your devices.".into()
+        }
         // A device past the roster's twenty (identity spec 11).
-        (_, Some("too_many_devices")) => {
+        (_, _, Some("too_many_devices")) => {
             "Your identity already has as many devices as it can hold. Revoke one first.".into()
         }
-        ("NOT_FOUND", _) => "That request has ended.".into(),
+        ("NOT_FOUND", _, _) => "That request has ended.".into(),
         _ => failure.message.clone(),
     }
 }
@@ -158,9 +164,8 @@ impl State {
         self.session.link_prompts();
     }
 
-    /// An account event arrived: a link session may have moved, this computer's or one
-    /// that prompts here.
-    pub(super) fn account_event(&mut self) {
+    /// A link session moved, this computer's or one that prompts here.
+    pub(super) fn link_session_moved(&mut self) {
         let now = chrono::Utc::now().timestamp_micros();
         self.ask_link_progress(now);
         self.ask_prompts(now);
@@ -244,12 +249,15 @@ impl State {
     }
 
     /// When the window next has something to do for linking by a prompt, in microseconds
-    /// from `now`: ask about a session, or put a prompt's end away.
+    /// from `now`: ask about a session, or put a prompt's end away. Not while a question is
+    /// on its way: asking again then only marks it to be asked once more when it lands, and
+    /// waking for it would wake every frame until it did.
     pub fn prompt_wake(&self, now: i64) -> Option<i64> {
         let link = &self.account.link;
         let asks = [
-            link.prompted.followed().then_some(link.asked_at + POLL),
-            (!self.prompts.list.is_empty()).then_some(self.prompts.asked_at + POLL),
+            (link.prompted.followed() && !link.asking).then_some(link.asked_at + POLL),
+            (!self.prompts.list.is_empty() && !self.prompts.asking)
+                .then_some(self.prompts.asked_at + POLL),
             self.prompts.ended.as_ref().map(|e| e.until),
         ];
         asks.into_iter()
