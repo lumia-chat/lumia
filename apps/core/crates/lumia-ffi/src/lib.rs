@@ -492,6 +492,238 @@ pub struct MessageSummary {
     pub reactions: Vec<ReactionSummary>,
     /// It mentions this account or everyone, or quotes this account.
     pub mentions_me: bool,
+    /// What it carries (specs/media.md); empty once deleted.
+    #[uniffi(default)]
+    pub attachments: Vec<AttachmentSummary>,
+    /// Its link cards, in the order their links appear.
+    #[uniffi(default)]
+    pub cards: Vec<CardSummary>,
+}
+
+/// One blob of an attachment or a card, with what opens it: handed back to
+/// [`Client::attachment_bytes`] as it was given, never decrypted by a shell.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct BlobSummary {
+    pub blob_id: String,
+    /// The stored ciphertext's length.
+    pub size_bytes: u64,
+    pub key: Vec<u8>,
+    pub nonce: Vec<u8>,
+    pub hash: Vec<u8>,
+}
+
+impl From<app::BlobSummary> for BlobSummary {
+    fn from(b: app::BlobSummary) -> Self {
+        Self {
+            blob_id: b.blob_id,
+            size_bytes: b.size_bytes,
+            key: b.key,
+            nonce: b.nonce,
+            hash: b.hash,
+        }
+    }
+}
+
+impl From<BlobSummary> for app::BlobSummary {
+    fn from(b: BlobSummary) -> Self {
+        Self {
+            blob_id: b.blob_id,
+            size_bytes: b.size_bytes,
+            key: b.key,
+            nonce: b.nonce,
+            hash: b.hash,
+        }
+    }
+}
+
+/// An attachment as a message carries it (specs/media.md 5).
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct AttachmentSummary {
+    pub attachment_id: String,
+    /// `image`, `gif`, `video`, `audio` or `file`.
+    pub kind: String,
+    pub name: String,
+    pub media_type: String,
+    /// After orientation; 0 when unknown.
+    pub width: u32,
+    pub height: u32,
+    /// Video and audio; 0 when unknown.
+    pub duration_ms: u32,
+    /// ThumbHash, drawn until the thumbnail arrives ([`placeholder_image`]).
+    pub placeholder: Vec<u8>,
+    pub alt: String,
+    /// The file's own size, for a file row.
+    pub size_bytes: u64,
+    pub main: BlobSummary,
+    /// At most 400 px: an image's, a GIF's first frame, a video's poster.
+    pub thumbnail: Option<BlobSummary>,
+}
+
+impl From<app::AttachmentSummary> for AttachmentSummary {
+    fn from(a: app::AttachmentSummary) -> Self {
+        Self {
+            attachment_id: a.attachment_id,
+            kind: a.kind,
+            name: a.name,
+            media_type: a.media_type,
+            width: a.width,
+            height: a.height,
+            duration_ms: a.duration_ms,
+            placeholder: a.placeholder,
+            alt: a.alt,
+            size_bytes: a.size_bytes,
+            main: a.main.into(),
+            thumbnail: a.thumbnail.map(Into::into),
+        }
+    }
+}
+
+/// A link's card (specs/media.md 6): drawn under the link, named by
+/// `host` (never `site_name`), opening `url`.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct CardSummary {
+    pub url: String,
+    pub title: String,
+    pub description: String,
+    pub site_name: String,
+    /// The site to show: the link's host.
+    pub host: String,
+    /// `#rrggbb`, or empty.
+    pub color: String,
+    /// Server content: the picture's path ([`Client::card_image`]).
+    pub image_url: String,
+    /// Personal DMs: the picture as a blob ([`Client::attachment_bytes`]).
+    pub image: Option<BlobSummary>,
+    pub image_width: u32,
+    pub image_height: u32,
+    /// The page is a video: a play symbol over its picture.
+    pub video: bool,
+}
+
+impl From<app::CardSummary> for CardSummary {
+    fn from(c: app::CardSummary) -> Self {
+        Self {
+            url: c.url,
+            title: c.title,
+            description: c.description,
+            site_name: c.site_name,
+            host: c.host,
+            color: c.color,
+            image_url: c.image_url,
+            image: c.image.map(Into::into),
+            image_width: c.image_width,
+            image_height: c.image_height,
+            video: c.video,
+        }
+    }
+}
+
+/// An attachment uploaded and waiting in the composer.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct AttachmentDraft {
+    pub draft_id: String,
+    pub channel_id: String,
+    pub kind: String,
+    pub name: String,
+    pub media_type: String,
+    pub width: u32,
+    pub height: u32,
+    pub duration_ms: u32,
+    pub placeholder: Vec<u8>,
+    pub alt: String,
+    pub size_bytes: u64,
+}
+
+impl From<app::AttachmentDraft> for AttachmentDraft {
+    fn from(d: app::AttachmentDraft) -> Self {
+        Self {
+            draft_id: d.draft_id,
+            channel_id: d.channel_id,
+            kind: d.kind,
+            name: d.name,
+            media_type: d.media_type,
+            width: d.width,
+            height: d.height,
+            duration_ms: d.duration_ms,
+            placeholder: d.placeholder,
+            alt: d.alt,
+            size_bytes: d.size_bytes,
+        }
+    }
+}
+
+/// Decoded pixels: RGBA8, row by row, upright.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct Pixels {
+    pub rgba: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// A file to attach and what the platform knows of it.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct AttachmentInput {
+    pub bytes: Vec<u8>,
+    pub name: String,
+    /// Sent as a file: a picture keeps its pixels, loses its metadata.
+    #[uniffi(default = false)]
+    pub as_file: bool,
+    /// The picture decoded by the platform (HEIC, HEIF), upright.
+    #[uniffi(default)]
+    pub pixels: Option<Pixels>,
+    /// A video's poster frame.
+    #[uniffi(default)]
+    pub poster: Option<Pixels>,
+    /// A video's or audio's length, when the platform read it.
+    #[uniffi(default)]
+    pub duration_ms: Option<u32>,
+    /// A video's size after rotation, when the platform read it; 0 if not.
+    #[uniffi(default = 0)]
+    pub video_width: u32,
+    #[uniffi(default = 0)]
+    pub video_height: u32,
+    /// An image's accessibility text.
+    #[uniffi(default = "")]
+    pub alt: String,
+}
+
+impl From<AttachmentInput> for app::AttachmentInput {
+    fn from(i: AttachmentInput) -> Self {
+        let pixels = |p: Pixels| app::PixelsInput {
+            rgba: p.rgba,
+            width: p.width,
+            height: p.height,
+        };
+        Self {
+            bytes: i.bytes,
+            name: i.name,
+            as_file: i.as_file,
+            pixels: i.pixels.map(pixels),
+            poster: i.poster.map(pixels),
+            duration_ms: i.duration_ms,
+            video_width: i.video_width,
+            video_height: i.video_height,
+            alt: i.alt,
+        }
+    }
+}
+
+/// The largest blob of each role the instance takes, in bytes.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UploadLimits {
+    pub image_max_bytes: u64,
+    pub file_max_bytes: u64,
+    pub thumbnail_max_bytes: u64,
+}
+
+impl From<app::UploadLimitsSummary> for UploadLimits {
+    fn from(l: app::UploadLimitsSummary) -> Self {
+        Self {
+            image_max_bytes: l.image_max_bytes,
+            file_max_bytes: l.file_max_bytes,
+            thumbnail_max_bytes: l.thumbnail_max_bytes,
+        }
+    }
 }
 
 /// A quote of another message of the conversation (architecture 6.6).
@@ -767,6 +999,8 @@ impl From<app::MessageSummary> for MessageSummary {
             mentions: m.mentions.into_iter().map(Into::into).collect(),
             reactions: m.reactions.into_iter().map(Into::into).collect(),
             mentions_me: m.mentions_me,
+            attachments: m.attachments.into_iter().map(Into::into).collect(),
+            cards: m.cards.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -935,6 +1169,12 @@ pub struct DmMessageSummary {
     pub reply: Option<QuoteSummary>,
     /// Its reactions, each emoji with who reacted where known.
     pub reactions: Vec<ReactionSummary>,
+    /// What it carries.
+    #[uniffi(default)]
+    pub attachments: Vec<AttachmentSummary>,
+    /// Its link cards: only those under a link its text holds.
+    #[uniffi(default)]
+    pub cards: Vec<CardSummary>,
 }
 
 impl From<app::DmMessageSummary> for DmMessageSummary {
@@ -952,6 +1192,8 @@ impl From<app::DmMessageSummary> for DmMessageSummary {
             mine: m.mine,
             reply: m.reply.map(Into::into),
             reactions: m.reactions.into_iter().map(Into::into).collect(),
+            attachments: m.attachments.into_iter().map(Into::into).collect(),
+            cards: m.cards.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -1356,6 +1598,33 @@ pub fn link_request_summary(request: String) -> Result<LinkRequestSummary, Lumia
     Ok(app::App::identity_link_request_summary(&request)?.into())
 }
 
+/// The links of a message body that may have cards, at most three, in order
+/// (specs/media.md 6.1): what a composer previews with
+/// [`Client::card_preview`].
+#[uniffi::export]
+pub fn card_links(body: String) -> Vec<String> {
+    App::card_links(&body)
+}
+
+/// Whether a picture someone sent may be handed to a decoder: its header
+/// names a size within the bounds (specs/media.md 5). One that is not is
+/// drawn as a file row.
+#[uniffi::export]
+pub fn attachment_drawable(bytes: Vec<u8>) -> bool {
+    App::attachment_drawable(&bytes)
+}
+
+/// An attachment's placeholder as a tiny picture (RGBA8) to scale up and
+/// draw until its thumbnail arrives; none for an empty or malformed one.
+#[uniffi::export]
+pub fn placeholder_image(placeholder: Vec<u8>) -> Option<Pixels> {
+    App::placeholder_image(&placeholder).map(|p| Pixels {
+        rgba: p.rgba,
+        width: p.width,
+        height: p.height,
+    })
+}
+
 /// The words of the recovery phrase's wordlist that begin with `prefix`, at
 /// most four: what a phrase field offers as the person types.
 #[uniffi::export]
@@ -1410,6 +1679,9 @@ impl Client {
             opener,
             &lock_dir.join("writer.lock"),
         )?;
+        // Opened attachments are kept beside the stores until the shell
+        // names a cache directory of its platform's.
+        app.set_media_cache_dir(lock_dir.join("media"));
         Ok(Arc::new(Self { runtime, app }))
     }
 
@@ -2617,5 +2889,158 @@ impl Client {
             .runtime
             .block_on(self.app.dm_messages(&channel_id))?
             .into())
+    }
+
+    // ---- Attachments and link cards (specs/media.md) ----
+
+    /// Keeps opened attachments in `path` (up to 512 MiB, least recently
+    /// used out first) instead of beside the stores: a platform cache
+    /// directory the system may clear.
+    pub fn set_media_cache_dir(&self, path: String) {
+        self.app.set_media_cache_dir(PathBuf::from(path));
+    }
+
+    /// What the instance takes of attachments; none when it keeps none, and
+    /// the composer then offers no way to attach.
+    pub fn upload_limits(&self) -> Res<Option<UploadLimits>> {
+        Ok(self
+            .runtime
+            .block_on(self.app.upload_limits())?
+            .map(Into::into))
+    }
+
+    /// Makes an attachment of a file and uploads it into the conversation:
+    /// processed here, sealed, stored. Answers the draft the composer
+    /// shows; a send names it by `draft_id`. Slow for a large file: call it
+    /// off the main thread, as every call here.
+    pub fn attach(&self, channel_id: String, input: AttachmentInput) -> Res<AttachmentDraft> {
+        Ok(self
+            .runtime
+            .block_on(self.app.attach(&channel_id, input.into()))?
+            .into())
+    }
+
+    /// Sets a waiting attachment's alt text.
+    pub fn set_attachment_alt(&self, draft_id: String, alt: String) -> Res<AttachmentDraft> {
+        Ok(self.app.set_attachment_alt(&draft_id, &alt)?.into())
+    }
+
+    /// Takes a waiting attachment out of the composer (its blobs off the
+    /// instance, best effort).
+    pub fn discard_attachment(&self, draft_id: String) {
+        self.runtime
+            .block_on(self.app.discard_attachment(&draft_id));
+    }
+
+    /// Sends a message in a server's channel with its mentions, its quote,
+    /// the waiting attachments `attachments` names (draft ids) and the
+    /// cards of `card_urls` (the links of [`card_links`] the person kept).
+    /// Returns the message id.
+    pub fn send_message_with_media(
+        &self,
+        channel_id: String,
+        body: String,
+        mentions: Vec<MentionSummary>,
+        reply_to: Option<QuoteSummary>,
+        attachments: Vec<String>,
+        card_urls: Vec<String>,
+    ) -> Res<String> {
+        let mentions: Vec<app::MentionSummary> = mentions.into_iter().map(Into::into).collect();
+        let reply_to: Option<app::QuoteSummary> = reply_to.map(Into::into);
+        Ok(self.app.send_message_with_media(
+            &channel_id,
+            &body,
+            &mentions,
+            reply_to.as_ref(),
+            &attachments,
+            &card_urls,
+        )?)
+    }
+
+    /// Edits one of this account's messages in a server's channel, dropping
+    /// the attachments named and, when `card_urls` is given, keeping only
+    /// those links' cards. Returns the command id.
+    pub fn edit_message_with_media(
+        &self,
+        channel_id: String,
+        message_id: String,
+        body: String,
+        mentions: Vec<MentionSummary>,
+        remove_attachment_ids: Vec<String>,
+        card_urls: Option<Vec<String>>,
+    ) -> Res<String> {
+        let mentions: Vec<app::MentionSummary> = mentions.into_iter().map(Into::into).collect();
+        Ok(self.app.edit_message_with_media(
+            &channel_id,
+            &message_id,
+            &body,
+            &mentions,
+            &remove_attachment_ids,
+            card_urls.as_deref(),
+        )?)
+    }
+
+    /// Sends a message in a personal DM with its quote, the waiting
+    /// attachments named and the cards of `card_urls` this device built
+    /// ([`Client::card_preview`]). Returns the message id.
+    pub fn dm_send_with_media(
+        &self,
+        channel_id: String,
+        body: String,
+        quote: Option<QuoteSummary>,
+        attachments: Vec<String>,
+        card_urls: Vec<String>,
+    ) -> Res<String> {
+        let quote: Option<app::QuoteSummary> = quote.map(Into::into);
+        Ok(self.runtime.block_on(self.app.dm_send_with_media(
+            &channel_id,
+            &body,
+            quote.as_ref(),
+            &attachments,
+            &card_urls,
+        ))?)
+    }
+
+    /// Edits one of this identity's messages in a personal DM, dropping the
+    /// attachments named and, when `card_urls` is given, keeping only those
+    /// links' cards.
+    pub fn dm_edit_with_media(
+        &self,
+        channel_id: String,
+        message_id: String,
+        body: String,
+        remove_attachment_ids: Vec<String>,
+        card_urls: Option<Vec<String>>,
+    ) -> Res<()> {
+        Ok(self.runtime.block_on(self.app.dm_edit_with_media(
+            &channel_id,
+            &message_id,
+            &body,
+            &remove_attachment_ids,
+            card_urls.as_deref(),
+        ))?)
+    }
+
+    /// The card to show under a link while composing: the instance's in a
+    /// server channel, this device's own in a personal one. None when the
+    /// page gives none.
+    pub fn card_preview(&self, channel_id: String, url: String) -> Res<Option<CardSummary>> {
+        Ok(self
+            .runtime
+            .block_on(self.app.card_preview(&channel_id, &url))?
+            .map(Into::into))
+    }
+
+    /// An attachment's or a DM card's blob, fetched, opened and kept. Check
+    /// [`attachment_drawable`] before decoding a picture.
+    pub fn attachment_bytes(&self, blob: BlobSummary) -> Res<Vec<u8>> {
+        Ok(self
+            .runtime
+            .block_on(self.app.attachment_bytes(&blob.into()))?)
+    }
+
+    /// A server card's picture, by its `image_url`.
+    pub fn card_image(&self, image_url: String) -> Res<Vec<u8>> {
+        Ok(self.runtime.block_on(self.app.card_image(&image_url))?)
     }
 }

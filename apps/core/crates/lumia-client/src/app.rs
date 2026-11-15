@@ -583,6 +583,260 @@ pub struct MessageSummary {
     /// Whether it notifies this account: it mentions it or everyone, or
     /// quotes one of its messages.
     pub mentions_me: bool,
+    /// What it carries (specs/media.md); empty once deleted.
+    #[serde(default)]
+    pub attachments: Vec<AttachmentSummary>,
+    /// Its link cards, in the order their links appear.
+    #[serde(default)]
+    pub cards: Vec<CardSummary>,
+}
+
+/// Bytes as a JSON string: base64, padded. Ids are strings everywhere a shell
+/// sees them; keys and placeholders are bytes the web carries the same way.
+mod b64 {
+    use base64::Engine as _;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(bytes: &[u8], s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&base64::engine::general_purpose::STANDARD.encode(bytes))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
+        let text = String::deserialize(d)?;
+        base64::engine::general_purpose::STANDARD
+            .decode(text)
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+/// One blob of an attachment or a card, with what opens it. A shell hands it
+/// back to [`App::attachment_bytes`] as it was given; it never decrypts.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BlobSummary {
+    pub blob_id: String,
+    /// The stored ciphertext's length: the plaintext's and 16.
+    pub size_bytes: u64,
+    #[serde(with = "b64")]
+    pub key: Vec<u8>,
+    #[serde(with = "b64")]
+    pub nonce: Vec<u8>,
+    /// BLAKE3-256 of the plaintext.
+    #[serde(with = "b64")]
+    pub hash: Vec<u8>,
+}
+
+/// An attachment as a message carries it (specs/media.md 5).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentSummary {
+    pub attachment_id: String,
+    /// `image`, `gif`, `video`, `audio` or `file`.
+    pub kind: String,
+    /// The name it is shown and saved under.
+    pub name: String,
+    pub media_type: String,
+    /// Images, GIFs and video, after orientation; 0 when unknown.
+    pub width: u32,
+    pub height: u32,
+    /// Video and audio, when known; 0 otherwise.
+    pub duration_ms: u32,
+    /// ThumbHash of the picture, poster or first frame, drawn until the
+    /// thumbnail arrives ([`App::placeholder_image`]); empty when none.
+    #[serde(with = "b64")]
+    pub placeholder: Vec<u8>,
+    /// An image's accessibility text.
+    pub alt: String,
+    /// The size of the file itself, for a file row.
+    pub size_bytes: u64,
+    /// The display picture, the GIF, the video, the audio or the file.
+    pub main: BlobSummary,
+    /// At most 400 px: an image's, a GIF's first frame, a video's poster.
+    pub thumbnail: Option<BlobSummary>,
+}
+
+/// A link's card (specs/media.md 6). Drawn only under a link the message's
+/// text holds, named by `host`, opening `url`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CardSummary {
+    /// The link as the text has it: what the card opens.
+    pub url: String,
+    pub title: String,
+    pub description: String,
+    /// The page's own name for its site. Not what a shell shows as the
+    /// site: in a personal DM the sender could have written anything.
+    pub site_name: String,
+    /// The site to show: the link's host, lowercase, without `www.`.
+    pub host: String,
+    /// `#rrggbb`, or empty.
+    pub color: String,
+    /// Server content: the picture, a path of this instance
+    /// ([`App::card_image`]); empty otherwise.
+    pub image_url: String,
+    /// Personal DMs: the picture, a blob ([`App::attachment_bytes`]).
+    pub image: Option<BlobSummary>,
+    pub image_width: u32,
+    pub image_height: u32,
+    /// The page is a video: drawn with a play symbol, opening the link.
+    pub video: bool,
+}
+
+/// An attachment uploaded and waiting in the composer: what its strip shows.
+/// It goes with the next send that names `draft_id`, or with
+/// [`App::discard_attachment`].
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentDraft {
+    pub draft_id: String,
+    pub channel_id: String,
+    /// As [`AttachmentSummary::kind`]: a picture sent as a file, or one that
+    /// could not be read, is a `file`.
+    pub kind: String,
+    /// The name it will be sent under (an image's extension is what the
+    /// core made of it).
+    pub name: String,
+    pub media_type: String,
+    pub width: u32,
+    pub height: u32,
+    pub duration_ms: u32,
+    #[serde(with = "b64")]
+    pub placeholder: Vec<u8>,
+    pub alt: String,
+    /// The size it will be sent at, after processing.
+    pub size_bytes: u64,
+}
+
+/// Decoded pixels: RGBA8, row by row.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PixelsInput {
+    pub rgba: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// A file a person chose to attach, and what the platform knows of it.
+#[derive(Debug, Clone, Default)]
+pub struct AttachmentInput {
+    /// The file's bytes, as chosen.
+    pub bytes: Vec<u8>,
+    /// The file's name.
+    pub name: String,
+    /// Sent as a file: a picture keeps its pixels and loses its metadata.
+    pub as_file: bool,
+    /// The picture decoded by the platform, upright, for a format the core
+    /// does not decode (HEIC, HEIF).
+    pub pixels: Option<PixelsInput>,
+    /// A video's poster frame, from the platform.
+    pub poster: Option<PixelsInput>,
+    /// A video's or audio's length, when the platform read it.
+    pub duration_ms: Option<u32>,
+    /// A video's size after rotation, when the platform read it (for WebM);
+    /// 0 when it did not.
+    pub video_width: u32,
+    pub video_height: u32,
+    /// An image's accessibility text.
+    pub alt: String,
+}
+
+/// The largest blob of each role the instance takes, in bytes of ciphertext.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct UploadLimitsSummary {
+    pub image_max_bytes: u64,
+    pub file_max_bytes: u64,
+    pub thumbnail_max_bytes: u64,
+}
+
+/// A placeholder opened as a picture: a few dozen pixels a side, RGBA8.
+#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaceholderImage {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
+fn kind_name(kind: i32) -> String {
+    match lumia_core::proto::AttachmentKind::try_from(kind) {
+        Ok(k) if k != lumia_core::proto::AttachmentKind::Unspecified => {
+            k.as_str_name().to_lowercase()
+        }
+        _ => "file".into(),
+    }
+}
+
+fn blob_summary(b: &lumia_core::proto::BlobRef) -> BlobSummary {
+    BlobSummary {
+        blob_id: hex_id(&b.blob_id),
+        size_bytes: b.size_bytes,
+        key: b.key.clone(),
+        nonce: b.nonce.clone(),
+        hash: b.hash.clone(),
+    }
+}
+
+fn blob_ref(b: &BlobSummary) -> Result<lumia_core::proto::BlobRef, ClientError> {
+    Ok(lumia_core::proto::BlobRef {
+        blob_id: parse_uuid(&b.blob_id)?,
+        size_bytes: b.size_bytes,
+        key: b.key.clone(),
+        nonce: b.nonce.clone(),
+        hash: b.hash.clone(),
+    })
+}
+
+fn attachment_summary(a: &lumia_core::proto::Attachment) -> AttachmentSummary {
+    let main = a.main.as_ref().map(blob_summary).unwrap_or_default();
+    AttachmentSummary {
+        attachment_id: hex_id(&a.attachment_id),
+        kind: kind_name(a.kind),
+        name: a.name.clone(),
+        media_type: a.media_type.clone(),
+        width: a.width,
+        height: a.height,
+        duration_ms: a.duration_ms,
+        placeholder: a.placeholder.clone(),
+        alt: a.alt.clone(),
+        size_bytes: main
+            .size_bytes
+            .saturating_sub(lumia_core::media::TAG_BYTES as u64),
+        main,
+        thumbnail: a.thumbnail.as_ref().map(blob_summary),
+    }
+}
+
+fn card_summary(c: &lumia_core::proto::Card) -> CardSummary {
+    CardSummary {
+        url: c.url.clone(),
+        title: c.title.clone(),
+        description: c.description.clone(),
+        site_name: c.site_name.clone(),
+        host: lumia_core::cards::host_for_display(&c.url).unwrap_or_default(),
+        color: c.color.clone(),
+        image_url: c.image_url.clone(),
+        image: c.image.as_ref().map(blob_summary),
+        image_width: c.image_width,
+        image_height: c.image_height,
+        video: c.video,
+    }
+}
+
+fn draft_summary(channel: &[u8], a: &lumia_core::proto::Attachment) -> AttachmentDraft {
+    let shown = attachment_summary(a);
+    AttachmentDraft {
+        draft_id: shown.attachment_id,
+        channel_id: hex_id(channel),
+        kind: shown.kind,
+        name: shown.name,
+        media_type: shown.media_type,
+        width: shown.width,
+        height: shown.height,
+        duration_ms: shown.duration_ms,
+        placeholder: shown.placeholder,
+        alt: shown.alt,
+        size_bytes: shown.size_bytes,
+    }
 }
 
 /// A quote of another message of the conversation (architecture 6.6).
@@ -741,6 +995,12 @@ pub struct DmMessageSummary {
     /// Its reactions, each emoji with who reacted (their accounts on this
     /// instance, where known).
     pub reactions: Vec<ReactionSummary>,
+    /// What it carries (specs/media.md).
+    #[serde(default)]
+    pub attachments: Vec<AttachmentSummary>,
+    /// Its link cards: only those under a link its text holds.
+    #[serde(default)]
+    pub cards: Vec<CardSummary>,
 }
 
 /// A personal conversation as this device can read it.
@@ -1048,6 +1308,8 @@ fn stored_summary(m: &lumia_core::store::StoredMessage, me: &[u8]) -> MessageSum
             })
             .collect(),
         mentions_me: !me.is_empty() && mentions_me,
+        attachments: m.attachments.iter().map(attachment_summary).collect(),
+        cards: m.cards.iter().map(card_summary).collect(),
     }
 }
 
@@ -1069,6 +1331,7 @@ fn event_summary(e: &Event) -> EventSummary {
             c.message.as_ref().map(|m| message_summary(m, &[])),
         ),
         Some(event::Payload::MessageEdited(_)) => ("message_edited", None),
+        Some(event::Payload::MessageCardsSet(_)) => ("message_cards_set", None),
         Some(event::Payload::MessageDeleted(_)) => ("message_deleted", None),
         Some(event::Payload::Encrypted(_)) => ("encrypted", None),
         Some(event::Payload::Redacted(_)) => ("redacted", None),
@@ -1576,7 +1839,34 @@ pub struct App {
     /// The largest message body the instance takes, in bytes: its
     /// `Welcome.limits`, or the protocol's until one arrives.
     max_message_bytes: AtomicU32,
+    /// Attachments waiting to be sent, cards made for personal DMs, and the
+    /// blobs opened (specs/media.md).
+    media: Mutex<Media>,
 }
+
+/// What this client holds of attachments and cards between calls. Memory
+/// only, but the opened blobs natively once a directory is given.
+#[derive(Default)]
+struct Media {
+    /// Uploaded and not yet sent, by attachment id.
+    drafts: HashMap<String, Draft>,
+    /// Cards this device built for links in personal conversations, by
+    /// conversation and link, for the next send there (specs/media.md 6.5).
+    dm_cards: HashMap<(Vec<u8>, String), lumia_core::proto::Card>,
+    /// What `GET /instance` said of uploads: `Some(None)` when it keeps no
+    /// blobs.
+    limits: Option<Option<lumia_core::proto::UploadLimits>>,
+    cache: crate::attachments::BlobCache,
+}
+
+/// An attachment uploaded into a conversation and not yet sent, keys and all.
+struct Draft {
+    channel_id: Vec<u8>,
+    attachment: lumia_core::proto::Attachment,
+}
+
+/// The largest picture of a server card fetched.
+const CARD_IMAGE_MAX_BYTES: usize = 1 << 20;
 
 impl std::fmt::Debug for App {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1732,6 +2022,7 @@ impl App {
             }),
             dm: Mutex::new(None),
             writer,
+            media: Mutex::new(Media::default()),
         }))
     }
 
@@ -3486,8 +3777,33 @@ impl App {
         mentions: &[MentionSummary],
         reply_to: Option<&QuoteSummary>,
     ) -> Result<String, ClientError> {
+        self.send_message_with_media(channel_id, body, mentions, reply_to, &[], &[])
+    }
+
+    /// [`App::send_message_with`], carrying the attachments `attachments`
+    /// names (draft ids from [`App::attach`], uploaded into this channel)
+    /// and asking for the cards of `card_urls`: the links of
+    /// [`App::card_links`] whose cards the person kept. The instance builds
+    /// those it has not yet and adds them to the message when they arrive.
+    /// The drafts go with the send; until it is queued they stay.
+    ///
+    /// # Errors
+    /// When not started, an id is malformed, the body is too long, or an
+    /// attachment is not one waiting for this channel; more than 10.
+    pub fn send_message_with_media(
+        &self,
+        channel_id: &str,
+        body: &str,
+        mentions: &[MentionSummary],
+        reply_to: Option<&QuoteSummary>,
+        attachments: &[String],
+        card_urls: &[String],
+    ) -> Result<String, ClientError> {
         self.fits(body)?;
         let channel = parse_uuid(channel_id)?;
+        let attachments = distinct(attachments);
+        let carried = self.drafts(&channel, &attachments)?;
+        let card_urls = cards_kept(body, card_urls);
         let id = wire::new_id();
         let mentions = mentions
             .iter()
@@ -3520,9 +3836,12 @@ impl App {
                 body: body.to_string(),
                 mentions,
                 reply_to,
+                attachments: carried,
+                card_urls,
                 ..Default::default()
             })),
         }))?;
+        self.sent_drafts(&attachments);
         Ok(wire::display(&id))
     }
 
@@ -3540,7 +3859,33 @@ impl App {
         body: &str,
         mentions: &[MentionSummary],
     ) -> Result<String, ClientError> {
+        self.edit_message_with_media(channel_id, message_id, body, mentions, &[], None)
+    }
+
+    /// [`App::edit_message`], dropping the attachments `remove_attachment_ids`
+    /// names (an edit cannot add one) and, when `card_urls` is given, keeping
+    /// the cards of those links only (a new one is fetched by the instance).
+    /// Without it, the cards of the links still in the body stay.
+    ///
+    /// # Errors
+    /// When not started or an id is malformed.
+    pub fn edit_message_with_media(
+        &self,
+        channel_id: &str,
+        message_id: &str,
+        body: &str,
+        mentions: &[MentionSummary],
+        remove_attachment_ids: &[String],
+        card_urls: Option<&[String]>,
+    ) -> Result<String, ClientError> {
         self.fits(body)?;
+        let removed = remove_attachment_ids
+            .iter()
+            .map(|id| parse_uuid(id))
+            .collect::<Result<Vec<_>, _>>()?;
+        let cards = card_urls.map(|urls| lumia_core::proto::CardUrls {
+            urls: cards_kept(body, urls),
+        });
         let channel = parse_uuid(channel_id)?;
         let mentions = mentions
             .iter()
@@ -3564,7 +3909,8 @@ impl App {
                 message_id: parse_uuid(message_id)?,
                 body: body.to_string(),
                 mentions,
-                ..Default::default()
+                remove_attachment_ids: removed,
+                cards,
             })),
         }))?;
         Ok(wire::display(&id))
@@ -3873,7 +4219,7 @@ impl App {
                         at,
                         NotificationContent {
                             title,
-                            body: send.body,
+                            body: notification_text(&send.body, &send.attachments),
                             channel_id: id.clone(),
                             kind: "dm".into(),
                         },
@@ -3911,7 +4257,7 @@ impl App {
                         at,
                         NotificationContent {
                             title,
-                            body: message.body,
+                            body: notification_text(&message.body, &message.attachments),
                             channel_id: id.clone(),
                             kind: "mention".into(),
                         },
@@ -5172,6 +5518,28 @@ impl App {
         body: &str,
         quote: Option<&QuoteSummary>,
     ) -> Result<String, ClientError> {
+        self.dm_send_with_media(channel_id, body, quote, &[], &[])
+            .await
+    }
+
+    /// [`App::dm_send_with`], carrying the attachments `attachments` names
+    /// (draft ids from [`App::attach`], uploaded into this conversation)
+    /// and the cards of `card_urls` this device built with
+    /// [`App::card_preview`] (a link without one goes without a card). The
+    /// blobs they use are named to the instance so it keeps them; the keys
+    /// travel only inside the encrypted message.
+    ///
+    /// # Errors
+    /// Without the group for the conversation, before the loop started, or
+    /// when an attachment is not one waiting for this conversation.
+    pub async fn dm_send_with_media(
+        &self,
+        channel_id: &str,
+        body: &str,
+        quote: Option<&QuoteSummary>,
+        attachments: &[String],
+        card_urls: &[String],
+    ) -> Result<String, ClientError> {
         self.fits(body)?;
         let channel = parse_uuid(channel_id)?;
         let quote = quote
@@ -5182,11 +5550,33 @@ impl App {
                 })
             })
             .transpose()?;
+        let attachments = distinct(attachments);
+        let carried = self.drafts(&channel, &attachments)?;
+        let cards = self.dm_cards_for(&channel, body, card_urls, &[]);
+        let blobs = crate::attachments::blob_ids(&carried, &cards);
         let engine = self.dm_engine_ready().await?;
         let mut e = engine.lock().await;
         e.load_participants(&channel)?;
-        let outcomes = e.send_text_quoting(&channel, body, quote)?;
+        let used: Vec<String> = cards.iter().map(|c| c.url.clone()).collect();
+        let outcomes = e.send_message(
+            &channel,
+            lumia_core::proto::DmSend {
+                body: body.to_string(),
+                quote,
+                attachments: carried,
+                cards,
+                ..Default::default()
+            },
+            blobs,
+        )?;
         drop(e);
+        self.sent_drafts(&attachments);
+        {
+            let mut media = self.media();
+            for url in used {
+                media.dm_cards.remove(&(channel.clone(), url));
+            }
+        }
         // The engine queues one command for a send; its id is the operation's.
         let id = outcomes
             .iter()
@@ -5232,15 +5622,85 @@ impl App {
         message_id: &str,
         body: &str,
     ) -> Result<(), ClientError> {
+        self.dm_edit_with_media(channel_id, message_id, body, &[], None)
+            .await
+    }
+
+    /// [`App::dm_edit`], dropping the attachments `remove_attachment_ids`
+    /// names and, when `card_urls` is given, keeping the cards of those
+    /// links only: a card the message had, or one this device built with
+    /// [`App::card_preview`]. Without it the cards of the links still in the
+    /// body stay. The blobs of what the edit drops are deleted once it is
+    /// sent (specs/media.md 4.4); that is best effort.
+    ///
+    /// # Errors
+    /// Without the group for the conversation, or before the loop started.
+    pub async fn dm_edit_with_media(
+        &self,
+        channel_id: &str,
+        message_id: &str,
+        body: &str,
+        remove_attachment_ids: &[String],
+        card_urls: Option<&[String]>,
+    ) -> Result<(), ClientError> {
         self.fits(body)?;
         let channel = parse_uuid(channel_id)?;
         let message = parse_uuid(message_id)?;
+        let removed = remove_attachment_ids
+            .iter()
+            .map(|id| parse_uuid(id))
+            .collect::<Result<Vec<_>, _>>()?;
         let engine = self.dm_engine_ready().await?;
         let mut e = engine.lock().await;
         e.load_participants(&channel)?;
-        let outcomes = e.send_edit(&channel, message, body)?;
+        let (projection, _, _) = project(&e, &channel)?;
+        let mine = projection
+            .message(&message)
+            .filter(|m| m.sender_identity_id == e.me().identity_id && !m.deleted)
+            .cloned();
+        let (had_attachments, had_cards) =
+            mine.map(|m| (m.attachments, m.cards)).unwrap_or_default();
+        let dropped: Vec<_> = had_attachments
+            .into_iter()
+            .filter(|a| removed.contains(&a.attachment_id))
+            .collect();
+        let cards = card_urls.map(|urls| self.dm_cards_for(&channel, body, urls, &had_cards));
+        let after = cards
+            .clone()
+            .unwrap_or_else(|| lumia_core::mls::projection::cards_in(body, &had_cards));
+        let before_blobs = crate::attachments::blob_ids(&[], &had_cards);
+        let after_blobs = crate::attachments::blob_ids(&[], &after);
+        let new_blobs: Vec<Vec<u8>> = after_blobs
+            .iter()
+            .filter(|id| !before_blobs.contains(id))
+            .cloned()
+            .collect();
+        let mut gone = crate::attachments::blob_ids(&dropped, &[]);
+        gone.extend(
+            before_blobs
+                .into_iter()
+                .filter(|id| !after_blobs.contains(id)),
+        );
+        let used: Vec<String> = after.iter().map(|c| c.url.clone()).collect();
+        let outcomes = e.send_edit_using(
+            &channel,
+            lumia_core::proto::DmEdit {
+                message_id: message,
+                body: body.to_string(),
+                remove_attachment_ids: removed,
+                cards: cards.map(|cards| lumia_core::proto::DmCards { cards }),
+            },
+            new_blobs,
+        )?;
         drop(e);
         self.dispatch(outcomes);
+        {
+            let mut media = self.media();
+            for url in used {
+                media.dm_cards.remove(&(channel.clone(), url));
+            }
+        }
+        self.delete_blobs(&gone).await;
         Ok(())
     }
 
@@ -5254,9 +5714,17 @@ impl App {
         let engine = self.dm_engine_ready().await?;
         let mut e = engine.lock().await;
         e.load_participants(&channel)?;
+        // Its blobs go once the delete is sent (specs/media.md 4.4).
+        let (projection, _, _) = project(&e, &channel)?;
+        let gone = projection
+            .message(&message)
+            .filter(|m| m.sender_identity_id == e.me().identity_id)
+            .map(|m| crate::attachments::blob_ids(&m.attachments, &m.cards))
+            .unwrap_or_default();
         let outcomes = e.send_delete(&channel, message)?;
         drop(e);
         self.dispatch(outcomes);
+        self.delete_blobs(&gone).await;
         Ok(())
     }
 
@@ -5285,25 +5753,7 @@ impl App {
         let engine = self.dm_engine_ready().await?;
         let e = engine.lock().await;
         let me = e.me().identity_id.clone();
-        let mut projection = Projection::default();
-        let mut before_join = 0u32;
-        let mut undecryptable = 0u32;
-        for row in e.rows(&channel)? {
-            match row.status {
-                DmStatus::Decrypted => {
-                    if let Ok(op) = DmOperation::decode(row.bytes.as_slice()) {
-                        projection.apply(
-                            row.seq,
-                            &row.sender_identity_id,
-                            &row.sender_device_id,
-                            &op,
-                        );
-                    }
-                }
-                DmStatus::BeforeJoin => before_join += 1,
-                DmStatus::Undecryptable => undecryptable += 1,
-            }
-        }
+        let (projection, before_join, undecryptable) = project(&e, &channel)?;
         // No server governs a personal conversation: its deleted messages are
         // left out, as a server's are by default (architecture 6.7).
         let messages = projection
@@ -5348,6 +5798,8 @@ impl App {
                             .collect(),
                     })
                     .collect(),
+                attachments: m.attachments.iter().map(attachment_summary).collect(),
+                cards: m.cards.iter().map(card_summary).collect(),
             })
             .collect();
         Ok(DmLogSummary {
@@ -5402,6 +5854,431 @@ impl App {
         tx.unbounded_send(command)
             .map_err(|_| ClientError::State("the gateway loop has stopped".into()))
     }
+}
+
+// ---- Attachments and link cards (specs/media.md) -------------------------------
+
+impl App {
+    fn media(&self) -> std::sync::MutexGuard<'_, Media> {
+        self.media.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Keeps the attachments this device opens in `dir` as well as in
+    /// memory, up to 512 MiB, the least recently used going first. Natively
+    /// only; without it they are kept in memory alone. A shell gives a
+    /// directory the system may clear, or one of its own beside the stores.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn set_media_cache_dir(&self, dir: std::path::PathBuf) {
+        self.media().cache.set_dir(dir);
+    }
+
+    /// What the instance takes of attachments (`GET /instance`, asked once
+    /// per launch): `None` when it keeps none, and a shell then offers no
+    /// way to attach.
+    ///
+    /// # Errors
+    /// On transport or API failure.
+    pub async fn upload_limits(&self) -> Result<Option<UploadLimitsSummary>, ClientError> {
+        Ok(self.limits().await?.map(|l| UploadLimitsSummary {
+            image_max_bytes: l.image_max_bytes,
+            file_max_bytes: l.file_max_bytes,
+            thumbnail_max_bytes: l.thumbnail_max_bytes,
+        }))
+    }
+
+    async fn limits(&self) -> Result<Option<lumia_core::proto::UploadLimits>, ClientError> {
+        let known = self.media().limits;
+        if let Some(known) = known {
+            return Ok(known);
+        }
+        let limits = self.api.instance_info().await?.upload_limits;
+        self.media().limits = Some(limits);
+        Ok(limits)
+    }
+
+    /// Makes an attachment of a file and uploads it into the conversation
+    /// `channel_id` (specs/media.md 3 and 4.1): processed on this device
+    /// (metadata stripped, a picture resized and re-encoded, a thumbnail and
+    /// a placeholder made), each blob sealed under a key of its own and
+    /// stored. Answers the draft a composer shows; [`App::send_message_with_media`]
+    /// or [`App::dm_send_with_media`] sends it by its id.
+    ///
+    /// # Errors
+    /// `NoBlobs` when the instance keeps no attachments; `Media` when the
+    /// file cannot be sent (too large even after processing, in words);
+    /// the instance's refusal (`PAYLOAD_TOO_LARGE`, `PERMISSION_DENIED`
+    /// without `ATTACH_FILES`); transport failure.
+    pub async fn attach(
+        &self,
+        channel_id: &str,
+        input: AttachmentInput,
+    ) -> Result<AttachmentDraft, ClientError> {
+        let channel = parse_uuid(channel_id)?;
+        let limits = self.limits().await?.ok_or(ClientError::NoBlobs)?;
+        let pixels = |p: PixelsInput| lumia_core::media::Pixels {
+            rgba: p.rgba,
+            width: p.width,
+            height: p.height,
+        };
+        let video_size = (input.video_width > 0 && input.video_height > 0)
+            .then_some((input.video_width, input.video_height));
+        let processed = lumia_core::media::process(lumia_core::media::Input {
+            bytes: input.bytes,
+            name: input.name,
+            as_file: input.as_file,
+            pixels: input.pixels.map(pixels),
+            poster: input.poster.map(pixels),
+            duration_ms: input.duration_ms,
+            video_size,
+            caps: crate::attachments::caps(&limits),
+        })?;
+        let attachment =
+            crate::attachments::upload(&self.api, &channel, processed, &input.alt).await?;
+        let draft = draft_summary(&channel, &attachment);
+        self.media().drafts.insert(
+            draft.draft_id.clone(),
+            Draft {
+                channel_id: channel,
+                attachment,
+            },
+        );
+        Ok(draft)
+    }
+
+    /// Sets a waiting attachment's alt text (at most 1,000 characters).
+    ///
+    /// # Errors
+    /// `State` when no attachment waits under `draft_id`.
+    pub fn set_attachment_alt(
+        &self,
+        draft_id: &str,
+        alt: &str,
+    ) -> Result<AttachmentDraft, ClientError> {
+        let mut media = self.media();
+        let draft = media.drafts.get_mut(draft_id).ok_or_else(not_waiting)?;
+        draft.attachment.alt = crate::attachments::clip_alt(alt);
+        Ok(draft_summary(&draft.channel_id, &draft.attachment))
+    }
+
+    /// Takes a waiting attachment out of the composer and its blobs off the
+    /// instance (best effort: one left is removed within a day anyway).
+    pub async fn discard_attachment(&self, draft_id: &str) {
+        let draft = self.media().drafts.remove(draft_id);
+        if let Some(draft) = draft {
+            self.delete_blobs(&crate::attachments::blob_ids(&[draft.attachment], &[]))
+                .await;
+        }
+    }
+
+    /// The waiting attachments `ids` names, all uploaded into `channel`.
+    fn drafts(
+        &self,
+        channel: &[u8],
+        ids: &[String],
+    ) -> Result<Vec<lumia_core::proto::Attachment>, ClientError> {
+        if ids.len() > lumia_core::media::MAX_ATTACHMENTS {
+            return Err(ClientError::State(format!(
+                "a message carries at most {} attachments",
+                lumia_core::media::MAX_ATTACHMENTS
+            )));
+        }
+        let media = self.media();
+        ids.iter()
+            .map(|id| {
+                media
+                    .drafts
+                    .get(id)
+                    .filter(|d| d.channel_id == channel)
+                    .map(|d| d.attachment.clone())
+                    .ok_or_else(not_waiting)
+            })
+            .collect()
+    }
+
+    fn sent_drafts(&self, ids: &[String]) {
+        let mut media = self.media();
+        for id in ids {
+            media.drafts.remove(id);
+        }
+    }
+
+    async fn delete_blobs(&self, ids: &[Vec<u8>]) {
+        for id in ids {
+            if let Err(e) = self.api.delete_blob(id).await {
+                tracing::debug!("a blob was not deleted: {e}");
+            }
+        }
+    }
+
+    /// The links of a message body that may have cards, at most three, in
+    /// order (specs/media.md 6.1): what a composer previews.
+    #[must_use]
+    pub fn card_links(body: &str) -> Vec<String> {
+        lumia_core::cards::card_links(body)
+    }
+
+    /// The card a composer shows under a link while the person writes
+    /// (specs/media.md 6.4, 6.5). In a server channel the instance builds it
+    /// (`POST /unfurl`, cached there). In a personal conversation this
+    /// device fetches the page itself, natively, and keeps the card, its
+    /// picture uploaded into the conversation, for the next send; the web
+    /// cannot (a browser does not read other sites) and answers none. `None`
+    /// when the page gives no card or could not be read.
+    ///
+    /// # Errors
+    /// In a server channel, the instance's refusal (`RATE_LIMITED`) or the
+    /// transport; a malformed id.
+    pub async fn card_preview(
+        &self,
+        channel_id: &str,
+        url: &str,
+    ) -> Result<Option<CardSummary>, ClientError> {
+        let channel = parse_uuid(channel_id)?;
+        let card = if self.is_personal(&channel).await {
+            self.dm_card(&channel, url).await
+        } else {
+            self.api.unfurl(channel, url).await?
+        };
+        Ok(card.as_ref().map(card_summary))
+    }
+
+    /// Whether `channel` is a personal conversation, as far as this client
+    /// has heard of it.
+    async fn is_personal(&self, channel: &[u8]) -> bool {
+        let said = self
+            .lock()
+            .reads
+            .by_channel
+            .get(channel)
+            .map(|c| c.kind.starts_with("PERSONAL"));
+        if let Some(said) = said {
+            return said;
+        }
+        match self.built_engine() {
+            Some(engine) => engine.lock().await.channels().contains_key(channel),
+            None => false,
+        }
+    }
+
+    /// A card this device builds for a link in a personal conversation.
+    #[cfg(not(target_arch = "wasm32"))]
+    async fn dm_card(&self, channel: &[u8], url: &str) -> Option<lumia_core::proto::Card> {
+        let key = (channel.to_vec(), url.to_owned());
+        let made = self.media().dm_cards.get(&key).cloned();
+        if made.is_some() {
+            return made;
+        }
+        let fetched = match crate::cards::fetch_card(url, "").await {
+            Ok(Some(fetched)) => fetched,
+            Ok(None) => return None,
+            Err(e) => {
+                tracing::debug!("no card for a link: {e}");
+                return None;
+            }
+        };
+        let page = fetched.card;
+        let mut card = lumia_core::proto::Card {
+            url: url.to_owned(),
+            title: page.title,
+            description: page.description,
+            site_name: page.site_name,
+            color: page.color,
+            video: page.video,
+            ..Default::default()
+        };
+        if let Some(thumbnail) = fetched.image.and_then(card_thumbnail) {
+            match crate::attachments::upload_blob(
+                &self.api,
+                channel,
+                lumia_core::proto::BlobRole::Thumbnail,
+                &thumbnail,
+            )
+            .await
+            {
+                Ok(blob) => {
+                    let size = lumia_core::media::probe(&thumbnail);
+                    card.image_width = size.map_or(0, |p| p.width);
+                    card.image_height = size.map_or(0, |p| p.height);
+                    card.image = Some(blob);
+                }
+                Err(e) => tracing::debug!("a card's picture was not uploaded: {e}"),
+            }
+        }
+        self.media().dm_cards.insert(key, card.clone());
+        Some(card)
+    }
+
+    /// The web makes no cards in personal conversations (specs/media.md 6.5).
+    #[cfg(target_arch = "wasm32")]
+    #[allow(clippy::unused_async)]
+    async fn dm_card(&self, _channel: &[u8], _url: &str) -> Option<lumia_core::proto::Card> {
+        None
+    }
+
+    /// The cards of `urls` (the links of `body` the person kept) for a
+    /// personal message: one it already had, or one this device built.
+    fn dm_cards_for(
+        &self,
+        channel: &[u8],
+        body: &str,
+        urls: &[String],
+        had: &[lumia_core::proto::Card],
+    ) -> Vec<lumia_core::proto::Card> {
+        let media = self.media();
+        cards_kept(body, urls)
+            .into_iter()
+            .filter_map(|url| {
+                had.iter()
+                    .find(|c| c.url == url)
+                    .or_else(|| media.dm_cards.get(&(channel.to_vec(), url)))
+                    .cloned()
+            })
+            .collect()
+    }
+
+    /// An attachment's or a card's blob, opened: fetched with this session
+    /// (`GET /blobs/{id}`, following a redirect to the bucket without it),
+    /// decrypted with the key it names and checked against its hash. Kept
+    /// after the first fetch (see [`App::set_media_cache_dir`]). A picture's
+    /// bytes are someone else's choice: check [`App::attachment_drawable`]
+    /// before handing them to a decoder.
+    ///
+    /// # Errors
+    /// `NOT_FOUND` when this account cannot read a message naming it;
+    /// `Media` when it does not open or is not the blob named; transport.
+    pub async fn attachment_bytes(&self, blob: &BlobSummary) -> Result<Vec<u8>, ClientError> {
+        let blob = blob_ref(blob)?;
+        let kept = self.media().cache.get(&blob);
+        if let Some(bytes) = kept {
+            return Ok(bytes);
+        }
+        let bytes = crate::attachments::fetch(&self.api, &blob).await?;
+        self.media().cache.put(&blob.blob_id, &bytes);
+        Ok(bytes)
+    }
+
+    /// A server card's picture (`GET /cards/{address}`, public, never
+    /// changing), for a shell that draws its own pictures; one that loads
+    /// URLs can ask the instance for `image_url` itself.
+    ///
+    /// # Errors
+    /// `State` for a path that is not a card picture of this instance;
+    /// `NOT_FOUND`; transport failure.
+    pub async fn card_image(&self, image_url: &str) -> Result<Vec<u8>, ClientError> {
+        let named = image_url
+            .strip_prefix("/api/v1/cards/")
+            .is_some_and(|name| {
+                !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric())
+            });
+        if !named {
+            return Err(ClientError::State(
+                "not a card picture of this instance".into(),
+            ));
+        }
+        self.api.avatar(image_url, CARD_IMAGE_MAX_BYTES).await
+    }
+
+    /// Whether a picture someone sent may be decoded (specs/media.md 5): its
+    /// header names a size within 8,192 px a side and 40 million pixels.
+    /// A picture that is not is drawn as a file row.
+    #[must_use]
+    pub fn attachment_drawable(bytes: &[u8]) -> bool {
+        lumia_core::media::probe(bytes).is_some_and(|p| p.within_bounds())
+    }
+
+    /// An attachment's placeholder as a tiny picture, to scale up and draw
+    /// until its thumbnail arrives; `None` for an empty or malformed one.
+    #[must_use]
+    pub fn placeholder_image(placeholder: &[u8]) -> Option<PlaceholderImage> {
+        lumia_core::media::placeholder_image(placeholder).map(|p| PlaceholderImage {
+            width: p.width,
+            height: p.height,
+            rgba: p.rgba,
+        })
+    }
+}
+
+/// What a notification says of a message: its text, or for one that is only
+/// attachments, what they are (specs/media.md 5: notifications stay text).
+fn notification_text(body: &str, attachments: &[lumia_core::proto::Attachment]) -> String {
+    use lumia_core::proto::AttachmentKind;
+    if !body.trim().is_empty() || attachments.is_empty() {
+        return body.to_owned();
+    }
+    let kind = |a: &lumia_core::proto::Attachment| match AttachmentKind::try_from(a.kind) {
+        Ok(AttachmentKind::Image | AttachmentKind::Gif) => "photo",
+        Ok(AttachmentKind::Video) => "video",
+        Ok(AttachmentKind::Audio) => "recording",
+        _ => "file",
+    };
+    let first = kind(&attachments[0]);
+    match attachments.len() {
+        1 => format!("Sent a {first}"),
+        n if attachments.iter().all(|a| kind(a) == first) => format!("Sent {n} {first}s"),
+        n => format!("Sent {n} attachments"),
+    }
+}
+
+fn not_waiting() -> ClientError {
+    ClientError::State("that attachment is no longer waiting to be sent".into())
+}
+
+/// `ids` once each, in order.
+fn distinct(ids: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for id in ids {
+        if !out.contains(id) {
+            out.push(id.clone());
+        }
+    }
+    out
+}
+
+/// The links of `urls` that are links of `body` with cards (specs/media.md
+/// 6.1), once each, at most three.
+fn cards_kept(body: &str, urls: &[String]) -> Vec<String> {
+    let links = lumia_core::cards::card_links(body);
+    distinct(urls)
+        .into_iter()
+        .filter(|u| links.contains(u))
+        .take(lumia_core::cards::MAX_CARDS)
+        .collect()
+}
+
+/// A card's picture made a thumbnail (specs/media.md 6.3): decoded within
+/// the bounds and at most 400 px, or none.
+#[cfg(not(target_arch = "wasm32"))]
+fn card_thumbnail(bytes: Vec<u8>) -> Option<Vec<u8>> {
+    use lumia_core::media::AttachmentKind;
+    let processed = lumia_core::media::process(lumia_core::media::Input {
+        bytes,
+        name: "card".into(),
+        ..lumia_core::media::Input::default()
+    })
+    .ok()?;
+    matches!(processed.kind, AttachmentKind::Image | AttachmentKind::Gif)
+        .then_some(processed.thumbnail)
+        .flatten()
+}
+
+/// A personal conversation's projection from this device's log, with the
+/// counts of what it cannot read: sent before it joined, undecryptable.
+fn project(e: &DmEngine, channel: &[u8]) -> Result<(Projection, u32, u32), ClientError> {
+    let mut projection = Projection::default();
+    let mut before_join = 0u32;
+    let mut undecryptable = 0u32;
+    for row in e.rows(channel)? {
+        match row.status {
+            DmStatus::Decrypted => {
+                if let Ok(op) = DmOperation::decode(row.bytes.as_slice()) {
+                    projection.apply(row.seq, &row.sender_identity_id, &row.sender_device_id, &op);
+                }
+            }
+            DmStatus::BeforeJoin => before_join += 1,
+            DmStatus::Undecryptable => undecryptable += 1,
+        }
+    }
+    Ok((projection, before_join, undecryptable))
 }
 
 /// What a push should say, decided on the device (architecture 15.5).
@@ -5480,6 +6357,65 @@ mod mention_tests {
         assert_eq!(
             found("(@everyone) look", true),
             [(String::new(), true, "@everyone".into())]
+        );
+    }
+}
+
+#[cfg(test)]
+mod media_tests {
+    use super::{cards_kept, notification_text};
+    use lumia_core::proto::{Attachment, AttachmentKind};
+
+    fn of(kind: AttachmentKind) -> Attachment {
+        Attachment {
+            kind: kind as i32,
+            ..Attachment::default()
+        }
+    }
+
+    #[test]
+    fn a_message_of_attachments_alone_is_told_in_words() {
+        let photo = of(AttachmentKind::Image);
+        assert_eq!(
+            notification_text("look", std::slice::from_ref(&photo)),
+            "look"
+        );
+        assert_eq!(
+            notification_text("  ", std::slice::from_ref(&photo)),
+            "Sent a photo"
+        );
+        assert_eq!(
+            notification_text("", &[photo.clone(), of(AttachmentKind::Gif)]),
+            "Sent 2 photos"
+        );
+        assert_eq!(
+            notification_text("", &[photo, of(AttachmentKind::File)]),
+            "Sent 2 attachments"
+        );
+        assert_eq!(notification_text("", &[]), "");
+    }
+
+    #[test]
+    fn only_links_of_the_body_keep_cards_once_each_and_three_at_most() {
+        let body = "https://a.example https://b.example `https://c.example` https://d.example https://e.example";
+        let asked: Vec<String> = [
+            "https://b.example",
+            "https://b.example",
+            "https://c.example",
+            "https://z.example",
+            "https://a.example",
+            "https://d.example",
+            "https://e.example",
+        ]
+        .map(String::from)
+        .to_vec();
+        assert_eq!(
+            cards_kept(body, &asked),
+            [
+                "https://b.example",
+                "https://a.example",
+                "https://d.example"
+            ]
         );
     }
 }

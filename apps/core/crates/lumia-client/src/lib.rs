@@ -12,6 +12,7 @@
 //!   target-specific code.
 //! * [`identity`] and [`dm`] are the flows over those.
 //! * [`keystore`] is the development file keystore (native only).
+//! * [`attachments`] uploads, fetches and keeps attachment blobs.
 //! * `cards` fetches a link's card for a personal DM (native only; a browser
 //!   cannot read other sites).
 //!
@@ -19,6 +20,7 @@
 
 pub mod api;
 pub mod app;
+pub mod attachments;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod cards;
 pub mod dm;
@@ -96,6 +98,13 @@ pub enum ClientError {
     /// to set up a second identity.
     #[error("this account already has private messages set up on another device")]
     AccountHasIdentity,
+    /// An attachment could not be made, or a blob could not be opened; the
+    /// message says why in words a person can read.
+    #[error(transparent)]
+    Media(#[from] lumia_core::media::MediaError),
+    /// The instance keeps no blobs: nothing can be attached there.
+    #[error("this instance does not keep attachments")]
+    NoBlobs,
     /// A message body over the instance's limit (protocol 14), refused
     /// before it is sent: `over` is how many characters must go.
     #[error("this message is {over} characters too long")]

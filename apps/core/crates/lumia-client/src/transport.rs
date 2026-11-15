@@ -76,6 +76,27 @@ fn refused(status: u16) -> ClientError {
     }
 }
 
+/// An HTTP client that answers a redirect instead of following it, so the
+/// caller follows it itself without the session (an attachment's blob is a
+/// redirect to the bucket, which is never shown the bearer token). The
+/// browser follows redirects inside `fetch` and drops `Authorization` on one
+/// to another origin, so on the web this is the plain client.
+#[cfg(not(target_arch = "wasm32"))]
+#[must_use]
+pub fn http_without_redirects() -> reqwest::Client {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap_or_default()
+}
+
+/// An HTTP client (see the native one: the browser follows redirects itself).
+#[cfg(target_arch = "wasm32")]
+#[must_use]
+pub fn http_without_redirects() -> reqwest::Client {
+    reqwest::Client::new()
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
     use super::{refused, BoxSocket, Context, Frame, Pin, Poll, Sink, Stream};

@@ -655,18 +655,37 @@ impl DmEngine {
         body: &str,
         quote: Option<lumia_core::proto::DmQuote>,
     ) -> Result<Vec<Outcome>, ClientError> {
-        let id = wire::new_id();
-        let op = DmOperation {
-            operation_id: id.clone(),
-            sent_at: Some(now_ts()),
-            op: Some(dm_operation::Op::Send(DmSend {
-                message_id: id,
+        self.send_message(
+            channel_id,
+            DmSend {
                 body: body.to_string(),
                 quote,
                 ..Default::default()
-            })),
+            },
+            Vec::new(),
+        )
+    }
+
+    /// Sends a message as `send` has it (its body, quote, attachments and
+    /// cards; its id is minted here) with the blobs it uses named in the
+    /// clear, so the instance keeps them (specs/media.md 4.2).
+    ///
+    /// # Errors
+    /// As [`DmEngine::send_operation`].
+    pub fn send_message(
+        &mut self,
+        channel_id: &[u8],
+        mut send: DmSend,
+        blob_ids: Vec<Vec<u8>>,
+    ) -> Result<Vec<Outcome>, ClientError> {
+        let id = wire::new_id();
+        send.message_id.clone_from(&id);
+        let op = DmOperation {
+            operation_id: id,
+            sent_at: Some(now_ts()),
+            op: Some(dm_operation::Op::Send(send)),
         };
-        self.send_operation(channel_id, op)
+        self.send_operation_using(channel_id, op, blob_ids)
     }
 
     /// Reacts to a message with an emoji, or takes the reaction back (a
@@ -703,16 +722,35 @@ impl DmEngine {
         message_id: Vec<u8>,
         body: &str,
     ) -> Result<Vec<Outcome>, ClientError> {
-        let op = DmOperation {
-            operation_id: wire::new_id(),
-            sent_at: Some(now_ts()),
-            op: Some(dm_operation::Op::Edit(lumia_core::proto::DmEdit {
+        self.send_edit_using(
+            channel_id,
+            lumia_core::proto::DmEdit {
                 message_id,
                 body: body.to_string(),
                 ..Default::default()
-            })),
+            },
+            Vec::new(),
+        )
+    }
+
+    /// Edits one of this identity's messages as `edit` has it (attachments
+    /// dropped, cards replaced), naming the blobs new to it: a new card's
+    /// picture.
+    ///
+    /// # Errors
+    /// As [`DmEngine::send_operation`].
+    pub fn send_edit_using(
+        &mut self,
+        channel_id: &[u8],
+        edit: lumia_core::proto::DmEdit,
+        blob_ids: Vec<Vec<u8>>,
+    ) -> Result<Vec<Outcome>, ClientError> {
+        let op = DmOperation {
+            operation_id: wire::new_id(),
+            sent_at: Some(now_ts()),
+            op: Some(dm_operation::Op::Edit(edit)),
         };
-        self.send_operation(channel_id, op)
+        self.send_operation_using(channel_id, op, blob_ids)
     }
 
     /// Deletes one of this identity's messages (a `DmDelete` operation).
@@ -743,6 +781,21 @@ impl DmEngine {
         channel_id: &[u8],
         op: DmOperation,
     ) -> Result<Vec<Outcome>, ClientError> {
+        self.send_operation_using(channel_id, op, Vec::new())
+    }
+
+    /// [`DmEngine::send_operation`], naming the blobs the operation uses in
+    /// `SendEncrypted.blob_ids`. The command is queued whole, so a retry
+    /// carries the same list.
+    ///
+    /// # Errors
+    /// As [`DmEngine::send_operation`].
+    pub fn send_operation_using(
+        &mut self,
+        channel_id: &[u8],
+        op: DmOperation,
+        blob_ids: Vec<Vec<u8>>,
+    ) -> Result<Vec<Outcome>, ClientError> {
         let command = self.store.transaction(|store| {
             let provider = Provider::new(store);
             let mut group = Conversation::load(&provider, channel_id)?.ok_or_else(|| {
@@ -761,7 +814,7 @@ impl DmEngine {
                         mls_message: out.bytes,
                         epoch: out.epoch,
                     }),
-                    blob_ids: Vec::new(),
+                    blob_ids: blob_ids.clone(),
                 })),
             };
             store.push_outbox(&OutboxEntry {

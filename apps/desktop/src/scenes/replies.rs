@@ -171,6 +171,8 @@ pub fn mentions(state: &mut State) {
         reactions: Vec::new(),
         mentions_me: true,
         edited: false,
+        attachments: Vec::new(),
+        cards: Vec::new(),
     };
     state.session.reads.mentions.insert(
         "acme".into(),

@@ -270,6 +270,10 @@ export interface DmMessageSummary {
   mine: boolean;
   reply: QuoteSummary | null;
   reactions: ReactionSummary[];
+  /** What it carries (specs/media.md). */
+  attachments: AttachmentSummary[];
+  /** Its link cards: only those under a link its text holds. */
+  cards: CardSummary[];
   /** The body read into blocks, which the worker adds to every message it hands the page. */
   blocks: BodyBlock[];
 }
@@ -302,8 +306,101 @@ export interface MessageSummary {
   mentionsMe: boolean;
   /** Its author has edited it ("(edited)"). */
   edited: boolean;
+  /** What it carries (specs/media.md); empty once deleted. */
+  attachments: AttachmentSummary[];
+  /** Its link cards, in the order their links appear. */
+  cards: CardSummary[];
   /** The body read into blocks, which the worker adds to every message it hands the page. */
   blocks: BodyBlock[];
+}
+/** One blob of an attachment or a DM card, with what opens it: handed back to `attachmentBytes` as given, never decrypted by the page. */
+export interface BlobSummary {
+  blobId: string;
+  /** The stored ciphertext's length. */
+  sizeBytes: number;
+  /** Base64. */
+  key: string;
+  nonce: string;
+  hash: string;
+}
+/** An attachment as a message carries it (specs/media.md 5). */
+export interface AttachmentSummary {
+  attachmentId: string;
+  kind: "image" | "gif" | "video" | "audio" | "file";
+  name: string;
+  mediaType: string;
+  /** After orientation; 0 when unknown. */
+  width: number;
+  height: number;
+  /** Video and audio; 0 when unknown. */
+  durationMs: number;
+  /** ThumbHash in base64, drawn until the thumbnail arrives (`placeholderImage`); empty for none. */
+  placeholder: string;
+  alt: string;
+  /** The file's own size, for a file row. */
+  sizeBytes: number;
+  main: BlobSummary;
+  /** At most 400 px: an image's, a GIF's first frame, a video's poster. */
+  thumbnail: BlobSummary | null;
+}
+/** A link's card (specs/media.md 6): drawn under the link, named by `host` (never `siteName`), opening `url`. */
+export interface CardSummary {
+  url: string;
+  title: string;
+  description: string;
+  siteName: string;
+  /** The site to show: the link's host. */
+  host: string;
+  /** `#rrggbb`, or empty. */
+  color: string;
+  /** Server content: the picture, a path of this instance (`cardImage`, or load it). */
+  imageUrl: string;
+  /** Personal DMs: the picture as a blob (`attachmentBytes`). */
+  image: BlobSummary | null;
+  imageWidth: number;
+  imageHeight: number;
+  /** The page is a video: a play symbol over its picture. */
+  video: boolean;
+}
+/** An attachment uploaded and waiting in the composer; a send names it by `draftId`. */
+export interface AttachmentDraft {
+  draftId: string;
+  channelId: string;
+  kind: AttachmentSummary["kind"];
+  name: string;
+  mediaType: string;
+  width: number;
+  height: number;
+  durationMs: number;
+  placeholder: string;
+  alt: string;
+  sizeBytes: number;
+}
+/** Decoded pixels, RGBA8 (an `ImageData`'s). */
+export interface Pixels {
+  rgba: Uint8Array | Uint8ClampedArray;
+  width: number;
+  height: number;
+}
+/** What the page knows of a file to attach. */
+export interface AttachOptions {
+  name: string;
+  /** Sent as a file: a picture keeps its pixels, loses its metadata. */
+  asFile?: boolean;
+  alt?: string;
+  /** A video's or audio's length, from a `<video>` or `<audio>` element. */
+  durationMs?: number;
+  videoWidth?: number;
+  videoHeight?: number;
+  /** A picture the browser decoded that the core cannot (HEIC in Safari). */
+  pixels?: Pixels;
+  /** A video's poster frame, drawn from a `<video>` to a canvas. */
+  poster?: Pixels;
+}
+export interface UploadLimits {
+  imageMaxBytes: number;
+  fileMaxBytes: number;
+  thumbnailMaxBytes: number;
 }
 export interface EventSummary {
   seq: number;
@@ -873,6 +970,63 @@ export class Bridge {
   }
   dmMessages(channelId: string): Promise<DmLogSummary> {
     return this.call("dmMessages", channelId);
+  }
+
+  // ---- Attachments and link cards (specs/media.md) ----
+
+  /** What the instance takes of attachments; null when it keeps none, and the composer offers no way to attach. */
+  uploadLimits(): Promise<UploadLimits | null> {
+    return this.call<UploadLimits | null | undefined>("uploadLimits").then((l) => l ?? null);
+  }
+  /** Makes an attachment of a file and uploads it into the conversation; the draft the composer strip shows. */
+  attach(channelId: string, bytes: Uint8Array, options: AttachOptions): Promise<AttachmentDraft> {
+    return this.call("attach", channelId, bytes, options);
+  }
+  setAttachmentAlt(draftId: string, alt: string): Promise<AttachmentDraft> {
+    return this.call("setAttachmentAlt", draftId, alt);
+  }
+  /** Takes a waiting attachment out of the composer (its blobs off the instance, best effort). */
+  discardAttachment(draftId: string): Promise<void> {
+    return this.call("discardAttachment", draftId);
+  }
+  /** `sendMessageWith`, with waiting attachments by draft id and the links whose cards the person kept; the message id. */
+  sendMessageWithMedia(channelId: string, body: string, mentions: MentionSummary[], replyTo: QuoteSummary | null, attachments: string[], cardUrls: string[]): Promise<string> {
+    return this.call("sendMessageWithMedia", channelId, body, mentions, replyTo, attachments, cardUrls);
+  }
+  /** `editMessage`, dropping attachments and, with `cardUrls` given, keeping only those links' cards; the command id. */
+  editMessageWithMedia(channelId: string, messageId: string, body: string, mentions: MentionSummary[], removeAttachmentIds: string[], cardUrls: string[] | null): Promise<string> {
+    return this.call("editMessageWithMedia", channelId, messageId, body, mentions, removeAttachmentIds, cardUrls);
+  }
+  /** `dmSendWith`, with waiting attachments by draft id (the web makes no cards in personal DMs); the message id. */
+  dmSendWithMedia(channelId: string, body: string, quote: QuoteSummary | null, attachments: string[], cardUrls: string[]): Promise<string> {
+    return this.call("dmSendWithMedia", channelId, body, quote, attachments, cardUrls);
+  }
+  dmEditWithMedia(channelId: string, messageId: string, body: string, removeAttachmentIds: string[], cardUrls: string[] | null): Promise<void> {
+    return this.call("dmEditWithMedia", channelId, messageId, body, removeAttachmentIds, cardUrls);
+  }
+  /** The links of a body that may have cards, at most three, in order. */
+  cardLinks(body: string): Promise<string[]> {
+    return this.call("cardLinks", body);
+  }
+  /** The card under a link while composing: the instance's in a server channel, none in a personal one on the web. */
+  cardPreview(channelId: string, url: string): Promise<CardSummary | null> {
+    return this.call<CardSummary | null | undefined>("cardPreview", channelId, url).then((c) => c ?? null);
+  }
+  /** A blob of an attachment or a DM card, fetched, opened and kept in memory. Check `attachmentDrawable` before decoding a picture. */
+  attachmentBytes(blob: BlobSummary): Promise<Uint8Array> {
+    return this.call("attachmentBytes", blob);
+  }
+  /** A server card's picture by its `imageUrl`. */
+  cardImage(imageUrl: string): Promise<Uint8Array> {
+    return this.call("cardImage", imageUrl);
+  }
+  /** Whether a picture someone sent may be decoded: its header names a size within the bounds. */
+  attachmentDrawable(bytes: Uint8Array): Promise<boolean> {
+    return this.call("attachmentDrawable", bytes);
+  }
+  /** A placeholder as a tiny picture for an `ImageData`; null for none. */
+  placeholderImage(placeholder: string): Promise<{ width: number; height: number; rgba: Uint8ClampedArray } | null> {
+    return this.call<{ width: number; height: number; rgba: Uint8ClampedArray } | null | undefined>("placeholderImage", placeholder).then((p) => p ?? null);
   }
 }
 

@@ -298,6 +298,8 @@ fn a_mention_opens_its_channel_at_it() {
         reactions: Vec::new(),
         mentions_me: true,
         edited: false,
+        attachments: Vec::new(),
+        cards: Vec::new(),
     };
     state.session.reads.mentions.insert(
         "acme".into(),

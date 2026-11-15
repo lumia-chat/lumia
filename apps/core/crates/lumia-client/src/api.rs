@@ -53,6 +53,9 @@ use lumia_core::proto::{
     OpenLinkSessionRequest, RevealLinkSessionRequest,
 };
 use lumia_core::proto::{
+    BlobRole, Card, CreateUploadRequest, CreateUploadResponse, UnfurlRequest, UnfurlResponse,
+};
+use lumia_core::proto::{
     CreateInviteRequest, EmailInviteRequest, HandoffResponse, Invite, InvitePreview,
     ListInvitesResponse, ListPasskeysResponse, MagicLinkCompleteRequest, MagicLinkRequest, Member,
     PasskeyAssertFinishRequest, PasskeyAssertStartRequest, PasskeyChallenge,
@@ -70,6 +73,7 @@ use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use reqwest::StatusCode;
 
 use crate::ClientError;
+use lumia_core::wire;
 
 const PROTO: &str = "application/x-protobuf";
 const REAUTH_HEADER: &str = "x-reauth-token";
@@ -97,7 +101,7 @@ fn time_allowed(base: Duration, path: &str, sent: usize) -> Duration {
     let upload = Duration::from_secs((sent / UPLOAD_BYTES_PER_SECOND) as u64);
     if path.starts_with("/api/v1/auth/sign-out") || path.starts_with("/api/v1/push/subscription") {
         base.min(FAREWELL_TIMEOUT)
-    } else if path.starts_with("/api/v1/history/chunks") {
+    } else if path.starts_with("/api/v1/history/chunks") || path.starts_with("/api/v1/blobs/") {
         base.max(CHUNK_TIMEOUT) + upload
     } else {
         base + upload
@@ -128,6 +132,9 @@ pub type RevokedHook = Arc<dyn Fn() + Send + Sync>;
 #[derive(Clone)]
 pub struct Api {
     http: reqwest::Client,
+    /// For a blob's ciphertext: its redirect is followed here, without the
+    /// session (`crate::transport::http_without_redirects`).
+    http_blobs: reqwest::Client,
     base: String,
     tokens: Arc<Mutex<Tokens>>,
     /// Held across a rotation, by whichever clone is making it.
@@ -168,6 +175,7 @@ impl Api {
     pub fn new(base: &str) -> Self {
         Self {
             http: reqwest::Client::new(),
+            http_blobs: crate::transport::http_without_redirects(),
             base: base.trim_end_matches('/').to_string(),
             tokens: Arc::new(Mutex::new(Tokens::default())),
             rotating: Arc::new(AsyncMutex::new(())),
@@ -585,6 +593,174 @@ impl Api {
             return Err(ClientError::State("the picture is too large".into()));
         }
         Ok(bytes.to_vec())
+    }
+
+    /// `POST /uploads`: a slot for one blob of `role` and exactly `size_bytes`
+    /// of ciphertext in the conversation `channel_id` (specs/media.md 4.1).
+    ///
+    /// # Errors
+    /// `PAYLOAD_TOO_LARGE` over the role's cap, `FAILED_PRECONDITION`
+    /// (`details.state` `blobs`) on an instance that keeps none,
+    /// `PERMISSION_DENIED` without `ATTACH_FILES`; transport failure.
+    pub async fn create_upload(
+        &self,
+        channel_id: Vec<u8>,
+        role: BlobRole,
+        size_bytes: u64,
+    ) -> Result<CreateUploadResponse, ClientError> {
+        self.post(
+            "/api/v1/uploads",
+            &CreateUploadRequest {
+                channel_id,
+                role: role as i32,
+                size_bytes,
+            },
+        )
+        .await
+    }
+
+    /// `PUT <upload_url>`: a blob's ciphertext, to the bucket's presigned
+    /// URL or (for a directory store) the instance's own path, which this
+    /// resolves against the instance. With the headers the slot named but
+    /// never the session: the URL is the authorization. `content-length` is
+    /// the body's own, which the HTTP client sets.
+    ///
+    /// # Errors
+    /// When the store refuses it (`State`, with its status); transport failure.
+    pub async fn put_upload(
+        &self,
+        upload_url: &str,
+        headers: &HashMap<String, String>,
+        ciphertext: Vec<u8>,
+    ) -> Result<(), ClientError> {
+        let url = self.resolve(upload_url);
+        let sent = ciphertext.len();
+        let mut builder = self
+            .http
+            .put(&url)
+            .timeout(time_allowed(self.timeout, "", sent));
+        for (name, value) in headers {
+            if name.eq_ignore_ascii_case("content-length") || name.eq_ignore_ascii_case("host") {
+                continue;
+            }
+            builder = builder.header(name.as_str(), value.as_str());
+        }
+        let response = builder.body(ciphertext).send().await?;
+        let status = response.status();
+        if status.is_success() {
+            return Ok(());
+        }
+        let bytes = response.bytes().await.unwrap_or_default();
+        if url.starts_with(&self.base) {
+            return Err(api_error(status, &bytes));
+        }
+        Err(ClientError::State(format!(
+            "the blob store refused the upload ({status})"
+        )))
+    }
+
+    /// `POST /uploads/{blob_id}/complete`: the ciphertext is in the store.
+    ///
+    /// # Errors
+    /// `INVALID_ARGUMENT` when the stored length is not the slot's (the slot
+    /// is gone), `NOT_FOUND`; transport failure.
+    pub async fn complete_upload(&self, blob_id: &[u8]) -> Result<(), ClientError> {
+        self.empty(
+            reqwest::Method::POST,
+            &format!("/api/v1/uploads/{}/complete", wire::display(blob_id)),
+            None,
+        )
+        .await
+    }
+
+    /// `DELETE /blobs/{blob_id}`: the uploader takes a blob back, one never
+    /// sent or one of a personal conversation (specs/media.md 4.4).
+    ///
+    /// # Errors
+    /// `NOT_FOUND`; transport failure.
+    pub async fn delete_blob(&self, blob_id: &[u8]) -> Result<(), ClientError> {
+        self.empty(
+            reqwest::Method::DELETE,
+            &format!("/api/v1/blobs/{}", wire::display(blob_id)),
+            None,
+        )
+        .await
+    }
+
+    /// `GET /blobs/{blob_id}`: a blob's ciphertext, at most `limit` bytes of
+    /// it. The instance answers with the bytes, or redirects to the bucket,
+    /// which is asked without the session.
+    ///
+    /// # Errors
+    /// `NOT_FOUND` when the caller cannot read a message naming it; a blob
+    /// over `limit`; transport failure.
+    pub async fn blob(&self, blob_id: &[u8], limit: u64) -> Result<Vec<u8>, ClientError> {
+        let path = format!("/api/v1/blobs/{}", wire::display(blob_id));
+        let (status, bytes, location) = self
+            .send_via(&self.http_blobs, reqwest::Method::GET, &path, None, None)
+            .await?;
+        let bytes = if status.is_redirection() {
+            let location =
+                location.ok_or_else(|| ClientError::State("a redirect to nowhere".into()))?;
+            let response = self
+                .http_blobs
+                .get(self.resolve(&location))
+                .timeout(time_allowed(self.timeout, &path, 0))
+                .send()
+                .await?;
+            let status = response.status();
+            if response.content_length().is_some_and(|n| n > limit) {
+                return Err(ClientError::State("the attachment is too large".into()));
+            }
+            let bytes = response.bytes().await?;
+            if !status.is_success() {
+                return Err(ClientError::State(format!(
+                    "the blob store answered {status}"
+                )));
+            }
+            bytes.to_vec()
+        } else if status.is_success() {
+            bytes
+        } else {
+            return Err(api_error(status, &bytes));
+        };
+        if bytes.len() as u64 > limit {
+            return Err(ClientError::State("the attachment is too large".into()));
+        }
+        Ok(bytes)
+    }
+
+    /// `POST /unfurl`: the instance's card for a link in a server channel,
+    /// or none (specs/media.md 6.4).
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` without `SEND_MESSAGES`, `RATE_LIMITED`;
+    /// transport failure.
+    pub async fn unfurl(
+        &self,
+        channel_id: Vec<u8>,
+        url: &str,
+    ) -> Result<Option<Card>, ClientError> {
+        let answer: UnfurlResponse = self
+            .post(
+                "/api/v1/unfurl",
+                &UnfurlRequest {
+                    channel_id,
+                    url: url.to_owned(),
+                },
+            )
+            .await?;
+        Ok(answer.card)
+    }
+
+    /// `upload_url` as an absolute URL: as it is when it is one, else a path
+    /// of this instance.
+    fn resolve(&self, url: &str) -> String {
+        if url.starts_with("https://") || url.starts_with("http://") {
+            url.to_owned()
+        } else {
+            format!("{}/{}", self.base, url.trim_start_matches('/'))
+        }
     }
 
     /// `PUT /account/rail`: the caller's rail, whole; answers it as kept.
@@ -2033,11 +2209,26 @@ impl Api {
         body: Option<Vec<u8>>,
         extra: Option<(&str, &str)>,
     ) -> Result<(StatusCode, Vec<u8>), ClientError> {
+        let (status, bytes, _) = self.send_via(&self.http, method, path, body, extra).await?;
+        Ok((status, bytes))
+    }
+
+    /// [`Api::send`] on `client`; the third part of the answer is its
+    /// `Location`, for a client that does not follow redirects.
+    async fn send_via(
+        &self,
+        client: &reqwest::Client,
+        method: reqwest::Method,
+        path: &str,
+        body: Option<Vec<u8>>,
+        extra: Option<(&str, &str)>,
+    ) -> Result<(StatusCode, Vec<u8>, Option<String>), ClientError> {
         // The pair this call goes out with: if it is refused and the pair has
         // changed by then, someone else has rotated it and the retry takes theirs.
         let mut sent_with = self.tokens().refresh;
         let mut answer = self
-            .send_once(
+            .send_once_via(
+                client,
                 method.clone(),
                 path,
                 body.clone(),
@@ -2063,7 +2254,8 @@ impl Api {
                     self.refresh_after(sent_with.as_deref()).await?;
                     sent_with = self.tokens().refresh;
                     answer = self
-                        .send_once(
+                        .send_once_via(
+                            client,
                             method.clone(),
                             path,
                             body.clone(),
@@ -2086,10 +2278,24 @@ impl Api {
         extra: Option<(&str, &str)>,
         bearer: Option<String>,
     ) -> Result<(StatusCode, Vec<u8>), ClientError> {
+        let (status, bytes, _) = self
+            .send_once_via(&self.http, method, path, body, extra, bearer)
+            .await?;
+        Ok((status, bytes))
+    }
+
+    async fn send_once_via(
+        &self,
+        client: &reqwest::Client,
+        method: reqwest::Method,
+        path: &str,
+        body: Option<Vec<u8>>,
+        extra: Option<(&str, &str)>,
+        bearer: Option<String>,
+    ) -> Result<(StatusCode, Vec<u8>, Option<String>), ClientError> {
         let sent = body.as_ref().map_or(0, Vec::len);
         let epoch = self.epoch.load(Ordering::SeqCst);
-        let mut builder = self
-            .http
+        let mut builder = client
             .request(method, format!("{}{path}", self.base))
             .timeout(time_allowed(self.timeout, path, sent))
             .header(ACCEPT, PROTO);
@@ -2108,6 +2314,11 @@ impl Api {
         }
         let response = builder.send().await?;
         let status = response.status();
+        let location = response
+            .headers()
+            .get(reqwest::header::LOCATION)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
         let bytes = response.bytes().await?;
         if status == StatusCode::UNAUTHORIZED
             && matches!(api_error(status, &bytes), ClientError::Api { code, .. } if code == "DEVICE_REVOKED")
@@ -2118,7 +2329,7 @@ impl Api {
                 hook();
             }
         }
-        Ok((status, bytes.to_vec()))
+        Ok((status, bytes.to_vec(), location))
     }
 }
 

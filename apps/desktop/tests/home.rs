@@ -152,6 +152,8 @@ fn said(id: &str, mine: bool, account: &str, body: &str, micros: i64) -> DmMessa
         mine,
         reply: None,
         reactions: Vec::new(),
+        attachments: Vec::new(),
+        cards: Vec::new(),
     }
 }
 

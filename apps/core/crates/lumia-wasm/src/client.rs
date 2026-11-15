@@ -13,7 +13,8 @@ use std::sync::Arc;
 
 use js_sys::Function;
 use lumia_client::app::{
-    App, EventSink, MentionSummary, MessageSummary, Opener, Place, QuoteSummary, StoreName,
+    App, AttachmentInput, BlobSummary, EventSink, MentionSummary, MessageSummary, Opener,
+    PixelsInput, Place, QuoteSummary, StoreName,
 };
 use lumia_client::sqlite::SqliteStore;
 use lumia_client::ClientError;
@@ -1627,4 +1628,304 @@ impl Client {
     pub async fn dm_messages(&self, channel_id: String) -> Result<JsValue, JsError> {
         to_js(&self.app.dm_messages(&channel_id).await.map_err(js)?)
     }
+
+    // ---- Attachments and link cards (specs/media.md) ----
+
+    /// What the instance takes of attachments, `{imageMaxBytes,
+    /// fileMaxBytes, thumbnailMaxBytes}`, or null when it keeps none (and
+    /// the composer offers no way to attach).
+    ///
+    /// # Errors
+    /// On transport or API failure.
+    #[wasm_bindgen(js_name = uploadLimits)]
+    pub async fn upload_limits(&self) -> Result<JsValue, JsError> {
+        to_js(&self.app.upload_limits().await.map_err(js_api)?)
+    }
+
+    /// Makes an attachment of a file's `bytes` and uploads it into the
+    /// conversation. `options`: `{name, asFile?, alt?, durationMs?,
+    /// videoWidth?, videoHeight?, pixels?: {rgba, width, height}, poster?:
+    /// {rgba, width, height}}`, `rgba` a `Uint8Array` or
+    /// `Uint8ClampedArray` (an `ImageData`'s `data`). Resolves to the draft
+    /// (`{draftId, channelId, kind, name, mediaType, width, height,
+    /// durationMs, placeholder, alt, sizeBytes}`, the placeholder in base64).
+    ///
+    /// # Errors
+    /// When the file cannot be sent (in words), the instance keeps no
+    /// attachments or refuses the upload, or the transport fails.
+    pub async fn attach(
+        &self,
+        channel_id: String,
+        bytes: Vec<u8>,
+        options: JsValue,
+    ) -> Result<JsValue, JsError> {
+        let input = attachment_input(bytes, &options)?;
+        to_js(&self.app.attach(&channel_id, input).await.map_err(js_api)?)
+    }
+
+    /// Sets a waiting attachment's alt text; resolves to its draft.
+    ///
+    /// # Errors
+    /// When no attachment waits under `draft_id`.
+    #[wasm_bindgen(js_name = setAttachmentAlt)]
+    pub fn set_attachment_alt(&self, draft_id: String, alt: String) -> Result<JsValue, JsError> {
+        to_js(&self.app.set_attachment_alt(&draft_id, &alt).map_err(js)?)
+    }
+
+    /// Takes a waiting attachment out of the composer (its blobs off the
+    /// instance, best effort).
+    #[wasm_bindgen(js_name = discardAttachment)]
+    pub async fn discard_attachment(&self, draft_id: String) {
+        self.app.discard_attachment(&draft_id).await;
+    }
+
+    /// `sendMessageWith`, with the waiting attachments `attachments` names
+    /// (draft ids) and the cards of `cardUrls` (the links of `cardLinks`
+    /// the person kept). Returns the message id.
+    ///
+    /// # Errors
+    /// When not started, an id is malformed, or an attachment is not one
+    /// waiting for this channel.
+    #[wasm_bindgen(js_name = sendMessageWithMedia)]
+    pub fn send_message_with_media(
+        &self,
+        channel_id: String,
+        body: String,
+        mentions: JsValue,
+        reply_to: JsValue,
+        attachments: JsValue,
+        card_urls: JsValue,
+    ) -> Result<String, JsError> {
+        let mentions: Vec<MentionSummary> = from_js(mentions)?.unwrap_or_default();
+        let reply_to: Option<QuoteSummary> = from_js(reply_to)?;
+        let attachments: Vec<String> = from_js(attachments)?.unwrap_or_default();
+        let card_urls: Vec<String> = from_js(card_urls)?.unwrap_or_default();
+        self.app
+            .send_message_with_media(
+                &channel_id,
+                &body,
+                &mentions,
+                reply_to.as_ref(),
+                &attachments,
+                &card_urls,
+            )
+            .map_err(js)
+    }
+
+    /// `editMessage`, dropping the attachments `removeAttachmentIds` names
+    /// and, when `cardUrls` is an array (not null), keeping only those
+    /// links' cards. Returns the command id.
+    ///
+    /// # Errors
+    /// When not started or an id is malformed.
+    #[wasm_bindgen(js_name = editMessageWithMedia)]
+    pub fn edit_message_with_media(
+        &self,
+        channel_id: String,
+        message_id: String,
+        body: String,
+        mentions: JsValue,
+        remove_attachment_ids: JsValue,
+        card_urls: JsValue,
+    ) -> Result<String, JsError> {
+        let mentions: Vec<MentionSummary> = from_js(mentions)?.unwrap_or_default();
+        let removed: Vec<String> = from_js(remove_attachment_ids)?.unwrap_or_default();
+        let card_urls: Option<Vec<String>> = from_js(card_urls)?;
+        self.app
+            .edit_message_with_media(
+                &channel_id,
+                &message_id,
+                &body,
+                &mentions,
+                &removed,
+                card_urls.as_deref(),
+            )
+            .map_err(js)
+    }
+
+    /// `dmSendWith`, with the waiting attachments `attachments` names. The
+    /// web builds no cards in personal conversations (specs/media.md 6.5),
+    /// so `cardUrls` finds none; it is here for one shape on every client.
+    /// Resolves to the message id.
+    ///
+    /// # Errors
+    /// Without the group for the conversation, before the loop started, or
+    /// when an attachment is not one waiting for this conversation.
+    #[wasm_bindgen(js_name = dmSendWithMedia)]
+    pub async fn dm_send_with_media(
+        &self,
+        channel_id: String,
+        body: String,
+        quote: JsValue,
+        attachments: JsValue,
+        card_urls: JsValue,
+    ) -> Result<String, JsError> {
+        let quote: Option<QuoteSummary> = from_js(quote)?;
+        let attachments: Vec<String> = from_js(attachments)?.unwrap_or_default();
+        let card_urls: Vec<String> = from_js(card_urls)?.unwrap_or_default();
+        self.app
+            .dm_send_with_media(&channel_id, &body, quote.as_ref(), &attachments, &card_urls)
+            .await
+            .map_err(js)
+    }
+
+    /// `dmEdit`, dropping the attachments `removeAttachmentIds` names and,
+    /// when `cardUrls` is an array, keeping only those links' cards.
+    ///
+    /// # Errors
+    /// Without the group for the conversation, or before the loop started.
+    #[wasm_bindgen(js_name = dmEditWithMedia)]
+    pub async fn dm_edit_with_media(
+        &self,
+        channel_id: String,
+        message_id: String,
+        body: String,
+        remove_attachment_ids: JsValue,
+        card_urls: JsValue,
+    ) -> Result<(), JsError> {
+        let removed: Vec<String> = from_js(remove_attachment_ids)?.unwrap_or_default();
+        let card_urls: Option<Vec<String>> = from_js(card_urls)?;
+        self.app
+            .dm_edit_with_media(
+                &channel_id,
+                &message_id,
+                &body,
+                &removed,
+                card_urls.as_deref(),
+            )
+            .await
+            .map_err(js)
+    }
+
+    /// The links of a message body that may have cards, at most three.
+    #[must_use]
+    #[wasm_bindgen(js_name = cardLinks)]
+    pub fn card_links(&self, body: String) -> Vec<String> {
+        App::card_links(&body)
+    }
+
+    /// The card to show under a link while composing, or null: the
+    /// instance's in a server channel; none in a personal one on the web.
+    ///
+    /// # Errors
+    /// The instance's refusal (`RATE_LIMITED`) or the transport.
+    #[wasm_bindgen(js_name = cardPreview)]
+    pub async fn card_preview(&self, channel_id: String, url: String) -> Result<JsValue, JsError> {
+        to_js(
+            &self
+                .app
+                .card_preview(&channel_id, &url)
+                .await
+                .map_err(js_api)?,
+        )
+    }
+
+    /// An attachment's or a card's blob (`{blobId, sizeBytes, key, nonce,
+    /// hash}` as a summary gave it), fetched, opened and kept in memory.
+    /// Check `attachmentDrawable` before decoding a picture.
+    ///
+    /// # Errors
+    /// `NOT_FOUND` when this account cannot read it; when it does not open
+    /// as named; the transport.
+    #[wasm_bindgen(js_name = attachmentBytes)]
+    pub async fn attachment_bytes(&self, blob: JsValue) -> Result<Vec<u8>, JsError> {
+        let blob: BlobSummary = from_js(blob)?.ok_or_else(|| JsError::new("no blob was named"))?;
+        self.app.attachment_bytes(&blob).await.map_err(js_api)
+    }
+
+    /// A server card's picture, by its `imageUrl`.
+    ///
+    /// # Errors
+    /// For a path that is not a card picture of this instance; `NOT_FOUND`.
+    #[wasm_bindgen(js_name = cardImage)]
+    pub async fn card_image(&self, image_url: String) -> Result<Vec<u8>, JsError> {
+        self.app.card_image(&image_url).await.map_err(js_api)
+    }
+
+    /// Whether a picture someone sent may be decoded: its header names a
+    /// size within the bounds (specs/media.md 5).
+    #[must_use]
+    #[wasm_bindgen(js_name = attachmentDrawable)]
+    pub fn attachment_drawable(&self, bytes: Vec<u8>) -> bool {
+        App::attachment_drawable(&bytes)
+    }
+
+    /// An attachment's placeholder (base64, as a summary carries it) as a
+    /// tiny picture, `{width, height, rgba}` with `rgba` a
+    /// `Uint8ClampedArray` for an `ImageData`; null for none.
+    #[must_use]
+    #[wasm_bindgen(js_name = placeholderImage)]
+    pub fn placeholder_image(&self, placeholder: String) -> JsValue {
+        use base64::Engine as _;
+        let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(placeholder) else {
+            return JsValue::NULL;
+        };
+        let Some(image) = App::placeholder_image(&bytes) else {
+            return JsValue::NULL;
+        };
+        let out = js_sys::Object::new();
+        let _ = js_sys::Reflect::set(&out, &"width".into(), &image.width.into());
+        let _ = js_sys::Reflect::set(&out, &"height".into(), &image.height.into());
+        let rgba = js_sys::Uint8ClampedArray::from(image.rgba.as_slice());
+        let _ = js_sys::Reflect::set(&out, &"rgba".into(), &rgba);
+        out.into()
+    }
+}
+
+/// The scalar options of `attach`.
+#[derive(serde::Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+struct AttachOptions {
+    name: String,
+    as_file: bool,
+    alt: String,
+    duration_ms: Option<u32>,
+    video_width: u32,
+    video_height: u32,
+}
+
+/// `attach`'s options read: the scalars by serde, the pixels as typed arrays.
+fn attachment_input(bytes: Vec<u8>, options: &JsValue) -> Result<AttachmentInput, JsError> {
+    let o: AttachOptions = from_js(options.clone())?.unwrap_or_default();
+    Ok(AttachmentInput {
+        bytes,
+        name: o.name,
+        as_file: o.as_file,
+        pixels: pixels_of(options, "pixels")?,
+        poster: pixels_of(options, "poster")?,
+        duration_ms: o.duration_ms,
+        video_width: o.video_width,
+        video_height: o.video_height,
+        alt: o.alt,
+    })
+}
+
+/// `options[field]` as `{rgba, width, height}`, or none.
+fn pixels_of(options: &JsValue, field: &str) -> Result<Option<PixelsInput>, JsError> {
+    if !options.is_object() {
+        return Ok(None);
+    }
+    let value = js_sys::Reflect::get(options, &field.into()).unwrap_or(JsValue::UNDEFINED);
+    if value.is_null() || value.is_undefined() {
+        return Ok(None);
+    }
+    let get = |name: &str| js_sys::Reflect::get(&value, &name.into()).unwrap_or(JsValue::UNDEFINED);
+    let rgba = get("rgba");
+    if !rgba.is_object() {
+        return Err(JsError::new(&format!(
+            "{field}.rgba is not an array of bytes"
+        )));
+    }
+    let dimension = |name: &str| {
+        get(name)
+            .as_f64()
+            .filter(|n| n.fract() == 0.0 && *n >= 0.0 && *n <= f64::from(u32::MAX))
+            .map(|n| n as u32)
+            .ok_or_else(|| JsError::new(&format!("{field}.{name} is not a size")))
+    };
+    Ok(Some(PixelsInput {
+        rgba: js_sys::Uint8Array::new(&rgba).to_vec(),
+        width: dimension("width")?,
+        height: dimension("height")?,
+    }))
 }

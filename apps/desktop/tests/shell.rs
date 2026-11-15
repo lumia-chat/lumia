@@ -600,6 +600,8 @@ fn who_is_typing_is_named_under_the_composer_until_their_time_runs_out() {
                     reactions: Vec::new(),
                     mentions_me: false,
                     edited: false,
+                    attachments: Vec::new(),
+                    cards: Vec::new(),
                 }),
             }],
         }));

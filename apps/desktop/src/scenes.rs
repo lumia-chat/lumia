@@ -817,6 +817,8 @@ mod staged {
             mine,
             reply: None,
             reactions: Vec::new(),
+            attachments: Vec::new(),
+            cards: Vec::new(),
         }
     }
 
