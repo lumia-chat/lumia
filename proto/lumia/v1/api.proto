@@ -520,6 +520,13 @@ message ReauthRequest {
   string passkey_challenge_id = 5;
 }
 
+// POST /identity/rebind: starting over (specs/identity.md 4.7). The proof is
+// by a device of the identity the account moves to, for LINK_ACCOUNT.
+message RebindIdentityRequest {
+  IdentityProof proof = 1;
+  string reauth_token = 2;
+}
+
 // POST /auth/reauth/oidc/start: a fresh login at the account's OIDC
 // provider. The callback lands at `{return_to}?reauth={reauth_token}`, a
 // token for the session that started the flow, or `?error=oidc`.

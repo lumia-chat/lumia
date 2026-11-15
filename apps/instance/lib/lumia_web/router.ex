@@ -61,6 +61,7 @@ defmodule LumiaWeb.Router do
     post "/identity/backup-key-handoff", IdentityController, :publish_backup_key_handoff
     post "/identity/devices/revoke", IdentityController, :revoke_device
     post "/identity/link", IdentityController, :link
+    post "/identity/rebind", IdentityController, :rebind
     post "/identity/link-bundles", IdentityController, :create_link_bundle
     put "/identity/backup", IdentityController, :put_backup
     get "/identity/backup", IdentityController, :get_backup

@@ -169,6 +169,8 @@ message AccountEvent {
     ChannelInvitationRemoved channel_invitation_removed = 36; // answered, dismissed or gone
     ReadPositionUpdated read_position_updated = 37; // this account read a conversation further, on some device
     RailArranged rail_arranged = 38;        // this account arranged its rail, on some device (architecture 6.9)
+    IdentityRebound identity_rebound = 39;  // this account started over with another identity (identity spec 4.7)
+    ContactIdentityChanged contact_identity_changed = 40; // a contact did: a key change, not a rotation
   }
 }
 
@@ -234,6 +236,23 @@ message RosterUpdated { SignedRoster roster = 1; }
 message ContactRosterUpdated {
   bytes identity_id = 1;
   SignedRoster roster = 2;
+}
+// Starting over (specs/identity.md 4.7): the account is bound to another
+// identity now. The old identity's sessions on the account are ended and its
+// key packages gone.
+message IdentityRebound {
+  bytes old_identity_id = 1;
+  bytes identity_id = 2;
+  SignedRoster roster = 3;  // the new identity's, as held
+}
+// A contact started over: their clients pin the new root and show a key
+// change in every conversation shared with the account, and remove the old
+// identity's leaves at their next commit (e2ee spec 4).
+message ContactIdentityChanged {
+  bytes account_id = 1;
+  bytes old_identity_id = 2;
+  bytes identity_id = 3;
+  SignedRoster roster = 4;
 }
 message ProfileUpdated { Account account = 1; }
 message SessionRevoked { bytes session_id = 1; bytes device_id = 2; }

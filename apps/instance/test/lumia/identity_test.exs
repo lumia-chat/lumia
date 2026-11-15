@@ -185,14 +185,22 @@ defmodule Lumia.IdentityTest do
 
       assert {:error, :policy_denied} = Identity.accept_roster(v3, :publish)
 
-      assert {:error, :policy_denied} =
-               Identity.accept_roster(v3, {:revoke, "bogus", ctx.account.id})
-
       {:ok, phone_session, _} = Auth.create_session(ctx.account.id, Proto.from_uuid(ctx.phone.id))
+
+      assert {:error, :policy_denied} =
+               Identity.accept_roster(v3, {:revoke, "bogus", phone_session})
+
+      # Another session's token, even the same account's, is not this one's.
+      {:ok, other_session, _} = Auth.create_session(ctx.account.id, Ecto.UUID.generate())
+      {elsewhere, _} = Identity.issue_reauth(other_session)
+
+      assert {:error, :policy_denied} =
+               Identity.accept_roster(v3, {:revoke, elsewhere, phone_session})
+
       {reauth, _} = Identity.issue_reauth(phone_session)
 
       assert {:ok, %{new_revocations: [_]}} =
-               Identity.accept_roster(v3, {:revoke, reauth, ctx.account.id})
+               Identity.accept_roster(v3, {:revoke, reauth, phone_session})
 
       # The laptop's session is gone, the account log says so, and the token was single use.
       assert {:error, :session_revoked} = Auth.verify_access(laptop_tokens.access_token)

@@ -185,7 +185,8 @@ defmodule Lumia.Identity do
   @doc """
   Verifies a roster against the held version and applies the revocation
   policy, then stores it. `context` is `:publish`, `:proof`, or
-  `{:revoke, reauth_token, account_id}`.
+  `{:revoke, reauth_token, session}`, the reauth token having to be that
+  session's (section 10).
 
   A roster that adds revocations is accepted only through the revoke
   context with a valid reauth token, or when root-signed. On acceptance,
@@ -262,9 +263,11 @@ defmodule Lumia.Identity do
   defp revocation_policy(%Roster{new_revocations: []}, _context), do: :ok
   defp revocation_policy(%Roster{root_signed?: true}, _context), do: :ok
 
-  defp revocation_policy(%Roster{} = verified, {:revoke, reauth_token, account_id}) do
+  defp revocation_policy(%Roster{} = verified, {:revoke, reauth_token, %Session{} = current}) do
+    account_id = current.account_id
+
     with {:ok, session} <- verify_reauth(reauth_token),
-         true <- session.account_id == account_id || {:error, :policy_denied},
+         true <- session.id == current.id || {:error, :policy_denied},
          %Account{identity_id: id} when id == verified.identity_id <-
            Repo.get(Account, account_id) do
       :ok
@@ -418,6 +421,88 @@ defmodule Lumia.Identity do
       _ ->
         {:error, :conflict}
     end
+  end
+
+  @doc """
+  Starting over (section 4.7): binds an account already bound to an
+  identity to `verified`, the roster of the one a proof just showed.
+  `{:error, {:failed_precondition, "unbound"}}` for an account bound to
+  none (that is `link_account/2`), `{:error, :already_exists}` for an
+  identity bound to another account here.
+
+  The old identity's sessions on the account end and its key packages go,
+  every device the old roster names; a session on a device it does not
+  name (the calling device's, signed in by a credential) is left alone.
+  The account's signed profile goes with the identity that signed it.
+  `IdentityRebound` goes on the account's log and `ContactIdentityChanged`
+  on the logs of everyone sharing a personal conversation with it.
+  """
+  def rebind_account(account_id, %Roster{} = verified) do
+    Tx.transact(fn ->
+      with %Account{identity_id: old} = account when is_binary(old) <-
+             Repo.get(Account, account_id) || {:error, :not_found},
+           :ok <- unbound_elsewhere(verified.identity_id, account_id) do
+        rebind(account, old, verified)
+      else
+        %Account{identity_id: nil} -> {:error, {:failed_precondition, "unbound"}}
+        other -> other
+      end
+    end)
+  end
+
+  defp unbound_elsewhere(identity_id, account_id) do
+    case account_for(identity_id) do
+      nil -> :ok
+      %Account{id: ^account_id} -> :ok
+      %Account{} -> {:error, :already_exists}
+    end
+  end
+
+  # Proving the identity it already has changes nothing.
+  defp rebind(%Account{} = account, old, %Roster{identity_id: old}), do: {:ok, account}
+
+  defp rebind(%Account{} = account, old, %Roster{} = verified) do
+    old_devices =
+      case held_roster(old) do
+        nil -> []
+        %Roster{devices: devices, revoked: revoked} -> Map.keys(devices) ++ Map.keys(revoked)
+      end
+
+    for device_bytes <- Enum.uniq(old_devices) do
+      device_id = Proto.from_uuid(device_bytes)
+      Auth.revoke_device(account.id, device_id)
+      Lumia.Mls.purge_device(account.id, device_id)
+    end
+
+    {:ok, account} =
+      account
+      |> Ecto.Changeset.change(identity_id: verified.identity_id, profile: nil)
+      |> Repo.update()
+
+    {:ok, _} =
+      Accounts.append_event(
+        account.id,
+        {:identity_rebound,
+         %V1.IdentityRebound{
+           old_identity_id: old,
+           identity_id: verified.identity_id,
+           roster: verified.signed
+         }}
+      )
+
+    changed =
+      {:contact_identity_changed,
+       %V1.ContactIdentityChanged{
+         account_id: Proto.uuid(account.id),
+         old_identity_id: old,
+         identity_id: verified.identity_id,
+         roster: verified.signed
+       }}
+
+    for contact <- Lumia.Dms.contacts(account.id),
+        do: {:ok, _} = Accounts.append_event(contact, changed)
+
+    {:ok, account}
   end
 
   @doc "The account bound to an identity on this instance, or nil."

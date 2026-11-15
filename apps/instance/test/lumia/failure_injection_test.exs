@@ -41,7 +41,6 @@ defmodule Lumia.FailureInjectionTest do
     {:authorization, 7} => "bot tokens and their scopes (authorization section 8) are not built",
     {:authorization, 8} =>
       "the NOT_FOUND half is covered; the override endpoints (authorization section 7) are not built",
-    {:identity, 16} => "POST /identity/rebind (identity section 4.7) is not built yet (#20)",
     {:identity, 17} =>
       "the core does not keep an unconfirmed phrase's entropy yet (identity section 4.1, #20)"
   }

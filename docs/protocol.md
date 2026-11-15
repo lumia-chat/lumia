@@ -410,4 +410,3 @@ For `PERSONAL_DM` and `PERSONAL_GROUP_DM`:
 - Whether `HighWaterMarkRequest` with an empty channel list is bounded by `Limits.max_subscriptions` or by a separate cap.
 - MCP tool and resource definitions.
 - OpenAPI generation: which generator and which annotations carry the HTTP mapping in section 9 so the table is derived, not maintained by hand.
-- The shapes section 9 names for starting over (issue #20) are not in `proto/lumia/v1/` yet: `RebindIdentityRequest` and the `IdentityRebound` and `ContactIdentityChanged` events. They land with `POST /identity/rebind`.

@@ -287,6 +287,167 @@ defmodule LumiaWeb.IdentityApiTest do
     assert dead.status == 401
   end
 
+  describe "starting over (identity spec 4.7)" do
+    defp started(conn) do
+      %{identity: old, device: old_phone, roster: old_v1} = bootstrap()
+
+      {:ok, account} =
+        Accounts.register(%{
+          handle: "over#{System.unique_integer([:positive])}",
+          password: "correct horse battery",
+          identity_id: old.identity_id
+        })
+
+      {:ok, _} = Identity.accept_roster(old_v1, :publish)
+      old_device_id = Proto.from_uuid(old_phone.id)
+      {:ok, _, old_tokens} = Lumia.Auth.create_session(account.id, old_device_id)
+      {:ok, _} = Lumia.Mls.publish_key_packages(account.id, old_device_id, ["kp"], "last")
+
+      # The person, on a new device with neither the old phone nor the
+      # phrase, signs in by password: no device of either identity yet.
+      {:ok, _, tokens} = Lumia.Auth.create_session(account.id, Ecto.UUID.generate())
+      authed = put_req_header(conn, "authorization", "Bearer " <> tokens.access_token)
+
+      %{
+        account: account,
+        old: old,
+        old_tokens: old_tokens,
+        old_device_id: old_device_id,
+        authed: authed
+      }
+    end
+
+    defp reauth_token(authed) do
+      authed
+      |> post_proto("/api/v1/auth/reauth", %V1.ReauthRequest{
+        credential: {:password, "correct horse battery"}
+      })
+      |> Map.get(:resp_body)
+      |> V1.ReauthResponse.decode()
+      |> Map.get(:reauth_token)
+    end
+
+    defp rebind(conn, authed, reauth, %{identity: identity, device: device, roster: roster}) do
+      post_proto(authed, "/api/v1/identity/rebind", %V1.RebindIdentityRequest{
+        proof: proof(conn, identity, device, roster, :LINK_ACCOUNT),
+        reauth_token: reauth
+      })
+    end
+
+    @tag failure_injection: [identity: 16]
+    test "binds the account to the new identity, ends the old one's sessions and packages, and tells contacts",
+         %{conn: conn} do
+      s = started(conn)
+      contact = Lumia.Fixtures.account("contact")
+      Lumia.Fixtures.personal_dm(s.account, contact)
+      new = bootstrap()
+
+      assert rebind(conn, s.authed, reauth_token(s.authed), new).status == 204
+
+      assert Lumia.Repo.get!(Accounts.Account, s.account.id).identity_id ==
+               new.identity.identity_id
+
+      dead =
+        conn
+        |> put_req_header("authorization", "Bearer " <> s.old_tokens.access_token)
+        |> get("/api/v1/account/snapshot")
+
+      assert dead.status == 401
+      assert Lumia.Mls.key_package_count(s.account.id, s.old_device_id) == 0
+
+      # The calling session, on a device neither roster names, lives on.
+      assert get(s.authed, "/api/v1/account/snapshot").status == 200
+
+      own = Accounts.events_after(s.account.id, 0) |> List.last()
+
+      assert {:identity_rebound,
+              %V1.IdentityRebound{old_identity_id: old_id, identity_id: new_id}} = own.payload
+
+      assert old_id == s.old.identity_id
+      assert new_id == new.identity.identity_id
+
+      theirs =
+        Accounts.events_after(contact.id, 0)
+        |> Enum.find(&match?({:contact_identity_changed, _}, &1.payload))
+
+      assert {:contact_identity_changed,
+              %V1.ContactIdentityChanged{account_id: account_id, identity_id: ^new_id}} =
+               theirs.payload
+
+      assert Proto.from_uuid(account_id) == s.account.id
+    end
+
+    @tag failure_injection: [identity: 16]
+    test "an identity bound to another account here is refused, and so is no reauth", %{
+      conn: conn
+    } do
+      s = started(conn)
+      taken = bootstrap()
+
+      {:ok, _} =
+        Accounts.register(%{
+          handle: "taken#{System.unique_integer([:positive])}",
+          password: "correct horse battery",
+          identity_id: taken.identity.identity_id
+        })
+
+      assert rebind(conn, s.authed, reauth_token(s.authed), taken).status == 409
+      assert rebind(conn, s.authed, "", bootstrap()).status == 401
+
+      assert Lumia.Repo.get!(Accounts.Account, s.account.id).identity_id == s.old.identity_id
+    end
+
+    test "an account with no identity links instead", %{conn: conn} do
+      {:ok, account} =
+        Accounts.register(%{
+          handle: "unbound#{System.unique_integer([:positive])}",
+          password: "correct horse battery"
+        })
+
+      {:ok, _, tokens} = Lumia.Auth.create_session(account.id, Ecto.UUID.generate())
+      authed = put_req_header(conn, "authorization", "Bearer " <> tokens.access_token)
+      refused = rebind(conn, authed, reauth_token(authed), bootstrap())
+      assert refused.status == 400
+
+      assert %V1.Error{code: :FAILED_PRECONDITION, details: %{"state" => "unbound"}} =
+               V1.Error.decode(refused.resp_body)
+    end
+  end
+
+  test "linking takes only this session's reauth, never another account's", %{conn: conn} do
+    register = fn ->
+      {:ok, account} =
+        Accounts.register(%{
+          handle: "lk#{System.unique_integer([:positive])}",
+          password: "correct horse battery"
+        })
+
+      {:ok, _, tokens} = Lumia.Auth.create_session(account.id, Ecto.UUID.generate())
+      {account, put_req_header(conn, "authorization", "Bearer " <> tokens.access_token)}
+    end
+
+    {victim, victim_conn} = register.()
+    {_attacker, attacker_conn} = register.()
+
+    reauth =
+      attacker_conn
+      |> post_proto("/api/v1/auth/reauth", %V1.ReauthRequest{
+        credential: {:password, "correct horse battery"}
+      })
+      |> Map.get(:resp_body)
+      |> V1.ReauthResponse.decode()
+
+    %{identity: identity, device: device, roster: roster} = bootstrap()
+
+    refused =
+      victim_conn
+      |> put_req_header("x-reauth-token", reauth.reauth_token)
+      |> post_proto("/api/v1/identity/link", proof(conn, identity, device, roster, :LINK_ACCOUNT))
+
+    assert refused.status == 401
+    assert Lumia.Repo.get!(Accounts.Account, victim.id).identity_id == nil
+  end
+
   test "link bundles round-trip through the public fetch", %{conn: conn} do
     %{identity: identity, roster: v1} = bootstrap()
 

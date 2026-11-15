@@ -172,13 +172,14 @@ defmodule LumiaWeb.IdentityController do
   end
 
   def revoke_device(conn, _params) do
-    account_id = conn.assigns.current_account_id
-
     with {:ok, _identity_id} <- bound_identity(conn),
          {:ok, %V1.RevokeDeviceRequest{roster: %V1.SignedRoster{} = roster} = req} <-
            ProtoConn.decode(conn, V1.RevokeDeviceRequest),
          {:ok, _verified} <-
-           Identity.accept_roster(roster, {:revoke, req.reauth_token, account_id}) do
+           Identity.accept_roster(
+             roster,
+             {:revoke, req.reauth_token, conn.assigns.current_session}
+           ) do
       ProtoConn.no_content(conn)
     else
       {:error, {:identity_proof_invalid, step, reason}} ->
@@ -195,12 +196,35 @@ defmodule LumiaWeb.IdentityController do
   def link(conn, params) do
     account_id = conn.assigns.current_account_id
 
-    with {:ok, _session} <-
-           Identity.verify_reauth(params["reauth_token"] || header(conn, "x-reauth-token")),
+    with :ok <- reauthed(conn, params["reauth_token"] || header(conn, "x-reauth-token")),
          {:ok, %V1.IdentityProof{} = proof} <- ProtoConn.decode(conn, V1.IdentityProof),
          {:ok, verified, _device} <- Identity.verify_proof(proof, :LINK_ACCOUNT),
          {:ok, _account} <- Identity.link_account(account_id, verified.identity_id) do
       ProtoConn.no_content(conn)
+    end
+  end
+
+  # Starting over (identity spec 4.7): the account moves to the identity
+  # the proof shows, under this session's reauth.
+  def rebind(conn, _params) do
+    with {:ok, %V1.RebindIdentityRequest{proof: %V1.IdentityProof{} = proof} = req} <-
+           ProtoConn.decode(conn, V1.RebindIdentityRequest),
+         :ok <- reauthed(conn, req.reauth_token),
+         {:ok, verified, _device} <- Identity.verify_proof(proof, :LINK_ACCOUNT),
+         {:ok, _account} <- Identity.rebind_account(conn.assigns.current_account_id, verified) do
+      ProtoConn.no_content(conn)
+    else
+      {:ok, %V1.RebindIdentityRequest{}} -> {:error, :invalid_argument}
+      other -> other
+    end
+  end
+
+  # A reauth token is this session's (identity spec 10): one another session
+  # earned, let alone another account's, authorizes nothing here.
+  defp reauthed(conn, token) do
+    case Identity.verify_reauth(token) do
+      {:ok, %{id: id}} when id == conn.assigns.current_session.id -> :ok
+      _ -> {:error, :unauthenticated}
     end
   end
 

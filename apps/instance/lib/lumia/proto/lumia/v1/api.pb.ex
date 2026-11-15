@@ -915,6 +915,18 @@ defmodule Lumia.V1.ReauthRequest do
   field :passkey_challenge_id, 5, type: :string, json_name: "passkeyChallengeId"
 end
 
+defmodule Lumia.V1.RebindIdentityRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.RebindIdentityRequest",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :proof, 1, type: Lumia.V1.IdentityProof
+  field :reauth_token, 2, type: :string, json_name: "reauthToken"
+end
+
 defmodule Lumia.V1.ReauthOidcStartRequest do
   @moduledoc false
 

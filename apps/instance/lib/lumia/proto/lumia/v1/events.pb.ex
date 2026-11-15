@@ -380,6 +380,16 @@ defmodule Lumia.V1.AccountEvent do
     oneof: 0
 
   field :rail_arranged, 38, type: Lumia.V1.RailArranged, json_name: "railArranged", oneof: 0
+
+  field :identity_rebound, 39,
+    type: Lumia.V1.IdentityRebound,
+    json_name: "identityRebound",
+    oneof: 0
+
+  field :contact_identity_changed, 40,
+    type: Lumia.V1.ContactIdentityChanged,
+    json_name: "contactIdentityChanged",
+    oneof: 0
 end
 
 defmodule Lumia.V1.MembershipAdded do
@@ -570,6 +580,33 @@ defmodule Lumia.V1.ContactRosterUpdated do
 
   field :identity_id, 1, type: :bytes, json_name: "identityId"
   field :roster, 2, type: Lumia.V1.SignedRoster
+end
+
+defmodule Lumia.V1.IdentityRebound do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.IdentityRebound",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :old_identity_id, 1, type: :bytes, json_name: "oldIdentityId"
+  field :identity_id, 2, type: :bytes, json_name: "identityId"
+  field :roster, 3, type: Lumia.V1.SignedRoster
+end
+
+defmodule Lumia.V1.ContactIdentityChanged do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.ContactIdentityChanged",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :account_id, 1, type: :bytes, json_name: "accountId"
+  field :old_identity_id, 2, type: :bytes, json_name: "oldIdentityId"
+  field :identity_id, 3, type: :bytes, json_name: "identityId"
+  field :roster, 4, type: Lumia.V1.SignedRoster
 end
 
 defmodule Lumia.V1.ProfileUpdated do
