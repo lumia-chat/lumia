@@ -201,13 +201,17 @@ struct ConversationScreen: View {
         PanelScreen(back: "Home", title: title, subtitle: [others.map { session.pronouns(of: $0) }.filter { !$0.isEmpty }.joined(separator: ", "), (channel?.host).flatMap { $0.isEmpty ? nil : "on \($0)" } ?? ""].filter { !$0.isEmpty }.joined(separator: " · ").nilIfEmpty, lead: {
             LumiaAvatar(initials: initials(of: title), tone: .of(others.first ?? channelID), size: LumiaTokens.avatarMd, picture: others.count == 1 ? session.picture(of: others[0]) : nil)
         }) {
+            // Who can read what is said here stays in sight under the header,
+            // in green, whatever the list is scrolled to.
+            LumiaNotice(icon: "lock.shield", tone: .secure) {
+                Text("Messages here are end-to-end encrypted. Only your devices and those of \(others.map { session.name(of: $0) }.joined(separator: ", ")) can read them.")
+            }
+            .padding(.horizontal, LumiaTokens.space16)
+            .padding(.top, LumiaTokens.space8)
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         VStack(alignment: .leading, spacing: LumiaTokens.space8) {
-                            LumiaNotice(icon: "shield") {
-                                Text("Messages here are end-to-end encrypted. Only your devices and those of \(others.map { session.name(of: $0) }.joined(separator: ", ")) can read them.")
-                            }
                             // A phone without the account's identity reads nothing here
                             // until it is brought in (issue #20).
                             if session.privateMessages.needsSomething {
@@ -241,8 +245,7 @@ struct ConversationScreen: View {
                         if !error.isEmpty { LumiaErrorText(error).padding(.horizontal, LumiaTokens.space16) }
                         NewestMark(visible: $newestVisible)
                     }
-                    .padding(.top, LumiaTokens.space16)
-                    .padding(.bottom, LumiaTokens.space8)
+                    .padding(.vertical, LumiaTokens.space8)
                 }
                 .defaultScrollAnchor(.bottom)
                 .scrollDismissesKeyboard(.interactively)
@@ -438,14 +441,18 @@ struct ChannelScreen: View {
         PanelScreen(back: server?.name ?? "the server", title: title, subtitle: server?.name, actions: isDM ? [] : [("person.2", "Members", { path.append(.channelMembers(channelID: channelID)) })], lead: {
             if isDM { LumiaAvatar(initials: initials(of: title), tone: .of(other), size: LumiaTokens.avatarMd, picture: session.picture(of: other)) }
         }) {
+            // That the server keeps a DM stays in sight under the header, in
+            // the warning's amber, whatever the list is scrolled to; an eye,
+            // not a shield, since it is no promise of privacy.
+            if isDM {
+                LumiaNotice(icon: "eye", tone: .warning) { Text(Membership.serverDMNote(server: server?.name ?? "this server")) }
+                    .padding(.horizontal, LumiaTokens.space16)
+                    .padding(.vertical, LumiaTokens.space8)
+            }
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
-                        if isDM {
-                            LumiaNotice(icon: "shield") { Text(Membership.serverDMNote(server: server?.name ?? "this server")) }
-                                .padding(.horizontal, LumiaTokens.space16)
-                                .padding(.vertical, LumiaTokens.space8)
-                        } else if messages.isEmpty {
+                        if !isDM, messages.isEmpty {
                             LumiaEmptyState(icon: "bubble.left", title: "Nothing here yet") { Text("Say something.") }
                         }
                         // What one person sends close together is one block, and

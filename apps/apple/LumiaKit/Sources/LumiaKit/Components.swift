@@ -60,17 +60,20 @@ public struct LumiaPictureOver<Under: View>: View {
     }
 }
 
-/// A notice's look: quiet, the accent's, or the warning's amber (the
-/// recovery phrase's notes, issue #20). The design has no warning colours
-/// of its own yet, so it borrows the amber avatar tone's fill and ink.
+/// A notice's look: quiet, the accent's, the warning's amber (the
+/// recovery phrase's notes, issue #20, and a server DM's note), or the
+/// green of an end-to-end encrypted conversation. The design has no
+/// warning or secure colours of its own yet, so these borrow the amber
+/// and green avatar tones' fills and inks.
 public enum NoticeTone {
-    case neutral, accent, warning
+    case neutral, accent, warning, secure
 
     var fill: Color {
         switch self {
         case .neutral: LumiaTokens.inset.color
         case .accent: LumiaTokens.accentWash.color
         case .warning: LumiaTokens.toneAmber.color
+        case .secure: LumiaTokens.toneGreen.color
         }
     }
 
@@ -79,6 +82,7 @@ public enum NoticeTone {
         case .neutral: LumiaTokens.line.color
         case .accent: LumiaTokens.accentLine.color
         case .warning: LumiaTokens.toneAmberInk.color.opacity(0.25)
+        case .secure: LumiaTokens.toneGreenInk.color.opacity(0.25)
         }
     }
 
@@ -87,10 +91,17 @@ public enum NoticeTone {
         case .neutral: LumiaTokens.inkSecondary.color
         case .accent: LumiaTokens.accentInk.color
         case .warning: LumiaTokens.toneAmberInk.color
+        case .secure: LumiaTokens.toneGreenInk.color
         }
     }
 
-    var ink: Color { self == .warning ? LumiaTokens.toneAmberInk.color : LumiaTokens.inkBody.color }
+    var ink: Color {
+        switch self {
+        case .neutral, .accent: LumiaTokens.inkBody.color
+        case .warning: LumiaTokens.toneAmberInk.color
+        case .secure: LumiaTokens.toneGreenInk.color
+        }
+    }
 }
 
 public struct LumiaNotice<Content: View>: View {
