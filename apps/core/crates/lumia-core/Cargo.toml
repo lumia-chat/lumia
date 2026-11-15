@@ -38,6 +38,11 @@ unicode-segmentation = "1"
 # Link cards (docs/specs/media.md 6): resolving a page's image against it.
 url = "2"
 
+# Attachments (docs/specs/media.md 3): decoders and encoders in Rust only,
+# so the core builds for wasm32 with no C.
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
+thumbhash = "0.1"
+
 [dev-dependencies]
 base64 = "0.22"
 hex = "0.4"

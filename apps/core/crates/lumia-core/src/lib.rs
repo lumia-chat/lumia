@@ -9,6 +9,8 @@
 //! * [`body`] is a message body's grammar (protocol 14) and its size limit.
 //! * [`cards`] is link cards' rules (docs/specs/media.md 6): which links,
 //!   what a page's head gives, which addresses a fetcher may reach.
+//! * [`media`] makes attachments before upload and opens their blobs
+//!   after fetching (docs/specs/media.md).
 //!
 //! Transports (`lumia-client` natively, `lumia-wasm` in the browser) feed
 //! this crate frames and carry out the effects it returns. Tests here run
@@ -18,6 +20,7 @@ pub mod body;
 pub mod cards;
 pub mod identity;
 pub mod keystore;
+pub mod media;
 pub mod mls;
 pub mod store;
 pub mod sync;
