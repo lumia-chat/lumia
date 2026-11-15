@@ -1,7 +1,8 @@
 #!/bin/sh
 # Makes what a release publishes for Linux (architecture section 13, "Distribution"): the
-# shell as an AppImage, which updates itself, and as a .deb and an .rpm, which the package
-# manager updates from the repository the release publishes (scripts/linux-repo.sh). Each
+# shell as an AppImage, which updates itself, as a .deb and an .rpm, which the package
+# manager updates from the repository the release publishes (scripts/linux-repo.sh), and
+# as a tarball to run from anywhere, which does not update. Each
 # carries a launcher entry and the lumia: link type. All three are previews and are named
 # so: nobody has used the shell on a Linux desktop. The release workflow runs this on a
 # tag; it also runs in a container (the head of the workflow's job says how).
@@ -13,8 +14,8 @@
 #
 # Output, in the output directory, <arch> being this machine's (x86_64 or aarch64):
 # Lumia-linux-<arch>-preview.AppImage (no version in the name: an update replaces the file
-# in place, so a name would soon say the wrong one), Lumia-<version>-linux-<arch>-preview.deb
-# and .rpm, and appcast-linux-<arch>.xml when there is a key to sign it with. The binary runs
+# in place, so a name would soon say the wrong one), Lumia-<version>-linux-<arch>-preview.deb,
+# .rpm and .tar.gz, and appcast-linux-<arch>.xml when there is a key to sign it with. The binary runs
 # on a glibc as old as the one it was built against, so the workflow builds on the oldest
 # Ubuntu the runners offer.
 #
@@ -73,7 +74,7 @@ case "$(uname -m)" in
   aarch64|arm64) arch=aarch64; deb_arch=arm64 ;;
   *) echo "dist: no package is made for $(uname -m)"; exit 1 ;;
 esac
-for tool in dpkg-deb rpmbuild mksquashfs curl convert sha256sum; do
+for tool in dpkg-deb rpmbuild mksquashfs curl convert sha256sum tar; do
   command -v "$tool" >/dev/null || { echo "dist: needs $tool"; exit 1; }
 done
 
@@ -161,6 +162,18 @@ chmod 755 "$dist/$image_name"
 # Unpacked by its own runtime, it is the same program.
 (cd "$work" && "$dist/$image_name" --appimage-extract usr/bin/lumia >/dev/null)
 cmp -s "$work/squashfs-root/usr/bin/lumia" "$bin" || { echo "dist: the AppImage does not unpack to the program"; exit 1; }
+
+# The tarball: the same files in one folder, with how to run and install them by hand and
+# where the versions that update are (packaging/linux/README.txt). The program in it has the
+# feed compiled in but is not an AppImage, so it has no updater.
+folder="$work/$name"
+mkdir -p "$folder"
+cp "$bin" "$folder/lumia"
+cp "$crate/packaging/linux/chat.lumia.desktop" "$crate/packaging/linux/README.txt" "$folder/"
+cp "$pkg/usr/share/icons/hicolor/256x256/apps/chat.lumia.png" "$folder/chat.lumia.png"
+cp "$root/LICENSE" "$folder/LICENSE"
+tar -C "$work" -czf "$dist/$name.tar.gz" "$name"
+tar -tzf "$dist/$name.tar.gz" | grep -qx "$name/lumia" || { echo "dist: the tarball has no $name/lumia"; exit 1; }
 
 # What only the packages carry: the repository they update from, and the key it is signed
 # with. apt reads an armoured key named .asc in Signed-By (apt 1.4 and later); dnf asks the

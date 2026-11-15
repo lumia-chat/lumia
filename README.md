@@ -55,7 +55,7 @@ sudo dnf install https://packages.lumia.chat/rpm/x86_64/lumia-<version>-1.x86_64
 sudo dnf install https://packages.lumia.chat/rpm/aarch64/lumia-<version>-1.aarch64.rpm
 ```
 
-Anywhere else, download `Lumia-linux-x86_64-preview.AppImage` or `Lumia-linux-aarch64-preview.AppImage`, make it executable (`chmod +x`) and open it; it needs FUSE, which most desktops have. It updates itself: Preferences has the choices, and nothing is downloaded until you choose Update. Every build needs a Vulkan driver.
+Anywhere else, download `Lumia-linux-x86_64-preview.AppImage` or `Lumia-linux-aarch64-preview.AppImage`, make it executable (`chmod +x`) and open it; it needs FUSE, which most desktops have. It updates itself: Preferences has the choices, and nothing is downloaded until you choose Update. To run it from a folder instead, with no updates, there is a tarball, `Lumia-<version>-linux-<arch>-preview.tar.gz`, whose `README.txt` says how. Every build needs a Vulkan driver.
 
 ### Android
 

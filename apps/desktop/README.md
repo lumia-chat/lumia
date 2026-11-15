@@ -42,7 +42,7 @@ The bundled app updates itself with [Sparkle](https://sparkle-project.org) (arch
 The same program builds for both, and a release tag publishes it for both as previews: nobody has run it on either desktop. What it lacks there is at the head of `src/platform/mod.rs`.
 
 ```sh
-scripts/dist-linux.sh 0.3.0      # on Linux: out/dist/Lumia-linux-<arch>-preview.AppImage, Lumia-0.3.0-linux-<arch>-preview.deb and .rpm
+scripts/dist-linux.sh 0.3.0      # on Linux: out/dist/Lumia-linux-<arch>-preview.AppImage, Lumia-0.3.0-linux-<arch>-preview.deb, .rpm and .tar.gz
 scripts/linux-repo.sh IN OUT     # the signed apt and dnf repository from a release's .deb and .rpm files
 scripts/dist-windows.sh 0.3.0    # on Linux with MinGW-w64: out/dist/Lumia-0.3.0-windows-x86_64-preview.zip
 ```
