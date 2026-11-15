@@ -31,6 +31,13 @@ use crate::ClientError;
 
 const B64: base64::engine::GeneralPurpose = base64::engine::general_purpose::STANDARD;
 
+/// A link code as typed: the approving device shows it in two groups of
+/// four, and people type it with the space, a dash, or neither. Only its
+/// letters and digits are the code.
+fn link_code(typed: &str) -> String {
+    typed.chars().filter(char::is_ascii_alphanumeric).collect()
+}
+
 /// The keystore entry for a phrase this device made and keeps until the
 /// person confirms it (spec 4.1 step 7).
 const UNCONFIRMED_PHRASE: &str = "unconfirmed_phrase";
@@ -530,7 +537,7 @@ impl<S: Store, K: Keystore> Device<'_, S, K> {
         let requester = LinkRequester::from_parts(&secret, request)?;
 
         let bundle = api
-            .get_link_bundle(code, &wire::display(&self.device_id))
+            .get_link_bundle(&link_code(code), &wire::display(&self.device_id))
             .await?;
         let body = requester.open_bundle(
             &bundle.sender_ephemeral_public_key,
@@ -1193,5 +1200,17 @@ mod tests {
             ClientError::DeviceRevoked { roster_version: 4 }
         ));
         assert_eq!(device.roster().unwrap().version, 4);
+    }
+}
+
+#[cfg(test)]
+mod link_code_tests {
+    use super::link_code;
+
+    #[test]
+    fn a_link_code_is_its_letters_and_digits_however_it_was_typed() {
+        assert_eq!(link_code("K7QM 2XRA"), "K7QM2XRA");
+        assert_eq!(link_code(" k7qm-2xra\n"), "k7qm2xra");
+        assert_eq!(link_code("K7QM2XRA"), "K7QM2XRA");
     }
 }

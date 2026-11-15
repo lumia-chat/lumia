@@ -280,8 +280,12 @@ fn a_computer_that_holds_the_identity_approves_another_from_devices() {
             .is_some_and(|r| r.devices.iter().filter(|d| !d.revoked).count() == 2)
     });
 
-    // The second claims it and holds the identity.
-    second.account.link.code.replace_text(&code);
+    // The second claims it, typed as it is shown, and holds the identity.
+    second
+        .account
+        .link
+        .code
+        .replace_text(&format!("{} {}", &code[..4], &code[4..]));
     second.claim_link();
     wait_until(&mut second, "the claim", |s| {
         s.session.has_identity() || !s.account.link.error.is_empty()
