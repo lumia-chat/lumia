@@ -1474,7 +1474,9 @@ pub enum Place {
 pub struct App {
     api: Api,
     host: String,
-    device_id: Vec<u8>,
+    /// New when the device is erased: a revoked id is never this device's
+    /// again.
+    device_id: Mutex<Vec<u8>>,
     place: Place,
     opener: Opener,
     inner: Mutex<Inner>,
@@ -1496,7 +1498,7 @@ impl std::fmt::Debug for App {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("App")
             .field("host", &self.host)
-            .field("device_id", &wire::display(&self.device_id))
+            .field("device_id", &wire::display(&self.this_device()))
             .finish_non_exhaustive()
     }
 }
@@ -1590,7 +1592,7 @@ impl App {
         Ok(Arc::new(Self {
             api,
             host,
-            device_id,
+            device_id: Mutex::new(device_id),
             place,
             opener,
             inner: Mutex::new(Inner {
@@ -1637,7 +1639,14 @@ impl App {
     /// This device's id (UUID string).
     #[must_use]
     pub fn device_id(&self) -> String {
-        wire::display(&self.device_id)
+        wire::display(&self.this_device())
+    }
+
+    fn this_device(&self) -> Vec<u8> {
+        self.device_id
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// Whether an access token is held for this instance.
@@ -1736,7 +1745,7 @@ impl App {
     ) -> Result<(), ClientError> {
         let pair = self
             .api
-            .passkey_assert_finish(challenge_id, credential_json, self.device_id.clone())
+            .passkey_assert_finish(challenge_id, credential_json, self.this_device())
             .await?;
         self.take_session(&pair).await
     }
@@ -1759,7 +1768,7 @@ impl App {
             .sign_in_with_passkey(
                 handle,
                 password,
-                self.device_id.clone(),
+                self.this_device(),
                 challenge_id,
                 credential_json,
             )
@@ -1821,7 +1830,7 @@ impl App {
         let token = magic_token_of(token);
         let pair = self
             .api
-            .magic_link_complete(&token, self.device_id.clone())
+            .magic_link_complete(&token, self.this_device())
             .await?;
         self.take_session(&pair).await
     }
@@ -1889,7 +1898,7 @@ impl App {
         let code = invite.map(invite_code_of).unwrap_or_default();
         let pair = self
             .api
-            .create_account(handle, "", password, &code, self.device_id.clone())
+            .create_account(handle, "", password, &code, self.this_device())
             .await?;
         self.take_session(&pair).await
     }
@@ -2281,12 +2290,12 @@ impl App {
         let pair = match totp_code.filter(|c| !c.is_empty()) {
             Some(code) => {
                 self.api
-                    .sign_in_with_totp(handle, password, self.device_id.clone(), code)
+                    .sign_in_with_totp(handle, password, self.this_device(), code)
                     .await?
             }
             None => {
                 self.api
-                    .sign_in(handle, password, self.device_id.clone())
+                    .sign_in(handle, password, self.this_device())
                     .await?
             }
         };
@@ -2733,7 +2742,7 @@ impl App {
         let (tx, rx) = mpsc::unbounded();
         let (etx, mut erx) = mpsc::unbounded();
         let api = self.api.clone();
-        let device_id = self.device_id.clone();
+        let device_id = self.this_device();
         let back = Arc::clone(self);
         let end_sink = Arc::clone(&sink);
         spawn(async move {
@@ -2907,12 +2916,23 @@ impl App {
                 }
             }
         }
-        let stores = self.identity.lock().await;
-        for result in [stores.store.erase(), stores.keys.erase()] {
+        let mut stores = self.identity.lock().await;
+        // Signed in again, the device is a new one: the instance refuses
+        // every session of the revoked id, and the roster keeps it revoked.
+        let id = wire::new_id();
+        for result in [
+            stores.store.erase().map_err(ClientError::from),
+            stores.keys.erase().map_err(ClientError::from),
+            stores.keys.put("device_id", &id).map_err(ClientError::from),
+        ] {
             if let Err(e) = result {
-                first_error.get_or_insert(ClientError::from(e));
+                first_error.get_or_insert(e);
             }
         }
+        *self
+            .device_id
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = id;
         first_error.map_or(Ok(()), Err)
     }
 
@@ -3760,7 +3780,7 @@ impl App {
     /// When this device already holds an identity, or on a store failure.
     pub async fn identity_create(&self, label: &str) -> Result<(String, String), ClientError> {
         let mut stores = self.identity.lock().await;
-        let created = device(&mut stores, &self.device_id).create(label)?;
+        let created = device(&mut stores, &self.this_device()).create(label)?;
         Ok((created.identity_id.to_string(), created.phrase))
     }
 
@@ -3771,7 +3791,7 @@ impl App {
     pub async fn identity_profile(&self) -> Result<Option<ProfileSummary>, ClientError> {
         let local = {
             let mut stores = self.identity.lock().await;
-            device(&mut stores, &self.device_id).profile()?
+            device(&mut stores, &self.this_device()).profile()?
         };
         // The account as the instance holds it: its signed profile, set by
         // any device of the identity, and its name and picture now (a
@@ -3821,7 +3841,7 @@ impl App {
         };
         let signed = {
             let mut stores = self.identity.lock().await;
-            device(&mut stores, &self.device_id).set_profile(
+            device(&mut stores, &self.this_device()).set_profile(
                 display_name,
                 pronouns,
                 bio,
@@ -3842,7 +3862,7 @@ impl App {
     pub async fn identity_link_account(&self, password: &str) -> Result<(), ClientError> {
         let api = self.api.clone();
         let mut stores = self.identity.lock().await;
-        device(&mut stores, &self.device_id)
+        device(&mut stores, &self.this_device())
             .link_account(&api, password)
             .await?;
         drop(stores);
@@ -3884,7 +3904,7 @@ impl App {
             Place::Native => (DeviceKind::Native, String::new()),
         };
         let mut stores = self.identity.lock().await;
-        device(&mut stores, &self.device_id).link_request_as(label, kind, &origin)
+        device(&mut stores, &self.this_device()).link_request_as(label, kind, &origin)
     }
 
     // ---- Linking by prompt (identity spec 4.2.1) ----
@@ -4108,7 +4128,7 @@ impl App {
     pub async fn identity_approve(&self, request: &str) -> Result<String, ClientError> {
         let api = self.api.clone();
         let mut stores = self.identity.lock().await;
-        device(&mut stores, &self.device_id)
+        device(&mut stores, &self.this_device())
             .approve(&api, request)
             .await
     }
@@ -4122,13 +4142,13 @@ impl App {
     pub async fn identity_claim(&self, code: &str) -> Result<RosterSummary, ClientError> {
         let api = self.api.clone();
         let mut stores = self.identity.lock().await;
-        let mut dev = device(&mut stores, &self.device_id);
+        let mut dev = device(&mut stores, &self.this_device());
         let roster = dev.claim(&api, code).await?;
         let pair = dev.sign_in(&api).await?;
         drop(stores);
         self.take_session(&pair).await?;
         self.announce_device().await;
-        Ok(roster_summary(&roster, &self.device_id))
+        Ok(roster_summary(&roster, &self.this_device()))
     }
 
     /// Signs in by identity proof with the roster this device holds.
@@ -4138,7 +4158,9 @@ impl App {
     pub async fn sign_in_identity(&self) -> Result<(), ClientError> {
         let api = self.api.clone();
         let mut stores = self.identity.lock().await;
-        let pair = device(&mut stores, &self.device_id).sign_in(&api).await?;
+        let pair = device(&mut stores, &self.this_device())
+            .sign_in(&api)
+            .await?;
         drop(stores);
         self.take_session(&pair).await
     }
@@ -4149,8 +4171,8 @@ impl App {
     /// When there is none.
     pub async fn identity_show(&self) -> Result<RosterSummary, ClientError> {
         let mut stores = self.identity.lock().await;
-        let roster = device(&mut stores, &self.device_id).roster()?;
-        Ok(roster_summary(&roster, &self.device_id))
+        let roster = device(&mut stores, &self.this_device()).roster()?;
+        Ok(roster_summary(&roster, &self.this_device()))
     }
 
     /// Revokes another device of this identity, signed by this device with
@@ -4166,10 +4188,10 @@ impl App {
         let target = parse_uuid(device_id)?;
         let api = self.api.clone();
         let mut stores = self.identity.lock().await;
-        let mut dev = device(&mut stores, &self.device_id);
+        let mut dev = device(&mut stores, &self.this_device());
         dev.revoke_with_device(&api, password, &target).await?;
         let roster = dev.roster()?;
-        Ok(roster_summary(&roster, &self.device_id))
+        Ok(roster_summary(&roster, &self.this_device()))
     }
 
     // ---- Setting up (identity spec 4.1, 4.3, 4.7; architecture 5.4) ----
@@ -4289,7 +4311,7 @@ impl App {
     /// On a keystore failure.
     pub async fn identity_phrase(&self) -> Result<Option<String>, ClientError> {
         let mut stores = self.identity.lock().await;
-        Ok(device(&mut stores, &self.device_id)
+        Ok(device(&mut stores, &self.this_device())
             .kept_phrase()?
             .map(|p| p.words()))
     }
@@ -4359,7 +4381,7 @@ impl App {
         };
         if !held {
             let mut stores = self.identity.lock().await;
-            device(&mut stores, &self.device_id).forget_phrase()?;
+            device(&mut stores, &self.this_device()).forget_phrase()?;
         }
         Ok(true)
     }
@@ -4374,7 +4396,7 @@ impl App {
             )?));
         }
         let mut stores = self.identity.lock().await;
-        device(&mut stores, &self.device_id).kept_phrase()
+        device(&mut stores, &self.this_device()).kept_phrase()
     }
 
     /// Sets up private messages on this device for the signed-in account
@@ -4417,7 +4439,7 @@ impl App {
         let api = self.api.clone();
         {
             let mut stores = self.identity.lock().await;
-            device(&mut stores, &self.device_id)
+            device(&mut stores, &self.this_device())
                 .link_account_with(&api, &reauth)
                 .await?;
         }
@@ -4444,7 +4466,7 @@ impl App {
         let api = self.api.clone();
         {
             let mut stores = self.identity.lock().await;
-            device(&mut stores, &self.device_id)
+            device(&mut stores, &self.this_device())
                 .rebind_account(&api, &reauth)
                 .await?;
         }
@@ -4482,11 +4504,11 @@ impl App {
     ) -> Result<Vec<DeviceSummary>, ClientError> {
         let api = self.api.clone();
         let mut stores = self.identity.lock().await;
-        let held = device(&mut stores, &self.device_id)
+        let held = device(&mut stores, &self.this_device())
             .recover_preview(&api, phrase)
             .await?;
         Ok(held.map_or_else(Vec::new, |held| {
-            roster_summary(&held, &self.device_id)
+            roster_summary(&held, &self.this_device())
                 .devices
                 .into_iter()
                 .filter(|d| !d.revoked)
@@ -4513,7 +4535,7 @@ impl App {
         let (kind, origin) = self.device_kind();
         let api = self.api.clone();
         let mut stores = self.identity.lock().await;
-        let mut dev = device(&mut stores, &self.device_id);
+        let mut dev = device(&mut stores, &self.this_device());
         let pair = dev
             .recover_keeping(&api, phrase, label, kind, &origin, &keep)
             .await?;
@@ -4524,7 +4546,7 @@ impl App {
         drop(stores);
         self.take_session(&pair).await?;
         self.announce_device().await;
-        Ok(roster_summary(&roster, &self.device_id))
+        Ok(roster_summary(&roster, &self.this_device()))
     }
 
     fn device_kind(&self) -> (DeviceKind, String) {
@@ -4536,7 +4558,7 @@ impl App {
 
     async fn held_identity_id(&self) -> Result<Option<Vec<u8>>, ClientError> {
         let mut stores = self.identity.lock().await;
-        let dev = device(&mut stores, &self.device_id);
+        let dev = device(&mut stores, &self.this_device());
         if dev.store.meta_get("roster")?.is_none() {
             return Ok(None);
         }
@@ -4581,7 +4603,7 @@ impl App {
             None => (Phrase::generate()?, true),
         };
         let mut stores = self.identity.lock().await;
-        device(&mut stores, &self.device_id).create_from(&phrase, label, kind, &origin, keep)
+        device(&mut stores, &self.this_device()).create_from(&phrase, label, kind, &origin, keep)
     }
 
     /// After this device's identity is bound: the identity backup written
@@ -4600,7 +4622,7 @@ impl App {
         let api = self.api.clone();
         {
             let mut stores = self.identity.lock().await;
-            let mut dev = device(&mut stores, &self.device_id);
+            let mut dev = device(&mut stores, &self.this_device());
             let written = dev.write_backup(&api, accounts).await;
             if self.device_kind().0 == DeviceKind::Web {
                 dev.forget_backup_key()?;
@@ -4701,7 +4723,7 @@ impl App {
                 .get("device_key")?
                 .ok_or_else(|| ClientError::State("no identity on this device".into()))?;
             let backup_key = stores.keys.get("backup_key")?;
-            let roster = device(stores, &self.device_id).roster()?;
+            let roster = device(stores, &self.this_device()).roster()?;
             (roster, seed, backup_key)
         };
         let account = self
@@ -4715,7 +4737,7 @@ impl App {
             self.api.clone(),
             store,
             account,
-            self.device_id.clone(),
+            self.this_device(),
             &seed,
             backup_key,
             roster,

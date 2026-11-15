@@ -1674,4 +1674,18 @@ async fn a_revoked_device_erases_what_it_kept() {
     assert!(phone.app.dm_channels().await.unwrap_or_default().is_empty());
     // The laptop is untouched.
     assert!(laptop.app.has_identity() && laptop.app.signed_in());
+
+    // The phone can be signed in and linked again, as a new device.
+    let old_id = phone_id;
+    phone.app.sign_in(&handle, PASSWORD, None).await.unwrap();
+    assert_ne!(phone.app.device_id(), old_id);
+    phone.app.link_start("Phone").await.unwrap();
+    let id = laptop.app.link_prompts().await.unwrap()[0]
+        .session_id
+        .clone();
+    laptop.app.link_prompt_answer(&id).await.unwrap();
+    phone.app.link_progress().await.unwrap();
+    laptop.app.link_prompt_confirm(&id).await.unwrap();
+    assert_eq!(phone.app.link_progress().await.unwrap().stage, "linked");
+    assert!(phone.app.has_identity());
 }
