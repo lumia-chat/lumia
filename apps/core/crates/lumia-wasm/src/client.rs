@@ -1313,6 +1313,33 @@ impl Client {
         )
     }
 
+    /// Linking by prompt, as the new device (a browser is never the one that
+    /// approves): opens a session, so every device that holds the identity
+    /// prompts. `{stage, digits}`.
+    ///
+    /// # Errors
+    /// When this browser already holds an identity; API failure.
+    #[wasm_bindgen(js_name = linkStart)]
+    pub async fn link_start(&self, label: String) -> Result<JsValue, JsError> {
+        to_js(&self.app.link_start(&label).await.map_err(js_api)?)
+    }
+
+    /// Where this browser's link session stands, taking its next step:
+    /// `waiting`, `compare` (show `digits`), `linked`, `declined`, `expired`.
+    ///
+    /// # Errors
+    /// Without a session in progress; API failure.
+    #[wasm_bindgen(js_name = linkProgress)]
+    pub async fn link_progress(&self) -> Result<JsValue, JsError> {
+        to_js(&self.app.link_progress().await.map_err(js_api)?)
+    }
+
+    /// Gives up this browser's link session.
+    #[wasm_bindgen(js_name = linkCancel)]
+    pub async fn link_cancel(&self) {
+        self.app.link_cancel().await;
+    }
+
     /// Signs in by identity proof with the roster this device holds.
     ///
     /// # Errors

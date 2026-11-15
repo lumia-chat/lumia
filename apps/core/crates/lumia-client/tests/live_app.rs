@@ -1460,3 +1460,73 @@ async fn a_message_stored_but_never_read_is_read_on_the_next_connection() {
         "bo reads what the store held once connected"
     );
 }
+
+/// Linking by prompt (identity spec 4.2.1): the new device opens a session,
+/// the device that holds the identity sees the prompt and answers, both
+/// show the same six digits, the old device confirms, and the new device
+/// finishes on its own, holding the identity. A second session is declined
+/// by "Not me".
+#[tokio::test(flavor = "multi_thread")]
+async fn a_device_is_linked_by_a_prompt_and_matching_digits() {
+    let Some(base) = instance() else { return };
+    let laptop = Device::new(&base);
+    let handle = format!("prompt{}", stamp());
+    laptop
+        .app
+        .create_account(&handle, PASSWORD, None)
+        .await
+        .unwrap();
+    let identity = laptop.app.identity_setup("Laptop").await.unwrap();
+
+    let phone = Device::new(&base);
+    phone.app.sign_in(&handle, PASSWORD, None).await.unwrap();
+    assert_eq!(
+        phone.app.link_start("Pixel 9").await.unwrap().stage,
+        "waiting"
+    );
+    assert_eq!(phone.app.link_progress().await.unwrap().stage, "waiting");
+
+    let prompts = laptop.app.link_prompts().await.unwrap();
+    assert_eq!(prompts.len(), 1);
+    assert_eq!(prompts[0].stage, "new");
+    assert_eq!(prompts[0].request.label, "Pixel 9");
+    let id = prompts[0].session_id.clone();
+    // The new device, holding no identity, prompts nothing.
+    assert!(phone.app.link_prompts().await.unwrap().is_empty());
+
+    laptop.app.link_prompt_answer(&id).await.unwrap();
+    assert_eq!(laptop.app.link_prompts().await.unwrap()[0].stage, "waiting");
+    let on_phone = phone.app.link_progress().await.unwrap();
+    assert_eq!(on_phone.stage, "compare");
+    let on_laptop = laptop.app.link_prompts().await.unwrap();
+    assert_eq!(on_laptop[0].stage, "compare");
+    assert_eq!(
+        on_laptop[0].digits, on_phone.digits,
+        "both screens show the same digits"
+    );
+    assert_eq!(on_phone.digits.len(), 7);
+
+    laptop.app.link_prompt_confirm(&id).await.unwrap();
+    assert!(laptop.app.link_prompts().await.unwrap().is_empty());
+    assert_eq!(phone.app.link_progress().await.unwrap().stage, "linked");
+    assert!(phone.app.has_identity());
+    assert_eq!(
+        phone.app.identity_show().await.unwrap().identity_id,
+        identity
+    );
+    assert!(
+        phone.app.link_progress().await.is_err(),
+        "nothing in progress after"
+    );
+
+    // Another device asks, and "Not me" ends it.
+    let other = Device::new(&base);
+    other.app.sign_in(&handle, PASSWORD, None).await.unwrap();
+    other.app.link_start("Unknown").await.unwrap();
+    let id = laptop.app.link_prompts().await.unwrap()[0]
+        .session_id
+        .clone();
+    laptop.app.link_prompt_decline(&id).await.unwrap();
+    assert_eq!(other.app.link_progress().await.unwrap().stage, "declined");
+    assert!(laptop.app.link_prompts().await.unwrap().is_empty());
+}

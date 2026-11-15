@@ -49,6 +49,10 @@ use lumia_core::proto::{
     ListMentionsResponse, MarkReadRequest, OpenServerDmRequest, ReadState, UpdateMembershipRequest,
 };
 use lumia_core::proto::{
+    AnswerLinkSessionRequest, LinkSession, LinkSessionCodeRequest, ListLinkSessionsResponse,
+    OpenLinkSessionRequest, RevealLinkSessionRequest,
+};
+use lumia_core::proto::{
     CreateInviteRequest, EmailInviteRequest, HandoffResponse, Invite, InvitePreview,
     ListInvitesResponse, ListPasskeysResponse, MagicLinkCompleteRequest, MagicLinkRequest, Member,
     PasskeyAssertFinishRequest, PasskeyAssertStartRequest, PasskeyChallenge,
@@ -756,6 +760,111 @@ impl Api {
         req: CreateLinkBundleRequest,
     ) -> Result<CreateLinkBundleResponse, ClientError> {
         self.post("/api/v1/identity/link-bundles", &req).await
+    }
+
+    /// `POST /identity/link-sessions`: linking by prompt (identity spec
+    /// 4.2.1), the new device's request and commitment.
+    ///
+    /// # Errors
+    /// `INVALID_ARGUMENT`, `RATE_LIMITED` past five open; transport failure.
+    pub async fn open_link_session(
+        &self,
+        request: Vec<u8>,
+        commitment: Vec<u8>,
+    ) -> Result<LinkSession, ClientError> {
+        self.post(
+            "/api/v1/identity/link-sessions",
+            &OpenLinkSessionRequest {
+                request,
+                commitment,
+            },
+        )
+        .await
+    }
+
+    /// `GET /identity/link-sessions`: the account's open sessions.
+    ///
+    /// # Errors
+    /// On transport failure or an API error.
+    pub async fn link_sessions(&self) -> Result<Vec<LinkSession>, ClientError> {
+        let list: ListLinkSessionsResponse = self.get("/api/v1/identity/link-sessions").await?;
+        Ok(list.sessions)
+    }
+
+    /// `GET /identity/link-sessions/{id}`.
+    ///
+    /// # Errors
+    /// `NOT_FOUND` once it expired; transport failure.
+    pub async fn link_session(&self, id: &[u8]) -> Result<LinkSession, ClientError> {
+        self.get(&format!(
+            "/api/v1/identity/link-sessions/{}",
+            lumia_core::wire::display(id)
+        ))
+        .await
+    }
+
+    /// `POST /identity/link-sessions/{id}/accept` with this device's `r_E`.
+    ///
+    /// # Errors
+    /// `FAILED_PRECONDITION` (`answered`), `PERMISSION_DENIED`; transport failure.
+    pub async fn answer_link_session(
+        &self,
+        id: &[u8],
+        answer: Vec<u8>,
+    ) -> Result<LinkSession, ClientError> {
+        self.link_session_step(id, "accept", &AnswerLinkSessionRequest { answer })
+            .await
+    }
+
+    /// `POST /identity/link-sessions/{id}/reveal` with the new device's `r_N`.
+    ///
+    /// # Errors
+    /// On transport failure or an API error.
+    pub async fn reveal_link_session(
+        &self,
+        id: &[u8],
+        reveal: Vec<u8>,
+    ) -> Result<LinkSession, ClientError> {
+        self.link_session_step(id, "reveal", &RevealLinkSessionRequest { reveal })
+            .await
+    }
+
+    /// `POST /identity/link-sessions/{id}/code` with the link bundle's code.
+    ///
+    /// # Errors
+    /// On transport failure or an API error.
+    pub async fn link_session_code(
+        &self,
+        id: &[u8],
+        code: &str,
+    ) -> Result<LinkSession, ClientError> {
+        self.link_session_step(id, "code", &LinkSessionCodeRequest { code: code.into() })
+            .await
+    }
+
+    /// `POST /identity/link-sessions/{id}/decline`.
+    ///
+    /// # Errors
+    /// On transport failure or an API error.
+    pub async fn decline_link_session(&self, id: &[u8]) -> Result<LinkSession, ClientError> {
+        self.link_session_step(id, "decline", &AnswerLinkSessionRequest::default())
+            .await
+    }
+
+    async fn link_session_step<Req: Message>(
+        &self,
+        id: &[u8],
+        step: &str,
+        req: &Req,
+    ) -> Result<LinkSession, ClientError> {
+        self.post(
+            &format!(
+                "/api/v1/identity/link-sessions/{}/{step}",
+                lumia_core::wire::display(id)
+            ),
+            req,
+        )
+        .await
     }
 
     /// `GET /identity/link-bundles/{code}?device_id=` (public).

@@ -661,6 +661,32 @@ pub struct DeviceSummary {
     pub revoked: bool,
 }
 
+/// Where linking this device by prompt stands (identity spec 4.2.1).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LinkProgress {
+    /// `waiting` (for another device to answer), `compare` (show `digits`),
+    /// `linked`, `declined` or `expired`.
+    pub stage: String,
+    /// The six digits to compare, as `482 913`, at `compare`.
+    pub digits: String,
+}
+
+/// A prompt on a device that holds the identity: another device asks to be
+/// linked (identity spec 4.2.1).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LinkPrompt {
+    pub session_id: String,
+    /// What it would add.
+    pub request: LinkRequestSummary,
+    /// `new` (nobody answered yet), `waiting` (answered here, waiting for
+    /// the new device), `compare` (show `digits`), or `refused` (the new
+    /// device's secret did not match its commitment: never approve).
+    pub stage: String,
+    pub digits: String,
+}
+
 /// What a link request asks to add, shown on the approving device before
 /// it approves (identity spec 4.2 step 2).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -891,6 +917,22 @@ fn presence_summary(p: &lumia_core::proto::Presence) -> PresenceSummary {
 }
 
 // ---- Conversions --------------------------------------------------------------
+
+/// What a serialized link request asks to add.
+fn summary_of(bytes: &[u8]) -> Result<LinkRequestSummary, ClientError> {
+    let request = lumia_core::proto::LinkRequest::decode(bytes)
+        .map_err(|_| ClientError::State("that is not a link request".into()))?;
+    if request.device_id.len() != 16 || request.ephemeral_public_key.len() != 32 {
+        return Err(ClientError::State("that is not a link request".into()));
+    }
+    let kind = DeviceKind::try_from(request.kind).unwrap_or(DeviceKind::Native);
+    Ok(LinkRequestSummary {
+        device_id: wire::display(&request.device_id),
+        kind: format!("{kind:?}").to_lowercase(),
+        label: request.label,
+        web_origin: request.web_origin,
+    })
+}
 
 fn parse_uuid(s: &str) -> Result<Vec<u8>, ClientError> {
     uuid::Uuid::parse_str(s)
@@ -1266,8 +1308,22 @@ struct Inner {
     /// A phrase made before its identity, held in memory only: the web's
     /// sign-up shows and confirms it first (identity spec 4.1 step 7).
     held_phrase: Option<HeldPhrase>,
+    /// This device's link session, as the new device (identity spec 4.2.1).
+    linking: Option<NewLink>,
+    /// The secrets this device answered link sessions with, by session id.
+    answers: HashMap<Vec<u8>, Vec<u8>>,
     /// The positions last asked for, of the held or kept phrase.
     quiz: Option<Vec<usize>>,
+}
+
+/// The link session this device opened as the new device, and what it
+/// needs to finish it: its request, its secret, whether it revealed it.
+#[derive(Clone)]
+struct NewLink {
+    session_id: Vec<u8>,
+    request: Vec<u8>,
+    reveal: Vec<u8>,
+    revealed: bool,
 }
 
 /// A phrase made and not yet an identity's, and whether the person has
@@ -1546,6 +1602,8 @@ impl App {
                 rails: RailSends::default(),
                 reauth: None,
                 held_phrase: None,
+                linking: None,
+                answers: HashMap::new(),
                 quiz: None,
             }),
             rail_turn: AsyncMutex::new(()),
@@ -3755,6 +3813,198 @@ impl App {
         device(&mut stores, &self.device_id).link_request_as(label, kind, &origin)
     }
 
+    // ---- Linking by prompt (identity spec 4.2.1) ----
+
+    /// As the new device: opens a link session, so that every device of the
+    /// account that holds the identity prompts. [`App::link_progress`]
+    /// follows it.
+    ///
+    /// # Errors
+    /// When this device already holds an identity; API failure.
+    pub async fn link_start(&self, label: &str) -> Result<LinkProgress, ClientError> {
+        use base64::Engine as _;
+        use lumia_core::identity::link::{commitment, session_secret};
+        if self.has_identity() {
+            return Err(ClientError::State(
+                "this device already has private messages".into(),
+            ));
+        }
+        let request = base64::engine::general_purpose::STANDARD
+            .decode(self.identity_link_request(label).await?)
+            .map_err(|e| ClientError::State(e.to_string()))?;
+        let reveal = session_secret()?;
+        let opened = self
+            .api
+            .open_link_session(request.clone(), commitment(&reveal))
+            .await?;
+        self.lock().linking = Some(NewLink {
+            session_id: opened.session_id,
+            request,
+            reveal,
+            revealed: false,
+        });
+        Ok(LinkProgress {
+            stage: "waiting".into(),
+            digits: String::new(),
+        })
+    }
+
+    /// As the new device: where its link session stands, taking the next
+    /// step when it is this device's: revealing its secret once another
+    /// device answered, claiming the code once it came. Call it again on
+    /// every `AccountApplied` (the session moves by `LinkSessionUpdated`),
+    /// or every second or two while the screen is open.
+    ///
+    /// # Errors
+    /// Without a session in progress; API failure.
+    pub async fn link_progress(&self) -> Result<LinkProgress, ClientError> {
+        use lumia_core::identity::link::{digits, digits_words};
+        let link = self
+            .lock()
+            .linking
+            .clone()
+            .ok_or_else(|| ClientError::State("no link in progress".into()))?;
+        let progress = |stage: &str, digits: String| LinkProgress {
+            stage: stage.into(),
+            digits,
+        };
+        let session = match self.api.link_session(&link.session_id).await {
+            Ok(session) => session,
+            Err(ClientError::Api { code, .. }) if code == "NOT_FOUND" => {
+                self.lock().linking = None;
+                return Ok(progress("expired", String::new()));
+            }
+            Err(e) => return Err(e),
+        };
+        if session.declined {
+            self.lock().linking = None;
+            return Ok(progress("declined", String::new()));
+        }
+        if !session.code.is_empty() {
+            self.identity_claim(&session.code).await?;
+            self.lock().linking = None;
+            return Ok(progress("linked", String::new()));
+        }
+        if session.answer.is_empty() {
+            return Ok(progress("waiting", String::new()));
+        }
+        if !link.revealed {
+            self.api
+                .reveal_link_session(&link.session_id, link.reveal.clone())
+                .await?;
+            if let Some(held) = self.lock().linking.as_mut() {
+                held.revealed = true;
+            }
+        }
+        let shown = digits(&link.request, &session.answer, &link.reveal);
+        Ok(progress("compare", digits_words(shown)))
+    }
+
+    /// As the new device: gives up the link session in progress.
+    pub async fn link_cancel(&self) {
+        let link = self.lock().linking.take();
+        if let Some(link) = link {
+            let _ = self.api.decline_link_session(&link.session_id).await;
+        }
+    }
+
+    /// On a device that holds the identity: the account's link sessions
+    /// that prompt here, each with where it stands. None on a browser,
+    /// which never approves (identity spec 7). Ask again on every
+    /// `AccountApplied`.
+    ///
+    /// # Errors
+    /// API failure.
+    pub async fn link_prompts(&self) -> Result<Vec<LinkPrompt>, ClientError> {
+        use lumia_core::identity::link::{digits, digits_words, reveals};
+        if matches!(self.place, Place::Web { .. }) || !self.has_identity() {
+            return Ok(Vec::new());
+        }
+        let sessions = self.api.link_sessions().await?;
+        let mut out = Vec::new();
+        let mut inner = self.lock();
+        inner
+            .answers
+            .retain(|id, _| sessions.iter().any(|s| s.session_id == *id));
+        for session in sessions {
+            let Ok(request) = summary_of(&session.request) else {
+                continue;
+            };
+            let mine = inner.answers.get(&session.session_id);
+            let (stage, shown) = match mine {
+                _ if session.answer.is_empty() => ("new", String::new()),
+                // Another device answered it: it is that device's to finish.
+                Some(answer) if *answer != session.answer => continue,
+                None => continue,
+                Some(_) if session.reveal.is_empty() => ("waiting", String::new()),
+                Some(answer) if reveals(&session.commitment, &session.reveal) => (
+                    "compare",
+                    digits_words(digits(&session.request, answer, &session.reveal)),
+                ),
+                Some(_) => ("refused", String::new()),
+            };
+            out.push(LinkPrompt {
+                session_id: wire::display(&session.session_id),
+                request,
+                stage: stage.into(),
+                digits: shown,
+            });
+        }
+        Ok(out)
+    }
+
+    /// On a device that holds the identity: answers a prompt, so the new
+    /// device reveals and both show their digits.
+    ///
+    /// # Errors
+    /// `FAILED_PRECONDITION` (`answered`) when another device answered first.
+    pub async fn link_prompt_answer(&self, session_id: &str) -> Result<(), ClientError> {
+        let id = parse_uuid(session_id)?;
+        let answer = lumia_core::identity::link::session_secret()?;
+        self.api.answer_link_session(&id, answer.clone()).await?;
+        self.lock().answers.insert(id, answer);
+        Ok(())
+    }
+
+    /// On a device that holds the identity: the person saw the same digits
+    /// on both screens. Approves the request (identity spec 4.2 steps 3 to
+    /// 6) and gives the new device its code through the session. A shell
+    /// asks for the device's own unlock first.
+    ///
+    /// # Errors
+    /// When the digits cannot have matched (no answer here, no reveal, or a
+    /// reveal that does not match its commitment); API failure.
+    pub async fn link_prompt_confirm(&self, session_id: &str) -> Result<(), ClientError> {
+        use base64::Engine as _;
+        use lumia_core::identity::link::reveals;
+        let id = parse_uuid(session_id)?;
+        let session = self.api.link_session(&id).await?;
+        let mine = self.lock().answers.get(&id).cloned();
+        let ready = mine.is_some_and(|answer| answer == session.answer)
+            && reveals(&session.commitment, &session.reveal);
+        if !ready {
+            return Err(ClientError::State(
+                "this request cannot be approved: start again on the new device".into(),
+            ));
+        }
+        let request = base64::engine::general_purpose::STANDARD.encode(&session.request);
+        let code = self.identity_approve(&request).await?;
+        self.api.link_session_code(&id, &code).await?;
+        self.lock().answers.remove(&id);
+        Ok(())
+    }
+
+    /// On any device of the account: "Not me". The session takes nothing more.
+    ///
+    /// # Errors
+    /// API failure.
+    pub async fn link_prompt_decline(&self, session_id: &str) -> Result<(), ClientError> {
+        let id = parse_uuid(session_id)?;
+        self.api.decline_link_session(&id).await?;
+        self.lock().answers.remove(&id);
+        Ok(())
+    }
+
     /// What a link request, as the new device shows it, asks to add: read
     /// before approving, so the person sees which device they are letting
     /// in (identity spec 4.2 step 2). Nothing is sent.
@@ -3766,18 +4016,7 @@ impl App {
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(request.trim())
             .map_err(|_| ClientError::State("that is not a link request".into()))?;
-        let request = lumia_core::proto::LinkRequest::decode(bytes.as_slice())
-            .map_err(|_| ClientError::State("that is not a link request".into()))?;
-        if request.device_id.len() != 16 || request.ephemeral_public_key.len() != 32 {
-            return Err(ClientError::State("that is not a link request".into()));
-        }
-        let kind = DeviceKind::try_from(request.kind).unwrap_or(DeviceKind::Native);
-        Ok(LinkRequestSummary {
-            device_id: wire::display(&request.device_id),
-            kind: format!("{kind:?}").to_lowercase(),
-            label: request.label,
-            web_origin: request.web_origin,
-        })
+        summary_of(&bytes)
     }
 
     /// On a device that holds the identity: approves a link request and

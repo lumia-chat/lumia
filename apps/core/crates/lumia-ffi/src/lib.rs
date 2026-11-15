@@ -836,6 +836,44 @@ impl From<app::LinkRequestSummary> for LinkRequestSummary {
     }
 }
 
+/// Where linking this device by prompt stands: `waiting`, `compare` (show
+/// `digits`), `linked`, `declined` or `expired`.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct LinkProgress {
+    pub stage: String,
+    pub digits: String,
+}
+
+impl From<app::LinkProgress> for LinkProgress {
+    fn from(p: app::LinkProgress) -> Self {
+        Self {
+            stage: p.stage,
+            digits: p.digits,
+        }
+    }
+}
+
+/// Another device asks to be linked: what it would add, and where it stands
+/// here (`new`, `waiting`, `compare` with `digits`, or `refused`).
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct LinkPrompt {
+    pub session_id: String,
+    pub request: LinkRequestSummary,
+    pub stage: String,
+    pub digits: String,
+}
+
+impl From<app::LinkPrompt> for LinkPrompt {
+    fn from(p: app::LinkPrompt) -> Self {
+        Self {
+            session_id: p.session_id,
+            request: p.request.into(),
+            stage: p.stage,
+            digits: p.digits,
+        }
+    }
+}
+
 /// The identity's roster.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct RosterSummary {
@@ -2241,6 +2279,53 @@ impl Client {
     /// On a device that holds the identity: approves a link request.
     pub fn identity_approve(&self, request: String) -> Res<String> {
         Ok(self.runtime.block_on(self.app.identity_approve(&request))?)
+    }
+
+    /// Linking by prompt, as the new device: opens a session, so every device
+    /// that holds the identity prompts.
+    pub fn link_start(&self, label: String) -> Res<LinkProgress> {
+        Ok(self.runtime.block_on(self.app.link_start(&label))?.into())
+    }
+
+    /// Where this device's link session stands; takes its next step.
+    pub fn link_progress(&self) -> Res<LinkProgress> {
+        Ok(self.runtime.block_on(self.app.link_progress())?.into())
+    }
+
+    /// Gives up this device's link session.
+    pub fn link_cancel(&self) {
+        self.runtime.block_on(self.app.link_cancel());
+    }
+
+    /// On a device that holds the identity: the link sessions that prompt here.
+    pub fn link_prompts(&self) -> Res<Vec<LinkPrompt>> {
+        Ok(self
+            .runtime
+            .block_on(self.app.link_prompts())?
+            .into_iter()
+            .map(Into::into)
+            .collect())
+    }
+
+    /// Answers a prompt, so both devices show their digits.
+    pub fn link_prompt_answer(&self, session_id: String) -> Res<()> {
+        Ok(self
+            .runtime
+            .block_on(self.app.link_prompt_answer(&session_id))?)
+    }
+
+    /// The digits matched: approves, after the device's own unlock.
+    pub fn link_prompt_confirm(&self, session_id: String) -> Res<()> {
+        Ok(self
+            .runtime
+            .block_on(self.app.link_prompt_confirm(&session_id))?)
+    }
+
+    /// "Not me".
+    pub fn link_prompt_decline(&self, session_id: String) -> Res<()> {
+        Ok(self
+            .runtime
+            .block_on(self.app.link_prompt_decline(&session_id))?)
     }
 
     /// Claims the bundle an approving device uploaded, then signs in.
