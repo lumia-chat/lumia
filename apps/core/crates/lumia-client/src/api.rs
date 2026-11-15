@@ -255,6 +255,12 @@ impl Api {
         self.revoked.load(Ordering::SeqCst)
     }
 
+    /// Holds a revocation as heard, as when an erase did not finish: the
+    /// next sign-in, or sign-out, tries again.
+    pub fn hear_revoked(&self) {
+        self.revoked.store(true, Ordering::SeqCst);
+    }
+
     /// Forgets a revocation heard, answering whether one was: the device
     /// erases once, and is a new one after.
     pub fn take_revoked(&self) -> bool {

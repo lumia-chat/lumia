@@ -1590,17 +1590,17 @@ impl App {
         let host = host_of(base_url);
         let writer_guard = writer.as_ref().map(WriterLock::shared).transpose()?;
         let mut store = opener(StoreName::Instance)?;
-        let keys = opener(StoreName::Keys)?;
+        let mut keys = opener(StoreName::Keys)?;
         let identity_store = opener(StoreName::IdentityStore)?;
         let mut identity_keys = opener(StoreName::IdentityKeys)?;
         // A call heard that the identity revoked this device, and it was not
         // erased before the app closed: it is now, before anything is read.
-        if keys.get(REVOKED_HEARD)?.is_some() {
-            store.erase()?;
-            keys.erase()?;
-            identity_store.erase()?;
-            identity_keys.erase()?;
-        }
+        // The marker goes last, and only once everything else went: what did
+        // not is tried again at the next sign-in, sign-out or launch.
+        let unerased = keys.get(REVOKED_HEARD)?.is_some() && {
+            let rest = [store.erase(), identity_store.erase(), identity_keys.erase()];
+            rest.iter().any(Result::is_err) || keys.erase().is_err()
+        };
         store.meta_set("base_url", base_url.trim_end_matches('/'))?;
         let reader = opener(StoreName::Instance)?;
         let writer_generation = writer_generation(&reader)?;
@@ -1615,7 +1615,14 @@ impl App {
         let rotate = Arc::clone(&opener);
         let read = Arc::clone(&opener);
         let heard = Arc::clone(&opener);
-        let held = tokens(&keys)?;
+        let held = if unerased {
+            // Still the revoked device's: nothing it held is presented.
+            let _ = keys.delete("access_token");
+            let _ = keys.delete("refresh_token");
+            Tokens::default()
+        } else {
+            tokens(&keys)?
+        };
         // The refresh token this process last saw in the store or put
         // there. When the store holds another, someone else on these
         // stores has rotated the pair (the notification extension, a
@@ -1652,6 +1659,9 @@ impl App {
                 seen.clone_from(&stored.refresh);
                 Some(stored)
             }));
+        if unerased {
+            api.hear_revoked();
+        }
         // On the web the sink is not `Send` (it holds a JS function) and
         // the worker is single-threaded; natively everything inside is.
         #[allow(clippy::arc_with_non_send_sync)]
@@ -2994,26 +3004,28 @@ impl App {
         self.api.clear_tokens();
         self.api.take_revoked();
         let mut first_error = None;
-        {
-            let mut inner = self.lock();
-            inner.reauth = None;
-            inner.held_phrase = None;
-            inner.quiz = None;
-            inner.linking = None;
-            inner.answers.clear();
-            // The store and the reader are the one file: erased once.
-            let instance = inner.store.as_ref().unwrap_or(&inner.reader).erase();
-            for result in [instance, inner.keys.erase()] {
-                if let Err(e) = result {
-                    first_error.get_or_insert(ClientError::from(e));
-                }
-            }
-        }
+        let mut inner = self.lock();
+        inner.reauth = None;
+        inner.held_phrase = None;
+        inner.quiz = None;
+        inner.linking = None;
+        inner.answers.clear();
+        // What says this device is to erase, kept until everything went: an
+        // erase that did not finish is tried again (`erase_if_revoked`, and
+        // at the next launch).
+        let _ = inner.keys.put(REVOKED_HEARD, b"1");
         // Signed in again, the device is a new one: the instance refuses a
         // session to the revoked id (`DEVICE_REVOKED`), and the roster keeps
         // it revoked.
         let id = wire::new_id();
         for result in [
+            // The store and the reader are the one file: erased once.
+            inner
+                .store
+                .as_ref()
+                .unwrap_or(&inner.reader)
+                .erase()
+                .map_err(ClientError::from),
             stores.store.erase().map_err(ClientError::from),
             stores.keys.erase().map_err(ClientError::from),
             stores.keys.put("device_id", &id).map_err(ClientError::from),
@@ -3022,6 +3034,18 @@ impl App {
                 first_error.get_or_insert(e);
             }
         }
+        if first_error.is_none() {
+            if let Err(e) = inner.keys.erase() {
+                first_error = Some(e.into());
+            }
+        }
+        if first_error.is_some() {
+            // Still the revoked device's: nothing it held is presented.
+            let _ = inner.keys.delete("access_token");
+            let _ = inner.keys.delete("refresh_token");
+            self.api.hear_revoked();
+        }
+        drop(inner);
         *self
             .device_id
             .lock()
@@ -5596,6 +5620,60 @@ mod kept_tests {
     fn app() -> Arc<App> {
         let opener: Opener = Arc::new(|_| SqliteStore::in_memory());
         App::open("http://127.0.0.1:9", Place::Native, opener).unwrap()
+    }
+
+    /// An app on files in a directory of its own, as a device keeps them.
+    fn app_at(dir: &std::path::Path) -> Arc<App> {
+        let at = dir.to_path_buf();
+        let opener: Opener = Arc::new(move |name| {
+            SqliteStore::open(&at.join(match name {
+                StoreName::Instance => "store.sqlite",
+                StoreName::Keys => "keys.sqlite",
+                StoreName::IdentityStore => "identity.sqlite",
+                StoreName::IdentityKeys => "identity-keys.sqlite",
+            }))
+        });
+        App::open("http://127.0.0.1:9", Place::Native, opener).unwrap()
+    }
+
+    /// An erase that could not finish (another writer held the store) keeps
+    /// what says it is to erase, and the next launch finishes it.
+    #[tokio::test]
+    async fn an_erase_that_did_not_finish_is_finished_at_the_next_launch() {
+        let dir =
+            std::env::temp_dir().join(format!("lumia-erase-{}", wire::display(&wire::new_id())));
+        std::fs::create_dir_all(&dir).unwrap();
+        let app = app_at(&dir);
+        app.lock().reader.meta_set(KEPT_SNAPSHOT, "kept").unwrap();
+        app.identity
+            .lock()
+            .await
+            .keys
+            .put("device_key", b"secret")
+            .unwrap();
+        let id = app.device_id();
+
+        let other = rusqlite::Connection::open(dir.join("store.sqlite")).unwrap();
+        other.execute_batch("BEGIN IMMEDIATE;").unwrap();
+        assert!(app.erase_device().await.is_err());
+        assert!(app.lock().keys.get(REVOKED_HEARD).unwrap().is_some());
+        drop(app);
+        drop(other);
+
+        let app = app_at(&dir);
+        assert_eq!(app.lock().reader.meta_get(KEPT_SNAPSHOT).unwrap(), None);
+        assert!(app
+            .identity
+            .lock()
+            .await
+            .keys
+            .get("device_key")
+            .unwrap()
+            .is_none());
+        assert!(app.lock().keys.get(REVOKED_HEARD).unwrap().is_none());
+        assert_ne!(app.device_id(), id);
+        drop(app);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

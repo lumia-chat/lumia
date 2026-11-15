@@ -1928,3 +1928,27 @@ async fn a_revocation_heard_by_a_call_is_kept_until_the_device_erases() {
         assert!(phone.app.identity_phrase().await.unwrap().is_none());
     }
 }
+
+/// Approving a request again, as after an approval whose bundle's reply was
+/// lost, certifies nothing twice: only the bundle is made again, and its
+/// code links the device.
+#[tokio::test]
+async fn an_approval_tried_again_makes_only_the_bundle_again() {
+    let Some(base) = instance() else { return };
+    let laptop = Device::new(&base);
+    let handle = format!("reapprove{}", stamp());
+    laptop
+        .app
+        .create_account(&handle, PASSWORD, None)
+        .await
+        .unwrap();
+    laptop.app.identity_setup("Laptop").await.unwrap();
+
+    let phone = Device::new(&base);
+    let request = phone.app.identity_link_request("Phone").await.unwrap();
+    laptop.app.identity_approve(&request).await.unwrap();
+    let code = laptop.app.identity_approve(&request).await.unwrap();
+    assert_eq!(laptop.app.identity_show().await.unwrap().devices.len(), 2);
+    phone.app.identity_claim(&code).await.unwrap();
+    assert!(phone.app.has_identity() && phone.app.signed_in());
+}

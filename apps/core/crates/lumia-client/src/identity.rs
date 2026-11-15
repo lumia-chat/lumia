@@ -480,10 +480,21 @@ impl<S: Store, K: Keystore> Device<'_, S, K> {
         let kind = DeviceKind::try_from(request.kind).unwrap_or(DeviceKind::Native);
 
         // Build on the roster held here; if the instance holds a newer one,
-        // adopt it and build again (spec 5, "older roster").
+        // adopt it and build again (spec 5, "older roster"). A device it
+        // holds already, with this key, was certified by an approval whose
+        // bundle never came back: only the bundle is made again.
         let mut verified = self.roster()?;
         let mut reconciled = false;
         let roster = loop {
+            if let Some(held) = verified.devices.get(&request.device_id) {
+                let key = request.device_public_key.as_ref().map(|k| &k.ed25519);
+                if key != Some(&held.public_key) {
+                    return Err(ClientError::State(
+                        "that device is already in the roster with another key".into(),
+                    ));
+                }
+                break verified.signed.clone();
+            }
             let roster = self.addition_roster(&verified, &request, kind)?;
             match api.publish_roster(roster.clone()).await {
                 Ok(()) => break roster,
