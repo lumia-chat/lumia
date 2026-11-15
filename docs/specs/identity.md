@@ -1,6 +1,6 @@
 # Identity, Devices, and Recovery
 
-Status: accepted, 2026-11-01; amended 2026-11-14 for setting up at sign-up, the web's create and restore, reauth by every credential, and starting over (issue #20), and 2026-11-15 for linking by prompt (4.2.1). This specification makes section 5 of [architecture.md](../architecture.md) implementable. Wire shapes are in `proto/lumia/v1/identity.proto` and `api.proto`; endpoint mappings are in [protocol.md](../protocol.md). Where this document and the architecture disagree, the architecture wins and this document is wrong.
+Status: accepted, 2026-11-01; amended 2026-11-14 for setting up at sign-up, the web's create and restore, reauth by every credential, and starting over (issue #20), and 2026-11-15 for linking by prompt (4.2.1) and, after its review, for what each side of a link holds, re-signing a stopped device's revocations (4.3, 4.4) and a revoked device's sign-in (4.4). This specification makes section 5 of [architecture.md](../architecture.md) implementable. Wire shapes are in `proto/lumia/v1/identity.proto` and `api.proto`; endpoint mappings are in [protocol.md](../protocol.md). Where this document and the architecture disagree, the architecture wins and this document is wrong.
 
 ## 1. Model
 
@@ -134,12 +134,12 @@ The bundle is single-use and expires ten minutes after creation. A fetch with th
 The way the apps link (Ryan, 2026-11-15: copying a request across and a code back was too rough). It is 4.2 with nothing carried by hand: the request and the code travel through a **link session** on the instance, and the person checks one number instead. N is signed in to the account by its own credentials (it holds no identity yet); E is every signed-in device of the account that holds the identity.
 
 1. N makes its `LinkRequest` as in 4.2 step 1, and a fresh 32-byte secret `r_N`. It opens a session, `POST /identity/link-sessions` with the request and the commitment `c = BLAKE3("lumia/link-commit/v1" || r_N)`. The instance appends `LinkSessionUpdated` to the account's log; every device of the account learns of it.
-2. Each E shows a prompt: what the request would add (kind, label, and a web device's origin). The first E whose person answers posts a fresh 32-byte `r_E` (`POST .../accept`); the session takes one answer.
-3. N, seeing the answer, reveals `r_N` (`POST .../reveal`). E checks it against `c` and refuses the session if it does not match.
-4. Both show the same six digits: the first four bytes of `BLAKE3("lumia/link-sas/v1" || request || r_E || r_N)` read as a big-endian integer, modulo 10^6, as `482 913`. The person checks that the two screens agree.
-5. On "They match", E approves with its own unlock and proceeds as 4.2 steps 3 to 6, then posts the bundle's code to the session (`POST .../code`). N, seeing the code, claims it as in 4.2 step 7. Nothing is typed.
+2. Each E shows a prompt: what the request would add (kind, label, and a web device's origin). The first E whose person answers reads the session, keeps its request and `c`, and only then draws and posts a fresh 32-byte `r_E` (`POST .../accept`); the session takes one answer.
+3. N, seeing the answer, keeps it and reveals `r_N` (`POST .../reveal`). E checks the reveal against the `c` it kept and refuses the session if it does not match, or if the session's request or commitment is no longer the one it answered. N refuses (and declines) a session whose answer changes after it revealed.
+4. Both show the same six digits: the first four bytes of `BLAKE3("lumia/link-sas/v1" || request || r_E || r_N)` read as a big-endian integer, modulo 10^6, as `482 913`, each from what it kept (E its request and `r_E`, N its request and the answer it revealed to), never from what the session says later. The person checks that the two screens agree.
+5. On "They match", E approves the request it kept, with its own unlock where the platform lets the app ask for one (the desktop shell cannot yet: plan step 9), and proceeds as 4.2 steps 3 to 6, then posts the bundle's code to the session (`POST .../code`). A code that does not reach the session is posted again; the request is not approved twice. N, seeing the code, claims it as in 4.2 step 7. Nothing is typed.
 
-The commitment is what makes six digits enough. An instance that wanted to put its own key in place of N's must commit to its `r_N` before it sees `r_E`, and E's `r_E` is drawn after the commitment arrives, so the instance cannot try keys until the digits match: each attempt at a substitution passes with probability 10^-6, and fails visibly otherwise. A session lasts ten minutes; "Not me" on any E declines it; an account has at most five open at once. The instance learns that a device asked to be linked and when, as it does in 4.2; it never sees a key or the backup key.
+The commitment is what makes six digits enough. An instance that wanted to put its own key in place of N's must commit to its `r_N` before it sees `r_E`, and E's `r_E` is drawn after the commitment arrives, so the instance cannot try keys until the digits match: each attempt at a substitution passes with probability 10^-6, and fails visibly otherwise. That holds only because each side keeps what it saw: an E that read the commitment again after answering, or an N that read the answer again after revealing, would let the instance choose the other value after the fact and try a million of them. A session lasts ten minutes; "Not me" on any E declines it, after which it takes no reveal and no code; an account has at most five open at once. The instance learns that a device asked to be linked and when, as it does in 4.2; it never sees a key or the backup key.
 
 4.2's copied request and typed code remain, behind "Link another way", for a device that cannot reach the instance while the other is in hand.
 
@@ -147,7 +147,7 @@ The commitment is what makes six digits enough. An instance that wanted to put i
 
 1. On the new device, enter the phrase; derive root and backup key.
 2. Fetch the identity backup from any host the user names (section 8), decrypt, and take the roster from it. If no backup is reachable, start from the newest roster any instance returns for the identity, or from nothing.
-3. Build the next version: revoke every device currently in `devices` (each revocation signed by the root), add this device with a root-signed certificate, sign the roster with the root. Revoking all old devices is the default; the user may keep specific ones.
+3. Build the next version: revoke every device currently in `devices` (each revocation signed by the root), add this device with a root-signed certificate, sign the roster with the root. Revoking all old devices is the default; the user may keep specific ones. A revocation in `revoked` signed by a device this one now revokes is signed again by the root, keeping its body's device, key and times: a device's revocation stands only while its signer is in `devices` (3.3 step 5).
 4. Discard the root private key. Publish the roster everywhere by identity proof sign-in; root-signed rosters pass the revocation policy without reauth.
 5. Rejoin MLS groups per architecture 11.3: by external commit, since no device remains to add this one.
 
@@ -157,12 +157,12 @@ After a root rotation (4.5) the phrase derives the **current** root, not the fir
 
 From any authorized device D, revoking device X:
 
-1. D builds a `RevocationBody` for X signed by D, and roster version held+1 with X moved to `revoked`; signs the roster with D.
+1. D builds a `RevocationBody` for X signed by D, and roster version held+1 with X moved to `revoked`, every revocation X signed signed again by D (as in 4.3 step 3); signs the roster with D.
 2. For each instance the client knows, in the order the user chooses (the UI lists them with state): D calls `POST /auth/reauth` with a credential, then `POST /identity/devices/revoke` with the roster and the reauth token.
 3. The instance verifies (section 3.3, including step 8), stores, kills X's sessions and connections there, and emits `RosterUpdated`.
 4. The UI shows "revoked on k of n" with the unreachable or unauthenticated instances named. It retries them on the next connect and keeps the state visible until all confirm. "Globally revoked" is never shown.
 
-X, if online, receives `DISCONNECT_DEVICE_REVOKED` and wipes its local store (architecture 12). A thief holding X has X's device key but not the account credentials, so X cannot produce an acceptable revocation of D at any instance; the root path (4.3) always beats X because root signatures bypass reauth.
+X, if online, receives `DISCONNECT_DEVICE_REVOKED` and wipes its local store (architecture 12). Any call X makes is answered `DEVICE_REVOKED`, including a refresh with a token its session retired, and so is a sign-in under X's id by any credential: an instance gives no session to a device id the account's identity has revoked. X keeps having heard it until it has wiped, across a restart. The device comes back under a new id, as a new device. A thief holding X has X's device key but not the account credentials, so X cannot produce an acceptable revocation of D at any instance; the root path (4.3) always beats X because root signatures bypass reauth.
 
 ### 4.5 Rotate the root
 
