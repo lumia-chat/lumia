@@ -646,6 +646,50 @@ impl<S: Store, K: Keystore> Device<'_, S, K> {
         kind: DeviceKind,
         origin: &str,
     ) -> Result<TokenPair, ClientError> {
+        self.recover_keeping(api, phrase, label, kind, origin, &[])
+            .await
+    }
+
+    /// The roster an instance holds for the identity `phrase` derives the
+    /// current root of: the devices a recovery would revoke, before it does
+    /// anything. `None` when no instance knows the root (a recovery would
+    /// start the identity's roster over).
+    ///
+    /// # Errors
+    /// A phrase that is not one; API failure.
+    pub async fn recover_preview(
+        &self,
+        api: &Api,
+        phrase: &str,
+    ) -> Result<Option<Verified>, ClientError> {
+        let derived = Phrase::parse(phrase)?.derive();
+        let root_public = derived.root.verifying_key().to_bytes().to_vec();
+        match api.roster_by_root(&root_public).await {
+            Ok(GetRosterResponse {
+                roster: Some(signed),
+            }) => Ok(Some(verify_roster(&signed, None, now_nanos())?)),
+            Ok(_) => Ok(None),
+            Err(ClientError::Api { code, .. }) if code == "NOT_FOUND" => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// [`Device::recover_as`], keeping the devices in `keep` (their ids)
+    /// instead of revoking them: "Revoking all old devices is the default;
+    /// the user may keep specific ones" (spec 4.3 step 3). A kept device
+    /// keeps its certificate, signed before anything is revoked here.
+    ///
+    /// # Errors
+    /// As [`Device::recover`].
+    pub async fn recover_keeping(
+        &mut self,
+        api: &Api,
+        phrase: &str,
+        label: &str,
+        kind: DeviceKind,
+        origin: &str,
+        keep: &[Vec<u8>],
+    ) -> Result<TokenPair, ClientError> {
         let derived = Phrase::parse(phrase)?.derive();
         let root_public = derived.root.verifying_key().to_bytes().to_vec();
         let device_key = self.device_key_or_generate()?;
@@ -716,10 +760,22 @@ impl<S: Store, K: Keystore> Device<'_, S, K> {
             }));
         }
 
-        // The real one: every held device revoked by the root, this one added.
+        // The real one: every held device revoked by the root but those kept,
+        // this one added.
         let identity_id = held.identity_id.clone();
         let mut revoked = held.body.revoked.clone();
+        let mut devices: Vec<_> = held
+            .body
+            .devices
+            .iter()
+            .filter(|entry| keep.contains(&entry.device_id))
+            .cloned()
+            .collect();
+        devices.push(new_device(&identity_id));
         for (device_id, info) in &held.devices {
+            if keep.contains(device_id) {
+                continue;
+            }
             revoked.push(revoked_entry(
                 &identity_id,
                 device_id,
@@ -734,7 +790,7 @@ impl<S: Store, K: Keystore> Device<'_, S, K> {
             held.version + 1,
             &held.root_public_key,
             held.body.rotations.clone(),
-            vec![new_device(&identity_id)],
+            devices,
             revoked,
             now(),
         );

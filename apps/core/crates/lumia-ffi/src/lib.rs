@@ -2431,6 +2431,30 @@ impl Client {
             .block_on(self.app.identity_start_over(&label))?)
     }
 
+    /// The devices restoring from `phrase` would stop, read first so the
+    /// person can keep one they still have.
+    pub fn identity_recover_devices(&self, phrase: String) -> Res<Vec<DeviceSummary>> {
+        Ok(self
+            .runtime
+            .block_on(self.app.identity_recover_devices(&phrase))?
+            .into_iter()
+            .map(Into::into)
+            .collect())
+    }
+
+    /// Restores from the phrase, keeping the devices in `keep` (their ids).
+    pub fn identity_recover_keeping(
+        &self,
+        phrase: String,
+        label: String,
+        keep: Vec<String>,
+    ) -> Res<RosterSummary> {
+        Ok(self
+            .runtime
+            .block_on(self.app.identity_recover_keeping(&phrase, &label, keep))?
+            .into())
+    }
+
     /// Restores the identity from its phrase here and signs in by it.
     pub fn identity_recover(&self, phrase: String, label: String) -> Res<RosterSummary> {
         Ok(self

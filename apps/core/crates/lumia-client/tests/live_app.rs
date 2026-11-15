@@ -1530,3 +1530,83 @@ async fn a_device_is_linked_by_a_prompt_and_matching_digits() {
     assert_eq!(other.app.link_progress().await.unwrap().stage, "declined");
     assert!(laptop.app.link_prompts().await.unwrap().is_empty());
 }
+
+/// Restoring from the phrase keeps the devices the person still has (identity
+/// spec 4.3 step 3): the devices are read first, the kept one stays in the
+/// roster and signed in, the rest are revoked.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_restore_keeps_the_devices_chosen_and_revokes_the_rest() {
+    let Some(base) = instance() else { return };
+    let laptop = Device::new(&base);
+    let handle = format!("keep{}", stamp());
+    laptop
+        .app
+        .create_account(&handle, PASSWORD, None)
+        .await
+        .unwrap();
+    laptop.app.identity_setup("Laptop").await.unwrap();
+    let phrase = laptop.app.identity_phrase().await.unwrap().unwrap();
+
+    // A phone linked by prompt, so the identity has two devices.
+    let phone = Device::new(&base);
+    phone.app.sign_in(&handle, PASSWORD, None).await.unwrap();
+    phone.app.link_start("Phone").await.unwrap();
+    let id = laptop.app.link_prompts().await.unwrap()[0]
+        .session_id
+        .clone();
+    laptop.app.link_prompt_answer(&id).await.unwrap();
+    phone.app.link_progress().await.unwrap();
+    laptop.app.link_prompt_confirm(&id).await.unwrap();
+    assert_eq!(phone.app.link_progress().await.unwrap().stage, "linked");
+
+    let restorer = Device::new(&base);
+    let listed = restorer
+        .app
+        .identity_recover_devices(&phrase)
+        .await
+        .unwrap();
+    let mut labels: Vec<&str> = listed.iter().map(|d| d.label.as_str()).collect();
+    labels.sort_unstable();
+    assert_eq!(labels, ["Laptop", "Phone"]);
+    assert!(
+        !restorer.app.has_identity(),
+        "reading the devices changes nothing"
+    );
+    let phone_id = listed
+        .iter()
+        .find(|d| d.label == "Phone")
+        .unwrap()
+        .device_id
+        .clone();
+    let laptop_id = listed
+        .iter()
+        .find(|d| d.label == "Laptop")
+        .unwrap()
+        .device_id
+        .clone();
+
+    let roster = restorer
+        .app
+        .identity_recover_keeping(&phrase, "Restorer", vec![phone_id.clone()])
+        .await
+        .unwrap();
+    let live: Vec<&str> = roster
+        .devices
+        .iter()
+        .filter(|d| !d.revoked)
+        .map(|d| d.label.as_str())
+        .collect();
+    assert_eq!(
+        live.len(),
+        2,
+        "the phone kept and this device added: {live:?}"
+    );
+    assert!(live.contains(&"Phone") && live.contains(&"Restorer"));
+    assert!(roster
+        .devices
+        .iter()
+        .any(|d| d.device_id == laptop_id && d.revoked));
+
+    // The phone is still a device of the identity, and its session still works.
+    assert!(phone.app.account_identity().await.unwrap().is_some());
+}

@@ -1293,6 +1293,42 @@ impl Client {
         self.app.identity_start_over(&label).await.map_err(js_api)
     }
 
+    /// The devices restoring from `phrase` would stop, read first so the
+    /// person can keep one they still have.
+    ///
+    /// # Errors
+    /// A phrase that is not one; API failure.
+    #[wasm_bindgen(js_name = identityRecoverDevices)]
+    pub async fn identity_recover_devices(&self, phrase: String) -> Result<JsValue, JsError> {
+        to_js(
+            &self
+                .app
+                .identity_recover_devices(&phrase)
+                .await
+                .map_err(js_api)?,
+        )
+    }
+
+    /// Restores from the phrase keeping the devices in `keep` (their ids).
+    ///
+    /// # Errors
+    /// As `identityRecover`.
+    #[wasm_bindgen(js_name = identityRecoverKeeping)]
+    pub async fn identity_recover_keeping(
+        &self,
+        phrase: String,
+        label: String,
+        keep: Vec<String>,
+    ) -> Result<JsValue, JsError> {
+        to_js(
+            &self
+                .app
+                .identity_recover_keeping(&phrase, &label, keep)
+                .await
+                .map_err(js_api)?,
+        )
+    }
+
     /// Restores the identity from its phrase here: only on the flagship's
     /// origin, which the page keeps to (identity spec 7).
     ///

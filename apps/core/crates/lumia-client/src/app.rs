@@ -4383,11 +4383,59 @@ impl App {
         phrase: &str,
         label: &str,
     ) -> Result<RosterSummary, ClientError> {
+        self.identity_recover_keeping(phrase, label, Vec::new())
+            .await
+    }
+
+    /// The devices restoring from `phrase` would stop: the roster the
+    /// instance holds for the identity, read before anything changes, so
+    /// the person can keep a device they still have
+    /// ([`App::identity_recover_keeping`]). Empty when the instance knows no
+    /// roster for it.
+    ///
+    /// # Errors
+    /// A phrase that is not one; API failure.
+    pub async fn identity_recover_devices(
+        &self,
+        phrase: &str,
+    ) -> Result<Vec<DeviceSummary>, ClientError> {
+        let api = self.api.clone();
+        let mut stores = self.identity.lock().await;
+        let held = device(&mut stores, &self.device_id)
+            .recover_preview(&api, phrase)
+            .await?;
+        Ok(held.map_or_else(Vec::new, |held| {
+            roster_summary(&held, &self.device_id)
+                .devices
+                .into_iter()
+                .filter(|d| !d.revoked)
+                .collect()
+        }))
+    }
+
+    /// [`App::identity_recover`], keeping the devices in `keep` (their ids,
+    /// as [`App::identity_recover_devices`] names them) instead of revoking
+    /// them (identity spec 4.3 step 3).
+    ///
+    /// # Errors
+    /// As [`App::identity_recover`].
+    pub async fn identity_recover_keeping(
+        &self,
+        phrase: &str,
+        label: &str,
+        keep: Vec<String>,
+    ) -> Result<RosterSummary, ClientError> {
+        let keep = keep
+            .iter()
+            .map(|id| parse_uuid(id))
+            .collect::<Result<Vec<_>, _>>()?;
         let (kind, origin) = self.device_kind();
         let api = self.api.clone();
         let mut stores = self.identity.lock().await;
         let mut dev = device(&mut stores, &self.device_id);
-        let pair = dev.recover_as(&api, phrase, label, kind, &origin).await?;
+        let pair = dev
+            .recover_keeping(&api, phrase, label, kind, &origin, &keep)
+            .await?;
         if kind == DeviceKind::Web {
             dev.forget_backup_key()?;
         }
