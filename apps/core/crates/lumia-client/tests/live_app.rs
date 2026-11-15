@@ -1737,3 +1737,138 @@ async fn a_revoked_device_that_heard_it_by_a_call_erases_before_signing_in_again
     assert!(phone.app.identity_phrase().await.unwrap().is_none());
     assert!(laptop.app.has_identity() && laptop.app.signed_in());
 }
+
+/// A device signed out before it was revoked, signing in again under its id,
+/// is refused as revoked (identity spec 4.4): it erases what it kept then,
+/// and the next sign-in is a new device's.
+#[tokio::test]
+async fn a_revoked_device_signing_in_by_password_is_refused_and_erases() {
+    let Some(base) = instance() else { return };
+    let laptop = Device::new(&base);
+    let handle = format!("refused{}", stamp());
+    laptop
+        .app
+        .create_account(&handle, PASSWORD, None)
+        .await
+        .unwrap();
+    laptop.app.identity_setup("Laptop").await.unwrap();
+
+    let phone = Device::new(&base);
+    phone.app.sign_in(&handle, PASSWORD, None).await.unwrap();
+    link_by_prompt(&laptop, &phone, "Phone").await;
+    let phone_id = phone.app.device_id();
+    phone.app.sign_out().await.unwrap();
+    laptop
+        .app
+        .identity_revoke(&phone_id, PASSWORD)
+        .await
+        .unwrap();
+
+    match phone.app.sign_in(&handle, PASSWORD, None).await {
+        Err(ClientError::Api { code, .. }) => assert_eq!(code, "DEVICE_REVOKED"),
+        other => panic!("the revoked id was let in: {other:?}"),
+    }
+    assert!(!phone.app.has_identity(), "erased on hearing it");
+    assert_ne!(phone.app.device_id(), phone_id);
+    phone.app.sign_in(&handle, PASSWORD, None).await.unwrap();
+    assert!(!phone.app.has_identity());
+}
+
+/// Links `new` to the identity `holder` holds, by a prompt.
+async fn link_by_prompt(holder: &Device, new: &Device, label: &str) {
+    new.app.link_start(label).await.unwrap();
+    let id = holder.app.link_prompts().await.unwrap()[0]
+        .session_id
+        .clone();
+    holder.app.link_prompt_answer(&id).await.unwrap();
+    new.app.link_progress().await.unwrap();
+    holder.app.link_prompt_confirm(&id).await.unwrap();
+    assert_eq!(new.app.link_progress().await.unwrap().stage, "linked");
+}
+
+/// A restore that stops a device which revoked another (identity spec 3.3,
+/// step 5): the revocation that device signed is vouched for by the root,
+/// so the restored roster stands.
+#[tokio::test]
+async fn a_restore_stopping_a_device_that_revoked_another_stands() {
+    let Some(base) = instance() else { return };
+    let laptop = Device::new(&base);
+    let handle = format!("resign{}", stamp());
+    laptop
+        .app
+        .create_account(&handle, PASSWORD, None)
+        .await
+        .unwrap();
+    laptop.app.identity_setup("Laptop").await.unwrap();
+    let phrase = laptop.app.identity_phrase().await.unwrap().unwrap();
+
+    let phone = Device::new(&base);
+    phone.app.sign_in(&handle, PASSWORD, None).await.unwrap();
+    link_by_prompt(&laptop, &phone, "Phone").await;
+    let tablet = Device::new(&base);
+    tablet.app.sign_in(&handle, PASSWORD, None).await.unwrap();
+    link_by_prompt(&phone, &tablet, "Tablet").await;
+    phone
+        .app
+        .identity_revoke(&tablet.app.device_id(), PASSWORD)
+        .await
+        .unwrap();
+
+    // The phone is lost: the restore keeps nothing.
+    let restorer = Device::new(&base);
+    let roster = restorer
+        .app
+        .identity_recover_keeping(&phrase, "Restorer", Vec::new())
+        .await
+        .unwrap();
+    let live: Vec<&str> = roster
+        .devices
+        .iter()
+        .filter(|d| !d.revoked)
+        .map(|d| d.label.as_str())
+        .collect();
+    assert_eq!(live, ["Restorer"]);
+    assert_eq!(roster.devices.iter().filter(|d| d.revoked).count(), 3);
+}
+
+/// Linking by prompt holds each side to what it saw (identity spec 4.2.1):
+/// starting again declines the session before, and a session declined
+/// after the answer cannot be approved.
+#[tokio::test]
+async fn a_link_started_again_or_declined_after_the_answer_is_not_approved() {
+    let Some(base) = instance() else { return };
+    let laptop = Device::new(&base);
+    let handle = format!("again{}", stamp());
+    laptop
+        .app
+        .create_account(&handle, PASSWORD, None)
+        .await
+        .unwrap();
+    laptop.app.identity_setup("Laptop").await.unwrap();
+
+    let phone = Device::new(&base);
+    phone.app.sign_in(&handle, PASSWORD, None).await.unwrap();
+    phone.app.link_start("Phone").await.unwrap();
+    phone.app.link_start("Phone").await.unwrap();
+    assert_eq!(
+        laptop.app.link_prompts().await.unwrap().len(),
+        1,
+        "the first session no longer prompts"
+    );
+
+    let id = laptop.app.link_prompts().await.unwrap()[0]
+        .session_id
+        .clone();
+    laptop.app.link_prompt_answer(&id).await.unwrap();
+    assert_eq!(phone.app.link_progress().await.unwrap().stage, "compare");
+    // Asked again, the new device shows the same digits: its reveal is not
+    // made twice.
+    assert_eq!(phone.app.link_progress().await.unwrap().stage, "compare");
+    phone.app.link_cancel().await;
+    assert!(laptop.app.link_prompt_confirm(&id).await.is_err());
+    assert_eq!(
+        laptop.app.identity_show().await.unwrap().devices.len(),
+        1,
+        "no device was added"
+    );
+}

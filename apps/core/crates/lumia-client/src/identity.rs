@@ -13,8 +13,8 @@ use lumia_core::identity::link::{seal_bundle, LinkRequester};
 use lumia_core::identity::phrase::Phrase;
 use lumia_core::identity::proof::build_proof;
 use lumia_core::identity::roster::{
-    device_entry, merge, revoked_entry, roster_body, rotation, sign_roster, verify_roster,
-    NewDevice, Signer, Step, Verified,
+    device_entry, merge, resign_revocations, revoked_entry, roster_body, rotation, sign_roster,
+    verify_roster, NewDevice, Signer, Step, Verified,
 };
 use lumia_core::keystore::Keystore;
 use lumia_core::proto::{
@@ -761,9 +761,21 @@ impl<S: Store, K: Keystore> Device<'_, S, K> {
         }
 
         // The real one: every held device revoked by the root but those kept,
-        // this one added.
+        // this one added, and what the stopped devices revoked vouched for by
+        // the root instead.
         let identity_id = held.identity_id.clone();
-        let mut revoked = held.body.revoked.clone();
+        let stopping: Vec<Vec<u8>> = held
+            .devices
+            .keys()
+            .filter(|id| !keep.contains(id))
+            .cloned()
+            .collect();
+        let mut revoked = resign_revocations(
+            &identity_id,
+            &held.body.revoked,
+            &stopping,
+            Signer::Root(&derived.root),
+        );
         let mut devices: Vec<_> = held
             .body
             .devices
@@ -1028,7 +1040,8 @@ impl<S: Store, K: Keystore> Device<'_, S, K> {
     }
 }
 
-/// The next roster with `device_id` moved to `revoked`, signed by `signer`.
+/// The next roster with `device_id` moved to `revoked`, and what it revoked
+/// vouched for by `signer`, signed by `signer`.
 fn revocation_roster(
     verified: &Verified,
     device_id: &[u8],
@@ -1054,7 +1067,12 @@ fn revocation_roster(
         .filter(|d| d.device_id != device_id)
         .cloned()
         .collect();
-    let mut revoked = verified.body.revoked.clone();
+    let mut revoked = resign_revocations(
+        &verified.identity_id,
+        &verified.body.revoked,
+        &[device_id.to_vec()],
+        signer,
+    );
     revoked.push(entry);
     let body = roster_body(
         &verified.identity_id,

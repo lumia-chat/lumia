@@ -795,6 +795,13 @@ pub enum AppEvent {
         pronouns: String,
         bio: String,
     },
+    /// A link session moved (`LinkSessionUpdated` on this account's log,
+    /// identity spec 4.2.1), after the `AccountApplied` it came in: this
+    /// device's own as the new device ([`App::link_progress`]) or one that
+    /// prompts here ([`App::link_prompts`]).
+    LinkSessionUpdated {
+        session_id: String,
+    },
     Acked {
         command_id: String,
         seq: u64,
@@ -1090,6 +1097,22 @@ fn profiles_updated(events: &[lumia_core::proto::AccountEvent]) -> Vec<AppEvent>
         .collect()
 }
 
+/// The link sessions an account batch moved, each once.
+fn link_sessions_updated(events: &[lumia_core::proto::AccountEvent]) -> Vec<AppEvent> {
+    let mut ids: Vec<String> = Vec::new();
+    for e in events {
+        if let Some(account_event::Payload::LinkSessionUpdated(l)) = &e.payload {
+            let id = wire::display(&l.session_id);
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+    }
+    ids.into_iter()
+        .map(|session_id| AppEvent::LinkSessionUpdated { session_id })
+        .collect()
+}
+
 fn app_event(ev: GatewayEvent) -> AppEvent {
     match ev {
         GatewayEvent::Applied(events) => AppEvent::Applied {
@@ -1317,21 +1340,45 @@ struct Inner {
     held_phrase: Option<HeldPhrase>,
     /// This device's link session, as the new device (identity spec 4.2.1).
     linking: Option<NewLink>,
-    /// The secrets this device answered link sessions with, by session id.
-    answers: HashMap<Vec<u8>, Vec<u8>>,
+    /// Moves on with every `link_start` and `link_cancel`: a session opened
+    /// by a start given up or overtaken meanwhile is declined as it opens.
+    link_runs: u64,
+    /// The link sessions this device answered, by session id.
+    answers: HashMap<Vec<u8>, Answered>,
     /// The positions last asked for, of the held or kept phrase.
     quiz: Option<Vec<usize>>,
 }
 
 /// The link session this device opened as the new device, and what it
-/// needs to finish it: its request, its secret, whether it revealed it.
+/// needs to finish it: its request, its secret, and the answer it revealed
+/// that secret to (identity spec 4.2.1). The digits are of that answer,
+/// whatever the instance says later: one that could change it after the
+/// reveal could try answers until the digits matched the other device's.
 #[derive(Clone)]
 struct NewLink {
     session_id: Vec<u8>,
     request: Vec<u8>,
     reveal: Vec<u8>,
-    revealed: bool,
+    answer: Option<Vec<u8>>,
 }
+
+/// A link session this device answered: its secret, and the request and
+/// commitment it answered, held from before the secret was drawn. The
+/// digits and the approval are of these, whatever the instance says later:
+/// one that could change the commitment after seeing the answer could try
+/// secrets until the digits matched the new device's. `code` is the
+/// approval's, kept until the session has it.
+#[derive(Clone)]
+struct Answered {
+    answer: Vec<u8>,
+    request: Vec<u8>,
+    commitment: Vec<u8>,
+    code: Option<String>,
+}
+
+/// What [`App::link_start`] answers when it was given up, or started again,
+/// while its session opened: a shell drops it.
+pub const LINK_GIVEN_UP: &str = "linking was given up";
 
 /// A phrase made and not yet an identity's, and whether the person has
 /// shown they hold it.
@@ -1612,6 +1659,7 @@ impl App {
                 reauth: None,
                 held_phrase: None,
                 linking: None,
+                link_runs: 0,
                 answers: HashMap::new(),
                 quiz: None,
             }),
@@ -1747,7 +1795,8 @@ impl App {
         let pair = self
             .api
             .passkey_assert_finish(challenge_id, credential_json, self.this_device())
-            .await?;
+            .await;
+        let pair = self.erased_if_revoked(pair).await?;
         self.take_session(&pair).await
     }
 
@@ -1774,7 +1823,8 @@ impl App {
                 challenge_id,
                 credential_json,
             )
-            .await?;
+            .await;
+        let pair = self.erased_if_revoked(pair).await?;
         self.take_session(&pair).await
     }
 
@@ -1834,7 +1884,8 @@ impl App {
         let pair = self
             .api
             .magic_link_complete(&token, self.this_device())
-            .await?;
+            .await;
+        let pair = self.erased_if_revoked(pair).await?;
         self.take_session(&pair).await
     }
 
@@ -2296,14 +2347,11 @@ impl App {
             Some(code) => {
                 self.api
                     .sign_in_with_totp(handle, password, self.this_device(), code)
-                    .await?
+                    .await
             }
-            None => {
-                self.api
-                    .sign_in(handle, password, self.this_device())
-                    .await?
-            }
+            None => self.api.sign_in(handle, password, self.this_device()).await,
         };
+        let pair = self.erased_if_revoked(pair).await?;
         self.take_session(&pair).await
     }
 
@@ -2750,6 +2798,9 @@ impl App {
         let device_id = self.this_device();
         let back = Arc::clone(self);
         let end_sink = Arc::clone(&sink);
+        // Dropped when the task passing the loop's events on has passed the
+        // last of them.
+        let (passed_on, all_passed) = crate::futures_channel::oneshot::channel::<()>();
         spawn(async move {
             let (store, revoked) =
                 gateway::run_until_end(api, store, "lumia-app", device_id, channels, rx, etx).await;
@@ -2760,8 +2811,10 @@ impl App {
                 inner.sink = None;
             }
             // The identity no longer holds this device: what it kept goes,
-            // and only then is the shell told the loop has ended.
+            // and only then is the shell told the loop has ended, after every
+            // event before it.
             if let Some(reason) = revoked {
+                let _ = all_passed.await;
                 let _ = back.erase_device().await;
                 end_sink(AppEvent::Closed {
                     reason,
@@ -2772,6 +2825,7 @@ impl App {
         let app = Arc::clone(self);
         let task_sink = Arc::clone(&sink);
         spawn(async move {
+            let _passed_on = passed_on;
             while let Some(ev) = erx.next().await {
                 match &ev {
                     GatewayEvent::Notice(Notice::Welcomed(w)) => {
@@ -2868,7 +2922,11 @@ impl App {
                     }
                 }
                 let profiles = match &ev {
-                    GatewayEvent::AccountApplied(events) => profiles_updated(events),
+                    GatewayEvent::AccountApplied(events) => {
+                        let mut after = profiles_updated(events);
+                        after.extend(link_sessions_updated(events));
+                        after
+                    }
                     _ => Vec::new(),
                 };
                 task_sink(app_event(ev));
@@ -2897,7 +2955,20 @@ impl App {
     /// On a store failure, after erasing what it could.
     pub async fn erase_device(&self) -> Result<(), ClientError> {
         self.stop();
-        *self.dm.lock().unwrap_or_else(PoisonError::into_inner) = None;
+        // Held first, so no DM engine is built again from what is erased.
+        let mut stores = self.identity.lock().await;
+        // The DM engine writes to the instance's store through its own
+        // connection: what it is doing is let finish, and nothing more is
+        // done with it while the store is erased.
+        let engine = self
+            .dm
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        let _engine = match &engine {
+            Some(engine) => Some(engine.lock().await),
+            None => None,
+        };
         self.api.clear_tokens();
         self.api.take_revoked();
         let mut first_error = None;
@@ -2908,23 +2979,17 @@ impl App {
             inner.quiz = None;
             inner.linking = None;
             inner.answers.clear();
-            let instance = inner.store.as_ref().map(SqliteStore::erase);
-            for result in [
-                instance,
-                Some(inner.reader.erase()),
-                Some(inner.keys.erase()),
-            ]
-            .into_iter()
-            .flatten()
-            {
+            // The store and the reader are the one file: erased once.
+            let instance = inner.store.as_ref().unwrap_or(&inner.reader).erase();
+            for result in [instance, inner.keys.erase()] {
                 if let Err(e) = result {
                     first_error.get_or_insert(ClientError::from(e));
                 }
             }
         }
-        let mut stores = self.identity.lock().await;
-        // Signed in again, the device is a new one: the instance refuses
-        // every session of the revoked id, and the roster keeps it revoked.
+        // Signed in again, the device is a new one: the instance refuses a
+        // session to the revoked id (`DEVICE_REVOKED`), and the roster keeps
+        // it revoked.
         let id = wire::new_id();
         for result in [
             stores.store.erase().map_err(ClientError::from),
@@ -2955,6 +3020,16 @@ impl App {
         if idle && self.api.take_revoked() {
             let _ = self.erase_device().await;
         }
+    }
+
+    /// A sign-in's answer, this device erased first when the instance
+    /// refused it because the identity revoked this device's id: the person
+    /// tries again as a new device.
+    async fn erased_if_revoked<T>(&self, answer: Result<T, ClientError>) -> Result<T, ClientError> {
+        if answer.is_err() {
+            self.erase_if_revoked().await;
+        }
+        answer
     }
 
     /// Stops the gateway loop; the store comes back once it ends.
@@ -3920,6 +3995,7 @@ impl App {
     /// # Errors
     /// On a store or keystore failure.
     pub async fn identity_link_request(&self, label: &str) -> Result<String, ClientError> {
+        self.erase_if_revoked().await;
         let (kind, origin) = match &self.place {
             Place::Web { origin } => (DeviceKind::Web, origin.clone()),
             Place::Native => (DeviceKind::Native, String::new()),
@@ -3932,13 +4008,25 @@ impl App {
 
     /// As the new device: opens a link session, so that every device of the
     /// account that holds the identity prompts. [`App::link_progress`]
-    /// follows it.
+    /// follows it. A session this device opened before is declined; one
+    /// given up ([`App::link_cancel`]) or started again while this one
+    /// opened is declined as it opens, and this answers [`LINK_GIVEN_UP`].
     ///
     /// # Errors
-    /// When this device already holds an identity; API failure.
+    /// When this device already holds an identity; given up meanwhile; API
+    /// failure.
     pub async fn link_start(&self, label: &str) -> Result<LinkProgress, ClientError> {
         use base64::Engine as _;
         use lumia_core::identity::link::{commitment, session_secret};
+        self.erase_if_revoked().await;
+        let (run, earlier) = {
+            let mut inner = self.lock();
+            inner.link_runs += 1;
+            (inner.link_runs, inner.linking.take())
+        };
+        if let Some(earlier) = earlier {
+            let _ = self.api.decline_link_session(&earlier.session_id).await;
+        }
         if self.holds_identity().await {
             return Err(ClientError::State(
                 "this device already has private messages".into(),
@@ -3952,26 +4040,35 @@ impl App {
             .api
             .open_link_session(request.clone(), commitment(&reveal))
             .await?;
-        self.lock().linking = Some(NewLink {
-            session_id: opened.session_id,
-            request,
-            reveal,
-            revealed: false,
-        });
-        Ok(LinkProgress {
-            stage: "waiting".into(),
-            digits: String::new(),
-        })
+        {
+            let mut inner = self.lock();
+            if inner.link_runs == run {
+                inner.linking = Some(NewLink {
+                    session_id: opened.session_id,
+                    request,
+                    reveal,
+                    answer: None,
+                });
+                return Ok(LinkProgress {
+                    stage: "waiting".into(),
+                    digits: String::new(),
+                });
+            }
+        }
+        let _ = self.api.decline_link_session(&opened.session_id).await;
+        Err(ClientError::State(LINK_GIVEN_UP.into()))
     }
 
     /// As the new device: where its link session stands, taking the next
     /// step when it is this device's: revealing its secret once another
     /// device answered, claiming the code once it came. Call it again on
-    /// every `AccountApplied` (the session moves by `LinkSessionUpdated`),
-    /// or every second or two while the screen is open.
+    /// every `LinkSessionUpdated`, or every second or two while the screen
+    /// is open. The digits are of the answer this device revealed to; a
+    /// session whose answer changed after is declined.
     ///
     /// # Errors
-    /// Without a session in progress; API failure.
+    /// Without a session in progress; an answer changed after the reveal;
+    /// API failure.
     pub async fn link_progress(&self) -> Result<LinkProgress, ClientError> {
         use lumia_core::identity::link::{digits, digits_words};
         let link = self
@@ -3986,15 +4083,39 @@ impl App {
         let session = match self.api.link_session(&link.session_id).await {
             Ok(session) => session,
             Err(ClientError::Api { code, .. }) if code == "NOT_FOUND" => {
-                self.lock().linking = None;
+                self.end_link(&link.session_id);
                 return Ok(progress("expired", String::new()));
             }
             Err(e) => return Err(e),
         };
         if session.declined {
-            self.lock().linking = None;
+            self.end_link(&link.session_id);
             return Ok(progress("declined", String::new()));
         }
+        if session.answer.is_empty() {
+            return Ok(progress("waiting", String::new()));
+        }
+        let answer = match link.answer {
+            Some(answer) if answer != session.answer => {
+                self.end_link(&link.session_id);
+                let _ = self.api.decline_link_session(&link.session_id).await;
+                return Err(ClientError::State(
+                    "the answer to this link changed after this device answered it: start again"
+                        .into(),
+                ));
+            }
+            Some(answer) => answer,
+            // Held before the reveal goes, so a reveal whose answer was lost
+            // is not made against another.
+            None => {
+                if let Some(held) = self.lock().linking.as_mut() {
+                    if held.session_id == link.session_id {
+                        held.answer = Some(session.answer.clone());
+                    }
+                }
+                session.answer.clone()
+            }
+        };
         if !session.code.is_empty() {
             // A claim that came through before a sign-in that did not leaves
             // the identity here and the code spent: only the sign-in is left.
@@ -4004,27 +4125,40 @@ impl App {
             } else {
                 self.identity_claim(&session.code).await?;
             }
-            self.lock().linking = None;
+            self.end_link(&link.session_id);
             return Ok(progress("linked", String::new()));
         }
-        if session.answer.is_empty() {
-            return Ok(progress("waiting", String::new()));
-        }
-        if !link.revealed {
+        // Revealed already when the session holds it, though the answer to
+        // the reveal was lost.
+        if session.reveal.is_empty() {
             self.api
                 .reveal_link_session(&link.session_id, link.reveal.clone())
                 .await?;
-            if let Some(held) = self.lock().linking.as_mut() {
-                held.revealed = true;
-            }
         }
-        let shown = digits(&link.request, &session.answer, &link.reveal);
+        let shown = digits(&link.request, &answer, &link.reveal);
         Ok(progress("compare", digits_words(shown)))
     }
 
-    /// As the new device: gives up the link session in progress.
+    /// Forgets the link session `session_id` when it is still the one held.
+    fn end_link(&self, session_id: &[u8]) {
+        let mut inner = self.lock();
+        if inner
+            .linking
+            .as_ref()
+            .is_some_and(|l| l.session_id == session_id)
+        {
+            inner.linking = None;
+        }
+    }
+
+    /// As the new device: gives up the link session in progress, or one
+    /// still opening.
     pub async fn link_cancel(&self) {
-        let link = self.lock().linking.take();
+        let link = {
+            let mut inner = self.lock();
+            inner.link_runs += 1;
+            inner.linking.take()
+        };
         if let Some(link) = link {
             let _ = self.api.decline_link_session(&link.session_id).await;
         }
@@ -4033,7 +4167,9 @@ impl App {
     /// On a device that holds the identity: the account's link sessions
     /// that prompt here, each with where it stands. None on a browser,
     /// which never approves (identity spec 7). Ask again on every
-    /// `AccountApplied`.
+    /// `LinkSessionUpdated`. A session this device answered is `refused`
+    /// when its request or commitment is not the one it answered, or its
+    /// reveal does not match that commitment.
     ///
     /// # Errors
     /// API failure.
@@ -4056,12 +4192,17 @@ impl App {
             let (stage, shown) = match mine {
                 _ if session.answer.is_empty() => ("new", String::new()),
                 // Another device answered it: it is that device's to finish.
-                Some(answer) if *answer != session.answer => continue,
+                Some(mine) if mine.answer != session.answer => continue,
                 None => continue,
+                Some(mine)
+                    if mine.request != session.request || mine.commitment != session.commitment =>
+                {
+                    ("refused", String::new())
+                }
                 Some(_) if session.reveal.is_empty() => ("waiting", String::new()),
-                Some(answer) if reveals(&session.commitment, &session.reveal) => (
+                Some(mine) if reveals(&mine.commitment, &session.reveal) => (
                     "compare",
-                    digits_words(digits(&session.request, answer, &session.reveal)),
+                    digits_words(digits(&mine.request, &mine.answer, &session.reveal)),
                 ),
                 Some(_) => ("refused", String::new()),
             };
@@ -4076,41 +4217,82 @@ impl App {
     }
 
     /// On a device that holds the identity: answers a prompt, so the new
-    /// device reveals and both show their digits.
+    /// device reveals and both show their digits. The session's request and
+    /// commitment are held here first, and the secret before it is sent: an
+    /// answer the instance took though its reply was lost is still this
+    /// device's.
     ///
     /// # Errors
     /// `FAILED_PRECONDITION` (`answered`) when another device answered first.
     pub async fn link_prompt_answer(&self, session_id: &str) -> Result<(), ClientError> {
         let id = parse_uuid(session_id)?;
+        let session = self.api.link_session(&id).await?;
         let answer = lumia_core::identity::link::session_secret()?;
-        self.api.answer_link_session(&id, answer.clone()).await?;
-        self.lock().answers.insert(id, answer);
-        Ok(())
+        self.lock().answers.insert(
+            id.clone(),
+            Answered {
+                answer: answer.clone(),
+                request: session.request,
+                commitment: session.commitment,
+                code: None,
+            },
+        );
+        let sent = self.api.answer_link_session(&id, answer).await;
+        // Refused: no answer of this device's is on it.
+        if matches!(sent, Err(ClientError::Api { .. })) {
+            self.lock().answers.remove(&id);
+        }
+        sent.map(|_| ())
     }
 
     /// On a device that holds the identity: the person saw the same digits
-    /// on both screens. Approves the request (identity spec 4.2 steps 3 to
-    /// 6) and gives the new device its code through the session. A shell
-    /// asks for the device's own unlock first.
+    /// on both screens. Approves the request it answered (identity spec 4.2
+    /// steps 3 to 6) and gives the new device its code through the session;
+    /// a code that did not reach the session is posted again the next time,
+    /// not approved twice. A shell asks for the device's own unlock first.
     ///
     /// # Errors
-    /// When the digits cannot have matched (no answer here, no reveal, or a
-    /// reveal that does not match its commitment); API failure.
+    /// When the digits cannot have matched (no answer here, a request or
+    /// commitment other than the one answered, no reveal, or a reveal that
+    /// does not match the commitment); a declined session; API failure.
     pub async fn link_prompt_confirm(&self, session_id: &str) -> Result<(), ClientError> {
         use base64::Engine as _;
         use lumia_core::identity::link::reveals;
         let id = parse_uuid(session_id)?;
         let session = self.api.link_session(&id).await?;
+        if session.declined {
+            self.lock().answers.remove(&id);
+            return Err(ClientError::State(
+                "this request was declined on another device".into(),
+            ));
+        }
         let mine = self.lock().answers.get(&id).cloned();
-        let ready = mine.is_some_and(|answer| answer == session.answer)
-            && reveals(&session.commitment, &session.reveal);
-        if !ready {
+        let Some(mine) = mine.filter(|mine| {
+            mine.answer == session.answer
+                && mine.request == session.request
+                && mine.commitment == session.commitment
+                && reveals(&mine.commitment, &session.reveal)
+        }) else {
             return Err(ClientError::State(
                 "this request cannot be approved: start again on the new device".into(),
             ));
+        };
+        // Its code reached the session, though the reply was lost.
+        if !session.code.is_empty() {
+            self.lock().answers.remove(&id);
+            return Ok(());
         }
-        let request = base64::engine::general_purpose::STANDARD.encode(&session.request);
-        let code = self.identity_approve(&request).await?;
+        let code = match mine.code {
+            Some(code) => code,
+            None => {
+                let request = base64::engine::general_purpose::STANDARD.encode(&mine.request);
+                let code = self.identity_approve(&request).await?;
+                if let Some(held) = self.lock().answers.get_mut(&id) {
+                    held.code = Some(code.clone());
+                }
+                code
+            }
+        };
         self.api.link_session_code(&id, &code).await?;
         self.lock().answers.remove(&id);
         Ok(())
@@ -4523,6 +4705,7 @@ impl App {
         &self,
         phrase: &str,
     ) -> Result<Vec<DeviceSummary>, ClientError> {
+        self.erase_if_revoked().await;
         let api = self.api.clone();
         let mut stores = self.identity.lock().await;
         let held = device(&mut stores, &self.this_device())
@@ -4553,6 +4736,7 @@ impl App {
             .iter()
             .map(|id| parse_uuid(id))
             .collect::<Result<Vec<_>, _>>()?;
+        self.erase_if_revoked().await;
         let (kind, origin) = self.device_kind();
         let api = self.api.clone();
         let mut stores = self.identity.lock().await;

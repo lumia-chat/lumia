@@ -1046,6 +1046,11 @@ pub enum ClientEvent {
         pronouns: String,
         bio: String,
     },
+    /// A link session moved, after the `AccountApplied` it came in: this
+    /// device's own as the new device, or one that prompts here.
+    LinkSessionUpdated {
+        session_id: String,
+    },
     Acked {
         command_id: String,
         seq: u64,
@@ -1229,6 +1234,7 @@ impl From<app::AppEvent> for ClientEvent {
                 pronouns,
                 bio,
             },
+            E::LinkSessionUpdated { session_id } => Self::LinkSessionUpdated { session_id },
             E::Acked { command_id, seq } => Self::Acked { command_id, seq },
             E::Error {
                 code,

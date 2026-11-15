@@ -141,6 +141,11 @@ pub struct Api {
     /// this device, which is to erase what it kept whichever call heard it
     /// first.
     revoked: Arc<AtomicBool>,
+    /// Moves on with every pair taken or forgotten: an answer to a call
+    /// made before then is about a session this client no longer holds, and
+    /// its `DEVICE_REVOKED` is not heard (an erased device signed in anew
+    /// would otherwise erase itself again).
+    epoch: Arc<AtomicU64>,
 }
 
 impl std::fmt::Debug for Api {
@@ -166,6 +171,7 @@ impl Api {
             timeout: REQUEST_TIMEOUT,
             sign_ins: Arc::new(AtomicU64::new(0)),
             revoked: Arc::new(AtomicBool::new(false)),
+            epoch: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -209,6 +215,7 @@ impl Api {
     /// Forgets the pair, as after a sign-out.
     pub fn clear_tokens(&self) {
         *self.tokens.lock().unwrap_or_else(PoisonError::into_inner) = Tokens::default();
+        self.epoch.fetch_add(1, Ordering::SeqCst);
     }
 
     /// The tokens in use right now.
@@ -225,6 +232,7 @@ impl Api {
     pub fn take_pair(&self, pair: &TokenPair) {
         self.set_tokens(pair);
         self.sign_ins.fetch_add(1, Ordering::SeqCst);
+        self.epoch.fetch_add(1, Ordering::SeqCst);
     }
 
     /// Whether a call was answered `DEVICE_REVOKED` since this client began
@@ -2060,6 +2068,7 @@ impl Api {
         bearer: Option<String>,
     ) -> Result<(StatusCode, Vec<u8>), ClientError> {
         let sent = body.as_ref().map_or(0, Vec::len);
+        let epoch = self.epoch.load(Ordering::SeqCst);
         let mut builder = self
             .http
             .request(method, format!("{}{path}", self.base))
@@ -2083,6 +2092,7 @@ impl Api {
         let bytes = response.bytes().await?;
         if status == StatusCode::UNAUTHORIZED
             && matches!(api_error(status, &bytes), ClientError::Api { code, .. } if code == "DEVICE_REVOKED")
+            && self.epoch.load(Ordering::SeqCst) == epoch
         {
             self.revoked.store(true, Ordering::SeqCst);
         }

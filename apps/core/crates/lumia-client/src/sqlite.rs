@@ -329,8 +329,9 @@ impl SqliteStore {
             }
             Ok::<_, StoreError>(())
         })?;
+        // Overwriting freed pages is for this; the store is used again after.
         self.conn
-            .execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM;")
+            .execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM; PRAGMA secure_delete = OFF;")
             .map_err(backend)
     }
 

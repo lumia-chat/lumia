@@ -608,6 +608,42 @@ pub fn revoked_entry(
     }
 }
 
+/// `revoked` as a roster that stops the devices in `stopping` holds it: each
+/// revocation one of them signed is signed again by `signer`, with the device
+/// it revoked, its key and both times kept. A device's revocation stands only
+/// while its signer is in `devices` (spec 3.3, step 5), so whoever stops the
+/// signer vouches for what it revoked.
+#[must_use]
+pub fn resign_revocations(
+    identity_id: &[u8],
+    revoked: &[RevokedEntry],
+    stopping: &[Vec<u8>],
+    signer: Signer<'_>,
+) -> Vec<RevokedEntry> {
+    revoked
+        .iter()
+        .map(|entry| {
+            let by_stopped = entry.signature.as_ref().is_some_and(|sig| {
+                sig.signer_kind == SignerKind::Device as i32 && stopping.contains(&sig.signer_id)
+            });
+            let body = by_stopped
+                .then(|| RevocationBody::decode(entry.body.as_slice()).ok())
+                .flatten();
+            match body {
+                Some(body) => revoked_entry(
+                    identity_id,
+                    &body.device_id,
+                    &body.public_key.map(|k| k.ed25519).unwrap_or_default(),
+                    body.added_at.unwrap_or_default(),
+                    body.revoked_at.unwrap_or_default(),
+                    signer,
+                ),
+                None => entry.clone(),
+            }
+        })
+        .collect()
+}
+
 /// Builds a root rotation from `old` to `new_public_key`, signed by `old`.
 #[must_use]
 pub fn rotation(
@@ -1000,6 +1036,70 @@ mod tests {
                 .len(),
             4
         );
+    }
+
+    #[test]
+    fn stopping_a_device_that_revoked_another_vouches_for_its_revocation_again() {
+        let t = two();
+        let tablet = generate_signing_key().unwrap();
+        let v2 = fork_adding(
+            &t,
+            &t.v1,
+            &t.phone,
+            new_device(3, &tablet, "tablet", t.now - 60),
+        );
+        // The phone revokes the laptop; then the phone is stopped, by the root
+        // (a restore) or by the tablet (a revocation).
+        let v3 = fork_revoking(&t, &v2, &t.phone, &t.laptop.0, t.now - 30);
+        let stop = |signer: Signer<'_>, revoked: Vec<RevokedEntry>| {
+            let info = v3.devices.get(&t.phone.0).unwrap();
+            let mut revoked = revoked;
+            revoked.push(revoked_entry(
+                &t.identity_id,
+                &t.phone.0,
+                &info.public_key,
+                info.cert.added_at.unwrap(),
+                ts(t.now),
+                signer,
+            ));
+            let devices = v3
+                .body
+                .devices
+                .iter()
+                .filter(|d| d.device_id != t.phone.0)
+                .cloned()
+                .collect();
+            let body = roster_body(
+                &t.identity_id,
+                4,
+                &v3.root_public_key,
+                vec![],
+                devices,
+                revoked,
+                ts(t.now),
+            );
+            verify_roster(&sign_roster(&body, signer), Some(&v3), nanos(t.now))
+        };
+        let stopping = [t.phone.0.clone()];
+
+        // As it was: the laptop's revocation is signed by a device no longer there.
+        let kept = stop(Signer::Root(&t.root), v3.body.revoked.clone());
+        assert!(
+            kept.is_err(),
+            "a stopped signer's revocation does not stand"
+        );
+
+        for signer in [Signer::Root(&t.root), Signer::Device(&[3u8; 16], &tablet)] {
+            let resigned = resign_revocations(&t.identity_id, &v3.body.revoked, &stopping, signer);
+            let verified = stop(signer, resigned).unwrap();
+            assert!(verified.revoked.contains_key(&t.laptop.0));
+            assert!(verified.revoked.contains_key(&t.phone.0));
+            // The laptop's revocation keeps its time: what it certified before stays.
+            assert_eq!(
+                verified.revoked[&t.laptop.0].revoked_at,
+                v3.revoked[&t.laptop.0].revoked_at
+            );
+        }
     }
 
     #[test]
