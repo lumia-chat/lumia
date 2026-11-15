@@ -35,6 +35,8 @@ pub const TAG_BYTES: usize = 16;
 pub const THUMBNAIL_MAX_BYTES: u64 = 256 * 1024;
 /// The longest a name may be, in bytes of UTF-8.
 pub const NAME_MAX_BYTES: usize = 255;
+/// The most attachments one message carries (spec 2).
+pub const MAX_ATTACHMENTS: usize = 10;
 
 /// Why an attachment could not be made or a blob could not be opened.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -146,6 +148,13 @@ pub fn open(
         return Err(MediaError::HashMismatch);
     }
     Ok(plaintext)
+}
+
+/// Whether `plaintext` is what `hash` (a `BlobRef`'s BLAKE3-256) names: for a
+/// blob kept after it was opened, checked again when it is read back.
+#[must_use]
+pub fn hash_matches(plaintext: &[u8], hash: &[u8]) -> bool {
+    blake3::hash(plaintext).as_bytes()[..] == *hash
 }
 
 // ---------------------------------------------------------------------------
@@ -555,6 +564,22 @@ fn media_type(format: Format, name: &str) -> String {
         _ => "application/octet-stream",
     }
     .into()
+}
+
+/// The picture a placeholder (an attachment's ThumbHash) stands for: a few
+/// dozen pixels a side, RGBA8, for a shell to scale up and draw until the
+/// thumbnail arrives. `None` for bytes that are not a ThumbHash.
+#[must_use]
+pub fn placeholder_image(placeholder: &[u8]) -> Option<Pixels> {
+    if placeholder.len() < 5 {
+        return None;
+    }
+    let (width, height, rgba) = thumbhash::thumb_hash_to_rgba(placeholder).ok()?;
+    Some(Pixels {
+        rgba,
+        width: u32::try_from(width).ok()?,
+        height: u32::try_from(height).ok()?,
+    })
 }
 
 /// `name` cut to at most [`NAME_MAX_BYTES`] on a character boundary.

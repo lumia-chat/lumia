@@ -951,3 +951,14 @@ fn names_are_cut_on_a_character_boundary() {
     assert!(processed.name.len() <= NAME_MAX_BYTES);
     assert!(processed.name.ends_with(".jpg"));
 }
+
+#[test]
+fn a_placeholder_opens_as_a_small_picture_of_the_same_shape() {
+    let processed = process(input(jpeg(800, 400), "wide.jpg")).unwrap();
+    let small = placeholder_image(&processed.placeholder).unwrap();
+    assert_eq!(small.width, 32);
+    assert!((14..=18).contains(&small.height));
+    assert_eq!(small.rgba.len(), (small.width * small.height * 4) as usize);
+    assert!(placeholder_image(&[]).is_none());
+    assert!(placeholder_image(&[1, 2, 3]).is_none());
+}

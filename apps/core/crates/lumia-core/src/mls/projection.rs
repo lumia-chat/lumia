@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::proto::{dm_operation, Attachment, DmOperation};
+use crate::proto::{dm_operation, Attachment, Card, DmOperation};
 
 /// One message as the projection shows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,8 +20,11 @@ pub struct DmMessage {
     pub body: String,
     /// Thread parent, or empty.
     pub parent_id: Vec<u8>,
-    /// Attachments as sent.
+    /// Attachments as sent, less those an edit dropped.
     pub attachments: Vec<Attachment>,
+    /// Link cards the sender's client built, only those under a link the
+    /// text holds (specs/media.md 6.5).
+    pub cards: Vec<Card>,
     /// Mentioned identity ids.
     pub mentions: Vec<Vec<u8>>,
     /// The sender's `sent_at`, nanoseconds since the epoch (display only).
@@ -87,7 +90,13 @@ impl Projection {
                         sender_device_id: sender_device.to_vec(),
                         body: send.body.clone(),
                         parent_id: send.parent_id.clone(),
-                        attachments: send.attachments.clone(),
+                        attachments: send
+                            .attachments
+                            .iter()
+                            .take(crate::media::MAX_ATTACHMENTS)
+                            .cloned()
+                            .collect(),
+                        cards: cards_in(&send.body, &send.cards),
                         mentions: send.mentions.clone(),
                         sent_at_nanos: crate::identity::keys::ts_nanos(op.sent_at.as_ref()),
                         edited: false,
@@ -106,6 +115,12 @@ impl Projection {
                     if m.sender_identity_id == sender_identity && !m.deleted {
                         m.body.clone_from(&edit.body);
                         m.edited = true;
+                        m.attachments
+                            .retain(|a| !edit.remove_attachment_ids.contains(&a.attachment_id));
+                        // Set, the cards are these from now on; unset, those
+                        // whose links the new text still holds stay.
+                        let cards = edit.cards.as_ref().map_or(&m.cards, |c| &c.cards);
+                        m.cards = cards_in(&m.body, cards);
                     }
                 }
             }
@@ -115,6 +130,7 @@ impl Projection {
                         m.body.clear();
                         m.deleted = true;
                         m.attachments.clear();
+                        m.cards.clear();
                         self.pins.remove(&delete.message_id);
                         true
                     }
@@ -179,6 +195,25 @@ impl Projection {
     pub fn message(&self, id: &[u8]) -> Option<&DmMessage> {
         self.messages.get(id)
     }
+}
+
+/// The cards of `cards` a receiver draws under `body` (specs/media.md 6.5):
+/// only one whose URL is a link the text holds ([`crate::cards::card_links`]),
+/// the first for each, at most [`crate::cards::MAX_CARDS`]. A forged card
+/// can mislead about a page, never about where its link goes.
+#[must_use]
+pub fn cards_in(body: &str, cards: &[Card]) -> Vec<Card> {
+    let links = crate::cards::card_links(body);
+    let mut kept: Vec<Card> = Vec::new();
+    for card in cards {
+        if kept.len() >= crate::cards::MAX_CARDS {
+            break;
+        }
+        if links.contains(&card.url) && !kept.iter().any(|k| k.url == card.url) {
+            kept.push(card.clone());
+        }
+    }
+    kept
 }
 
 #[cfg(test)]
@@ -333,5 +368,100 @@ mod tests {
         let m = p.message(&[1; 16]).unwrap();
         assert!(m.deleted && m.body.is_empty());
         assert!(!p.pins.contains(&vec![1; 16]));
+    }
+
+    #[test]
+    fn attachments_and_cards_follow_sends_edits_and_deletes() {
+        use crate::proto::{DmCards, DmSend};
+        let a = vec![1; 32];
+        let dev = vec![9; 16];
+        let card = |url: &str| Card {
+            url: url.into(),
+            title: "A page".into(),
+            ..Default::default()
+        };
+        let attachment = |id: u8| Attachment {
+            attachment_id: vec![id; 16],
+            name: format!("{id}.jpg"),
+            ..Default::default()
+        };
+        let mut p = Projection::default();
+        p.apply(
+            1,
+            &a,
+            &dev,
+            &DmOperation {
+                operation_id: vec![1; 16],
+                sent_at: None,
+                op: Some(dm_operation::Op::Send(DmSend {
+                    message_id: vec![1; 16],
+                    body: "see https://a.example and `https://b.example`".into(),
+                    attachments: vec![attachment(1), attachment(2)],
+                    // A card for a link in code, and one for no link at all,
+                    // are forgeries a receiver does not draw.
+                    cards: vec![
+                        card("https://a.example"),
+                        card("https://b.example"),
+                        card("https://evil.example"),
+                        card("https://a.example"),
+                    ],
+                    ..Default::default()
+                })),
+            },
+        );
+        let m = p.message(&[1; 16]).unwrap();
+        assert_eq!(m.attachments.len(), 2);
+        let urls: Vec<_> = m.cards.iter().map(|c| c.url.as_str()).collect();
+        assert_eq!(urls, ["https://a.example"]);
+
+        // An edit drops an attachment, and its new text keeps the card.
+        p.apply(
+            2,
+            &a,
+            &dev,
+            &op(dm_operation::Op::Edit(DmEdit {
+                message_id: vec![1; 16],
+                body: "still https://a.example, also https://c.example".into(),
+                remove_attachment_ids: vec![vec![1; 16]],
+                cards: None,
+            })),
+        );
+        let m = p.message(&[1; 16]).unwrap();
+        assert_eq!(m.attachments, vec![attachment(2)]);
+        assert_eq!(m.cards.len(), 1);
+
+        // Set, the cards are replaced; a link gone from the text loses its card.
+        p.apply(
+            3,
+            &a,
+            &dev,
+            &op(dm_operation::Op::Edit(DmEdit {
+                message_id: vec![1; 16],
+                body: "now https://c.example".into(),
+                remove_attachment_ids: vec![],
+                cards: Some(DmCards {
+                    cards: vec![card("https://a.example"), card("https://c.example")],
+                }),
+            })),
+        );
+        let urls: Vec<_> = p
+            .message(&[1; 16])
+            .unwrap()
+            .cards
+            .iter()
+            .map(|c| c.url.clone())
+            .collect();
+        assert_eq!(urls, ["https://c.example"]);
+
+        p.apply(
+            4,
+            &a,
+            &dev,
+            &op(dm_operation::Op::Delete(DmDelete {
+                message_id: vec![1; 16],
+            })),
+        );
+        let m = p.message(&[1; 16]).unwrap();
+        assert!(m.attachments.is_empty() && m.cards.is_empty());
     }
 }

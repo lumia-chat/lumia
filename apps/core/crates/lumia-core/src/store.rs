@@ -55,6 +55,10 @@ pub struct StoredMessage {
     pub mentions: Vec<StoredMention>,
     /// Its reactions, each emoji with who reacted, in the order first used.
     pub reactions: Vec<StoredReaction>,
+    /// Its attachments, keys included (specs/media.md 4.2); empty when deleted.
+    pub attachments: Vec<crate::proto::Attachment>,
+    /// Its link cards, in the order their links appear (specs/media.md 6).
+    pub cards: Vec<crate::proto::Card>,
 }
 
 /// A quote of another message of the conversation.
@@ -126,6 +130,8 @@ impl StoredMessage {
                     account_ids: r.account_ids.clone(),
                 })
                 .collect(),
+            attachments: m.attachments.clone(),
+            cards: m.cards.clone(),
         }
     }
 }

@@ -9,7 +9,7 @@ use std::path::Path;
 
 use lumia_core::keystore::{Keystore, KeystoreError};
 use lumia_core::mls::storage::MlsKv;
-use lumia_core::proto::{event, AccountEvent, Event};
+use lumia_core::proto::{event, AccountEvent, Attachment, Card, Event};
 use lumia_core::store::{
     LogKind, OutboxEntry, Store, StoreError, StoredEvent, StoredMention, StoredMessage,
     StoredQuote, StoredReaction,
@@ -51,7 +51,9 @@ CREATE TABLE IF NOT EXISTS messages (
   reply_deleted INTEGER NOT NULL DEFAULT 0,
   mentions TEXT NOT NULL DEFAULT '[]',
   edited INTEGER NOT NULL DEFAULT 0,
-  reply_silent INTEGER NOT NULL DEFAULT 0
+  reply_silent INTEGER NOT NULL DEFAULT 0,
+  attachments BLOB NOT NULL DEFAULT x'',
+  cards BLOB NOT NULL DEFAULT x''
 );
 CREATE TABLE IF NOT EXISTS reactions (
   message_id BLOB NOT NULL,
@@ -650,7 +652,7 @@ impl Store for SqliteStore {
             .prepare(
                 "SELECT message_id, channel_id, seq, author_account_id, body, created_at_micros, deleted,
                         notice, notice_account_id, reply_to_id, reply_author_id, reply_text, reply_deleted, mentions,
-                        edited, reply_silent
+                        edited, reply_silent, attachments, cards
                  FROM messages WHERE channel_id = ?1 AND seq < ?2 ORDER BY seq DESC LIMIT ?3",
             )
             .map_err(backend)?;
@@ -686,6 +688,8 @@ impl Store for SqliteStore {
                     },
                     mentions: mentions_from(&row.get::<_, String>(13)?),
                     reactions: Vec::new(),
+                    attachments: list_from(&row.get::<_, Vec<u8>>(16)?),
+                    cards: list_from(&row.get::<_, Vec<u8>>(17)?),
                 })
             })
             .map_err(backend)?;
@@ -899,6 +903,9 @@ fn add_missing_columns(conn: &Connection) -> Result<(), StoreError> {
         // Edits, and replies sent without notifying (6.6).
         ("edited", "INTEGER NOT NULL DEFAULT 0"),
         ("reply_silent", "INTEGER NOT NULL DEFAULT 0"),
+        // Attachments and link cards (specs/media.md).
+        ("attachments", "BLOB NOT NULL DEFAULT x''"),
+        ("cards", "BLOB NOT NULL DEFAULT x''"),
     ];
     for (name, kind) in columns {
         let has = conn
@@ -915,8 +922,8 @@ fn add_missing_columns(conn: &Connection) -> Result<(), StoreError> {
 
 /// What a server channel's rows keep of its events, as a number raised whenever
 /// `materialize` learns to keep something an older store let go: 1 is quotes, mentions,
-/// reactions and edits (architecture 6.6).
-const MATERIALIZED: u32 = 1;
+/// reactions and edits (architecture 6.6), 2 attachments and link cards (specs/media.md).
+const MATERIALIZED: u32 = 2;
 
 // A store kept by an older core has server channels' messages without what it did not yet
 // keep, and cannot make it up: the events it kept were encoded again after decoding, which
@@ -980,6 +987,28 @@ fn mentions_from(json: &str) -> Vec<StoredMention> {
         .collect()
 }
 
+/// A list of messages as a row keeps it: each length-delimited, one after another.
+fn list_bytes<M: prost::Message>(items: &[M]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for item in items {
+        // Writing to a Vec cannot run out of room.
+        let _ = item.encode_length_delimited(&mut out);
+    }
+    out
+}
+
+/// The list [`list_bytes`] wrote; what does not decode is left out.
+fn list_from<M: prost::Message + Default>(mut bytes: &[u8]) -> Vec<M> {
+    let mut out = Vec::new();
+    while !bytes.is_empty() {
+        match M::decode_length_delimited(&mut bytes) {
+            Ok(item) => out.push(item),
+            Err(_) => break,
+        }
+    }
+    out
+}
+
 /// Drops the quoted text from the replies to the messages `quoted` names (an
 /// SQL query of message ids with its parameters bound by `bind`): deleting a
 /// message still deletes it where it was quoted (architecture 6.6).
@@ -1021,15 +1050,31 @@ fn materialize(tx: &rusqlite::Transaction<'_>, ev: &StoredEvent) -> Result<(), S
                 .iter()
                 .filter_map(lumia_core::store::mention_of)
                 .collect();
+            // The attachments and cards after the edit come in full.
             tx.execute(
-                "UPDATE messages SET body = ?2, mentions = ?3, edited = 1 WHERE message_id = ?1 AND deleted = 0",
-                params![edited.message_id, edited.body, mentions_json(&mentions)],
+                "UPDATE messages SET body = ?2, mentions = ?3, edited = 1, attachments = ?4, cards = ?5
+                 WHERE message_id = ?1 AND deleted = 0",
+                params![
+                    edited.message_id,
+                    edited.body,
+                    mentions_json(&mentions),
+                    list_bytes::<Attachment>(&edited.attachments),
+                    list_bytes::<Card>(&edited.cards)
+                ],
+            )
+            .map_err(backend)?;
+        }
+        Some(event::Payload::MessageCardsSet(set)) => {
+            tx.execute(
+                "UPDATE messages SET cards = ?2 WHERE message_id = ?1 AND deleted = 0",
+                params![set.message_id, list_bytes::<Card>(&set.cards)],
             )
             .map_err(backend)?;
         }
         Some(event::Payload::MessageDeleted(deleted)) => {
             tx.execute(
-                "UPDATE messages SET body = '', deleted = 1 WHERE message_id = ?1",
+                "UPDATE messages SET body = '', deleted = 1, attachments = x'', cards = x''
+                 WHERE message_id = ?1",
                 params![deleted.message_id],
             )
             .map_err(backend)?;
@@ -1067,7 +1112,8 @@ fn materialize(tx: &rusqlite::Transaction<'_>, ev: &StoredEvent) -> Result<(), S
                 params![event.channel_id, to_i64(purged.before_seq)],
             )?;
             tx.execute(
-                "UPDATE messages SET body = '', deleted = 1 WHERE channel_id = ?1 AND seq < ?2",
+                "UPDATE messages SET body = '', deleted = 1, attachments = x'', cards = x''
+                 WHERE channel_id = ?1 AND seq < ?2",
                 params![event.channel_id, to_i64(purged.before_seq)],
             )
             .map_err(backend)?;
@@ -1081,8 +1127,9 @@ fn insert_message(tx: &rusqlite::Transaction<'_>, m: &StoredMessage) -> Result<(
     let reply = m.reply.as_ref();
     tx.execute(
         "INSERT OR REPLACE INTO messages (message_id, channel_id, seq, author_account_id, body, created_at_micros, deleted, notice, notice_account_id,
-                                          reply_to_id, reply_author_id, reply_text, reply_deleted, mentions, edited, reply_silent)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+                                          reply_to_id, reply_author_id, reply_text, reply_deleted, mentions, edited, reply_silent,
+                                          attachments, cards)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
         params![
             m.message_id, m.channel_id, to_i64(m.seq), m.author_account_id, m.body, m.created_at_micros, i64::from(m.deleted),
             m.notice, m.notice_account_id,
@@ -1093,6 +1140,8 @@ fn insert_message(tx: &rusqlite::Transaction<'_>, m: &StoredMessage) -> Result<(
             mentions_json(&m.mentions),
             i64::from(m.edited),
             i64::from(reply.is_some_and(|q| q.silent)),
+            list_bytes::<Attachment>(&m.attachments),
+            list_bytes::<Card>(&m.cards),
         ],
     )
     .map_err(backend)?;
@@ -1333,6 +1382,86 @@ mod tests {
     }
 
     #[test]
+    fn attachments_and_cards_are_kept_replaced_and_dropped() {
+        use lumia_core::proto::{
+            Attachment, AttachmentKind, BlobRef, Card, MessageCardsSet, MessageDeleted,
+            MessageEdited,
+        };
+        let mut store = SqliteStore::in_memory().unwrap();
+        let ch = vec![1u8; 16];
+        let attachment = |id: u8| Attachment {
+            attachment_id: vec![id; 16],
+            kind: AttachmentKind::Image as i32,
+            name: format!("{id}.jpg"),
+            main: Some(BlobRef {
+                blob_id: vec![id; 16],
+                size_bytes: 116,
+                key: vec![id; 32],
+                nonce: vec![id; 24],
+                hash: vec![id; 32],
+            }),
+            ..Default::default()
+        };
+        let card = |url: &str| Card {
+            url: url.into(),
+            title: url.into(),
+            ..Default::default()
+        };
+        let mut first = created(&ch, 1, "look https://a.example");
+        let mut event = Event::decode(first.bytes.as_slice()).unwrap();
+        if let Some(event::Payload::MessageCreated(MessageCreated { message: Some(m) })) =
+            event.payload.as_mut()
+        {
+            m.attachments = vec![attachment(1), attachment(2)];
+        }
+        first.bytes = event.encode_to_vec();
+        store.apply(LogKind::Channel, &ch, &[first]).unwrap();
+        let kept = &store.messages(&ch, 10).unwrap()[0];
+        assert_eq!(kept.attachments, vec![attachment(1), attachment(2)]);
+        assert!(kept.cards.is_empty());
+
+        // The card arrives after the message, then an edit drops an attachment.
+        let message_id = vec![1u8; 16];
+        let later = [
+            stored(
+                &ch,
+                2,
+                event::Payload::MessageCardsSet(MessageCardsSet {
+                    message_id: message_id.clone(),
+                    cards: vec![card("https://a.example")],
+                }),
+            ),
+            stored(
+                &ch,
+                3,
+                event::Payload::MessageEdited(MessageEdited {
+                    message_id: message_id.clone(),
+                    body: "look https://a.example".into(),
+                    attachments: vec![attachment(2)],
+                    cards: vec![card("https://a.example")],
+                    ..Default::default()
+                }),
+            ),
+        ];
+        store.apply(LogKind::Channel, &ch, &later).unwrap();
+        let kept = &store.messages(&ch, 10).unwrap()[0];
+        assert_eq!(kept.attachments, vec![attachment(2)]);
+        assert_eq!(kept.cards, vec![card("https://a.example")]);
+
+        let deleted = stored(
+            &ch,
+            4,
+            event::Payload::MessageDeleted(MessageDeleted {
+                message_id,
+                purge_cache: false,
+            }),
+        );
+        store.apply(LogKind::Channel, &ch, &[deleted]).unwrap();
+        let kept = &store.messages(&ch, 10).unwrap()[0];
+        assert!(kept.attachments.is_empty() && kept.cards.is_empty());
+    }
+
+    #[test]
     fn a_store_made_before_notices_gains_their_columns() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
@@ -1347,7 +1476,7 @@ mod tests {
              );
              INSERT INTO messages VALUES (x'01', x'02', 1, x'03', 'old', 0, 0);
              CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-             INSERT INTO meta VALUES ('materialized', '1');",
+             INSERT INTO meta VALUES ('materialized', '2');",
         )
         .unwrap();
         let store = SqliteStore::init(conn).unwrap();
@@ -1500,6 +1629,8 @@ mod tests {
             reply: None,
             mentions: Vec::new(),
             reactions: Vec::new(),
+            attachments: Vec::new(),
+            cards: Vec::new(),
         };
         store.apply_snapshot(&ch, 2000, &[m]).unwrap();
         assert_eq!(
