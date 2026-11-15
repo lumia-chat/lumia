@@ -13,7 +13,7 @@
 #   apt/dists/stable/{InRelease,Release,Release.gpg}, main/binary-<arch>/Packages{,.gz}
 #   apt/pool/main/lumia_<version>_<arch>.deb
 #   rpm/<arch>/lumia-<version>-1.<arch>.rpm (signed), rpm/<arch>/repodata (repomd.xml signed)
-#   lumia-archive-key.asc, index.html
+#   lumia-archive-key.asc, lumia.svg (the brand's symbol), index.html
 #
 # Only the release given is in it: apt and dnf want the newest, and a site of every release
 # would outgrow Pages. A person who wants an older one takes it from its release.
@@ -134,8 +134,10 @@ for dir in "$out"/rpm/*/; do
     || { echo "repo: $dir's repomd.xml does not verify"; exit 1; }
 done
 
-# The key, where the page tells people to fetch it from, and the page.
+# The key, where the page tells people to fetch it from, and the page with the brand's
+# symbol, which is the same on light and dark (assets/brand/README.md).
 cp "$public" "$out/lumia-archive-key.asc"
+cp "$crate/../../assets/brand/lumia-original-icon.svg" "$out/lumia.svg"
 version=$(dpkg-deb --show --showformat '${Version}' "$(ls "$pool"/*.deb | head -1)")
 sed -e "s|@URL@|$url|g" -e "s|@VERSION@|$version|g" -e "s|@FINGERPRINT@|$fpr|g" \
   "$crate/packaging/linux/repository.html" >"$out/index.html"
