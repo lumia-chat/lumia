@@ -3,7 +3,8 @@
 // reminder and Devices' card, the recovery phrase and its three-word
 // check, "Private messages need this phone" with Link, Restore and Start
 // over, the restore and start-over screens, the reauth they ask for, and
-// approving another device (4.2) from this one. The rules they draw by
+// approving another device from this one: by a prompt (4.2.1) or a pasted
+// request (4.2). The rules they draw by
 // are lumiakit's `Identity.kt`.
 package chat.lumia
 
@@ -34,6 +35,8 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Block
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.History
@@ -41,9 +44,12 @@ import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.WarningAmber
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.ModalBottomSheetProperties
+import androidx.compose.material3.SheetValue
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -88,6 +94,7 @@ import chat.lumia.kit.LumiaSession
 import chat.lumia.kit.LumiaTokens
 import chat.lumia.kit.LumiaWarning
 import chat.lumia.kit.NOT_A_LINK_REQUEST
+import chat.lumia.kit.PROMPT_STOPPED
 import chat.lumia.kit.PHRASE_FILE_NAME
 import chat.lumia.kit.PHRASE_KEEP
 import chat.lumia.kit.PHRASE_SAVE_CLOUD
@@ -96,6 +103,7 @@ import chat.lumia.kit.PHRASE_SAVE_WARNING
 import chat.lumia.kit.PHRASE_WARNING
 import chat.lumia.kit.PhraseQuiz
 import chat.lumia.kit.PrivateMessages
+import chat.lumia.kit.PromptStage
 import chat.lumia.kit.REAUTH_RETURN
 import chat.lumia.kit.Route
 import chat.lumia.kit.completionsLabel
@@ -103,6 +111,7 @@ import chat.lumia.kit.deviceLabel
 import chat.lumia.kit.keyChangeWords
 import chat.lumia.kit.linkCodeForReading
 import chat.lumia.kit.linkCodeSpoken
+import chat.lumia.kit.linkDigitsSpoken
 import chat.lumia.kit.linkRequestMeta
 import chat.lumia.kit.linkRequestOf
 import chat.lumia.kit.linkRequestWho
@@ -118,6 +127,9 @@ import chat.lumia.kit.phraseDocument
 import chat.lumia.kit.phraseOf
 import chat.lumia.kit.phraseWords
 import chat.lumia.kit.privateContacts
+import chat.lumia.kit.promptLine
+import chat.lumia.kit.promptStageOf
+import chat.lumia.kit.promptTitle
 import chat.lumia.kit.readLinkRequest
 import chat.lumia.kit.restoreReady
 import kotlinx.coroutines.launch
@@ -782,7 +794,7 @@ fun ApproveScreen(session: LumiaSession, from: String, back: () -> Unit) {
                         }
                     }
                     when {
-                        request.isEmpty() -> LumiaNotice(Icons.Filled.Devices, text = "On the new device, choose Link from a device you use, then Start linking, and copy the request it shows.")
+                        request.isEmpty() -> LumiaNotice(Icons.Filled.Devices, text = "On the new device, choose Link from a device you use, then Link another way and Start linking, and copy the request it shows.")
                         summary == null -> LumiaErrorText(NOT_A_LINK_REQUEST)
                         else -> {
                             LinkRequestRow(summary)
@@ -799,6 +811,94 @@ fun ApproveScreen(session: LumiaSession, from: String, back: () -> Unit) {
                     }
                 },
             )
+        }
+    }
+}
+
+// A device asking to be linked (identity spec 4.2.1)
+
+/**
+ * The prompt a link session of the account raises on this phone, which
+ * holds the identity, over whatever is on screen, one at a time and oldest
+ * first (the session keeps which): what would be added, Continue or Not
+ * me; waiting for the new device; the six digits, They match (behind the
+ * phone's own unlock, as Approve a device is) or They don't match; a
+ * request that can't be trusted, with Not me alone; and once approved,
+ * "Pixel 9 is linked." for a moment. It goes by its buttons or when its
+ * session does, not by a swipe: Not me is how to say no, and a prompt put
+ * aside here would only come back at the next account event.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun LinkPromptSheet(session: LumiaSession) {
+    // The session approved once the unlock answers, which may be after the prompt moved on.
+    var approving by remember { mutableStateOf<String?>(null) }
+    val unlock = rememberDeviceUnlock("Approve a device", "Unlock to let it read your private messages") { ok ->
+        approving?.let { if (ok) session.promptConfirm(it) }
+        approving = null
+    }
+    val prompt = session.prompt
+    val done = session.promptDone
+    if (prompt == null && done == null) return
+    val state = rememberModalBottomSheetState(skipPartiallyExpanded = true, confirmValueChange = { it != SheetValue.Hidden })
+
+    // Neither a swipe, a tap on the scrim nor the back button puts it away: hidden, it would stay over the app with nothing to show.
+    ModalBottomSheet(
+        onDismissRequest = {},
+        sheetState = state,
+        containerColor = LumiaTokens.surface.color,
+        properties = ModalBottomSheetProperties(shouldDismissOnBackPress = false),
+    ) {
+        Column(Modifier.padding(start = LumiaTokens.space24, end = LumiaTokens.space24, bottom = LumiaTokens.space40), verticalArrangement = Arrangement.spacedBy(LumiaTokens.space18)) {
+            if (done != null || prompt == null) {
+                Row(
+                    Modifier.semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite },
+                    horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space10),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    val linked = done != PROMPT_STOPPED
+                    Icon(if (linked) Icons.Filled.CheckCircle else Icons.Filled.Block, contentDescription = null, tint = if (linked) LumiaTokens.accent.color else LumiaTokens.inkMuted.color, modifier = Modifier.size(LumiaTokens.space24))
+                    Text(done.orEmpty(), style = LumiaTokens.titleChannel.style, color = LumiaTokens.ink.color)
+                }
+                return@Column
+            }
+            val stage = promptStageOf(prompt.stage)
+            val r = prompt.request
+            val id = prompt.sessionId
+            val busy = session.promptBusy || approving != null
+            Column(Modifier.semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite }, verticalArrangement = Arrangement.spacedBy(LumiaTokens.space6)) {
+                Text(promptTitle(stage, r.kind, r.label, r.webOrigin), style = LumiaTokens.titleChannel.style, color = LumiaTokens.ink.color)
+                promptLine(stage)?.let { Text(it, style = LumiaTokens.textSubtitle.style, color = if (stage == PromptStage.REFUSED) LumiaTokens.dnd.color else LumiaTokens.inkMuted.color) }
+            }
+            when (stage) {
+                PromptStage.NEW -> LinkRequestRow(r)
+                PromptStage.WAITING -> CircularProgressIndicator(Modifier.size(LumiaTokens.space18), color = LumiaTokens.inkMuted.color, strokeWidth = LumiaTokens.space2)
+                PromptStage.COMPARE -> Text(
+                    prompt.digits,
+                    style = LumiaTokens.titleAuth.style.copy(fontFamily = FontFamily.Monospace),
+                    color = LumiaTokens.ink.color,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth().padding(vertical = LumiaTokens.space12).semantics { contentDescription = linkDigitsSpoken(prompt.digits) },
+                )
+                PromptStage.REFUSED -> LinkRequestRow(r)
+            }
+            session.promptFailure?.let { LumiaErrorText(it) }
+            Column(verticalArrangement = Arrangement.spacedBy(LumiaTokens.space8)) {
+                when (stage) {
+                    PromptStage.NEW -> {
+                        LumiaPrimaryButton("Continue", Modifier.fillMaxWidth(), enabled = !busy) { session.promptAnswer(id) }
+                        LumiaSecondaryButton("Not me", Modifier.fillMaxWidth(), enabled = !busy) { session.promptDecline(id) }
+                    }
+                    PromptStage.COMPARE -> {
+                        LumiaPrimaryButton(if (busy) "Approving…" else "They match", Modifier.fillMaxWidth(), enabled = !busy) {
+                            approving = id
+                            unlock()
+                        }
+                        LumiaSecondaryButton("They don't match", Modifier.fillMaxWidth(), enabled = !busy) { session.promptDecline(id, mismatch = true) }
+                    }
+                    PromptStage.WAITING, PromptStage.REFUSED -> LumiaSecondaryButton("Not me", Modifier.fillMaxWidth(), enabled = !busy) { session.promptDecline(id) }
+                }
+            }
         }
     }
 }

@@ -292,6 +292,8 @@ fun Shell(store: AppStore, session: LumiaSession, devScreen: String?, devChannel
     }
     // "Private messages need this phone", over whatever asked for it.
     if (session.setupAsked) NeedsSetupSheet(store, session, push) { session.setupAsked = false }
+    // Another device of the account asking to be linked (identity spec 4.2.1), over whatever is open.
+    LinkPromptSheet(session)
 }
 
 // Home

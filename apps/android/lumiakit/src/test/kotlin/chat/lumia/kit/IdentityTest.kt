@@ -1,8 +1,9 @@
 // Setting up private messages, as values: which screen a phone without
 // the account's identity gets, when Home's reminder shows, the three-word
 // check's fields, the phrase as Restore counts it and as it is printed or
-// saved, what Start over says of a key change, and what approving another
-// device says of the request pasted and the code it answers.
+// saved, what Start over says of a key change, what approving another
+// device says of the request pasted and the code it answers, and linking
+// by prompt: the new device's stages and the prompt another device shows.
 package chat.lumia.kit
 
 import org.junit.Assert.assertEquals
@@ -185,5 +186,87 @@ class IdentityTest {
         assertTrue(Approval("req").underWay)
         assertFalse(Approval("req", code = "7KQM2XRD").underWay)
         assertFalse(Approval("req", error = "Not approved: offline").underWay)
+    }
+
+    // Linking by prompt (identity spec 4.2.1), as the new device.
+
+    @Test
+    fun theNewDeviceReadsTheCoresStagesAndAsksAgainOnlyWhileAnotherDeviceMayMoveIt() {
+        assertEquals(LinkStage.WAITING, linkStageOf("waiting"))
+        assertEquals(LinkStage.COMPARE, linkStageOf("compare"))
+        assertEquals(LinkStage.LINKED, linkStageOf("linked"))
+        assertEquals(LinkStage.DECLINED, linkStageOf("declined"))
+        assertEquals(LinkStage.EXPIRED, linkStageOf("expired"))
+        // A stage this build does not know waits, and asks again.
+        assertEquals(LinkStage.WAITING, linkStageOf("thinking"))
+        assertEquals(setOf(LinkStage.WAITING, LinkStage.COMPARE), LinkStage.entries.filter { it.polls }.toSet())
+        assertEquals(setOf(LinkStage.DECLINED, LinkStage.EXPIRED, LinkStage.FAILED), LinkStage.entries.filter { it.over }.toSet())
+        assertEquals(2_000L, LINK_POLL_MS)
+    }
+
+    @Test
+    fun eachStageOfTheNewDeviceSaysWhatIsHappening() {
+        assertEquals("Open Lumia on a device that has your private messages. It will ask about this phone.", linkStageWords(LinkStage.WAITING))
+        assertEquals("Check that your other device shows the same number, then approve it there.", linkStageWords(LinkStage.COMPARE))
+        assertEquals("It wasn't approved on your other device.", linkStageWords(LinkStage.DECLINED))
+        assertEquals("That took too long.", linkStageWords(LinkStage.EXPIRED))
+        assertNull(linkStageWords(LinkStage.STARTING))
+        assertNull(linkStageWords(LinkStage.FAILED))
+        assertEquals("Too many devices are waiting to be linked. Wait a few minutes, then try again.", linkStartError("RATE_LIMITED", "slow down"))
+        assertEquals("Linking didn't start: could not reach the instance", linkStartError(null, "could not reach the instance"))
+        assertEquals("4 8 2 9 1 3", linkDigitsSpoken("482 913"))
+    }
+
+    // As the device that holds the identity: the prompt.
+
+    @Test
+    fun onePromptShowsAtATimeTheOldestFirstUntilItGoes() {
+        assertNull(promptToShow(emptyList(), null))
+        assertEquals("a", promptToShow(listOf("a", "b"), null))
+        // The one showing stays while it is listed, even with an older one listed since.
+        assertEquals("b", promptToShow(listOf("a", "b"), "b"))
+        // Gone (declined, answered elsewhere, expired, linked), the oldest left is next.
+        assertEquals("a", promptToShow(listOf("a", "c"), "b"))
+        assertNull(promptToShow(emptyList(), "b"))
+    }
+
+    @Test
+    fun aPromptsStageIsTheCoresAndOneUnknownIsNeverApproved() {
+        assertEquals(PromptStage.NEW, promptStageOf("new"))
+        assertEquals(PromptStage.WAITING, promptStageOf("waiting"))
+        assertEquals(PromptStage.COMPARE, promptStageOf("compare"))
+        assertEquals(PromptStage.REFUSED, promptStageOf("refused"))
+        assertEquals(PromptStage.REFUSED, promptStageOf("something new"))
+    }
+
+    @Test
+    fun aPromptNamesTheDeviceAsTheRequestDoes() {
+        assertEquals("Pixel 9 wants your private messages", promptTitle(PromptStage.NEW, "native", " Pixel 9 ", ""))
+        assertEquals("A browser on https://my.lumia.chat wants your private messages", promptTitle(PromptStage.NEW, "web", "Safari", "https://my.lumia.chat"))
+        assertEquals("A browser wants your private messages", promptTitle(PromptStage.NEW, "web", "", ""))
+        assertEquals("A new device wants your private messages", promptTitle(PromptStage.NEW, "native", "", ""))
+        assertEquals("A bot wants your private messages", promptTitle(PromptStage.NEW, "bot", "", ""))
+        assertEquals("Waiting for Pixel 9…", promptTitle(PromptStage.WAITING, "native", "Pixel 9", ""))
+        assertEquals("Waiting for the browser on https://my.lumia.chat…", promptTitle(PromptStage.WAITING, "web", "Safari", "https://my.lumia.chat"))
+        assertEquals("Does Pixel 9 show this number?", promptTitle(PromptStage.COMPARE, "native", "Pixel 9", ""))
+        assertEquals("Does the new device show this number?", promptTitle(PromptStage.COMPARE, "native", "", ""))
+        assertEquals("This request can't be trusted", promptTitle(PromptStage.REFUSED, "native", "Pixel 9", ""))
+        assertEquals("Only continue if you're linking a device of yours right now.", promptLine(PromptStage.NEW))
+        assertEquals("Don't approve it.", promptLine(PromptStage.REFUSED))
+        assertNull(promptLine(PromptStage.WAITING))
+        assertNull(promptLine(PromptStage.COMPARE))
+        assertEquals("Pixel 9 is linked.", promptLinkedWords("native", "Pixel 9", ""))
+        assertEquals("The browser on https://my.lumia.chat is linked.", promptLinkedWords("web", "", "https://my.lumia.chat"))
+        assertEquals("Linking was stopped.", PROMPT_STOPPED)
+    }
+
+    @Test
+    fun aPromptsFailedCallSaysWhyInWords() {
+        assertEquals("Another of your devices answered it first.", promptError("FAILED_PRECONDITION", "answered"))
+        assertTrue(promptError("NOT_FOUND", "not found").startsWith("That request is over."))
+        assertTrue(promptError("IDENTITY_PROOF_INVALID", "bad roster").startsWith("The instance refused the new list of devices."))
+        assertEquals("Too many tries. Wait a minute, then try again.", promptError("RATE_LIMITED", "slow down"))
+        // The core's own words, a sentence.
+        assertEquals("This request cannot be approved: start again on the new device", promptError(null, "this request cannot be approved: start again on the new device"))
     }
 }

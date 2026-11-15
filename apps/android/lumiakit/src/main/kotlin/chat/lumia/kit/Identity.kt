@@ -4,9 +4,10 @@
 // save the recovery phrase, the three-word check's fields, the phrase as a
 // restore field counts it and as a printed page or a file lays it out,
 // approving another device (4.2): what a pasted request reads as and the
-// code it answers, and the words the screens say. The phrase itself, the
-// quiz's positions, whether a word is right and what a request holds are
-// the core's.
+// code it answers, linking by prompt (4.2.1): the new device's stages and
+// the prompt another device shows, which one and in what words, and the
+// words the screens say. The phrase itself, the quiz's positions, whether
+// a word is right, what a request holds and the six digits are the core's.
 package chat.lumia.kit
 
 /** What a signed-in phone needs before it can send or accept a private message. */
@@ -254,4 +255,157 @@ fun approveError(code: String?, message: String): String = when (code) {
  */
 data class Approval(val request: String, val code: String? = null, val error: String? = null) {
     val underWay: Boolean get() = code == null && error == null
+}
+
+// Linking by prompt (identity spec 4.2.1)
+
+/** How often the link screen, and a prompt while one is open, ask again besides at every account event. */
+const val LINK_POLL_MS = 2_000L
+
+/** How long "Pixel 9 is linked." or "Linking was stopped." stays before the prompt goes. */
+const val PROMPT_DONE_MS = 2_500L
+
+/**
+ * Where linking this phone by prompt stands, as the new device: starting
+ * (asked for, not answered), waiting for another device to answer,
+ * comparing the digits, linked, or over: declined on the other device,
+ * expired, or not started at all ([FAILED], with what went wrong).
+ */
+enum class LinkStage {
+    STARTING, WAITING, COMPARE, LINKED, DECLINED, EXPIRED, FAILED;
+
+    /** Whether the link screen asks again: while another device may still move it. */
+    val polls: Boolean get() = this == WAITING || this == COMPARE
+
+    /** Whether it is over and only Try again and Cancel are left. */
+    val over: Boolean get() = this == DECLINED || this == EXPIRED || this == FAILED
+}
+
+/** The core's `LinkProgress.stage` as a stage; one this build does not know is still waiting. */
+fun linkStageOf(stage: String): LinkStage = when (stage) {
+    "compare" -> LinkStage.COMPARE
+    "linked" -> LinkStage.LINKED
+    "declined" -> LinkStage.DECLINED
+    "expired" -> LinkStage.EXPIRED
+    else -> LinkStage.WAITING
+}
+
+/**
+ * This phone's link by prompt: its stage, the six digits while comparing
+ * (the core's, already `482 913`), and a failure in words: the reason it
+ * did not start, or an ask that did not reach the instance, which the next
+ * one clears.
+ */
+data class Linking(val stage: LinkStage, val digits: String = "", val error: String? = null)
+
+/** What the new device says while it waits for another to answer. */
+const val LINK_WAITING = "Open Lumia on a device that has your private messages. It will ask about this phone."
+
+/** What it says under the digits. */
+const val LINK_COMPARE_HOW = "Check that your other device shows the same number, then approve it there."
+
+/** What it says when the other device said no, or nobody answered in time. */
+const val LINK_DECLINED = "It wasn't approved on your other device."
+const val LINK_EXPIRED = "That took too long."
+
+/** What the stage says on the new device; none for one with nothing to add. */
+fun linkStageWords(stage: LinkStage): String? = when (stage) {
+    LinkStage.WAITING -> LINK_WAITING
+    LinkStage.COMPARE -> LINK_COMPARE_HOW
+    LinkStage.DECLINED -> LINK_DECLINED
+    LinkStage.EXPIRED -> LINK_EXPIRED
+    LinkStage.STARTING, LinkStage.LINKED, LinkStage.FAILED -> null
+}
+
+/** What a link that did not start says, by the API error's [code]; for the rest, [message]. */
+fun linkStartError(code: String?, message: String): String = when (code) {
+    "RATE_LIMITED" -> "Too many devices are waiting to be linked. Wait a few minutes, then try again."
+    else -> "Linking didn't start: $message"
+}
+
+/** The six digits to a screen reader, one at a time: "4 8 2 9 1 3". */
+fun linkDigitsSpoken(digits: String): String = digits.filterNot { it.isWhitespace() }.toList().joinToString(" ")
+
+/**
+ * Where a prompt stands on this phone, the device that holds the identity:
+ * nobody answered yet, answered here and waiting for the new device,
+ * comparing the digits, or refused (the new device's secret did not match
+ * what it committed to: never approve).
+ */
+enum class PromptStage { NEW, WAITING, COMPARE, REFUSED }
+
+/** The core's `LinkPrompt.stage` as a stage; one this build does not know offers only Not me, as a refused one does. */
+fun promptStageOf(stage: String): PromptStage = when (stage) {
+    "new" -> PromptStage.NEW
+    "waiting" -> PromptStage.WAITING
+    "compare" -> PromptStage.COMPARE
+    else -> PromptStage.REFUSED
+}
+
+/**
+ * Which prompt is shown, of the sessions listed (oldest first, as the
+ * instance lists them), one at a time: the one showing while it is still
+ * listed, else the oldest; none when none is.
+ */
+fun promptToShow(listed: List<String>, showing: String?): String? =
+    if (showing != null && showing in listed) showing else listed.firstOrNull()
+
+/**
+ * Who a prompt is about: a browser by the origin it is scoped to, anything
+ * else by its label, or by what it is without one; [start] for the start
+ * of a sentence ("The browser on …"), else as it reads inside one ("the
+ * browser on …"). [kind] is the core's: `native`, `web` or `bot`.
+ */
+fun promptName(kind: String, label: String, webOrigin: String, start: Boolean): String {
+    val name = label.trim()
+    val words = when {
+        kind == "web" && webOrigin.isNotEmpty() -> "the browser on $webOrigin"
+        kind == "web" -> "the browser"
+        name.isNotEmpty() -> return name
+        kind == "bot" -> "the bot"
+        else -> "the new device"
+    }
+    return if (start) words.replaceFirstChar { it.uppercase() } else words
+}
+
+/** A prompt's title, by its stage. */
+fun promptTitle(stage: PromptStage, kind: String, label: String, webOrigin: String): String = when (stage) {
+    PromptStage.NEW -> when {
+        kind == "web" && webOrigin.isNotEmpty() -> "A browser on $webOrigin"
+        kind == "web" -> "A browser"
+        label.isNotBlank() -> label.trim()
+        kind == "bot" -> "A bot"
+        else -> "A new device"
+    } + " wants your private messages"
+    PromptStage.WAITING -> "Waiting for ${promptName(kind, label, webOrigin, start = false)}…"
+    PromptStage.COMPARE -> "Does ${promptName(kind, label, webOrigin, start = false)} show this number?"
+    PromptStage.REFUSED -> "This request can't be trusted"
+}
+
+/** The line under a prompt's title; none for a stage with nothing to add. */
+fun promptLine(stage: PromptStage): String? = when (stage) {
+    PromptStage.NEW -> "Only continue if you're linking a device of yours right now."
+    PromptStage.REFUSED -> "Don't approve it."
+    PromptStage.WAITING, PromptStage.COMPARE -> null
+}
+
+/** What the prompt says once it was approved, before it goes. */
+fun promptLinkedWords(kind: String, label: String, webOrigin: String): String =
+    "${promptName(kind, label, webOrigin, start = true)} is linked."
+
+/** What it says once "They don't match" stopped it. */
+const val PROMPT_STOPPED = "Linking was stopped."
+
+/**
+ * What a prompt's call that failed says, by the API error's [code]; for
+ * the rest, [message] (the failure as `lumiaMessage` has it).
+ */
+fun promptError(code: String?, message: String): String = when (code) {
+    "FAILED_PRECONDITION" -> "Another of your devices answered it first."
+    "NOT_FOUND" -> "That request is over. Start linking again on the new device."
+    "CONFLICT" -> "Your devices changed on another device while this one was approving. Try again."
+    "IDENTITY_PROOF_INVALID", "INVALID_ARGUMENT", "PAYLOAD_TOO_LARGE" -> "The instance refused the new list of devices. Start linking again on the new device."
+    "PERMISSION_DENIED" -> "This account isn't linked to the identity on this phone, so it can't add a device to it."
+    "RATE_LIMITED" -> "Too many tries. Wait a minute, then try again."
+    else -> message.replaceFirstChar { it.uppercase() }
 }

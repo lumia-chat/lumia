@@ -786,9 +786,9 @@ fun DevicesScreen(store: AppStore, session: LumiaSession, back: () -> Unit, push
             if (session.roster != null) {
                 item { SectionTitle("Devices with your identity") }
                 items(active, key = { it.deviceId }) { d -> LumiaDeviceRow(d, label(d), meta(d), icon(d)) { revoking = d; password = ""; error = "" } }
-                // Identity spec 4.2 from this side: the new device shows a request, this phone approves it and gives the code.
+                // Identity spec 4.2.1 from this side: the new device asks and this phone prompts by itself; 4.2's pasted request when it cannot.
                 item {
-                    LumiaCard("Link another device", "Bring in a laptop, a browser or another phone: it shows a request, and this phone approves it.") {
+                    LumiaCard("Link another device", "On a laptop, a browser or another phone, choose Link from a device you use: this phone asks you. One that can't reach the instance shows a request to approve here instead.") {
                         LumiaPrimaryButton("Approve a device", Modifier.fillMaxWidth()) { push(Screen.Approve) }
                     }
                 }

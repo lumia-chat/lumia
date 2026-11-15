@@ -23,6 +23,7 @@ import uniffi.lumia_ffi.DmResponse
 import uniffi.lumia_ffi.InvitePreviewSummary
 import uniffi.lumia_ffi.InviteSummary
 import uniffi.lumia_ffi.InstanceSummary
+import uniffi.lumia_ffi.LinkPrompt
 import uniffi.lumia_ffi.MemberSummary
 import uniffi.lumia_ffi.PasskeySummary
 import uniffi.lumia_ffi.ProfileSummary
@@ -450,6 +451,13 @@ class LumiaSession(
                 phraseUnlocked = false
                 setupAsked = false
                 approval = null
+                linking = null
+                linkPrompts = emptyList()
+                promptShown = null
+                promptFailure = null
+                promptDone = null
+                promptLoop?.cancel()
+                promptDoneJob?.cancel()
             },
         )
     }
@@ -505,6 +513,195 @@ class LumiaSession(
     /** The approve screen left: an answered or refused approval is forgotten; one under way is kept for when it is opened again. */
     fun approvalLeft() {
         if (approval?.underWay != true) approval = null
+    }
+
+    // Linking by prompt (identity spec 4.2.1), as the new device
+
+    /**
+     * This phone's link by prompt, none until the link screen starts one:
+     * the session's, so the phone turned keeps it, as the core keeps the
+     * session's secret for the process.
+     */
+    var linking by mutableStateOf<Linking?>(null)
+        private set
+    private var linkAsking = false
+
+    /**
+     * Opens a link session ([label] is this phone's name in the roster):
+     * every device of the account that holds the identity prompts. A
+     * session already open is given up first. In the session's scope, so
+     * nothing that goes from the screen stops it half-way.
+     */
+    fun linkStart(label: String) {
+        if (linking?.stage == LinkStage.STARTING) return
+        val started = Linking(LinkStage.STARTING)
+        linking = started
+        scope.launch {
+            val answered = try {
+                client.call { linkCancel() }
+                val p = client.call { linkStart(label) }
+                Linking(linkStageOf(p.stage), p.digits)
+            } catch (e: Exception) {
+                Linking(LinkStage.FAILED, error = linkStartError(e.lumiaCode, e.lumiaMessage))
+            }
+            if (linking === started) linking = answered
+        }
+    }
+
+    /**
+     * Asks where the link stands, which also takes this phone's next step
+     * (revealing its secret, claiming the code): when the link screen
+     * opens, every [LINK_POLL_MS] while it is open, and at every account
+     * event. One ask at a time, in the session's scope: a claim cut short
+     * would leave the code taken and this phone without the identity.
+     * Linked, this phone holds the identity, is signed in by it, and the
+     * gateway starts again under that session.
+     */
+    fun linkFollow() {
+        val now = linking ?: return
+        if (!now.stage.polls || linkAsking) return
+        linkAsking = true
+        scope.launch {
+            try {
+                val p = client.call { linkProgress() }
+                val stage = linkStageOf(p.stage)
+                // Not when it was cancelled or started again meanwhile; a claim that went through is taken either way.
+                if (stage == LinkStage.LINKED) {
+                    hasIdentity = true
+                    signedIn = true
+                    identityChanged()
+                }
+                if (linking === now || stage == LinkStage.LINKED) linking = Linking(stage, p.digits)
+            } catch (e: Exception) {
+                if (e.endsSession) sessionEnded()
+                else if (linking === now) linking = now.copy(error = e.lumiaMessage)
+            } finally {
+                linkAsking = false
+            }
+        }
+    }
+
+    /** Gives the link up (the other devices' prompts go), and forgets it here. */
+    fun linkCancel() {
+        val open = linking?.stage?.let { it.polls || it == LinkStage.STARTING } == true
+        linking = null
+        if (open) scope.launch { runCatching { client.call { linkCancel() } } }
+    }
+
+    /** The linked phone gone on to the app: the link is forgotten. */
+    fun linkDone() {
+        if (linking?.stage == LinkStage.LINKED) linking = null
+    }
+
+    // Linking by prompt (identity spec 4.2.1), on a device that holds the identity
+
+    /** The account's link sessions that prompt here, oldest first; none on a phone without the identity. */
+    var linkPrompts by mutableStateOf<List<LinkPrompt>>(emptyList())
+        private set
+    /** The session the prompt shows, one at a time (`promptToShow`). */
+    var promptShown by mutableStateOf<String?>(null)
+        private set
+    /** Whether a call of the prompt's is under way: its buttons wait. */
+    var promptBusy by mutableStateOf(false)
+        private set
+    /** What the prompt's last call that failed says, under its buttons, until the next. */
+    var promptFailure by mutableStateOf<String?>(null)
+        private set
+    /** "Pixel 9 is linked." or "Linking was stopped.", shown for [PROMPT_DONE_MS] after the prompt's session ended here. */
+    var promptDone by mutableStateOf<String?>(null)
+        private set
+    private var promptsAsking = false
+    private var promptLoop: Job? = null
+    private var promptDoneJob: Job? = null
+    /** Whether the app is in the foreground: an open prompt is asked about every [LINK_POLL_MS] only then. */
+    private var inForeground = true
+
+    /** The prompt on screen, while its session is listed. */
+    val prompt: LinkPrompt? get() = linkPrompts.firstOrNull { it.sessionId == promptShown }
+
+    /**
+     * Asks which link sessions prompt here: at launch, back in the
+     * foreground, at every account event, and every [LINK_POLL_MS] while one
+     * is listed and the app is in front. A prompt whose session is no longer
+     * listed closes; the next, oldest first, takes its place.
+     */
+    suspend fun refreshPrompts() {
+        if (promptsAsking || !signedIn || leaving) return
+        if (!client.hasIdentity) {
+            linkPrompts = emptyList()
+            promptShown = null
+            return
+        }
+        promptsAsking = true
+        try {
+            val listed = client.call { linkPrompts() }
+            if (!signedIn || leaving) return
+            linkPrompts = listed
+            val next = promptToShow(listed.map { it.sessionId }, promptShown)
+            if (next != promptShown) promptFailure = null
+            promptShown = next
+        } catch (e: Exception) {
+            if (e.endsSession) sessionEnded()
+        } finally {
+            promptsAsking = false
+        }
+        keepAskingPrompts()
+    }
+
+    private fun keepAskingPrompts() {
+        if (promptLoop?.isActive == true || linkPrompts.isEmpty() || !inForeground) return
+        promptLoop = scope.launch {
+            while (linkPrompts.isNotEmpty() && inForeground && signedIn) {
+                delay(LINK_POLL_MS)
+                refreshPrompts()
+            }
+        }
+    }
+
+    /** Continue: this phone answers, so the new device reveals and both show the digits. */
+    fun promptAnswer(sessionId: String) = promptCall { linkPromptAnswer(sessionId) }
+
+    /**
+     * They match (the phone's own unlock already given): the request
+     * approved as Approve a device does and its code handed over through the
+     * session; then "Pixel 9 is linked." and Devices' roster read again.
+     */
+    fun promptConfirm(sessionId: String) {
+        val p = linkPrompts.firstOrNull { it.sessionId == sessionId } ?: return
+        promptCall(done = promptLinkedWords(p.request.kind, p.request.label, p.request.webOrigin)) {
+            linkPromptConfirm(sessionId)
+        }
+    }
+
+    /** Not me, or They don't match ([mismatch]: "Linking was stopped." after). The new device is told it was declined. */
+    fun promptDecline(sessionId: String, mismatch: Boolean = false) =
+        promptCall(done = if (mismatch) PROMPT_STOPPED else null) { linkPromptDecline(sessionId) }
+
+    private fun promptCall(done: String? = null, call: Client.() -> Unit) {
+        if (promptBusy) return
+        promptBusy = true
+        promptFailure = null
+        scope.launch {
+            try {
+                client.call(call)
+                if (done != null) showPromptDone(done)
+            } catch (e: Exception) {
+                if (e.endsSession) sessionEnded() else promptFailure = promptError(e.lumiaCode, e.lumiaMessage)
+            } finally {
+                promptBusy = false
+            }
+            refreshPrompts()
+            if (done != null) refreshRoster()
+        }
+    }
+
+    private fun showPromptDone(words: String) {
+        promptDone = words
+        promptDoneJob?.cancel()
+        promptDoneJob = scope.launch {
+            delay(PROMPT_DONE_MS)
+            promptDone = null
+        }
     }
 
     // Setting up private messages (identity spec 4.1, 4.3, 4.7; issue #20)
@@ -678,6 +875,8 @@ class LumiaSession(
             snapshot = snap
             hasIdentity = client.hasIdentity
             refreshPrivateMessages()
+            // A device asking to be linked while this phone was closed prompts as it opens.
+            scope.launch { refreshPrompts() }
             refreshReads()
             snap.servers.map { it.serverId }.let { refreshPeople(it, it) }
             refreshDmChannels()
@@ -1138,6 +1337,7 @@ class LumiaSession(
 
     /** Back in the foreground: the lock is taken again; when another process wrote, the loop restarts. */
     fun foreground() {
+        inForeground = true
         scope.launch {
             val wrote = runCatching { client.call { resume() } }.getOrDefault(false)
             if (wrote) {
@@ -1145,11 +1345,15 @@ class LumiaSession(
                 load()
             } else {
                 runCatching { client.call { foreground() } }
+                // What moved while the app was away: a device asking to be linked, or this phone's own link.
+                refreshPrompts()
+                linkFollow()
             }
         }
     }
 
     fun background() {
+        inForeground = false
         scope.launch { runCatching { client.call { background() } } }
     }
 
@@ -1173,7 +1377,8 @@ class LumiaSession(
                 showTyping(now)
             }
             is ClientEvent.SnapshotTaken -> refreshMessages(event.channelId)
-            is ClientEvent.AccountApplied -> { refreshSnapshot(); refreshDmChannels() }
+            // A link session moves by the account's log too (identity spec 4.2.1): this phone's own, or another's prompting here.
+            is ClientEvent.AccountApplied -> { refreshSnapshot(); refreshDmChannels(); linkFollow(); refreshPrompts() }
             is ClientEvent.ProfileUpdated -> profileUpdated(event)
             is ClientEvent.Reconnecting -> connection = ConnectionState.Reconnecting(event.attempt)
             is ClientEvent.Disconnected -> connection = ConnectionState.Disconnected(event.reason)
