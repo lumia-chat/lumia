@@ -14,10 +14,12 @@ defmodule LumiaWeb.BlobController do
 
   def show(conn, %{"blob_id" => blob_id}) do
     case Uploads.fetch(conn.assigns.current_account_id, blob_id) do
+      # Never kept: a redirect cached past a delete would still lead to the
+      # bytes (specs/media.md 4.3).
       {:redirect, url} ->
         conn
         |> put_resp_header("location", url)
-        |> put_resp_header("cache-control", "private, max-age=300")
+        |> put_resp_header("cache-control", "no-store")
         |> send_resp(302, "")
 
       {:bytes, bytes} ->

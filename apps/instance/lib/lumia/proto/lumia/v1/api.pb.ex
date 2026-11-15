@@ -213,6 +213,7 @@ defmodule Lumia.V1.InstanceInfo do
   field :magic_link_enabled, 15, type: :bool, json_name: "magicLinkEnabled"
   field :oidc_name, 16, type: :string, json_name: "oidcName"
   field :upload_limits, 17, type: Lumia.V1.UploadLimits, json_name: "uploadLimits"
+  field :link_cards_enabled, 18, type: :bool, json_name: "linkCardsEnabled"
 end
 
 defmodule Lumia.V1.MagicLinkRequest do

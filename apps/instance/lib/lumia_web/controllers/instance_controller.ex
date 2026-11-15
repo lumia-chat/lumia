@@ -39,6 +39,7 @@ defmodule LumiaWeb.InstanceController do
       recovery_generation: Instance.recovery_generation(),
       magic_link_enabled: Lumia.Auth.MagicLink.enabled?(),
       upload_limits: Lumia.Uploads.limits_proto(),
+      link_cards_enabled: Lumia.Cards.enabled?(),
       oidc_name: Lumia.Auth.Oidc.name() || ""
     }
   end

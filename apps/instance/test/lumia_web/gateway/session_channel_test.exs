@@ -610,6 +610,21 @@ defmodule LumiaWeb.Gateway.SessionChannelTest do
       assert error.command_id == cmd.command_id
     end
 
+    test "a refused field is named in INVALID_ARGUMENT, and the session lives on", ctx do
+      {_, socket} = join!(ctx.socket)
+      cmd = send_message(ctx.channel.id, "no link here")
+      {:send_message, op} = cmd.op
+      cmd = %{cmd | op: {:send_message, %{op | card_urls: ["https://example.com/"]}}}
+      send_frame(socket, {:command, cmd})
+
+      assert_push "frame", %V1.ServerFrame{
+        frame: {:error, %V1.Error{code: :INVALID_ARGUMENT, details: %{"field" => "card_urls"}}}
+      }
+
+      send_frame(socket, {:command, send_message(ctx.channel.id, "still here")})
+      assert_push "frame", %V1.ServerFrame{frame: {:ack, %V1.Ack{}}}
+    end
+
     test "a member without SEND_MESSAGES is denied", ctx do
       member = account("member")
       {:ok, _} = Servers.add_member(ctx.server.id, member.id, ctx.account.id)

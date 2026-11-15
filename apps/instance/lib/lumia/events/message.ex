@@ -34,5 +34,8 @@ defmodule Lumia.Events.Message do
     field :cards, {:array, :binary}, default: []
     field :card_ids, {:array, Ecto.UUID}, default: []
     field :card_urls, {:array, :string}, default: []
+    # The seqs of the events that carried its content after it was created
+    # (edits, cards set), purged with the original when it is deleted.
+    field :revision_seqs, {:array, :integer}, default: []
   end
 end

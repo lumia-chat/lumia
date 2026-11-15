@@ -3,12 +3,11 @@ defmodule Lumia.ProtoJSON do
   The API's JSON encoding: ProtoJSON with the rules of docs/protocol.md
   section 2 laid over it.
 
-    1. A `bytes` field that is an id (its name ends in `_id` or `_ids`),
-       `content_address` or `nonce` is a string a person can read: a
-       canonical lowercase UUID when it holds sixteen bytes (account, channel,
-       message, device and the other ids), lowercase hex otherwise (an
-       identity id is a 32-byte hash, a content address a 32-byte digest, a
-       nonce 24 bytes). Never base64.
+    1. A `bytes` field that is an id (its name ends in `_id` or `_ids`) or
+       a `nonce` is a string a person can read: a canonical lowercase UUID
+       when it holds sixteen bytes (account, channel, message, device and
+       the other ids), lowercase hex otherwise (an identity id is a 32-byte
+       hash, a nonce 24 bytes). Never base64.
     2. 64-bit integers are decimal strings (ProtoJSON already).
     3. Enums are their names (ProtoJSON already).
     4. Every other `bytes` field is base64 (ProtoJSON already).
@@ -20,7 +19,7 @@ defmodule Lumia.ProtoJSON do
   alias Lumia.Proto
   alias Protobuf.FieldProps
 
-  @hex_names ~w(content_address nonce)
+  @hex_names ~w(nonce)
 
   @doc "Encodes a `Lumia.V1` struct as the protocol's JSON."
   def encode!(%_{} = struct), do: Jason.encode!(to_map!(struct))

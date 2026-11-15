@@ -7,7 +7,7 @@ defmodule Lumia.FakePages do
 
   @logo File.read!(Path.expand("fixtures/media/logo.png", __DIR__))
 
-  def page("https://example.com/" <> _ = url) do
+  def page("https://example.com/" <> _ = url, _deadline) do
     bump()
 
     {:ok, url,
@@ -21,13 +21,13 @@ defmodule Lumia.FakePages do
      """}
   end
 
-  def page(_url) do
+  def page(_url, _deadline) do
     bump()
     {:error, :refused}
   end
 
-  def image("https://example.com/logo.png"), do: {:ok, @logo}
-  def image(_url), do: {:error, :refused}
+  def image("https://example.com/logo.png", _deadline), do: {:ok, @logo}
+  def image(_url, _deadline), do: {:error, :refused}
 
   def count, do: :persistent_term.get({__MODULE__, :count}, 0)
   def reset, do: :persistent_term.put({__MODULE__, :count}, 0)

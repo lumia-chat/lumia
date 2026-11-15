@@ -87,11 +87,16 @@ defmodule Lumia.Blobs do
     end
   end
 
-  @doc "Removes the blob at `address`, row and object; fine when it is not there."
+  @doc """
+  Removes the blob at `address`, object and then row; fine when it is not
+  there. `{:error, reason}` when the store would not let the object go,
+  and the row stays to say it is there.
+  """
   def delete(address) when is_binary(address) do
-    Repo.delete_all(from b in Blob, where: b.address == ^address)
-    Store.delete(name(address))
-    :ok
+    with :ok <- Store.delete(name(address)) do
+      Repo.delete_all(from b in Blob, where: b.address == ^address)
+      :ok
+    end
   end
 
   @doc "The names of the blobs the table has and the store does not, for a restore to report."

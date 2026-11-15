@@ -232,7 +232,7 @@ defmodule LumiaWeb.UploadsApiTest do
          }}
     }
 
-    assert {:ok, _} = Events.append(ctx.general.id, actor(ctx.grace), edit)
+    assert {:ok, %{seq: edit_seq}} = Events.append(ctx.general.id, actor(ctx.grace), edit)
 
     [%V1.Event{payload: {:message_edited, edited}}] =
       Events.events_after(ctx.general.id, 0, 200) |> Enum.take(-1)
@@ -251,6 +251,11 @@ defmodule LumiaWeb.UploadsApiTest do
     assert fetch(ctx.owner, kept_id).status == 404
     assert fetch(ctx.grace, kept_id).status == 404
 
+    # The edit's payload, which held the message's attachments, is purged
+    # with the original's.
+    assert [%V1.Event{payload: {:redacted, _}}] =
+             Events.events_after(ctx.general.id, edit_seq - 1, 1)
+
     # Past the window, the sweep removes both blobs, objects and rows.
     long_ago = DateTime.add(DateTime.utc_now(), -31, :day)
 
@@ -260,8 +265,61 @@ defmodule LumiaWeb.UploadsApiTest do
 
     assert Uploads.sweep() == 2
     refute Repo.get(Upload, kept_id)
-    refute Store.exists?(kept_id)
+    refute Store.exists?("att/" <> kept_id)
     assert Repo.get(Message, message_id).attachments == []
+  end
+
+  test "an empty file sealed, the tag alone, may be uploaded; less may not", ctx do
+    assert slot(ctx.grace, ctx.general.id, :BLOB_ROLE_FILE, 16).status == 201
+    assert slot(ctx.grace, ctx.general.id, :BLOB_ROLE_FILE, 15).status == 400
+  end
+
+  test "an attachment's placeholder is bounded, and fields the instance does not know are dropped",
+       ctx do
+    {_, ref} = upload(ctx.grace, ctx.general.id)
+    big = %{attachment(:FILE, ref) | placeholder: :binary.copy("x", 65)}
+
+    assert {{:error, {:invalid_argument, "attachments"}}, _} =
+             send(ctx.general, ctx.grace, "big", [big])
+
+    # Field 99, length-delimited, five bytes: a field no schema here has.
+    padded =
+      V1.Attachment.decode(
+        V1.Attachment.encode(attachment(:FILE, ref)) <> <<0x9A, 0x06, 5, "junk!">>
+      )
+
+    assert padded.__unknown_fields__ != []
+    {{:ok, _}, message_id} = send(ctx.general, ctx.grace, "padded", [padded])
+
+    [kept] = Repo.get(Message, message_id).attachments
+    assert V1.Attachment.decode(kept).__unknown_fields__ == []
+  end
+
+  test "a copy of a send with attachments that committed meets its message, not its blobs", ctx do
+    {_, ref} = upload(ctx.grace, ctx.general.id)
+    command = send_message(ctx.general.id, "once")
+    {:send_message, op} = command.op
+    command = %{command | op: {:send_message, %{op | attachments: [attachment(:FILE, ref)]}}}
+    assert {:ok, ack} = Events.append(ctx.general.id, actor(ctx.grace), command)
+
+    # The same command again answers with the first's ack.
+    assert {:ok, ^ack} = Events.append(ctx.general.id, actor(ctx.grace), command)
+
+    # Once its commands row is gone (purged), a late copy finds the message
+    # there and is a conflict, as one without attachments is; before, the
+    # blobs it names refused it as if they were another message's.
+    Repo.delete_all(from c in Lumia.Events.Command, where: c.channel_id == ^ctx.general.id)
+    assert {:error, :conflict} = Events.append(ctx.general.id, actor(ctx.grace), command)
+  end
+
+  test "a blob whose object the store kept is asked for again by the sweep", ctx do
+    {blob_id, _} = upload(ctx.grace, ctx.general.id)
+    Repo.update_all(from(u in Upload, where: u.id == ^blob_id), set: [deleting: true])
+    assert fetch(ctx.grace, blob_id).status == 404
+
+    assert Uploads.sweep() == 1
+    refute Repo.get(Upload, blob_id)
+    refute Store.exists?("att/" <> blob_id)
   end
 
   test "a blob nobody named for a day is swept, and one taken back goes at once", ctx do
@@ -278,13 +336,13 @@ defmodule LumiaWeb.UploadsApiTest do
            |> delete("/api/v1/blobs/#{taken_back_id}")
            |> Map.get(:status) == 204
 
-    refute Store.exists?(taken_back_id)
+    refute Store.exists?("att/" <> taken_back_id)
 
     assert Uploads.sweep() == 0
     yesterday = DateTime.add(DateTime.utc_now(), -25, :hour)
     Repo.update_all(from(u in Upload, where: u.id == ^orphan_id), set: [created_at: yesterday])
     assert Uploads.sweep() == 1
-    refute Store.exists?(orphan_id)
+    refute Store.exists?("att/" <> orphan_id)
   end
 
   test "a personal conversation's blobs: named by id, read by its members, deleted by their sender" do

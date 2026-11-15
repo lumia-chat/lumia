@@ -3,7 +3,7 @@ defmodule Lumia.Uploads.Upload do
   One client-encrypted blob (specs/media.md 4): its uploader, the
   conversation it is for, its role (`"display"`, `"thumbnail"` or
   `"file"`), the ciphertext's length, whether the bytes have arrived, and
-  the message that named it. Its id is its name in the blob store.
+  the message that named it. Its object in the blob store is `att/<id>`.
   """
 
   use Lumia.Schema
@@ -16,6 +16,8 @@ defmodule Lumia.Uploads.Upload do
     field :stored, :boolean, default: false
     field :message_id, Ecto.UUID
     field :removed, :boolean, default: false
+    # Its removal has begun; the row goes once the store let the object go.
+    field :deleting, :boolean, default: false
     field :created_at, :utc_datetime_usec
   end
 end

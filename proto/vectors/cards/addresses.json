@@ -286,6 +286,16 @@
       "why": "IPv4-translated private"
     },
     {
+      "ip": "::ffff:0:8.8.8.8",
+      "allowed": true,
+      "why": "IPv4-translated public, judged by the IPv4 it carries"
+    },
+    {
+      "ip": "0:0:0:ffff::8.8.8.8",
+      "allowed": false,
+      "why": "not a form that carries IPv4, and outside 2000::/3"
+    },
+    {
       "ip": "64:ff9b::7f00:1",
       "allowed": false,
       "why": "NAT64 of loopback"

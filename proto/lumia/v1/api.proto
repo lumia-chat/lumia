@@ -137,6 +137,10 @@ message InstanceInfo {
   // What a client may upload; absent when the instance keeps no blobs, and
   // then nothing can be attached.
   UploadLimits upload_limits = 17;
+  // Link cards in server content (specs/media.md 6.4): on only when the
+  // operator lets the instance fetch the pages its members link. Off,
+  // POST /unfurl answers no card and messages go without.
+  bool link_cards_enabled = 18;
 }
 
 // POST /auth/sign-in/magic-link — public, 202 whether or not the address

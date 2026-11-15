@@ -83,6 +83,7 @@ client                          instance                          blob store
 - **The upload URL** is a presigned S3 `PUT` for `att/<blob id>`, valid for 15 minutes, with `content-length` among its signed headers so the store refuses any other length. For a `local:` or `fs:` store it is the instance's own `PUT /api/v1/blobs/upload/{token}`, where the token is a signed, expiring statement of the blob id and size, needing no session. Clients treat both the same: `PUT` the ciphertext with the headers the response names.
 - **Complete** checks the stored object's length against the declared size and deletes the object and the row on a mismatch.
 - **Orphans**: a blob neither referenced nor deleted 24 hours after it was created is removed, object and row, by an Oban job.
+- **Removal**, by any path: the row is marked first, which stops the blob being served or named, then the object is deleted, then the row. A row whose object the store did not let go stays marked, and the hourly job asks again.
 - The bucket needs a CORS rule allowing `PUT` and `GET` from the web client's origin, with the `content-length` and `content-type` headers. The deployment spec says so.
 
 ### 4.2 Sending
@@ -93,7 +94,7 @@ client                          instance                          blob store
 
 ### 4.3 Fetching
 
-`GET /api/v1/blobs/{blob_id}` with the session answers `302` to a presigned `GET` valid for 10 minutes (S3), or the ciphertext itself (`local:`, `fs:`), with `Cache-Control: private, max-age=300`. The caller must be able to read the message that references the blob: for server content, `VIEW_CHANNEL` and `READ_HISTORY` on its channel and the message not deleted; for a personal DM, membership of the conversation. A blob not referenced yet is fetchable only by its uploader. Anything else is `NOT_FOUND`. The client decrypts, checks the hash, and keeps the plaintext in its own cache.
+`GET /api/v1/blobs/{blob_id}` with the session answers `302` to a presigned `GET` valid for 60 seconds (S3), with `Cache-Control: no-store` so no redirect outlives a delete, or the ciphertext itself (`local:`, `fs:`), with `Cache-Control: private, max-age=300`. The caller must be able to read the message that references the blob: for server content, `VIEW_CHANNEL` and `READ_HISTORY` on its channel and the message not deleted; for a personal DM, membership of the conversation. A blob not referenced yet is fetchable only by its uploader. Anything else is `NOT_FOUND`. The client decrypts, checks the hash, and keeps the plaintext in its own cache.
 
 ### 4.4 Removal
 
@@ -130,17 +131,20 @@ The same rules in Elixir (the instance) and Rust (`lumia-client`, native targets
 
 - `http` and `https` only, ports 80 and 443, at most 5 redirects, each hop held to every rule here.
 - The host is resolved first and the connection made to the address resolved; any address that is private, loopback, link-local, unique-local, multicast, unspecified, CGNAT (100.64/10), or the cloud metadata address is refused, IPv4 and IPv6 alike, IPv4-mapped IPv6 included. In the client this keeps a link from reading the sharer's own router.
-- 5 s for the whole fetch. At most 1 MiB of HTML, reading stopped at `</head>`; only `text/html` and `application/xhtml+xml` are parsed. The image at most 5 MiB.
+- 5 s for the whole fetch: resolving the name, the page and its picture share one deadline. At most 1 MiB of HTML, reading stopped once the head has ended as the card's tokenizer reads it (a `</head>` or `<body>` outside comments and scripts); only `text/html` and `application/xhtml+xml` are parsed. The image at most 5 MiB.
+- A link as people write it: a character a URL cannot hold as written (a space, `|`, a letter outside ASCII in the path) is percent-encoded before the URL is parsed, as browsers do.
 - User agent `LumiaBot/<version> (+https://lumia.chat/bot)`; no cookies; `Accept-Language` from the sharer's locale on the client and `en` on the instance.
 - The image is fetched by the same rules, decoded under the same bounds as 3, and kept as a thumbnail (longest edge 400 px, JPEG or PNG). Receivers never contact the site until they open the link.
 
 ### 6.4 Server content: the instance builds the card
 
-- **Preview**: while composing, every client (native and web) asks `POST /api/v1/unfurl {channel_id, url}` once the typing pauses for 500 ms, and draws the card above the composer with a ×. The instance needs `SEND_MESSAGES` in the channel, limits each account to 30 unfurls a minute, and keeps each result in its cache for an hour, keyed by URL (`link_cards`: the card and its image's address; a page that gave no card is cached as none, for 10 minutes).
+The instance fetches pages only when its operator turned link cards on (`LUMIA_LINK_CARDS=true`; architecture hard rule 3). Until then `GET /instance` says `link_cards_enabled: false`, `POST /unfurl` answers no card, and messages are sent with none; nothing else changes.
+
+- **Preview**: while composing, every client (native and web) asks `POST /api/v1/unfurl {channel_id, url}` once the typing pauses for 500 ms, and draws the card above the composer with a ×. The instance needs `SEND_MESSAGES` in the channel, limits each account to 30 fetches a minute (counted from when a fetch starts, so requests made at once cannot pass it; a page fetched for a sent message counts against its author, and one past the limit goes without a card), and keeps each result in its cache for an hour, keyed by URL (`link_cards`: the card and its image's address; a page that gave no card is cached as none, for 10 minutes).
 - **Send**: `SendMessage.card_urls` names the links whose cards were kept (a subset of 6.1's). The instance checks each appears in the body, is `http(s)`, and that there are at most 3. It appends `MessageCreated` with the cards it has cached; for any it has not, it fetches after the commit and appends `MessageCardsSet` (the message's cards in full) when they arrive. Sending never waits for a fetch.
 - **Edit**: `EditMessage.cards` (when set) names the links whose cards stay; a link no longer in the body loses its card; a new one in the set is fetched as at send. The author removes a card this way.
 - **The card's image** is a blob made and sealed by the instance (`Lumia.Blobs`, through the avatar pipeline in `native/lumia_media`), served by its address at `GET /api/v1/cards/{address}` without a session, as an avatar is: it is a copy of a public page's picture, and its address is 64 hex digits nobody can compute. A card image no message references and older than the cache is deleted by the orphan job.
-- Cards are inside the message's payload, so retention and purge drop them with it.
+- Cards are inside the message's payload, so retention and purge drop them with it. A deleted message holds its cards' pictures until its delete window passes (as its attachments, 4.4), then lets them go.
 
 Because the instance builds them, server cards cannot be forged by a member, and sites see the instance's address, never a member's.
 

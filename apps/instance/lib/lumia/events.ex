@@ -476,12 +476,17 @@ defmodule Lumia.Events do
   # a reaction's message and emoji (architecture 6.6). After the
   # fingerprint, so a retry of the same command still matches.
   # A message's attachments and the links it wants cards for are checked
-  # here too (specs/media.md 4.2 and 6.4).
+  # here too (specs/media.md 4.2 and 6.4). Blobs this very message already
+  # named pass, so that a copy of a send that committed reaches the
+  # message's insert and is answered with the original's ack.
   defp resolve(channel_id, actor, %V1.Command{op: {:send_message, op}} = command) do
+    message_id = Proto.from_uuid(command.command_id)
+
     with {:ok, op} <- resolve_quote(channel_id, op),
-         {:ok, _} <- Uploads.check_attachments(channel_id, actor.account_id, op.attachments),
+         {:ok, attachments} <-
+           Uploads.check_attachments(channel_id, actor.account_id, message_id, op.attachments),
          {:ok, urls} <- Cards.check_urls(op.body, op.card_urls) do
-      {:ok, %{command | op: {:send_message, %{op | card_urls: urls}}}}
+      {:ok, %{command | op: {:send_message, %{op | attachments: attachments, card_urls: urls}}}}
     end
   end
 
@@ -497,7 +502,9 @@ defmodule Lumia.Events do
   end
 
   defp resolve(channel_id, actor, %V1.Command{op: {:send_encrypted, op}} = command) do
-    with :ok <- Uploads.check_dm_blobs(channel_id, actor.account_id, op.blob_ids),
+    message_id = Proto.from_uuid(command.command_id)
+
+    with :ok <- Uploads.check_dm_blobs(channel_id, actor.account_id, message_id, op.blob_ids),
          do: {:ok, command}
   end
 
@@ -619,6 +626,13 @@ defmodule Lumia.Events do
 
   defp with_extras(payload, _extras), do: payload
 
+  # A message sent with nothing beyond its text needs no second write.
+  defp materialize_extras(_channel_id, %V1.Command{op: {:send_message, _}}, %{
+         attachments: [],
+         card_urls: []
+       }),
+       do: :ok
+
   defp materialize_extras(channel_id, %V1.Command{op: {op, _}} = command, extras)
        when op in [:send_message, :edit_message] do
     message_id =
@@ -671,28 +685,35 @@ defmodule Lumia.Events do
     with {:ok, _} <- Tx.transact(fn -> replace_cards(channel_id, message_id) end), do: :ok
   end
 
+  # The channel's row is locked first, as every write to the channel takes
+  # it (`take_head`) before its message's: the other order would deadlock
+  # against an edit or a delete of the same message.
   defp replace_cards(channel_id, message_id) do
+    Repo.one(from c in Channel, where: c.id == ^channel_id, select: c.id, lock: "FOR UPDATE")
+
     message =
       Repo.one(
         from m in Message,
-          where: m.id == ^message_id and m.channel_id == ^channel_id and is_nil(m.deleted_at),
-          lock: "FOR UPDATE"
+          where: m.id == ^message_id and m.channel_id == ^channel_id and is_nil(m.deleted_at)
       )
 
     with %Message{} <- message,
          {cards, card_ids, _missing} = Cards.for_message(message.card_urls, kept_cards(message)),
          encoded = Enum.map(cards, &V1.Card.encode/1),
-         true <- encoded != message.cards do
+         true <- encoded != message.cards,
+         {:ok, %{seq: seq}} <-
+           append_system(
+             channel_id,
+             {:message_cards_set,
+              %V1.MessageCardsSet{message_id: Proto.uuid(message_id), cards: cards}}
+           ) do
       Repo.update_all(
         from(m in Message, where: m.id == ^message_id and m.channel_id == ^channel_id),
-        set: [cards: encoded, card_ids: card_ids]
+        set: [cards: encoded, card_ids: card_ids],
+        push: [revision_seqs: seq]
       )
 
-      append_system(
-        channel_id,
-        {:message_cards_set,
-         %V1.MessageCardsSet{message_id: Proto.uuid(message_id), cards: cards}}
-      )
+      {:ok, nil}
     else
       _ -> {:ok, nil}
     end
@@ -824,7 +845,7 @@ defmodule Lumia.Events do
     {:ok, nil}
   end
 
-  defp materialize(channel_id, _seq, _actor, %V1.Command{op: {:edit_message, op}}, now) do
+  defp materialize(channel_id, seq, _actor, %V1.Command{op: {:edit_message, op}}, now) do
     # The edit's mentions replace the message's; the author a reply quotes
     # stays notified as it was (architecture 6.6).
     message_id = Proto.from_uuid(op.message_id)
@@ -847,19 +868,32 @@ defmodule Lumia.Events do
         mentioned_account_ids: Enum.uniq(named ++ List.wrap(quoted)),
         mentions_everyone: everyone_in?(op.mentions),
         mention_spans: Enum.flat_map(op.mentions, &Proto.mention_span/1)
-      ]
+      ],
+      push: [revision_seqs: seq]
     )
   end
 
   defp materialize(channel_id, _seq, _actor, %V1.Command{op: {:delete_message, op}}, now) do
     with {:ok, message_seq} <- update_message(channel_id, op.message_id, set: [deleted_at: now]) do
-      # The original create event's payload is purged; the row stays.
+      message_id = Proto.from_uuid(op.message_id)
+
+      revisions =
+        Repo.one(
+          from m in Message,
+            where: m.id == ^message_id and m.channel_id == ^channel_id,
+            select: m.revision_seqs
+        )
+
+      # The payloads of the original create event and of every event that
+      # carried the message's content since (its edits, its cards) are
+      # purged; the rows stay.
       Repo.update_all(
-        from(p in EventPayload, where: p.channel_id == ^channel_id and p.seq == ^message_seq),
+        from(p in EventPayload,
+          where: p.channel_id == ^channel_id and p.seq in ^[message_seq | revisions]
+        ),
         set: [payload: nil]
       )
 
-      message_id = Proto.from_uuid(op.message_id)
       drop_quotes(channel_id, from(m in Message, where: m.id == ^message_id, select: m.id))
       {:ok, message_seq}
     end

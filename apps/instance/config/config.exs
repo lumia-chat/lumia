@@ -34,7 +34,7 @@ config :lumia, Lumia.Repo,
 config :lumia, Oban,
   repo: Lumia.Repo,
   notifier: Oban.Notifiers.PG,
-  queues: [default: 10, maintenance: 2],
+  queues: [default: 10, maintenance: 2, cards: 3],
   plugins: [
     {Oban.Plugins.Pruner, max_age: 60 * 60 * 24 * 7},
     {Oban.Plugins.Cron,

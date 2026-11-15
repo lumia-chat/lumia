@@ -15,5 +15,8 @@ defmodule Lumia.Cards.LinkCard do
     field :image_address, :binary
     field :fetched_by_account_id, Ecto.UUID
     field :fetched_at, :utc_datetime_usec
+    # A fetch under way: counted against its account's rate, cached for
+    # nobody until it is done.
+    field :pending, :boolean, default: false
   end
 end

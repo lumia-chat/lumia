@@ -29,13 +29,18 @@ defmodule Lumia.Uploads do
   @tag_bytes 16
   @thumbnail_max 256 * 1024
   @put_seconds 15 * 60
-  @get_seconds 10 * 60
+  # Long enough to start a download, short enough that a deleted message's
+  # blob stops being reachable within a minute.
+  @get_seconds 60
   @orphan_hours 24
   @deleted_days 30
   @max_attachments 10
   @max_dm_blobs 2 * @max_attachments + 3
   @max_name_bytes 255
   @max_alt_chars 1_000
+  @max_media_type_bytes 255
+  # A ThumbHash is about 25 bytes.
+  @max_placeholder_bytes 64
 
   @doc "Whether attachments can be kept here: the instance has a blob store."
   def enabled?, do: Store.configured() != nil
@@ -94,7 +99,7 @@ defmodule Lumia.Uploads do
         })
 
       url =
-        case Store.presign(upload.id, :put, @put_seconds, size) do
+        case Store.presign(object(upload.id), :put, @put_seconds, size) do
           {:ok, url} -> url
           :instance -> "/api/v1/blobs/upload/" <> token(upload)
         end
@@ -121,11 +126,15 @@ defmodule Lumia.Uploads do
     max = max_for(role)
 
     cond do
-      size <= @tag_bytes -> {:error, {:invalid_argument, "size_bytes"}}
+      # An empty file sealed is the tag alone.
+      size < @tag_bytes -> {:error, {:invalid_argument, "size_bytes"}}
       size > max -> {:error, {:payload_too_large, max}}
       true -> :ok
     end
   end
+
+  # The blob's object in the store (specs/media.md 4.1).
+  defp object(id), do: "att/" <> id
 
   defp max_for("display"), do: limits().image
   defp max_for("thumbnail"), do: @thumbnail_max
@@ -156,10 +165,7 @@ defmodule Lumia.Uploads do
   length, or `{:error, {:invalid_argument, "size_bytes"}}`.
   """
   def put_local(%Upload{size: size} = upload, bytes) when byte_size(bytes) == size do
-    with :ok <- Store.put(upload.id, bytes) do
-      Repo.update_all(from(u in Upload, where: u.id == ^upload.id), set: [stored: true])
-      :ok
-    end
+    with :ok <- Store.put(object(upload.id), bytes), do: mark_stored(upload)
   end
 
   def put_local(%Upload{}, _bytes), do: {:error, {:invalid_argument, "size_bytes"}}
@@ -176,13 +182,12 @@ defmodule Lumia.Uploads do
         :ok
 
       %Upload{uploader_account_id: ^account_id} = upload ->
-        case Store.size(upload.id) do
+        case Store.size(object(upload.id)) do
           {:ok, size} when size == upload.size ->
-            Repo.update_all(from(u in Upload, where: u.id == ^upload.id), set: [stored: true])
-            :ok
+            mark_stored(upload)
 
           {:ok, _other} ->
-            remove([upload])
+            remove(from u in Upload, where: u.id == ^upload.id)
             {:error, {:invalid_argument, "size_bytes"}}
 
           _ ->
@@ -194,6 +199,11 @@ defmodule Lumia.Uploads do
     end
   end
 
+  defp mark_stored(upload) do
+    Repo.update_all(from(u in Upload, where: u.id == ^upload.id), set: [stored: true])
+    :ok
+  end
+
   @doc """
   Where the caller gets a blob's ciphertext: `{:redirect, url}` to the
   bucket, `{:bytes, bytes}` from a directory store, or `{:error,
@@ -202,7 +212,8 @@ defmodule Lumia.Uploads do
   message, is not found.
   """
   def fetch(account_id, blob_id) do
-    with %Upload{stored: true, removed: false} = upload <- Repo.get(Upload, blob_id),
+    with %Upload{stored: true, removed: false, deleting: false} = upload <-
+           Repo.get(Upload, blob_id),
          :ok <- readable(account_id, upload),
          {:ok, where} <- location(upload) do
       where
@@ -212,9 +223,9 @@ defmodule Lumia.Uploads do
   end
 
   defp location(upload) do
-    case Store.presign(upload.id, :get, @get_seconds) do
+    case Store.presign(object(upload.id), :get, @get_seconds) do
       {:ok, url} -> {:ok, {:redirect, url}}
-      :instance -> with {:ok, bytes} <- Store.get(upload.id), do: {:ok, {:bytes, bytes}}
+      :instance -> with {:ok, bytes} <- Store.get(object(upload.id)), do: {:ok, {:bytes, bytes}}
       error -> error
     end
   end
@@ -243,9 +254,10 @@ defmodule Lumia.Uploads do
   with the message. `:ok`, or `{:error, :not_found}`.
   """
   def delete(account_id, blob_id) do
-    with %Upload{uploader_account_id: ^account_id} = upload <- Repo.get(Upload, blob_id),
+    with %Upload{uploader_account_id: ^account_id, deleting: false} = upload <-
+           Repo.get(Upload, blob_id),
          true <- upload.message_id == nil or personal?(upload.channel_id) do
-      remove([upload])
+      remove(from u in Upload, where: u.id == ^upload.id)
       :ok
     else
       _ -> {:error, :not_found}
@@ -262,29 +274,44 @@ defmodule Lumia.Uploads do
   @doc """
   Checks a message's attachments before it is written (specs/media.md
   4.2): at most #{@max_attachments}, each well formed, each blob the
-  sender's, stored, for this channel, not yet named by a message, of the
-  role its kind needs and of the length it says. `{:ok, attachments}` or
-  `{:error, {:invalid_argument, field}}`.
+  sender's, stored, for this channel, named by no other message than
+  `message_id` (a copy of a send that already committed names its own),
+  of the role its kind needs and of the length it says. `{:ok,
+  attachments}`, stripped of fields this instance does not know, or
+  `{:error, {:invalid_argument, "attachments"}}`.
   """
-  def check_attachments(_channel_id, _account_id, []), do: {:ok, []}
+  def check_attachments(_channel_id, _account_id, _message_id, []), do: {:ok, []}
 
-  def check_attachments(_channel_id, _account_id, attachments)
+  def check_attachments(_channel_id, _account_id, _message_id, attachments)
       when length(attachments) > @max_attachments,
       do: {:error, {:invalid_argument, "attachments"}}
 
-  def check_attachments(channel_id, account_id, attachments) do
+  def check_attachments(channel_id, account_id, message_id, attachments) do
     if Enum.all?(attachments, &well_formed?/1) and
          distinct?(Enum.map(attachments, & &1.attachment_id)) and
-         blobs_held?(channel_id, account_id, attachments),
-       do: {:ok, attachments},
+         blobs_held?(channel_id, account_id, message_id, attachments),
+       do: {:ok, Enum.map(attachments, &known/1)},
        else: {:error, {:invalid_argument, "attachments"}}
   end
 
   defp distinct?(list), do: list == Enum.uniq(list)
 
+  # What a client added beyond the schema would be kept and delivered with
+  # the message, outside every limit here.
+  defp known(%V1.Attachment{} = a) do
+    %{
+      a
+      | __unknown_fields__: [],
+        main: known_ref(a.main),
+        thumbnail: a.thumbnail && known_ref(a.thumbnail)
+    }
+  end
+
+  defp known_ref(%V1.BlobRef{} = ref), do: %{ref | __unknown_fields__: []}
+
   # Every blob named is the sender's, stored, for this channel, unnamed,
   # of the role its place needs and of the length its reference says.
-  defp blobs_held?(channel_id, account_id, attachments) do
+  defp blobs_held?(channel_id, account_id, message_id, attachments) do
     refs =
       Enum.flat_map(attachments, fn a ->
         [{a.main, main_role(a.kind)}] ++
@@ -292,20 +319,25 @@ defmodule Lumia.Uploads do
       end)
 
     ids = Enum.map(refs, fn {ref, _} -> Proto.from_uuid(ref.blob_id) end)
-
-    held =
-      Repo.all(
-        from u in Upload,
-          where:
-            u.id in ^Enum.reject(ids, &is_nil/1) and u.uploader_account_id == ^account_id and
-              u.channel_id == ^channel_id and u.stored and is_nil(u.message_id)
-      )
-      |> Map.new(&{&1.id, &1})
+    held = held(channel_id, account_id, message_id, ids) |> Map.new(&{&1.id, &1})
 
     Enum.all?(ids) and distinct?(ids) and
       Enum.all?(Enum.zip(refs, ids), fn {{ref, role}, id} ->
         match?(%Upload{role: ^role}, held[id]) and held[id].size == ref.size_bytes
       end)
+  end
+
+  # The blobs among `ids` a message may name: the sender's, stored, for
+  # this conversation, being removed by no one, and named by no message
+  # but this one.
+  defp held(channel_id, account_id, message_id, ids) do
+    Repo.all(
+      from u in Upload,
+        where:
+          u.id in ^Enum.reject(ids, &is_nil/1) and u.uploader_account_id == ^account_id and
+            u.channel_id == ^channel_id and u.stored and not u.removed and not u.deleting and
+            (is_nil(u.message_id) or u.message_id == ^message_id)
+    )
   end
 
   defp main_role(:IMAGE), do: "display"
@@ -318,7 +350,9 @@ defmodule Lumia.Uploads do
 
   defp text_fits?(a) do
     a.name != "" and byte_size(a.name) <= @max_name_bytes and String.valid?(a.name) and
-      String.length(a.alt) <= @max_alt_chars
+      String.length(a.alt) <= @max_alt_chars and
+      byte_size(a.media_type) <= @max_media_type_bytes and
+      byte_size(a.placeholder) <= @max_placeholder_bytes
   end
 
   defp thumbnail_fits?(%V1.Attachment{thumbnail: nil}), do: true
@@ -338,26 +372,17 @@ defmodule Lumia.Uploads do
 
   @doc """
   Checks the blobs a personal message says it uses (`SendEncrypted.blob_ids`):
-  each the sender's, stored, for this conversation and not yet named.
-  `:ok` or `{:error, {:invalid_argument, "blob_ids"}}`.
+  each the sender's, stored, for this conversation and named by no other
+  message than `message_id`. `:ok` or `{:error, {:invalid_argument,
+  "blob_ids"}}`.
   """
-  def check_dm_blobs(_channel_id, _account_id, []), do: :ok
+  def check_dm_blobs(_channel_id, _account_id, _message_id, []), do: :ok
 
-  def check_dm_blobs(channel_id, account_id, blob_ids) do
+  def check_dm_blobs(channel_id, account_id, message_id, blob_ids) do
     ids = Enum.map(blob_ids, &Proto.from_uuid/1)
 
-    held =
-      Repo.aggregate(
-        from(u in Upload,
-          where:
-            u.id in ^Enum.reject(ids, &is_nil/1) and u.uploader_account_id == ^account_id and
-              u.channel_id == ^channel_id and u.stored and is_nil(u.message_id)
-        ),
-        :count
-      )
-
-    if length(ids) <= @max_dm_blobs and Enum.all?(ids) and ids == Enum.uniq(ids) and
-         held == length(ids),
+    if length(ids) <= @max_dm_blobs and Enum.all?(ids) and distinct?(ids) and
+         length(held(channel_id, account_id, message_id, ids)) == length(ids),
        do: :ok,
        else: {:error, {:invalid_argument, "blob_ids"}}
   end
@@ -390,61 +415,94 @@ defmodule Lumia.Uploads do
   commit. `message_ids` is a query of message ids.
   """
   def release(channel_id, message_ids) do
-    Repo.all(
+    remove(
       from u in Upload,
-        where: u.channel_id == ^channel_id and u.message_id in subquery(message_ids)
+        where:
+          u.channel_id == ^channel_id and u.message_id in subquery(message_ids) and
+            not u.deleting
     )
-    |> remove()
   end
 
   @doc """
   The hourly sweep: blobs no message named within #{@orphan_hours} hours,
-  and those of messages deleted more than #{@deleted_days} days ago (whose
-  attachments the message row then lets go too). Returns how many went.
+  those of messages deleted more than #{@deleted_days} days ago (whose
+  attachments the message row then lets go too), and those whose objects
+  the store did not let go before. Returns how many it removed.
   """
   def sweep do
     now = DateTime.utc_now()
     orphaned_before = DateTime.add(now, -@orphan_hours, :hour)
     deleted_before = DateTime.add(now, -@deleted_days, :day)
 
+    deleted_messages =
+      from m in Message,
+        where: not is_nil(m.deleted_at) and m.deleted_at < ^deleted_before,
+        select: m.id
+
+    # Each is checked again as it is marked, so one a message named in
+    # the meantime stays.
     orphans =
-      Repo.all(
+      remove(
         from u in Upload,
-          where: is_nil(u.message_id) and u.created_at < ^orphaned_before,
-          limit: 1_000
+          where:
+            u.id in subquery(
+              from u in Upload,
+                where:
+                  is_nil(u.message_id) and u.created_at < ^orphaned_before and not u.deleting,
+                select: u.id,
+                limit: 1_000
+            ) and is_nil(u.message_id)
       )
 
     deleted =
-      Repo.all(
+      remove(
         from u in Upload,
-          join: m in Message,
-          on: m.id == u.message_id and m.channel_id == u.channel_id,
-          where: not is_nil(m.deleted_at) and m.deleted_at < ^deleted_before,
-          limit: 1_000
+          where:
+            u.id in subquery(
+              from u in Upload,
+                where: u.message_id in subquery(deleted_messages) and not u.deleting,
+                select: u.id,
+                limit: 1_000
+            )
       )
 
     Repo.update_all(
       from(m in Message,
-        where: not is_nil(m.deleted_at) and m.deleted_at < ^deleted_before and m.attachments != []
+        where:
+          not is_nil(m.deleted_at) and m.deleted_at < ^deleted_before and
+            fragment("? <> '{}'", m.attachments)
       ),
       set: [attachments: []]
     )
 
-    remove(orphans ++ deleted)
-    length(orphans) + length(deleted)
+    retried =
+      from(u in Upload, where: u.deleting, select: u.id, limit: 1_000)
+      |> Repo.all()
+      |> delete_objects()
+
+    orphans + deleted + retried
   end
 
-  defp remove([]), do: :ok
+  # Marks the blobs `query` finds as being removed, which stops their
+  # serving at once, and after the commit asks the store to let each
+  # object go, removing the row of each it did. A row whose object stays
+  # is asked for again by the next sweep. Returns how many were marked.
+  defp remove(query) do
+    {:ok, ids} =
+      Tx.transact(fn ->
+        {_, ids} =
+          Repo.update_all(select(query, [u], u.id), set: [deleting: true, removed: true])
 
-  defp remove(uploads) do
-    ids = Enum.map(uploads, & &1.id)
+        Tx.after_commit(fn -> delete_objects(ids) end)
+        {:ok, ids}
+      end)
 
-    Tx.transact(fn ->
-      Repo.delete_all(from u in Upload, where: u.id in ^ids)
-      Tx.after_commit(fn -> Enum.each(ids, &Store.delete/1) end)
-      {:ok, nil}
-    end)
+    length(ids)
+  end
 
-    :ok
+  defp delete_objects(ids) do
+    gone = Enum.filter(ids, &(Store.delete(object(&1)) == :ok))
+    Repo.delete_all(from u in Upload, where: u.id in ^gone)
+    length(gone)
   end
 end

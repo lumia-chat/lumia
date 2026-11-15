@@ -118,6 +118,10 @@ config :lumia, :uploads,
   file_max_bytes:
     String.to_integer(System.get_env("LUMIA_UPLOAD_FILE_MAX_BYTES") || "#{10 * 1024 * 1024}")
 
+# Link cards (specs/media.md 6.4): the instance fetches the pages its
+# members link only when the operator says so (architecture hard rule 3).
+config :lumia, :link_cards, System.get_env("LUMIA_LINK_CARDS") == "true"
+
 config :lumia, :metrics, System.get_env("LUMIA_METRICS") == "true"
 
 # Push (architecture 15.5): the relay for APNs and FCM, and the contact

@@ -154,7 +154,7 @@ Same ID on content the actor cannot access                     → NOT_FOUND
 
 ## 10. Purge and redaction
 
-**User deletion.** `DeleteMessage` appends a `MessageDeleted{purge_cache: true}` event, nulls the original create event's payload, and sets `messages.deleted_at`. Content stays available to moderators through the edit-history endpoint until the retention window (30 days, instance-configurable) passes, then the history rows are deleted too.
+**User deletion.** `DeleteMessage` appends a `MessageDeleted{purge_cache: true}` event, nulls the payloads of the original create event and of every event that carried the message's content since (its `MessageEdited` and `MessageCardsSet` events, whose seqs the message row keeps), and sets `messages.deleted_at`. Content stays available to moderators through the edit-history endpoint until the retention window (30 days, instance-configurable) passes, then the history rows are deleted too.
 
 **Retention.** An Oban job per channel with a retention policy nulls `event_payloads.payload` for events older than the policy, deletes the corresponding `messages` bodies and edit history, drops attachment references (blobs follow by garbage collection), removes search index entries, and appends one `PayloadsPurged{before_seq}` event so online clients drop cached bodies below it.
 

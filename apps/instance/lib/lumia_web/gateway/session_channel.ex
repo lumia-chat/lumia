@@ -755,8 +755,20 @@ defmodule LumiaWeb.Gateway.SessionChannel do
     })
   end
 
-  defp push_command_error(socket, reason, command_id) do
+  # As the HTTP API answers it (`LumiaWeb.FallbackController`): the field
+  # that was wrong, such as an attachment or a card's link.
+  defp push_command_error(socket, {:invalid_argument, field}, command_id) when is_binary(field) do
+    push_error(socket, :INVALID_ARGUMENT, "invalid argument", command_id, %{"field" => field})
+  end
+
+  defp push_command_error(socket, reason, command_id) when is_atom(reason) do
     push_error(socket, error_code(reason), to_string(reason), command_id)
+  end
+
+  # Any other reason is answered, never raised on: the session would die,
+  # and the client's outbox would send the command again on reconnecting.
+  defp push_command_error(socket, reason, command_id) do
+    push_error(socket, error_code(reason), "internal", command_id)
   end
 
   defp push_error(socket, code, message, command_id \\ "", details \\ %{}) do

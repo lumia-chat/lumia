@@ -8,6 +8,7 @@ defmodule Lumia.CardsTest do
   use Lumia.DataCase, async: false
   use Oban.Testing, repo: Lumia.Repo
 
+  import Ecto.Query
   import Lumia.Fixtures
 
   alias Lumia.Cards
@@ -23,8 +24,13 @@ defmodule Lumia.CardsTest do
 
   setup do
     Application.put_env(:lumia, :card_fetch, FakePages)
+    Application.put_env(:lumia, :link_cards, true)
     FakePages.reset()
-    on_exit(fn -> Application.delete_env(:lumia, :card_fetch) end)
+
+    on_exit(fn ->
+      Application.delete_env(:lumia, :card_fetch)
+      Application.put_env(:lumia, :link_cards, false)
+    end)
 
     owner = account("owner")
     {:ok, server} = Servers.create_server(owner.id, "Acme")
@@ -158,6 +164,74 @@ defmodule Lumia.CardsTest do
     assert [%{url: "https://example.com/kept"}] = Repo.all(Lumia.Cards.LinkCard)
   end
 
+  test "nothing is fetched unless the operator turned cards on", ctx do
+    Application.put_env(:lumia, :link_cards, false)
+    url = "https://example.com/off"
+    assert {:ok, nil} = Cards.unfurl(ctx.owner.id, ctx.general.id, url)
+    {{:ok, _}, _} = send(ctx.general, ctx.owner, "see #{url}", [url])
+
+    %V1.Event{payload: {:message_created, %V1.MessageCreated{message: message}}} =
+      last_event(ctx.general)
+
+    assert message.cards == []
+    refute_enqueued(worker: Unfurl)
+    assert FakePages.count() == 0
+  end
+
+  test "a link as people write it, with a letter a URL cannot hold as it is", ctx do
+    url = "https://example.com/wiki/Bücher"
+    assert {:ok, %V1.Card{url: ^url}} = Cards.unfurl(ctx.owner.id, ctx.general.id, url)
+    assert {{:ok, _}, _} = send(ctx.general, ctx.owner, "see #{url}", [url])
+    assert {:ok, %URI{path: "/wiki/B%C3%BCcher"}} = Fetch.parse(url)
+  end
+
+  test "fetches under way count against the rate, and a sent link past it goes without", ctx do
+    now = DateTime.utc_now()
+
+    Repo.insert_all(
+      Lumia.Cards.LinkCard,
+      for n <- 1..30 do
+        %{
+          id: Ecto.UUID.generate(version: 7),
+          url: "https://example.com/busy/#{n}",
+          pending: true,
+          fetched_by_account_id: ctx.owner.id,
+          fetched_at: now
+        }
+      end
+    )
+
+    url = "https://example.com/one-more"
+    assert {:error, :rate_limited} = Cards.unfurl(ctx.owner.id, ctx.general.id, url)
+
+    {{:ok, _}, message_id} = send(ctx.general, ctx.owner, "see #{url}", [url])
+    seq = last_event(ctx.general).seq
+    assert :ok = perform_job(Unfurl, %{channel_id: ctx.general.id, message_id: message_id})
+    assert last_event(ctx.general).seq == seq
+    assert FakePages.count() == 0
+  end
+
+  test "a deleted message holds its card until its window has passed", ctx do
+    url = "https://example.com/deleted"
+    {:ok, _} = Cards.unfurl(ctx.owner.id, ctx.general.id, url)
+    {{:ok, _}, message_id} = send(ctx.general, ctx.owner, "see #{url}", [url])
+
+    {:ok, _} =
+      Events.append(ctx.general.id, actor(ctx.owner), delete_message(ctx.general.id, message_id))
+
+    Repo.update_all(Lumia.Cards.LinkCard,
+      set: [fetched_at: DateTime.add(DateTime.utc_now(), -2, :hour)]
+    )
+
+    assert Cards.sweep() == 0
+
+    Repo.update_all(from(m in Message, where: m.id == ^message_id),
+      set: [deleted_at: DateTime.add(DateTime.utc_now(), -31, :day)]
+    )
+
+    assert Cards.sweep() == 1
+  end
+
   test "the fetcher refuses what it must not reach" do
     for url <- [
           "http://127.0.0.1/",
@@ -170,7 +244,7 @@ defmodule Lumia.CardsTest do
           "file:///etc/passwd",
           "gopher://example.com/"
         ] do
-      assert {:error, reason} = Fetch.page(url)
+      assert {:error, reason} = Fetch.page(url, Fetch.deadline())
       assert reason in [:refused, :nxdomain], "#{url} gave #{inspect(reason)}"
     end
   end

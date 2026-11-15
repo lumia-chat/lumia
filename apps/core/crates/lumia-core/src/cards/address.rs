@@ -73,7 +73,7 @@ fn embedded_v4(n: u128) -> Option<Ipv4Addr> {
     // NAT64's well-known prefix: the IPv4 address is the last 32 bits.
     let carries = matches!(
         n >> 32,
-        0 | 0xffff | 0xffff_0000_0000 | 0x0064_ff9b_0000_0000_0000_0000
+        0 | 0xffff | 0xffff_0000 | 0x0064_ff9b_0000_0000_0000_0000
     );
     if carries {
         return Some(Ipv4Addr::from((n & 0xffff_ffff) as u32));

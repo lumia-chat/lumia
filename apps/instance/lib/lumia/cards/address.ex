@@ -62,7 +62,7 @@ defmodule Lumia.Cards.Address do
 
   defp embedded_v4(n) do
     cond do
-      (n >>> 32) in [0, 0xFFFF, 0xFFFF_0000_0000, 0x0064_FF9B_0000_0000_0000_0000] ->
+      (n >>> 32) in [0, 0xFFFF, 0xFFFF_0000, 0x0064_FF9B_0000_0000_0000_0000] ->
         n &&& 0xFFFF_FFFF
 
       n >>> 112 == 0x2002 ->

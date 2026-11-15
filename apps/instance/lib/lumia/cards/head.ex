@@ -23,12 +23,20 @@ defmodule Lumia.Cards.Head do
   `:title`, `:description`, `:site_name`, `:color`, `:image_url`,
   `:image_width`, `:image_height` and `:video`, or nil when it has no title.
   """
-  def parse(html, page_url) when is_binary(html) do
+  def parse(html, page_url) when is_binary(html), do: html |> read() |> build(page_url)
+
+  @doc """
+  Whether the head of `html`, the start of a page, is over as the
+  tokenizer reads it (a `</head>` or `<body>` outside comments and
+  scripts), for the fetcher to stop reading there.
+  """
+  def ended?(html) when is_binary(html), do: read(html).ended
+
+  defp read(html) do
     html
     |> binary_part(0, min(byte_size(html), @max_html))
     |> String.replace_invalid()
     |> scan()
-    |> build(page_url)
   end
 
   defp build(head, page_url) do
@@ -198,7 +206,18 @@ defmodule Lumia.Cards.Head do
 
   # ---- The tokenizer -----------------------------------------------------------
 
-  defp scan(text), do: scan(text, 0, %{title: nil, base: nil, metas: []})
+  # `lower` is the text in ASCII lower case, made once: the same offsets,
+  # so a closing tag is found in any case without copying the rest of the
+  # page at every search.
+  defp scan(text),
+    do:
+      scan(text, 0, %{
+        title: nil,
+        base: nil,
+        metas: [],
+        ended: false,
+        lower: String.downcase(text, :ascii)
+      })
 
   defp scan(text, i, head) do
     case :binary.match(text, "<", scope: {i, byte_size(text) - i}) do
@@ -216,7 +235,7 @@ defmodule Lumia.Cards.Head do
   defp tag(text, at, "</" <> _, head) do
     case tag_name(text, at + 2) do
       {"", _} -> scan(text, at + 2, head)
-      {"head", _} -> finish(head)
+      {"head", _} -> finish(%{head | ended: true})
       {_, after_name} -> scan(text, after_match(text, after_name, ">"), head)
     end
   end
@@ -232,20 +251,20 @@ defmodule Lumia.Cards.Head do
     end
   end
 
-  defp element("body", _attrs, _text, _i, head), do: finish(head)
+  defp element("body", _attrs, _text, _i, head), do: finish(%{head | ended: true})
   defp element("meta", attrs, text, i, head), do: scan(text, i, meta(attrs, head))
 
   defp element("base", attrs, text, i, %{base: nil} = head),
     do: scan(text, i, %{head | base: attr(attrs, "href")})
 
   defp element("title", _attrs, text, i, head) do
-    {raw, next} = raw_text(text, i, "title")
+    {raw, next} = raw_text(text, head.lower, i, "title")
     head = if head.title == nil, do: %{head | title: decode(raw)}, else: head
     scan(text, next, head)
   end
 
   defp element(name, _attrs, text, i, head) when name in @raw,
-    do: scan(text, elem(raw_text(text, i, name), 1), head)
+    do: scan(text, elem(raw_text(text, head.lower, i, name), 1), head)
 
   defp element(_name, _attrs, text, i, head), do: scan(text, i, head)
 
@@ -266,13 +285,15 @@ defmodule Lumia.Cards.Head do
   defp key(attrs, name) do
     case attr(attrs, name) do
       nil -> nil
-      value -> non_empty(value |> String.trim() |> ascii_downcase())
+      value -> non_empty(value |> String.trim() |> String.downcase(:ascii))
     end
   end
 
   defp attr(attrs, name), do: Enum.find_value(attrs, fn {n, v} -> n == name && v end)
 
-  # Where `needle` (any ASCII case) ends, from `from`; the end of the text when absent.
+  # Where `needle` ends, from `from`; the end of the text when absent. The
+  # needles searched in the text as written have no letters; a closing tag
+  # is searched in the lower-case copy.
   defp after_match(text, from, needle) do
     case find(text, from, needle) do
       nil -> byte_size(text)
@@ -281,10 +302,8 @@ defmodule Lumia.Cards.Head do
   end
 
   defp find(text, from, needle) when from <= byte_size(text) do
-    hay = binary_part(text, from, byte_size(text) - from)
-
-    case :binary.match(ascii_downcase(hay), ascii_downcase(needle)) do
-      {at, _} -> from + at
+    case :binary.match(text, needle, scope: {from, byte_size(text) - from}) do
+      {at, _} -> at
       :nomatch -> nil
     end
   end
@@ -295,7 +314,7 @@ defmodule Lumia.Cards.Head do
     case text do
       <<_::binary-size(^at), first, _::binary>> when first in ?a..?z or first in ?A..?Z ->
         end_at = skip(text, at, &(not ws?(&1) and &1 not in [?/, ?>]))
-        {ascii_downcase(binary_part(text, at, end_at - at)), end_at}
+        {String.downcase(binary_part(text, at, end_at - at), :ascii), end_at}
 
       _ ->
         {"", at}
@@ -314,7 +333,7 @@ defmodule Lumia.Cards.Head do
 
       _ ->
         name_end = skip(text, at + 1, &(not ws?(&1) and &1 not in [?/, ?>, ?=]))
-        name = ascii_downcase(binary_part(text, at, name_end - at))
+        name = String.downcase(binary_part(text, at, name_end - at), :ascii)
         at = skip(text, name_end, &ws?/1)
         {value, at} = value(text, at)
         attributes(text, at, [{name, value} | attrs])
@@ -346,10 +365,10 @@ defmodule Lumia.Cards.Head do
     end
   end
 
-  defp raw_text(text, at, name), do: raw_text(text, at, at, "</" <> name)
+  defp raw_text(text, lower, at, name), do: raw_text(text, lower, at, at, "</" <> name)
 
-  defp raw_text(text, at, from, close) do
-    case find(text, from, close) do
+  defp raw_text(text, lower, at, from, close) do
+    case find(lower, from, close) do
       nil ->
         {binary_part(text, at, byte_size(text) - at), byte_size(text)}
 
@@ -358,7 +377,7 @@ defmodule Lumia.Cards.Head do
 
         if after_close == nil or ws?(after_close) or after_close in [?/, ?>],
           do: {binary_part(text, at, end_at - at), after_match(text, end_at, ">")},
-          else: raw_text(text, at, end_at + byte_size(close), close)
+          else: raw_text(text, lower, at, end_at + byte_size(close), close)
     end
   end
 
@@ -373,10 +392,6 @@ defmodule Lumia.Cards.Head do
   defp byte_at(_text, _at), do: nil
 
   defp ws?(byte), do: byte in [?\s, ?\t, ?\n, ?\r, ?\f]
-
-  defp ascii_downcase(text), do: for(<<c <- text>>, into: "", do: <<downcase(c)>>)
-  defp downcase(c) when c in ?A..?Z, do: c + 32
-  defp downcase(c), do: c
 
   # ---- Character references ----------------------------------------------------
 
