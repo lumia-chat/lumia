@@ -477,6 +477,10 @@ function Conversation(props: HomeProps) {
       {(ch) => (
         <>
           <ChannelHeader kind="dm" name={title()} topic={ch().host ? `on ${ch().host}` : undefined} onBack={props.back} backLabel="Back to Home" actions={[{ icon: "members", label: props.asideShown ? "Hide details" : "Show details", pressed: props.asideShown, onClick: props.toggleAside }]} />
+          {/* Above the log, not in it, so it stays in view as the messages scroll (a server DM's note the same). */}
+          <Notice icon="shield" tone="secure">
+            Messages here are end-to-end encrypted. Only your devices and those of {others().map((p) => p.name).join(", ") || "the other participants"} can read them.
+          </Notice>
           <Show when={ch().channelId} keyed>
             {(id) => (
               <Timeline
@@ -514,9 +518,6 @@ function Conversation(props: HomeProps) {
                 onAtEnd={setAtEnd}
                 before={
                   <>
-                    <Notice icon="shield">
-                      Messages here are end-to-end encrypted. Only your devices and those of {others().map((p) => p.name).join(", ") || "the other participants"} can read them.
-                    </Notice>
                     <Show when={state() && !state()?.member}>
                       <Notice icon="lock" tone="accent" action={{ label: "Rejoin", onClick: () => void rejoin() }}>
                         This device is not in the conversation's group yet. The device that created it sends a welcome; if that never comes, rejoin from the instance's group info.

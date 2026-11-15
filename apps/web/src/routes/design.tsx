@@ -436,7 +436,7 @@ function DmConversation() {
         ]}
       />
       <MessageList>
-        <Notice icon="shield">Messages here are end-to-end encrypted. Only your devices and Maya's can read them; chat.acme.dev delivers them without seeing them.</Notice>
+        <Notice icon="shield" tone="secure">Messages here are end-to-end encrypted. Only your devices and Maya's can read them; chat.acme.dev delivers them without seeing them.</Notice>
         <Divider variant="day" label="Yesterday" />
         <Message author={PEOPLE.maya.name} initials="MC" tone="peach" time="4:12 PM" datetime="2026-11-01T16:12">
           {["Are you around tomorrow? I want to walk you through the onboarding changes before they go to the guild.", "Ten minutes, promise."]}
@@ -759,7 +759,7 @@ function PhoneConversation() {
         ]}
       >
         <MessageList>
-          <Notice icon="shield">Messages with Maya are end-to-end encrypted. Only your devices and Maya's can read them.</Notice>
+          <Notice icon="shield" tone="secure">Messages with Maya are end-to-end encrypted. Only your devices and Maya's can read them.</Notice>
           <Divider variant="day" label="Yesterday" />
           <Message author={PEOPLE.maya.name} initials="MC" tone="peach" time="4:12 PM" datetime="2026-11-02T16:12">
             Are you around tomorrow? I want to walk you through the onboarding changes.

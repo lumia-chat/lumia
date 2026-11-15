@@ -796,6 +796,7 @@ button.lu-replyref { cursor: pointer; }
 /* The design system ships no monospaced face, so the words are in the platform's own, as code is. */
 .lu-phrase, .lu-wordfield { --phrase-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .lu-notice--caution, .lu-savewarn { border: 1px solid color-mix(in srgb, var(--tone-amber-ink) 22%, var(--tone-amber)); background: color-mix(in srgb, var(--tone-amber) 60%, var(--surface)); color: var(--tone-amber-ink); }
+.lu-notice--secure { border: 1px solid color-mix(in srgb, var(--tone-green-ink) 22%, var(--tone-green)); background: color-mix(in srgb, var(--tone-green) 60%, var(--surface)); color: var(--tone-green-ink); }
 .lu-notice--caution { align-items: flex-start; line-height: 1.45; }
 .lu-card > .lu-notice { margin: 0; }
 .lu-notice--caution .lu-notice__glyph { margin-top: 1px; }

@@ -750,14 +750,14 @@ function Frame() {
                     <>
                       <ChannelHeader
                         name={title()}
-                        topic={isDm() ? undefined : ch().topic || undefined}
+                        topic={isDm() ? server()?.name : ch().topic || undefined}
                         kind={isDm() ? "page" : ch().private ? "private" : "channel"}
                         onBack={() => setReading(false)}
                         backLabel={`Back to ${server()?.name ?? "the server"}`}
                         actions={isDm() ? [] : [{ icon: "members", label: asideShown() ? "Hide members" : "Show members", pressed: asideShown(), onClick: toggleAside }]}
                       />
                       <Show when={isDm()}>
-                        <Notice icon="shield">Messages here are kept by {server()?.name ?? "this server"} and follow its message history settings. For an encrypted conversation, message privately.</Notice>
+                        <Notice icon="eye" tone="caution">Messages here are kept by {server()?.name ?? "this server"} and follow its message history settings. For an encrypted conversation, message privately.</Notice>
                       </Show>
                       <Show
                         when={!messages.data || timelineItems().length > 0}

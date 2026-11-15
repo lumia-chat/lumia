@@ -1305,8 +1305,9 @@ export function ChannelHeader(props: ChannelHeaderProps) {
 
 export interface NoticeProps {
   icon?: IconName;
-  /** `caution`: what has to be read before going on, in amber (the recovery phrase's warnings, issue #20). */
-  tone?: "neutral" | "accent" | "caution";
+  /** `caution`: what has to be read before going on, in amber (the recovery phrase's warnings, issue #20, and a server DM's
+   * note). `secure`: what is end-to-end encrypted, in green (a personal conversation's note). */
+  tone?: "neutral" | "accent" | "caution" | "secure";
   action?: { label: string; onClick?: () => void };
   children?: JSX.Element;
   class?: string;
