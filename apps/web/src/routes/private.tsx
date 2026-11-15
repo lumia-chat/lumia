@@ -102,17 +102,15 @@ export function PrivateMessages() {
   // already made here (a reauth ran out after it), straight to binding it.
   const confirmed = async () => ((await client().hasIdentity()) ? finish() : toPhrase());
 
-  onMount(async () => {
-    const token = search().reauth;
+  // Where this browser stands decides the first screen. Asked again by Try
+  // again when nothing was shown yet: a browser that holds an identity
+  // binds that one, so a new phrase there would restore nothing.
+  const begin = async () => {
+    setPhase("loading");
+    setError("");
     try {
-      if (token) {
-        await client().reauthTake(token);
-        // The token is spent by the next call; it does not stay in the address.
-        void navigate({ to: "/private-messages", search: { ...search(), reauth: undefined }, replace: true });
-      }
-      const state = await privateState();
-      if (token) return void (await confirmed());
       if (startingOver()) return void setPhase("startOver");
+      const state = await privateState();
       if (state === "ready") return done();
       if (state === "elsewhere") return void setPhase("needs");
       if (state === "unbound") return void (await finish());
@@ -127,6 +125,20 @@ export function PrivateMessages() {
       // with the phrase; without one, it is asked for first.
       if (await client().hasReauth()) await toPhrase();
       else setPhase("reauth");
+    } catch (e) {
+      setError(text(e));
+      setPhase("failed");
+    }
+  };
+
+  onMount(async () => {
+    const token = search().reauth;
+    if (!token) return void (await begin());
+    try {
+      await client().reauthTake(token);
+      // The token is spent by the next call; it does not stay in the address.
+      void navigate({ to: "/private-messages", search: { ...search(), reauth: undefined }, replace: true });
+      await confirmed();
     } catch (e) {
       setError(text(e));
       setPhase("failed");
@@ -194,7 +206,7 @@ export function PrivateMessages() {
                 <p class="auth__error" role="alert">
                   {error()}
                 </p>
-                <Button variant="primary" block onClick={() => void (words().length ? finish() : toPhrase())}>
+                <Button variant="primary" block onClick={() => void (words().length ? finish() : begin())}>
                   Try again
                 </Button>
               </div>
@@ -475,21 +487,28 @@ export function ConfirmItsYou(props: { oidcName: string; returnTo: () => string;
   );
 }
 
-/** Starting over with a new identity: what it costs, said before the reauth that does it (identity spec 4.7). */
+/**
+ * Starting over with a new identity: what it costs, said before the reauth
+ * that does it (identity spec 4.7). `again`: the new identity is already
+ * made here (a reauth ran out after it, or moving the account to it
+ * failed), so finishing moves the account to it and no new phrase comes.
+ */
 export function StartOver(props: { again?: boolean; oidcName: string; returnTo: () => string; onConfirmed: () => void; onKeepLooking: () => void }) {
+  const points = () => ["Your account, servers and channels stay as they are.", "Private messages from before stay unreadable.", "People you talk to privately will see that your key changed.", ...(props.again ? [] : ["You’ll get a new recovery phrase to save."])];
   return (
-    <Card title="Start over" subtitle="With a new identity">
-      <p class="auth__note private__lead">Without a device or your recovery phrase, your old identity can’t come back. You can start over in this browser with a new one.</p>
+    <Card title={props.again ? "Finish starting over" : "Start over"} subtitle="With a new identity">
+      <p class="auth__note private__lead">
+        {props.again
+          ? "This browser holds the new identity, made from the phrase you checked, but your account isn’t using it yet. A confirmation lasts five minutes: confirm it’s you once more to finish."
+          : "Without a device or your recovery phrase, your old identity can’t come back. You can start over in this browser with a new one."}
+      </p>
       <ul class="private__points">
-        <For each={["Your account, servers and channels stay as they are.", "Private messages from before stay unreadable.", "People you talk to privately will see that your key changed.", "You’ll get a new recovery phrase to save."]}>{(point) => <li>{point}</li>}</For>
+        <For each={points()}>{(point) => <li>{point}</li>}</For>
       </ul>
       <Notice tone="caution" icon="key">
         Only do this if the old phrase is truly gone. If you find it later, your old identity can be restored, but not onto this account.
       </Notice>
-      <Show when={props.again}>
-        <p class="auth__note">Confirm it’s you once more to finish. A confirmation lasts five minutes; this browser keeps the phrase you checked.</p>
-      </Show>
-      <ConfirmItsYou oidcName={props.oidcName} returnTo={props.returnTo} label="Confirm with your password" submit="Start over with a new identity" danger onConfirmed={props.onConfirmed} />
+      <ConfirmItsYou oidcName={props.oidcName} returnTo={props.returnTo} label="Confirm with your password" submit={props.again ? "Finish starting over" : "Start over with a new identity"} danger onConfirmed={props.onConfirmed} />
       <Button block onClick={() => props.onKeepLooking()}>
         Keep looking for the phrase
       </Button>

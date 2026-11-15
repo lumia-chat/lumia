@@ -254,7 +254,8 @@ function AddServer(props: HomeProps) {
 }
 
 export function HomeMain(props: HomeProps) {
-  const ready = privateStateQuery();
+  const privateMessages = privateStateQuery();
+  const ready = privateMessages.state;
   return (
     <Show
       when={props.view !== "add" && props.view !== "devices" && props.view !== "profile" && props.view !== "preferences" && props.view !== "mentions"}
@@ -277,28 +278,35 @@ export function HomeMain(props: HomeProps) {
           made before that would accept the request on the instance and then
           fail to make its encrypted group, leaving a conversation nobody can
           use. */}
-      <Show when={ready() === "ready"} fallback={<Show when={ready()} keyed fallback={<PrivateLoading {...props} />}>{(state) => <NoIdentity state={state} {...props} />}</Show>}>
+      <Show when={ready() === "ready"} fallback={<Show when={ready()} keyed fallback={<PrivateLoading failed={privateMessages.retrying() ? undefined : privateMessages.failed()} retry={privateMessages.retry} {...props} />}>{(state) => <NoIdentity state={state} {...props} />}</Show>}>
         {props.view === "requests" ? <Requests {...props} /> : props.view === "new" ? <NewMessage {...props} /> : <Conversation {...props} />}
       </Show>
     </Show>
   );
 }
 
-// Where a private message would start or be accepted in a browser that
-// cannot read one (issue #20): set up here when the account has no
-// identity, else "Private messages need this browser".
 // While it is not yet known whether this browser holds the account's
-// identity: nothing to press.
-function PrivateLoading(props: HomeProps) {
+// identity: nothing to press, or, when asking failed, why and Try again.
+function PrivateLoading(props: HomeProps & { failed: string | undefined; retry: () => void }) {
   return (
     <>
       <ChannelHeader kind="page" name="Home" actions={[]} onBack={props.back} backLabel="Back to Home" />
       <div class="lu-page">
-        <EmptyState icon="shield" title="Looking…" />
+        <Show when={props.failed} fallback={<EmptyState icon="shield" title="Looking…" />}>
+          {(why) => (
+            <EmptyState icon="shield" title="Couldn’t check private messages" action={{ label: "Try again", onClick: props.retry }}>
+              Whether this browser can read your private messages isn’t known yet: {why()}
+            </EmptyState>
+          )}
+        </Show>
       </div>
     </>
   );
 }
+
+// Where a private message would start or be accepted in a browser that
+// cannot read one (issue #20): set up here when the account has no
+// identity, else "Private messages need this browser".
 
 function NoIdentity(props: HomeProps & { state: PrivateState }) {
   const navigate = useNavigate();
@@ -1109,7 +1117,7 @@ function PreferenceRow(props: { label: string; children: JSX.Element }) {
 
 function Devices(props: HomeProps) {
   const roster = rosterQuery(() => true);
-  const ready = privateStateQuery();
+  const ready = privateStateQuery().state;
   const [revoking, setRevoking] = createSignal<DeviceSummary | null>(null);
   const [password, setPassword] = createSignal("");
   const [busy, setBusy] = createSignal(false);

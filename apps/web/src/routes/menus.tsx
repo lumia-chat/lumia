@@ -10,7 +10,7 @@
 import { For, Match, Show, Switch, createMemo, createSignal } from "solid-js";
 import { Button, Checkbox, Choice, Menu, MenuHead, MenuItem, MenuLabel, MenuRadio, MenuRule, PickRow, Pop, Popover, ProfileCard, SearchField, TextField, type IconName, type Status } from "../design/components";
 import { ClientError, type InviteSummary, type MemberSummary, type ServerSummary, type SnapshotSummary } from "../client/bridge";
-import { avatarSrc, channelMembersQuery, client, connection, customStatusOf, membersQuery, myStatus, presenceOf, privateState, queryClient, setMyStatus } from "../client/state";
+import { avatarSrc, channelMembersQuery, client, connection, customStatusOf, membersQuery, myStatus, presenceOf, privateStateNow, queryClient, setMyStatus } from "../client/state";
 import { channelRefusal, dmRefusal } from "./channels";
 import { useNames } from "../client/names";
 import { initialsOf, toneFor } from "./app";
@@ -444,7 +444,7 @@ function PersonCard(props: OverlayProps & { accountId: string }) {
     try {
       // Personal messages are between devices: a browser that cannot read
       // them is sent to set them up, or to be brought in (issue #20).
-      if ((await privateState()) !== "ready") {
+      if ((await privateStateNow()) !== "ready") {
         props.close();
         props.toPrivate();
         return;

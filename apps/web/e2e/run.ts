@@ -624,10 +624,49 @@ async function privateStep(which: string, stamp: number) {
       await goto(page, `${base}/app?place=home&view=devices`);
       await page.locator(".lu-device.is-this", { hasText: "This browser" }).waitFor();
       await page.screenshot({ path: `${out}/${which}-phrase-devices.png` });
+      // A browser keeps its identity when its account signs out, so the
+      // next account signed in here meets one it is not bound to. Binding
+      // it is refused, and Try again tries the binding again: a new phrase
+      // shown there would restore nothing, since the identity held is the
+      // one a binding uses.
+      phase("another account");
+      const other = resolve(work, `cli-private-other-${which}`);
+      const otherHandle = `other${which}${stamp}`;
+      lumia(other, "instance", "add", instance);
+      lumia(other, "account", "create", "--handle", otherHandle, "--password", password);
+      await page.getByRole("button", { name: /account menu/ }).click();
+      await page.getByRole("menuitem", { name: "Sign out" }).click();
+      await page.waitForURL(/\/sign-in/);
+      await trustCard(page);
+      await page.getByLabel("Email or handle").fill(otherHandle);
+      await page.getByRole("textbox", { name: "Password" }).fill(password);
+      await page.getByRole("button", { name: "Sign in", exact: true }).click();
+      await page.getByRole("button", { name: "Create, join or discover servers" }).waitFor();
+      await goto(page, `${base}/app?place=home`);
+      await page.getByRole("button", { name: "Finish setting up" }).click();
+      // The reload let the sign-in's reauth go.
+      await page.getByLabel("Password", { exact: true }).fill(password);
+      await page.getByRole("button", { name: "Continue", exact: true }).click();
+      await page.getByText("The identity made in this browser is another account’s on this instance.").waitFor();
+      await page.evaluate(() => {
+        const titles: string[] = [];
+        (window as unknown as { titles: string[] }).titles = titles;
+        new MutationObserver(() => {
+          const title = document.querySelector(".lu-card__title")?.textContent ?? "";
+          if (title && titles.at(-1) !== title) titles.push(title);
+        }).observe(document.body, { subtree: true, childList: true, characterData: true });
+      });
+      // The refused binding spent the reauth, so trying again asks for it.
+      await page.getByRole("button", { name: "Try again" }).click();
+      await page.getByLabel("Password", { exact: true }).fill(password);
+      await page.getByRole("button", { name: "Continue", exact: true }).click();
+      await page.getByText("The identity made in this browser is another account’s on this instance.").waitFor();
+      const titles = await page.evaluate(() => (window as unknown as { titles: string[] }).titles);
+      if (titles.includes("Save your recovery phrase")) throw new Error(`Try again showed a new phrase for the identity this browser holds: ${titles.join(" → ")}`);
     } finally {
       await ctx.close();
     }
-    console.log(`  ${which}: signed up through the phrase (printed alone, saved behind its warning), was shown it again after a wrong check, and a right one set up this browser, in ${Date.now() - t0} ms`);
+    console.log(`  ${which}: signed up through the phrase (printed alone, saved behind its warning), was shown it again after a wrong check, and a right one set up this browser; another account signed in here was refused the identity, and Try again asked again without a new phrase, in ${Date.now() - t0} ms`);
   }
   {
     const dir = resolve(work, `cli-private-${which}`);
@@ -2382,6 +2421,11 @@ try {
   }
   console.log(failed ? `${failed} failed; screenshots in ${out}` : "ok");
   process.exitCode = failed ? 1 : 0;
+} catch (e) {
+  // Before any step (the UI not answering, say): said, and a failure, since
+  // the exit below would otherwise end the process quietly with 0.
+  console.log(e instanceof Error ? e.message : String(e));
+  process.exitCode = 1;
 } finally {
   vite?.kill();
   pushService.stop(true);

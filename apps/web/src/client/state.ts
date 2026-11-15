@@ -580,17 +580,29 @@ export async function privateState(): Promise<PrivateState> {
 }
 
 /**
- * `privateState`, or undefined until it is known. Read without suspending:
- * a query's `data` read while it is pending suspends the navigation in
- * progress, and this one waits on the account snapshot, during which the
- * Home sidebar's memos read as undefined and the page fell over.
+ * `privateState` as a query: `state` is undefined until it is known, and
+ * `failed` holds why asking failed, for a page to say so and `retry`. Read
+ * without suspending: a query's `data` read while it is pending suspends
+ * the navigation in progress, and this one waits on the account snapshot,
+ * during which the Home sidebar's memos read as undefined and the page fell
+ * over.
  */
-export function privateStateQuery(): () => PrivateState | undefined {
+export function privateStateQuery() {
   const query = createQuery(() => ({
     queryKey: ["privateState"],
     queryFn: privateState,
   }));
-  return () => (query.isSuccess ? query.data : undefined);
+  return {
+    state: (): PrivateState | undefined => (query.isSuccess ? query.data : undefined),
+    failed: (): string | undefined => (query.isError ? (query.error instanceof Error ? query.error.message : String(query.error)) : undefined),
+    retrying: () => query.isFetching,
+    retry: () => void query.refetch(),
+  };
+}
+
+/** `privateState` from what the page already holds, asked only when it holds none or it was invalidated: an account snapshot each time otherwise. */
+export function privateStateNow(): Promise<PrivateState> {
+  return queryClient.fetchQuery({ queryKey: ["privateState"], queryFn: privateState });
 }
 
 /** After this browser's identity changed: what follows from it is asked again. */
