@@ -282,9 +282,12 @@ defmodule LumiaWeb.IdentityApiTest do
     dead =
       conn
       |> put_req_header("authorization", "Bearer " <> laptop_tokens.access_token)
+      |> put_req_header("accept", @proto)
       |> get("/api/v1/account/snapshot")
 
     assert dead.status == 401
+    # Not a session signed out: the device itself, which then erases what it kept.
+    assert %V1.Error{code: :DEVICE_REVOKED} = V1.Error.decode(dead.resp_body)
   end
 
   describe "starting over (identity spec 4.7)" do

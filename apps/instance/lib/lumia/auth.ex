@@ -77,7 +77,8 @@ defmodule Lumia.Auth do
   @doc """
   Verifies an access token. Returns the live session or an error code from
   the protocol's error table: `:unauthenticated`, `:token_expired`,
-  `:session_revoked`.
+  `:session_revoked`, or `:device_revoked` for a session whose device the
+  identity's roster revoked.
   """
   def verify_access(token) when is_binary(token) do
     now = DateTime.utc_now()
@@ -85,6 +86,9 @@ defmodule Lumia.Auth do
     case Repo.get_by(Session, access_hash: hash(token)) do
       nil ->
         {:error, :unauthenticated}
+
+      %Session{revoked_at: %DateTime{}, device_revoked: true} ->
+        {:error, :device_revoked}
 
       %Session{revoked_at: %DateTime{}} ->
         {:error, :session_revoked}
@@ -113,6 +117,9 @@ defmodule Lumia.Auth do
     case Repo.get_by(Session, refresh_hash: presented) do
       nil ->
         retired(refresh_token, presented, now)
+
+      %Session{revoked_at: %DateTime{}, device_revoked: true} ->
+        {:error, :device_revoked}
 
       %Session{revoked_at: %DateTime{}} ->
         {:error, :session_revoked}
@@ -201,26 +208,36 @@ defmodule Lumia.Auth do
     end
   end
 
-  @doc "Revokes a session: the row, any live socket, and the account log."
-  def revoke(session_id) do
+  @doc """
+  Revokes a session: the row, any live socket, and the account log. With
+  `device_revoked: true` (its device was revoked in the identity's roster)
+  the socket closes with `DISCONNECT_DEVICE_REVOKED` and the session's calls
+  answer `DEVICE_REVOKED` from then on, so the device erases what it kept
+  (identity spec 4.4).
+  """
+  def revoke(session_id, opts \\ []) do
     now = DateTime.utc_now()
+    device_revoked = Keyword.get(opts, :device_revoked, false)
 
     query =
       from s in Session,
         where: s.id == ^session_id and is_nil(s.revoked_at),
         select: {s.account_id, s.device_id}
 
-    case Repo.update_all(query, set: [revoked_at: now]) do
+    case Repo.update_all(query, set: [revoked_at: now, device_revoked: device_revoked]) do
       {0, _} ->
         {:error, :not_found}
 
       {1, [{account_id, device_id}]} ->
+        # A revoked device is told so apart from a sign-out: it erases
+        # what it kept, where a signed-out one keeps it for next time.
+        message =
+          if device_revoked,
+            do: {:device_revoked, session_id},
+            else: {:session_revoked, session_id}
+
         Tx.after_commit(fn ->
-          Phoenix.PubSub.broadcast(
-            Lumia.PubSub,
-            topic(session_id),
-            {:session_revoked, session_id}
-          )
+          Phoenix.PubSub.broadcast(Lumia.PubSub, topic(session_id), message)
         end)
 
         {:ok, _} =
@@ -261,7 +278,7 @@ defmodule Lumia.Auth do
       select: s.id
     )
     |> Repo.all()
-    |> Enum.each(&revoke/1)
+    |> Enum.each(&revoke(&1, device_revoked: true))
   end
 
   @doc "Live sessions for an account, newest first."

@@ -499,6 +499,12 @@ defmodule LumiaWeb.Gateway.SessionChannel do
     disconnect(socket, :DISCONNECT_SESSION_REVOKED)
   end
 
+  # Its device was revoked in the identity's roster: the device erases what
+  # it kept (identity spec 4.4).
+  def handle_info({:device_revoked, _id}, socket) do
+    disconnect(socket, :DISCONNECT_DEVICE_REVOKED)
+  end
+
   # A newer connection for the same session took over (protocol 6.1).
   def handle_info({:session_superseded, _id}, socket) do
     disconnect(socket, :DISCONNECT_PROTOCOL_ERROR)

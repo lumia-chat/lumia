@@ -17,6 +17,7 @@ defmodule Lumia.Auth.Session do
     field :last_seen_at, :utc_datetime_usec
     field :revoked_at, :utc_datetime_usec
     field :credentialed_at, :utc_datetime_usec
+    field :device_revoked, :boolean, default: false
     timestamps()
   end
 end

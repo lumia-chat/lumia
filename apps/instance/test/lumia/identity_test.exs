@@ -204,7 +204,7 @@ defmodule Lumia.IdentityTest do
                Identity.accept_roster(v3, {:revoke, reauth, phone_session})
 
       # The laptop's session is gone, the account log says so, and the token was single use.
-      assert {:error, :session_revoked} = Auth.verify_access(laptop_tokens.access_token)
+      assert {:error, :device_revoked} = Auth.verify_access(laptop_tokens.access_token)
       assert "roster_updated" in Accounts.event_kinds(ctx.account.id)
       assert {:error, :unauthenticated} = Identity.verify_reauth(reauth)
     end

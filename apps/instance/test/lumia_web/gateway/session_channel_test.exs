@@ -685,6 +685,17 @@ defmodule LumiaWeb.Gateway.SessionChannelTest do
       assert_receive {:socket_close, _, _}, 500
     end
 
+    test "a revoked device's socket is told DEVICE_REVOKED, so it erases what it kept", ctx do
+      {_, _socket} = join!(ctx.socket)
+      Auth.revoke_device(ctx.account.id, ctx.session.device_id)
+
+      assert_push "frame", %V1.ServerFrame{
+        frame: {:disconnect, %V1.Disconnect{reason: :DISCONNECT_DEVICE_REVOKED}}
+      }
+
+      assert_receive {:socket_close, _, _}, 500
+    end
+
     test "a second connection for the same session closes the first with PROTOCOL_ERROR", ctx do
       {_, _first} = join!(ctx.socket)
       {:ok, _session, tokens} = Auth.create_session(ctx.account.id, ctx.device_id)
