@@ -4,7 +4,7 @@ Status: accepted, 2026-11-02. This specification retires section 15 of [architec
 
 ## 1. What an instance is
 
-One instance is **one database, one blob store, one master key**, served by one or more identical nodes of the Lumia image. The database holds everything the protocol defines; the blob store holds attachment ciphertext (architecture 12); the master key wraps the blobs' content keys. The three are one unit: a database without its master key cannot open a single attachment, and blobs without the database are unreachable ciphertext.
+One instance is **one database, one blob store, one master key**, served by one or more identical nodes of the Lumia image. The database holds everything the protocol defines; the blob store holds attachment ciphertext, encrypted by the clients that uploaded it, and the instance's own pictures (architecture 12, [media.md](media.md)); the master key wraps the attachments' keys, which the database keeps, and the content keys of the instance's own pictures. The three are one unit: a database without its master key cannot open a single attachment, and blobs without the database are unreachable ciphertext.
 
 The web UI (`apps/web`) ships inside the image and is served by the instance from `priv/static/ui`, so a self-hosted instance's web origin is itself (architecture 11.4).
 
@@ -43,7 +43,8 @@ All configuration is environment variables read at boot (`config/runtime.exs`); 
 | `LUMIA_MASTER_KEY_FILE` | with blobs | Path to the 32-byte instance master key (section 5): the 32 bytes themselves (`openssl rand -out master.key 32`), or their base64 or hex |
 | `LUMIA_BLOB_STORE` | with blobs | `local:<path>`, `fs:<shared path>`, or `s3://bucket`. Unset, the instance keeps no blobs: no pictures, and people who try are told so. Set, it needs the master key, and does not start without it |
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | with `s3://` | The bucket's credentials |
-| `AWS_REGION`, `AWS_ENDPOINT_URL_S3` | no | The region (default `us-east-1`) and, for anything that is not AWS, the service's URL (Tigris, R2, MinIO); requests are path-style, `<endpoint>/<bucket>/<name>` |
+| `AWS_REGION`, `AWS_ENDPOINT_URL_S3` | no | The region (default `us-east-1`) and, for anything that is not AWS, the service's URL (Tigris, R2, MinIO); requests are path-style, `<endpoint>/<bucket>/<name>`. Clients upload and download attachments **straight to and from this URL** through presigned requests ([media.md](media.md) 4), so it must be reachable from the internet, and the bucket needs a CORS rule allowing `PUT`, `GET` and `HEAD` from the web client's origins (the instance's own and `LUMIA_WEB_ORIGINS`) with the `content-type` and `content-length` request headers |
+| `LUMIA_UPLOAD_IMAGE_MAX_BYTES`, `LUMIA_UPLOAD_FILE_MAX_BYTES` | no | The largest processed picture and the largest of anything else a client may upload; default 2 MiB and 10 MiB ([media.md](media.md) 2) |
 | `DNS_CLUSTER_QUERY` | multi-node | The DNS name that resolves to every node |
 | `RELEASE_COOKIE` | multi-node | The Erlang distribution cookie, the same on every node. Each image build generates its own, so without this a rolling upgrade's new nodes cannot join the old ones (section 6) |
 | `DB_POOL_SIZE` | no | Database connections per node, default 10 |
@@ -92,7 +93,7 @@ Recovery objectives are the operator's to choose. The install guide says plainly
 
 | Data | Who encrypts | Mechanism |
 |---|---|---|
-| Blobs | Lumia | Envelope encryption under the instance master key (architecture 12) |
+| Blobs | Lumia | Attachments: encrypted by the sharer's client, their keys kept wrapped under the instance master key; avatars and card pictures: sealed by the instance under it (architecture 12) |
 | Personal DM content and history chunks | The clients | MLS and the backup key; the server never has plaintext ([e2ee.md](e2ee.md)) |
 | Postgres data files, WAL, database backups | **The operator** | Filesystem or block-device encryption, encrypted backup storage. Lumia does not provide this and the install guide says so |
 | Instance master key | The operator | A file the operator mounts (`LUMIA_MASTER_KEY_FILE`); a KMS integration later |

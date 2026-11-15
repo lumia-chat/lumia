@@ -17,8 +17,9 @@ Legend: `[x]` done · `[~]` in progress · `[ ]` not started · `(spec §n)` the
 | 7. Multi-node, push, SwiftUI, Compose | Settled 2026-11-02; the deployment spec, the cross-node cases on two nodes, the release commands, the image and compose example, push on the instance and the relay, the macOS, iOS and Android apps, the iOS release path and the notification extension landed by 2026-11-03; invites on every surface and Web Push end to end in the suite 2026-11-05; what stays open moved to step 8. The SwiftUI macOS app was removed on 2026-11-11 (step 9); LumiaKit and the iOS app stay |
 | 8. A first release | Written 2026-11-05 from what the earlier steps parked: servers and channels from the apps, the rest of invites, presence, more sign-in methods, the release path exercised by a tag, two instances in compose, and the proofs the specs owe |
 | 9. The desktop shell on Rune | Decided 2026-11-11 after two spikes. It is the only desktop shell and the Mac app: it has every screen the SwiftUI macOS app had, bundles as `Lumia.app` and updates itself with Sparkle, checked by 150 tests (live ones against a dev instance), headless frames compared with the design boards by eye, and an update installed between local builds. The SwiftUI macOS app and the Tauri shell were removed the same day. Released as 0.3.1 on 2026-11-12, signed and notarized on macOS, with preview builds for Windows and Linux that nobody has run. On Linux since 2026-11-14 the AppImage updates itself and the deb and rpm update from Lumia's package repository, shown in containers only. Open: the hand checks, and everything on Windows and Linux beyond building |
+| 10. Attachments and link cards | Settled and specified 2026-11-15 ([media](specs/media.md)); building |
 
-Specs written: [identity](specs/identity.md), [delivery](specs/delivery.md), [authorization](specs/authorization.md). Still provisional in the architecture: E2EE backup and rejoin (11.3), deployment recovery (15).
+Specs written: [identity](specs/identity.md), [delivery](specs/delivery.md), [authorization](specs/authorization.md), [media](specs/media.md). Still provisional in the architecture: E2EE backup and rejoin (11.3), deployment recovery (15).
 
 ## Completed
 
@@ -534,6 +535,18 @@ Open, in the order to take it:
 - [ ] Windows and Linux for real. The preview packages exist; what would let them drop the word: someone opening each on its system (a window, the section 17 rows, the hand checks with Narrator and Orca and with input methods on Wayland and X11); on Windows an installer that registers `lumia:`, a signature, an icon in the program and a build with Microsoft's toolchain if MinGW's shows a difference; on Linux following a `lumia:` link through the launcher entry; on both, notifications (Rune posts none on Linux; Windows needs an identity registered), the frame kept in settings, a tray icon or quitting with the window, and the updaters above.
 - [ ] Upstream, to file or work around: Rune's font fallback does not choose a face by language (a Japanese full stop draws centred on macOS); one or two frames in a hundred begin a refresh late while scrolling; a copy across unbuilt rows is cut at 4 MiB without notice (its issue 550); `rune::single_instance` does nothing on macOS (the shell has its own lock and socket). Since `74a3c8d4`: Rune's CoreText fallback reads SFNS.ttf's names (about 55 ms) for every character the app's fonts lack and the system font has, which made the bench's first frame 3.46 s and a row with a new such character a 58 ms frame (cause and a tested patch in the entry on wide-gamut colours above); filed with the patch as Rune issue 916; bump once it lands.
 
+## Step 10: attachments and link cards
+
+Settled in a grill with Ryan on 2026-11-15 and written as [specs/media.md](specs/media.md), with architecture 6 ("Link cards"), 12 ("Attachments") and 20 and the deployment spec amended first. The sharer's client strips, resizes and encrypts every attachment in the core and uploads it straight to the blob store through presigned URLs; the instance builds server cards, the sharer's client builds personal DM cards. Order: the instance, the core, the desktop and the web in the main checkout, then iOS and Android by an agent each in a worktree.
+
+- [x] The spec and the amendments (2026-11-15).
+- [ ] Protos and protocol: `BlobRef`, the new `Attachment` and `Card`, `SendMessage.attachments` and `card_urls`, `EditMessage.remove_attachment_ids` and `cards`, `MessageCardsSet`, `SendEncrypted.blob_ids`, `DmAttachment` and `DmCard`, uploads with roles, `complete`, `GET` and `DELETE /blobs/{id}`, `POST /unfurl`, `GET /cards/{address}`.
+- [ ] Instance: uploads (presigned S3 `PUT` with the length signed, the instance's own signed URL for a directory store), complete, access-checked fetch, attachments on send and edit with keys wrapped under the master key, the orphan and purge jobs, the fetcher with its address rules, `link_cards` and `MessageCardsSet`, the two caps.
+- [ ] Core: processing (still images, GIF, MP4/MOV metadata, lossless stripping for files, ThumbHash), blob encryption, upload and fetch with a cache, the link rule, the native fetcher and DM cards, attachments and cards in the store and on `App`.
+- [ ] Desktop and web: the composer's strip, paste and drop, the card preview, attachments and cards in messages, the viewer, the two display settings' controls.
+- [ ] iOS and Android: the same, HEIC and the poster frame from the platform.
+- [ ] Ryan: a CORS rule on the flagship's R2 bucket ([deployment](specs/deployment.md) section 3), before the web can upload there.
+
 ## Open questions carried forward
 
 From architecture §20, plus ones raised while specifying:
@@ -541,6 +554,5 @@ From architecture §20, plus ones raised while specifying:
 - MLS ciphersuite and key-package cadence.
 - OpenMLS on wasm32 with WebCrypto key storage, or an adjusted web trust statement.
 - The Rune shell's proof obligations and what it needs from each platform (architecture §20; the checklist is step 9).
-- Link unfurling.
 - Whether `commands` retention of 30 days is acceptable for non-message operations (delivery §9 states the consequence).
 - The connections row of architecture §17: 112 KB of server memory per connection against the 80 KB budgeted, measured 2026-11-06 on a laptop ([spikes/2026-11-06-load.md](spikes/2026-11-06-load.md)); a Linux node's reading and the transport's heap under `fullsweep_after` are the next two things to look at.
