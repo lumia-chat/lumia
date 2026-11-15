@@ -1,6 +1,6 @@
 # Identity, Devices, and Recovery
 
-Status: accepted, 2026-11-01. This specification makes section 5 of [architecture.md](../architecture.md) implementable. Wire shapes are in `proto/lumia/v1/identity.proto` and `api.proto`; endpoint mappings are in [protocol.md](../protocol.md). Where this document and the architecture disagree, the architecture wins and this document is wrong.
+Status: accepted, 2026-11-01; amended 2026-11-14 for setting up at sign-up, the web's create and restore, reauth by every credential, and starting over (issue #20). This specification makes section 5 of [architecture.md](../architecture.md) implementable. Wire shapes are in `proto/lumia/v1/identity.proto` and `api.proto`; endpoint mappings are in [protocol.md](../protocol.md). Where this document and the architecture disagree, the architecture wins and this document is wrong.
 
 ## 1. Model
 
@@ -100,13 +100,19 @@ An instance with no held version accepts any roster that passes steps 1 to 6. Th
 
 ### 4.1 Create an identity
 
-On a device with no identity:
+On a device with no identity, at sign-up or at the first sign-in to an account with none (architecture 5.4):
 
-1. Generate 256 bits of entropy; derive root and backup key (section 2); show the phrase and require the user to confirm it.
+1. Generate 256 bits of entropy; derive root and backup key (section 2).
 2. Generate the device key.
 3. Build roster version 1: the device, with a certificate signed by the root; sign the roster with the root.
-4. Discard the root private key from memory. Keep the backup key in the keystore.
-5. Create the flagship account by identity proof unless the user declines (architecture 5.2); write the identity backup (section 8).
+4. Discard the root private key from memory. Keep the backup key in the keystore. A native device also keeps the entropy in the keystore, marked unconfirmed; a web device keeps none of it (step 7).
+5. Make the account by identity proof (`POST /accounts` with a `CREATE_ACCOUNT` proof) where the instance allows it. Where it does not, make it by the instance's own method and bind it at once with `POST /identity/link` (4.6), under the reauth token the sign-up returned (section 10). Signing in to an existing account with none binds it the same way.
+6. Create the flagship account by identity proof unless the user declines; on any instance but the flagship, sign-up shows this as an option, checked (architecture 5.2). Write the identity backup (section 8).
+7. **The phrase.** A native device shows it later, on the device's own unlock (biometric, passcode, or the operating system's prompt), from the kept entropy: a reminder on Home that can be put off for seven days at a time, a standing row on Devices, and one prompt when the identity's first personal conversation opens. A web device shows it during sign-up, before step 2, and discards the entropy with the root. Either way the person is then asked for three of the 24 words, at positions chosen at random, each typed with the wordlist completing it. When all three are right, a native device deletes the entropy and the reminders end; a wrong word shows the phrase again.
+
+The screen that shows the phrase has no copy button, since clipboards sync between devices and other apps read them. Desktop and web offer to print it or save it as a file. Android marks the screen secure (`FLAG_SECURE`), so it is left out of screenshots and the recents view; iOS hides the words while the app is in the background. The screen says that whoever has the words has the identity and its private messages, and that Lumia cannot recover them.
+
+Sign-up first offers "Already use Lumia on another device?", which leads to 4.2 or 4.3 instead of this flow. A device that already holds an identity never runs this flow: it signs up with that identity by proof.
 
 ### 4.2 Add a device, with an existing device
 
@@ -154,17 +160,29 @@ Requires the old phrase. On a device:
 4. Sign the roster with the new root; discard both private roots. Publish everywhere.
 5. Re-encrypt the identity backup and history backup manifests under the new backup key (architecture 11.3). Distribute the new backup key to native devices through the next link or through an encrypted account-log message to each device: a `BackupKeyHandoff` (`BackupKeyHandoffBody`: the identity id, the roster version the new root signed, and one `SealedBackupKey` per native device other than the rotating one, the 32-byte key under XChaCha20-Poly1305 with a key agreed between a fresh X25519 key and the device's Ed25519 key read as X25519), signed by the new root while the rotating device still holds it, published to each instance as `POST /identity/backup-key-handoff`. The instance checks that the body names the caller's identity and the roster version it holds, and that the held root signed it, then appends `BackupKeyHandedOff` to the log of every account bound to the identity; a device opens its own copy once it holds a roster at or past the version the handoff names under the root that signed it, and keeps the key. The instance never sees the key, and a device added after the rotation has no copy: its link carried the key.
 
-A lost phrase cannot be rotated. The identity remains usable through its devices; recovery is impossible; the client says this at setup.
+A lost phrase cannot be rotated. The identity remains usable through its devices; recovery is impossible; the client says this at setup. Someone without the phrase or a device starts over (4.7).
 
 ### 4.6 Link an existing account to an identity
 
-An account created with a password before the user had an identity, or on an instance that requires OIDC:
+An account created before the user had an identity, or on an instance that refuses creation by identity proof (4.1 step 5):
 
-1. The client authenticates to the account normally and calls `POST /auth/reauth`.
+1. The client authenticates to the account normally and takes the reauth token the sign-in returned, or calls `POST /auth/reauth` (section 10).
 2. It requests a `LINK_ACCOUNT` challenge, signs it with the device key, and calls `POST /identity/link` with the proof and the reauth token.
 3. The instance verifies both and binds the account to the identity. Identity-proof sign-in to that account thereafter follows the instance's policy (architecture 6.3).
 
 Matching an email or profile is never sufficient for linking.
+
+### 4.7 Start over
+
+For someone with neither a device of the identity nor its phrase, so neither 4.2 nor 4.3 is open. The account is bound to a different identity: a new one made on this device (4.1 steps 1 to 4 and 7), or one this device already holds, which is how an identity made by mistake at sign-up is replaced with the person's real one.
+
+1. The client authenticates to the account and takes a reauth token (section 10).
+2. It requests a `LINK_ACCOUNT` challenge, signs it with this device's key in the identity it is moving to, and calls `POST /identity/rebind` with the proof and the reauth token.
+3. The instance verifies both, refuses with `ALREADY_EXISTS` an identity already bound to another account here, and binds the account to the new identity. It ends the old identity's sessions on the account, deletes its key packages here, appends `IdentityRebound` to the account's log, and appends `ContactIdentityChanged` to the log of every account that shares a `PERSONAL_*` channel with it.
+4. The client repeats this on every instance it has an account on and can reauth to, listing them with their state as revocation does (4.4). An account it cannot reauth to stays bound to the old identity, and the client says so.
+5. This device joins each personal conversation by external commit (e2ee spec 10), its leaf valid because the account's identity is now the new one. Each other participant's client, on `ContactIdentityChanged`, fetches the new roster, shows a key change in every conversation they share (the safety number changes and nothing chains it to the pinned root, so it is not a rotation), pins the new root, and removes the old identity's leaves at its next commit. Messages from before stay unreadable to the new identity's devices.
+
+A key change is shown only to someone who pinned the old root, which needs a personal conversation. Replacing an identity that has never had one therefore warns nobody, and the client says which case the person is in before step 2. The old identity keeps its roster wherever it is held and can still be recovered from its phrase if that turns up, on an account not bound to another identity.
 
 ## 5. Conflicts and merging
 
@@ -194,6 +212,14 @@ One case needs more than the union. A device certified by a signer at or after t
 
 A WEB device key is scoped to the origin that served the client (architecture 11.4). Its certificate carries `web_origin`. Linking a web device follows 4.2 with the browser as N and a native device as E; the bundle omits the backup key. A web device therefore has live MLS membership, server content, and whatever personal DM traffic it received while open, and cannot restore history. The device list labels web devices with their origin. An instance refuses identity proofs from a WEB device whose `web_origin` is not the instance's own origin or the flagship's.
 
+A browser holds root material only inside one flow and discards it when the flow ends, and never holds the backup key past one:
+
+- **Create** (4.1) on any origin. The phrase and its confirmation come during sign-up, and the root, the entropy and the backup key are discarded once roster version 1 and the identity backup are written. On an origin other than the flagship's, the screen says the identity begins on that site and trusts its operator.
+- **Restore** (4.3) on the flagship's origin only. Any other origin offers no phrase entry; it says to restore in a Lumia app or on the flagship's web and then link this browser (4.2). The backup key is used to read the identity backup and discarded.
+- **Start over** (4.7) on any origin where the new identity is created there, under the same rule as create.
+
+An identity created in a browser has its identity backup written once, at creation. Until a native device is linked, nothing updates it, so a later recovery finds the roster (by root, 4.3) but not the pinned keys or blocks added since; the web's Devices screen says so. The first native device linked writes it current.
+
 ## 8. Identity backup
 
 **Contents** (`IdentityBackupBody`): version, roster, signed profile, host accounts, pinned contact keys with verification state, block list, `written_at`.
@@ -216,7 +242,17 @@ As in protocol section 13, with these details fixed:
 
 ## 10. Reauth
 
-`POST /auth/reauth` accepts a password, a TOTP code, or a WebAuthn assertion for the current account and returns a token valid for five minutes, bound to the session, usable only by the revoke and link endpoints. Each use is logged on the account log. Accounts without a credential (joined by identity proof only, bots) cannot reauth and therefore cannot revoke through the device path; the root path (4.3) remains.
+A reauth token is valid for five minutes, bound to the session, single use, and usable only by the revoke, link and rebind endpoints. Each use is logged on the account log. `POST /auth/reauth` issues one for the current account against any credential it has:
+
+- its password;
+- a TOTP code;
+- a WebAuthn assertion by one of its passkeys, from a ceremony started at `POST /auth/passkey/assert/start`;
+- a code mailed to its address by `POST /auth/reauth/magic-link`, six digits, once, within fifteen minutes, five wrong attempts spending it;
+- a code from a fresh login at its OIDC provider, started by `POST /auth/reauth/oidc/start` with `prompt=login` and `max_age=0`: the callback checks that the provider's subject is the one bound to this account and that its `auth_time` is no older than the flow, and returns a one-time code, valid for five minutes, to the return URL (the apps' system browser sheet, as at sign-in).
+
+**A sign-in that proved a credential carries one.** The `TokenPair` from a password sign-in, a passkey assertion, a mailed magic link, an OIDC login, or an account creation with a password includes a reauth token for the new session. One from identity proof, refresh, or a handoff does not, except that a handoff made within five minutes of its session's own credentialed sign-in passes that sign-in on, so an app that signs in through the instance's web page (architecture 6.3) gets one too.
+
+Accounts without a credential (joined by identity proof only, bots) cannot reauth and therefore cannot revoke or start over through the device path; the root path (4.3) remains.
 
 ## 11. Limits
 
@@ -264,4 +300,18 @@ Rotate the root; verify old certificates still verify, safety numbers change,
   and an instance holding the pre-rotation roster accepts the new one at step 3.
 Present a WEB device proof from an origin other than the instance's or the
   flagship's; verify rejection.
+Reauth by each credential (password, TOTP, passkey, mailed code, OIDC login);
+  verify a token for each, that a wrong one is refused, that the mailed code
+  is spent after five wrong attempts, and that an OIDC login whose subject is
+  another account's is refused.
+Sign in by password, passkey, magic link and OIDC; verify each TokenPair
+  carries a reauth token, and that identity-proof sign-in, refresh, and a
+  handoff from a session older than five minutes do not.
+Rebind an account to a new identity; verify the old identity's sessions end
+  and its key packages are gone, the contact sees ContactIdentityChanged, the
+  new device's external commit is accepted, and rebinding to an identity bound
+  to another account is ALREADY_EXISTS.
+Create an identity on a native device and leave the phrase unconfirmed;
+  verify the entropy survives a restart, the phrase shown matches the roster's
+  root, and three right words delete it.
 ```

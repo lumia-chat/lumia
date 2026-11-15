@@ -62,6 +62,8 @@ A leaf that fails is rejected and the group is not advanced. A client that holds
 
 **Device recovery** is an external commit (section 10). Other members see a `device recovered` marker and their clients re-verify the identity's root key against the pinned one before accepting further messages.
 
+**Starting over** (identity spec 4.7) binds a participant's account to a new identity. Its device joins by external commit as a recovered one does; leaf validation's first rule is judged against the identity the account is bound to now, so the new leaf passes and the old identity's leaves no longer would. Every other member's client, on `ContactIdentityChanged`, shows a key change rather than `device recovered`, pins the new root, and removes the old identity's leaves in its next commit.
+
 ## 5. Messages and the projection
 
 Every application message is a `DmOperation`. The sender encrypts it with `create_message`, persists the advanced MLS state and the outbox entry in **one** store transaction, then sends `SendEncrypted` with the ciphertext, `APPLICATION`, and the epoch. The command id is the `operation_id`. A retry resends identical bytes (delivery spec 3); if the epoch moved before the ack, the sender re-encrypts under a **new** command id and operation id and drops the old outbox entry.
