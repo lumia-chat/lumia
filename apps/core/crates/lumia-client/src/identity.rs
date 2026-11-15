@@ -471,8 +471,10 @@ impl<S: Store, K: Keystore> Device<'_, S, K> {
     /// # Errors
     /// On a malformed request, API failure, or missing state.
     pub async fn approve(&mut self, api: &Api, request_b64: &str) -> Result<String, ClientError> {
+        // However it wrapped when it was copied across.
+        let request_b64: String = request_b64.split_whitespace().collect();
         let bytes = B64
-            .decode(request_b64.trim())
+            .decode(request_b64)
             .map_err(|e| ClientError::State(format!("bad request: {e}")))?;
         let request = LinkRequest::decode(bytes.as_slice())?;
         let kind = DeviceKind::try_from(request.kind).unwrap_or(DeviceKind::Native);

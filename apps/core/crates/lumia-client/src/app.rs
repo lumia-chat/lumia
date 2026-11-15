@@ -4317,8 +4317,10 @@ impl App {
     /// When the text is not a link request.
     pub fn identity_link_request_summary(request: &str) -> Result<LinkRequestSummary, ClientError> {
         use base64::Engine as _;
+        // However it wrapped when it was copied across.
+        let request: String = request.split_whitespace().collect();
         let bytes = base64::engine::general_purpose::STANDARD
-            .decode(request.trim())
+            .decode(request)
             .map_err(|_| ClientError::State("that is not a link request".into()))?;
         summary_of(&bytes)
     }
@@ -5438,6 +5440,10 @@ mod link_request_tests {
         assert_eq!(summary.label, "Safari");
         assert_eq!(summary.web_origin, "https://my.lumia.chat");
         assert_eq!(summary.device_id, "07070707-0707-0707-0707-070707070707");
+        // Wrapped across lines when it was copied.
+        let (head, tail) = text.split_at(20);
+        let wrapped = App::identity_link_request_summary(&format!("{head}\r\n  {tail}")).unwrap();
+        assert_eq!(wrapped.label, "Safari");
         assert!(App::identity_link_request_summary("hello").is_err());
         assert!(App::identity_link_request_summary("").is_err());
         let short = base64::engine::general_purpose::STANDARD.encode(
