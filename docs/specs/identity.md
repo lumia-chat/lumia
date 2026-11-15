@@ -248,7 +248,7 @@ A reauth token is valid for five minutes, bound to the session, single use, and 
 - a TOTP code;
 - a WebAuthn assertion by one of its passkeys, from a ceremony started at `POST /auth/passkey/assert/start`;
 - a code mailed to its address by `POST /auth/reauth/magic-link`, six digits, once, within fifteen minutes, five wrong attempts spending it;
-- a code from a fresh login at its OIDC provider, started by `POST /auth/reauth/oidc/start` with `prompt=login` and `max_age=0`: the callback checks that the provider's subject is the one bound to this account and that its `auth_time` is no older than the flow, and returns a one-time code, valid for five minutes, to the return URL (the apps' system browser sheet, as at sign-in).
+- a fresh login at its OIDC provider, started by `POST /auth/reauth/oidc/start` with `prompt=login` and `max_age=0`: the callback checks that the provider's subject is the one bound to this account and that the ID token's `auth_time` is no older than the flow (a provider that leaves it out has not shown a fresh login), and lands at the return URL (the apps' system browser sheet, as at sign-in) with a reauth token for the session that started the flow. The token in the URL is useless without that session's access token.
 
 **A sign-in that proved a credential carries one.** The `TokenPair` from a password sign-in, a passkey assertion, a mailed magic link, an OIDC login, or an account creation with a password includes a reauth token for the new session. One from identity proof, refresh, or a handoff does not, except that a handoff made within five minutes of its session's own credentialed sign-in passes that sign-in on, so an app that signs in through the instance's web page (architecture 6.3) gets one too.
 

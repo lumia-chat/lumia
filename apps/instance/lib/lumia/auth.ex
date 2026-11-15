@@ -46,6 +46,11 @@ defmodule Lumia.Auth do
   @doc """
   Creates a session for an account on a device. Returns the session and the
   plaintext tokens, which are shown exactly once.
+
+  `:credentialed_at` is when the sign-in that made it proved a credential
+  (a password, a passkey, a mailed link, an OIDC login), or the time a
+  handoff passes on; nil for identity proof. A sign-in's answer carries a
+  reauth token while it is recent (`credentialed_recently?/1`).
   """
   def create_session(account_id, device_id, opts \\ []) do
     {access, access_hash} = token()
@@ -60,6 +65,7 @@ defmodule Lumia.Auth do
              refresh_hash: refresh_hash,
              client: Keyword.get(opts, :client),
              ip: Keyword.get(opts, :ip),
+             credentialed_at: Keyword.get(opts, :credentialed_at),
              access_expires_at: DateTime.add(now, @access_ttl_seconds, :second),
              refresh_expires_at: DateTime.add(now, @refresh_ttl_seconds, :second),
              last_seen_at: now
@@ -269,6 +275,16 @@ defmodule Lumia.Auth do
 
   @doc "The PubSub topic a gateway process subscribes to for revocation."
   def topic(session_id), do: "session:" <> session_id
+
+  @doc """
+  Whether the session's credential was proven within a reauth token's
+  lifetime: a sign-in's answer then carries one, and a handoff from it
+  passes the proof on (specs/identity.md 10).
+  """
+  def credentialed_recently?(%Session{credentialed_at: %DateTime{} = at}),
+    do: DateTime.diff(DateTime.utc_now(), at, :second) < Lumia.Identity.reauth_ttl_seconds()
+
+  def credentialed_recently?(%Session{}), do: false
 
   @doc "Access token lifetime, for Welcome and documentation."
   def access_ttl_seconds, do: @access_ttl_seconds

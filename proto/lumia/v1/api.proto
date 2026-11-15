@@ -24,6 +24,12 @@ message TokenPair {
   string refresh_token = 3;
   google.protobuf.Timestamp refresh_expires_at = 4;
   bytes session_id = 5;
+  // A reauth token for this session, when the sign-in that made the pair
+  // proved a credential (password, passkey, mailed magic link, OIDC), so the
+  // client can bind an identity or revoke a device without asking again
+  // (specs/identity.md 10). Empty after identity proof and refresh.
+  string reauth_token = 6;
+  google.protobuf.Timestamp reauth_expires_at = 7;
 }
 
 message PasswordSignInRequest {
@@ -505,9 +511,24 @@ message ReauthRequest {
     string password = 1;
     string totp_code = 2;
     // WebAuthn assertion JSON, from the ceremony started at
-    // POST /auth/passkey/assert/start.
+    // POST /auth/passkey/assert/start, by one of the account's passkeys.
     string passkey_assertion = 3;
+    // The six digits POST /auth/reauth/magic-link mailed.
+    string magic_code = 4;
   }
+  // The challenge the passkey assertion answers.
+  string passkey_challenge_id = 5;
+}
+
+// POST /auth/reauth/oidc/start: a fresh login at the account's OIDC
+// provider. The callback lands at `{return_to}?reauth={reauth_token}`, a
+// token for the session that started the flow, or `?error=oidc`.
+message ReauthOidcStartRequest {
+  string return_to = 1;
+}
+
+message ReauthOidcStartResponse {
+  string url = 1;
 }
 
 message ReauthResponse {

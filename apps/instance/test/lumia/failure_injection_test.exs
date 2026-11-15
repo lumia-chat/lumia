@@ -40,7 +40,10 @@ defmodule Lumia.FailureInjectionTest do
   @pending %{
     {:authorization, 7} => "bot tokens and their scopes (authorization section 8) are not built",
     {:authorization, 8} =>
-      "the NOT_FOUND half is covered; the override endpoints (authorization section 7) are not built"
+      "the NOT_FOUND half is covered; the override endpoints (authorization section 7) are not built",
+    {:identity, 16} => "POST /identity/rebind (identity section 4.7) is not built yet (#20)",
+    {:identity, 17} =>
+      "the core does not keep an unconfirmed phrase's entropy yet (identity section 4.1, #20)"
   }
 
   # The pending cases whose instance half is covered and tagged anyway.
@@ -48,7 +51,7 @@ defmodule Lumia.FailureInjectionTest do
 
   test "every listed case has a tagged test, or is named as pending with its reason" do
     cases = FailureInjection.cases()
-    assert length(cases) == 35, "the three lists hold 35 cases"
+    assert length(cases) == 39, "the three lists hold 39 cases"
 
     assert_whole_suite_loaded()
 
@@ -91,7 +94,7 @@ defmodule Lumia.FailureInjectionTest do
     assert {:delivery, 1, "Commit an event, kill the session process before broadcast; " <> _} =
              hd(cases)
 
-    assert {:identity, 13, "Present a WEB device proof from an origin other than " <> _} =
+    assert {:identity, 17, "Create an identity on a native device and leave the phrase " <> _} =
              List.last(cases)
 
     assert Enum.count(cases, &match?({:authorization, _, _}, &1)) == 10

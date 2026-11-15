@@ -13,6 +13,13 @@ defmodule Lumia.Auth.Oidc do
   The provider's subject is the binding; an email in the claims fills the
   account's address on creation but never matches an existing account by
   itself (architecture 6.3: matching an email is never sufficient).
+
+  The same flow is reauth for an account bound to the provider
+  (specs/identity.md 10): `start_reauth/2` asks the provider for a fresh
+  login (`prompt=login`, `max_age=0`) and keeps the session it is for, and
+  the callback, finding the provider's subject bound to that session's
+  account and the login no older than the flow, lands as
+  `{return}?reauth={token}` with a reauth token for that session.
   """
 
   import Ecto.Query
@@ -21,6 +28,7 @@ defmodule Lumia.Auth.Oidc do
   alias Lumia.Accounts
   alias Lumia.Accounts.Account
   alias Lumia.Auth.MagicLink
+  alias Lumia.Auth.Session
   alias Lumia.Repo
 
   @flow_seconds 600
@@ -45,6 +53,7 @@ defmodule Lumia.Auth.Oidc do
       field :state, :string
       field :session_params, :binary
       field :return_to, :string
+      field :session_id, Ecto.UUID
       field :expires_at, :utc_datetime_usec
       timestamps(updated_at: false)
     end
@@ -66,17 +75,37 @@ defmodule Lumia.Auth.Oidc do
   for ten minutes. `return_to` is where the browser lands afterwards: the
   instance's own UI or a trusted web origin, nothing else.
   """
-  def start(return_to) do
+  def start(return_to), do: begin_flow(return_to, nil, [])
+
+  @doc """
+  Begins a reauth for `session`'s account: the provider's URL for a fresh
+  login. `{:error, {:failed_precondition, "no_oidc"}}` for an account not
+  bound to the provider; `return_to` is checked as `start/1` checks it.
+  """
+  def start_reauth(%Session{} = session, return_to) do
+    with {:ok, settings} <- fetch_settings(),
+         %Identity{} <-
+           Repo.get_by(Identity,
+             issuer: Keyword.fetch!(settings, :issuer),
+             account_id: session.account_id
+           ) || {:error, {:failed_precondition, "no_oidc"}} do
+      begin_flow(return_to, session.id, prompt: "login", max_age: "0")
+    end
+  end
+
+  defp begin_flow(return_to, session_id, extra_params) do
     with {:ok, settings} <- fetch_settings(),
          :ok <- check_return(return_to),
          nonce = Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false),
-         {:ok, %{url: url, session_params: params}} <-
-           OIDC.authorize_url(Keyword.put(config(settings), :nonce, nonce)) do
+         config = config(settings) |> Keyword.put(:nonce, nonce),
+         config = Keyword.update!(config, :authorization_params, &(&1 ++ extra_params)),
+         {:ok, %{url: url, session_params: params}} <- OIDC.authorize_url(config) do
       {:ok, _} =
         Repo.insert(%Flow{
           state: params.state,
           session_params: :erlang.term_to_binary(params),
           return_to: return_to,
+          session_id: session_id,
           expires_at: DateTime.add(DateTime.utc_now(), @flow_seconds, :second)
         })
 
@@ -95,10 +124,8 @@ defmodule Lumia.Auth.Oidc do
   def callback(%{"state" => state} = params) when is_binary(state) do
     with {:ok, settings} <- fetch_settings(),
          {:ok, flow} <- take_flow(state),
-         {:ok, %{user: claims}} <- exchange(settings, flow, params),
-         {:ok, account} <- account_for(settings, claims),
-         {:ok, token} <- MagicLink.mint(account) do
-      {:ok, with_query(flow.return_to, "magic=" <> token)}
+         {:ok, result} <- exchange(settings, flow, params) do
+      landing(settings, flow, result)
     else
       {:error, {:flow, return_to}} -> {:error, with_query(return_to, "error=oidc")}
       _ -> {:error, nil}
@@ -106,6 +133,53 @@ defmodule Lumia.Auth.Oidc do
   end
 
   def callback(_params), do: {:error, nil}
+
+  # A sign-in: the account, found or made, and a token to complete.
+  defp landing(settings, %Flow{session_id: nil} = flow, %{user: claims}) do
+    with {:ok, account} <- account_for(settings, claims),
+         {:ok, token} <- MagicLink.mint(account) do
+      {:ok, with_query(flow.return_to, "magic=" <> token)}
+    else
+      _ -> {:error, with_query(flow.return_to, "error=oidc")}
+    end
+  end
+
+  # A reauth: the subject must be the one bound to the session's account,
+  # and the login must have happened during this flow, not be a session
+  # the provider remembered.
+  defp landing(settings, %Flow{} = flow, %{user: claims, token: token}) do
+    issuer = Keyword.fetch!(settings, :issuer)
+
+    with %Session{revoked_at: nil} = session <- Repo.get(Session, flow.session_id),
+         %Identity{} <-
+           Repo.get_by(Identity,
+             issuer: issuer,
+             subject: claims["sub"],
+             account_id: session.account_id
+           ),
+         true <- fresh_login?(token, flow) do
+      {reauth, _expires_at} = Lumia.Identity.issue_reauth(session)
+      {:ok, with_query(flow.return_to, "reauth=" <> reauth)}
+    else
+      _ -> {:error, with_query(flow.return_to, "error=oidc")}
+    end
+  end
+
+  # Assent leaves `auth_time` out of the user claims, so it is read from
+  # the ID token the callback has just verified. A provider that does not
+  # send it, though asked by `max_age`, has not shown a fresh login. A
+  # minute's allowance for the provider's clock.
+  defp fresh_login?(%{"id_token" => id_token}, %Flow{inserted_at: started}) do
+    with [_, payload, _] <- String.split(id_token, "."),
+         {:ok, json} <- Base.url_decode64(payload, padding: false),
+         {:ok, %{"auth_time" => auth_time}} when is_integer(auth_time) <- Jason.decode(json) do
+      auth_time >= DateTime.to_unix(started) - 60
+    else
+      _ -> false
+    end
+  end
+
+  defp fresh_login?(_token, _flow), do: false
 
   # ---- Internals -------------------------------------------------------------------
 

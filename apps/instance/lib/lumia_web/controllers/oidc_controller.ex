@@ -1,5 +1,8 @@
 defmodule LumiaWeb.OidcController do
-  @moduledoc "OIDC sign-in (architecture 6.3): to the provider, and back with a sign-in token."
+  @moduledoc """
+  OIDC sign-in (architecture 6.3): to the provider, and back with a sign-in
+  token; and reauth by a fresh login there (specs/identity.md 10).
+  """
 
   use Phoenix.Controller, formats: []
 
@@ -19,6 +22,23 @@ defmodule LumiaWeb.OidcController do
 
       {:error, reason} ->
         ProtoConn.render_error(conn, reason)
+    end
+  end
+
+  # POST /auth/reauth/oidc/start: the provider's URL for a fresh login, its
+  # callback landing with a reauth token for this session.
+  def reauth_start(conn, _params) do
+    with {:ok, req} <- ProtoConn.decode(conn, Lumia.V1.ReauthOidcStartRequest) do
+      case Oidc.start_reauth(conn.assigns.current_session, req.return_to) do
+        {:ok, url} ->
+          ProtoConn.render(conn, %Lumia.V1.ReauthOidcStartResponse{url: url})
+
+        {:error, {:provider, message}} ->
+          ProtoConn.render_error(conn, :internal, %{"provider" => message})
+
+        {:error, reason} ->
+          {:error, reason}
+      end
     end
   end
 

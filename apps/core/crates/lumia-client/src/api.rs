@@ -591,6 +591,7 @@ impl Api {
             "/api/v1/auth/reauth",
             &ReauthRequest {
                 credential: Some(reauth_request::Credential::Password(password.into())),
+                ..Default::default()
             },
         )
         .await

@@ -39,14 +39,14 @@ defmodule LumiaWeb.PasskeyController do
   # Public: the assertion signs the device in.
   def assert_finish(conn, _params) do
     with {:ok, req} <- ProtoConn.decode(conn, V1.PasskeyAssertFinishRequest),
-         {:ok, _session, tokens} <-
+         {:ok, session, tokens} <-
            Passkeys.assert_finish(
              req.challenge_id,
              req.credential_json,
              Proto.from_uuid(req.device_id) || Ecto.UUID.generate(),
              client: client(conn)
            ) do
-      ProtoConn.render(conn, LumiaWeb.AuthController.token_pair(tokens))
+      ProtoConn.render(conn, LumiaWeb.AuthController.signed_in_pair(session, tokens))
     end
   end
 

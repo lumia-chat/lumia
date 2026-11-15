@@ -2,7 +2,8 @@ defmodule LumiaWeb.AuthController do
   @moduledoc """
   Account creation with a password, password sign-in, refresh, sign-out,
   and the session list (docs/protocol.md section 9, auth table). Identity
-  proof flows arrive with the identity endpoints.
+  proof flows arrive with the identity endpoints. A sign-in that proved a
+  credential answers with a reauth token too (`signed_in_pair/2`).
   """
 
   use Phoenix.Controller, formats: []
@@ -31,9 +32,12 @@ defmodule LumiaWeb.AuthController do
              password: req.password
            }),
          {:ok, _} <- join(invite, account.id),
-         {:ok, _session, tokens} <-
-           Auth.create_session(account.id, device_id(req), client: client(conn)) do
-      ProtoConn.render(conn, 201, token_pair(tokens))
+         {:ok, session, tokens} <-
+           Auth.create_session(account.id, device_id(req),
+             client: client(conn),
+             credentialed_at: DateTime.utc_now()
+           ) do
+      ProtoConn.render(conn, 201, signed_in_pair(session, tokens))
     end
   end
 
@@ -61,13 +65,13 @@ defmodule LumiaWeb.AuthController do
 
   def magic_link_complete(conn, _params) do
     with {:ok, req} <- ProtoConn.decode(conn, V1.MagicLinkCompleteRequest),
-         {:ok, _session, tokens} <-
+         {:ok, session, tokens} <-
            MagicLink.complete(
              req.token,
              Proto.from_uuid(req.device_id) || Ecto.UUID.generate(),
              client: client(conn)
            ) do
-      ProtoConn.render(conn, token_pair(tokens))
+      ProtoConn.render(conn, signed_in_pair(session, tokens))
     end
   end
 
@@ -75,11 +79,12 @@ defmodule LumiaWeb.AuthController do
     with {:ok, req} <- ProtoConn.decode(conn, V1.PasswordSignInRequest),
          {:ok, account} <- Accounts.authenticate(req.handle_or_email, req.password),
          :ok <- Accounts.check_second_factor(account, req.totp_code, passkey_factor(req)),
-         {:ok, _session, tokens} <-
+         {:ok, session, tokens} <-
            Auth.create_session(account.id, Proto.from_uuid(req.device_id) || Ecto.UUID.generate(),
-             client: client(conn)
+             client: client(conn),
+             credentialed_at: DateTime.utc_now()
            ) do
-      ProtoConn.render(conn, token_pair(tokens))
+      ProtoConn.render(conn, signed_in_pair(session, tokens))
     end
   end
 
@@ -117,17 +122,30 @@ defmodule LumiaWeb.AuthController do
 
   # POST /auth/handoff: a one-time sign-in token for the caller's account,
   # for another device of the person's (a native app's browser sheet, or
-  # the app itself) to complete as a magic-link token.
+  # the app itself) to complete as a magic-link token. It proves only this
+  # session, so it passes on a credential this session proved lately and
+  # nothing else (specs/identity.md 10).
   def handoff(conn, _params) do
     account = Repo.get!(Account, conn.assigns.current_account_id)
+    session = conn.assigns.current_session
 
-    with {:ok, token} <- MagicLink.mint(account) do
+    credentialed_at = if Auth.credentialed_recently?(session), do: session.credentialed_at
+
+    with {:ok, token} <-
+           MagicLink.mint(account, credentialed: false, credentialed_at: credentialed_at) do
       expires_at = DateTime.add(DateTime.utc_now(), MagicLink.ttl_seconds(), :second)
 
       ProtoConn.render(conn, %V1.HandoffResponse{
         token: token,
         expires_at: Proto.timestamp(expires_at)
       })
+    end
+  end
+
+  # POST /auth/reauth/magic-link: six digits mailed, for POST /auth/reauth.
+  def reauth_magic_link(conn, _params) do
+    with :ok <- Lumia.Auth.ReauthCodes.request(conn.assigns.current_session) do
+      send_resp(conn, 202, "")
     end
   end
 
@@ -176,6 +194,23 @@ defmodule LumiaWeb.AuthController do
       access_expires_at: Proto.timestamp(DateTime.add(now, Auth.access_ttl_seconds(), :second)),
       refresh_token: tokens.refresh_token
     }
+  end
+
+  @doc """
+  The pair a sign-in answers with: with a reauth token for the new session
+  when the sign-in proved a credential lately (specs/identity.md 10), so
+  binding an identity or revoking a device does not ask again. Refresh
+  answers with `token_pair/1`, which never carries one.
+  """
+  def signed_in_pair(session, tokens) do
+    pair = token_pair(tokens)
+
+    if Auth.credentialed_recently?(session) do
+      {reauth, expires_at} = Lumia.Identity.issue_reauth(session)
+      %{pair | reauth_token: reauth, reauth_expires_at: Proto.timestamp(expires_at)}
+    else
+      pair
+    end
   end
 
   defp registration_open do

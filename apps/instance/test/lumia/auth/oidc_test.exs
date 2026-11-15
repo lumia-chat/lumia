@@ -105,4 +105,62 @@ defmodule Lumia.Auth.OidcTest do
   test "the trust card names the provider" do
     assert Oidc.name() == "Sign in with Fake"
   end
+
+  describe "reauth (identity spec 10)" do
+    defp reauth_flow(session, claims) do
+      return_to = "lumia://reauth"
+      assert {:ok, url} = Oidc.start_reauth(session, return_to)
+      params = url |> URI.parse() |> Map.get(:query) |> URI.decode_query()
+      assert params["prompt"] == "login"
+      assert params["max_age"] == "0"
+      flow = Repo.get_by!(Oidc.Flow, state: params["state"])
+      assert flow.session_id == session.id
+      FakeOidc.expect(:erlang.binary_to_term(flow.session_params).nonce, claims)
+      Oidc.callback(%{"code" => "code-r", "state" => params["state"]})
+    end
+
+    defp bound_session do
+      sub = "sub-#{System.unique_integer([:positive])}"
+      account_id = run_flow(%{"sub" => sub})
+      {:ok, session, _} = Lumia.Auth.create_session(account_id, Ecto.UUID.generate())
+      {sub, session}
+    end
+
+    @tag failure_injection: [identity: 14]
+    test "a fresh login by the account's own subject lands with a reauth token for the session" do
+      {sub, session} = bound_session()
+
+      assert {:ok, landed} =
+               reauth_flow(session, %{"sub" => sub, "auth_time" => System.os_time(:second)})
+
+      assert "lumia://reauth?reauth=" <> token = landed
+      assert {:ok, reauthed} = Lumia.Identity.verify_reauth(token)
+      assert reauthed.id == session.id
+    end
+
+    @tag failure_injection: [identity: 14]
+    test "another subject, a remembered login, or none stated, is sent back with an error" do
+      {sub, session} = bound_session()
+      {other, _} = bound_session()
+      now = System.os_time(:second)
+
+      assert {:error, "lumia://reauth?error=oidc"} =
+               reauth_flow(session, %{"sub" => other, "auth_time" => now})
+
+      assert {:error, "lumia://reauth?error=oidc"} =
+               reauth_flow(session, %{"sub" => sub, "auth_time" => now - 3600})
+
+      assert {:error, "lumia://reauth?error=oidc"} = reauth_flow(session, %{"sub" => sub})
+    end
+
+    test "an account not bound to the provider has nothing to reauth with there" do
+      {:ok, account} =
+        Lumia.Accounts.create_account(%{handle: "local#{System.unique_integer([:positive])}"})
+
+      {:ok, session, _} = Lumia.Auth.create_session(account.id, Ecto.UUID.generate())
+
+      assert {:error, {:failed_precondition, "no_oidc"}} =
+               Oidc.start_reauth(session, "lumia://reauth")
+    end
+  end
 end

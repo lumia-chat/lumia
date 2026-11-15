@@ -435,6 +435,9 @@ defmodule Lumia.Identity do
 
   # ---- Reauth (section 10) -------------------------------------------------------
 
+  @doc "How long a reauth token lives, in seconds."
+  def reauth_ttl_seconds, do: @reauth_ttl_seconds
+
   @doc "Issues a reauth token for a session after the caller verified a credential."
   def issue_reauth(%Session{id: session_id}) do
     token = :crypto.strong_rand_bytes(32) |> Base.url_encode64(padding: false)

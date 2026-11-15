@@ -91,7 +91,7 @@ defmodule LumiaWeb.IdentityController do
     session = conn.assigns.current_session
 
     with {:ok, req} <- ProtoConn.decode(conn, V1.ReauthRequest),
-         {:ok, _account} <- credential(req, conn.assigns.current_account_id) do
+         {:ok, _account} <- credential(req, session) do
       {token, expires_at} = Identity.issue_reauth(session)
 
       ProtoConn.render(conn, %V1.ReauthResponse{
@@ -244,15 +244,15 @@ defmodule LumiaWeb.IdentityController do
     end
   end
 
-  defp credential(%V1.ReauthRequest{credential: {:password, password}}, account_id) do
-    case Lumia.Repo.get(Lumia.Accounts.Account, account_id) do
+  defp credential(%V1.ReauthRequest{credential: {:password, password}}, session) do
+    case Lumia.Repo.get(Lumia.Accounts.Account, session.account_id) do
       %{handle: handle} -> Accounts.authenticate(handle, password)
       _ -> {:error, :unauthenticated}
     end
   end
 
-  defp credential(%V1.ReauthRequest{credential: {:totp_code, code}}, account_id) do
-    case Lumia.Repo.get(Lumia.Accounts.Account, account_id) do
+  defp credential(%V1.ReauthRequest{credential: {:totp_code, code}}, session) do
+    case Lumia.Repo.get(Lumia.Accounts.Account, session.account_id) do
       %{totp_enabled_at: %DateTime{}, totp_secret: secret} = account ->
         if Lumia.Auth.Totp.valid?(secret, code),
           do: {:ok, account},
@@ -263,7 +263,24 @@ defmodule LumiaWeb.IdentityController do
     end
   end
 
-  defp credential(_req, _account_id), do: {:error, :invalid_argument}
+  # By one of this account's passkeys: an assertion by another account's
+  # is as wrong as a bad one.
+  defp credential(%V1.ReauthRequest{credential: {:passkey_assertion, json}} = req, session) do
+    account_id = session.account_id
+
+    case Lumia.Auth.Passkeys.verify_assertion(req.passkey_challenge_id, json) do
+      {:ok, ^account_id} -> {:ok, Lumia.Repo.get!(Lumia.Accounts.Account, account_id)}
+      _ -> {:error, :unauthenticated}
+    end
+  end
+
+  defp credential(%V1.ReauthRequest{credential: {:magic_code, code}}, session) do
+    with :ok <- Lumia.Auth.ReauthCodes.verify(session, code) do
+      {:ok, Lumia.Repo.get!(Lumia.Accounts.Account, session.account_id)}
+    end
+  end
+
+  defp credential(_req, _session), do: {:error, :invalid_argument}
 
   defp no_account_yet(identity_id) do
     if Identity.account_for(identity_id), do: {:error, :already_exists}, else: :ok

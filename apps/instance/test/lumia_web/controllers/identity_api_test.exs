@@ -141,6 +141,7 @@ defmodule LumiaWeb.IdentityApiTest do
     assert refused.status == 401
   end
 
+  @tag failure_injection: [identity: 15]
   test "create an account by identity proof, then sign in by proof, then publish a roster", %{
     conn: conn
   } do
@@ -153,7 +154,8 @@ defmodule LumiaWeb.IdentityApiTest do
       })
 
     assert created.status == 201
-    assert %V1.TokenPair{} = V1.TokenPair.decode(created.resp_body)
+    # Identity proof is not a credential: no reauth token (identity spec 10).
+    assert %V1.TokenPair{reauth_token: ""} = V1.TokenPair.decode(created.resp_body)
 
     # A second account for the same identity is refused.
     again =
@@ -169,7 +171,8 @@ defmodule LumiaWeb.IdentityApiTest do
         proof: proof(conn, identity, phone, v1, :SIGN_IN)
       })
 
-    assert %V1.TokenPair{access_token: access} = V1.TokenPair.decode(signed.resp_body)
+    assert %V1.TokenPair{access_token: access, reauth_token: ""} =
+             V1.TokenPair.decode(signed.resp_body)
 
     laptop = device("laptop")
 

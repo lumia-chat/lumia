@@ -144,7 +144,11 @@ defmodule Lumia.Auth.Passkeys do
   @doc "Signs `device_id` in with the assertion the browser made for the challenge."
   def assert_finish(challenge_id, credential_json, device_id, opts \\ []) do
     with {:ok, account_id} <- verify_assertion(challenge_id, credential_json) do
-      Auth.create_session(account_id, device_id, opts)
+      Auth.create_session(
+        account_id,
+        device_id,
+        Keyword.put(opts, :credentialed_at, DateTime.utc_now())
+      )
     end
   end
 

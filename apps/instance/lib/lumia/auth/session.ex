@@ -16,6 +16,7 @@ defmodule Lumia.Auth.Session do
     field :refresh_expires_at, :utc_datetime_usec
     field :last_seen_at, :utc_datetime_usec
     field :revoked_at, :utc_datetime_usec
+    field :credentialed_at, :utc_datetime_usec
     timestamps()
   end
 end

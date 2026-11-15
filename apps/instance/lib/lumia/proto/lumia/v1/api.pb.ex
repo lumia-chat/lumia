@@ -27,6 +27,8 @@ defmodule Lumia.V1.TokenPair do
   field :refresh_token, 3, type: :string, json_name: "refreshToken"
   field :refresh_expires_at, 4, type: Google.Protobuf.Timestamp, json_name: "refreshExpiresAt"
   field :session_id, 5, type: :bytes, json_name: "sessionId"
+  field :reauth_token, 6, type: :string, json_name: "reauthToken"
+  field :reauth_expires_at, 7, type: Google.Protobuf.Timestamp, json_name: "reauthExpiresAt"
 end
 
 defmodule Lumia.V1.PasswordSignInRequest do
@@ -909,6 +911,30 @@ defmodule Lumia.V1.ReauthRequest do
   field :password, 1, type: :string, oneof: 0
   field :totp_code, 2, type: :string, json_name: "totpCode", oneof: 0
   field :passkey_assertion, 3, type: :string, json_name: "passkeyAssertion", oneof: 0
+  field :magic_code, 4, type: :string, json_name: "magicCode", oneof: 0
+  field :passkey_challenge_id, 5, type: :string, json_name: "passkeyChallengeId"
+end
+
+defmodule Lumia.V1.ReauthOidcStartRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.ReauthOidcStartRequest",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :return_to, 1, type: :string, json_name: "returnTo"
+end
+
+defmodule Lumia.V1.ReauthOidcStartResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.ReauthOidcStartResponse",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :url, 1, type: :string
 end
 
 defmodule Lumia.V1.ReauthResponse do

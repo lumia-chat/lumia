@@ -28,6 +28,8 @@ defmodule Lumia.Auth.MagicLink do
       field :token_hash, :binary
       field :expires_at, :utc_datetime_usec
       field :used_at, :utc_datetime_usec
+      field :credentialed, :boolean, default: true
+      field :credentialed_at, :utc_datetime_usec
       timestamps(updated_at: false)
     end
   end
@@ -62,17 +64,24 @@ defmodule Lumia.Auth.MagicLink do
 
   @doc """
   A one-time sign-in token for the account, for a flow that proved the
-  person another way (OIDC); nothing is mailed. Completed as a mailed
-  token is.
+  person another way (OIDC) or a handoff from a session; nothing is
+  mailed. Completed as a mailed token is.
+
+  Completing it proves a credential, as a mailed one does, unless
+  `credentialed: false` (a handoff, which proves only a session); then
+  the session it makes takes `:credentialed_at`, the time the handing
+  session proved one, if it did lately (specs/identity.md 10).
   """
-  def mint(%Account{} = account) do
+  def mint(%Account{} = account, opts \\ []) do
     token = Base.url_encode64(:crypto.strong_rand_bytes(24), padding: false)
     expires_at = DateTime.add(DateTime.utc_now(), @ttl_seconds, :second)
 
     case Repo.insert(%Link{
            account_id: account.id,
            token_hash: hash(token),
-           expires_at: expires_at
+           expires_at: expires_at,
+           credentialed: Keyword.get(opts, :credentialed, true),
+           credentialed_at: Keyword.get(opts, :credentialed_at)
          }) do
       {:ok, _} -> {:ok, token}
       {:error, _} -> {:error, :internal}
@@ -92,6 +101,7 @@ defmodule Lumia.Auth.MagicLink do
              Repo.one(from l in Link, where: l.token_hash == ^hash, lock: "FOR UPDATE"),
            true <- is_nil(link.used_at) and DateTime.after?(link.expires_at, now),
            {:ok, _} <- link |> Ecto.Changeset.change(used_at: now) |> Repo.update(),
+           opts = Keyword.put(opts, :credentialed_at, credentialed_at(link, now)),
            {:ok, session, tokens} <- Auth.create_session(link.account_id, device_id, opts) do
         {:ok, {session, tokens}}
       else
@@ -103,6 +113,9 @@ defmodule Lumia.Auth.MagicLink do
       {:error, _} -> {:error, :unauthenticated}
     end
   end
+
+  defp credentialed_at(%Link{credentialed: true}, now), do: now
+  defp credentialed_at(%Link{credentialed_at: at}, _now), do: at
 
   defp send_link(%Account{} = account) do
     since = DateTime.add(DateTime.utc_now(), -3600, :second)
