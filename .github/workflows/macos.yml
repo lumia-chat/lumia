@@ -28,6 +28,14 @@ jobs:
     env:
       MIX_ENV: dev
       DB_URL: postgres://postgres:postgres@localhost:5432/lumia_dev
+      # The instance the smokes run against has no code reloader: nothing
+      # changes its code here, and the reloader's check before every request,
+      # one request at a time, costs a second and more on a loaded machine;
+      # on this runner a phone's sign-in or snapshot outran the core's 20 s
+      # now and then, which was most of the push smoke's flakiness. A
+      # compile-time switch of the endpoint, so the cached build is keyed by
+      # it too.
+      LUMIA_CODE_RELOADER: "false"
     steps:
       - uses: actions/checkout@v4
       - uses: erlef/setup-beam@v1
@@ -68,7 +76,7 @@ jobs:
             # compiled image library is there and not under _build: without it, a
             # restored build has the module and no library to load.
             apps/instance/priv/native
-          key: mix-dev-${{ runner.os }}-${{ hashFiles('apps/instance/mix.lock', 'apps/instance/native/lumia_media/src/**', 'apps/instance/native/lumia_media/Cargo.*') }}
+          key: mix-dev-noreload-${{ runner.os }}-${{ hashFiles('apps/instance/mix.lock', 'apps/instance/native/lumia_media/src/**', 'apps/instance/native/lumia_media/Cargo.*') }}
       # The desktop shell is a workspace of its own on Rune's toolchain.
       - run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt,clippy
       - uses: Swatinem/rust-cache@v2
