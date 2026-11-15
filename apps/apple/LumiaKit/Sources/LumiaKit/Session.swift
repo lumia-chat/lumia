@@ -536,6 +536,16 @@ public final class LumiaSession {
 
     public func identityLinkRequest(label: String) async throws -> String { try await client.identityLinkRequest(label: label) }
 
+    /// On this phone, which holds the identity: approves another device's
+    /// request (identity spec 4.2 steps 3 to 6) and answers the code it
+    /// claims with. The roster held here gains the device at once, so
+    /// Devices lists it before it has claimed.
+    public func identityApprove(request: String) async throws -> String {
+        let code = try await client.identityApprove(request: request)
+        roster = try? await client.identityShow()
+        return code
+    }
+
     /// Claims the code an approving device gave, which makes this phone a
     /// device of the identity and signs it in by identity proof: the core's
     /// claim does both, so nothing signs in a second time here (that made a

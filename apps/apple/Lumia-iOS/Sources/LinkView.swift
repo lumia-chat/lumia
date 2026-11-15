@@ -24,7 +24,7 @@ struct LinkView: View {
                             Button { Task { await start() } } label: { Text("Start linking").frame(maxWidth: .infinity) }
                                 .buttonStyle(.lumiaPrimary)
                         } else {
-                            Text("On a device that holds your identity, approve this request and enter the code it gives you.")
+                            Text(LinkApproval.instruction)
                                 .font(LumiaTokens.textBody.font).foregroundStyle(LumiaTokens.inkSecondary.color)
                             Text(request)
                                 .font(.system(.caption, design: .monospaced))
@@ -47,7 +47,7 @@ struct LinkView: View {
                                 .onSubmit { Task { await claim() } }
                             Button { Task { await claim() } } label: { Text("Claim and sign in").frame(maxWidth: .infinity) }
                                 .buttonStyle(.lumiaPrimary)
-                                .disabled(busy || code.trimmingCharacters(in: .whitespaces).isEmpty)
+                                .disabled(busy || LinkApproval.typedCode(code).isEmpty)
                         }
                         if !error.isEmpty { LumiaErrorText(error) }
                         Button(session.signedIn ? "Back" : "Back to sign in") { store.route = session.signedIn ? .app : .signIn }
@@ -71,7 +71,7 @@ struct LinkView: View {
         busy = true
         defer { busy = false }
         do {
-            try await session.identityClaim(code: code.trimmingCharacters(in: .whitespaces))
+            try await session.identityClaim(code: LinkApproval.typedCode(code))
             store.route = .app
         } catch {
             self.error = error.lumiaMessage

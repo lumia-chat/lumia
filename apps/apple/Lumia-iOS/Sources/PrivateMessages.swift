@@ -474,22 +474,9 @@ struct PhraseScreen: View {
     /// offers none, and the words are shown.
     private func unlock() async {
         locked = false
-        let context = LAContext()
-        var unavailable: NSError?
-        #if DEBUG
-        // A smoke run (scripts/smoke-private-messages.sh) cannot answer the
-        // system's passcode prompt, which a simulator shows too.
-        let asks = ProcessInfo.processInfo.environment["LUMIA_DEV_NO_UNLOCK"] != "1"
-        #else
-        let asks = true
-        #endif
-        if asks, context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &unavailable) {
-            do {
-                _ = try await context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "Show your recovery phrase")
-            } catch {
-                locked = true
-                return
-            }
+        guard await ownerUnlock("Show your recovery phrase") else {
+            locked = true
+            return
         }
         do {
             if let found = try await session.phrase() {
@@ -512,6 +499,27 @@ struct PhraseScreen: View {
         controller.printInfo = info
         controller.printFormatter = UIMarkupTextPrintFormatter(markupText: PhraseWords.page(words))
         controller.present(animated: true)
+    }
+}
+
+/// The phone's own unlock (passcode, Face ID or Touch ID), which showing
+/// the recovery phrase and approving a device ask for: true once given,
+/// and straight away on a phone with no passcode set, which offers none.
+func ownerUnlock(_ reason: String) async -> Bool {
+    let context = LAContext()
+    var unavailable: NSError?
+    #if DEBUG
+    // A smoke run (scripts/smoke-private-messages.sh, smoke-approve.sh)
+    // cannot answer the system's passcode prompt, which a simulator shows too.
+    let asks = ProcessInfo.processInfo.environment["LUMIA_DEV_NO_UNLOCK"] != "1"
+    #else
+    let asks = true
+    #endif
+    guard asks, context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &unavailable) else { return true }
+    do {
+        return try await context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason)
+    } catch {
+        return false
     }
 }
 

@@ -1,12 +1,14 @@
 // The things the simulator cannot do from the command line: answer the
 // notification permission prompt, tap a notification, type into a
 // composer, make a choice in Preferences, sign out from the account menu,
-// look into Notification Center, and read a screen as assistive technology
-// does. scripts/smoke-push.sh,
+// look into Notification Center, put a link request on the clipboard, and
+// read a screen as assistive technology does. scripts/smoke-push.sh,
 // scripts/smoke-typing.sh, scripts/smoke-preferences.sh,
-// scripts/smoke-signout.sh, scripts/smoke-server-settings.sh and scripts/smoke-rail.sh run these tests with the app signed in
+// scripts/smoke-signout.sh, scripts/smoke-server-settings.sh, scripts/smoke-rail.sh
+// and scripts/smoke-approve.sh run these tests with the app signed in
 // (the LUMIA_DEV_* environment, passed through xcodebuild's TEST_RUNNER_
 // prefix).
+import UIKit
 import XCTest
 
 final class SmokeUITests: XCTestCase {
@@ -1197,5 +1199,60 @@ final class SmokeUITests: XCTestCase {
         start.tap()
         XCTAssertTrue(app.staticTexts["Save your recovery phrase"].waitForExistence(timeout: 30), "no new phrase to save after starting over")
         reached("started")
+    }
+
+    // MARK: Approving a device (identity spec 4.2; scripts/smoke-approve.sh)
+
+    /// A phone that set private messages up at sign-in approves the CLI as
+    /// a new device: Devices' Approve a device opens the screen, text that
+    /// is not a request says so, the CLI's request through the system's
+    /// Paste says what it would add and warns, Approve (the system's unlock
+    /// skipped, LUMIA_DEV_NO_UNLOCK) shows the code, which the test leaves
+    /// in LUMIA_UITEST_CODE for the smoke's CLI to claim, and Done is back
+    /// on Devices with the new device listed.
+    func testApprovingADeviceFromThisPhone() throws {
+        let env = ProcessInfo.processInfo.environment
+        let steps = try XCTUnwrap(env["LUMIA_UITEST_STEPS"])
+        let request = try XCTUnwrap(env["LUMIA_UITEST_REQUEST"])
+        let label = try XCTUnwrap(env["LUMIA_UITEST_LABEL"])
+        let codeFile = try XCTUnwrap(env["LUMIA_UITEST_CODE"])
+        let reached = { (step: String) in self.reached(step, under: steps) }
+        let app = launch(screen: "devices")
+        let open = app.buttons.matching(NSPredicate(format: "label == %@", "Approve a device")).firstMatch
+        XCTAssertTrue(open.waitForExistence(timeout: 90), "no Approve a device on Devices: private messages were not set up at sign-in")
+        reached("devices")
+        open.tap()
+
+        let field = app.textViews["Link request"]
+        XCTAssertTrue(field.waitForExistence(timeout: 10), "no field for the request")
+        let approve = app.buttons["Approve"]
+        XCTAssertFalse(approve.isEnabled, "Approve on with nothing pasted")
+        field.tap()
+        field.typeText("hello")
+        XCTAssertTrue(app.staticTexts["That isn't a link request."].waitForExistence(timeout: 5), "text that is not a request is not said to be one")
+        XCTAssertFalse(approve.isEnabled, "Approve on for text that is not a request")
+        reached("notarequest")
+        app.buttons["Clear"].tap()
+
+        // As a request shared from another device arrives: on the clipboard.
+        UIPasteboard.general.string = request
+        app.buttons["Paste"].tap()
+        let adds = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "A device named “\(label)”")).firstMatch
+        XCTAssertTrue(adds.waitForExistence(timeout: 10), "the pasted request does not say what it would add, on:\n" + app.debugDescription)
+        XCTAssertTrue(adds.label.contains("It will read your private messages from now on."), "no warning: \(adds.label)")
+        XCTAssertTrue(approve.isEnabled, "Approve off for a request")
+        reached("request")
+        approve.tap()
+
+        let code = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Code")).firstMatch
+        XCTAssertTrue(code.waitForExistence(timeout: 30), "no code after Approve, on:\n" + app.debugDescription)
+        let value = (code.value as? String) ?? ""
+        XCTAssertEqual(value.count, 8, "the code is not 8 characters: \(value)")
+        XCTAssertTrue(app.staticTexts["Type this code on the new device. It works once, within ten minutes."].exists)
+        try value.write(toFile: codeFile, atomically: true, encoding: .utf8)
+        reached("code")
+        app.buttons["Done"].tap()
+        XCTAssertTrue(app.staticTexts[label].waitForExistence(timeout: 10), "Devices does not list \(label) once approved")
+        reached("listed")
     }
 }

@@ -39,6 +39,8 @@ enum Screen: Hashable {
     case restore
     case startOver
     case setUp
+    /// Approving another device from Devices (`ApproveDevice.swift`).
+    case approveDevice
 }
 
 /// A server's unread mark on the rail: a dot at its tile's top end, 11

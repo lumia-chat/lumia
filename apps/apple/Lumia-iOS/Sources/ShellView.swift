@@ -68,6 +68,7 @@ struct ShellView: View {
                 case .restore: RestoreScreen(session: session, back: back(from: screen)) { path = [] }
                 case .startOver: StartOverScreen(session: session, back: back(from: screen)) { path = [] }
                 case .setUp: SetUpScreen(session: session, back: back(from: screen))
+                case .approveDevice: ApproveDeviceScreen(session: session)
                 }
             }
             .sheet(isPresented: $needsSetup) {
@@ -155,6 +156,8 @@ struct ShellView: View {
                 case "restore": place = .home; path = [.restore]
                 case "startover": place = .home; path = [.startOver]
                 case "needssetup": place = .home; needsSetup = true
+                // Approving another device, over Devices (scripts/smoke-approve.sh).
+                case "approve": place = .home; path = [.devices, .approveDevice]
                 default: devMembershipScreen(screen, serverID: first)
                 }
             }

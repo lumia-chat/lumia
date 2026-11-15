@@ -995,8 +995,8 @@ struct DevicesScreen: View {
 
     var body: some View {
         // Link takes this phone into an identity, so it is offered only to a
-        // phone without one; approving another device is not on a phone yet.
-        PanelScreen(back: "Home", title: "Devices", subtitle: session.roster == nil ? "No identity on this phone" : "\(active.count) linked to you", actions: session.roster == nil ? [("plus", "Link this phone", { store.route = .link })] : []) {
+        // phone without one; a phone with one approves other devices instead.
+        PanelScreen(back: "Home", title: "Devices", subtitle: session.roster == nil ? "No identity on this phone" : "\(active.count) linked to you", actions: session.roster == nil ? [("plus", "Link this phone", { store.route = .link })] : [("plus", "Approve a device", { path.append(.approveDevice) })]) {
             ScrollView {
                 VStack(alignment: .leading, spacing: LumiaTokens.space12) {
                     // Standing while the recovery phrase waits (architecture 5.4); never put off.
@@ -1029,6 +1029,11 @@ struct DevicesScreen: View {
                                 .background(LumiaTokens.tile.color, in: RoundedRectangle(cornerRadius: LumiaTokens.radius14))
                                 .overlay(RoundedRectangle(cornerRadius: LumiaTokens.radius14).stroke(d.thisDevice ? LumiaTokens.accent.color : LumiaTokens.line.color))
                         }
+                        Button { path.append(.approveDevice) } label: { Label("Approve a device", systemImage: "plus").frame(maxWidth: .infinity) }
+                            .buttonStyle(.lumiaSecondary)
+                        Text("Link a laptop, a browser or another phone: it shows a request, and this phone approves it.")
+                            .font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkQuiet.color)
+                            .fixedSize(horizontal: false, vertical: true)
                         let revoked = devices.filter(\.revoked)
                         if !revoked.isEmpty {
                             SectionTitle("Revoked").padding(.horizontal, -LumiaTokens.space10)
