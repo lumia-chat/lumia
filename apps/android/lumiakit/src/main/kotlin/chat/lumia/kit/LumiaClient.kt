@@ -86,6 +86,8 @@ val Throwable.lumiaMessage: String
         is LumiaException.Api -> detail
         is LumiaException.DeviceRevoked -> "This device was revoked (roster v$rosterVersion)."
         is LumiaException.NotSignedIn -> "Not signed in."
+        is LumiaException.ReauthNeeded -> "Confirm it's you first."
+        is LumiaException.AccountHasIdentity -> "This account already has private messages on another device."
         is LumiaException.Other -> detail
         else -> message ?: toString()
     }

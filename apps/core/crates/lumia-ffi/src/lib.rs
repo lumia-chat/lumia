@@ -49,6 +49,14 @@ pub enum LumiaError {
     /// Not signed in to this instance.
     #[error("not signed in")]
     NotSignedIn,
+    /// An identity operation needs a fresh reauth: ask for the password, a
+    /// code, a passkey or an OIDC login, then call again.
+    #[error("confirm it is you first")]
+    ReauthNeeded,
+    /// The account has private messages on a device this one is not: offer
+    /// link and restore, never a second identity.
+    #[error("this account already has private messages set up on another device")]
+    AccountHasIdentity,
     /// A malformed argument, a lifecycle mistake, or any other failure.
     #[error("{detail}")]
     Other { detail: String },
@@ -69,6 +77,8 @@ impl From<ClientError> for LumiaError {
             },
             ClientError::DeviceRevoked { roster_version } => Self::DeviceRevoked { roster_version },
             ClientError::NotSignedIn => Self::NotSignedIn,
+            ClientError::ReauthNeeded => Self::ReauthNeeded,
+            ClientError::AccountHasIdentity => Self::AccountHasIdentity,
             other => Self::Other {
                 detail: other.to_string(),
             },

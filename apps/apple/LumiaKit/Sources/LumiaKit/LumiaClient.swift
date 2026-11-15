@@ -296,7 +296,7 @@ public extension Error {
         switch self as? LumiaError {
         case let .Api(code, _, _)?: ["UNAUTHENTICATED", "TOKEN_EXPIRED", "SESSION_REVOKED", "DEVICE_REVOKED"].contains(code)
         case .DeviceRevoked?, .NotSignedIn?: true
-        case .Other?, nil: false
+        case .ReauthNeeded?, .AccountHasIdentity?, .Other?, nil: false
         }
     }
 
@@ -306,6 +306,8 @@ public extension Error {
         case let .Api(_, message, _)?: message
         case let .DeviceRevoked(version)?: "This device was revoked (roster v\(version))."
         case .NotSignedIn?: "Not signed in."
+        case .ReauthNeeded?: "Confirm it's you first."
+        case .AccountHasIdentity?: "This account already has private messages on another device."
         case let .Other(message)?: message
         case nil: localizedDescription
         }
