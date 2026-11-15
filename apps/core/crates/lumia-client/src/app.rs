@@ -991,6 +991,11 @@ const DELETED_PAGES: usize = 10;
 const KEPT_SNAPSHOT: &str = "kept_snapshot";
 const KEPT_MEMBERS: &str = "kept_members";
 
+/// Kept in the keys store from the moment a call hears that the identity
+/// revoked this device until it has erased: one that closed first erases
+/// at its next launch.
+const REVOKED_HEARD: &str = "device_revoked";
+
 fn hex_id(id: &[u8]) -> String {
     if id.is_empty() {
         String::new()
@@ -1585,12 +1590,20 @@ impl App {
         let host = host_of(base_url);
         let writer_guard = writer.as_ref().map(WriterLock::shared).transpose()?;
         let mut store = opener(StoreName::Instance)?;
-        store.meta_set("base_url", base_url.trim_end_matches('/'))?;
-        let reader = opener(StoreName::Instance)?;
-        let writer_generation = writer_generation(&reader)?;
         let keys = opener(StoreName::Keys)?;
         let identity_store = opener(StoreName::IdentityStore)?;
         let mut identity_keys = opener(StoreName::IdentityKeys)?;
+        // A call heard that the identity revoked this device, and it was not
+        // erased before the app closed: it is now, before anything is read.
+        if keys.get(REVOKED_HEARD)?.is_some() {
+            store.erase()?;
+            keys.erase()?;
+            identity_store.erase()?;
+            identity_keys.erase()?;
+        }
+        store.meta_set("base_url", base_url.trim_end_matches('/'))?;
+        let reader = opener(StoreName::Instance)?;
+        let writer_generation = writer_generation(&reader)?;
         let device_id = match identity_keys.get("device_id")? {
             Some(id) => id,
             None => {
@@ -1601,6 +1614,7 @@ impl App {
         };
         let rotate = Arc::clone(&opener);
         let read = Arc::clone(&opener);
+        let heard = Arc::clone(&opener);
         let held = tokens(&keys)?;
         // The refresh token this process last saw in the store or put
         // there. When the store holds another, someone else on these
@@ -1622,6 +1636,11 @@ impl App {
                         *wrote.lock().unwrap_or_else(PoisonError::into_inner) =
                             Some(pair.refresh_token.clone());
                     }
+                }
+            }))
+            .on_revoked(Arc::new(move || {
+                if let Ok(mut keys) = heard(StoreName::Keys) {
+                    let _ = keys.put(REVOKED_HEARD, b"1");
                 }
             }))
             .stored(Arc::new(move || {
@@ -2383,6 +2402,9 @@ impl App {
             (access.and(refresh), snapshot.and(members).and(log))
         };
         self.api.clear_tokens();
+        // Signed out because a call heard this device was revoked: it
+        // erases now, not at the next sign-in.
+        self.erase_if_revoked().await;
         tokens?;
         kept?;
         Ok(())

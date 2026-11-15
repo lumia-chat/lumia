@@ -120,6 +120,10 @@ pub type RotateHook = Arc<dyn Fn(&TokenPair) + Send + Sync>;
 /// process has changed it there since this process last read or wrote it.
 pub type StoredHook = Arc<dyn Fn() -> Option<Tokens> + Send + Sync>;
 
+/// Called when a call is first answered `DEVICE_REVOKED`, to keep that
+/// past a restart: the device erases what it kept at its next launch.
+pub type RevokedHook = Arc<dyn Fn() + Send + Sync>;
+
 /// A client for one instance's HTTP API.
 #[derive(Clone)]
 pub struct Api {
@@ -130,6 +134,7 @@ pub struct Api {
     rotating: Arc<AsyncMutex<()>>,
     on_rotate: Option<RotateHook>,
     stored: Option<StoredHook>,
+    on_revoked: Option<RevokedHook>,
     /// What a request is allowed before what it carries is counted in.
     timeout: Duration,
     /// How many sign-ins have given this client a pair: a rotation keeps
@@ -168,6 +173,7 @@ impl Api {
             rotating: Arc::new(AsyncMutex::new(())),
             on_rotate: None,
             stored: None,
+            on_revoked: None,
             timeout: REQUEST_TIMEOUT,
             sign_ins: Arc::new(AtomicU64::new(0)),
             revoked: Arc::new(AtomicBool::new(false)),
@@ -202,6 +208,13 @@ impl Api {
     #[must_use]
     pub fn on_rotate(mut self, hook: RotateHook) -> Self {
         self.on_rotate = Some(hook);
+        self
+    }
+
+    /// Called when a call is first answered `DEVICE_REVOKED`.
+    #[must_use]
+    pub fn on_revoked(mut self, hook: RevokedHook) -> Self {
+        self.on_revoked = Some(hook);
         self
     }
 
@@ -2093,8 +2106,11 @@ impl Api {
         if status == StatusCode::UNAUTHORIZED
             && matches!(api_error(status, &bytes), ClientError::Api { code, .. } if code == "DEVICE_REVOKED")
             && self.epoch.load(Ordering::SeqCst) == epoch
+            && !self.revoked.swap(true, Ordering::SeqCst)
         {
-            self.revoked.store(true, Ordering::SeqCst);
+            if let Some(hook) = &self.on_revoked {
+                hook();
+            }
         }
         Ok((status, bytes.to_vec()))
     }

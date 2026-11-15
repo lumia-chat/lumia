@@ -40,6 +40,8 @@ fn stamp() -> u128 {
 /// A device: its stores in a directory of its own, as a shell keeps them.
 struct Device {
     dir: PathBuf,
+    /// Its stores outlive it: it is opened again on them.
+    reopening: bool,
     app: Arc<App>,
     events: Arc<Mutex<Vec<AppEvent>>>,
 }
@@ -48,6 +50,18 @@ impl Device {
     fn new(base: &str) -> Self {
         let dir = std::env::temp_dir().join(format!("lumia-live-{}", stamp()));
         std::fs::create_dir_all(&dir).unwrap();
+        Self::at(base, dir)
+    }
+
+    /// The app opened again on what this device keeps, as at a relaunch.
+    fn reopened(mut self, base: &str) -> Self {
+        self.reopening = true;
+        let dir = self.dir.clone();
+        drop(self);
+        Self::at(base, dir)
+    }
+
+    fn at(base: &str, dir: PathBuf) -> Self {
         let at = dir.clone();
         let opener: Opener = Arc::new(move |name| {
             SqliteStore::open(&at.join(match name {
@@ -60,6 +74,7 @@ impl Device {
         let app = App::open(base, Place::Native, opener).unwrap();
         Self {
             dir,
+            reopening: false,
             app,
             events: Arc::new(Mutex::new(Vec::new())),
         }
@@ -109,7 +124,9 @@ impl Device {
 impl Drop for Device {
     fn drop(&mut self) {
         self.app.stop();
-        let _ = std::fs::remove_dir_all(&self.dir);
+        if !self.reopening {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
     }
 }
 
@@ -1871,4 +1888,43 @@ async fn a_link_started_again_or_declined_after_the_answer_is_not_approved() {
         1,
         "no device was added"
     );
+}
+
+/// A device that heard it was revoked from a call and closed before anything
+/// erased it erases at its next launch (identity spec 4.4); and one signed
+/// out on hearing it erases then.
+#[tokio::test]
+async fn a_revocation_heard_by_a_call_is_kept_until_the_device_erases() {
+    let Some(base) = instance() else { return };
+    let laptop = Device::new(&base);
+    let handle = format!("relaunch{}", stamp());
+    laptop
+        .app
+        .create_account(&handle, PASSWORD, None)
+        .await
+        .unwrap();
+    laptop.app.identity_setup("Laptop").await.unwrap();
+
+    for sign_out in [false, true] {
+        let phone = Device::new(&base);
+        phone.app.sign_in(&handle, PASSWORD, None).await.unwrap();
+        link_by_prompt(&laptop, &phone, "Phone").await;
+        let phone_id = phone.app.device_id();
+        laptop
+            .app
+            .identity_revoke(&phone_id, PASSWORD)
+            .await
+            .unwrap();
+        assert!(phone.app.snapshot().await.is_err());
+        assert!(phone.app.has_identity());
+        let phone = if sign_out {
+            phone.app.sign_out().await.unwrap();
+            phone
+        } else {
+            phone.reopened(&base)
+        };
+        assert!(!phone.app.has_identity(), "erased (signed out: {sign_out})");
+        assert_ne!(phone.app.device_id(), phone_id);
+        assert!(phone.app.identity_phrase().await.unwrap().is_none());
+    }
 }
