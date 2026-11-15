@@ -1743,6 +1743,7 @@ impl App {
         challenge_id: &str,
         credential_json: &str,
     ) -> Result<(), ClientError> {
+        self.erase_if_revoked().await;
         let pair = self
             .api
             .passkey_assert_finish(challenge_id, credential_json, self.this_device())
@@ -1763,6 +1764,7 @@ impl App {
         challenge_id: &str,
         credential_json: &str,
     ) -> Result<(), ClientError> {
+        self.erase_if_revoked().await;
         let pair = self
             .api
             .sign_in_with_passkey(
@@ -1827,6 +1829,7 @@ impl App {
     /// # Errors
     /// `UNAUTHENTICATED` for an unknown, used or expired token; transport failure.
     pub async fn sign_in_magic_link(&self, token: &str) -> Result<(), ClientError> {
+        self.erase_if_revoked().await;
         let token = magic_token_of(token);
         let pair = self
             .api
@@ -1895,6 +1898,7 @@ impl App {
         password: &str,
         invite: Option<&str>,
     ) -> Result<(), ClientError> {
+        self.erase_if_revoked().await;
         let code = invite.map(invite_code_of).unwrap_or_default();
         let pair = self
             .api
@@ -2287,6 +2291,7 @@ impl App {
         password: &str,
         totp_code: Option<&str>,
     ) -> Result<(), ClientError> {
+        self.erase_if_revoked().await;
         let pair = match totp_code.filter(|c| !c.is_empty()) {
             Some(code) => {
                 self.api
@@ -2894,6 +2899,7 @@ impl App {
         self.stop();
         *self.dm.lock().unwrap_or_else(PoisonError::into_inner) = None;
         self.api.clear_tokens();
+        self.api.take_revoked();
         let mut first_error = None;
         {
             let mut inner = self.lock();
@@ -2934,6 +2940,21 @@ impl App {
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = id;
         first_error.map_or(Ok(()), Err)
+    }
+
+    /// Erases this device before a sign-in when one of its calls heard that
+    /// the identity revoked it and no loop is running to erase it: the app
+    /// went to sign-in on that answer before the loop heard it, or never
+    /// started one. The sign-in that follows is a new device's.
+    /// A loop still giving the store back erases it when it ends instead.
+    async fn erase_if_revoked(&self) {
+        let idle = {
+            let inner = self.lock();
+            inner.commands.is_none() && inner.store.is_some()
+        };
+        if idle && self.api.take_revoked() {
+            let _ = self.erase_device().await;
+        }
     }
 
     /// Stops the gateway loop; the store comes back once it ends.

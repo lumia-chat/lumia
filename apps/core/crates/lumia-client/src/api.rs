@@ -25,7 +25,7 @@
 //! call that runs out fails as any transport failure does.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -137,6 +137,10 @@ pub struct Api {
     /// revocation of the session it holds from one of a session this
     /// client has already left for another.
     sign_ins: Arc<AtomicU64>,
+    /// Whether any call was answered `DEVICE_REVOKED`: the identity revoked
+    /// this device, which is to erase what it kept whichever call heard it
+    /// first.
+    revoked: Arc<AtomicBool>,
 }
 
 impl std::fmt::Debug for Api {
@@ -161,6 +165,7 @@ impl Api {
             stored: None,
             timeout: REQUEST_TIMEOUT,
             sign_ins: Arc::new(AtomicU64::new(0)),
+            revoked: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -220,6 +225,19 @@ impl Api {
     pub fn take_pair(&self, pair: &TokenPair) {
         self.set_tokens(pair);
         self.sign_ins.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// Whether a call was answered `DEVICE_REVOKED` since this client began
+    /// or last forgot it.
+    #[must_use]
+    pub fn device_revoked(&self) -> bool {
+        self.revoked.load(Ordering::SeqCst)
+    }
+
+    /// Forgets a revocation heard, answering whether one was: the device
+    /// erases once, and is a new one after.
+    pub fn take_revoked(&self) -> bool {
+        self.revoked.swap(false, Ordering::SeqCst)
     }
 
     /// How many sign-ins have given this client a pair (see [`Api::take_pair`]).
@@ -2063,6 +2081,11 @@ impl Api {
         let response = builder.send().await?;
         let status = response.status();
         let bytes = response.bytes().await?;
+        if status == StatusCode::UNAUTHORIZED
+            && matches!(api_error(status, &bytes), ClientError::Api { code, .. } if code == "DEVICE_REVOKED")
+        {
+            self.revoked.store(true, Ordering::SeqCst);
+        }
         Ok((status, bytes.to_vec()))
     }
 }

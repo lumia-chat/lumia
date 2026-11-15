@@ -158,8 +158,35 @@ pub async fn run_forever<S: Store>(
 /// [`run_forever`], answering why it ended when the instance revoked this
 /// device (`DEVICE_REVOKED`, or a `Disconnect` saying so), and then leaving
 /// `Closed` to the caller: a device the identity no longer holds erases what
-/// it kept (identity spec 4.4) before it says it has ended.
+/// it kept (identity spec 4.4) before it says it has ended. A loop the shell
+/// stopped because one of its own calls heard it first answers the same.
 pub async fn run_until_end<S: Store>(
+    api: Api,
+    store: S,
+    client_name: &str,
+    device_id: Vec<u8>,
+    channels: Vec<Vec<u8>>,
+    commands: mpsc::UnboundedReceiver<GatewayCommand>,
+    events: mpsc::UnboundedSender<GatewayEvent>,
+) -> (S, Option<String>) {
+    let heard = api.clone();
+    let (store, revoked) = run_until_told(
+        api,
+        store,
+        client_name,
+        device_id,
+        channels,
+        commands,
+        events,
+    )
+    .await;
+    match revoked {
+        None if heard.device_revoked() => (store, Some("DEVICE_REVOKED".into())),
+        revoked => (store, revoked),
+    }
+}
+
+async fn run_until_told<S: Store>(
     api: Api,
     mut store: S,
     client_name: &str,

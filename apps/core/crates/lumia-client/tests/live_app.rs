@@ -12,6 +12,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use lumia_client::api::Api;
 use lumia_client::app::{App, AppEvent, EventSink, Opener, Place, StoreName};
 use lumia_client::sqlite::SqliteStore;
+use lumia_client::ClientError;
 
 const PASSWORD: &str = "correct-horse-battery-staple";
 
@@ -1688,4 +1689,51 @@ async fn a_revoked_device_erases_what_it_kept() {
     laptop.app.link_prompt_confirm(&id).await.unwrap();
     assert_eq!(phone.app.link_progress().await.unwrap().stage, "linked");
     assert!(phone.app.has_identity());
+}
+
+/// A device that hears it was revoked from one of its own calls, with no
+/// loop running to hear it, erases before it signs in again, and comes back
+/// as a new device.
+#[tokio::test]
+async fn a_revoked_device_that_heard_it_by_a_call_erases_before_signing_in_again() {
+    let Some(base) = instance() else { return };
+    let laptop = Device::new(&base);
+    let handle = format!("heard{}", stamp());
+    laptop
+        .app
+        .create_account(&handle, PASSWORD, None)
+        .await
+        .unwrap();
+    laptop.app.identity_setup("Laptop").await.unwrap();
+
+    let phone = Device::new(&base);
+    phone.app.sign_in(&handle, PASSWORD, None).await.unwrap();
+    phone.app.link_start("Phone").await.unwrap();
+    let id = laptop.app.link_prompts().await.unwrap()[0]
+        .session_id
+        .clone();
+    laptop.app.link_prompt_answer(&id).await.unwrap();
+    phone.app.link_progress().await.unwrap();
+    laptop.app.link_prompt_confirm(&id).await.unwrap();
+    assert_eq!(phone.app.link_progress().await.unwrap().stage, "linked");
+    let phone_id = phone.app.device_id();
+    laptop
+        .app
+        .identity_revoke(&phone_id, PASSWORD)
+        .await
+        .unwrap();
+
+    // No loop runs: a call hears it, and the phone keeps what it has until
+    // it signs in again.
+    match phone.app.snapshot().await {
+        Err(ClientError::Api { code, .. }) => assert_eq!(code, "DEVICE_REVOKED"),
+        other => panic!("the phone's call was not refused as revoked: {other:?}"),
+    }
+    assert!(phone.app.has_identity());
+
+    phone.app.sign_in(&handle, PASSWORD, None).await.unwrap();
+    assert_ne!(phone.app.device_id(), phone_id);
+    assert!(!phone.app.has_identity());
+    assert!(phone.app.identity_phrase().await.unwrap().is_none());
+    assert!(laptop.app.has_identity() && laptop.app.signed_in());
 }
