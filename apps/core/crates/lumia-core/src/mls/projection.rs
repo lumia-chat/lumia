@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::proto::{dm_operation, DmAttachment, DmOperation};
+use crate::proto::{dm_operation, Attachment, DmOperation};
 
 /// One message as the projection shows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,7 +21,7 @@ pub struct DmMessage {
     /// Thread parent, or empty.
     pub parent_id: Vec<u8>,
     /// Attachments as sent.
-    pub attachments: Vec<DmAttachment>,
+    pub attachments: Vec<Attachment>,
     /// Mentioned identity ids.
     pub mentions: Vec<Vec<u8>>,
     /// The sender's `sent_at`, nanoseconds since the epoch (display only).
@@ -257,6 +257,7 @@ mod tests {
             &op(dm_operation::Op::Edit(DmEdit {
                 message_id: vec![1; 16],
                 body: "hacked".into(),
+                ..Default::default()
             })),
         );
         assert_eq!(p.message(&[1; 16]).unwrap().body, "hi");
@@ -267,6 +268,7 @@ mod tests {
             &op(dm_operation::Op::Edit(DmEdit {
                 message_id: vec![1; 16],
                 body: "hello".into(),
+                ..Default::default()
             })),
         );
         let m = p.message(&[1; 16]).unwrap();

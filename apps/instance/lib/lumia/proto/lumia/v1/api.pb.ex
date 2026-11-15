@@ -14,6 +14,21 @@ defmodule Lumia.V1.PushKind do
   field :RELAY_FCM, 4
 end
 
+defmodule Lumia.V1.BlobRole do
+  @moduledoc false
+
+  use Protobuf,
+    enum: true,
+    full_name: "lumia.v1.BlobRole",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :BLOB_ROLE_UNSPECIFIED, 0
+  field :BLOB_ROLE_DISPLAY, 1
+  field :BLOB_ROLE_THUMBNAIL, 2
+  field :BLOB_ROLE_FILE, 3
+end
+
 defmodule Lumia.V1.TokenPair do
   @moduledoc false
 
@@ -197,6 +212,7 @@ defmodule Lumia.V1.InstanceInfo do
   field :web_push_public_key, 14, type: :string, json_name: "webPushPublicKey"
   field :magic_link_enabled, 15, type: :bool, json_name: "magicLinkEnabled"
   field :oidc_name, 16, type: :string, json_name: "oidcName"
+  field :upload_limits, 17, type: Lumia.V1.UploadLimits, json_name: "uploadLimits"
 end
 
 defmodule Lumia.V1.MagicLinkRequest do
@@ -750,10 +766,21 @@ defmodule Lumia.V1.CreateUploadRequest do
     syntax: :proto3
 
   field :channel_id, 1, type: :bytes, json_name: "channelId"
-  field :filename, 2, type: :string
-  field :media_type, 3, type: :string, json_name: "mediaType"
-  field :size_bytes, 4, type: :uint64, json_name: "sizeBytes"
-  field :client_encrypted, 5, type: :bool, json_name: "clientEncrypted"
+  field :role, 2, type: Lumia.V1.BlobRole, enum: true
+  field :size_bytes, 3, type: :uint64, json_name: "sizeBytes"
+end
+
+defmodule Lumia.V1.CreateUploadResponse.UploadHeadersEntry do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.CreateUploadResponse.UploadHeadersEntry",
+    map: true,
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :key, 1, type: :string
+  field :value, 2, type: :string
 end
 
 defmodule Lumia.V1.CreateUploadResponse do
@@ -764,9 +791,52 @@ defmodule Lumia.V1.CreateUploadResponse do
     protoc_gen_elixir_version: "0.17.1",
     syntax: :proto3
 
-  field :attachment_id, 1, type: :bytes, json_name: "attachmentId"
+  field :blob_id, 1, type: :bytes, json_name: "blobId"
   field :upload_url, 2, type: :string, json_name: "uploadUrl"
-  field :upload_expires_at, 3, type: Google.Protobuf.Timestamp, json_name: "uploadExpiresAt"
+
+  field :upload_headers, 3,
+    repeated: true,
+    type: Lumia.V1.CreateUploadResponse.UploadHeadersEntry,
+    json_name: "uploadHeaders",
+    map: true
+
+  field :upload_expires_at, 4, type: Google.Protobuf.Timestamp, json_name: "uploadExpiresAt"
+end
+
+defmodule Lumia.V1.UploadLimits do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.UploadLimits",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :image_max_bytes, 1, type: :uint64, json_name: "imageMaxBytes"
+  field :file_max_bytes, 2, type: :uint64, json_name: "fileMaxBytes"
+  field :thumbnail_max_bytes, 3, type: :uint64, json_name: "thumbnailMaxBytes"
+end
+
+defmodule Lumia.V1.UnfurlRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.UnfurlRequest",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :channel_id, 1, type: :bytes, json_name: "channelId"
+  field :url, 2, type: :string
+end
+
+defmodule Lumia.V1.UnfurlResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.UnfurlResponse",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :card, 1, type: Lumia.V1.Card
 end
 
 defmodule Lumia.V1.SearchRequest do

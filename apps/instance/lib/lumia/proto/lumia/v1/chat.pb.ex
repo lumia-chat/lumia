@@ -89,6 +89,23 @@ defmodule Lumia.V1.Permission do
   field :MANAGE_BOTS, 31
 end
 
+defmodule Lumia.V1.AttachmentKind do
+  @moduledoc false
+
+  use Protobuf,
+    enum: true,
+    full_name: "lumia.v1.AttachmentKind",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :ATTACHMENT_KIND_UNSPECIFIED, 0
+  field :IMAGE, 1
+  field :GIF, 2
+  field :VIDEO, 3
+  field :AUDIO, 4
+  field :FILE, 5
+end
+
 defmodule Lumia.V1.ChannelNotice.Kind do
   @moduledoc false
 
@@ -235,6 +252,21 @@ defmodule Lumia.V1.Mention do
   field :end, 5, type: :uint32
 end
 
+defmodule Lumia.V1.BlobRef do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.BlobRef",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :blob_id, 1, type: :bytes, json_name: "blobId"
+  field :size_bytes, 2, type: :uint64, json_name: "sizeBytes"
+  field :key, 3, type: :bytes
+  field :nonce, 4, type: :bytes
+  field :hash, 5, type: :bytes
+end
+
 defmodule Lumia.V1.Attachment do
   @moduledoc false
 
@@ -244,14 +276,33 @@ defmodule Lumia.V1.Attachment do
     syntax: :proto3
 
   field :attachment_id, 1, type: :bytes, json_name: "attachmentId"
-  field :content_address, 2, type: :bytes, json_name: "contentAddress"
-  field :filename, 3, type: :string
+  field :kind, 2, type: Lumia.V1.AttachmentKind, enum: true
+  field :name, 3, type: :string
   field :media_type, 4, type: :string, json_name: "mediaType"
-  field :size_bytes, 5, type: :uint64, json_name: "sizeBytes"
-  field :width, 6, type: :uint32
-  field :height, 7, type: :uint32
-  field :url, 8, type: :string
-  field :thumbnail_url, 9, type: :string, json_name: "thumbnailUrl"
+  field :width, 5, type: :uint32
+  field :height, 6, type: :uint32
+  field :duration_ms, 7, type: :uint32, json_name: "durationMs"
+  field :placeholder, 8, type: :bytes
+  field :alt, 9, type: :string
+  field :main, 10, type: Lumia.V1.BlobRef
+  field :thumbnail, 11, type: Lumia.V1.BlobRef
+end
+
+defmodule Lumia.V1.Card do
+  @moduledoc false
+
+  use Protobuf, full_name: "lumia.v1.Card", protoc_gen_elixir_version: "0.17.1", syntax: :proto3
+
+  field :url, 1, type: :string
+  field :title, 2, type: :string
+  field :description, 3, type: :string
+  field :site_name, 4, type: :string, json_name: "siteName"
+  field :color, 5, type: :string
+  field :image_url, 6, type: :string, json_name: "imageUrl"
+  field :image_width, 7, type: :uint32, json_name: "imageWidth"
+  field :image_height, 8, type: :uint32, json_name: "imageHeight"
+  field :video, 9, type: :bool
+  field :image, 10, type: Lumia.V1.BlobRef
 end
 
 defmodule Lumia.V1.ReactionCount do
@@ -310,6 +361,7 @@ defmodule Lumia.V1.Message do
   field :mirrors_message_id, 15, type: :bytes, json_name: "mirrorsMessageId"
   field :notice, 16, type: Lumia.V1.ChannelNotice
   field :reply_to, 17, type: Lumia.V1.QuoteReply, json_name: "replyTo"
+  field :cards, 18, repeated: true, type: Lumia.V1.Card
 end
 
 defmodule Lumia.V1.QuoteReply do

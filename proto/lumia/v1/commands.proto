@@ -38,8 +38,9 @@ message Command {
 message SendMessage {
   string body = 1;
   repeated Mention mentions = 2;
-  // Attachment IDs from prior uploads (POST /api/v1/uploads).
-  repeated bytes attachment_ids = 3;
+  // Attachments whose blobs were uploaded and completed (POST
+  // /api/v1/uploads), with their keys; at most 10 (specs/media.md 4.2).
+  repeated Attachment attachments = 3;
   // Thread root to reply to.
   bytes parent_id = 4;
   // When replying: also post this reply to the channel as a top-level
@@ -47,13 +48,23 @@ message SendMessage {
   bool also_send_to_channel = 5;
   // The message quoted and the text quoted (architecture 6.6).
   QuoteReply reply_to = 6;
+  // The links whose cards the sharer kept, at most 3, each in the body
+  // (specs/media.md 6.4).
+  repeated string card_urls = 7;
 }
 
 message EditMessage {
   bytes message_id = 1;
   string body = 2;
   repeated Mention mentions = 3;
+  // Attachments to drop; an edit cannot add one.
+  repeated bytes remove_attachment_ids = 4;
+  // When set, the links whose cards stay or are wanted; unset keeps the
+  // cards of the links still in the body.
+  CardUrls cards = 5;
 }
+
+message CardUrls { repeated string urls = 1; }
 
 message DeleteMessage { bytes message_id = 1; }
 
@@ -72,6 +83,9 @@ message UnpinMessage { bytes message_id = 1; }
 
 message SendEncrypted {
   EncryptedPayload payload = 1;
+  // The blobs this message's attachments and cards use, so the instance
+  // keeps them (specs/media.md 4.2). Ids only; it learns nothing else.
+  repeated bytes blob_ids = 2;
   // A retry MUST carry the identical payload. If the epoch has advanced and
   // the original cannot be delivered, the client abandons this command_id and
   // sends a new command (architecture 8.3).

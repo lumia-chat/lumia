@@ -51,6 +51,9 @@ message Event {
     // Retention ran: every payload with seq < before_seq is now null.
     // Clients drop cached bodies below it (specs/delivery.md 10).
     PayloadsPurged payloads_purged = 33;
+    // A message's cards, in full, once the instance fetched them after the
+    // send or an edit (specs/media.md 6.4).
+    MessageCardsSet message_cards_set = 34;
     EncryptedPayload encrypted = 40;
   }
 }
@@ -64,6 +67,14 @@ message MessageEdited {
   string body = 2;
   repeated Mention mentions = 3;
   google.protobuf.Timestamp edited_at = 4;
+  // The attachments and cards after the edit, in full.
+  repeated Attachment attachments = 5;
+  repeated Card cards = 6;
+}
+
+message MessageCardsSet {
+  bytes message_id = 1;
+  repeated Card cards = 2;
 }
 
 message MessageDeleted {

@@ -27,9 +27,10 @@ defmodule Lumia.V1.DmSend do
   field :message_id, 1, type: :bytes, json_name: "messageId"
   field :body, 2, type: :string
   field :parent_id, 3, type: :bytes, json_name: "parentId"
-  field :attachments, 4, repeated: true, type: Lumia.V1.DmAttachment
+  field :attachments, 4, repeated: true, type: Lumia.V1.Attachment
   field :mentions, 5, repeated: true, type: :bytes
   field :quote, 6, type: Lumia.V1.DmQuote
+  field :cards, 7, repeated: true, type: Lumia.V1.Card
 end
 
 defmodule Lumia.V1.DmQuote do
@@ -51,6 +52,19 @@ defmodule Lumia.V1.DmEdit do
 
   field :message_id, 1, type: :bytes, json_name: "messageId"
   field :body, 2, type: :string
+  field :remove_attachment_ids, 3, repeated: true, type: :bytes, json_name: "removeAttachmentIds"
+  field :cards, 4, type: Lumia.V1.DmCards
+end
+
+defmodule Lumia.V1.DmCards do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.DmCards",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :cards, 1, repeated: true, type: Lumia.V1.Card
 end
 
 defmodule Lumia.V1.DmDelete do
@@ -103,23 +117,6 @@ defmodule Lumia.V1.DmTyping do
     syntax: :proto3
 
   field :until, 1, type: Google.Protobuf.Timestamp
-end
-
-defmodule Lumia.V1.DmAttachment do
-  @moduledoc false
-
-  use Protobuf,
-    full_name: "lumia.v1.DmAttachment",
-    protoc_gen_elixir_version: "0.17.1",
-    syntax: :proto3
-
-  field :attachment_id, 1, type: :bytes, json_name: "attachmentId"
-  field :name, 2, type: :string
-  field :content_type, 3, type: :string, json_name: "contentType"
-  field :size, 4, type: :uint64
-  field :key, 5, type: :bytes
-  field :nonce, 6, type: :bytes
-  field :hash, 7, type: :bytes
 end
 
 defmodule Lumia.V1.HistoryChunkBody do

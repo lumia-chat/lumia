@@ -114,6 +114,12 @@ defmodule Lumia.V1.Event do
   field :acl_changed, 31, type: Lumia.V1.AclChanged, json_name: "aclChanged", oneof: 0
   field :redacted, 32, type: Lumia.V1.Redacted, oneof: 0
   field :payloads_purged, 33, type: Lumia.V1.PayloadsPurged, json_name: "payloadsPurged", oneof: 0
+
+  field :message_cards_set, 34,
+    type: Lumia.V1.MessageCardsSet,
+    json_name: "messageCardsSet",
+    oneof: 0
+
   field :encrypted, 40, type: Lumia.V1.EncryptedPayload, oneof: 0
 end
 
@@ -151,6 +157,20 @@ defmodule Lumia.V1.MessageEdited do
   field :body, 2, type: :string
   field :mentions, 3, repeated: true, type: Lumia.V1.Mention
   field :edited_at, 4, type: Google.Protobuf.Timestamp, json_name: "editedAt"
+  field :attachments, 5, repeated: true, type: Lumia.V1.Attachment
+  field :cards, 6, repeated: true, type: Lumia.V1.Card
+end
+
+defmodule Lumia.V1.MessageCardsSet do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.MessageCardsSet",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :message_id, 1, type: :bytes, json_name: "messageId"
+  field :cards, 2, repeated: true, type: Lumia.V1.Card
 end
 
 defmodule Lumia.V1.MessageDeleted do

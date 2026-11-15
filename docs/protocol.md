@@ -277,9 +277,16 @@ Permission changes, overwrite changes, and membership changes each bump the affe
 | Method and path | Body → Response |
 |---|---|
 | `POST /uploads` | `CreateUploadRequest` → `CreateUploadResponse` |
-| `PUT <upload_url>` | raw bytes → 204 |
+| `PUT <upload_url>` | the ciphertext, with exactly `upload_headers` → 2xx |
+| `POST /uploads/{blob_id}/complete` | → 204 |
+| `GET /blobs/{blob_id}` | → `302` to the ciphertext, or the ciphertext |
+| `DELETE /blobs/{blob_id}` | → 204 |
+| `POST /unfurl` | `UnfurlRequest` → `UnfurlResponse` |
+| `GET /cards/{address}` | → a card's picture |
 
-The upload URL is single-use and expires. The attachment ID is then referenced from `SendMessage.attachment_ids`. Server content is processed (thumbnails, EXIF) after the PUT; `client_encrypted` uploads are stored as-is.
+Attachments are specified in [specs/media.md](specs/media.md). The client processes and encrypts each blob itself (XChaCha20-Poly1305 under a random key and nonce per blob) and asks for a slot naming the conversation, the blob's role and the ciphertext's exact length; the instance needs `ATTACH_FILES` there (a personal conversation's members always have it), refuses a length over the role's cap with `PAYLOAD_TOO_LARGE`, and with `FAILED_PRECONDITION` (`details.state` `blobs`) when it keeps no blobs. `upload_url` is a presigned URL to the bucket or the instance's own `PUT /blobs/upload/{token}`, valid for 15 minutes; the store refuses any other length. `complete` checks the stored length (`INVALID_ARGUMENT` and the slot gone on a mismatch). A blob is then named in `SendMessage.attachments` (server content, with its key) or `SendEncrypted.blob_ids` (personal, the key inside the MLS message); one never named is removed after 24 hours. `GET /blobs/{blob_id}` needs a session that can read the message naming the blob, or the uploader's while none does, and is `NOT_FOUND` otherwise. `DELETE` is the uploader's, for a personal conversation's blob. `GET /instance` names the caps in `upload_limits`.
+
+`POST /unfurl` needs `SEND_MESSAGES` in a server channel and answers the instance's card for the URL, from a cache of an hour, or no card; at most 30 a minute per account (`RATE_LIMITED`). `GET /cards/{address}` is public, as `GET /avatars/{address}` is: `image/jpeg` or `image/png`, immutable.
 
 ### Search, friends, requests, blocks
 

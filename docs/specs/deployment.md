@@ -4,7 +4,7 @@ Status: accepted, 2026-11-02. This specification retires section 15 of [architec
 
 ## 1. What an instance is
 
-One instance is **one database, one blob store, one master key**, served by one or more identical nodes of the Lumia image. The database holds everything the protocol defines; the blob store holds attachment ciphertext, encrypted by the clients that uploaded it, and the instance's own pictures (architecture 12, [media.md](media.md)); the master key wraps the attachments' keys, which the database keeps, and the content keys of the instance's own pictures. The three are one unit: a database without its master key cannot open a single attachment, and blobs without the database are unreachable ciphertext.
+One instance is **one database, one blob store, one master key**, served by one or more identical nodes of the Lumia image. The database holds everything the protocol defines; the blob store holds attachment ciphertext, encrypted by the clients that uploaded it, and the instance's own pictures (architecture 12, [media.md](media.md)); the database keeps the attachments' keys with their messages, and the master key wraps the content keys of the instance's own pictures (avatars, server icons, card pictures). The three are one unit: a database without its master key cannot open a single picture of the instance's, and blobs without the database are unreachable ciphertext.
 
 The web UI (`apps/web`) ships inside the image and is served by the instance from `priv/static/ui`, so a self-hosted instance's web origin is itself (architecture 11.4).
 
@@ -87,13 +87,13 @@ Restoring onto a running cluster is not supported: stop every node, restore on o
 
 ### 4.3 What the operator is told
 
-Recovery objectives are the operator's to choose. The install guide says plainly: a database backup without the master key loses every attachment; a restore makes every client resynchronise once; and the time between backups is the most content a restore can lose.
+Recovery objectives are the operator's to choose. The install guide says plainly: a database backup without the master key loses every avatar, server icon and card picture, and one without the blob store every attachment; a restore makes every client resynchronise once; and the time between backups is the most content a restore can lose.
 
 ## 5. Encryption at rest, by responsibility
 
 | Data | Who encrypts | Mechanism |
 |---|---|---|
-| Blobs | Lumia | Attachments: encrypted by the sharer's client, their keys kept wrapped under the instance master key; avatars and card pictures: sealed by the instance under it (architecture 12) |
+| Blobs | Lumia | Attachments: encrypted by the sharer's client, their keys kept with their messages; avatars, server icons and card pictures: sealed by the instance under the instance master key (architecture 12) |
 | Personal DM content and history chunks | The clients | MLS and the backup key; the server never has plaintext ([e2ee.md](e2ee.md)) |
 | Postgres data files, WAL, database backups | **The operator** | Filesystem or block-device encryption, encrypted backup storage. Lumia does not provide this and the install guide says so |
 | Instance master key | The operator | A file the operator mounts (`LUMIA_MASTER_KEY_FILE`); a KMS integration later |

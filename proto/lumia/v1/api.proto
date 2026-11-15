@@ -134,6 +134,9 @@ message InstanceInfo {
   // as "Sign in with Okta"; empty when the instance has no provider. The flow
   // is GET /auth/oidc/start?return={url}, which ends at {url}?magic={token}.
   string oidc_name = 16;
+  // What a client may upload; absent when the instance keeps no blobs, and
+  // then nothing can be attached.
+  UploadLimits upload_limits = 17;
 }
 
 // POST /auth/sign-in/magic-link — public, 202 whether or not the address
@@ -438,22 +441,49 @@ message ListAccountEventsResponse {
 
 // ---- Uploads ----------------------------------------------------------------
 
-// POST /uploads: metadata first, bytes second (PUT to upload_url).
+// What a blob is for, which sets its cap (specs/media.md 2 and 4.1).
+enum BlobRole {
+  BLOB_ROLE_UNSPECIFIED = 0;
+  BLOB_ROLE_DISPLAY = 1;    // an IMAGE's main blob: the image cap
+  BLOB_ROLE_THUMBNAIL = 2;  // 256 KiB
+  BLOB_ROLE_FILE = 3;       // every other main blob: the file cap
+}
+
+// POST /uploads: a blob's slot first, its ciphertext second (PUT to
+// upload_url), then POST /uploads/{blob_id}/complete.
 message CreateUploadRequest {
-  bytes channel_id = 1;   // determines whose plan pays (architecture 16)
-  string filename = 2;
-  string media_type = 3;
-  uint64 size_bytes = 4;
-  // Personal DMs: the client has already encrypted; the server treats bytes
-  // as opaque and skips processing.
-  bool client_encrypted = 5;
+  // The conversation it will be sent in: a server channel or a PERSONAL_*.
+  bytes channel_id = 1;
+  BlobRole role = 2;
+  // The ciphertext's exact length.
+  uint64 size_bytes = 3;
 }
 
 message CreateUploadResponse {
-  bytes attachment_id = 1;
+  bytes blob_id = 1;
+  // PUT the ciphertext here with exactly these headers: a presigned URL to
+  // the bucket, or the instance's own for a directory store.
   string upload_url = 2;
-  google.protobuf.Timestamp upload_expires_at = 3;
+  map<string, string> upload_headers = 3;
+  google.protobuf.Timestamp upload_expires_at = 4;
 }
+
+// The largest blob of each role this instance takes from the caller in a
+// channel; in GET /instance.
+message UploadLimits {
+  uint64 image_max_bytes = 1;
+  uint64 file_max_bytes = 2;
+  uint64 thumbnail_max_bytes = 3;
+}
+
+// POST /unfurl: a server channel's card for a link (specs/media.md 6.4).
+message UnfurlRequest {
+  bytes channel_id = 1;
+  string url = 2;
+}
+
+// No card when the page gave none.
+message UnfurlResponse { Card card = 1; }
 
 // ---- Search -----------------------------------------------------------------
 

@@ -3,6 +3,7 @@ syntax = "proto3";
 package lumia.v1;
 
 import "google/protobuf/timestamp.proto";
+import "lumia/v1/chat.proto";
 import "lumia/v1/identity.proto";
 
 // End-to-end encrypted personal DMs (docs/specs/e2ee.md). Everything in
@@ -37,12 +38,14 @@ message DmSend {
   string body = 2;
   // Thread parent, or empty.
   bytes parent_id = 3;
-  repeated DmAttachment attachments = 4;
+  repeated Attachment attachments = 4;
   // Identity ids mentioned, for the receiver's notification decision.
   repeated bytes mentions = 5;
   // A quote reply (architecture 6.6): the message quoted, by its id, and the
   // text quoted. Receivers drop the text when the original is deleted.
   DmQuote quote = 6;
+  // Link cards the sender's client built (specs/media.md 6.5).
+  repeated Card cards = 7;
 }
 
 message DmQuote {
@@ -53,7 +56,13 @@ message DmQuote {
 message DmEdit {
   bytes message_id = 1;
   string body = 2;
+  // Attachments to drop; an edit cannot add one.
+  repeated bytes remove_attachment_ids = 3;
+  // When set, the message's cards from now on.
+  DmCards cards = 4;
 }
+
+message DmCards { repeated Card cards = 1; }
 
 message DmDelete { bytes message_id = 1; }
 
@@ -76,19 +85,6 @@ message DmRead { uint64 through_seq = 1; }
 // Typing until `until`; receivers stop showing it then without a stop.
 message DmTyping { google.protobuf.Timestamp until = 1; }
 
-// An attachment uploaded as `client_encrypted`: the server holds an opaque
-// blob and its size; the key travels here.
-message DmAttachment {
-  bytes attachment_id = 1;
-  string name = 2;
-  string content_type = 3;
-  uint64 size = 4;
-  // XChaCha20-Poly1305 key and nonce the sender used over the plaintext.
-  bytes key = 5;
-  bytes nonce = 6;
-  // BLAKE3-256 of the plaintext, checked after decryption.
-  bytes hash = 7;
-}
 
 // ---- History backup ---------------------------------------------------------
 

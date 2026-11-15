@@ -30,10 +30,11 @@ defmodule Lumia.V1.SendMessage do
 
   field :body, 1, type: :string
   field :mentions, 2, repeated: true, type: Lumia.V1.Mention
-  field :attachment_ids, 3, repeated: true, type: :bytes, json_name: "attachmentIds"
+  field :attachments, 3, repeated: true, type: Lumia.V1.Attachment
   field :parent_id, 4, type: :bytes, json_name: "parentId"
   field :also_send_to_channel, 5, type: :bool, json_name: "alsoSendToChannel"
   field :reply_to, 6, type: Lumia.V1.QuoteReply, json_name: "replyTo"
+  field :card_urls, 7, repeated: true, type: :string, json_name: "cardUrls"
 end
 
 defmodule Lumia.V1.EditMessage do
@@ -47,6 +48,19 @@ defmodule Lumia.V1.EditMessage do
   field :message_id, 1, type: :bytes, json_name: "messageId"
   field :body, 2, type: :string
   field :mentions, 3, repeated: true, type: Lumia.V1.Mention
+  field :remove_attachment_ids, 4, repeated: true, type: :bytes, json_name: "removeAttachmentIds"
+  field :cards, 5, type: Lumia.V1.CardUrls
+end
+
+defmodule Lumia.V1.CardUrls do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.CardUrls",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :urls, 1, repeated: true, type: :string
 end
 
 defmodule Lumia.V1.DeleteMessage do
@@ -115,6 +129,7 @@ defmodule Lumia.V1.SendEncrypted do
     syntax: :proto3
 
   field :payload, 1, type: Lumia.V1.EncryptedPayload
+  field :blob_ids, 2, repeated: true, type: :bytes, json_name: "blobIds"
 end
 
 defmodule Lumia.V1.Ack do

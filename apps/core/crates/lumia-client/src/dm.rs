@@ -194,6 +194,7 @@ fn encrypted(kind: EncryptedKind, channel_id: &[u8], mls_message: Vec<u8>, epoch
                 mls_message,
                 epoch,
             }),
+            blob_ids: Vec::new(),
         })),
     }
 }
@@ -708,6 +709,7 @@ impl DmEngine {
             op: Some(dm_operation::Op::Edit(lumia_core::proto::DmEdit {
                 message_id,
                 body: body.to_string(),
+                ..Default::default()
             })),
         };
         self.send_operation(channel_id, op)
@@ -759,6 +761,7 @@ impl DmEngine {
                         mls_message: out.bytes,
                         epoch: out.epoch,
                     }),
+                    blob_ids: Vec::new(),
                 })),
             };
             store.push_outbox(&OutboxEntry {
@@ -775,6 +778,7 @@ impl DmEngine {
         let epoch = match &command.op {
             Some(command::Op::SendEncrypted(SendEncrypted {
                 payload: Some(payload),
+                ..
             })) => payload.epoch,
             _ => 0,
         };

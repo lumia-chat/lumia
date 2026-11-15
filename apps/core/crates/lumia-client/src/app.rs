@@ -3564,6 +3564,7 @@ impl App {
                 message_id: parse_uuid(message_id)?,
                 body: body.to_string(),
                 mentions,
+                ..Default::default()
             })),
         }))?;
         Ok(wire::display(&id))

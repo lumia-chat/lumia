@@ -178,19 +178,73 @@ message Mention {
   uint32 end = 5;
 }
 
+// One client-encrypted object in the blob store (specs/media.md 1). The
+// bytes are fetched with GET /api/v1/blobs/{blob_id} and opened with the
+// key and nonce (XChaCha20-Poly1305 over the whole plaintext); the hash is
+// the BLAKE3-256 of the plaintext, checked after decryption.
+message BlobRef {
+  bytes blob_id = 1;
+  // The stored ciphertext's length: the plaintext's plus the 16-byte tag.
+  uint64 size_bytes = 2;
+  bytes key = 3;
+  bytes nonce = 4;
+  bytes hash = 5;
+}
+
+enum AttachmentKind {
+  ATTACHMENT_KIND_UNSPECIFIED = 0;
+  // A still picture the client made (JPEG or PNG), with a thumbnail.
+  IMAGE = 1;
+  GIF = 2;
+  VIDEO = 3;
+  AUDIO = 4;
+  FILE = 5;
+}
+
+// An attachment (specs/media.md). The same shape in server messages and,
+// inside the ciphertext, in personal DMs.
 message Attachment {
+  // Client-minted UUIDv7, unique within its message.
   bytes attachment_id = 1;
-  // Content address: keyed BLAKE3 of stored ciphertext (architecture 12).
-  bytes content_address = 2;
-  string filename = 3;
+  AttachmentKind kind = 2;
+  // The file's name as shown and saved, at most 255 bytes.
+  string name = 3;
   string media_type = 4;
-  uint64 size_bytes = 5;
-  uint32 width = 6;    // images and video
-  uint32 height = 7;
-  // Server content only; personal DMs carry attachment metadata inside the
-  // ciphertext and the client decrypts the blob with a key from the message.
-  string url = 8;
-  string thumbnail_url = 9;
+  uint32 width = 5;    // images, GIFs and video, after orientation
+  uint32 height = 6;
+  uint32 duration_ms = 7;  // video and audio, when known
+  // ThumbHash of the picture, poster or first frame.
+  bytes placeholder = 8;
+  // Accessibility text for an image, at most 1,000 characters.
+  string alt = 9;
+  // The display picture, the GIF, the video, the audio, or the file.
+  BlobRef main = 10;
+  // At most 400 px, for IMAGE and GIF, and VIDEO when the sharer's
+  // platform made a poster.
+  BlobRef thumbnail = 11;
+}
+
+// A link's preview (specs/media.md 6). In server content the instance built
+// it; in a personal DM, the sharer's client.
+message Card {
+  // The link as it appears in the message text; receivers draw a card only
+  // under a URL the text holds, and name the site from it.
+  string url = 1;
+  string title = 2;
+  string description = 3;
+  string site_name = 4;
+  // "#rrggbb" from theme-color, or empty.
+  string color = 5;
+  // Server content: the picture's path under /api/v1/cards/, public by its
+  // address. Empty when the page had none.
+  string image_url = 6;
+  uint32 image_width = 7;
+  uint32 image_height = 8;
+  // The page is a video (og:video or og:type video.*).
+  bool video = 9;
+  // Personal DMs: the picture, a THUMBNAIL blob the sharer uploaded, with
+  // image_url empty.
+  BlobRef image = 10;
 }
 
 message ReactionCount {
@@ -236,6 +290,8 @@ message Message {
   ChannelNotice notice = 16;
   // What this message quotes (architecture 6.6).
   QuoteReply reply_to = 17;
+  // Link cards, in the order their links appear (specs/media.md 6).
+  repeated Card cards = 18;
 }
 
 // A quote of another message of the same conversation: the whole of it or
