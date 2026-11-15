@@ -5,6 +5,7 @@ defmodule Lumia.IdentityTest do
   import Lumia.IdentityFixtures
 
   alias Lumia.Accounts
+  alias Lumia.Accounts.Account
   alias Lumia.Auth
   alias Lumia.Crypto
   alias Lumia.Identity
@@ -475,6 +476,20 @@ defmodule Lumia.IdentityTest do
 
       assert {:error, :conflict} =
                Identity.link_account(account.id, :crypto.strong_rand_bytes(32))
+    end
+
+    # Found by the web's suite: a browser keeps its identity across a
+    # sign-out, and the next account signed in there was bound to it too,
+    # after which `account_for/1` (identity sign-in) raised on two rows.
+    test "refuses an identity another account here is bound to" do
+      first = account()
+      second = account()
+      id = :crypto.strong_rand_bytes(32)
+      assert {:ok, _} = Identity.link_account(first.id, id)
+      assert {:error, :already_exists} = Identity.link_account(second.id, id)
+      assert %{identity_id: nil} = Repo.get(Account, second.id)
+      assert %{id: first_id} = Identity.account_for(id)
+      assert first_id == first.id
     end
   end
 end

@@ -406,20 +406,28 @@ defmodule Lumia.Identity do
 
   defp root_signed?(_signature, _bytes, _root), do: false
 
-  @doc "Binds an account to an identity. Requires the account to be unbound or already bound to it."
+  @doc """
+  Binds an account to an identity. Requires the account to be unbound or
+  already bound to it: `{:error, :conflict}` for an account bound to
+  another, `{:error, :already_exists}` for an identity bound to another
+  account here, as `rebind_account/2` and creating an account by identity
+  refuse it (an identity has one account on an instance).
+  """
   def link_account(account_id, identity_id) do
-    case Repo.get(Account, account_id) do
-      %Account{identity_id: nil} = account ->
-        account
-        |> Ecto.Changeset.change(identity_id: identity_id)
-        |> Repo.update()
-        |> then(fn {:ok, a} -> {:ok, a} end)
+    Tx.transact(fn ->
+      case Repo.get(Account, account_id) do
+        %Account{identity_id: nil} = account -> bind(account, identity_id)
+        %Account{identity_id: ^identity_id} = account -> {:ok, account}
+        _ -> {:error, :conflict}
+      end
+    end)
+  end
 
-      %Account{identity_id: ^identity_id} = account ->
-        {:ok, account}
-
-      _ ->
-        {:error, :conflict}
+  defp bind(account, identity_id) do
+    with :ok <- unbound_elsewhere(identity_id, account.id) do
+      account
+      |> Ecto.Changeset.change(identity_id: identity_id)
+      |> Repo.update()
     end
   end
 
