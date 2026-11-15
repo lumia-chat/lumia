@@ -21,7 +21,7 @@ Not built yet: threads, reactions, attachments, search and calls, all of which t
 
 ## Install
 
-Every app starts by asking which instance to sign in to: the address of the Lumia instance you have an account on, or want one on. The downloads are on the [latest release](https://github.com/lumia-chat/lumia/releases/latest).
+Every app starts by asking which instance to sign in to. **`my.lumia.chat`** is the flagship, the instance Lumia runs for everyone, and anyone can make an account there; any other instance is its address, whether someone else runs it or you host it yourself, and one app can be signed in to several. The downloads are on the [latest release](https://github.com/lumia-chat/lumia/releases/latest).
 
 ### macOS
 
@@ -67,7 +67,7 @@ iOS 17 or later. While Lumia is in testing it is on TestFlight, by invitation; t
 
 ### Web
 
-There is nothing to install. Every instance serves the web app at its own address: open it in a current browser and sign in.
+There is nothing to install. Every instance serves the web app at its own address: open [my.lumia.chat](https://my.lumia.chat) in a current browser for the flagship, or your instance's address for any other, and sign in.
 
 ### Hosting an instance
 
