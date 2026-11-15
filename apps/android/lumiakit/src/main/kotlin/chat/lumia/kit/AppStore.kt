@@ -195,7 +195,7 @@ class AppStore(context: Context) {
         dataDirectory.mkdirs()
         val client = LumiaClient(url, dataDirectory)
         // The phone's push subscription is kept in its preferences, which the store can reach.
-        val s = LumiaSession(client) { chosen -> PushRegistrar.left(context, client, chosen) }
+        val s = LumiaSession(client, pushLeft = { chosen -> PushRegistrar.left(context, client, chosen) }, erased = ::forgetAccount)
         // A conversation read, here or on another device: its delivered notifications go, and the rest carry the badge.
         s.readsChanged = { states, badge -> PushRegistrar.settle(context, states, badge) }
         session = s
@@ -264,6 +264,20 @@ class AppStore(context: Context) {
                 signingOut = false
             }
         }
+    }
+
+    /**
+     * This phone was removed from the account, and the core erased what it
+     * kept: what the app keeps of the account beside it goes too
+     * (`ERASED_WITH_THE_DEVICE`, and the pictures fetched). The push
+     * subscription goes as for any session's end (`PushRegistrar.left`).
+     */
+    private fun forgetAccount() {
+        prefs.edit().apply { for (key in ERASED_WITH_THE_DEVICE) remove(key) }.apply()
+        openFolders = emptySet()
+        phraseSnooze = null
+        recentEmoji = emptyList()
+        forgetPictures()
     }
 
     fun forgetInstance() {

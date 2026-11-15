@@ -11,6 +11,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -120,5 +121,23 @@ class LeavingTest {
         // No instance saved: nothing to ask.
         assertFalse(pushIsFor(null, "chat.example.com"))
         assertFalse(pushIsFor(null, null))
+    }
+
+    // A loop that ended because another device removed this one says so on the
+    // sign-in screen; any other end says nothing here, the snapshot deciding.
+    @Test
+    fun onlyARemovalLeavesTheSignInScreenALine() {
+        assertEquals("This phone was removed from your account, and its private messages were erased from it.", closedNotice(removed = true))
+        assertNull(closedNotice(removed = false))
+        assertTrue(REMOVED != SIGNED_OUT)
+    }
+
+    // A removed phone forgets what it kept of the account, never the phone's own choices.
+    @Test
+    fun aRemovedPhoneKeepsItsInstanceAndPreferences() {
+        assertTrue("open_folders" in ERASED_WITH_THE_DEVICE)
+        assertTrue("phrase_snoozed_until" in ERASED_WITH_THE_DEVICE)
+        val phones = listOf("instance", "appearance") + Display().written().keys
+        for (key in phones) assertFalse(key, key in ERASED_WITH_THE_DEVICE)
     }
 }

@@ -2,7 +2,9 @@
 // (tested in lumiakit/src/test, as Timeline.kt's and Preferences.kt's
 // are): the order a session is left in, whether the person chose to sign
 // out or the instance ended it, and what the phone remembers of the push
-// subscriptions it sent, which a leaving takes back and forgets.
+// subscriptions it sent, which a leaving takes back and forgets; and a
+// phone another device removed: what the sign-in screen says and what of
+// the phone's own goes with it.
 package chat.lumia.kit
 
 import kotlinx.coroutines.NonCancellable
@@ -55,6 +57,29 @@ class Leaving {
         return true
     }
 }
+
+// Removed by another device (identity spec 4.4)
+
+/** What the sign-in screen says to a phone another device removed from the account, once the core has erased what it kept. */
+const val REMOVED = "This phone was removed from your account, and its private messages were erased from it."
+
+/**
+ * The line a gateway loop's end leaves the sign-in screen: the removal's
+ * when the identity revoked this phone (the core's `Closed.removed`, sent
+ * only once it has erased the phone's store, identity, keys and tokens),
+ * and otherwise none here: the snapshot asked next says whether the
+ * session is over (`SIGNED_OUT`) or the loop just starts again.
+ */
+fun closedNotice(removed: Boolean): String? = if (removed) REMOVED else null
+
+/**
+ * What the app keeps in its `lumia` preferences about the account and its
+ * identity, which a removed phone forgets as the core erased the rest:
+ * the rail's open folders, when Home's phrase reminder was put off, and
+ * what it reacted with. The saved instance and Preferences' choices are
+ * the phone's and stay, as on signing out.
+ */
+val ERASED_WITH_THE_DEVICE = listOf("open_folders", "phrase_snoozed_until", "recent_emoji")
 
 // Push subscriptions (architecture 15.5)
 

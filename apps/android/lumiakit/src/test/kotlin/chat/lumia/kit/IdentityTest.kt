@@ -10,7 +10,9 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import java.time.ZoneId
 import org.junit.Test
+import uniffi.lumia_ffi.DeviceSummary
 
 class IdentityTest {
     private val words = (1..24).map { "w$it" }
@@ -268,5 +270,52 @@ class IdentityTest {
         assertEquals("Too many tries. Wait a minute, then try again.", promptError("RATE_LIMITED", "slow down"))
         // The core's own words, a sentence.
         assertEquals("This request cannot be approved: start again on the new device", promptError(null, "this request cannot be approved: start again on the new device"))
+    }
+
+    // Restoring, keeping devices (identity spec 4.3 step 3).
+
+    private fun device(id: String, kind: String = "native", label: String = "", origin: String = "", added: Long = 0, revoked: Boolean = false) =
+        DeviceSummary(id, kind, label, origin, added, false, revoked)
+
+    @Test
+    fun theRestoreButtonSaysHowManyDevicesItKeeps() {
+        assertEquals("Restore and stop them all", restoreKeepButton(0))
+        assertEquals("Restore and keep 1 device", restoreKeepButton(1))
+        assertEquals("Restore and keep 3 devices", restoreKeepButton(3))
+    }
+
+    @Test
+    fun aDeviceToKeepReadsAsItsLabelAndWhenItWasAdded() {
+        val utc = ZoneId.of("UTC")
+        // 2026-11-12 15:00 UTC, in microseconds.
+        val nov12 = 1_794_495_600_000_000L
+        assertEquals("Added Nov 12", restoreDeviceMeta("", nov12, utc))
+        assertEquals("On chat.acme.dev · added Nov 12", restoreDeviceMeta("https://chat.acme.dev", nov12, utc))
+        assertEquals("On chat.acme.dev", restoreDeviceMeta("https://chat.acme.dev/", 0, utc))
+        assertEquals("", restoreDeviceMeta("", 0, utc))
+        assertEquals("MacBook Pro", restoreDeviceName("native", " MacBook Pro "))
+        assertEquals("Browser", restoreDeviceName("web", ""))
+        assertEquals("Device", restoreDeviceName("native", ""))
+    }
+
+    // An instance that knows no device of the identity restores at once, as before.
+    @Test
+    fun thePhraseLeadsToTheDevicesOnlyWhenThereAreAnyToStop() {
+        assertTrue(restoreChoices(emptyList()).isEmpty())
+        assertTrue(restoreChoices(listOf(device("a", revoked = true))).isEmpty())
+        assertEquals(listOf("b"), restoreChoices(listOf(device("a", revoked = true), device("b"))).map { it.deviceId })
+    }
+
+    @Test
+    fun aRestoreKeepsWhatIsTickedInTheListsOrderAndNeverSaysThePhrase() {
+        val phrase = words.joinToString(" ")
+        var r = Restoring(phrase, listOf(device("a"), device("b"), device("c")))
+        assertEquals(emptyList<String>(), r.keep)
+        r = r.toggled("c").toggled("a")
+        assertEquals(listOf("a", "c"), r.keep)
+        r = r.toggled("c")
+        assertEquals(listOf("a"), r.keep)
+        assertEquals(phrase, r.phrase)
+        assertFalse(r.toString().contains("w1"))
     }
 }

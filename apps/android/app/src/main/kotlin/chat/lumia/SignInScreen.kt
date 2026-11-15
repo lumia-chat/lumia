@@ -47,11 +47,14 @@ import chat.lumia.kit.LumiaErrorText
 import chat.lumia.kit.LumiaField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Email
+import androidx.compose.material.icons.filled.PhonelinkErase
 import chat.lumia.kit.LumiaLinkButton
 import chat.lumia.kit.LumiaNotice
 import chat.lumia.kit.LumiaPrimaryButton
 import chat.lumia.kit.LumiaSecondaryButton
 import chat.lumia.kit.LumiaTokens
+import chat.lumia.kit.NoticeTone
+import chat.lumia.kit.REMOVED
 import chat.lumia.kit.Route
 import chat.lumia.kit.initialsOf
 import chat.lumia.kit.lumiaCode
@@ -80,6 +83,8 @@ fun SignInScreen(store: AppStore) {
     var totp by rememberSaveable { mutableStateOf("") }
     var needsTotp by rememberSaveable { mutableStateOf(false) }
     var error by rememberSaveable { mutableStateOf("") }
+    /** The removal's line (`REMOVED`), until dismissed: not an error of anything typed here. */
+    var notice by rememberSaveable { mutableStateOf("") }
     var magicSent by rememberSaveable { mutableStateOf(false) }
     var magicCode by rememberSaveable { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
@@ -193,8 +198,9 @@ fun SignInScreen(store: AppStore) {
     }
 
     LaunchedEffect(Unit) {
-        // Sent back here by the instance (a session revoked or run out), the screen opens saying so.
-        store.session?.takeEndedNotice()?.let { error = it }
+        // Sent back here by the instance (a session revoked or run out), the screen opens saying so;
+        // removed by another device, it says that, as a notice of its own.
+        store.session?.takeEndedNotice()?.let { if (it == REMOVED) notice = it else error = it }
         if (store.session != null && info == null && !choosing) reach()
     }
 
@@ -204,6 +210,7 @@ fun SignInScreen(store: AppStore) {
         verticalArrangement = Arrangement.spacedBy(LumiaTokens.space16),
     ) {
         Image(painterResource(R.drawable.logo), contentDescription = "Lumia", modifier = Modifier.padding(top = LumiaTokens.space24).size(96.dp))
+        if (notice.isNotEmpty()) LumiaNotice(Icons.Filled.PhonelinkErase, NoticeTone.WARNING, action = "Dismiss" to { notice = "" }, text = notice)
         val current = info
         if (current == null) {
             LumiaCard("Welcome", "Which instance do you want to sign in to?") {

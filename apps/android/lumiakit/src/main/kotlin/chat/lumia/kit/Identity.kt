@@ -3,12 +3,20 @@
 // signed-in phone needs before it can send one, when Home reminds it to
 // save the recovery phrase, the three-word check's fields, the phrase as a
 // restore field counts it and as a printed page or a file lays it out,
+// restoring while keeping devices (4.3 step 3): which devices are offered,
+// how one reads and what the button says by how many are ticked,
 // approving another device (4.2): what a pasted request reads as and the
 // code it answers, linking by prompt (4.2.1): the new device's stages and
 // the prompt another device shows, which one and in what words, and the
 // words the screens say. The phrase itself, the quiz's positions, whether
 // a word is right, what a request holds and the six digits are the core's.
 package chat.lumia.kit
+
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Locale
+import uniffi.lumia_ffi.DeviceSummary
 
 /** What a signed-in phone needs before it can send or accept a private message. */
 enum class PrivateMessages {
@@ -101,6 +109,76 @@ fun restoreReady(text: String): Boolean = phraseWords(text).size == PHRASE_WORDS
 
 /** What Restore sends the core: the words, one space between each. */
 fun phraseOf(text: String): String = phraseWords(text).joinToString(" ")
+
+// Restoring, keeping devices (identity spec 4.3 step 3)
+
+/** Restore's first question, before the phrase: a device still at hand links this phone instead. */
+const val RESTORE_ASK = "Do you still have a device with your private messages?"
+const val RESTORE_ASK_LINE = "If you do, link this phone from it instead. Restoring is for when your devices are gone: it stops the ones you don't keep."
+
+/** What "Keep any devices?" says over the devices, and the warning under them. */
+const val RESTORE_KEEP_LINE = "Tick the devices you still have. The others stop reading your private messages, so a lost one can't keep reading them."
+const val RESTORE_KEEP_WARNING = "Keep only devices you have with you now. A kept device you've lost would keep reading your private messages."
+
+/**
+ * A restore between the phrase and "Keep any devices?": the phrase, the
+ * devices restoring would stop (the core's `identityRecoverDevices`) and
+ * the ids ticked to keep. Held in memory by the session for that step
+ * alone and dropped when the restore ends or is left; never saved, and
+ * never written out (`toString` leaves the phrase out).
+ */
+class Restoring(val phrase: String, val devices: List<DeviceSummary>, val kept: Set<String> = emptySet()) {
+    /** The same, with [deviceId] ticked if it was not and not if it was. */
+    fun toggled(deviceId: String): Restoring =
+        Restoring(phrase, devices, if (deviceId in kept) kept - deviceId else kept + deviceId)
+
+    /** What restoring keeps: the ticked ids, in the list's order. */
+    val keep: List<String> get() = devices.map { it.deviceId }.filter { it in kept }
+
+    override fun toString(): String = "Restoring(${devices.size} devices, ${kept.size} kept)"
+}
+
+/**
+ * The devices "Keep any devices?" lists, from what the core answered for
+ * the phrase: none revoked. Empty, the phrase restores straight away, as
+ * it did before there was a choice.
+ */
+fun restoreChoices(devices: List<DeviceSummary>): List<DeviceSummary> =
+    devices.filter { !it.revoked }
+
+/** The restore button, by how many devices are ticked. */
+fun restoreKeepButton(kept: Int): String = when (kept) {
+    0 -> "Restore and stop them all"
+    1 -> "Restore and keep 1 device"
+    else -> "Restore and keep $kept devices"
+}
+
+/** A device's name in the list: its label, else what it is. [kind] is the core's: `native`, `web` or `bot`. */
+fun restoreDeviceName(kind: String, label: String): String = label.trim().ifEmpty {
+    when (kind) {
+        "web" -> "Browser"
+        "bot" -> "Bot"
+        else -> "Device"
+    }
+}
+
+/**
+ * The line under a device's name: "Added Nov 12", or for a browser the
+ * site it is on first, "On chat.acme.dev · added Nov 1" ([webOrigin]
+ * without its scheme). Nothing of when for a device with no date.
+ */
+fun restoreDeviceMeta(webOrigin: String, addedAtMicros: Long, zone: ZoneId = ZoneId.systemDefault()): String {
+    val day = if (addedAtMicros > 0) {
+        Instant.ofEpochMilli(addedAtMicros / 1000).atZone(zone).format(DateTimeFormatter.ofPattern("MMM d", Locale.ENGLISH))
+    } else null
+    val site = webOrigin.substringAfter("://").trimEnd('/')
+    return when {
+        site.isNotEmpty() && day != null -> "On $site · added $day"
+        site.isNotEmpty() -> "On $site"
+        day != null -> "Added $day"
+        else -> ""
+    }
+}
 
 /**
  * The words as the screen and the printed page lay them out: numbered

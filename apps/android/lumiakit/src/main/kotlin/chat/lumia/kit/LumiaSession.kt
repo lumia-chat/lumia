@@ -17,6 +17,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import uniffi.lumia_ffi.ClientEvent
+import uniffi.lumia_ffi.DeviceSummary
 import uniffi.lumia_ffi.DmChannelSummary
 import uniffi.lumia_ffi.DmLogSummary
 import uniffi.lumia_ffi.DmResponse
@@ -73,6 +74,12 @@ class LumiaSession(
      * ended the session. A session made without one has none to see to.
      */
     private val pushLeft: suspend (chosen: Boolean) -> Unit = {},
+    /**
+     * What this phone being removed from the account does about what the
+     * app keeps of it beyond the core (`ERASED_WITH_THE_DEVICE`, the
+     * pictures fetched), which `AppStore` holds.
+     */
+    private val erased: () -> Unit = {},
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     val host: String = client.host
@@ -400,6 +407,18 @@ class LumiaSession(
         if (signedIn) leave(notice = SIGNED_OUT)
     }
 
+    /**
+     * Another device removed this one from the identity (identity spec
+     * 4.4), and the core has erased what it kept and given it a new device
+     * id: what the app held goes as for a session that ended, and what it
+     * keeps of the account beyond the session too, and the sign-in screen
+     * says so (`closedNotice`). Signing in again is as a new device.
+     */
+    private suspend fun removed(notice: String) {
+        erased()
+        if (signedIn) leave(notice) else endedNotice = notice
+    }
+
     /** The line for the sign-in screen, taken: the next one starts without it. */
     fun takeEndedNotice(): String? = endedNotice.also { endedNotice = null }
 
@@ -446,6 +465,8 @@ class LumiaSession(
                 messageLimits.clear()
                 railSent = null
                 railError = null
+                hasIdentity = client.hasIdentity
+                restoring = null
                 privateMessages = null
                 phraseUnconfirmed = false
                 phraseUnlocked = false
@@ -776,12 +797,24 @@ class LumiaSession(
     }
 
     /**
-     * Restores the identity from its phrase on this phone, every other
-     * device of it revoked (identity spec 4.3), and signs in by it. Signed
-     * in already, the gateway starts again under the session it took.
+     * A restore between the phrase and "Keep any devices?" (`Restoring`):
+     * held here, in memory only, so turning the phone keeps the step and
+     * what was ticked; the restore screen drops it as the flow ends or is
+     * left, and leaving the session drops it too.
      */
-    suspend fun identityRecover(phrase: String, label: String) {
-        client.call { identityRecover(phrase, label) }
+    var restoring by mutableStateOf<Restoring?>(null)
+
+    /** The devices of the phrase's identity that restoring would stop, read from the instance before anything changes. */
+    suspend fun identityRecoverDevices(phrase: String): List<DeviceSummary> = client.call { identityRecoverDevices(phrase) }
+
+    /**
+     * Restores the identity from its phrase on this phone (identity spec
+     * 4.3), keeping the devices in [keep] and revoking every other, and
+     * signs in by it. Signed in already, the gateway starts again under
+     * the session it took.
+     */
+    suspend fun identityRecover(phrase: String, label: String, keep: List<String> = emptyList()) {
+        client.call { identityRecoverKeeping(phrase, label, keep) }
         signedIn = true
         identityChanged()
     }
@@ -1304,8 +1337,9 @@ class LumiaSession(
             events = null
             // The stream ends by itself only when the loop has (`Closed`; `stop()`
             // cancels this job instead), so here and not in `handle`: the loop
-            // this may start is not the one `events` was just cleared for.
-            loopEnded()
+            // this may start is not the one `events` was just cleared for. Not
+            // for a phone the loop's end removed, which has nothing left to ask.
+            if (signedIn) loopEnded()
         }
     }
 
@@ -1382,7 +1416,11 @@ class LumiaSession(
             is ClientEvent.ProfileUpdated -> profileUpdated(event)
             is ClientEvent.Reconnecting -> connection = ConnectionState.Reconnecting(event.attempt)
             is ClientEvent.Disconnected -> connection = ConnectionState.Disconnected(event.reason)
-            is ClientEvent.Closed -> { connection = ConnectionState.Closed(event.reason); events = null }
+            is ClientEvent.Closed -> {
+                connection = ConnectionState.Closed(event.reason)
+                events = null
+                closedNotice(event.removed)?.let { removed(it) }
+            }
             is ClientEvent.DmSubscribed -> { refreshDmChannels(); refreshDmLog(event.channelId) }
             is ClientEvent.DmReady -> { refreshDmChannels(); refreshDmLog(event.channelId) }
             is ClientEvent.DmOperation -> { refreshDmLog(event.channelId); refreshReads() }

@@ -2,12 +2,14 @@
 // issue #20; the "Setting up private messages" phone boards): Home's
 // reminder and Devices' card, the recovery phrase and its three-word
 // check, "Private messages need this phone" with Link, Restore and Start
-// over, the restore and start-over screens, the reauth they ask for, and
+// over, the restore screens (its question, the words and the devices to
+// keep) and the start-over screen, the reauth they ask for, and
 // approving another device from this one: by a prompt (4.2.1) or a pasted
 // request (4.2). The rules they draw by
 // are lumiakit's `Identity.kt`.
 package chat.lumia
 
+import android.app.Activity
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -30,6 +32,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -44,6 +47,8 @@ import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.WarningAmber
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -53,6 +58,7 @@ import androidx.compose.material3.SheetValue
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
@@ -69,7 +75,9 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
@@ -105,6 +113,11 @@ import chat.lumia.kit.PhraseQuiz
 import chat.lumia.kit.PrivateMessages
 import chat.lumia.kit.PromptStage
 import chat.lumia.kit.REAUTH_RETURN
+import chat.lumia.kit.RESTORE_ASK
+import chat.lumia.kit.RESTORE_ASK_LINE
+import chat.lumia.kit.RESTORE_KEEP_LINE
+import chat.lumia.kit.RESTORE_KEEP_WARNING
+import chat.lumia.kit.Restoring
 import chat.lumia.kit.Route
 import chat.lumia.kit.completionsLabel
 import chat.lumia.kit.deviceLabel
@@ -131,8 +144,13 @@ import chat.lumia.kit.promptLine
 import chat.lumia.kit.promptStageOf
 import chat.lumia.kit.promptTitle
 import chat.lumia.kit.readLinkRequest
+import chat.lumia.kit.restoreChoices
+import chat.lumia.kit.restoreDeviceMeta
+import chat.lumia.kit.restoreDeviceName
+import chat.lumia.kit.restoreKeepButton
 import chat.lumia.kit.restoreReady
 import kotlinx.coroutines.launch
+import uniffi.lumia_ffi.DeviceSummary
 import uniffi.lumia_ffi.LinkRequestSummary
 import uniffi.lumia_ffi.LumiaException
 
@@ -506,31 +524,51 @@ private fun SetUpHere(store: AppStore, session: LumiaSession, done: () -> Unit) 
 // Restore
 
 /**
- * Restore with the recovery phrase (identity spec 4.3): the 24 words in
- * one field with their count, what restoring does to the other devices
- * and to messages from before, and Restore once all 24 are in. It signs
- * in by the identity, so it is offered before a sign-in too. Nothing
- * typed is kept when Android saves the screen, and the screen is kept
- * out of screenshots.
+ * Restore with the recovery phrase (identity spec 4.3), in up to three
+ * steps. First the question: a device that still has the private
+ * messages links this phone instead ([link], where Link from a device you
+ * use goes from the same place), restoring being for when they are gone.
+ * Then the 24 words in one field with their count, what restoring does to
+ * the other devices and to messages from before, and Restore once all 24
+ * are in, which asks the instance which devices restoring would stop.
+ * None, it restores at once; else "Keep any devices?" lists them to tick,
+ * and restores keeping the ticked and stopping the rest. It signs in by
+ * the identity, so it is offered before a sign-in too. Nothing typed is
+ * kept when Android saves the screen, the words' step is kept out of
+ * screenshots, and the phrase between the last two steps is held by the
+ * session in memory only (`LumiaSession.restoring`), dropped as the
+ * restore ends or is left.
  */
 @Composable
-fun RestoreScreen(store: AppStore, session: LumiaSession, from: String, back: () -> Unit, done: () -> Unit) {
-    SecureWindow()
+fun RestoreScreen(store: AppStore, session: LumiaSession, from: String, back: () -> Unit, link: () -> Unit, done: () -> Unit) {
     val scope = rememberCoroutineScope()
+    val activity = LocalContext.current as? Activity
+    /** "No, restore with my phrase" answered: a step, not what was typed, so kept as the phone turns. */
+    var phraseStep by rememberSaveable { mutableStateOf(session.restoring != null) }
     var text by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
+    val keeping = session.restoring
     val ready = restoreReady(text)
 
-    fun restore() {
+    // Left, and not only made again as the phone turns: the phrase goes with the restore.
+    DisposableEffect(session) { onDispose { if (activity?.isChangingConfigurations != true) session.restoring = null } }
+
+    suspend fun restore(phrase: String, keep: List<String>) {
+        store.signIn { identityRecover(phrase, deviceLabel, keep) }
+        session.restoring = null
+        done()
+    }
+
+    fun submit() {
         if (!ready || busy) return
         scope.launch {
             busy = true
             error = ""
             try {
                 val phrase = phraseOf(text)
-                store.signIn { identityRecover(phrase, deviceLabel) }
-                done()
+                val devices = restoreChoices(session.identityRecoverDevices(phrase))
+                if (devices.isEmpty()) restore(phrase, emptyList()) else session.restoring = Restoring(phrase, devices)
             } catch (e: Exception) {
                 error = "Not restored: ${e.lumiaMessage}"
             } finally {
@@ -539,34 +577,118 @@ fun RestoreScreen(store: AppStore, session: LumiaSession, from: String, back: ()
         }
     }
 
-    PanelScreen(back = from, onBack = back, title = "Restore", subtitle = "With your recovery phrase") {
-        WithFooter(
-            content = {
-                Column(verticalArrangement = Arrangement.spacedBy(LumiaTokens.space6)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("Your 24 words, in order", style = LumiaTokens.textLabel.style, color = LumiaTokens.inkEmphasis.color, modifier = Modifier.weight(1f))
-                        Text(phraseCount(text), style = LumiaTokens.textMeta.style, color = LumiaTokens.inkMuted.color, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
-                    }
-                    Box(
-                        Modifier.fillMaxWidth().heightIn(min = LumiaTokens.controlHeight * 3)
-                            .background(LumiaTokens.field.color, RoundedCornerShape(LumiaTokens.radius12))
-                            .border(1.dp, LumiaTokens.borderForm.color, RoundedCornerShape(LumiaTokens.radius12))
-                            .padding(LumiaTokens.space12),
-                    ) {
-                        PhraseInput(text, { text = it }, "orbit cactus timber …", Modifier.fillMaxWidth().semantics { contentDescription = "Your 24 words, in order" }, maxLines = 8, ime = ImeAction.Done) { restore() }
-                    }
-                }
-                LumiaWarning(Icons.Filled.WarningAmber, "Restoring makes this phone your identity's only device. Every other device of yours stops reading private messages, so a lost one can't keep reading them.")
-                LumiaNotice(Icons.Filled.History, text = "Messages from before can't be read here unless history backup was on.")
-            },
-            footer = {
-                // Over the actions, where it shows above the keyboard too.
-                if (error.isNotEmpty()) LumiaErrorText(error)
-                LumiaPrimaryButton(if (busy) "Restoring…" else "Restore", Modifier.fillMaxWidth(), enabled = ready && !busy) { restore() }
-                if (!ready) Text("Restore turns on once all 24 words are in.", style = LumiaTokens.textMeta.style, color = LumiaTokens.inkMuted.color, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
-            },
-        )
+    fun restoreKeeping(chosen: Restoring) {
+        if (busy) return
+        scope.launch {
+            busy = true
+            error = ""
+            try {
+                restore(chosen.phrase, chosen.keep)
+            } catch (e: Exception) {
+                error = "Not restored: ${e.lumiaMessage}"
+            } finally {
+                busy = false
+            }
+        }
     }
+
+    // Back a step: the devices to the words, still in their field; the words to the question, dropped.
+    fun stepBack() {
+        error = ""
+        when {
+            keeping != null -> { text = keeping.phrase; session.restoring = null }
+            phraseStep -> { text = ""; phraseStep = false }
+            else -> back()
+        }
+    }
+    BackHandler(onBack = ::stepBack)
+
+    when {
+        keeping != null -> PanelScreen(back = "Restore", onBack = ::stepBack, title = "Keep any devices?", subtitle = "Before this phone restores") {
+            WithFooter(
+                content = {
+                    Text(RESTORE_KEEP_LINE, style = LumiaTokens.textBody.style, color = LumiaTokens.inkBody.color)
+                    Column(Modifier.semantics { contentDescription = "Your devices" }) {
+                        for (d in keeping.devices) {
+                            KeepDeviceRow(d, d.deviceId in keeping.kept, enabled = !busy) { session.restoring = keeping.toggled(d.deviceId) }
+                        }
+                    }
+                    LumiaWarning(Icons.Filled.WarningAmber, RESTORE_KEEP_WARNING)
+                },
+                footer = {
+                    if (error.isNotEmpty()) LumiaErrorText(error)
+                    LumiaPrimaryButton(if (busy) "Restoring…" else restoreKeepButton(keeping.kept.size), Modifier.fillMaxWidth(), enabled = !busy) { restoreKeeping(keeping) }
+                },
+            )
+        }
+        phraseStep -> PanelScreen(back = "Restore", onBack = ::stepBack, title = "Restore", subtitle = "With your recovery phrase") {
+            SecureWindow()
+            WithFooter(
+                content = {
+                    Column(verticalArrangement = Arrangement.spacedBy(LumiaTokens.space6)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("Your 24 words, in order", style = LumiaTokens.textLabel.style, color = LumiaTokens.inkEmphasis.color, modifier = Modifier.weight(1f))
+                            Text(phraseCount(text), style = LumiaTokens.textMeta.style, color = LumiaTokens.inkMuted.color, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+                        }
+                        Box(
+                            Modifier.fillMaxWidth().heightIn(min = LumiaTokens.controlHeight * 3)
+                                .background(LumiaTokens.field.color, RoundedCornerShape(LumiaTokens.radius12))
+                                .border(1.dp, LumiaTokens.borderForm.color, RoundedCornerShape(LumiaTokens.radius12))
+                                .padding(LumiaTokens.space12),
+                        ) {
+                            PhraseInput(text, { text = it }, "orbit cactus timber …", Modifier.fillMaxWidth().semantics { contentDescription = "Your 24 words, in order" }, maxLines = 8, ime = ImeAction.Done) { submit() }
+                        }
+                    }
+                    LumiaWarning(Icons.Filled.WarningAmber, "Restoring makes this phone your identity's only device. Every other device of yours stops reading private messages, so a lost one can't keep reading them.")
+                    LumiaNotice(Icons.Filled.History, text = "Messages from before can't be read here unless history backup was on.")
+                },
+                footer = {
+                    // Over the actions, where it shows above the keyboard too.
+                    if (error.isNotEmpty()) LumiaErrorText(error)
+                    LumiaPrimaryButton(if (busy) "Restoring…" else "Restore", Modifier.fillMaxWidth(), enabled = ready && !busy) { submit() }
+                    if (!ready) Text("Restore turns on once all 24 words are in.", style = LumiaTokens.textMeta.style, color = LumiaTokens.inkMuted.color, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                },
+            )
+        }
+        else -> PanelScreen(back = from, onBack = back, title = "Restore", subtitle = "With your recovery phrase") {
+            Column(
+                Modifier.fillMaxSize().verticalScroll(rememberScrollState()).navigationBarsPadding().padding(LumiaTokens.space24),
+                verticalArrangement = Arrangement.spacedBy(LumiaTokens.space18, Alignment.CenterVertically),
+            ) {
+                Text(RESTORE_ASK, style = LumiaTokens.titleChannel.style, color = LumiaTokens.ink.color, modifier = Modifier.semantics { heading() })
+                Text(RESTORE_ASK_LINE, style = LumiaTokens.textBody.style, color = LumiaTokens.inkMuted.color)
+                LumiaPrimaryButton("Yes, link from it", Modifier.fillMaxWidth(), onClick = link)
+                LumiaSecondaryButton("No, restore with my phrase", Modifier.fillMaxWidth()) { phraseStep = true }
+            }
+        }
+    }
+}
+
+/**
+ * One device of "Keep any devices?": its kind's glyph on a tile, its name
+ * and when it was added, and a checkbox; ticked by a tap anywhere on the
+ * row, which is one checkbox to TalkBack.
+ */
+@Composable
+private fun KeepDeviceRow(device: DeviceSummary, ticked: Boolean, enabled: Boolean, toggle: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth()
+            .toggleable(value = ticked, enabled = enabled, role = Role.Checkbox) { toggle() }
+            .padding(vertical = LumiaTokens.space12),
+        horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space12),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(40.dp).background(LumiaTokens.inset.color, RoundedCornerShape(LumiaTokens.radius10)), contentAlignment = Alignment.Center) {
+            Icon(if (device.kind == "web") Icons.Filled.Language else Icons.Filled.Devices, contentDescription = null, tint = LumiaTokens.iconStrong.color, modifier = Modifier.size(20.dp))
+        }
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(LumiaTokens.space2)) {
+            Text(restoreDeviceName(device.kind, device.label), style = LumiaTokens.textAuthor.style, color = LumiaTokens.ink.color)
+            val meta = restoreDeviceMeta(device.webOrigin, device.addedAtMicros)
+            if (meta.isNotEmpty()) Text(meta, style = LumiaTokens.textMeta.style, color = LumiaTokens.inkMuted.color)
+        }
+        Checkbox(checked = ticked, onCheckedChange = null, enabled = enabled, colors = CheckboxDefaults.colors(checkedColor = LumiaTokens.accent.color, checkmarkColor = LumiaTokens.onAccent.color, uncheckedColor = LumiaTokens.borderForm.color))
+    }
+    Box(Modifier.fillMaxWidth().height(1.dp).background(LumiaTokens.line.color))
 }
 
 // Start over

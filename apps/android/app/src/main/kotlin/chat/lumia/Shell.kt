@@ -36,6 +36,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import chat.lumia.kit.Route
 import chat.lumia.kit.Unread
 import chat.lumia.kit.unreadIn
 import chat.lumia.kit.withUnread
@@ -284,7 +285,7 @@ fun Shell(store: AppStore, session: LumiaSession, devScreen: String?, devChannel
             leavePhrase()
             Toast.makeText(context, "Your recovery phrase is saved.", Toast.LENGTH_SHORT).show()
         }
-        Screen.Restore -> RestoreScreen(store, session, backTo(stack.dropLast(1).lastOrNull()), pop) { replace(emptyList()) }
+        Screen.Restore -> RestoreScreen(store, session, backTo(stack.dropLast(1).lastOrNull()), pop, link = { pop(); store.route = Route.LINK }) { replace(emptyList()) }
         // Started over, the new phrase is next to save, when the phone keeps one.
         Screen.StartOver -> StartOverScreen(store, session, backTo(stack.dropLast(1).lastOrNull()), pop) { phrase -> replace(if (phrase) listOf(Screen.Phrase()) else emptyList()) }
         // Approving another device; an approval answered or refused is forgotten on the way out, one under way kept.
