@@ -3881,7 +3881,14 @@ impl App {
             return Ok(progress("declined", String::new()));
         }
         if !session.code.is_empty() {
-            self.identity_claim(&session.code).await?;
+            // A claim that came through before a sign-in that did not leaves
+            // the identity here and the code spent: only the sign-in is left.
+            if self.has_identity() {
+                self.sign_in_identity().await?;
+                self.announce_device().await;
+            } else {
+                self.identity_claim(&session.code).await?;
+            }
             self.lock().linking = None;
             return Ok(progress("linked", String::new()));
         }
