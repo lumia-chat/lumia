@@ -339,6 +339,8 @@ export type ClientEvent =
   | { kind: "accountApplied"; count: number }
   /** Someone's name or picture changed, this account's own included (issue #15): the account as others see it, after the `accountApplied` it came in. */
   | { kind: "profileUpdated"; accountId: string; handle: string; displayName: string; avatarUrl: string; pronouns: string; bio: string }
+  /** A link session moved (identity spec 4.2.1), after the `accountApplied` it came in: this browser's own as the new device. */
+  | { kind: "linkSessionUpdated"; sessionId: string }
   | { kind: "acked"; commandId: string; seq: number }
   | { kind: "error"; code: string; message: string; commandId: string }
   | { kind: "subscriptionFailed"; channelId: string; message: string }

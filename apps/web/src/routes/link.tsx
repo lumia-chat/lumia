@@ -101,6 +101,8 @@ function LinkByPrompt(props: { onLinked: () => void; onCancel: () => void; under
     if (n !== run) return;
     setReason(message(e));
     setScreen("failed");
+    // The session may still be open on the instance: given up, so the other devices stop asking.
+    void client().linkCancel().catch(() => {});
   };
   const start = async () => {
     const n = ++run;
@@ -141,7 +143,7 @@ function LinkByPrompt(props: { onLinked: () => void; onCancel: () => void; under
     const timer = setInterval(() => void ask(), LINK_POLL_MS);
     // The session moves by the account's log (`LinkSessionUpdated`).
     const off = client().onEvent((e) => {
-      if (e.kind === "accountApplied") void ask();
+      if (e.kind === "linkSessionUpdated") void ask();
     });
     onCleanup(() => {
       clearInterval(timer);

@@ -1,7 +1,7 @@
 // Linking this browser by a prompt (identity spec 4.2.1): the rules the
 // link page follows that need no page. The core takes each step; the page
-// asks it where the session stands when it opens, on every
-// `accountApplied` and every two seconds while it waits, and says so in
+// asks it where the session stands when it opens, whenever it moves
+// (`linkSessionUpdated`) and every two seconds while it waits, and says so in
 // these words. A browser is only ever the new device: it never approves.
 import type { LinkStage } from "./bridge";
 
@@ -11,7 +11,7 @@ export const LINK_POLL_MS = 2000;
 /** What the page shows: a stage of the core's, or starting one, or a failure to start or go on. */
 export type LinkScreen = LinkStage | "starting" | "failed";
 
-/** Whether the session is open and waiting on the other device: asked again on the timer and on every account event. */
+/** Whether the session is open and waiting on the other device: asked again on the timer and whenever it moves. */
 export function linkPolls(screen: LinkScreen): boolean {
   return screen === "waiting" || screen === "compare";
 }
