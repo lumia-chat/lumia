@@ -1,9 +1,7 @@
 Lumia for Windows, a preview
 ============================
 
-This is the Lumia desktop app built for Windows. It is a preview: it was
-built on another system and nobody has yet run it on Windows. It may not
-start. Please say what you find:
+Lumia desktop app for Windows, preview. Please report issues here:
 https://github.com/lumia-chat/lumia/issues
 
 Run it
