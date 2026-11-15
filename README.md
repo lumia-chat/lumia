@@ -15,15 +15,70 @@ Personal DMs are end-to-end encrypted. Server content is readable by the people 
 
 ## Status
 
-Early, and used by a handful of testers. The instance, the client core and the apps run: signing in, servers and channels, invites, presence, end-to-end encrypted personal DMs, devices and push notifications. Builds are on the [releases page](https://github.com/lumia-chat/lumia/releases): macOS, Android as an APK, and previews for Windows and Linux that nobody has tried on those systems yet; iOS goes through TestFlight.
+Early, and used by a handful of testers. The instance, the client core and the apps run: signing in, servers and channels, invites, presence, end-to-end encrypted personal DMs, devices and push notifications. Install below says where each app comes from; the Windows and Linux builds are previews that nobody has tried on those systems yet.
 
 Not built yet: threads, reactions, attachments, search and calls, all of which the pictures above show. [docs/plan.md](docs/plan.md) says what is done and what is next.
+
+## Install
+
+Every app starts by asking which instance to sign in to: the address of the Lumia instance you have an account on, or want one on. The downloads are on the [latest release](https://github.com/lumia-chat/lumia/releases/latest).
+
+### macOS
+
+macOS 14 or later, on Apple silicon or Intel. Download `Lumia-<version>.dmg`, open it and drag Lumia to Applications. The app is signed and notarized, and updates itself: it checks once a day, and **Lumia › Check for updates…** checks now.
+
+### Windows (preview)
+
+Windows on x86-64. Download `Lumia-<version>-windows-x86_64-preview.zip`, unpack it anywhere and open `Lumia.exe`. It is not signed yet, so SmartScreen warns the first time: choose **More info**, then **Run anyway**. There is no installer and no updater, so a new version is a new download. Signing in through the browser (a passkey, or an organization's sign-in) cannot come back to the app yet: sign in with a password, or link the computer from another device.
+
+### Linux (preview)
+
+On Debian or Ubuntu, install the package from [packages.lumia.chat](https://packages.lumia.chat), which adds the repository so Lumia updates with the rest of the system:
+
+```sh
+# Intel or AMD (x86-64)
+curl -fLO https://packages.lumia.chat/apt/pool/main/lumia_<version>_amd64.deb
+sudo apt install ./lumia_<version>_amd64.deb
+
+# Arm (arm64)
+curl -fLO https://packages.lumia.chat/apt/pool/main/lumia_<version>_arm64.deb
+sudo apt install ./lumia_<version>_arm64.deb
+```
+
+On Fedora and other dnf systems:
+
+```sh
+# Intel or AMD (x86-64)
+sudo dnf install https://packages.lumia.chat/rpm/x86_64/lumia-<version>-1.x86_64.rpm
+
+# Arm (aarch64)
+sudo dnf install https://packages.lumia.chat/rpm/aarch64/lumia-<version>-1.aarch64.rpm
+```
+
+Anywhere else, download `Lumia-linux-x86_64-preview.AppImage` or `Lumia-linux-aarch64-preview.AppImage`, make it executable (`chmod +x`) and open it; it needs FUSE, which most desktops have. It updates itself: Preferences has the choices, and nothing is downloaded until you choose Update. Every build needs a Vulkan driver.
+
+### Android
+
+Android 9 or later. Download `Lumia-<version>.apk` on the phone and open it, allowing the browser to install apps when Android asks. To get new versions as they are released, add `https://github.com/lumia-chat/lumia` to [Obtainium](https://github.com/ImranR98/Obtainium). Every release is signed with the same key, so each one installs over the last.
+
+### iOS
+
+iOS 17 or later. While Lumia is in testing it is on TestFlight, by invitation; there is no App Store listing yet.
+
+### Web
+
+There is nothing to install. Every instance serves the web app at its own address: open it in a current browser and sign in.
+
+### Hosting an instance
+
+An instance is two containers, the Lumia image and Postgres. [apps/instance/README.md](apps/instance/README.md) has the commands and [docs/specs/deployment.md](docs/specs/deployment.md) the contract.
 
 ## How it works
 
 - **Instances are islands.** Each one is a deployment: an Elixir server, a Postgres database, and a blob store. Instances never talk to each other. The client bridges them.
 - **One identity, many accounts.** Your identity is a key hierarchy on your devices. Each instance you use holds an account bound to it. Joining a server on a new instance is a URL and a tap.
 - **Two kinds of DM.** Server DMs belong to the server and follow its rules. Personal DMs belong to the people in them and are encrypted with MLS so no server, including ours, can read them.
+- **One core, native shells.** macOS, Windows, Linux, iOS, Android and the browser share one Rust client core; each platform gets a native shell around it.
 - **Self-hosting is two containers.** The Lumia image and Postgres. Everything else is optional.
 - **Open by design.** The server is AGPL-3.0 with no enterprise edition. The client core and protocol schemas are Apache-2.0. Bots, agents, and third-party clients use the same public API the official apps do, and every instance speaks MCP.
 
@@ -54,10 +109,6 @@ spikes/         Throwaway code behind the write-ups in docs/spikes
 ```
 
 Section 18 of the architecture doc gives the order these were built in, and section 21 says what each directory holds.
-
-## Platforms
-
-macOS, Windows, Linux, iOS, Android, and the browser. All clients share one Rust core; each platform gets a native shell.
 
 ## Contributing
 
