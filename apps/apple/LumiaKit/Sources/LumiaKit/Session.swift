@@ -1211,7 +1211,7 @@ public final class LumiaSession {
             connection = .reconnecting(attempt: attempt)
         case let .disconnected(reason, _):
             connection = .disconnected(reason: reason)
-        case let .closed(reason):
+        case let .closed(reason, _):
             connection = .closed(reason: reason)
             events = nil
         case let .dmSubscribed(channelId), let .dmReady(channelId):

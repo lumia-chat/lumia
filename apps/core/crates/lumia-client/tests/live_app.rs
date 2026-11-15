@@ -98,7 +98,7 @@ impl Device {
             .iter()
             .filter_map(|event| match event {
                 AppEvent::Reconnecting { reason, .. } => Some(format!("reconnecting: {reason}")),
-                AppEvent::Closed { reason } => Some(format!("closed: {reason}")),
+                AppEvent::Closed { reason, .. } => Some(format!("closed: {reason}")),
                 _ => None,
             })
             .collect()
@@ -1660,11 +1660,16 @@ async fn a_revoked_device_erases_what_it_kept() {
         .await
         .unwrap();
 
-    let until = Instant::now() + Duration::from_secs(15);
-    while phone.app.has_identity() || phone.app.signed_in() {
-        assert!(Instant::now() < until, "the phone still holds what it kept");
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
+    // The loop says it ended because the phone was removed, and by then
+    // the phone has erased what it kept.
+    phone
+        .wait_for(from, Duration::from_secs(15), |e| match e {
+            AppEvent::Closed { removed: true, .. } => Some(()),
+            _ => None,
+        })
+        .await
+        .expect("the phone is told it was removed");
+    assert!(!phone.app.has_identity() && !phone.app.signed_in());
     assert!(phone.app.identity_phrase().await.unwrap().is_none());
     assert!(phone.app.dm_channels().await.unwrap_or_default().is_empty());
     // The laptop is untouched.

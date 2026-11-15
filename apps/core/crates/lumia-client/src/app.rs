@@ -821,8 +821,12 @@ pub enum AppEvent {
         delay_millis: u64,
         reason: String,
     },
+    /// The loop ended for good. `removed`: because the identity revoked this
+    /// device, which has erased what it kept (identity spec 4.4) by the time
+    /// this comes; the shell says so instead of only signing out.
     Closed {
         reason: String,
+        removed: bool,
     },
     /// The DM engine said something worth showing (a note, not an error).
     DmNote {
@@ -1156,7 +1160,10 @@ fn app_event(ev: GatewayEvent) -> AppEvent {
             delay_millis: u64::try_from(delay.as_millis()).unwrap_or(u64::MAX),
             reason,
         },
-        GatewayEvent::Closed(reason) => AppEvent::Closed { reason },
+        GatewayEvent::Closed(reason) => AppEvent::Closed {
+            reason,
+            removed: false,
+        },
     }
 }
 
@@ -2728,6 +2735,7 @@ impl App {
         let api = self.api.clone();
         let device_id = self.device_id.clone();
         let back = Arc::clone(self);
+        let end_sink = Arc::clone(&sink);
         spawn(async move {
             let (store, revoked) =
                 gateway::run_until_end(api, store, "lumia-app", device_id, channels, rx, etx).await;
@@ -2737,9 +2745,14 @@ impl App {
                 inner.commands = None;
                 inner.sink = None;
             }
-            // The identity no longer holds this device: what it kept goes.
-            if revoked {
+            // The identity no longer holds this device: what it kept goes,
+            // and only then is the shell told the loop has ended.
+            if let Some(reason) = revoked {
                 let _ = back.erase_device().await;
+                end_sink(AppEvent::Closed {
+                    reason,
+                    removed: true,
+                });
             }
         });
         let app = Arc::clone(self);

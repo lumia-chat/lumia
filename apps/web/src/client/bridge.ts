@@ -348,7 +348,7 @@ export type ClientEvent =
   | { kind: "snapshotTaken"; channelId: string; seq: number }
   | { kind: "disconnected"; reason: string; reconnectAfterSeconds: number }
   | { kind: "reconnecting"; attempt: number; delayMillis: number; reason: string }
-  | { kind: "closed"; reason: string }
+  | { kind: "closed"; reason: string; removed: boolean }
   | { kind: "dmNote"; message: string }
   | { kind: "dmError"; message: string }
   | { kind: "dmSubscribed"; channelId: string }

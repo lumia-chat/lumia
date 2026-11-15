@@ -1408,7 +1408,7 @@ impl Session {
                     reason: reason.clone(),
                 }
             }
-            AppEvent::Closed { reason } => {
+            AppEvent::Closed { reason, .. } => {
                 self.connection = Connection::Closed {
                     reason: reason.clone(),
                 };

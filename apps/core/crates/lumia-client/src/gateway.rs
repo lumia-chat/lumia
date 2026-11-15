@@ -94,6 +94,22 @@ pub enum GatewayCommand {
     Typing(Vec<u8>),
 }
 
+/// Ends the loop on an answer that says not to come back: `Closed` now, or,
+/// when the answer is that this device was revoked, the reason handed back
+/// for the caller to say once it has erased what the device kept.
+fn end<S>(
+    store: S,
+    events: &mpsc::UnboundedSender<GatewayEvent>,
+    e: &ClientError,
+) -> (S, Option<String>) {
+    let reason = e.to_string();
+    if matches!(e, ClientError::Api { code, .. } if code == "DEVICE_REVOKED") {
+        return (store, Some(reason));
+    }
+    let _ = events.unbounded_send(GatewayEvent::Closed(reason));
+    (store, None)
+}
+
 /// How one connection ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Exit {
@@ -123,22 +139,26 @@ pub async fn run_forever<S: Store>(
     commands: mpsc::UnboundedReceiver<GatewayCommand>,
     events: mpsc::UnboundedSender<GatewayEvent>,
 ) -> S {
-    run_until_end(
+    let (store, revoked) = run_until_end(
         api,
         store,
         client_name,
         device_id,
         channels,
         commands,
-        events,
+        events.clone(),
     )
-    .await
-    .0
+    .await;
+    if let Some(reason) = revoked {
+        let _ = events.unbounded_send(GatewayEvent::Closed(reason));
+    }
+    store
 }
 
-/// [`run_forever`], saying whether it ended because the instance revoked this
-/// device (`DEVICE_REVOKED`, or a `Disconnect` saying so): a device the
-/// identity no longer holds erases what it kept (identity spec 4.4).
+/// [`run_forever`], answering why it ended when the instance revoked this
+/// device (`DEVICE_REVOKED`, or a `Disconnect` saying so), and then leaving
+/// `Closed` to the caller: a device the identity no longer holds erases what
+/// it kept (identity spec 4.4) before it says it has ended.
 pub async fn run_until_end<S: Store>(
     api: Api,
     mut store: S,
@@ -147,7 +167,7 @@ pub async fn run_until_end<S: Store>(
     mut channels: Vec<Vec<u8>>,
     mut commands: mpsc::UnboundedReceiver<GatewayCommand>,
     events: mpsc::UnboundedSender<GatewayEvent>,
-) -> (S, bool) {
+) -> (S, Option<String>) {
     let mut attempt = 0u32;
     let mut stash: Vec<GatewayCommand> = Vec::new();
     loop {
@@ -167,7 +187,7 @@ pub async fn run_until_end<S: Store>(
         // client signed in again over it: the new one is held already.
         let left_for_another = || api.sign_ins() != signed_in && api.tokens().access.is_some();
         let (reason, wait) = match outcome {
-            Ok(Exit::Done) => return (store, false),
+            Ok(Exit::Done) => return (store, None),
             Ok(Exit::Closed {
                 disconnect: Some(DisconnectReason::DisconnectSessionRevoked),
                 ..
@@ -183,8 +203,11 @@ pub async fn run_until_end<S: Store>(
                 disconnect: Some(d),
                 ..
             }) if !retryable(d) => {
+                if d == DisconnectReason::DisconnectDeviceRevoked {
+                    return (store, Some(reason));
+                }
                 let _ = events.unbounded_send(GatewayEvent::Closed(reason));
-                return (store, d == DisconnectReason::DisconnectDeviceRevoked);
+                return (store, None);
             }
             Ok(Exit::Closed {
                 reason,
@@ -199,13 +222,13 @@ pub async fn run_until_end<S: Store>(
             }
             Err(ClientError::NotSignedIn) => {
                 let _ = events.unbounded_send(GatewayEvent::Closed("not signed in".into()));
-                return (store, false);
+                return (store, None);
             }
-            Err(ClientError::Api { code, message, .. })
-                if code == "DEVICE_REVOKED" || code == "SESSION_REVOKED" =>
+            Err(e @ ClientError::Api { .. })
+                if matches!(&e, ClientError::Api { code, .. }
+                    if code == "DEVICE_REVOKED" || code == "SESSION_REVOKED") =>
             {
-                let _ = events.unbounded_send(GatewayEvent::Closed(format!("{code}: {message}")));
-                return (store, code == "DEVICE_REVOKED");
+                return end(store, &events, &e);
             }
             Err(ClientError::Api { code, message, .. })
                 if code == "UNAUTHENTICATED" || code == "TOKEN_EXPIRED" =>
@@ -220,8 +243,7 @@ pub async fn run_until_end<S: Store>(
                 if let Err(e @ (ClientError::Api { .. } | ClientError::NotSignedIn)) =
                     api.refresh_now().await
                 {
-                    let _ = events.unbounded_send(GatewayEvent::Closed(e.to_string()));
-                    return (store, false);
+                    return end(store, &events, &e);
                 }
                 (format!("{code}: {message}"), Duration::ZERO)
             }
@@ -233,8 +255,7 @@ pub async fn run_until_end<S: Store>(
                 // a rotation that got no answer is tried again next time.
                 if api.tokens().refresh.is_some() {
                     if let Err(e @ ClientError::Api { .. }) = api.refresh_now().await {
-                        let _ = events.unbounded_send(GatewayEvent::Closed(e.to_string()));
-                        return (store, false);
+                        return end(store, &events, &e);
                     }
                 }
                 (reason, Duration::ZERO)
@@ -253,7 +274,7 @@ pub async fn run_until_end<S: Store>(
             })
             .is_err()
         {
-            return (store, false);
+            return (store, None);
         }
         // The wait watches the application: one that lets go meanwhile
         // (signing out, going to the background) ends the loop then and
@@ -265,7 +286,7 @@ pub async fn run_until_end<S: Store>(
                 () = waited => break,
                 command = commands.next().fuse() => match command {
                     Some(command) => stash.push(command),
-                    None => return (store, false),
+                    None => return (store, None),
                 },
             }
         }

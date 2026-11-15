@@ -1074,6 +1074,7 @@ pub enum ClientEvent {
     },
     Closed {
         reason: String,
+        removed: bool,
     },
     DmNote {
         message: String,
@@ -1262,7 +1263,7 @@ impl From<app::AppEvent> for ClientEvent {
                 delay_millis,
                 reason,
             },
-            E::Closed { reason } => Self::Closed { reason },
+            E::Closed { reason, removed } => Self::Closed { reason, removed },
             E::DmNote { message } => Self::DmNote { message },
             E::DmError { message } => Self::DmError { message },
             E::DmSubscribed { channel_id } => Self::DmSubscribed { channel_id },
