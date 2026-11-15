@@ -42,6 +42,9 @@ pub struct Inline {
     pub runs: Vec<(Range<usize>, Style)>,
     /// Web links: their text's range and where they go.
     pub links: Vec<(Range<usize>, String)>,
+    /// The ranges of the links in [`Inline::links`] written in angle brackets
+    /// (`<https://…>`), which a sender writes to say "no card" (media spec 6.1).
+    pub bracketed: Vec<Range<usize>>,
     /// The message's mentions ([`super::parse_with`]): each one's range of the text and its
     /// place among the mentions the body was read with. Never inside code or a link.
     pub mentions: Vec<(Range<usize>, u32)>,
@@ -99,6 +102,7 @@ impl Inline {
                 .iter()
                 .filter_map(|(r, index)| Some((clip(r)?, *index)))
                 .collect(),
+            bracketed: self.bracketed.iter().filter_map(clip).collect(),
         }
     }
 
@@ -222,7 +226,8 @@ struct Open {
 
 enum Opened {
     Style(Style),
-    Link(String),
+    /// A link to where it goes, and whether it was written in angle brackets.
+    Link(String, bool),
     /// A single `~`, which CommonMark's extension strikes with and the subset does not:
     /// its closing `~` is owed.
     Tilde,
@@ -361,10 +366,13 @@ impl Builder<'_> {
                 }
             }
             Tag::Link {
-                link_type: LinkType::Inline | LinkType::Autolink,
+                link_type: link_type @ (LinkType::Inline | LinkType::Autolink),
                 dest_url,
                 ..
-            } if is_web(&dest_url) => self.open(Opened::Link(dest_url.into_string()), &range),
+            } if is_web(&dest_url) => {
+                let bracketed = link_type == LinkType::Autolink;
+                self.open(Opened::Link(dest_url.into_string(), bracketed), &range);
+            }
             Tag::Link { .. } | Tag::Image { .. } => {
                 self.before(range.start);
                 let typed = self.src.get(range).unwrap_or_default().to_owned();
@@ -515,6 +523,10 @@ impl Builder<'_> {
             range.end = range.end.min(len);
             range.start < range.end
         });
+        inline.bracketed.retain_mut(|range| {
+            range.end = range.end.min(len);
+            range.start < range.end
+        });
         if inline.text.is_empty() {
             return;
         }
@@ -596,7 +608,12 @@ fn end_run(inline: &mut Inline, open: Open) {
         Opened::Tilde => inline.text.push('~'),
         _ if range.is_empty() => {}
         Opened::Style(style) => inline.runs.push((range, style)),
-        Opened::Link(url) => inline.links.push((range, url)),
+        Opened::Link(url, bracketed) => {
+            if bracketed {
+                inline.bracketed.push(range.clone());
+            }
+            inline.links.push((range, url));
+        }
     }
 }
 
@@ -1065,6 +1082,21 @@ mod tests {
     }
 
     #[test]
+    fn a_link_in_angle_brackets_is_marked() {
+        let p = para("<https://example.com/a> and https://example.org");
+        assert_eq!(
+            links(&p),
+            [
+                ("https://example.com/a", "https://example.com/a"),
+                ("https://example.org", "https://example.org"),
+            ]
+        );
+        assert_eq!(p.bracketed, [p.links[0].0.clone()]);
+        assert_eq!(p.slice(0..5).bracketed, vec![0..5]);
+        assert!(para("[a](https://example.com)").bracketed.is_empty());
+    }
+
+    #[test]
     fn what_the_subset_does_not_have_stays_as_typed() {
         // Headings, both ways of writing one.
         assert_eq!(typed("# Not a heading"), "# Not a heading");
@@ -1144,6 +1176,7 @@ mod tests {
                     runs: Vec::new(),
                     links: vec![(5..29, "https://example.com/plan".into())],
                     mentions: Vec::new(),
+                    bracketed: Vec::new(),
                 }),
             ]
         );

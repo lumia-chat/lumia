@@ -1,0 +1,319 @@
+{
+  "vectors": [
+    {
+      "ip": "93.184.215.14",
+      "allowed": true,
+      "why": "public IPv4"
+    },
+    {
+      "ip": "1.1.1.1",
+      "allowed": true,
+      "why": "public IPv4"
+    },
+    {
+      "ip": "8.8.8.8",
+      "allowed": true,
+      "why": "public IPv4"
+    },
+    {
+      "ip": "0.0.0.0",
+      "allowed": false,
+      "why": "unspecified"
+    },
+    {
+      "ip": "0.1.2.3",
+      "allowed": false,
+      "why": "0.0.0.0/8"
+    },
+    {
+      "ip": "10.0.0.1",
+      "allowed": false,
+      "why": "private"
+    },
+    {
+      "ip": "10.255.255.255",
+      "allowed": false,
+      "why": "private"
+    },
+    {
+      "ip": "100.63.255.255",
+      "allowed": true,
+      "why": "just below CGNAT"
+    },
+    {
+      "ip": "100.64.0.1",
+      "allowed": false,
+      "why": "CGNAT"
+    },
+    {
+      "ip": "100.127.255.255",
+      "allowed": false,
+      "why": "CGNAT"
+    },
+    {
+      "ip": "100.128.0.0",
+      "allowed": true,
+      "why": "just above CGNAT"
+    },
+    {
+      "ip": "127.0.0.1",
+      "allowed": false,
+      "why": "loopback"
+    },
+    {
+      "ip": "127.255.255.254",
+      "allowed": false,
+      "why": "loopback"
+    },
+    {
+      "ip": "169.254.169.254",
+      "allowed": false,
+      "why": "cloud metadata, link-local"
+    },
+    {
+      "ip": "169.254.0.1",
+      "allowed": false,
+      "why": "link-local"
+    },
+    {
+      "ip": "172.15.255.255",
+      "allowed": true,
+      "why": "just below 172.16/12"
+    },
+    {
+      "ip": "172.16.0.1",
+      "allowed": false,
+      "why": "private"
+    },
+    {
+      "ip": "172.31.255.255",
+      "allowed": false,
+      "why": "private"
+    },
+    {
+      "ip": "172.32.0.0",
+      "allowed": true,
+      "why": "just above 172.16/12"
+    },
+    {
+      "ip": "192.0.0.8",
+      "allowed": false,
+      "why": "IETF protocol assignments"
+    },
+    {
+      "ip": "192.0.2.1",
+      "allowed": false,
+      "why": "documentation"
+    },
+    {
+      "ip": "192.88.99.1",
+      "allowed": false,
+      "why": "6to4 relay anycast"
+    },
+    {
+      "ip": "192.168.1.1",
+      "allowed": false,
+      "why": "private"
+    },
+    {
+      "ip": "198.18.0.1",
+      "allowed": false,
+      "why": "benchmarking"
+    },
+    {
+      "ip": "198.19.255.255",
+      "allowed": false,
+      "why": "benchmarking"
+    },
+    {
+      "ip": "198.51.100.7",
+      "allowed": false,
+      "why": "documentation"
+    },
+    {
+      "ip": "203.0.113.9",
+      "allowed": false,
+      "why": "documentation"
+    },
+    {
+      "ip": "224.0.0.1",
+      "allowed": false,
+      "why": "multicast"
+    },
+    {
+      "ip": "239.255.255.250",
+      "allowed": false,
+      "why": "multicast"
+    },
+    {
+      "ip": "240.0.0.1",
+      "allowed": false,
+      "why": "reserved"
+    },
+    {
+      "ip": "255.255.255.255",
+      "allowed": false,
+      "why": "broadcast"
+    },
+    {
+      "ip": "223.255.255.255",
+      "allowed": true,
+      "why": "just below multicast"
+    },
+    {
+      "ip": "::",
+      "allowed": false,
+      "why": "unspecified"
+    },
+    {
+      "ip": "::1",
+      "allowed": false,
+      "why": "loopback"
+    },
+    {
+      "ip": "2606:4700:4700::1111",
+      "allowed": true,
+      "why": "public IPv6"
+    },
+    {
+      "ip": "2a00:1450:4001:80b::200e",
+      "allowed": true,
+      "why": "public IPv6"
+    },
+    {
+      "ip": "fc00::1",
+      "allowed": false,
+      "why": "unique-local"
+    },
+    {
+      "ip": "fd00:ec2::254",
+      "allowed": false,
+      "why": "cloud metadata (AWS IPv6), unique-local"
+    },
+    {
+      "ip": "fe80::1",
+      "allowed": false,
+      "why": "link-local"
+    },
+    {
+      "ip": "fec0::1",
+      "allowed": false,
+      "why": "site-local, deprecated"
+    },
+    {
+      "ip": "ff02::1",
+      "allowed": false,
+      "why": "multicast"
+    },
+    {
+      "ip": "100::1",
+      "allowed": false,
+      "why": "discard-only"
+    },
+    {
+      "ip": "2001:db8::1",
+      "allowed": false,
+      "why": "documentation"
+    },
+    {
+      "ip": "3fff::1",
+      "allowed": false,
+      "why": "documentation (RFC 9637)"
+    },
+    {
+      "ip": "2001::1",
+      "allowed": false,
+      "why": "Teredo"
+    },
+    {
+      "ip": "2001:2::1",
+      "allowed": false,
+      "why": "benchmarking"
+    },
+    {
+      "ip": "2001:10::1",
+      "allowed": false,
+      "why": "ORCHID"
+    },
+    {
+      "ip": "2001:20::1",
+      "allowed": false,
+      "why": "ORCHIDv2"
+    },
+    {
+      "ip": "64:ff9b:1::1",
+      "allowed": false,
+      "why": "local-use NAT64"
+    },
+    {
+      "ip": "4000::1",
+      "allowed": false,
+      "why": "outside global unicast"
+    },
+    {
+      "ip": "::ffff:127.0.0.1",
+      "allowed": false,
+      "why": "IPv4-mapped loopback"
+    },
+    {
+      "ip": "::ffff:10.1.2.3",
+      "allowed": false,
+      "why": "IPv4-mapped private"
+    },
+    {
+      "ip": "::ffff:169.254.169.254",
+      "allowed": false,
+      "why": "IPv4-mapped metadata"
+    },
+    {
+      "ip": "::ffff:8.8.8.8",
+      "allowed": true,
+      "why": "IPv4-mapped public"
+    },
+    {
+      "ip": "::127.0.0.1",
+      "allowed": false,
+      "why": "IPv4-compatible loopback"
+    },
+    {
+      "ip": "::8.8.8.8",
+      "allowed": true,
+      "why": "IPv4-compatible public"
+    },
+    {
+      "ip": "::ffff:0:10.0.0.1",
+      "allowed": false,
+      "why": "IPv4-translated private"
+    },
+    {
+      "ip": "64:ff9b::7f00:1",
+      "allowed": false,
+      "why": "NAT64 of loopback"
+    },
+    {
+      "ip": "64:ff9b::c0a8:101",
+      "allowed": false,
+      "why": "NAT64 of 192.168.1.1"
+    },
+    {
+      "ip": "64:ff9b::808:808",
+      "allowed": true,
+      "why": "NAT64 of 8.8.8.8"
+    },
+    {
+      "ip": "2002:7f00:1::1",
+      "allowed": false,
+      "why": "6to4 of loopback"
+    },
+    {
+      "ip": "2002:a9fe:a9fe::1",
+      "allowed": false,
+      "why": "6to4 of the metadata address"
+    },
+    {
+      "ip": "2002:808:808::1",
+      "allowed": true,
+      "why": "6to4 of 8.8.8.8"
+    }
+  ]
+}

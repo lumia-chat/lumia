@@ -324,6 +324,7 @@ fn put_back_inline(inline: &Inline, typed: &[(u32, String)]) -> Inline {
             .iter()
             .map(|(r, url)| (moved(r), put_back(url, typed)))
             .collect(),
+        bracketed: inline.bracketed.iter().map(moved).collect(),
         mentions,
         text,
     }

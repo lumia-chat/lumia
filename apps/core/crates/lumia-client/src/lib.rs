@@ -12,11 +12,15 @@
 //!   target-specific code.
 //! * [`identity`] and [`dm`] are the flows over those.
 //! * [`keystore`] is the development file keystore (native only).
+//! * `cards` fetches a link's card for a personal DM (native only; a browser
+//!   cannot read other sites).
 //!
 //! The headless client is the `lumia-cli` crate.
 
 pub mod api;
 pub mod app;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod cards;
 pub mod dm;
 pub mod gateway;
 pub mod identity;

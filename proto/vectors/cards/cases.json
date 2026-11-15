@@ -1,0 +1,283 @@
+{
+  "vectors": [
+    {
+      "name": "og-full",
+      "note": "Open Graph first; whitespace collapsed; relative image resolved; #rgb widened and lowercased",
+      "file": "pages/og-full.html",
+      "page_url": "https://example.com/articles/one?ref=x",
+      "expect": {
+        "url": "https://example.com/articles/one?ref=x",
+        "title": "The first article",
+        "description": "What happened, and why.",
+        "site_name": "Example News",
+        "color": "#aabbcc",
+        "image_url": "https://example.com/images/one.jpg",
+        "image_width": 1200,
+        "image_height": 630,
+        "video": false
+      }
+    },
+    {
+      "name": "og-image-structure",
+      "note": "secure_url preferred when https; og:image:* after a second og:image describe that one, not the first",
+      "file": "pages/og-image-structure.html",
+      "page_url": "http://example.org/post",
+      "expect": {
+        "url": "http://example.org/post",
+        "title": "Secure picture",
+        "description": "",
+        "site_name": "",
+        "color": "",
+        "image_url": "https://cdn.example.org/a.png",
+        "image_width": 800,
+        "image_height": 0,
+        "video": false
+      }
+    },
+    {
+      "name": "og-secure-url-not-https",
+      "note": "an og:image:secure_url that is not https is ignored",
+      "file": "pages/og-secure-url-not-https.html",
+      "page_url": "https://example.net/",
+      "expect": {
+        "url": "https://example.net/",
+        "title": "Not so secure",
+        "description": "",
+        "site_name": "",
+        "color": "",
+        "image_url": "https://example.net/a.png",
+        "image_width": 0,
+        "image_height": 0,
+        "video": false
+      }
+    },
+    {
+      "name": "twitter-fallback",
+      "note": "no Open Graph: Twitter's tags, by property= or name=, before <title> and description",
+      "file": "pages/twitter-fallback.html",
+      "page_url": "https://social.example/status/1",
+      "expect": {
+        "url": "https://social.example/status/1",
+        "title": "Twitter title",
+        "description": "Twitter description",
+        "site_name": "",
+        "color": "",
+        "image_url": "https://img.social.example/1.jpg",
+        "image_width": 0,
+        "image_height": 0,
+        "video": false
+      }
+    },
+    {
+      "name": "title-fallback",
+      "note": "no Open Graph or Twitter: <title> and <meta name=description>, any case, entities decoded",
+      "file": "pages/title-fallback.html",
+      "page_url": "https://plain.example/",
+      "expect": {
+        "url": "https://plain.example/",
+        "title": "Fish & Chips — a history",
+        "description": "Everything about \"fish\" and chips.",
+        "site_name": "",
+        "color": "",
+        "image_url": "",
+        "image_width": 0,
+        "image_height": 0,
+        "video": false
+      }
+    },
+    {
+      "name": "no-title",
+      "note": "a page with no title (a blank one is none) has no card",
+      "file": "pages/no-title.html",
+      "page_url": "https://example.com/untitled",
+      "expect": null
+    },
+    {
+      "name": "entities",
+      "note": "named and numeric references; &nbsp; is whitespace and collapses; an unknown name stays; &#150; is Windows-1252's en dash",
+      "file": "pages/entities.html",
+      "page_url": "https://example.com/e",
+      "expect": {
+        "url": "https://example.com/e",
+        "title": "Tom & Jerry's 😀 café time &unknown; – <b>",
+        "description": "",
+        "site_name": "",
+        "color": "",
+        "image_url": "",
+        "image_width": 0,
+        "image_height": 0,
+        "video": false
+      }
+    },
+    {
+      "name": "long",
+      "note": "title at most 300 characters and description at most 1000, the last an ellipsis, trailing space trimmed before it",
+      "file": "pages/long.html",
+      "page_url": "https://example.com/long",
+      "expect": {
+        "url": "https://example.com/long",
+        "title": "word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word…",
+        "description": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…",
+        "site_name": "Long",
+        "color": "",
+        "image_url": "",
+        "image_width": 0,
+        "image_height": 0,
+        "video": false
+      }
+    },
+    {
+      "name": "video-type",
+      "note": "og:type video.* marks a video",
+      "file": "pages/video-type.html",
+      "page_url": "https://video.example/watch?v=1",
+      "expect": {
+        "url": "https://video.example/watch?v=1",
+        "title": "A video",
+        "description": "",
+        "site_name": "",
+        "color": "",
+        "image_url": "https://video.example/thumb.jpg",
+        "image_width": 0,
+        "image_height": 0,
+        "video": true
+      }
+    },
+    {
+      "name": "video-tag",
+      "note": "any og:video property marks a video",
+      "file": "pages/video-tag.html",
+      "page_url": "https://video.example/clip",
+      "expect": {
+        "url": "https://video.example/clip",
+        "title": "A clip",
+        "description": "",
+        "site_name": "",
+        "color": "",
+        "image_url": "",
+        "image_width": 0,
+        "image_height": 0,
+        "video": true
+      }
+    },
+    {
+      "name": "after-head",
+      "note": "nothing after </head> is read",
+      "file": "pages/after-head.html",
+      "page_url": "https://example.com/head-only",
+      "expect": {
+        "url": "https://example.com/head-only",
+        "title": "Only the head",
+        "description": "",
+        "site_name": "",
+        "color": "",
+        "image_url": "",
+        "image_width": 0,
+        "image_height": 0,
+        "video": false
+      }
+    },
+    {
+      "name": "comments-and-scripts",
+      "note": "comments, scripts and styles hold no tags; single-quoted attributes",
+      "file": "pages/comments-and-scripts.html",
+      "page_url": "https://example.com/hidden",
+      "expect": {
+        "url": "https://example.com/hidden",
+        "title": "The real title",
+        "description": "Single \"quoted\" > value",
+        "site_name": "",
+        "color": "",
+        "image_url": "",
+        "image_width": 0,
+        "image_height": 0,
+        "video": false
+      }
+    },
+    {
+      "name": "bad-values",
+      "note": "the first valid theme-color; an image that is not http(s) is dropped, Open Graph's and Twitter's alike",
+      "file": "pages/bad-values.html",
+      "page_url": "https://example.com/",
+      "expect": {
+        "url": "https://example.com/",
+        "title": "Bad values",
+        "description": "",
+        "site_name": "",
+        "color": "#000000",
+        "image_url": "",
+        "image_width": 0,
+        "image_height": 0,
+        "video": false
+      }
+    },
+    {
+      "name": "base-href",
+      "note": "a relative image resolves against <base href>",
+      "file": "pages/base-href.html",
+      "page_url": "https://example.com/a/b",
+      "expect": {
+        "url": "https://example.com/a/b",
+        "title": "Based",
+        "description": "",
+        "site_name": "",
+        "color": "",
+        "image_url": "https://cdn.example.net/assets/pic.jpg",
+        "image_width": 0,
+        "image_height": 0,
+        "video": false
+      }
+    },
+    {
+      "name": "unquoted",
+      "note": "unquoted attributes, either attribute order, keys in any case, a scheme-relative image; url is the page_url as given",
+      "file": "pages/unquoted.html",
+      "page_url": "https://Example.com/x",
+      "expect": {
+        "url": "https://Example.com/x",
+        "title": "Unquoted",
+        "description": "Description first",
+        "site_name": "Shouty",
+        "color": "",
+        "image_url": "https://images.example.com/u.png",
+        "image_width": 0,
+        "image_height": 0,
+        "video": false
+      }
+    },
+    {
+      "name": "empty-og-title",
+      "note": "a blank og:title falls back",
+      "file": "pages/empty-og-title.html",
+      "page_url": "https://example.com/empty",
+      "expect": {
+        "url": "https://example.com/empty",
+        "title": "Fallback wins",
+        "description": "",
+        "site_name": "",
+        "color": "",
+        "image_url": "",
+        "image_width": 0,
+        "image_height": 0,
+        "video": false
+      }
+    },
+    {
+      "name": "no-head-tag",
+      "note": "without <head>, reading stops at <body>",
+      "file": "pages/no-head-tag.html",
+      "page_url": "https://example.com/no-head",
+      "expect": {
+        "url": "https://example.com/no-head",
+        "title": "No head tag",
+        "description": "Still read",
+        "site_name": "",
+        "color": "",
+        "image_url": "",
+        "image_width": 0,
+        "image_height": 0,
+        "video": false
+      }
+    }
+  ]
+}

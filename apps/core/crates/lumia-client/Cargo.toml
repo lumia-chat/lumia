@@ -27,7 +27,7 @@ ed25519-dalek = "3"
 
 # Native: tokio for timers, tungstenite for the socket, bundled SQLite.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net"] }
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2"] }
 rusqlite = { version = "0.41", features = ["bundled"] }
@@ -47,6 +47,9 @@ wasm-bindgen-futures = "0.4"
 getrandom02 = { package = "getrandom", version = "0.2", features = ["js"] }
 getrandom03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
 getrandom04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+tokio = { version = "1", features = ["io-util"] }
 
 [lints]
 workspace = true

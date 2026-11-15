@@ -1,0 +1,127 @@
+{
+  "vectors": [
+    {
+      "name": "bare",
+      "body": "see https://example.com/a",
+      "links": [
+        "https://example.com/a"
+      ]
+    },
+    {
+      "name": "three_at_most",
+      "body": "https://a.example https://b.example https://c.example https://d.example",
+      "links": [
+        "https://a.example",
+        "https://b.example",
+        "https://c.example"
+      ]
+    },
+    {
+      "name": "each_once_before_the_limit",
+      "body": "https://a.example and https://a.example, https://b.example https://c.example https://d.example",
+      "links": [
+        "https://a.example",
+        "https://b.example",
+        "https://c.example"
+      ]
+    },
+    {
+      "name": "angle_brackets_mean_no_card",
+      "body": "<https://a.example> but https://b.example",
+      "links": [
+        "https://b.example"
+      ]
+    },
+    {
+      "name": "angle_brackets_then_bare",
+      "body": "<https://a.example> then https://a.example",
+      "links": [
+        "https://a.example"
+      ]
+    },
+    {
+      "name": "inline_code",
+      "body": "`https://a.example` and https://b.example",
+      "links": [
+        "https://b.example"
+      ]
+    },
+    {
+      "name": "code_block",
+      "body": "```\nhttps://a.example\n```\nhttps://b.example",
+      "links": [
+        "https://b.example"
+      ]
+    },
+    {
+      "name": "indented_code_is_text",
+      "body": "    https://a.example",
+      "links": [
+        "https://a.example"
+      ]
+    },
+    {
+      "name": "markdown_link",
+      "body": "read [the docs](https://docs.example/x)",
+      "links": [
+        "https://docs.example/x"
+      ]
+    },
+    {
+      "name": "www_is_not_a_url_in_the_text",
+      "body": "www.example.com",
+      "links": []
+    },
+    {
+      "name": "trailing_punctuation",
+      "body": "Look: https://example.com/a.",
+      "links": [
+        "https://example.com/a"
+      ]
+    },
+    {
+      "name": "balanced_parentheses",
+      "body": "(see https://en.wikipedia.org/wiki/Rust_(programming_language))",
+      "links": [
+        "https://en.wikipedia.org/wiki/Rust_(programming_language)"
+      ]
+    },
+    {
+      "name": "other_schemes",
+      "body": "ftp://example.com <mailto:a@example.com> javascript:alert(1)",
+      "links": []
+    },
+    {
+      "name": "inside_a_word",
+      "body": "xhttps://a.example",
+      "links": []
+    },
+    {
+      "name": "quotes_and_lists",
+      "body": "> https://a.example\n\n- https://b.example\n- `https://c.example`",
+      "links": [
+        "https://a.example",
+        "https://b.example"
+      ]
+    },
+    {
+      "name": "http_and_case",
+      "body": "HTTP://Example.COM/A",
+      "links": [
+        "HTTP://Example.COM/A"
+      ]
+    },
+    {
+      "name": "query_and_fragment",
+      "body": "https://example.com/s?q=a&b=c#top!",
+      "links": [
+        "https://example.com/s?q=a&b=c#top"
+      ]
+    },
+    {
+      "name": "nothing",
+      "body": "just words",
+      "links": []
+    }
+  ]
+}

@@ -35,6 +35,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 pulldown-cmark = { version = "0.13.6", default-features = false }
 unicode-segmentation = "1"
+# Link cards (docs/specs/media.md 6): resolving a page's image against it.
+url = "2"
 
 [dev-dependencies]
 base64 = "0.22"

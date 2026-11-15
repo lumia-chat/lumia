@@ -7,12 +7,15 @@
 //! * [`store`] and [`keystore`] are the contracts the transports implement.
 //! * [`wire`] holds the scalar conventions from docs/protocol.md section 2.
 //! * [`body`] is a message body's grammar (protocol 14) and its size limit.
+//! * [`cards`] is link cards' rules (docs/specs/media.md 6): which links,
+//!   what a page's head gives, which addresses a fetcher may reach.
 //!
 //! Transports (`lumia-client` natively, `lumia-wasm` in the browser) feed
 //! this crate frames and carry out the effects it returns. Tests here run
 //! against scripted frames, never a socket.
 
 pub mod body;
+pub mod cards;
 pub mod identity;
 pub mod keystore;
 pub mod mls;
