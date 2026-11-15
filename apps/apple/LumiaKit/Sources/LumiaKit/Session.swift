@@ -626,15 +626,20 @@ public final class LumiaSession {
 
     /// As the new device: opens a link session, so every device that holds
     /// the identity prompts. This phone must be signed in to the account.
+    /// One given up while it opened answers nothing: the core declined it.
     public func linkStart() async throws {
         linkingError = nil
-        linking = LinkByPrompt.Stage(try await client.linkStart(label: Self.deviceLabel))
+        do {
+            linking = LinkByPrompt.Stage(try await client.linkStart(label: Self.deviceLabel))
+        } catch let LumiaError.Other(detail) where detail == LinkByPrompt.givenUp {
+            return
+        }
     }
 
     /// Where linking stands, which takes its next step (reveals, then
     /// claims and signs in by identity proof as `identityClaim` does): when
-    /// the screen opens, every two seconds while it shows, and on every
-    /// account event. One at a time; nothing once it has ended.
+    /// the screen opens, every two seconds while it shows, and whenever the
+    /// session moves. One at a time; nothing once it has ended.
     public func linkStep() async {
         guard let stage = linking, stage.polls, !linkStepping else { return }
         linkStepping = true
@@ -678,8 +683,9 @@ public final class LumiaSession {
     }
 
     /// As a device that holds the identity: the sessions that prompt here,
-    /// asked at launch, on coming to the foreground, on every account event
-    /// and every two seconds while one is open. A failure keeps what is held.
+    /// asked at launch, on coming to the foreground, whenever a session
+    /// moves and every two seconds while one is open. A failure keeps what
+    /// is held.
     public func refreshLinkPrompts() async {
         guard signedIn, hasIdentity, !promptsAsking else { return }
         promptsAsking = true
@@ -1246,10 +1252,11 @@ public final class LumiaSession {
             await refreshReads()
         case let .snapshotTaken(channelId, _):
             await refreshMessages(channelID: channelId)
-        case .accountApplied:
-            // A link session moves by an account event, on either side.
+        case .linkSessionUpdated:
+            // A link session moved, on either side.
             await linkStep()
             await refreshLinkPrompts()
+        case .accountApplied:
             // Another device may have read something.
             await refreshReads()
             await refreshSnapshot()

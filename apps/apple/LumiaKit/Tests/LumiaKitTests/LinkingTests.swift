@@ -187,6 +187,7 @@ final class LinkingTests: XCTestCase {
     func testAPromptsRefusalsInWords() {
         func api(_ code: String, _ details: [String: String] = [:]) -> Error { LumiaError.Api(code: code, detail: "refused", details: details) }
         XCTAssertEqual(LinkByPrompt.refusal(api("FAILED_PRECONDITION", ["state": "answered"])), "Another of your devices answered it, or it was declined.")
+        XCTAssertEqual(LinkByPrompt.refusal(api("FAILED_PRECONDITION", ["state": "declined"])), "It was declined on another of your devices.")
         XCTAssertEqual(LinkByPrompt.refusal(api("NOT_FOUND")), "That request has ended.")
         XCTAssertEqual(LinkByPrompt.refusal(api("IDENTITY_PROOF_INVALID", ["reason": "too_many_devices"])), LinkApproval.tooMany)
         XCTAssertEqual(LinkByPrompt.refusal(api("CONFLICT")), LinkApproval.conflict)

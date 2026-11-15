@@ -249,12 +249,16 @@ public enum LinkByPrompt {
     public static let onlyIfYours = "Only continue if you're linking a device of yours right now."
     /// After "They don't match".
     public static let stopped = "Linking was stopped."
+    /// What the core's `linkStart` answers when it was given up, or started
+    /// again, while its session opened (`LINK_GIVEN_UP`).
+    public static let givenUp = "linking was given up"
 
     /// What answering, approving or declining failed with, in words.
     public static func refusal(_ error: Error) -> String {
         guard case let .Api(code, _, details)? = error as? LumiaError else { return error.lumiaMessage }
         switch (code, details["state"]) {
         case ("FAILED_PRECONDITION", "answered"): return "Another of your devices answered it, or it was declined."
+        case ("FAILED_PRECONDITION", "declined"): return "It was declined on another of your devices."
         case ("NOT_FOUND", _): return "That request has ended."
         case ("IDENTITY_PROOF_INVALID", _), ("CONFLICT", _): return LinkApproval.refusal(error)
         default: return error.lumiaMessage
