@@ -372,21 +372,39 @@ impl DmEngine {
                 .into_iter()
                 .collect()),
             Some(account_event::Payload::ContactRosterUpdated(_)) => {
-                // A participant's roster changed: forget cached rosters other
-                // than our own so the next event re-fetches them.
-                let mine = self.me.identity_id.clone();
-                self.rosters.retain(|id, _| *id == mine);
-                self.account_identity
-                    .retain(|account, _| *account == self.my_account);
+                self.forget_contacts();
                 Ok(Vec::new())
+            }
+            // A participant started over (identity spec 4.7): their account
+            // is bound to another identity, so its leaves are judged against
+            // the new roster and the old identity's go at the next commit
+            // (spec section 4). Not a rotation: nothing chains the new root
+            // to the old, and the person is told.
+            Some(account_event::Payload::ContactIdentityChanged(changed)) => {
+                self.forget_contacts();
+                Ok(vec![Outcome::Print(format!(
+                    "{} started over with a new identity: their key changed, and their \
+                     earlier messages cannot be read on their new devices",
+                    wire::display(&changed.account_id)
+                ))])
             }
             _ => Ok(Vec::new()),
         }
     }
 
+    /// Forgets the rosters cached for others, and which identity each
+    /// account is, so the next judgement fetches them again.
+    fn forget_contacts(&mut self) {
+        let mine = self.me.identity_id.clone();
+        self.rosters.retain(|id, _| *id == mine);
+        self.account_identity
+            .retain(|account, _| *account == self.my_account);
+    }
+
     /// Feeds the account events the gateway applied. A roster change, ours
-    /// or a contact's, reconciles every known conversation's leaves against
-    /// the rosters (spec section 4, "revoking a device").
+    /// or a contact's, or a contact starting over, reconciles every known
+    /// conversation's leaves against the rosters (spec section 4,
+    /// "revoking a device").
     ///
     /// # Errors
     /// On a store, MLS or API failure.
@@ -401,6 +419,7 @@ impl DmEngine {
                 ev.payload,
                 Some(account_event::Payload::RosterUpdated(_))
                     | Some(account_event::Payload::ContactRosterUpdated(_))
+                    | Some(account_event::Payload::ContactIdentityChanged(_))
             ) {
                 rosters_changed = true;
             }

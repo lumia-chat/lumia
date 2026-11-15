@@ -1211,3 +1211,133 @@ async fn the_phrase_restores_on_a_new_device_and_starting_over_moves_the_account
     fresh.app.reauth_password(PASSWORD).await.unwrap();
     assert!(fresh.app.has_reauth());
 }
+
+/// A device signed up, set up and running, and its account id.
+async fn set_up(base: &str, name: &str) -> (Device, String, String) {
+    let device = Device::new(base);
+    let handle = format!("{name}{}", stamp());
+    device
+        .app
+        .create_account(&handle, PASSWORD, None)
+        .await
+        .unwrap();
+    device.app.identity_setup(name).await.unwrap();
+    let from = device.seen();
+    device.start(&[]).unwrap();
+    let account = device
+        .wait_for(from, Duration::from_secs(10), welcomed)
+        .await
+        .expect("welcomed");
+    (device, handle, account)
+}
+
+/// Whether the device holds the conversation's group, within `within`.
+async fn member_of(device: &Device, channel: &str, within: Duration) -> bool {
+    let until = Instant::now() + within;
+    while Instant::now() < until {
+        let channels = device.app.dm_channels().await.unwrap_or_default();
+        if channels.iter().any(|c| c.channel_id == channel && c.member) {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    false
+}
+
+/// Whether the device has read `body` in the conversation, within `within`.
+async fn reads(device: &Device, channel: &str, body: &str, within: Duration) -> bool {
+    let until = Instant::now() + within;
+    while Instant::now() < until {
+        if let Ok(log) = device.app.dm_messages(channel).await {
+            if log.messages.iter().any(|m| m.body == body) {
+                return true;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    false
+}
+
+/// A contact starts over (identity spec 4.7; e2ee spec 4): the other side
+/// is told, and the conversation goes on with the new identity's device.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_contact_who_starts_over_is_told_and_the_conversation_goes_on() {
+    let Some(base) = instance() else { return };
+    let (ada, _, _) = set_up(&base, "ada").await;
+    let (bo, bo_handle, bo_account) = set_up(&base, "bo").await;
+
+    let request = ada.app.dm_request(&bo_account).await.unwrap();
+    let Ok(opened) = bo
+        .app
+        .dm_respond(&request.request_id, "accept")
+        .await
+        .unwrap()
+    else {
+        panic!("accepting opens the conversation");
+    };
+    let channel = opened.channel_id;
+    assert!(
+        member_of(&ada, &channel, Duration::from_secs(20)).await,
+        "ada is welcomed"
+    );
+    ada.app.dm_send(&channel, "before").await.unwrap();
+    assert!(reads(&bo, &channel, "before", Duration::from_secs(20)).await);
+
+    // Bo loses the device and the phrase, and starts over on a new one.
+    let noted = ada.seen();
+    let fresh = Device::new(&base);
+    fresh.app.sign_in(&bo_handle, PASSWORD, None).await.unwrap();
+    fresh.app.identity_start_over("Fresh").await.unwrap();
+    let from = fresh.seen();
+    fresh.start(&[]).unwrap();
+    fresh
+        .wait_for(from, Duration::from_secs(10), welcomed)
+        .await
+        .expect("the fresh device is welcomed");
+
+    let told = ada
+        .wait_for(noted, Duration::from_secs(20), |e| match e {
+            AppEvent::DmNote { message } if message.contains("started over") => Some(()),
+            _ => None,
+        })
+        .await;
+    assert!(told.is_some(), "ada is told bo started over");
+
+    // Ada removes the old identity's leaf; the new device rejoins from the
+    // group info, and once Ada has seen it join, what she sends reaches it.
+    let removed = ada
+        .wait_for(noted, Duration::from_secs(20), |e| match e {
+            AppEvent::DmNote { message } if message.starts_with("commit acked") => Some(()),
+            _ => None,
+        })
+        .await;
+    assert!(
+        removed.is_some(),
+        "ada's commit removing the old leaf is acked"
+    );
+    let joining = ada.seen();
+    let until = Instant::now() + Duration::from_secs(10);
+    // The new device learns of the conversation from its account log first.
+    while let Err(e) = fresh.app.dm_rejoin(&channel).await {
+        assert!(Instant::now() < until, "rejoin: {e}");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    assert!(
+        member_of(&fresh, &channel, Duration::from_secs(20)).await,
+        "the new device is in the conversation"
+    );
+    let seen = ada
+        .wait_for(joining, Duration::from_secs(20), |e| match e {
+            AppEvent::DmNote { message } if message.contains("device recovered") => Some(()),
+            _ => None,
+        })
+        .await;
+    assert!(seen.is_some(), "ada sees the new device join");
+    ada.app.dm_send(&channel, "after").await.unwrap();
+    let read = reads(&fresh, &channel, "after", Duration::from_secs(20)).await;
+    assert!(read, "the new device reads what is sent after");
+    assert!(
+        !reads(&fresh, &channel, "before", Duration::from_millis(200)).await,
+        "and not what was sent before"
+    );
+}
