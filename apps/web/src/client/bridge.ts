@@ -386,6 +386,23 @@ export function signedOut(e: unknown): boolean {
   return /\bnot signed in\b/i.test(e.message);
 }
 
+/**
+ * Whether an identity operation wants a fresh reauth: none was in hand
+ * (the core's `ReauthNeeded`), or the one in hand was spent or ran out
+ * (the instance's `UNAUTHENTICATED` for the token). Asked only of the
+ * calls that take one.
+ */
+export function reauthNeeded(e: unknown): boolean {
+  if (!(e instanceof Error)) return false;
+  if (e instanceof ClientError && e.code === "UNAUTHENTICATED") return true;
+  return e.message === "confirm it is you first";
+}
+
+/** Whether setting up found the account bound to an identity this browser does not hold (the core's `AccountHasIdentity`). */
+export function accountHasIdentity(e: unknown): boolean {
+  return e instanceof Error && e.message === "this account already has private messages set up on another device";
+}
+
 export class Bridge {
   private worker: Worker;
   private next = 1;
@@ -719,6 +736,59 @@ export class Bridge {
   }
   identityRevoke(deviceId: string, password: string): Promise<RosterSummary> {
     return this.call("identityRevoke", deviceId, password);
+  }
+  /** The identity the signed-in account is bound to, hex, or null for none (identity spec 4.1). */
+  accountIdentity(): Promise<string | null> {
+    return this.call<string | null | undefined>("accountIdentity").then((id) => id ?? null);
+  }
+  /** Whether a reauth token is in hand: a credentialed sign-in carries one for five minutes (identity spec 10). */
+  hasReauth(): Promise<boolean> {
+    return this.call("hasReauth");
+  }
+  reauthPassword(password: string): Promise<void> {
+    return this.call("reauthPassword", password);
+  }
+  /** Reauth by a TOTP code, or by the code `reauthMailCode` mailed when `mailed`. */
+  reauthCode(code: string, mailed: boolean): Promise<void> {
+    return this.call("reauthCode", code, mailed);
+  }
+  reauthMailCode(): Promise<void> {
+    return this.call("reauthMailCode");
+  }
+  /** Where a fresh login at the account's OIDC provider starts; it lands at `returnTo` with `?reauth=`. */
+  reauthOidcUrl(returnTo: string): Promise<string> {
+    return this.call("reauthOidcUrl", returnTo);
+  }
+  reauthTake(token: string): Promise<void> {
+    return this.call("reauthTake", token);
+  }
+  /** A new recovery phrase, 24 words, held by the worker until it is confirmed and set up; making another forgets the last. */
+  identityNewPhrase(): Promise<string> {
+    return this.call("identityNewPhrase");
+  }
+  /** Up to four words of the phrase's wordlist that begin with `prefix`. */
+  phraseCompletions(prefix: string): Promise<string[]> {
+    return this.call("phraseCompletions", prefix);
+  }
+  /** Three positions, 1 to 24, to ask for; the same until answered. */
+  identityPhraseQuiz(): Promise<number[]> {
+    return this.call<ArrayLike<number>>("identityPhraseQuiz").then((q) => Array.from(q));
+  }
+  /** Whether the words are the quiz's; false, and the next quiz asks other positions. */
+  identityPhraseConfirm(words: string[]): Promise<boolean> {
+    return this.call("identityPhraseConfirm", words);
+  }
+  /** Private messages set up here from the confirmed phrase, the account bound under the reauth in hand: the identity id. */
+  identitySetup(label: string): Promise<string> {
+    return this.call("identitySetup", label);
+  }
+  /** Starting over (identity spec 4.7): the account moved to an identity made here from the confirmed phrase. */
+  identityStartOver(label: string): Promise<string> {
+    return this.call("identityStartOver", label);
+  }
+  /** Restores the identity from its phrase and signs in by it; the page offers it only on the flagship's origin. */
+  identityRecover(phrase: string, label: string): Promise<RosterSummary> {
+    return this.call("identityRecover", phrase, label);
   }
   pushSubscribe(endpoint: string, p256dh: string, auth: string): Promise<void> {
     return this.call("pushSubscribe", endpoint, p256dh, auth);

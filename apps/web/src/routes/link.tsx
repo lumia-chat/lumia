@@ -6,7 +6,7 @@ import { Show, createSignal } from "solid-js";
 import { useNavigate } from "@tanstack/solid-router";
 import { Button, Card, TextField } from "../design/components";
 import { AuthPage } from "./auth-page";
-import { client } from "../client/state";
+import { client, identityChanged } from "../client/state";
 
 export function Link() {
   const navigate = useNavigate();
@@ -30,6 +30,8 @@ export function Link() {
     setBusy(true);
     try {
       await client().identityClaim(code().trim());
+      // What the page held of this browser having no identity is asked again.
+      identityChanged();
       navigate({ to: "/app" });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -46,7 +48,7 @@ export function Link() {
         </button>
       }
     >
-      <Card title="Link this browser" subtitle="A device you already use approves this one; the recovery phrase never enters the browser.">
+      <Card title="Link this browser" subtitle="A device you already use approves this one, and your recovery phrase stays where it is.">
         <Show
           when={request()}
           fallback={

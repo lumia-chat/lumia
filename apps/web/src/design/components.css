@@ -791,3 +791,29 @@ button.lu-replyref { cursor: pointer; }
   .lu-body__copy { transition: none; }
 }
 .lu-msg__part.is-mentioned .lu-mention { box-shadow: inset 0 0 0 1px var(--reaction-on-border); }
+
+/* ── The recovery phrase (issue #20): the caution strip, the danger button, the words, saving's warning, a word of the check ── */
+/* The design system ships no monospaced face, so the words are in the platform's own, as code is. */
+.lu-phrase, .lu-wordfield { --phrase-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.lu-notice--caution, .lu-savewarn { border: 1px solid color-mix(in srgb, var(--tone-amber-ink) 22%, var(--tone-amber)); background: color-mix(in srgb, var(--tone-amber) 60%, var(--surface)); color: var(--tone-amber-ink); }
+.lu-notice--caution { align-items: flex-start; line-height: 1.45; }
+.lu-card > .lu-notice { margin: 0; }
+.lu-notice--caution .lu-notice__glyph { margin-top: 1px; }
+.lu-btn--danger { height: 48px; background: var(--danger); color: var(--on-accent); font-size: 15px; font-weight: 700; }
+.lu-btn--danger:hover { background: color-mix(in srgb, var(--danger) 86%, var(--ink)); }
+.lu-btn--danger.lu-btn--md { height: var(--control-height); }
+.lu-card__eyebrow { margin: 0; font-size: 13px; font-weight: 600; color: var(--ink-muted); }
+.lu-phrase { list-style: none; margin: 0; padding: 0; display: grid; grid-auto-flow: column; gap: var(--space-6); }
+.lu-phrase__word { display: flex; align-items: baseline; gap: var(--space-8); padding: 7px var(--space-10); border-radius: var(--radius-10); background: var(--inset); }
+.lu-phrase__n { flex: none; width: 20px; font-size: 12px; font-weight: 600; color: var(--ink-muted); text-align: right; font-variant-numeric: tabular-nums; }
+.lu-phrase__text { min-width: 0; font-family: var(--phrase-mono); font-size: 15px; font-weight: 500; color: var(--ink); }
+.lu-savewarn { display: flex; flex-direction: column; gap: var(--space-12); padding: var(--space-16); border-radius: var(--radius-14); font-family: var(--font-sans); }
+.lu-savewarn__title { margin: 0; font-size: 14.5px; font-weight: 700; }
+.lu-savewarn__text { margin: 0; font-size: 13.5px; line-height: 1.45; }
+.lu-savewarn__actions { display: flex; flex-wrap: wrap; gap: var(--space-8); }
+.lu-savewarn .lu-btn--primary.lu-btn--md { box-shadow: none; }
+.lu-savewarn .lu-savewarn__cancel.lu-btn--md, .lu-savewarn .lu-savewarn__cancel.lu-btn--md:hover { border-color: color-mix(in srgb, var(--tone-amber-ink) 22%, var(--tone-amber)); background: transparent; color: var(--tone-amber-ink); }
+.lu-wordfield__input { font-family: var(--phrase-mono); }
+.lu-wordfield__words { list-style: none; margin: 0; padding: var(--space-4); border-radius: var(--radius-12); background: var(--surface); border: 1px solid var(--border-form); box-shadow: var(--shadow-popover); }
+.lu-wordfield__word { width: 100%; display: flex; align-items: center; min-height: 44px; padding: 0 14px; border: 0; border-radius: var(--radius-10); background: none; font: inherit; font-family: var(--phrase-mono); font-size: 15px; color: var(--ink); text-align: left; cursor: pointer; }
+.lu-wordfield__word:hover { background: var(--hover-row); }

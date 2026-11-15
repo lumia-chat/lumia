@@ -10,6 +10,8 @@ export interface AuthPageProps {
   under?: JSX.Element;
   /** Links at the page's foot. */
   footer?: JSX.Element;
+  /** The wider column of the web's recovery phrase step (the "WebSignUpPhrase" board). */
+  wide?: boolean;
   children?: JSX.Element;
 }
 
@@ -20,7 +22,7 @@ export function AuthPage(props: AuthPageProps) {
   return (
     <div class="auth">
       <main class="auth__main">
-        <div class="auth__column">
+        <div class={props.wide ? "auth__column auth__column--wide" : "auth__column"}>
           <Show when={props.logo ?? true}>
             <div class="auth__logo" aria-hidden="true">
               <img src="/brand/lumia-original-light.svg" alt="" class="lu-only-light" />

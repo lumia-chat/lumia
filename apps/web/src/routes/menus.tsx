@@ -10,7 +10,7 @@
 import { For, Match, Show, Switch, createMemo, createSignal } from "solid-js";
 import { Button, Checkbox, Choice, Menu, MenuHead, MenuItem, MenuLabel, MenuRadio, MenuRule, PickRow, Pop, Popover, ProfileCard, SearchField, TextField, type IconName, type Status } from "../design/components";
 import { ClientError, type InviteSummary, type MemberSummary, type ServerSummary, type SnapshotSummary } from "../client/bridge";
-import { avatarSrc, channelMembersQuery, client, connection, customStatusOf, membersQuery, myStatus, presenceOf, queryClient, setMyStatus } from "../client/state";
+import { avatarSrc, channelMembersQuery, client, connection, customStatusOf, membersQuery, myStatus, presenceOf, privateState, queryClient, setMyStatus } from "../client/state";
 import { channelRefusal, dmRefusal } from "./channels";
 import { useNames } from "../client/names";
 import { initialsOf, toneFor } from "./app";
@@ -49,7 +49,8 @@ export interface OverlayProps {
   /** The settings of the server on screen (architecture 6.7). */
   toServerSettings: () => void;
   toDevices: () => void;
-  toLink: () => void;
+  /** Setting up private messages here, or bringing this browser in (issue #20). */
+  toPrivate: () => void;
   onSignOut: () => void;
 }
 
@@ -441,10 +442,11 @@ function PersonCard(props: OverlayProps & { accountId: string }) {
     setBusy(true);
     setNote("");
     try {
-      // Personal messages are between devices: a browser with no device key is sent to link itself.
-      if (!(await client().hasIdentity())) {
+      // Personal messages are between devices: a browser that cannot read
+      // them is sent to set them up, or to be brought in (issue #20).
+      if ((await privateState()) !== "ready") {
         props.close();
-        props.toLink();
+        props.toPrivate();
         return;
       }
       const outcome = await messagePerson(props.accountId, name());

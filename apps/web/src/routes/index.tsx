@@ -11,6 +11,7 @@ import { AuthPage } from "./auth-page";
 import { DesignGallery } from "./design";
 import { Invite } from "./invite";
 import { Link } from "./link";
+import { PrivateMessages, Restore, privateSearch } from "./private";
 import { SignIn } from "./sign-in";
 
 function Root() {
@@ -101,6 +102,22 @@ const signInRoute = createRoute({ getParentRoute: () => rootRoute, path: "/sign-
 // 6.1: the trust card and what the link leads to, before anything is sent).
 const inviteRoute = createRoute({ getParentRoute: () => rootRoute, path: "/invite/$code", component: Invite, validateSearch: signInSearch });
 const linkRoute = createRoute({ getParentRoute: () => rootRoute, path: "/link", component: Link });
+// Private messages in this browser (issue #20): the phrase step and its
+// check, or link, restore and start over; signed in.
+const privateRoute = createRoute({ getParentRoute: () => rootRoute, path: "/private-messages", component: PrivateMessages, beforeLoad: requireSession, validateSearch: privateSearch });
+// Restore with the phrase, signed in or not (it signs in by the identity):
+// the instance open, as sign-in leaves it or as the saved one reopens.
+const restoreRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/restore",
+  component: Restore,
+  beforeLoad: async () => {
+    if (opened()) return;
+    const url = savedInstance();
+    if (!url) throw redirect({ to: "/sign-in" });
+    await openInstance(url);
+  },
+});
 const appRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/app",
@@ -115,4 +132,4 @@ const appRoute = createRoute({
 });
 const designRoute = createRoute({ getParentRoute: () => rootRoute, path: "/design", component: DesignGallery });
 
-export const routeTree = rootRoute.addChildren([indexRoute, signInRoute, inviteRoute, linkRoute, appRoute, designRoute]);
+export const routeTree = rootRoute.addChildren([indexRoute, signInRoute, inviteRoute, linkRoute, privateRoute, restoreRoute, appRoute, designRoute]);

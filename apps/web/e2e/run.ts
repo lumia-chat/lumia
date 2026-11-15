@@ -197,6 +197,13 @@ function intercepts(which: string): boolean {
   return which === "chromium";
 }
 
+// A browser with no identity signing in to an account with none is offered
+// the recovery phrase first (#20); the steps that are about something else
+// put it off, and land where they would have.
+async function later(page: Page) {
+  await page.getByRole("button", { name: "Set up later" }).click();
+}
+
 // Sign in by password, send a message, reload, read it back.
 async function signInAndSend(which: string, handle: string) {
   const { ctx, page } = await open(which, "sign-in");
@@ -215,6 +222,7 @@ async function signInSteps(which: string, page: Page, handle: string) {
   await page.getByLabel("Email or handle").fill(handle);
   await page.getByRole("textbox", { name: "Password" }).fill(password);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await later(page);
   const composer = page.getByPlaceholder(/^Message #/);
   await composer.waitFor();
   const body = `hello from ${which} ${Date.now()}`;
@@ -386,6 +394,7 @@ async function handoff(which: string, handle: string) {
     live.page = again;
     await page.close();
     await goto(again, `${base}/sign-in?instance=${encodeURIComponent(instance)}&magic=${encodeURIComponent(token)}&next=devices`);
+    await later(again);
     await again.getByText("Everything that holds your identity").waitFor();
     phase("spent");
     const dir = resolve(work, `cli-handoff-${which}`);
@@ -528,6 +537,8 @@ async function invite(which: string, dataDir: string, server: string) {
     await page.getByLabel("Handle").fill(`joined${which}${Date.now()}`);
     await page.getByRole("textbox", { name: "Password" }).fill(password);
     await page.getByRole("button", { name: "Create account", exact: true }).click();
+    // Sign-up's phrase step is the private step's to walk through; put off, it lands in the server.
+    await later(page);
     phase("joined");
     await page.getByPlaceholder(/^Message #general/).waitFor();
     if ((await page.getByText("Web suite").count()) === 0) throw new Error("the joined server is not shown");
@@ -536,6 +547,156 @@ async function invite(which: string, dataDir: string, server: string) {
     await ctx.close();
   }
   console.log(`  ${which}: opened an invite, created an account from it and landed in the server in ${Date.now() - t0} ms`);
+}
+
+// Private messages in a browser (#20). Sign-up's steps 2 and 3: the phrase
+// (printing shows only it and its warning; saving asks first, then the file
+// holds the words), a wrong check that shows the phrase again, and a right
+// one, a word of it taken from the wordlist's completion, which sets up
+// this browser as the identity's device. Then an account whose identity is
+// on the CLI: signing in asks nothing, Home says private messages need
+// this browser, restore is the flagship's, and starting over (the
+// password, a new phrase and its check) makes this browser its device.
+async function privateStep(which: string, stamp: number) {
+  const words = async (page: Page) => {
+    await page.locator(".lu-phrase__text").first().waitFor();
+    const list = await page.locator(".lu-phrase__text").allTextContents();
+    if (list.length !== 24) throw new Error(`the phrase shows ${list.length} words`);
+    return list;
+  };
+  const check = async (page: Page, phrase: string[], right: boolean) => {
+    await page.getByRole("button", { name: "I’ve saved them — check three words" }).click();
+    await page.getByLabel(/^Word \d+$/).first().waitFor();
+    const positions = (await page.locator(".lu-wordfield .lu-textfield__label").allTextContents()).map((t) => Number(t.replace(/\D/g, "")));
+    if (positions.length !== 3 || positions.some((p) => !(p >= 1 && p <= 24))) throw new Error(`the check asks for ${positions.join(", ")}`);
+    let completed = !right;
+    for (const p of positions) {
+      const field = page.getByLabel(`Word ${p}`, { exact: true });
+      const word = phrase[p - 1] ?? "";
+      if (!right) await field.fill("notaword");
+      else if (!completed && word.length >= 5) {
+        // Four letters name one word of the list; it is offered, and taken.
+        await field.fill(word.slice(0, 4));
+        await page.getByRole("button", { name: word, exact: true }).click();
+        if ((await field.inputValue()) !== word) throw new Error(`the completion left ${await field.inputValue()}`);
+        completed = true;
+      } else await field.fill(word);
+    }
+    await page.getByRole("button", { name: "Confirm", exact: true }).click();
+  };
+  {
+    const { ctx, page } = await open(which, "private");
+    const t0 = Date.now();
+    try {
+      phase("sign up");
+      await trustCard(page);
+      await page.getByRole("button", { name: "Create an account" }).click();
+      await page.getByLabel("Handle").fill(`phrase${which}${stamp}`);
+      await page.getByRole("textbox", { name: "Password" }).fill(password);
+      await page.getByText("Next, you’ll save a recovery phrase.").waitFor();
+      await page.getByRole("button", { name: "Create account", exact: true }).click();
+      phase("the phrase");
+      await page.getByText("Create your account · Step 2 of 3").waitFor();
+      const phrase = await words(page);
+      await page.screenshot({ path: `${out}/${which}-phrase.png` });
+      await page.emulateMedia({ media: "print" });
+      const printed = await page.evaluate(() => ({
+        words: document.querySelectorAll(".lu-phrase__word").length > 0 && [...document.querySelectorAll(".lu-phrase__word")].every((w) => w.getClientRects().length > 0),
+        warning: (document.querySelector(".lu-card .lu-notice--caution")?.getClientRects().length ?? 0) > 0,
+        others: [...document.querySelectorAll(".private__phrase button, .private__phrase h1")].filter((e) => e.getClientRects().length > 0).map((e) => e.textContent),
+      }));
+      await page.emulateMedia({ media: "screen" });
+      if (!printed.words || !printed.warning || printed.others.length) throw new Error(`printing shows the words: ${printed.words}, the warning: ${printed.warning}, and also: ${printed.others.join(" | ")}`);
+      phase("save");
+      await page.getByRole("button", { name: "Save as a file" }).click();
+      await page.getByRole("alertdialog", { name: "This file is your identity" }).waitFor();
+      const [download] = await Promise.all([page.waitForEvent("download"), page.getByRole("button", { name: "Save anyway" }).click()]);
+      const file = await Bun.file(await download.path()).text();
+      const missing = phrase.filter((w, i) => !file.includes(`${String(i + 1).padStart(2, " ")}  ${w}`));
+      if (missing.length) throw new Error(`the saved file lacks ${missing.join(", ")}`);
+      phase("wrong");
+      await check(page, phrase, false);
+      await page.getByText("Those words didn’t match.").waitFor();
+      if ((await words(page)).join(" ") !== phrase.join(" ")) throw new Error("a wrong check showed another phrase");
+      phase("right");
+      await check(page, phrase, true);
+      await page.waitForURL(/\/app/);
+      await goto(page, `${base}/app?place=home&view=devices`);
+      await page.locator(".lu-device.is-this", { hasText: "This browser" }).waitFor();
+      await page.screenshot({ path: `${out}/${which}-phrase-devices.png` });
+    } finally {
+      await ctx.close();
+    }
+    console.log(`  ${which}: signed up through the phrase (printed alone, saved behind its warning), was shown it again after a wrong check, and a right one set up this browser, in ${Date.now() - t0} ms`);
+  }
+  {
+    const dir = resolve(work, `cli-private-${which}`);
+    const handle = `over${which}${stamp}`;
+    lumia(dir, "instance", "add", instance);
+    lumia(dir, "account", "create", "--handle", handle, "--password", password);
+    lumia(dir, "identity", "create", "--label", "lost phone");
+    lumia(dir, "identity", "link-account", "--password", password);
+    const { ctx, page } = await open(which, "private-over");
+    const t0 = Date.now();
+    try {
+      phase("sign in");
+      await trustCard(page);
+      await page.getByLabel("Email or handle").fill(handle);
+      await page.getByRole("textbox", { name: "Password" }).fill(password);
+      await page.getByRole("button", { name: "Sign in", exact: true }).click();
+      await page.getByRole("button", { name: "Create, join or discover servers" }).waitFor();
+      phase("needs this browser");
+      await goto(page, `${base}/app?place=home`);
+      await page.getByText("Private messages need this browser").waitFor();
+      await page.getByRole("button", { name: "Restore with your recovery phrase" }).click();
+      await page.getByText("A browser restores your identity only on my.lumia.chat.").waitFor();
+      await page.goBack();
+      phase("start over");
+      await page.getByRole("button", { name: "Start over", exact: true }).click();
+      await page.getByText("Private messages from before stay unreadable.").waitFor();
+      await page.getByLabel("Confirm with your password").fill(password);
+      await page.getByRole("button", { name: "Start over with a new identity" }).click();
+      await page.getByText("Start over · Step 1 of 2").waitFor();
+      await check(page, await words(page), true);
+      await page.waitForURL(/place=home/);
+      await page.getByText("Private messages need this browser").waitFor({ state: "detached" });
+      await goto(page, `${base}/app?place=home&view=devices`);
+      await page.locator(".lu-device.is-this", { hasText: "This browser" }).waitFor();
+    } finally {
+      await ctx.close();
+    }
+    console.log(`  ${which}: an account whose identity was elsewhere was told private messages need this browser, offered restore only on the flagship, and started over with the password and a new phrase, in ${Date.now() - t0} ms`);
+  }
+  {
+    const dir = resolve(work, `cli-private-later-${which}`);
+    const handle = `later${which}${stamp}`;
+    lumia(dir, "instance", "add", instance);
+    lumia(dir, "account", "create", "--handle", handle, "--password", password);
+    const { ctx, page } = await open(which, "private-later");
+    const t0 = Date.now();
+    try {
+      phase("put off");
+      await trustCard(page);
+      await page.getByLabel("Email or handle").fill(handle);
+      await page.getByRole("textbox", { name: "Password" }).fill(password);
+      await page.getByRole("button", { name: "Sign in", exact: true }).click();
+      await page.getByText("Set up private messages · Step 1 of 2").waitFor();
+      await later(page);
+      // A reload lets the sign-in's reauth go: setting up from Devices asks for one first.
+      phase("from devices");
+      await goto(page, `${base}/app?place=home&view=devices`);
+      await page.getByRole("button", { name: "Set up private messages" }).click();
+      await page.getByText("Confirm it’s you").waitFor();
+      await page.getByLabel("Password", { exact: true }).fill(password);
+      await page.getByRole("button", { name: "Continue", exact: true }).click();
+      await check(page, await words(page), true);
+      await page.waitForURL(/view=devices/);
+      await page.locator(".lu-device.is-this", { hasText: "This browser" }).waitFor();
+    } finally {
+      await ctx.close();
+    }
+    console.log(`  ${which}: put the phrase off at sign-in, then set up from Devices after confirming it with the password, in ${Date.now() - t0} ms`);
+  }
 }
 
 // A small PNG of one colour, for the photo step: the instance decodes
@@ -574,6 +735,7 @@ async function account(which: string, taken: string, stamp: number) {
     await page.getByLabel("Email or handle").fill(handle);
     await page.getByRole("textbox", { name: "Password" }).fill(password);
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await later(page);
     await page.getByRole("button", { name: /account menu/ }).click();
     await page.getByRole("menuitem", { name: "View profile" }).click();
     const card = page.locator("form", { has: page.getByLabel("Handle") });
@@ -648,6 +810,7 @@ async function preferencesStep(which: string, stamp: number) {
     await page.getByLabel("Email or handle").fill(handle);
     await page.getByRole("textbox", { name: "Password" }).fill(password);
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await later(page);
     await page.getByText(`Three of ${stamp}`).waitFor();
     const part = (line: string) => page.locator(".lu-msglist .lu-msg__part", { has: page.locator(".lu-msg__body", { hasText: `${line} of ${stamp}` }) });
     await part("Two").hover();
@@ -778,6 +941,7 @@ async function serverSettings(which: string, stamp: number) {
     await page.getByLabel("Email or handle").fill(handle);
     await page.getByRole("textbox", { name: "Password" }).fill(password);
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await later(page);
     await page.getByPlaceholder("Message #general").waitFor();
   };
   const t0 = Date.now();
@@ -876,6 +1040,7 @@ async function autoscrollStep(which: string, stamp: number) {
     await field.fill(handle);
     await page.getByRole("textbox", { name: "Password" }).fill(password);
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await later(page);
     await page.getByText(`line 59 of ${stamp}`).waitFor();
     const composer = page.getByPlaceholder("Message #general");
     await composer.focus();
@@ -932,6 +1097,7 @@ async function asideStep(which: string, stamp: number) {
     await page.getByLabel("Email or handle").fill(handle);
     await page.getByRole("textbox", { name: "Password" }).fill(password);
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await later(page);
     await page.getByPlaceholder("Message #general").waitFor();
     const aside = page.locator(".lu-shell__aside");
     phase("wide");
@@ -992,6 +1158,7 @@ async function railStep(which: string, stamp: number) {
     await page.getByLabel("Email or handle").fill(handle);
     await page.getByRole("textbox", { name: "Password" }).fill(password);
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await later(page);
     await page.getByPlaceholder("Message #general").waitFor();
     const rail = page.locator("nav.lu-rail");
     const tile = (name: string) => rail.getByRole("button", { name: new RegExp(`^${name}(,|$)`) });
@@ -1169,6 +1336,7 @@ async function membershipStep(which: string, stamp: number) {
     await page.getByLabel("Email or handle").fill(member);
     await page.getByRole("textbox", { name: "Password" }).fill(password);
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await later(page);
     await page.getByPlaceholder("Message #general").waitFor();
     const sidebar = page.locator(".lu-shell__sidebar");
     if ((await sidebar.getByRole("link", { name: "design" }).count()) > 0) throw new Error("design is listed before joining it");
@@ -1215,6 +1383,7 @@ async function membershipStep(which: string, stamp: number) {
     await keeper.page.getByLabel("Email or handle").fill(owner);
     await keeper.page.getByRole("textbox", { name: "Password" }).fill(password);
     await keeper.page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await later(keeper.page);
     await keeper.page.getByPlaceholder("Message #general").waitFor();
     const aside = keeper.page.locator(".lu-shell__aside");
     const row = aside.getByRole("button", { name: new RegExp(`^${member}`) });
@@ -1272,6 +1441,7 @@ async function historyStep(which: string, stamp: number) {
     await page.getByLabel("Email or handle").fill(reader);
     await page.getByRole("textbox", { name: "Password" }).fill(password);
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await later(page);
     await page.getByPlaceholder("Message #general").waitFor();
     phase("scrolling back");
     const first = page.locator(".lu-msg__body", { hasText: /^history 0$/ });
@@ -1314,6 +1484,7 @@ async function repliesStep(which: string, stamp: number) {
     await page.getByLabel("Email or handle").fill(reader);
     await page.getByRole("textbox", { name: "Password" }).fill(password);
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await later(page);
     const composer = page.getByPlaceholder("Message #general");
     await composer.waitFor();
     phase("quote reply");
@@ -1413,6 +1584,7 @@ async function editingStep(which: string, stamp: number) {
     await page.getByLabel("Email or handle").fill(writer);
     await page.getByRole("textbox", { name: "Password" }).fill(password);
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await later(page);
     const composer = page.getByPlaceholder("Message #general");
     await composer.waitFor();
     const part = (text: string) => page.locator(".lu-msg__part", { has: page.locator(".lu-msg__body", { hasText: text }) });
@@ -1509,6 +1681,7 @@ async function profileStep(which: string, stamp: number) {
     await page.getByLabel("Email or handle").fill(owner);
     await page.getByRole("textbox", { name: "Password" }).fill(password);
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await later(page);
     await page.getByPlaceholder("Message #general").waitFor();
     const message = page.locator("article.lu-msg", { has: page.locator(".lu-msg__body", { hasText: "Who am I now?" }) });
     const member = page.locator(".lu-shell__aside .lu-member", { hasText: other });
@@ -1573,6 +1746,7 @@ async function longStep(which: string, stamp: number) {
     await page.getByLabel("Email or handle").fill(reader);
     await page.getByRole("textbox", { name: "Password" }).fill(password);
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await later(page);
     const composer = page.getByPlaceholder("Message #general");
     await composer.waitFor();
     const part = (text: string) => page.locator(".lu-msg__part", { has: page.locator(".lu-msg__body", { hasText: text }) });
@@ -1650,6 +1824,7 @@ async function revoked(which: string, stamp: number) {
     await page.getByLabel("Email or handle").fill(handle);
     await page.getByRole("textbox", { name: "Password" }).fill(password);
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await later(page);
     phase("connected");
     await page.locator('.lu-rail__self[title$="connected"]').waitFor();
     phase("revoke");
@@ -1686,6 +1861,7 @@ async function create(which: string, handle: string, stamp: number) {
     await page.getByLabel("Email or handle").fill(handle);
     await page.getByRole("textbox", { name: "Password" }).fill(password);
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await later(page);
     await page.getByPlaceholder(/^Message #/).waitFor();
     phase("server");
     await page.getByRole("button", { name: "Create, join or discover servers" }).click();
@@ -1853,6 +2029,7 @@ async function webPush(which: string, handle: string, inviterDir: string, server
     await page.getByLabel("Email or handle").fill(handle);
     await page.getByRole("textbox", { name: "Password" }).fill(password);
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await later(page);
     phase("composer");
     await page.getByPlaceholder(/^Message #/).waitFor();
     phase("turn on");
@@ -1917,6 +2094,7 @@ async function magicLink(which: string) {
     if (!token) throw new Error("no magic-link mail in the dev mailbox");
     phase("link");
     await goto(page, `${base}/sign-in?magic=${encodeURIComponent(token)}&instance=${encodeURIComponent(instance)}`);
+    await later(page);
     await page.getByRole("button", { name: "Create, join or discover servers" }).waitFor();
     await page.screenshot({ path: `${out}/${which}-magic.png` });
   } finally {
@@ -1946,6 +2124,7 @@ async function passkey(which: string, handle: string) {
     await page.getByLabel("Email or handle").fill(handle);
     await page.getByRole("textbox", { name: "Password" }).fill(password);
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await later(page);
     await page.getByPlaceholder(/^Message #/).waitFor();
     phase("register");
     await goto(page, `${base}/app?place=home&view=devices`);
@@ -1968,6 +2147,7 @@ async function passkey(which: string, handle: string) {
     await page.getByLabel("Email or handle").fill(handle);
     await page.getByRole("textbox", { name: "Password" }).fill(password);
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await later(page);
     await page.getByPlaceholder(/^Message #/).waitFor();
     await goto(page, `${base}/app?place=home&view=devices`);
     await page.getByLabel("Require a passkey when signing in with a password").waitFor();
@@ -1985,6 +2165,7 @@ async function passkey(which: string, handle: string) {
     await page.getByText("run by").waitFor();
     await page.getByLabel("Email or handle").fill(handle);
     await page.getByRole("button", { name: "Sign in with a passkey" }).click();
+    await later(page);
     try {
       await page.getByPlaceholder(/^Message #/).waitFor();
     } catch (e) {
@@ -2075,6 +2256,7 @@ async function oidc(which: string) {
     await page.getByRole("button", { name: info.oidcName }).click();
     phase("back");
     try {
+      await later(page);
       await page.getByRole("button", { name: "Create, join or discover servers" }).waitFor();
     } catch (e) {
       console.log(`  [${which}] oidc: at ${page.url()}: ${(await page.textContent("body"))?.replace(/\s+/g, " ").slice(0, 300)}`);
@@ -2146,6 +2328,7 @@ try {
       ["link", () => link(which, identityDir)],
       ["dm", () => dm(which, aDir, bAccount, aHandle)],
       ["invite", () => invite(which, passwordDir, server)],
+      ["private", () => privateStep(which, stamp)],
       ["create", () => create(which, `web${stamp}`, stamp)],
       ["revoked", () => revoked(which, stamp)],
       ["account", () => account(which, `web${stamp}`, stamp)],

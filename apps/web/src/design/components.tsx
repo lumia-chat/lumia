@@ -91,7 +91,8 @@ export function Icon(props: IconProps) {
 /* ── Actions ─────────────────────────────────────────────── */
 
 export interface ButtonProps extends JSX.ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: "primary" | "secondary" | "text";
+  /** `danger`: a view's one step that cannot be undone, drawn as primary is but in the danger ink (Start over, issue #20). */
+  variant?: "primary" | "secondary" | "text" | "danger";
   size?: "lg" | "md" | "sm";
   icon?: IconName;
   block?: boolean;
@@ -101,7 +102,7 @@ export interface ButtonProps extends JSX.ButtonHTMLAttributes<HTMLButtonElement>
 export function Button(props: ButtonProps) {
   const [local, rest] = splitProps(props, ["variant", "size", "icon", "block", "class", "children", "type"]);
   const variant = () => local.variant ?? "secondary";
-  const sz = () => (variant() === "text" ? null : local.size ?? (variant() === "primary" ? "lg" : "md"));
+  const sz = () => (variant() === "text" ? null : local.size ?? (variant() === "primary" || variant() === "danger" ? "lg" : "md"));
   return (
     <button
       type={local.type ?? "button"}
@@ -1304,7 +1305,8 @@ export function ChannelHeader(props: ChannelHeaderProps) {
 
 export interface NoticeProps {
   icon?: IconName;
-  tone?: "neutral" | "accent";
+  /** `caution`: what has to be read before going on, in amber (the recovery phrase's warnings, issue #20). */
+  tone?: "neutral" | "accent" | "caution";
   action?: { label: string; onClick?: () => void };
   children?: JSX.Element;
   class?: string;
@@ -2741,6 +2743,8 @@ export function Panel(props: PanelProps) {
 }
 
 export interface CardProps {
+  /** A line over the title: where in a flow the card is ("Create your account · Step 2 of 3"). */
+  eyebrow?: string;
   title?: string;
   subtitle?: string;
   children?: JSX.Element;
@@ -2754,6 +2758,9 @@ export function Card(props: CardProps) {
     <section aria-labelledby={props.title ? hid : undefined} class={cx("lu-card", props.class)}>
       <Show when={props.title}>
         <div class="lu-card__head">
+          <Show when={props.eyebrow}>
+            <p class="lu-card__eyebrow">{props.eyebrow}</p>
+          </Show>
           <h1 id={hid} class="lu-card__title">
             {props.title}
           </h1>
@@ -3319,6 +3326,125 @@ export function FolderSettings(props: FolderSettingsProps) {
         </div>
       </form>
     </section>
+  );
+}
+
+/* ── The recovery phrase (issue #20, identity spec 4.1) ────── */
+
+export interface PhraseWordsProps {
+  /** The 24 words, in order. */
+  words: string[];
+  /** Two on a phone, three on the web's sign-up step; each column read top to bottom. */
+  columns?: 2 | 3;
+  class?: string;
+}
+
+/** The phrase's words, numbered, in columns read down. Nothing here copies them: there is no copy button anywhere. */
+export function PhraseWords(props: PhraseWordsProps) {
+  const columns = () => props.columns ?? 3;
+  return (
+    <ol class={cx("lu-phrase", props.class)} aria-label={`Your ${props.words.length} words, in order`} style={{ "grid-template-rows": `repeat(${Math.ceil(props.words.length / columns())}, auto)`, "grid-template-columns": `repeat(${columns()}, minmax(0, 1fr))` }}>
+      <For each={props.words}>
+        {(word, i) => (
+          <li class="lu-phrase__word">
+            <span class="lu-phrase__n">{i() + 1}</span>
+            <span class="lu-phrase__text">{word}</span>
+          </li>
+        )}
+      </For>
+    </ol>
+  );
+}
+
+export interface PhraseSaveWarningProps {
+  onSave?: () => void;
+  onCancel?: () => void;
+  class?: string;
+}
+
+/** What saving the phrase as a file means, asked before it is written; only "Save anyway" writes it (identity spec 4.1). */
+export function PhraseSaveWarning(props: PhraseSaveWarningProps) {
+  const tid = fieldId();
+  let save: HTMLButtonElement | undefined;
+  onMount(() => save?.focus());
+  return (
+    <div class={cx("lu-savewarn", props.class)} role="alertdialog" aria-labelledby={tid} aria-describedby={tid + "-text"}>
+      <p id={tid} class="lu-savewarn__title">
+        This file is your identity
+      </p>
+      <p id={tid + "-text"} class="lu-savewarn__text">
+        Anyone who opens it can read your private messages. A folder that syncs to iCloud, Google Drive or OneDrive puts a copy in that cloud. Paper, or a drive you keep offline, is safer.
+      </p>
+      <div class="lu-savewarn__actions">
+        <Button ref={save} variant="primary" size="md" onClick={() => props.onSave?.()}>
+          Save anyway
+        </Button>
+        <Button size="md" class="lu-savewarn__cancel" onClick={() => props.onCancel?.()}>
+          Cancel
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+export interface PhraseWordFieldProps {
+  /** Which of the 24 words, from 1. */
+  position: number;
+  value: string;
+  /** The wordlist's words that begin with what is typed (the core's `phraseCompletions`), none once a word is whole. */
+  completions: string[];
+  onInput?: (value: string) => void;
+  onPick?: (word: string) => void;
+  class?: string;
+}
+
+/** One word of the three-word check, "Word 11", with the wordlist completing it as it is typed. */
+export function PhraseWordField(props: PhraseWordFieldProps) {
+  const fid = fieldId();
+  let list: HTMLUListElement | undefined;
+  const buttons = () => Array.from(list?.querySelectorAll("button") ?? []);
+  const move = (e: KeyboardEvent, from: number) => {
+    const all = buttons();
+    if (e.key === "ArrowDown" && from + 1 < all.length) all[from + 1]?.focus();
+    else if (e.key === "ArrowUp") (from > 0 ? all[from - 1] : (document.getElementById(fid) as HTMLInputElement | null))?.focus();
+    else if (e.key === "Escape") document.getElementById(fid)?.focus();
+    else return;
+    e.preventDefault();
+  };
+  return (
+    <div class={cx("lu-textfield lu-wordfield", props.class)}>
+      <div class="lu-textfield__top">
+        <label for={fid} class="lu-textfield__label">
+          Word {props.position}
+        </label>
+      </div>
+      <div class="lu-textfield__box">
+        <input
+          id={fid}
+          type="text"
+          class="lu-textfield__input lu-wordfield__input"
+          value={props.value}
+          autocomplete="off"
+          autocapitalize="none"
+          spellcheck={false}
+          onInput={(e) => props.onInput?.(e.currentTarget.value)}
+          onKeyDown={(e) => move(e, -1)}
+        />
+      </div>
+      <Show when={props.completions.length > 0}>
+        <ul ref={list} class="lu-wordfield__words" aria-label={`Words starting with ${props.value.trim()}`}>
+          <For each={props.completions}>
+            {(word, i) => (
+              <li>
+                <button type="button" class="lu-wordfield__word" onClick={() => props.onPick?.(word)} onKeyDown={(e) => move(e, i())}>
+                  {word}
+                </button>
+              </li>
+            )}
+          </For>
+        </ul>
+      </Show>
+    </div>
   );
 }
 

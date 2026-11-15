@@ -33,6 +33,12 @@ a { color: var(--link); }
 .gallery-auth .lu-card { width: var(--auth-width); max-width: 100%; }
 .gallery-auth__form { display: flex; flex-direction: column; gap: var(--space-16); }
 .gallery-auth__foot { margin: var(--space-16) 0 0; text-align: center; font-size: 13.5px; color: var(--ink-secondary); }
+/* Setting up private messages (issue #20): the web's phrase step at its board's 1440 by 900, the other cards beside each other under it. */
+.gallery-private { display: flex; flex-direction: column; gap: var(--space-40); padding-bottom: var(--space-40); background: var(--bg); }
+.gallery-private__step { box-sizing: border-box; width: 1440px; min-height: 900px; display: flex; align-items: center; justify-content: center; padding: var(--space-40) 20px; }
+.gallery-private__step .lu-card { max-width: 640px; }
+.gallery-private__row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--space-24); padding: 0 var(--space-24); }
+.gallery-private__card { width: var(--auth-width); display: flex; flex-direction: column; gap: var(--space-24); }
 
 /* The Phone board: iPhone frames of the Quiet Split folded (the design
    canvas's iOS boards). The status bar and home indicator are the
@@ -131,6 +137,34 @@ a { color: var(--link); }
 .auth__change, .auth__switch { font: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
 .auth__change { flex: none; font-size: 13px; font-weight: 600; }
 .auth__code { font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink-field); background: var(--field); border: 1px solid var(--border-form); border-radius: var(--radius-12); padding: var(--space-12); resize: none; word-break: break-all; }
+
+/* ── Private messages in this browser (issue #20) ── */
+/* The "WebSignUpPhrase" board's card is 640 wide, with no logo over it. */
+.auth__column--wide { max-width: 640px; }
+.private__keep { display: flex; flex-wrap: wrap; gap: var(--space-10); }
+.private__keep .lu-btn { flex: 1; min-width: 160px; }
+.private__last { text-align: center; }
+.private__lead { font-size: 14.5px; color: var(--ink-body); }
+.private__points { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-8); }
+.private__points li { display: flex; gap: var(--space-10); font-size: 14.5px; line-height: 1.5; color: var(--ink-secondary); }
+.private__points li::before { content: ""; flex: none; width: 6px; height: 6px; margin-top: 9px; border-radius: var(--radius-round); background: var(--ink-muted); }
+.private__count { font-size: 12.5px; font-weight: 600; color: var(--ink-muted); font-variant-numeric: tabular-nums; }
+.private__words { min-height: 150px; padding: var(--space-10) 14px; border: 1px solid var(--border-form); border-radius: var(--radius-12); background: var(--field); font: 15px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--ink-field); resize: none; }
+.private__words:focus { outline: none; border-color: var(--border-focus); }
+.private__hint { text-align: center; font-size: 12.5px; color: var(--ink-muted); }
+
+/* Printing the phrase prints its words and the warning over them, and
+   nothing else of the page, in the paper's own ink whatever the theme. */
+@media print {
+  :root, :root[data-theme], body, .lu-card.private__phrase { color-scheme: light; }
+  body, .auth { background: Canvas; }
+  .auth__logo, .auth__under, .auth__footer { display: none; }
+  .auth__main { padding: 0; align-items: flex-start; }
+  .lu-card.private__phrase { padding: 0; border: 0; box-shadow: none; background: none; }
+  .lu-card.private__phrase > :not(.is-printed) { display: none; }
+  .lu-card.private__phrase .is-printed, .lu-card.private__phrase .is-printed * { color: CanvasText; background: none; border-color: CanvasText; }
+  .lu-card.private__phrase .lu-phrase__word { border: 1px solid; break-inside: avoid; }
+}
 
 /* ── App ── */
 .app__empty { margin: auto; padding: var(--space-24); font-size: 14px; color: var(--ink-secondary); text-align: center; }

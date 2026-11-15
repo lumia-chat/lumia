@@ -75,7 +75,10 @@ import {
   type RailServer,
   type RailTile,
   type Tone,
+  PhraseSaveWarning,
+  PhraseWordField,
 } from "../design/components";
+import { NeedsBrowser, PhraseStep, RestoreForm, StartOver } from "./private";
 
 type Theme = "light" | "dark";
 
@@ -1075,15 +1078,53 @@ function FoldersBoard() {
   );
 }
 
+// Setting up private messages (issue #20): the "WebSignUpPhrase" board's
+// step at its 1440 by 900, then the phone boards' check, "need this
+// browser", start over and restore, as the web draws them.
+const SAMPLE_PHRASE = "orbit cactus timber velvet harbor pencil meadow copper rescue glimpse fabric lunar anchor whisper salad ticket marble frozen clever sunny violin garden token mirror".split(" ");
+
+function PrivateBoard() {
+  return (
+    <div class="gallery-private">
+      <div class="gallery-private__step">
+        <PhraseStep eyebrow="Create your account · Step 2 of 3" words={SAMPLE_PHRASE} />
+      </div>
+      <div class="gallery-private__row">
+        <div class="gallery-private__card">
+          <PhraseSaveWarning />
+          <Card eyebrow="Create your account · Step 3 of 3" title="Check your phrase" subtitle="Type these three words from what you wrote down, to make sure it’s right.">
+            <form class="auth__form" onSubmit={(e) => e.preventDefault()}>
+              <PhraseWordField position={4} value="velvet" completions={[]} />
+              <PhraseWordField position={11} value="fa" completions={["fabric", "face", "faculty", "fade"]} />
+              <PhraseWordField position={19} value="" completions={[]} />
+              <Button variant="primary" type="submit" block disabled>
+                Confirm
+              </Button>
+              <Button block>Show the phrase again</Button>
+            </form>
+          </Card>
+        </div>
+        <div class="gallery-private__card">
+          <NeedsBrowser onLink={() => {}} onRestore={() => {}} onStartOver={() => {}} />
+          <RestoreForm initial={SAMPLE_PHRASE.slice(0, 12).join(" ")} onRestore={async () => {}} />
+        </div>
+        <div class="gallery-private__card">
+          <StartOver oidcName="Acme SSO" returnTo={() => ""} onConfirmed={() => {}} onKeepLooking={() => {}} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function DesignGallery() {
   const { theme, apply } = useTheme();
-  const [board, setBoard] = createSignal<"split" | "replies" | "home" | "requests" | "devices" | "signin" | "phone" | "folders" | "pieces">("split");
+  const [board, setBoard] = createSignal<"split" | "replies" | "home" | "requests" | "devices" | "signin" | "private" | "phone" | "folders" | "pieces">("split");
   return (
     <div class="gallery">
       <header class="gallery__bar">
         <strong>Lumia design system</strong>
         <nav class="gallery__nav" aria-label="Boards">
-          <For each={[["split", "Quiet Split"], ["replies", "Inline replies"], ["home", "Home"], ["requests", "Requests"], ["devices", "Devices"], ["signin", "Sign in"], ["phone", "Phone"], ["folders", "Server folders"], ["pieces", "Pieces"]] as const}>
+          <For each={[["split", "Quiet Split"], ["replies", "Inline replies"], ["home", "Home"], ["requests", "Requests"], ["devices", "Devices"], ["signin", "Sign in"], ["private", "Private messages"], ["phone", "Phone"], ["folders", "Server folders"], ["pieces", "Pieces"]] as const}>
             {([id, label]) => (
               <button type="button" class="gallery__tab" aria-pressed={board() === id} onClick={() => setBoard(id)}>
                 {label}
@@ -1101,7 +1142,7 @@ export function DesignGallery() {
         </nav>
       </header>
       <div class="gallery__board">
-        {board() === "split" ? <QuietSplit /> : board() === "replies" ? <RepliesBoard /> : board() === "home" ? <HomeBoard view="dm" /> : board() === "requests" ? <HomeBoard view="requests" /> : board() === "devices" ? <HomeBoard view="devices" /> : board() === "signin" ? <SignIn /> : board() === "phone" ? <PhoneBoard /> : board() === "folders" ? <FoldersBoard /> : <Pieces />}
+        {board() === "split" ? <QuietSplit /> : board() === "replies" ? <RepliesBoard /> : board() === "home" ? <HomeBoard view="dm" /> : board() === "requests" ? <HomeBoard view="requests" /> : board() === "devices" ? <HomeBoard view="devices" /> : board() === "signin" ? <SignIn /> : board() === "private" ? <PrivateBoard /> : board() === "phone" ? <PhoneBoard /> : board() === "folders" ? <FoldersBoard /> : <Pieces />}
       </div>
     </div>
   );

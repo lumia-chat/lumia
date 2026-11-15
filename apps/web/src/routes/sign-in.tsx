@@ -36,7 +36,7 @@ export function SignIn() {
   // code pasted here.
   const [magicSent, setMagicSent] = createSignal(false);
   const [magicCode, setMagicCode] = createSignal("");
-  const land = async () => {
+  const land = async (created = false) => {
     // Signing in for a native app: the session made here is handed to it
     // as a one-time token on its return URL, and this page keeps nothing.
     const back = search().return;
@@ -47,8 +47,14 @@ export function SignIn() {
       return;
     }
     const code = invite();
-    if (code) {
-      const serverId = await client().acceptInvite(code);
+    const serverId = code ? await client().acceptInvite(code) : undefined;
+    // A browser with no identity: a new account's phrase is sign-up's next
+    // step, and an account with none is offered it at sign-in, while the
+    // sign-in's reauth is fresh (issue #20). An account whose identity is
+    // elsewhere is asked where a private message would start, not here.
+    if (!(await client().hasIdentity()) && (created || !(await client().accountIdentity().catch(() => "unknown")))) {
+      navigate({ to: "/private-messages", search: { from: created ? "signup" : "signin", server: serverId, next: search().next } });
+    } else if (serverId) {
       navigate({ to: "/app", search: { server: serverId } });
     } else if (search().next === "devices") {
       navigate({ to: "/app", search: { place: "home", view: "devices" } });
@@ -136,7 +142,7 @@ export function SignIn() {
       else await b.signIn(handle(), password(), needsTotp() ? totp() : undefined);
       // With an invite in hand, the landing joins its server (a new
       // account joined at creation; its code resolves to the same server).
-      await land();
+      await land(mode() === "create");
     } catch (err) {
       const ce = err instanceof ClientError ? err : null;
       if (ce?.code === "FAILED_PRECONDITION" && ce.details.mfa === "passkey") {
@@ -251,6 +257,22 @@ export function SignIn() {
                     <Button variant="primary" type="submit" block disabled={busy()}>
                       {mode() === "create" ? "Create account" : "Sign in"}
                     </Button>
+                    {/* Sign-up in a browser: the recovery phrase is its next step (issue #20); not for a native app's sign-up, which sets up on its own. */}
+                    <Show when={mode() === "create" && !search().return}>
+                      <p class="auth__note">Next, you’ll save a recovery phrase. It sets up private messages in this browser with your account.</p>
+                      <Divider variant="or" label="Already use Lumia on another device?" />
+                      <div class="auth__ways">
+                        {/* Linking ends in a sign-in by identity proof, which only some instances take. */}
+                        <Show when={i().identityProofSignInEnabled}>
+                          <Button icon="key" block type="button" onClick={() => navigate({ to: "/link" })}>
+                            Link from a device you use
+                          </Button>
+                        </Show>
+                        <Button block type="button" onClick={() => navigate({ to: "/restore" })}>
+                          Restore with your recovery phrase
+                        </Button>
+                      </div>
+                    </Show>
                     <Show when={otherWays(i())}>
                       <Divider variant="or" />
                       <div class="auth__ways">

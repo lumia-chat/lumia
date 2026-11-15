@@ -551,6 +551,54 @@ export function hasIdentityQuery() {
   }));
 }
 
+/**
+ * Where private messages stand in this browser (issue #20): `ready` (it
+ * holds the account's identity), `none` (neither the account nor the
+ * browser has one: the phrase step sets one up), `unbound` (the browser
+ * made one that a reauth did not finish binding), `elsewhere` (the
+ * account's identity is on other devices: link, restore or start over).
+ */
+export type PrivateState = "ready" | "none" | "unbound" | "elsewhere";
+
+export async function privateState(): Promise<PrivateState> {
+  const held = await client().hasIdentity();
+  let bound: string | null;
+  try {
+    bound = await client().accountIdentity();
+  } catch {
+    // Unreachable: what this browser holds is what it can say.
+    return held ? "ready" : "none";
+  }
+  if (held) return bound ? "ready" : "unbound";
+  return bound ? "elsewhere" : "none";
+}
+
+/**
+ * `privateState`, or undefined until it is known. Read without suspending:
+ * a query's `data` read while it is pending suspends the navigation in
+ * progress, and this one waits on the account snapshot, during which the
+ * Home sidebar's memos read as undefined and the page fell over.
+ */
+export function privateStateQuery(): () => PrivateState | undefined {
+  const query = createQuery(() => ({
+    queryKey: ["privateState"],
+    queryFn: privateState,
+  }));
+  return () => (query.isSuccess ? query.data : undefined);
+}
+
+/** After this browser's identity changed: what follows from it is asked again. */
+export function identityChanged(): void {
+  for (const key of ["privateState", "hasIdentity", "roster", "dmChannels", "snapshot"]) void queryClient.invalidateQueries({ queryKey: [key] });
+}
+
+/**
+ * The flagship's web origin, the only one a browser restores an identity
+ * on (identity spec 7); elsewhere the page says to restore in an app or
+ * there, and link this browser after.
+ */
+export const FLAGSHIP_ORIGIN = "https://my.lumia.chat";
+
 export function rosterQuery(enabled: () => boolean) {
   return createQuery(() => ({
     queryKey: ["roster"],

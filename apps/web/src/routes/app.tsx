@@ -613,6 +613,7 @@ export function App() {
     channelId: search().dm,
     go: goHome,
     toLink: () => void navigate({ to: "/link" }),
+    toPrivate: (next: "home" | "devices", startOver?: boolean) => void navigate({ to: "/private-messages", search: { next, step: startOver ? "start-over" : undefined } }),
     toServer: goServer,
     back: () => setReading(false),
     asideShown: asideShown(),
@@ -904,7 +905,7 @@ export function App() {
               setReading(true);
             }}
             toDevices={() => goHome("devices")}
-            toLink={() => void navigate({ to: "/link" })}
+            toPrivate={() => void navigate({ to: "/private-messages", search: { next: "home" } })}
             onSignOut={() => void leave()}
           />
         )}

@@ -2,6 +2,7 @@
 // requests, this identity's devices, and starting a conversation. From
 // the "Home", "Requests" and "Devices" boards in the gallery.
 import { For, Show, createEffect, createMemo, createSignal, on, untrack, type JSX } from "solid-js";
+import { useNavigate } from "@tanstack/solid-router";
 import {
   Avatar,
   Button,
@@ -25,7 +26,8 @@ import {
   type DeviceEntry,
 } from "../design/components";
 import { ClientError, type ChannelSummary, type DeviceSummary, type DmMessageSummary, type InvitePreviewSummary, type MemberSummary, type MessageSummary, type PasskeySummary, type ProfileSummary, type SnapshotSummary } from "../client/bridge";
-import { SERVED_BY_INSTANCE, avatarSrc, client, pictureRefusal, savedInstance, dmChannelsQuery, dmMessagesQuery, enableNotifications, hasIdentityQuery, myStatus, peopleQuery, pushState, queryClient, readStatesQuery, rosterQuery, setMyStatus, snapshotQuery } from "../client/state";
+import { SERVED_BY_INSTANCE, avatarSrc, client, pictureRefusal, savedInstance, dmChannelsQuery, dmMessagesQuery, enableNotifications, hasIdentityQuery, myStatus, peopleQuery, privateStateQuery, pushState, queryClient, readStatesQuery, rosterQuery, setMyStatus, snapshotQuery, type PrivateState } from "../client/state";
+import { NeedsBrowser } from "./private";
 import { useNames } from "../client/names";
 import { FONT_SIZES, choosePreset, preferences, presetOf, setAppearance, setPreferences, type Appearance, type Avatars, type FontSize, type Layout, type Preset, type Reactions, type Spacing } from "../client/preferences";
 import { addPasskey, passkeysAvailable } from "../client/passkeys";
@@ -41,6 +43,8 @@ export interface HomeProps {
   channelId: string | undefined;
   go: (view: HomeView, channelId?: string) => void;
   toLink: () => void;
+  /** Setting up private messages in this browser, or bringing it in (issue #20); back here after. */
+  toPrivate: (next: "home" | "devices", startOver?: boolean) => void;
   toServer: (serverId: string) => void;
   /** Back to the rail and the sidebar, where the frame is folded. */
   back: () => void;
@@ -250,7 +254,7 @@ function AddServer(props: HomeProps) {
 }
 
 export function HomeMain(props: HomeProps) {
-  const identity = hasIdentityQuery();
+  const ready = privateStateQuery();
   return (
     <Show
       when={props.view !== "add" && props.view !== "devices" && props.view !== "profile" && props.view !== "preferences" && props.view !== "mentions"}
@@ -268,21 +272,32 @@ export function HomeMain(props: HomeProps) {
         )
       }
     >
-      <Show when={identity.data !== false} fallback={<NoIdentity toLink={props.toLink} back={props.back} />}>
+      <Show when={!ready() || ready() === "ready"} fallback={<NoIdentity state={ready() ?? "none"} {...props} />}>
         {props.view === "requests" ? <Requests {...props} /> : props.view === "new" ? <NewMessage {...props} /> : <Conversation {...props} />}
       </Show>
     </Show>
   );
 }
 
-function NoIdentity(props: { toLink: () => void; back: () => void }) {
+// Where a private message would start or be accepted in a browser that
+// cannot read one (issue #20): set up here when the account has no
+// identity, else "Private messages need this browser".
+function NoIdentity(props: HomeProps & { state: PrivateState }) {
+  const navigate = useNavigate();
   return (
     <>
       <ChannelHeader kind="page" name="Home" actions={[]} onBack={props.back} backLabel="Back to Home" />
       <div class="lu-page">
-        <EmptyState icon="shield" title="Link this browser to your identity" action={{ label: "Link this browser", onClick: props.toLink }}>
-          Personal messages are end-to-end encrypted between your devices and theirs. This browser has no device key yet; a device you already use approves it.
-        </EmptyState>
+        <Show
+          when={props.state === "elsewhere"}
+          fallback={
+            <EmptyState icon="shield" title={props.state === "unbound" ? "Finish setting up private messages" : "Set up private messages"} action={{ label: props.state === "unbound" ? "Finish setting up" : "Set up private messages", onClick: () => props.toPrivate("home") }}>
+              Private messages are end-to-end encrypted between your devices and theirs. Setting them up here gives you a recovery phrase to save.
+            </EmptyState>
+          }
+        >
+          <NeedsBrowser onLink={props.toLink} onRestore={() => void navigate({ to: "/restore" })} onStartOver={() => props.toPrivate("home", true)} />
+        </Show>
       </div>
     </>
   );
@@ -923,8 +938,8 @@ function Profile(props: HomeProps) {
         <Show
           when={hasIdentity.data !== false}
           fallback={
-            <Notice icon="shield" action={{ label: "Link this browser", onClick: props.toLink }}>
-              Your profile travels with your identity, signed by its devices. This browser holds no device key yet; a device you already use approves it.
+            <Notice icon="shield" action={{ label: "Set up private messages", onClick: () => props.toPrivate("home") }}>
+              Your profile travels with your identity, signed by its devices. Private messages aren’t set up in this browser yet.
             </Notice>
           }
         >
@@ -1067,6 +1082,7 @@ function PreferenceRow(props: { label: string; children: JSX.Element }) {
 
 function Devices(props: HomeProps) {
   const roster = rosterQuery(() => true);
+  const ready = privateStateQuery();
   const [revoking, setRevoking] = createSignal<DeviceSummary | null>(null);
   const [password, setPassword] = createSignal("");
   const [busy, setBusy] = createSignal(false);
@@ -1186,7 +1202,23 @@ function Devices(props: HomeProps) {
             </form>
           </Card>
         </Show>
-        <Notice icon="shield" action={{ label: "Link a device", onClick: props.toLink }}>
+        <Show when={ready() && ready() !== "ready"}>
+          <Card
+            title={ready() === "elsewhere" ? "Private messages need this browser" : "Private messages aren’t set up"}
+            subtitle={ready() === "elsewhere" ? "Your account has private messages on another device. Link this browser from it, or restore with your recovery phrase." : ready() === "unbound" ? "This browser made its keys; confirming it’s you finishes tying them to your account." : "Set them up here: you’ll save a recovery phrase and check three of its words."}
+          >
+            <div class="app__row">
+              <Button variant="primary" size="md" onClick={() => props.toPrivate("devices")}>
+                {ready() === "elsewhere" ? "Bring this browser in" : ready() === "unbound" ? "Finish setting up" : "Set up private messages"}
+              </Button>
+            </div>
+          </Card>
+        </Show>
+        <Show when={ready() === "ready" && roster.data && !roster.data.devices.some((d) => !d.revoked && d.kind !== "web")}>
+          {/* A browser keeps no backup key: the identity backup stands as it was written at creation until an app is linked (identity spec 7). */}
+          <Notice icon="shield">Your identity’s backup was written when it was made. Until you link a Lumia app, it isn’t kept up to date: a restore finds your devices, but not what changed since.</Notice>
+        </Show>
+        <Notice icon="shield">
           Your identity lives on these devices, not on any instance. Revoking one takes effect on every instance that holds your roster.
         </Notice>
         <Show when={pushState() !== "unavailable"}>
