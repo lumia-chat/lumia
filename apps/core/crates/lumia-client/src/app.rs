@@ -2729,12 +2729,18 @@ impl App {
         let device_id = self.device_id.clone();
         let back = Arc::clone(self);
         spawn(async move {
-            let store =
-                gateway::run_forever(api, store, "lumia-app", device_id, channels, rx, etx).await;
-            let mut inner = back.lock();
-            inner.store = Some(store);
-            inner.commands = None;
-            inner.sink = None;
+            let (store, revoked) =
+                gateway::run_until_end(api, store, "lumia-app", device_id, channels, rx, etx).await;
+            {
+                let mut inner = back.lock();
+                inner.store = Some(store);
+                inner.commands = None;
+                inner.sink = None;
+            }
+            // The identity no longer holds this device: what it kept goes.
+            if revoked {
+                let _ = back.erase_device().await;
+            }
         });
         let app = Arc::clone(self);
         let task_sink = Arc::clone(&sink);
@@ -2847,6 +2853,54 @@ impl App {
         inner.commands = Some(tx);
         inner.sink = Some(sink);
         Ok(())
+    }
+
+    /// Erases what this device kept, for an identity that no longer holds it
+    /// (identity spec 4.4, architecture 12): this instance's store (server
+    /// channels, personal conversations as decrypted, MLS groups, cursors),
+    /// its tokens, and the identity's stores (roster, device key, backup key,
+    /// a kept phrase), so nothing on it reads a private message again. The
+    /// gateway loop does it when the instance says this device is revoked;
+    /// a shell calls it for a revocation it learns of another way. The app
+    /// is then signed out, with no identity; it can be set up or linked anew.
+    /// Only a device that hears of its revocation erases: one kept offline
+    /// keeps what it had, under the platform keystore's key.
+    ///
+    /// # Errors
+    /// On a store failure, after erasing what it could.
+    pub async fn erase_device(&self) -> Result<(), ClientError> {
+        self.stop();
+        *self.dm.lock().unwrap_or_else(PoisonError::into_inner) = None;
+        self.api.clear_tokens();
+        let mut first_error = None;
+        {
+            let mut inner = self.lock();
+            inner.reauth = None;
+            inner.held_phrase = None;
+            inner.quiz = None;
+            inner.linking = None;
+            inner.answers.clear();
+            let instance = inner.store.as_ref().map(SqliteStore::erase);
+            for result in [
+                instance,
+                Some(inner.reader.erase()),
+                Some(inner.keys.erase()),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                if let Err(e) = result {
+                    first_error.get_or_insert(ClientError::from(e));
+                }
+            }
+        }
+        let stores = self.identity.lock().await;
+        for result in [stores.store.erase(), stores.keys.erase()] {
+            if let Err(e) = result {
+                first_error.get_or_insert(ClientError::from(e));
+            }
+        }
+        first_error.map_or(Ok(()), Err)
     }
 
     /// Stops the gateway loop; the store comes back once it ends.
@@ -3679,6 +3733,13 @@ impl App {
         }
     }
 
+    /// [`App::has_identity`] for a flow that refuses or branches on it:
+    /// waits for an identity call in flight rather than answering yes.
+    async fn holds_identity(&self) -> bool {
+        let stores = self.identity.lock().await;
+        stores.store.meta_get("roster").ok().flatten().is_some()
+    }
+
     /// Creates a new identity on this device; the recovery phrase is shown
     /// once and never stored.
     ///
@@ -3824,7 +3885,7 @@ impl App {
     pub async fn link_start(&self, label: &str) -> Result<LinkProgress, ClientError> {
         use base64::Engine as _;
         use lumia_core::identity::link::{commitment, session_secret};
-        if self.has_identity() {
+        if self.holds_identity().await {
             return Err(ClientError::State(
                 "this device already has private messages".into(),
             ));
@@ -3883,7 +3944,7 @@ impl App {
         if !session.code.is_empty() {
             // A claim that came through before a sign-in that did not leaves
             // the identity here and the code spent: only the sign-in is left.
-            if self.has_identity() {
+            if self.holds_identity().await {
                 self.sign_in_identity().await?;
                 self.announce_device().await;
             } else {
@@ -3924,7 +3985,7 @@ impl App {
     /// API failure.
     pub async fn link_prompts(&self) -> Result<Vec<LinkPrompt>, ClientError> {
         use lumia_core::identity::link::{digits, digits_words, reveals};
-        if matches!(self.place, Place::Web { .. }) || !self.has_identity() {
+        if matches!(self.place, Place::Web { .. }) || !self.holds_identity().await {
             return Ok(Vec::new());
         }
         let sessions = self.api.link_sessions().await?;

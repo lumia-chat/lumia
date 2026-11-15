@@ -298,6 +298,42 @@ impl SqliteStore {
             .map_err(backend)
     }
 
+    /// Erases everything this store holds, every row of every table, with the
+    /// freed pages overwritten and given back: what a revoked device does
+    /// with what it kept (identity spec 4.4). The tables stay, empty.
+    ///
+    /// # Errors
+    /// On a database failure.
+    pub fn erase(&self) -> Result<(), StoreError> {
+        self.conn
+            .execute_batch("PRAGMA secure_delete = ON;")
+            .map_err(backend)?;
+        let tables: Vec<String> = {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+                .map_err(backend)?;
+            let names = stmt
+                .query_map([], |row| row.get::<_, String>(0))
+                .map_err(backend)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(backend)?;
+            names
+        };
+        self.transaction(|store: &Self| {
+            for table in &tables {
+                store
+                    .conn
+                    .execute(&format!("DELETE FROM \"{table}\""), [])
+                    .map_err(backend)?;
+            }
+            Ok::<_, StoreError>(())
+        })?;
+        self.conn
+            .execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM;")
+            .map_err(backend)
+    }
+
     /// Forgets what an account that signed out leaves here: its account log
     /// (the cursor with the events, so the next account starts from the
     /// beginning of its own) and the commands it had not sent, which would

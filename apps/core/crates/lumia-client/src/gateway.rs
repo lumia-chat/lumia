@@ -116,13 +116,38 @@ pub enum Exit {
 /// Returns the store so the caller keeps it.
 pub async fn run_forever<S: Store>(
     api: Api,
+    store: S,
+    client_name: &str,
+    device_id: Vec<u8>,
+    channels: Vec<Vec<u8>>,
+    commands: mpsc::UnboundedReceiver<GatewayCommand>,
+    events: mpsc::UnboundedSender<GatewayEvent>,
+) -> S {
+    run_until_end(
+        api,
+        store,
+        client_name,
+        device_id,
+        channels,
+        commands,
+        events,
+    )
+    .await
+    .0
+}
+
+/// [`run_forever`], saying whether it ended because the instance revoked this
+/// device (`DEVICE_REVOKED`, or a `Disconnect` saying so): a device the
+/// identity no longer holds erases what it kept (identity spec 4.4).
+pub async fn run_until_end<S: Store>(
+    api: Api,
     mut store: S,
     client_name: &str,
     device_id: Vec<u8>,
     mut channels: Vec<Vec<u8>>,
     mut commands: mpsc::UnboundedReceiver<GatewayCommand>,
     events: mpsc::UnboundedSender<GatewayEvent>,
-) -> S {
+) -> (S, bool) {
     let mut attempt = 0u32;
     let mut stash: Vec<GatewayCommand> = Vec::new();
     loop {
@@ -142,7 +167,7 @@ pub async fn run_forever<S: Store>(
         // client signed in again over it: the new one is held already.
         let left_for_another = || api.sign_ins() != signed_in && api.tokens().access.is_some();
         let (reason, wait) = match outcome {
-            Ok(Exit::Done) => return store,
+            Ok(Exit::Done) => return (store, false),
             Ok(Exit::Closed {
                 disconnect: Some(DisconnectReason::DisconnectSessionRevoked),
                 ..
@@ -159,7 +184,7 @@ pub async fn run_forever<S: Store>(
                 ..
             }) if !retryable(d) => {
                 let _ = events.unbounded_send(GatewayEvent::Closed(reason));
-                return store;
+                return (store, d == DisconnectReason::DisconnectDeviceRevoked);
             }
             Ok(Exit::Closed {
                 reason,
@@ -174,13 +199,13 @@ pub async fn run_forever<S: Store>(
             }
             Err(ClientError::NotSignedIn) => {
                 let _ = events.unbounded_send(GatewayEvent::Closed("not signed in".into()));
-                return store;
+                return (store, false);
             }
             Err(ClientError::Api { code, message, .. })
                 if code == "DEVICE_REVOKED" || code == "SESSION_REVOKED" =>
             {
                 let _ = events.unbounded_send(GatewayEvent::Closed(format!("{code}: {message}")));
-                return store;
+                return (store, code == "DEVICE_REVOKED");
             }
             Err(ClientError::Api { code, message, .. })
                 if code == "UNAUTHENTICATED" || code == "TOKEN_EXPIRED" =>
@@ -196,7 +221,7 @@ pub async fn run_forever<S: Store>(
                     api.refresh_now().await
                 {
                     let _ = events.unbounded_send(GatewayEvent::Closed(e.to_string()));
-                    return store;
+                    return (store, false);
                 }
                 (format!("{code}: {message}"), Duration::ZERO)
             }
@@ -209,7 +234,7 @@ pub async fn run_forever<S: Store>(
                 if api.tokens().refresh.is_some() {
                     if let Err(e @ ClientError::Api { .. }) = api.refresh_now().await {
                         let _ = events.unbounded_send(GatewayEvent::Closed(e.to_string()));
-                        return store;
+                        return (store, false);
                     }
                 }
                 (reason, Duration::ZERO)
@@ -228,7 +253,7 @@ pub async fn run_forever<S: Store>(
             })
             .is_err()
         {
-            return store;
+            return (store, false);
         }
         // The wait watches the application: one that lets go meanwhile
         // (signing out, going to the background) ends the loop then and
@@ -240,7 +265,7 @@ pub async fn run_forever<S: Store>(
                 () = waited => break,
                 command = commands.next().fuse() => match command {
                     Some(command) => stash.push(command),
-                    None => return store,
+                    None => return (store, false),
                 },
             }
         }

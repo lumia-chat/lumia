@@ -1610,3 +1610,63 @@ async fn a_restore_keeps_the_devices_chosen_and_revokes_the_rest() {
     // The phone is still a device of the identity, and its session still works.
     assert!(phone.app.account_identity().await.unwrap().is_some());
 }
+
+/// A device revoked while it is online erases what it kept (identity spec
+/// 4.4, architecture 12): its gateway hears the revocation, and the device is
+/// left with no identity, no tokens and nothing of its conversations.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_revoked_device_erases_what_it_kept() {
+    let Some(base) = instance() else { return };
+    let laptop = Device::new(&base);
+    let handle = format!("erase{}", stamp());
+    laptop
+        .app
+        .create_account(&handle, PASSWORD, None)
+        .await
+        .unwrap();
+    laptop.app.identity_setup("Laptop").await.unwrap();
+
+    let phone = Device::new(&base);
+    phone.app.sign_in(&handle, PASSWORD, None).await.unwrap();
+    phone.app.link_start("Phone").await.unwrap();
+    let id = laptop.app.link_prompts().await.unwrap()[0]
+        .session_id
+        .clone();
+    laptop.app.link_prompt_answer(&id).await.unwrap();
+    phone.app.link_progress().await.unwrap();
+    laptop.app.link_prompt_confirm(&id).await.unwrap();
+    assert_eq!(phone.app.link_progress().await.unwrap().stage, "linked");
+    let from = phone.seen();
+    phone.start(&[]).unwrap();
+    phone
+        .wait_for(from, Duration::from_secs(10), welcomed)
+        .await
+        .expect("the phone is welcomed");
+    assert!(phone.app.has_identity());
+
+    let phone_id = phone
+        .app
+        .identity_show()
+        .await
+        .unwrap()
+        .devices
+        .into_iter()
+        .find(|d| d.this_device)
+        .unwrap()
+        .device_id;
+    laptop
+        .app
+        .identity_revoke(&phone_id, PASSWORD)
+        .await
+        .unwrap();
+
+    let until = Instant::now() + Duration::from_secs(15);
+    while phone.app.has_identity() || phone.app.signed_in() {
+        assert!(Instant::now() < until, "the phone still holds what it kept");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(phone.app.identity_phrase().await.unwrap().is_none());
+    assert!(phone.app.dm_channels().await.unwrap_or_default().is_empty());
+    // The laptop is untouched.
+    assert!(laptop.app.has_identity() && laptop.app.signed_in());
+}
