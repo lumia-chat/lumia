@@ -572,8 +572,8 @@ class LumiaSession(
     /**
      * Asks where the link stands, which also takes this phone's next step
      * (revealing its secret, claiming the code): when the link screen
-     * opens, every [LINK_POLL_MS] while it is open, and at every account
-     * event. One ask at a time, in the session's scope: a claim cut short
+     * opens, every [LINK_POLL_MS] while it is open, and whenever the
+     * session moves. One ask at a time, in the session's scope: a claim cut short
      * would leave the code taken and this phone without the identity.
      * Linked, this phone holds the identity, is signed in by it, and the
      * gateway starts again under that session.
@@ -642,7 +642,7 @@ class LumiaSession(
 
     /**
      * Asks which link sessions prompt here: at launch, back in the
-     * foreground, at every account event, and every [LINK_POLL_MS] while one
+     * foreground, whenever a link session moves, and every [LINK_POLL_MS] while one
      * is listed and the app is in front. A prompt whose session is no longer
      * listed closes; the next, oldest first, takes its place.
      */
@@ -707,7 +707,7 @@ class LumiaSession(
                 client.call(call)
                 if (done != null) showPromptDone(done)
             } catch (e: Exception) {
-                if (e.endsSession) sessionEnded() else promptFailure = promptError(e.lumiaCode, e.lumiaMessage)
+                if (e.endsSession) sessionEnded() else promptFailure = promptError(e.lumiaCode, e.lumiaDetails["state"], e.lumiaMessage)
             } finally {
                 promptBusy = false
             }
@@ -1411,8 +1411,9 @@ class LumiaSession(
                 showTyping(now)
             }
             is ClientEvent.SnapshotTaken -> refreshMessages(event.channelId)
-            // A link session moves by the account's log too (identity spec 4.2.1): this phone's own, or another's prompting here.
-            is ClientEvent.AccountApplied -> { refreshSnapshot(); refreshDmChannels(); linkFollow(); refreshPrompts() }
+            is ClientEvent.AccountApplied -> { refreshSnapshot(); refreshDmChannels() }
+            // A link session moved (identity spec 4.2.1): this phone's own, or another's prompting here.
+            is ClientEvent.LinkSessionUpdated -> { linkFollow(); refreshPrompts() }
             is ClientEvent.ProfileUpdated -> profileUpdated(event)
             is ClientEvent.Reconnecting -> connection = ConnectionState.Reconnecting(event.attempt)
             is ClientEvent.Disconnected -> connection = ConnectionState.Disconnected(event.reason)

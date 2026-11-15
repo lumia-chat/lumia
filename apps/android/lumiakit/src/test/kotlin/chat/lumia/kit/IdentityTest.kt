@@ -264,12 +264,15 @@ class IdentityTest {
 
     @Test
     fun aPromptsFailedCallSaysWhyInWords() {
-        assertEquals("Another of your devices answered it first.", promptError("FAILED_PRECONDITION", "answered"))
-        assertTrue(promptError("NOT_FOUND", "not found").startsWith("That request is over."))
-        assertTrue(promptError("IDENTITY_PROOF_INVALID", "bad roster").startsWith("The instance refused the new list of devices."))
-        assertEquals("Too many tries. Wait a minute, then try again.", promptError("RATE_LIMITED", "slow down"))
+        assertEquals("Another of your devices answered it first.", promptError("FAILED_PRECONDITION", "answered", "answered"))
+        assertEquals("It was declined on another of your devices.", promptError("FAILED_PRECONDITION", "declined", "declined"))
+        // A step out of turn otherwise is said as the instance says it.
+        assertEquals("Order", promptError("FAILED_PRECONDITION", "order", "order"))
+        assertTrue(promptError("NOT_FOUND", null, "not found").startsWith("That request is over."))
+        assertTrue(promptError("IDENTITY_PROOF_INVALID", null, "bad roster").startsWith("The instance refused the new list of devices."))
+        assertEquals("Too many tries. Wait a minute, then try again.", promptError("RATE_LIMITED", null, "slow down"))
         // The core's own words, a sentence.
-        assertEquals("This request cannot be approved: start again on the new device", promptError(null, "this request cannot be approved: start again on the new device"))
+        assertEquals("This request cannot be approved: start again on the new device", promptError(null, null, "this request cannot be approved: start again on the new device"))
     }
 
     // Restoring, keeping devices (identity spec 4.3 step 3).

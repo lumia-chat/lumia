@@ -337,7 +337,7 @@ data class Approval(val request: String, val code: String? = null, val error: St
 
 // Linking by prompt (identity spec 4.2.1)
 
-/** How often the link screen, and a prompt while one is open, ask again besides at every account event. */
+/** How often the link screen, and a prompt while one is open, ask again besides whenever a link session moves. */
 const val LINK_POLL_MS = 2_000L
 
 /** How long "Pixel 9 is linked." or "Linking was stopped." stays before the prompt goes. */
@@ -475,11 +475,17 @@ fun promptLinkedWords(kind: String, label: String, webOrigin: String): String =
 const val PROMPT_STOPPED = "Linking was stopped."
 
 /**
- * What a prompt's call that failed says, by the API error's [code]; for
- * the rest, [message] (the failure as `lumiaMessage` has it).
+ * What a prompt's call that failed says, by the API error's [code] and,
+ * for a step out of turn, its `details.state` ([state]); for the rest,
+ * [message] (the failure as `lumiaMessage` has it).
  */
-fun promptError(code: String?, message: String): String = when (code) {
-    "FAILED_PRECONDITION" -> "Another of your devices answered it first."
+fun promptError(code: String?, state: String?, message: String): String = when {
+    code == "FAILED_PRECONDITION" && state == "answered" -> "Another of your devices answered it first."
+    code == "FAILED_PRECONDITION" && state == "declined" -> "It was declined on another of your devices."
+    else -> promptErrorByCode(code, message)
+}
+
+private fun promptErrorByCode(code: String?, message: String): String = when (code) {
     "NOT_FOUND" -> "That request is over. Start linking again on the new device."
     "CONFLICT" -> "Your devices changed on another device while this one was approving. Try again."
     "IDENTITY_PROOF_INVALID", "INVALID_ARGUMENT", "PAYLOAD_TOO_LARGE" -> "The instance refused the new list of devices. Start linking again on the new device."

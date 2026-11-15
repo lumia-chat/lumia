@@ -95,7 +95,7 @@ fun LinkScreen(store: AppStore, session: LumiaSession) {
 
 /**
  * The prompt's side on this phone: started as the screen opens, asked
- * again every [LINK_POLL_MS] while it is open (and at every account event,
+ * again every [LINK_POLL_MS] while it is open (and whenever the session moves,
  * by the session); waiting, then the digits, then linked, or declined or
  * expired with Try again.
  */
