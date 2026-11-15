@@ -17,6 +17,7 @@ defmodule Lumia.Identity.LinkSessions do
   alias Lumia.Accounts
   alias Lumia.Accounts.Account
   alias Lumia.Auth.Session
+  alias Lumia.Identity.LinkSession
   alias Lumia.Proto
   alias Lumia.Repo
   alias Lumia.Tx
@@ -24,25 +25,8 @@ defmodule Lumia.Identity.LinkSessions do
 
   @ttl_seconds 600
   @open_per_account 5
-
-  defmodule LinkSession do
-    @moduledoc false
-    use Lumia.Schema
-
-    schema "link_sessions" do
-      field :account_id, Ecto.UUID
-      field :opened_by, Ecto.UUID
-      field :answered_by, Ecto.UUID
-      field :request, :binary
-      field :commitment, :binary
-      field :answer, :binary
-      field :reveal, :binary
-      field :code, :string
-      field :declined_at, :utc_datetime_usec
-      field :expires_at, :utc_datetime_usec
-      timestamps()
-    end
-  end
+  # A link bundle's code is eight characters; this bounds what is kept.
+  @code_max_bytes 64
 
   @doc """
   Opens a session from the new device's session: its serialized
@@ -59,6 +43,11 @@ defmodule Lumia.Identity.LinkSessions do
 
   defp insert_within_limit(session, request, commitment) do
     now = DateTime.utc_now()
+
+    # The account's row, locked, so two opens at once count one another.
+    Repo.one!(
+      from a in Account, where: a.id == ^session.account_id, select: a.id, lock: "FOR UPDATE"
+    )
 
     open_count =
       Repo.one(
@@ -131,14 +120,17 @@ defmodule Lumia.Identity.LinkSessions do
   end
 
   @doc """
-  The session that opened it reveals its secret, once, after an answer;
-  it must match the commitment.
+  The session that opened it reveals its secret, once, after an answer and
+  before a decline; it must match the commitment.
   """
   def reveal(%Session{} = session, id, reveal) do
     step(session.account_id, id, fn link ->
       cond do
         link.opened_by != session.id ->
           {:error, :permission_denied}
+
+        not is_nil(link.declined_at) ->
+          {:error, {:failed_precondition, "declined"}}
 
         is_nil(link.answer) or not is_nil(link.reveal) ->
           {:error, {:failed_precondition, "order"}}
@@ -152,14 +144,21 @@ defmodule Lumia.Identity.LinkSessions do
     end)
   end
 
-  @doc "The answering session posts the link bundle's code, once, after the reveal."
+  @doc """
+  The answering session posts the link bundle's code, once, after the
+  reveal. `{:error, {:failed_precondition, "declined"}}` once any device
+  declined the session.
+  """
   def code(%Session{} = session, id, code) do
     step(session.account_id, id, fn link ->
+      code = String.trim(code)
+
       cond do
         link.answered_by != session.id -> {:error, :permission_denied}
+        not is_nil(link.declined_at) -> {:error, {:failed_precondition, "declined"}}
         is_nil(link.reveal) or not is_nil(link.code) -> {:error, {:failed_precondition, "order"}}
-        String.trim(code) == "" -> {:error, {:invalid_argument, "code"}}
-        true -> {:ok, %{code: String.trim(code)}}
+        code == "" or byte_size(code) > @code_max_bytes -> {:error, {:invalid_argument, "code"}}
+        true -> {:ok, %{code: code}}
       end
     end)
   end

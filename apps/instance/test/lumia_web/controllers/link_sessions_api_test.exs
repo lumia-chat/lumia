@@ -136,6 +136,42 @@ defmodule LumiaWeb.LinkSessionsApiTest do
     assert other.e |> put_req_header("accept", @proto) |> get(path) |> Map.get(:status) == 404
   end
 
+  test "a session declined after the answer takes no reveal and no code", %{conn: conn} do
+    s = setting(conn)
+    reveal = :crypto.strong_rand_bytes(32)
+    %V1.LinkSession{session_id: id} = session_of(open(s.n, reveal))
+    path = "/api/v1/identity/link-sessions/#{Proto.from_uuid(id)}"
+    answer = %V1.AnswerLinkSessionRequest{answer: :crypto.strong_rand_bytes(32)}
+    assert post_proto(s.e, path <> "/accept", answer).status == 200
+    assert post_proto(s.e, path <> "/decline", %V1.AnswerLinkSessionRequest{}).status == 200
+
+    refused = post_proto(s.n, path <> "/reveal", %V1.RevealLinkSessionRequest{reveal: reveal})
+
+    assert %V1.Error{code: :FAILED_PRECONDITION, details: %{"state" => "declined"}} =
+             V1.Error.decode(refused.resp_body)
+
+    refused = post_proto(s.e, path <> "/code", %V1.LinkSessionCodeRequest{code: "K7QM2XRA"})
+
+    assert %V1.Error{code: :FAILED_PRECONDITION, details: %{"state" => "declined"}} =
+             V1.Error.decode(refused.resp_body)
+  end
+
+  test "a code longer than a link bundle's is refused", %{conn: conn} do
+    s = setting(conn)
+    reveal = :crypto.strong_rand_bytes(32)
+    %V1.LinkSession{session_id: id} = session_of(open(s.n, reveal))
+    path = "/api/v1/identity/link-sessions/#{Proto.from_uuid(id)}"
+    answer = %V1.AnswerLinkSessionRequest{answer: :crypto.strong_rand_bytes(32)}
+    assert post_proto(s.e, path <> "/accept", answer).status == 200
+
+    assert post_proto(s.n, path <> "/reveal", %V1.RevealLinkSessionRequest{reveal: reveal}).status ==
+             200
+
+    long = String.duplicate("K", 300)
+    refused = post_proto(s.e, path <> "/code", %V1.LinkSessionCodeRequest{code: long})
+    assert %V1.Error{code: :INVALID_ARGUMENT} = V1.Error.decode(refused.resp_body)
+  end
+
   test "a request that is not one is refused, and an account has five open at most", %{conn: conn} do
     s = setting(conn)
 

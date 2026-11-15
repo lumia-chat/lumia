@@ -205,8 +205,13 @@ defmodule Lumia.IdentityTest do
 
       # The laptop's session is gone, the account log says so, and the token was single use.
       assert {:error, :device_revoked} = Auth.verify_access(laptop_tokens.access_token)
+      assert {:error, :device_revoked} = Auth.refresh(laptop_tokens.refresh_token)
       assert "roster_updated" in Accounts.event_kinds(ctx.account.id)
       assert {:error, :unauthenticated} = Identity.verify_reauth(reauth)
+
+      # Signed in again under its revoked id, by any credential, it is told so.
+      assert {:error, :device_revoked} =
+               Auth.create_session(ctx.account.id, Proto.from_uuid(laptop.id))
     end
 
     @tag failure_injection: [identity: 11]

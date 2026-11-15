@@ -30,7 +30,7 @@ defmodule Lumia.Workers.PurgeExpired do
     counts =
       Map.put(
         counts,
-        Lumia.Identity.LinkSessions.LinkSession,
+        Lumia.Identity.LinkSession,
         Lumia.Identity.LinkSessions.purge_expired()
       )
 

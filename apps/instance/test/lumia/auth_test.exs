@@ -74,6 +74,14 @@ defmodule Lumia.AuthTest do
     assert {:error, :unauthenticated} = Auth.refresh("never-issued")
   end
 
+  test "a revoked device's retired refresh token is told the device was revoked", ctx do
+    assert {:ok, _session, _new} = Auth.refresh(ctx.tokens.refresh_token)
+    :ok = Auth.revoke(ctx.session.id, device_revoked: true)
+
+    # Its answer lost, or the pair rotated elsewhere: the device still erases.
+    assert {:error, :device_revoked} = Auth.refresh(ctx.tokens.refresh_token)
+  end
+
   test "a rotation whose answer was lost is given again within the grace", ctx do
     assert {:ok, _session, new} = Auth.refresh(ctx.tokens.refresh_token)
     rotated = Repo.reload!(ctx.session)

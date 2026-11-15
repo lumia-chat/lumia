@@ -27,6 +27,7 @@ defmodule Lumia.Auth do
   import Ecto.Query
 
   alias Lumia.Accounts
+  alias Lumia.Accounts.Account
   alias Lumia.Auth.Session
   alias Lumia.Crypto
   alias Lumia.Proto
@@ -51,13 +52,15 @@ defmodule Lumia.Auth do
   (a password, a passkey, a mailed link, an OIDC login), or the time a
   handoff passes on; nil for identity proof. A sign-in's answer carries a
   reauth token while it is recent (`credentialed_recently?/1`).
+  `{:error, :device_revoked}` for a device the account's identity revoked.
   """
   def create_session(account_id, device_id, opts \\ []) do
     {access, access_hash} = token()
     {refresh, refresh_hash} = token()
     now = DateTime.utc_now()
 
-    with {:ok, session} <-
+    with :ok <- not_revoked(account_id, device_id),
+         {:ok, session} <-
            Repo.insert(%Session{
              account_id: account_id,
              device_id: device_id,
@@ -71,6 +74,21 @@ defmodule Lumia.Auth do
              last_seen_at: now
            }) do
       {:ok, session, %{access_token: access, refresh_token: refresh}}
+    end
+  end
+
+  # A device the account's identity revoked is not let back in under its id
+  # (identity spec 4.4): it hears `DEVICE_REVOKED`, erases what it kept, and
+  # comes back as a new device.
+  defp not_revoked(account_id, device_id) do
+    with %Account{identity_id: identity_id} when is_binary(identity_id) <-
+           Repo.get(Account, account_id),
+         {:ok, id} <- Ecto.UUID.dump(device_id),
+         %{revoked: revoked} <- Lumia.Identity.held_roster(identity_id),
+         true <- Map.has_key?(revoked, id) do
+      {:error, :device_revoked}
+    else
+      _ -> :ok
     end
   end
 
@@ -148,6 +166,9 @@ defmodule Lumia.Auth do
             _ = revoke(session.id)
             {:error, :session_revoked}
         end
+
+      %Session{device_revoked: true} ->
+        {:error, :device_revoked}
 
       %Session{} ->
         {:error, :session_revoked}

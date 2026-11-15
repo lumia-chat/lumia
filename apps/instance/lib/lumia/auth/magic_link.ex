@@ -105,11 +105,13 @@ defmodule Lumia.Auth.MagicLink do
            {:ok, session, tokens} <- Auth.create_session(link.account_id, device_id, opts) do
         {:ok, {session, tokens}}
       else
+        {:error, :device_revoked} -> {:error, :device_revoked}
         _ -> {:error, :unauthenticated}
       end
     end)
     |> case do
       {:ok, {session, tokens}} -> {:ok, session, tokens}
+      {:error, :device_revoked} -> {:error, :device_revoked}
       {:error, _} -> {:error, :unauthenticated}
     end
   end
