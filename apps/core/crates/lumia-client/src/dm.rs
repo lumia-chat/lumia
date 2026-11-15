@@ -436,7 +436,12 @@ impl DmEngine {
     }
 
     /// On `Welcome`: tops up this device's key-package pool when the
-    /// instance reports it below the threshold (spec section 3).
+    /// instance reports it below the threshold (spec section 3), then
+    /// catches up every conversation whose stored log runs past what was
+    /// processed. Events reach the store before the engine, so a run that
+    /// ended between the two (the CLI stopping once its group is ready, a
+    /// crash, a roster fetch that failed) left events that no new event
+    /// would ever trigger: the gateway resumes from the store's cursor.
     ///
     /// # Errors
     /// On an MLS, store or API failure.
@@ -446,6 +451,24 @@ impl DmEngine {
         for channel in self.participants.keys().cloned().collect::<Vec<_>>() {
             self.forget_rosters(&channel);
         }
+        let mut out = self.top_up_key_packages(welcome).await?;
+        let cursors: HashMap<Vec<u8>, u64> = self
+            .store
+            .cursors(lumia_core::store::LogKind::Channel)?
+            .into_iter()
+            .collect();
+        for channel in self.participants.keys().cloned().collect::<Vec<_>>() {
+            if cursors.get(&channel).copied().unwrap_or(0) > self.processed(&channel)? {
+                out.extend(self.catch_up(&channel).await?);
+            }
+        }
+        Ok(out)
+    }
+
+    async fn top_up_key_packages(
+        &mut self,
+        welcome: &Welcome,
+    ) -> Result<Vec<Outcome>, ClientError> {
         let count = welcome.key_package_count as usize;
         if count >= KEY_PACKAGE_TOP_UP_BELOW {
             return Ok(Vec::new());

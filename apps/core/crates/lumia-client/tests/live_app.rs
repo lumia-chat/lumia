@@ -1359,3 +1359,76 @@ async fn a_contact_who_starts_over_is_told_and_the_conversation_goes_on() {
         "and not what was sent before"
     );
 }
+
+/// A personal message the store holds and the DM engine never read: a run
+/// that ended between the two (the CLI stops once its group is ready, while
+/// its gateway may have stored the next event) left it there, and the next
+/// connection resumed from the store's cursor, so no event ever came to
+/// make the engine catch up. The welcome does now.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_message_stored_but_never_read_is_read_on_the_next_connection() {
+    use lumia_core::store::{LogKind, Store as _};
+
+    let Some(base) = instance() else { return };
+    let (ada, _, _) = set_up(&base, "ada").await;
+    let (bo, _, bo_account) = set_up(&base, "bo").await;
+    let request = ada.app.dm_request(&bo_account).await.unwrap();
+    let Ok(opened) = bo
+        .app
+        .dm_respond(&request.request_id, "accept")
+        .await
+        .unwrap()
+    else {
+        panic!("accepting opens the conversation");
+    };
+    let channel = opened.channel_id;
+    assert!(
+        member_of(&ada, &channel, Duration::from_secs(20)).await,
+        "ada is welcomed"
+    );
+    ada.app.dm_send(&channel, "first").await.unwrap();
+    assert!(reads(&bo, &channel, "first", Duration::from_secs(20)).await);
+
+    // Bo goes away. What Ada sends next reaches Bo's store as Bo's gateway
+    // would have stored it, and Bo's engine never hears of it.
+    stopped(&bo).await;
+    ada.app.dm_send(&channel, "second").await.unwrap();
+    let id = lumia_core::wire::uuid_bytes(uuid::Uuid::parse_str(&channel).unwrap());
+    let mut bo_store = SqliteStore::open(&bo.dir.join("store.sqlite")).unwrap();
+    let cursor = bo_store
+        .cursors(LogKind::Channel)
+        .unwrap()
+        .into_iter()
+        .find_map(|(log, seq)| (log == id).then_some(seq))
+        .expect("bo's store follows the conversation");
+    let ada_store = SqliteStore::open(&ada.dir.join("store.sqlite")).unwrap();
+    let until = Instant::now() + Duration::from_secs(20);
+    let missed = loop {
+        let missed: Vec<_> = ada_store
+            .stored_events(LogKind::Channel, &id)
+            .unwrap()
+            .into_iter()
+            .filter(|e| e.seq > cursor)
+            .collect();
+        if !missed.is_empty() {
+            break missed;
+        }
+        assert!(Instant::now() < until, "ada's store never held her message");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    bo_store.apply(LogKind::Channel, &id, &missed).unwrap();
+    assert!(
+        !reads(&bo, &channel, "second", Duration::from_millis(200)).await,
+        "bo has not read it before connecting"
+    );
+
+    let from = bo.seen();
+    start_when_free(&bo, &[]).await;
+    bo.wait_for(from, Duration::from_secs(10), welcomed)
+        .await
+        .expect("bo is welcomed again");
+    assert!(
+        reads(&bo, &channel, "second", Duration::from_secs(20)).await,
+        "bo reads what the store held once connected"
+    );
+}
