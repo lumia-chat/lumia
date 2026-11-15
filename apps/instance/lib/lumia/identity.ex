@@ -478,7 +478,7 @@ defmodule Lumia.Identity do
 
     for device_bytes <- Enum.uniq(old_devices) do
       device_id = Proto.from_uuid(device_bytes)
-      Auth.revoke_device(account.id, device_id)
+      Auth.sign_out_device(account.id, device_id)
       Lumia.Mls.purge_device(account.id, device_id)
     end
 

@@ -355,7 +355,10 @@ defmodule LumiaWeb.IdentityApiTest do
         |> put_req_header("authorization", "Bearer " <> s.old_tokens.access_token)
         |> get("/api/v1/account/snapshot")
 
+      # Signed out, not revoked: the old identity still holds the device,
+      # which keeps what it has for that identity elsewhere.
       assert dead.status == 401
+      assert %{"code" => "SESSION_REVOKED"} = Jason.decode!(dead.resp_body)
       assert Lumia.Mls.key_package_count(s.account.id, s.old_device_id) == 0
 
       # The calling session, on a device neither roster names, lives on.

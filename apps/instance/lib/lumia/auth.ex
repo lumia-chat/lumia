@@ -271,14 +271,27 @@ defmodule Lumia.Auth do
     )
   end
 
-  @doc "Revokes every session of a device on this instance (identity spec 4.4)."
-  def revoke_device(account_id, device_id) do
+  @doc """
+  Revokes every session of a device the identity revoked (identity spec
+  4.4): it is told `DEVICE_REVOKED` and erases what it kept.
+  """
+  def revoke_device(account_id, device_id), do: end_device_sessions(account_id, device_id, true)
+
+  @doc """
+  Ends every session of a device as a sign-out does, for a device its
+  identity still holds: the old identity's devices when the account starts
+  over (identity spec 4.7), which may be that identity's on other instances.
+  """
+  def sign_out_device(account_id, device_id),
+    do: end_device_sessions(account_id, device_id, false)
+
+  defp end_device_sessions(account_id, device_id, device_revoked) do
     from(s in Session,
       where: s.account_id == ^account_id and s.device_id == ^device_id and is_nil(s.revoked_at),
       select: s.id
     )
     |> Repo.all()
-    |> Enum.each(&revoke(&1, device_revoked: true))
+    |> Enum.each(&revoke(&1, device_revoked: device_revoked))
   end
 
   @doc "Live sessions for an account, newest first."
