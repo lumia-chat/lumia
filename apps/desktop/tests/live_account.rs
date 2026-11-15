@@ -182,6 +182,11 @@ fn linked(
     }
     state.start_linking();
     assert_eq!(state.route, Route::Link);
+    // Signed in, linking starts by a prompt (`live_setup.rs`); the CLI approves only the
+    // copied request.
+    if from == From::Profile {
+        state.link_another_way();
+    }
     state.start_link();
     wait(&mut state, "the link request", |s| {
         !s.account.link.request.is_empty() || !s.account.link.error.is_empty()

@@ -40,6 +40,8 @@ impl State {
             self.notices.to_post.clear();
             self.notices.looking.clear();
             self.session.came_forward();
+            // Another device may be asking to be linked (`prompts`).
+            self.ask_prompts(chrono::Utc::now().timestamp_micros());
         }
     }
 

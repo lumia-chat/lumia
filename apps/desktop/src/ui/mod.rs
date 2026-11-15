@@ -10,6 +10,7 @@ mod home;
 mod link;
 mod mentions;
 mod menus;
+mod prompt;
 mod rail;
 mod replies;
 mod scroll;
@@ -83,6 +84,12 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
         && let Some(layer) = rail::drag_layer(s, look)
     {
         screen = screen.child(layer);
+    }
+    // Another device asking this computer to link it, over whatever is on screen.
+    if s.route != Route::SignIn
+        && let Some(prompt) = prompt::view(s, look)
+    {
+        screen = screen.child(prompt);
     }
     match s.autoscroll.origin() {
         Some(at) => screen.child(autoscroll_mark(at, look)),

@@ -7,9 +7,11 @@
 use std::time::{Duration, Instant};
 
 use lumia_client::app::{
-    DeviceSummary, InstanceSummary, PasskeySummary, ProfileSummary, RosterSummary, SnapshotSummary,
+    DeviceSummary, InstanceSummary, LinkProgress, LinkPrompt, LinkRequestSummary, PasskeySummary,
+    ProfileSummary, RosterSummary, SnapshotSummary,
 };
 
+use crate::app::account::{Link, Prompted};
 use crate::app::{HomeView, Route, State};
 use crate::session::Update;
 use crate::session::identity::{IdentityUpdate, Setup};
@@ -365,6 +367,118 @@ pub fn start_over(s: &mut State) {
     needs_setup(s);
     s.open_start_over();
     debug_assert_eq!(s.route, Route::StartOver);
+}
+
+// ---- Linking by a prompt (identity spec 4.2.1) ------------------------------------------
+
+/// Never due: a scene's session is not asked about, or the real answer (nothing is there
+/// to give one) would land on what it staged.
+const NOT_DUE: i64 = i64::MAX / 2;
+
+/// This computer, its private messages elsewhere, linking by a prompt with the session at
+/// `stage`.
+fn linking(s: &mut State, stage: &str, digits: &str) {
+    needs_setup(s);
+    s.route = Route::Link;
+    s.account.link = Link {
+        prompted: Prompted::Starting,
+        ..Link::default()
+    };
+    s.receive(&Update::Identity(IdentityUpdate::LinkStarted(Ok(
+        LinkProgress {
+            stage: stage.into(),
+            digits: digits.into(),
+        },
+    ))));
+    s.account.link.asked_at = NOT_DUE;
+}
+
+/// Waiting for a device that holds the identity to answer.
+pub fn link_waiting(s: &mut State) {
+    linking(s, "waiting", "");
+}
+
+/// Another device answered: the digits both show.
+pub fn link_compare(s: &mut State) {
+    linking(s, "compare", "482 913");
+}
+
+/// Declined on the other device.
+pub fn link_declined(s: &mut State) {
+    linking(s, "declined", "");
+}
+
+/// Ten minutes went by.
+pub fn link_expired(s: &mut State) {
+    linking(s, "expired", "");
+}
+
+/// "Link another way" from the waiting screen: the copied request, signed in.
+pub fn link_another_way(s: &mut State) {
+    link_waiting(s);
+    s.link_another_way();
+}
+
+/// A device of the account asking this computer, which holds the identity.
+fn asking(kind: &str, label: &str, origin: &str, stage: &str, digits: &str) -> LinkPrompt {
+    LinkPrompt {
+        session_id: "0196f1c2-5555-7000-8000-000000000005".into(),
+        request: LinkRequestSummary {
+            device_id: "0196f1c2-6666-7000-8000-000000000006".into(),
+            kind: kind.into(),
+            label: label.into(),
+            web_origin: origin.into(),
+        },
+        stage: stage.into(),
+        digits: digits.into(),
+    }
+}
+
+/// Home on a computer set up with the identity, the prompt over it.
+fn prompted(s: &mut State, prompt: LinkPrompt) {
+    staged(s, true, HomeView::Conversations, Setup::Ready, false);
+    // The real question about the sessions (nothing is there to answer it) lands first.
+    quiet(s);
+    s.receive(&Update::Identity(IdentityUpdate::Prompts(Ok(vec![prompt]))));
+    s.prompts.asked_at = NOT_DUE;
+}
+
+/// A phone asks: Continue, or Not me.
+pub fn prompt_new(s: &mut State) {
+    prompted(s, asking("native", "Pixel 9", "", "new", ""));
+}
+
+/// A browser asks, named by its origin.
+pub fn prompt_web(s: &mut State) {
+    prompted(s, asking("web", "", "https://chat.example.com", "new", ""));
+}
+
+/// Answered here, waiting for the phone to show its digits.
+pub fn prompt_waiting(s: &mut State) {
+    prompted(s, asking("native", "Pixel 9", "", "waiting", ""));
+}
+
+/// The digits to compare with the phone's.
+pub fn prompt_compare(s: &mut State) {
+    prompted(s, asking("native", "Pixel 9", "", "compare", "482 913"));
+}
+
+/// The phone's secret did not match what it committed to: never approve.
+pub fn prompt_refused(s: &mut State) {
+    prompted(s, asking("native", "Pixel 9", "", "refused", ""));
+}
+
+/// "They match", and the phone is linked: what the prompt says for a moment after. Staged,
+/// as the approval itself would be refused with nothing to answer it.
+pub fn prompt_linked(s: &mut State) {
+    let phone = asking("native", "Pixel 9", "", "compare", "482 913");
+    let words = crate::app::prompts::linked(&phone);
+    prompted(s, phone);
+    s.receive(&Update::Identity(IdentityUpdate::Prompts(Ok(Vec::new()))));
+    s.prompts.ended = Some(crate::app::prompts::Ended {
+        words,
+        until: NOT_DUE,
+    });
 }
 
 /// Drains until nothing has arrived for a moment, or three seconds.

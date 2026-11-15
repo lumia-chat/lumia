@@ -5,8 +5,9 @@
 //! This file is the frame: the route, the place, the conversation on screen. Each part of
 //! the product keeps its own state and reactions beside it: [`sign_in`], [`home`]
 //! (personal conversations), [`server`] (making and managing servers), [`account`]
-//! (devices, profile, status) and [`setup`] (private messages on this computer: the
-//! recovery phrase, restoring, starting over).
+//! (devices, profile, status), [`setup`] (private messages on this computer: the
+//! recovery phrase, restoring, starting over) and [`prompts`] (another device asking this
+//! one to link it).
 
 pub mod account;
 pub mod aside;
@@ -17,6 +18,7 @@ pub mod links;
 pub mod menu;
 pub mod notices;
 pub mod pictures;
+pub mod prompts;
 pub mod rail;
 pub mod replies;
 pub mod server;
@@ -147,6 +149,8 @@ pub struct State {
     pub account: account::Account,
     /// Private messages on this computer: the phrase, restoring, starting over (`setup`).
     pub setup: setup::SetupForms,
+    /// Another device of the account asking this computer to link it (`prompts`).
+    pub prompts: prompts::Prompts,
     /// The system browser and the `lumia:` links it comes back on.
     pub links: links::Links,
     /// Whether the window is in front, and the notices owed the system.
@@ -202,6 +206,7 @@ impl State {
             channel_forms: channels::ChannelForms::default(),
             account: account::Account::default(),
             setup: setup::SetupForms::default(),
+            prompts: prompts::Prompts::default(),
             links: links::Links::default(),
             notices: notices::Notices::default(),
             pictures: pictures::Pictures::default(),
@@ -436,8 +441,9 @@ impl State {
 
     /// What the passing of time does, apart from anything the session reports: says this
     /// person is typing when the draft has changed since the last look (the composer has
-    /// no hook of its own for an edit), and stops showing those whose typing has run out
-    /// by `now_micros`. True when that changed what is on screen.
+    /// no hook of its own for an edit), stops showing those whose typing has run out by
+    /// `now_micros`, and asks about link sessions on screen (`prompts`). True when that
+    /// changed what is on screen.
     pub fn tick(&mut self, now_micros: i64) -> bool {
         if self.draft.text != self.draft_seen {
             self.draft_seen.clone_from(&self.draft.text);
@@ -451,7 +457,8 @@ impl State {
         let expired = self.session.expire_typing(now_micros);
         let pictured = self.pictures.sync(&self.session.avatars);
         let replied = self.tick_replies();
-        expired || pictured || replied
+        let prompted = self.tick_prompts(now_micros);
+        expired || pictured || replied || prompted
     }
 
     /// Enters the shell for a session the stores already hold, at launch: with what the
@@ -486,6 +493,7 @@ impl State {
         self.channel_forms = channels::ChannelForms::default();
         self.account = account::Account::default();
         self.setup = setup::SetupForms::default();
+        self.prompts = prompts::Prompts::default();
     }
 
     /// Keeps the place and the channel on screen ones the snapshot still has. The first
@@ -566,7 +574,12 @@ impl State {
             Update::Browser(update) => self.react_browser(update),
             Update::Notice(update) => self.react_notice(update),
             Update::Avatar(update) => self.react_avatar(update),
-            Update::Gateway(event) => self.react_gateway(event),
+            Update::Gateway(event) => {
+                self.react_gateway(event);
+                if matches!(event, lumia_client::app::AppEvent::AccountApplied { .. }) {
+                    self.account_event();
+                }
+            }
             Update::Read(_)
             | Update::Rail(_)
             | Update::Members { .. }
@@ -682,5 +695,10 @@ pub fn poll(state: &mut State, now: f64, tx: &mut Tx) -> bool {
         tx.wake_after(std::time::Duration::from_micros(left));
     }
     state.typing_wake = ends;
+    // A link session moves by an account event, and one missed would leave it unseen: the
+    // window wakes to ask about it (`prompts`).
+    if let Some(left) = state.prompt_wake(now) {
+        tx.wake_after(std::time::Duration::from_micros(left.unsigned_abs()));
+    }
     drained || ticked || found
 }

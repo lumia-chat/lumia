@@ -1,8 +1,9 @@
 //! This device's identity (architecture 5) and the account's own settings: setting up
 //! private messages (architecture 5.4, identity spec 4.1, 4.3 and 4.7), the roster and its
-//! devices, linking this computer to an identity (identity spec 4.2), revoking a device
-//! (4.4), the account's passkeys, the signed profile, the status this person chose, and the
-//! magic-link sign-in (architecture 6.3).
+//! devices, linking this computer to an identity (identity spec 4.2, and by a prompt on the
+//! account's other devices, 4.2.1, in either role), revoking a device (4.4), the account's
+//! passkeys, the signed profile, the status this person chose, and the magic-link sign-in
+//! (architecture 6.3).
 //!
 //! Setting up: after every sign-in, and at a launch that resumes a session, the account is
 //! set up on this computer silently ([`Session::check_setup`], the core's
@@ -11,15 +12,15 @@
 //! screens read; the phrase the core keeps until three of its words are confirmed is
 //! [`IdentityState::phrase_kept`], which the reminders follow.
 //!
-//! Not built yet: making a passkey, which needs the browser handoff; approving another
-//! device's link request from here; the per-instance state of a revocation ("revoked on 1
+//! Not built yet: making a passkey, which needs the browser handoff; the per-instance state of a revocation ("revoked on 1
 //! of 2"), since this shell knows one instance; reauth by a mailed code or the instance's
 //! OIDC provider (the core has both), so an account without a password can neither finish
 //! a setup that needs reauth nor start over here.
 
 use lumia_client::ClientError;
 use lumia_client::app::{
-    PasskeySummary, ProfileSummary, RosterSummary, SnapshotSummary, StatusSummary,
+    LinkProgress, LinkPrompt, PasskeySummary, ProfileSummary, RosterSummary, SnapshotSummary,
+    StatusSummary,
 };
 
 use super::{Failure, Session, Update};
@@ -65,7 +66,24 @@ pub enum IdentityUpdate {
     /// approve.
     LinkRequested(Result<String, Failure>),
     /// The code was claimed: this device is in the roster and signed in by identity proof.
+    /// Linking by a prompt ends here too, at its `linked` stage.
     Linked(Result<RosterSummary, Failure>),
+    /// Linking by a prompt (identity spec 4.2.1), this computer as the new device: the
+    /// session was opened, and every device of the account that holds the identity asks.
+    LinkStarted(Result<LinkProgress, Failure>),
+    /// Where that session stands now, short of `linked` (which is [`Self::Linked`]).
+    LinkProgressed(Result<LinkProgress, Failure>),
+    /// The session was given up.
+    LinkCancelled,
+    /// This computer, which holds the identity: the account's link sessions that prompt
+    /// here, oldest first.
+    Prompts(Result<Vec<LinkPrompt>, Failure>),
+    /// A prompt was answered here ("Continue").
+    PromptAnswered(Result<(), Failure>),
+    /// A prompt was approved here: the new device is in the roster and has its code.
+    PromptConfirmed(Result<(), Failure>),
+    /// A prompt was declined here ("Not me", "They don’t match").
+    PromptDeclined(Result<(), Failure>),
     /// This computer approved another device's request: the code the new device claims
     /// with (identity spec 4.2 step 6).
     Approved(Result<String, Failure>),
@@ -306,6 +324,100 @@ impl Session {
         });
     }
 
+    // ---- Linking by a prompt (identity spec 4.2.1) ---------------------------------------
+
+    /// As the new device: opens a link session, so the account's devices that hold the
+    /// identity prompt; the answer is [`IdentityUpdate::LinkStarted`].
+    pub fn link_start(&self, label: &str) {
+        let Some(app) = self.client() else { return };
+        let label = label.to_string();
+        self.task_local(move || async move {
+            Update::Identity(IdentityUpdate::LinkStarted(
+                app.link_start(&label).await.map_err(Failure::from),
+            ))
+        });
+    }
+
+    /// As the new device: where the session stands, the core taking the next step when it
+    /// is this computer's (revealing its secret, claiming the code and signing in by it).
+    /// The answer is [`IdentityUpdate::LinkProgressed`], or [`IdentityUpdate::Linked`] with
+    /// the roster once it is linked.
+    pub fn link_progress(&self) {
+        let Some(app) = self.client() else { return };
+        self.task_local(move || async move {
+            match app.link_progress().await {
+                Ok(progress) if progress.stage == "linked" => Update::Identity(
+                    IdentityUpdate::Linked(app.identity_show().await.map_err(Failure::from)),
+                ),
+                answer => Update::Identity(IdentityUpdate::LinkProgressed(
+                    answer.map_err(Failure::from),
+                )),
+            }
+        });
+    }
+
+    /// As the new device: gives the session up, which declines it.
+    pub fn link_cancel(&self) {
+        let Some(app) = self.client() else { return };
+        self.task_local(move || async move {
+            app.link_cancel().await;
+            Update::Identity(IdentityUpdate::LinkCancelled)
+        });
+    }
+
+    /// On this computer, which holds the identity: the link sessions that prompt here
+    /// ([`IdentityUpdate::Prompts`]).
+    pub fn link_prompts(&self) {
+        let Some(app) = self.client() else { return };
+        self.task_local(move || async move {
+            Update::Identity(IdentityUpdate::Prompts(
+                app.link_prompts().await.map_err(Failure::from),
+            ))
+        });
+    }
+
+    /// Answers a prompt, so the new device reveals and both show their digits
+    /// ([`IdentityUpdate::PromptAnswered`]).
+    pub fn link_prompt_answer(&self, session_id: &str) {
+        let Some(app) = self.client() else { return };
+        let session_id = session_id.to_string();
+        self.task_local(move || async move {
+            Update::Identity(IdentityUpdate::PromptAnswered(
+                app.link_prompt_answer(&session_id)
+                    .await
+                    .map_err(Failure::from),
+            ))
+        });
+    }
+
+    /// The digits matched: approves the new device and hands it its code
+    /// ([`IdentityUpdate::PromptConfirmed`]).
+    pub fn link_prompt_confirm(&self, session_id: &str) {
+        let Some(app) = self.client() else { return };
+        let session_id = session_id.to_string();
+        self.task_local(move || async move {
+            Update::Identity(IdentityUpdate::PromptConfirmed(
+                app.link_prompt_confirm(&session_id)
+                    .await
+                    .map_err(Failure::from),
+            ))
+        });
+    }
+
+    /// "Not me", or the digits did not match: the session takes nothing more
+    /// ([`IdentityUpdate::PromptDeclined`]).
+    pub fn link_prompt_decline(&self, session_id: &str) {
+        let Some(app) = self.client() else { return };
+        let session_id = session_id.to_string();
+        self.task_local(move || async move {
+            Update::Identity(IdentityUpdate::PromptDeclined(
+                app.link_prompt_decline(&session_id)
+                    .await
+                    .map_err(Failure::from),
+            ))
+        });
+    }
+
     // ---- Devices ------------------------------------------------------------------------
 
     /// Asks for the roster this device holds ([`IdentityUpdate::Roster`]).
@@ -489,7 +601,9 @@ impl Session {
                 self.identity.roster = Some(roster.clone());
             }
             // The new device is in the roster this computer published.
-            IdentityUpdate::Approved(Ok(_)) => self.load_roster(),
+            IdentityUpdate::Approved(Ok(_)) | IdentityUpdate::PromptConfirmed(Ok(())) => {
+                self.load_roster();
+            }
             IdentityUpdate::Passkeys(Ok(passkeys)) => self.identity.passkeys = passkeys.clone(),
             IdentityUpdate::PasskeyRemoved(Ok(())) => self.load_passkeys(),
             IdentityUpdate::Profile(Ok(profile)) => self.identity.profile = profile.clone(),
@@ -516,6 +630,13 @@ impl Session {
                 self.hold_snapshot(snapshot.clone());
             }
             IdentityUpdate::LinkRequested(_)
+            | IdentityUpdate::LinkStarted(_)
+            | IdentityUpdate::LinkProgressed(_)
+            | IdentityUpdate::LinkCancelled
+            | IdentityUpdate::Prompts(_)
+            | IdentityUpdate::PromptAnswered(_)
+            | IdentityUpdate::PromptConfirmed(Err(_))
+            | IdentityUpdate::PromptDeclined(_)
             | IdentityUpdate::MagicLinkSent(_)
             | IdentityUpdate::Linked(Err(_))
             | IdentityUpdate::Approved(Err(_))

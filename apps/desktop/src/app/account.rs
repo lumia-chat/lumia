@@ -2,9 +2,17 @@
 //! devices with the revoke confirmation and the passkeys, and the profile with the status.
 //! The counterpart of the `@State` in the iOS app's `LinkView.swift` and `Screens.swift`,
 //! with their wording for each refusal.
+//!
+//! Linking this computer, signed in to the account, is by a prompt on the account's devices
+//! that hold the identity (identity spec 4.2.1): it opens a session at once, and follows it
+//! ([`Prompted`]) on every account event and every two seconds ([`super::prompts::due`])
+//! until it ends. From sign-in, with no account signed in to hold a session, it is the
+//! copied request and the typed code (4.2), which "Link another way" also offers under the
+//! waiting screen.
 
 use std::path::Path;
 
+use lumia_client::app::LinkProgress;
 use rune::{FileDialogOptions, TextEdit, Tx};
 
 use super::{HomeView, Place, Popover, Route, State};
@@ -22,9 +30,20 @@ pub struct Account {
     pub menu_status: Option<(String, String)>,
 }
 
-/// The link screen (identity spec 4.2): the request to show, then the code to claim.
+/// The link screen: linking by a prompt (identity spec 4.2.1), or the request to show and
+/// then the code to claim (4.2).
 #[derive(Debug, Default)]
 pub struct Link {
+    /// Where linking by a prompt stands.
+    pub prompted: Prompted,
+    /// The copied request and the typed code, chosen under the waiting screen.
+    pub another_way: bool,
+    /// A question to the instance about the session is on its way; `again` asks once more
+    /// when it lands, for an account event that came meanwhile.
+    pub asking: bool,
+    pub again: bool,
+    /// When the session was last asked about, in microseconds.
+    pub asked_at: i64,
     /// The request a device that holds the identity approves; empty until started.
     pub request: String,
     pub code: TextEdit,
@@ -35,6 +54,63 @@ pub struct Link {
     /// The request went to the clipboard since it was made.
     pub copied: bool,
     pub error: String,
+}
+
+/// Where linking this computer by a prompt stands (identity spec 4.2.1): the core's
+/// `LinkProgress` short of `linked`, which goes on as a claimed code does.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum Prompted {
+    /// No session: not started (the other way, or sign-in's), or it could not be opened.
+    #[default]
+    Idle,
+    /// The instance was asked to open one.
+    Starting,
+    /// Open, and no other device has answered.
+    Waiting,
+    /// Another device answered: both show these digits (`482 913`).
+    Compare(String),
+    /// "Not me", or "They don’t match", on the other device.
+    Declined,
+    /// Ten minutes passed, or the instance no longer knows the session.
+    Expired,
+}
+
+impl Prompted {
+    /// The core's stage, as this screen shows it.
+    pub fn of(progress: &LinkProgress) -> Self {
+        match progress.stage.as_str() {
+            "compare" => Self::Compare(progress.digits.clone()),
+            "declined" => Self::Declined,
+            "expired" => Self::Expired,
+            _ => Self::Waiting,
+        }
+    }
+
+    /// Whether a session is open and followed: asked about on every account event and
+    /// every two seconds.
+    pub fn followed(&self) -> bool {
+        matches!(self, Self::Waiting | Self::Compare(_))
+    }
+
+    /// Whether a session is open or opening, which leaving the screen gives up.
+    pub fn open(&self) -> bool {
+        matches!(self, Self::Starting | Self::Waiting | Self::Compare(_))
+    }
+
+    /// What the card says at this stage.
+    pub fn words(&self) -> &'static str {
+        match self {
+            Self::Idle => "Your other devices couldn’t be asked.",
+            Self::Starting | Self::Waiting => {
+                "Open Lumia on a device that has your private messages. It will ask about this computer."
+            }
+            Self::Compare(_) => {
+                "Check that your other device shows the same number, then approve it there."
+            }
+            Self::Declined => "It wasn’t approved on your other device.",
+            Self::Expired => "That took too long.",
+        }
+    }
 }
 
 /// The devices screen: the device being revoked with its confirmation, the passkeys, and
@@ -175,15 +251,63 @@ impl State {
     // ---- Linking this computer ----------------------------------------------------------
 
     /// Shows the link screen, from sign-in or from a signed-in account with no identity
-    /// on this computer.
+    /// on this computer. Signed in, the account's other devices are asked at once.
     pub fn start_linking(&mut self) {
         self.account.link = Link::default();
         self.popover = None;
         self.route = Route::Link;
+        if self.session.signed_in {
+            self.start_prompt();
+        }
     }
 
-    /// Leaves the link screen for where it was opened from.
+    /// Opens a link session, so the account's devices that hold the identity prompt; "Try
+    /// again" after one ended.
+    pub fn start_prompt(&mut self) {
+        let form = &mut self.account.link;
+        if form.prompted.open() {
+            return;
+        }
+        *form = Link {
+            prompted: Prompted::Starting,
+            ..Link::default()
+        };
+        self.session.link_start(DEVICE_LABEL);
+    }
+
+    /// "Link another way": the copied request and the typed code, the session given up so
+    /// the other devices stop asking.
+    pub fn link_another_way(&mut self) {
+        if self.account.link.prompted.open() {
+            self.session.link_cancel();
+        }
+        self.account.link = Link {
+            another_way: true,
+            ..Link::default()
+        };
+    }
+
+    /// Asks where the session stands, unless a question is on its way already (then once
+    /// more when it lands). Only while one is open and followed.
+    pub(super) fn ask_link_progress(&mut self, now: i64) {
+        let form = &mut self.account.link;
+        if self.route != Route::Link || !form.prompted.followed() {
+            return;
+        }
+        if form.asking {
+            form.again = true;
+            return;
+        }
+        form.asking = true;
+        form.asked_at = now;
+        self.session.link_progress();
+    }
+
+    /// Leaves the link screen for where it was opened from, giving up a session it opened.
     pub fn close_link(&mut self) {
+        if self.account.link.prompted.open() {
+            self.session.link_cancel();
+        }
         self.account.link = Link::default();
         self.route = if self.session.signed_in {
             Route::Shell
@@ -429,10 +553,52 @@ impl State {
     // ---- What the session reports -------------------------------------------------------
 
     pub(super) fn react_identity(&mut self, update: &IdentityUpdate) {
-        if self.react_setup(update) {
+        if self.react_prompts(update) || self.react_setup(update) {
             return;
         }
         match update {
+            IdentityUpdate::LinkStarted(answer) => {
+                let form = &mut self.account.link;
+                // Given up meanwhile: the session it opened is declined too.
+                if form.prompted != Prompted::Starting {
+                    if answer.is_ok() {
+                        self.session.link_cancel();
+                    }
+                    return;
+                }
+                match answer {
+                    Ok(progress) => {
+                        form.prompted = Prompted::of(progress);
+                        form.asked_at = chrono::Utc::now().timestamp_micros();
+                    }
+                    Err(failure) => {
+                        form.prompted = Prompted::Idle;
+                        form.error = link_refusal(failure);
+                    }
+                }
+            }
+            IdentityUpdate::LinkProgressed(answer) => {
+                let form = &mut self.account.link;
+                form.asking = false;
+                if !form.prompted.followed() {
+                    return;
+                }
+                match answer {
+                    Ok(progress) => {
+                        form.prompted = Prompted::of(progress);
+                        form.error.clear();
+                    }
+                    // The core holds no session: it ended, or was given up elsewhere.
+                    Err(failure) if failure.message == "no link in progress" => {
+                        form.prompted = Prompted::Expired;
+                    }
+                    // Asked again in two seconds; the words stay until an answer comes.
+                    Err(failure) => form.error.clone_from(&failure.message),
+                }
+                if std::mem::take(&mut form.again) {
+                    self.ask_link_progress(chrono::Utc::now().timestamp_micros());
+                }
+            }
             IdentityUpdate::LinkRequested(answer) => {
                 let form = &mut self.account.link;
                 form.starting = false;
@@ -455,6 +621,7 @@ impl State {
             IdentityUpdate::Linked(Err(failure)) => {
                 let form = &mut self.account.link;
                 form.busy = false;
+                form.asking = false;
                 // A code is eight characters, good once, for ten minutes, and gone after
                 // five wrong tries (identity spec 6); the instance says only "not found".
                 form.error = match failure.code.as_str() {
@@ -563,12 +730,28 @@ impl State {
             | IdentityUpdate::PasskeyRemoved(Ok(()))
             | IdentityUpdate::SetUp { .. }
             | IdentityUpdate::SetupRefused(_)
+            | IdentityUpdate::LinkCancelled
+            | IdentityUpdate::Prompts(_)
+            | IdentityUpdate::PromptAnswered(_)
+            | IdentityUpdate::PromptConfirmed(_)
+            | IdentityUpdate::PromptDeclined(_)
             | IdentityUpdate::Phrase(_)
             | IdentityUpdate::Quiz(_)
             | IdentityUpdate::Confirmed(_)
             | IdentityUpdate::Restored(_)
             | IdentityUpdate::StartedOver(_) => {}
         }
+    }
+}
+
+/// Why a link session could not be opened.
+fn link_refusal(failure: &Failure) -> String {
+    match failure.code.as_str() {
+        // At most five open at once for an account (identity spec 4.2.1).
+        "RATE_LIMITED" => {
+            "Too many devices are waiting to be linked. Try again in a few minutes.".into()
+        }
+        _ => failure.message.clone(),
     }
 }
 

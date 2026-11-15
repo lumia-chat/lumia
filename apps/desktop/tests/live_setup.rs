@@ -3,7 +3,9 @@
 //! phrase confirmed by three words (one wrong check first); a second computer signing in
 //! is told the account has its identity elsewhere and restores it from the phrase; a third
 //! starts over with a new identity under the password; and, with `LUMIA_CLI`, an account
-//! the CLI made with no identity is set up at its next sign-in here. Runs only with
+//! the CLI made with no identity is set up at its next sign-in here. Linking another
+//! computer from one that holds the identity, by Devices' copied request and typed code,
+//! and by a prompt and six matching digits (identity spec 4.2 and 4.2.1). Runs only with
 //! `LUMIA_DEV_INSTANCE` set; without it it passes having checked nothing, and says so.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
@@ -12,7 +14,8 @@ use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use lumia_shell::app::{HomeView, Route, State};
+use lumia_shell::app::account::Prompted;
+use lumia_shell::app::{HomeView, Route, State, prompts};
 use lumia_shell::session::identity::Setup;
 use rune::TextEdit;
 
@@ -234,13 +237,14 @@ fn a_computer_that_holds_the_identity_approves_another_from_devices() {
     });
 
     // The second computer of the account is told its private messages are elsewhere, and
-    // starts linking.
+    // starts linking, the other way.
     let mut second = computer(&dir.join("second"), &instance);
     sign_in(&mut second, &handle, false);
     wait_until(&mut second, "the identity elsewhere", |s| {
         s.session.identity.setup == Setup::Elsewhere
     });
     second.start_linking();
+    second.link_another_way();
     second.start_link();
     wait_until(&mut second, "the request", |s| {
         !s.account.link.request.is_empty()
@@ -285,7 +289,7 @@ fn a_computer_that_holds_the_identity_approves_another_from_devices() {
         .account
         .link
         .code
-        .replace_text(&format!("{} {}", &code[..4], &code[4..]));
+        .replace_text(format!("{} {}", &code[..4], &code[4..]));
     second.claim_link();
     wait_until(&mut second, "the claim", |s| {
         s.session.has_identity() || !s.account.link.error.is_empty()
@@ -297,5 +301,160 @@ fn a_computer_that_holds_the_identity_approves_another_from_devices() {
 
     first.close_approve();
     assert!(!first.account.devices.approve.open && first.account.devices.approve.code.is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Drains the window's updates and lets time pass as a frame does (`State::tick`, which
+/// asks about link sessions every two seconds) until `done` holds of the state.
+fn wait_ticking(state: &mut State, what: &str, done: impl Fn(&State) -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !done(state) {
+        state.drain();
+        state.tick(chrono::Utc::now().timestamp_micros());
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for {what}: link {:?} {:?}, prompts {:?} {:?}",
+            state.account.link.prompted,
+            state.account.link.error,
+            state.prompts.list,
+            state.prompts.error,
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// [`wait_ticking`] for two computers at once, each taking its own steps meanwhile.
+fn wait_both(
+    one: &mut State,
+    other: &mut State,
+    what: &str,
+    done: impl Fn(&State, &State) -> bool,
+) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !done(one, other) {
+        for state in [&mut *one, &mut *other] {
+            state.drain();
+            state.tick(chrono::Utc::now().timestamp_micros());
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for {what}: link {:?} {:?}, prompts {:?} {:?}",
+            other.account.link.prompted,
+            other.account.link.error,
+            one.prompts.list,
+            one.prompts.error,
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// The stage of the prompt on screen, if any.
+fn prompt_stage(state: &State) -> Option<String> {
+    state.prompts.current().map(|p| p.stage.clone())
+}
+
+/// Linking by a prompt (identity spec 4.2.1): a second computer of the account asks, the
+/// first is prompted by the account event alone, continues, shows the same six digits as
+/// the second, and approves; the second is linked, with private messages ready, and the
+/// first's roster has it. A third computer that asks is turned away by "Not me".
+#[test]
+fn a_computer_is_linked_by_a_prompt_on_one_that_holds_the_identity() {
+    let Ok(instance) = std::env::var("LUMIA_DEV_INSTANCE") else {
+        eprintln!("skipped: no LUMIA_DEV_INSTANCE");
+        return;
+    };
+    let dir = std::env::temp_dir().join(format!("lumia-shell-prompt-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let handle = format!("prompt{}", std::process::id());
+
+    let mut first = computer(&dir.join("first"), &instance);
+    sign_in(&mut first, &handle, true);
+    wait_until(&mut first, "the silent setup", |s| {
+        s.session.identity.setup == Setup::Ready
+    });
+    // Asked once set up, before any device asked: nothing prompts.
+    wait_ticking(&mut first, "the first question", |s| !s.prompts.asking);
+    assert!(!first.prompts.open());
+
+    let mut second = computer(&dir.join("second"), &instance);
+    sign_in(&mut second, &handle, false);
+    wait_until(&mut second, "the identity elsewhere", |s| {
+        s.session.identity.setup == Setup::Elsewhere
+    });
+    second.start_linking();
+    assert_eq!(second.route, Route::Link);
+    wait_ticking(&mut second, "the session", |s| {
+        s.account.link.prompted == Prompted::Waiting
+    });
+
+    // The first is told by the account event, with nothing else asking.
+    wait_ticking(&mut first, "the prompt", |s| {
+        prompt_stage(s).as_deref() == Some("new")
+    });
+    let prompt = first.prompts.current().unwrap().clone();
+    assert_eq!(prompt.request.kind, "native");
+    assert_eq!(
+        prompts::title(&prompt),
+        "desktop wants your private messages"
+    );
+    first.answer_prompt();
+    // The second reveals its secret once it sees the answer; then both show the digits.
+    wait_both(
+        &mut first,
+        &mut second,
+        "the digits on both",
+        |first, second| {
+            prompt_stage(first).as_deref() == Some("compare")
+                && matches!(second.account.link.prompted, Prompted::Compare(_))
+        },
+    );
+    let here = first.prompts.current().unwrap().digits.clone();
+    let Prompted::Compare(there) = second.account.link.prompted.clone() else {
+        unreachable!("waited for")
+    };
+    assert_eq!(here, there, "both screens show the same number");
+    assert_eq!(here.len(), 7);
+
+    first.confirm_prompt();
+    wait_ticking(&mut first, "the approval", |s| {
+        s.prompts.ended.is_some() || !s.prompts.error.is_empty()
+    });
+    assert_eq!(first.prompts.error, "");
+    assert_eq!(
+        first.prompts.ended.as_ref().unwrap().words,
+        "desktop is linked."
+    );
+    wait_ticking(&mut second, "the link", |s| {
+        s.route == Route::Shell && s.session.has_identity()
+    });
+    wait_until(&mut second, "private messages ready", |s| {
+        s.session.identity.setup == Setup::Ready && s.session.private_ready()
+    });
+    wait_ticking(&mut first, "the roster with two devices", |s| {
+        s.session
+            .identity
+            .roster
+            .as_ref()
+            .is_some_and(|r| r.devices.iter().filter(|d| !d.revoked).count() == 2)
+            && s.prompts.list.is_empty()
+    });
+
+    // Another computer asks, and "Not me" turns it away.
+    let mut third = computer(&dir.join("third"), &instance);
+    sign_in(&mut third, &handle, false);
+    wait_until(&mut third, "the identity elsewhere", |s| {
+        s.session.identity.setup == Setup::Elsewhere
+    });
+    third.start_linking();
+    wait_ticking(&mut third, "the session", |s| {
+        s.account.link.prompted == Prompted::Waiting
+    });
+    wait_ticking(&mut first, "the third's prompt", |s| {
+        s.prompts.ended.is_none() && prompt_stage(s).as_deref() == Some("new")
+    });
+    first.decline_prompt();
+    wait_both(&mut first, &mut third, "the refusal", |first, third| {
+        third.account.link.prompted == Prompted::Declined && !first.prompts.open()
+    });
     let _ = std::fs::remove_dir_all(&dir);
 }

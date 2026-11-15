@@ -371,13 +371,14 @@ fn an_account_with_its_identity_elsewhere_is_led_to_linking_from_devices() {
         "the instance is asked for a token"
     );
 
+    // Signed in, it is linked by a prompt on the other device (`tests/prompts.rs`).
     press(&mut rt, "setup-link");
     assert_eq!(rt.state.route, Route::Link);
     assert!(
-        words(&rt).contains("Not now"),
+        words(&rt).contains("Cancel") && !words(&rt).contains("Back to sign in"),
         "an account that is signed in goes back to the shell, not to sign-in"
     );
-    press(&mut rt, "link-back");
+    press(&mut rt, "link-cancel");
     assert_eq!(rt.state.route, Route::Shell);
     assert_eq!(rt.state.home_view, HomeView::Devices);
 

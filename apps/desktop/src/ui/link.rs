@@ -1,24 +1,31 @@
-//! Link this computer as a device of an identity (identity spec 4.2): show the request for
-//! a device that holds the identity to approve, then claim the code it gives and sign in by
-//! identity proof. The same card and wording as the iOS app's `LinkView.swift` and the web's `link.tsx`.
+//! Link this computer as a device of an identity. Signed in to the account (from "Private
+//! messages need this computer" on Home and Devices), by a prompt on the account's devices
+//! that hold the identity (identity spec 4.2.1): this computer waits for one to answer,
+//! then shows the six digits that one shows too, and is linked once it is approved there.
+//! Under the waiting screen, "Link another way" is the copied request and the typed code
+//! (4.2), for when the other device cannot reach the instance; from sign-in, with no
+//! account signed in to hold a session, that is the only way. The same card and wording as
+//! the iOS app's `LinkView.swift` and the web's `link.tsx`.
 //!
-//! Reached from sign-in when the instance allows identity-proof sign-in, and from Devices
-//! and Profile when the account is signed in with no identity on this computer.
+//! The approving side is `ui::prompt`, and Devices' "Approve a device" for the other way.
 //!
-//! Not here: the request as a QR code (the other shells show its text too), and approving
-//! another device's request from this one, which only the CLI does today.
+//! Not here: the request as a QR code (the other shells show its text too).
 
-use rune::{El, ScrollSpec, Tx, col, el, row, text};
+use rune::{El, LiveRegion, LoopSpec, ScrollSpec, Tx, col, el, row, text};
 
-use super::components::{Look, card, error_text, field, primary_button, small_button};
+use super::components::{Look, card, error_text, field, primary_button, small_button, wide_button};
 use super::sign_in::foot_link;
 use crate::app::State;
+use crate::app::account::Prompted;
 use crate::tokens::{self as t};
 use crate::ui::scroll::WithScrollBar;
 
 pub fn view(s: &State, look: Look) -> El {
     let c = look.c;
     let form = &s.account.link;
+    if s.session.signed_in && !form.another_way {
+        return prompted(s, look);
+    }
     let note = |words: &str| {
         text(words)
             .font(t::TEXT_BODY)
@@ -98,6 +105,119 @@ pub fn view(s: &State, look: Look) -> El {
             .child(foot),
         look,
     )
+}
+
+/// Linking by a prompt on the account's other devices: waiting for one to answer, the
+/// digits to compare, or how it ended with the way to try again.
+fn prompted(s: &State, look: Look) -> El {
+    let form = &s.account.link;
+    let mut stage = col()
+        .key("link-stage")
+        .w_full()
+        .gap(t::SPACE_18)
+        .live_region(LiveRegion::Polite);
+    if let Prompted::Compare(shown) = &form.prompted {
+        stage = stage.child(digits("link-digits", shown, look));
+    }
+    stage = stage.child(
+        text(form.prompted.words())
+            .font(t::TEXT_BODY)
+            .color(look.c.ink_secondary)
+            .wrap()
+            .w_full(),
+    );
+    if matches!(form.prompted, Prompted::Starting | Prompted::Waiting) {
+        stage = stage.child(waiting("Waiting for your other device", look));
+    }
+    let mut card = card(
+        "Link this computer",
+        "A device you already use approves this one.",
+        look,
+    )
+    .key("link-card")
+    .no_window_drag()
+    .child(stage);
+    if !form.error.is_empty() {
+        card = card.child(error_text(&form.error, look));
+    }
+    let mut actions = col().w_full().gap(t::SPACE_8);
+    if matches!(
+        form.prompted,
+        Prompted::Idle | Prompted::Declined | Prompted::Expired
+    ) {
+        actions = actions.child(primary_button(
+            "link-again",
+            "Try again",
+            true,
+            State::start_prompt,
+            look,
+        ));
+    }
+    card = card.child(actions.child(wide_button(
+        "link-cancel",
+        None,
+        "Cancel",
+        true,
+        |s, _| s.close_link(),
+        look,
+    )));
+    let mut content = col().items_center().gap(t::SPACE_24).child(card);
+    // The copied request and the typed code, for an other device that cannot reach the
+    // instance: offered while nothing has answered.
+    if matches!(form.prompted, Prompted::Starting | Prompted::Waiting) {
+        content = content.child(row().no_window_drag().child(foot_link(
+            "link-another-way",
+            "Link another way",
+            State::link_another_way,
+            look,
+        )));
+    }
+    screen("link", content, look)
+}
+
+/// The six digits both screens show, large, in the code's type: `482 913`.
+pub(super) fn digits(key: &'static str, shown: &str, look: Look) -> El {
+    let c = look.c;
+    row()
+        .key(key)
+        .w_full()
+        .py(t::SPACE_14)
+        .center()
+        .radius(t::RADIUS_12)
+        .fill(c.inset)
+        .role("text")
+        .label(format!("Number {shown}"))
+        .child(
+            text(shown)
+                .font(t::TEXT_LINK_DIGITS)
+                .color(c.ink)
+                .a11y_hidden(),
+        )
+}
+
+/// A quiet sign that something is on its way: three dots fading in turn, holding still
+/// under reduced motion.
+pub(super) fn waiting(label: &str, look: Look) -> El {
+    let dot = |n: u8| {
+        el().size(t::SPACE_6, t::SPACE_6)
+            .radius(t::SPACE_6 / 2.0)
+            .fill(look.c.ink_quiet)
+            .looping(LoopSpec::opacity(
+                t::WAITING_PERIOD,
+                f64::from(n) * t::WAITING_STEP,
+                t::WAITING_LOW,
+                1.0,
+            ))
+    };
+    row()
+        .key("waiting")
+        .gap(t::SPACE_6)
+        .items_center()
+        .role("progressbar")
+        .label(label)
+        .child(dot(0))
+        .child(dot(1))
+        .child(dot(2))
 }
 
 /// A card's screen on the app ground: the content centred while the window has room for

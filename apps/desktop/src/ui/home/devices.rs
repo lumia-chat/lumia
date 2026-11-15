@@ -7,6 +7,10 @@
 //! A device is named by the label its person gave it when it was linked, and by its kind
 //! when it has none.
 //!
+//! A new device of the account is approved by the prompt that comes over the window when it
+//! asks (`ui::prompt`); "Approve a device" here is the other way, a copied request and a
+//! typed code, for a new device that cannot reach the instance.
+//!
 //! "Add a passkey" opens the instance's web page signed in as this account, in the system
 //! browser (architecture 6.3): a passkey is made there, by the browser, for the instance's
 //! own domain.
@@ -434,7 +438,7 @@ fn approve_card(s: &State, look: Look) -> El {
     let c = look.c;
     let mut card = card(
         "Approve a device",
-        "On the new device, choose Link, copy the request it shows and paste it here. It gets a key of its own and reads your private messages from then on.",
+        "On the new device, choose Link another way, copy the request it shows and paste it here. It gets a key of its own and reads your private messages from then on.",
         look,
     )
     .key("approve-card")

@@ -391,6 +391,14 @@ pub const TEXT_CODE: TextStyle = TextStyle::new(13.0, 400.0).lh(20.0).mono();
 /// The code an approving device gives the new one (identity spec 4.2): read across a desk
 /// and typed, so large, in the mono slot, with its two groups of four apart.
 pub const TEXT_LINK_CODE: TextStyle = TextStyle::new(28.0, 600.0).lh(36.0).mono();
+/// Linking by a prompt (identity spec 4.2.1): the six digits both screens show, read side
+/// by side, so in the code's type.
+pub const TEXT_LINK_DIGITS: TextStyle = TEXT_LINK_CODE;
+/// The waiting dots while another device is asked: each fades over this many seconds, the
+/// next this much later, down to this opacity. The design system names no motion yet.
+pub const WAITING_PERIOD: f64 = 1.2;
+pub const WAITING_STEP: f64 = 0.2;
+pub const WAITING_LOW: f32 = 0.25;
 /// Inline code's size beside the message text around it.
 pub const CODE_SCALE: f32 = 0.9;
 /// The room either side of inline code inside its chip.
