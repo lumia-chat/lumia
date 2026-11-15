@@ -458,6 +458,16 @@ impl<S: Store, K: Keystore> Device<'_, S, K> {
             label,
             web_origin,
         )?;
+        // The request this one replaces stays claimable: a link by prompt
+        // given up for "Link another way" may finish making its request after
+        // the one shown, and the code is for whichever was approved.
+        if let (Some(secret), Some(request)) = (
+            self.keystore.get("link_secret")?,
+            self.store.meta_get("link_request")?,
+        ) {
+            self.keystore.put("link_secret_before", &secret)?;
+            self.store.meta_set("link_request_before", &request)?;
+        }
         self.keystore
             .put("link_secret", &requester.secret_bytes())?;
         let request = requester.request.encode_to_vec();
@@ -534,29 +544,45 @@ impl<S: Store, K: Keystore> Device<'_, S, K> {
     /// # Errors
     /// On API failure, decryption failure, or a roster that does not verify.
     pub async fn claim(&mut self, api: &Api, code: &str) -> Result<Verified, ClientError> {
-        let secret = self
-            .keystore
-            .get("link_secret")?
-            .ok_or_else(|| ClientError::State("no link request on this device".into()))?;
-        let request_b64 = self
-            .store
-            .meta_get("link_request")?
-            .ok_or_else(|| ClientError::State("no link request on this device".into()))?;
-        let request = LinkRequest::decode(
-            B64.decode(request_b64)
-                .map_err(|e| ClientError::State(e.to_string()))?
-                .as_slice(),
-        )?;
-        let requester = LinkRequester::from_parts(&secret, request)?;
+        let mut requesters = Vec::new();
+        for (secret, request) in [
+            ("link_secret", "link_request"),
+            ("link_secret_before", "link_request_before"),
+        ] {
+            let (Some(secret), Some(request_b64)) =
+                (self.keystore.get(secret)?, self.store.meta_get(request)?)
+            else {
+                continue;
+            };
+            let request = LinkRequest::decode(
+                B64.decode(request_b64)
+                    .map_err(|e| ClientError::State(e.to_string()))?
+                    .as_slice(),
+            )?;
+            requesters.push(LinkRequester::from_parts(&secret, request)?);
+        }
+        if requesters.is_empty() {
+            return Err(ClientError::State("no link request on this device".into()));
+        }
 
         let bundle = api
             .get_link_bundle(&link_code(code), &wire::display(&self.device_id))
             .await?;
-        let body = requester.open_bundle(
-            &bundle.sender_ephemeral_public_key,
-            &bundle.nonce,
-            &bundle.ciphertext,
-        )?;
+        // Sealed to the request shown, or to the one it replaced.
+        let mut opened = Err(ClientError::State("no link request on this device".into()));
+        for requester in &requesters {
+            opened = requester
+                .open_bundle(
+                    &bundle.sender_ephemeral_public_key,
+                    &bundle.nonce,
+                    &bundle.ciphertext,
+                )
+                .map_err(ClientError::from);
+            if opened.is_ok() {
+                break;
+            }
+        }
+        let body = opened?;
         let roster = body
             .roster
             .ok_or_else(|| ClientError::State("bundle has no roster".into()))?;
@@ -571,6 +597,7 @@ impl<S: Store, K: Keystore> Device<'_, S, K> {
         }
         self.save_roster(&verified.identity_id, &roster)?;
         self.keystore.delete("link_secret")?;
+        self.keystore.delete("link_secret_before")?;
         Ok(verified)
     }
 

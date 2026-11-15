@@ -1952,3 +1952,26 @@ async fn an_approval_tried_again_makes_only_the_bundle_again() {
     phone.app.identity_claim(&code).await.unwrap();
     assert!(phone.app.has_identity() && phone.app.signed_in());
 }
+
+/// A request made after the one approved, as a link by prompt given up for
+/// "Link another way" may finish making its own after the request shown,
+/// leaves the approved one claimable.
+#[tokio::test]
+async fn a_request_made_after_the_one_approved_leaves_it_claimable() {
+    let Some(base) = instance() else { return };
+    let laptop = Device::new(&base);
+    let handle = format!("tworequests{}", stamp());
+    laptop
+        .app
+        .create_account(&handle, PASSWORD, None)
+        .await
+        .unwrap();
+    laptop.app.identity_setup("Laptop").await.unwrap();
+
+    let phone = Device::new(&base);
+    let shown = phone.app.identity_link_request("Phone").await.unwrap();
+    phone.app.identity_link_request("Phone").await.unwrap();
+    let code = laptop.app.identity_approve(&shown).await.unwrap();
+    phone.app.identity_claim(&code).await.unwrap();
+    assert!(phone.app.has_identity() && phone.app.signed_in());
+}
