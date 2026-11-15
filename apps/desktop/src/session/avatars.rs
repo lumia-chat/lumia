@@ -112,7 +112,7 @@ fn refused(reason: &str, message: &str) -> Failure {
 }
 
 impl Session {
-    fn avatars_dir(&self) -> PathBuf {
+    pub(super) fn avatars_dir(&self) -> PathBuf {
         self.data_dir.join(&self.host).join("avatars")
     }
 

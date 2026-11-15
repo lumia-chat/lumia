@@ -1,4 +1,5 @@
-//! The sign-in screen's form and its reactions: the instance, then an account on it.
+//! The sign-in screen's form and its reactions: the instance, then an account on it. And
+//! where a computer another device removed from the account lands ([`REMOVED`]).
 
 use rune::TextEdit;
 
@@ -25,7 +26,15 @@ pub struct SignIn {
     /// takes its code.
     pub magic_sent: bool,
     pub magic_code: TextEdit,
+    /// Why this computer is back at sign-in, when it is something to tell ([`REMOVED`]),
+    /// until it is put away or the next sign-in.
+    pub notice: Option<String>,
 }
+
+/// What the sign-in card says once another device of the identity removed this computer
+/// (identity spec 4.4): the core erased what it kept before saying so.
+pub const REMOVED: &str =
+    "This computer was removed from your account, and its private messages were erased from it.";
 
 impl SignIn {
     pub(super) fn new(instance: &str) -> Self {
@@ -41,6 +50,7 @@ impl SignIn {
             error: String::new(),
             magic_sent: false,
             magic_code: TextEdit::new(""),
+            notice: None,
         }
     }
 
@@ -110,6 +120,42 @@ impl State {
         password.set_revealed(!password.is_revealed());
     }
 
+    /// Puts away the sign-in card's notice.
+    pub fn dismiss_sign_in_notice(&mut self) {
+        self.sign_in.notice = None;
+    }
+
+    /// Another device of the identity removed this computer, and the core erased what it
+    /// kept: to sign-in, saying so, with what the window holds of the account forgotten and
+    /// what `settings.json` keeps of it (the channel a launch returns to, the folders open
+    /// on the rail, the emoji reacted with, the phrase reminder put away). The instance
+    /// stays the one to sign in to, and Preferences stay this computer's.
+    pub(super) fn device_removed(&mut self) {
+        self.leave_shell();
+        let in_front = self.notices.in_front;
+        self.notices = super::notices::Notices::default();
+        self.notices.in_front = in_front;
+        self.pictures = super::pictures::Pictures::default();
+        self.rail = super::rail::RailUi::default();
+        self.person = None;
+        self.member_filter.clear();
+        self.aside_open = false;
+        self.settings.last_channel = None;
+        self.settings.open_folders.clear();
+        self.settings.recent_emoji.clear();
+        self.settings.phrase_reminder_until = None;
+        self.settings.save(&self.data_dir);
+        let form = &mut self.sign_in;
+        form.busy = false;
+        form.error.clear();
+        form.password.clear();
+        form.totp.clear();
+        form.needs_totp = false;
+        form.forget_magic_link();
+        form.notice = Some(REMOVED.into());
+        self.route = Route::SignIn;
+    }
+
     pub fn sign_out(&mut self) {
         self.session.sign_out();
         self.leave_shell();
@@ -126,6 +172,7 @@ impl State {
                 self.sign_in.totp.clear();
                 self.sign_in.needs_totp = false;
                 self.sign_in.forget_magic_link();
+                self.sign_in.notice = None;
                 self.route = Route::Shell;
             }
             Err(failure) => self.refused(failure),

@@ -738,6 +738,7 @@ impl State {
             | IdentityUpdate::Phrase(_)
             | IdentityUpdate::Quiz(_)
             | IdentityUpdate::Confirmed(_)
+            | IdentityUpdate::RestoreDevices(_)
             | IdentityUpdate::Restored(_)
             | IdentityUpdate::StartedOver(_) => {}
         }

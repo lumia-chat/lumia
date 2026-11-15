@@ -227,7 +227,7 @@ fn passkeys(s: &State, look: Look) -> El {
 // ---- The roster -------------------------------------------------------------------------
 
 /// A device's name: the label it was linked under, else what kind of device it is.
-fn name_of(device: &DeviceSummary) -> String {
+pub(crate) fn name_of(device: &DeviceSummary) -> String {
     if device.this_device {
         return "This computer".into();
     }
@@ -243,7 +243,7 @@ fn name_of(device: &DeviceSummary) -> String {
     }
 }
 
-fn glyph_of(device: &DeviceSummary) -> &'static Icon {
+pub(crate) fn glyph_of(device: &DeviceSummary) -> &'static Icon {
     match device.kind.as_str() {
         "web" => &icons::GLOBE,
         "mobile" => &icons::PHONE,

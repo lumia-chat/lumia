@@ -9,7 +9,7 @@
 
 mod add_server;
 mod conversations;
-mod devices;
+pub(crate) mod devices;
 mod new_message;
 mod preferences;
 mod profile;

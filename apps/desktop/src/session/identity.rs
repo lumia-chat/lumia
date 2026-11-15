@@ -19,8 +19,8 @@
 
 use lumia_client::ClientError;
 use lumia_client::app::{
-    LinkProgress, LinkPrompt, PasskeySummary, ProfileSummary, RosterSummary, SnapshotSummary,
-    StatusSummary,
+    DeviceSummary, LinkProgress, LinkPrompt, PasskeySummary, ProfileSummary, RosterSummary,
+    SnapshotSummary, StatusSummary,
 };
 
 use super::{Failure, Session, Update};
@@ -118,8 +118,11 @@ pub enum IdentityUpdate {
     /// The words given for the quiz were right (`true`: the core forgot the phrase and the
     /// reminders end) or not (`false`: the phrase is shown again).
     Confirmed(Result<bool, Failure>),
-    /// The identity was restored from its phrase: this computer is its only device now, and
-    /// signed in by it.
+    /// The devices restoring from a phrase would stop, read before anything changes (not
+    /// the revoked ones); empty when the instance knows no roster for it.
+    RestoreDevices(Result<Vec<DeviceSummary>, Failure>),
+    /// The identity was restored from its phrase: this computer is a device of it now, with
+    /// only the devices the person kept beside it, and signed in by it.
     Restored(Result<RosterSummary, Failure>),
     /// The account was moved to a new identity made here (identity spec 4.7), whose phrase
     /// waits to be saved.
@@ -234,15 +237,29 @@ impl Session {
         });
     }
 
+    /// Reads the devices restoring from `phrase` would stop, so the person can keep the
+    /// ones they still have; the answer is [`IdentityUpdate::RestoreDevices`].
+    pub fn restore_devices(&self, phrase: &str) {
+        let Some(app) = self.client() else { return };
+        let phrase = phrase.split_whitespace().collect::<Vec<_>>().join(" ");
+        self.task_local(move || async move {
+            Update::Identity(IdentityUpdate::RestoreDevices(
+                app.identity_recover_devices(&phrase)
+                    .await
+                    .map_err(Failure::from),
+            ))
+        });
+    }
+
     /// Restores the identity from its phrase on this computer, every other device of it
-    /// revoked, and signs in by it (identity spec 4.3); the answer is
-    /// [`IdentityUpdate::Restored`].
-    pub fn restore_identity(&self, phrase: &str) {
+    /// revoked but those in `keep` (their ids), and signs in by it (identity spec 4.3); the
+    /// answer is [`IdentityUpdate::Restored`].
+    pub fn restore_identity(&self, phrase: &str, keep: Vec<String>) {
         let Some(app) = self.client() else { return };
         let phrase = phrase.split_whitespace().collect::<Vec<_>>().join(" ");
         self.task_local(move || async move {
             Update::Identity(IdentityUpdate::Restored(
-                app.identity_recover(&phrase, DEVICE_LABEL)
+                app.identity_recover_keeping(&phrase, DEVICE_LABEL, keep)
                     .await
                     .map_err(Failure::from),
             ))
@@ -651,6 +668,7 @@ impl Session {
             | IdentityUpdate::Phrase(Err(_))
             | IdentityUpdate::Quiz(_)
             | IdentityUpdate::Confirmed(_)
+            | IdentityUpdate::RestoreDevices(_)
             | IdentityUpdate::Restored(Err(_))
             | IdentityUpdate::StartedOver(Err(_)) => {}
         }

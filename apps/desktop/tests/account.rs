@@ -992,3 +992,91 @@ fn pressing_the_avatar_again_keeps_what_is_being_typed() {
     open_profile(&mut rt);
     assert_eq!(rt.state.account.profile.custom_status.text, "Brb");
 }
+
+// ---- Removed by another device ----------------------------------------------------------
+
+/// Signed in over `dir`, with what the shell keeps on disk for the account there.
+fn signed_in_over(dir: &std::path::Path) -> State {
+    let mut state = State::new(dir.to_path_buf());
+    state.sign_in.instance.replace_text("http://127.0.0.1:9");
+    state.connect();
+    state.receive(&Update::Info(Ok(info())));
+    state.receive(&Update::SignedIn(Ok(())));
+    state.receive(&Update::Snapshot(Ok(snapshot())));
+    state.settings.last_channel = Some(lumia_shell::settings::LastChannel {
+        server_id: "acme".into(),
+        channel_id: "general".into(),
+    });
+    state.settings.open_folders = vec!["f1".into()];
+    state.settings.recent_emoji = vec!["👍".into()];
+    state.settings.phrase_reminder_until = Some(1);
+    let avatars = dir.join(&state.session.host).join("avatars");
+    std::fs::create_dir_all(&avatars).unwrap();
+    std::fs::write(avatars.join("grace"), b"picture").unwrap();
+    state
+}
+
+fn closed(removed: bool) -> Update {
+    Update::Gateway(lumia_client::app::AppEvent::Closed {
+        reason: "device revoked".into(),
+        removed,
+    })
+}
+
+#[test]
+fn a_computer_another_device_removed_is_back_at_sign_in_saying_so() {
+    let dir = data_dir();
+    let mut state = signed_in_over(&dir);
+    state.go_home(HomeView::Devices);
+    state.draft.replace_text("half a thought");
+    state.receive(&closed(true));
+
+    assert_eq!(state.route, Route::SignIn);
+    assert_eq!(
+        state.sign_in.notice.as_deref(),
+        Some(lumia_shell::app::sign_in::REMOVED)
+    );
+    assert!(!state.session.signed_in);
+    assert!(state.session.snapshot.is_none() && state.session.servers().is_empty());
+    assert!(state.draft.text.is_empty());
+    // What settings.json kept of the account is gone; the instance and Preferences stay.
+    let kept = lumia_shell::settings::Settings::load(&dir);
+    assert_eq!(kept.instance.as_deref(), Some("http://127.0.0.1:9"));
+    assert!(kept.last_channel.is_none() && kept.open_folders.is_empty());
+    assert!(kept.recent_emoji.is_empty() && kept.phrase_reminder_until.is_none());
+    assert!(
+        !dir.join(&state.session.host).join("avatars").exists(),
+        "the pictures kept for the account are erased"
+    );
+
+    let mut rt = runtime(state);
+    assert!(words(&rt).contains(
+        "This computer was removed from your account, and its private messages were erased from it."
+    ));
+    press(&mut rt, "dismiss-sign-in-notice");
+    assert!(rt.state.sign_in.notice.is_none());
+    assert!(rt.find("sign-in-notice").is_none());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_loop_that_ends_for_another_reason_says_nothing_of_removal() {
+    let dir = data_dir();
+    let mut state = signed_in_over(&dir);
+    state.receive(&closed(false));
+    assert_eq!(state.route, Route::Shell);
+    assert!(state.sign_in.notice.is_none());
+    assert!(dir.join(&state.session.host).join("avatars").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_next_sign_in_puts_the_notice_away() {
+    let dir = data_dir();
+    let mut state = signed_in_over(&dir);
+    state.receive(&closed(true));
+    state.receive(&Update::SignedIn(Ok(())));
+    assert_eq!(state.route, Route::Shell);
+    assert!(state.sign_in.notice.is_none());
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -591,6 +591,28 @@ impl Session {
         });
     }
 
+    /// Another device of the identity revoked this one (identity spec 4.4). The core erased
+    /// what it kept (the instance's store, the identity, its keys and tokens) and gives the
+    /// computer a new device id before it says so; this forgets what the session holds of
+    /// the account, and the pictures it kept on disk for it. Nothing is asked of the
+    /// instance: signing in again is as a new device.
+    pub(super) fn device_removed(&mut self) {
+        if let Some(app) = &self.app {
+            app.stop();
+        }
+        self.subscribed.clear();
+        self.members_fresh = false;
+        self.holds_identity = false;
+        self.watching.clear();
+        self.loop_started = None;
+        self.loop_held = false;
+        self.signed_in = false;
+        self.forget_account();
+        if !self.host.is_empty() {
+            let _ = std::fs::remove_dir_all(self.avatars_dir());
+        }
+    }
+
     /// Revokes the session on the instance and forgets the tokens; [`Update::SignedOut`]
     /// follows once the instance has been told.
     pub fn sign_out(&mut self) {
@@ -1407,6 +1429,15 @@ impl Session {
                 self.connection = Connection::Disconnected {
                     reason: reason.clone(),
                 }
+            }
+            AppEvent::Closed {
+                removed: true,
+                reason,
+            } => {
+                self.device_removed();
+                self.connection = Connection::Closed {
+                    reason: reason.clone(),
+                };
             }
             AppEvent::Closed { reason, .. } => {
                 self.connection = Connection::Closed {

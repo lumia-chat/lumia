@@ -1,10 +1,13 @@
 //! Setting up private messages on this computer (architecture 5.4): the recovery phrase and
-//! its check (identity spec 4.1 step 7), restoring from the phrase (4.3) and starting over
+//! its check (identity spec 4.1 step 7), restoring from the phrase (4.3: first whether a
+//! device is still at hand, then the words, then which devices to keep) and starting over
 //! (4.7), each a card on the app ground as linking is; and what Home and Devices show while
 //! this computer is not set up ([`needs_setup`]), the reminder in Home's sidebar
 //! ([`reminder`]) and the card on Devices ([`phrase_card`]). The content and order of the
 //! design canvas's "Setting up private messages (#20)" boards, drawn for the phone, in the
-//! Quiet Split's cards, with "computer" where they say "phone".
+//! Quiet Split's cards, with "computer" where they say "phone". The restore boards' warning
+//! triangle is the key here, as every caution of this module's is: `assets/icons` has no
+//! warning glyph.
 //!
 //! The phrase has no copy button, and its words are not selectable: clipboards sync
 //! between devices and other apps read them. Saving it as a file asks first.
@@ -13,16 +16,18 @@
 //! computer's own unlock, since the shell has no way to ask for one (`app::setup`); and the
 //! board's "Also be findable on Lumia", which the core has not built.
 
+use lumia_client::app::DeviceSummary;
 use rune::{Cursor, El, Tx, col, el, icon, row, text, text_input};
 
 use super::components::{
     Look, action_button, card, danger_button, empty_state, error_text, field, link_button, notice,
     primary_button, primary_button_tx, secondary_button, small_button, wide_button,
 };
+use super::home::devices::{glyph_of, name_of};
 use super::link::screen;
 use super::sign_in::foot_link;
 use crate::app::State;
-use crate::app::setup::PHRASE_WORDS;
+use crate::app::setup::{PHRASE_WORDS, RestoreStep, added_line, keep_button};
 use crate::session::identity::Setup;
 use crate::tokens::{self as t, icons};
 
@@ -359,6 +364,66 @@ fn completions(field: usize, typed: &str, look: Look) -> Option<El> {
 // ---- Restoring --------------------------------------------------------------------------
 
 pub fn restore(s: &State, look: Look) -> El {
+    match s.setup.restore.step {
+        RestoreStep::Ask => restore_ask(s, look),
+        RestoreStep::Phrase => restore_phrase(s, look),
+        RestoreStep::Keep => restore_keep(s, look),
+    }
+}
+
+/// The way back from the question and the words: to where restoring was opened.
+fn restore_back(s: &State, look: Look) -> El {
+    let back = if s.session.signed_in {
+        "Not now"
+    } else {
+        "Back to sign in"
+    };
+    foot("restore-back", back, State::close_restore, look)
+}
+
+/// First: someone who still has a device with their private messages wants to link this
+/// computer from it, not to restore, which stops the devices not kept.
+fn restore_ask(s: &State, look: Look) -> El {
+    let c = look.c;
+    let question = "Do you still have a device with your private messages?";
+    let card = card("Restore", "With your recovery phrase", look)
+        .key("restore-ask-card")
+        .child(
+            text(question)
+                .font(t::TITLE_CHANNEL)
+                .color(c.ink)
+                .wrap()
+                .w_full()
+                .role("heading"),
+        )
+        .child(body(
+            "If you do, link this computer from it instead. Restoring is for when your devices are gone: it stops the ones you don’t keep.",
+            look,
+        ))
+        .child(
+            col()
+                .w_full()
+                .gap(t::SPACE_8)
+                .child(primary_button(
+                    "restore-link",
+                    "Yes, link from it",
+                    true,
+                    State::restore_by_linking,
+                    look,
+                ))
+                .child(wide_button(
+                    "restore-with-phrase",
+                    Some(&icons::KEY),
+                    "No, restore with my phrase",
+                    true,
+                    |s, _| s.restore_with_phrase(),
+                    look,
+                )),
+        );
+    card_screen("restore-screen", card, restore_back(s, look), look)
+}
+
+fn restore_phrase(s: &State, look: Look) -> El {
     let c = look.c;
     let form = &s.setup.restore;
     let count = form.count();
@@ -433,17 +498,122 @@ pub fn restore(s: &State, look: Look) -> El {
     } else if count > PHRASE_WORDS {
         card = card.child(quiet("That’s more than 24 words.", look));
     }
-    let back = if s.session.signed_in {
-        "Not now"
-    } else {
-        "Back to sign in"
-    };
+    card_screen("restore-screen", card, restore_back(s, look), look)
+}
+
+/// Then, when restoring would stop any device: which to keep. None is ticked at first.
+fn restore_keep(s: &State, look: Look) -> El {
+    let form = &s.setup.restore;
+    let mut list = col()
+        .key("restore-devices")
+        .w_full()
+        .role("list")
+        .label("Your devices");
+    for device in &form.devices {
+        let kept = form.kept.contains(&device.device_id);
+        list = list.child(
+            el().w_full()
+                .role("listitem")
+                .child(keep_row(device, kept, !form.busy, look)),
+        );
+    }
+    let mut card = card("Keep any devices?", "Before this computer restores", look)
+        .key("restore-keep-card")
+        .child(body(
+            "Tick the devices you still have. The others stop reading your private messages, so a lost one can’t keep reading them.",
+            look,
+        ))
+        .child(list)
+        .child(caution(
+            "Keep only devices you have with you now. A kept device you’ve lost would keep reading your private messages.",
+            look,
+        ));
+    if !form.error.is_empty() {
+        card = card.child(error_text(&form.error, look));
+    }
+    card = card.child(primary_button(
+        "restore-keep",
+        &keep_button(form.kept.len()),
+        !form.busy,
+        State::restore_keeping,
+        look,
+    ));
     card_screen(
         "restore-screen",
         card,
-        foot("restore-back", back, State::close_restore, look),
+        foot("restore-keep-back", "Back", State::restore_keep_back, look),
         look,
     )
+}
+
+/// A device restoring would stop, ticked to keep it by a press anywhere on it: its kind's
+/// glyph, its name and when it was added, and the box at the end, as the board has them.
+fn keep_row(device: &DeviceSummary, kept: bool, enabled: bool, look: Look) -> El {
+    let c = look.c;
+    let name = name_of(device);
+    let line = added_line(device);
+    let mut tick = el()
+        .size(t::SPACE_18, t::SPACE_18)
+        .radius(t::RADIUS_5)
+        .center()
+        .a11y_hidden();
+    tick = if kept {
+        tick.fill(c.accent)
+            .child(icon(&icons::CHECK, t::SPACE_14).color(c.on_accent))
+    } else {
+        tick.fill(c.field).border(1.0, c.border_form)
+    };
+    // The row says both lines in its label.
+    let mut words = col().grow(1.0).min_w(0.0).gap(t::SPACE_2).child(
+        text(name.clone())
+            .font(t::TEXT_MEMBER)
+            .color(c.ink)
+            .truncate()
+            .a11y_hidden(),
+    );
+    if !line.is_empty() {
+        words = words.child(
+            text(line.clone())
+                .font(t::TEXT_META)
+                .color(c.ink_secondary)
+                .a11y_hidden(),
+        );
+    }
+    let spoken = if line.is_empty() {
+        name
+    } else {
+        format!("{name}, {line}")
+    };
+    let id = device.device_id.clone();
+    let mut item = row()
+        .key(format!("keep-{}", device.device_id))
+        .w_full()
+        .py(t::SPACE_12)
+        .gap(t::SPACE_12)
+        .items_center()
+        .border_sides([0.0, 0.0, 1.0, 0.0], c.line)
+        .role("checkbox")
+        .label(spoken)
+        .checked(kept)
+        .disabled(!enabled)
+        .child(
+            el().size(t::GLYPH_TILE, t::GLYPH_TILE)
+                .radius(t::RADIUS_10)
+                .fill(c.inset)
+                .center()
+                .a11y_hidden()
+                .child(icon(glyph_of(device), t::SPACE_18).color(c.ink_secondary)),
+        )
+        .child(words)
+        .child(tick);
+    if enabled {
+        item = item
+            .cursor(Cursor::Pointer)
+            .focusable(true)
+            .focus_ring(2.0, 2.0, c.focus)
+            .on_press(move |s: &mut State| s.toggle_kept(&id));
+    }
+    item
 }
 
 // ---- Starting over ----------------------------------------------------------------------

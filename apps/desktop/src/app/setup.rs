@@ -1,6 +1,10 @@
 //! Setting up private messages on this computer (architecture 5.4; identity spec 4.1, 4.3
 //! and 4.7): the recovery phrase and its three-word check, restoring from the phrase,
 //! starting over, and finishing a setup that needs the password, each with its reactions.
+//! Restoring asks first whether a device with the private messages is still at hand (then
+//! linking from it is what the person wants), and after the phrase which of the devices
+//! restoring would stop to keep ([`RestoreStep`]): restoring revokes every device it does
+//! not keep (identity spec 4.3 step 3).
 //! The session sets the account up silently after every sign-in (`session::identity`);
 //! these are what follows it. The counterpart of the iOS app's setup screens, with their
 //! wording for each refusal.
@@ -12,6 +16,8 @@
 
 use std::path::Path;
 
+use chrono::{DateTime, Local};
+use lumia_client::app::DeviceSummary;
 use rune::{FileDialogOptions, TextEdit, Tx};
 
 use super::{HomeView, Place, Route, State};
@@ -85,10 +91,30 @@ impl PhraseForm {
     }
 }
 
-/// Restoring from the phrase: the 24 words in one field.
+/// Which step of restoring is on screen.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum RestoreStep {
+    /// "Do you still have a device with your private messages?"
+    #[default]
+    Ask,
+    /// The 24 words.
+    Phrase,
+    /// "Keep any devices?": the devices restoring would stop, to tick those still at hand.
+    Keep,
+}
+
+/// Restoring from the phrase: the question first, then the 24 words in one field, then
+/// the devices to keep. The words are held here, in memory, from the phrase to the keep
+/// step, and go with the form when restoring ends or is left.
 #[derive(Debug, Default)]
 pub struct RestoreForm {
+    pub step: RestoreStep,
     pub words: TextEdit,
+    /// The devices restoring would stop, as the instance listed them once the phrase was
+    /// given.
+    pub devices: Vec<DeviceSummary>,
+    /// The ones ticked to keep, by id.
+    pub kept: Vec<String>,
     /// Waiting for the instances' answers.
     pub busy: bool,
     pub error: String,
@@ -269,8 +295,8 @@ impl State {
 
     // ---- Restoring --------------------------------------------------------------------
 
-    /// Shows the restore screen: from sign-in or sign-up, or from a signed-in computer
-    /// that needs the identity.
+    /// Shows the restore screen at its question: from sign-in or sign-up, or from a
+    /// signed-in computer that needs the identity.
     pub fn start_restore(&mut self) {
         self.setup.restore = RestoreForm::default();
         self.popover = None;
@@ -287,15 +313,67 @@ impl State {
         };
     }
 
-    /// Restores with the 24 words in the field.
+    /// "Yes, link from it": linking, as "Link from a device you use" does from where
+    /// restoring was opened.
+    pub fn restore_by_linking(&mut self) {
+        self.setup.restore = RestoreForm::default();
+        self.start_linking();
+    }
+
+    /// "No, restore with my phrase": the 24 words.
+    pub fn restore_with_phrase(&mut self) {
+        let form = &mut self.setup.restore;
+        form.step = RestoreStep::Phrase;
+        form.error.clear();
+    }
+
+    /// Restores with the 24 words in the field: first the devices it would stop are read,
+    /// and with none, it restores at once ([`State::react_setup`]).
     pub fn restore_identity(&mut self) {
         let form = &mut self.setup.restore;
-        if form.busy || form.count() != PHRASE_WORDS {
+        if form.busy || form.step != RestoreStep::Phrase || form.count() != PHRASE_WORDS {
             return;
         }
         form.busy = true;
         form.error.clear();
-        self.session.restore_identity(&form.words.text);
+        self.session.restore_devices(&form.words.text);
+    }
+
+    /// Ticks a device to keep, or unticks it.
+    pub fn toggle_kept(&mut self, device_id: &str) {
+        let form = &mut self.setup.restore;
+        if form.busy {
+            return;
+        }
+        if let Some(at) = form.kept.iter().position(|id| id == device_id) {
+            form.kept.remove(at);
+        } else if form.devices.iter().any(|d| d.device_id == device_id) {
+            form.kept.push(device_id.to_string());
+        }
+    }
+
+    /// Back from the devices to the phrase, its words still in the field.
+    pub fn restore_keep_back(&mut self) {
+        let form = &mut self.setup.restore;
+        if form.busy {
+            return;
+        }
+        form.step = RestoreStep::Phrase;
+        form.devices.clear();
+        form.kept.clear();
+        form.error.clear();
+    }
+
+    /// Restores, keeping the devices ticked and stopping the rest.
+    pub fn restore_keeping(&mut self) {
+        let form = &mut self.setup.restore;
+        if form.busy || form.step != RestoreStep::Keep {
+            return;
+        }
+        form.busy = true;
+        form.error.clear();
+        self.session
+            .restore_identity(&form.words.text, form.kept.clone());
     }
 
     // ---- Starting over ----------------------------------------------------------------
@@ -391,6 +469,29 @@ impl State {
                     Err(failure) => form.error.clone_from(&failure.message),
                 }
             }
+            IdentityUpdate::RestoreDevices(answer) => {
+                let form = &mut self.setup.restore;
+                // Left, or gone back, while the instance was asked: nothing waits for it.
+                if self.route != Route::Restore || form.step != RestoreStep::Phrase || !form.busy {
+                    return true;
+                }
+                match answer {
+                    // Nothing to keep: restored at once, as before there was a choice.
+                    Ok(devices) if devices.is_empty() => {
+                        self.session.restore_identity(&form.words.text, Vec::new());
+                    }
+                    Ok(devices) => {
+                        form.busy = false;
+                        form.step = RestoreStep::Keep;
+                        form.devices.clone_from(devices);
+                        form.kept.clear();
+                    }
+                    Err(failure) => {
+                        form.busy = false;
+                        form.error = restore_refusal(failure);
+                    }
+                }
+            }
             IdentityUpdate::Restored(answer) => match answer {
                 Ok(_) => {
                     self.setup.restore = RestoreForm::default();
@@ -426,6 +527,34 @@ impl State {
             _ => return false,
         }
         true
+    }
+}
+
+/// The keep step's button, by how many devices are ticked.
+pub fn keep_button(kept: usize) -> String {
+    match kept {
+        0 => "Restore and stop them all".into(),
+        1 => "Restore and keep 1 device".into(),
+        n => format!("Restore and keep {n} devices"),
+    }
+}
+
+/// The line under a device on the keep step: when it was added, and where a browser's key
+/// is scoped. `Added Nov 12`, `On chat.acme.dev · added Nov 1`.
+pub fn added_line(device: &DeviceSummary) -> String {
+    let day = DateTime::from_timestamp_micros(device.added_at_micros)
+        .filter(|_| device.added_at_micros > 0)
+        .map(|at| at.with_timezone(&Local).format("%b %-d").to_string());
+    let host = device
+        .web_origin
+        .split_once("://")
+        .map_or(device.web_origin.as_str(), |(_, host)| host)
+        .trim_end_matches('/');
+    match (host.is_empty(), day) {
+        (true, Some(day)) => format!("Added {day}"),
+        (true, None) => String::new(),
+        (false, Some(day)) => format!("On {host} · added {day}"),
+        (false, None) => format!("On {host}"),
     }
 }
 

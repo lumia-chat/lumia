@@ -10,6 +10,10 @@
 //! A passkey and the instance's OIDC provider sign in through the system browser
 //! (architecture 6.3, [`browser_sign_in`]).
 //!
+//! A computer another device removed from the account comes back here with a notice at
+//! the card's head saying so ([`removed_notice`]), until it is put away or the next
+//! sign-in.
+//!
 //! Drawn as the sign-in boards draw it: the stacked logo, the card, the line under it. Under
 //! the primary button an "or" rule, then every other way in as an outlined button with its
 //! glyph. Of what the boards show, the shell has no "Keep me signed in", no "Forgot
@@ -19,8 +23,8 @@ use lumia_client::app::InstanceSummary;
 use rune::{Cursor, El, Tx, col, el, icon, row, text};
 
 use super::components::{
-    Look, card, error_text, field, field_with, link_button, notice, primary_button, reveal_button,
-    wide_button,
+    Look, card, error_text, field, field_with, icon_button, link_button, notice, primary_button,
+    reveal_button, wide_button,
 };
 use crate::app::State;
 use crate::tokens::{self as t, icons};
@@ -72,6 +76,7 @@ fn instance_card(s: &State, look: Look) -> El {
     let mut card = card("Welcome", "Which instance do you want to sign in to?", look)
         .key("instance-card")
         .no_window_drag()
+        .children(removed_notice(s, look))
         .child(field(
             "instance",
             "Instance",
@@ -98,6 +103,26 @@ fn instance_card(s: &State, look: Look) -> El {
         State::connect,
         look,
     ))
+}
+
+/// Why this computer is back here, when there is something to tell, with the way to put
+/// it away.
+fn removed_notice(s: &State, look: Look) -> Option<El> {
+    let words = s.sign_in.notice.as_deref()?;
+    Some(
+        notice(&icons::SHIELD, words, look)
+            .key("sign-in-notice")
+            .items_center()
+            .role("status")
+            .label(words)
+            .child(icon_button(
+                "dismiss-sign-in-notice",
+                &icons::CLOSE,
+                "Dismiss",
+                State::dismiss_sign_in_notice,
+                look,
+            )),
+    )
 }
 
 /// Who runs the instance, before anything is sent to it: an inset block, as the boards draw
@@ -195,6 +220,7 @@ fn account_card(s: &State, info: &InstanceSummary, look: Look) -> (El, El) {
     let mut card = card(title, &subtitle, look)
         .key("account-card")
         .no_window_drag()
+        .children(removed_notice(s, look))
         .child(trust(info, look))
         .child(field(
             "handle",

@@ -1,7 +1,8 @@
 //! Setting up private messages on this computer (#20) over a state no instance is behind:
 //! sign-up's line and "Already use Lumia on another device?", what Home and Devices show
 //! for each way setting up can come out, the reminder and "In a week", the phrase with its
-//! warning before saving and its three-word check, restoring and starting over. What the
+//! warning before saving and its three-word check, restoring (asked first whether a device
+//! is still at hand, then the words, then which devices to keep) and starting over. What the
 //! core would answer is applied with `State::receive`.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
@@ -11,7 +12,8 @@ mod common;
 use std::collections::HashMap;
 
 use common::*;
-use lumia_shell::app::setup::phrase_file;
+use lumia_client::app::{DeviceSummary, RosterSummary};
+use lumia_shell::app::setup::{RestoreStep, added_line, keep_button, phrase_file};
 use lumia_shell::app::{HomeView, Route, State};
 use lumia_shell::session::identity::{IdentityUpdate, Setup};
 use lumia_shell::session::{Failure, Update};
@@ -364,10 +366,100 @@ fn a_phrase_already_confirmed_closes_the_screen() {
 
 // ---- Restoring --------------------------------------------------------------------------
 
+fn roster() -> RosterSummary {
+    RosterSummary {
+        identity_id: "9f2c".into(),
+        version: 2,
+        devices: Vec::new(),
+    }
+}
+
+/// A device restoring would stop, added at `at` (seconds since 1970).
+fn device(id: &str, kind: &str, label: &str, origin: &str, at: i64) -> DeviceSummary {
+    DeviceSummary {
+        device_id: id.into(),
+        kind: kind.into(),
+        label: label.into(),
+        web_origin: origin.into(),
+        added_at_micros: at * 1_000_000,
+        this_device: false,
+        revoked: false,
+    }
+}
+
+/// The day `micros` falls on here, as the screens write one.
+fn local_day(micros: i64) -> String {
+    chrono::DateTime::from_timestamp_micros(micros)
+        .unwrap()
+        .with_timezone(&chrono::Local)
+        .format("%b %-d")
+        .to_string()
+}
+
+/// Restoring from sign-in, at the words with all 24 typed.
+fn restoring_with_words() -> Runtime<State> {
+    let mut rt = tall(offering());
+    press(&mut rt, "to-restore");
+    press(&mut rt, "restore-with-phrase");
+    rt.update(|s, _| s.setup.restore.words.replace_text(PHRASE));
+    settle(&mut rt);
+    rt
+}
+
+#[test]
+fn restoring_asks_first_whether_a_device_is_still_at_hand() {
+    let mut rt = tall(offering());
+    press(&mut rt, "to-restore");
+    assert_eq!(rt.state.setup.restore.step, RestoreStep::Ask);
+    let shown = words(&rt);
+    for expected in [
+        "Restore",
+        "With your recovery phrase",
+        "Do you still have a device with your private messages?",
+        "If you do, link this computer from it instead. Restoring is for when your devices are gone: it stops the ones you don’t keep.",
+        "Yes, link from it",
+        "No, restore with my phrase",
+        "Back to sign in",
+    ] {
+        assert!(shown.contains(expected), "{expected:?} in:\n{shown}");
+    }
+    assert!(!shown.contains("Your 24 words"), "the words come after");
+
+    // Yes: linking, as "Link from a device you use" does from sign-in (the copied request).
+    press(&mut rt, "restore-link");
+    assert_eq!(rt.state.route, Route::Link);
+    assert!(
+        !rt.state.account.link.prompted.open(),
+        "no account to prompt for"
+    );
+
+    // No: the words.
+    press(&mut rt, "link-back");
+    press(&mut rt, "to-restore");
+    press(&mut rt, "restore-with-phrase");
+    assert_eq!(rt.state.setup.restore.step, RestoreStep::Phrase);
+    assert!(words(&rt).contains("0 of 24"));
+}
+
+#[test]
+fn signed_in_yes_links_by_a_prompt() {
+    let mut rt = at(HomeView::Requests);
+    set_up(&mut rt, Setup::Elsewhere, false);
+    press(&mut rt, "setup-restore");
+    assert!(words(&rt).contains("Not now"));
+    press(&mut rt, "restore-link");
+    assert_eq!(rt.state.route, Route::Link);
+    assert!(
+        rt.state.account.link.prompted.open(),
+        "a session was asked for at once"
+    );
+}
+
 #[test]
 fn restore_turns_on_at_24_words() {
     let mut rt = tall(offering());
     press(&mut rt, "to-restore");
+    press(&mut rt, "restore-with-phrase");
     let shown = words(&rt);
     for expected in [
         "With your recovery phrase",
@@ -395,28 +487,155 @@ fn restore_turns_on_at_24_words() {
     press(&mut rt, "restore");
     assert!(rt.state.setup.restore.busy);
 
+    // The devices it would stop are read first; a phrase that is not one is refused there.
     receive(
         &mut rt,
-        IdentityUpdate::Restored(Err(Failure {
+        IdentityUpdate::RestoreDevices(Err(Failure {
             message: "that phrase is not this identity's root".into(),
             ..Failure::default()
         })),
     );
     assert!(!rt.state.setup.restore.busy);
     assert!(words(&rt).contains("that phrase is not this identity's root"));
-    assert_eq!(rt.state.route, Route::Restore);
+    assert_eq!(rt.state.setup.restore.step, RestoreStep::Phrase);
 
+    // None to stop: restored at once, with no question.
     press(&mut rt, "restore");
-    receive(
-        &mut rt,
-        IdentityUpdate::Restored(Ok(lumia_client::app::RosterSummary {
-            identity_id: "9f2c".into(),
-            version: 2,
-            devices: Vec::new(),
-        })),
-    );
+    receive(&mut rt, IdentityUpdate::RestoreDevices(Ok(Vec::new())));
+    assert_eq!(rt.state.setup.restore.step, RestoreStep::Phrase);
+    assert!(rt.state.setup.restore.busy, "restoring");
+    receive(&mut rt, IdentityUpdate::Restored(Ok(roster())));
     assert_eq!(rt.state.route, Route::Shell);
     assert!(rt.state.session.signed_in);
+    assert!(
+        rt.state.setup.restore.words.text.is_empty(),
+        "the phrase is forgotten"
+    );
+}
+
+#[test]
+fn restoring_keeps_the_devices_ticked() {
+    let mut rt = restoring_with_words();
+    press(&mut rt, "restore");
+    let mac = device("d1", "native", "MacBook Pro", "", 1_794_484_800);
+    let safari = device(
+        "d3",
+        "web",
+        "Safari",
+        "https://chat.acme.dev",
+        1_793_534_400,
+    );
+    let bare = device("d4", "native", "", "", 1_793_707_200);
+    receive(
+        &mut rt,
+        IdentityUpdate::RestoreDevices(Ok(vec![mac.clone(), safari.clone(), bare])),
+    );
+    assert_eq!(rt.state.setup.restore.step, RestoreStep::Keep);
+    assert!(!rt.state.setup.restore.busy);
+    let shown = words(&rt);
+    let mac_added = format!("Added {}", local_day(mac.added_at_micros));
+    let safari_added = format!(
+        "On chat.acme.dev · added {}",
+        local_day(safari.added_at_micros)
+    );
+    for expected in [
+        "Keep any devices?",
+        "Before this computer restores",
+        "Tick the devices you still have. The others stop reading your private messages, so a lost one can’t keep reading them.",
+        "MacBook Pro",
+        mac_added.as_str(),
+        "Safari",
+        safari_added.as_str(),
+        // A device with no label is named by its kind.
+        "Computer",
+        "Keep only devices you have with you now. A kept device you’ve lost would keep reading your private messages.",
+        "Restore and stop them all",
+        "Back",
+    ] {
+        assert!(shown.contains(expected), "{expected:?} in:\n{shown}");
+    }
+
+    // A press anywhere on a row ticks it; the button counts.
+    press(&mut rt, "keep-d1");
+    assert!(words(&rt).contains("Restore and keep 1 device"));
+    press(&mut rt, "keep-d3");
+    assert!(words(&rt).contains("Restore and keep 2 devices"));
+    press(&mut rt, "keep-d3");
+    assert_eq!(rt.state.setup.restore.kept, vec!["d1".to_string()]);
+
+    // Back keeps the words, and forgets what was ticked.
+    press(&mut rt, "restore-keep-back");
+    assert_eq!(rt.state.setup.restore.step, RestoreStep::Phrase);
+    assert_eq!(rt.state.setup.restore.words.text, PHRASE);
+    assert!(words(&rt).contains("24 of 24"));
+    press(&mut rt, "restore");
+    receive(&mut rt, IdentityUpdate::RestoreDevices(Ok(vec![mac])));
+    assert!(
+        rt.state.setup.restore.kept.is_empty(),
+        "none ticked at first"
+    );
+    press(&mut rt, "keep-d1");
+    press(&mut rt, "restore-keep");
+    assert!(rt.state.setup.restore.busy);
+    rt.update(|s, _| s.toggle_kept("d1"));
+    assert_eq!(rt.state.setup.restore.kept.len(), 1, "not while restoring");
+
+    receive(
+        &mut rt,
+        IdentityUpdate::Restored(Err(Failure {
+            code: "UNAVAILABLE".into(),
+            message: "the instance is busy".into(),
+            ..Failure::default()
+        })),
+    );
+    assert_eq!(rt.state.setup.restore.step, RestoreStep::Keep);
+    assert!(words(&rt).contains("the instance is busy"));
+    press(&mut rt, "restore-keep");
+    receive(&mut rt, IdentityUpdate::Restored(Ok(roster())));
+    assert_eq!(rt.state.route, Route::Shell);
+    assert!(rt.state.setup.restore.words.text.is_empty());
+    assert!(rt.state.setup.restore.devices.is_empty());
+}
+
+#[test]
+fn the_devices_arriving_after_restoring_was_left_change_nothing() {
+    let mut rt = restoring_with_words();
+    press(&mut rt, "restore");
+    press(&mut rt, "restore-back");
+    assert_eq!(rt.state.route, Route::SignIn);
+    receive(
+        &mut rt,
+        IdentityUpdate::RestoreDevices(Ok(vec![device("d1", "native", "Mac", "", 1)])),
+    );
+    assert_eq!(rt.state.route, Route::SignIn);
+    assert_eq!(rt.state.setup.restore.step, RestoreStep::Ask);
+    assert!(rt.state.setup.restore.words.text.is_empty());
+}
+
+#[test]
+fn the_keep_button_says_how_many_are_kept() {
+    assert_eq!(keep_button(0), "Restore and stop them all");
+    assert_eq!(keep_button(1), "Restore and keep 1 device");
+    assert_eq!(keep_button(3), "Restore and keep 3 devices");
+}
+
+#[test]
+fn a_device_says_when_it_was_added_and_a_browser_where() {
+    let noon = 1_794_484_800;
+    let day = local_day(noon * 1_000_000);
+    assert_eq!(
+        added_line(&device("a", "native", "Mac", "", noon)),
+        format!("Added {day}")
+    );
+    assert_eq!(
+        added_line(&device("b", "web", "", "https://chat.acme.dev", noon)),
+        format!("On chat.acme.dev · added {day}")
+    );
+    assert_eq!(
+        added_line(&device("c", "web", "", "https://chat.acme.dev", 0)),
+        "On chat.acme.dev"
+    );
+    assert_eq!(added_line(&device("d", "native", "", "", 0)), "");
 }
 
 // ---- Starting over ----------------------------------------------------------------------

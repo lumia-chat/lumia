@@ -1,11 +1,12 @@
 //! Setting up private messages against a real instance (#20; architecture 5.4, identity spec
 //! 4.1, 4.3 and 4.7), through the shell's forms: a new account is set up silently and its
 //! phrase confirmed by three words (one wrong check first); a second computer signing in
-//! is told the account has its identity elsewhere and restores it from the phrase; a third
-//! starts over with a new identity under the password; and, with `LUMIA_CLI`, an account
-//! the CLI made with no identity is set up at its next sign-in here. Linking another
-//! computer from one that holds the identity, by Devices' copied request and typed code,
-//! and by a prompt and six matching digits (identity spec 4.2 and 4.2.1). Runs only with
+//! is told the account has its identity elsewhere and restores it from the phrase, keeping
+//! the first; a third starts over with a new identity under the password, which signs
+//! the second out without removing it; and, with `LUMIA_CLI`, an account the CLI made with no identity is set up at
+//! its next sign-in here. Linking another computer from one that holds the identity, by
+//! Devices' copied request and typed code, and by a prompt and six matching digits
+//! (identity spec 4.2 and 4.2.1), and then removing it from Devices (4.4). Runs only with
 //! `LUMIA_DEV_INSTANCE` set; without it it passes having checked nothing, and says so.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
@@ -15,6 +16,7 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use lumia_shell::app::account::Prompted;
+use lumia_shell::app::setup::RestoreStep;
 use lumia_shell::app::{HomeView, Route, State, prompts};
 use lumia_shell::session::identity::Setup;
 use rune::TextEdit;
@@ -122,13 +124,45 @@ fn a_new_account_is_set_up_here_restored_on_another_computer_and_started_over_on
     assert_eq!(second.session.identity.setup, Setup::Elsewhere);
     assert!(!second.session.has_identity() && !second.session.private_ready());
 
-    // Restored from the phrase.
+    // Restored from the phrase, keeping the first computer, which restoring lists.
     second.start_restore();
+    second.restore_with_phrase();
     second.setup.restore.words.replace_text(words.join(" "));
     second.restore_identity();
+    wait_until(&mut second, "the devices to keep", |s| {
+        s.setup.restore.step == RestoreStep::Keep || !s.setup.restore.error.is_empty()
+    });
+    assert_eq!(second.setup.restore.error, "");
+    let listed = second.setup.restore.devices.clone();
+    assert_eq!(listed.len(), 1, "the first computer: {listed:?}");
+    assert_eq!(listed[0].label, "desktop");
+    second.toggle_kept(&listed[0].device_id);
+    second.restore_keeping();
     wait_until(&mut second, "the restore", |s| {
         s.route == Route::Shell && s.session.identity.setup == Setup::Ready
     });
+    assert!(
+        second.setup.restore.words.text.is_empty(),
+        "the phrase is forgotten"
+    );
+    wait_until(&mut second, "the roster", |s| {
+        s.session
+            .identity
+            .roster
+            .as_ref()
+            .is_some_and(|r| r.devices.iter().filter(|d| !d.revoked).count() == 2)
+    });
+    let kept = second.session.identity.roster.clone().unwrap();
+    assert!(
+        kept.devices
+            .iter()
+            .any(|d| d.device_id == listed[0].device_id && !d.revoked),
+        "the first computer is kept: {kept:?}"
+    );
+    // The first still reads private messages: its loop goes on, and it is not removed.
+    first.drain();
+    assert_eq!(first.route, Route::Shell);
+    assert!(first.sign_in.notice.is_none());
     assert!(second.session.private_ready());
     assert!(
         !second.session.identity.phrase_kept,
@@ -160,8 +194,18 @@ fn a_new_account_is_set_up_here_restored_on_another_computer_and_started_over_on
     assert_eq!(third.session.identity.setup, Setup::Ready);
     assert!(third.session.private_ready() && third.session.identity.phrase_kept);
 
-    // The second computer's identity is no longer the account's: at its next launch it is
-    // not set up (its session went with the old identity, or the account is another's).
+    // The second computer's identity is no longer the account's: starting over ended the
+    // old identity's sessions as a sign-out (identity spec 4.7 step 3). The old identity
+    // still holds the second, so it is not removed and keeps what it has; at its next
+    // launch it is not set up.
+    wait_until(&mut second, "the second at sign-in", |s| {
+        s.route == Route::SignIn
+    });
+    assert_ne!(
+        second.sign_in.notice.as_deref(),
+        Some(lumia_shell::app::sign_in::REMOVED)
+    );
+    assert!(second.session.has_identity());
     drop(second);
     let mut again = computer(&dir.join("second"), &instance);
     wait_until(&mut again, "the setup check", |s| {
@@ -456,5 +500,33 @@ fn a_computer_is_linked_by_a_prompt_on_one_that_holds_the_identity() {
     wait_both(&mut first, &mut third, "the refusal", |first, third| {
         third.account.link.prompted == Prompted::Declined && !first.prompts.open()
     });
+
+    // The first removes the second from Devices: the second erases what it kept and is
+    // back at sign-in, saying so, and signs in again as a new device.
+    let linked = first
+        .session
+        .identity
+        .roster
+        .as_ref()
+        .and_then(|r| r.devices.iter().find(|d| !d.this_device && !d.revoked))
+        .map(|d| d.device_id.clone())
+        .unwrap();
+    first.ask_revoke(&linked);
+    first.account.devices.password.replace_text(PASSWORD);
+    first.revoke();
+    wait_until(&mut first, "the revocation", |s| !s.account.devices.busy);
+    assert_eq!(first.account.devices.error, "");
+    wait_until(&mut second, "the removal", |s| s.route == Route::SignIn);
+    assert_eq!(
+        second.sign_in.notice.as_deref(),
+        Some(lumia_shell::app::sign_in::REMOVED)
+    );
+    assert!(!second.session.signed_in && !second.session.has_identity());
+    sign_in(&mut second, &handle, false);
+    assert!(second.sign_in.notice.is_none());
+    wait_until(&mut second, "the setup check", |s| {
+        s.session.identity.setup != Setup::Checking
+    });
+    assert_eq!(second.session.identity.setup, Setup::Elsewhere);
     let _ = std::fs::remove_dir_all(&dir);
 }

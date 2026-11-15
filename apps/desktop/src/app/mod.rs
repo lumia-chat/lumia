@@ -575,6 +575,12 @@ impl State {
             Update::Notice(update) => self.react_notice(update),
             Update::Avatar(update) => self.react_avatar(update),
             Update::Gateway(event) => {
+                if matches!(
+                    event,
+                    lumia_client::app::AppEvent::Closed { removed: true, .. }
+                ) {
+                    self.device_removed();
+                }
                 self.react_gateway(event);
                 if matches!(event, lumia_client::app::AppEvent::AccountApplied { .. }) {
                     self.account_event();

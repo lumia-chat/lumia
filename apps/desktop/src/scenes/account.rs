@@ -7,11 +7,12 @@
 use std::time::{Duration, Instant};
 
 use lumia_client::app::{
-    DeviceSummary, InstanceSummary, LinkProgress, LinkPrompt, LinkRequestSummary, PasskeySummary,
-    ProfileSummary, RosterSummary, SnapshotSummary,
+    AppEvent, DeviceSummary, InstanceSummary, LinkProgress, LinkPrompt, LinkRequestSummary,
+    PasskeySummary, ProfileSummary, RosterSummary, SnapshotSummary,
 };
 
 use crate::app::account::{Link, Prompted};
+use crate::app::setup::RestoreStep;
 use crate::app::{HomeView, Route, State};
 use crate::session::Update;
 use crate::session::identity::{IdentityUpdate, Setup};
@@ -354,12 +355,59 @@ pub fn phrase_check(s: &mut State) {
     }
 }
 
-/// Restoring, from sign-in, twelve words in.
-pub fn restore(s: &mut State) {
+/// Restoring, from sign-in: first, whether a device is still at hand.
+pub fn restore_ask(s: &mut State) {
     opened(s);
     s.start_restore();
+}
+
+/// Restoring with the phrase, twelve words in.
+pub fn restore(s: &mut State) {
+    restore_ask(s);
+    s.restore_with_phrase();
     let twelve: Vec<&str> = PHRASE.split(' ').take(12).collect();
     s.setup.restore.words.replace_text(twelve.join(" "));
+}
+
+/// After the phrase: the three devices restoring would stop, the first ticked, as the
+/// board has them.
+pub fn restore_keep(s: &mut State) {
+    restore(s);
+    s.setup.restore.words.replace_text(PHRASE);
+    let added = |id: &str, kind: &str, label: &str, origin: &str, at: i64| DeviceSummary {
+        device_id: id.into(),
+        kind: kind.into(),
+        label: label.into(),
+        web_origin: origin.into(),
+        added_at_micros: at,
+        this_device: false,
+        revoked: false,
+    };
+    // Noon UTC on Nov 12, 3 and 1.
+    let form = &mut s.setup.restore;
+    form.step = RestoreStep::Keep;
+    form.devices = vec![
+        added("d1", "native", "MacBook Pro", "", 1_794_484_800_000_000),
+        added("d2", "native", "iPhone", "", 1_793_707_200_000_000),
+        added(
+            "d3",
+            "web",
+            "Safari",
+            "https://chat.acme.dev",
+            1_793_534_400_000_000,
+        ),
+    ];
+    s.toggle_kept("d1");
+}
+
+/// Back at sign-in after another device removed this computer.
+pub fn removed(s: &mut State) {
+    signed_in(s);
+    s.receive(&Update::Gateway(AppEvent::Closed {
+        reason: "device revoked".into(),
+        removed: true,
+    }));
+    debug_assert_eq!(s.route, Route::SignIn);
 }
 
 /// Starting over, from "Private messages need this computer".
