@@ -182,6 +182,35 @@ public actor LumiaClient {
         try inner.identityRevoke(deviceId: deviceID, password: password)
     }
 
+    /// Setting up private messages (architecture 5.4, identity spec 4.1,
+    /// 4.3 and 4.7): the identity the account is bound to here (hex, nil
+    /// for none); an identity made here unless held and the account bound
+    /// to it under the reauth in hand (`ReauthNeeded` without one,
+    /// `AccountHasIdentity` when the account has another); the identity
+    /// restored from its phrase, signing in by it; the account moved to a
+    /// new one here (Start over, reauth first).
+    public func accountIdentity() throws -> String? { try inner.accountIdentity() }
+    public func identitySetup(label: String) throws -> String { try inner.identitySetup(label: label) }
+    public func identityRecover(phrase: String, label: String) throws -> RosterSummary { try inner.identityRecover(phrase: phrase, label: label) }
+    public func identityStartOver(label: String) throws -> String { try inner.identityStartOver(label: label) }
+    /// The phrase this phone keeps until three of its words are confirmed
+    /// (24 words, or nil once confirmed), whether one waits, the three
+    /// positions to ask for (the same until answered) and the answer; a
+    /// wrong one asks other positions next time.
+    public func identityPhrase() throws -> String? { try inner.identityPhrase() }
+    public func identityPhraseUnconfirmed() throws -> Bool { try inner.identityPhraseUnconfirmed() }
+    public func identityPhraseQuiz() throws -> [UInt32] { try inner.identityPhraseQuiz() }
+    public func identityPhraseConfirm(words: [String]) throws -> Bool { try inner.identityPhraseConfirm(words: words) }
+    /// Reauth (identity spec 10), the token kept by the core for the next
+    /// identity call: by password, a TOTP code or the mailed one, or a
+    /// fresh OIDC login that lands at `returnTo?reauth=<token>`.
+    public var hasReauth: Bool { inner.hasReauth() }
+    public func reauthPassword(_ password: String) throws { try inner.reauthPassword(password: password) }
+    public func reauthCode(_ code: String, mailed: Bool) throws { try inner.reauthCode(code: code, mailed: mailed) }
+    public func reauthMailCode() throws { try inner.reauthMailCode() }
+    public func reauthOIDCURL(returnTo: String) throws -> String { try inner.reauthOidcUrl(returnTo: returnTo) }
+    public func reauthTake(_ token: String) { inner.reauthTake(token: token) }
+
     /// The account's passkeys (architecture 6.3), and one removed.
     public func passkeys() throws -> [PasskeySummary] { try inner.passkeys() }
     public func removePasskey(id: String) throws { try inner.removePasskey(passkeyId: id) }

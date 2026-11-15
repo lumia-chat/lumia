@@ -4,9 +4,10 @@
 import Foundation
 import Observation
 
-/// What the app shows.
+/// What the app shows: restore is the recovery phrase's way in from the
+/// sign-in screen, which signs in by the identity it restores.
 public enum Route: Equatable, Sendable {
-    case signIn, link, app
+    case signIn, link, restore, app
 }
 
 @MainActor

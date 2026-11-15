@@ -60,7 +60,38 @@ public struct LumiaPictureOver<Under: View>: View {
     }
 }
 
-public enum NoticeTone { case neutral, accent }
+/// A notice's look: quiet, the accent's, or the warning's amber (the
+/// recovery phrase's notes, issue #20). The design has no warning colours
+/// of its own yet, so it borrows the amber avatar tone's fill and ink.
+public enum NoticeTone {
+    case neutral, accent, warning
+
+    var fill: Color {
+        switch self {
+        case .neutral: LumiaTokens.inset.color
+        case .accent: LumiaTokens.accentWash.color
+        case .warning: LumiaTokens.toneAmber.color
+        }
+    }
+
+    var edge: Color {
+        switch self {
+        case .neutral: LumiaTokens.line.color
+        case .accent: LumiaTokens.accentLine.color
+        case .warning: LumiaTokens.toneAmberInk.color.opacity(0.25)
+        }
+    }
+
+    var iconInk: Color {
+        switch self {
+        case .neutral: LumiaTokens.inkSecondary.color
+        case .accent: LumiaTokens.accentInk.color
+        case .warning: LumiaTokens.toneAmberInk.color
+        }
+    }
+
+    var ink: Color { self == .warning ? LumiaTokens.toneAmberInk.color : LumiaTokens.inkBody.color }
+}
 
 public struct LumiaNotice<Content: View>: View {
     let icon: String
@@ -75,19 +106,20 @@ public struct LumiaNotice<Content: View>: View {
     public var body: some View {
         HStack(alignment: .top, spacing: LumiaTokens.space10) {
             Image(systemName: icon)
-                .foregroundStyle(tone == .accent ? LumiaTokens.accentInk.color : LumiaTokens.inkSecondary.color)
+                .foregroundStyle(tone.iconInk)
                 .frame(width: 18)
+                .accessibilityHidden(true)
             content()
                 .font(LumiaTokens.textBody.font)
-                .foregroundStyle(LumiaTokens.inkBody.color)
+                .foregroundStyle(tone.ink)
                 .frame(maxWidth: .infinity, alignment: .leading)
             if let action {
                 Button(action.label, action: action.run).buttonStyle(.lumiaSecondary)
             }
         }
         .padding(LumiaTokens.space12)
-        .background(tone == .accent ? LumiaTokens.accentWash.color : LumiaTokens.inset.color, in: RoundedRectangle(cornerRadius: LumiaTokens.radius10))
-        .overlay(RoundedRectangle(cornerRadius: LumiaTokens.radius10).stroke(tone == .accent ? LumiaTokens.accentLine.color : LumiaTokens.line.color))
+        .background(tone.fill, in: RoundedRectangle(cornerRadius: LumiaTokens.radius10))
+        .overlay(RoundedRectangle(cornerRadius: LumiaTokens.radius10).stroke(tone.edge))
     }
 }
 
@@ -1135,6 +1167,21 @@ public struct LumiaLinkButton: ButtonStyle {
     }
 }
 
+/// The danger's: an action that cannot be taken back (Start over).
+public struct LumiaDangerButton: ButtonStyle {
+    @Environment(\.isEnabled) var enabled
+    public func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(LumiaTokens.textButton.font)
+            .foregroundStyle(LumiaTokens.onAccent.color)
+            .padding(.horizontal, LumiaTokens.space14)
+            .frame(minHeight: LumiaTokens.controlHeight)
+            .background(LumiaTokens.danger.color.opacity(configuration.isPressed ? 0.85 : 1), in: RoundedRectangle(cornerRadius: LumiaTokens.radius8))
+            .opacity(enabled ? 1 : 0.5)
+    }
+}
+
 public extension ButtonStyle where Self == LumiaPrimaryButton { static var lumiaPrimary: LumiaPrimaryButton { .init() } }
+public extension ButtonStyle where Self == LumiaDangerButton { static var lumiaDanger: LumiaDangerButton { .init() } }
 public extension ButtonStyle where Self == LumiaSecondaryButton { static var lumiaSecondary: LumiaSecondaryButton { .init() } }
 public extension ButtonStyle where Self == LumiaLinkButton { static var lumiaLink: LumiaLinkButton { .init() } }

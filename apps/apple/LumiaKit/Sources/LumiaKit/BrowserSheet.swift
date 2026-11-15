@@ -21,6 +21,9 @@ public final class BrowserSheet: NSObject {
     public static let signInReturn = "lumia://sign-in"
     /// Where the web page returns to once done with a handed-off session.
     public static let doneReturn = "lumia://done"
+    /// Where a fresh login at the account's OIDC provider, to confirm it's
+    /// the person (identity spec 10), returns to, with `reauth={token}`.
+    public static let reauthReturn = "lumia://reauth"
 
     private var session: ASWebAuthenticationSession?
     // The sheet holds its provider weakly; this keeps the running one alive.

@@ -33,6 +33,8 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.social-networking</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Lumia shows your recovery phrase only after you unlock it with Face ID or your passcode.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string></string>
 	<key>UIBackgroundModes</key>

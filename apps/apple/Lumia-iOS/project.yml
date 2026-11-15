@@ -64,6 +64,9 @@ targets:
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         UISupportedInterfaceOrientations~ipad: [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
         NSHumanReadableCopyright: ""
+        # The recovery phrase is shown only after the phone's own unlock
+        # (identity spec 4.1 step 7), which may be Face ID.
+        NSFaceIDUsageDescription: Lumia shows your recovery phrase only after you unlock it with Face ID or your passcode.
     entitlements:
       path: Lumia.entitlements
       properties:

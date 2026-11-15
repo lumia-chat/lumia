@@ -50,7 +50,7 @@ struct LinkView: View {
                                 .disabled(busy || code.trimmingCharacters(in: .whitespaces).isEmpty)
                         }
                         if !error.isEmpty { LumiaErrorText(error) }
-                        Button("Back to sign in") { store.route = session.signedIn ? .app : .signIn }
+                        Button(session.signedIn ? "Back" : "Back to sign in") { store.route = session.signedIn ? .app : .signIn }
                             .buttonStyle(.lumiaLink).frame(maxWidth: .infinity)
                     }
                 }
@@ -63,7 +63,7 @@ struct LinkView: View {
 
     private func start() async {
         error = ""
-        do { request = try await session.identityLinkRequest(label: "phone") } catch { self.error = error.lumiaMessage }
+        do { request = try await session.identityLinkRequest(label: LumiaSession.deviceLabel) } catch { self.error = error.lumiaMessage }
     }
 
     private func claim() async {

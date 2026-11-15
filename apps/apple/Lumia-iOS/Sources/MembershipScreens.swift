@@ -436,6 +436,7 @@ struct YourSettingsScreen: View {
 /// Someone in a server: who they are, and a way to write to them there
 /// (a server DM, unless they take none) or privately (a personal DM).
 struct ProfileCard: View {
+    @Environment(\.setUpPrivateMessages) private var setUp
     let session: LumiaSession
     let person: PersonInServer
     /// Opens the conversation a button led to.
@@ -508,6 +509,8 @@ struct ProfileCard: View {
 
     /// A personal DM, end-to-end encrypted: opened, or asked for first.
     private func messagePrivately() async {
+        // Closes the card, then what this phone needs (the shell's).
+        if session.privateMessages.needsSomething { setUp(); return }
         busy = true
         note = ""
         defer { busy = false }

@@ -98,6 +98,9 @@ struct RootView: View {
             ShellView(session: session)
         } else if store.route == .link, let session = store.session {
             LinkView(session: session)
+        } else if store.route == .restore, let session = store.session {
+            // From the sign-in screen: restoring signs in by the identity.
+            RestoreScreen(session: session, back: "Sign in", close: { store.route = .signIn }) { store.route = .app }
         } else {
             SignInView()
         }

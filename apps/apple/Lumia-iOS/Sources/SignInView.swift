@@ -1,7 +1,10 @@
 // Sign in on a phone: the instance (with its trust card, architecture
 // 6.1), then a password with a second factor when the account asks for
 // one, or a new account, or linking this phone from a device that holds
-// the identity; the same flow as the web's and the desktop shell's.
+// the identity, or restoring the identity from its recovery phrase; the
+// same flow as the web's and the desktop shell's. A new account has
+// private messages set up on this phone with it (architecture 5.4), the
+// phrase following through the reminders.
 import LumiaFFI
 import LumiaKit
 import SwiftUI
@@ -28,6 +31,7 @@ struct SignInView: View {
                     .padding(.top, LumiaTokens.space24)
                 if let info {
                     accountCard(info)
+                    if creating, info.identityProofSignInEnabled { alreadyUse }
                 } else {
                     instanceCard
                 }
@@ -104,6 +108,11 @@ struct SignInView: View {
                 Button { Task { await submit() } } label: { Text(creating ? "Create account" : "Sign in").frame(maxWidth: .infinity) }
                     .buttonStyle(.lumiaPrimary)
                     .disabled(busy)
+                if creating {
+                    Text("Private messages are set up on this phone with your account. You'll be asked to save a recovery phrase afterwards.")
+                        .font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkSecondary.color)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 if !creating, !info.oidcName.isEmpty {
                     Button { Task { await browserSignIn(oidc: true) } } label: { Label(info.oidcName, systemImage: "key").frame(maxWidth: .infinity) }
                         .buttonStyle(.lumiaSecondary).disabled(busy)
@@ -136,9 +145,30 @@ struct SignInView: View {
                         Label("Link this phone from another device", systemImage: "iphone").frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.lumiaSecondary)
+                    Button {
+                        store.route = .restore
+                    } label: {
+                        Label("Restore with your recovery phrase", systemImage: "text.alignleft").frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.lumiaSecondary)
                 }
             }
         }
+    }
+
+    /// Under the new account's card: someone who already has an identity
+    /// brings this phone into it instead (identity spec 4.2 and 4.3), and
+    /// signs in by it.
+    private var alreadyUse: some View {
+        VStack(alignment: .leading, spacing: LumiaTokens.space8) {
+            Text("Already use Lumia on another device?").font(LumiaTokens.textLabel.font).foregroundStyle(LumiaTokens.inkSecondary.color)
+                .accessibilityAddTraits(.isHeader)
+            Button { store.route = .link } label: { Label("Link from a device you use", systemImage: "iphone").frame(maxWidth: .infinity) }
+                .buttonStyle(.lumiaSecondary)
+            Button { store.route = .restore } label: { Label("Restore with your recovery phrase", systemImage: "text.alignleft").frame(maxWidth: .infinity) }
+                .buttonStyle(.lumiaSecondary)
+        }
+        .padding(.horizontal, LumiaTokens.space4)
     }
 
     @ViewBuilder

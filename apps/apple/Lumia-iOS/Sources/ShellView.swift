@@ -8,11 +8,18 @@ import SwiftUI
 
 struct ShellView: View {
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(AppStore.self) private var store
     let session: LumiaSession
     @State private var place: Place = .home
     @State private var path: [Screen] = []
     /// Whose profile card is open, over whatever is on screen.
     @State private var person: PersonInServer?
+    /// "Private messages need this phone" is open; and it is to open once
+    /// the profile card that asked for it has gone.
+    @State private var needsSetup = false
+    @State private var setUpAfterCard = false
+    /// The phrase check got a word wrong: the phrase says so when shown again.
+    @State private var phraseAgain = false
 
     private var snapshot: SnapshotSummary? { session.snapshot }
     private var servers: [ServerSummary] { snapshot?.servers ?? [] }
@@ -41,7 +48,7 @@ struct ShellView: View {
                 case let .conversation(id): ConversationScreen(session: session, channelID: id)
                 case let .channel(id): ChannelScreen(session: session, channelID: id, path: $path)
                 case .requests: RequestsScreen(session: session, path: $path)
-                case .devices: DevicesScreen(session: session)
+                case .devices: DevicesScreen(session: session, path: $path)
                 case .profile: ProfileScreen(session: session)
                 case .preferences: PreferencesScreen()
                 case .newMessage: NewMessageScreen(session: session, path: $path)
@@ -55,16 +62,35 @@ struct ShellView: View {
                 case let .newServerDM(serverID): NewServerDMScreen(session: session, serverID: serverID, path: $path)
                 case let .yourSettings(serverID): YourSettingsScreen(session: session, serverID: serverID)
                 case let .mentions(serverID): MentionsScreen(session: session, serverID: serverID) { openMention($0, from: serverID) }
+                case .phrase: PhraseScreen(session: session, back: back(from: screen), again: $phraseAgain) { path.append(.phraseCheck) }
+                case .phraseCheck:
+                    PhraseCheckScreen(session: session, wrong: { phraseAgain = true; path.removeLast() }, back: { path.removeLast() }, done: phraseSaved)
+                case .restore: RestoreScreen(session: session, back: back(from: screen)) { path = [] }
+                case .startOver: StartOverScreen(session: session, back: back(from: screen)) { path = [] }
+                case .setUp: SetUpScreen(session: session, back: back(from: screen))
+                }
+            }
+            .sheet(isPresented: $needsSetup) {
+                NeedsSetupSheet { choice in
+                    needsSetup = false
+                    switch choice {
+                    case .link: store.route = .link
+                    case .restore: path.append(.restore)
+                    case .startOver: path.append(.startOver)
+                    }
                 }
             }
         }
-        .sheet(item: $person) { person in
+        .sheet(item: $person, onDismiss: {
+            if setUpAfterCard { setUpAfterCard = false; setUpPrivateMessages() }
+        }) { person in
             ProfileCard(session: session, person: person) { screen in
                 self.person = nil
                 path.append(screen)
             }
         }
         .environment(\.openPerson, OpenPerson { person = $0 })
+        .environment(\.setUpPrivateMessages, SetUpPrivateMessages { setUpPrivateMessages() })
         .task {
             PushRegistrar.shared.session = session
             await session.load()
@@ -121,6 +147,14 @@ struct ShellView: View {
                 case "serversettings": place = .server(id: first); path = [.serverSettings(serverID: first)]
                 case "mentions": place = .server(id: first); path = [.mentions(serverID: first)]
                 case "homementions": place = .home; path = [.mentions(serverID: nil)]
+                // Setting up private messages (issue #20): the phrase (after the
+                // unlock, which LUMIA_DEV_NO_UNLOCK=1 skips), its check,
+                // restore, start over, and "Private messages need this phone".
+                case "phrase": place = .home; path = [.phrase]
+                case "phrasecheck": place = .home; path = [.phrase, .phraseCheck]
+                case "restore": place = .home; path = [.restore]
+                case "startover": place = .home; path = [.startOver]
+                case "needssetup": place = .home; needsSetup = true
                 default: devMembershipScreen(screen, serverID: first)
                 }
             }
@@ -136,6 +170,46 @@ struct ShellView: View {
         }
         .onChange(of: PushRegistrar.shared.target) { _, _ in openTarget() }
         .onChange(of: channels.map(\.channelId)) { _, _ in openTarget() }
+    }
+
+    /// What this phone needs before a private message can be started or
+    /// accepted here: the sheet when the account's identity is on other
+    /// devices, confirming it's you when no sign-in token is in hand, or
+    /// finding out again. From the profile card, once it has gone.
+    private func setUpPrivateMessages() {
+        if person != nil {
+            setUpAfterCard = true
+            person = nil
+            return
+        }
+        switch session.privateMessages {
+        case .bringIn: needsSetup = true
+        case .confirm: path.append(.setUp)
+        default: Task { await session.settlePrivateMessages() }
+        }
+    }
+
+    /// What a setup screen's back button goes back to, as its label says it.
+    private func back(from screen: Screen) -> String {
+        guard let i = path.firstIndex(of: screen), i > 0 else { return "Home" }
+        switch path[i - 1] {
+        case .devices: return "Devices"
+        case .profile: return "Profile"
+        case .requests: return "Requests"
+        case .newMessage: return "New message"
+        case let .conversation(id): return session.channel(id).map { session.conversationName($0) } ?? "Conversation"
+        default: return "Home"
+        }
+    }
+
+    /// Three words were right: the phrase and its check go, and with them
+    /// the reminders; the next one, after starting over, is not put off.
+    private func phraseSaved() {
+        path.removeAll { $0 == .phrase || $0 == .phraseCheck }
+        phraseAgain = false
+        var reminder = PhraseReminder()
+        reminder.clear()
+        AccessibilityNotification.Announcement("Recovery phrase saved").post()
     }
 
     #if DEBUG
@@ -207,9 +281,11 @@ struct ShellView: View {
 // MARK: Home
 
 struct HomeScreen: View {
-    @Environment(AppStore.self) private var store
+    @Environment(\.setUpPrivateMessages) private var setUp
     let session: LumiaSession
     @Binding var path: [Screen]
+    /// "In a week", kept on this phone.
+    @State private var reminder = PhraseReminder()
 
     private var byHost: [(host: String, channels: [ChannelSummary])] {
         var order: [String] = []
@@ -234,11 +310,13 @@ struct HomeScreen: View {
                         Tile(label: "Devices", icon: "shield") { path.append(.devices) }
                         Tile(label: "New", icon: "square.and.pencil") { path.append(.newMessage) }
                     }
-                    if !session.hasIdentity {
-                        LumiaNotice(icon: "shield", tone: .accent, action: ("Link", { store.route = .link })) {
-                            Text("Personal messages are end-to-end encrypted. This phone has no device key yet; a device you already use approves it.")
-                        }
-                    } else if byHost.isEmpty {
+                    // The recovery phrase waits for three of its words (architecture 5.4).
+                    if reminder.shows(unconfirmed: session.phraseUnconfirmed) {
+                        PhraseReminderCard(save: { path.append(.phrase) }, later: { reminder.putOff() })
+                    }
+                    if session.privateMessages.needsSomething {
+                        PrivateMessagesNotice(state: session.privateMessages, setUp: setUp.run)
+                    } else if session.hasIdentity, byHost.isEmpty {
                         LumiaEmptyState(icon: "lock", title: "Your conversations", action: ("New message", { path.append(.newMessage) })) {
                             Text("Personal messages are end-to-end encrypted. Start one with someone you share a server with.")
                         }
@@ -262,6 +340,8 @@ struct HomeScreen: View {
                 .font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkQuiet.color)
                 .padding(.horizontal, LumiaTokens.space16).padding(.vertical, LumiaTokens.space6)
         }
+        // Read again on the way back: a phrase confirmed, or a new one after starting over.
+        .onAppear { reminder = PhraseReminder() }
         .task(id: byHost.flatMap { $0.channels.map(\.channelId) }) {
             // The rows show each conversation's last line.
             for c in byHost.flatMap(\.channels) where session.dmLogs[c.channelId] == nil {

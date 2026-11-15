@@ -5,6 +5,9 @@
 import Foundation
 import LumiaFFI
 import Observation
+#if os(iOS)
+import UIKit
+#endif
 
 public enum ConnectionState: Equatable, Sendable {
     case idle, connecting, connected
@@ -70,6 +73,14 @@ public final class LumiaSession {
     public private(set) var dmChannels: [DmChannelSummary] = []
     public private(set) var dmLogs: [String: DmLogSummary] = [:]
     public private(set) var roster: RosterSummary?
+    /// Where this phone stands with private messages (issue #20): found out
+    /// and set up silently where it can be at each load.
+    public private(set) var privateMessages: PrivateMessages = .unknown
+    /// The recovery phrase this phone keeps still waits for three of its
+    /// words: what the Home reminder and Devices' card follow.
+    public private(set) var phraseUnconfirmed = false
+    /// Setting up is being found out: a second asking meanwhile does nothing.
+    @ObservationIgnored private var settling = false
     /// Everyone this account shares a server with, by account id.
     public internal(set) var people: [String: MemberSummary] = [:]
     /// A server's members, by server id, for the members aside.
@@ -208,10 +219,14 @@ public final class LumiaSession {
         signedIn = true
     }
 
-    /// With an invite link or code, the account joins its server at creation.
+    /// With an invite link or code, the account joins its server at
+    /// creation. Private messages are set up on this phone straight after,
+    /// under the reauth the creation carried (architecture 5.4); the phrase
+    /// comes later, through the reminders.
     public func createAccount(handle: String, password: String, invite: String? = nil) async throws {
         try await client.createAccount(handle: handle, password: password, invite: invite)
         signedIn = true
+        await settlePrivateMessages()
     }
 
     // MARK: Invites (architecture 6.1)
@@ -444,6 +459,8 @@ public final class LumiaSession {
         dmChannels = []
         dmLogs = [:]
         roster = nil
+        privateMessages = .unknown
+        phraseUnconfirmed = false
         people = [:]
         serverMembers = [:]
         serverPresence = [:]
@@ -496,9 +513,135 @@ public final class LumiaSession {
     /// claim does both, so nothing signs in a second time here (that made a
     /// session only to revoke it).
     public func identityClaim(code: String) async throws {
-        _ = try await client.identityClaim(code: code)
+        roster = try await client.identityClaim(code: code)
         hasIdentity = true
         signedIn = true
+        privateMessages = .ready
+    }
+
+    /// What this phone calls itself among the identity's devices.
+    public static var deviceLabel: String {
+        #if os(iOS)
+        UIDevice.current.model
+        #else
+        "Mac"
+        #endif
+    }
+
+    /// Finds out where this phone stands with private messages and sets
+    /// them up silently where the account allows (architecture 5.4): an
+    /// account with no identity is bound to this phone's, made here unless
+    /// held, under the reauth the sign-up or sign-in carried. Without one in
+    /// hand the person is asked to confirm it's them (`confirm`); an account
+    /// whose identity is elsewhere needs this phone brought in (`bringIn`).
+    /// A failure to reach the instance leaves it to the next load.
+    public func settlePrivateMessages() async {
+        guard signedIn, !settling else { return }
+        settling = true
+        defer { settling = false }
+        do {
+            let account = try await client.accountIdentity()
+            hasIdentity = await client.hasIdentity
+            if hasIdentity { roster = try await client.identityShow() }
+            var state = PrivateMessages.step(account: account, device: hasIdentity ? roster?.identityId : nil)
+            if state == .setUp {
+                do {
+                    _ = try await client.identitySetup(label: Self.deviceLabel)
+                    state = .ready
+                } catch {
+                    state = PrivateMessages.after(error)
+                }
+                // Made here, bound or not: a setup asked to confirm it's
+                // you first has made the identity already.
+                await refreshRoster()
+            }
+            privateMessages = state
+        } catch {
+            if error.lumiaSignedOut { await sessionEnded(); return }
+        }
+        await refreshPhrase()
+    }
+
+    /// After the person confirmed it's them: sets up as `settlePrivateMessages` would have.
+    public func setUpPrivateMessages() async throws {
+        do {
+            _ = try await client.identitySetup(label: Self.deviceLabel)
+        } catch {
+            privateMessages = PrivateMessages.after(error)
+            await refreshRoster()
+            throw error
+        }
+        privateMessages = .ready
+        await afterIdentity()
+    }
+
+    /// Restores the identity from its 24 words (identity spec 4.3): this
+    /// phone becomes its only device and signs in by it, so this works from
+    /// the sign-in screen as well as from inside the app.
+    public func restore(phrase: String) async throws {
+        roster = try await client.identityRecover(phrase: phrase, label: Self.deviceLabel)
+        hasIdentity = true
+        signedIn = true
+        privateMessages = .ready
+        await afterIdentity()
+    }
+
+    /// Starts over with a new identity made here (identity spec 4.7), under
+    /// the reauth the person just gave; its phrase follows as at sign-up.
+    public func startOver() async throws {
+        _ = try await client.identityStartOver(label: Self.deviceLabel)
+        privateMessages = .ready
+        await afterIdentity()
+    }
+
+    /// Once this phone holds the account's identity: the phrase's state,
+    /// and, with the app already on screen, the personal conversations it
+    /// can now read.
+    private func afterIdentity() async {
+        await refreshRoster()
+        await refreshPhrase()
+        guard snapshot != nil else { return }
+        await refreshSnapshot()
+        await refreshDmChannels()
+    }
+
+    /// Confirming it's the person (identity spec 10), for the next setup or start over.
+    public func reauthPassword(_ password: String) async throws { try await client.reauthPassword(password) }
+    public func reauthCode(_ code: String, mailed: Bool) async throws { try await client.reauthCode(code, mailed: mailed) }
+    public func reauthMailCode() async throws { try await client.reauthMailCode() }
+
+    /// Confirms it's the person by a fresh login at the account's OIDC
+    /// provider in the system browser, which comes back with the token.
+    public func reauthThroughBrowser() async throws {
+        let url = try await client.reauthOIDCURL(returnTo: BrowserSheet.reauthReturn)
+        guard let parsed = URL(string: url) else { throw BrowserSheetError.badURL }
+        let back = try await BrowserSheet().run(parsed, ephemeral: false)
+        let token = URLComponents(url: back, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "reauth" }?.value ?? ""
+        guard !token.isEmpty else { throw BrowserSheetError.badURL }
+        await client.reauthTake(token)
+    }
+
+    /// The phrase this phone keeps, its 24 words, or nil once confirmed.
+    /// Shown only after the phone's own unlock, which is the screen's.
+    public func phrase() async throws -> [String]? {
+        try await client.identityPhrase().map(PhraseWords.words)
+    }
+
+    /// The three positions to ask for.
+    public func phraseQuiz() async throws -> [UInt32] { try await client.identityPhraseQuiz() }
+
+    /// The words for those positions: true ends the reminders; false means
+    /// the phrase is shown again, and the next quiz asks other positions.
+    public func confirmPhrase(_ words: [String]) async throws -> Bool {
+        let right = try await client.identityPhraseConfirm(words: words)
+        if right { phraseUnconfirmed = false }
+        return right
+    }
+
+    /// Whether the phrase still waits, read again.
+    public func refreshPhrase() async {
+        guard hasIdentity else { phraseUnconfirmed = false; return }
+        phraseUnconfirmed = (try? await client.identityPhraseUnconfirmed()) ?? false
     }
 
     public func identityRevoke(deviceID: String, password: String) async throws {
@@ -583,6 +726,7 @@ public final class LumiaSession {
         } catch {
             await loadFailed(error)
         }
+        if !privateMessages.ready { await settlePrivateMessages() }
     }
 
     /// Reads the snapshot again. Member lists are read only for servers

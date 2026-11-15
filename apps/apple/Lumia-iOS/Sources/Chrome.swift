@@ -31,6 +31,14 @@ enum Screen: Hashable {
     case yourSettings(serverID: String)
     /// A server's Mentions page, or Home's (every server's) for nil.
     case mentions(serverID: String?)
+    /// Setting up private messages (issue #20, `PrivateMessages.swift`):
+    /// the recovery phrase and its check, restoring from it, starting over,
+    /// and confirming it's you to set up on this phone.
+    case phrase
+    case phraseCheck
+    case restore
+    case startOver
+    case setUp
 }
 
 /// A server's unread mark on the rail: a dot at its tile's top end, 11
@@ -125,16 +133,19 @@ struct PanelScreen<Lead: View, Content: View>: View {
     var subtitle: String?
     @ViewBuilder let lead: () -> Lead
     var actions: [(icon: String, label: String, run: () -> Void)] = []
+    /// What the back button does where the panel is not pushed (Restore
+    /// from the sign-in screen); popping it otherwise.
+    var close: (() -> Void)?
     @ViewBuilder let content: () -> Content
 
-    init(back: String, title: String, subtitle: String? = nil, actions: [(icon: String, label: String, run: () -> Void)] = [], @ViewBuilder lead: @escaping () -> Lead = { EmptyView() }, @ViewBuilder content: @escaping () -> Content) {
-        self.back = back; self.title = title; self.subtitle = subtitle; self.actions = actions; self.lead = lead; self.content = content
+    init(back: String, title: String, subtitle: String? = nil, actions: [(icon: String, label: String, run: () -> Void)] = [], close: (() -> Void)? = nil, @ViewBuilder lead: @escaping () -> Lead = { EmptyView() }, @ViewBuilder content: @escaping () -> Content) {
+        self.back = back; self.title = title; self.subtitle = subtitle; self.actions = actions; self.close = close; self.lead = lead; self.content = content
     }
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: LumiaTokens.space8) {
-                Button { dismiss() } label: {
+                Button { if let close { close() } else { dismiss() } } label: {
                     Image(systemName: "chevron.left").font(.system(size: 20, weight: .semibold))
                         .foregroundStyle(LumiaTokens.iconStrong.color)
                         .frame(width: LumiaTokens.controlHeight, height: LumiaTokens.controlHeight)

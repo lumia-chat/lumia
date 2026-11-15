@@ -33,6 +33,7 @@ struct JoinBar: View {
 // MARK: Requests
 
 struct RequestsScreen: View {
+    @Environment(\.setUpPrivateMessages) private var setUp
     let session: LumiaSession
     @Binding var path: [Screen]
     @State private var busy: String?
@@ -80,6 +81,8 @@ struct RequestsScreen: View {
     }
 
     private func respond(_ id: String, _ response: String) async {
+        // Accepting opens an encrypted conversation, which needs this phone set up.
+        if response == "accept", session.privateMessages.needsSomething { setUp(); return }
         busy = id
         error = ""
         defer { busy = nil }
@@ -699,6 +702,7 @@ struct ServerSettingsScreen: View {
 }
 
 struct NewMessageScreen: View {
+    @Environment(\.setUpPrivateMessages) private var setUp
     let session: LumiaSession
     @Binding var path: [Screen]
     @State private var query = ""
@@ -746,6 +750,7 @@ struct NewMessageScreen: View {
     }
 
     private func message(_ p: MemberSummary) async {
+        if session.privateMessages.needsSomething { setUp(); return }
         busy = p.accountId
         note = ""
         defer { busy = nil }
@@ -768,7 +773,7 @@ struct NewMessageScreen: View {
 // phone's device key and sent to the instance as the account's. The same
 // screen as the web's and the desktop shell's.
 struct ProfileScreen: View {
-    @Environment(AppStore.self) private var store
+    @Environment(\.setUpPrivateMessages) private var setUp
     let session: LumiaSession
     @State private var profile: ProfileSummary?
     @State private var displayName = ""
@@ -817,9 +822,9 @@ struct ProfileScreen: View {
                                     .buttonStyle(.lumiaPrimary).disabled(busy)
                             }
                         }
-                    } else if !session.hasIdentity {
-                        LumiaNotice(icon: "shield", tone: .accent, action: ("Link this phone", { store.route = .link })) {
-                            Text("Your profile travels with your identity, signed by its devices. This phone holds no device key yet; a device you already use approves it.")
+                    } else if !session.hasIdentity, session.privateMessages.needsSomething {
+                        LumiaNotice(icon: "shield", tone: .accent, action: ("Set up", setUp.run)) {
+                            Text("Your profile travels with your identity, signed by its devices. This phone doesn't hold it yet.")
                         }
                     }
                 }
@@ -953,7 +958,9 @@ private struct PreferenceRow<Content: View>: View {
 
 struct DevicesScreen: View {
     @Environment(AppStore.self) private var store
+    @Environment(\.setUpPrivateMessages) private var setUp
     let session: LumiaSession
+    @Binding var path: [Screen]
     @State private var revoking: DeviceSummary?
     @State private var password = ""
     @State private var busy = false
@@ -987,9 +994,15 @@ struct DevicesScreen: View {
     }
 
     var body: some View {
-        PanelScreen(back: "Home", title: "Devices", subtitle: session.roster == nil ? "No identity on this phone" : "\(active.count) linked to you", actions: [("plus", "Link a device", { store.route = .link })]) {
+        // Link takes this phone into an identity, so it is offered only to a
+        // phone without one; approving another device is not on a phone yet.
+        PanelScreen(back: "Home", title: "Devices", subtitle: session.roster == nil ? "No identity on this phone" : "\(active.count) linked to you", actions: session.roster == nil ? [("plus", "Link this phone", { store.route = .link })] : []) {
             ScrollView {
                 VStack(alignment: .leading, spacing: LumiaTokens.space12) {
+                    // Standing while the recovery phrase waits (architecture 5.4); never put off.
+                    if session.phraseUnconfirmed {
+                        PhraseNotSavedCard { path.append(.phrase) }
+                    }
                     LumiaNotice(icon: "shield") {
                         Text("Your identity lives on these devices, not on any instance. Revoking one takes effect on every instance that holds your roster.")
                     }
@@ -1025,9 +1038,7 @@ struct DevicesScreen: View {
                             }
                         }
                     } else {
-                        LumiaEmptyState(icon: "shield", title: "No identity on this phone", action: ("Link this phone", { store.route = .link })) {
-                            Text("A device you already use approves this one.")
-                        }
+                        noIdentity
                     }
                 }
                 .padding(LumiaTokens.space16)
@@ -1042,6 +1053,36 @@ struct DevicesScreen: View {
                 .presentationDetents([.medium])
                 .presentationDragIndicator(.visible)
                 .presentationBackground(LumiaTokens.surface.color)
+        }
+    }
+
+    /// A phone without the identity, by what the account needs of it.
+    @ViewBuilder private var noIdentity: some View {
+        switch session.privateMessages {
+        case .bringIn:
+            VStack(alignment: .leading, spacing: LumiaTokens.space12) {
+                Text("Private messages need this phone").font(LumiaTokens.titleChannel.font).foregroundStyle(LumiaTokens.ink.color)
+                Text("Your account has private messages on another device. Bring this phone in to read and send them here.")
+                    .font(LumiaTokens.textBody.font).foregroundStyle(LumiaTokens.inkSecondary.color)
+                NeedsSetupChoices { choice in
+                    switch choice {
+                    case .link: store.route = .link
+                    case .restore: path.append(.restore)
+                    case .startOver: path.append(.startOver)
+                    }
+                }
+            }
+            .padding(.vertical, LumiaTokens.space12)
+        case .confirm, .failed:
+            LumiaEmptyState(icon: "shield", title: "No identity on this phone", action: ("Set up private messages", setUp.run)) {
+                Text("Private messages aren't set up for your account yet.")
+            }
+        case .unknown:
+            LumiaEmptyState(icon: "shield", title: "No identity on this phone") {
+                Text("Private messages are set up here as soon as the instance answers.")
+            }
+        case .setUp, .ready:
+            LumiaEmptyState(icon: "shield", title: "Setting up private messages…")
         }
     }
 

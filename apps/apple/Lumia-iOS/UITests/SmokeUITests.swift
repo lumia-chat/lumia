@@ -1061,4 +1061,141 @@ final class SmokeUITests: XCTestCase {
         // A moment for the smoke's screenshot of the composer with nothing under it.
         sleep(3)
     }
+
+    // MARK: Setting up private messages (issue #20; scripts/smoke-private-messages.sh)
+
+    /// A phone signed in with a password to an account with no identity
+    /// sets private messages up silently; Home reminds of the phrase until
+    /// "In a week", which holds at the next launch; Devices' card leads to
+    /// the phrase (the system's unlock skipped, LUMIA_DEV_NO_UNLOCK),
+    /// whose words are read as a person would; a wrong word in the check
+    /// shows the phrase again, saying so, and the right three end the card
+    /// and the reminder.
+    func testPrivateMessagesAreSetUpAndThePhraseConfirmed() throws {
+        let steps = try XCTUnwrap(ProcessInfo.processInfo.environment["LUMIA_UITEST_STEPS"])
+        let reached = { (step: String) in self.reached(step, under: steps) }
+        var app = launch(screen: "home")
+        let reminder = app.staticTexts["Save your recovery phrase"]
+        XCTAssertTrue(reminder.waitForExistence(timeout: 90), "no reminder on Home: private messages were not set up at sign-in")
+        XCTAssertTrue(app.buttons["Save it now"].exists)
+        reached("reminder")
+        app.buttons["In a week"].tap()
+        XCTAssertFalse(reminder.waitForExistence(timeout: 3), "the reminder stayed after In a week")
+        app.terminate()
+
+        // The next launch: the reminder is still put off, and Devices' card is not.
+        app = launch(screen: "devices")
+        let card = app.staticTexts["Recovery phrase not saved"]
+        XCTAssertTrue(card.waitForExistence(timeout: 90), "no card on Devices while the phrase waits")
+        reached("devices")
+        app.buttons["Save your recovery phrase"].tap()
+
+        /// The 24 words, as their elements say them.
+        func words() -> [String] {
+            (1...24).map { n in
+                let cell = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "Word \(n): ")).firstMatch
+                if !cell.waitForExistence(timeout: 20) {
+                    XCTFail("no word \(n), on:\n" + app.debugDescription)
+                    return ""
+                }
+                return String(cell.label.dropFirst("Word \(n): ".count))
+            }
+        }
+        let phrase = words()
+        XCTAssertGreaterThan(Set(phrase).count, 1, "the words are not a phrase: \(phrase)")
+        XCTAssertTrue(app.staticTexts["Whoever has these 24 words has your identity and your private messages. Lumia can't recover them for you."].exists)
+        XCTAssertTrue(app.buttons["Print"].exists && app.buttons["Save as a file"].exists)
+        XCTAssertFalse(app.buttons["Copy"].exists, "a copy button on the phrase")
+        reached("phrase")
+
+        /// Fills the check's three fields, the last one wrong when asked, and confirms.
+        func answer(wrong: Bool) {
+            app.buttons["I've written them down"].tap()
+            let fields = app.textFields.matching(NSPredicate(format: "label BEGINSWITH %@", "Word "))
+            let three = XCTNSPredicateExpectation(predicate: NSPredicate(format: "count == 3"), object: fields)
+            XCTAssertEqual(XCTWaiter().wait(for: [three], timeout: 20), .completed, "not three fields to check")
+            for i in 0..<3 {
+                let field = fields.element(boundBy: i)
+                guard let position = Int(field.label.dropFirst("Word ".count)) else { return XCTFail("a field named \(field.label)") }
+                let right = phrase[position - 1]
+                field.tap()
+                field.typeText(wrong && i == 2 ? (right == "abandon" ? "zoo" : "abandon") : right)
+            }
+            if !wrong { reached("check") }
+            app.buttons["Confirm"].tap()
+        }
+        answer(wrong: true)
+        let again = app.staticTexts["One of those words wasn't right. Check what you wrote down against the phrase, then try again."]
+        XCTAssertTrue(again.waitForExistence(timeout: 20), "a wrong word did not show the phrase again")
+        XCTAssertEqual(words(), phrase, "the phrase shown again is another")
+        reached("again")
+        answer(wrong: false)
+
+        XCTAssertTrue(app.staticTexts["This iPhone"].waitForExistence(timeout: 20), "not back on Devices with this phone listed")
+        XCTAssertFalse(card.waitForExistence(timeout: 3), "the card stayed once the phrase was confirmed")
+        reached("saved")
+        app.buttons["Back to Home"].tap()
+        XCTAssertFalse(reminder.waitForExistence(timeout: 3), "the reminder came back once the phrase was confirmed")
+    }
+
+    /// A phone signed in to an account whose identity is on another device
+    /// (the CLI's): Home says private messages need this phone, its Set up
+    /// opens the sheet, Restore takes the 24 words and turns on at 24, and
+    /// the phone is then the identity's device, with nothing more to set up.
+    func testThisPhoneIsBroughtInByRestoring() throws {
+        let env = ProcessInfo.processInfo.environment
+        let steps = try XCTUnwrap(env["LUMIA_UITEST_STEPS"])
+        let phrase = try XCTUnwrap(env["LUMIA_UITEST_PHRASE"]).split(separator: " ")
+        let reached = { (step: String) in self.reached(step, under: steps) }
+        let app = launch(screen: "home")
+        let notice = app.staticTexts["Private messages need this phone. Your account has them on another device."]
+        XCTAssertTrue(notice.waitForExistence(timeout: 90), "Home does not say private messages need this phone")
+        XCTAssertFalse(app.staticTexts["Save your recovery phrase"].exists, "a reminder for a phrase this phone does not keep")
+        app.buttons["Set up"].tap()
+        XCTAssertTrue(app.staticTexts["Private messages need this phone"].waitForExistence(timeout: 10), "no sheet")
+        for label in ["Link from a device you use", "Restore with your recovery phrase", "Lost every device and the phrase? Start over"] {
+            XCTAssertTrue(app.buttons[label].exists, "the sheet has no \(label)")
+        }
+        reached("sheet")
+        app.buttons["Restore with your recovery phrase"].tap()
+        let words = app.textViews["Your 24 words, in order"]
+        XCTAssertTrue(words.waitForExistence(timeout: 10), "no field for the words")
+        let restore = app.buttons["Restore"]
+        XCTAssertFalse(restore.isEnabled, "Restore on with no words")
+        words.tap()
+        words.typeText(phrase.prefix(12).joined(separator: " "))
+        XCTAssertFalse(restore.isEnabled, "Restore on at 12 words")
+        XCTAssertTrue(app.staticTexts["12 of 24"].exists || (words.value as? String) == "12 of 24", "the count does not say 12 of 24")
+        words.typeText(" " + phrase.dropFirst(12).joined(separator: " "))
+        XCTAssertTrue(restore.isEnabled, "Restore off at 24 words")
+        reached("restore")
+        restore.tap()
+        XCTAssertTrue(app.staticTexts["Your conversations"].waitForExistence(timeout: 30), "not back on Home, set up")
+        XCTAssertFalse(notice.exists, "Home still says private messages need this phone")
+        reached("restored")
+    }
+
+    /// Start over, for someone with neither device nor phrase: what stays
+    /// and what does not, nobody to see a key change on an account with no
+    /// personal conversation, the password, the danger's button; then a new
+    /// phrase to save, which Home reminds of.
+    func testStartingOverWithANewIdentity() throws {
+        let env = ProcessInfo.processInfo.environment
+        let steps = try XCTUnwrap(env["LUMIA_UITEST_STEPS"])
+        let password = try XCTUnwrap(env["LUMIA_DEV_PASSWORD"])
+        let reached = { (step: String) in self.reached(step, under: steps) }
+        let app = launch(screen: "startover")
+        XCTAssertTrue(app.staticTexts["Nobody has talked with you privately yet, so nobody will see a key change."].waitForExistence(timeout: 90), "no Start over, or the wrong words for who sees the key change")
+        XCTAssertTrue(app.staticTexts["Private messages from before stay unreadable."].exists)
+        let start = app.buttons["Start over with a new identity"]
+        XCTAssertFalse(start.isEnabled, "Start over on with no password")
+        let field = app.secureTextFields["Your password"]
+        field.tap()
+        field.typeText(password)
+        XCTAssertTrue(start.isEnabled)
+        reached("startover")
+        start.tap()
+        XCTAssertTrue(app.staticTexts["Save your recovery phrase"].waitForExistence(timeout: 30), "no new phrase to save after starting over")
+        reached("started")
+    }
 }

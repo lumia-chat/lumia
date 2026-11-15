@@ -167,6 +167,7 @@ extension View {
 
 struct ConversationScreen: View {
     @Environment(Preferences.self) private var preferences
+    @Environment(\.setUpPrivateMessages) private var setUp
     let session: LumiaSession
     let channelID: String
     @State private var draft = ""
@@ -207,7 +208,11 @@ struct ConversationScreen: View {
                             LumiaNotice(icon: "shield") {
                                 Text("Messages here are end-to-end encrypted. Only your devices and those of \(others.map { session.name(of: $0) }.joined(separator: ", ")) can read them.")
                             }
-                            if let state, !state.member {
+                            // A phone without the account's identity reads nothing here
+                            // until it is brought in (issue #20).
+                            if session.privateMessages.needsSomething {
+                                PrivateMessagesNotice(state: session.privateMessages, setUp: setUp.run)
+                            } else if let state, !state.member {
                                 LumiaNotice(icon: "lock", tone: .accent, action: ("Rejoin", { Task { await rejoin() } })) {
                                     Text("This device is not in the conversation's group yet. The device that created it sends a welcome; if that never comes, rejoin from the instance's group info.")
                                 }
@@ -254,7 +259,7 @@ struct ConversationScreen: View {
             // it either: the instance is not to learn who is writing in a
             // personal conversation (protocol 6.7; an open item of the E2EE spec).
             // The reply bar has no "@ On" here: every message of a personal conversation notifies.
-            LumiaComposer(text: $draft, placeholder: member ? "Message \(title)" : "Setting up the encrypted group…", disabled: !member, hint: nil, focused: $composing, reply: replying.map { _ in ComposerReply(name: replyingTo, mention: nil) { replying = nil } }, editLast: editLast, textScale: measures.text, room: { session.client.messageRoom($0) }) {
+            LumiaComposer(text: $draft, placeholder: member ? "Message \(title)" : session.privateMessages.needsSomething ? "Private messages need this phone" : "Setting up the encrypted group…", disabled: !member, hint: nil, focused: $composing, reply: replying.map { _ in ComposerReply(name: replyingTo, mention: nil) { replying = nil } }, editLast: editLast, textScale: measures.text, room: { session.client.messageRoom($0) }) {
                 Task { await send() }
             } above: {
                 EmptyView()
@@ -271,6 +276,10 @@ struct ConversationScreen: View {
         }
         .deleteConfirmation(changer)
         .onChange(of: channelID) { _, _ in expanded = [] }
+        // Opened on a phone that needs bringing in: the sheet says what it can do.
+        .task(id: session.privateMessages) {
+            if session.privateMessages == .bringIn { setUp() }
+        }
     }
 
     /// Whose a message is, for its block and its avatar's tone:
