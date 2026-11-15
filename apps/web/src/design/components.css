@@ -818,3 +818,15 @@ button.lu-replyref { cursor: pointer; }
 .lu-wordfield__words { list-style: none; margin: 0; padding: var(--space-4); border-radius: var(--radius-12); background: var(--surface); border: 1px solid var(--border-form); box-shadow: var(--shadow-popover); }
 .lu-wordfield__word { width: 100%; display: flex; align-items: center; min-height: 44px; padding: 0 14px; border: 0; border-radius: var(--radius-10); background: none; font: inherit; font-family: var(--phrase-mono); font-size: 15px; color: var(--ink); text-align: left; cursor: pointer; }
 .lu-wordfield__word:hover { background: var(--hover-row); }
+
+/* ── Linking by a prompt (identity spec 4.2.1): the digits both devices show, and the quiet wait ── */
+/* The digits as the approve screen draws its code: 28 on 36, semibold, in the platform's monospaced face. */
+.lu-digits { margin: 0; padding: var(--space-16) 0; border-radius: var(--radius-12); background: var(--inset); font: 600 28px/36px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; letter-spacing: 0.04em; color: var(--ink); text-align: center; user-select: all; }
+.lu-waiting { display: inline-flex; align-items: center; gap: var(--space-8); font-size: 13px; color: var(--ink-muted); }
+.lu-waiting__dots { display: flex; gap: 4px; }
+.lu-waiting__dots span { width: 6px; height: 6px; border-radius: var(--radius-round); background: var(--ink-muted); animation: lu-dot 1.2s ease-in-out infinite; }
+.lu-waiting__dots span:nth-child(2) { animation-delay: .15s; }
+.lu-waiting__dots span:nth-child(3) { animation-delay: .3s; }
+@media (prefers-reduced-motion: reduce) {
+  .lu-waiting__dots span { animation: none; }
+}

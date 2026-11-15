@@ -377,6 +377,10 @@ async function link(which: string, dataDir: string) {
 async function linkSteps(which: string, page: Page, dataDir: string) {
   await trustCard(page);
   await page.getByRole("button", { name: "Link this browser to your identity" }).click();
+  // Signed out, a prompt can't be asked for (a link session is the
+  // account's): the page says to sign in first, or link another way.
+  await page.getByRole("button", { name: "Sign in", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Link another way" }).click();
   await page.getByRole("button", { name: "Start linking" }).click();
   const request = await page.getByLabel("Link request").inputValue();
   await page.screenshot({ path: `${out}/${which}-link.png` });
@@ -415,6 +419,53 @@ async function linkSteps(which: string, page: Page, dataDir: string) {
   await page.screenshot({ path: `${out}/${which}-account-menu.png` });
   await page.keyboard.press("Escape");
   await page.getByRole("menu").waitFor({ state: "detached" });
+}
+
+// Linking by a prompt (identity spec 4.2.1), as far as the suite can take
+// it: the CLI has no prompt to answer, so the other side is never there.
+// Signed in by password to the account whose identity is the CLI's, the
+// browser meets "Private messages need this browser", and "Link from a
+// device you use" opens a session and waits, asking again without
+// failing; Cancel leaves it, and "Link another way" gives it up for the
+// copied request, with Back to a new one. The approval itself is checked
+// by hand against a native device.
+async function linkPrompt(which: string, handle: string) {
+  const { ctx, page } = await open(which, "link-prompt");
+  const t0 = Date.now();
+  try {
+    await trustCard(page);
+    await page.getByLabel("Email or handle").fill(handle);
+    await page.getByRole("textbox", { name: "Password" }).fill(password);
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await page.getByPlaceholder(/^Message #/).waitFor();
+    phase("needs this browser");
+    await goto(page, `${base}/private-messages`);
+    await page.getByRole("heading", { name: "Private messages need this browser" }).waitFor();
+    await page.getByRole("button", { name: "Link from a device you use" }).click();
+    phase("waiting");
+    const waiting = page.getByText("Open Lumia on a device that has your private messages. It will ask about this browser.");
+    await waiting.waitFor();
+    await page.getByText("Waiting for your other device…").waitFor();
+    // Two turns of the timer: still waiting, nothing said wrong.
+    await Bun.sleep(4_500);
+    await waiting.waitFor();
+    if ((await page.locator(".auth__error").count()) > 0) throw new Error(`waiting said: ${await page.locator(".auth__error").first().textContent()}`);
+    await page.screenshot({ path: `${out}/${which}-link-waiting.png` });
+    phase("cancel");
+    await page.getByRole("button", { name: "Cancel" }).click();
+    await page.waitForURL(/\/app/);
+    phase("another way");
+    await goto(page, `${base}/link`);
+    await waiting.waitFor();
+    await page.getByRole("button", { name: "Link another way" }).click();
+    await page.getByRole("button", { name: "Start linking" }).click();
+    await page.getByLabel("Link request").waitFor();
+    await page.getByRole("button", { name: "Back" }).click();
+    await waiting.waitFor();
+  } finally {
+    await ctx.close();
+  }
+  console.log(`  ${which}: asked to link by a prompt, waited, cancelled, and linked another way and back, in ${Date.now() - t0} ms`);
 }
 
 // A sign-in handed to another device (the native apps' browser sheet):
@@ -2407,6 +2458,7 @@ try {
     for (const [name, step] of [
       ["sign in", () => signInAndSend(which, `web${stamp}`)],
       ["served", () => instanceServed(which)],
+      ["link prompt", () => linkPrompt(which, `link${stamp}`)],
       ["link", () => link(which, identityDir)],
       ["dm", () => dm(which, aDir, bAccount, aHandle)],
       ["invite", () => invite(which, passwordDir, server)],

@@ -107,8 +107,8 @@ export interface SignInSearch {
    * page of this origin. Nothing else: the token signs a device in.
    */
   return?: string;
-  /** Where to land once signed in: the Devices page, for a passkey made there. */
-  next?: "devices";
+  /** Where to land once signed in: the Devices page, for a passkey made there, or the link page, to link this browser by a prompt. */
+  next?: "devices" | "link";
 }
 const returnOf = (value: unknown): string | undefined =>
   typeof value === "string" && (value.startsWith("lumia://") || value.startsWith(location.origin + "/")) ? value : undefined;
@@ -117,28 +117,31 @@ const signInSearch = (s: Record<string, unknown>): SignInSearch => ({
   instance: typeof s.instance === "string" && s.instance ? s.instance : undefined,
   magic: typeof s.magic === "string" && s.magic ? s.magic : undefined,
   return: returnOf(s.return),
-  next: s.next === "devices" ? "devices" : undefined,
+  next: s.next === "devices" || s.next === "link" ? s.next : undefined,
 });
 const signInRoute = createRoute({ getParentRoute: () => rootRoute, path: "/sign-in", component: SignIn, validateSearch: signInSearch });
 // The link an invite is: `/invite/{code}` on the instance (architecture
 // 6.1: the trust card and what the link leads to, before anything is sent).
 const inviteRoute = createRoute({ getParentRoute: () => rootRoute, path: "/invite/$code", component: Invite, validateSearch: signInSearch });
-const linkRoute = createRoute({ getParentRoute: () => rootRoute, path: "/link", component: Link });
+// For a page that works signed in or not: the instance open, as sign-in
+// leaves it or as the saved one reopens.
+async function openSaved() {
+  if (opened()) return;
+  const url = savedInstance();
+  if (!url) throw redirect({ to: "/sign-in" });
+  await openInstance(url);
+}
+// Link this browser: by a prompt signed in, another way signed out.
+const linkRoute = createRoute({ getParentRoute: () => rootRoute, path: "/link", component: Link, beforeLoad: openSaved });
 // Private messages in this browser (issue #20): the phrase step and its
 // check, or link, restore and start over; signed in.
 const privateRoute = createRoute({ getParentRoute: () => rootRoute, path: "/private-messages", component: PrivateMessages, beforeLoad: requireSession, validateSearch: privateSearch });
-// Restore with the phrase, signed in or not (it signs in by the identity):
-// the instance open, as sign-in leaves it or as the saved one reopens.
+// Restore with the phrase, signed in or not (it signs in by the identity).
 const restoreRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/restore",
   component: Restore,
-  beforeLoad: async () => {
-    if (opened()) return;
-    const url = savedInstance();
-    if (!url) throw redirect({ to: "/sign-in" });
-    await openInstance(url);
-  },
+  beforeLoad: openSaved,
 });
 const appRoute = createRoute({
   getParentRoute: () => rootRoute,

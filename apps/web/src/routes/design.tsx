@@ -79,6 +79,7 @@ import {
   PhraseWordField,
 } from "../design/components";
 import { NeedsBrowser, PhraseStep, RestoreForm, StartOver } from "./private";
+import { LinkPromptCard } from "./link";
 
 type Theme = "light" | "dark";
 
@@ -1080,7 +1081,9 @@ function FoldersBoard() {
 
 // Setting up private messages (issue #20): the "WebSignUpPhrase" board's
 // step at its 1440 by 900, then the phone boards' check, "need this
-// browser", start over and restore, as the web draws them.
+// browser", start over and restore, as the web draws them; then linking
+// by a prompt (identity spec 4.2.1, no board): waiting, the digits, and
+// declined and expired.
 const SAMPLE_PHRASE = "orbit cactus timber velvet harbor pencil meadow copper rescue glimpse fabric lunar anchor whisper salad ticket marble frozen clever sunny violin garden token mirror".split(" ");
 
 function PrivateBoard() {
@@ -1110,6 +1113,19 @@ function PrivateBoard() {
         </div>
         <div class="gallery-private__card">
           <StartOver oidcName="Acme SSO" returnTo={() => ""} onConfirmed={() => {}} onKeepLooking={() => {}} />
+        </div>
+      </div>
+      <div class="gallery-private__row">
+        <div class="gallery-private__card">
+          <LinkPromptCard screen="waiting" digits="" onTryAgain={() => {}} onCancel={() => {}} />
+          <LinkPromptCard screen="waiting" digits="" trouble="Can’t reach your instance; still trying. (transport: error sending request)" onTryAgain={() => {}} onCancel={() => {}} />
+        </div>
+        <div class="gallery-private__card">
+          <LinkPromptCard screen="compare" digits="482 913" onTryAgain={() => {}} onCancel={() => {}} />
+        </div>
+        <div class="gallery-private__card">
+          <LinkPromptCard screen="declined" digits="" onTryAgain={() => {}} onCancel={() => {}} />
+          <LinkPromptCard screen="expired" digits="" onTryAgain={() => {}} onCancel={() => {}} />
         </div>
       </div>
     </div>

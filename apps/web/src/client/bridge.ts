@@ -325,6 +325,14 @@ export interface RosterSummary {
   devices: DeviceSummary[];
 }
 
+/** Where linking this browser by a prompt stands (identity spec 4.2.1; the core's `LinkProgress`). */
+export type LinkStage = "waiting" | "compare" | "linked" | "declined" | "expired";
+export interface LinkProgress {
+  stage: LinkStage;
+  /** The six digits to compare, as `482 913`, at `compare`; empty otherwise. */
+  digits: string;
+}
+
 export type ClientEvent =
   | { kind: "welcomed"; accountId: string }
   | { kind: "applied"; channelId: string; events: EventSummary[] }
@@ -727,6 +735,18 @@ export class Bridge {
   }
   identityClaim(code: string): Promise<RosterSummary> {
     return this.call("identityClaim", code);
+  }
+  /** Linking by a prompt (identity spec 4.2.1): opens a session, so every device that holds the identity asks about this browser. */
+  linkStart(label: string): Promise<LinkProgress> {
+    return this.call("linkStart", label);
+  }
+  /** Where the session stands, the core taking its next step (revealing, then claiming the code and signing in by identity proof). */
+  linkProgress(): Promise<LinkProgress> {
+    return this.call("linkProgress");
+  }
+  /** Gives the session up: declined, so the other devices stop asking. */
+  linkCancel(): Promise<void> {
+    return this.call("linkCancel");
   }
   signInIdentity(): Promise<void> {
     return this.call("signInIdentity");

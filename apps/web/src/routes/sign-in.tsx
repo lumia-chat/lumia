@@ -53,7 +53,10 @@ export function SignIn() {
     // sign-in's reauth is fresh (issue #20). An account whose identity is
     // elsewhere is asked where a private message would start, not here.
     if (!(await client().hasIdentity()) && (created || !(await client().accountIdentity().catch(() => "unknown")))) {
-      navigate({ to: "/private-messages", search: { from: created ? "signup" : "signin", server: serverId, next: search().next } });
+      navigate({ to: "/private-messages", search: { from: created ? "signup" : "signin", server: serverId, next: search().next === "devices" ? "devices" : undefined } });
+    } else if (search().next === "link" && !(await client().hasIdentity())) {
+      // Signed in to link this browser by a prompt (identity spec 4.2.1).
+      navigate({ to: "/link" });
     } else if (serverId) {
       navigate({ to: "/app", search: { server: serverId } });
     } else if (search().next === "devices") {

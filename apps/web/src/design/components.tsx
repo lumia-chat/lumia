@@ -3449,4 +3449,29 @@ export function PhraseWordField(props: PhraseWordFieldProps) {
   );
 }
 
+/* ── Linking by a prompt (identity spec 4.2.1) ─────────────── */
+
+/** The six digits both devices show, large and in the platform's monospaced face, as the approve screen draws its code. */
+export function LinkDigits(props: { digits: string; class?: string }) {
+  return (
+    <p class={cx("lu-digits", props.class)} aria-label={`Number ${props.digits}`}>
+      {props.digits}
+    </p>
+  );
+}
+
+/** The quiet sign that something is being waited on: three dots in the muted ink, as typing's, and the words beside them. */
+export function Waiting(props: { label: string; class?: string }) {
+  return (
+    <span class={cx("lu-waiting", props.class)}>
+      <span class="lu-waiting__dots" aria-hidden="true">
+        <span />
+        <span />
+        <span />
+      </span>
+      <span class="lu-waiting__text">{props.label}</span>
+    </span>
+  );
+}
+
 export const icons = Object.keys(ICONS) as IconName[];
