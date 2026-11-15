@@ -1504,6 +1504,38 @@ impl Reads {
     }
 }
 
+/// How far a personal conversation is read when the person has read it
+/// through `seq`, its newest message on screen: on through what follows that
+/// shows no message of its own (a reaction, an edit, a delete, what this
+/// device could not decrypt), up to the next message that shows. The
+/// instance counts every application message of the others as unread, not
+/// knowing what is in it; read only to the newest message, those after it
+/// stayed unread for good.
+fn dm_read_through(rows: &[crate::sqlite::DmRow], seq: u64) -> u64 {
+    let deleted: HashSet<Vec<u8>> = rows
+        .iter()
+        .filter_map(
+            |row| match DmOperation::decode(row.bytes.as_slice()).ok()?.op? {
+                dm_operation::Op::Delete(d) => Some(d.message_id),
+                _ => None,
+            },
+        )
+        .collect();
+    let mut through = seq;
+    for row in rows.iter().filter(|row| row.seq > seq) {
+        let shows = row.status == DmStatus::Decrypted
+            && matches!(
+                DmOperation::decode(row.bytes.as_slice()).ok().and_then(|op| op.op),
+                Some(dm_operation::Op::Send(send)) if !deleted.contains(&send.message_id)
+            );
+        if shows {
+            break;
+        }
+        through = row.seq;
+    }
+    through
+}
+
 /// The identity's stores: their own lock, so an identity flow that awaits
 /// the network (and holds them meanwhile) never blocks a store read behind
 /// `Inner`; the UI runs one identity flow at a time.
@@ -3628,6 +3660,19 @@ impl App {
         seq: u64,
     ) -> Result<ReadStateSummary, ClientError> {
         let id = parse_uuid(channel_id)?;
+        let personal = self
+            .lock()
+            .reads
+            .by_channel
+            .get(&id)
+            .is_some_and(|c| c.kind.starts_with("PERSONAL"));
+        let seq = match self.built_engine() {
+            Some(engine) if personal => {
+                let rows = engine.lock().await.rows(&id).unwrap_or_default();
+                dm_read_through(&rows, seq)
+            }
+            _ => seq,
+        };
         if let Some(count) = self.lock().reads.by_channel.get(&id) {
             if seq <= count.read_seq && count.unread == 0 {
                 return Ok(ReadStateSummary {
@@ -5500,6 +5545,70 @@ mod link_request_tests {
             .encode_to_vec(),
         );
         assert!(App::identity_link_request_summary(&short).is_err());
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod dm_read_tests {
+    use super::dm_read_through;
+    use crate::sqlite::{DmRow, DmStatus};
+    use lumia_core::proto::{dm_operation, DmDelete, DmOperation, DmReact, DmSend};
+    use prost::Message as _;
+
+    fn row(seq: u64, op: Option<dm_operation::Op>) -> DmRow {
+        DmRow {
+            seq,
+            sender_identity_id: vec![2; 32],
+            sender_device_id: vec![2; 16],
+            epoch: 1,
+            status: if op.is_some() {
+                DmStatus::Decrypted
+            } else {
+                DmStatus::Undecryptable
+            },
+            bytes: op.map_or_else(Vec::new, |op| {
+                DmOperation {
+                    op: Some(op),
+                    ..Default::default()
+                }
+                .encode_to_vec()
+            }),
+        }
+    }
+
+    fn send(id: u8) -> Option<dm_operation::Op> {
+        Some(dm_operation::Op::Send(DmSend {
+            message_id: vec![id; 16],
+            body: "hi".into(),
+            ..Default::default()
+        }))
+    }
+
+    #[test]
+    fn what_shows_no_message_after_the_newest_is_read_with_it() {
+        let react = Some(dm_operation::Op::React(DmReact {
+            message_id: vec![1; 16],
+            ..Default::default()
+        }));
+        let rows = [row(3, send(1)), row(5, react), row(6, None)];
+        assert_eq!(
+            dm_read_through(&rows, 3),
+            6,
+            "a reaction and an unreadable one"
+        );
+
+        // The next message that shows is not read before it is seen.
+        let rows = [row(3, send(1)), row(5, None), row(7, send(2)), row(8, None)];
+        assert_eq!(dm_read_through(&rows, 3), 5);
+
+        // One sent and deleted shows nothing.
+        let delete = Some(dm_operation::Op::Delete(DmDelete {
+            message_id: vec![2; 16],
+        }));
+        let rows = [row(3, send(1)), row(4, send(2)), row(5, delete)];
+        assert_eq!(dm_read_through(&rows, 3), 5);
+        assert_eq!(dm_read_through(&[], 3), 3);
     }
 }
 

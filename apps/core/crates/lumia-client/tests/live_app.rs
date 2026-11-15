@@ -1975,3 +1975,51 @@ async fn a_request_made_after_the_one_approved_leaves_it_claimable() {
     phone.app.identity_claim(&code).await.unwrap();
     assert!(phone.app.has_identity() && phone.app.signed_in());
 }
+
+/// A reaction in a personal conversation is an encrypted message the
+/// instance counts as unread, and it shows no message of its own: read
+/// through the newest message, the conversation is read through it too.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_reaction_after_the_newest_message_is_read_with_it() {
+    let Some(base) = instance() else { return };
+    let (ada, _, _) = set_up(&base, "ada").await;
+    let (bo, _, bo_account) = set_up(&base, "bo").await;
+    let request = ada.app.dm_request(&bo_account).await.unwrap();
+    let Ok(opened) = bo
+        .app
+        .dm_respond(&request.request_id, "accept")
+        .await
+        .unwrap()
+    else {
+        panic!("accepting opens the conversation");
+    };
+    let channel = opened.channel_id;
+    assert!(member_of(&ada, &channel, Duration::from_secs(20)).await);
+    ada.app.dm_send(&channel, "hello").await.unwrap();
+    assert!(reads(&bo, &channel, "hello", Duration::from_secs(20)).await);
+    let message = bo.app.dm_messages(&channel).await.unwrap().messages[0].clone();
+    ada.app
+        .dm_react(&channel, &message.message_id, "👍", false)
+        .await
+        .unwrap();
+    let until = Instant::now() + Duration::from_secs(20);
+    while bo.app.dm_messages(&channel).await.unwrap().messages[0]
+        .reactions
+        .is_empty()
+    {
+        assert!(Instant::now() < until, "bo never saw the reaction");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    bo.app.snapshot().await.unwrap();
+    let unread = |app: &App| {
+        app.read_states()
+            .into_iter()
+            .find(|r| r.channel_id == channel)
+            .map(|r| r.unread)
+    };
+    assert_eq!(unread(&bo.app), Some(2), "the message and the reaction");
+    let state = bo.app.mark_read(&channel, message.seq).await.unwrap();
+    assert_eq!((state.unread, state.mentions), (0, 0));
+    assert!(state.read_seq > message.seq);
+}
