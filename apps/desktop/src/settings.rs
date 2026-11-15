@@ -86,6 +86,10 @@ pub struct Settings {
     /// launches and a launch does not check again.
     #[serde(deserialize_with = "or_default")]
     pub last_update_check: Option<i64>,
+    /// Until when Home's reminder to save the recovery phrase is put away ("In a week"), in
+    /// seconds since 1970. Devices' card stays.
+    #[serde(deserialize_with = "or_default")]
+    pub phrase_reminder_until: Option<i64>,
 }
 
 /// Whether the release feed is checked once a day.

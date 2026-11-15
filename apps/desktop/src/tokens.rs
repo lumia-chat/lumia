@@ -233,6 +233,44 @@ pub const DRAGGED_OPACITY: f32 = 0.35;
 /// Folder settings (320 wide).
 pub const FOLDER_SETTINGS_WIDTH: f32 = SPACE_40 * 8.0;
 
+/// The amber of a caution: the recovery phrase's warnings and Home's reminder to save it.
+pub struct Caution {
+    pub fill: Color,
+    pub edge: Color,
+    pub ink: Color,
+    pub glyph: Color,
+}
+
+/// The #20 boards draw a caution as `#FFF6E5` with a `#F2D7A6` edge, `#6B4200` words and a
+/// `#B45309` glyph, none of which `tokens.json` names: the amber avatar tone stands in for
+/// the fill and the words, its ink at 25% for the edge, and `away` for the glyph.
+pub fn caution(c: &Colors) -> Caution {
+    Caution {
+        fill: c.tone_amber,
+        edge: Color {
+            a: 0.25,
+            ..c.tone_amber_ink
+        },
+        ink: c.tone_amber_ink,
+        glyph: c.away,
+    }
+}
+
+/// A word of the recovery phrase on screen: the body's size in the mono slot, at the
+/// author's weight (the boards' JetBrains Mono 500 at 15, which the design system ships
+/// no face for).
+pub const TEXT_PHRASE: TextStyle = TextStyle {
+    weight: TEXT_AUTHOR.weight,
+    ..TEXT_BODY
+}
+.mono();
+/// A phrase word's cell (the boards' 34; the row height).
+pub const PHRASE_CELL: f32 = ROW_HEIGHT;
+/// The number before a phrase word (the boards' 18, right-aligned).
+pub const PHRASE_NUMBER: f32 = SPACE_18;
+/// The restore field: four lines of words, as the board's 170.
+pub const RESTORE_FIELD: f32 = SPACE_40 * 4.0 + SPACE_10;
+
 /// The initials on an avatar `size` points across. The boards set them at 700 in a size per
 /// avatar that no token names: 14 on 40, 13 on 38, 12.5 on 34, 10 on 28, 9 on 22. Three of
 /// those are a text token's size at the author's weight; the two smallest are worked from

@@ -16,6 +16,7 @@ mod scroll;
 mod server;
 mod server_popovers;
 mod server_settings;
+mod setup;
 mod shell;
 mod sign_in;
 mod timeline;
@@ -43,6 +44,9 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
     let screen = match s.route {
         Route::SignIn => sign_in::view(s, look),
         Route::Link => link::view(s, look),
+        Route::Phrase => setup::phrase(s, look),
+        Route::Restore => setup::restore(s, look),
+        Route::StartOver => setup::start_over(s, look),
         Route::Shell => shell::view(s, look),
     };
     // A popover is a child of the root after everything else, so it draws above the shell

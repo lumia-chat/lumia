@@ -18,8 +18,9 @@ use lumia_client::app::{
     DmRequestSummary, Opener, Place as DevicePlace, SnapshotSummary, StoreName, host_of,
 };
 use lumia_client::sqlite::SqliteStore;
-use lumia_shell::app::{HomeView, Place, State};
+use lumia_shell::app::{HomeView, Place, Route, State};
 use lumia_shell::session::dms::{Answer, DmUpdate};
+use lumia_shell::session::identity::{IdentityUpdate, Setup};
 use lumia_shell::session::{Conversation, Failure, Update};
 use rune::{Key, KeyEvent, Mods, Runtime};
 
@@ -191,8 +192,18 @@ fn now() -> i64 {
 }
 
 #[test]
-fn a_computer_without_an_identity_is_told_so_and_sent_to_devices() {
+fn a_computer_without_an_identity_is_told_what_it_needs() {
     let mut rt = runtime(at_home(false, home_snapshot()));
+    // While the silent setup is asked, the panes say so.
+    assert!(words(&rt).contains("Setting up private messages…"));
+    // The account has its identity on another device.
+    rt.update(|s, _| {
+        s.receive(&Update::Identity(IdentityUpdate::SetUp {
+            setup: Setup::Elsewhere,
+            phrase_kept: false,
+        }))
+    });
+    settle(&mut rt);
     for view in [
         HomeView::Conversations,
         HomeView::Requests,
@@ -202,8 +213,8 @@ fn a_computer_without_an_identity_is_told_so_and_sent_to_devices() {
         settle(&mut rt);
         let shown = words(&rt);
         assert!(
-            shown.contains("Link this computer to your identity")
-                && shown.contains("This computer has no device key yet"),
+            shown.contains("Private messages need this computer")
+                && shown.contains("Your account has private messages on another device."),
             "{view:?}:\n{shown}"
         );
         assert!(
@@ -214,11 +225,30 @@ fn a_computer_without_an_identity_is_told_so_and_sent_to_devices() {
     // The conversations are still listed: the account is in them, this computer is not.
     assert!(rt.find("dm-with-grace").is_some());
     press(&mut rt, "dm-with-grace");
-    assert!(words(&rt).contains("Link this computer to your identity"));
+    assert!(words(&rt).contains("Private messages need this computer"));
     assert!(rt.find("participants").is_none(), "and no aside");
 
-    press(&mut rt, "link-this-computer");
-    assert_eq!(rt.state.home_view, HomeView::Devices);
+    press(&mut rt, "setup-link");
+    assert_eq!(rt.state.route, Route::Link);
+}
+
+#[test]
+fn a_computer_that_holds_an_identity_the_account_is_not_bound_to_is_not_ready() {
+    let mut rt = runtime(at_home(true, home_snapshot()));
+    assert!(rt.find("composer").is_none());
+    press(&mut rt, "dm-with-grace");
+    assert!(rt.find("composer").is_some(), "held, and taken at its word");
+    // Binding it needs the password: the conversation waits for it.
+    rt.update(|s, _| {
+        s.receive(&Update::Identity(IdentityUpdate::SetUp {
+            setup: Setup::NeedsReauth,
+            phrase_kept: true,
+        }))
+    });
+    settle(&mut rt);
+    assert!(rt.find("composer").is_none());
+    assert!(words(&rt).contains("Set up private messages on this computer"));
+    assert!(rt.find("setup-password").is_some());
 }
 
 #[test]

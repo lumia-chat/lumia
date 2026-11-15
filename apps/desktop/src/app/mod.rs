@@ -4,8 +4,9 @@
 //!
 //! This file is the frame: the route, the place, the conversation on screen. Each part of
 //! the product keeps its own state and reactions beside it: [`sign_in`], [`home`]
-//! (personal conversations), [`server`] (making and managing servers) and [`account`]
-//! (devices, profile, status).
+//! (personal conversations), [`server`] (making and managing servers), [`account`]
+//! (devices, profile, status) and [`setup`] (private messages on this computer: the
+//! recovery phrase, restoring, starting over).
 
 pub mod account;
 pub mod aside;
@@ -20,6 +21,7 @@ pub mod rail;
 pub mod replies;
 pub mod server;
 pub mod server_settings;
+pub mod setup;
 pub mod sign_in;
 pub mod updates;
 
@@ -40,6 +42,14 @@ pub enum Route {
     /// Linking this computer to an identity (identity spec 4.2), from sign-in or from a
     /// signed-in account with no identity on this computer.
     Link,
+    /// The recovery phrase this computer keeps until three of its words are confirmed, then
+    /// the check (identity spec 4.1 step 7).
+    Phrase,
+    /// Restoring the identity from its phrase (identity spec 4.3), from sign-in or from a
+    /// signed-in account whose identity this computer does not hold.
+    Restore,
+    /// Starting over with a new identity (identity spec 4.7).
+    StartOver,
     Shell,
 }
 
@@ -135,6 +145,8 @@ pub struct State {
     /// Being in channels, and server DMs (`channels`).
     pub channel_forms: channels::ChannelForms,
     pub account: account::Account,
+    /// Private messages on this computer: the phrase, restoring, starting over (`setup`).
+    pub setup: setup::SetupForms,
     /// The system browser and the `lumia:` links it comes back on.
     pub links: links::Links,
     /// Whether the window is in front, and the notices owed the system.
@@ -189,6 +201,7 @@ impl State {
             server_forms: server::ServerForms::default(),
             channel_forms: channels::ChannelForms::default(),
             account: account::Account::default(),
+            setup: setup::SetupForms::default(),
             links: links::Links::default(),
             notices: notices::Notices::default(),
             pictures: pictures::Pictures::default(),
@@ -472,6 +485,7 @@ impl State {
         self.server_forms = server::ServerForms::default();
         self.channel_forms = channels::ChannelForms::default();
         self.account = account::Account::default();
+        self.setup = setup::SetupForms::default();
     }
 
     /// Keeps the place and the channel on screen ones the snapshot still has. The first
@@ -538,7 +552,8 @@ impl State {
             }
             Update::Snapshot(Err(_)) => {
                 // The instance no longer knows this session, or has revoked it.
-                if !self.session.signed_in && self.route == Route::Shell {
+                let inside = matches!(self.route, Route::Shell | Route::Phrase | Route::StartOver);
+                if !self.session.signed_in && inside {
                     self.leave_shell();
                     self.route = Route::SignIn;
                     self.sign_in.error = SIGNED_OUT.into();

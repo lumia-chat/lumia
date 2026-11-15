@@ -337,6 +337,17 @@ pub fn primary_button(
     press: impl Fn(&mut State) + 'static,
     look: Look,
 ) -> El {
+    primary_button_tx(key, label, enabled, move |s, _| press(s), look)
+}
+
+/// [`primary_button`] for an action that needs the frame's `Tx` (a file dialog).
+pub fn primary_button_tx(
+    key: impl Into<String>,
+    label: &str,
+    enabled: bool,
+    press: impl Fn(&mut State, &mut Tx) + 'static,
+    look: Look,
+) -> El {
     let c = look.c;
     let mut button = row()
         .key(key)
@@ -355,11 +366,44 @@ pub fn primary_button(
             .cursor(Cursor::Pointer)
             .focusable(true)
             .focus_ring(2.0, 2.0, c.focus)
-            .on_press(press);
+            .on_press_tx(press);
     } else {
         button = button.opacity(0.5);
     }
     button
+}
+
+/// A card's primary action when it cannot be undone (starting over): [`primary_button`] in
+/// `danger`. The board darkens it under the pointer to `#B91C1C`, which no token names, so
+/// it keeps its fill there.
+pub fn danger_button(
+    key: impl Into<String>,
+    label: &str,
+    enabled: bool,
+    press: impl Fn(&mut State) + 'static,
+    look: Look,
+) -> El {
+    let c = look.c;
+    let button = row()
+        .key(key)
+        .w_full()
+        .h(t::CONTROL_PRIMARY)
+        .center()
+        .radius(t::RADIUS_12)
+        .fill(c.danger)
+        .role("button")
+        .label(label)
+        .disabled(!enabled)
+        .child(text(label).font(t::TEXT_BUTTON).color(c.on_accent));
+    if enabled {
+        button
+            .cursor(Cursor::Pointer)
+            .focusable(true)
+            .focus_ring(2.0, 2.0, c.focus)
+            .on_press(press)
+    } else {
+        button.opacity(0.5)
+    }
 }
 
 /// The one thing to do next in a pane or a row: the accent fill, as wide as its words, at

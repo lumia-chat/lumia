@@ -5,7 +5,7 @@
 //! or do not disturb, with a custom line), the signed profile the identity carries
 //! (architecture 6.4: display name, pronouns and bio, signed by this computer's device key
 //! and sent to the instance as the account's), and, for an account with no identity on
-//! this computer, the way to linking it. The same states and wording as the web's
+//! this computer, the way to Devices, where it is set up. The same states and wording as the web's
 //! `home.tsx`.
 //!
 //! Sign out is at the foot of this page, and in the Account menu with "Change instance"
@@ -18,7 +18,7 @@
 
 use rune::{El, Tx, col, row, text};
 
-use super::devices::{action, link_notice, page, page_column};
+use super::devices::{action, page, page_column, setup_notice};
 use crate::app::State;
 use crate::tokens::{self as t, icons};
 use crate::ui::components::{
@@ -33,9 +33,9 @@ pub fn view(s: &State, look: Look) -> El {
     content = if form.loaded || s.session.has_identity() {
         content.child(profile(s, look))
     } else {
-        content.child(link_notice(
-            "profile-link",
-            "Your profile travels with your identity, signed by its devices. This computer holds no device key yet; a device you already use approves it.",
+        content.child(setup_notice(
+            "profile-setup",
+            "Your profile travels with your identity, signed by its devices. This computer isn’t set up with it yet.",
             look,
         ))
     };

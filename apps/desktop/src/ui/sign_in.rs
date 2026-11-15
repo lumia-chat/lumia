@@ -1,8 +1,11 @@
 //! Sign in: the instance with its trust card (architecture 6.1), then a password with a
 //! second factor when the account asks for one, or a new account. The same flow and wording
 //! as the web's sign-in screen and the iOS app's `SignInView.swift`. With them, when the instance offers
-//! each: a sign-in link by mail, completed by its code ([`magic_link`]), and the way to
-//! linking this computer to an identity ([`link_identity`]).
+//! each: a sign-in link by mail, completed by its code ([`magic_link`]), and the ways to
+//! bring this computer into an identity, linking it ([`link_identity`]) or restoring it
+//! from the phrase ([`restore_identity`]), which a new account's card offers under it as
+//! "Already use Lumia on another device?". A new account's identity is made silently once
+//! it exists (architecture 5.4), and the card says so.
 //!
 //! A passkey and the instance's OIDC provider sign in through the system browser
 //! (architecture 6.3, [`browser_sign_in`]).
@@ -238,19 +241,31 @@ fn account_card(s: &State, info: &InstanceSummary, look: Look) -> (El, El) {
         State::submit,
         look,
     ));
-    if !form.creating {
+    if form.creating {
+        // Native sign-up sets up private messages silently (architecture 5.4).
+        card = card.child(
+            text("Private messages are set up on this computer with your account. You’ll be asked to save a recovery phrase afterwards.")
+                .font(t::TEXT_META)
+                .color(c.ink_secondary)
+                .wrap()
+                .w_full(),
+        );
+    } else {
         // The other ways in, each an outlined button, a step apart under the rule.
         let ways = col()
             .w_full()
             .gap(t::SPACE_8)
             .children(browser_sign_in(s, info, look))
             .children(magic_link_ask(s, info, look))
-            // While a mailed code is being waited for, this one follows that.
-            .children(link_identity(s, info, look).filter(|_| !form.magic_sent));
+            // While a mailed code is being waited for, these follow that.
+            .children(link_identity(s, info, look).filter(|_| !form.magic_sent))
+            .children(restore_identity(s, info, look).filter(|_| !form.magic_sent));
         card = card.child(or_rule(look)).child(ways);
         card = magic_link_sent(card, s, info, look);
         if form.magic_sent {
-            card = card.children(link_identity(s, info, look));
+            card = card
+                .children(link_identity(s, info, look))
+                .children(restore_identity(s, info, look));
         }
     }
 
@@ -283,6 +298,40 @@ fn account_card(s: &State, info: &InstanceSummary, look: Look) -> (El, El) {
         footer.child(quiet(
             "New to Lumia? This instance is not open for new accounts.",
         ))
+    };
+    // Sign-up's other way (identity spec 4.1): someone who already uses Lumia brings this
+    // computer in instead of making a second identity. Both sign in by identity proof, so
+    // only where the instance takes it.
+    let footer = if form.creating && info.identity_proof_sign_in_enabled {
+        col()
+            .w(t::AUTH_WIDTH)
+            .gap(t::SPACE_8)
+            .no_window_drag()
+            .child(
+                text("Already use Lumia on another device?")
+                    .font(t::TEXT_LABEL)
+                    .color(c.ink_body)
+                    .role("heading"),
+            )
+            .child(wide_button(
+                "signup-link",
+                Some(&icons::MONITOR),
+                "Link from a device you use",
+                true,
+                |s, _| s.start_linking(),
+                look,
+            ))
+            .child(wide_button(
+                "signup-restore",
+                Some(&icons::KEY),
+                "Restore with your recovery phrase",
+                true,
+                |s, _| s.start_restore(),
+                look,
+            ))
+            .child(el().w_full().pt(t::SPACE_8).child(footer.w_full()))
+    } else {
+        footer
     };
     (card, footer)
 }
@@ -376,6 +425,22 @@ fn link_identity(s: &State, info: &InstanceSummary, look: Look) -> Option<El> {
         "Link this computer to your identity",
         true,
         |s, _| s.start_linking(),
+        look,
+    ))
+}
+
+/// "Restore with your recovery phrase", beside linking: the identity restored on this
+/// computer and signed in by it (identity spec 4.3).
+fn restore_identity(s: &State, info: &InstanceSummary, look: Look) -> Option<El> {
+    if s.sign_in.creating || !info.identity_proof_sign_in_enabled {
+        return None;
+    }
+    Some(wide_button(
+        "to-restore",
+        Some(&icons::KEY),
+        "Restore with your recovery phrase",
+        true,
+        |s, _| s.start_restore(),
         look,
     ))
 }

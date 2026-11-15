@@ -11,8 +11,8 @@ use crate::tokens::{self as t, icons};
 use crate::ui::components::{Look, avatar_of, empty_state, error_text, notice, secondary_button};
 
 pub fn view(s: &State, look: Look) -> El {
-    if !s.session.has_identity() {
-        return no_identity(look);
+    if !s.session.private_ready() {
+        return no_identity(s, look);
     }
     let requests = s
         .session

@@ -2,9 +2,10 @@
 //! [`HomeView`]. Each view is a module of its own. The counterpart of the web's
 //! `routes/home.tsx`.
 //!
-//! Personal conversations need this computer to hold an identity; without one the
-//! conversation, requests and new-message panes say so and point to Devices, where it is
-//! linked.
+//! Personal conversations need this computer set up with the account's identity; until it
+//! is, the conversation, requests and new-message panes say what it needs (linking,
+//! restoring or starting over, or the password to finish setting up), and the sidebar
+//! reminds the person to save the recovery phrase while it waits to be.
 
 mod add_server;
 mod conversations;
@@ -21,8 +22,8 @@ use lumia_client::app::ChannelSummary;
 use rune::{Cursor, El, Icon, ScrollSpec, col, el, icon, row, text};
 
 use super::components::{
-    Look, action_button, avatar_of, empty_state, hover_layer, icon_button, link_button, panel,
-    section_label, shadowed,
+    Look, action_button, avatar_of, hover_layer, icon_button, link_button, panel, section_label,
+    shadowed,
 };
 use super::conversation;
 use super::shell::{SIDEBAR_WIDTH, sidebar_frame};
@@ -126,18 +127,24 @@ pub fn sidebar(s: &State, look: Look) -> El {
         |s| s.go_home(HomeView::AddServer),
         look,
     )));
-    let body = col().w_full().grow(1.0).min_h(0.0).child(tiles).child(
-        col()
-            .key("conversations")
-            .w_full()
-            .grow(1.0)
-            .min_h(0.0)
-            .scroll(ScrollSpec {
-                stick_bottom: false,
-            })
-            .child(list)
-            .with_scroll_bar("conversations", look),
-    );
+    let body = col()
+        .w_full()
+        .grow(1.0)
+        .min_h(0.0)
+        .child(tiles)
+        .children(super::setup::reminder(s, look))
+        .child(
+            col()
+                .key("conversations")
+                .w_full()
+                .grow(1.0)
+                .min_h(0.0)
+                .scroll(ScrollSpec {
+                    stick_bottom: false,
+                })
+                .child(list)
+                .with_scroll_bar("conversations", look),
+        );
     let new_message = icon_button(
         "new-message",
         &icons::COMPOSE,
@@ -353,29 +360,14 @@ fn page(title: &str, topic: &str, content: El, look: Look) -> El {
         )
 }
 
-/// The pane of a computer that holds no identity: personal conversations are encrypted to
-/// devices, and this one is not among them yet. Devices is where it is linked.
-fn no_identity(look: Look) -> El {
+/// The pane of a computer where personal conversations cannot be had yet: they are
+/// encrypted to devices, and this one is not set up among them. What it needs is the
+/// setup screens' to say ([`super::setup::needs_setup`]).
+fn no_identity(s: &State, look: Look) -> El {
     panel("panel", look)
         .w_full()
         .child(conversation::header("Home", None, look))
-        .child(
-            empty_state(
-                &icons::SHIELD,
-                "Link this computer to your identity",
-                "Personal messages are end-to-end encrypted between your devices and theirs. \
-                 This computer has no device key yet; a device you already use approves it.",
-                look,
-            )
-            .key("no-identity")
-            .child(el().pt(t::SPACE_8).child(action_button(
-                "link-this-computer",
-                "Link this computer",
-                true,
-                |s| s.go_home(HomeView::Devices),
-                look,
-            ))),
-        )
+        .child(super::setup::needs_setup(s, look))
 }
 
 /// A person as a row's start, in a member row's metrics: the avatar, the name with `mark`

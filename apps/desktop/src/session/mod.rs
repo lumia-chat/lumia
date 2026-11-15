@@ -489,6 +489,9 @@ impl Session {
         self.check_identity();
         if self.signed_in {
             self.restore();
+            // An account met without private messages here is set up at the next sign-in
+            // (architecture 5.4), and a launch that resumes a session is one.
+            self.check_setup();
         }
         self.task(async move { Update::Info(app.instance_info().await.map_err(Failure::from)) });
         Ok(())
@@ -1195,6 +1198,9 @@ impl Session {
             Update::SignedIn(Ok(())) => {
                 self.signed_in = true;
                 self.load();
+                // A new account's identity is made now, silently, and an account met
+                // without one gets one (architecture 5.4).
+                self.check_setup();
             }
             Update::SignedIn(Err(_)) => {}
             Update::Snapshot(Ok(snapshot)) => {

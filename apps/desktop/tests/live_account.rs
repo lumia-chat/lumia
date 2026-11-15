@@ -18,6 +18,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use lumia_shell::app::{HomeView, Route, State};
 use lumia_shell::session::Connection;
+use lumia_shell::session::identity::Setup;
 use rune::TextEdit;
 
 const PASSWORD: &str = "correct-horse-battery-staple";
@@ -460,23 +461,46 @@ fn a_status_is_kept_and_reported_by_the_instance() {
     finished(again, &holder);
 }
 
-/// An account made with a password on this computer, which holds no identity: its handle
-/// and display name are its own to change (`PATCH /account`), a taken handle is refused in
-/// words, the old handle no longer signs in and nobody else can take it.
+/// A password account signed in on a computer that does not hold its identity (it lives on
+/// a CLI device, so setting up here finds it elsewhere): its handle and display name are
+/// its own to change (`PATCH /account`), a taken handle is refused in words, the old handle
+/// no longer signs in and nobody else can take it.
 #[test]
 fn a_password_account_changes_its_handle_and_display_name() {
     let Some((instance, bin)) = environment() else {
         return;
     };
     let (before, after) = (unique("was"), unique("now"));
+    let holder = scratch("rename-holder");
+    cli(&bin, &holder, &["instance", "add", &instance]);
+    cli(
+        &bin,
+        &holder,
+        &[
+            "account",
+            "create",
+            "--handle",
+            &before,
+            "--password",
+            PASSWORD,
+        ],
+    );
+    cli(&bin, &holder, &["identity", "create"]);
+    cli(
+        &bin,
+        &holder,
+        &["identity", "link-account", "--password", PASSWORD],
+    );
     let mut state = opened(&instance, scratch("rename"));
-    state.sign_in.creating = true;
     state.sign_in.handle = TextEdit::new(before.as_str());
     state.sign_in.password.replace_text(PASSWORD);
     state.submit();
     wait(&mut state, "the shell", |s| s.route == Route::Shell);
     wait(&mut state, "the first snapshot", |s| {
         s.session.snapshot.is_some()
+    });
+    wait(&mut state, "the setup check", |s| {
+        s.session.identity.setup == Setup::Elsewhere
     });
     assert!(!state.session.has_identity());
 

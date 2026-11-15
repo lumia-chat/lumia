@@ -1,7 +1,8 @@
-//! The account screens' scenes: sign-in with the magic link, linking this computer, the
-//! devices and the profile, each over a state no instance is behind (what an instance
-//! would report is applied with `State::receive`). The `*-live` ones wait for a real
-//! instance instead, with the `LUMIA_DEV_*` environment.
+//! The account screens' scenes: sign-in with the magic link, linking this computer, setting
+//! up private messages (the phrase, its check, restoring, starting over, and what Home and
+//! Devices show meanwhile), the devices and the profile, each over a state no instance is
+//! behind (what an instance would report is applied with `State::receive`). The `*-live`
+//! ones wait for a real instance instead, with the `LUMIA_DEV_*` environment.
 
 use std::time::{Duration, Instant};
 
@@ -9,9 +10,9 @@ use lumia_client::app::{
     DeviceSummary, InstanceSummary, PasskeySummary, ProfileSummary, RosterSummary, SnapshotSummary,
 };
 
-use crate::app::{HomeView, State};
+use crate::app::{HomeView, Route, State};
 use crate::session::Update;
-use crate::session::identity::IdentityUpdate;
+use crate::session::identity::{IdentityUpdate, Setup};
 
 /// An instance nothing answers for, offering every way in this part of the shell draws.
 fn opened(s: &mut State) {
@@ -217,6 +218,131 @@ pub fn profile_live(s: &mut State) {
     super::live(s);
     s.go_home(HomeView::Profile);
     quiet(s);
+}
+
+// ---- Setting up private messages (#20) --------------------------------------------------
+
+/// The words the scenes show: the boards' phrase.
+const PHRASE: &str = "orbit cactus timber velvet harbor pencil meadow copper rescue glimpse fabric lunar anchor whisper salad ticket marble frozen clever sunny violin garden token mirror";
+
+/// Signed in, the silent setup's real answer (nothing is there to answer it) landed, and
+/// then `setup` staged in its place.
+fn set_up(s: &mut State, setup: Setup, phrase_kept: bool) {
+    signed_in(s);
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while s.session.identity.setup == Setup::Checking && Instant::now() < deadline {
+        s.drain();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    s.receive(&Update::Identity(IdentityUpdate::SetUp {
+        setup,
+        phrase_kept,
+    }));
+}
+
+/// A new account's card: the line about private messages, and "Already use Lumia on
+/// another device?" under it.
+pub fn sign_up(s: &mut State) {
+    opened(s);
+    s.sign_in.creating = true;
+    s.sign_in.handle.replace_text("sam");
+}
+
+/// Home's staged account (`scenes::staged`), on a computer that holds an identity or not,
+/// with setting up come to `setup`.
+fn staged(s: &mut State, identity: bool, view: HomeView, setup: Setup, phrase_kept: bool) {
+    super::staged::home(s, identity, view, None);
+    s.receive(&Update::Identity(IdentityUpdate::SetUp {
+        setup,
+        phrase_kept,
+    }));
+}
+
+/// Home with the reminder to save the phrase in the sidebar.
+pub fn home_reminder(s: &mut State) {
+    staged(s, true, HomeView::Conversations, Setup::Ready, true);
+}
+
+/// Devices with the "Recovery phrase not saved" card over the roster.
+pub fn devices_phrase(s: &mut State) {
+    staged(s, true, HomeView::Devices, Setup::Ready, true);
+    s.receive(&Update::Identity(IdentityUpdate::Roster(Ok(
+        RosterSummary {
+            identity_id: "9f2c".into(),
+            version: 1,
+            devices: vec![device(
+                "0b6e7a52-1111-4000-8000-000000000001",
+                "native",
+                "",
+                true,
+                false,
+            )],
+        },
+    ))));
+}
+
+/// "Private messages need this computer": the account's identity is on another device.
+pub fn needs_setup(s: &mut State) {
+    staged(s, false, HomeView::Conversations, Setup::Elsewhere, false);
+}
+
+/// The same on Devices.
+pub fn devices_elsewhere(s: &mut State) {
+    staged(s, false, HomeView::Devices, Setup::Elsewhere, false);
+}
+
+/// The account has no identity yet, and binding one here needs the password.
+pub fn needs_reauth(s: &mut State) {
+    staged(s, true, HomeView::NewMessage, Setup::NeedsReauth, false);
+}
+
+/// Step 1: the phrase.
+pub fn phrase(s: &mut State) {
+    set_up(s, Setup::Ready, true);
+    s.open_phrase();
+    // The real read finds no phrase (nothing is set up here) and puts the screen away: it
+    // lands first, and the staged phrase after it.
+    quiet(s);
+    s.route = Route::Phrase;
+    s.receive(&Update::Identity(IdentityUpdate::Phrase(Ok(Some(
+        PHRASE.into(),
+    )))));
+}
+
+/// "Save as a file" pressed: the warning first.
+pub fn phrase_save(s: &mut State) {
+    phrase(s);
+    s.ask_save_phrase();
+}
+
+/// Step 2: three words, one being typed with the wordlist completing it.
+pub fn phrase_check(s: &mut State) {
+    phrase(s);
+    s.phrase_written();
+    // As for the phrase: the real quiz refuses first.
+    quiet(s);
+    s.setup.phrase.checking = true;
+    s.setup.phrase.error.clear();
+    s.receive(&Update::Identity(IdentityUpdate::Quiz(Ok(vec![4, 11, 19]))));
+    s.complete_word(0, "velvet");
+    if let Some(field) = s.setup.phrase.answers.get_mut(1) {
+        field.replace_text("fa");
+    }
+}
+
+/// Restoring, from sign-in, twelve words in.
+pub fn restore(s: &mut State) {
+    opened(s);
+    s.start_restore();
+    let twelve: Vec<&str> = PHRASE.split(' ').take(12).collect();
+    s.setup.restore.words.replace_text(twelve.join(" "));
+}
+
+/// Starting over, from "Private messages need this computer".
+pub fn start_over(s: &mut State) {
+    needs_setup(s);
+    s.open_start_over();
+    debug_assert_eq!(s.route, Route::StartOver);
 }
 
 /// Drains until nothing has arrived for a moment, or three seconds.

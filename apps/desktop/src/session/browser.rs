@@ -66,6 +66,7 @@ impl Session {
             BrowserUpdate::SignedIn(Ok(())) => {
                 self.signed_in = true;
                 self.load();
+                self.check_setup();
             }
             BrowserUpdate::SignedIn(Err(_)) | BrowserUpdate::Handoff(_) => {}
         }

@@ -33,8 +33,8 @@ fn people(s: &State) -> Vec<&MemberSummary> {
 }
 
 pub fn view(s: &State, look: Look) -> El {
-    if !s.session.has_identity() {
-        return no_identity(look);
+    if !s.session.private_ready() {
+        return no_identity(s, look);
     }
     let mut content = col().child(field(
         "find-person",

@@ -1,8 +1,8 @@
-//! Devices: everything that holds this identity. The roster with this computer marked,
-//! revoking another device with the account password as reauth (identity spec 4.4), the
-//! account's passkeys with their removal, and, for an account with no identity on this
-//! computer, the way to linking it. The same states and wording as the web's
-//! `home.tsx`.
+//! Devices: everything that holds this identity. The card asking for the recovery phrase
+//! while it waits to be saved, the roster with this computer marked, revoking another
+//! device with the account password as reauth (identity spec 4.4), the account's passkeys
+//! with their removal, and, for a computer not set up with the account's identity, what it
+//! needs (`ui::setup`). The same states and wording as the web's `home.tsx`.
 //!
 //! A device is named by the label its person gave it when it was linked, and by its kind
 //! when it has none.
@@ -17,18 +17,22 @@ use chrono::{DateTime, Local};
 use lumia_client::app::{DeviceSummary, PasskeySummary, RosterSummary};
 use rune::{El, Icon, ScrollSpec, Tx, col, el, icon, row, text};
 
-use crate::app::State;
+use crate::app::{HomeView, State};
 use crate::tokens::{self as t, icons};
 use crate::ui::components::{
     Look, card, empty_state, error_text, field, link_button, notice, panel, primary_button,
     section_label, small_button, wide_button,
 };
-use crate::ui::conversation;
 use crate::ui::scroll::WithScrollBar;
+use crate::ui::{conversation, setup};
 
 pub fn view(s: &State, look: Look) -> El {
-    let mut content = page_column();
-    let roster = s.session.identity.roster.as_ref();
+    let mut content = page_column().children(setup::phrase_card(s, look));
+    // A roster held here while the account waits on the person (its identity is another,
+    // or binding needs the password) is not the account's devices.
+    let needed = s.session.setup_needed();
+    let ready = s.session.private_ready();
+    let roster = s.session.identity.roster.as_ref().filter(|_| !needed);
     if roster.is_some() {
         content = content.child(notice(
             &icons::SHIELD,
@@ -40,10 +44,8 @@ pub fn view(s: &State, look: Look) -> El {
     content = match roster {
         Some(roster) => devices(content, s, roster, look),
         // The roster is on its way from this computer's own store.
-        None if s.session.has_identity() => {
-            content.child(empty_state(&icons::SHIELD, "Looking…", "", look))
-        }
-        None => content.child(no_identity(look)),
+        None if ready => content.child(empty_state(&icons::SHIELD, "Looking…", "", look)),
+        None => content.child(setup::needs_setup(s, look)),
     };
     page(
         "devices",
@@ -89,15 +91,15 @@ pub(crate) fn action(button: El) -> El {
         .child(el().w(t::AUTH_WIDTH / 2.0).child(button))
 }
 
-/// A notice with the way to linking this computer at its end.
-pub(super) fn link_notice(key: &'static str, words: &str, look: Look) -> El {
+/// A notice with the way to Devices at its end, where this computer is set up.
+pub(super) fn setup_notice(key: &'static str, words: &str, look: Look) -> El {
     notice(&icons::SHIELD, words, look)
         .items_center()
         .child(small_button(
             key,
-            "Link this computer",
+            "Open Devices",
             true,
-            |s, _| s.start_linking(),
+            |s, _| s.go_home(HomeView::Devices),
             look,
         ))
 }
@@ -116,26 +118,6 @@ fn day(micros: i64) -> String {
     DateTime::from_timestamp_micros(micros).map_or_else(String::new, |at| {
         at.with_timezone(&Local).format("%b %-d").to_string()
     })
-}
-
-// ---- No identity ------------------------------------------------------------------------
-
-/// The account is signed in, and this computer holds no device key: the way to linking.
-fn no_identity(look: Look) -> El {
-    empty_state(
-        &icons::SHIELD,
-        "Link this computer to your identity",
-        "Personal messages are end-to-end encrypted between your devices and theirs. This computer has no device key yet; a device you already use approves it.",
-        look,
-    )
-    .key("no-identity")
-    .child(el().w(t::AUTH_WIDTH / 2.0).pt(t::SPACE_8).child(primary_button(
-        "link-this-computer",
-        "Link this computer",
-        true,
-        State::start_linking,
-        look,
-    )))
 }
 
 // ---- Passkeys ---------------------------------------------------------------------------

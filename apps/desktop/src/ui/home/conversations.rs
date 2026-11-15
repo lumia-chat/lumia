@@ -27,8 +27,8 @@ fn open(s: &State) -> Option<&ChannelSummary> {
 }
 
 pub fn view(s: &State, look: Look) -> El {
-    if !s.session.has_identity() {
-        return no_identity(look);
+    if !s.session.private_ready() {
+        return no_identity(s, look);
     }
     let Some(channel) = open(s) else {
         return choose(look);
@@ -123,7 +123,7 @@ pub fn view(s: &State, look: Look) -> El {
                 )
             },
             // The participants beside a conversation, for a computer that holds the identity.
-            aside: s.session.has_identity().then_some("Details"),
+            aside: s.session.private_ready().then_some("Details"),
         },
         Extras {
             topic: Some(topic),
@@ -206,7 +206,7 @@ fn accent_notice(glyph: &'static Icon, words: El, look: Look) -> El {
 
 /// Who is in the conversation on screen, as the aside panel.
 pub fn aside(s: &State, look: Look) -> Option<El> {
-    if !s.session.has_identity() {
+    if !s.session.private_ready() {
         return None;
     }
     let channel = open(s)?;

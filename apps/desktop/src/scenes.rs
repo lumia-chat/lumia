@@ -250,6 +250,18 @@ pub const SCENES: &[Scene] = &[
     ("devices", account::devices),
     ("devices-revoke", account::devices_revoke),
     ("devices-none", account::devices_none),
+    // Setting up private messages (#20).
+    ("sign-up", account::sign_up),
+    ("home-reminder", account::home_reminder),
+    ("devices-phrase", account::devices_phrase),
+    ("needs-setup", account::needs_setup),
+    ("devices-elsewhere", account::devices_elsewhere),
+    ("needs-reauth", account::needs_reauth),
+    ("phrase", account::phrase),
+    ("phrase-save", account::phrase_save),
+    ("phrase-check", account::phrase_check),
+    ("restore", account::restore),
+    ("start-over", account::start_over),
     ("devices-live", account::devices_live),
     ("profile", account::profile),
     ("profile-photo", account::profile_photo),
@@ -627,8 +639,10 @@ fn home(state: &mut State) {
     staged::home(state, true, HomeView::Conversations, None);
 }
 
+/// A computer that holds no identity is one whose account has it elsewhere, once setting up
+/// has been asked.
 fn home_no_identity(state: &mut State) {
-    staged::home(state, false, HomeView::Conversations, None);
+    account::needs_setup(state);
 }
 
 fn home_dm(state: &mut State) {

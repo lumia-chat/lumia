@@ -13,7 +13,7 @@ use common::*;
 use lumia_client::app::{DeviceSummary, PasskeySummary, ProfileSummary, RosterSummary};
 use lumia_shell::app::{HomeView, Place, Route, State};
 use lumia_shell::session::avatars::AvatarUpdate;
-use lumia_shell::session::identity::IdentityUpdate;
+use lumia_shell::session::identity::{IdentityUpdate, Setup};
 use lumia_shell::session::{Failure, Update};
 use lumia_shell::ui;
 use rune::{Env, Runtime};
@@ -340,16 +340,25 @@ fn a_link_request_that_cannot_be_made_says_why_and_back_returns_to_sign_in() {
 // ---- Devices ----------------------------------------------------------------------------
 
 #[test]
-fn an_account_with_no_identity_here_is_led_to_linking_from_devices() {
+fn an_account_with_its_identity_elsewhere_is_led_to_linking_from_devices() {
     let mut rt = at_devices();
+    receive(
+        &mut rt,
+        identity(IdentityUpdate::SetUp {
+            setup: Setup::Elsewhere,
+            phrase_kept: false,
+        }),
+    );
     let shown = words(&rt);
     for expected in [
         "Devices",
         "Everything that holds your identity",
         "Passkeys",
         "No passkeys yet.",
-        "Link this computer to your identity",
-        "This computer has no device key yet; a device you already use approves it.",
+        "Private messages need this computer",
+        "Link from a device you use",
+        "Restore with your recovery phrase",
+        "Lost every device and the phrase? Start over",
     ] {
         assert!(shown.contains(expected), "{expected:?} in:\n{shown}");
     }
@@ -362,7 +371,7 @@ fn an_account_with_no_identity_here_is_led_to_linking_from_devices() {
         "the instance is asked for a token"
     );
 
-    press(&mut rt, "link-this-computer");
+    press(&mut rt, "setup-link");
     assert_eq!(rt.state.route, Route::Link);
     assert!(
         words(&rt).contains("Not now"),
@@ -373,10 +382,10 @@ fn an_account_with_no_identity_here_is_led_to_linking_from_devices() {
     assert_eq!(rt.state.home_view, HomeView::Devices);
 
     // Linked from here: the shell again, with the roster where the notice was.
-    press(&mut rt, "link-this-computer");
+    press(&mut rt, "setup-link");
     receive(&mut rt, identity(IdentityUpdate::Linked(Ok(roster(false)))));
     assert_eq!(rt.state.route, Route::Shell);
-    assert!(rt.find("devices-list").is_some() && rt.find("no-identity").is_none());
+    assert!(rt.find("devices-list").is_some() && rt.find("needs-setup").is_none());
 }
 
 #[test]
@@ -401,7 +410,7 @@ fn the_roster_names_devices_by_kind_and_marks_this_one() {
     ] {
         assert!(shown.contains(expected), "{expected:?} in:\n{shown}");
     }
-    assert!(rt.find("no-identity").is_none());
+    assert!(rt.find("needs-setup").is_none());
     // This device and a revoked one cannot be revoked from here.
     assert!(
         rt.find("revoke-0b6e7a52-1111-4000-8000-000000000001")
@@ -574,7 +583,7 @@ fn passkeys_are_listed_and_removed() {
 // ---- Profile and status -----------------------------------------------------------------
 
 #[test]
-fn the_profile_of_an_account_with_no_identity_here_leads_to_linking() {
+fn the_profile_of_an_account_with_no_identity_here_leads_to_devices() {
     let mut rt = at_profile();
     let shown = words(&rt);
     for expected in [
@@ -582,14 +591,14 @@ fn the_profile_of_an_account_with_no_identity_here_leads_to_linking() {
         "How people see you",
         "Status",
         "What people see beside your name in a server's member list.",
-        "Your profile travels with your identity, signed by its devices. This computer holds no device key yet; a device you already use approves it.",
-        "Link this computer",
+        "Your profile travels with your identity, signed by its devices. This computer isn’t set up with it yet.",
+        "Open Devices",
     ] {
         assert!(shown.contains(expected), "{expected:?} in:\n{shown}");
     }
     assert!(rt.find("profile-card").is_none() && rt.find("display-name").is_none());
-    press(&mut rt, "profile-link");
-    assert_eq!(rt.state.route, Route::Link);
+    press(&mut rt, "profile-setup");
+    assert_eq!(rt.state.home_view, HomeView::Devices);
 }
 
 #[test]

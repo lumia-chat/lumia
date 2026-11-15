@@ -10,11 +10,7 @@ use rune::{FileDialogOptions, TextEdit, Tx};
 use super::{HomeView, Place, Popover, Route, State};
 use crate::session::Failure;
 use crate::session::avatars::AvatarUpdate;
-use crate::session::identity::IdentityUpdate;
-
-/// The label this computer's device carries in a link request, as the other desktop
-/// shells send it.
-const DEVICE_LABEL: &str = "desktop";
+use crate::session::identity::{DEVICE_LABEL, IdentityUpdate};
 
 /// What the account screens hold between frames.
 #[derive(Debug, Default)]
@@ -390,6 +386,9 @@ impl State {
     // ---- What the session reports -------------------------------------------------------
 
     pub(super) fn react_identity(&mut self, update: &IdentityUpdate) {
+        if self.react_setup(update) {
+            return;
+        }
         match update {
             IdentityUpdate::LinkRequested(answer) => {
                 let form = &mut self.account.link;
@@ -495,10 +494,18 @@ impl State {
             }
             IdentityUpdate::MagicLinkSent(answer) => self.magic_link_sent(answer),
             IdentityUpdate::MagicLinkSignedIn(answer) => self.magic_link_signed_in(answer),
-            // The session keeps these; the screens read them from it.
+            // The session keeps these; the screens read them from it. The setup screens took
+            // theirs above.
             IdentityUpdate::Roster(_)
             | IdentityUpdate::Passkeys(_)
-            | IdentityUpdate::PasskeyRemoved(Ok(())) => {}
+            | IdentityUpdate::PasskeyRemoved(Ok(()))
+            | IdentityUpdate::SetUp { .. }
+            | IdentityUpdate::SetupRefused(_)
+            | IdentityUpdate::Phrase(_)
+            | IdentityUpdate::Quiz(_)
+            | IdentityUpdate::Confirmed(_)
+            | IdentityUpdate::Restored(_)
+            | IdentityUpdate::StartedOver(_) => {}
         }
     }
 }
