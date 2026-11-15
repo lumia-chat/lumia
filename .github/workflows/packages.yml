@@ -1,0 +1,76 @@
+# Lumia's apt and dnf repository at https://packages.lumia.chat
+# (apps/desktop/scripts/linux-repo.sh): a release's .deb and .rpm files,
+# signed, with the page in apps/desktop/packaging/linux/repository.html,
+# deployed to GitHub Pages. The domain is the Pages site's setting, not a
+# file here. The packages add the site to the system as they install. The
+# site holds one release alone.
+#
+# Two ways in. A release calls it once the release is published and both
+# Linux builds succeeded (release.yml's packages job), from the tag, with
+# the tag's script and page. By hand (Actions, "packages", Run workflow, on
+# master) it builds the site again from a release already published, the
+# latest unless one is named, with master's script and page: for a change
+# to the page or the script between releases.
+#
+# The github-pages environment allows `master` and tags `v*` (repository
+# settings, Environments); a run from anywhere else is refused before its
+# first step. LINUX_REPO_KEY holds the repository key.
+name: packages
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: The release whose packages the site holds
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The release whose packages the site holds (empty for the latest)
+        type: string
+        required: false
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  site:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y apt-utils rpm createrepo-c gnupg
+      - name: The release's packages
+        run: |
+          tag=${TAG:-$(gh release view --json tagName -q .tagName)}
+          echo "packages of $tag"
+          gh release download "$tag" --pattern '*-preview.deb' --pattern '*-preview.rpm' -D "$RUNNER_TEMP/packages"
+        env:
+          TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+      - name: The repository
+        run: |
+          printf '%s\n' "$LINUX_REPO_KEY" > "$RUNNER_TEMP/repo.key"
+          apps/desktop/scripts/linux-repo.sh "$RUNNER_TEMP/packages" "$RUNNER_TEMP/site"
+          rm "$RUNNER_TEMP/repo.key"
+        env:
+          LINUX_REPO_KEY: ${{ secrets.LINUX_REPO_KEY }}
+          LINUX_REPO_KEY_PATH: ${{ runner.temp }}/repo.key
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: ${{ runner.temp }}/site
+      - id: deploy
+        uses: actions/deploy-pages@v4

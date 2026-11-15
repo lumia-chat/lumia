@@ -295,56 +295,22 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
-  # Lumia's apt and dnf repository (apps/desktop/scripts/linux-repo.sh),
-  # made from the published release's .deb and .rpm files, signed, and
-  # deployed to GitHub Pages at https://packages.lumia.chat (the domain is
-  # the Pages site's setting, not a file here), which the packages add to
-  # the system as they install. Only when both Linux builds succeeded: a site missing one
-  # architecture would leave its systems failing to update. The site holds
-  # this release alone.
-  #
-  # First run with v0.10.0 (2026-11-14). It runs from the tag, so the
-  # github-pages environment needs a deployment rule for tags `v*` beside
-  # `master` (repository settings, Environments); without one the job is
-  # refused before its first step. LINUX_REPO_KEY holds the repository key.
+  # Lumia's apt and dnf repository at https://packages.lumia.chat, from
+  # this release's packages (packages.yml, which can also be run by hand
+  # from master between releases). Only when both Linux builds succeeded: a
+  # site missing one architecture would leave its systems failing to update.
+  # First run with v0.10.0 (2026-11-14).
   packages:
     needs: [publish, linux]
     if: ${{ !cancelled() && needs.publish.result == 'success' && needs.linux.result == 'success' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
     permissions:
       contents: read
       pages: write
       id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
-    concurrency:
-      group: pages
-      cancel-in-progress: false
-    steps:
-      - uses: actions/checkout@v4
-      - name: System packages
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y apt-utils rpm createrepo-c gnupg
-      - name: The release's packages
-        run: gh release download "$GITHUB_REF_NAME" --pattern '*-preview.deb' --pattern '*-preview.rpm' -D "$RUNNER_TEMP/packages"
-        env:
-          GH_TOKEN: ${{ github.token }}
-      - name: The repository
-        run: |
-          printf '%s\n' "$LINUX_REPO_KEY" > "$RUNNER_TEMP/repo.key"
-          apps/desktop/scripts/linux-repo.sh "$RUNNER_TEMP/packages" "$RUNNER_TEMP/site"
-          rm "$RUNNER_TEMP/repo.key"
-        env:
-          LINUX_REPO_KEY: ${{ secrets.LINUX_REPO_KEY }}
-          LINUX_REPO_KEY_PATH: ${{ runner.temp }}/repo.key
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: ${{ runner.temp }}/site
-      - id: deploy
-        uses: actions/deploy-pages@v4
+    uses: ./.github/workflows/packages.yml
+    with:
+      tag: ${{ github.ref_name }}
+    secrets: inherit
 
   # Waits for every job that attaches something, and publishes when the two
   # that gate the release succeeded, whatever became of the previews.

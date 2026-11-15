@@ -28,14 +28,19 @@
 <p>Lumia @VERSION@, a preview: it has been built and tested without a screen, and nobody has used it on a Linux desktop yet. Please <a href="https://github.com/lumia-chat/lumia/issues">say what you find</a>.</p>
 
 <h2>Debian and Ubuntu</h2>
-<p>For an Arm computer, put <code>arm64</code> in place of <code>amd64</code>.</p>
+<p>On an Intel or AMD computer (x86-64):</p>
 <pre><code>curl -fLO @URL@/apt/pool/main/lumia_@VERSION@_amd64.deb
 sudo apt install ./lumia_@VERSION@_amd64.deb</code></pre>
+<p>On an Arm computer (arm64):</p>
+<pre><code>curl -fLO @URL@/apt/pool/main/lumia_@VERSION@_arm64.deb
+sudo apt install ./lumia_@VERSION@_arm64.deb</code></pre>
 <p>The package adds this repository to apt as it installs, so Lumia updates with the rest of the system.</p>
 
 <h2>Fedora and other dnf systems</h2>
-<p>For an Arm computer, put <code>aarch64</code> in place of <code>x86_64</code>, both times.</p>
+<p>On an Intel or AMD computer (x86-64):</p>
 <pre><code>sudo dnf install @URL@/rpm/x86_64/lumia-@VERSION@-1.x86_64.rpm</code></pre>
+<p>On an Arm computer (aarch64):</p>
+<pre><code>sudo dnf install @URL@/rpm/aarch64/lumia-@VERSION@-1.aarch64.rpm</code></pre>
 <p>The package adds this repository to dnf; the first update asks you to accept its key.</p>
 
 <h2>Anywhere else</h2>
