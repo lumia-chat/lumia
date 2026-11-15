@@ -5,4 +5,5 @@ defmodule Lumia.Media.Native do
   use Rustler, otp_app: :lumia, crate: "lumia_media", mode: :release
 
   def avatar(_upload), do: :erlang.nif_error(:nif_not_loaded)
+  def card(_upload), do: :erlang.nif_error(:nif_not_loaded)
 end

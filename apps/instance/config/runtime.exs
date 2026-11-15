@@ -57,8 +57,9 @@ if path = System.get_env("LUMIA_MASTER_KEY_FILE") do
   config :lumia, :master_key_file, path
 end
 
-# The blob store (docs/specs/deployment.md section 3): where pictures, and
-# later attachments, are kept, encrypted under the master key above.
+# The blob store (docs/specs/deployment.md section 3): where pictures,
+# sealed under the master key above, and attachments, encrypted by the
+# clients that send them, are kept.
 # Without it the instance keeps none and says so to whoever tries.
 case System.get_env("LUMIA_BLOB_STORE") do
   nil ->
@@ -108,6 +109,14 @@ case System.get_env("LUMIA_BLOB_STORE") do
 
     config :lumia, :blob_store, blob_store
 end
+
+# What a client may upload (specs/media.md 2): a processed picture, and
+# anything else, in bytes of ciphertext.
+config :lumia, :uploads,
+  image_max_bytes:
+    String.to_integer(System.get_env("LUMIA_UPLOAD_IMAGE_MAX_BYTES") || "#{2 * 1024 * 1024}"),
+  file_max_bytes:
+    String.to_integer(System.get_env("LUMIA_UPLOAD_FILE_MAX_BYTES") || "#{10 * 1024 * 1024}")
 
 config :lumia, :metrics, System.get_env("LUMIA_METRICS") == "true"
 

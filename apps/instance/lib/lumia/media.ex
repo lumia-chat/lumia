@@ -39,6 +39,20 @@ defmodule Lumia.Media do
     end
   end
 
+  @doc """
+  A page's picture as a link card keeps it (specs/media.md 6.3): its
+  longest side at most 400 pixels, its shape kept, as JPEG (or PNG when it
+  has transparency). `{:ok, {media_type, bytes, width, height}}`, or the
+  refusals of `avatar/1`.
+  """
+  def card(upload) when is_binary(upload) do
+    cond do
+      byte_size(upload) > @max_upload_bytes -> {:error, :too_large}
+      upload == "" -> {:error, :unsupported}
+      true -> bounded(fn -> Native.card(upload) end)
+    end
+  end
+
   defp bounded(work) do
     slots = slots()
 

@@ -18,9 +18,10 @@ defmodule Lumia.Blobs do
   (`enabled?/0`); without them every call answers `{:error, :unavailable}`
   and what would have used a blob says so to the person.
 
-  What is built on this so far: account avatars (`Lumia.Accounts`).
-  Attachments, with their per-server address keys, reference counts and
-  access checks, are not.
+  What is built on this: account avatars (`Lumia.Accounts`), server
+  icons and link cards' pictures (`Lumia.Cards`), all of them pictures the
+  instance made itself. Attachments are not sealed here: their clients
+  encrypt them and `Lumia.Uploads` keeps only rows about them.
   """
 
   import Ecto.Query
@@ -38,7 +39,7 @@ defmodule Lumia.Blobs do
   def enabled?, do: Store.configured() != nil and master_key() != nil
 
   @doc """
-  Stores `bytes` as a blob of `kind` (`"avatar"`), of `media_type`, for
+  Stores `bytes` as a blob of `kind` (`"avatar"`, `"card"`), of `media_type`, for
   `owner_account_id`. `{:ok, %Blob{}}`, or `{:error, :unavailable}` when
   the instance keeps no blobs or the store refused the write.
   """

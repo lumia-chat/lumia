@@ -30,6 +30,23 @@ defmodule Lumia.Blobs.Store do
   @doc "Whether `name` is in the store."
   def exists?(name), do: call(:exists?, [name]) == true
 
+  @doc "`{:ok, length}` of what is under `name`, or `{:error, :not_found}`."
+  def size(name), do: call(:size, [name])
+
+  @doc """
+  Where a client sends or fetches `name` itself (specs/media.md 4): for a
+  bucket, `{:ok, url}` presigned for `method` (`:put` or `:get`) for
+  `seconds`, a `:put` signed for exactly `length` bytes; for a directory,
+  `:instance`, and the instance carries the bytes.
+  """
+  def presign(name, method, seconds, length \\ nil) do
+    case configured() do
+      {:s3, options} -> {:ok, S3.presign(options, name, method, seconds, length)}
+      {kind, _} when kind in [:local, :fs] -> :instance
+      nil -> {:error, :unavailable}
+    end
+  end
+
   @doc "The store's kind as a backup's manifest names it: `local`, `fs`, `s3` or `none`."
   def kind do
     case configured() do

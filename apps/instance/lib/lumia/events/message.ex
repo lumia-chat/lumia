@@ -27,5 +27,12 @@ defmodule Lumia.Events.Message do
     field :mentioned_account_ids, {:array, Ecto.UUID}, default: []
     field :mentions_everyone, :boolean, default: false
     field :mention_spans, {:array, :map}, default: []
+    # Attachments and link cards (specs/media.md), each an encoded proto as
+    # the event carried it; `card_ids` are the `link_cards` rows the cards
+    # came from, in the same order, and `card_urls` the links it wants.
+    field :attachments, {:array, :binary}, default: []
+    field :cards, {:array, :binary}, default: []
+    field :card_ids, {:array, Ecto.UUID}, default: []
+    field :card_urls, {:array, :string}, default: []
   end
 end

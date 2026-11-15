@@ -15,6 +15,7 @@ defmodule Lumia.Events do
 
   import Ecto.Query
 
+  alias Lumia.Cards
   alias Lumia.Dms
   alias Lumia.Events.Channel
   alias Lumia.Events.Command
@@ -26,6 +27,7 @@ defmodule Lumia.Events do
   alias Lumia.Repo
   alias Lumia.Schema
   alias Lumia.Tx
+  alias Lumia.Uploads
   alias Lumia.V1
 
   # The most of a message a quote keeps, in characters (architecture 6.6).
@@ -256,10 +258,11 @@ defmodule Lumia.Events do
     if nulled == 0 do
       {:ok, 0}
     else
-      drop_quotes(
-        channel_id,
+      purged =
         from(m in Message, where: m.channel_id == ^channel_id and m.seq <= ^seq, select: m.id)
-      )
+
+      drop_quotes(channel_id, purged)
+      Uploads.release(channel_id, purged)
 
       Repo.delete_all(from m in Message, where: m.channel_id == ^channel_id and m.seq <= ^seq)
 
@@ -345,11 +348,14 @@ defmodule Lumia.Events do
     with {:ok, seq, acl_version, kind} <- take_head(channel_id, now),
          :ok <- check_kind(kind, command),
          :ok <- advance_epoch(channel_id, command),
-         {:ok, command} <- resolve(channel_id, command),
+         {:ok, command} <- resolve(channel_id, actor, command),
+         {:ok, extras} <- extras(channel_id, command),
          {:ok, payload} <- payload_for(command, actor, channel_id, seq, now),
+         payload = with_extras(payload, extras),
          event = build_event(channel_id, seq, acl_version, actor, command, payload, now),
          {:ok, {event, bytes}} <- insert_event(channel_id, event, command_id, actor, now),
          {:ok, _} <- materialize(channel_id, seq, actor, command, now),
+         :ok <- materialize_extras(channel_id, command, extras),
          {:ok, record} <- insert_command(channel_id, command_id, actor, fingerprint, event, now) do
       {:ok, {ack(record), {event, bytes}}}
     end
@@ -469,12 +475,35 @@ defmodule Lumia.Events do
   # written: a quote's original (its author, the text cut to its limit) and
   # a reaction's message and emoji (architecture 6.6). After the
   # fingerprint, so a retry of the same command still matches.
-  defp resolve(
-         channel_id,
-         %V1.Command{
-           op: {:send_message, %V1.SendMessage{reply_to: %V1.QuoteReply{} = quote} = op}
-         } = command
-       ) do
+  # A message's attachments and the links it wants cards for are checked
+  # here too (specs/media.md 4.2 and 6.4).
+  defp resolve(channel_id, actor, %V1.Command{op: {:send_message, op}} = command) do
+    with {:ok, op} <- resolve_quote(channel_id, op),
+         {:ok, _} <- Uploads.check_attachments(channel_id, actor.account_id, op.attachments),
+         {:ok, urls} <- Cards.check_urls(op.body, op.card_urls) do
+      {:ok, %{command | op: {:send_message, %{op | card_urls: urls}}}}
+    end
+  end
+
+  defp resolve(_channel_id, _actor, %V1.Command{op: {:edit_message, op}} = command) do
+    case op.cards do
+      nil ->
+        {:ok, command}
+
+      %V1.CardUrls{urls: urls} ->
+        with {:ok, urls} <- Cards.check_urls(op.body, urls),
+             do: {:ok, %{command | op: {:edit_message, %{op | cards: %V1.CardUrls{urls: urls}}}}}
+    end
+  end
+
+  defp resolve(channel_id, actor, %V1.Command{op: {:send_encrypted, op}} = command) do
+    with :ok <- Uploads.check_dm_blobs(channel_id, actor.account_id, op.blob_ids),
+         do: {:ok, command}
+  end
+
+  defp resolve(channel_id, _actor, command), do: resolve(channel_id, command)
+
+  defp resolve_quote(channel_id, %V1.SendMessage{reply_to: %V1.QuoteReply{} = quote} = op) do
     case quotable(channel_id, quote.message_id) do
       {:ok, original} ->
         quote = %V1.QuoteReply{
@@ -484,12 +513,14 @@ defmodule Lumia.Events do
           silent: quote.silent
         }
 
-        {:ok, %{command | op: {:send_message, %{op | reply_to: quote}}}}
+        {:ok, %{op | reply_to: quote}}
 
       error ->
         error
     end
   end
+
+  defp resolve_quote(_channel_id, op), do: {:ok, op}
 
   defp resolve(channel_id, %V1.Command{op: {reaction, op}} = command)
        when reaction in [:add_reaction, :remove_reaction] do
@@ -517,6 +548,162 @@ defmodule Lumia.Events do
       %Message{} = message -> {:ok, message}
       _ -> {:error, :message_not_found}
     end
+  end
+
+  # What a message carries beyond its text (specs/media.md): its
+  # attachments and its cards, and for a personal message the blobs it
+  # uses. The cards are the ones the cache has now; `missing` are fetched
+  # after the commit (`Lumia.Workers.Unfurl`).
+  defp extras(_channel_id, %V1.Command{op: {:send_message, op}}) do
+    {cards, card_ids, missing} = Cards.for_message(op.card_urls)
+
+    {:ok,
+     %{
+       attachments: op.attachments,
+       removed: [],
+       cards: cards,
+       card_ids: card_ids,
+       card_urls: op.card_urls,
+       missing: missing
+     }}
+  end
+
+  defp extras(channel_id, %V1.Command{op: {:edit_message, op}}) do
+    message_id = Proto.from_uuid(op.message_id)
+
+    case message_id && Repo.get_by(Message, id: message_id, channel_id: channel_id) do
+      %Message{} = message ->
+        dropped = MapSet.new(op.remove_attachment_ids)
+        current = Enum.map(message.attachments, &V1.Attachment.decode/1)
+
+        {removed, attachments} =
+          Enum.split_with(current, &MapSet.member?(dropped, &1.attachment_id))
+
+        kept = kept_cards(message)
+
+        urls =
+          case op.cards do
+            %V1.CardUrls{urls: urls} -> urls
+            nil -> Enum.filter(message.card_urls, &String.contains?(op.body, &1))
+          end
+
+        {cards, card_ids, missing} = Cards.for_message(urls, kept)
+
+        {:ok,
+         %{
+           attachments: attachments,
+           removed: Uploads.blob_ids(removed),
+           cards: cards,
+           card_ids: card_ids,
+           card_urls: urls,
+           missing: missing
+         }}
+
+      nil ->
+        {:error, :message_not_found}
+    end
+  end
+
+  defp extras(_channel_id, %V1.Command{op: {:send_encrypted, op}} = command),
+    do: {:ok, %{blob_ids: op.blob_ids, message_id: command.command_id}}
+
+  defp extras(_channel_id, _command), do: {:ok, %{}}
+
+  defp with_extras({:message_created, %V1.MessageCreated{message: message}}, extras) do
+    message = %{message | attachments: extras.attachments, cards: extras.cards}
+    {:message_created, %V1.MessageCreated{message: message}}
+  end
+
+  defp with_extras({:message_edited, edited}, extras),
+    do: {:message_edited, %{edited | attachments: extras.attachments, cards: extras.cards}}
+
+  defp with_extras(payload, _extras), do: payload
+
+  defp materialize_extras(channel_id, %V1.Command{op: {op, _}} = command, extras)
+       when op in [:send_message, :edit_message] do
+    message_id =
+      case command.op do
+        {:send_message, _} -> Proto.from_uuid(command.command_id)
+        {:edit_message, edit} -> Proto.from_uuid(edit.message_id)
+      end
+
+    Repo.update_all(
+      from(m in Message, where: m.id == ^message_id and m.channel_id == ^channel_id),
+      set: [
+        attachments: Enum.map(extras.attachments, &V1.Attachment.encode/1),
+        cards: Enum.map(extras.cards, &V1.Card.encode/1),
+        card_ids: extras.card_ids,
+        card_urls: extras.card_urls
+      ]
+    )
+
+    with :ok <- Uploads.reference(channel_id, message_id, Uploads.blob_ids(extras.attachments)),
+         :ok <- Uploads.mark_removed(extras.removed),
+         do: unfurl_later(channel_id, message_id, extras.missing)
+  end
+
+  defp materialize_extras(channel_id, %V1.Command{op: {:send_encrypted, _}}, extras) do
+    ids = Enum.map(extras.blob_ids, &Proto.from_uuid/1)
+    Uploads.reference(channel_id, Proto.from_uuid(extras.message_id), ids)
+  end
+
+  defp materialize_extras(_channel_id, _command, _extras), do: :ok
+
+  # Oban's insert joins the transaction: the job exists once the message does.
+  defp unfurl_later(_channel_id, _message_id, []), do: :ok
+
+  defp unfurl_later(channel_id, message_id, _missing) do
+    %{channel_id: channel_id, message_id: message_id}
+    |> Lumia.Workers.Unfurl.new()
+    |> Oban.insert()
+    |> case do
+      {:ok, _} -> :ok
+      error -> error
+    end
+  end
+
+  @doc """
+  Puts the cards a message wants on it once the instance has fetched them
+  (`Lumia.Workers.Unfurl`): the message's row and a `MessageCardsSet`
+  event, when they differ from what it has. A deleted message is left.
+  """
+  def set_cards(channel_id, message_id) do
+    with {:ok, _} <- Tx.transact(fn -> replace_cards(channel_id, message_id) end), do: :ok
+  end
+
+  defp replace_cards(channel_id, message_id) do
+    message =
+      Repo.one(
+        from m in Message,
+          where: m.id == ^message_id and m.channel_id == ^channel_id and is_nil(m.deleted_at),
+          lock: "FOR UPDATE"
+      )
+
+    with %Message{} <- message,
+         {cards, card_ids, _missing} = Cards.for_message(message.card_urls, kept_cards(message)),
+         encoded = Enum.map(cards, &V1.Card.encode/1),
+         true <- encoded != message.cards do
+      Repo.update_all(
+        from(m in Message, where: m.id == ^message_id and m.channel_id == ^channel_id),
+        set: [cards: encoded, card_ids: card_ids]
+      )
+
+      append_system(
+        channel_id,
+        {:message_cards_set,
+         %V1.MessageCardsSet{message_id: Proto.uuid(message_id), cards: cards}}
+      )
+    else
+      _ -> {:ok, nil}
+    end
+  end
+
+  # A message's cards as `{url, card, link_cards id}`, for `Cards.for_message/2`.
+  defp kept_cards(%Message{} = message) do
+    message.cards
+    |> Enum.map(&V1.Card.decode/1)
+    |> Enum.zip(message.card_ids)
+    |> Enum.map(fn {card, id} -> {card.url, card, id} end)
   end
 
   # Command op → event payload. The message id is the command id.

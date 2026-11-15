@@ -38,6 +38,13 @@ defmodule Lumia.Blobs.Store.Local do
 
   def exists?(dir, name), do: File.regular?(path(dir, name))
 
+  def size(dir, name) do
+    case File.stat(path(dir, name)) do
+      {:ok, %File.Stat{type: :regular, size: size}} -> {:ok, size}
+      _ -> {:error, :not_found}
+    end
+  end
+
   # Names are hex made by `Lumia.Blobs`, never a caller's string.
   defp path(dir, <<prefix::binary-size(2), _::binary>> = name), do: Path.join([dir, prefix, name])
 end

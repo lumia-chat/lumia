@@ -38,6 +38,9 @@ defmodule LumiaWeb.Router do
   # them with no Accept the API's pipelines would take.
   scope "/api/v1", LumiaWeb do
     get "/avatars/:address", AvatarController, :show
+    get "/cards/:address", UnfurlController, :show
+    # A directory store's upload, authorized by its token alone (specs/media.md 4.1).
+    put "/blobs/upload/:token", UploadController, :put_local
   end
 
   scope "/api/v1", LumiaWeb do
@@ -77,6 +80,11 @@ defmodule LumiaWeb.Router do
 
     get "/account/snapshot", AccountController, :snapshot
     patch "/account", AccountController, :update
+    post "/uploads", UploadController, :create
+    post "/uploads/:blob_id/complete", UploadController, :complete
+    get "/blobs/:blob_id", BlobController, :show
+    delete "/blobs/:blob_id", BlobController, :delete
+    post "/unfurl", UnfurlController, :create
     put "/account/avatar", AccountController, :put_avatar
     delete "/account/avatar", AccountController, :delete_avatar
     put "/account/profile", AccountController, :put_profile

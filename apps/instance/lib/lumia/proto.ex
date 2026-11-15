@@ -165,7 +165,9 @@ defmodule Lumia.Proto do
       notice: notice(m.notice, m.notice_account_id),
       mentions: Enum.flat_map(m.mention_spans || [], &mention/1),
       reply_to: quote_reply(m),
-      reactions: reactions
+      reactions: reactions,
+      attachments: Enum.map(m.attachments || [], &V1.Attachment.decode/1),
+      cards: Enum.map(m.cards || [], &V1.Card.decode/1)
     }
   end
 

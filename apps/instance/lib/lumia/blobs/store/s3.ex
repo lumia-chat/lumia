@@ -36,10 +36,51 @@ defmodule Lumia.Blobs.Store.S3 do
     match?({:ok, %Req.Response{status: 200}}, request(options, :head, name, []))
   end
 
+  def size(options, name) do
+    case request(options, :head, name, []) do
+      {:ok, %Req.Response{status: 200} = response} ->
+        case response |> Req.Response.get_header("content-length") |> List.first() do
+          nil -> {:error, :not_found}
+          length -> {:ok, String.to_integer(length)}
+        end
+
+      {:ok, %Req.Response{status: 404}} ->
+        {:error, :not_found}
+
+      other ->
+        failed(other)
+    end
+  end
+
+  @doc """
+  A presigned URL for `method` on `name`, good for `seconds`. A `:put` with
+  a `length` signs `content-length`, so the bucket refuses a body of any
+  other length (specs/media.md 4.1).
+  """
+  def presign(options, name, method, seconds, length) do
+    headers = if length, do: [{"content-length", Integer.to_string(length)}], else: []
+
+    Req.Utils.aws_sigv4_url(
+      method: method,
+      url: url(options, name),
+      headers: headers,
+      expires: seconds,
+      datetime: DateTime.utc_now(),
+      access_key_id: options[:access_key_id],
+      secret_access_key: options[:secret_access_key],
+      region: options[:region],
+      service: :s3
+    )
+    |> to_string()
+  end
+
+  defp url(options, name),
+    do: "#{String.trim_trailing(options[:endpoint], "/")}/#{options[:bucket]}/#{name}"
+
   defp request(options, method, name, extra) do
     [
       method: method,
-      url: "#{String.trim_trailing(options[:endpoint], "/")}/#{options[:bucket]}/#{name}",
+      url: url(options, name),
       aws_sigv4: [
         access_key_id: options[:access_key_id],
         secret_access_key: options[:secret_access_key],

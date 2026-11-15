@@ -36,6 +36,8 @@ const MAX_PIXELS: u64 = 25_000_000;
 const MAX_ALLOC: u64 = 160 * 1024 * 1024;
 /// The side of the square an avatar is kept as.
 const AVATAR_SIDE: u32 = 512;
+/// The longest side a link card's picture is kept at (specs/media.md 6.3).
+const CARD_SIDE: u32 = 400;
 const JPEG_QUALITY: u8 = 85;
 
 enum Refusal {
@@ -54,7 +56,10 @@ impl Refusal {
     }
 }
 
-fn reader(bytes: &[u8]) -> Result<(ImageReader<Cursor<&[u8]>>, ImageFormat), Refusal> {
+/// A reader over an upload, and the format its first bytes say it is.
+type Probed<'a> = (ImageReader<Cursor<&'a [u8]>>, ImageFormat);
+
+fn reader(bytes: &[u8]) -> Result<Probed<'_>, Refusal> {
     let reader = ImageReader::new(Cursor::new(bytes))
         .with_guessed_format()
         .map_err(|_| Refusal::Unsupported)?;
@@ -105,6 +110,16 @@ fn square(image: &DynamicImage) -> DynamicImage {
     }
 }
 
+/// `image` with its longest side at most [`CARD_SIDE`] and its shape kept; a smaller one
+/// is kept at its size.
+fn fit(image: &DynamicImage) -> DynamicImage {
+    if image.width().max(image.height()) > CARD_SIDE {
+        image.resize(CARD_SIDE, CARD_SIDE, FilterType::CatmullRom)
+    } else {
+        image.clone()
+    }
+}
+
 /// A picture someone may see through keeps its transparency as PNG; anything else is a
 /// photograph and is kept as JPEG.
 fn encode(image: &DynamicImage) -> Result<(&'static str, Vec<u8>), Refusal> {
@@ -135,6 +150,26 @@ fn avatar<'a>(env: Env<'a>, upload: Binary<'a>) -> Term<'a> {
     });
     match stored {
         Ok(avatar) => (atoms::ok(), avatar).encode(env),
+        Err(refusal) => (atoms::error(), refusal.atom()).encode(env),
+    }
+}
+
+/// A page's picture as a link card keeps it: `{:ok, {media_type, bytes, width, height}}`,
+/// its longest side at most 400 pixels, encoded here, or `{:error, reason}` as for an avatar.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn card<'a>(env: Env<'a>, upload: Binary<'a>) -> Term<'a> {
+    let made = decode(upload.as_slice()).and_then(|image| {
+        let fitted = fit(&image);
+        let (width, height) = (fitted.width(), fitted.height());
+        encode(&fitted).map(|(media_type, bytes)| (media_type, bytes, width, height))
+    });
+    let stored = made.and_then(|(media_type, bytes, width, height)| {
+        let mut binary = OwnedBinary::new(bytes.len()).ok_or(Refusal::Invalid)?;
+        binary.as_mut_slice().copy_from_slice(&bytes);
+        Ok((media_type, binary.release(env), width, height))
+    });
+    match stored {
+        Ok(card) => (atoms::ok(), card).encode(env),
         Err(refusal) => (atoms::error(), refusal.atom()).encode(env),
     }
 }
@@ -243,5 +278,15 @@ mod tests {
             Err(Refusal::Unsupported)
         ));
         assert!(matches!(decode(b""), Err(Refusal::Unsupported)));
+    }
+
+    #[test]
+    fn a_card_picture_keeps_its_shape_within_400_pixels() {
+        let wide = fit(&DynamicImage::new_rgb8(1200, 600));
+        assert_eq!((wide.width(), wide.height()), (400, 200));
+        let tall = fit(&DynamicImage::new_rgb8(300, 900));
+        assert_eq!((tall.width(), tall.height()), (133, 400));
+        let small = fit(&DynamicImage::new_rgb8(100, 50));
+        assert_eq!((small.width(), small.height()), (100, 50));
     }
 }

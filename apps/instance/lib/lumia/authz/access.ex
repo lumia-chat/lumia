@@ -146,7 +146,11 @@ defmodule Lumia.Authz.Access do
   message to edit or delete that is not there, is gone, or is a notice.
   """
   def check_command(access, _account_id, %Lumia.V1.Command{op: {:send_message, op}}) do
-    everyone_allowed(access, op.mentions)
+    with :ok <- everyone_allowed(access, op.mentions) do
+      if op.attachments == [] or Permission.has?(access.permissions, :attach_files),
+        do: :ok,
+        else: {:error, :permission_denied}
+    end
   end
 
   def check_command(access, account_id, %Lumia.V1.Command{op: {:edit_message, op}}) do
