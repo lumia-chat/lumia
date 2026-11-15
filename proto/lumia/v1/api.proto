@@ -520,6 +520,33 @@ message ReauthRequest {
   string passkey_challenge_id = 5;
 }
 
+// ---- Linking by prompt (specs/identity.md 4.2.1) ----------------------------
+
+// POST /identity/link-sessions: the new device's request and its commitment
+// to a secret it reveals once another device has answered.
+message OpenLinkSessionRequest {
+  bytes request = 1;     // a serialized LinkRequest
+  bytes commitment = 2;  // BLAKE3("lumia/link-commit/v1" || r_N), 32 bytes
+}
+
+// A link session as it stands. Each step's field is empty until it is taken.
+message LinkSession {
+  bytes session_id = 1;
+  bytes request = 2;
+  bytes commitment = 3;
+  bytes answer = 4;      // r_E, from the device that answered
+  bytes reveal = 5;      // r_N, from the new device
+  string code = 6;       // the link bundle's code, from the answering device
+  bool declined = 7;
+  google.protobuf.Timestamp expires_at = 8;
+}
+
+message ListLinkSessionsResponse { repeated LinkSession sessions = 1; }
+
+message AnswerLinkSessionRequest { bytes answer = 1; }
+message RevealLinkSessionRequest { bytes reveal = 1; }
+message LinkSessionCodeRequest { string code = 1; }
+
 // POST /identity/rebind: starting over (specs/identity.md 4.7). The proof is
 // by a device of the identity the account moves to, for LINK_ACCOUNT.
 message RebindIdentityRequest {

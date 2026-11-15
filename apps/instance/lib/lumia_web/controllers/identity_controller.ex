@@ -6,6 +6,7 @@ defmodule LumiaWeb.IdentityController do
   alias Lumia.Accounts
   alias Lumia.Auth
   alias Lumia.Identity
+  alias Lumia.Identity.LinkSessions
   alias Lumia.Proto
   alias Lumia.V1
   alias LumiaWeb.ProtoConn
@@ -225,6 +226,58 @@ defmodule LumiaWeb.IdentityController do
     case Identity.verify_reauth(token) do
       {:ok, %{id: id}} when id == conn.assigns.current_session.id -> :ok
       _ -> {:error, :unauthenticated}
+    end
+  end
+
+  # ---- Linking by prompt (identity spec 4.2.1) ----------------------------------
+
+  def open_link_session(conn, _params) do
+    with {:ok, req} <- ProtoConn.decode(conn, V1.OpenLinkSessionRequest),
+         {:ok, link} <-
+           LinkSessions.open(conn.assigns.current_session, req.request, req.commitment) do
+      ProtoConn.render(conn, 201, LinkSessions.to_proto(link))
+    end
+  end
+
+  def list_link_sessions(conn, _params) do
+    sessions =
+      conn.assigns.current_account_id
+      |> LinkSessions.list_open()
+      |> Enum.map(&LinkSessions.to_proto/1)
+
+    ProtoConn.render(conn, %V1.ListLinkSessionsResponse{sessions: sessions})
+  end
+
+  def get_link_session(conn, %{"id" => id}) do
+    with {:ok, link} <- LinkSessions.get(conn.assigns.current_account_id, id) do
+      ProtoConn.render(conn, LinkSessions.to_proto(link))
+    end
+  end
+
+  def answer_link_session(conn, %{"id" => id}) do
+    with {:ok, req} <- ProtoConn.decode(conn, V1.AnswerLinkSessionRequest),
+         {:ok, link} <- LinkSessions.answer(conn.assigns.current_session, id, req.answer) do
+      ProtoConn.render(conn, LinkSessions.to_proto(link))
+    end
+  end
+
+  def reveal_link_session(conn, %{"id" => id}) do
+    with {:ok, req} <- ProtoConn.decode(conn, V1.RevealLinkSessionRequest),
+         {:ok, link} <- LinkSessions.reveal(conn.assigns.current_session, id, req.reveal) do
+      ProtoConn.render(conn, LinkSessions.to_proto(link))
+    end
+  end
+
+  def link_session_code(conn, %{"id" => id}) do
+    with {:ok, req} <- ProtoConn.decode(conn, V1.LinkSessionCodeRequest),
+         {:ok, link} <- LinkSessions.code(conn.assigns.current_session, id, req.code) do
+      ProtoConn.render(conn, LinkSessions.to_proto(link))
+    end
+  end
+
+  def decline_link_session(conn, %{"id" => id}) do
+    with {:ok, link} <- LinkSessions.decline(conn.assigns.current_session, id) do
+      ProtoConn.render(conn, LinkSessions.to_proto(link))
     end
   end
 

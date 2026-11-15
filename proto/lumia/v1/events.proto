@@ -171,6 +171,7 @@ message AccountEvent {
     RailArranged rail_arranged = 38;        // this account arranged its rail, on some device (architecture 6.9)
     IdentityRebound identity_rebound = 39;  // this account started over with another identity (identity spec 4.7)
     ContactIdentityChanged contact_identity_changed = 40; // a contact did: a key change, not a rotation
+    LinkSessionUpdated link_session_updated = 41; // a link session of this account moved (identity spec 4.2.1)
   }
 }
 
@@ -254,6 +255,9 @@ message ContactIdentityChanged {
   bytes identity_id = 3;
   SignedRoster roster = 4;
 }
+// A link session of this account was opened, answered, revealed, given its
+// code or declined: its devices read it again (GET /identity/link-sessions).
+message LinkSessionUpdated { bytes session_id = 1; }
 message ProfileUpdated { Account account = 1; }
 message SessionRevoked { bytes session_id = 1; bytes device_id = 2; }
 message BlockListUpdated { repeated bytes blocked_identity_ids = 1; }

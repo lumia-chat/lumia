@@ -27,6 +27,13 @@ defmodule Lumia.Workers.PurgeExpired do
         {schema, n}
       end
 
+    counts =
+      Map.put(
+        counts,
+        Lumia.Identity.LinkSessions.LinkSession,
+        Lumia.Identity.LinkSessions.purge_expired()
+      )
+
     {:ok, Map.put(counts, Lumia.Mls.KeyPackage, Lumia.Mls.purge_expired())}
   end
 end

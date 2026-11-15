@@ -1,6 +1,6 @@
 # Identity, Devices, and Recovery
 
-Status: accepted, 2026-11-01; amended 2026-11-14 for setting up at sign-up, the web's create and restore, reauth by every credential, and starting over (issue #20). This specification makes section 5 of [architecture.md](../architecture.md) implementable. Wire shapes are in `proto/lumia/v1/identity.proto` and `api.proto`; endpoint mappings are in [protocol.md](../protocol.md). Where this document and the architecture disagree, the architecture wins and this document is wrong.
+Status: accepted, 2026-11-01; amended 2026-11-14 for setting up at sign-up, the web's create and restore, reauth by every credential, and starting over (issue #20), and 2026-11-15 for linking by prompt (4.2.1). This specification makes section 5 of [architecture.md](../architecture.md) implementable. Wire shapes are in `proto/lumia/v1/identity.proto` and `api.proto`; endpoint mappings are in [protocol.md](../protocol.md). Where this document and the architecture disagree, the architecture wins and this document is wrong.
 
 ## 1. Model
 
@@ -128,6 +128,20 @@ Actors: **N**, the new device; **E**, an existing authorized native device.
 8. N signs in by identity proof at each host in the bundle where policy allows, and by credentials elsewhere. N stores the backup key in its keystore. N is done.
 
 The bundle is single-use and expires ten minutes after creation. A fetch with the wrong `device_id` is `NOT_FOUND`. The root key is never in the bundle and never on E.
+
+### 4.2.1 Add a device by prompt
+
+The way the apps link (Ryan, 2026-11-15: copying a request across and a code back was too rough). It is 4.2 with nothing carried by hand: the request and the code travel through a **link session** on the instance, and the person checks one number instead. N is signed in to the account by its own credentials (it holds no identity yet); E is every signed-in device of the account that holds the identity.
+
+1. N makes its `LinkRequest` as in 4.2 step 1, and a fresh 32-byte secret `r_N`. It opens a session, `POST /identity/link-sessions` with the request and the commitment `c = BLAKE3("lumia/link-commit/v1" || r_N)`. The instance appends `LinkSessionUpdated` to the account's log; every device of the account learns of it.
+2. Each E shows a prompt: what the request would add (kind, label, and a web device's origin). The first E whose person answers posts a fresh 32-byte `r_E` (`POST .../accept`); the session takes one answer.
+3. N, seeing the answer, reveals `r_N` (`POST .../reveal`). E checks it against `c` and refuses the session if it does not match.
+4. Both show the same six digits: the first four bytes of `BLAKE3("lumia/link-sas/v1" || request || r_E || r_N)` read as a big-endian integer, modulo 10^6, as `482 913`. The person checks that the two screens agree.
+5. On "They match", E approves with its own unlock and proceeds as 4.2 steps 3 to 6, then posts the bundle's code to the session (`POST .../code`). N, seeing the code, claims it as in 4.2 step 7. Nothing is typed.
+
+The commitment is what makes six digits enough. An instance that wanted to put its own key in place of N's must commit to its `r_N` before it sees `r_E`, and E's `r_E` is drawn after the commitment arrives, so the instance cannot try keys until the digits match: each attempt at a substitution passes with probability 10^-6, and fails visibly otherwise. A session lasts ten minutes; "Not me" on any E declines it; an account has at most five open at once. The instance learns that a device asked to be linked and when, as it does in 4.2; it never sees a key or the backup key.
+
+4.2's copied request and typed code remain, behind "Link another way", for a device that cannot reach the instance while the other is in hand.
 
 ### 4.3 Add a device, with no existing device
 

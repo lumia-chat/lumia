@@ -915,6 +915,80 @@ defmodule Lumia.V1.ReauthRequest do
   field :passkey_challenge_id, 5, type: :string, json_name: "passkeyChallengeId"
 end
 
+defmodule Lumia.V1.OpenLinkSessionRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.OpenLinkSessionRequest",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :request, 1, type: :bytes
+  field :commitment, 2, type: :bytes
+end
+
+defmodule Lumia.V1.LinkSession do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.LinkSession",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :session_id, 1, type: :bytes, json_name: "sessionId"
+  field :request, 2, type: :bytes
+  field :commitment, 3, type: :bytes
+  field :answer, 4, type: :bytes
+  field :reveal, 5, type: :bytes
+  field :code, 6, type: :string
+  field :declined, 7, type: :bool
+  field :expires_at, 8, type: Google.Protobuf.Timestamp, json_name: "expiresAt"
+end
+
+defmodule Lumia.V1.ListLinkSessionsResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.ListLinkSessionsResponse",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :sessions, 1, repeated: true, type: Lumia.V1.LinkSession
+end
+
+defmodule Lumia.V1.AnswerLinkSessionRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.AnswerLinkSessionRequest",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :answer, 1, type: :bytes
+end
+
+defmodule Lumia.V1.RevealLinkSessionRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.RevealLinkSessionRequest",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :reveal, 1, type: :bytes
+end
+
+defmodule Lumia.V1.LinkSessionCodeRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.LinkSessionCodeRequest",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :code, 1, type: :string
+end
+
 defmodule Lumia.V1.RebindIdentityRequest do
   @moduledoc false
 

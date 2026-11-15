@@ -390,6 +390,11 @@ defmodule Lumia.V1.AccountEvent do
     type: Lumia.V1.ContactIdentityChanged,
     json_name: "contactIdentityChanged",
     oneof: 0
+
+  field :link_session_updated, 41,
+    type: Lumia.V1.LinkSessionUpdated,
+    json_name: "linkSessionUpdated",
+    oneof: 0
 end
 
 defmodule Lumia.V1.MembershipAdded do
@@ -607,6 +612,17 @@ defmodule Lumia.V1.ContactIdentityChanged do
   field :old_identity_id, 2, type: :bytes, json_name: "oldIdentityId"
   field :identity_id, 3, type: :bytes, json_name: "identityId"
   field :roster, 4, type: Lumia.V1.SignedRoster
+end
+
+defmodule Lumia.V1.LinkSessionUpdated do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.LinkSessionUpdated",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :session_id, 1, type: :bytes, json_name: "sessionId"
 end
 
 defmodule Lumia.V1.ProfileUpdated do

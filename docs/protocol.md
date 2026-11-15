@@ -210,6 +210,13 @@ Base path `/api/v1`. All endpoints require `Authorization: Bearer <access_token>
 | `POST /identity/link` | `IdentityProof` + `reauth_token` → 204 | Binds the current account to the proven identity. |
 | `POST /identity/rebind` | `RebindIdentityRequest` (`IdentityProof` + `reauth_token`) → 204 | Starting over (specs/identity.md 4.7): binds the current account, already bound to an identity, to the proven one instead. `ALREADY_EXISTS` for an identity bound to another account here; `FAILED_PRECONDITION` with `state` `unbound` for an account with no identity (that is `POST /identity/link`). Ends the old identity's sessions on the account, deletes its key packages, appends `IdentityRebound` to the account log and `ContactIdentityChanged` to the logs of accounts sharing a `PERSONAL_*` channel with it. |
 | `POST /identity/link-bundles` | `CreateLinkBundleRequest` → `CreateLinkBundleResponse` | Existing device uploads the bundle for a device being added. |
+| `POST /identity/link-sessions` | `OpenLinkSessionRequest` → `LinkSession` | Linking by prompt (specs/identity.md 4.2.1): the new device's request and its commitment, from a session of the account. `INVALID_ARGUMENT` for a request that does not decode or a commitment not 32 bytes; `RATE_LIMITED` past five open for the account. Ten minutes. `LinkSessionUpdated` goes on the account's log. |
+| `GET /identity/link-sessions` | → `ListLinkSessionsResponse` | The account's open sessions, for the prompt on its other devices. |
+| `GET /identity/link-sessions/{id}` | → `LinkSession` | One of the account's sessions as it stands. `NOT_FOUND` for another account's or an expired one. |
+| `POST /identity/link-sessions/{id}/accept` | `AnswerLinkSessionRequest` → `LinkSession` | A device that holds the identity answers with its `r_E`, once; `FAILED_PRECONDITION` with `state` `answered` after another did, `PERMISSION_DENIED` from a session whose device is not in the identity's held roster. |
+| `POST /identity/link-sessions/{id}/reveal` | `RevealLinkSessionRequest` → `LinkSession` | The session that opened it reveals `r_N`, once, after an answer; the instance checks it against the commitment. |
+| `POST /identity/link-sessions/{id}/code` | `LinkSessionCodeRequest` → `LinkSession` | The answering session posts the link bundle's code, once. |
+| `POST /identity/link-sessions/{id}/decline` | → `LinkSession` | Any session of the account declines it ("Not me"); it takes nothing more. |
 | `GET /identity/link-bundles/{code}?device_id=` | → `GetLinkBundleResponse` | Public. Single use, ten minutes, five attempts. |
 | `PUT /identity/backup` | `PutIdentityBackupRequest` → 204 | Highest version wins. |
 | `GET /identity/backup` | → `GetIdentityBackupResponse` | |

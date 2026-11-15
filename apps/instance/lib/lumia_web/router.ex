@@ -63,6 +63,13 @@ defmodule LumiaWeb.Router do
     post "/identity/link", IdentityController, :link
     post "/identity/rebind", IdentityController, :rebind
     post "/identity/link-bundles", IdentityController, :create_link_bundle
+    post "/identity/link-sessions", IdentityController, :open_link_session
+    get "/identity/link-sessions", IdentityController, :list_link_sessions
+    get "/identity/link-sessions/:id", IdentityController, :get_link_session
+    post "/identity/link-sessions/:id/accept", IdentityController, :answer_link_session
+    post "/identity/link-sessions/:id/reveal", IdentityController, :reveal_link_session
+    post "/identity/link-sessions/:id/code", IdentityController, :link_session_code
+    post "/identity/link-sessions/:id/decline", IdentityController, :decline_link_session
     put "/identity/backup", IdentityController, :put_backup
     get "/identity/backup", IdentityController, :get_backup
     get "/sessions", AuthController, :list_sessions
