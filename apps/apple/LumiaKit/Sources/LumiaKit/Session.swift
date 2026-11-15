@@ -8,6 +8,7 @@ import Observation
 #if os(iOS)
 import UIKit
 #endif
+import os
 
 public enum ConnectionState: Equatable, Sendable {
     case idle, connecting, connected
@@ -56,6 +57,27 @@ public struct PushLedger: Equatable, Sendable {
     /// Signing out: nothing is held as sent.
     public mutating func forget() {
         token = nil
+    }
+}
+
+/// How long a load that came short of the gateway loop waits before it is
+/// asked again: a second, then twice as long each time, at most half a
+/// minute, as the core's reconnects wait; a load that comes through starts
+/// it over.
+public struct LoadRetry: Equatable, Sendable {
+    private var failures = 0
+
+    public init() {}
+
+    /// A load failed: the pause before the next.
+    public mutating func pause() -> Duration {
+        failures += 1
+        return .seconds(min(30, 1 << min(failures - 1, 5)))
+    }
+
+    /// A load came through.
+    public mutating func reset() {
+        failures = 0
     }
 }
 
@@ -154,6 +176,12 @@ public final class LumiaSession {
     public internal(set) var railError: String?
 
     private var events: Task<Void, Never>?
+    /// A load that came short of the gateway loop, asked again after a
+    /// pause until one comes through, the session ends or another load is
+    /// asked for (`LoadRetry`).
+    private var reload: Task<Void, Never>?
+    @ObservationIgnored private var loadRetry = LoadRetry()
+    private static let log = Logger(subsystem: "chat.lumia", category: "session")
     /// A gateway loop is being started: a second asking meanwhile (the
     /// shell's first load and a return to the foreground, say) starts none.
     private var starting = false
@@ -705,7 +733,14 @@ public final class LumiaSession {
     // MARK: Loading
 
     /// Loads the snapshot and starts the gateway on every server channel.
+    /// A load that fails short of the loop, with the session still held (the
+    /// instance slow to answer or out of reach as the app opens), is asked
+    /// again after a pause: nothing else would ask before the app next comes
+    /// to the foreground, and until then the app would hold no snapshot, no
+    /// loop, and open nothing a tapped notification names.
     public func load() async {
+        reload?.cancel()
+        reload = nil
         do {
             let snap = try await client.snapshot()
             hold(snap)
@@ -723,10 +758,24 @@ public final class LumiaSession {
             } else {
                 subscribeGained()
             }
+            loadRetry.reset()
         } catch {
             await loadFailed(error)
+            if signedIn, !leaving { loadAgain(after: error) }
         }
         if !privateMessages.ready { await settlePrivateMessages() }
+    }
+
+    /// The next load after one that failed, once its pause is over.
+    private func loadAgain(after error: Error) {
+        let pause = loadRetry.pause()
+        Self.log.info("the load did not come through (\(error.lumiaMessage, privacy: .public)); again in \(pause.components.seconds) s")
+        reload = Task { [weak self] in
+            try? await Task.sleep(for: pause)
+            guard let self, !Task.isCancelled, self.signedIn, !self.leaving else { return }
+            self.reload = nil
+            await self.load()
+        }
     }
 
     /// Reads the snapshot again. Member lists are read only for servers
@@ -938,6 +987,8 @@ public final class LumiaSession {
     }
 
     public func stop() {
+        reload?.cancel()
+        reload = nil
         events?.cancel()
         events = nil
         subscriptions.clear()

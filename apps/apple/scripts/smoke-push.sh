@@ -118,7 +118,14 @@ xcrun simctl io "$udid" screenshot "$work/linked.png" >/dev/null 2>&1
 # The test holds the app through the link and then expects it still in the
 # app, its gateway connected: on the new session, the old one's socket
 # having been told not to come back.
-wait $uitest || { echo "FAIL: the UI test did not pass; see $work/uitest.log"; grep -E "error|failed|XCTAssert" "$work/uitest.log" | head -10; tail -20 "$work/uitest.log"; exit 1; }
+wait $uitest || {
+  echo "FAIL: the UI test did not pass; see $work/uitest.log"
+  grep -E "error|failed|XCTAssert" "$work/uitest.log" | head -10
+  tail -20 "$work/uitest.log"
+  # The app's log (a load that did not come through says so), for the artifact.
+  xcrun simctl spawn "$udid" log show --info --last 4m --style compact --predicate 'subsystem == "chat.lumia" OR process == "Lumia"' > "$work/sim.log" 2>&1 || true
+  exit 1
+}
 [ "$("$cli" --data-dir "$x" identity show | grep -c "^  device ")" -ge 2 ] || { echo "FAIL: the phone is not in the roster"; "$cli" --data-dir "$x" identity show; exit 1; }
 # Linking signed the phone in again, by identity proof: the core revokes
 # the session it held, so the phone's device has one and not two.

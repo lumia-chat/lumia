@@ -134,6 +134,16 @@ final class LumiaKitTests: XCTestCase {
         XCTAssertTrue(ledger.claim("b"), "signed out, whoever signs in next is subscribed again")
     }
 
+    // A load that came short of the gateway loop is asked again after a
+    // second, then twice as long each time up to half a minute; one that
+    // comes through starts the pauses over.
+    func testAFailedLoadIsAskedAgainLaterEachTime() {
+        var retry = LoadRetry()
+        XCTAssertEqual((0..<8).map { _ in retry.pause() }, [1, 2, 4, 8, 16, 30, 30, 30].map { Duration.seconds($0) })
+        retry.reset()
+        XCTAssertEqual(retry.pause(), .seconds(1))
+    }
+
     /// What a test's session was asked of its client, and what the test has it answer.
     @MainActor
     private final class Asked {
