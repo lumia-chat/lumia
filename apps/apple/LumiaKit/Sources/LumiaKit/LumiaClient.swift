@@ -176,6 +176,17 @@ public actor LumiaClient {
     public func identityLinkRequest(label: String) throws -> String { try inner.identityLinkRequest(label: label) }
     public func identityApprove(request: String) throws -> String { try inner.identityApprove(request: request) }
     public func identityClaim(code: String) throws -> RosterSummary { try inner.identityClaim(code: code) }
+    /// Linking by a prompt (identity spec 4.2.1): as the new device, a
+    /// session opened, where it stands (which takes its next step) and
+    /// given up; as a device that holds the identity, the sessions that
+    /// prompt here, answered, approved once the digits matched, or "Not me".
+    public func linkStart(label: String) throws -> LinkProgress { try inner.linkStart(label: label) }
+    public func linkProgress() throws -> LinkProgress { try inner.linkProgress() }
+    public func linkCancel() { inner.linkCancel() }
+    public func linkPrompts() throws -> [LinkPrompt] { try inner.linkPrompts() }
+    public func linkPromptAnswer(sessionID: String) throws { try inner.linkPromptAnswer(sessionId: sessionID) }
+    public func linkPromptConfirm(sessionID: String) throws { try inner.linkPromptConfirm(sessionId: sessionID) }
+    public func linkPromptDecline(sessionID: String) throws { try inner.linkPromptDecline(sessionId: sessionID) }
     public func signInIdentity() throws { try inner.signInIdentity() }
     public func identityShow() throws -> RosterSummary { try inner.identityShow() }
     public func identityRevoke(deviceID: String, password: String) throws -> RosterSummary {

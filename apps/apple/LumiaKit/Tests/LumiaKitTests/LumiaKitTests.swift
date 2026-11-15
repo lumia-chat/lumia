@@ -374,6 +374,82 @@ final class LumiaKitTests: XCTestCase {
         XCTAssertEqual(left, [], "signed out, the instance still has a session of the phone")
     }
 
+    // Against a running instance (`LUMIA_TEST_INSTANCE`, as above): linking
+    // by a prompt (identity spec 4.2.1) between two sessions, each with its
+    // gateway running, moved only by the account events each hears. One
+    // holds the identity, set up silently at sign-up; the other signs in
+    // with the password and starts linking. The first is prompted, answers,
+    // both show the same digits, it approves, and the second holds the
+    // identity. A third starts and is told "They don't match", which ends it.
+    @MainActor
+    func testAPhoneIsLinkedByAPromptAndMatchingDigits() async throws {
+        guard let instance = ProcessInfo.processInfo.environment["LUMIA_TEST_INSTANCE"], let base = URL(string: instance) else {
+            throw XCTSkip("LUMIA_TEST_INSTANCE names no instance")
+        }
+        let dirs = (0..<3).map { _ in FileManager.default.temporaryDirectory.appendingPathComponent("lumia-kit-\(UUID().uuidString)") }
+        defer { for dir in dirs { try? FileManager.default.removeItem(at: dir) } }
+        let handle = "prompt\(UInt64(Date().timeIntervalSince1970 * 1000))"
+        let password = "a password for the kit's test"
+        let holder = await LumiaSession(client: try LumiaClient(baseURL: base, dataDirectory: dirs[0]))
+        try await holder.createAccount(handle: handle, password: password)
+        await holder.load()
+        try await wait(for: "private messages set up on the first") { holder.privateMessages == .ready && holder.roster != nil }
+        try await wait(for: "the first's gateway") { holder.connection == .connected }
+        XCTAssertNil(holder.linkSheet)
+
+        let phone = await LumiaSession(client: try LumiaClient(baseURL: base, dataDirectory: dirs[1]))
+        try await phone.signIn(handle: handle, password: password, totpCode: nil)
+        await phone.load()
+        try await wait(for: "the phone's gateway") { phone.connection == .connected }
+        XCTAssertEqual(phone.privateMessages, .bringIn)
+        try await phone.linkStart()
+        XCTAssertEqual(phone.linking, .waiting)
+
+        // The account event brings the prompt; nothing here asks for it.
+        try await wait(for: "the prompt") { !holder.linkPrompts.isEmpty }
+        guard case let .prompt(asked)? = holder.linkSheet else { return XCTFail("no prompt shown: \(String(describing: holder.linkSheet))") }
+        XCTAssertEqual(LinkByPrompt.PromptStage(asked), .new)
+        XCTAssertEqual(LinkByPrompt.title(asked), "\(LumiaSession.deviceLabel) wants your private messages")
+        XCTAssertTrue(phone.linkPrompts.isEmpty, "the phone holds no identity and is prompted nothing")
+
+        try await holder.linkPromptAnswer(asked)
+        try await wait(for: "the digits on the phone") { if case .compare = phone.linking { true } else { false } }
+        try await wait(for: "the digits on the first") { holder.linkPrompts.first.map { LinkByPrompt.PromptStage($0) } != .waiting }
+        guard case let .compare(onPhone)? = phone.linking, let shown = holder.linkPrompts.first else { return XCTFail("no digits") }
+        XCTAssertEqual(LinkByPrompt.PromptStage(shown), .compare(onPhone), "both show the same digits")
+        XCTAssertEqual(onPhone.count, 7, "six digits in threes: \(onPhone)")
+
+        try await holder.linkPromptConfirm(shown)
+        XCTAssertEqual(holder.linkSheet, .linked("\(LumiaSession.deviceLabel) is linked."))
+        XCTAssertEqual(holder.roster?.devices.filter { !$0.revoked }.count, 2, "the roster held here has the new device")
+        try await wait(for: "the phone linked") { phone.linking == .linked }
+        XCTAssertTrue(phone.hasIdentity)
+        XCTAssertTrue(phone.signedIn)
+        XCTAssertEqual(phone.privateMessages, .ready)
+        XCTAssertEqual(phone.roster?.identityId, holder.roster?.identityId)
+        phone.linkDone()
+        XCTAssertNil(phone.linking)
+        try await wait(for: "the ending to go") { holder.linkSheet == nil }
+
+        // Another asks, and the digits "don't match".
+        let other = await LumiaSession(client: try LumiaClient(baseURL: base, dataDirectory: dirs[2]))
+        try await other.signIn(handle: handle, password: password, totpCode: nil)
+        try await other.linkStart()
+        try await wait(for: "the second prompt") { !holder.linkPrompts.isEmpty }
+        let second = try XCTUnwrap(holder.linkPrompts.first)
+        try await holder.linkPromptAnswer(second)
+        await other.linkStep()
+        try await holder.linkPromptDecline(second, mismatch: true)
+        XCTAssertEqual(holder.linkSheet, .stopped)
+        XCTAssertTrue(holder.linkPrompts.isEmpty)
+        await other.linkStep()
+        XCTAssertEqual(other.linking, .declined)
+        XCTAssertFalse(other.hasIdentity)
+        await phone.signOut()
+        await holder.signOut()
+        await other.signOut()
+    }
+
     /// One call to the instance's API as JSON, beside the client under test.
     private func call(_ instance: String, _ method: String, _ path: String, token: String? = nil, body: [String: String]? = nil) async throws -> (Data, Int) {
         var request = URLRequest(url: URL(string: "\(instance)/api/v1\(path)")!)

@@ -90,6 +90,23 @@ struct ShellView: View {
                 path.append(screen)
             }
         }
+        // Another device asks to be linked (identity spec 4.2.1): over
+        // whatever is on screen, the shell's own sheets put away for it.
+        .sheet(isPresented: Binding(get: { session.linkSheet != nil && person == nil && !needsSetup }, set: { _ in })) {
+            LinkPromptSheet(session: session)
+        }
+        .onChange(of: session.linkSheet != nil, initial: true) { _, asked in
+            guard asked else { return }
+            person = nil
+            needsSetup = false
+        }
+        // Asked again every two seconds while a prompt is open, beside every account event.
+        .task(id: LinkByPrompt.polls(session.linkPrompts)) {
+            while !Task.isCancelled, LinkByPrompt.polls(session.linkPrompts) {
+                try? await Task.sleep(for: LinkByPrompt.pollEvery)
+                await session.refreshLinkPrompts()
+            }
+        }
         .environment(\.openPerson, OpenPerson { person = $0 })
         .environment(\.setUpPrivateMessages, SetUpPrivateMessages { setUpPrivateMessages() })
         .task {

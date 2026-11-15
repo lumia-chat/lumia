@@ -115,4 +115,82 @@ final class LinkingTests: XCTestCase {
         XCTAssertEqual(LinkApproval.typedCode(" k7pq m2xd\n"), "K7PQM2XD")
         XCTAssertEqual(LinkApproval.typedCode("K7PQ-M2XD"), "K7PQM2XD")
     }
+
+    // MARK: Linking by a prompt (identity spec 4.2.1)
+
+    private func prompt(_ stage: String, digits: String = "", kind: String = "native", label: String = "Pixel 9", origin: String = "", id: String = "s1") -> LinkPrompt {
+        LinkPrompt(sessionId: id, request: summary(kind: kind, label: label, origin: origin), stage: stage, digits: digits)
+    }
+
+    func testThisPhonesStagesAndWhenItAsksAgain() {
+        typealias Stage = LinkByPrompt.Stage
+        XCTAssertEqual(Stage(LinkProgress(stage: "waiting", digits: "")), .waiting)
+        XCTAssertEqual(Stage(LinkProgress(stage: "compare", digits: "482 913")), .compare("482 913"))
+        XCTAssertEqual(Stage(LinkProgress(stage: "linked", digits: "")), .linked)
+        XCTAssertEqual(Stage(LinkProgress(stage: "declined", digits: "")), .declined)
+        XCTAssertEqual(Stage(LinkProgress(stage: "expired", digits: "")), .expired)
+        XCTAssertEqual(Stage(LinkProgress(stage: "something new", digits: "")), .waiting, "a stage not known here waits")
+        XCTAssertTrue(Stage.waiting.polls)
+        XCTAssertTrue(Stage.compare("482 913").polls)
+        XCTAssertFalse(Stage.linked.polls, "linked goes on into the app")
+        XCTAssertFalse(Stage.declined.polls)
+        XCTAssertFalse(Stage.expired.polls)
+        XCTAssertEqual(LinkByPrompt.pollEvery, .seconds(2))
+    }
+
+    func testTheLinkScreensWords() {
+        XCTAssertEqual(LinkByPrompt.words(.waiting), "Open Lumia on a device that has your private messages. It will ask about this phone.")
+        XCTAssertEqual(LinkByPrompt.words(.compare("482 913")), "Check that your other device shows the same number, then approve it there.")
+        XCTAssertEqual(LinkByPrompt.words(.declined), "It wasn't approved on your other device.")
+        XCTAssertEqual(LinkByPrompt.words(.expired), "That took too long.")
+        XCTAssertEqual(LinkByPrompt.words(.linked), "")
+        XCTAssertEqual(LinkByPrompt.startRefusal(LumiaError.Api(code: "RATE_LIMITED", detail: "slow down", details: [:])),
+                       "Too many devices are waiting to be linked to your account. Try again in a few minutes.")
+        XCTAssertEqual(LinkByPrompt.startRefusal(LumiaError.Other(detail: "no network")), "no network")
+    }
+
+    func testAPromptsStages() {
+        XCTAssertEqual(LinkByPrompt.PromptStage(prompt("new")), .new)
+        XCTAssertEqual(LinkByPrompt.PromptStage(prompt("waiting")), .waiting)
+        XCTAssertEqual(LinkByPrompt.PromptStage(prompt("compare", digits: "482 913")), .compare("482 913"))
+        XCTAssertEqual(LinkByPrompt.PromptStage(prompt("refused")), .refused)
+        XCTAssertEqual(LinkByPrompt.PromptStage(prompt("later")), .waiting, "a stage not known here offers only Not me")
+    }
+
+    func testAPromptsTitleByStageAndDevice() {
+        XCTAssertEqual(LinkByPrompt.title(prompt("new")), "Pixel 9 wants your private messages")
+        XCTAssertEqual(LinkByPrompt.title(prompt("new", label: "  ")), "The new device wants your private messages")
+        XCTAssertEqual(LinkByPrompt.title(prompt("new", kind: "web", label: "Firefox", origin: "https://my.lumia.chat")),
+                       "A browser on https://my.lumia.chat wants your private messages", "a browser by its origin, never its label")
+        XCTAssertEqual(LinkByPrompt.title(prompt("new", kind: "web", label: "")), "A browser wants your private messages")
+        XCTAssertEqual(LinkByPrompt.title(prompt("waiting")), "Waiting for Pixel 9…")
+        XCTAssertEqual(LinkByPrompt.title(prompt("waiting", kind: "web", label: "")), "Waiting for the browser…")
+        XCTAssertEqual(LinkByPrompt.title(prompt("compare", digits: "482 913")), "Does Pixel 9 show this number?")
+        XCTAssertEqual(LinkByPrompt.title(prompt("compare", digits: "482 913", label: "")), "Does the new device show this number?")
+        XCTAssertEqual(LinkByPrompt.title(prompt("refused")), "This request can't be trusted. Don't approve it.")
+    }
+
+    func testWhichPromptShowsOldestFirstAndHowOneEnds() {
+        let older = prompt("new", id: "a")
+        let newer = prompt("compare", digits: "111 222", label: "iPad", id: "b")
+        XCTAssertNil(LinkByPrompt.sheet(prompts: [], ending: nil), "no sheet")
+        XCTAssertEqual(LinkByPrompt.sheet(prompts: [older, newer], ending: nil), .prompt(older), "one at a time, as the instance lists them")
+        XCTAssertEqual(LinkByPrompt.sheet(prompts: [newer], ending: nil), .prompt(newer), "the next once the first is gone")
+        XCTAssertEqual(LinkByPrompt.sheet(prompts: [newer], ending: .linked(older.request)), .linked("Pixel 9 is linked."), "the ending before the next")
+        XCTAssertEqual(LinkByPrompt.sheet(prompts: [], ending: .linked(summary(label: ""))), .linked("The new device is linked."))
+        XCTAssertEqual(LinkByPrompt.sheet(prompts: [], ending: .stopped), .stopped)
+        XCTAssertEqual(LinkByPrompt.stopped, "Linking was stopped.")
+        XCTAssertTrue(LinkByPrompt.polls([older]))
+        XCTAssertFalse(LinkByPrompt.polls([]))
+    }
+
+    func testAPromptsRefusalsInWords() {
+        func api(_ code: String, _ details: [String: String] = [:]) -> Error { LumiaError.Api(code: code, detail: "refused", details: details) }
+        XCTAssertEqual(LinkByPrompt.refusal(api("FAILED_PRECONDITION", ["state": "answered"])), "Another of your devices answered it, or it was declined.")
+        XCTAssertEqual(LinkByPrompt.refusal(api("NOT_FOUND")), "That request has ended.")
+        XCTAssertEqual(LinkByPrompt.refusal(api("IDENTITY_PROOF_INVALID", ["reason": "too_many_devices"])), LinkApproval.tooMany)
+        XCTAssertEqual(LinkByPrompt.refusal(api("CONFLICT")), LinkApproval.conflict)
+        XCTAssertEqual(LinkByPrompt.refusal(LumiaError.Other(detail: "this request cannot be approved: start again on the new device")),
+                       "this request cannot be approved: start again on the new device")
+    }
 }

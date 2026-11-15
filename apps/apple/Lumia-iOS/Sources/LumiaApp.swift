@@ -47,6 +47,9 @@ struct RootView: View {
                 PreferencesScreen()
             } else if devScreen == "profile-updated" {
                 ProfileUpdatedScene()
+            } else if let devScreen, devScreen.hasPrefix("linking-") || devScreen.hasPrefix("linkprompt-") {
+                // Linking by a prompt's every stage, drawn from values.
+                LinkStagesScene(part: devScreen)
             } else {
                 screen
             }
@@ -92,7 +95,8 @@ struct RootView: View {
             ProgressView().controlSize(.large)
         } else if devScreen == "signin" {
             SignInView()
-        } else if devScreen == "link", let session = store.session {
+        } else if devScreen == "link", let session = store.session, !session.hasIdentity {
+            // Once linked it goes on into the app, as the route does.
             LinkView(session: session)
         } else if store.route == .app, let session = store.session, session.signedIn {
             ShellView(session: session)

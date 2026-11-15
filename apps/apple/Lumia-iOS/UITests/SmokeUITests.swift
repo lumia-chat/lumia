@@ -1255,4 +1255,50 @@ final class SmokeUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts[label].waitForExistence(timeout: 10), "Devices does not list \(label) once approved")
         reached("listed")
     }
+
+    /// Linking by a prompt, answered on this phone (scripts/smoke-link-prompt.sh,
+    /// identity spec 4.2.1): once private messages are set up here it says
+    /// so in LUMIA_UITEST_READY, and the script opens the link screen on a
+    /// second simulator signed in to the same account. The prompt comes
+    /// over Devices with no tap here, Continue shows the digits, which the
+    /// test leaves in LUMIA_UITEST_DIGITS for the script to set beside the
+    /// other phone's, "They match" (the unlock skipped) says the device is
+    /// linked, and the prompt goes with Devices counting two.
+    func testAPromptIsAnsweredOnThisPhone() throws {
+        let env = ProcessInfo.processInfo.environment
+        let steps = try XCTUnwrap(env["LUMIA_UITEST_STEPS"])
+        let label = try XCTUnwrap(env["LUMIA_UITEST_LABEL"])
+        let ready = try XCTUnwrap(env["LUMIA_UITEST_READY"])
+        let digitsFile = try XCTUnwrap(env["LUMIA_UITEST_DIGITS"])
+        let reached = { (step: String) in self.reached(step, under: steps) }
+        let app = launch(screen: "devices")
+        let set = app.buttons.matching(NSPredicate(format: "label == %@", "Approve a device")).firstMatch
+        XCTAssertTrue(set.waitForExistence(timeout: 90), "private messages were not set up at sign-in")
+        try "ready".write(toFile: ready, atomically: true, encoding: .utf8)
+
+        let asked = app.staticTexts["\(label) wants your private messages"]
+        XCTAssertTrue(asked.waitForExistence(timeout: 90), "no prompt, on:\n" + app.debugDescription)
+        XCTAssertTrue(app.staticTexts["Only continue if you're linking a device of yours right now."].exists)
+        XCTAssertTrue(app.buttons["Not me"].exists)
+        reached("prompt")
+        app.buttons["Continue"].tap()
+
+        XCTAssertTrue(app.staticTexts["Does \(label) show this number?"].waitForExistence(timeout: 30), "no digits, on:\n" + app.debugDescription)
+        let number = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Number")).firstMatch
+        XCTAssertTrue(number.exists)
+        let digits = (number.value as? String) ?? ""
+        XCTAssertNotNil(digits.range(of: #"^\d{3} \d{3}$"#, options: .regularExpression), "not six digits in threes: \(digits)")
+        try digits.write(toFile: digitsFile, atomically: true, encoding: .utf8)
+        XCTAssertTrue(app.buttons["They don't match"].exists)
+        reached("compare")
+        app.buttons["They match"].tap()
+
+        XCTAssertTrue(app.staticTexts["\(label) is linked."].waitForExistence(timeout: 30), "not linked, on:\n" + app.debugDescription)
+        reached("linked")
+        let gone = NSPredicate(format: "exists == false")
+        expectation(for: gone, evaluatedWith: app.staticTexts["\(label) is linked."])
+        waitForExpectations(timeout: 10)
+        XCTAssertTrue(app.staticTexts["2 linked to you"].waitForExistence(timeout: 10), "Devices does not count the new device")
+        reached("listed")
+    }
 }

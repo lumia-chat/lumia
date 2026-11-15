@@ -1031,7 +1031,7 @@ struct DevicesScreen: View {
                         }
                         Button { path.append(.approveDevice) } label: { Label("Approve a device", systemImage: "plus").frame(maxWidth: .infinity) }
                             .buttonStyle(.lumiaSecondary)
-                        Text("Link a laptop, a browser or another phone: it shows a request, and this phone approves it.")
+                        Text("Start linking on a laptop, a browser or another phone, and this phone asks you about it. Approve a device is for a request it shows when linked another way.")
                             .font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkQuiet.color)
                             .fixedSize(horizontal: false, vertical: true)
                         let revoked = devices.filter(\.revoked)

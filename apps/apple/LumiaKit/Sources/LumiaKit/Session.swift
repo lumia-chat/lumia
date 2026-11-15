@@ -103,6 +103,20 @@ public final class LumiaSession {
     public private(set) var phraseUnconfirmed = false
     /// Setting up is being found out: a second asking meanwhile does nothing.
     @ObservationIgnored private var settling = false
+    // Linking by a prompt (identity spec 4.2.1; `LinkByPrompt` has the rules).
+    /// Linking this phone: where it stands, nil with none under way.
+    public private(set) var linking: LinkByPrompt.Stage?
+    /// What asking where it stands last failed with, until it next answers.
+    public private(set) var linkingError: String?
+    @ObservationIgnored private var linkStepping = false
+    /// Other devices asking to be linked, oldest first, on a phone that
+    /// holds the identity: session state, so the prompt shows over any screen.
+    public private(set) var linkPrompts: [LinkPrompt] = []
+    /// How the prompt answered here ended, said for a moment.
+    public private(set) var linkEnding: LinkByPrompt.Ending?
+    @ObservationIgnored private var promptsAsking = false
+    /// What the prompt sheet shows, if anything.
+    public var linkSheet: LinkByPrompt.Sheet? { LinkByPrompt.sheet(prompts: linkPrompts, ending: linkEnding) }
     /// Everyone this account shares a server with, by account id.
     public internal(set) var people: [String: MemberSummary] = [:]
     /// A server's members, by server id, for the members aside.
@@ -489,6 +503,10 @@ public final class LumiaSession {
         roster = nil
         privateMessages = .unknown
         phraseUnconfirmed = false
+        linking = nil
+        linkingError = nil
+        linkPrompts = []
+        linkEnding = nil
         people = [:]
         serverMembers = [:]
         serverPresence = [:]
@@ -555,6 +573,107 @@ public final class LumiaSession {
         hasIdentity = true
         signedIn = true
         privateMessages = .ready
+    }
+
+    // MARK: Linking by a prompt (identity spec 4.2.1)
+
+    /// As the new device: opens a link session, so every device that holds
+    /// the identity prompts. This phone must be signed in to the account.
+    public func linkStart() async throws {
+        linkingError = nil
+        linking = LinkByPrompt.Stage(try await client.linkStart(label: Self.deviceLabel))
+    }
+
+    /// Where linking stands, which takes its next step (reveals, then
+    /// claims and signs in by identity proof as `identityClaim` does): when
+    /// the screen opens, every two seconds while it shows, and on every
+    /// account event. One at a time; nothing once it has ended.
+    public func linkStep() async {
+        guard let stage = linking, stage.polls, !linkStepping else { return }
+        linkStepping = true
+        defer { linkStepping = false }
+        do {
+            let next = LinkByPrompt.Stage(try await client.linkProgress())
+            if next == .linked {
+                hasIdentity = true
+                signedIn = true
+                privateMessages = .ready
+                roster = try? await client.identityShow()
+            }
+            // Given up meanwhile: the answer is nobody's.
+            guard linking != nil else { return }
+            linking = next
+            linkingError = nil
+        } catch {
+            if error.lumiaSignedOut { await sessionEnded(); return }
+            guard linking != nil else { return }
+            // The core no longer has it (given up elsewhere, or claimed by a step that failed after).
+            if case let .Other(detail)? = error as? LumiaError, detail == "no link in progress" {
+                linking = .expired
+            } else {
+                linkingError = error.lumiaMessage
+            }
+        }
+    }
+
+    /// Gives linking up, which declines it so the other devices' prompts close.
+    public func linkCancel() async {
+        guard linking != nil else { return }
+        linking = nil
+        linkingError = nil
+        await client.linkCancel()
+    }
+
+    /// Linking is over and the screen has gone on.
+    public func linkDone() {
+        linking = nil
+        linkingError = nil
+    }
+
+    /// As a device that holds the identity: the sessions that prompt here,
+    /// asked at launch, on coming to the foreground, on every account event
+    /// and every two seconds while one is open. A failure keeps what is held.
+    public func refreshLinkPrompts() async {
+        guard signedIn, hasIdentity, !promptsAsking else { return }
+        promptsAsking = true
+        defer { promptsAsking = false }
+        do {
+            linkPrompts = try await client.linkPrompts()
+        } catch {
+            if error.lumiaSignedOut { await sessionEnded() }
+        }
+    }
+
+    /// Continue: answers the prompt, so both devices show their digits.
+    public func linkPromptAnswer(_ prompt: LinkPrompt) async throws {
+        try await client.linkPromptAnswer(sessionID: prompt.sessionId)
+        await refreshLinkPrompts()
+    }
+
+    /// They match, after the phone's own unlock (the screen's): approves
+    /// and hands over the code; "… is linked." for a moment, and the roster
+    /// held here gains the device.
+    public func linkPromptConfirm(_ prompt: LinkPrompt) async throws {
+        try await client.linkPromptConfirm(sessionID: prompt.sessionId)
+        end(with: .linked(prompt.request))
+        roster = try? await client.identityShow()
+        await refreshLinkPrompts()
+    }
+
+    /// Not me, or (`mismatch`) They don't match, which says "Linking was stopped." for a moment.
+    public func linkPromptDecline(_ prompt: LinkPrompt, mismatch: Bool = false) async throws {
+        try await client.linkPromptDecline(sessionID: prompt.sessionId)
+        if mismatch { end(with: .stopped) }
+        await refreshLinkPrompts()
+    }
+
+    /// Says how a prompt ended, then lets it go.
+    private func end(with ending: LinkByPrompt.Ending) {
+        linkEnding = ending
+        Task { [weak self] in
+            try? await Task.sleep(for: LinkByPrompt.endingFor)
+            if self?.linkEnding == ending { self?.linkEnding = nil }
+        }
     }
 
     /// What this phone calls itself among the identity's devices.
@@ -774,6 +893,7 @@ public final class LumiaSession {
             if signedIn, !leaving { loadAgain(after: error) }
         }
         if !privateMessages.ready { await settlePrivateMessages() }
+        await refreshLinkPrompts()
     }
 
     /// The next load after one that failed, once its pause is over.
@@ -1027,6 +1147,8 @@ public final class LumiaSession {
             } else {
                 try? await client.foreground()
             }
+            // A device may have asked while this phone was away.
+            await refreshLinkPrompts()
         }
     }
 
@@ -1070,6 +1192,9 @@ public final class LumiaSession {
         case let .snapshotTaken(channelId, _):
             await refreshMessages(channelID: channelId)
         case .accountApplied:
+            // A link session moves by an account event, on either side.
+            await linkStep()
+            await refreshLinkPrompts()
             // Another device may have read something.
             await refreshReads()
             await refreshSnapshot()

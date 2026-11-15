@@ -7,6 +7,7 @@
 // as the launch's preset says (`LUMIA_DEV_PRESET=minimal` hides them), and
 // `reactions-preferences` the Preferences page where they are chosen.
 // `profile-updated` is a changed name drawn at once (issue #15).
+// `linking-…` and `linkprompt-…` are linking by a prompt's stages.
 #if DEBUG
 import LumiaFFI
 import LumiaKit
@@ -146,6 +147,58 @@ struct ProfileUpdatedScene: View {
         .task {
             try? await Task.sleep(for: .seconds(2))
             members = ProfileUpdate(accountID: "ada", handle: "countess", displayName: "Ada Lovelace", avatarURL: "", pronouns: "she/her", bio: "").applied(to: members)
+        }
+    }
+}
+
+/// Linking by a prompt (identity spec 4.2.1), each stage drawn from values:
+/// `linking-waiting`, `-compare`, `-declined`, `-expired` and `-failed` are
+/// the new device's link screen; `linkprompt-new`, `-web`, `-waiting`,
+/// `-compare`, `-refused`, `-linked` and `-stopped` the prompt's sheet over
+/// a phone that holds the identity.
+struct LinkStagesScene: View {
+    let part: String
+
+    private static func prompt(_ stage: String, kind: String = "native", label: String = "iPhone", origin: String = "") -> LinkPrompt {
+        LinkPrompt(sessionId: "s", request: LinkRequestSummary(deviceId: "d", kind: kind, label: label, webOrigin: origin), stage: stage, digits: stage == "compare" ? "482 913" : "")
+    }
+
+    private var sheet: LinkByPrompt.Sheet? {
+        switch part {
+        case "linkprompt-new": .prompt(Self.prompt("new"))
+        case "linkprompt-web": .prompt(Self.prompt("new", kind: "web", label: "Firefox", origin: "https://my.lumia.chat"))
+        case "linkprompt-waiting": .prompt(Self.prompt("waiting"))
+        case "linkprompt-compare": .prompt(Self.prompt("compare"))
+        case "linkprompt-refused": .prompt(Self.prompt("refused"))
+        case "linkprompt-linked": LinkByPrompt.sheet(prompts: [], ending: .linked(Self.prompt("new").request))
+        case "linkprompt-stopped": .stopped
+        default: nil
+        }
+    }
+
+    private var stage: LinkByPrompt.Stage? {
+        switch part {
+        case "linking-waiting": .waiting
+        case "linking-compare": .compare("482 913")
+        case "linking-declined": .declined
+        case "linking-expired": .expired
+        default: nil
+        }
+    }
+
+    var body: some View {
+        if let sheet {
+            LumiaEmptyState(icon: "lock", title: "Your conversations") { Text("What the phone was showing when the prompt came.") }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .sheet(isPresented: .constant(true)) { LinkPromptCard(sheet: sheet) { _, _ in } }
+        } else {
+            ScrollView {
+                LumiaCard(title: "Link this phone", subtitle: "A device you already use approves this one.", width: nil) {
+                    LinkByPromptSteps(stage: stage, error: part == "linking-failed" ? LinkByPrompt.startRefusal(LumiaError.Api(code: "RATE_LIMITED", detail: "", details: [:])) : nil, start: {}, cancel: {}, anotherWay: {})
+                }
+                .padding(LumiaTokens.space16)
+                .padding(.top, LumiaTokens.space40)
+            }
         }
     }
 }
