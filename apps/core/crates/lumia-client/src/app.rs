@@ -676,7 +676,8 @@ pub struct RosterSummary {
 pub struct DmChannelSummary {
     pub channel_id: String,
     pub participant_account_ids: Vec<String>,
-    /// Whether this device holds the group (can read and send).
+    /// Whether this device holds the group past its creation (can read
+    /// and send).
     pub member: bool,
 }
 
@@ -4338,7 +4339,7 @@ impl App {
             out.push(DmChannelSummary {
                 channel_id: wire::display(channel),
                 participant_account_ids: participants.iter().map(|p| wire::display(p)).collect(),
-                member: e.is_member(channel)?,
+                member: e.is_ready(channel)?,
             });
         }
         Ok(out)

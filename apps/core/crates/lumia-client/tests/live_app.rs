@@ -1360,6 +1360,34 @@ async fn a_contact_who_starts_over_is_told_and_the_conversation_goes_on() {
     );
 }
 
+/// The device that accepts a request creates the group and holds it,
+/// alone, until the instance acks the commit adding the other: a send
+/// before then is refused ("a commit is pending"). The conversation was
+/// said to be a member's, so a shell offered its composer, from the moment
+/// the group was created; it is a member's once the commit is acked.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_new_conversation_is_offered_for_sending_once_its_group_is_acked() {
+    let Some(base) = instance() else { return };
+    let (ada, _, _) = set_up(&base, "ada").await;
+    let (bo, _, bo_account) = set_up(&base, "bo").await;
+    let request = ada.app.dm_request(&bo_account).await.unwrap();
+    let Ok(opened) = bo
+        .app
+        .dm_respond(&request.request_id, "accept")
+        .await
+        .unwrap()
+    else {
+        panic!("accepting opens the conversation");
+    };
+    let channel = opened.channel_id;
+    assert!(
+        member_of(&bo, &channel, Duration::from_secs(20)).await,
+        "bo's group is ready"
+    );
+    bo.app.dm_send(&channel, "at once").await.unwrap();
+    assert!(reads(&ada, &channel, "at once", Duration::from_secs(20)).await);
+}
+
 /// A personal message the store holds and the DM engine never read: a run
 /// that ended between the two (the CLI stops once its group is ready, while
 /// its gateway may have stored the next event) left it there, and the next

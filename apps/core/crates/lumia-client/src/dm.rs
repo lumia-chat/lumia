@@ -2004,6 +2004,19 @@ impl DmEngine {
         Ok(Conversation::load(&provider, channel_id)?.is_some())
     }
 
+    /// Whether this device holds the group past its creation, so that what
+    /// is sent there can be sent. The device that creates a group holds it
+    /// at epoch 0, alone and with the commit that adds everyone pending,
+    /// until the instance acks that commit; a send before then is refused
+    /// as a commit pending.
+    ///
+    /// # Errors
+    /// On a store failure.
+    pub fn is_ready(&self, channel_id: &[u8]) -> Result<bool, ClientError> {
+        let provider = Provider::new(&self.store);
+        Ok(Conversation::load(&provider, channel_id)?.is_some_and(|g| g.epoch() > 0))
+    }
+
     /// Participants recorded for a channel, from the store if not cached.
     ///
     /// # Errors
