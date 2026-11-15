@@ -60,6 +60,13 @@ class LumiaClient(val baseUrl: String, dataDirectory: File) {
     fun stop() = inner.stop()
 }
 
+/**
+ * Up to four words of the phrase's wordlist that [prefix] begins, for a
+ * field of the three-word check or a restore (the core's
+ * `phrase::completions`): a value only, asked as the field is typed in.
+ */
+fun phraseCompletions(prefix: String): List<String> = uniffi.lumia_ffi.phraseCompletions(prefix)
+
 /** The API error's code, when the failure was one (`UNAUTHENTICATED`, `NOT_FOUND`, ...). */
 val Throwable.lumiaCode: String?
     get() = (this as? LumiaException.Api)?.code

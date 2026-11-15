@@ -174,6 +174,8 @@ fun Root(store: AppStore, devScreen: String?, devChannel: String? = null) {
             devScreen == "link" && session != null -> LinkScreen(store, session)
             store.route == Route.APP && session != null && session.signedIn -> Shell(store, session, devScreen, devChannel)
             store.route == Route.LINK && session != null -> LinkScreen(store, session)
+            // Restoring signs in by the identity (identity spec 4.3), so it is the sign-in screen's to offer.
+            store.route == Route.RESTORE && session != null -> RestoreScreen(store, session, "sign in", back = { store.route = if (session.signedIn) Route.APP else Route.SIGN_IN }) {}
             else -> SignInScreen(store)
         }
     }

@@ -25,8 +25,11 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import uniffi.lumia_ffi.RailItem
 
-/** What the app shows. */
-enum class Route { SIGN_IN, LINK, APP }
+/** What the app shows: restoring is the sign-in screen's, a phone with the phrase and no session (identity spec 4.3). */
+enum class Route { SIGN_IN, LINK, RESTORE, APP }
+
+/** What this phone is called in its identity's roster, as other devices list it. */
+val deviceLabel: String get() = android.os.Build.MODEL.orEmpty().ifEmpty { "Android phone" }
 
 class AppStore(context: Context) {
     companion object {
@@ -212,8 +215,28 @@ class AppStore(context: Context) {
         val s = session ?: return
         scope.async {
             s.how()
+            // An account with no identity is set up here as sign-up sets one
+            // up (architecture 5.4), under the reauth the sign-in carried;
+            // what is left (a reauth, link or restore) is Home's to say.
+            s.setUpQuietly(deviceLabel)
             if (session === s) route = Route.APP
         }.await()
+    }
+
+    /**
+     * Until when Home's reminder to save the phrase is put off ("In a
+     * week"): this phone's, kept in the `lumia` preferences as
+     * `phrase_snoozed_until` (milliseconds since the epoch), and sent
+     * nowhere. Devices' card is never put off.
+     */
+    var phraseSnooze by mutableStateOf(phraseSnoozeOf(stored("phrase_snoozed_until")))
+        private set
+
+    /** "In a week" tapped: the reminder goes from Home for seven days. */
+    fun snoozePhrase(now: Long = System.currentTimeMillis()) {
+        val until = phraseSnoozedUntil(now)
+        phraseSnooze = until
+        prefs.edit().putString("phrase_snoozed_until", until.toString()).apply()
     }
 
     /**

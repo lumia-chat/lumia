@@ -72,6 +72,7 @@ import chat.lumia.kit.LumiaSession
 import chat.lumia.kit.LumiaTokens
 import chat.lumia.kit.NoticeTone
 import chat.lumia.kit.Route
+import chat.lumia.kit.setupNotice
 import chat.lumia.kit.SectionTitle
 import chat.lumia.kit.dayOfMicros
 import chat.lumia.kit.initialsOf
@@ -110,6 +111,8 @@ fun RequestsScreen(session: LumiaSession, back: () -> Unit, replace: (List<Scree
     }
 
     fun respond(id: String, response: String) {
+        // Accepting opens a private conversation, which this phone must be able to hold (#20).
+        if (response == "accept" && !session.readyForPrivate()) return
         scope.launch {
             busy = id
             error = ""
@@ -165,6 +168,8 @@ fun NewMessageScreen(session: LumiaSession, back: () -> Unit, replace: (List<Scr
         .sortedBy { (it.displayName.ifEmpty { it.handle }).lowercase() }
 
     fun message(p: MemberSummary) {
+        // A phone that cannot send one says what it needs first (#20).
+        if (!session.readyForPrivate()) return
         scope.launch {
             busy = p.accountId
             note = ""
@@ -586,7 +591,7 @@ fun ProfileScreen(store: AppStore, session: LumiaSession, back: () -> Unit) {
                     }
                 }
             } else if (!session.hasIdentity) {
-                LumiaNotice(Icons.Filled.Shield, NoticeTone.ACCENT, action = "Link this phone" to { store.route = Route.LINK }, text = "Your profile travels with your identity, signed by its devices. This phone holds no device key yet; a device you already use approves it.")
+                LumiaNotice(Icons.Filled.Shield, NoticeTone.ACCENT, action = "Set up" to { session.setupAsked = true }, text = "Your profile travels with your identity, signed by its devices. Private messages and your profile need this phone set up first.")
             }
         }
     }
@@ -691,7 +696,7 @@ private fun Setting(label: String, content: @Composable () -> Unit) {
 
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
-fun DevicesScreen(store: AppStore, session: LumiaSession, back: () -> Unit) {
+fun DevicesScreen(store: AppStore, session: LumiaSession, back: () -> Unit, push: (Screen) -> Unit) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current
@@ -737,7 +742,7 @@ fun DevicesScreen(store: AppStore, session: LumiaSession, back: () -> Unit) {
         else -> Icons.Filled.VpnKey
     }
 
-    LaunchedEffect(Unit) { session.refreshRoster(); loadPasskeys() }
+    LaunchedEffect(Unit) { session.refreshRoster(); loadPasskeys(); session.refreshPrivateMessages() }
 
     PanelScreen(
         back = "Home", onBack = back, title = "Devices",
@@ -745,7 +750,8 @@ fun DevicesScreen(store: AppStore, session: LumiaSession, back: () -> Unit) {
         actions = listOf(Triple(Icons.Filled.Add, "Link a device") { store.route = Route.LINK }),
     ) {
         LazyColumn(Modifier.fillMaxSize().navigationBarsPadding(), contentPadding = androidx.compose.foundation.layout.PaddingValues(LumiaTokens.space16), verticalArrangement = Arrangement.spacedBy(LumiaTokens.space12)) {
-            item { LumiaNotice(Icons.Filled.Shield, text = "Your identity lives on these devices, not on any instance. Revoking one takes effect on every instance that holds your roster.") }
+            // The phrase not yet saved: the standing card, which "In a week" does not put off (#20).
+            if (session.hasIdentity && session.phraseUnconfirmed) item { PhraseNotSaved { push(Screen.Phrase()) } }
             item {
                 LumiaCard("Passkeys", "Sign in to this instance with a key this phone keeps, instead of a password.") {
                     Column(verticalArrangement = Arrangement.spacedBy(LumiaTokens.space8)) {
@@ -774,6 +780,7 @@ fun DevicesScreen(store: AppStore, session: LumiaSession, back: () -> Unit) {
                 }
             }
             if (session.roster != null) {
+                item { SectionTitle("Devices with your identity") }
                 items(active, key = { it.deviceId }) { d -> LumiaDeviceRow(d, label(d), meta(d), icon(d)) { revoking = d; password = ""; error = "" } }
                 val revoked = devices.filter { it.revoked }
                 if (revoked.isNotEmpty()) {
@@ -781,14 +788,16 @@ fun DevicesScreen(store: AppStore, session: LumiaSession, back: () -> Unit) {
                     items(revoked, key = { it.deviceId }) { d -> LumiaDeviceRow(d, d.deviceId.take(8), "", icon(d), null) }
                 }
             } else {
-                item { LumiaEmptyState(Icons.Filled.Shield, "No identity on this phone", "A device you already use approves this one.", action = "Link this phone" to { store.route = Route.LINK }) }
+                item { LumiaEmptyState(Icons.Filled.Shield, "No identity on this phone", setupNotice(false, session.privateMessages), action = "Set up" to { session.setupAsked = true }) }
             }
+            item { LumiaNotice(Icons.Filled.Shield, text = "Your identity lives on your devices, not on any instance. The recovery phrase is the only way back if every device is lost.") }
         }
     }
 
     val d = revoking
     if (d != null) {
-        ModalBottomSheet(onDismissRequest = { revoking = null }, containerColor = LumiaTokens.surface.color) {
+        // Open all the way: its password field brings the keyboard up, which a half-open sheet sat under.
+        ModalBottomSheet(onDismissRequest = { revoking = null }, sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = LumiaTokens.surface.color) {
             Column(Modifier.padding(start = LumiaTokens.space24, end = LumiaTokens.space24, bottom = LumiaTokens.space40).imePadding(), verticalArrangement = Arrangement.spacedBy(LumiaTokens.space16)) {
                 Column(verticalArrangement = Arrangement.spacedBy(LumiaTokens.space4)) {
                     Text("Revoke ${label(d)}?", style = LumiaTokens.titleAuth.style, color = LumiaTokens.ink.color)

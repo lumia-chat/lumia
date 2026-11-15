@@ -244,6 +244,8 @@ fun ConversationScreen(store: AppStore, session: LumiaSession, channelId: String
     val firstIndex = 2
 
     LaunchedEffect(channelId) {
+        // A phone that cannot read or send here says what it needs (#20), over the conversation.
+        session.readyForPrivate()
         session.refreshDmChannels()
         session.refreshDmLog(channelId)
     }

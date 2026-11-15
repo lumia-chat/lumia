@@ -39,6 +39,7 @@ import chat.lumia.kit.LumiaSecondaryButton
 import chat.lumia.kit.LumiaSession
 import chat.lumia.kit.LumiaTokens
 import chat.lumia.kit.Route
+import chat.lumia.kit.deviceLabel
 import chat.lumia.kit.lumiaMessage
 import kotlinx.coroutines.launch
 
@@ -64,7 +65,7 @@ fun LinkScreen(store: AppStore, session: LumiaSession) {
                     LumiaPrimaryButton("Start linking", modifier = Modifier.fillMaxWidth()) {
                         scope.launch {
                             error = ""
-                            try { request = session.identityLinkRequest("phone") } catch (e: Exception) { error = e.lumiaMessage }
+                            try { request = session.identityLinkRequest(deviceLabel) } catch (e: Exception) { error = e.lumiaMessage }
                         }
                     }
                 } else {

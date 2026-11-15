@@ -59,6 +59,9 @@ private const val MESSAGE_PAGE = 200u
 /** Where a sign-in through the system browser returns to, with `magic={token}` (architecture 6.3). */
 const val BROWSER_SIGN_IN_RETURN = "lumia://sign-in"
 
+/** Where a reauth at the account's OIDC provider returns to, with `reauth={token}` (identity spec 10). */
+const val REAUTH_RETURN = "lumia://reauth"
+
 class LumiaSession(
     val client: LumiaClient,
     /**
@@ -442,6 +445,10 @@ class LumiaSession(
                 messageLimits.clear()
                 railSent = null
                 railError = null
+                privateMessages = null
+                phraseUnconfirmed = false
+                phraseUnlocked = false
+                setupAsked = false
             },
         )
     }
@@ -455,10 +462,126 @@ class LumiaSession(
         hasIdentity = true
         client.call { signInIdentity() }
         signedIn = true
+        identityChanged()
     }
 
     suspend fun identityRevoke(deviceId: String, password: String) {
         roster = client.call { identityRevoke(deviceId, password) }
+    }
+
+    // Setting up private messages (identity spec 4.1, 4.3, 4.7; issue #20)
+
+    /** What this phone needs before it can send a private message; null until asked (`refreshPrivateMessages`). */
+    var privateMessages by mutableStateOf<PrivateMessages?>(null)
+        private set
+    /** Whether this phone keeps a phrase not yet confirmed: Home's reminder and Devices' card. */
+    var phraseUnconfirmed by mutableStateOf(false)
+        private set
+    /**
+     * Whether the phrase was unlocked by the phone's own unlock for the
+     * screens showing it: for the process, so a turn of the phone does
+     * not ask again, and dropped once neither screen is open.
+     */
+    var phraseUnlocked by mutableStateOf(false)
+    /** Whether a screen asked for "Private messages need this phone" (or setting up), which the shell draws over whatever is open. */
+    var setupAsked by mutableStateOf(false)
+
+    /** Whether this phone can send private messages; when it cannot, the shell is asked to say what it needs. */
+    fun readyForPrivate(): Boolean {
+        if (hasIdentity && privateMessages == PrivateMessages.READY) return true
+        // Never asked, with the identity held: the account's is the one most likely, and a send says otherwise if not.
+        if (hasIdentity && privateMessages == null) return true
+        setupAsked = true
+        return false
+    }
+
+    /** Asks the instance which identity the account is bound to, and the phone whether its phrase waits. */
+    suspend fun refreshPrivateMessages() {
+        hasIdentity = client.hasIdentity
+        val held = if (hasIdentity) runCatching { client.call { identityShow() } }.getOrNull()?.identityId else null
+        val bound = runCatching { client.call { accountIdentity() } }.getOrElse { return }
+        privateMessages = privateMessagesFor(held, bound)
+        phraseUnconfirmed = hasIdentity && runCatching { client.call { identityPhraseUnconfirmed() } }.getOrDefault(false)
+    }
+
+    /**
+     * Sets up private messages here (identity spec 4.1): an identity made
+     * unless this phone holds one, and the account bound to it under the
+     * reauth the sign-in carried or one just asked for. Throws
+     * `ReauthNeeded` without one, `AccountHasIdentity` for an account
+     * bound elsewhere.
+     */
+    suspend fun identitySetUp(label: String) {
+        client.call { identitySetup(label) }
+        identityChanged()
+    }
+
+    /**
+     * After a sign-in, or an account made: set up as sign-up does when the
+     * account has no identity, and with no question. Nothing is thrown:
+     * what is left to do (a reauth, link or restore) is what Home says.
+     */
+    suspend fun setUpQuietly(label: String) {
+        refreshPrivateMessages()
+        if (privateMessages != PrivateMessages.SET_UP) return
+        runCatching { identitySetUp(label) }
+    }
+
+    /** The phrase kept until confirmed, 24 words separated by spaces, or none once it is. Asked for only after the phone's own unlock. */
+    suspend fun identityPhrase(): String? = client.call { identityPhrase() }
+
+    /** The three positions (1 to 24) the check asks for; the same until answered. */
+    suspend fun identityPhraseQuiz(): List<Int> = client.call { identityPhraseQuiz() }.map { it.toInt() }
+
+    /** The check answered: true ends the reminders; false means the phrase again, and the next check asks other words. */
+    suspend fun identityPhraseConfirm(words: List<String>): Boolean {
+        val right = client.call { identityPhraseConfirm(words) }
+        if (right) phraseUnconfirmed = false
+        return right
+    }
+
+    /**
+     * Restores the identity from its phrase on this phone, every other
+     * device of it revoked (identity spec 4.3), and signs in by it. Signed
+     * in already, the gateway starts again under the session it took.
+     */
+    suspend fun identityRecover(phrase: String, label: String) {
+        client.call { identityRecover(phrase, label) }
+        signedIn = true
+        identityChanged()
+    }
+
+    /** Starting over (identity spec 4.7): the account moved to an identity of this phone's, under a reauth in hand. */
+    suspend fun identityStartOver(label: String) {
+        client.call { identityStartOver(label) }
+        identityChanged()
+    }
+
+    /** What an identity set up, restored or started over changes: the roster, what the phone needs, and the gateway's subscriptions. */
+    private suspend fun identityChanged() {
+        hasIdentity = client.hasIdentity
+        refreshRoster()
+        if (events != null) {
+            stop()
+            load()
+        } else {
+            refreshPrivateMessages()
+        }
+    }
+
+    // Reauth (identity spec 10): a credential proved again, held by the core for the next setup or start over.
+
+    suspend fun reauthPassword(password: String) { client.call { reauthPassword(password) } }
+    suspend fun reauthMailCode() { client.call { reauthMailCode() } }
+    suspend fun reauthMailed(code: String) { client.call { reauthCode(code, true) } }
+
+    /** Where the system browser logs in at the account's provider afresh, coming back to [REAUTH_RETURN] with `reauth={token}`. */
+    suspend fun reauthOidcUrl(): String = client.call { reauthOidcUrl(REAUTH_RETURN) }
+
+    /** The `lumia:` URL the browser came back on, its token held for the next call. */
+    fun reauthTake(returnUrl: String) {
+        val token = android.net.Uri.parse(returnUrl).getQueryParameter("reauth") ?: return
+        client.now { reauthTake(token) }
     }
 
     // Passkeys, and sign-in through the browser (architecture 6.3)
@@ -516,6 +639,7 @@ class LumiaSession(
             if (leaving || !signedIn) return
             snapshot = snap
             hasIdentity = client.hasIdentity
+            refreshPrivateMessages()
             refreshReads()
             snap.servers.map { it.serverId }.let { refreshPeople(it, it) }
             refreshDmChannels()

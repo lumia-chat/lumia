@@ -65,6 +65,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
@@ -123,6 +124,39 @@ fun LumiaNotice(
         Icon(icon, contentDescription = null, tint = if (accent) LumiaTokens.accentInk.color else LumiaTokens.inkSecondary.color, modifier = Modifier.size(18.dp))
         Text(text, style = LumiaTokens.textBody.style, color = LumiaTokens.inkBody.color, modifier = Modifier.weight(1f))
         if (action != null) LumiaSecondaryButton(action.first, onClick = action.second)
+    }
+}
+
+/**
+ * The boards' warning (#20's phrase, restore and start over screens): the
+ * amber tone's fill under its ink, a line of its ink, the icon and words
+ * in it; with [title], a heading over the words and [content] under them
+ * (Home's reminder, Devices' card).
+ */
+@Composable
+fun LumiaWarning(
+    icon: ImageVector,
+    text: String,
+    title: String? = null,
+    content: (@Composable () -> Unit)? = null,
+) {
+    val ink = LumiaTokens.toneAmberInk.color
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(LumiaTokens.toneAmber.color, RoundedCornerShape(LumiaTokens.radius12))
+            .border(1.dp, ink.copy(alpha = 0.25f), RoundedCornerShape(LumiaTokens.radius12))
+            .padding(horizontal = LumiaTokens.space12, vertical = if (title == null) LumiaTokens.space10 else LumiaTokens.space12),
+        verticalArrangement = Arrangement.spacedBy(LumiaTokens.space10),
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space10), verticalAlignment = Alignment.Top) {
+            Icon(icon, contentDescription = null, tint = ink, modifier = Modifier.size(18.dp))
+            Column(Modifier.weight(1f).semantics(mergeDescendants = true) {}, verticalArrangement = Arrangement.spacedBy(LumiaTokens.space2)) {
+                if (title != null) Text(title, style = LumiaTokens.textSubtitle.style.copy(fontWeight = FontWeight(LumiaTokens.textAuthor.weight)), color = ink, modifier = Modifier.semantics { heading() })
+                Text(text, style = LumiaTokens.textCompact.style, color = ink)
+            }
+        }
+        content?.invoke()
     }
 }
 
@@ -777,6 +811,23 @@ fun LumiaPrimaryButton(label: String, modifier: Modifier = Modifier, enabled: Bo
             containerColor = LumiaTokens.accent.color,
             contentColor = LumiaTokens.onAccent.color,
             disabledContainerColor = LumiaTokens.accent.color.copy(alpha = 0.5f),
+            disabledContentColor = LumiaTokens.onAccent.color,
+        ),
+    ) { Text(label, style = LumiaTokens.textButton.style) }
+}
+
+/** What cannot be taken back (Start over): the primary's shape in the danger colour. */
+@Composable
+fun LumiaDangerButton(label: String, modifier: Modifier = Modifier, enabled: Boolean = true, onClick: () -> Unit) {
+    Button(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier.heightIn(min = LumiaTokens.controlHeight),
+        shape = RoundedCornerShape(LumiaTokens.radius8),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = LumiaTokens.danger.color,
+            contentColor = LumiaTokens.onAccent.color,
+            disabledContainerColor = LumiaTokens.danger.color.copy(alpha = 0.5f),
             disabledContentColor = LumiaTokens.onAccent.color,
         ),
     ) { Text(label, style = LumiaTokens.textButton.style) }

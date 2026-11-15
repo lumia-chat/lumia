@@ -80,7 +80,9 @@ import chat.lumia.kit.LumiaSession
 import chat.lumia.kit.LumiaTokens
 import chat.lumia.kit.NoticeTone
 import chat.lumia.kit.PushRegistrar
-import chat.lumia.kit.Route
+import chat.lumia.kit.phraseReminderShows
+import chat.lumia.kit.setupNotice
+import android.widget.Toast
 import chat.lumia.kit.SectionTitle
 import chat.lumia.kit.initialsOf
 import chat.lumia.kit.personalKinds
@@ -109,7 +111,8 @@ fun Shell(store: AppStore, session: LumiaSession, devScreen: String?, devChannel
     val replace: (List<Screen>) -> Unit = { stack = it }
 
     val channels = session.snapshot?.channels ?: emptyList()
-    val activity = LocalContext.current as? MainActivity
+    val context = LocalContext.current
+    val activity = context as? MainActivity
     val target = PushRegistrar.target
 
     LaunchedEffect(Unit) {
@@ -183,6 +186,12 @@ fun Shell(store: AppStore, session: LumiaSession, devScreen: String?, devChannel
                 "yoursettings" -> { place = Place.Server(first); stack = listOf(Screen.YourSettings(first)) }
                 "mentions" -> { place = Place.Server(first); stack = listOf(Screen.Mentions(first)) }
                 "homementions" -> { place = Place.Home; stack = listOf(Screen.Mentions(null)) }
+                // Setting up private messages (#20): the screens a phone without its phrase saved, or without the account's identity, is shown.
+                "phrase" -> { place = Place.Home; stack = listOf(Screen.Devices, Screen.Phrase()) }
+                "phrasecheck" -> { place = Place.Home; stack = listOf(Screen.Devices, Screen.Phrase(), Screen.PhraseCheck) }
+                "restore" -> { place = Place.Home; stack = listOf(Screen.Restore) }
+                "startover" -> { place = Place.Home; stack = listOf(Screen.StartOver) }
+                "needssetup" -> { place = Place.Home; session.setupAsked = true }
             }
         }
     }
@@ -215,6 +224,17 @@ fun Shell(store: AppStore, session: LumiaSession, devScreen: String?, devChannel
         session.watchPresence((place as? Place.Server)?.let { listOf(it.id) } ?: emptyList())
     }
     BackHandler(enabled = stack.isNotEmpty()) { pop() }
+    // The phrase's unlock lasts while its screens are open, through a turn of the phone, and no longer.
+    val showingPhrase = stack.any { it is Screen.Phrase || it is Screen.PhraseCheck }
+    LaunchedEffect(showingPhrase) { if (!showingPhrase) session.phraseUnlocked = false }
+    val leavePhrase: () -> Unit = { stack = stack.dropLastWhile { it is Screen.Phrase || it is Screen.PhraseCheck } }
+    // What a screen of the setup goes back to, named for its back button.
+    fun backTo(below: Screen?): String = when {
+        below == Screen.Devices -> "Devices"
+        below == null && place is Place.Server -> servers.firstOrNull { it.serverId == (place as Place.Server).id }?.name ?: "Home"
+        below == null -> "Home"
+        else -> "the last screen"
+    }
 
     when (val top = stack.lastOrNull()) {
         null -> Row(Modifier.fillMaxSize().background(LumiaTokens.bg.color)) {
@@ -243,7 +263,7 @@ fun Shell(store: AppStore, session: LumiaSession, devScreen: String?, devChannel
             stack = stack.dropLast(1) + Screen.Channel(channelId, messageId)
         }
         Screen.Requests -> RequestsScreen(session, pop, replace)
-        Screen.Devices -> DevicesScreen(store, session, pop)
+        Screen.Devices -> DevicesScreen(store, session, pop, push)
         Screen.Profile -> ProfileScreen(store, session, pop)
         Screen.Preferences -> PreferencesScreen(store, pop)
         Screen.NewMessage -> NewMessageScreen(session, pop, replace)
@@ -257,7 +277,18 @@ fun Shell(store: AppStore, session: LumiaSession, devScreen: String?, devChannel
         is Screen.AddPeople -> AddPeopleScreen(session, top.channelId, pop)
         is Screen.NewServerDm -> NewServerDmScreen(session, servers.firstOrNull { it.serverId == top.serverId }, pop) { id -> stack = stack.dropLast(1) + Screen.Channel(id) }
         is Screen.YourSettings -> YourSettingsScreen(session, servers.firstOrNull { it.serverId == top.serverId }, pop)
+        // The phrase, then its check; a word wrong is the phrase again, right is back where the person came from.
+        is Screen.Phrase -> PhraseScreen(session, top.again, backTo(stack.dropLastWhile { it is Screen.Phrase || it is Screen.PhraseCheck }.lastOrNull()), leavePhrase) { push(Screen.PhraseCheck) }
+        Screen.PhraseCheck -> PhraseCheckScreen(session, back = pop, wrong = { leavePhrase(); push(Screen.Phrase(again = true)) }) {
+            leavePhrase()
+            Toast.makeText(context, "Your recovery phrase is saved.", Toast.LENGTH_SHORT).show()
+        }
+        Screen.Restore -> RestoreScreen(store, session, backTo(stack.dropLast(1).lastOrNull()), pop) { replace(emptyList()) }
+        // Started over, the new phrase is next to save, when the phone keeps one.
+        Screen.StartOver -> StartOverScreen(store, session, backTo(stack.dropLast(1).lastOrNull()), pop) { phrase -> replace(if (phrase) listOf(Screen.Phrase()) else emptyList()) }
     }
+    // "Private messages need this phone", over whatever asked for it.
+    if (session.setupAsked) NeedsSetupSheet(store, session, push) { session.setupAsked = false }
 }
 
 // Home
@@ -298,11 +329,15 @@ fun HomeScreen(store: AppStore, session: LumiaSession, push: (Screen) -> Unit) {
                 val personal = unreadIn(session.readStates, byHost.flatMap { it.second }.map { it.channelId }).mentions
                 Column(Modifier.padding(bottom = LumiaTokens.space8)) { MentionsRow((session.badge - personal).coerceAtLeast(0)) { push(Screen.Mentions(null)) } }
             }
-            if (!session.hasIdentity) {
-                item {
-                    LumiaNotice(Icons.Filled.Shield, NoticeTone.ACCENT, action = "Link" to { store.route = Route.LINK }, text = "Personal messages are end-to-end encrypted. This phone has no device key yet; a device you already use approves it.")
-                }
-            } else if (byHost.isEmpty()) {
+            // What this phone needs before it can send a private message (#20), else the
+            // reminder to save the phrase while it waits, unless it was put off.
+            val notice = setupNotice(session.hasIdentity, session.privateMessages)
+            if (notice != null) {
+                item { LumiaNotice(Icons.Filled.Shield, NoticeTone.ACCENT, action = "Set up" to { session.setupAsked = true }, text = notice) }
+            } else if (phraseReminderShows(session.phraseUnconfirmed, store.phraseSnooze, System.currentTimeMillis())) {
+                item { Box(Modifier.padding(bottom = LumiaTokens.space4)) { PhraseReminder(save = { push(Screen.Phrase()) }, later = { store.snoozePhrase() }) } }
+            }
+            if (notice == null && byHost.isEmpty()) {
                 item {
                     LumiaEmptyState(Icons.Filled.Lock, "Your conversations", "Personal messages are end-to-end encrypted. Start one with someone you share a server with.", action = "New message" to { push(Screen.NewMessage) })
                 }

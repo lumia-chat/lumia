@@ -476,6 +476,8 @@ fun ProfileCard(
     }
 
     fun messagePrivately() {
+        // A phone that cannot send one says what it needs first (#20).
+        if (!session.readyForPrivate()) return onDismiss()
         scope.launch {
             busy = true
             note = ""

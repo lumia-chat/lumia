@@ -88,6 +88,14 @@ sealed class Screen {
     data class AddPeople(val channelId: String) : Screen()
     data class NewServerDm(val serverId: String) : Screen()
     data class YourSettings(val serverId: String) : Screen()
+    /** The recovery phrase (identity spec 4.1); [again] after a check with a word wrong. */
+    data class Phrase(val again: Boolean = false) : Screen()
+    /** The phrase's three-word check. */
+    data object PhraseCheck : Screen()
+    /** Restore with the phrase, on a phone signed in to an account whose identity is elsewhere (identity spec 4.3). */
+    data object Restore : Screen()
+    /** Start over with a new identity (identity spec 4.7). */
+    data object StartOver : Screen()
 }
 
 // Where the shell is, as Android can keep it while the activity is made
@@ -122,6 +130,10 @@ private fun Screen.kept(): String = when (this) {
     is Screen.NewServerDm -> "new-server-dm $serverId"
     is Screen.YourSettings -> "your-settings $serverId"
     is Screen.Mentions -> if (serverId == null) "mentions" else "mentions $serverId"
+    is Screen.Phrase -> if (again) "phrase again" else "phrase"
+    Screen.PhraseCheck -> "phrase-check"
+    Screen.Restore -> "restore"
+    Screen.StartOver -> "start-over"
 }
 
 /** The screen a kept word names; none for a word this build does not know, and the stack is that much shorter. */
@@ -145,6 +157,10 @@ private fun screenOf(kept: String): Screen? {
         "new-server-dm" -> Screen.NewServerDm(id)
         "your-settings" -> Screen.YourSettings(id)
         "mentions" -> Screen.Mentions(id.ifEmpty { null })
+        "phrase" -> Screen.Phrase(again = id == "again")
+        "phrase-check" -> Screen.PhraseCheck
+        "restore" -> Screen.Restore
+        "start-over" -> Screen.StartOver
         else -> null
     }
 }

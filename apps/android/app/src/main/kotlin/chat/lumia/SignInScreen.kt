@@ -1,7 +1,10 @@
 // Sign in on a phone: the instance (with its trust card, architecture
 // 6.1), then a password with a second factor when the account asks for
 // one, or a new account, or linking this phone from a device that holds
-// the identity; the same flow as the web's, the macOS and the iOS apps'.
+// the identity, or restoring it with the recovery phrase; the same flow as
+// the web's, the macOS and the iOS apps'. A new account has private
+// messages set up on this phone as it is made (#20, `AppStore.signIn`),
+// its phrase saved afterwards from Home's reminder.
 package chat.lumia
 
 import androidx.compose.foundation.Image
@@ -215,7 +218,7 @@ fun SignInScreen(store: AppStore) {
             }
         } else {
             LumiaCard(
-                if (creating) "Create an account" else "Welcome back",
+                if (creating) "Create your account" else "Welcome back",
                 if (creating) "A new account on ${current.host}." else "Sign in to pick up your conversations.",
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(LumiaTokens.space12)) {
@@ -238,10 +241,21 @@ fun SignInScreen(store: AppStore) {
                         LumiaLinkButton("Change") { info = null; choosing = true; error = "" }
                     }
                     LumiaField(if (creating) "Handle" else "Email or handle", handle, { handle = it }, placeholder = if (creating) "yourname" else "you@example.com", keyboard = KeyboardOptions(keyboardType = KeyboardType.Email))
+                    if (creating) Text("People find you as @${handle.trim().ifEmpty { "yourname" }}.", style = LumiaTokens.textMeta.style, color = LumiaTokens.inkSecondary.color)
                     LumiaField("Password", password, { password = it }, placeholder = if (creating) "At least 12 characters" else "Your password", secure = true)
                     if (needsTotp) LumiaField("Verification code", totp, { totp = it }, placeholder = "6 digits from your authenticator", keyboard = KeyboardOptions(keyboardType = KeyboardType.Number))
                     if (error.isNotEmpty()) LumiaErrorText(error)
                     LumiaPrimaryButton(if (creating) "Create account" else "Sign in", enabled = !busy, modifier = Modifier.fillMaxWidth()) { scope.launch { submit() } }
+                    if (creating) {
+                        Text("Private messages are set up on this phone with your account. You'll be asked to save a recovery phrase afterwards.", style = LumiaTokens.textMeta.style, color = LumiaTokens.inkSecondary.color)
+                        // Someone with an identity already brings it here instead of making a second (identity spec 4.1):
+                        // both sign in by it, so only where the instance takes that.
+                        if (current.identityProofSignInEnabled) {
+                            Text("Already use Lumia on another device?", style = LumiaTokens.textLabel.style, color = LumiaTokens.inkEmphasis.color, modifier = Modifier.padding(top = LumiaTokens.space8))
+                            LumiaSecondaryButton("Link from a device you use", modifier = Modifier.fillMaxWidth()) { store.route = Route.LINK }
+                            LumiaSecondaryButton("Restore with your recovery phrase", modifier = Modifier.fillMaxWidth()) { store.route = Route.RESTORE }
+                        }
+                    }
                     // Through the system browser (architecture 6.3): the provider,
                     // or the instance's web sign-in page for a passkey; the tab
                     // comes back with a one-time token, taken below.
@@ -267,12 +281,13 @@ fun SignInScreen(store: AppStore) {
                             Box(Modifier.weight(1f).height(1.dp).background(LumiaTokens.line.color))
                         }
                         LumiaSecondaryButton("Link this phone from another device", modifier = Modifier.fillMaxWidth()) { store.route = Route.LINK }
+                        LumiaSecondaryButton("Restore with your recovery phrase", modifier = Modifier.fillMaxWidth()) { store.route = Route.RESTORE }
                     }
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space4), verticalAlignment = Alignment.CenterVertically) {
                 if (creating) {
-                    Text("Already have an account?", style = LumiaTokens.textMeta.style, color = LumiaTokens.inkSecondary.color)
+                    Text("Have an account here?", style = LumiaTokens.textMeta.style, color = LumiaTokens.inkSecondary.color)
                     LumiaLinkButton("Sign in") { creating = false; error = "" }
                 } else {
                     Text("New to Lumia?", style = LumiaTokens.textMeta.style, color = LumiaTokens.inkSecondary.color)
