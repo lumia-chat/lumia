@@ -1244,6 +1244,17 @@ impl Client {
         self.app.identity_new_phrase().map_err(js)
     }
 
+    /// The words of the recovery phrase's wordlist that begin with `prefix`,
+    /// at most four: what a phrase field offers as the person types.
+    #[must_use]
+    #[wasm_bindgen(js_name = phraseCompletions)]
+    pub fn phrase_completions(&self, prefix: String) -> Vec<String> {
+        lumia_core::identity::phrase::completions(&prefix, 4)
+            .into_iter()
+            .map(str::to_string)
+            .collect()
+    }
+
     /// Three positions, 1 to 24, to ask the person for.
     ///
     /// # Errors

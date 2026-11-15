@@ -119,6 +119,22 @@ impl Phrase {
 /// (identity spec 4.1 step 7).
 pub const QUIZ_WORDS: usize = 3;
 
+/// The wordlist's words that begin with `prefix` (trimmed, any case), in
+/// list order, at most `limit`: what a field completes a word of the phrase
+/// from. An empty prefix completes nothing. Four letters always settle on
+/// one word, as BIP39 guarantees.
+#[must_use]
+pub fn completions(prefix: &str, limit: usize) -> Vec<&'static str> {
+    let prefix = prefix.trim().to_ascii_lowercase();
+    if prefix.is_empty() {
+        return Vec::new();
+    }
+    Language::English
+        .words_by_prefix_iter(&prefix)
+        .take(limit)
+        .collect()
+}
+
 impl Phrase {
     /// [`QUIZ_WORDS`] distinct positions, 1 to 24, in ascending order, chosen
     /// at random: the words to ask for.
@@ -219,6 +235,14 @@ mod tests {
         assert!(!phrase.answers(&[0, 12, 24], &right));
         assert!(!phrase.answers(&[1, 12, 25], &right));
         assert!(!phrase.answers(&[], &[]));
+    }
+
+    #[test]
+    fn completions_come_from_the_wordlist_by_prefix() {
+        assert_eq!(completions("ORBI", 4), vec!["orbit"]);
+        assert_eq!(completions(" ab ", 3), vec!["abandon", "ability", "able"]);
+        assert!(completions("", 4).is_empty());
+        assert!(completions("zzz", 4).is_empty());
     }
 
     #[test]

@@ -1283,6 +1283,16 @@ pub fn parse_body(body: String, mentions: Vec<MentionSummary>) -> Vec<BodyBlock>
         .collect()
 }
 
+/// The words of the recovery phrase's wordlist that begin with `prefix`, at
+/// most four: what a phrase field offers as the person types.
+#[uniffi::export]
+pub fn phrase_completions(prefix: String) -> Vec<String> {
+    lumia_core::identity::phrase::completions(&prefix, 4)
+        .into_iter()
+        .map(str::to_string)
+        .collect()
+}
+
 #[uniffi::export]
 impl Client {
     /// Opens the client for the instance at `base_url` with state under
