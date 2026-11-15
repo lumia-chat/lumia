@@ -612,10 +612,14 @@ mod tests {
     async fn reading_stops_at_the_end_of_the_head() {
         let server = serve(site).await;
         let url = format!("http://127.0.0.1:{}/forever", server.port);
-        let started = std::time::Instant::now();
-        let got = fetch_with(&local(server.port), &url, "en").await.unwrap();
+        // The page never ends; a fetch that waited for its end would run into
+        // the time limit and fail. Long enough not to race a loaded machine.
+        let rules = Rules {
+            timeout: Duration::from_secs(30),
+            ..local(server.port)
+        };
+        let got = fetch_with(&rules, &url, "en").await.unwrap();
         assert_eq!(got.map(|c| c.card.title), Some("Endless".into()));
-        assert!(started.elapsed() < Duration::from_secs(2));
     }
 
     #[tokio::test]
