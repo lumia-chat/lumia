@@ -11,6 +11,23 @@ export const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: Infinity, retry: false } },
 });
 
+/**
+ * A query whose `data` is undefined until it has some, instead of
+ * suspending; every query here is made through it. Solid Query reads
+ * `data` through a resource, and a resource read with nothing in it yet
+ * suspends the navigation in progress (the router runs each one as a
+ * Solid transition), which then waits for the query. While it waits,
+ * whatever changes meanwhile (an event, another query answering) runs
+ * outside the transition and reads what the new screen made inside it as
+ * undefined: the conversation Accept opens fell over that way on a slow
+ * machine, "reading 'defaultQueryOptions'" of undefined or "a stale value
+ * from <Show>", with nothing on the page. Every screen says what it is
+ * still looking for, so none needs to suspend.
+ */
+function settled<Q extends { readonly isPending: boolean }>(query: Q): Q {
+  return new Proxy(query, { get: (q, key) => (key === "data" && q.isPending ? undefined : Reflect.get(q, key)) });
+}
+
 const INSTANCE_KEY = "lumia:instance";
 
 export function savedInstance(): string | null {
@@ -428,7 +445,7 @@ function onGatewayEvent(e: ClientEvent): void {
 }
 
 export function snapshotQuery() {
-  return createQuery(() => ({
+  return settled(createQuery(() => ({
     queryKey: ["snapshot"],
     queryFn: async () => {
       const before = queryClient.getQueryData<SnapshotSummary>(["snapshot"]);
@@ -441,7 +458,7 @@ export function snapshotQuery() {
       if (before && snapshot.servers.some((v) => was.get(v.serverId) !== v.showDeleted)) void queryClient.invalidateQueries({ queryKey: ["messages"] });
       return snapshot;
     },
-  }));
+  })));
 }
 
 /** Read state by conversation, and the badge (architecture 6.6): what the core counts, asked again after every event that can move it. */
@@ -451,13 +468,13 @@ export interface ReadStates {
 }
 
 export function readStatesQuery() {
-  return createQuery(() => ({
+  return settled(createQuery(() => ({
     queryKey: ["readStates"],
     queryFn: async (): Promise<ReadStates> => {
       const [states, badge] = await Promise.all([client().readStates(), client().badge()]);
       return { byChannel: new Map(states.map((s) => [s.channelId, s])), badge };
     },
-  }));
+  })));
 }
 
 /** Reads a conversation through `seq` and takes the counts the instance answers with. */
@@ -468,29 +485,29 @@ export async function markRead(channelId: string, seq: number): Promise<void> {
 
 /** The messages that notify this account, newest first, in one server or every one, a page at a time. */
 export function mentionsQuery(serverId: () => string | null) {
-  return createInfiniteQuery(() => ({
+  return settled(createInfiniteQuery(() => ({
     queryKey: ["mentions", serverId() ?? "all"],
     queryFn: ({ pageParam }: { pageParam: string | null }) => client().mentions(serverId(), pageParam),
     initialPageParam: null as string | null,
     getNextPageParam: (last: { messages: { messageId: string }[]; hasMore: boolean }) => (last.hasMore ? (last.messages[last.messages.length - 1]?.messageId ?? null) : null),
     staleTime: 0,
-  }));
+  })));
 }
 
 export function dmChannelsQuery(enabled: () => boolean) {
-  return createQuery(() => ({
+  return settled(createQuery(() => ({
     queryKey: ["dmChannels"],
     queryFn: () => client().dmChannels(),
     enabled: enabled(),
-  }));
+  })));
 }
 
 export function dmMessagesQuery(channelId: () => string | undefined) {
-  return createQuery(() => ({
+  return settled(createQuery(() => ({
     queryKey: ["dm", channelId()],
     queryFn: () => client().dmMessages(channelId() as string),
     enabled: !!channelId(),
-  }));
+  })));
 }
 
 // The profile updates that arrived, for a fetch begun before one to catch up with it.
@@ -498,7 +515,7 @@ const profileUpdates = profileLog();
 
 /** Everyone this account shares a server with, by account id. */
 export function peopleQuery(serverIds: () => string[]) {
-  return createQuery(() => ({
+  return settled(createQuery(() => ({
     queryKey: ["people", serverIds().join(",")],
     queryFn: async () => {
       const from = profileUpdates.mark();
@@ -509,7 +526,7 @@ export function peopleQuery(serverIds: () => string[]) {
       return profileUpdates.since(from, people, (held, p) => peopleWithProfile(held, p) ?? held);
     },
     enabled: serverIds().length > 0,
-  }));
+  })));
 }
 
 // Public profiles of people outside a shared server (a DM participant, a
@@ -545,10 +562,10 @@ function profileUpdated(p: ProfileUpdate): void {
 }
 
 export function hasIdentityQuery() {
-  return createQuery(() => ({
+  return settled(createQuery(() => ({
     queryKey: ["hasIdentity"],
     queryFn: () => client().hasIdentity(),
-  }));
+  })));
 }
 
 /**
@@ -581,17 +598,15 @@ export async function privateState(): Promise<PrivateState> {
 
 /**
  * `privateState` as a query: `state` is undefined until it is known, and
- * `failed` holds why asking failed, for a page to say so and `retry`. Read
- * without suspending: a query's `data` read while it is pending suspends
- * the navigation in progress, and this one waits on the account snapshot,
- * during which the Home sidebar's memos read as undefined and the page fell
- * over.
+ * `failed` holds why asking failed, for a page to say so and `retry`.
+ * (This query was the first found to suspend a navigation and leave the
+ * Home sidebar's memos undefined; `settled` now keeps every query from it.)
  */
 export function privateStateQuery() {
-  const query = createQuery(() => ({
+  const query = settled(createQuery(() => ({
     queryKey: ["privateState"],
     queryFn: privateState,
-  }));
+  })));
   return {
     state: (): PrivateState | undefined => (query.isSuccess ? query.data : undefined),
     failed: (): string | undefined => (query.isError ? (query.error instanceof Error ? query.error.message : String(query.error)) : undefined),
@@ -618,16 +633,16 @@ export function identityChanged(): void {
 export const FLAGSHIP_ORIGIN = "https://my.lumia.chat";
 
 export function rosterQuery(enabled: () => boolean) {
-  return createQuery(() => ({
+  return settled(createQuery(() => ({
     queryKey: ["roster"],
     queryFn: () => client().identityShow(),
     enabled: enabled(),
-  }));
+  })));
 }
 
 /** A server's members, for the aside. */
 export function membersQuery(serverId: () => string | undefined) {
-  return createQuery(() => ({
+  return settled(createQuery(() => ({
     queryKey: ["members", serverId()],
     queryFn: async () => {
       const from = profileUpdates.mark();
@@ -635,25 +650,25 @@ export function membersQuery(serverId: () => string | undefined) {
       return profileUpdates.since(from, list, (held, p) => membersWithProfile(held, p) ?? held);
     },
     enabled: !!serverId(),
-  }));
+  })));
 }
 
 /** Who is in a channel, as account ids (architecture 6.8). */
 export function channelMembersQuery(channelId: () => string | undefined) {
-  return createQuery(() => ({
+  return settled(createQuery(() => ({
     queryKey: ["channelMembers", channelId()],
     queryFn: () => client().channelMembers(channelId() as string),
     enabled: !!channelId(),
-  }));
+  })));
 }
 
 /** The public channels of a server this account is not in, as Browse lists them. */
 export function browseQuery(serverId: () => string | undefined, enabled: () => boolean = () => true) {
-  return createQuery(() => ({
+  return settled(createQuery(() => ({
     queryKey: ["browse", serverId()],
     queryFn: () => client().browseChannels(serverId() as string),
     enabled: !!serverId() && enabled(),
-  }));
+  })));
 }
 
 /** Takes a snapshot a call answered with, as a fresh one is taken. */
@@ -674,7 +689,7 @@ const loadingOlder = new Set<string>();
 
 /** A channel's messages: what the instance gave from before the store begins, then the store's newest pages. */
 export function messagesQuery(channelId: () => string | undefined) {
-  return createQuery(() => {
+  return settled(createQuery(() => {
     const id = channelId();
     return {
       queryKey: ["messages", id],
@@ -689,7 +704,7 @@ export function messagesQuery(channelId: () => string | undefined) {
       },
       enabled: !!id,
     };
-  });
+  }));
 }
 
 /** Reads one more page of a channel's older messages: from the store while it has more, then from the instance. False when there were no more, or one is already on its way. */

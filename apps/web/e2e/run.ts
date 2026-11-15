@@ -87,20 +87,44 @@ async function open(which: string, name: string, keep = false): Promise<{ ctx: B
     options.args = ["--enable-logging=stderr", "--v=0"];
     if (process.env.LUMIA_E2E_CHANNEL) options.channel = process.env.LUMIA_E2E_CHANNEL;
   }
-  const launched = engine.launchPersistentContext(profile, options).then(async (ctx) => ({ ctx, page: await ctx.newPage() }));
+  // Every page of the context is watched (and slowed), the ones a step
+  // opens itself too.
+  const launched = engine.launchPersistentContext(profile, options).then(async (ctx) => {
+    ctx.on("page", (p) => watch(which, ctx, p));
+    const page = await ctx.newPage();
+    if (which === "chromium" && slow > 1) await throttle(ctx, page);
+    return { ctx, page };
+  });
   const { ctx, page } = await Promise.race([launched, Bun.sleep(90_000).then(() => Promise.reject(new Error(`${which} did not open a page within 90 s`)))]);
-  console.log(`  [${which}] browser ${ctx.browser()?.version() ?? "?"} up`);
+  console.log(`  [${which}] browser ${ctx.browser()?.version() ?? "?"} up${which === "chromium" && slow > 1 ? `, its CPU slowed ${slow} times` : ""}`);
   live.page = page;
   // WebKit's first navigation of a run on Linux CI takes well over the default 30 s.
   page.setDefaultNavigationTimeout(90_000);
-  page.on("pageerror", (e) => console.log(`  [${which}] page error: ${e.message}`));
+  if (!keep) await clearStores(which, page, base);
+  return { ctx, page };
+}
+
+// What a page says that a step should show: what it threw, with where
+// (the stack, not only the message), and what it logged as an error.
+function watch(which: string, ctx: BrowserContext, page: Page) {
+  page.on("pageerror", (e) => console.log(`  [${which}] page error: ${e.stack ?? e.message}`));
   page.on("crash", () => console.log(`  [${which}] the page crashed`));
   page.on("worker", (w) => w.on("close", () => console.log(`  [${which}] worker closed: ${w.url().split("/").pop()}`)));
   page.on("console", (m) => {
     if (m.type() === "error") console.log(`  [${which}] console: ${m.text()}`);
   });
-  if (!keep) await clearStores(which, page, base);
-  return { ctx, page };
+  if (which === "chromium" && slow > 1) void throttle(ctx, page).catch(() => {});
+}
+
+// `LUMIA_E2E_SLOW=<rate>` slows Chromium's CPU that many times over on
+// every page (CDP's Emulation.setCPUThrottlingRate), so that a slow
+// runner's timing can be had on a fast machine and a race only the runner
+// loses is lost here too. Chromium only: WebKit has no such switch.
+const slow = Number(process.env.LUMIA_E2E_SLOW ?? 0);
+
+async function throttle(ctx: BrowserContext, page: Page) {
+  const cdp = await ctx.newCDPSession(page);
+  await cdp.send("Emulation.setCPUThrottlingRate", { rate: slow });
 }
 
 // WebKit keeps OPFS outside the profile directory, so a fresh profile
@@ -496,7 +520,7 @@ async function dmSteps(which: string, page: Page, aDir: string, bAccount: string
     tailed = await follow([cli, "--data-dir", aDir, "dm", "tail", channel], (text) => text.includes(hello), 60_000);
     seen = lumia(aDir, "dm", "messages", channel);
   }
-  if (!seen.includes(hello)) throw new Error(`the CLI did not read the browser's message; its tail said:\n${tailed.slice(-600)}\nand it holds:\n${seen}`);
+  if (!seen.includes(hello)) throw new Error(`the CLI did not read the browser's message; its open said:\n${opened.slice(-600)}\nits tail said:\n${tailed.slice(-600)}\nand it holds:\n${seen}`);
   const reply = `reply from the cli ${Date.now()}`;
   phase("cli send");
   lumia(aDir, "dm", "send", channel, reply);
@@ -1989,7 +2013,8 @@ async function create(which: string, handle: string, stamp: number) {
 // with its VAPID key (RFC 8292); the test decrypts it. The service worker's
 // own `push` event cannot be raised from outside, so the content it would
 // show is what is checked.
-const pushPort = 4919;
+// `LUMIA_E2E_PUSH_PORT` moves it, for a second suite run beside the first.
+const pushPort = Number(process.env.LUMIA_E2E_PUSH_PORT ?? 4919);
 type Bytes = Uint8Array<ArrayBuffer>;
 const pushes = new Map<string, { resolve: (r: { headers: Headers; body: Bytes }) => void }>();
 const pushService = Bun.serve({
@@ -2245,7 +2270,8 @@ async function passkey(which: string, handle: string) {
 // code's nonce with the suite's RSA key, the key set and userinfo. The
 // step runs when the instance names a provider (LUMIA_OIDC_ISSUER at
 // this port, with LUMIA_OIDC_CLIENT_ID=suite), and is skipped otherwise.
-const oidcPort = 4920;
+// `LUMIA_E2E_OIDC_PORT` moves it, as `LUMIA_E2E_PUSH_PORT` does the push service.
+const oidcPort = Number(process.env.LUMIA_E2E_OIDC_PORT ?? 4920);
 const oidcIssuer = `http://127.0.0.1:${oidcPort}`;
 const oidcKeys = await crypto.subtle.generateKey({ name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" }, true, ["sign", "verify"]);
 const oidcCodes = new Map<string, { nonce: string; clientId: string }>();

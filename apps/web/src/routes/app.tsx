@@ -174,7 +174,19 @@ export interface AppSearch {
 
 const PERSONAL = new Set(["PERSONAL_DM", "PERSONAL_GROUP_DM"]);
 
+// Drawn once the account snapshot is known (or asking for it failed):
+// before it, every list in the frame would show as empty for a moment.
+// The queries do not suspend (`settled` in state.ts), so this is the wait.
 export function App() {
+  const snapshot = snapshotQuery();
+  return (
+    <Show when={!snapshot.isPending}>
+      <Frame />
+    </Show>
+  );
+}
+
+function Frame() {
   const navigate = useNavigate();
   const tileCache = railCache();
   const search = useSearch({ from: "/app" }) as () => AppSearch;

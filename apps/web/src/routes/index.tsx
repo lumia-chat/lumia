@@ -2,7 +2,7 @@
 // owning tab (one tab owns the OPFS store; the others are told so), then
 // `/` sends a signed-in browser to `/app` and anyone else to `/sign-in`.
 // `/design` is the gallery of the design system's components.
-import { Outlet, createRootRoute, createRoute, redirect } from "@tanstack/solid-router";
+import { Outlet, createRootRoute, createRoute, redirect, type ErrorComponentProps } from "@tanstack/solid-router";
 import { Show, createResource } from "solid-js";
 import { Button, Card } from "../design/components";
 import { ensureOwner, openInstance, opened, refreshSignedIn, savedInstance } from "../client/state";
@@ -37,7 +37,29 @@ function OtherTab() {
   );
 }
 
-const rootRoute = createRootRoute({ component: Root });
+// What a screen threw while it was drawn, in place of the screen: said,
+// with a reload (what is held is in the store and the instance, so a
+// reload loses nothing sent), and logged with its stack for whoever
+// looks at the console.
+function Failed(props: ErrorComponentProps) {
+  console.error(props.error);
+  return (
+    <AuthPage>
+      <Card title="Something went wrong" subtitle="This screen ran into a problem it couldn’t recover from. Reloading usually fixes it.">
+        <div class="auth__form">
+          <p class="auth__error" role="alert">
+            {props.error instanceof Error ? props.error.message : String(props.error)}
+          </p>
+          <Button variant="primary" block onClick={() => location.reload()}>
+            Reload
+          </Button>
+        </div>
+      </Card>
+    </AuthPage>
+  );
+}
+
+const rootRoute = createRootRoute({ component: Root, errorComponent: Failed });
 
 // A signed-in session, reopened from the saved instance after a reload,
 // or the sign-in screen. Synchronous once signed in: this runs on every
