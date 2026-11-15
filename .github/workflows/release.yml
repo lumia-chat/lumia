@@ -303,11 +303,10 @@ jobs:
   # architecture would leave its systems failing to update. The site holds
   # this release alone.
   #
-  # Written on 2026-11-14 and not yet run on a runner: the script built and
-  # signed the site in an ubuntu:24.04 container, from which apt on Ubuntu
-  # and dnf on Fedora installed and updated the package. Pages deploys from
-  # GitHub Actions with the domain set, and LINUX_REPO_KEY is set (both
-  # 2026-11-14).
+  # First run with v0.10.0 (2026-11-14). It runs from the tag, so the
+  # github-pages environment needs a deployment rule for tags `v*` beside
+  # `master` (repository settings, Environments); without one the job is
+  # refused before its first step. LINUX_REPO_KEY holds the repository key.
   packages:
     needs: [publish, linux]
     if: ${{ !cancelled() && needs.publish.result == 'success' && needs.linux.result == 'success' }}
