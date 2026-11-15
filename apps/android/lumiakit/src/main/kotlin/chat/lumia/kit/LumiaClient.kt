@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.withContext
 import uniffi.lumia_ffi.Client
 import uniffi.lumia_ffi.ClientEvent
+import uniffi.lumia_ffi.LinkRequestSummary
 import uniffi.lumia_ffi.Listener
 import uniffi.lumia_ffi.LumiaException
 
@@ -66,6 +67,14 @@ class LumiaClient(val baseUrl: String, dataDirectory: File) {
  * `phrase::completions`): a value only, asked as the field is typed in.
  */
 fun phraseCompletions(prefix: String): List<String> = uniffi.lumia_ffi.phraseCompletions(prefix)
+
+/**
+ * What a pasted link request asks to add (the core's
+ * `link_request_summary`, identity spec 4.2 step 2), read before approving
+ * it; none for text that is not one. A value only: nothing is sent.
+ */
+fun readLinkRequest(request: String): LinkRequestSummary? =
+    try { uniffi.lumia_ffi.linkRequestSummary(request) } catch (e: LumiaException) { null }
 
 /** The API error's code, when the failure was one (`UNAUTHENTICATED`, `NOT_FOUND`, ...). */
 val Throwable.lumiaCode: String?

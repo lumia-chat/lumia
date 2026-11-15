@@ -747,7 +747,11 @@ fun DevicesScreen(store: AppStore, session: LumiaSession, back: () -> Unit, push
     PanelScreen(
         back = "Home", onBack = back, title = "Devices",
         subtitle = if (session.roster == null) "No identity on this phone" else "${active.size} linked to you",
-        actions = listOf(Triple(Icons.Filled.Add, "Link a device") { store.route = Route.LINK }),
+        // A phone that holds the identity approves another device; one that does not is the one to link.
+        actions = listOf(
+            if (session.roster != null) Triple(Icons.Filled.Add, "Approve a device") { push(Screen.Approve) }
+            else Triple(Icons.Filled.Add, "Link a device") { store.route = Route.LINK },
+        ),
     ) {
         LazyColumn(Modifier.fillMaxSize().navigationBarsPadding(), contentPadding = androidx.compose.foundation.layout.PaddingValues(LumiaTokens.space16), verticalArrangement = Arrangement.spacedBy(LumiaTokens.space12)) {
             // The phrase not yet saved: the standing card, which "In a week" does not put off (#20).
@@ -782,6 +786,12 @@ fun DevicesScreen(store: AppStore, session: LumiaSession, back: () -> Unit, push
             if (session.roster != null) {
                 item { SectionTitle("Devices with your identity") }
                 items(active, key = { it.deviceId }) { d -> LumiaDeviceRow(d, label(d), meta(d), icon(d)) { revoking = d; password = ""; error = "" } }
+                // Identity spec 4.2 from this side: the new device shows a request, this phone approves it and gives the code.
+                item {
+                    LumiaCard("Link another device", "Bring in a laptop, a browser or another phone: it shows a request, and this phone approves it.") {
+                        LumiaPrimaryButton("Approve a device", Modifier.fillMaxWidth()) { push(Screen.Approve) }
+                    }
+                }
                 val revoked = devices.filter { it.revoked }
                 if (revoked.isNotEmpty()) {
                     item { SectionTitle("Revoked") }

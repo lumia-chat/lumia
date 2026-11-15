@@ -1,7 +1,8 @@
 // Setting up private messages, as values: which screen a phone without
 // the account's identity gets, when Home's reminder shows, the three-word
 // check's fields, the phrase as Restore counts it and as it is printed or
-// saved, and what Start over says of a key change.
+// saved, what Start over says of a key change, and what approving another
+// device says of the request pasted and the code it answers.
 package chat.lumia.kit
 
 import org.junit.Assert.assertEquals
@@ -127,5 +128,62 @@ class IdentityTest {
         assertEquals("Nobody will see a key change: you have no private conversations yet.", keyChangeWords(0))
         assertEquals("The 1 person you talk to privately will see that your key changed.", keyChangeWords(1))
         assertEquals("The 3 people you talk to privately will see that your key changed.", keyChangeWords(3))
+    }
+
+    // A request is base64 on one line; a paste or a share may break it, and
+    // anything with other characters in it is not one, said without asking.
+    @Test
+    fun onlyTextThatCouldBeARequestIsAskedAbout() {
+        assertEquals("CgQAAQID+/==", linkRequestOf("  CgQA\nAQID +/==\n"))
+        assertTrue(linkRequestWorthAsking("CgQAAQID+/=="))
+        assertTrue(linkRequestWorthAsking(" CgQA\r\nAQID "))
+        assertFalse(linkRequestWorthAsking(""))
+        assertFalse(linkRequestWorthAsking(" \n "))
+        assertFalse(linkRequestWorthAsking("hello there!"))
+        assertFalse(linkRequestWorthAsking("https://my.lumia.chat/link"))
+        assertFalse(linkRequestWorthAsking("CgQA-AQID_"))
+        assertTrue(NOT_A_LINK_REQUEST.startsWith("That isn't a link request."))
+    }
+
+    // Step 2: a browser is named by the origin it is scoped to, anything else by its label.
+    @Test
+    fun aRequestSaysWhatItWouldAdd() {
+        assertEquals("A device named “MacBook Pro”", linkRequestWho("native", " MacBook Pro ", ""))
+        assertEquals("A device with no name", linkRequestWho("native", "", ""))
+        assertEquals("A browser on https://my.lumia.chat", linkRequestWho("web", "Safari", "https://my.lumia.chat"))
+        assertEquals("A browser", linkRequestWho("web", "", ""))
+        assertEquals("A bot named “Ledger”", linkRequestWho("bot", "Ledger", ""))
+        assertEquals("A bot", linkRequestWho("bot", "", ""))
+        // A kind this build does not know is a device.
+        assertEquals("A device named “Pixel”", linkRequestWho("unspecified", "Pixel", ""))
+        assertEquals("07070707", linkRequestMeta("native", "MacBook Pro", "07070707-0707-0707-0707-070707070707"))
+        assertEquals("Safari · 07070707", linkRequestMeta("web", "Safari", "07070707-0707-0707-0707-070707070707"))
+        assertEquals("07070707", linkRequestMeta("web", "", "07070707-0707-0707-0707-070707070707"))
+    }
+
+    @Test
+    fun theCodeIsReadOutInTwoGroupsOfFour() {
+        assertEquals("7KQM 2XRD", linkCodeForReading("7KQM2XRD"))
+        assertEquals("7KQM 2XRD", linkCodeForReading(" 7KQM2XRD\n"))
+        assertEquals("7 K Q M 2 X R D", linkCodeSpoken("7KQM2XRD"))
+        assertEquals("", linkCodeForReading(""))
+    }
+
+    @Test
+    fun anApprovalTheInstanceRefusedSaysWhyInWords() {
+        assertEquals("Your devices changed on another device while this one was approving. Try again.", approveError("CONFLICT", "conflict"))
+        assertTrue(approveError("FAILED_PRECONDITION", "failed precondition").startsWith("This account isn't linked"))
+        assertTrue(approveError("IDENTITY_PROOF_INVALID", "bad roster").startsWith("The instance refused the new list of devices."))
+        assertEquals("Too many tries. Wait a minute, then try again.", approveError("RATE_LIMITED", "slow down"))
+        // Anything else, a network failure included, is the failure's own words.
+        assertEquals("Not approved: could not reach the instance", approveError(null, "could not reach the instance"))
+        assertEquals("Not approved: internal", approveError("INTERNAL", "internal"))
+    }
+
+    @Test
+    fun anApprovalIsUnderWayUntilItHasACodeOrARefusal() {
+        assertTrue(Approval("req").underWay)
+        assertFalse(Approval("req", code = "7KQM2XRD").underWay)
+        assertFalse(Approval("req", error = "Not approved: offline").underWay)
     }
 }

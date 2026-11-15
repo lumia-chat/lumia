@@ -96,6 +96,8 @@ sealed class Screen {
     data object Restore : Screen()
     /** Start over with a new identity (identity spec 4.7). */
     data object StartOver : Screen()
+    /** Approve another device from this one, which holds the identity (identity spec 4.2). */
+    data object Approve : Screen()
 }
 
 // Where the shell is, as Android can keep it while the activity is made
@@ -134,6 +136,7 @@ private fun Screen.kept(): String = when (this) {
     Screen.PhraseCheck -> "phrase-check"
     Screen.Restore -> "restore"
     Screen.StartOver -> "start-over"
+    Screen.Approve -> "approve"
 }
 
 /** The screen a kept word names; none for a word this build does not know, and the stack is that much shorter. */
@@ -161,6 +164,7 @@ private fun screenOf(kept: String): Screen? {
         "phrase-check" -> Screen.PhraseCheck
         "restore" -> Screen.Restore
         "start-over" -> Screen.StartOver
+        "approve" -> Screen.Approve
         else -> null
     }
 }

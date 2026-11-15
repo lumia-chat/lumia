@@ -449,6 +449,7 @@ class LumiaSession(
                 phraseUnconfirmed = false
                 phraseUnlocked = false
                 setupAsked = false
+                approval = null
             },
         )
     }
@@ -467,6 +468,43 @@ class LumiaSession(
 
     suspend fun identityRevoke(deviceId: String, password: String) {
         roster = client.call { identityRevoke(deviceId, password) }
+    }
+
+    /**
+     * Approving another device (identity spec 4.2 steps 3 to 6): none, or
+     * the one under way, answered or refused. Held here rather than by the
+     * screen, so the phone turned or the screen left while the roster is
+     * published keeps the code it answers.
+     */
+    var approval by mutableStateOf<Approval?>(null)
+        private set
+
+    /**
+     * Approves [request] (the device's own unlock already given): the
+     * roster with the new device published, the bundle uploaded, and the
+     * code it answers kept in [approval]; once at a time. In the session's
+     * scope, so nothing that goes from the screen stops it half-way.
+     */
+    fun approve(request: String) {
+        if (approval?.underWay == true) return
+        val started = Approval(request)
+        approval = started
+        scope.launch {
+            val answered = try {
+                Approval(request, code = client.call { identityApprove(request) })
+            } catch (e: Exception) {
+                Approval(request, error = approveError(e.lumiaCode, e.lumiaMessage))
+            }
+            // Not when the session was left meanwhile, which forgot it.
+            if (approval !== started) return@launch
+            approval = answered
+            refreshRoster()
+        }
+    }
+
+    /** The approve screen left: an answered or refused approval is forgotten; one under way is kept for when it is opened again. */
+    fun approvalLeft() {
+        if (approval?.underWay != true) approval = null
     }
 
     // Setting up private messages (identity spec 4.1, 4.3, 4.7; issue #20)

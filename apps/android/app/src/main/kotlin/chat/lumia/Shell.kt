@@ -191,6 +191,7 @@ fun Shell(store: AppStore, session: LumiaSession, devScreen: String?, devChannel
                 "phrasecheck" -> { place = Place.Home; stack = listOf(Screen.Devices, Screen.Phrase(), Screen.PhraseCheck) }
                 "restore" -> { place = Place.Home; stack = listOf(Screen.Restore) }
                 "startover" -> { place = Place.Home; stack = listOf(Screen.StartOver) }
+                "approve" -> { place = Place.Home; stack = listOf(Screen.Devices, Screen.Approve) }
                 "needssetup" -> { place = Place.Home; session.setupAsked = true }
             }
         }
@@ -286,6 +287,8 @@ fun Shell(store: AppStore, session: LumiaSession, devScreen: String?, devChannel
         Screen.Restore -> RestoreScreen(store, session, backTo(stack.dropLast(1).lastOrNull()), pop) { replace(emptyList()) }
         // Started over, the new phrase is next to save, when the phone keeps one.
         Screen.StartOver -> StartOverScreen(store, session, backTo(stack.dropLast(1).lastOrNull()), pop) { phrase -> replace(if (phrase) listOf(Screen.Phrase()) else emptyList()) }
+        // Approving another device; an approval answered or refused is forgotten on the way out, one under way kept.
+        Screen.Approve -> ApproveScreen(session, backTo(stack.dropLast(1).lastOrNull())) { session.approvalLeft(); pop() }
     }
     // "Private messages need this phone", over whatever asked for it.
     if (session.setupAsked) NeedsSetupSheet(store, session, push) { session.setupAsked = false }

@@ -2,11 +2,13 @@
 // issue #20; the "Setting up private messages" phone boards): Home's
 // reminder and Devices' card, the recovery phrase and its three-word
 // check, "Private messages need this phone" with Link, Restore and Start
-// over, the restore and start-over screens, and the reauth they ask for.
-// The rules they draw by are lumiakit's `Identity.kt`.
+// over, the restore and start-over screens, the reauth they ask for, and
+// approving another device (4.2) from this one. The rules they draw by
+// are lumiakit's `Identity.kt`.
 package chat.lumia
 
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -24,6 +26,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -31,10 +34,15 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Computer
+import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.Text
@@ -45,11 +53,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -64,6 +74,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import chat.lumia.kit.AppStore
+import chat.lumia.kit.LINK_APPROVE_WARNING
+import chat.lumia.kit.LINK_CODE_HOW
 import chat.lumia.kit.LumiaDangerButton
 import chat.lumia.kit.LumiaEmptyState
 import chat.lumia.kit.LumiaErrorText
@@ -75,6 +87,7 @@ import chat.lumia.kit.LumiaSecondaryButton
 import chat.lumia.kit.LumiaSession
 import chat.lumia.kit.LumiaTokens
 import chat.lumia.kit.LumiaWarning
+import chat.lumia.kit.NOT_A_LINK_REQUEST
 import chat.lumia.kit.PHRASE_FILE_NAME
 import chat.lumia.kit.PHRASE_KEEP
 import chat.lumia.kit.PHRASE_SAVE_CLOUD
@@ -88,6 +101,12 @@ import chat.lumia.kit.Route
 import chat.lumia.kit.completionsLabel
 import chat.lumia.kit.deviceLabel
 import chat.lumia.kit.keyChangeWords
+import chat.lumia.kit.linkCodeForReading
+import chat.lumia.kit.linkCodeSpoken
+import chat.lumia.kit.linkRequestMeta
+import chat.lumia.kit.linkRequestOf
+import chat.lumia.kit.linkRequestWho
+import chat.lumia.kit.linkRequestWorthAsking
 import chat.lumia.kit.lumiaCode
 import chat.lumia.kit.lumiaDetails
 import chat.lumia.kit.lumiaMessage
@@ -99,8 +118,10 @@ import chat.lumia.kit.phraseDocument
 import chat.lumia.kit.phraseOf
 import chat.lumia.kit.phraseWords
 import chat.lumia.kit.privateContacts
+import chat.lumia.kit.readLinkRequest
 import chat.lumia.kit.restoreReady
 import kotlinx.coroutines.launch
+import uniffi.lumia_ffi.LinkRequestSummary
 import uniffi.lumia_ffi.LumiaException
 
 // Home and Devices
@@ -688,6 +709,121 @@ private fun ReauthFields(store: AppStore, session: LumiaSession, draft: ReauthDr
                     try { openInBrowser(context, session.reauthOidcUrl()) } catch (e: Exception) { onError(e.lumiaMessage) }
                 }
             }
+        }
+    }
+}
+
+// Approve a device
+
+/**
+ * Approve a device (identity spec 4.2 steps 2 to 6; the Devices board's
+ * "Link another device"), from Devices on a phone that holds the
+ * identity, so it can bring in a laptop, a browser or another phone: the
+ * request the new device shows, pasted; what it would add, read by the
+ * core with nothing sent, or "That isn't a link request"; the warning;
+ * Approve, behind the phone's own unlock as the phrase is; then the code,
+ * large and in two groups to read out, for the new device to claim with.
+ * The approval is the session's, so the phone turned or the screen left
+ * while it runs keeps the code. The request is kept in the saved state:
+ * it is the new device's public half and opens nothing by itself.
+ */
+@Composable
+fun ApproveScreen(session: LumiaSession, from: String, back: () -> Unit) {
+    val clipboard = LocalClipboardManager.current
+    val focus = LocalFocusManager.current
+    val approval = session.approval
+    var text by rememberSaveable { mutableStateOf(session.approval?.request ?: "") }
+    val request = linkRequestOf(text)
+    val summary = remember(request) { if (linkRequestWorthAsking(request)) readLinkRequest(request) else null }
+    val unlock = rememberDeviceUnlock("Approve a device", "Unlock to let it read your private messages") { ok -> if (ok) session.approve(request) }
+    val code = approval?.code
+    // The back button is this screen's own, so an answered approval is forgotten on the way out.
+    BackHandler(onBack = back)
+
+    PanelScreen(back = from, onBack = back, title = "Approve a device", subtitle = if (code == null) "Link another device" else "Approved") {
+        if (code != null) {
+            WithFooter(
+                content = {
+                    Column(
+                        Modifier.fillMaxWidth().padding(vertical = LumiaTokens.space24),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(LumiaTokens.space12),
+                    ) {
+                        Text("Code for the new device", style = LumiaTokens.textLabel.style, color = LumiaTokens.inkSecondary.color)
+                        Text(
+                            linkCodeForReading(code),
+                            style = LumiaTokens.titleAuth.style.copy(fontFamily = FontFamily.Monospace),
+                            color = LumiaTokens.ink.color,
+                            modifier = Modifier.semantics { contentDescription = linkCodeSpoken(code) },
+                        )
+                    }
+                    Text(LINK_CODE_HOW, style = LumiaTokens.textBody.style, color = LumiaTokens.inkSecondary.color, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                },
+                footer = { LumiaPrimaryButton("Done", Modifier.fillMaxWidth(), onClick = back) },
+            )
+        } else {
+            val underWay = approval?.underWay == true
+            WithFooter(
+                content = {
+                    Column(verticalArrangement = Arrangement.spacedBy(LumiaTokens.space6)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("Paste the request the new device shows", style = LumiaTokens.textLabel.style, color = LumiaTokens.inkEmphasis.color, modifier = Modifier.weight(1f))
+                            LumiaLinkButton("Paste", enabled = !underWay) { clipboard.getText()?.text?.let { text = it } }
+                        }
+                        Box(
+                            Modifier.fillMaxWidth().heightIn(min = LumiaTokens.controlHeight * 3)
+                                .background(LumiaTokens.field.color, RoundedCornerShape(LumiaTokens.radius12))
+                                .border(1.dp, LumiaTokens.borderForm.color, RoundedCornerShape(LumiaTokens.radius12))
+                                .padding(LumiaTokens.space12),
+                            // The field fills the box, so a tap anywhere in it, not only on the first line, brings the keyboard.
+                            propagateMinConstraints = true,
+                        ) {
+                            PhraseInput(text, { if (!underWay) text = it }, "CiQ3…", Modifier.fillMaxWidth().semantics { contentDescription = "The request the new device shows" }, maxLines = 8, ime = ImeAction.Done) { focus.clearFocus() }
+                        }
+                    }
+                    when {
+                        request.isEmpty() -> LumiaNotice(Icons.Filled.Devices, text = "On the new device, choose Link from a device you use, then Start linking, and copy the request it shows.")
+                        summary == null -> LumiaErrorText(NOT_A_LINK_REQUEST)
+                        else -> {
+                            LinkRequestRow(summary)
+                            LumiaWarning(Icons.Filled.WarningAmber, LINK_APPROVE_WARNING)
+                        }
+                    }
+                },
+                footer = {
+                    // Over the actions, where it shows above the keyboard too; only while it is about the request in the field.
+                    approval?.error?.takeIf { approval.request == request }?.let { LumiaErrorText(it) }
+                    LumiaPrimaryButton(if (underWay) "Approving…" else "Approve", Modifier.fillMaxWidth(), enabled = summary != null && !underWay) {
+                        focus.clearFocus()
+                        unlock()
+                    }
+                },
+            )
+        }
+    }
+}
+
+/** What a request would add, drawn as Devices will list it: its kind's glyph, who, and its id's first eight. */
+@Composable
+private fun LinkRequestRow(summary: LinkRequestSummary) {
+    Row(
+        Modifier.fillMaxWidth()
+            .background(LumiaTokens.tile.color, RoundedCornerShape(LumiaTokens.radius14))
+            .border(1.dp, LumiaTokens.line.color, RoundedCornerShape(LumiaTokens.radius14))
+            .padding(horizontal = LumiaTokens.space14, vertical = LumiaTokens.space12)
+            .semantics(mergeDescendants = true) {},
+        horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space12),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        val glyph = when (summary.kind) {
+            "web" -> Icons.Filled.Language
+            "bot" -> Icons.Filled.SmartToy
+            else -> Icons.Filled.Computer
+        }
+        Icon(glyph, contentDescription = null, tint = LumiaTokens.iconStrong.color, modifier = Modifier.size(LumiaTokens.space24))
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(LumiaTokens.space2)) {
+            Text(linkRequestWho(summary.kind, summary.label, summary.webOrigin), style = LumiaTokens.textAuthor.style, color = LumiaTokens.inkEmphasis.color)
+            Text(linkRequestMeta(summary.kind, summary.label, summary.deviceId), style = LumiaTokens.textMeta.style, color = LumiaTokens.inkQuiet.color)
         }
     }
 }

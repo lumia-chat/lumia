@@ -2,9 +2,11 @@
 // 5.4; issue #20), as plain values `src/test` checks on the JVM: what a
 // signed-in phone needs before it can send one, when Home reminds it to
 // save the recovery phrase, the three-word check's fields, the phrase as a
-// restore field counts it and as a printed page or a file lays it out, and
-// the words the screens say. The phrase itself, the quiz's positions and
-// whether a word is right are the core's.
+// restore field counts it and as a printed page or a file lays it out,
+// approving another device (4.2): what a pasted request reads as and the
+// code it answers, and the words the screens say. The phrase itself, the
+// quiz's positions, whether a word is right and what a request holds are
+// the core's.
 package chat.lumia.kit
 
 /** What a signed-in phone needs before it can send or accept a private message. */
@@ -167,4 +169,89 @@ fun keyChangeWords(people: Int): String = when (people) {
     0 -> "Nobody will see a key change: you have no private conversations yet."
     1 -> "The 1 person you talk to privately will see that your key changed."
     else -> "The $people people you talk to privately will see that your key changed."
+}
+
+// Approving a device (identity spec 4.2)
+
+/**
+ * What the new device's Link screen says over its request: where to take
+ * it, on a device that has the private messages, and what comes back.
+ */
+const val LINK_REQUEST_HOW = "On a device that has your private messages, open Devices, choose Approve a device and paste this request. Then type the code it shows here."
+
+/** What the approve field sends the core: the request without the spaces and line breaks a paste or a share may have put in it. */
+fun linkRequestOf(text: String): String = text.filterNot { it.isWhitespace() }
+
+/**
+ * Whether what was pasted is worth asking the core about: something is
+ * there, and nothing a request (base64) cannot hold. Whether it is one is
+ * the core's to say (`linkRequestSummary`).
+ */
+fun linkRequestWorthAsking(text: String): Boolean {
+    val request = linkRequestOf(text)
+    return request.isNotEmpty() && request.all { it in 'A'..'Z' || it in 'a'..'z' || it in '0'..'9' || it == '+' || it == '/' || it == '=' }
+}
+
+/** What the approve screen says of pasted text that is not a request. */
+const val NOT_A_LINK_REQUEST = "That isn't a link request. Copy the whole request the new device shows, then paste it here."
+
+/**
+ * Who a request would add, as the approve screen names it (step 2): a
+ * browser by the origin it is scoped to, anything else by its label.
+ * [kind] is the core's: `native`, `web` or `bot`.
+ */
+fun linkRequestWho(kind: String, label: String, webOrigin: String): String {
+    val name = label.trim()
+    return when {
+        kind == "web" && webOrigin.isNotEmpty() -> "A browser on $webOrigin"
+        kind == "web" -> "A browser"
+        kind == "bot" && name.isNotEmpty() -> "A bot named “$name”"
+        kind == "bot" -> "A bot"
+        name.isNotEmpty() -> "A device named “$name”"
+        else -> "A device with no name"
+    }
+}
+
+/**
+ * The line under it: a browser's own name where it gave one, and the
+ * device id's first eight, as Devices lists the device once it is added.
+ */
+fun linkRequestMeta(kind: String, label: String, deviceId: String): String {
+    val name = label.trim()
+    val id = deviceId.take(8)
+    return if (kind == "web" && name.isNotEmpty()) "$name · $id" else id
+}
+
+/** What approving lets the new device do, said before Approve. */
+const val LINK_APPROVE_WARNING = "It will read your private messages from now on, as this phone does. Approve only a device you have with you."
+
+/** What the code is for, said under it. */
+const val LINK_CODE_HOW = "Type this code on the new device. It works once, within ten minutes."
+
+/** The code an approval answers, as it is read out: two groups of four. */
+fun linkCodeForReading(code: String): String = code.trim().chunked(4).joinToString(" ")
+
+/** The same to a screen reader, a character at a time. */
+fun linkCodeSpoken(code: String): String = code.trim().toList().joinToString(" ")
+
+/**
+ * What an approval the instance refused says, by the API error's [code];
+ * for the rest, [message] (the failure as `lumiaMessage` has it).
+ */
+fun approveError(code: String?, message: String): String = when (code) {
+    "CONFLICT" -> "Your devices changed on another device while this one was approving. Try again."
+    "FAILED_PRECONDITION", "PERMISSION_DENIED" -> "This account isn't linked to the identity on this phone, so it can't add a device to it."
+    "IDENTITY_PROOF_INVALID" -> "The instance refused the new list of devices. Start linking again on the new device and paste its new request."
+    "INVALID_ARGUMENT", "PAYLOAD_TOO_LARGE" -> "The instance couldn't take this request. Start linking again on the new device and paste its new request."
+    "RATE_LIMITED" -> "Too many tries. Wait a minute, then try again."
+    else -> "Not approved: $message"
+}
+
+/**
+ * An approval (steps 3 to 6): under way, answered with the code the new
+ * device claims with, or refused with what to say. The session holds it,
+ * so the phone turned or the screen left while it runs keeps the code.
+ */
+data class Approval(val request: String, val code: String? = null, val error: String? = null) {
+    val underWay: Boolean get() = code == null && error == null
 }

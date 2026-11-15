@@ -30,6 +30,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import chat.lumia.kit.AppStore
+import chat.lumia.kit.LINK_REQUEST_HOW
 import chat.lumia.kit.LumiaCard
 import chat.lumia.kit.LumiaErrorText
 import chat.lumia.kit.LumiaField
@@ -69,7 +70,7 @@ fun LinkScreen(store: AppStore, session: LumiaSession) {
                         }
                     }
                 } else {
-                    Text("On a device that holds your identity, approve this request and enter the code it gives you.", style = LumiaTokens.textBody.style, color = LumiaTokens.inkSecondary.color)
+                    Text(LINK_REQUEST_HOW, style = LumiaTokens.textBody.style, color = LumiaTokens.inkSecondary.color)
                     SelectionContainer {
                         Text(
                             request,
