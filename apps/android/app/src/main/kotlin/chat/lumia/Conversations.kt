@@ -39,6 +39,7 @@ import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -240,7 +241,7 @@ fun ConversationScreen(store: AppStore, session: LumiaSession, channelId: String
     val readTo = remember { session.readStates[channelId]?.takeIf { it.unread > 0u }?.readSeq }
     val newLine = readTo?.let { r -> firstUnread(sent, r, { it.seq }) { !it.mine } } ?: -1
     val member = state?.member == true
-    // The list: the notes, the day's divider, then the messages.
+    // The list: the notes about this device, the day's divider, then the messages; the encrypted note is pinned over it.
     val firstIndex = 2
 
     LaunchedEffect(channelId) {
@@ -301,10 +302,13 @@ fun ConversationScreen(store: AppStore, session: LumiaSession, channelId: String
         lead = { LumiaAvatar(initialsOf(title), AvatarTone.of(others.firstOrNull() ?: channelId), LumiaTokens.avatarMd, others.singleOrNull()?.let { session.avatarOf(it) }) },
     ) {
         Column(Modifier.fillMaxSize().imePadding()) {
+            // Pinned under the header, the messages scrolling under it.
+            Column(Modifier.padding(horizontal = LumiaTokens.space16, vertical = LumiaTokens.space8)) {
+                LumiaNotice(Icons.Filled.Shield, NoticeTone.SECURE, text = "Messages here are end-to-end encrypted. Only your devices and those of ${others.joinToString(", ") { session.nameOf(it) }} can read them.")
+            }
             LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(vertical = LumiaTokens.space8)) {
                 item {
                     Column(Modifier.padding(horizontal = LumiaTokens.space16), verticalArrangement = Arrangement.spacedBy(LumiaTokens.space8)) {
-                        LumiaNotice(Icons.Filled.Shield, text = "Messages here are end-to-end encrypted. Only your devices and those of ${others.joinToString(", ") { session.nameOf(it) }} can read them.")
                         if (state != null && !state.member) {
                             LumiaNotice(Icons.Filled.Lock, NoticeTone.ACCENT, action = "Rejoin" to {
                                 scope.launch { error = ""; try { session.dmRejoin(channelId) } catch (e: Exception) { error = e.lumiaMessage } }
@@ -444,8 +448,8 @@ fun ChannelScreen(store: AppStore, session: LumiaSession, channelId: String, dis
     val places = remember(messages) { blockPlaces(messages.map { Stamp(if (it.notice.isEmpty()) it.authorAccountId else "notice:${it.messageId}", it.createdAtMicros, quotes = it.reply != null) }) }
     val readTo = remember { session.readStates[channelId]?.takeIf { it.unread > 0u }?.readSeq }
     val newLine = readTo?.let { r -> firstUnread(messages, r, { it.seq }) { it.notice.isEmpty() && it.authorAccountId != session.me } } ?: -1
-    // The list: a server DM's note, the day's divider (or that nothing is here), then the messages.
-    val firstIndex = if (dm) 2 else 1
+    // The list: the day's divider (or that nothing is here), then the messages; a server DM's note is pinned over it.
+    val firstIndex = 1
     // The @ list, in a server's text channel this account is in: the `@word` at the caret.
     val query = if (channel?.kind == TEXT && member) mentionAt(draft.text, draft.selection.start, draft.selection.end) else null
     val choices = query?.let { q -> mentionChoices(q.query, session.serverMembers[channel?.serverId] ?: emptyList(), session.me, session.channelMemberIds[channelId], server?.canMentionEveryone == true) } ?: emptyList()
@@ -562,8 +566,9 @@ fun ChannelScreen(store: AppStore, session: LumiaSession, channelId: String, dis
         actions = if (!dm && channel != null) listOf(Triple(Icons.Filled.Group, "Members") { push(Screen.Members(channelId)) }) else emptyList(),
     ) {
         Column(Modifier.fillMaxSize().imePadding()) {
+            // A server DM's note, pinned under the header in the warning's amber: the server keeps and can read what is said here.
+            if (dm) Column(Modifier.padding(horizontal = LumiaTokens.space16, vertical = LumiaTokens.space8)) { LumiaNotice(Icons.Outlined.Visibility, NoticeTone.WARNING, text = serverDmNote(server?.name ?: "this server")) }
             LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(vertical = LumiaTokens.space8)) {
-                if (dm) item { Column(Modifier.padding(horizontal = LumiaTokens.space16, vertical = LumiaTokens.space8)) { LumiaNotice(Icons.Filled.Shield, text = serverDmNote(server?.name ?: "this server")) } }
                 if (messages.isEmpty()) item { LumiaEmptyState(Icons.Filled.ChatBubbleOutline, "Nothing here yet", if (member) "Say something." else null) }
                 else item { LumiaDayDivider("Today", measures) }
                 itemsIndexed(messages, key = { _, m -> m.messageId }) { i, m ->

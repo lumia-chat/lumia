@@ -55,7 +55,7 @@ fun noticeText(kind: String, actor: String, subject: String): String? = when (ki
 /** How many are in a channel, as Browse says it. */
 fun memberCount(count: Int): String = if (count == 1) "1 member" else "$count members"
 
-/** What a server DM says once, at the top of its history (architecture 6.4). */
+/** What a server DM says once, pinned over its history (architecture 6.4). */
 fun serverDmNote(serverName: String): String =
     "Messages here are kept by $serverName and follow its message history settings. For an encrypted conversation, message privately."
 

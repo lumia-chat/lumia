@@ -58,6 +58,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -102,7 +103,41 @@ fun LumiaAvatar(initials: String, tone: AvatarTone, size: Dp = LumiaTokens.avata
 
 private val Float.sp get() = androidx.compose.ui.unit.TextUnit(this, androidx.compose.ui.unit.TextUnitType.Sp)
 
-enum class NoticeTone { NEUTRAL, ACCENT }
+/**
+ * A notice's tone: [SECURE] is the green of an encrypted conversation's note,
+ * [WARNING] the amber of a server DM's (messages the server keeps), each its
+ * tone's fill under a line of its ink, the icon and words in that ink.
+ */
+enum class NoticeTone {
+    NEUTRAL, ACCENT, SECURE, WARNING;
+
+    val fill: Color @Composable get() = when (this) {
+        NEUTRAL -> LumiaTokens.inset.color
+        ACCENT -> LumiaTokens.accentWash.color
+        SECURE -> LumiaTokens.toneGreen.color
+        WARNING -> LumiaTokens.toneAmber.color
+    }
+
+    val edge: Color @Composable get() = when (this) {
+        NEUTRAL -> LumiaTokens.line.color
+        ACCENT -> LumiaTokens.accentLine.color
+        SECURE -> LumiaTokens.toneGreenInk.color.copy(alpha = 0.25f)
+        WARNING -> LumiaTokens.toneAmberInk.color.copy(alpha = 0.25f)
+    }
+
+    val iconInk: Color @Composable get() = when (this) {
+        NEUTRAL -> LumiaTokens.inkSecondary.color
+        ACCENT -> LumiaTokens.accentInk.color
+        SECURE -> LumiaTokens.toneGreenInk.color
+        WARNING -> LumiaTokens.toneAmberInk.color
+    }
+
+    val ink: Color @Composable get() = when (this) {
+        SECURE -> LumiaTokens.toneGreenInk.color
+        WARNING -> LumiaTokens.toneAmberInk.color
+        else -> LumiaTokens.inkBody.color
+    }
+}
 
 @Composable
 fun LumiaNotice(
@@ -111,18 +146,17 @@ fun LumiaNotice(
     action: Pair<String, () -> Unit>? = null,
     text: String,
 ) {
-    val accent = tone == NoticeTone.ACCENT
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(if (accent) LumiaTokens.accentWash.color else LumiaTokens.inset.color, RoundedCornerShape(LumiaTokens.radius10))
-            .border(1.dp, if (accent) LumiaTokens.accentLine.color else LumiaTokens.line.color, RoundedCornerShape(LumiaTokens.radius10))
+            .background(tone.fill, RoundedCornerShape(LumiaTokens.radius10))
+            .border(1.dp, tone.edge, RoundedCornerShape(LumiaTokens.radius10))
             .padding(LumiaTokens.space12),
         horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space10),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(icon, contentDescription = null, tint = if (accent) LumiaTokens.accentInk.color else LumiaTokens.inkSecondary.color, modifier = Modifier.size(18.dp))
-        Text(text, style = LumiaTokens.textBody.style, color = LumiaTokens.inkBody.color, modifier = Modifier.weight(1f))
+        Icon(icon, contentDescription = null, tint = tone.iconInk, modifier = Modifier.size(18.dp))
+        Text(text, style = LumiaTokens.textBody.style, color = tone.ink, modifier = Modifier.weight(1f))
         if (action != null) LumiaSecondaryButton(action.first, onClick = action.second)
     }
 }
