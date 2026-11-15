@@ -3895,6 +3895,16 @@ impl App {
         self.lock().reauth.take().ok_or(ClientError::ReauthNeeded)
     }
 
+    /// The words of the phrase's wordlist that begin with `prefix`, at most
+    /// four: what a phrase field offers as the person types.
+    #[must_use]
+    pub fn phrase_completions(prefix: &str) -> Vec<String> {
+        lumia_core::identity::phrase::completions(prefix, 4)
+            .into_iter()
+            .map(str::to_string)
+            .collect()
+    }
+
     /// A new phrase held in memory, for a flow that shows and confirms it
     /// before the identity is made (the web's sign-up): its words. Making
     /// another forgets the last.
@@ -4017,8 +4027,7 @@ impl App {
     /// confirmed, and a web device refuses (it shows and confirms the phrase
     /// first, keeping none). Binding an account takes a reauth token in
     /// hand, the sign-in's or a reauth's, else fails with
-    /// [`ClientError::ReauthNeeded`]; a second call after that binds without making
-    /// another identity.
+    /// [`ClientError::ReauthNeeded`] before anything is made.
     ///
     /// # Errors
     /// [`ClientError::AccountHasIdentity`] when the account is bound to another
@@ -4039,11 +4048,13 @@ impl App {
             }
             return Err(ClientError::AccountHasIdentity);
         }
+        // Asked before anything is made, so a missing token leaves this
+        // device as it was.
+        let reauth = self.take_reauth()?;
         let identity_id = match mine {
             Some(id) => hex::encode(id),
-            None => self.make_identity(label).await?,
+            None => self.make_identity_or_keep(label, &reauth).await?,
         };
-        let reauth = self.take_reauth()?;
         let api = self.api.clone();
         {
             let mut stores = self.identity.lock().await;
@@ -4066,11 +4077,11 @@ impl App {
     /// another account's there; a web device without a confirmed phrase;
     /// API or store failure.
     pub async fn identity_start_over(&self, label: &str) -> Result<String, ClientError> {
+        let reauth = self.take_reauth()?;
         let identity_id = match self.held_identity_id().await? {
             Some(id) => hex::encode(id),
-            None => self.make_identity(label).await?,
+            None => self.make_identity_or_keep(label, &reauth).await?,
         };
-        let reauth = self.take_reauth()?;
         let api = self.api.clone();
         {
             let mut stores = self.identity.lock().await;
@@ -4123,6 +4134,21 @@ impl App {
             return Ok(None);
         }
         Ok(Some(dev.roster()?.identity_id))
+    }
+
+    /// [`App::make_identity`], putting `reauth` back when it fails, so the
+    /// token is not lost to a refusal that had nothing to do with it (a
+    /// browser's unconfirmed phrase).
+    async fn make_identity_or_keep(
+        &self,
+        label: &str,
+        reauth: &str,
+    ) -> Result<String, ClientError> {
+        let made = self.make_identity(label).await;
+        if made.is_err() {
+            self.lock().reauth = Some(reauth.to_string());
+        }
+        made
     }
 
     /// Makes this device's identity from the held, confirmed phrase, or on

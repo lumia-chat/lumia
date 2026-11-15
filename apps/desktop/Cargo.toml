@@ -47,9 +47,6 @@ rune-kit = { git = "https://github.com/anomalyco/rune", rev = "74a3c8d4f4aadbdad
 rune-mac = { git = "https://github.com/anomalyco/rune", rev = "74a3c8d4f4aadbdadcc8fae0aee5e36f42af1ccd" }
 rune-notify = { git = "https://github.com/anomalyco/rune", rev = "74a3c8d4f4aadbdadcc8fae0aee5e36f42af1ccd" }
 lumia-client = { path = "../core/crates/lumia-client" }
-# The phrase's wordlist, which completes a word as it is typed (`lumia_core::identity::phrase`):
-# a free function the client crate does not carry.
-lumia-core = { path = "../core/crates/lumia-core" }
 # Sparkle, the macOS app's updater, loaded at run time from the bundle (`src/platform/updates.rs`).
 # Off macOS, and in a bare binary, it is the same surface with nothing behind it.
 lumia-sparkle = { path = "crates/sparkle" }

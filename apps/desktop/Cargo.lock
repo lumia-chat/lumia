@@ -3062,7 +3062,6 @@ dependencies = [
  "getrandom 0.4.3",
  "lumia-appcast",
  "lumia-client",
- "lumia-core",
  "lumia-sparkle",
  "reqwest",
  "rune",

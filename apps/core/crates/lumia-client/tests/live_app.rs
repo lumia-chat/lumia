@@ -1129,6 +1129,24 @@ async fn a_native_sign_up_sets_up_silently_and_the_phrase_is_confirmed_later() {
     // Setting up again is a no-op for the device that holds it.
     assert_eq!(phone.app.identity_setup("Phone").await.unwrap(), identity);
 
+    // Without a reauth token in hand, setting up refuses before it makes
+    // anything: the device stays without an identity.
+    let other = Device::new(&base);
+    other
+        .app
+        .create_account(&format!("{handle}b"), PASSWORD, None)
+        .await
+        .unwrap();
+    other.app.reauth_take("");
+    assert!(matches!(
+        other.app.identity_setup("Other").await,
+        Err(lumia_client::ClientError::ReauthNeeded)
+    ));
+    assert!(!other.app.has_identity());
+    other.app.reauth_password(PASSWORD).await.unwrap();
+    other.app.identity_setup("Other").await.unwrap();
+    assert!(other.app.has_identity());
+
     // Another device of the same account is sent to link or restore,
     // never given a second identity.
     let laptop = Device::new(&base);

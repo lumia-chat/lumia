@@ -26,9 +26,6 @@ use crate::app::setup::PHRASE_WORDS;
 use crate::session::identity::Setup;
 use crate::tokens::{self as t, icons};
 
-/// How many completions a word of the check offers.
-const COMPLETIONS: usize = 4;
-
 /// A block in the amber of a caution: the key glyph and the words.
 fn caution(words: &str, look: Look) -> El {
     let tone = t::caution(look.c);
@@ -322,8 +319,8 @@ fn check_card(s: &State, look: Look) -> El {
 fn completions(field: usize, typed: &str, look: Look) -> Option<El> {
     let c = look.c;
     let typed = typed.trim().to_lowercase();
-    let words = lumia_core::identity::phrase::completions(&typed, COMPLETIONS);
-    if words.is_empty() || words.contains(&typed.as_str()) {
+    let words = lumia_client::app::App::phrase_completions(&typed);
+    if words.is_empty() || words.contains(&typed) {
         return None;
     }
     let mut list = col()
@@ -347,12 +344,12 @@ fn completions(field: usize, typed: &str, look: Look) -> Option<El> {
                     .radius(t::RADIUS_8)
                     .hover(c.hover_member)
                     .role("button")
-                    .label(word)
+                    .label(word.clone())
                     .cursor(Cursor::Pointer)
                     .focusable(true)
                     .focus_ring(2.0, 0.0, c.focus)
-                    .on_press(move |s: &mut State| s.complete_word(field, word))
-                    .child(text(word).font(t::TEXT_PHRASE).color(c.ink_field)),
+                    .child(text(word.clone()).font(t::TEXT_PHRASE).color(c.ink_field))
+                    .on_press(move |s: &mut State| s.complete_word(field, &word)),
             ),
         );
     }
