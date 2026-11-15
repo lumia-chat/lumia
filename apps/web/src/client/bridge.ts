@@ -810,6 +810,18 @@ export class Bridge {
   identityRecover(phrase: string, label: string): Promise<RosterSummary> {
     return this.call("identityRecover", phrase, label);
   }
+  /** The devices restoring from the phrase would stop, read from the instance before anything changes; empty when it knows none. */
+  identityRecoverDevices(phrase: string): Promise<DeviceSummary[]> {
+    return this.call("identityRecoverDevices", phrase);
+  }
+  /** Restores as `identityRecover` does, keeping the devices in `keep` (their ids) and stopping the rest. */
+  identityRecoverKeeping(phrase: string, label: string, keep: string[]): Promise<RosterSummary> {
+    return this.call("identityRecoverKeeping", phrase, label, keep);
+  }
+  /** Lets go of the bodies the worker keeps read, for an account whose device was removed. */
+  forgetBodies(): Promise<void> {
+    return this.call("forgetBodies");
+  }
   pushSubscribe(endpoint: string, p256dh: string, auth: string): Promise<void> {
     return this.call("pushSubscribe", endpoint, p256dh, auth);
   }

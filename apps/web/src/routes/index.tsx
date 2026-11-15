@@ -2,10 +2,11 @@
 // owning tab (one tab owns the OPFS store; the others are told so), then
 // `/` sends a signed-in browser to `/app` and anyone else to `/sign-in`.
 // `/design` is the gallery of the design system's components.
-import { Outlet, createRootRoute, createRoute, redirect, type ErrorComponentProps } from "@tanstack/solid-router";
-import { Show, createResource } from "solid-js";
+import { Outlet, createRootRoute, createRoute, redirect, useNavigate, type ErrorComponentProps } from "@tanstack/solid-router";
+import { Show, createEffect, createResource } from "solid-js";
 import { Button, Card } from "../design/components";
-import { ensureOwner, openInstance, opened, refreshSignedIn, savedInstance } from "../client/state";
+import { ensureOwner, forgetRemovedDevice, openInstance, opened, refreshSignedIn, removed, savedInstance } from "../client/state";
+import { forgetOpenFolders } from "./rail";
 import { App, type AppSearch } from "./app";
 import { AuthPage } from "./auth-page";
 import { DesignGallery } from "./design";
@@ -16,6 +17,15 @@ import { SignIn } from "./sign-in";
 
 function Root() {
   const [owner] = createResource(ensureOwner);
+  // Removed by another device (identity spec 4.4), on whatever screen: the
+  // core has erased what it kept; what the page holds goes too, and the
+  // sign-in card says why.
+  const navigate = useNavigate();
+  createEffect(() => {
+    if (!removed()) return;
+    forgetOpenFolders();
+    void forgetRemovedDevice().finally(() => void navigate({ to: "/sign-in" }));
+  });
   return (
     <Show when={owner.loading || owner()} fallback={<OtherTab />}>
       <Outlet />

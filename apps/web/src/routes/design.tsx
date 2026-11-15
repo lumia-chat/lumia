@@ -4,7 +4,7 @@
 // the top. Not a product screen.
 import { For, Show, createSignal, onCleanup, onMount, type JSX } from "solid-js";
 import { applyPreferences } from "../client/preferences";
-import type { BodyBlock, BodyLink, BodyRun } from "../client/bridge";
+import type { BodyBlock, BodyLink, BodyRun, DeviceSummary } from "../client/bridge";
 import { QUICK_REACTIONS } from "../design/emoji";
 import {
   AppShell,
@@ -78,7 +78,8 @@ import {
   PhraseSaveWarning,
   PhraseWordField,
 } from "../design/components";
-import { NeedsBrowser, PhraseStep, RestoreForm, StartOver } from "./private";
+import { NeedsBrowser, PhraseStep, RestoreAsk, RestoreForm, RestoreKeep, StartOver } from "./private";
+import { endedNotice } from "../client/ended";
 import { LinkPromptCard } from "./link";
 
 type Theme = "light" | "dark";
@@ -1083,7 +1084,8 @@ function FoldersBoard() {
 // step at its 1440 by 900, then the phone boards' check, "need this
 // browser", start over and restore, as the web draws them; then linking
 // by a prompt (identity spec 4.2.1, no board): waiting, the digits, and
-// declined and expired.
+// declined and expired; then restoring ("PhoneRestoreAsk", "PhoneRestoreKeep")
+// and the sign-in notice of a browser another device removed.
 const SAMPLE_PHRASE = "orbit cactus timber velvet harbor pencil meadow copper rescue glimpse fabric lunar anchor whisper salad ticket marble frozen clever sunny violin garden token mirror".split(" ");
 
 function PrivateBoard() {
@@ -1128,9 +1130,30 @@ function PrivateBoard() {
           <LinkPromptCard screen="expired" digits="" onTryAgain={() => {}} onCancel={() => {}} />
         </div>
       </div>
+      <div class="gallery-private__row">
+        <div class="gallery-private__card">
+          <RestoreAsk onLink={() => {}} onPhrase={() => {}} />
+        </div>
+        <div class="gallery-private__card">
+          <RestoreKeep devices={SAMPLE_KEEP} initial={["mac"]} onRestore={async () => {}} />
+        </div>
+        <div class="gallery-private__card">
+          <Notice icon="shield" action={{ label: "Dismiss" }}>
+            {endedNotice(true).words}
+          </Notice>
+          <Card title="Welcome back" subtitle="Sign in to pick up your conversations." />
+        </div>
+      </div>
     </div>
   );
 }
+
+// The "PhoneRestoreKeep" board's three devices.
+const SAMPLE_KEEP: DeviceSummary[] = [
+  { deviceId: "mac", kind: "native", label: "MacBook Pro", webOrigin: "", addedAtMicros: new Date(2026, 10, 12).getTime() * 1000, thisDevice: false, revoked: false },
+  { deviceId: "iphone", kind: "native", label: "iPhone", webOrigin: "", addedAtMicros: new Date(2026, 10, 3).getTime() * 1000, thisDevice: false, revoked: false },
+  { deviceId: "safari", kind: "web", label: "", webOrigin: "https://chat.acme.dev", addedAtMicros: new Date(2026, 10, 1).getTime() * 1000, thisDevice: false, revoked: false },
+];
 
 export function DesignGallery() {
   const { theme, apply } = useTheme();

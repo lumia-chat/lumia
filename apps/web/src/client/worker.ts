@@ -46,6 +46,11 @@ async function dispatch(method: string, args: unknown[]): Promise<unknown> {
     }
     return { host: client.host(), deviceId: client.deviceId(), signedIn: client.signedIn() };
   }
+  if (method === "forgetBodies") {
+    read.clear();
+    readBytes = 0;
+    return undefined;
+  }
   if (!client) throw new Error("open the client first");
   if (method === "start") {
     client.start(args[0] as string[], (event: unknown) => self.postMessage({ event }));

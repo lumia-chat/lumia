@@ -129,6 +129,7 @@ a { color: var(--link); }
 .auth__footer a:hover { color: var(--ink); }
 .auth__note { margin: 0; font-size: 13.5px; line-height: 1.5; color: var(--ink-secondary); }
 .auth__error { margin: 0; font-size: 13.5px; line-height: 1.5; color: var(--dnd); }
+.auth__notice { align-self: stretch; }
 /* The instance being signed in to: its trust card (architecture 6.1), as an inset block. */
 .auth__trust { display: flex; align-items: center; gap: var(--space-12); padding: var(--space-10) var(--space-12); border-radius: var(--radius-12); background: var(--inset); }
 .auth__trust-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
@@ -152,6 +153,7 @@ a { color: var(--link); }
 .private__words { min-height: 150px; padding: var(--space-10) 14px; border: 1px solid var(--border-form); border-radius: var(--radius-12); background: var(--field); font: 15px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--ink-field); resize: none; }
 .private__words:focus { outline: none; border-color: var(--border-focus); }
 .private__hint { text-align: center; font-size: 12.5px; color: var(--ink-muted); }
+.private__question { margin: 0; color: var(--ink); }
 
 /* Printing the phrase prints its words and the warning over them, and
    nothing else of the page, in the paper's own ink whatever the theme. */

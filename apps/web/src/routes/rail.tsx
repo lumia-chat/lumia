@@ -56,6 +56,16 @@ export function toggleFolder(folderId: string) {
   }
 }
 
+/** Forgets which folders were open, for an account whose device was removed: they were its folders. */
+export function forgetOpenFolders() {
+  setOpenFolders(new Set<string>());
+  try {
+    localStorage.removeItem(OPEN_KEY);
+  } catch {
+    /* nothing was kept */
+  }
+}
+
 /* ── How a folder with no name reads, the core's words ─────── */
 
 const [words, setWords] = createSignal(new Map<string, string>());

@@ -1590,6 +1590,41 @@ export function DeviceList(props: DeviceListProps) {
   );
 }
 
+export interface DeviceChoicesProps {
+  devices: DeviceEntry[];
+  /** The ids ticked. */
+  chosen: string[];
+  onToggle?: (id: string) => void;
+  label?: string;
+  class?: string;
+}
+
+/** Devices to tick, a row each that ticks wherever it is pressed: the ones a restore keeps (identity spec 4.3). */
+export function DeviceChoices(props: DeviceChoicesProps) {
+  return (
+    <ul class={cx("lu-devices", props.class)} aria-label={props.label ?? "Your devices"}>
+      <For each={props.devices}>
+        {(d) => (
+          <li>
+            <label class={cx("lu-device", "lu-device--choice", props.chosen.includes(d.id) && "is-chosen")}>
+              <span class="lu-device__glyph" aria-hidden="true">
+                <Icon name={deviceIcon(d.kind)} size={20} />
+              </span>
+              <span class="lu-device__text">
+                <span class="lu-device__name">{d.label}</span>
+                <Show when={d.meta}>
+                  <span class="lu-device__meta">{d.meta}</span>
+                </Show>
+              </span>
+              <input type="checkbox" class="lu-device__check" checked={props.chosen.includes(d.id)} onChange={() => props.onToggle?.(d.id)} />
+            </label>
+          </li>
+        )}
+      </For>
+    </ul>
+  );
+}
+
 /* ── Empty state ─────────────────────────────────────────── */
 
 export interface EmptyStateProps {

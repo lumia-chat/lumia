@@ -542,6 +542,14 @@ button.lu-mention:hover { text-decoration: underline; text-underline-offset: 3px
 .lu-device__text { flex: 1; min-width: 0; }
 .lu-device__name { margin: 0; display: flex; align-items: center; gap: var(--space-8); font-size: 15px; font-weight: 600; color: var(--ink); }
 .lu-device__meta { margin: 2px 0 0; font-size: 13px; color: var(--ink-muted); }
+/* A device to tick: the row is its label, so pressing anywhere on it ticks; the ring is the row's under the keyboard. */
+.lu-device--choice { cursor: pointer; }
+.lu-device--choice:hover { background: var(--hover-row); border-color: var(--border-hover); }
+.lu-device--choice.is-chosen { border-color: var(--accent); }
+.lu-device--choice .lu-device__text { display: flex; flex-direction: column; }
+.lu-device--choice .lu-device__meta { margin: 0; }
+.lu-device--choice:has(.lu-device__check:focus-visible) { outline: 2px solid var(--focus); outline-offset: 2px; }
+.lu-device__check { flex: none; width: 20px; height: 20px; margin: 0; accent-color: var(--accent); cursor: pointer; }
 
 /* ── Empty state ── */
 .lu-empty { margin: auto; max-width: 360px; display: flex; flex-direction: column; align-items: center; gap: var(--space-8); padding: var(--space-24); text-align: center; }

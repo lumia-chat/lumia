@@ -1980,6 +1980,58 @@ async function revoked(which: string, stamp: number) {
   console.log(`  ${which}: its session revoked from elsewhere, the browser went back to sign-in and said so, in ${Date.now() - t0} ms`);
 }
 
+// This browser removed from the identity by another device (identity spec
+// 4.4): linked another way to a CLI identity of its own, then revoked by
+// the CLI. The core erases what the browser kept and ends the loop saying
+// so; the page goes to the sign-in card with the notice, which dismisses,
+// and signing in again works, as a new device.
+async function removed(which: string, stamp: number) {
+  const dir = resolve(work, `cli-removed-${which}`);
+  const handle = `removed${which}${stamp}`;
+  lumia(dir, "instance", "add", instance);
+  lumia(dir, "account", "create", "--handle", handle, "--password", password);
+  lumia(dir, "identity", "create", "--label", "desk");
+  lumia(dir, "identity", "link-account", "--password", password);
+  const { ctx, page } = await open(which, "removed");
+  const t0 = Date.now();
+  try {
+    await trustCard(page);
+    await page.getByRole("button", { name: "Link this browser to your identity" }).click();
+    await page.getByRole("button", { name: "Link another way" }).click();
+    await page.getByRole("button", { name: "Start linking" }).click();
+    const request = await page.getByLabel("Link request").inputValue();
+    const code = lumia(dir, "identity", "approve", request).match(/code (\S+)/)?.[1];
+    if (!code) throw new Error("the CLI printed no claim code");
+    await page.getByLabel("Code from the approving device").fill(code);
+    await page.getByRole("button", { name: "Claim and sign in" }).click();
+    phase("connected");
+    await page.locator('.lu-rail__self[title$="connected"]').waitFor();
+    phase("revoke");
+    const web = lumia(dir, "identity", "show")
+      .split("\n")
+      .find((line) => /^\s*device\b/.test(line) && /\bWeb\b/.test(line))
+      ?.match(/device (\S+)/)?.[1];
+    if (!web) throw new Error("no web device in the CLI's roster");
+    lumia(dir, "identity", "revoke", web, "--password", password);
+    phase("sent back");
+    await page.waitForURL(/\/sign-in/);
+    const notice = page.getByText("This browser was removed from your account, and its private messages were erased from it.");
+    await notice.waitFor();
+    await page.screenshot({ path: `${out}/${which}-removed.png` });
+    await page.getByRole("button", { name: "Dismiss" }).click();
+    await notice.waitFor({ state: "detached" });
+    phase("sign in again");
+    await trustCard(page);
+    await page.getByLabel("Email or handle").fill(handle);
+    await page.getByRole("textbox", { name: "Password" }).fill(password);
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await page.waitForURL(/\/app/);
+  } finally {
+    await ctx.close();
+  }
+  console.log(`  ${which}: removed by the CLI's identity, the browser went back to sign-in and said its private messages were erased, and signed in again, in ${Date.now() - t0} ms`);
+}
+
 // A server and a channel from the app: the rail's "+" makes a server the
 // account owns, "New channel" in the menu under its name its first channel.
 async function create(which: string, handle: string, stamp: number) {
@@ -2465,6 +2517,7 @@ try {
       ["private", () => privateStep(which, stamp)],
       ["create", () => create(which, `web${stamp}`, stamp)],
       ["revoked", () => revoked(which, stamp)],
+      ["removed", () => removed(which, stamp)],
       ["account", () => account(which, `web${stamp}`, stamp)],
       ["preferences", () => preferencesStep(which, stamp)],
       ["server settings", () => serverSettings(which, stamp)],

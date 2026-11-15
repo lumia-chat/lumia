@@ -7,11 +7,12 @@
 // (on the flagship's origin only) and, last, start over. Built from the
 // "WebSignUpPhrase" board and, wider, the phone's "Check your phrase",
 // "Private messages need this phone", "Restore" and "Start over".
-import { For, Index, Show, createResource, createSignal, onMount } from "solid-js";
+import { For, Index, Show, createResource, createSignal, onCleanup, onMount } from "solid-js";
 import { useNavigate, useSearch } from "@tanstack/solid-router";
-import { Button, Card, Divider, Notice, PhraseSaveWarning, PhraseWordField, PhraseWords, TextField } from "../design/components";
+import { Button, Card, DeviceChoices, Divider, Notice, PhraseSaveWarning, PhraseWordField, PhraseWords, TextField } from "../design/components";
 import { AuthPage } from "./auth-page";
-import { ClientError, accountHasIdentity, reauthNeeded } from "../client/bridge";
+import { ClientError, accountHasIdentity, reauthNeeded, type DeviceSummary } from "../client/bridge";
+import { addedLine, afterPhrase, deviceName, keepWords } from "../client/restore";
 import { FLAGSHIP_ORIGIN, client, identityChanged, privateState } from "../client/state";
 
 /** The label this browser's device carries in the roster, as linking gives it. */
@@ -521,18 +522,52 @@ export function StartOver(props: { again?: boolean; oidcName: string; returnTo: 
  * on the flagship's origin (spec 7); anywhere else the page says where to
  * restore and to link this browser after. Reached from sign-in and sign-up
  * ("Already use Lumia on another device?") and from "Private messages need
- * this browser"; restoring signs in by the identity.
+ * this browser"; restoring signs in by the identity. It asks first whether
+ * a device with the private messages is still at hand, since then linking
+ * is what is wanted; once the phrase is in, the devices restoring would
+ * stop are read, and when there are any the person ticks the ones they
+ * still have (the "PhoneRestoreAsk" and "PhoneRestoreKeep" boards). The
+ * phrase is held only between those two steps, never kept.
  */
 export function Restore() {
   const navigate = useNavigate();
   const here = () => typeof location !== "undefined" && location.origin === FLAGSHIP_ORIGIN;
-  const restore = async (phrase: string) => {
-    await client().identityRecover(phrase, LABEL);
+  const [step, setStep] = createSignal<"ask" | "phrase" | "keep">("ask");
+  const [phrase, setPhrase] = createSignal("");
+  const [stopping, setStopping] = createSignal<DeviceSummary[]>([]);
+  onCleanup(() => setPhrase(""));
+  const restored = () => {
+    setPhrase("");
     identityChanged();
     void navigate({ to: "/app" });
   };
+  const submit = async (words: string) => {
+    const devices = await client().identityRecoverDevices(words);
+    if (afterPhrase(devices) === "restore") {
+      await client().identityRecover(words, LABEL);
+      return restored();
+    }
+    setPhrase(words);
+    setStopping(devices.filter((d) => !d.revoked));
+    setStep("keep");
+  };
+  const keep = async (ids: string[]) => {
+    await client().identityRecoverKeeping(phrase(), LABEL, ids);
+    restored();
+  };
   const back = (
-    <button type="button" class="lu-link auth__switch" onClick={() => history.back()}>
+    <button
+      type="button"
+      class="lu-link auth__switch"
+      onClick={() => {
+        if (step() === "keep") return void setStep("phrase");
+        if (step() === "phrase" && here()) {
+          setPhrase("");
+          return void setStep("ask");
+        }
+        history.back();
+      }}
+    >
       Back
     </button>
   );
@@ -551,9 +586,72 @@ export function Restore() {
           </Card>
         }
       >
-        <RestoreForm onRestore={restore} />
+        <Show when={step() === "ask"}>
+          <RestoreAsk onLink={() => void navigate({ to: "/link" })} onPhrase={() => setStep("phrase")} />
+        </Show>
+        <Show when={step() === "phrase"}>
+          <RestoreForm initial={phrase()} onRestore={submit} />
+        </Show>
+        <Show when={step() === "keep"}>
+          <RestoreKeep devices={stopping()} onRestore={keep} />
+        </Show>
       </Show>
     </AuthPage>
+  );
+}
+
+/** "Do you still have a device with your private messages?": linking from it, or on to the phrase. */
+export function RestoreAsk(props: { onLink: () => void; onPhrase: () => void }) {
+  return (
+    <Card title="Restore" subtitle="With your recovery phrase">
+      <h2 class="lu-title-channel private__question">Do you still have a device with your private messages?</h2>
+      <p class="auth__note private__lead">If you do, link this browser from it instead. Restoring is for when your devices are gone: it stops the ones you don’t keep.</p>
+      <div class="auth__ways">
+        <Button variant="primary" icon="phone" block onClick={() => props.onLink()}>
+          Yes, link from it
+        </Button>
+        <Button block onClick={() => props.onPhrase()}>
+          No, restore with my phrase
+        </Button>
+      </div>
+    </Card>
+  );
+}
+
+/** "Keep any devices?": the devices restoring would stop, none ticked at first; restoring keeps the ticked ones and stops the rest. */
+export function RestoreKeep(props: { devices: DeviceSummary[]; initial?: string[]; onRestore: (keep: string[]) => Promise<void> }) {
+  const [chosen, setChosen] = createSignal<string[]>(props.initial ?? []);
+  const [busy, setBusy] = createSignal(false);
+  const [error, setError] = createSignal("");
+  const entries = () => props.devices.map((d) => ({ id: d.deviceId, kind: d.kind, label: deviceName(d), meta: addedLine(d) }));
+  const toggle = (id: string) => setChosen((c) => (c.includes(id) ? c.filter((x) => x !== id) : [...c, id]));
+  const restore = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      await props.onRestore(chosen());
+    } catch (err) {
+      setError(text(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Card title="Keep any devices?" subtitle="Before this browser restores">
+      <p class="auth__note private__lead">Tick the devices you still have. The others stop reading your private messages, so a lost one can’t keep reading them.</p>
+      <DeviceChoices devices={entries()} chosen={chosen()} onToggle={toggle} />
+      <Notice tone="caution" icon="shield">
+        Keep only devices you have with you now. A kept device you’ve lost would keep reading your private messages.
+      </Notice>
+      <Show when={error()}>
+        <p class="auth__error" role="alert">
+          {error()}
+        </p>
+      </Show>
+      <Button variant="primary" block disabled={busy()} onClick={() => void restore()}>
+        {keepWords(chosen().length)}
+      </Button>
+    </Card>
   );
 }
 

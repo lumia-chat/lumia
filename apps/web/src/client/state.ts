@@ -5,6 +5,7 @@
 import { QueryClient, createInfiniteQuery, createQuery, useQueryClient } from "@tanstack/solid-query";
 import { createSignal } from "solid-js";
 import { Bridge, ClientError, claimOwnership, type ClientEvent, type MemberSummary, type MessageSummary, type Opened, type ReadStateSummary, type SnapshotSummary, type StatusSummary } from "./bridge";
+import { type Ended, endedNotice } from "./ended";
 import { type ProfileUpdate, membersWithProfile, peopleWithProfile, profileLog, snapshotWithProfile, withProfile } from "./profiles";
 
 export const queryClient = new QueryClient({
@@ -309,25 +310,58 @@ export function typingIn(channelId: string | undefined): string[] {
   return channelId ? [...(typing().get(channelId)?.keys() ?? [])] : [];
 }
 
-// What the sign-in card says to someone the instance sent back to it:
-// set when a session turns out to be over, read once by the card.
-const [endedNotice, setEndedNotice] = createSignal("");
+// What the sign-in card says to someone the instance sent back to it, or
+// whose browser another device removed: set when a session turns out to
+// be over, read once by the card.
+const [ended, setEnded] = createSignal<Ended | null>(null);
 
-/** The line for the sign-in card, taken: the next card starts without it. */
-export function takeEndedNotice(): string {
-  const notice = endedNotice();
-  if (notice) setEndedNotice("");
+/** The notice for the sign-in card, taken: the next card starts without it, and a removal is over once said. */
+export function takeEndedNotice(): Ended | null {
+  const notice = ended();
+  if (notice) setEnded(null);
+  if (notice?.removed) setRemoved(false);
   return notice;
 }
 
 /**
  * The instance no longer takes this session (it was revoked, or ran out):
  * what the page held of the account goes, as on signing out, and the
- * sign-in card says what happened.
+ * sign-in card says what happened. Not when the device was removed,
+ * which says so itself.
  */
 export async function sessionEnded(): Promise<void> {
-  setEndedNotice("You were signed out of this browser. Sign in again to carry on.");
+  if (removed()) return;
+  setEnded(endedNotice(false));
   await signOut().catch((e) => console.warn("sign out:", e));
+}
+
+// Another device removed this browser from the identity (identity spec
+// 4.4): the core erased the store, the identity, its keys and the tokens
+// before the loop said so, and gave the browser a new device id. The root
+// follows this to the sign-in card, after `forgetRemovedDevice`; until the
+// card has said so, a session found ended on the way is not said over it.
+const [removed, setRemoved] = createSignal(false);
+export { removed };
+
+/**
+ * What the page still holds of a removed device's account goes: every
+ * query, the scrollback and profiles held, presence, who was typing, the
+ * bodies the worker keeps read and the browser's push subscription. The
+ * instance is not asked anything, as the tokens went with the erase.
+ */
+export async function forgetRemovedDevice(): Promise<void> {
+  setEnded(endedNotice(true));
+  const b = client();
+  await b.stop().catch(() => {});
+  await b.signOut().catch(() => {});
+  await b.forgetBodies().catch(() => {});
+  try {
+    const registration = await navigator.serviceWorker?.getRegistration("/");
+    await (await registration?.pushManager.getSubscription())?.unsubscribe();
+  } catch (e) {
+    console.warn("push:", e);
+  }
+  forgetPage();
 }
 
 /**
@@ -342,7 +376,18 @@ export async function signOut(): Promise<void> {
   gatewayStopping = started();
   await b.stop().catch(() => {});
   await b.signOut();
+  forgetPage();
+}
+
+// What the page holds of the account outside the queries goes with them:
+// the instance's scrollback, the pages read, the public profiles fetched.
+function forgetPage(): void {
   queryClient.clear();
+  history.clear();
+  storedCount.clear();
+  setMessagePages(new Map());
+  profiles.clear();
+  setProfilesVersion((v) => v + 1);
   setStarted(false);
   gatewayHeld = false;
   setConnection("idle");
@@ -416,6 +461,12 @@ function onGatewayEvent(e: ClientEvent): void {
     case "closed":
       setConnection(`closed: ${e.reason}`);
       setStarted(false);
+      // Removed by another device: nothing is left to start again or ask.
+      if (e.removed) {
+        gatewayStopping = false;
+        setRemoved(true);
+        break;
+      }
       gatewayHeld = !gatewayStopping && Date.now() - gatewayStartedAt < LOOP_TOO_BRIEF_MS;
       gatewayStopping = false;
       // The loop has ended and will not come back by itself. Why is in

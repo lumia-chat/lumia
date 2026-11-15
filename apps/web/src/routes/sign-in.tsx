@@ -5,7 +5,7 @@
 // card the board shows.
 import { Show, createResource, createSignal, onMount } from "solid-js";
 import { useNavigate, useSearch } from "@tanstack/solid-router";
-import { Button, Card, Divider, TextField } from "../design/components";
+import { Button, Card, Divider, Notice, TextField } from "../design/components";
 import { AuthPage, TrustCard } from "./auth-page";
 import { ClientError, type InstanceSummary } from "../client/bridge";
 import { SERVED_BY_INSTANCE, client, openInstance, savedInstance, takeEndedNotice } from "../client/state";
@@ -28,8 +28,12 @@ export function SignIn() {
   const [password, setPassword] = createSignal("");
   const [totp, setTotp] = createSignal("");
   const [needsTotp, setNeedsTotp] = createSignal(false);
-  // Sent back here by the instance (a revoked session), the card opens saying so.
-  const [error, setError] = createSignal(takeEndedNotice());
+  // Sent back here by the instance (a revoked session), the card opens
+  // saying so; removed by another device, a notice over it says that,
+  // until dismissed (identity spec 4.4).
+  const ended = takeEndedNotice();
+  const [error, setError] = createSignal(ended && !ended.removed ? ended.words : "");
+  const [removedNotice, setRemovedNotice] = createSignal(ended?.removed ? ended.words : "");
   const [busy, setBusy] = createSignal(false);
   // Magic link (architecture 6.3): asked for with the address in the handle
   // field; completed by the link's `magic` query on this page, or by its
@@ -201,6 +205,13 @@ export function SignIn() {
         </Show>
       }
     >
+          <Show when={removedNotice()}>
+            {(words) => (
+              <Notice icon="shield" class="auth__notice" action={{ label: "Dismiss", onClick: () => setRemovedNotice("") }}>
+                {words()}
+              </Notice>
+            )}
+          </Show>
           <Show
             when={info()}
             fallback={
