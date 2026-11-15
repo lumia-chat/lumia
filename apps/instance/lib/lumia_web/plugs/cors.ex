@@ -12,7 +12,10 @@ defmodule LumiaWeb.Plugs.Cors do
   import Plug.Conn
 
   @methods "GET, POST, PUT, PATCH, DELETE, OPTIONS"
-  @headers "authorization, content-type, accept"
+  # `x-reauth-token` carries a reauth to `POST /identity/link` (identity
+  # spec 10); without it a browser on the flagship's origin could not bind
+  # an account on another instance.
+  @headers "authorization, content-type, accept, x-reauth-token"
 
   @doc "The origins that may call the API and open the gateway from a browser."
   def allowed_origins, do: Lumia.Identity.web_origins()

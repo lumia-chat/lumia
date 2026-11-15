@@ -19,6 +19,8 @@ defmodule LumiaWeb.Plugs.CorsTest do
     assert methods =~ "POST"
     assert [headers] = get_resp_header(conn, "access-control-allow-headers")
     assert headers =~ "authorization"
+    # Linking an account sends its reauth token in a header (#20).
+    assert headers =~ "x-reauth-token"
     assert get_resp_header(conn, "vary") == ["origin"]
   end
 
