@@ -6,6 +6,8 @@
 //!     lumia-cli servers
 //!     lumia-cli channels <server-id>
 //!     lumia-cli send <channel-id> "hello"
+//!     lumia-cli send <channel-id> "the plan" --attach plan.pdf --attach photo.jpg
+//!     lumia-cli attachments <channel-id> <message-id> --out ./downloads
 //!     lumia-cli tail <channel-id>
 //!     lumia-cli scenario all
 //!
@@ -23,6 +25,7 @@ use std::sync::Arc;
 use clap::{Parser, Subcommand};
 use lumia_client::api::{Api, Tokens};
 use lumia_client::app::{invite_code_of, magic_token_of};
+use lumia_client::attachments;
 use lumia_client::dm::{DmEngine, Outcome};
 use lumia_client::futures_channel::mpsc;
 use lumia_client::futures_util::StreamExt as _;
@@ -126,7 +129,9 @@ enum Cmd {
     /// Send a message; `--mention <account-id>` (repeatable) mentions an account;
     /// `--reply-to <message-id>` with `--quote <text>` quotes a message of the channel;
     /// `--count N` sends N of them over one connection, `{n}` in the body numbering
-    /// them from 0 (to seed a long channel).
+    /// them from 0 (to seed a long channel). `--attach <file>` (repeatable) carries a
+    /// file, processed and encrypted here first (a picture resized, its metadata
+    /// stripped; `--as-file` keeps its pixels).
     Send {
         channel_id: String,
         body: String,
@@ -138,6 +143,18 @@ enum Cmd {
         quote: String,
         #[arg(long, default_value_t = 1)]
         count: u32,
+        #[arg(long)]
+        attach: Vec<PathBuf>,
+        #[arg(long)]
+        as_file: bool,
+    },
+    /// Save the attachments of a message of a server channel, opened, into a
+    /// directory (`--out`, default the current one); prints each file written.
+    Attachments {
+        channel_id: String,
+        message_id: String,
+        #[arg(long, default_value = ".")]
+        out: PathBuf,
     },
     /// React to a message with one emoji, or take the reaction away (`--remove`).
     React {
@@ -601,8 +618,16 @@ async fn run(cli: Cli) -> Result<(), ClientError> {
             reply_to,
             quote,
             count,
+            attach,
+            as_file,
         } => {
             let channel = parse_uuid(&channel_id)?;
+            if !attach.is_empty() && count > 1 {
+                return Err(ClientError::State(
+                    "an attachment goes with one message: no --count with --attach".into(),
+                ));
+            }
+            let attachments = upload_files(&api, &channel, &attach, as_file).await?;
             let mut mentions = Vec::with_capacity(mention.len());
             for id in &mention {
                 mentions.push(Mention {
@@ -625,6 +650,7 @@ async fn run(cli: Cli) -> Result<(), ClientError> {
                         body: body.replace("{n}", &n.to_string()),
                         mentions: mentions.clone(),
                         reply_to: reply_to.clone(),
+                        attachments: attachments.clone(),
                         ..Default::default()
                     })
                 })
@@ -688,6 +714,11 @@ async fn run(cli: Cli) -> Result<(), ClientError> {
             gw.abort();
             Ok(())
         }
+        Cmd::Attachments {
+            channel_id,
+            message_id,
+            out,
+        } => save_attachments(&ctx, &api, &channel_id, &message_id, &out).await,
         Cmd::Typing { channel_id } => {
             let channel = parse_uuid(&channel_id)?;
             let (tx, rx) = mpsc::unbounded();
@@ -1689,6 +1720,99 @@ fn save_tokens(ctx: &mut Ctx, tokens: &lumia_core::proto::TokenPair) -> Result<(
         .put("access_token", tokens.access_token.as_bytes())?;
     ctx.keystore
         .put("refresh_token", tokens.refresh_token.as_bytes())?;
+    Ok(())
+}
+
+/// Processes, seals and uploads each file into `channel` (specs/media.md 3, 4.1).
+async fn upload_files(
+    api: &Api,
+    channel: &[u8],
+    paths: &[PathBuf],
+    as_file: bool,
+) -> Result<Vec<lumia_core::proto::Attachment>, ClientError> {
+    if paths.is_empty() {
+        return Ok(Vec::new());
+    }
+    let limits = api
+        .instance_info()
+        .await?
+        .upload_limits
+        .ok_or(ClientError::NoBlobs)?;
+    let mut out = Vec::with_capacity(paths.len());
+    for path in paths {
+        let bytes = std::fs::read(path)
+            .map_err(|e| ClientError::State(format!("{}: {e}", path.display())))?;
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "file".into());
+        let processed = lumia_core::media::process(lumia_core::media::Input {
+            bytes,
+            name,
+            as_file,
+            caps: attachments::caps(&limits),
+            ..Default::default()
+        })?;
+        let attachment = attachments::upload(api, channel, processed, "").await?;
+        eprintln!(
+            "uploaded {} ({}, {} bytes)",
+            attachment.name,
+            attachment.media_type,
+            attachment.main.as_ref().map_or(0, |b| b.size_bytes)
+        );
+        out.push(attachment);
+    }
+    Ok(out)
+}
+
+/// Writes the attachments of a server channel's message into `out`, opened.
+async fn save_attachments(
+    ctx: &Ctx,
+    api: &Api,
+    channel_id: &str,
+    message_id: &str,
+    out: &std::path::Path,
+) -> Result<(), ClientError> {
+    let channel = parse_uuid(channel_id)?;
+    let message = parse_uuid(message_id)?;
+    let kept = ctx
+        .store
+        .messages(&channel, 1000)?
+        .into_iter()
+        .find(|m| m.message_id == message)
+        .map(|m| m.attachments);
+    let found = match kept {
+        Some(found) => found,
+        None => api
+            .list_messages(channel_id, i64::MAX.unsigned_abs(), 200)
+            .await?
+            .messages
+            .into_iter()
+            .find(|m| m.message_id == message)
+            .map(|m| m.attachments)
+            .ok_or_else(|| ClientError::State("no such message in the last 200".into()))?,
+    };
+    if found.is_empty() {
+        println!("no attachments");
+        return Ok(());
+    }
+    std::fs::create_dir_all(out).map_err(|e| ClientError::State(e.to_string()))?;
+    for attachment in found {
+        let Some(main) = attachment.main.as_ref() else {
+            continue;
+        };
+        let bytes = attachments::fetch(api, main).await?;
+        // The name is the sender's: only its last component is used.
+        let name = std::path::Path::new(&attachment.name)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .filter(|n| !n.is_empty() && n != "." && n != "..")
+            .unwrap_or_else(|| wire::display(&attachment.attachment_id));
+        let path = out.join(name);
+        std::fs::write(&path, &bytes)
+            .map_err(|e| ClientError::State(format!("{}: {e}", path.display())))?;
+        println!("{} ({} bytes)", path.display(), bytes.len());
+    }
     Ok(())
 }
 

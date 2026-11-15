@@ -2023,3 +2023,243 @@ async fn a_reaction_after_the_newest_message_is_read_with_it() {
     assert_eq!((state.unread, state.mentions), (0, 0));
     assert!(state.read_seq > message.seq);
 }
+
+/// A picture with its camera's metadata, oriented sideways (the instance's fixture).
+const SIDEWAYS_JPEG: &[u8] =
+    include_bytes!("../../../../instance/test/support/fixtures/media/sideways.jpg");
+
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack.windows(needle.len()).any(|w| w == needle)
+}
+
+/// An attachment in a server channel (specs/media.md 3 and 4): the owner's
+/// device makes it of a photo with its camera's EXIF and sends it; the
+/// member's device reads it from its store, fetches and opens it, and has an
+/// upright JPEG with nothing of the camera left. A delete stops it being
+/// served.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_picture_is_sent_stripped_and_opened_by_another_member() {
+    use lumia_client::app::AttachmentInput;
+
+    let Some(base) = instance() else { return };
+    let (owner, member, server_id, _) = owner_and_member(&base).await;
+    if owner.app.upload_limits().await.unwrap().is_none() {
+        eprintln!("the instance keeps no blobs: skipped");
+        return;
+    }
+    let general = owner
+        .app
+        .snapshot()
+        .await
+        .unwrap()
+        .channels
+        .into_iter()
+        .find(|c| c.server_id == server_id && c.name == "general")
+        .unwrap()
+        .channel_id;
+    let from = member.seen();
+    member.app.subscribe(&general).unwrap();
+    member
+        .wait_for(from, Duration::from_secs(10), first_read(&general))
+        .await
+        .expect("the channel is read");
+    let started = owner.seen();
+    owner.start(std::slice::from_ref(&general)).unwrap();
+    owner
+        .wait_for(started, Duration::from_secs(10), welcomed)
+        .await
+        .expect("the owner is welcomed");
+
+    assert!(contains(SIDEWAYS_JPEG, b"LumiaTestCam"));
+    let draft = owner
+        .app
+        .attach(
+            &general,
+            AttachmentInput {
+                bytes: SIDEWAYS_JPEG.to_vec(),
+                name: "sideways.jpg".into(),
+                alt: "a test card".into(),
+                ..AttachmentInput::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(draft.kind, "image");
+    assert_eq!((draft.width, draft.height), (320, 480), "turned upright");
+    assert!(!draft.placeholder.is_empty());
+
+    // One waiting and taken back is gone from the composer.
+    let spare = owner
+        .app
+        .attach(
+            &general,
+            AttachmentInput {
+                bytes: b"just some notes".to_vec(),
+                name: "notes.txt".into(),
+                ..AttachmentInput::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(spare.kind, "file");
+    owner.app.discard_attachment(&spare.draft_id).await;
+
+    let acked = |e: &AppEvent| matches!(e, AppEvent::Acked { .. }).then_some(());
+    let sent = owner.seen();
+    let arrived = member.seen();
+    let message_id = owner
+        .app
+        .send_message_with_media(
+            &general,
+            "the view",
+            &[],
+            None,
+            std::slice::from_ref(&draft.draft_id),
+            &[],
+        )
+        .unwrap();
+    owner
+        .wait_for(sent, Duration::from_secs(10), acked)
+        .await
+        .expect("the message is acked");
+    assert!(
+        owner
+            .app
+            .send_message_with_media(&general, "again", &[], None, &[spare.draft_id], &[])
+            .is_err(),
+        "a discarded attachment is not sent"
+    );
+    assert!(
+        owner
+            .app
+            .send_message_with_media(&general, "again", &[], None, &[draft.draft_id], &[])
+            .is_err(),
+        "a sent attachment went with its message"
+    );
+
+    let message = member
+        .wait_for(arrived, Duration::from_secs(10), |_| {
+            member
+                .app
+                .messages(&general, 50)
+                .unwrap()
+                .into_iter()
+                .find(|m| m.message_id == message_id)
+        })
+        .await
+        .expect("the message reaches the member");
+    assert_eq!(message.attachments.len(), 1);
+    let attachment = &message.attachments[0];
+    assert_eq!(
+        (attachment.kind.as_str(), attachment.alt.as_str()),
+        ("image", "a test card")
+    );
+    assert_eq!((attachment.width, attachment.height), (320, 480));
+    let picture = member.app.attachment_bytes(&attachment.main).await.unwrap();
+    assert!(picture.starts_with(&[0xFF, 0xD8]), "a JPEG");
+    assert_eq!(picture.len() as u64, attachment.size_bytes);
+    assert!(!contains(&picture, b"Exif") && !contains(&picture, b"LumiaTestCam"));
+    assert!(App::attachment_drawable(&picture));
+    let thumbnail = attachment.thumbnail.clone().unwrap();
+    let small = member.app.attachment_bytes(&thumbnail).await.unwrap();
+    assert!(App::attachment_drawable(&small));
+    assert!(App::placeholder_image(&attachment.placeholder).is_some());
+    // Kept: asked again, it is the same.
+    assert_eq!(
+        member.app.attachment_bytes(&attachment.main).await.unwrap(),
+        picture
+    );
+
+    // A blob opens only with the key its message names.
+    let mut wrong = thumbnail.clone();
+    wrong.key[0] ^= 1;
+    wrong.hash[0] ^= 1;
+    assert!(member.app.attachment_bytes(&wrong).await.is_err());
+
+    // Deleted, its attachments are no longer served: the owner, who never
+    // kept the thumbnail, cannot fetch it now.
+    let deleted = member.seen();
+    owner.app.delete_message(&general, &message_id).unwrap();
+    member
+        .wait_for(deleted, Duration::from_secs(10), |_| {
+            member
+                .app
+                .messages(&general, 50)
+                .unwrap()
+                .iter()
+                .all(|m| m.message_id != message_id)
+                .then_some(())
+        })
+        .await
+        .expect("the delete reaches the member");
+    assert!(owner.app.attachment_bytes(&thumbnail).await.is_err());
+}
+
+/// An attachment in a personal conversation (specs/media.md 4.2): its keys
+/// travel inside the encrypted message, its blobs are named to the instance
+/// in the clear, and the other side opens it. Deleting the message takes the
+/// blobs off the instance.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_file_in_a_personal_conversation_is_opened_by_the_other_side() {
+    use lumia_client::app::AttachmentInput;
+
+    let Some(base) = instance() else { return };
+    let (ada, _, _) = set_up(&base, "ada").await;
+    if ada.app.upload_limits().await.unwrap().is_none() {
+        eprintln!("the instance keeps no blobs: skipped");
+        return;
+    }
+    let (bo, _, bo_account) = set_up(&base, "bo").await;
+    let request = ada.app.dm_request(&bo_account).await.unwrap();
+    let Ok(opened) = bo
+        .app
+        .dm_respond(&request.request_id, "accept")
+        .await
+        .unwrap()
+    else {
+        panic!("accepting opens the conversation");
+    };
+    let channel = opened.channel_id;
+    assert!(member_of(&bo, &channel, Duration::from_secs(20)).await);
+    assert!(member_of(&ada, &channel, Duration::from_secs(20)).await);
+
+    let draft = bo
+        .app
+        .attach(
+            &channel,
+            AttachmentInput {
+                bytes: SIDEWAYS_JPEG.to_vec(),
+                name: "sideways.jpg".into(),
+                as_file: true,
+                ..AttachmentInput::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(draft.kind, "file");
+    bo.app
+        .dm_send_with_media(&channel, "the original", None, &[draft.draft_id], &[])
+        .await
+        .unwrap();
+    assert!(reads(&ada, &channel, "the original", Duration::from_secs(20)).await);
+    let log = ada.app.dm_messages(&channel).await.unwrap();
+    let message = log
+        .messages
+        .iter()
+        .find(|m| m.body == "the original")
+        .unwrap();
+    let attachment = &message.attachments[0];
+    assert_eq!(attachment.name, "sideways.jpg");
+    let file = ada.app.attachment_bytes(&attachment.main).await.unwrap();
+    // Sent as a file, it keeps its pixels and loses its camera.
+    assert!(file.starts_with(&[0xFF, 0xD8]));
+    assert!(!contains(&file, b"LumiaTestCam"));
+
+    // Deleted by its sender, its blob is gone from the instance: the sender,
+    // who never kept it, cannot fetch it.
+    bo.app
+        .dm_delete(&channel, &message.message_id)
+        .await
+        .unwrap();
+    assert!(bo.app.attachment_bytes(&attachment.main).await.is_err());
+}
