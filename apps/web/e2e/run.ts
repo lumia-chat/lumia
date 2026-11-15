@@ -35,6 +35,26 @@ function lumia(dataDir: string, ...args: string[]): string {
   return run([cli, "--data-dir", dataDir, ...args]);
 }
 
+// Runs a CLI call that does not end by itself (`dm tail`) until what it
+// printed satisfies `done`, or for `ms` at most; returns what it printed.
+async function follow(args: string[], done: (text: string) => boolean, ms: number): Promise<string> {
+  const proc = Bun.spawn(args, { cwd: web, stdout: "pipe", stderr: "pipe" });
+  const timer = setTimeout(() => proc.kill(), ms);
+  const decoder = new TextDecoder();
+  let text = "";
+  try {
+    for await (const chunk of proc.stdout) {
+      text += decoder.decode(chunk, { stream: true });
+      if (done(text)) break;
+    }
+  } finally {
+    clearTimeout(timer);
+    proc.kill();
+    await proc.exited;
+  }
+  return text + (await new Response(proc.stderr).text());
+}
+
 async function waitFor(url: string, what: string) {
   for (let i = 0; i < 60; i++) {
     try {
@@ -463,23 +483,20 @@ async function dmSteps(which: string, page: Page, aDir: string, bAccount: string
   const opened = lumia(aDir, "dm", "open", bAccount);
   const channel = opened.match(/([0-9a-f-]{36})\s+personal DM/)?.[1];
   if (!channel) throw new Error(`no channel from dm open:\n${opened}`);
-  // The CLI joined from the welcome; the browser's message lands in its
-  // store once its tail has applied the channel log, which takes a moment.
-  // `dm messages` reads the CLI's store without syncing, and `dm open`
-  // returns as soon as the group is ready, which can be before the
-  // browser's message was applied: follow the conversation for a moment,
-  // then read, until the message is there.
+  // The CLI joined from the welcome. `dm open` returns as soon as the group
+  // is ready, which can be before the browser's message was decrypted (its
+  // gateway may even have stored it, which the next connection's welcome
+  // catches up), and `dm messages` reads the CLI's store without syncing:
+  // when the message is not there yet, follow the conversation until the
+  // CLI prints it, then read again.
   phase("cli read");
-  let seen = "";
+  let seen = lumia(aDir, "dm", "messages", channel);
   let tailed = "";
-  // Twenty tries: the macOS runner's WebKit has taken most of a minute
-  // over the group alone, and the CLI's store follows the channel log.
-  for (let i = 0; i < 20 && !seen.includes(hello); i++) {
-    const tail = Bun.spawnSync([cli, "--data-dir", aDir, "dm", "tail", channel], { cwd: web, timeout: 4_000 });
-    tailed = tail.stdout.toString() + tail.stderr.toString();
+  if (!seen.includes(hello)) {
+    tailed = await follow([cli, "--data-dir", aDir, "dm", "tail", channel], (text) => text.includes(hello), 60_000);
     seen = lumia(aDir, "dm", "messages", channel);
   }
-  if (!seen.includes(hello)) throw new Error(`the CLI did not read the browser's message; its last tail said:\n${tailed.slice(-600)}\nand it holds:\n${seen}`);
+  if (!seen.includes(hello)) throw new Error(`the CLI did not read the browser's message; its tail said:\n${tailed.slice(-600)}\nand it holds:\n${seen}`);
   const reply = `reply from the cli ${Date.now()}`;
   phase("cli send");
   lumia(aDir, "dm", "send", channel, reply);
