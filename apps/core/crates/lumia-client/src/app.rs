@@ -661,6 +661,19 @@ pub struct DeviceSummary {
     pub revoked: bool,
 }
 
+/// What a link request asks to add, shown on the approving device before
+/// it approves (identity spec 4.2 step 2).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LinkRequestSummary {
+    pub device_id: String,
+    /// `native` or `web`.
+    pub kind: String,
+    pub label: String,
+    /// The origin a WEB device is scoped to; empty for a native one.
+    pub web_origin: String,
+}
+
 /// The identity's roster.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -3742,6 +3755,31 @@ impl App {
         device(&mut stores, &self.device_id).link_request_as(label, kind, &origin)
     }
 
+    /// What a link request, as the new device shows it, asks to add: read
+    /// before approving, so the person sees which device they are letting
+    /// in (identity spec 4.2 step 2). Nothing is sent.
+    ///
+    /// # Errors
+    /// When the text is not a link request.
+    pub fn identity_link_request_summary(request: &str) -> Result<LinkRequestSummary, ClientError> {
+        use base64::Engine as _;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(request.trim())
+            .map_err(|_| ClientError::State("that is not a link request".into()))?;
+        let request = lumia_core::proto::LinkRequest::decode(bytes.as_slice())
+            .map_err(|_| ClientError::State("that is not a link request".into()))?;
+        if request.device_id.len() != 16 || request.ephemeral_public_key.len() != 32 {
+            return Err(ClientError::State("that is not a link request".into()));
+        }
+        let kind = DeviceKind::try_from(request.kind).unwrap_or(DeviceKind::Native);
+        Ok(LinkRequestSummary {
+            device_id: wire::display(&request.device_id),
+            kind: format!("{kind:?}").to_lowercase(),
+            label: request.label,
+            web_origin: request.web_origin,
+        })
+    }
+
     /// On a device that holds the identity: approves a link request and
     /// returns the code the new device claims with.
     ///
@@ -4778,6 +4816,43 @@ mod invite_tests {
             "abc23xyz"
         );
         assert_eq!(invite_code_of("/invite/abc23xyz#top"), "abc23xyz");
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod link_request_tests {
+    use super::App;
+    use base64::Engine as _;
+    use lumia_core::proto::{DeviceKind, LinkRequest};
+    use prost::Message as _;
+
+    #[test]
+    fn a_request_says_what_it_would_add_and_anything_else_is_refused() {
+        let request = LinkRequest {
+            device_id: vec![7; 16],
+            ephemeral_public_key: vec![9; 32],
+            kind: DeviceKind::Web as i32,
+            label: "Safari".into(),
+            web_origin: "https://my.lumia.chat".into(),
+            ..Default::default()
+        };
+        let text = base64::engine::general_purpose::STANDARD.encode(request.encode_to_vec());
+        let summary = App::identity_link_request_summary(&format!("  {text}\n")).unwrap();
+        assert_eq!(summary.kind, "web");
+        assert_eq!(summary.label, "Safari");
+        assert_eq!(summary.web_origin, "https://my.lumia.chat");
+        assert_eq!(summary.device_id, "07070707-0707-0707-0707-070707070707");
+        assert!(App::identity_link_request_summary("hello").is_err());
+        assert!(App::identity_link_request_summary("").is_err());
+        let short = base64::engine::general_purpose::STANDARD.encode(
+            LinkRequest {
+                device_id: vec![1; 3],
+                ..Default::default()
+            }
+            .encode_to_vec(),
+        );
+        assert!(App::identity_link_request_summary(&short).is_err());
     }
 }
 

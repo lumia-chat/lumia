@@ -815,6 +815,27 @@ impl From<app::DeviceSummary> for DeviceSummary {
     }
 }
 
+/// What a link request asks to add, shown before approving it.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct LinkRequestSummary {
+    pub device_id: String,
+    /// `native` or `web`.
+    pub kind: String,
+    pub label: String,
+    pub web_origin: String,
+}
+
+impl From<app::LinkRequestSummary> for LinkRequestSummary {
+    fn from(r: app::LinkRequestSummary) -> Self {
+        Self {
+            device_id: r.device_id,
+            kind: r.kind,
+            label: r.label,
+            web_origin: r.web_origin,
+        }
+    }
+}
+
 /// The identity's roster.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct RosterSummary {
@@ -1281,6 +1302,13 @@ pub fn parse_body(body: String, mentions: Vec<MentionSummary>) -> Vec<BodyBlock>
         .into_iter()
         .map(Into::into)
         .collect()
+}
+
+/// What a link request, as the new device shows it, asks to add (identity
+/// spec 4.2 step 2): read before approving. Nothing is sent.
+#[uniffi::export]
+pub fn link_request_summary(request: String) -> Result<LinkRequestSummary, LumiaError> {
+    Ok(app::App::identity_link_request_summary(&request)?.into())
 }
 
 /// The words of the recovery phrase's wordlist that begin with `prefix`, at
