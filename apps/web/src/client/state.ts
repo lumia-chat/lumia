@@ -556,9 +556,12 @@ export function hasIdentityQuery() {
  * holds the account's identity), `none` (neither the account nor the
  * browser has one: the phrase step sets one up), `unbound` (the browser
  * made one that a reauth did not finish binding), `elsewhere` (the
- * account's identity is on other devices: link, restore or start over).
+ * account's identity is on other devices: link, restore or start over),
+ * `mismatched` (the browser holds an identity the account is not bound to:
+ * a start-over whose rebind failed after the identity was made, which
+ * finishing the start-over binds).
  */
-export type PrivateState = "ready" | "none" | "unbound" | "elsewhere";
+export type PrivateState = "ready" | "none" | "unbound" | "elsewhere" | "mismatched";
 
 export async function privateState(): Promise<PrivateState> {
   const held = await client().hasIdentity();
@@ -569,8 +572,11 @@ export async function privateState(): Promise<PrivateState> {
     // Unreachable: what this browser holds is what it can say.
     return held ? "ready" : "none";
   }
-  if (held) return bound ? "ready" : "unbound";
-  return bound ? "elsewhere" : "none";
+  if (!held) return bound ? "elsewhere" : "none";
+  if (!bound) return "unbound";
+  // Both exist, but private messages work only when they are one identity.
+  const mine = (await client().identityShow()).identityId;
+  return mine === bound ? "ready" : "mismatched";
 }
 
 /**

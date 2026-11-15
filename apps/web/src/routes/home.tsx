@@ -272,7 +272,12 @@ export function HomeMain(props: HomeProps) {
         )
       }
     >
-      <Show when={!ready() || ready() === "ready"} fallback={<NoIdentity state={ready() ?? "none"} {...props} />}>
+      {/* Nothing that starts or accepts a private message is mounted until
+          this browser is known to hold the account's identity: an Accept
+          made before that would accept the request on the instance and then
+          fail to make its encrypted group, leaving a conversation nobody can
+          use. */}
+      <Show when={ready() === "ready"} fallback={<Show when={ready()} keyed fallback={<PrivateLoading {...props} />}>{(state) => <NoIdentity state={state} {...props} />}</Show>}>
         {props.view === "requests" ? <Requests {...props} /> : props.view === "new" ? <NewMessage {...props} /> : <Conversation {...props} />}
       </Show>
     </Show>
@@ -282,12 +287,33 @@ export function HomeMain(props: HomeProps) {
 // Where a private message would start or be accepted in a browser that
 // cannot read one (issue #20): set up here when the account has no
 // identity, else "Private messages need this browser".
+// While it is not yet known whether this browser holds the account's
+// identity: nothing to press.
+function PrivateLoading(props: HomeProps) {
+  return (
+    <>
+      <ChannelHeader kind="page" name="Home" actions={[]} onBack={props.back} backLabel="Back to Home" />
+      <div class="lu-page">
+        <EmptyState icon="shield" title="Looking…" />
+      </div>
+    </>
+  );
+}
+
 function NoIdentity(props: HomeProps & { state: PrivateState }) {
   const navigate = useNavigate();
   return (
     <>
       <ChannelHeader kind="page" name="Home" actions={[]} onBack={props.back} backLabel="Back to Home" />
       <div class="lu-page">
+        <Show
+          when={props.state !== "mismatched"}
+          fallback={
+            <EmptyState icon="shield" title="Finish starting over" action={{ label: "Finish starting over", onClick: () => props.toPrivate("home", true) }}>
+              This browser holds the new identity from starting over, but your account isn’t using it yet. Confirm it’s you to finish.
+            </EmptyState>
+          }
+        >
         <Show
           when={props.state === "elsewhere"}
           fallback={
@@ -297,6 +323,7 @@ function NoIdentity(props: HomeProps & { state: PrivateState }) {
           }
         >
           <NeedsBrowser onLink={props.toLink} onRestore={() => void navigate({ to: "/restore" })} onStartOver={() => props.toPrivate("home", true)} />
+        </Show>
         </Show>
       </div>
     </>
@@ -1204,12 +1231,12 @@ function Devices(props: HomeProps) {
         </Show>
         <Show when={ready() && ready() !== "ready"}>
           <Card
-            title={ready() === "elsewhere" ? "Private messages need this browser" : "Private messages aren’t set up"}
-            subtitle={ready() === "elsewhere" ? "Your account has private messages on another device. Link this browser from it, or restore with your recovery phrase." : ready() === "unbound" ? "This browser made its keys; confirming it’s you finishes tying them to your account." : "Set them up here: you’ll save a recovery phrase and check three of its words."}
+            title={ready() === "elsewhere" ? "Private messages need this browser" : ready() === "mismatched" ? "Finish starting over" : "Private messages aren’t set up"}
+            subtitle={ready() === "elsewhere" ? "Your account has private messages on another device. Link this browser from it, or restore with your recovery phrase." : ready() === "unbound" ? "This browser made its keys; confirming it’s you finishes tying them to your account." : ready() === "mismatched" ? "This browser holds the new identity from starting over, but your account isn’t using it yet. Confirm it’s you to finish." : "Set them up here: you’ll save a recovery phrase and check three of its words."}
           >
             <div class="app__row">
               <Button variant="primary" size="md" onClick={() => props.toPrivate("devices")}>
-                {ready() === "elsewhere" ? "Bring this browser in" : ready() === "unbound" ? "Finish setting up" : "Set up private messages"}
+                {ready() === "elsewhere" ? "Bring this browser in" : ready() === "unbound" ? "Finish setting up" : ready() === "mismatched" ? "Finish starting over" : "Set up private messages"}
               </Button>
             </div>
           </Card>

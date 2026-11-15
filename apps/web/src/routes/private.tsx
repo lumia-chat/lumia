@@ -116,6 +116,13 @@ export function PrivateMessages() {
       if (state === "ready") return done();
       if (state === "elsewhere") return void setPhase("needs");
       if (state === "unbound") return void (await finish());
+      // A start-over that made this browser's identity and did not bind it:
+      // its phrase was shown and checked then, so finishing only binds it.
+      if (state === "mismatched") {
+        setStartingOver(true);
+        setAgain(true);
+        return void setPhase("startOver");
+      }
       // Nothing anywhere: a credentialed sign-in carries a reauth, which goes
       // with the phrase; without one, it is asked for first.
       if (await client().hasReauth()) await toPhrase();
