@@ -14,7 +14,7 @@
 //! Not here: "revoked on 1 of 2 instances"; this shell knows one instance.
 
 use chrono::{DateTime, Local};
-use lumia_client::app::{DeviceSummary, PasskeySummary, RosterSummary};
+use lumia_client::app::{App, DeviceSummary, LinkRequestSummary, PasskeySummary, RosterSummary};
 use rune::{El, Icon, ScrollSpec, Tx, col, el, icon, row, text};
 
 use crate::app::{HomeView, State};
@@ -279,6 +279,7 @@ fn devices(mut content: El, s: &State, roster: &RosterSummary, look: Look) -> El
         ));
     }
     content = content.child(list);
+    content = content.child(approve_card(s, look));
 
     let revoking = form
         .revoking
@@ -383,6 +384,138 @@ fn device_row(
         );
     }
     item
+}
+
+// ---- Approving another device -------------------------------------------------------
+
+/// What a request would add, in words: "a browser on my.lumia.chat", "a device named
+/// “Pixel 9”".
+fn adds(summary: &LinkRequestSummary) -> String {
+    let label = summary.label.trim();
+    match (summary.kind.as_str(), label.is_empty()) {
+        ("web", _) => format!("a browser on {}", summary.web_origin),
+        (_, false) => format!("a device named “{label}”"),
+        (_, true) => "a new device".into(),
+    }
+}
+
+/// A code as it is read out and typed: two groups of four.
+fn spaced(code: &str) -> String {
+    let chars: Vec<char> = code.chars().collect();
+    chars
+        .chunks(4)
+        .map(|group| group.iter().collect::<String>())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn approve(s: &mut State, _: &mut Tx) {
+    s.approve_device();
+}
+
+/// Approving another device (identity spec 4.2): the new device shows a request, this
+/// computer reads what it would add, approves it, and gives the code to type there. Closed,
+/// it is the button that opens it.
+fn approve_card(s: &State, look: Look) -> El {
+    let form = &s.account.devices.approve;
+    if !form.open {
+        return row().key("approve-open").child(small_button(
+            "approve-device",
+            "Approve a device",
+            true,
+            // The card opens under the list, which may be below the fold.
+            |s: &mut State, tx: &mut Tx| {
+                s.open_approve();
+                tx.scroll_into_view("approve-card");
+            },
+            look,
+        ));
+    }
+    let c = look.c;
+    let mut card = card(
+        "Approve a device",
+        "On the new device, choose Link, copy the request it shows and paste it here. It gets a key of its own and reads your private messages from then on.",
+        look,
+    )
+    .key("approve-card")
+    .w_full();
+    if !form.code.is_empty() {
+        return card
+            .child(
+                text(spaced(&form.code))
+                    .font(t::TEXT_LINK_CODE)
+                    .color(c.ink)
+                    .selectable(true)
+                    .selection_color(c.accent_soft)
+                    .label(format!("Code {}", form.code)),
+            )
+            .child(
+                text(format!(
+                    "Type this code on the new device, which claims it from {}. It works once, within ten minutes.",
+                    s.session.address()
+                ))
+                .font(t::TEXT_META)
+                .color(c.ink_secondary)
+                .wrap()
+                .w_full(),
+            )
+            .child(action(primary_button(
+                "approve-done",
+                "Done",
+                true,
+                State::close_approve,
+                look,
+            )));
+    }
+    card = card.child(field(
+        "approve-request",
+        "Request",
+        &form.request,
+        "Paste the request here",
+        |s| &mut s.account.devices.approve.request,
+        approve,
+        look,
+    ));
+    let typed = form.request.text.trim();
+    let summary = (!typed.is_empty()).then(|| App::identity_link_request_summary(typed));
+    match &summary {
+        Some(Ok(summary)) => {
+            card = card.child(notice(
+                &icons::SHIELD,
+                format!(
+                    "This adds {} to your identity. Approve it only if it is yours.",
+                    adds(summary)
+                ),
+                look,
+            ));
+        }
+        Some(Err(_)) => card = card.child(error_text("That isn't a link request.", look)),
+        None => {}
+    }
+    if !form.error.is_empty() {
+        card = card.child(error_text(&form.error, look));
+    }
+    let ready = matches!(summary, Some(Ok(_))) && !form.busy;
+    card.child(
+        col()
+            .w_full()
+            .gap(t::SPACE_8)
+            .child(primary_button(
+                "approve-confirm",
+                if form.busy { "Approving…" } else { "Approve" },
+                ready,
+                State::approve_device,
+                look,
+            ))
+            .child(wide_button(
+                "approve-cancel",
+                None,
+                "Cancel",
+                true,
+                |s, _| s.close_approve(),
+                look,
+            )),
+    )
 }
 
 fn revoke(s: &mut State, _: &mut Tx) {

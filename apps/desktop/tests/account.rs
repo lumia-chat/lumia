@@ -269,7 +269,7 @@ fn this_computer_is_linked_from_sign_in_with_a_request_and_a_code() {
     );
     let shown = words(&rt);
     for expected in [
-        "On a device that holds your identity, approve this request and enter the code it gives you.",
+        "On a device that has your private messages, open Devices, choose Approve a device and paste this request. Then type the code it shows here.",
         "UkVRVUVTVA",
         "Link request",
         "Copy request",

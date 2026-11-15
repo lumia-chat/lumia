@@ -66,6 +66,9 @@ pub enum IdentityUpdate {
     LinkRequested(Result<String, Failure>),
     /// The code was claimed: this device is in the roster and signed in by identity proof.
     Linked(Result<RosterSummary, Failure>),
+    /// This computer approved another device's request: the code the new device claims
+    /// with (identity spec 4.2 step 6).
+    Approved(Result<String, Failure>),
     /// The roster this device holds.
     Roster(Result<RosterSummary, Failure>),
     /// A device was revoked: the roster after it.
@@ -290,6 +293,19 @@ impl Session {
         });
     }
 
+    /// On this computer, which holds the identity: approves another device's link request
+    /// (identity spec 4.2), adding it to the roster; the code it claims with arrives as
+    /// [`IdentityUpdate::Approved`].
+    pub fn approve_link(&self, request: &str) {
+        let Some(app) = self.client() else { return };
+        let request = request.trim().to_string();
+        self.task_local(move || async move {
+            Update::Identity(IdentityUpdate::Approved(
+                app.identity_approve(&request).await.map_err(Failure::from),
+            ))
+        });
+    }
+
     // ---- Devices ------------------------------------------------------------------------
 
     /// Asks for the roster this device holds ([`IdentityUpdate::Roster`]).
@@ -472,6 +488,8 @@ impl Session {
             IdentityUpdate::Roster(Ok(roster)) | IdentityUpdate::Revoked(Ok(roster)) => {
                 self.identity.roster = Some(roster.clone());
             }
+            // The new device is in the roster this computer published.
+            IdentityUpdate::Approved(Ok(_)) => self.load_roster(),
             IdentityUpdate::Passkeys(Ok(passkeys)) => self.identity.passkeys = passkeys.clone(),
             IdentityUpdate::PasskeyRemoved(Ok(())) => self.load_passkeys(),
             IdentityUpdate::Profile(Ok(profile)) => self.identity.profile = profile.clone(),
@@ -500,6 +518,7 @@ impl Session {
             IdentityUpdate::LinkRequested(_)
             | IdentityUpdate::MagicLinkSent(_)
             | IdentityUpdate::Linked(Err(_))
+            | IdentityUpdate::Approved(Err(_))
             | IdentityUpdate::Roster(Err(_))
             | IdentityUpdate::Revoked(Err(_))
             | IdentityUpdate::Passkeys(Err(_))

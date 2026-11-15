@@ -212,3 +212,86 @@ fn an_account_made_without_an_identity_is_set_up_at_its_next_sign_in() {
     assert!(state.session.private_ready() && state.session.identity.phrase_kept);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Linking another device from this one (identity spec 4.2, this computer approving): the
+/// second computer of the account shows its request, the first reads what it would add,
+/// approves it from Devices and gives the code, and the second claims it and is a device
+/// of the identity, with private messages ready.
+#[test]
+fn a_computer_that_holds_the_identity_approves_another_from_devices() {
+    let Ok(instance) = std::env::var("LUMIA_DEV_INSTANCE") else {
+        eprintln!("skipped: no LUMIA_DEV_INSTANCE");
+        return;
+    };
+    let dir = std::env::temp_dir().join(format!("lumia-shell-approve-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let handle = format!("approve{}", std::process::id());
+
+    let mut first = computer(&dir.join("first"), &instance);
+    sign_in(&mut first, &handle, true);
+    wait_until(&mut first, "the silent setup", |s| {
+        s.session.identity.setup == Setup::Ready
+    });
+
+    // The second computer of the account is told its private messages are elsewhere, and
+    // starts linking.
+    let mut second = computer(&dir.join("second"), &instance);
+    sign_in(&mut second, &handle, false);
+    wait_until(&mut second, "the identity elsewhere", |s| {
+        s.session.identity.setup == Setup::Elsewhere
+    });
+    second.start_linking();
+    second.start_link();
+    wait_until(&mut second, "the request", |s| {
+        !s.account.link.request.is_empty()
+    });
+    let request = second.account.link.request.clone();
+
+    // Devices on the first: what is not a request is refused before anything is sent;
+    // the request says what it adds; approving gives the code.
+    first.go_home(HomeView::Devices);
+    first.open_approve();
+    first
+        .account
+        .devices
+        .approve
+        .request
+        .replace_text("not a request");
+    first.approve_device();
+    assert!(
+        !first.account.devices.approve.busy,
+        "nothing is sent for text that is not one"
+    );
+    first.account.devices.approve.request.replace_text(&request);
+    let adds = lumia_client::app::App::identity_link_request_summary(&request).unwrap();
+    assert_eq!(adds.kind, "native");
+    first.approve_device();
+    wait_until(&mut first, "the code", |s| {
+        !s.account.devices.approve.code.is_empty() || !s.account.devices.approve.error.is_empty()
+    });
+    assert_eq!(first.account.devices.approve.error, "");
+    let code = first.account.devices.approve.code.clone();
+    assert_eq!(code.len(), 8);
+    wait_until(&mut first, "the roster with two devices", |s| {
+        s.session
+            .identity
+            .roster
+            .as_ref()
+            .is_some_and(|r| r.devices.iter().filter(|d| !d.revoked).count() == 2)
+    });
+
+    // The second claims it and holds the identity.
+    second.account.link.code.replace_text(&code);
+    second.claim_link();
+    wait_until(&mut second, "the claim", |s| {
+        s.session.has_identity() || !s.account.link.error.is_empty()
+    });
+    assert_eq!(second.account.link.error, "");
+    wait_until(&mut second, "private messages ready", |s| {
+        s.session.private_ready()
+    });
+
+    first.close_approve();
+    assert!(!first.account.devices.approve.open && first.account.devices.approve.code.is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}

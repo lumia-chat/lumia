@@ -46,7 +46,7 @@ pub fn view(s: &State, look: Look) -> El {
     } else {
         card = card
             .child(note(
-                "On a device that holds your identity, approve this request and enter the code it gives you.",
+                "On a device that has your private messages, open Devices, choose Approve a device and paste this request. Then type the code it shows here.",
             ))
             .child(request(&form.request, look))
             .child(row().w_full().child(small_button(

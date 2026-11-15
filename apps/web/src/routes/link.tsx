@@ -61,7 +61,7 @@ export function Link() {
           }
         >
           <form class="auth__form" onSubmit={(e) => void claim(e)}>
-            <p class="auth__note">On a device that holds your identity, approve this request and enter the code it gives you.</p>
+            <p class="auth__note">On a device that has your private messages, open Devices, choose Approve a device and paste this request. Then type the code it shows here.</p>
             <textarea class="auth__code" readonly rows={5} value={request()} aria-label="Link request" onFocus={(e) => e.currentTarget.select()} />
             <TextField label="Code from the approving device" value={code()} onInput={(e) => setCode(e.currentTarget.value)} autocomplete="one-time-code" placeholder="8 characters" />
             <Show when={error()}>

@@ -37,7 +37,8 @@ pub struct Link {
     pub error: String,
 }
 
-/// The devices screen: the device being revoked with its confirmation, and the passkeys.
+/// The devices screen: the device being revoked with its confirmation, the passkeys, and
+/// approving another device's link request.
 #[derive(Debug)]
 pub struct Devices {
     /// The device whose revocation is being confirmed, by id.
@@ -47,6 +48,7 @@ pub struct Devices {
     pub busy: bool,
     pub error: String,
     pub passkey_error: String,
+    pub approve: Approve,
 }
 
 impl Default for Devices {
@@ -57,8 +59,23 @@ impl Default for Devices {
             busy: false,
             error: String::new(),
             passkey_error: String::new(),
+            approve: Approve::default(),
         }
     }
+}
+
+/// Approving another device (identity spec 4.2, this computer as the device that holds the
+/// identity): the request pasted from it, then the code to type there.
+#[derive(Debug, Default)]
+pub struct Approve {
+    /// The card is open.
+    pub open: bool,
+    pub request: TextEdit,
+    /// Waiting for the instance's answer.
+    pub busy: bool,
+    /// The code the new device claims with, once approved.
+    pub code: String,
+    pub error: String,
 }
 
 /// The profile screen's account card: the handle and, on a computer that does not hold
@@ -208,6 +225,32 @@ impl State {
     }
 
     // ---- Devices ------------------------------------------------------------------------
+
+    /// Opens the card that approves another device, empty.
+    pub fn open_approve(&mut self) {
+        self.account.devices.approve = Approve {
+            open: true,
+            ..Approve::default()
+        };
+        self.account.devices.approve.request.focused = true;
+    }
+
+    /// Puts the approve card away, code and all.
+    pub fn close_approve(&mut self) {
+        self.account.devices.approve = Approve::default();
+    }
+
+    /// Approves the pasted request, once it reads as one.
+    pub fn approve_device(&mut self) {
+        let form = &mut self.account.devices.approve;
+        let request = form.request.text.trim().to_string();
+        if form.busy || lumia_client::app::App::identity_link_request_summary(&request).is_err() {
+            return;
+        }
+        form.error.clear();
+        form.busy = true;
+        self.session.approve_link(&request);
+    }
 
     /// Asks to confirm revoking a device with the account password.
     pub fn ask_revoke(&mut self, device_id: &str) {
@@ -421,6 +464,25 @@ impl State {
                     }
                     _ => failure.message.clone(),
                 };
+            }
+            IdentityUpdate::Approved(answer) => {
+                let form = &mut self.account.devices.approve;
+                form.busy = false;
+                match answer {
+                    Ok(code) => code.clone_into(&mut form.code),
+                    Err(failure) => {
+                        // A device past the roster's twenty (identity spec 11) is a
+                        // roster the instance refuses to parse.
+                        let full = failure.details.get("reason").map(String::as_str)
+                            == Some("too_many_devices");
+                        form.error = if full {
+                            "Your identity already has as many devices as it can hold. Revoke one first."
+                                .into()
+                        } else {
+                            failure.message.clone()
+                        };
+                    }
+                }
             }
             IdentityUpdate::Revoked(answer) => {
                 let form = &mut self.account.devices;

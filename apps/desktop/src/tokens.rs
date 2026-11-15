@@ -374,6 +374,9 @@ pub const MESSAGE_TYPE: MessageType = MessageType::at(TEXT_MESSAGE.size);
 
 /// A code block in a message: the mono slot, a step under the message size.
 pub const TEXT_CODE: TextStyle = TextStyle::new(13.0, 400.0).lh(20.0).mono();
+/// The code an approving device gives the new one (identity spec 4.2): read across a desk
+/// and typed, so large, in the mono slot, with its two groups of four apart.
+pub const TEXT_LINK_CODE: TextStyle = TextStyle::new(28.0, 600.0).lh(36.0).mono();
 /// Inline code's size beside the message text around it.
 pub const CODE_SCALE: f32 = 0.9;
 /// The room either side of inline code inside its chip.

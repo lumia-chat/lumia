@@ -249,6 +249,8 @@ pub const SCENES: &[Scene] = &[
     ("link-request", account::link_request),
     ("devices", account::devices),
     ("devices-revoke", account::devices_revoke),
+    ("devices-approve", account::devices_approve),
+    ("devices-approved", account::devices_approved),
     ("devices-none", account::devices_none),
     // Setting up private messages (#20).
     ("sign-up", account::sign_up),

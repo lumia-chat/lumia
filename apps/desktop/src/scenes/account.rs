@@ -158,6 +158,28 @@ pub fn devices_revoke(s: &mut State) {
     ))));
 }
 
+/// A phone's link request, as its Link screen shows it: a native device named "Pixel 9".
+const PHONE_REQUEST: &str = "ChABoeDCfUpwAIAAAAAAAKF+GiAAAQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyABKgdQaXhlbCA5OiAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==";
+
+/// Devices approving another device: a phone's request pasted, saying what it adds.
+pub fn devices_approve(s: &mut State) {
+    devices(s);
+    s.open_approve();
+    s.account
+        .devices
+        .approve
+        .request
+        .replace_text(PHONE_REQUEST);
+}
+
+/// Devices after approving: the code the phone types.
+pub fn devices_approved(s: &mut State) {
+    devices_approve(s);
+    s.receive(&Update::Identity(IdentityUpdate::Approved(Ok(
+        "K7QM2XRA".into()
+    ))));
+}
+
 /// Signed in, and this computer holds no identity.
 pub fn devices_none(s: &mut State) {
     signed_in(s);
