@@ -62,6 +62,7 @@ pub fn view(s: &State, look: Look) -> El {
     } else {
         // One conversation is opened or asked for at a time.
         let free = s.home.starting.is_none();
+        let c = look.c;
         let mut list = col().key("people").w_full().role("list").label("People");
         for p in found {
             let name = display_name(p);
@@ -70,9 +71,13 @@ pub fn view(s: &State, look: Look) -> El {
                 row()
                     .key(format!("person-{}", p.account_id))
                     .w_full()
+                    .px(t::SPACE_10)
                     .py(t::SPACE_6)
                     .gap(t::SPACE_12)
                     .items_center()
+                    .radius(t::RADIUS_12)
+                    // The row under the pointer is lit, so its Message button is plainly its.
+                    .hover(c.hover_member)
                     .role("listitem")
                     .label(name.clone())
                     .child(person(
