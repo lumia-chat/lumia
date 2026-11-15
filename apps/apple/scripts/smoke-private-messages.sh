@@ -10,9 +10,10 @@
 #     phrase, a wrong word, the phrase again and the right three; the script
 #     reads the account's identity over HTTP before (none) and after (bound);
 #   - one whose identity the CLI made: testThisPhoneIsBroughtInByRestoring
-#     expects "Private messages need this phone", the sheet, and Restore
-#     with the CLI's phrase; the script expects the account still bound to
-#     that identity;
+#     expects "Private messages need this phone", the sheet, Restore's
+#     question, the CLI's phrase and the CLI's device offered to keep, kept,
+#     and Devices counting two; the script expects the account still bound
+#     to that identity;
 #   - another the CLI made: testStartingOverWithANewIdentity starts over
 #     with the password; the script expects the account bound to a new identity.
 # Each step announced is screenshotted into .build/smoke-private-messages/.

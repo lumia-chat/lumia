@@ -144,6 +144,33 @@ final class LumiaKitTests: XCTestCase {
         XCTAssertEqual(retry.pause(), .seconds(1))
     }
 
+    // The loop's end says this device was removed only when the identity
+    // revoked it; then the session ends as signing out does, what the app
+    // kept of the account on the phone goes, and the sign-in screen says
+    // why, once. Any other end leaves it to the snapshot asked after it.
+    @MainActor
+    func testARemovedDeviceEndsAndSaysWhy() async throws {
+        XCTAssertEqual(SessionEnd.closed(removed: true), .removed)
+        XCTAssertNil(SessionEnd.closed(removed: false))
+        XCTAssertEqual(SessionEnd.removed.notice, "This phone was removed from your account, and its private messages were erased from it.")
+        XCTAssertEqual(SessionEnd.signedOut.notice, LumiaSession.signedOutNotice)
+
+        let asked = Asked()
+        let (session, dir) = try signedInSession(asked)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        await session.handle(.closed(reason: "socket closed", removed: false))
+        XCTAssertTrue(session.signedIn)
+        XCTAssertNil(session.takeEnded())
+
+        UserDefaults.standard.set("f1,f2", forKey: OpenFolders.key)
+        await session.handle(.closed(reason: "device revoked", removed: true))
+        XCTAssertFalse(session.signedIn)
+        XCTAssertFalse(session.hasIdentity)
+        XCTAssertNil(UserDefaults.standard.string(forKey: OpenFolders.key), "the rail's open folders were the account's")
+        XCTAssertEqual(session.takeEndedNotice(), SessionEnd.removed.notice)
+        XCTAssertNil(session.takeEnded())
+    }
+
     /// What a test's session was asked of its client, and what the test has it answer.
     @MainActor
     private final class Asked {
@@ -448,6 +475,67 @@ final class LumiaKitTests: XCTestCase {
         await phone.signOut()
         await holder.signOut()
         await other.signOut()
+    }
+
+    // Against a running instance: one session holds the identity, set up
+    // silently at sign-up. A second restores from its phrase keeping the
+    // first, which goes on. A third restores keeping only the second: the
+    // first is revoked, hears it, is erased by the core and ends saying it
+    // was removed; signed in again, it is a new device that needs bringing in.
+    @MainActor
+    func testRestoringKeepsTheDevicesChosenAndARemovedOneSaysSo() async throws {
+        guard let instance = ProcessInfo.processInfo.environment["LUMIA_TEST_INSTANCE"], let base = URL(string: instance) else {
+            throw XCTSkip("LUMIA_TEST_INSTANCE names no instance")
+        }
+        let dirs = (0..<3).map { _ in FileManager.default.temporaryDirectory.appendingPathComponent("lumia-kit-\(UUID().uuidString)") }
+        defer { for dir in dirs { try? FileManager.default.removeItem(at: dir) } }
+        let handle = "restore\(UInt64(Date().timeIntervalSince1970 * 1000))"
+        let password = "a password for the kit's test"
+        let first = await LumiaSession(client: try LumiaClient(baseURL: base, dataDirectory: dirs[0]))
+        try await first.createAccount(handle: handle, password: password)
+        await first.load()
+        try await wait(for: "private messages set up on the first") { first.privateMessages == .ready && first.roster != nil }
+        try await wait(for: "the first's gateway") { first.connection == .connected }
+        let words = try await first.phrase()
+        let phrase = try XCTUnwrap(words).joined(separator: " ")
+        let firstID = try XCTUnwrap(first.roster?.devices.first(where: \.thisDevice)?.deviceId)
+
+        let second = await LumiaSession(client: try LumiaClient(baseURL: base, dataDirectory: dirs[1]))
+        try await second.signIn(handle: handle, password: password, totpCode: nil)
+        do {
+            _ = try await second.restoreDevices(phrase: "not a phrase")
+            XCTFail("a phrase that is not one is refused before anything changes")
+        } catch {}
+        let stopping = try await second.restoreDevices(phrase: phrase)
+        XCTAssertEqual(stopping.map(\.deviceId), [firstID])
+        XCTAssertEqual(RestoreStep.afterPhrase(devices: stopping), .keep)
+        try await second.restore(phrase: phrase, keeping: [firstID])
+        XCTAssertEqual(second.privateMessages, .ready)
+        XCTAssertEqual(second.roster?.devices.filter { !$0.revoked }.count, 2, "the first is kept")
+        let secondID = try XCTUnwrap(second.roster?.devices.first(where: \.thisDevice)?.deviceId)
+        try await Task.sleep(for: .seconds(1))
+        XCTAssertTrue(first.signedIn, "a kept device goes on")
+
+        let third = await LumiaSession(client: try LumiaClient(baseURL: base, dataDirectory: dirs[2]))
+        try await third.signIn(handle: handle, password: password, totpCode: nil)
+        let both = try await third.restoreDevices(phrase: phrase)
+        XCTAssertEqual(Set(both.map(\.deviceId)), [firstID, secondID])
+        try await third.restore(phrase: phrase, keeping: [secondID])
+        XCTAssertEqual(third.roster?.devices.filter { !$0.revoked }.map(\.deviceId).sorted(), [secondID, third.roster?.devices.first(where: \.thisDevice)?.deviceId ?? ""].sorted())
+
+        try await wait(for: "the first to hear it was removed") { !first.signedIn }
+        XCTAssertEqual(first.takeEnded(), .removed)
+        XCTAssertFalse(first.hasIdentity)
+        let held = await first.client.hasIdentity
+        XCTAssertFalse(held, "the core erased the identity")
+        XCTAssertTrue(second.signedIn)
+
+        try await first.signIn(handle: handle, password: password, totpCode: nil)
+        await first.load()
+        XCTAssertEqual(first.privateMessages, .bringIn, "a new device, the account's identity elsewhere")
+        await first.signOut()
+        await second.signOut()
+        await third.signOut()
     }
 
     /// One call to the instance's API as JSON, beside the client under test.

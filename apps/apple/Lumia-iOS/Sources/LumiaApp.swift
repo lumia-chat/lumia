@@ -50,6 +50,10 @@ struct RootView: View {
             } else if let devScreen, devScreen.hasPrefix("linking-") || devScreen.hasPrefix("linkprompt-") {
                 // Linking by a prompt's every stage, drawn from values.
                 LinkStagesScene(part: devScreen)
+            } else if let devScreen, devScreen.hasPrefix("restore-") {
+                RestoreStepsScene(part: devScreen)
+            } else if devScreen == "removed" {
+                SignInView(removed: true)
             } else {
                 screen
             }
@@ -104,7 +108,7 @@ struct RootView: View {
             LinkView(session: session)
         } else if store.route == .restore, let session = store.session {
             // From the sign-in screen: restoring signs in by the identity.
-            RestoreScreen(session: session, back: "Sign in", close: { store.route = .signIn }) { store.route = .app }
+            RestoreScreen(session: session, back: "Sign in", close: { store.route = .signIn }, link: { store.route = .link }) { store.route = .app }
         } else {
             SignInView()
         }

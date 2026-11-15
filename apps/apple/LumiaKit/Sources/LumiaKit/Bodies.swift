@@ -154,6 +154,10 @@ public enum BodyBlocks {
         return cache
     }()
 
+    /// Lets every body read so far go: this device was removed, and what
+    /// it read, private messages among it, goes with what the core erased.
+    static func forget() { cache.removeAllObjects() }
+
     /// A list item's marker: "•", or its number counting from `start`.
     public static func marker(start: UInt64?, at k: Int) -> String {
         start.map { "\($0 + UInt64(k))." } ?? "•"

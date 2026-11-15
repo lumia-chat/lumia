@@ -65,7 +65,7 @@ struct ShellView: View {
                 case .phrase: PhraseScreen(session: session, back: back(from: screen), again: $phraseAgain) { path.append(.phraseCheck) }
                 case .phraseCheck:
                     PhraseCheckScreen(session: session, wrong: { phraseAgain = true; path.removeLast() }, back: { path.removeLast() }, done: phraseSaved)
-                case .restore: RestoreScreen(session: session, back: back(from: screen)) { path = [] }
+                case .restore: RestoreScreen(session: session, back: back(from: screen), link: { store.route = .link }) { path = [] }
                 case .startOver: StartOverScreen(session: session, back: back(from: screen)) { path = [] }
                 case .setUp: SetUpScreen(session: session, back: back(from: screen))
                 case .approveDevice: ApproveDeviceScreen(session: session)

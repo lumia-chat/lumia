@@ -2,7 +2,8 @@
 // gets from the account's identity and its own, what a failed setup
 // leaves, the Home reminder's seven days, the phrase's columns, page and
 // file, the three-word check's fields against the core's wordlist,
-// Restore's count and Start over's words for who sees the key change.
+// Restore's count, steps and devices kept, and Start over's words for who
+// sees the key change.
 import Foundation
 @testable import LumiaKit
 import LumiaFFI
@@ -154,6 +155,41 @@ final class PrivateMessagesTests: XCTestCase {
         XCTAssertTrue(RestoreWords.canRestore(phrase))
         XCTAssertFalse(RestoreWords.canRestore(phrase + " extra"))
         XCTAssertEqual(RestoreWords.phrase(" Orbit\n\ncactus  timber "), "orbit cactus timber")
+    }
+
+    private func device(_ kind: String, label: String = "", origin: String = "", added: Int64 = 0) -> DeviceSummary {
+        DeviceSummary(deviceId: UUID().uuidString, kind: kind, label: label, webOrigin: origin, addedAtMicros: added, thisDevice: false, revoked: false)
+    }
+
+    func testThePhraseRestoresStraightAwayWhenNoDeviceWouldStop() {
+        XCTAssertNil(RestoreStep.afterPhrase(devices: []))
+        XCTAssertEqual(RestoreStep.afterPhrase(devices: [device("native", label: "MacBook Pro")]), .keep)
+    }
+
+    func testAKeptDeviceReadsByItsLabelElseItsKind() {
+        XCTAssertEqual(RestoreKeep.name(device("native", label: "MacBook Pro")), "MacBook Pro")
+        XCTAssertEqual(RestoreKeep.name(device("native")), "Computer")
+        XCTAssertEqual(RestoreKeep.name(device("web")), "Browser")
+        XCTAssertEqual(RestoreKeep.name(device("")), "Device")
+    }
+
+    func testAKeptDeviceSaysWhenItWasAddedAndABrowserWhere() {
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC")!
+        let locale = Locale(identifier: "en_US")
+        let nov12 = Int64(utc.date(from: DateComponents(year: 2026, month: 11, day: 12, hour: 12))!.timeIntervalSince1970) * 1_000_000
+        let nov1 = Int64(utc.date(from: DateComponents(year: 2026, month: 11, day: 1, hour: 12))!.timeIntervalSince1970) * 1_000_000
+        let line = { (d: DeviceSummary) in RestoreKeep.added(d, calendar: utc, locale: locale) }
+        XCTAssertEqual(line(device("native", added: nov12)), "Added Nov 12")
+        XCTAssertEqual(line(device("web", origin: "https://chat.acme.dev", added: nov1)), "On chat.acme.dev · added Nov 1")
+        XCTAssertEqual(line(device("web", origin: "http://localhost:5173")), "On localhost:5173")
+        XCTAssertEqual(line(device("native")), "")
+    }
+
+    func testTheRestoreButtonSaysHowManyAreKept() {
+        XCTAssertEqual(RestoreKeep.button(keeping: 0), "Restore and stop them all")
+        XCTAssertEqual(RestoreKeep.button(keeping: 1), "Restore and keep 1 device")
+        XCTAssertEqual(RestoreKeep.button(keeping: 3), "Restore and keep 3 devices")
     }
 
     // MARK: Start over

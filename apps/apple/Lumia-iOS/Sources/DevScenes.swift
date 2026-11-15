@@ -8,6 +8,9 @@
 // `reactions-preferences` the Preferences page where they are chosen.
 // `profile-updated` is a changed name drawn at once (issue #15).
 // `linking-…` and `linkprompt-…` are linking by a prompt's stages.
+// `restore-ask` is Restore's first question, `restore-keep` its devices to
+// keep with none ticked and `restore-keep-1` with one; `removed` is the
+// sign-in screen as a removed phone opens it.
 #if DEBUG
 import LumiaFFI
 import LumiaKit
@@ -156,6 +159,31 @@ struct ProfileUpdatedScene: View {
 /// the new device's link screen; `linkprompt-new`, `-web`, `-waiting`,
 /// `-compare`, `-refused`, `-linked` and `-stopped` the prompt's sheet over
 /// a phone that holds the identity.
+struct RestoreStepsScene: View {
+    let part: String
+    @State private var kept: Set<String> = []
+
+    private static func micros(_ month: Int, _ day: Int) -> Int64 {
+        let date = Calendar.current.date(from: DateComponents(year: 2026, month: month, day: day, hour: 12))!
+        return Int64(date.timeIntervalSince1970 * 1_000_000)
+    }
+
+    private static let devices = [
+        DeviceSummary(deviceId: "mac", kind: "native", label: "MacBook Pro", webOrigin: "", addedAtMicros: micros(11, 12), thisDevice: false, revoked: false),
+        DeviceSummary(deviceId: "phone", kind: "native", label: "iPhone", webOrigin: "", addedAtMicros: micros(11, 3), thisDevice: false, revoked: false),
+        DeviceSummary(deviceId: "web", kind: "web", label: "Safari", webOrigin: "https://chat.acme.dev", addedAtMicros: micros(11, 1), thisDevice: false, revoked: false),
+    ]
+
+    var body: some View {
+        if part == "restore-ask" {
+            RestoreAskScreen(back: "Sign in", close: {}, link: {}, restore: {})
+        } else {
+            RestoreKeepScreen(devices: Self.devices, kept: $kept, busy: false, error: "", back: {}, restore: {})
+                .onAppear { if part == "restore-keep-1" { kept = ["mac"] } }
+        }
+    }
+}
+
 struct LinkStagesScene: View {
     let part: String
 

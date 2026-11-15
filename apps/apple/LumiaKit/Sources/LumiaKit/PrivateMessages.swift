@@ -4,7 +4,8 @@
 // the one it holds (`PrivateMessages`), the Home reminder's seven days
 // (`PhraseReminder`), the phrase's words as the screen, the printed page
 // and the saved file have them (`PhraseWords`), the three-word check's
-// fields (`PhraseCheck`), Restore's one field (`RestoreWords`) and what
+// fields (`PhraseCheck`), Restore's one field (`RestoreWords`), its steps
+// and the devices it keeps (`RestoreStep`, `RestoreKeep`) and what
 // Start over says of the people who will see the key change
 // (`StartOverWords`). The core makes, keeps, asks about and checks the
 // phrase; these are the phone's words and choices around it.
@@ -214,6 +215,74 @@ public enum RestoreWords {
 
     /// What is sent: the words in lower case, one space between.
     public static func phrase(_ text: String) -> String { PhraseWords.words(text).joined(separator: " ") }
+}
+
+/// Restoring's steps (identity spec 4.3 step 3): first whether the person
+/// still has a device with their private messages, when linking from it is
+/// what they want; then the phrase; then, when the identity has devices
+/// restoring would stop, which of them to keep. The phrase is held in the
+/// screen's memory between the last two and never kept anywhere.
+public enum RestoreStep: Equatable, Sendable {
+    case ask, phrase, keep
+
+    /// What follows the phrase, by the devices the instance says restoring
+    /// would stop: none, and it restores straight away (nil); else they are
+    /// listed to keep.
+    public static func afterPhrase(devices: [DeviceSummary]) -> RestoreStep? {
+        devices.isEmpty ? nil : .keep
+    }
+}
+
+/// "Keep any devices?": how each device the restore would stop reads, and
+/// what the button says by how many are ticked.
+public enum RestoreKeep {
+    /// A device's kind as the other clients name it, for one with no label.
+    public static func kindName(_ kind: String) -> String {
+        switch kind {
+        case "web": "Browser"
+        case "native": "Computer"
+        case "mobile": "Phone"
+        default: kind.isEmpty ? "Device" : kind
+        }
+    }
+
+    public static func name(_ device: DeviceSummary) -> String {
+        device.label.isEmpty ? kindName(device.kind) : device.label
+    }
+
+    /// The line under the name: "Added Nov 12", or a browser's "On
+    /// chat.acme.dev · added Nov 1"; nothing for a device with no date.
+    public static func added(_ device: DeviceSummary, calendar: Calendar = .current, locale: Locale = .current) -> String {
+        var day = ""
+        if device.addedAtMicros > 0 {
+            let date = Date(timeIntervalSince1970: Double(device.addedAtMicros) / 1_000_000)
+            day = date.formatted(Date.FormatStyle(locale: locale, calendar: calendar, timeZone: calendar.timeZone).month(.abbreviated).day())
+        }
+        let origin = host(device.webOrigin)
+        switch (origin.isEmpty, day.isEmpty) {
+        case (true, true): return ""
+        case (true, false): return "Added \(day)"
+        case (false, true): return "On \(origin)"
+        case (false, false): return "On \(origin) · added \(day)"
+        }
+    }
+
+    /// An origin as a person reads it: "https://chat.acme.dev" is "chat.acme.dev".
+    static func host(_ origin: String) -> String {
+        for scheme in ["https://", "http://"] where origin.hasPrefix(scheme) {
+            return String(origin.dropFirst(scheme.count))
+        }
+        return origin
+    }
+
+    /// The button, by how many devices are ticked.
+    public static func button(keeping: Int) -> String {
+        switch keeping {
+        case 0: "Restore and stop them all"
+        case 1: "Restore and keep 1 device"
+        default: "Restore and keep \(keeping) devices"
+        }
+    }
 }
 
 /// What Start over says before anything is sent (identity spec 4.7): who

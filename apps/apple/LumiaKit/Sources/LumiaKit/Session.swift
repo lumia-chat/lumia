@@ -60,6 +60,26 @@ public struct PushLedger: Equatable, Sendable {
     }
 }
 
+/// Why a session ended, and what the sign-in screen says of it (a sign-out
+/// the person chose says nothing): the instance no longer taking the
+/// session, or this device removed from the identity by another (identity
+/// spec 4.4), which the core has erased.
+public enum SessionEnd: Equatable, Sendable {
+    case signedOut, removed
+
+    /// The gateway loop's end: removed when the identity revoked this
+    /// device; otherwise nothing is known yet, and the snapshot asked after
+    /// it says whether the session is over.
+    public static func closed(removed: Bool) -> SessionEnd? { removed ? .removed : nil }
+
+    public var notice: String {
+        switch self {
+        case .signedOut: "You were signed out of this phone. Sign in again to carry on."
+        case .removed: "This phone was removed from your account, and its private messages were erased from it."
+        }
+    }
+}
+
 /// How long a load that came short of the gateway loop waits before it is
 /// asked again: a second, then twice as long each time, at most half a
 /// minute, as the core's reconnects wait; a load that comes through starts
@@ -486,7 +506,7 @@ public final class LumiaSession {
         await pushSending?.value
         try? await ask(.pushUnsubscribe)
         await end()
-        endedNotice = nil
+        ended = nil
     }
 
     /// The gateway stops, the session is revoked where the instance still
@@ -520,6 +540,9 @@ public final class LumiaSession {
         newSince = [:]
         channelMemberIDs = [:]
         commandError = nil
+        editsSent = EditsSent()
+        editRefusals = [:]
+        railError = nil
         pendingReveal = nil
         messageLimits = [:]
         readMarks = ReadMarks()
@@ -529,14 +552,17 @@ public final class LumiaSession {
     }
 
     /// What the sign-in screen says to someone the instance sent back to it.
-    public static let signedOutNotice = "You were signed out of this phone. Sign in again to carry on."
-    private var endedNotice: String?
+    public static let signedOutNotice = SessionEnd.signedOut.notice
+    private var ended: SessionEnd?
+
+    /// Why the session last ended, taken: the next sign-in screen opens without it.
+    public func takeEnded() -> SessionEnd? {
+        defer { ended = nil }
+        return ended
+    }
 
     /// The line for the sign-in screen, taken: the next one opens without it.
-    public func takeEndedNotice() -> String? {
-        defer { endedNotice = nil }
-        return endedNotice
-    }
+    public func takeEndedNotice() -> String? { takeEnded()?.notice }
 
     /// The instance no longer takes this session (it was revoked, or ran
     /// out): the gateway stops and what was held of the account goes, as on
@@ -546,7 +572,28 @@ public final class LumiaSession {
         guard signedIn, !leaving else { return }
         leaving = true
         defer { leaving = false }
-        endedNotice = Self.signedOutNotice
+        ended = .signedOut
+        await end()
+    }
+
+    /// Another device revoked this one (identity spec 4.4): the core has
+    /// already erased what it kept (the instance's store, the identity, the
+    /// keys and tokens) and made it a new device. What the app held of the
+    /// account goes too, in memory and on this phone (the parsed bodies,
+    /// the pictures' cache, the phrase reminder, the rail's open folders,
+    /// the emoji used), and the sign-in screen says why, even when the
+    /// session had already ended another way.
+    func deviceRemoved() async {
+        ended = .removed
+        hasIdentity = false
+        BodyBlocks.forget()
+        URLCache.shared.removeAllCachedResponses()
+        var reminder = PhraseReminder()
+        reminder.clear()
+        for key in [OpenFolders.key, FrequentEmoji.key] { UserDefaults.standard.removeObject(forKey: key) }
+        guard signedIn, !leaving else { return }
+        leaving = true
+        defer { leaving = false }
         await end()
     }
 
@@ -732,11 +779,19 @@ public final class LumiaSession {
         await afterIdentity()
     }
 
+    /// The devices of the phrase's identity that restoring would stop, read
+    /// from the instance before anything changes; none when it knows no
+    /// roster for it. A phrase that is not one is refused here.
+    public func restoreDevices(phrase: String) async throws -> [DeviceSummary] {
+        try await client.identityRecoverDevices(phrase: phrase)
+    }
+
     /// Restores the identity from its 24 words (identity spec 4.3): this
-    /// phone becomes its only device and signs in by it, so this works from
-    /// the sign-in screen as well as from inside the app.
-    public func restore(phrase: String) async throws {
-        roster = try await client.identityRecover(phrase: phrase, label: Self.deviceLabel)
+    /// phone joins it and signs in by it, so this works from the sign-in
+    /// screen as well as from inside the app. The devices in `keeping`
+    /// stay; every other one is revoked.
+    public func restore(phrase: String, keeping: [String] = []) async throws {
+        roster = try await client.identityRecoverKeeping(phrase: phrase, label: Self.deviceLabel, keep: keeping)
         hasIdentity = true
         signedIn = true
         privateMessages = .ready
@@ -1211,9 +1266,10 @@ public final class LumiaSession {
             connection = .reconnecting(attempt: attempt)
         case let .disconnected(reason, _):
             connection = .disconnected(reason: reason)
-        case let .closed(reason, _):
+        case let .closed(reason, removed):
             connection = .closed(reason: reason)
             events = nil
+            if SessionEnd.closed(removed: removed) == .removed { await deviceRemoved() }
         case let .dmSubscribed(channelId), let .dmReady(channelId):
             await refreshDmChannels()
             await refreshDmLog(channelID: channelId)

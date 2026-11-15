@@ -198,11 +198,15 @@ public actor LumiaClient {
     /// for none); an identity made here unless held and the account bound
     /// to it under the reauth in hand (`ReauthNeeded` without one,
     /// `AccountHasIdentity` when the account has another); the identity
-    /// restored from its phrase, signing in by it; the account moved to a
-    /// new one here (Start over, reauth first).
+    /// restored from its phrase, signing in by it, after the devices it
+    /// would stop are read and those the person still has kept; the account
+    /// moved to a new one here (Start over, reauth first).
     public func accountIdentity() throws -> String? { try inner.accountIdentity() }
     public func identitySetup(label: String) throws -> String { try inner.identitySetup(label: label) }
-    public func identityRecover(phrase: String, label: String) throws -> RosterSummary { try inner.identityRecover(phrase: phrase, label: label) }
+    public func identityRecoverDevices(phrase: String) throws -> [DeviceSummary] { try inner.identityRecoverDevices(phrase: phrase) }
+    public func identityRecoverKeeping(phrase: String, label: String, keep: [String]) throws -> RosterSummary {
+        try inner.identityRecoverKeeping(phrase: phrase, label: label, keep: keep)
+    }
     public func identityStartOver(label: String) throws -> String { try inner.identityStartOver(label: label) }
     /// The phrase this phone keeps until three of its words are confirmed
     /// (24 words, or nil once confirmed), whether one waits, the three

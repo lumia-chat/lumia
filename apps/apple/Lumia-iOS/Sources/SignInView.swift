@@ -23,12 +23,23 @@ struct SignInView: View {
     @State private var magicSent = false
     @State private var magicCode = ""
     @State private var busy = false
+    /// Sent here because another device removed this one: said until dismissed.
+    @State private var removed: Bool
+
+    init(removed: Bool = false) {
+        _removed = State(initialValue: removed)
+    }
 
     var body: some View {
         ScrollView {
             VStack(spacing: LumiaTokens.space16) {
                 Image("Logo").resizable().scaledToFit().frame(height: 96)
                     .padding(.top, LumiaTokens.space24)
+                if removed {
+                    LumiaNotice(icon: "iphone.slash", tone: .warning, action: ("Dismiss", { removed = false })) {
+                        Text(SessionEnd.removed.notice)
+                    }
+                }
                 if let info {
                     accountCard(info)
                     if creating, info.identityProofSignInEnabled { alreadyUse }
@@ -50,8 +61,13 @@ struct SignInView: View {
         .scrollDismissesKeyboard(.interactively)
         .task {
             if let saved = store.savedInstance { instance = saved }
-            // Sent back here by the instance (a revoked session), the card opens saying so.
-            if let notice = store.session?.takeEndedNotice() { error = notice }
+            // Sent back here by the instance (a revoked session), the card
+            // opens saying so; removed by another device, the notice over it does.
+            switch store.session?.takeEnded() {
+            case .removed?: removed = true
+            case let ended?: error = ended.notice
+            case nil: break
+            }
             if store.session != nil { await reach() }
         }
     }

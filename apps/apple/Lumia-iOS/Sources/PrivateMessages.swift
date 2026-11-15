@@ -651,21 +651,44 @@ struct PhraseCheckScreen: View {
 
 // MARK: Restore
 
-/// Restore with the recovery phrase (identity spec 4.3): the 24 words in
-/// one field, counted, Restore at 24. This phone becomes the identity's
-/// only device and signs in by it, from inside the app or from sign-in.
+/// Restore with the recovery phrase (identity spec 4.3), from inside the
+/// app or from sign-in, in three steps (`RestoreStep`): whether the person
+/// still has a device with their private messages, which sends them to
+/// link from it instead; the 24 words in one field, counted, Restore at
+/// 24; and, when the identity has devices restoring would stop, which of
+/// them to keep. This phone joins the identity and signs in by it. The
+/// phrase lives in this screen's state between the last two steps and
+/// goes with it.
 struct RestoreScreen: View {
     let session: LumiaSession
     var back = "Home"
     /// Where the back button goes when this is not pushed (from sign-in).
     var close: (() -> Void)?
+    /// "Yes, link from it": where "Link from a device you use" goes from the same place.
+    let link: () -> Void
     let restored: () -> Void
+    @State private var step = RestoreStep.ask
     @State private var text = ""
+    @State private var devices: [DeviceSummary] = []
+    @State private var kept: Set<String> = []
     @State private var busy = false
     @State private var error = ""
 
     var body: some View {
-        PanelScreen(back: back, title: "Restore", subtitle: "With your recovery phrase", close: close) {
+        switch step {
+        case .ask:
+            RestoreAskScreen(back: back, close: close, link: link) { step = .phrase }
+        case .phrase:
+            phraseEntry
+        case .keep:
+            RestoreKeepScreen(devices: devices, kept: $kept, busy: busy, error: error, back: { error = ""; step = .phrase }) {
+                Task { await restore(keeping: Array(kept)) }
+            }
+        }
+    }
+
+    private var phraseEntry: some View {
+        PanelScreen(back: "Restore", title: "Restore", subtitle: "With your recovery phrase", close: { error = ""; step = .ask }) {
             ScrollView {
                 VStack(alignment: .leading, spacing: LumiaTokens.space14) {
                     VStack(alignment: .leading, spacing: LumiaTokens.space6) {
@@ -699,7 +722,7 @@ struct RestoreScreen: View {
             }
             .scrollDismissesKeyboard(.interactively)
             PanelFooter {
-                Button { Task { await restore() } } label: { Text("Restore").frame(maxWidth: .infinity) }
+                Button { Task { await submit() } } label: { Text("Restore").frame(maxWidth: .infinity) }
                     .buttonStyle(.lumiaPrimary).disabled(busy || !RestoreWords.canRestore(text))
                 if !RestoreWords.canRestore(text) {
                     Text("Restore turns on once all 24 words are in.")
@@ -709,16 +732,148 @@ struct RestoreScreen: View {
         }
     }
 
-    private func restore() async {
+    /// The phrase given: the devices restoring would stop are read first;
+    /// with none it restores at once, else they are listed to keep, none ticked.
+    private func submit() async {
+        busy = true
+        error = ""
+        let stopping: [DeviceSummary]
+        do {
+            stopping = try await session.restoreDevices(phrase: RestoreWords.phrase(text))
+        } catch {
+            busy = false
+            self.error = "Not restored: \(error.lumiaMessage)"
+            return
+        }
+        guard RestoreStep.afterPhrase(devices: stopping) == .keep else { return await restore(keeping: []) }
+        busy = false
+        devices = stopping
+        kept = []
+        step = .keep
+    }
+
+    private func restore(keeping: [String]) async {
         busy = true
         error = ""
         defer { busy = false }
         do {
-            try await session.restore(phrase: RestoreWords.phrase(text))
+            try await session.restore(phrase: RestoreWords.phrase(text), keeping: keeping)
             text = ""
             restored()
         } catch {
             self.error = "Not restored: \(error.lumiaMessage)"
+        }
+    }
+}
+
+/// "Do you still have a device with your private messages?": someone who
+/// does wants to link from it, since restoring stops the devices they
+/// don't keep.
+struct RestoreAskScreen: View {
+    let back: String
+    var close: (() -> Void)?
+    let link: () -> Void
+    let restore: () -> Void
+
+    var body: some View {
+        PanelScreen(back: back, title: "Restore", subtitle: "With your recovery phrase", close: close) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: LumiaTokens.space18) {
+                    Text("Do you still have a device with your private messages?")
+                        .font(LumiaTokens.titleAuth.font).foregroundStyle(LumiaTokens.ink.color)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityAddTraits(.isHeader)
+                    Text("If you do, link this phone from it instead. Restoring is for when your devices are gone: it stops the ones you don't keep.")
+                        .font(LumiaTokens.textSubtitle.font).foregroundStyle(LumiaTokens.inkSecondary.color)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button(action: link) { Label("Yes, link from it", systemImage: "iphone").frame(maxWidth: .infinity) }
+                        .buttonStyle(.lumiaPrimary)
+                    Button(action: restore) { Label("No, restore with my phrase", systemImage: "text.alignleft").frame(maxWidth: .infinity) }
+                        .buttonStyle(.lumiaSecondary)
+                }
+                .padding(LumiaTokens.space24)
+                .containerRelativeFrame(.vertical, alignment: .center) { height, _ in height }
+            }
+        }
+    }
+}
+
+/// "Keep any devices?": the identity's devices restoring would stop, each
+/// ticked by a tap anywhere on its row, none at first; the button says how
+/// many stay.
+struct RestoreKeepScreen: View {
+    let devices: [DeviceSummary]
+    @Binding var kept: Set<String>
+    let busy: Bool
+    let error: String
+    let back: () -> Void
+    let restore: () -> Void
+
+    var body: some View {
+        PanelScreen(back: "Restore", title: "Keep any devices?", subtitle: "Before this phone restores", close: back) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: LumiaTokens.space14) {
+                    Text("Tick the devices you still have. The others stop reading your private messages, so a lost one can't keep reading them.")
+                        .font(LumiaTokens.textBody.font).foregroundStyle(LumiaTokens.inkBody.color)
+                        .fixedSize(horizontal: false, vertical: true)
+                    VStack(spacing: 0) {
+                        ForEach(devices, id: \.deviceId) { d in
+                            KeepDeviceRow(device: d, kept: Binding(
+                                get: { kept.contains(d.deviceId) },
+                                set: { on in if on { kept.insert(d.deviceId) } else { kept.remove(d.deviceId) } }
+                            ))
+                        }
+                    }
+                    .accessibilityElement(children: .contain)
+                    .accessibilityLabel("Your devices")
+                    LumiaNotice(icon: "exclamationmark.triangle", tone: .warning) {
+                        Text("Keep only devices you have with you now. A kept device you've lost would keep reading your private messages.")
+                    }
+                    if !error.isEmpty { LumiaErrorText(error) }
+                }
+                .padding(LumiaTokens.space16)
+            }
+            PanelFooter {
+                Button(action: restore) { Text(RestoreKeep.button(keeping: kept.count)).frame(maxWidth: .infinity) }
+                    .buttonStyle(.lumiaPrimary).disabled(busy)
+            }
+        }
+    }
+}
+
+/// One device to keep or not: its kind's icon, its name and when it was
+/// added, and the checkbox; heard as a switch with the same words.
+private struct KeepDeviceRow: View {
+    let device: DeviceSummary
+    @Binding var kept: Bool
+
+    private var name: String { RestoreKeep.name(device) }
+    private var added: String { RestoreKeep.added(device) }
+
+    var body: some View {
+        Button { kept.toggle() } label: {
+            HStack(spacing: LumiaTokens.space12) {
+                Image(systemName: device.kind == "web" ? "globe" : "laptopcomputer.and.iphone")
+                    .font(.system(size: 17))
+                    .foregroundStyle(LumiaTokens.iconStrong.color)
+                    .frame(width: LumiaTokens.space40, height: LumiaTokens.space40)
+                    .background(LumiaTokens.chip.color, in: RoundedRectangle(cornerRadius: LumiaTokens.radius10))
+                VStack(alignment: .leading, spacing: LumiaTokens.space2) {
+                    Text(name).font(LumiaTokens.textAuthor.font).foregroundStyle(LumiaTokens.ink.color)
+                    if !added.isEmpty { Text(added).font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkSecondary.color) }
+                }
+                Spacer(minLength: 0)
+                Image(systemName: kept ? "checkmark.square.fill" : "square")
+                    .font(.system(size: 22))
+                    .foregroundStyle(kept ? LumiaTokens.accent.color : LumiaTokens.inkQuiet.color)
+            }
+            .padding(.vertical, LumiaTokens.space12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .overlay(alignment: .bottom) { Divider().overlay(LumiaTokens.line.color) }
+        .accessibilityRepresentation {
+            Toggle(isOn: $kept) { Text(added.isEmpty ? name : "\(name), \(added)") }
         }
     }
 }

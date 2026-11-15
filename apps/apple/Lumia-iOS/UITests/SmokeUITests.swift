@@ -1142,8 +1142,10 @@ final class SmokeUITests: XCTestCase {
 
     /// A phone signed in to an account whose identity is on another device
     /// (the CLI's): Home says private messages need this phone, its Set up
-    /// opens the sheet, Restore takes the 24 words and turns on at 24, and
-    /// the phone is then the identity's device, with nothing more to set up.
+    /// opens the sheet, Restore asks first whether a device is still there
+    /// and, told no, takes the 24 words and turns on at 24; the CLI's device
+    /// is offered to keep, none ticked, and kept, and the phone is then the
+    /// identity's device beside it, with nothing more to set up.
     func testThisPhoneIsBroughtInByRestoring() throws {
         let env = ProcessInfo.processInfo.environment
         let steps = try XCTUnwrap(env["LUMIA_UITEST_STEPS"])
@@ -1160,6 +1162,10 @@ final class SmokeUITests: XCTestCase {
         }
         reached("sheet")
         app.buttons["Restore with your recovery phrase"].tap()
+        XCTAssertTrue(app.staticTexts["Do you still have a device with your private messages?"].waitForExistence(timeout: 10), "Restore does not ask first")
+        XCTAssertTrue(app.buttons["Yes, link from it"].exists)
+        reached("ask")
+        app.buttons["No, restore with my phrase"].tap()
         let words = app.textViews["Your 24 words, in order"]
         XCTAssertTrue(words.waitForExistence(timeout: 10), "no field for the words")
         let restore = app.buttons["Restore"]
@@ -1172,9 +1178,23 @@ final class SmokeUITests: XCTestCase {
         XCTAssertTrue(restore.isEnabled, "Restore off at 24 words")
         reached("restore")
         restore.tap()
+        XCTAssertTrue(app.staticTexts["Keep any devices?"].waitForExistence(timeout: 30), "the CLI's device is not offered to keep")
+        let device = app.switches.firstMatch
+        XCTAssertTrue(device.exists, "no device to tick, on:\n" + app.debugDescription)
+        XCTAssertEqual(device.value as? String, "0", "a device ticked before the person chose")
+        XCTAssertTrue(app.buttons["Restore and stop them all"].exists)
+        device.tap()
+        XCTAssertEqual(device.value as? String, "1", "a tap does not tick it")
+        let keep = app.buttons["Restore and keep 1 device"]
+        XCTAssertTrue(keep.exists, "the button does not say one device is kept")
+        reached("keep")
+        keep.tap()
         XCTAssertTrue(app.staticTexts["Your conversations"].waitForExistence(timeout: 30), "not back on Home, set up")
         XCTAssertFalse(notice.exists, "Home still says private messages need this phone")
         reached("restored")
+        app.buttons["Devices"].tap()
+        XCTAssertTrue(app.staticTexts["2 linked to you"].waitForExistence(timeout: 10), "the CLI's device was not kept beside this phone")
+        reached("kept")
     }
 
     /// Start over, for someone with neither device nor phrase: what stays

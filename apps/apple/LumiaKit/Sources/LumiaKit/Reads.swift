@@ -249,7 +249,7 @@ public extension LumiaSession {
 }
 
 public extension FrequentEmoji {
-    private static let key = "recentEmoji"
+    internal static let key = "recentEmoji"
 
     /// What this phone reacted with, newest first.
     static var recent: [String] { UserDefaults.standard.stringArray(forKey: key) ?? [] }
