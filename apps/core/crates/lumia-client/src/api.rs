@@ -1687,6 +1687,45 @@ impl Api {
         decoded(status, &bytes)
     }
 
+    /// `PATCH /servers/{id}` with only what it does with its files (specs/media.md
+    /// 4.5); `None` leaves one as it is.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` without `MANAGE_SERVER`; transport failure.
+    pub async fn set_server_files(
+        &self,
+        server_id: &str,
+        attachment_retention_days: Option<u32>,
+        storage_full: Option<lumia_core::proto::StorageFull>,
+    ) -> Result<Server, ClientError> {
+        let req = UpdateServerRequest {
+            attachment_retention_days,
+            storage_full: storage_full.map(|f| f as i32),
+            ..Default::default()
+        };
+        let (status, bytes) = self
+            .send(
+                reqwest::Method::PATCH,
+                &format!("/api/v1/servers/{server_id}"),
+                Some(req.encode_to_vec()),
+                None,
+            )
+            .await?;
+        decoded(status, &bytes)
+    }
+
+    /// `GET /servers/{id}/storage`: what the server's files take.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` without `MANAGE_SERVER`; transport failure.
+    pub async fn server_storage(
+        &self,
+        server_id: &str,
+    ) -> Result<lumia_core::proto::ServerStorage, ClientError> {
+        self.get(&format!("/api/v1/servers/{server_id}/storage"))
+            .await
+    }
+
     /// `PATCH /servers/{server_id}` with only its default channels.
     pub async fn set_default_channels(
         &self,

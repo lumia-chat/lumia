@@ -119,6 +119,15 @@ pub struct ServerSummary {
     /// 6.7).
     #[serde(default)]
     pub show_deleted: bool,
+    /// How long the server keeps its attachments, in days; 0 for ever
+    /// (specs/media.md 4.5).
+    #[serde(default)]
+    pub attachment_retention_days: u32,
+    /// What happens when the server's files reach its limit: its oldest
+    /// messages' attachments go to make room, or (false, the default) new
+    /// uploads are refused.
+    #[serde(default)]
+    pub delete_oldest_when_full: bool,
     /// Whether this account may change the server's settings: its owner,
     /// or a member whose roles grant `MANAGE_SERVER` or `ADMINISTRATOR`
     /// (architecture 6.7). What a shell offers; the instance decides.
@@ -166,6 +175,9 @@ impl ServerSummary {
             icon_url: server.icon_url.clone(),
             retention_days: server.retention_days,
             show_deleted: server.show_deleted,
+            attachment_retention_days: server.attachment_retention_days,
+            delete_oldest_when_full: server.storage_full
+                == lumia_core::proto::StorageFull::DeleteOldest as i32,
             can_manage: holds(Permission::ManageServer),
             can_manage_channels: holds(Permission::ManageChannels),
             can_start_dms: holds(Permission::StartServerDms),
@@ -653,6 +665,20 @@ pub struct AttachmentSummary {
     pub main: BlobSummary,
     /// At most 800 px: an image's, a GIF's first frame, a video's poster.
     pub thumbnail: Option<BlobSummary>,
+    /// The server let its blobs go (specs/media.md 4.5): `main` and
+    /// `thumbnail` open nothing, and a shell draws a file row with the name
+    /// and "No longer available".
+    #[serde(default)]
+    pub expired: bool,
+}
+
+/// What a server's files take (specs/media.md 4.5).
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageSummary {
+    pub used_bytes: u64,
+    /// 0 when the instance sets no limit.
+    pub max_bytes: u64,
 }
 
 /// A link's card (specs/media.md 6). Drawn only under a link the message's
@@ -803,6 +829,7 @@ fn attachment_summary(a: &lumia_core::proto::Attachment) -> AttachmentSummary {
             .saturating_sub(lumia_core::media::TAG_BYTES as u64),
         main,
         thumbnail: a.thumbnail.as_ref().map(blob_summary),
+        expired: a.expired,
     }
 }
 
@@ -3641,6 +3668,53 @@ impl App {
             .set_show_deleted(&wire::display(&server_id), show)
             .await?;
         self.snapshot().await
+    }
+
+    /// How long a server keeps its attachments, in days, 0 for ever, and
+    /// whether a full server lets its oldest attachments go to make room
+    /// (specs/media.md 4.5); `None` leaves one as it is. Every member hears
+    /// of it through the account log. Returns the account's snapshot as it
+    /// then is.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` without `MANAGE_SERVER` there; transport failure.
+    pub async fn set_server_files(
+        &self,
+        server_id: &str,
+        attachment_retention_days: Option<u32>,
+        delete_oldest_when_full: Option<bool>,
+    ) -> Result<SnapshotSummary, ClientError> {
+        use lumia_core::proto::StorageFull;
+        let server_id = parse_uuid(server_id)?;
+        let storage_full = delete_oldest_when_full.map(|delete| {
+            if delete {
+                StorageFull::DeleteOldest
+            } else {
+                StorageFull::Refuse
+            }
+        });
+        self.api
+            .set_server_files(
+                &wire::display(&server_id),
+                attachment_retention_days,
+                storage_full,
+            )
+            .await?;
+        self.snapshot().await
+    }
+
+    /// What a server's files take (`GET /servers/{id}/storage`, specs/media.md
+    /// 4.5), for its settings: "1.2 GB of 5 GB used".
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` without `MANAGE_SERVER` there; transport failure.
+    pub async fn server_storage(&self, server_id: &str) -> Result<StorageSummary, ClientError> {
+        let server_id = parse_uuid(server_id)?;
+        let storage = self.api.server_storage(&wire::display(&server_id)).await?;
+        Ok(StorageSummary {
+            used_bytes: storage.used_bytes,
+            max_bytes: storage.max_bytes,
+        })
     }
 
     /// Makes `picture`, a file's bytes as chosen, a server's picture
@@ -6841,6 +6915,8 @@ mod kept_tests {
                 icon_url: String::new(),
                 retention_days: 0,
                 show_deleted: false,
+                attachment_retention_days: 0,
+                delete_oldest_when_full: false,
                 can_manage: false,
                 can_manage_channels: false,
                 can_start_dms: false,

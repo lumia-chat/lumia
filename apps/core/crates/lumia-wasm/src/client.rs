@@ -338,6 +338,42 @@ impl Client {
         )
     }
 
+    /// How long a server keeps its attachments in days (0 for ever), and
+    /// whether a full one lets its oldest go; one left out stays
+    /// (specs/media.md 4.5). The snapshot as it then is.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` without `MANAGE_SERVER`; transport failure.
+    #[wasm_bindgen(js_name = setServerFiles)]
+    pub async fn set_server_files(
+        &self,
+        server_id: String,
+        attachment_retention_days: Option<u32>,
+        delete_oldest_when_full: Option<bool>,
+    ) -> Result<JsValue, JsError> {
+        to_js(
+            &self
+                .app
+                .set_server_files(
+                    &server_id,
+                    attachment_retention_days,
+                    delete_oldest_when_full,
+                )
+                .await
+                .map_err(js_api)?,
+        )
+    }
+
+    /// What a server's files take, `{usedBytes, maxBytes}` (`maxBytes` 0 for
+    /// no limit), for its settings.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` without `MANAGE_SERVER`; transport failure.
+    #[wasm_bindgen(js_name = serverStorage)]
+    pub async fn server_storage(&self, server_id: String) -> Result<JsValue, JsError> {
+        to_js(&self.app.server_storage(&server_id).await.map_err(js_api)?)
+    }
+
     /// `PATCH /servers/{id}`: a server's name, how long it keeps messages in
     /// days (0 for ever), or both; one left out stays. The snapshot as it
     /// then is.

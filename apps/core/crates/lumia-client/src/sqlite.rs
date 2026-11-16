@@ -922,8 +922,9 @@ fn add_missing_columns(conn: &Connection) -> Result<(), StoreError> {
 
 /// What a server channel's rows keep of its events, as a number raised whenever
 /// `materialize` learns to keep something an older store let go: 1 is quotes, mentions,
-/// reactions and edits (architecture 6.6), 2 attachments and link cards (specs/media.md).
-const MATERIALIZED: u32 = 2;
+/// reactions and edits (architecture 6.6), 2 attachments and link cards (specs/media.md), 3
+/// attachments a server let go (specs/media.md 4.5).
+const MATERIALIZED: u32 = 3;
 
 // A store kept by an older core has server channels' messages without what it did not yet
 // keep, and cannot make it up: the events it kept were encoded again after decoding, which
@@ -1117,6 +1118,39 @@ fn materialize(tx: &rusqlite::Transaction<'_>, ev: &StoredEvent) -> Result<(), S
                 params![event.channel_id, to_i64(purged.before_seq)],
             )
             .map_err(backend)?;
+        }
+        Some(event::Payload::AttachmentsExpired(expired)) => {
+            // The messages keep their text; each attachment stays as what is drawn in its
+            // place, opening nothing (specs/media.md 4.5).
+            let rows = tx
+                .prepare(
+                    "SELECT message_id, attachments FROM messages
+                     WHERE channel_id = ?1 AND seq < ?2 AND length(attachments) > 0",
+                )
+                .and_then(|mut stmt| {
+                    stmt.query_map(
+                        params![event.channel_id, to_i64(expired.before_seq)],
+                        |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?)),
+                    )?
+                    .collect::<Result<Vec<_>, _>>()
+                })
+                .map_err(backend)?;
+            for (message_id, bytes) in rows {
+                let attachments: Vec<Attachment> = list_from::<Attachment>(&bytes)
+                    .into_iter()
+                    .map(|a| Attachment {
+                        expired: true,
+                        main: None,
+                        thumbnail: None,
+                        ..a
+                    })
+                    .collect();
+                tx.execute(
+                    "UPDATE messages SET attachments = ?2 WHERE message_id = ?1",
+                    params![message_id, list_bytes(&attachments)],
+                )
+                .map_err(backend)?;
+            }
         }
         _ => {}
     }
@@ -1462,9 +1496,61 @@ mod tests {
     }
 
     #[test]
+    fn attachments_a_server_let_go_stay_as_their_names_and_open_nothing() {
+        use lumia_core::proto::{Attachment, AttachmentKind, AttachmentsExpired, BlobRef};
+        let mut store = SqliteStore::in_memory().unwrap();
+        let ch = vec![1u8; 16];
+        let attachment = |id: u8| Attachment {
+            attachment_id: vec![id; 16],
+            kind: AttachmentKind::File as i32,
+            name: format!("{id}.pdf"),
+            main: Some(BlobRef {
+                blob_id: vec![id; 16],
+                size_bytes: 116,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let with = |seq: u64, id: u8| {
+            let mut e = created(&ch, seq, "here");
+            let mut event = Event::decode(e.bytes.as_slice()).unwrap();
+            if let Some(event::Payload::MessageCreated(MessageCreated { message: Some(m) })) =
+                event.payload.as_mut()
+            {
+                m.message_id = vec![id; 16];
+                m.attachments = vec![attachment(id)];
+            }
+            e.bytes = event.encode_to_vec();
+            e
+        };
+        store
+            .apply(LogKind::Channel, &ch, &[with(1, 1), with(2, 2)])
+            .unwrap();
+        let expired = stored(
+            &ch,
+            3,
+            event::Payload::AttachmentsExpired(AttachmentsExpired { before_seq: 2 }),
+        );
+        store.apply(LogKind::Channel, &ch, &[expired]).unwrap();
+
+        let kept = store.messages(&ch, 10).unwrap();
+        let of = |seq: u64| &kept.iter().find(|m| m.seq == seq).unwrap().attachments;
+        assert_eq!(
+            of(1),
+            &vec![Attachment {
+                expired: true,
+                main: None,
+                ..attachment(1)
+            }]
+        );
+        assert_eq!(of(2), &vec![attachment(2)]);
+        assert_eq!(kept.iter().find(|m| m.seq == 1).unwrap().body, "here");
+    }
+
+    #[test]
     fn a_store_made_before_notices_gains_their_columns() {
         let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
+        conn.execute_batch(&format!(
             "CREATE TABLE messages (
                message_id BLOB PRIMARY KEY,
                channel_id BLOB NOT NULL,
@@ -1476,8 +1562,8 @@ mod tests {
              );
              INSERT INTO messages VALUES (x'01', x'02', 1, x'03', 'old', 0, 0);
              CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-             INSERT INTO meta VALUES ('materialized', '2');",
-        )
+             INSERT INTO meta VALUES ('materialized', '{MATERIALIZED}');",
+        ))
         .unwrap();
         let store = SqliteStore::init(conn).unwrap();
         let kept = store.messages(&[2], 10).unwrap();

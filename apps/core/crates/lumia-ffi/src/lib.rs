@@ -136,6 +136,12 @@ pub struct ServerSummary {
     /// Whether a deleted message keeps its place as "(deleted)" there
     /// (architecture 6.7); off, the core's reads leave deleted ones out.
     pub show_deleted: bool,
+    /// How long the server keeps its attachments, in days; 0 for ever
+    /// (specs/media.md 4.5).
+    pub attachment_retention_days: u32,
+    /// A full server lets its oldest attachments go; false, it refuses
+    /// uploads.
+    pub delete_oldest_when_full: bool,
     /// Whether this account may change the server's settings (architecture 6.7).
     pub can_manage: bool,
     /// Whether it may create channels there and remove others from them
@@ -153,6 +159,23 @@ pub struct ServerSummary {
     pub server_dms_off: bool,
 }
 
+/// What a server's files take (specs/media.md 4.5).
+#[derive(Debug, Clone, Copy, uniffi::Record)]
+pub struct StorageSummary {
+    pub used_bytes: u64,
+    /// 0 when the instance sets no limit.
+    pub max_bytes: u64,
+}
+
+impl From<app::StorageSummary> for StorageSummary {
+    fn from(s: app::StorageSummary) -> Self {
+        Self {
+            used_bytes: s.used_bytes,
+            max_bytes: s.max_bytes,
+        }
+    }
+}
+
 impl From<app::ServerSummary> for ServerSummary {
     fn from(s: app::ServerSummary) -> Self {
         Self {
@@ -161,6 +184,8 @@ impl From<app::ServerSummary> for ServerSummary {
             icon_url: s.icon_url,
             retention_days: s.retention_days,
             show_deleted: s.show_deleted,
+            attachment_retention_days: s.attachment_retention_days,
+            delete_oldest_when_full: s.delete_oldest_when_full,
             can_manage: s.can_manage,
             can_manage_channels: s.can_manage_channels,
             can_start_dms: s.can_start_dms,
@@ -557,6 +582,9 @@ pub struct AttachmentSummary {
     pub main: BlobSummary,
     /// At most 400 px: an image's, a GIF's first frame, a video's poster.
     pub thumbnail: Option<BlobSummary>,
+    /// The server let it go (specs/media.md 4.5): drawn as a file row with
+    /// its name and "No longer available", opening nothing.
+    pub expired: bool,
 }
 
 impl From<app::AttachmentSummary> for AttachmentSummary {
@@ -574,6 +602,7 @@ impl From<app::AttachmentSummary> for AttachmentSummary {
             size_bytes: a.size_bytes,
             main: a.main.into(),
             thumbnail: a.thumbnail.map(Into::into),
+            expired: a.expired,
         }
     }
 }
@@ -1856,6 +1885,33 @@ impl Client {
         Ok(self
             .runtime
             .block_on(self.app.set_show_deleted(&server_id, show))?
+            .into())
+    }
+
+    /// How long a server keeps its attachments in days (0 for ever), and
+    /// whether a full one lets its oldest go; `None` leaves one as it is
+    /// (specs/media.md 4.5). Returns the snapshot as it then is.
+    pub fn set_server_files(
+        &self,
+        server_id: String,
+        attachment_retention_days: Option<u32>,
+        delete_oldest_when_full: Option<bool>,
+    ) -> Res<SnapshotSummary> {
+        Ok(self
+            .runtime
+            .block_on(self.app.set_server_files(
+                &server_id,
+                attachment_retention_days,
+                delete_oldest_when_full,
+            ))?
+            .into())
+    }
+
+    /// What a server's files take, for its settings (`MANAGE_SERVER`).
+    pub fn server_storage(&self, server_id: String) -> Res<StorageSummary> {
+        Ok(self
+            .runtime
+            .block_on(self.app.server_storage(&server_id))?
             .into())
     }
 
