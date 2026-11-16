@@ -13,6 +13,9 @@ use std::io::Cursor;
 use image::codecs::jpeg::JpegEncoder;
 use image::imageops::FilterType;
 use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader, Limits};
+use moxcms::{
+    ColorProfile, DataColorSpace, Layout, ParsingOptions, TransformExecutor, TransformOptions,
+};
 use rustler::{Atom, Binary, Encoder, Env, OwnedBinary, Term};
 
 mod atoms {
@@ -71,9 +74,15 @@ fn reader(bytes: &[u8]) -> Result<Probed<'_>, Refusal> {
     }
 }
 
-/// The upload as pixels, upright: bounds first, then the decode under its limits, then
-/// the turn its metadata asks for (a phone's photo is stored on its side and says so).
+/// The upload as pixels, upright and in sRGB: bounds first, then the decode under its
+/// limits, then its colour profile applied and the turn its metadata asks for (a phone's
+/// photo is stored on its side and says so, in Display P3 and says so).
 fn decode(bytes: &[u8]) -> Result<DynamicImage, Refusal> {
+    decode_within(bytes, MAX_ALLOC)
+}
+
+/// [`decode`] under an allocation limit of `max_alloc` bytes.
+fn decode_within(bytes: &[u8], max_alloc: u64) -> Result<DynamicImage, Refusal> {
     let (probe, _) = reader(bytes)?;
     let (width, height) = probe.into_dimensions().map_err(|_| Refusal::Invalid)?;
     if width == 0
@@ -88,13 +97,100 @@ fn decode(bytes: &[u8]) -> Result<DynamicImage, Refusal> {
     let mut limits = Limits::default();
     limits.max_image_width = Some(MAX_SIDE);
     limits.max_image_height = Some(MAX_SIDE);
-    limits.max_alloc = Some(MAX_ALLOC);
-    reader.limits(limits);
+    limits.max_alloc = Some(max_alloc);
+    reader.limits(limits.clone());
     let mut decoder = reader.into_decoder().map_err(|_| Refusal::Invalid)?;
+    // The decoded pixels count against the limit before they are allocated, as
+    // `ImageReader::decode` counts them: a picture within the bounds can still need more
+    // (16 bits a channel), and `from_decoder` does not ask.
+    limits
+        .reserve(decoder.total_bytes())
+        .map_err(|_| Refusal::TooLarge)?;
+    decoder.set_limits(limits).map_err(|_| Refusal::TooLarge)?;
     let orientation = decoder.orientation().map_err(|_| Refusal::Invalid)?;
+    // A profile that will not read is taken for none: the picture is sRGB, as most are.
+    let icc = decoder.icc_profile().ok().flatten();
     let mut image = DynamicImage::from_decoder(decoder).map_err(|_| Refusal::Invalid)?;
+    if let Some(icc) = icc {
+        to_srgb(&mut image, &icc);
+    }
     image.apply_orientation(orientation);
     Ok(image)
+}
+
+/// The largest embedded colour profile read: a display's is a few hundred bytes, a
+/// printer's with its lookup tables a few hundred kilobytes.
+const MAX_ICC_BYTES: usize = 1 << 20;
+/// The largest colour lookup table a profile may build, in entries.
+const MAX_CLUT: usize = 1 << 20;
+
+/// Converts, in place, pixels in the colour space an embedded ICC profile names (Display
+/// P3 from a phone, Adobe RGB from a camera) to sRGB, which is what a picture without one
+/// is taken to be; the profile itself is not kept. A profile that does not parse or is not
+/// RGB, and pixels that are not RGB of 8 or 16 bits, are left as they are: a grey picture
+/// is grey in any profile.
+fn to_srgb(image: &mut DynamicImage, icc: &[u8]) {
+    let options = ParsingOptions {
+        max_profile_size: MAX_ICC_BYTES,
+        max_allowed_clut_size: MAX_CLUT,
+        ..ParsingOptions::default()
+    };
+    let Ok(profile) = ColorProfile::new_from_slice_with_options(icc, options) else {
+        return;
+    };
+    if profile.color_space != DataColorSpace::Rgb {
+        return;
+    }
+    let srgb = ColorProfile::new_srgb();
+    let width = image.width() as usize;
+    let to = |layout| {
+        profile
+            .create_transform_8bit(layout, &srgb, layout, TransformOptions::default())
+            .ok()
+    };
+    let to16 = |layout| {
+        profile
+            .create_transform_16bit(layout, &srgb, layout, TransformOptions::default())
+            .ok()
+    };
+    match image {
+        DynamicImage::ImageRgb8(pixels) => {
+            if let Some(t) = to(Layout::Rgb) {
+                convert(t.as_ref(), pixels, width * 3);
+            }
+        }
+        DynamicImage::ImageRgba8(pixels) => {
+            if let Some(t) = to(Layout::Rgba) {
+                convert(t.as_ref(), pixels, width * 4);
+            }
+        }
+        DynamicImage::ImageRgb16(pixels) => {
+            if let Some(t) = to16(Layout::Rgb) {
+                convert(t.as_ref(), pixels, width * 3);
+            }
+        }
+        DynamicImage::ImageRgba16(pixels) => {
+            if let Some(t) = to16(Layout::Rgba) {
+                convert(t.as_ref(), pixels, width * 4);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// `samples` run through `transform` a row of `row` samples at a time, so the copy it
+/// needs is one row and not the picture.
+fn convert<V: Copy + Default>(transform: &dyn TransformExecutor<V>, samples: &mut [V], row: usize) {
+    if row == 0 {
+        return;
+    }
+    let mut scratch = vec![V::default(); row];
+    for line in samples.chunks_exact_mut(row) {
+        scratch.copy_from_slice(line);
+        if transform.transform(&scratch, line).is_err() {
+            return;
+        }
+    }
 }
 
 /// The middle square of `image`, no larger than [`AVATAR_SIDE`]; a smaller one is kept
@@ -288,5 +384,64 @@ mod tests {
         assert_eq!((tall.width(), tall.height()), (133, 400));
         let small = fit(&DynamicImage::new_rgb8(100, 50));
         assert_eq!((small.width(), small.height()), (100, 50));
+    }
+
+    #[test]
+    fn the_decoded_pixels_count_against_the_allocation_limit() {
+        use image::codecs::png::PngEncoder;
+        use image::{ExtendedColorType, ImageEncoder};
+        // 64 x 64 at 16 bits a channel, RGBA: 32 KiB of pixels. A 4,096 x 6,100 picture like
+        // it is within the bounds and would need 200 MB against a limit of 160 MiB.
+        let samples: Vec<u8> = (0..64 * 64 * 4u32)
+            .flat_map(|i| u16::try_from(i).unwrap_or(0).to_be_bytes())
+            .collect();
+        let mut png = Vec::new();
+        PngEncoder::new(&mut png)
+            .write_image(&samples, 64, 64, ExtendedColorType::Rgba16)
+            .expect("it encodes");
+        assert!(decode_within(&png, 1 << 20).is_ok());
+        assert!(matches!(
+            decode_within(&png, 24 * 1024),
+            Err(Refusal::TooLarge)
+        ));
+    }
+
+    #[test]
+    fn a_picture_with_a_colour_profile_comes_out_in_srgb() {
+        use image::codecs::png::PngEncoder;
+        use image::{ExtendedColorType, ImageEncoder, Rgb, RgbImage};
+        const P3: [u8; 3] = [200, 100, 50];
+        let mut srgb = [0u8; 3];
+        ColorProfile::new_display_p3()
+            .create_transform_8bit(
+                Layout::Rgb,
+                &ColorProfile::new_srgb(),
+                Layout::Rgb,
+                TransformOptions::default(),
+            )
+            .expect("a transform")
+            .transform(&P3, &mut srgb)
+            .expect("it converts");
+        let close =
+            |a: [u8; 3], within: u8| a.iter().zip(srgb).all(|(x, y)| x.abs_diff(y) <= within);
+        assert!(!close(P3, 8), "the colours differ enough to tell: {srgb:?}");
+
+        let img = RgbImage::from_pixel(16, 16, Rgb(P3));
+        let encode = |icc: Option<Vec<u8>>| {
+            let mut png = Vec::new();
+            let mut encoder = PngEncoder::new(&mut png);
+            if let Some(icc) = icc {
+                encoder.set_icc_profile(icc).expect("PNG takes a profile");
+            }
+            encoder
+                .write_image(img.as_raw(), 16, 16, ExtendedColorType::Rgb8)
+                .expect("it encodes");
+            png
+        };
+        let p3 = ColorProfile::new_display_p3().encode().expect("a profile");
+        let tagged = decode(&encode(Some(p3))).unwrap_or_else(|_| panic!("it decodes"));
+        assert!(close(tagged.to_rgb8().get_pixel(3, 3).0, 1));
+        let plain = decode(&encode(None)).unwrap_or_else(|_| panic!("it decodes"));
+        assert_eq!(plain.to_rgb8().get_pixel(3, 3).0, P3);
     }
 }

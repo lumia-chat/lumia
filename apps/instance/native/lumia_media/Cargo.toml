@@ -16,6 +16,9 @@ rustler = "0.38"
 # Decoders in Rust only: no format here links C (architecture 3 sends those
 # through a Port worker instead, and none is needed yet).
 image = { version = "0.25.6", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
+# A picture's embedded colour profile converted to sRGB; already in the tree
+# under `image`, and Rust only.
+moxcms = { version = "0.8.1", default-features = false }
 
 [lints.rust]
 unsafe_code = "forbid"
