@@ -128,3 +128,19 @@ fn a_resolved_handle_gives_the_address_a_did_link_does() {
     assert_eq!(bluesky_embed_url("did:plc:nope", rkey), None);
     assert_eq!(bluesky_embed_url(&format!("{did}/x"), rkey), None);
 }
+
+/// `proto/vectors/embeds/origins.json` is what the instance names in the web app's
+/// `frame-src`: the same origins as [`lumia_core::embeds::EMBED_ORIGINS`], in its order.
+#[test]
+fn the_origins_file_is_the_cores_list() {
+    #[derive(Deserialize)]
+    struct Origins {
+        origins: Vec<String>,
+    }
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../../proto/vectors/embeds/origins.json"
+    );
+    let file: Origins = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    assert_eq!(file.origins, lumia_core::embeds::EMBED_ORIGINS);
+}

@@ -5,11 +5,27 @@ defmodule LumiaWeb.UiController do
   router's catch-all). The app routes client-side, so a deep link to a
   conversation reloads to the same page. Without a build the instance
   says so in plain text, and an unknown `/api` path stays a JSON 404.
+
+  The page carries a Content-Security-Policy of `frame-src` alone, naming
+  the origins a link's embed loads from (specs/media.md 6.6), read at
+  compile time from `proto/vectors/embeds/origins.json`, which a test in
+  `lumia-core` holds equal to the core's `EMBED_ORIGINS`. No other
+  directive yet: a fuller policy is its own work.
   """
 
   use LumiaWeb, :controller
 
   alias LumiaWeb.ProtoConn
+
+  # From the repository's root; the image copies the file to the same place
+  # relative to the instance (apps/instance/Dockerfile).
+  @origins_path Path.expand("../../../../../proto/vectors/embeds/origins.json", __DIR__)
+  @external_resource @origins_path
+  @embed_origins @origins_path |> File.read!() |> Jason.decode!() |> Map.fetch!("origins")
+  @csp "frame-src " <> Enum.join(@embed_origins, " ")
+
+  @doc "The origins a link's embed loads from: the web app's `frame-src`."
+  def embed_origins, do: @embed_origins
 
   def index(%{path_info: ["api" | _]} = conn, _params) do
     ProtoConn.render_error(conn, :not_found)
@@ -22,6 +38,7 @@ defmodule LumiaWeb.UiController do
       conn
       |> put_resp_content_type("text/html")
       |> put_resp_header("cache-control", "no-cache")
+      |> put_resp_header("content-security-policy", @csp)
       |> send_file(200, index)
     else
       conn

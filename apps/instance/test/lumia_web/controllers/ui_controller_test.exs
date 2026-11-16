@@ -28,6 +28,30 @@ defmodule LumiaWeb.UiControllerTest do
     end
   end
 
+  test "the page may frame the embeds' origins, and the policy says nothing else", %{
+    conn: conn,
+    index: index,
+    dir: dir
+  } do
+    File.mkdir_p!(dir)
+    File.write!(index, "<!doctype html>")
+
+    origins =
+      Path.expand("../../../../../proto/vectors/embeds/origins.json", __DIR__)
+      |> File.read!()
+      |> Jason.decode!()
+      |> Map.fetch!("origins")
+
+    assert "https://www.youtube-nocookie.com" in origins
+    assert UiController.embed_origins() == origins
+
+    [csp] = conn |> get("/app") |> get_resp_header("content-security-policy")
+    assert ["frame-src" | sources] = String.split(csp, " ")
+    for origin <- origins, do: assert(origin in sources)
+    assert length(sources) == length(origins)
+    refute csp =~ ";"
+  end
+
   test "an unknown api path is still a JSON not-found", %{conn: conn, index: index, dir: dir} do
     File.mkdir_p!(dir)
     File.write!(index, "<!doctype html>")

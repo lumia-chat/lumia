@@ -1,0 +1,17 @@
+{
+  "comment": "The origins an embed loads from (specs/media.md 6.6): lumia_core::embeds::EMBED_ORIGINS, held equal to it by a test in lumia-core. The instance reads this file for the web app's frame-src.",
+  "origins": [
+    "https://www.youtube-nocookie.com",
+    "https://player.vimeo.com",
+    "https://player.twitch.tv",
+    "https://clips.twitch.tv",
+    "https://w.soundcloud.com",
+    "https://open.spotify.com",
+    "https://platform.twitter.com",
+    "https://embed.bsky.app",
+    "https://www.facebook.com",
+    "https://www.instagram.com",
+    "https://www.tiktok.com",
+    "https://embed.reddit.com"
+  ]
+}

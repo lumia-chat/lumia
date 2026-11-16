@@ -41,6 +41,9 @@ COPY apps/instance/native native
 COPY apps/instance/lib lib
 COPY apps/instance/priv priv
 COPY apps/instance/rel rel
+# The embeds' origins, the web app's frame-src (LumiaWeb.UiController reads
+# it at compile time from the repository's root, which is / from /app).
+COPY proto/vectors/embeds/origins.json /proto/vectors/embeds/origins.json
 COPY --from=web /src/apps/instance/priv/static/ui priv/static/ui
 RUN mix compile && mix release
 
