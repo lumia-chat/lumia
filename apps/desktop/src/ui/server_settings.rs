@@ -242,7 +242,7 @@ fn files(s: &State, server: &ServerSummary, look: Look) -> El {
     ));
     card = card.child(if form.delete_oldest_when_full {
         quiet(
-            "When an upload would not fit, the oldest messages' attachments are deleted for everyone to make room.",
+            "When an upload would not fit, the oldest messages’ attachments are deleted for everyone to make room.",
             look,
         )
     } else {

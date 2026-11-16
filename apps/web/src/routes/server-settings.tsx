@@ -309,7 +309,7 @@ export function ServerSettings(props: { server: ServerSummary; snapshot: Snapsho
               }}
             />
             <p class="auth__note">
-              {deleteOldest() ? "When an upload would not fit, the oldest messages' attachments are deleted for everyone to make room." : "When an upload would not fit, it is refused until files are deleted."}
+              {deleteOldest() ? "When an upload would not fit, the oldest messages’ attachments are deleted for everyone to make room." : "When an upload would not fit, it is refused until files are deleted."}
             </p>
             <Show when={filesError()}>
               <p class="auth__error" role="alert">

@@ -127,7 +127,7 @@ class ServerSettingsTest {
         assertEquals(listOf("Refuse new uploads", "Delete the oldest attachments"), WhenFull.choices.map { it.second })
         assertEquals(listOf(false, true), WhenFull.choices.map { it.first })
         assertEquals(
-            "When an upload would not fit, the oldest messages' attachments are deleted for everyone to make room.",
+            "When an upload would not fit, the oldest messages’ attachments are deleted for everyone to make room.",
             WhenFull.warning(false, true),
         )
         assertNull(WhenFull.warning(true, true))

@@ -92,7 +92,7 @@ object WhenFull {
     /** What the screen says above Save when the choice would start deleting attachments; none when it would not. */
     fun warning(from: Boolean, to: Boolean): String? =
         if (to && !from) {
-            "When an upload would not fit, the oldest messages' attachments are deleted for everyone to make room."
+            "When an upload would not fit, the oldest messages’ attachments are deleted for everyone to make room."
         } else {
             null
         }

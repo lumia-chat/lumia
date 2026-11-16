@@ -191,7 +191,7 @@ fn the_files_card_says_what_they_take_and_what_each_choice_deletes() {
     assert!(shown.contains(
         "Attachments older than 90 days will be deleted for everyone. Their messages stay."
     ));
-    assert!(shown.contains("the oldest messages' attachments are deleted for everyone"));
+    assert!(shown.contains("the oldest messages’ attachments are deleted for everyone"));
     press(&mut rt, "save-files");
     assert!(rt.state.server_forms.settings.files_saving.busy);
     answer(
