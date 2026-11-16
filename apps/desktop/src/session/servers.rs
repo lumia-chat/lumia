@@ -16,6 +16,7 @@ use std::path::Path;
 
 use lumia_client::app::{
     ChannelSummary, InvitePreviewSummary, InviteSummary, ServerSummary, SnapshotSummary,
+    StorageSummary,
 };
 
 use super::avatars::read_picture;
@@ -28,6 +29,8 @@ pub enum Setting {
     Retention,
     Picture,
     ShowDeleted,
+    /// How long attachments are kept and what a full server does (specs/media.md 4.5).
+    Files,
 }
 
 /// What a finished server-management call reports.
@@ -65,6 +68,11 @@ pub enum ServerUpdate {
         server_id: String,
         setting: Setting,
         result: Result<SnapshotSummary, Failure>,
+    },
+    /// What `server_id`'s files take, for its settings (specs/media.md 4.5).
+    Storage {
+        server_id: String,
+        result: Result<StorageSummary, Failure>,
     },
     /// The invite `code` of `server_id` revoked, or why not.
     InviteRevoked {
@@ -221,6 +229,36 @@ impl Session {
         });
     }
 
+    /// How long a server keeps its attachments, in days (0 for ever), and whether a full
+    /// one lets its oldest go ([`ServerUpdate::SettingSaved`]; specs/media.md 4.5).
+    pub fn set_server_files(&self, server_id: &str, days: u32, delete_oldest: bool) {
+        let Some(app) = self.client() else { return };
+        let server_id = server_id.to_string();
+        self.task(async move {
+            let result = app
+                .set_server_files(&server_id, Some(days), Some(delete_oldest))
+                .await;
+            Update::Server(ServerUpdate::SettingSaved {
+                server_id,
+                setting: Setting::Files,
+                result: result.map_err(Failure::from),
+            })
+        });
+    }
+
+    /// What a server's files take ([`ServerUpdate::Storage`]).
+    pub fn load_server_storage(&self, server_id: &str) {
+        let Some(app) = self.client() else { return };
+        let server_id = server_id.to_string();
+        self.task(async move {
+            let result = app.server_storage(&server_id).await;
+            Update::Server(ServerUpdate::Storage {
+                server_id,
+                result: result.map_err(Failure::from),
+            })
+        });
+    }
+
     /// Sends the file at `path` to be a server's picture ([`ServerUpdate::SettingSaved`]).
     pub fn set_server_icon(&self, server_id: &str, path: &Path) {
         let Some(app) = self.client() else { return };
@@ -278,6 +316,7 @@ impl Session {
             | ServerUpdate::InviteEmailed { .. }
             | ServerUpdate::Invites { .. }
             | ServerUpdate::InviteRevoked { .. }
+            | ServerUpdate::Storage { .. }
             | ServerUpdate::SettingSaved { .. } => {}
         }
     }

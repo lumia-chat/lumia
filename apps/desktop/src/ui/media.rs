@@ -196,7 +196,8 @@ fn gif_badge(look: Look) -> El {
 
 /// The design system's file row: the kind's tile, the name, the size, and what can be done
 /// with it. A picture's row (Images "As links", or one that may not be decoded) opens the
-/// viewer when pressed; a video's and a recording's have Play.
+/// viewer when pressed; a video's and a recording's have Play. One the server let go says
+/// so where its size was, and does nothing (specs/media.md 4.5).
 fn file_row(
     s: &State,
     attachment: &AttachmentSummary,
@@ -205,10 +206,15 @@ fn file_row(
     look: Look,
 ) -> El {
     let c = look.c;
-    let playable = matches!(attachment.kind.as_str(), "video" | "audio");
+    let gone = attachment.expired;
+    let playable = !gone && matches!(attachment.kind.as_str(), "video" | "audio");
     let opens = is_picture(attachment) && !undrawable(s, attachment);
     let glyph = if playable { &icons::PLAY } else { &icons::FILE };
-    let size = size_words(attachment.size_bytes);
+    let size = if gone {
+        "No longer available".to_string()
+    } else {
+        size_words(attachment.size_bytes)
+    };
     let mut words = row()
         .grow(1.0)
         .min_w(0.0)
@@ -262,15 +268,17 @@ fn file_row(
             look,
         ));
     }
-    let a = attachment.clone();
-    frame = frame.child(glyph_button(
-        format!("save-{}", attachment.attachment_id),
-        &icons::DOWNLOAD,
-        &format!("Save {}", attachment.name),
-        t::FILE_ACTION,
-        move |s: &mut State, tx| s.save_attachment(&a, tx),
-        look,
-    ));
+    if !gone {
+        let a = attachment.clone();
+        frame = frame.child(glyph_button(
+            format!("save-{}", attachment.attachment_id),
+            &icons::DOWNLOAD,
+            &format!("Save {}", attachment.name),
+            t::FILE_ACTION,
+            move |s: &mut State, tx| s.save_attachment(&a, tx),
+            look,
+        ));
+    }
     if editing {
         frame = frame.child(remove_button(attachment, look));
     }
@@ -309,7 +317,7 @@ pub fn attachments(
     let images = s.settings.images == Media::Shown;
     let as_picture = |a: &AttachmentSummary| {
         images
-            && (is_picture(a) || (a.kind == "video" && a.thumbnail.is_some()))
+            && (is_picture(a) || (a.kind == "video" && !a.expired && a.thumbnail.is_some()))
             && !undrawable(s, a)
     };
     let (pictures, files): (Vec<&AttachmentSummary>, Vec<&AttachmentSummary>) =

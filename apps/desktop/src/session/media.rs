@@ -232,8 +232,9 @@ pub fn card_key(card: &CardSummary) -> Option<String> {
 }
 
 /// Whether an attachment is drawn as a picture: an image or a GIF, and a video by its poster.
+/// One the server let go is a file row (specs/media.md 4.5).
 pub fn is_picture(attachment: &AttachmentSummary) -> bool {
-    matches!(attachment.kind.as_str(), "image" | "gif")
+    !attachment.expired && matches!(attachment.kind.as_str(), "image" | "gif")
 }
 
 /// The extension a video or a recording is written under for the system's player: from its
@@ -287,6 +288,11 @@ pub fn size_words(bytes: u64) -> String {
 fn refusal_words(failure: &Failure) -> String {
     match failure.code.as_str() {
         "PAYLOAD_TOO_LARGE" => "Too large for this instance.".into(),
+        "RESOURCE_EXHAUSTED"
+            if failure.details.get("state").map(String::as_str) == Some("storage") =>
+        {
+            "This server is out of space for files.".into()
+        }
         "PERMISSION_DENIED" => "You can’t attach files here.".into(),
         _ => {
             let mut words = failure.message.trim().to_string();
@@ -593,7 +599,7 @@ impl Session {
         let mut wanted: Vec<(String, Source)> = Vec::new();
         for entry in self.entries.iter().filter(|e| !e.deleted) {
             if self.media.show_images {
-                for attachment in &entry.attachments {
+                for attachment in entry.attachments.iter().filter(|a| !a.expired) {
                     if let Some(thumbnail) = &attachment.thumbnail
                         && matches!(attachment.kind.as_str(), "image" | "gif" | "video")
                     {
@@ -852,6 +858,14 @@ mod tests {
         assert_eq!(
             refusal_words(&failure("PAYLOAD_TOO_LARGE", "x")),
             "Too large for this instance."
+        );
+        let full = Failure {
+            details: [("state".to_string(), "storage".to_string())].into(),
+            ..failure("RESOURCE_EXHAUSTED", "quota exceeded")
+        };
+        assert_eq!(
+            refusal_words(&full),
+            "This server is out of space for files."
         );
         assert_eq!(
             refusal_words(&failure(

@@ -5,7 +5,9 @@
 //! web's and the phones'.
 //!
 //! Shortening how long messages are kept deletes, at the instance's next daily run and for
-//! everyone, what is older than the new limit; the card says so before it is saved.
+//! everyone, what is older than the new limit; the card says so before it is saved. The
+//! Files card does the same for attachments, says what the server's files take, and says
+//! what letting the oldest go means before it is chosen (specs/media.md 4.5).
 
 use std::path::Path;
 
@@ -14,7 +16,9 @@ use rune::{FileDialogOptions, TextEdit, Tx};
 use super::State;
 use super::account::picture_refusal;
 use crate::session::Failure;
+use crate::session::media::size_words;
 use crate::session::servers::Setting;
+use lumia_client::app::StorageSummary;
 
 /// The retention choices the page offers, in days; 0 keeps messages for ever.
 pub const RETENTION_CHOICES: [u32; 4] = [0, 365, 90, 30];
@@ -43,6 +47,20 @@ pub fn retention_choices(current: u32) -> Vec<u32> {
 /// is the longest.
 pub fn shortens(current: u32, chosen: u32) -> bool {
     chosen != 0 && (current == 0 || chosen < current)
+}
+
+/// What a server's files take, as its settings say it: "1.2 GB of 5.0 GB used", or "1.2 GB
+/// used" where the instance sets no limit.
+pub fn usage_words(storage: &StorageSummary) -> String {
+    if storage.max_bytes == 0 {
+        format!("{} used", size_words(storage.used_bytes))
+    } else {
+        format!(
+            "{} of {} used",
+            size_words(storage.used_bytes),
+            size_words(storage.max_bytes)
+        )
+    }
 }
 
 /// One card's save: waiting, done, or why not.
@@ -74,6 +92,14 @@ pub struct ServerSettings {
     pub retention_saving: Saving,
     pub picture: Saving,
     pub show_deleted: Saving,
+    /// How long attachments are kept, in days (0 for ever), and whether a full server lets
+    /// its oldest go, as chosen on the page; saved together.
+    pub attachment_retention: u32,
+    pub delete_oldest_when_full: bool,
+    pub files_saving: Saving,
+    /// What the server's files take, once the instance said; why not, when it could not.
+    pub storage: Option<StorageSummary>,
+    pub storage_error: String,
 }
 
 /// Why a setting was not changed.
@@ -110,8 +136,11 @@ impl State {
             server_id: Some(server.server_id.clone()),
             name: TextEdit::new(&server.name),
             retention: server.retention_days,
+            attachment_retention: server.attachment_retention_days,
+            delete_oldest_when_full: server.delete_oldest_when_full,
             ..ServerSettings::default()
         };
+        self.session.load_server_storage(&server.server_id);
     }
 
     /// Back to the channel the page was opened over.
@@ -143,6 +172,48 @@ impl State {
         let form = &mut self.server_forms.settings;
         form.retention = days;
         form.retention_saving.saved = false;
+    }
+
+    pub fn choose_attachment_retention(&mut self, days: u32) {
+        let form = &mut self.server_forms.settings;
+        form.attachment_retention = days;
+        form.files_saving.saved = false;
+    }
+
+    pub fn choose_when_full(&mut self, delete_oldest: bool) {
+        let form = &mut self.server_forms.settings;
+        form.delete_oldest_when_full = delete_oldest;
+        form.files_saving.saved = false;
+    }
+
+    pub fn save_server_files(&mut self) {
+        let Some(server_id) = self.settings_server() else {
+            return;
+        };
+        let form = &mut self.server_forms.settings;
+        if form.files_saving.busy {
+            return;
+        }
+        form.files_saving = Saving::started();
+        let (days, delete_oldest) = (form.attachment_retention, form.delete_oldest_when_full);
+        self.session
+            .set_server_files(&server_id, days, delete_oldest);
+    }
+
+    /// What the server's files take, when the page is still open for it.
+    pub(super) fn react_storage(
+        &mut self,
+        server_id: &str,
+        result: &Result<StorageSummary, Failure>,
+    ) {
+        let form = &mut self.server_forms.settings;
+        if form.server_id.as_deref() != Some(server_id) {
+            return;
+        }
+        match result {
+            Ok(storage) => form.storage = Some(*storage),
+            Err(failure) => form.storage_error = setting_refusal(failure),
+        }
     }
 
     /// Turns "Show deleted messages" over, saved at once (architecture 6.7).
@@ -239,6 +310,7 @@ impl State {
             Setting::Retention => &mut form.retention_saving,
             Setting::Picture => &mut form.picture,
             Setting::ShowDeleted => &mut form.show_deleted,
+            Setting::Files => &mut form.files_saving,
         };
         *saving = Saving::default();
         match result {
@@ -248,6 +320,10 @@ impl State {
                     match setting {
                         Setting::Name => form.name = TextEdit::new(&server.name),
                         Setting::Retention => form.retention = server.retention_days,
+                        Setting::Files => {
+                            form.attachment_retention = server.attachment_retention_days;
+                            form.delete_oldest_when_full = server.delete_oldest_when_full;
+                        }
                         Setting::Picture | Setting::ShowDeleted => {}
                     }
                 }
@@ -276,6 +352,20 @@ mod tests {
         assert_eq!(retention_choices(90), vec![0, 365, 90, 30]);
         // Set elsewhere to something the page does not offer: shown, so it can be kept.
         assert_eq!(retention_choices(14), vec![0, 365, 90, 30, 14]);
+    }
+
+    #[test]
+    fn usage_names_the_limit_only_where_there_is_one() {
+        let of = |used_bytes, max_bytes| StorageSummary {
+            used_bytes,
+            max_bytes,
+        };
+        assert_eq!(usage_words(&of(1_200_000_000, 0)), "1.2 GB used");
+        assert_eq!(
+            usage_words(&of(1_200_000_000, 5_000_000_000)),
+            "1.2 GB of 5.0 GB used"
+        );
+        assert_eq!(usage_words(&of(0, 0)), "0 B used");
         // For ever is the longest; a shorter time deletes, a longer one does not.
         assert!(shortens(0, 30));
         assert!(shortens(90, 30));

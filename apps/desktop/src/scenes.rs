@@ -213,7 +213,7 @@ pub const SCENES: &[Scene] = &[
     }),
     // A server's settings (`ui/server_settings.rs`): Acme with a picture, which the rail
     // draws too, and a shorter retention chosen and not yet saved, which says what it
-    // deletes. The picture is the brand's icon standing in; no instance is asked for it.
+    // deletes; its files at 1.2 GB of 5 GB, with 90 days and letting the oldest go chosen. The picture is the brand's icon standing in; no instance is asked for it.
     ("server-settings", |s| {
         use crate::session::avatars::AvatarUpdate;
         servers_sample(s);
@@ -231,6 +231,23 @@ pub const SCENES: &[Scene] = &[
         }));
         s.open_server_settings();
         s.choose_retention(30);
+        let server_id = s
+            .server_forms
+            .settings
+            .server_id
+            .clone()
+            .unwrap_or_default();
+        s.receive(&Update::Server(
+            crate::session::servers::ServerUpdate::Storage {
+                server_id,
+                result: Ok(lumia_client::app::StorageSummary {
+                    used_bytes: 1_200_000_000,
+                    max_bytes: 5_000_000_000,
+                }),
+            },
+        ));
+        s.choose_attachment_retention(90);
+        s.choose_when_full(true);
         s.tick(chrono::Utc::now().timestamp_micros());
         s.pictures.wait();
     }),

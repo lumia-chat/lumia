@@ -67,8 +67,9 @@ fn file(id: &str, kind: &str, name: &str, media_type: &str, size: u64) -> Attach
     }
 }
 
-/// `media`: a channel where a picture, a file, two pictures together, a link's card, a
-/// video without a poster and a recording were sent, and the composer holding a picture
+/// `media`: a channel where a picture the server has since let go (specs/media.md 4.5), a
+/// picture, a file, two pictures together, a link's card, a video without a poster and a
+/// recording were sent, and the composer holding a picture
 /// with its alt text, a file uploading, one refused, and a link's card previewed.
 /// `--snap out.png --scene media --size 1180x1500`.
 pub fn media(state: &mut State) {
@@ -118,6 +119,17 @@ pub fn media(state: &mut State) {
         ..CardSummary::default()
     };
     state.session.entries = vec![
+        Entry {
+            attachments: vec![AttachmentSummary {
+                attachment_id: "a-gone".into(),
+                kind: "image".into(),
+                name: "Offsite, last spring.jpg".into(),
+                media_type: "image/jpeg".into(),
+                expired: true,
+                ..AttachmentSummary::default()
+            }],
+            ..entry("x0", "grace", "From the offsite.", 40)
+        },
         Entry {
             attachments: vec![portrait.clone()],
             ..entry("x1", "grace", "The new portrait, as promised.", 30)

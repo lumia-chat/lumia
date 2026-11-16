@@ -272,6 +272,7 @@ impl State {
                 setting,
                 result,
             } => self.react_setting(server_id, *setting, result),
+            ServerUpdate::Storage { server_id, result } => self.react_storage(server_id, result),
             ServerUpdate::ServerCreated(answer) => {
                 let form = &mut self.server_forms.add;
                 form.creating = false;

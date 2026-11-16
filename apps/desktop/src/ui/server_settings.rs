@@ -1,5 +1,6 @@
 //! A server's settings (architecture 6.7, `app::server_settings`): its picture and name, the
-//! channels newcomers join (architecture 6.8), and how long it keeps its messages. Drawn in the server's main pane in place of the channel,
+//! channels newcomers join (architecture 6.8), how long it keeps its messages, and its files
+//! (specs/media.md 4.5). Drawn in the server's main pane in place of the channel,
 //! for whoever the menu under the server's name offers them to; a channel chosen in the
 //! sidebar goes back to it.
 //!
@@ -15,14 +16,15 @@ use super::components::{
 };
 use super::home::{action, page_column, titled_page};
 use crate::app::State;
-use crate::app::server_settings::{retention_choices, retention_words, shortens};
+use crate::app::server_settings::{retention_choices, retention_words, shortens, usage_words};
 use crate::tokens as t;
 
 pub fn view(s: &State, server: &ServerSummary, look: Look) -> El {
     let content = page_column()
         .child(overview(s, server, look))
         .child(super::channels::defaults_card(s, server, look))
-        .child(history(s, server, look));
+        .child(history(s, server, look))
+        .child(files(s, server, look));
     titled_page(
         "server-settings",
         "Server settings",
@@ -187,4 +189,80 @@ fn history(s: &State, server: &ServerSummary, look: Look) -> El {
         card = card.child(error_text(&form.show_deleted.error, look));
     }
     card
+}
+
+/// The server's files: what they take, how long attachments are kept, and what happens when
+/// the server is full, with what a shorter time and letting the oldest go do said first.
+fn files(s: &State, server: &ServerSummary, look: Look) -> El {
+    let form = &s.server_forms.settings;
+    let choices: Vec<(u32, String)> = retention_choices(server.attachment_retention_days)
+        .into_iter()
+        .map(|days| (days, retention_words(days)))
+        .collect();
+    let options: Vec<(u32, &str)> = choices.iter().map(|(d, w)| (*d, w.as_str())).collect();
+    let mut card = card(
+        "Files",
+        "The attachments sent in this server's channels.",
+        look,
+    )
+    .key("server-files")
+    .w_full();
+    card = card.child(match (&form.storage, form.storage_error.is_empty()) {
+        (Some(storage), _) => quiet(&usage_words(storage), look),
+        (None, false) => error_text(&form.storage_error, look),
+        (None, true) => quiet("Counting…", look),
+    });
+    card = card.child(segmented(
+        "attachment-retention",
+        "Keep attachments",
+        &options,
+        form.attachment_retention,
+        |s: &mut State, days: u32| s.choose_attachment_retention(days),
+        look,
+    ));
+    if shortens(server.attachment_retention_days, form.attachment_retention) {
+        card = card.child(error_text(
+            &format!(
+                "Attachments older than {} will be deleted for everyone. Their messages stay. This cannot be undone.",
+                retention_words(form.attachment_retention)
+            ),
+            look,
+        ));
+    }
+    card = card.child(segmented(
+        "when-full",
+        "When the server is full",
+        &[
+            (false, "Refuse new uploads"),
+            (true, "Delete the oldest attachments"),
+        ],
+        form.delete_oldest_when_full,
+        |s: &mut State, delete: bool| s.choose_when_full(delete),
+        look,
+    ));
+    card = card.child(if form.delete_oldest_when_full {
+        quiet(
+            "When an upload would not fit, the oldest messages' attachments are deleted for everyone to make room.",
+            look,
+        )
+    } else {
+        quiet(
+            "When an upload would not fit, it is refused until files are deleted.",
+            look,
+        )
+    });
+    if !form.files_saving.error.is_empty() {
+        card = card.child(error_text(&form.files_saving.error, look));
+    } else if form.files_saving.saved {
+        card = card.child(quiet("Saved.", look));
+    }
+    card.child(action(primary_button(
+        "save-files",
+        "Save",
+        !form.files_saving.busy
+            && (form.attachment_retention != server.attachment_retention_days
+                || form.delete_oldest_when_full != server.delete_oldest_when_full),
+        State::save_server_files,
+        look,
+    )))
 }

@@ -165,6 +165,49 @@ fn a_shorter_retention_says_what_it_deletes_before_it_is_saved() {
 }
 
 #[test]
+fn the_files_card_says_what_they_take_and_what_each_choice_deletes() {
+    let mut rt = runtime(signed_in());
+    open_settings(&mut rt);
+    assert!(words(&rt).contains("Counting…"));
+    rt.update(|s, _| {
+        s.receive(&Update::Server(ServerUpdate::Storage {
+            server_id: "acme".into(),
+            result: Ok(lumia_client::app::StorageSummary {
+                used_bytes: 1_200_000_000,
+                max_bytes: 0,
+            }),
+        }));
+    });
+    settle(&mut rt);
+    let shown = words(&rt);
+    assert!(shown.contains("1.2 GB used"));
+    assert!(shown.contains("it is refused until files are deleted"));
+    assert!(!shown.contains("Their messages stay"));
+
+    // Forever, 1 year, 90 days, 30 days; then the oldest let go.
+    press(&mut rt, "attachment-retention-2");
+    press(&mut rt, "when-full-1");
+    let shown = words(&rt);
+    assert!(shown.contains(
+        "Attachments older than 90 days will be deleted for everyone. Their messages stay."
+    ));
+    assert!(shown.contains("the oldest messages' attachments are deleted for everyone"));
+    press(&mut rt, "save-files");
+    assert!(rt.state.server_forms.settings.files_saving.busy);
+    answer(
+        &mut rt,
+        Setting::Files,
+        Ok(changed(|s| {
+            s.attachment_retention_days = 90;
+            s.delete_oldest_when_full = true;
+        })),
+    );
+    let shown = words(&rt);
+    assert!(shown.contains("Saved."));
+    assert!(!shown.contains("Their messages stay"));
+}
+
+#[test]
 fn a_channel_goes_back_from_the_settings() {
     let mut rt = runtime(signed_in());
     open_settings(&mut rt);
