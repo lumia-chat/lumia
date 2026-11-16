@@ -16,7 +16,7 @@ defmodule Lumia.BlobsTest do
     assert byte_size(blob.address) == 32
     assert blob.size == byte_size(@picture)
 
-    {:ok, object} = Store.get(Blobs.name(blob.address))
+    {:ok, object} = Store.get(Blobs.object_name("avatar", blob.address))
     refute object =~ "not really a picture"
     refute blob.wrapped_key =~ "not really"
     # 12 of nonce and 16 of tag around the bytes; 32 of key the same way.
@@ -41,14 +41,14 @@ defmodule Lumia.BlobsTest do
     assert {:error, :not_found} = Blobs.fetch(:crypto.strong_rand_bytes(32), "avatar")
     assert {:error, :not_found} = Blobs.fetch(blob.address, "attachment")
 
-    name = Blobs.name(blob.address)
+    name = Blobs.object_name("avatar", blob.address)
     {:ok, <<first, rest::binary>>} = Store.get(name)
     :ok = Store.put(name, <<Bitwise.bxor(first, 1), rest::binary>>)
     assert {:error, :not_found} = Blobs.fetch(blob.address, "avatar")
 
     # Another blob's object under this one's name does not pass for it either.
     {:ok, other} = Blobs.put("something else entirely", "avatar", "image/png", owner.id)
-    {:ok, theirs} = Store.get(Blobs.name(other.address))
+    {:ok, theirs} = Store.get(Blobs.object_name("avatar", other.address))
     :ok = Store.put(name, theirs)
     assert {:error, :not_found} = Blobs.fetch(blob.address, "avatar")
   end
@@ -57,7 +57,7 @@ defmodule Lumia.BlobsTest do
     {:ok, blob} = Blobs.put(@picture, "avatar", "image/png", account().id)
     assert :ok = Blobs.delete(blob.address)
     assert {:error, :not_found} = Blobs.fetch(blob.address, "avatar")
-    assert {:error, :not_found} = Store.get(Blobs.name(blob.address))
+    assert {:error, :not_found} = Store.get(Blobs.object_name("avatar", blob.address))
     assert :ok = Blobs.delete(blob.address)
   end
 

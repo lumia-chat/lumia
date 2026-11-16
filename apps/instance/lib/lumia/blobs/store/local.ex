@@ -1,6 +1,7 @@
 defmodule Lumia.Blobs.Store.Local do
   @moduledoc """
-  Blobs as files under a directory: `<dir>/<first two of the name>/<name>`.
+  Blobs as files under a directory: a name `folder/rest` (`avatars/<hex>`,
+  `att/<uuid>`) at `<dir>/<folder>/<first two of rest>/<rest>`.
   A write goes to a temporary file beside its place and is renamed in, so a
   reader never sees half of one.
   """
@@ -45,6 +46,17 @@ defmodule Lumia.Blobs.Store.Local do
     end
   end
 
-  # Names are hex made by `Lumia.Blobs`, never a caller's string.
-  defp path(dir, <<prefix::binary-size(2), _::binary>> = name), do: Path.join([dir, prefix, name])
+  @doc "Where `name` is kept under `dir`."
+  def path(dir, name) do
+    # Names are made by `Lumia.Blobs` and `Lumia.Uploads`, never a caller's string.
+    case String.split(name, "/", parts: 2) do
+      [folder, <<prefix::binary-size(2), _::binary>> = rest] ->
+        Path.join([dir, folder, prefix, rest])
+
+      # A name with no folder, as blobs were named before they had one
+      # (`Lumia.Release.BlobFolders` moves them).
+      [<<prefix::binary-size(2), _::binary>>] ->
+        Path.join([dir, prefix, name])
+    end
+  end
 end

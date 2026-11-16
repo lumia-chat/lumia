@@ -56,6 +56,8 @@ All configuration is environment variables read at boot (`config/runtime.exs`); 
 | `LUMIA_PUSH_RELAY_URL` | for APNs and FCM | The push relay (architecture 15.5); without it, relay subscriptions are kept and skipped |
 | `LUMIA_PUSH_CONTACT` | no | The address the Web Push VAPID token names (`mailto:`); default `ops@` the host |
 
+The store is laid out in a folder per kind: `att/` for attachments (client ciphertext, named by the upload's id), `avatars/` for accounts' pictures, `icons/` for servers', and `cards/` for link cards' pictures (the instance's own, sealed under the master key, named by their address in hex). A directory store keeps each as `<folder>/<first two of the name>/<name>`. The instance removes what it no longer needs itself; a bucket lifecycle rule that expires objects would leave messages and profiles naming ones that are gone, with the one exception that `cards/` holds only a cache and may be expired after a day as a backstop.
+
 ## 4. Backups and restore
 
 ### 4.1 The backup set

@@ -61,7 +61,7 @@ defmodule Lumia.ReleaseTest do
 
     {:ok, blob} = Blobs.put("a picture's bytes", "avatar", "image/png", owner.id)
     name = Blobs.name(blob.address)
-    stored = Path.join([Blobs.Store.directory(), String.slice(name, 0, 2), name])
+    stored = Path.join([Blobs.Store.directory(), "avatars", String.slice(name, 0, 2), name])
 
     on_exit(fn ->
       Sandbox.checkout(Lumia.Repo, sandbox: false)
@@ -72,7 +72,7 @@ defmodule Lumia.ReleaseTest do
     assert {:ok, manifest} = Release.backup(ctx.dir)
     assert File.regular?(Path.join(ctx.dir, "database.dump"))
     assert manifest["blob_store"] == "local"
-    assert File.regular?(Path.join([ctx.dir, "blobs", String.slice(name, 0, 2), name]))
+    assert File.regular?(Path.join([ctx.dir, "blobs", "avatars", String.slice(name, 0, 2), name]))
     assert manifest["schema_version"] == Release.schema_version()
     assert manifest["master_key_fingerprint"] == Release.master_key_fingerprint()
     assert is_integer(manifest["recovery_generation"])
@@ -98,7 +98,9 @@ defmodule Lumia.ReleaseTest do
     File.rm!(stored)
     File.rm_rf!(Path.join(ctx.dir, "blobs"))
 
-    assert {:error, {:missing_blobs, [^name]}} =
+    object = "avatars/" <> name
+
+    assert {:error, {:missing_blobs, [^object]}} =
              Release.restore(ctx.dir, url: ctx.scratch_url, replace: true)
 
     assert {:ok, _} =

@@ -16,7 +16,8 @@ defmodule LumiaWeb.AvatarController do
 
   def show(conn, %{"address" => name}) do
     with address when is_binary(address) <- Blobs.address(name),
-         {:ok, %{media_type: media_type, bytes: bytes}} <- Blobs.fetch(address, "avatar") do
+         {:ok, %{media_type: media_type, bytes: bytes}} <-
+           Blobs.fetch(address, ["avatar", "icon"]) do
       conn
       |> put_resp_header("content-type", media_type)
       |> put_resp_header("cache-control", "public, max-age=31536000, immutable")

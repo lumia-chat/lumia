@@ -541,7 +541,7 @@ defmodule Lumia.Servers do
     with :ok <- may_manage(server_id, actor_id),
          true <- Lumia.Blobs.enabled?() || {:error, {:failed_precondition, "blobs"}},
          {:ok, {media_type, bytes}} <- Lumia.Media.avatar(upload),
-         {:ok, blob} <- Lumia.Blobs.put(bytes, "avatar", media_type, actor_id) do
+         {:ok, blob} <- Lumia.Blobs.put(bytes, "icon", media_type, actor_id) do
       case put_icon(server_id, actor_id, Accounts.picture_path(blob)) do
         {:ok, server} ->
           {:ok, server}
