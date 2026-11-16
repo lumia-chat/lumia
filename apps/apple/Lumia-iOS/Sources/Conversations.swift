@@ -336,7 +336,7 @@ struct ConversationScreen: View {
         if !m.attachments.isEmpty || !m.cards.isEmpty {
             let editing = changer.mediaEditing(m.messageId)
             // A long press on what it carries is its actions, as on its words; not while it is edited.
-            let hold: (() -> Void)? = member && editing == nil ? { sheet = .actions(ref(m)) } : nil
+            let hold: (() -> Void)? = member && editing == nil ? { sheet = .actions(self.ref(m)) } : nil
             x.media = AnyView(MessageMedia(attachments: m.attachments, cards: m.cards, session: session, open: { opening = $0 }, editing: editing, hold: hold))
         }
         // A quote whose author is not known draws no name.
@@ -623,7 +623,7 @@ struct ChannelScreen: View {
         if !m.attachments.isEmpty || !m.cards.isEmpty {
             let editing = changer.mediaEditing(m.messageId)
             // A long press on what it carries is its actions, as on its words; not while it is edited.
-            let hold: (() -> Void)? = member && editing == nil ? { sheet = .actions(ref(m)) } : nil
+            let hold: (() -> Void)? = member && editing == nil ? { sheet = .actions(self.ref(m)) } : nil
             x.media = AnyView(MessageMedia(attachments: m.attachments, cards: m.cards, session: session, open: { opening = $0 }, editing: editing, hold: hold))
         }
         x.mentions = m.mentions
