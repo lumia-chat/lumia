@@ -80,74 +80,178 @@ struct Track {
     handler: [u8; 4],
 }
 
+/// The deepest a movie's containers are followed. A real movie nests five
+/// deep (`moov` `trak` `mdia` `minf` `stbl`); a file nesting further is
+/// read as broken rather than followed down its whole length.
+const MAX_DEPTH: usize = 8;
+
 /// Rewrites an MP4, MOV or M4A in place: every `udta` and `meta` box (and
-/// a top-level XMP `uuid` box) becomes a `free` box of the same size with
-/// its payload zeroed, and the creation and modification times in `mvhd`,
-/// `tkhd` and `mdhd` become zero. `None` when the box structure does not
-/// hold together; boxes before the fault may already be wiped, and the
-/// file is still the same length.
+/// an XMP `uuid` box) becomes a `free` box of the same size with its
+/// payload zeroed, and the creation and modification times in `mvhd`,
+/// `tkhd` and `mdhd` become zero. The file stays the same length.
+///
+/// `None` when the box structure does not hold together. The wipe is done
+/// all the same: a box that runs past the end of what holds it (a file cut
+/// short) is read to that end, and past a header that does not read, where
+/// the boxes that follow cannot be found by their sizes, any `udta`, `meta`
+/// or XMP `uuid` type in the rest of the container is taken for a box and
+/// freed. A damaged phone video sent as a file keeps no location that way.
 pub(super) fn wipe_movie(bytes: &mut [u8]) -> Option<Movie> {
-    let mut movie = Movie::default();
-    let mut tracks = Vec::new();
+    let mut walk = Walk::default();
     let len = bytes.len();
-    for b in children(bytes, 0, len)? {
-        match &b.kind {
-            b"moov" | b"moof" => walk(bytes, b, &mut movie, &mut tracks)?,
-            b"udta" | b"meta" => free(bytes, b),
-            b"uuid" if bytes.get(b.payload - 16..b.payload) == Some(&XMP_UUID[..]) => {
-                free(bytes, b);
-            }
-            _ => {}
-        }
-    }
-    if let Some(video) = tracks.iter().find(|t| &t.handler == b"vide") {
+    walk.container(bytes, 0, len, *b"\0\0\0\0", 0);
+    let mut movie = walk.movie;
+    if let Some(video) = walk.tracks.iter().find(|t| &t.handler == b"vide") {
         movie.has_video = true;
         movie.width = video.width;
         movie.height = video.height;
     }
-    movie.has_audio = tracks.iter().any(|t| &t.handler == b"soun");
-    Some(movie)
+    movie.has_audio = walk.tracks.iter().any(|t| &t.handler == b"soun");
+    (!walk.broken).then_some(movie)
 }
 
-/// The boxes inside a container of the movie.
-fn walk(bytes: &mut [u8], parent: BoxAt, movie: &mut Movie, tracks: &mut Vec<Track>) -> Option<()> {
-    for b in children(bytes, parent.payload, parent.end)? {
-        match &b.kind {
-            b"udta" | b"meta" => free(bytes, b),
-            b"trak" => {
-                tracks.push(Track::default());
-                walk(bytes, b, movie, tracks)?;
-            }
-            b"mdia" | b"minf" | b"stbl" | b"edts" | b"dinf" | b"mvex" | b"traf" => {
-                walk(bytes, b, movie, tracks)?;
-            }
-            b"mvhd" => {
-                let (timescale, duration) = header_times(bytes, b, true)?;
-                if timescale > 0 && duration > 0 && duration != u64::from(u32::MAX) {
-                    let ms = u128::from(duration) * 1000 / u128::from(timescale);
-                    movie.duration_ms = u32::try_from(ms).unwrap_or(u32::MAX);
+/// What a walk through a movie has read, and whether anything in it did
+/// not hold together.
+#[derive(Default)]
+struct Walk {
+    movie: Movie,
+    tracks: Vec<Track>,
+    broken: bool,
+}
+
+impl Walk {
+    /// The boxes from `start` to `end`, inside a box of type `parent`.
+    fn container(
+        &mut self,
+        bytes: &mut [u8],
+        start: usize,
+        end: usize,
+        parent: [u8; 4],
+        depth: usize,
+    ) {
+        if depth > MAX_DEPTH {
+            self.broken = true;
+            free_strays(bytes, start, end);
+            return;
+        }
+        let (boxes, unread) = boxes_until_fault(bytes, start, end, &mut self.broken);
+        for b in boxes {
+            match &b.kind {
+                b"udta" | b"meta" => free(bytes, b),
+                b"uuid" if bytes.get(b.payload - 16..b.payload) == Some(&XMP_UUID[..]) => {
+                    free(bytes, b);
                 }
-            }
-            b"mdhd" => {
-                header_times(bytes, b, true)?;
-            }
-            b"tkhd" => {
-                header_times(bytes, b, false)?;
-                if let (Some(track), Some(size)) = (tracks.last_mut(), track_size(bytes, b)) {
-                    (track.width, track.height) = size;
+                b"trak" => {
+                    self.tracks.push(Track::default());
+                    self.container(bytes, b.payload, b.end, b.kind, depth + 1);
                 }
-            }
-            b"hdlr" if &parent.kind == b"mdia" => {
-                if let (Some(track), Some(handler)) =
-                    (tracks.last_mut(), bytes.get(b.payload + 8..b.payload + 12))
-                {
-                    track.handler.copy_from_slice(handler);
+                b"moov" | b"moof" | b"mdia" | b"minf" | b"stbl" | b"edts" | b"dinf" | b"mvex"
+                | b"traf" => self.container(bytes, b.payload, b.end, b.kind, depth + 1),
+                b"mvhd" => match header_times(bytes, b, true) {
+                    Some((timescale, duration)) if timescale > 0 && duration > 0 => {
+                        let ms = u128::from(duration) * 1000 / u128::from(timescale);
+                        self.movie.duration_ms = u32::try_from(ms).unwrap_or(u32::MAX);
+                    }
+                    Some(_) => {}
+                    None => self.broken = true,
+                },
+                b"mdhd" => {
+                    if header_times(bytes, b, true).is_none() {
+                        self.broken = true;
+                    }
                 }
+                b"tkhd" => {
+                    if header_times(bytes, b, false).is_none() {
+                        self.broken = true;
+                    }
+                    if let (Some(track), Some(size)) =
+                        (self.tracks.last_mut(), track_size(bytes, b))
+                    {
+                        (track.width, track.height) = size;
+                    }
+                }
+                b"hdlr" if &parent == b"mdia" => {
+                    if let (Some(track), Some(handler)) = (
+                        self.tracks.last_mut(),
+                        bytes.get(b.payload + 8..b.payload + 12),
+                    ) {
+                        track.handler.copy_from_slice(handler);
+                    }
+                }
+                _ => {}
             }
-            _ => {}
+        }
+        if let Some(at) = unread {
+            free_strays(bytes, at, end);
         }
     }
-    Some(())
+}
+
+/// The boxes from `start` to `end` as far as they read, and where reading
+/// stopped at a header that does not read (too short a size, a type cut
+/// off). A box that runs past `end` is taken to end there, the last of
+/// them. Either sets `broken`.
+fn boxes_until_fault(
+    bytes: &[u8],
+    start: usize,
+    end: usize,
+    broken: &mut bool,
+) -> (Vec<BoxAt>, Option<usize>) {
+    let mut out = Vec::new();
+    let mut pos = start;
+    // A few trailing bytes too short for a header: tolerated, as players
+    // tolerate them.
+    while pos < end && end - pos >= 8 {
+        if let Some(b) = box_at(bytes, pos, end) {
+            pos = b.end;
+            out.push(b);
+            continue;
+        }
+        *broken = true;
+        return match box_at(bytes, pos, usize::MAX) {
+            Some(b) if b.payload <= end => {
+                out.push(BoxAt { end, ..b });
+                (out, None)
+            }
+            _ => (out, Some(pos)),
+        };
+    }
+    (out, None)
+}
+
+/// Frees, from `from` to `end`, whatever reads as a `udta`, `meta` or XMP
+/// `uuid` box: to its stated size, or to `end` when that does not fit.
+fn free_strays(bytes: &mut [u8], from: usize, end: usize) {
+    let end = end.min(bytes.len());
+    let mut at = from;
+    while at.saturating_add(8) <= end {
+        let Some(found) = bytes[at + 4..end]
+            .windows(4)
+            .position(|w| matches!(w, b"udta" | b"meta" | b"uuid"))
+        else {
+            return;
+        };
+        let start = at + found;
+        let uuid = bytes.get(start + 4..start + 8) == Some(&b"uuid"[..]);
+        if uuid && bytes.get(start + 8..start + 24) != Some(&XMP_UUID[..]) {
+            at = start + 1;
+            continue;
+        }
+        let size = be32(bytes, start).map_or(0, |s| s as usize);
+        let stop = match start.checked_add(size) {
+            Some(stop) if size >= 8 && stop <= end => stop,
+            _ => end,
+        };
+        // As `free` does: the type, then everything after the header (a
+        // `uuid` box's extended type included).
+        if let Some(kind) = bytes.get_mut(start + 4..start + 8) {
+            kind.copy_from_slice(b"free");
+        }
+        if let Some(payload) = bytes.get_mut(start + 8..stop) {
+            payload.fill(0);
+        }
+        at = stop;
+    }
 }
 
 /// Turns a box into a `free` box of the same size with its payload zeroed.
@@ -168,7 +272,8 @@ fn free(bytes: &mut [u8], b: BoxAt) {
 
 /// Zeroes the creation and modification times of an `mvhd`, `tkhd` or
 /// `mdhd` (a full box: version 1 has 64-bit times, version 0 32-bit), and
-/// returns its timescale and duration where it has them (`mvhd`, `mdhd`).
+/// returns its timescale and duration where it has them (`mvhd`, `mdhd`),
+/// the duration 0 when the box says it is unknown.
 fn header_times(bytes: &mut [u8], b: BoxAt, timescale: bool) -> Option<(u32, u64)> {
     let version = *bytes.get(b.payload)?;
     let at = b.payload + 4;
@@ -179,7 +284,13 @@ fn header_times(bytes: &mut [u8], b: BoxAt, timescale: bool) -> Option<(u32, u64
     }
     let scale = be32(bytes, at + 2 * width)?;
     let duration = be_sized(bytes, at + 2 * width + 4, width)?;
-    Some((scale, duration))
+    // All ones, in either width, is "unknown".
+    let unknown = if width == 8 {
+        u64::MAX
+    } else {
+        u64::from(u32::MAX)
+    };
+    Some((scale, if duration == unknown { 0 } else { duration }))
 }
 
 /// A `tkhd`'s width and height (16.16 fixed point), swapped when its matrix

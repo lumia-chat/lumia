@@ -246,15 +246,31 @@ fn hdlr(handler: &[u8; 4]) -> Vec<u8> {
     full(b"hdlr", 0, &[&[0; 4][..], handler, &[0; 13]].concat())
 }
 
-/// A movie: ftyp, moov (mvhd, a track with its own udta, a udta and a
-/// meta), and an mdat.
-fn movie(brand: &[u8; 4], handler: &[u8; 4], matrix: [u32; 9]) -> Vec<u8> {
+/// A movie's boxes: ftyp, moov (mvhd, a track with its own udta, a udta
+/// and a meta), and an mdat.
+fn movie_boxes(brand: &[u8; 4], handler: &[u8; 4], matrix: [u32; 9]) -> [Vec<u8>; 3] {
     let ftyp = bx(
         b"ftyp",
         &[brand.as_slice(), &[0, 0, 2, 0], b"isom"].concat(),
     );
+    let moov = bx(
+        b"moov",
+        &[
+            mvhd(),
+            trak(handler, matrix),
+            bx(b"udta", &bx(b"\xA9too", b"SECRET-SOFTWARE")),
+            full(b"meta", 0, &bx(b"ilst", b"SECRET-ILST")),
+        ]
+        .concat(),
+    );
+    let mdat = bx(b"mdat", b"FRAMES-STAY-WHERE-THEY-ARE");
+    [ftyp, moov, mdat]
+}
+
+/// A track with its own udta, naming a place.
+fn trak(handler: &[u8; 4], matrix: [u32; 9]) -> Vec<u8> {
     let mdia = bx(b"mdia", &[mdhd(), hdlr(handler)].concat());
-    let trak = bx(
+    bx(
         b"trak",
         &[
             tkhd(matrix),
@@ -262,19 +278,23 @@ fn movie(brand: &[u8; 4], handler: &[u8; 4], matrix: [u32; 9]) -> Vec<u8> {
             bx(b"udta", &bx(b"\xA9xyz", b"+48.8584+002.2945/")),
         ]
         .concat(),
-    );
-    let moov = bx(
-        b"moov",
-        &[
-            mvhd(),
-            trak,
-            bx(b"udta", &bx(b"\xA9too", b"SECRET-SOFTWARE")),
-            full(b"meta", 0, &bx(b"ilst", b"SECRET-ILST")),
-        ]
-        .concat(),
-    );
-    let mdat = bx(b"mdat", b"FRAMES-STAY-WHERE-THEY-ARE");
-    [ftyp, moov, mdat].concat()
+    )
+}
+
+/// A movie: ftyp, moov, mdat, as [`movie_boxes`] makes them.
+fn movie(brand: &[u8; 4], handler: &[u8; 4], matrix: [u32; 9]) -> Vec<u8> {
+    movie_boxes(brand, handler, matrix).concat()
+}
+
+/// No metadata left anywhere in a wiped movie.
+fn assert_wiped(out: &[u8]) {
+    for needle in [&b"SECRET"[..], b"+48.8584", b"udta", b"meta", b"ilst"] {
+        assert!(
+            !contains(out, needle),
+            "{}",
+            String::from_utf8_lossy(needle)
+        );
+    }
 }
 
 fn find(haystack: &[u8], needle: &[u8]) -> usize {
@@ -649,6 +669,97 @@ fn a_noisy_camera_picture_fits_two_mebibytes() {
     assert!(sealed_len(processed.thumbnail.unwrap().len()) <= THUMBNAIL_MAX_BYTES);
 }
 
+/// A PNG of `w` x `h` at 16 bits a channel, RGBA.
+fn png16(w: u32, h: u32) -> Vec<u8> {
+    let samples: Vec<u8> = (0..w * h * 4)
+        .flat_map(|i| u16::try_from(i % 65_536).unwrap().to_be_bytes())
+        .collect();
+    let mut out = Vec::new();
+    PngEncoder::new(&mut out)
+        .write_image(&samples, w, h, ExtendedColorType::Rgba16)
+        .unwrap();
+    out
+}
+
+#[test]
+fn the_decoded_pixels_count_against_the_allocation_limit() {
+    // 64 x 64 x 8 bytes: 32 KiB of pixels, within the bounds as any
+    // picture of that size is. A 6,500 x 6,000 picture like it would need
+    // 312 MB against a limit of 192 MiB.
+    let bytes = png16(64, 64);
+    assert!(still::decode_within(&bytes, 1 << 20).is_some());
+    assert!(still::decode_within(&bytes, 24 * 1024).is_none());
+}
+
+/// Display P3, as a phone's camera embeds it.
+fn display_p3() -> Vec<u8> {
+    moxcms::ColorProfile::new_display_p3().encode().unwrap()
+}
+
+/// What `rgb` in Display P3 is in sRGB, by the conversion itself.
+fn p3_in_srgb(rgb: [u8; 3]) -> [u8; 3] {
+    let transform = moxcms::ColorProfile::new_display_p3()
+        .create_transform_8bit(
+            moxcms::Layout::Rgb,
+            &moxcms::ColorProfile::new_srgb(),
+            moxcms::Layout::Rgb,
+            moxcms::TransformOptions::default(),
+        )
+        .unwrap();
+    let mut out = [0u8; 3];
+    transform.transform(&rgb, &mut out).unwrap();
+    out
+}
+
+fn close(a: [u8; 3], b: [u8; 3], within: u8) -> bool {
+    a.iter().zip(b).all(|(x, y)| x.abs_diff(y) <= within)
+}
+
+#[test]
+fn a_picture_with_a_colour_profile_is_converted_to_srgb() {
+    const P3: [u8; 3] = [200, 100, 50];
+    let srgb = p3_in_srgb(P3);
+    assert!(
+        !close(srgb, P3, 8),
+        "the colours differ enough to tell: {srgb:?}"
+    );
+    let img = RgbImage::from_pixel(16, 16, Rgb(P3));
+
+    let mut tagged = Vec::new();
+    let mut encoder = PngEncoder::new(&mut tagged);
+    encoder.set_icc_profile(display_p3()).unwrap();
+    encoder
+        .write_image(img.as_raw(), 16, 16, ExtendedColorType::Rgb8)
+        .unwrap();
+    let converted = still::decode(&tagged).unwrap().to_rgb8();
+    assert!(close(converted.get_pixel(3, 3).0, srgb, 1), "{converted:?}");
+
+    // Without a profile the pixels are sRGB already, and stay as they are.
+    let mut plain = Vec::new();
+    PngEncoder::new(&mut plain)
+        .write_image(img.as_raw(), 16, 16, ExtendedColorType::Rgb8)
+        .unwrap();
+    assert_eq!(
+        still::decode(&plain).unwrap().to_rgb8().get_pixel(3, 3).0,
+        P3
+    );
+
+    // A phone's JPEG: the display image and its thumbnail are in sRGB, and
+    // carry no profile.
+    let mut jpeg = Vec::new();
+    let mut encoder = JpegEncoder::new_with_quality(&mut jpeg, 95);
+    encoder.set_icc_profile(display_p3()).unwrap();
+    encoder
+        .write_image(img.as_raw(), 16, 16, ExtendedColorType::Rgb8)
+        .unwrap();
+    let processed = process(input(jpeg, "IMG_0004.JPG")).unwrap();
+    assert!(!contains(&processed.main, b"ICC_PROFILE"));
+    let shown = decoded(&processed.main).to_rgb8();
+    assert!(close(shown.get_pixel(8, 8).0, srgb, 4), "{shown:?}");
+    let thumbnail = decoded(&processed.thumbnail.unwrap()).to_rgb8();
+    assert!(close(thumbnail.get_pixel(8, 8).0, srgb, 4), "{thumbnail:?}");
+}
+
 // ---------------------------------------------------------------------------
 // GIFs
 
@@ -753,6 +864,94 @@ fn a_movie_as_a_file_is_wiped_too() {
     assert_eq!(processed.kind, AttachmentKind::File);
     assert_eq!(processed.media_type, "video/mp4");
     assert!(!contains(&processed.main, b"SECRET"));
+}
+
+#[test]
+fn a_movie_cut_short_is_a_file_and_still_loses_its_metadata() {
+    // The movie box last, as a phone writes it, and the file cut off in the
+    // middle of its meta box.
+    let [ftyp, moov, mdat] = movie_boxes(b"qt  ", b"vide", IDENTITY);
+    let mut cut = [ftyp, mdat, moov].concat();
+    cut.truncate(find(&cut, b"SECRET-ILST") + 3);
+    let processed = process(input(cut.clone(), "IMG_0005.MOV")).unwrap();
+    assert_eq!(processed.kind, AttachmentKind::File);
+    assert_eq!(processed.media_type, "video/quicktime");
+    assert_eq!(processed.main.len(), cut.len());
+    assert_wiped(&processed.main);
+    let mvhd = find(&processed.main, b"mvhd") + 8;
+    assert_eq!(&processed.main[mvhd..mvhd + 8], &[0; 8]);
+    assert!(contains(&processed.main, b"FRAMES-STAY-WHERE-THEY-ARE"));
+}
+
+#[test]
+fn a_broken_box_does_not_keep_the_metadata_after_it() {
+    // A header too short to be one between the track and the movie's own
+    // udta and meta: the boxes after it cannot be found by their sizes.
+    let [ftyp, _, mdat] = movie_boxes(b"isom", b"vide", IDENTITY);
+    let moov = bx(
+        b"moov",
+        &[
+            mvhd(),
+            trak(b"vide", IDENTITY),
+            vec![0, 0, 0, 4, b'j', b'u', b'n', b'k'],
+            bx(b"udta", &bx(b"\xA9xyz", b"+48.8584+002.2945/")),
+            full(b"meta", 0, &bx(b"ilst", b"SECRET-ILST")),
+        ]
+        .concat(),
+    );
+    let broken = [ftyp, moov, mdat].concat();
+    for as_file in [false, true] {
+        let processed = process(Input {
+            as_file,
+            ..input(broken.clone(), "clip.mp4")
+        })
+        .unwrap();
+        assert_eq!(processed.kind, AttachmentKind::File);
+        assert_eq!(processed.main.len(), broken.len());
+        assert_wiped(&processed.main);
+        assert!(contains(&processed.main, b"FRAMES-STAY-WHERE-THEY-ARE"));
+    }
+}
+
+#[test]
+fn a_movie_nested_past_reason_is_a_file_without_its_metadata() {
+    let mut nested = full(b"meta", 0, &bx(b"ilst", b"SECRET-ILST"));
+    for _ in 0..20 {
+        nested = bx(b"trak", &nested);
+    }
+    let [ftyp, _, mdat] = movie_boxes(b"isom", b"vide", IDENTITY);
+    let deep = [ftyp, bx(b"moov", &[mvhd(), nested].concat()), mdat].concat();
+    let processed = process(input(deep, "deep.mp4")).unwrap();
+    assert_eq!(processed.kind, AttachmentKind::File);
+    assert_wiped(&processed.main);
+}
+
+#[test]
+fn an_unknown_duration_is_unknown_in_either_version() {
+    let [ftyp, _, mdat] = movie_boxes(b"isom", b"vide", IDENTITY);
+    let mvhd1 = |duration: u64| {
+        let mut p = Vec::new();
+        p.extend_from_slice(&[0x11; 16]); // times, 64 bits each
+        p.extend_from_slice(&600u32.to_be_bytes());
+        p.extend_from_slice(&duration.to_be_bytes());
+        p.extend_from_slice(&[0; 80]);
+        full(b"mvhd", 1, &p)
+    };
+    for (duration, want) in [(u64::MAX, 4321), (1800, 3000)] {
+        let moov = bx(
+            b"moov",
+            &[mvhd1(duration), trak(b"vide", IDENTITY)].concat(),
+        );
+        let processed = process(Input {
+            duration_ms: Some(4321),
+            ..input([ftyp.clone(), moov, mdat.clone()].concat(), "clip.mp4")
+        })
+        .unwrap();
+        assert_eq!(processed.kind, AttachmentKind::Video);
+        assert_eq!(processed.duration_ms, want);
+        let mvhd = find(&processed.main, b"mvhd") + 8;
+        assert_eq!(&processed.main[mvhd..mvhd + 16], &[0; 16]);
+    }
 }
 
 #[test]
@@ -950,6 +1149,34 @@ fn names_are_cut_on_a_character_boundary() {
     let processed = process(input(png_with_text(), &format!("{long}.png"))).unwrap();
     assert!(processed.name.len() <= NAME_MAX_BYTES);
     assert!(processed.name.ends_with(".jpg"));
+}
+
+#[test]
+fn a_file_without_a_name_is_named_for_what_it_is() {
+    let mp3 = b"ID3\x04\0\0\0\0\0\0\xFF\xFB\x90\x64".to_vec();
+    let cases = [
+        (png_with_text(), false, AttachmentKind::Image, "image.jpg"),
+        (gif(3), false, AttachmentKind::Gif, "image.gif"),
+        (
+            movie(b"isom", b"vide", IDENTITY),
+            false,
+            AttachmentKind::Video,
+            "video.mp4",
+        ),
+        (mp3, false, AttachmentKind::Audio, "audio.mp3"),
+        (png_with_text(), true, AttachmentKind::File, "image.png"),
+        (b"%PDF-1.7".to_vec(), false, AttachmentKind::File, "file"),
+    ];
+    for (bytes, as_file, kind, name) in cases {
+        for given in ["", "  "] {
+            let processed = process(Input {
+                as_file,
+                ..input(bytes.clone(), given)
+            })
+            .unwrap();
+            assert_eq!((processed.kind, processed.name.as_str()), (kind, name));
+        }
+    }
 }
 
 #[test]

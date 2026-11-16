@@ -10,6 +10,9 @@ use image::{
     DynamicImage, ExtendedColorType, ImageDecoder, ImageEncoder, ImageFormat, ImageReader, Limits,
     RgbImage, RgbaImage,
 };
+use moxcms::{
+    ColorProfile, DataColorSpace, Layout, ParsingOptions, TransformExecutor, TransformOptions,
+};
 
 use super::detect::{probe, Format, MAX_SIDE};
 use super::{MediaError, TAG_BYTES, THUMBNAIL_MAX_BYTES};
@@ -48,10 +51,15 @@ pub(super) struct Preview {
     pub placeholder: Vec<u8>,
 }
 
-/// `bytes` decoded, upright, or `None` when they are not a picture the
-/// core decodes, declare a size past the bounds, or will not decode under
-/// the allocation limit. The first frame of an animated GIF.
+/// `bytes` decoded, upright and in sRGB, or `None` when they are not a
+/// picture the core decodes, declare a size past the bounds, or will not
+/// decode under the allocation limit. The first frame of an animated GIF.
 pub(super) fn decode(bytes: &[u8]) -> Option<DynamicImage> {
+    decode_within(bytes, MAX_ALLOC)
+}
+
+/// [`decode`] under an allocation limit of `max_alloc` bytes.
+pub(super) fn decode_within(bytes: &[u8], max_alloc: u64) -> Option<DynamicImage> {
     let probe = probe(bytes)?;
     let format = match probe.format {
         Format::Jpeg => ImageFormat::Jpeg,
@@ -67,16 +75,102 @@ pub(super) fn decode(bytes: &[u8]) -> Option<DynamicImage> {
     let mut limits = Limits::default();
     limits.max_image_width = Some(MAX_SIDE);
     limits.max_image_height = Some(MAX_SIDE);
-    limits.max_alloc = Some(MAX_ALLOC);
-    reader.limits(limits);
+    limits.max_alloc = Some(max_alloc);
+    reader.limits(limits.clone());
     let mut decoder = reader.into_decoder().ok()?;
-    // An orientation that will not read is no turn, not a broken picture.
+    // The decoded pixels count against the limit before they are allocated,
+    // as `ImageReader::decode` counts them: a picture within the bounds can
+    // still need more (16 bits a channel), and `from_decoder` does not ask.
+    limits.reserve(decoder.total_bytes()).ok()?;
+    decoder.set_limits(limits).ok()?;
+    // An orientation that will not read is no turn, not a broken picture;
+    // nor is a colour profile that will not.
     let orientation = decoder
         .orientation()
         .unwrap_or(image::metadata::Orientation::NoTransforms);
+    let icc = decoder.icc_profile().ok().flatten();
     let mut image = DynamicImage::from_decoder(decoder).ok()?;
+    if let Some(icc) = icc {
+        to_srgb(&mut image, &icc);
+    }
     image.apply_orientation(orientation);
     Some(image)
+}
+
+/// The largest embedded colour profile read: a display's is a few hundred
+/// bytes, a printer's with its lookup tables a few hundred kilobytes.
+const MAX_ICC_BYTES: usize = 1 << 20;
+/// The largest colour lookup table a profile may build, in entries.
+const MAX_CLUT: usize = 1 << 20;
+
+/// Converts, in place, pixels in the colour space an embedded ICC profile
+/// names (Display P3 from a phone, Adobe RGB from a camera) to sRGB, which
+/// is what a picture without a profile is taken to be: the profile itself
+/// is not kept (spec 3.1). A profile that does not parse or is not RGB,
+/// and pixels that are not RGB of 8 or 16 bits, are left as they are; a
+/// grey picture is grey in any profile.
+fn to_srgb(image: &mut DynamicImage, icc: &[u8]) {
+    let options = ParsingOptions {
+        max_profile_size: MAX_ICC_BYTES,
+        max_allowed_clut_size: MAX_CLUT,
+        ..ParsingOptions::default()
+    };
+    let Ok(profile) = ColorProfile::new_from_slice_with_options(icc, options) else {
+        return;
+    };
+    if profile.color_space != DataColorSpace::Rgb {
+        return;
+    }
+    let srgb = ColorProfile::new_srgb();
+    let width = image.width() as usize;
+    let to = |layout| {
+        profile
+            .create_transform_8bit(layout, &srgb, layout, TransformOptions::default())
+            .ok()
+    };
+    let to16 = |layout| {
+        profile
+            .create_transform_16bit(layout, &srgb, layout, TransformOptions::default())
+            .ok()
+    };
+    match image {
+        DynamicImage::ImageRgb8(pixels) => {
+            if let Some(t) = to(Layout::Rgb) {
+                convert(t.as_ref(), pixels, width * 3);
+            }
+        }
+        DynamicImage::ImageRgba8(pixels) => {
+            if let Some(t) = to(Layout::Rgba) {
+                convert(t.as_ref(), pixels, width * 4);
+            }
+        }
+        DynamicImage::ImageRgb16(pixels) => {
+            if let Some(t) = to16(Layout::Rgb) {
+                convert(t.as_ref(), pixels, width * 3);
+            }
+        }
+        DynamicImage::ImageRgba16(pixels) => {
+            if let Some(t) = to16(Layout::Rgba) {
+                convert(t.as_ref(), pixels, width * 4);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// `samples` run through `transform` a row of `row` samples at a time, so
+/// the copy it needs is one row and not the picture.
+fn convert<V: Copy + Default>(transform: &dyn TransformExecutor<V>, samples: &mut [V], row: usize) {
+    if row == 0 {
+        return;
+    }
+    let mut scratch = vec![V::default(); row];
+    for line in samples.chunks_exact_mut(row) {
+        scratch.copy_from_slice(line);
+        if transform.transform(&scratch, line).is_err() {
+            return;
+        }
+    }
 }
 
 /// Platform-decoded pixels (RGBA8, upright) as an image.

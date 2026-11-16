@@ -2324,6 +2324,7 @@ dependencies = [
  "hkdf 0.13.0",
  "image",
  "lumia-proto",
+ "moxcms",
  "openmls",
  "openmls_basic_credential",
  "openmls_rust_crypto",

@@ -241,8 +241,10 @@ impl std::fmt::Debug for Input {
 pub struct Processed {
     pub kind: AttachmentKind,
     pub media_type: String,
-    /// At most [`NAME_MAX_BYTES`] of UTF-8, cut on a character boundary.
-    /// An `IMAGE`'s extension names what the core made (`.jpg`, `.png`).
+    /// At most [`NAME_MAX_BYTES`] of UTF-8, cut on a character boundary,
+    /// and never empty: a file given no name is named for what it is
+    /// (`video.mp4`, `file`). An `IMAGE`'s extension names what the core
+    /// made (`.jpg`, `.png`).
     pub name: String,
     pub width: u32,
     pub height: u32,
@@ -298,6 +300,11 @@ pub fn process(input: Input) -> Result<Processed, MediaError> {
         caps,
     } = input;
     let format = detect(&bytes);
+    let name = if name.trim().is_empty() {
+        unnamed(format).to_owned()
+    } else {
+        name
+    };
     let image_cap = caps.image_bytes;
 
     if !as_file {
@@ -580,6 +587,30 @@ pub fn placeholder_image(placeholder: &[u8]) -> Option<Pixels> {
         width: u32::try_from(width).ok()?,
         height: u32::try_from(height).ok()?,
     })
+}
+
+/// The name of a file given none, by what it is: the instance takes no
+/// attachment without a name.
+fn unnamed(format: Format) -> &'static str {
+    match format {
+        Format::Jpeg => "image.jpg",
+        Format::Png => "image.png",
+        Format::Gif => "image.gif",
+        Format::WebP => "image.webp",
+        Format::Heic => "image.heic",
+        Format::Heif => "image.heif",
+        Format::Avif => "image.avif",
+        Format::Mp4 => "video.mp4",
+        Format::Mov => "video.mov",
+        Format::WebM => "video.webm",
+        Format::Mp3 => "audio.mp3",
+        Format::M4a => "audio.m4a",
+        Format::Aac => "audio.aac",
+        Format::Ogg => "audio.ogg",
+        Format::Flac => "audio.flac",
+        Format::Wav => "audio.wav",
+        Format::Unknown => "file",
+    }
 }
 
 /// `name` cut to at most [`NAME_MAX_BYTES`] on a character boundary.
