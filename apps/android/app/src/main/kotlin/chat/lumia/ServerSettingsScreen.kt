@@ -1,5 +1,7 @@
 // A server's settings (architecture 6.7): its picture and name, how long
-// it keeps its messages and whether its deleted ones keep their place.
+// it keeps its messages and whether its deleted ones keep their place,
+// and its files: what they take, how long it keeps them and what it does
+// when full (specs/media.md 4.5).
 // Offered from the server's channel list to whoever may change them; the
 // web's and the desktop's screen, in the vocabulary of Profile: a card for
 // each, a Save for each (the switch saved as it is turned, as Your
@@ -29,6 +31,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -42,6 +45,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import chat.lumia.kit.FilesChange
 import chat.lumia.kit.LumiaCard
 import chat.lumia.kit.LumiaChoice
 import chat.lumia.kit.LumiaErrorText
@@ -56,6 +60,7 @@ import chat.lumia.kit.PICTURE_MAX_BYTES
 import chat.lumia.kit.PICTURE_TOO_LARGE
 import chat.lumia.kit.Retention
 import chat.lumia.kit.SERVER_NAME_REFUSED
+import chat.lumia.kit.WhenFull
 import chat.lumia.kit.initialsOf
 import chat.lumia.kit.lumiaCode
 import chat.lumia.kit.lumiaDetails
@@ -65,10 +70,12 @@ import chat.lumia.kit.readAtMost
 import chat.lumia.kit.serverNameChanged
 import chat.lumia.kit.serverNameFits
 import chat.lumia.kit.serverSettingsRefused
+import chat.lumia.kit.storageWords
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import uniffi.lumia_ffi.ServerSummary
+import uniffi.lumia_ffi.StorageSummary
 
 /** The picture in Overview: a rail tile's shape, larger (`tokens.json` has no name for it). */
 private val PictureSize = LumiaTokens.tileSize + LumiaTokens.space12
@@ -259,8 +266,86 @@ fun ServerSettingsScreen(session: LumiaSession, server: ServerSummary?, back: ()
                     if (showDeletedSaved) Text("Saved.", style = LumiaTokens.textMeta.style, color = LumiaTokens.inkSecondary.color)
                 }
             }
+            if (server != null) FilesCard(session, server)
             // The channels every newcomer joins (architecture 6.8).
             if (server != null) DefaultChannelsCard(session, server)
+        }
+    }
+}
+
+/**
+ * Files (specs/media.md 4.5): what the server's files take, asked as the
+ * screen opens ("1.2 GB of 5 GB used", "1.2 GB used" with no limit); how
+ * long it keeps its attachments, Message history's choices; and what it
+ * does when full. One Save sends what differs (`FilesChange`), and the
+ * line in the error colour above it says first what a choice would
+ * delete: nothing goes until Save.
+ */
+@Composable
+private fun FilesCard(session: LumiaSession, server: ServerSummary) {
+    val scope = rememberCoroutineScope()
+    val serverId = server.serverId
+    val keptDays = server.attachmentRetentionDays.toInt()
+    val keptDeleteOldest = server.deleteOldestWhenFull
+
+    var storage by remember(serverId) { mutableStateOf<StorageSummary?>(null) }
+    var storageError by remember(serverId) { mutableStateOf("") }
+    var days by rememberSaveable(serverId) { mutableStateOf(keptDays) }
+    var deleteOldest by rememberSaveable(serverId) { mutableStateOf(keptDeleteOldest) }
+    var busy by remember { mutableStateOf(false) }
+    var error by rememberSaveable { mutableStateOf("") }
+    var saved by rememberSaveable { mutableStateOf(false) }
+
+    LaunchedEffect(serverId) {
+        try {
+            storage = session.serverStorage(serverId)
+        } catch (e: Exception) {
+            storageError = serverSettingsRefused(e.lumiaCode, e.lumiaDetails["field"]) ?: e.lumiaMessage
+        }
+    }
+
+    val change = FilesChange.of(keptDays, keptDeleteOldest, days, deleteOldest)
+
+    fun save() {
+        scope.launch {
+            busy = true
+            error = ""
+            saved = false
+            try {
+                session.setServerFiles(serverId, change.attachmentRetentionDays, change.deleteOldestWhenFull)
+                saved = true
+            } catch (e: Exception) {
+                error = serverSettingsRefused(e.lumiaCode, e.lumiaDetails["field"]) ?: e.lumiaMessage
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    LumiaCard("Files", "What this server's attachments take, and how long it keeps them.") {
+        Column(verticalArrangement = Arrangement.spacedBy(LumiaTokens.space12)) {
+            storage?.let { Text(storageWords(it.usedBytes.toLong(), it.maxBytes.toLong()), style = LumiaTokens.textBody.style, color = LumiaTokens.ink.color) }
+            if (storageError.isNotEmpty()) LumiaErrorText(storageError)
+            Setting("Keep attachments for") {
+                LumiaChoice(
+                    Retention.choices(keptDays).map { it.toString() to Retention.label(it) },
+                    days.toString(),
+                    { days = it.toInt(); saved = false; error = "" },
+                )
+            }
+            Setting("When the server is full") {
+                LumiaChoice(
+                    WhenFull.choices.map { (delete, label) -> delete.toString() to label },
+                    deleteOldest.toString(),
+                    { deleteOldest = it.toBoolean(); saved = false; error = "" },
+                )
+            }
+            // Nothing is deleted until Save; these say what Save would start deleting.
+            Retention.attachmentsWarning(keptDays, days)?.let { LumiaErrorText(it) }
+            WhenFull.warning(keptDeleteOldest, deleteOldest)?.let { LumiaErrorText(it) }
+            if (error.isNotEmpty()) LumiaErrorText(error)
+            if (saved) Text("Saved.", style = LumiaTokens.textMeta.style, color = LumiaTokens.inkSecondary.color)
+            LumiaPrimaryButton("Save", Modifier.fillMaxWidth(), enabled = !busy && change.changed) { save() }
         }
     }
 }

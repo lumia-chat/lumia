@@ -1,6 +1,7 @@
 // What Server settings decides, as values: the name the instance would
-// keep, the retention choices and when one deletes messages, the words a
-// refusal reads as, and which pictures the phone fetches.
+// keep, the retention choices and when one deletes messages or
+// attachments, what a full server does and what its files take, the words
+// a refusal reads as, and which pictures the phone fetches.
 package chat.lumia.kit
 
 import org.junit.Assert.assertEquals
@@ -104,5 +105,52 @@ class ServerSettingsTest {
         // A server gained or left holds nothing to read again.
         assertEquals(emptySet<String>(), showDeletedChanged(before, mapOf("d" to true)))
         assertEquals(emptySet<String>(), showDeletedChanged(emptyMap(), mapOf("a" to true)))
+    }
+
+    @Test
+    fun shorterAttachmentRetentionWarnsOfTheNextDailyRun() {
+        assertEquals(
+            "Attachments older than 90 days will be deleted for everyone at the next daily run. Their messages stay, saying the files are no longer available. This cannot be undone.",
+            Retention.attachmentsWarning(0, 90),
+        )
+        assertEquals(
+            "Attachments older than 30 days will be deleted for everyone at the next daily run. Their messages stay, saying the files are no longer available. This cannot be undone.",
+            Retention.attachmentsWarning(365, 30),
+        )
+        assertNull(Retention.attachmentsWarning(30, 90))
+        assertNull(Retention.attachmentsWarning(90, 0))
+        assertNull(Retention.attachmentsWarning(0, 0))
+    }
+
+    @Test
+    fun aFullServerRefusesFirstAndSaysBeforeDeletingTheOldest() {
+        assertEquals(listOf("Refuse new uploads", "Delete the oldest attachments"), WhenFull.choices.map { it.second })
+        assertEquals(listOf(false, true), WhenFull.choices.map { it.first })
+        assertEquals(
+            "When this server is full, the attachments of its oldest messages will be deleted for everyone to make room for new ones. This cannot be undone.",
+            WhenFull.warning(false, true),
+        )
+        assertNull(WhenFull.warning(true, true))
+        assertNull(WhenFull.warning(true, false))
+        assertNull(WhenFull.warning(false, false))
+    }
+
+    @Test
+    fun savingFilesSendsOnlyWhatDiffers() {
+        assertEquals(FilesChange(null, null), FilesChange.of(0, false, 0, false))
+        assertFalse(FilesChange.of(0, false, 0, false).changed)
+        assertEquals(FilesChange(30, null), FilesChange.of(0, false, 30, false))
+        assertEquals(FilesChange(null, true), FilesChange.of(90, false, 90, true))
+        assertEquals(FilesChange(0, false), FilesChange.of(90, true, 0, false))
+        assertTrue(FilesChange.of(90, true, 0, false).changed)
+    }
+
+    @Test
+    fun usageSaysTheLimitOnlyWhenThereIsOne() {
+        val gb = 1024L * 1024 * 1024
+        assertEquals("1.2 GB of 5 GB used", storageWords(gb * 12 / 10, 5 * gb))
+        assertEquals("1.2 GB used", storageWords(gb * 12 / 10, 0))
+        assertEquals("0 bytes of 5 GB used", storageWords(0, 5 * gb))
+        assertEquals("340 KB used", storageWords(340 * 1024, 0))
     }
 }

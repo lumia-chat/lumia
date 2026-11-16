@@ -29,6 +29,7 @@ import uniffi.lumia_ffi.MemberSummary
 import uniffi.lumia_ffi.PasskeySummary
 import uniffi.lumia_ffi.ProfileSummary
 import uniffi.lumia_ffi.StatusSummary
+import uniffi.lumia_ffi.StorageSummary
 import uniffi.lumia_ffi.MessageRoom
 import uniffi.lumia_ffi.MessageSummary
 import uniffi.lumia_ffi.RosterSummary
@@ -274,6 +275,14 @@ class LumiaSession(
     suspend fun setShowDeleted(serverId: String, show: Boolean) {
         took(client.call { setShowDeleted(serverId, show) })
     }
+
+    /** How long a server keeps its attachments (0 for ever) and whether a full one lets its oldest go; none leaves one as it is (specs/media.md 4.5). */
+    suspend fun setServerFiles(serverId: String, attachmentRetentionDays: Int?, deleteOldestWhenFull: Boolean?) {
+        took(client.call { setServerFiles(serverId, attachmentRetentionDays?.toUInt(), deleteOldestWhenFull) })
+    }
+
+    /** What a server's files take, for its settings; only someone who may change them is answered (`MANAGE_SERVER`). */
+    suspend fun serverStorage(serverId: String): StorageSummary = client.call { serverStorage(serverId) }
 
     // The rail (architecture 6.9)
 
@@ -1076,7 +1085,7 @@ class LumiaSession(
             }
             attaching[channelId] = now.map { p ->
                 if (p.localId != localId) p
-                else outcome.fold({ p.copy(draft = it) }, { p.copy(error = attachRefused(it.lumiaMessage)) })
+                else outcome.fold({ p.copy(draft = it) }, { p.copy(error = uploadRefused(it.lumiaCode, it.lumiaDetails["state"], it.lumiaMessage)) })
             }
         }
     }

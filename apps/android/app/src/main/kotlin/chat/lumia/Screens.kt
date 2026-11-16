@@ -700,11 +700,12 @@ fun PreferencesScreen(store: AppStore, back: () -> Unit) {
 }
 
 /**
- * One of Messages' settings: its label over its choice, the label saying
- * which setting the choice is to a screen reader before it.
+ * One of Messages' settings (and Server settings' Files'): its label over
+ * its choice, the label saying which setting the choice is to a screen
+ * reader before it.
  */
 @Composable
-private fun Setting(label: String, content: @Composable () -> Unit) {
+internal fun Setting(label: String, content: @Composable () -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(LumiaTokens.space6)) {
         Text(label, style = LumiaTokens.textLabel.style, color = LumiaTokens.inkSecondary.color)
         content()

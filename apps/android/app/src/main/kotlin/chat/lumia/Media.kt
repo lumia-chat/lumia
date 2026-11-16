@@ -4,7 +4,8 @@
 // the field with each one's state and alt text, the link previews over
 // it; under a message, its pictures at their shape or in a grid, its
 // videos and audio as a poster or row that plays in the system's player
-// view, its files as rows with Save and Share, its cards; the full-screen
+// view, its files as rows with Save and Share, those its server let go as
+// rows that open nothing, its cards; the full-screen
 // viewer with pinch zoom; and what editing a message may take away. The
 // rules are `Media.kt`'s in the kit; the platform's side of a file is
 // `Attachments.kt`'s.
@@ -108,6 +109,7 @@ import chat.lumia.kit.LumiaErrorText
 import chat.lumia.kit.LumiaSession
 import chat.lumia.kit.LumiaTokens
 import chat.lumia.kit.MediaShape
+import chat.lumia.kit.NO_LONGER_AVAILABLE
 import chat.lumia.kit.PendingAttachment
 import chat.lumia.kit.animationsOff
 import chat.lumia.kit.attachmentInput
@@ -332,15 +334,18 @@ private const val MESSAGE_ACTIONS = "Message actions"
  */
 @Composable
 fun MessageMedia(session: LumiaSession, attachments: List<AttachmentSummary>, cards: List<CardSummary>, display: Display, onLongPress: (() -> Unit)? = null) {
-    val pictures = attachments.filter { mediaShape(it.kind, display.images) == MediaShape.PICTURE }
-    val rows = attachments.filter { mediaShape(it.kind, display.images) == MediaShape.FILE_ROW }
+    val pictures = attachments.filter { mediaShape(it.kind, display.images, it.expired) == MediaShape.PICTURE }
+    // Rows keep the message's order, those its server let go among them.
+    val rows = attachments.filter { mediaShape(it.kind, display.images, it.expired) != MediaShape.PICTURE }
     val drawnCards = if (cardsDrawn(display.embeds)) cards else emptyList()
     var viewing by remember { mutableStateOf<AttachmentSummary?>(null) }
     var playing by remember { mutableStateOf<AttachmentSummary?>(null) }
     val open = { a: AttachmentSummary -> if (a.kind == "video" || a.kind == "audio") playing = a else viewing = a }
     Column(Modifier.fillMaxWidth().padding(top = LumiaTokens.space4), verticalArrangement = Arrangement.spacedBy(LumiaTokens.space6)) {
         if (pictures.isNotEmpty()) PictureGrid(session, pictures, open, onLongPress)
-        for (a in rows) FileRow(session, a, onOpen = if (a.kind == "file") null else ({ open(a) }), onLongPress)
+        for (a in rows) {
+            if (a.expired) ExpiredRow(a, onLongPress) else FileRow(session, a, onOpen = if (a.kind == "file") null else ({ open(a) }), onLongPress)
+        }
         for (card in drawnCards) CardView(session, card, onLongPress)
     }
     viewing?.let { a -> ImageViewer(session, a) { viewing = null } }
@@ -493,14 +498,7 @@ private fun FileRow(session: LumiaSession, a: AttachmentSummary, onOpen: (() -> 
             horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space10),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            val (fill, ink) = when (kind) {
-                FileKind.DOCUMENT -> LumiaTokens.filePdf.color to LumiaTokens.filePdfInk.color
-                FileKind.IMAGE -> LumiaTokens.toneBlue.color to LumiaTokens.toneBlueInk.color
-                FileKind.VIDEO -> LumiaTokens.tonePurple.color to LumiaTokens.tonePurpleInk.color
-                FileKind.AUDIO -> LumiaTokens.toneGreen.color to LumiaTokens.toneGreenInk.color
-                FileKind.ARCHIVE -> LumiaTokens.toneAmber.color to LumiaTokens.toneAmberInk.color
-                else -> LumiaTokens.toneStone.color to LumiaTokens.toneStoneInk.color
-            }
+            val (fill, ink) = kindTone(kind)
             Box(Modifier.size(34.dp).background(fill, RoundedCornerShape(LumiaTokens.radius9)), contentAlignment = Alignment.Center) {
                 Icon(if (a.kind == "audio" || a.kind == "video") Icons.Filled.PlayArrow else kindIcon(kind), null, tint = ink, modifier = Modifier.size(18.dp))
             }
@@ -521,6 +519,47 @@ private fun FileRow(session: LumiaSession, a: AttachmentSummary, onOpen: (() -> 
             RowButton(Icons.Filled.Share, "Share ${a.name}", onLongPress) { scope.launch { error = share(context, session, a) } }
         }
         error?.let { LumiaErrorText(it) }
+    }
+}
+
+/** A file row's tile colour and its icon's, by its kind; the PDF tone for documents. */
+@Composable
+private fun kindTone(kind: FileKind): Pair<Color, Color> = when (kind) {
+    FileKind.DOCUMENT -> LumiaTokens.filePdf.color to LumiaTokens.filePdfInk.color
+    FileKind.IMAGE -> LumiaTokens.toneBlue.color to LumiaTokens.toneBlueInk.color
+    FileKind.VIDEO -> LumiaTokens.tonePurple.color to LumiaTokens.tonePurpleInk.color
+    FileKind.AUDIO -> LumiaTokens.toneGreen.color to LumiaTokens.toneGreenInk.color
+    FileKind.ARCHIVE -> LumiaTokens.toneAmber.color to LumiaTokens.toneAmberInk.color
+    else -> LumiaTokens.toneStone.color to LumiaTokens.toneStoneInk.color
+}
+
+/**
+ * An attachment its server let go (specs/media.md 4.5), whatever its
+ * kind: the file row's shape with its kind's icon on the stone tile, its
+ * name and "No longer available". It fetches nothing, not even a
+ * thumbnail, and has no Save, Share, viewer or player; the message keeps
+ * its long press here as anywhere on it ([onLongPress], TalkBack's too).
+ */
+@Composable
+private fun ExpiredRow(a: AttachmentSummary, onLongPress: (() -> Unit)?) {
+    val shape = RoundedCornerShape(LumiaTokens.radius12)
+    Row(
+        Modifier.fillMaxWidth().clip(shape).background(LumiaTokens.inset.color, shape)
+            .semantics(mergeDescendants = true) {
+                contentDescription = attachmentLabel(a)
+                if (onLongPress != null) onLongClick(label = MESSAGE_ACTIONS) { onLongPress(); true }
+            }
+            .padding(LumiaTokens.space8),
+        horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space10),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(34.dp).background(LumiaTokens.toneStone.color, RoundedCornerShape(LumiaTokens.radius9)), contentAlignment = Alignment.Center) {
+            Icon(kindIcon(fileKindOf(a.mediaType, a.name)), null, tint = LumiaTokens.toneStoneInk.color, modifier = Modifier.size(18.dp))
+        }
+        Column(Modifier.weight(1f)) {
+            Text(a.name, style = LumiaTokens.textAuthor.style, color = LumiaTokens.inkSecondary.color, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(NO_LONGER_AVAILABLE, style = LumiaTokens.textMeta.style, color = LumiaTokens.inkMuted.color)
+        }
     }
 }
 

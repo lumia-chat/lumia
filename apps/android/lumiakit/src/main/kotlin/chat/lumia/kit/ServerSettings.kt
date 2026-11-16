@@ -1,7 +1,8 @@
 // What the Server settings screen decides, as plain values `src/test`
 // checks on the JVM (architecture 6.7): a server's name as the instance
-// keeps it, how long it keeps its messages and when a change to that
-// deletes some, the words a refusal reads as, and where a picture the
+// keeps it, how long it keeps its messages and its attachments and when a
+// change to either deletes some, what a full server does and what its
+// files take, the words a refusal reads as, and where a picture the
 // instance names is. The web's and the desktop's rules and words.
 package chat.lumia.kit
 
@@ -64,7 +65,60 @@ object Retention {
     /** What the screen says above Save when the choice would delete messages; none when it would not. */
     fun warning(from: Int, to: Int): String? =
         if (shortens(from, to)) "Messages older than ${label(to)} will be deleted for everyone. This cannot be undone." else null
+
+    /**
+     * What the screen says above Save when keeping attachments [to] days
+     * instead of [from] would delete some (specs/media.md 4.5): the daily
+     * job lets them go, and their messages keep their words. None when it
+     * would not.
+     */
+    fun attachmentsWarning(from: Int, to: Int): String? =
+        if (shortens(from, to)) {
+            "Attachments older than ${label(to)} will be deleted for everyone at the next daily run. Their messages stay, saying the files are no longer available. This cannot be undone."
+        } else {
+            null
+        }
 }
+
+/**
+ * What a server does when its files reach the instance's limit
+ * (specs/media.md 4.5): refuse new uploads, the default, or let the
+ * attachments of its oldest messages go to make room.
+ */
+object WhenFull {
+    /** The choices offered, by whether the oldest attachments go, the default first. */
+    val choices = listOf(false to "Refuse new uploads", true to "Delete the oldest attachments")
+
+    /** What the screen says above Save when the choice would start deleting attachments; none when it would not. */
+    fun warning(from: Boolean, to: Boolean): String? =
+        if (to && !from) {
+            "When this server is full, the attachments of its oldest messages will be deleted for everyone to make room for new ones. This cannot be undone."
+        } else {
+            null
+        }
+}
+
+/**
+ * What saving the Files card sends (`setServerFiles`): each setting that
+ * differs from what the server has, the rest none, which leaves it as it
+ * is. [changed] is whether there is anything to send.
+ */
+data class FilesChange(val attachmentRetentionDays: Int?, val deleteOldestWhenFull: Boolean?) {
+    val changed: Boolean get() = attachmentRetentionDays != null || deleteOldestWhenFull != null
+
+    companion object {
+        fun of(keptDays: Int, keptDeleteOldest: Boolean, days: Int, deleteOldest: Boolean) =
+            FilesChange(days.takeIf { it != keptDays }, deleteOldest.takeIf { it != keptDeleteOldest })
+    }
+}
+
+/**
+ * What a server's files take, as its settings say it (specs/media.md
+ * 4.5): "1.2 GB of 5 GB used", or "1.2 GB used" where the instance sets
+ * no limit ([maxBytes] 0).
+ */
+fun storageWords(usedBytes: Long, maxBytes: Long): String =
+    if (maxBytes > 0) "${sizeWords(usedBytes)} of ${sizeWords(maxBytes)} used" else "${sizeWords(usedBytes)} used"
 
 /**
  * The servers whose "Show deleted messages" a snapshot changed, from each

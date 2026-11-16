@@ -1,6 +1,7 @@
 // Attachments and link cards: the composer's waiting files and when a send
 // may go, which links are previewed and kept, how pictures fit and share
-// a column, how Preferences' Images and Embeds draw them, and their words.
+// a column, how Preferences' Images and Embeds draw them, those a server
+// let go, and their words.
 package chat.lumia.kit
 
 import org.junit.Assert.assertEquals
@@ -177,5 +178,31 @@ class MediaTest {
         // Without attachments, as editing always was.
         assertEquals(editOutcome("a", "b"), editWithMediaOutcome("a", "b", removing = 0, keepsSomething = false))
         assertEquals(editOutcome("a", ""), editWithMediaOutcome("a", "", removing = 0, keepsSomething = false))
+    }
+
+    @Test
+    fun anUploadAFullServerRefusedSaysSoOnTheFile() {
+        assertEquals("This server is out of space for files.", uploadRefused("RESOURCE_EXHAUSTED", "storage", "storage quota exceeded"))
+        assertEquals("This server is out of space for files.", pending("a", error = uploadRefused("RESOURCE_EXHAUSTED", "storage", "x")).status)
+        // Any other refusal is the instance's words, as before.
+        assertEquals("Not attached: too many uploads", uploadRefused("RESOURCE_EXHAUSTED", "uploads", "too many uploads"))
+        assertEquals("Not attached: file too large", uploadRefused("PAYLOAD_TOO_LARGE", null, "file too large"))
+        assertEquals("Not attached: offline", uploadRefused(null, null, "offline"))
+    }
+
+    @Test
+    fun anAttachmentItsServerLetGoIsARowWhateverItsKindOrImages() {
+        for (kind in listOf("image", "gif", "video", "audio", "file")) {
+            assertEquals(MediaShape.EXPIRED, mediaShape(kind, Shown.SHOWN, expired = true))
+            assertEquals(MediaShape.EXPIRED, mediaShape(kind, Shown.LINK, expired = true))
+        }
+        assertEquals(MediaShape.PICTURE, mediaShape("image", Shown.SHOWN, expired = false))
+        assertEquals("No longer available", NO_LONGER_AVAILABLE)
+        assertEquals("Photo, beach.jpg, No longer available", expiredLabel("image", "beach.jpg"))
+        assertEquals("GIF, dance.gif, No longer available", expiredLabel("gif", "dance.gif"))
+        assertEquals("Video, clip.mp4, No longer available", expiredLabel("video", "clip.mp4"))
+        assertEquals("Audio, memo.m4a, No longer available", expiredLabel("audio", "memo.m4a"))
+        assertEquals("File, report.pdf, No longer available", expiredLabel("file", "report.pdf"))
+        assertEquals("File, No longer available", expiredLabel("file", ""))
     }
 }

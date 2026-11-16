@@ -3,8 +3,8 @@
 // waiting attachment in the composer is and when a message may go with
 // them; which links of a draft are previewed and sent with their cards;
 // how one picture fits a message's column and how several share it; how an
-// attachment is drawn under Preferences' Images, and what it is to a
-// screen reader; a size and a length in words.
+// attachment is drawn under Preferences' Images, or once its server let
+// it go, and what it is to a screen reader; a size and a length in words.
 package chat.lumia.kit
 
 import uniffi.lumia_ffi.AttachmentDraft
@@ -66,6 +66,18 @@ data class PendingAttachment(
 /** The words a refused attachment says on itself. */
 fun attachRefused(detail: String): String = "Not attached: $detail"
 
+/** What a file says when its server's files are at their limit (specs/media.md 4.5). */
+const val SERVER_OUT_OF_SPACE = "This server is out of space for files."
+
+/**
+ * The words an upload refused by the instance says on its file, by the
+ * error's [code] and `details.state` ([state]): a full server's
+ * (`RESOURCE_EXHAUSTED`, `storage`) in words of its own, anything else as
+ * [attachRefused] with the instance's [detail].
+ */
+fun uploadRefused(code: String?, state: String?, detail: String): String =
+    if (code == "RESOURCE_EXHAUSTED" && state == "storage") SERVER_OUT_OF_SPACE else attachRefused(detail)
+
 /**
  * Whether the composer can send: words, or an attachment that is ready,
  * and nothing over the limit. Attachments still uploading do not stop it:
@@ -113,15 +125,23 @@ enum class MediaShape {
 
     /** A row: an icon for its kind, its name and size. */
     FILE_ROW,
+
+    /** One its server let go (spec 4.5): a row with its name and [NO_LONGER_AVAILABLE], fetching and opening nothing. */
+    EXPIRED,
 }
+
+/** What an attachment its server let go says under its name. */
+const val NO_LONGER_AVAILABLE = "No longer available"
 
 /**
  * How [kind] is drawn: a picture, a GIF and a video as pictures (a video
  * its poster or the play placeholder), audio and files as rows; with
  * Preferences' Images at Link, every attachment a row, which opens the
- * viewer for a picture (spec 5).
+ * viewer for a picture (spec 5); one [expired], whatever its kind, as a
+ * row that opens nothing (spec 4.5).
  */
-fun mediaShape(kind: String, images: Shown): MediaShape = when {
+fun mediaShape(kind: String, images: Shown, expired: Boolean = false): MediaShape = when {
+    expired -> MediaShape.EXPIRED
     images == Shown.LINK -> MediaShape.FILE_ROW
     kind == "image" || kind == "gif" || kind == "video" -> MediaShape.PICTURE
     else -> MediaShape.FILE_ROW
@@ -192,7 +212,19 @@ fun attachmentLabel(kind: String, name: String, alt: String, sizeBytes: Long, du
 }
 
 fun attachmentLabel(a: AttachmentSummary): String =
-    attachmentLabel(a.kind, a.name, a.alt, a.sizeBytes.toLong(), a.durationMs.toLong())
+    if (a.expired) expiredLabel(a.kind, a.name) else attachmentLabel(a.kind, a.name, a.alt, a.sizeBytes.toLong(), a.durationMs.toLong())
+
+/** What an attachment its server let go is to a screen reader: its kind, its name and that it is gone, "Photo, beach.jpg, No longer available". */
+fun expiredLabel(kind: String, name: String): String {
+    val word = when (kind) {
+        "image" -> "Photo"
+        "gif" -> "GIF"
+        "video" -> "Video"
+        "audio" -> "Audio"
+        else -> "File"
+    }
+    return listOf(word, name, NO_LONGER_AVAILABLE).filter { it.isNotEmpty() }.joinToString(", ")
+}
 
 /** A file's size as a row shows it: "12 bytes", "340 KB", "2.4 MB", "1.2 GB" (1,024 to the step). */
 fun sizeWords(bytes: Long): String {
