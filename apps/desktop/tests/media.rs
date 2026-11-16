@@ -282,7 +282,7 @@ fn a_refused_file_says_why_in_words() {
     let rt = runtime(state);
     let said = words(&rt);
     assert!(
-        said.contains("Too large to attach: files can be up to 10.5 MB here."),
+        said.contains("Too large to attach: files can be up to 10 MB here."),
         "{said}"
     );
     let _ = std::fs::remove_file(file);

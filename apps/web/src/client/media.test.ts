@@ -69,11 +69,14 @@ describe("sizeWords", () => {
   test("bytes, KB and MB of 1,024", () => {
     expect(sizeWords(1)).toBe("1 byte");
     expect(sizeWords(512)).toBe("512 bytes");
-    expect(sizeWords(2048)).toBe("2 KB");
-    expect(sizeWords(1536)).toBe("1.5 KB");
-    expect(sizeWords(48 * 1024)).toBe("48 KB");
+    expect(sizeWords(999)).toBe("999 bytes");
+    expect(sizeWords(1000)).toBe("1 KB");
+    expect(sizeWords(1500)).toBe("1.5 KB");
+    expect(sizeWords(820_000)).toBe("820 KB");
+    expect(sizeWords(999_600)).toBe("1 MB");
+    expect(sizeWords(2_400_000)).toBe("2.4 MB");
     expect(sizeWords(10 * 1024 * 1024)).toBe("10 MB");
-    expect(sizeWords(2.4 * 1024 * 1024)).toBe("2.4 MB");
+    expect(sizeWords(5_000_000_000)).toBe("5 GB");
   });
 });
 
@@ -264,8 +267,7 @@ describe("BlobUrls", () => {
 
 describe("a server's storage", () => {
   test("names the limit only where there is one", () => {
-    const gb = 1024 * 1024 * 1024;
-    expect(usageWords({ usedBytes: 1.2 * gb, maxBytes: 0 })).toBe("1.2 GB used");
-    expect(usageWords({ usedBytes: 1.2 * gb, maxBytes: 5 * gb })).toBe("1.2 GB of 5 GB used");
+    expect(usageWords({ usedBytes: 1_200_000_000, maxBytes: 0 })).toBe("1.2 GB used");
+    expect(usageWords({ usedBytes: 1_200_000_000, maxBytes: 5_000_000_000 })).toBe("1.2 GB of 5 GB used");
   });
 });

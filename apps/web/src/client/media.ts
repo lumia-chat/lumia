@@ -43,12 +43,16 @@ export function mediaGrid(count: number): { span: number; height: number }[] {
 /** A file's size as a row says it: "512 bytes", "48 KB", "2.4 MB" (KB and MB of 1,024). */
 export function sizeWords(bytes: number): string {
   if (!(bytes >= 0)) return "";
-  if (bytes < 1024) return `${bytes} ${bytes === 1 ? "byte" : "bytes"}`;
-  const kb = bytes / 1024;
-  if (kb < 1024) return `${kb < 10 ? kb.toFixed(1).replace(/\.0$/, "") : Math.round(kb)} KB`;
-  const mb = kb / 1024;
-  if (mb < 1024) return `${mb < 10 ? mb.toFixed(1).replace(/\.0$/, "") : Math.round(mb)} MB`;
-  return `${(mb / 1024).toFixed(1).replace(/\.0$/, "")} GB`;
+  // In 1,000s, as the systems' own file sizes and every Lumia client say them.
+  if (bytes < 1000) return `${bytes} ${bytes === 1 ? "byte" : "bytes"}`;
+  let value = bytes / 1000;
+  let unit = 0;
+  const units = ["KB", "MB", "GB", "TB"];
+  while (value >= 999.5 && unit < units.length - 1) {
+    value /= 1000;
+    unit++;
+  }
+  return `${value < 9.95 ? value.toFixed(1).replace(/\.0$/, "") : Math.round(value)} ${units[unit]}`;
 }
 
 /** What a server's files take: "1.2 GB of 5 GB used", or "1.2 GB used" where the instance sets no limit (specs/media.md 4.5). */

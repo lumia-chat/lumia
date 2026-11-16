@@ -138,18 +138,20 @@ class MediaTest {
         assertEquals("GIF, Dancing", attachmentLabel("gif", "a.gif", "Dancing", 1000, 0))
         assertEquals("Video, beach.mp4, 0:12", attachmentLabel("video", "beach.mp4", "", 1000, 12_400))
         assertEquals("Audio, memo.m4a", attachmentLabel("audio", "memo.m4a", "", 1000, 0))
-        assertEquals("File, report.pdf, 2.4 MB", attachmentLabel("file", "report.pdf", "", 2_500_000, 0))
+        assertEquals("File, report.pdf, 2.5 MB", attachmentLabel("file", "report.pdf", "", 2_500_000, 0))
     }
 
     @Test
     fun sizesAndLengthsInWords() {
         assertEquals("1 byte", sizeWords(1))
-        assertEquals("1023 bytes", sizeWords(1023))
-        assertEquals("1 KB", sizeWords(1024))
-        assertEquals("340 KB", sizeWords(340 * 1024))
-        assertEquals("9.5 MB", sizeWords((9.5 * 1024 * 1024).toLong()))
+        assertEquals("999 bytes", sizeWords(999))
+        assertEquals("1 KB", sizeWords(1000))
+        assertEquals("1.5 KB", sizeWords(1500))
+        assertEquals("820 KB", sizeWords(820_000))
+        assertEquals("1 MB", sizeWords(999_600))
+        assertEquals("2.4 MB", sizeWords(2_400_000))
         assertEquals("10 MB", sizeWords(10L * 1024 * 1024))
-        assertEquals("1.2 GB", sizeWords((1.2 * 1024 * 1024 * 1024).toLong()))
+        assertEquals("5 GB", sizeWords(5_000_000_000))
         assertEquals("0:07", lengthWords(7_900))
         assertEquals("12:30", lengthWords(750_000))
         assertEquals("1:02:03", lengthWords(3_723_000))

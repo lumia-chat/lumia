@@ -49,7 +49,7 @@ pub fn shortens(current: u32, chosen: u32) -> bool {
     chosen != 0 && (current == 0 || chosen < current)
 }
 
-/// What a server's files take, as its settings say it: "1.2 GB of 5.0 GB used", or "1.2 GB
+/// What a server's files take, as its settings say it: "1.2 GB of 5 GB used", or "1.2 GB
 /// used" where the instance sets no limit.
 pub fn usage_words(storage: &StorageSummary) -> String {
     if storage.max_bytes == 0 {
@@ -363,9 +363,9 @@ mod tests {
         assert_eq!(usage_words(&of(1_200_000_000, 0)), "1.2 GB used");
         assert_eq!(
             usage_words(&of(1_200_000_000, 5_000_000_000)),
-            "1.2 GB of 5.0 GB used"
+            "1.2 GB of 5 GB used"
         );
-        assert_eq!(usage_words(&of(0, 0)), "0 B used");
+        assert_eq!(usage_words(&of(0, 0)), "0 bytes used");
         // For ever is the longest; a shorter time deletes, a longer one does not.
         assert!(shortens(0, 30));
         assert!(shortens(90, 30));

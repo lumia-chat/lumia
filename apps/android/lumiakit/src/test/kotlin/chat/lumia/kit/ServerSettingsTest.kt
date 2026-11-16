@@ -147,10 +147,9 @@ class ServerSettingsTest {
 
     @Test
     fun usageSaysTheLimitOnlyWhenThereIsOne() {
-        val gb = 1024L * 1024 * 1024
-        assertEquals("1.2 GB of 5 GB used", storageWords(gb * 12 / 10, 5 * gb))
-        assertEquals("1.2 GB used", storageWords(gb * 12 / 10, 0))
-        assertEquals("0 bytes of 5 GB used", storageWords(0, 5 * gb))
-        assertEquals("340 KB used", storageWords(340 * 1024, 0))
+        assertEquals("1.2 GB of 5 GB used", storageWords(1_200_000_000, 5_000_000_000))
+        assertEquals("1.2 GB used", storageWords(1_200_000_000, 0))
+        assertEquals("0 bytes of 5 GB used", storageWords(0, 5_000_000_000))
+        assertEquals("340 KB used", storageWords(340_000, 0))
     }
 }

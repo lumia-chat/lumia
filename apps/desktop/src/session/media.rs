@@ -268,20 +268,31 @@ fn named_picture(name: &str) -> bool {
     )
 }
 
-/// A size as a file row says it: "820 KB", "2.4 MB".
+/// A size as a file row says it: "820 KB", "2.4 MB", "5 GB". In 1,000s, as the systems' own
+/// file sizes and every Lumia client say them: one decimal under 10, whole above.
 pub fn size_words(bytes: u64) -> String {
-    const KB: f64 = 1000.0;
-    #[allow(clippy::cast_precision_loss)]
-    let n = bytes as f64;
-    if n < KB {
-        format!("{bytes} B")
-    } else if n < KB * KB {
-        format!("{:.0} KB", n / KB)
-    } else if n < KB * KB * KB {
-        format!("{:.1} MB", n / (KB * KB))
-    } else {
-        format!("{:.1} GB", n / (KB * KB * KB))
+    const UNITS: [&str; 4] = ["KB", "MB", "GB", "TB"];
+    if bytes < 1000 {
+        return if bytes == 1 {
+            "1 byte".into()
+        } else {
+            format!("{bytes} bytes")
+        };
     }
+    #[allow(clippy::cast_precision_loss)]
+    let mut value = bytes as f64 / 1000.0;
+    let mut unit = 0;
+    while value >= 999.5 && unit < UNITS.len() - 1 {
+        value /= 1000.0;
+        unit += 1;
+    }
+    let shown = if value < 9.95 {
+        let one = format!("{value:.1}");
+        one.strip_suffix(".0").map_or(one.clone(), str::to_string)
+    } else {
+        format!("{value:.0}")
+    };
+    format!("{shown} {}", UNITS[unit])
 }
 
 /// Why an attachment could not be sent, as its row in the strip says it.
@@ -824,10 +835,16 @@ mod tests {
 
     #[test]
     fn sizes_read_as_a_file_row_says_them() {
-        assert_eq!(size_words(512), "512 B");
+        assert_eq!(size_words(1), "1 byte");
+        assert_eq!(size_words(512), "512 bytes");
+        assert_eq!(size_words(999), "999 bytes");
+        assert_eq!(size_words(1000), "1 KB");
+        assert_eq!(size_words(1500), "1.5 KB");
         assert_eq!(size_words(820_000), "820 KB");
+        assert_eq!(size_words(999_600), "1 MB");
         assert_eq!(size_words(2_400_000), "2.4 MB");
-        assert_eq!(size_words(10 * 1024 * 1024), "10.5 MB");
+        assert_eq!(size_words(10 * 1024 * 1024), "10 MB");
+        assert_eq!(size_words(5_000_000_000), "5 GB");
     }
 
     #[test]

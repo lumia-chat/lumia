@@ -228,12 +228,13 @@ fun expiredLabel(kind: String, name: String): String {
 
 /** A file's size as a row shows it: "12 bytes", "340 KB", "2.4 MB", "1.2 GB" (1,024 to the step). */
 fun sizeWords(bytes: Long): String {
-    if (bytes < 1024) return if (bytes == 1L) "1 byte" else "$bytes bytes"
+    // In 1,000s, as the systems' own file sizes and every Lumia client say them.
+    if (bytes < 1000) return if (bytes == 1L) "1 byte" else "$bytes bytes"
     val units = listOf("KB", "MB", "GB", "TB")
-    var value = bytes / 1024.0
+    var value = bytes / 1000.0
     var unit = 0
-    while (value >= 1024 && unit < units.size - 1) { value /= 1024; unit++ }
-    val shown = if (value < 10) String.format(java.util.Locale.ROOT, "%.1f", value).removeSuffix(".0") else Math.round(value).toString()
+    while (value >= 999.5 && unit < units.size - 1) { value /= 1000; unit++ }
+    val shown = if (value < 9.95) String.format(java.util.Locale.ROOT, "%.1f", value).removeSuffix(".0") else Math.round(value).toString()
     return "$shown ${units[unit]}"
 }
 

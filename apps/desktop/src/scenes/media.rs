@@ -203,7 +203,7 @@ pub fn media(state: &mut State) {
             3,
             "Whole talk.mov",
             48_000_000,
-            Stage::Failed("Too large to attach: files can be up to 10.5 MB here.".into()),
+            Stage::Failed("Too large to attach: files can be up to 10 MB here.".into()),
         ),
     ];
     state
