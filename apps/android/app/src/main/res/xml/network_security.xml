@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- An instance is at whatever address its people host it, plain http on a
+     home network or a development machine included, so cleartext is
+     permitted, as the manifest's usesCleartextTraffic says. This file is
+     here because the TLS verifier's library (org.rustls:rustls-platform-verifier)
+     brings a configuration of its own, which refuses cleartext to all but
+     the certificate authorities' revocation lists, and where there is a
+     configuration Android reads it and not usesCleartextTraffic: on an http
+     instance the phone's own fetches (a person's or a server's picture,
+     Pictures.kt) were refused. The manifest names this one in its place;
+     permitting cleartext everywhere covers the lists that one names. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>
