@@ -23,10 +23,11 @@ import android.widget.VideoView
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.horizontalScroll
@@ -66,6 +67,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -88,6 +90,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextDecoration
@@ -316,9 +319,19 @@ private fun PreviewRow(session: LumiaSession, card: CardSummary, onDismiss: () -
 
 // A message's attachments and cards
 
-/** What a message carries, under its words: its pictures, then its rows, then its cards (none while Preferences' Embeds is Link). */
+/** What TalkBack calls a long press on a message, here as on its row. */
+private const val MESSAGE_ACTIONS = "Message actions"
+
+/**
+ * What a message carries, under its words: its pictures, then its rows,
+ * then its cards (none while Preferences' Embeds is Link). Each piece
+ * takes its own taps, so it takes the message's long press too
+ * ([onLongPress], the row's: its actions), as a long press on the words
+ * does; a tap is still the piece's own, and TalkBack has the long press as
+ * each one's "Message actions".
+ */
 @Composable
-fun MessageMedia(session: LumiaSession, attachments: List<AttachmentSummary>, cards: List<CardSummary>, display: Display) {
+fun MessageMedia(session: LumiaSession, attachments: List<AttachmentSummary>, cards: List<CardSummary>, display: Display, onLongPress: (() -> Unit)? = null) {
     val pictures = attachments.filter { mediaShape(it.kind, display.images) == MediaShape.PICTURE }
     val rows = attachments.filter { mediaShape(it.kind, display.images) == MediaShape.FILE_ROW }
     val drawnCards = if (cardsDrawn(display.embeds)) cards else emptyList()
@@ -326,9 +339,9 @@ fun MessageMedia(session: LumiaSession, attachments: List<AttachmentSummary>, ca
     var playing by remember { mutableStateOf<AttachmentSummary?>(null) }
     val open = { a: AttachmentSummary -> if (a.kind == "video" || a.kind == "audio") playing = a else viewing = a }
     Column(Modifier.fillMaxWidth().padding(top = LumiaTokens.space4), verticalArrangement = Arrangement.spacedBy(LumiaTokens.space6)) {
-        if (pictures.isNotEmpty()) PictureGrid(session, pictures, open)
-        for (a in rows) FileRow(session, a, onOpen = if (a.kind == "file") null else ({ open(a) }))
-        for (card in drawnCards) CardView(session, card)
+        if (pictures.isNotEmpty()) PictureGrid(session, pictures, open, onLongPress)
+        for (a in rows) FileRow(session, a, onOpen = if (a.kind == "file") null else ({ open(a) }), onLongPress)
+        for (card in drawnCards) CardView(session, card, onLongPress)
     }
     viewing?.let { a -> ImageViewer(session, a) { viewing = null } }
     playing?.let { a -> PlayerDialog(session, a) { playing = null } }
@@ -336,13 +349,13 @@ fun MessageMedia(session: LumiaSession, attachments: List<AttachmentSummary>, ca
 
 /** One picture at its shape fitted to the column, or several in rows of two (`mediaRows`), each cut square-ish to its tile. */
 @Composable
-private fun PictureGrid(session: LumiaSession, pictures: List<AttachmentSummary>, open: (AttachmentSummary) -> Unit) {
+private fun PictureGrid(session: LumiaSession, pictures: List<AttachmentSummary>, open: (AttachmentSummary) -> Unit, onLongPress: (() -> Unit)?) {
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         val column = maxWidth.value
         if (pictures.size == 1) {
             val a = pictures[0]
             val (w, h) = fitted(a.width.toInt(), a.height.toInt(), column)
-            PictureTile(session, a, Modifier.width(w.dp).height(h.dp), open)
+            PictureTile(session, a, Modifier.width(w.dp).height(h.dp), open, onLongPress)
             return@BoxWithConstraints
         }
         val gap = LumiaTokens.space4
@@ -352,7 +365,7 @@ private fun PictureGrid(session: LumiaSession, pictures: List<AttachmentSummary>
                 val row = pictures.subList(at, at + n)
                 at += n
                 Row(Modifier.fillMaxWidth().height((column / 2).dp), horizontalArrangement = Arrangement.spacedBy(gap)) {
-                    for (a in row) PictureTile(session, a, Modifier.weight(1f).fillMaxSize(), open)
+                    for (a in row) PictureTile(session, a, Modifier.weight(1f).fillMaxSize(), open, onLongPress)
                 }
             }
         }
@@ -364,11 +377,13 @@ private fun PictureGrid(session: LumiaSession, pictures: List<AttachmentSummary>
  * the thumbnail is here, then the thumbnail. A GIF animates in place from
  * its whole file unless the system asks for no motion, then it is its
  * first frame with a GIF badge and plays on a tap. A video has the play
- * symbol and its length. A tap opens the viewer or the player. A picture
- * that cannot be drawn says so with its name, as a file would.
+ * symbol and its length. A tap opens the viewer or the player, a long
+ * press the message's actions ([onLongPress]). A picture that cannot be
+ * drawn says so with its name, as a file would.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun PictureTile(session: LumiaSession, a: AttachmentSummary, modifier: Modifier, open: (AttachmentSummary) -> Unit) {
+private fun PictureTile(session: LumiaSession, a: AttachmentSummary, modifier: Modifier, open: (AttachmentSummary) -> Unit, onLongPress: (() -> Unit)?) {
     val context = LocalContext.current
     val shape = RoundedCornerShape(LumiaTokens.radius12)
     val still = remember { animationsOff(context) }
@@ -385,7 +400,11 @@ private fun PictureTile(session: LumiaSession, a: AttachmentSummary, modifier: M
                 contentDescription = attachmentLabel(a)
                 role = Role.Button
             }
-            .clickable(onClickLabel = if (gif && still && !played) "Play" else "Open") { if (gif && still && !played) played = true else open(a) },
+            .combinedClickable(
+                onClickLabel = if (gif && still && !played) "Play" else "Open",
+                onLongClickLabel = onLongPress?.let { MESSAGE_ACTIONS },
+                onLongClick = onLongPress,
+            ) { if (gif && still && !played) played = true else open(a) },
         contentAlignment = Alignment.Center,
     ) {
         if (placeholder != null) Image(placeholder, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop, filterQuality = FilterQuality.Low)
@@ -451,10 +470,12 @@ private fun kindIcon(kind: FileKind): ImageVector = when (kind) {
  * A file as the design's attachment row (`lu-attach`): its kind's icon on
  * a tile, its name and size, Save (the system's "save to" picker) and
  * Share. A picture, video or audio drawn as a row opens its viewer or
- * player on a tap ([onOpen]); a file is saved or shared.
+ * player on a tap ([onOpen]); a file is saved or shared. A long press
+ * anywhere on it, Save and Share too, is the message's ([onLongPress]).
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun FileRow(session: LumiaSession, a: AttachmentSummary, onOpen: (() -> Unit)?) {
+private fun FileRow(session: LumiaSession, a: AttachmentSummary, onOpen: (() -> Unit)?, onLongPress: (() -> Unit)?) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var error by remember { mutableStateOf<String?>(null) }
@@ -467,7 +488,7 @@ private fun FileRow(session: LumiaSession, a: AttachmentSummary, onOpen: (() -> 
     Column {
         Row(
             Modifier.fillMaxWidth().clip(shape).background(LumiaTokens.inset.color, shape)
-                .then(if (onOpen != null) Modifier.clickable(onClickLabel = "Open", role = Role.Button, onClick = onOpen) else Modifier)
+                .then(if (onOpen != null) Modifier.combinedClickable(onClickLabel = "Open", role = Role.Button, onLongClickLabel = onLongPress?.let { MESSAGE_ACTIONS }, onLongClick = onLongPress, onClick = onOpen) else Modifier)
                 .padding(LumiaTokens.space8),
             horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space10),
             verticalAlignment = Alignment.CenterVertically,
@@ -483,21 +504,36 @@ private fun FileRow(session: LumiaSession, a: AttachmentSummary, onOpen: (() -> 
             Box(Modifier.size(34.dp).background(fill, RoundedCornerShape(LumiaTokens.radius9)), contentAlignment = Alignment.Center) {
                 Icon(if (a.kind == "audio" || a.kind == "video") Icons.Filled.PlayArrow else kindIcon(kind), null, tint = ink, modifier = Modifier.size(18.dp))
             }
-            Column(Modifier.weight(1f).semantics(mergeDescendants = true) { contentDescription = attachmentLabel(a.kind.takeIf { onOpen != null } ?: "file", a.name, a.alt, a.sizeBytes.toLong(), a.durationMs.toLong()) }) {
+            Column(
+                Modifier.weight(1f).semantics(mergeDescendants = true) {
+                    contentDescription = attachmentLabel(a.kind.takeIf { onOpen != null } ?: "file", a.name, a.alt, a.sizeBytes.toLong(), a.durationMs.toLong())
+                    // A file's row takes no tap of its own, so the row's long press reaches it; TalkBack's is here.
+                    if (onLongPress != null) onLongClick(label = MESSAGE_ACTIONS) { onLongPress(); true }
+                },
+            ) {
                 Text(a.name, style = LumiaTokens.textAuthor.style, color = LumiaTokens.ink.color, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(
                     listOfNotNull(sizeWords(a.sizeBytes.toLong()), a.durationMs.takeIf { it > 0u }?.let { lengthWords(it.toLong()) }).joinToString(" · "),
                     style = LumiaTokens.textMeta.style, color = LumiaTokens.inkMuted.color,
                 )
             }
-            androidx.compose.material3.IconButton(onClick = { save.launch(a.name) }, modifier = Modifier.size(32.dp)) {
-                Icon(Icons.Filled.Download, contentDescription = "Save ${a.name}", tint = LumiaTokens.iconStrong.color, modifier = Modifier.size(18.dp))
-            }
-            androidx.compose.material3.IconButton(onClick = { scope.launch { error = share(context, session, a) } }, modifier = Modifier.size(32.dp)) {
-                Icon(Icons.Filled.Share, contentDescription = "Share ${a.name}", tint = LumiaTokens.iconStrong.color, modifier = Modifier.size(18.dp))
-            }
+            RowButton(Icons.Filled.Download, "Save ${a.name}", onLongPress) { save.launch(a.name) }
+            RowButton(Icons.Filled.Share, "Share ${a.name}", onLongPress) { scope.launch { error = share(context, session, a) } }
         }
         error?.let { LumiaErrorText(it) }
+    }
+}
+
+/** Save or Share on a file's row, an icon button's size and touch area, whose long press is the message's. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun RowButton(icon: ImageVector, description: String, onLongPress: (() -> Unit)?, onClick: () -> Unit) {
+    Box(
+        Modifier.size(32.dp).minimumInteractiveComponentSize().clip(CircleShape)
+            .combinedClickable(role = Role.Button, onLongClickLabel = onLongPress?.let { MESSAGE_ACTIONS }, onLongClick = onLongPress, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(icon, contentDescription = description, tint = LumiaTokens.iconStrong.color, modifier = Modifier.size(18.dp))
     }
 }
 
@@ -539,16 +575,17 @@ private suspend fun share(context: Context, session: LumiaSession, a: Attachment
  * A link's card (spec 6): its site by the link's host (never the page's
  * own name for itself), its title and description, its picture with a
  * play symbol for a video page; a stripe in the page's colour. A tap
- * opens the link in the browser.
+ * opens the link in the browser, a long press the message's actions.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun CardView(session: LumiaSession, card: CardSummary) {
+private fun CardView(session: LumiaSession, card: CardSummary, onLongPress: (() -> Unit)?) {
     val context = LocalContext.current
     val shape = RoundedCornerShape(LumiaTokens.radius12)
     val stripe = parseColour(card.color) ?: LumiaTokens.lineStrong.color
     Row(
         Modifier.fillMaxWidth().clip(shape).background(LumiaTokens.inset.color, shape)
-            .clickable(onClickLabel = "Open the link", role = Role.Button) { openInBrowser(context, card.url) }
+            .combinedClickable(onClickLabel = "Open the link", role = Role.Button, onLongClickLabel = onLongPress?.let { MESSAGE_ACTIONS }, onLongClick = onLongPress) { openInBrowser(context, card.url) }
             .semantics(mergeDescendants = true) { contentDescription = listOf("Link preview", card.host, card.title, card.description).filter { it.isNotEmpty() }.joinToString(", ") },
     ) {
         Box(Modifier.width(3.dp).heightIn(min = 48.dp).background(stripe))

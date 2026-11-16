@@ -6,7 +6,8 @@
 # the first account (the LUMIA_DEV_* extras a debug build honours, through
 # the launch intent) and screenshots each screen the LUMIA_DEV_SCREEN
 # switch can open. Then attachments: a picture and a file sent from the
-# CLI drawn in a channel and the picture opened in the viewer, and a
+# CLI drawn in a channel, a long press on the picture and on the file's
+# Share opening the message's actions, the picture opened in the viewer, and a
 # picture attached through the Photo Picker, sent and drawn. Then the rail: a second server dragged onto the first
 # makes a folder the instance keeps, a tap opens it, Folder settings names
 # it and Delete folder takes it away. Then Preferences: dark, Compact, Minimal (light and
@@ -283,7 +284,8 @@ for screen in server channel requests devices approve profile preferences new ad
 # reads #general as it was: the phone's account sends a picture and a file
 # from the CLI, another device of its own, which the channel must draw
 # (the picture, with no alt text, as "Photo"; the file as "File, name,
-# size") and the viewer open; then the phone attaches a picture the way a
+# size"), a long press on either open the message's actions and nothing
+# else, and a tap the viewer; then the phone attaches a picture the way a
 # person does, through the attach button and the system's Photo Picker,
 # and sends it, and the channel must draw it (`channel-media.png`). A CLI
 # without `send --attach` cannot seed this, and the script says so.
@@ -306,6 +308,27 @@ printf 'Notes for the smoke.\n' > "$work/notes.txt"
 launch channel 0 --es LUMIA_DEV_CHANNEL media
 await 'content-desc="Photo"' 30 || { shot channel-media; echo "FAIL: the channel does not draw the picture the CLI sent; see $work/channel-media.png"; exit 1; }
 await 'content-desc="File, notes.txt, 21 bytes"' 5 || { shot channel-media; echo "FAIL: the channel does not draw the file the CLI sent as a row; see $work/channel-media.png"; exit 1; }
+# A long press on what a message carries is the message's, as on its words:
+# its actions and nothing of the piece's own tap (the viewer, the share
+# sheet). The picture, then the file row's Share.
+press() { # <text or description>: held a second where it is and let go
+  at=$(node "$1" middle)
+  [ -n "$at" ] || { echo "FAIL: nothing on screen reads \"$1\" to press"; exit 1; }
+  # shellcheck disable=SC2086
+  set -- $at
+  "$adb" shell input swipe "$1" "$2" "$1" "$2" 1000
+  sleep 1
+}
+for piece in "Photo" "Share notes.txt"; do
+  press "$piece"
+  await 'content-desc="Message actions"' 5 || { shot media-held; echo "FAIL: a long press on \"$piece\" did not open the message's actions; see $work/media-held.png"; exit 1; }
+  seen=$(ui)
+  case "$seen" in *'text="Reply"'*) ;; *) shot media-held; echo "FAIL: the message's actions after a long press on \"$piece\" do not offer Reply; see $work/media-held.png"; exit 1 ;; esac
+  case "$seen" in *'content-desc="Share"'*|*'resource-id="android:id/chooser'*|*'resolver_list'*) shot media-held; echo "FAIL: a long press on \"$piece\" also did the piece's own tap; see $work/media-held.png"; exit 1 ;; esac
+  [ "$piece" = "Photo" ] && shot media-held
+  "$adb" shell input keyevent BACK
+  for _ in $(seq 1 10); do case "$(ui)" in *'content-desc="Message actions"'*) sleep 1 ;; *) break ;; esac; done
+done
 tap "Photo"
 await 'content-desc="Share"' 10 || { shot viewer; echo "FAIL: the picture did not open in the viewer; see $work/viewer.png"; exit 1; }
 shot viewer
@@ -341,7 +364,7 @@ done
 shot channel-media
 [ "$(count "$(ui)" 'content-desc="Photo"')" -ge 2 ] || { echo "FAIL: the picture the phone sent is not drawn in the channel; see $work/channel-media.png"; exit 1; }
 "$adb" shell rm -f "/sdcard/Pictures/lumia-smoke-$stamp.png" >/dev/null 2>&1 || true
-echo "  attachments: $work/channel-media.png (the CLI's picture and file drawn, the viewer opened, the phone's picture attached through the Photo Picker, sent and drawn)"
+echo "  attachments: $work/channel-media.png (the CLI's picture and file drawn, a long press on either the message's actions, the viewer opened by a tap, the phone's picture attached through the Photo Picker, sent and drawn)"
 
 # The rail's order and folders (architecture 6.9). A second server of the
 # phone's account, long pressed and dragged onto the first's middle, makes

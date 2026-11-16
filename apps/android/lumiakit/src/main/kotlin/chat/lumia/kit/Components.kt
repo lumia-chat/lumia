@@ -263,8 +263,9 @@ fun LumiaMessageRow(
     // A long body collapsed (`LumiaBody`), and whether this one is open.
     expanded: Boolean = false,
     onExpanded: ((Boolean) -> Unit)? = null,
-    // What it carries under its words (specs/media.md 5 and 6): its attachments and link cards.
-    media: (@Composable () -> Unit)? = null,
+    // What it carries under its words (specs/media.md 5 and 6): its attachments and link cards,
+    // handed the row's long press (none while it is edited), as their own taps would take it from the row.
+    media: (@Composable (onLongPress: (() -> Unit)?) -> Unit)? = null,
     reactions: (@Composable () -> Unit)? = null,
     editor: (@Composable () -> Unit)? = null,
     under: (@Composable () -> Unit)? = null,
@@ -286,7 +287,7 @@ fun LumiaMessageRow(
                 text.isEmpty() && media != null && !edited -> Unit
                 else -> LumiaBody(text, mentions = mentions, nameOf = nameOf, edited = edited, expanded = expanded, onExpanded = onExpanded)
             }
-            if (media != null && !deleted) media()
+            if (media != null && !deleted) media(onLongPress.takeIf { editor == null })
             if (reactions != null && editor == null) Box(Modifier.padding(top = LumiaTokens.space2)) { reactions() }
             under?.invoke()
         }

@@ -402,7 +402,7 @@ fun ConversationScreen(store: AppStore, session: LumiaSession, channelId: String
                             expanded = expanded[m.messageId] == true,
                             onExpanded = { expanded[m.messageId] = it },
                             // None while Preferences hides them: no row and no room for one, Add reaction still in the actions.
-                            media = if (m.attachments.isNotEmpty() || m.cards.isNotEmpty()) ({ MessageMedia(session, m.attachments, m.cards, display) }) else null,
+                            media = if (m.attachments.isNotEmpty() || m.cards.isNotEmpty()) ({ hold -> MessageMedia(session, m.attachments, m.cards, display, hold) }) else null,
                             reactions = display.drawn(m.reactions).takeIf { it.isNotEmpty() && !m.deleted }?.let { drawn -> @Composable { ReactionChips(drawn, session.me, session::knownNameOf, { react(m.messageId, it) }, { pickerFor = m.messageId }) } },
                             editor = if (editing == m.messageId && !m.deleted) ({ EditField(editDraft, { editDraft = it }, editRoom, { saveEdit(m) }, { editing = null }) { removals.Field(m.attachments, m.cards) } }) else null,
                             under = session.editRefusals[m.messageId]?.let { words -> @Composable { LumiaErrorText(words) } },
@@ -669,7 +669,7 @@ fun ChannelScreen(store: AppStore, session: LumiaSession, channelId: String, dis
                                 expanded = expanded[m.messageId] == true,
                                 onExpanded = { expanded[m.messageId] = it },
                                 // None while Preferences hides them: no row and no room for one, Add reaction still in the actions.
-                                media = if (m.attachments.isNotEmpty() || m.cards.isNotEmpty()) ({ MessageMedia(session, m.attachments, m.cards, display) }) else null,
+                                media = if (m.attachments.isNotEmpty() || m.cards.isNotEmpty()) ({ hold -> MessageMedia(session, m.attachments, m.cards, display, hold) }) else null,
                                 reactions = display.drawn(m.reactions).takeIf { it.isNotEmpty() && !m.deleted }?.let { drawn -> @Composable { ReactionChips(drawn, session.me, session::knownNameOf, { if (member) react(m.messageId, it) }, { if (member) pickerFor = m.messageId }) } },
                                 editor = if (editing == m.messageId && !m.deleted) ({ EditField(editDraft, { editDraft = it }, editRoom, { saveEdit(m) }, { editing = null }) { removals.Field(m.attachments, m.cards) } }) else null,
                                 under = session.editRefusals[m.messageId]?.let { words -> @Composable { LumiaErrorText(words) } },
