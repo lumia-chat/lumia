@@ -271,6 +271,85 @@ pub fn is_empty(s: &State) -> bool {
     s.session.entries.is_empty() && s.session.pending_here().next().is_none()
 }
 
+/// A message Preferences' preview draws: what a row is drawn from, with nothing stored.
+pub struct Sample<'a> {
+    pub author: &'a str,
+    /// What the avatar's tone hashes; no one's card opens from it.
+    pub author_id: &'a str,
+    pub at_micros: i64,
+    /// Its words, in the protocol's Markdown.
+    pub body: &'a str,
+    /// What it carries under its words, as `media` draws pictures, file rows and cards.
+    pub boxes: Vec<El>,
+    /// Its reactions' chips, drawn only where Preferences shows reactions.
+    pub reactions: Option<El>,
+}
+
+/// `samples` as the conversation draws messages under Preferences' settings, through the same
+/// rows: in blocks by [`joins`], at the layout's measures and the font size's type. Nothing
+/// in them is selectable or opens anything, and they are not a list a reader moves through.
+pub fn samples(s: &State, samples: Vec<Sample<'_>>, look: Look) -> El {
+    let m = Measures::of(&s.settings);
+    let stamps: Vec<(&str, i64)> = samples
+        .iter()
+        .map(|sample| (sample.author_id, sample.at_micros))
+        .collect();
+    let joined = |i: usize| {
+        i.checked_sub(1)
+            .and_then(|before| stamps.get(before))
+            .zip(stamps.get(i))
+            .is_some_and(|(before, this)| joins(*before, *this))
+    };
+    let mut rows = col()
+        .w_full()
+        .pt(t::SPACE_14)
+        .pb(t::SPACE_8)
+        .px(t::SPACE_14);
+    for (i, sample) in samples.into_iter().enumerate() {
+        let place = Place {
+            opens: !joined(i),
+            closes: !joined(i + 1),
+        };
+        let drawn = body::Drawn {
+            ty: &m.ty,
+            ..body::Drawn::default()
+        };
+        let mut content = col().w_full().gap(t::SPACE_4).child(body::view_with(
+            sample.body,
+            false,
+            &[],
+            drawn,
+            look,
+        ));
+        let boxed = !sample.boxes.is_empty();
+        for piece in sample.boxes {
+            content = content.child(piece.mt(t::SPACE_2));
+        }
+        if let Some(chips) = sample
+            .reactions
+            .filter(|_| s.settings.reactions == Reactions::Shown)
+        {
+            content = content.child(chips.mt(t::SPACE_2));
+        }
+        let head = Head {
+            author: sample.author,
+            author_id: sample.author_id,
+            time: clock(sample.at_micros, s.clock_24),
+            short_time: short_clock(sample.at_micros, s.clock_24),
+            selectable: false,
+            live: false,
+        };
+        let decor = Decor {
+            boxed,
+            ..Decor::default()
+        };
+        let key = format!("sample-{i}");
+        rows = rows
+            .child(slot(place, m).child(message_frame(s, &key, head, content, place, decor, look)));
+    }
+    rows
+}
+
 fn local(micros: i64) -> DateTime<Local> {
     DateTime::from_timestamp_micros(micros)
         .unwrap_or_default()
@@ -415,6 +494,9 @@ struct Head<'a> {
     /// Puts the name and the time in the list's selection: a copy that reaches them starts
     /// the block on a line of its own, after a blank one.
     selectable: bool,
+    /// A row of the conversation, lit under the pointer, whose avatar or name opens the
+    /// person's card. Preferences' preview draws rows that are not.
+    live: bool,
 }
 
 /// What a stored message's row has besides its words.
@@ -491,8 +573,10 @@ fn message_frame(
         .key(frame_key(key))
         .w_full()
         .px(t::SPACE_12)
-        .hover(c.hover_message)
         .role("listitem");
+    if head.live {
+        frame = frame.hover(c.hover_message);
+    }
     if decor.tint {
         frame = frame.fill(c.accent_wash);
     } else if decor.lit {
@@ -550,7 +634,10 @@ fn grouped_frame(s: &State, row_: Row<'_>, place: Place, look: Look) -> El {
         time,
         short_time,
         selectable,
+        live,
     } = head;
+    // What opens the person's card: nothing in a row that is not live.
+    let card_of = if live { author_id } else { "" };
     // A block's rows touch, and are a paragraph's distance apart between them: the board
     // draws a block's messages as the paragraphs of one.
     let within = m.under_name / 2.0;
@@ -600,14 +687,14 @@ fn grouped_frame(s: &State, row_: Row<'_>, place: Place, look: Look) -> El {
         let head = row()
             .gap(t::SPACE_8)
             .items_center()
-            .child(name_button(name, author, author_id, key, look))
+            .child(name_button(name, author, card_of, key, look))
             .child(time);
         return frame.child(col().w_full().gap(m.under_name).child(head).child(content));
     };
     // The avatar opens its person's card, as the board's does. The name stays text: it is
     // part of what a selection copies, and a press on it starts one.
     let mut picture = el().child(avatar_of(s, author, author_id, avatar, look));
-    if !author_id.is_empty() {
+    if !card_of.is_empty() {
         let anchor = format!("avatar-{key}");
         let (id, at) = (author_id.to_string(), anchor.clone());
         picture = picture
@@ -669,7 +756,8 @@ fn line_frame(s: &State, row_: Row<'_>, look: Look) -> El {
             .font(m.ty.author)
             .color(c.ink),
     );
-    let name = name_button(name, head.author, head.author_id, key, look);
+    let card_of = if head.live { head.author_id } else { "" };
+    let name = name_button(name, head.author, card_of, key, look);
     let mut lead = col().gap(t::SPACE_2);
     let mut words = col().grow(1.0).min_w(0.0).gap(t::SPACE_2);
     if let Some(quote) = quote {
@@ -832,6 +920,7 @@ fn stored_row(s: &State, i: usize, entry: &Entry, place: Place, look: Look) -> E
         time,
         short_time: short_clock(entry.at_micros, s.clock_24),
         selectable: true,
+        live: true,
     };
     let decor = Decor {
         id: (!entry.deleted).then(|| entry.id.clone()),
@@ -1136,6 +1225,7 @@ fn pending_row(s: &State, pending: &Pending, place: Place, look: Look) -> El {
         time,
         short_time: short_clock(pending.sent_at_micros, s.clock_24),
         selectable: false,
+        live: true,
     };
     slot(place, m).child(message_frame(
         s,

@@ -233,6 +233,54 @@ pub const DRAGGED_OPACITY: f32 = 0.35;
 /// Folder settings (320 wide).
 pub const FOLDER_SETTINGS_WIDTH: f32 = SPACE_40 * 8.0;
 
+// ---- Preferences, from the Preferences boards -----------------------------------------------
+
+/// The settings' column (at most 620 wide).
+pub const PREFS_COLUMN: f32 = SPACE_40 * 15.0 + SPACE_18 + SPACE_2;
+/// The narrowest the settings' column is drawn with the preview beside it.
+pub const PREFS_COLUMN_MIN: f32 = SPACE_40 * 11.0;
+/// The preview's column beside the settings: up to 480 wide, as the board's, and at least
+/// 360, which keeps the two side by side in a narrower window.
+pub const PREFS_PREVIEW: f32 = SPACE_40 * 9.0;
+pub const PREFS_PREVIEW_MAX: f32 = SPACE_40 * 12.0;
+/// Between the two columns, and between the page's sections (40).
+pub const PREFS_GAP: f32 = SPACE_40;
+/// A section's heading (17 at 700, display): the server title's style, two smaller.
+pub const TITLE_SECTION: TextStyle = TextStyle {
+    size: TITLE_SERVER.size - SPACE_2,
+    ..TITLE_SERVER
+};
+/// A picture choice's drawing, a theme's window or a preset's sketch (92 tall, radius 12),
+/// and the ring round the chosen one (2, 2 off it).
+pub const CHOICE_SKETCH: f32 = SPACE_40 * 2.0 + SPACE_12;
+pub const CHOICE_RING: f32 = SPACE_2;
+/// A sketch's bars (the board's are 5 tall; the nearest token), and the window sketch's rail
+/// (14) and sidebar (40).
+pub const SKETCH_BAR: f32 = SPACE_6;
+pub const SKETCH_RAIL: f32 = SPACE_14;
+pub const SKETCH_SIDEBAR: f32 = SPACE_40;
+/// A preset's sketched avatars: Comfortable's (20) and Compact's (12).
+pub const SKETCH_AVATAR: f32 = SPACE_18 + SPACE_2;
+pub const SKETCH_AVATAR_SMALL: f32 = SPACE_12;
+/// A segment of a setting's row (30 tall, 12 to each side), and a font size's (36 wide).
+pub const SEGMENT_COMPACT: f32 = SPACE_28 + SPACE_2;
+pub const SEGMENT_NUMBER: f32 = SPACE_24 + SPACE_12;
+/// The small and large "A" either side of the font sizes (11 and 17, at 700).
+pub const TEXT_SIZE_SMALL: TextStyle = TEXT_COUNT;
+pub const TEXT_SIZE_LARGE: TextStyle = TextStyle {
+    size: TEXT_AUTHOR.size + SPACE_2,
+    ..TEXT_AUTHOR
+};
+/// A switch (42 by 26) and its knob (20).
+pub const SWITCH_WIDTH: f32 = SPACE_40 + SPACE_2;
+pub const SWITCH_HEIGHT: f32 = SPACE_24 + SPACE_2;
+pub const SWITCH_KNOB: f32 = SPACE_18 + SPACE_2;
+/// The preview's picture (240 by 150) and the sign-in card drawn in it (120 by 128).
+pub const PREVIEW_PICTURE: [f32; 2] = [SPACE_40 * 6.0, SPACE_40 * 4.0 - SPACE_10];
+pub const PREVIEW_CARD: [f32; 2] = [SPACE_40 * 3.0, SPACE_40 * 3.0 + SPACE_8];
+/// A field and the button in that card (18 tall).
+pub const PREVIEW_FIELD: f32 = SPACE_18;
+
 /// The amber of a caution: the recovery phrase's warnings and Home's reminder to save it.
 pub struct Caution {
     pub fill: Color,

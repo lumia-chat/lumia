@@ -54,10 +54,8 @@ fn glyph_button(
     look: Look,
 ) -> El {
     let c = look.c;
-    el().key(key)
-        .size(size, size)
-        .radius(t::RADIUS_9)
-        .center()
+    glyph_face(glyph, size, look)
+        .key(key)
         .role("button")
         .label(label)
         .help(label)
@@ -68,11 +66,16 @@ fn glyph_button(
         .focus_ring(2.0, 0.0, c.focus)
         .no_window_drag()
         .on_press_tx(press)
-        .child(
-            icon(glyph, t::SPACE_16)
-                .color(c.ink_quiet)
-                .group_color(c.ink_field),
-        )
+}
+
+/// How a [`glyph_button`] looks, with nothing to press: Preferences' preview draws one.
+pub(crate) fn glyph_face(glyph: &'static Icon, size: f32, look: Look) -> El {
+    let c = look.c;
+    el().size(size, size).radius(t::RADIUS_9).center().child(
+        icon(glyph, t::SPACE_16)
+            .color(c.ink_quiet)
+            .group_color(c.ink_field),
+    )
 }
 
 /// What a picture's button is called: its alt text when it has one, its name otherwise.
@@ -225,28 +228,7 @@ fn file_row(
     } else {
         size_words(attachment.size_bytes)
     };
-    let mut words = row()
-        .grow(1.0)
-        .min_w(0.0)
-        .gap(t::SPACE_10)
-        .items_center()
-        .child(
-            el().size(t::FILE_TILE, t::FILE_TILE)
-                .radius(t::RADIUS_9)
-                .fill(c.file_pdf)
-                .center()
-                .a11y_hidden()
-                .child(icon(glyph, t::FILE_GLYPH).color(c.file_pdf_ink)),
-        )
-        .child(
-            text(attachment.name.clone())
-                .font(ty.file)
-                .color(c.ink)
-                .truncate()
-                .shrink()
-                .min_w(0.0),
-        )
-        .child(text(size.clone()).font(ty.meta).color(c.ink_muted));
+    let mut words = file_words(glyph, &attachment.name, &size, ty, look);
     if opens {
         let a = attachment.clone();
         words = words
@@ -289,19 +271,56 @@ fn file_row(
     if editing {
         frame = frame.child(remove_button(attachment, look));
     }
-    let mut framed = col()
-        .key(format!("file-{}", attachment.attachment_id))
-        .max_w(t::MEDIA_MAX)
-        .padding(t::SPACE_8)
-        .gap(t::SPACE_6)
-        .radius(t::RADIUS_12)
-        .fill(c.inset)
-        .child(frame);
+    let mut framed = file_box(frame, look).key(format!("file-{}", attachment.attachment_id));
     // A recording plays in its row; a video under it (`attachments`).
     if let Some(clip) = clip.filter(|clip| !clip.is_video()) {
         framed = framed.child(clip_controls(clip, ty, false, look));
     }
     framed
+}
+
+/// A file row's kind tile, name and size, as the conversation draws them.
+pub(crate) fn file_words(
+    glyph: &'static Icon,
+    name: &str,
+    size: &str,
+    ty: &t::MessageType,
+    look: Look,
+) -> El {
+    let c = look.c;
+    row()
+        .grow(1.0)
+        .min_w(0.0)
+        .gap(t::SPACE_10)
+        .items_center()
+        .child(
+            el().size(t::FILE_TILE, t::FILE_TILE)
+                .radius(t::RADIUS_9)
+                .fill(c.file_pdf)
+                .center()
+                .a11y_hidden()
+                .child(icon(glyph, t::FILE_GLYPH).color(c.file_pdf_ink)),
+        )
+        .child(
+            text(name.to_string())
+                .font(ty.file)
+                .color(c.ink)
+                .truncate()
+                .shrink()
+                .min_w(0.0),
+        )
+        .child(text(size.to_string()).font(ty.meta).color(c.ink_muted))
+}
+
+/// The box a file row stands in: its words and its buttons in `frame`.
+pub(crate) fn file_box(frame: El, look: Look) -> El {
+    col()
+        .max_w(t::MEDIA_MAX)
+        .padding(t::SPACE_8)
+        .gap(t::SPACE_6)
+        .radius(t::RADIUS_12)
+        .fill(look.c.inset)
+        .child(frame)
 }
 
 /// What a video's or a recording's Play is called.
@@ -696,30 +715,7 @@ pub fn cards(
 /// One link's card: the host, the title and the description, the picture beside them.
 fn link_card(s: &State, card: &CardSummary, ty: &t::MessageType, look: Look) -> El {
     let c = look.c;
-    let mut words = col().grow(1.0).min_w(0.0).gap(t::SPACE_2).child(
-        text(card.host.clone())
-            .font(ty.meta)
-            .color(c.ink_muted)
-            .truncate(),
-    );
-    if !card.title.is_empty() {
-        words = words.child(
-            text(card.title.clone())
-                .font(ty.file)
-                .color(c.link)
-                .wrap()
-                .max_lines(2),
-        );
-    }
-    if !card.description.is_empty() {
-        words = words.child(
-            text(card.description.clone())
-                .font(ty.compact)
-                .color(c.ink_secondary)
-                .wrap()
-                .max_lines(3),
-        );
-    }
+    let words = card_words(&card.host, &card.title, &card.description, ty, look);
     let url = card.url.clone();
     let mut body = row()
         .key(format!("card-{}", card.url))
@@ -754,13 +750,54 @@ fn link_card(s: &State, card: &CardSummary, ty: &t::MessageType, look: Look) -> 
         }
         body = body.child(tile);
     }
+    card_box(body, look)
+}
+
+/// A link card's host, title and description, as the conversation draws them.
+pub(crate) fn card_words(
+    host: &str,
+    title: &str,
+    description: &str,
+    ty: &t::MessageType,
+    look: Look,
+) -> El {
+    let c = look.c;
+    let mut words = col().grow(1.0).min_w(0.0).gap(t::SPACE_2).child(
+        text(host.to_string())
+            .font(ty.meta)
+            .color(c.ink_muted)
+            .truncate(),
+    );
+    if !title.is_empty() {
+        words = words.child(
+            text(title.to_string())
+                .font(ty.file)
+                .color(c.link)
+                .wrap()
+                .max_lines(2),
+        );
+    }
+    if !description.is_empty() {
+        words = words.child(
+            text(description.to_string())
+                .font(ty.compact)
+                .color(c.ink_secondary)
+                .wrap()
+                .max_lines(3),
+        );
+    }
+    words
+}
+
+/// The box a link card stands in, around its words and picture in `body`.
+pub(crate) fn card_box(body: El, look: Look) -> El {
     row()
         .max_w(t::MEDIA_MAX)
         .padding(t::SPACE_12)
         .gap(t::SPACE_6)
         .items_start()
         .radius(t::RADIUS_12)
-        .fill(c.inset)
+        .fill(look.c.inset)
         .child(body)
 }
 

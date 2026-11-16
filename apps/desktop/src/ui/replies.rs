@@ -224,13 +224,8 @@ pub fn reactions(s: &State, entry: &Entry, ty: &t::MessageType, look: Look) -> E
     for (n, reaction) in entry.reactions.iter().enumerate() {
         let (id, emoji) = (entry.id.clone(), reaction.reaction.clone());
         let words = reacted_words(s, reaction);
-        let mut chip = row()
+        let mut chip = chip(&reaction.reaction, reaction.count, reaction.me, ty, look)
             .key(format!("reaction-{n}"))
-            .min_h(t::SPACE_28)
-            .px(t::SPACE_10)
-            .gap(t::SPACE_6)
-            .items_center()
-            .radius(t::RADIUS_PILL)
             .role("button")
             .label(format!("{words}, {}", reaction.count))
             .help(words)
@@ -238,32 +233,16 @@ pub fn reactions(s: &State, entry: &Entry, ty: &t::MessageType, look: Look) -> E
             .cursor(Cursor::Pointer)
             .focusable(true)
             .focus_ring(2.0, 0.0, c.focus)
-            .on_press(move |s: &mut State| s.react_with(&id, &emoji))
-            .child(text(reaction.reaction.clone()).font(ty.reaction))
-            .child(
-                text(reaction.count.to_string())
-                    .font(ty.reaction_count)
-                    .color(if reaction.me {
-                        c.accent_ink
-                    } else {
-                        c.ink_body
-                    }),
-            );
-        chip = if reaction.me {
-            chip.fill(c.accent_soft).border(1.0, c.reaction_on_border)
-        } else {
-            chip.fill(c.reaction)
-                .border(1.0, c.reaction)
-                .hover(c.hover_icon)
-        };
+            .on_press(move |s: &mut State| s.react_with(&id, &emoji));
+        if !reaction.me {
+            chip = chip.hover(c.hover_icon);
+        }
         chips = chips.child(chip);
     }
     let (id, anchor) = (entry.id.clone(), format!("add-reaction-{}", entry.id));
     chips.child(
-        el().key(anchor.clone())
-            .size(t::SPACE_28, t::SPACE_28)
-            .radius(t::RADIUS_PILL)
-            .center()
+        add_reaction_face(look)
+            .key(anchor.clone())
             .role("button")
             .label("Add reaction")
             .help("Add reaction")
@@ -271,9 +250,39 @@ pub fn reactions(s: &State, entry: &Entry, ty: &t::MessageType, look: Look) -> E
             .cursor(Cursor::Pointer)
             .focusable(true)
             .focus_ring(2.0, 0.0, c.focus)
-            .on_press(move |s: &mut State| s.open_picker(&id, &anchor))
-            .child(icon(&icons::REACTION_ADD, t::SPACE_16).color(c.ink_muted)),
+            .on_press(move |s: &mut State| s.open_picker(&id, &anchor)),
     )
+}
+
+/// How a reaction's chip looks, with nothing to press: its emoji and count, in the accent
+/// when it is this account's (`me`). Preferences' preview draws these.
+pub(crate) fn chip(emoji: &str, count: u32, me: bool, ty: &t::MessageType, look: Look) -> El {
+    let c = look.c;
+    let chip = row()
+        .min_h(t::SPACE_28)
+        .px(t::SPACE_10)
+        .gap(t::SPACE_6)
+        .items_center()
+        .radius(t::RADIUS_PILL)
+        .child(text(emoji.to_string()).font(ty.reaction))
+        .child(
+            text(count.to_string())
+                .font(ty.reaction_count)
+                .color(if me { c.accent_ink } else { c.ink_body }),
+        );
+    if me {
+        chip.fill(c.accent_soft).border(1.0, c.reaction_on_border)
+    } else {
+        chip.fill(c.reaction).border(1.0, c.reaction)
+    }
+}
+
+/// How the Add reaction button after the chips looks, with nothing to press.
+pub(crate) fn add_reaction_face(look: Look) -> El {
+    el().size(t::SPACE_28, t::SPACE_28)
+        .radius(t::RADIUS_PILL)
+        .center()
+        .child(icon(&icons::REACTION_ADD, t::SPACE_16).color(look.c.ink_muted))
 }
 
 /// The toolbar over the message under the pointer, or over the one being replied to: Add

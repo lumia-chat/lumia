@@ -903,43 +903,209 @@ pub fn segmented<V: Copy + PartialEq + 'static>(
     pick: impl Fn(&mut State, V) + Clone + 'static,
     look: Look,
 ) -> El {
+    segments(key, label, options, selected, pick, Fit::Full, look)
+}
+
+/// [`segmented`] as wide as its words, at the end of a setting's row (the Preferences
+/// boards): 30 tall, 12 to each side of a segment's words, or `width` across each.
+pub fn segmented_compact<V: Copy + PartialEq + 'static>(
+    key: &str,
+    label: &str,
+    options: &[(V, &str)],
+    selected: V,
+    pick: impl Fn(&mut State, V) + Clone + 'static,
+    width: Option<f32>,
+    look: Look,
+) -> El {
+    segments(key, label, options, selected, pick, Fit::Words(width), look)
+}
+
+/// How wide a segmented control is: its row's width shared out, or its words'.
+#[derive(Clone, Copy)]
+enum Fit {
+    Full,
+    Words(Option<f32>),
+}
+
+fn segments<V: Copy + PartialEq + 'static>(
+    key: &str,
+    label: &str,
+    options: &[(V, &str)],
+    selected: V,
+    pick: impl Fn(&mut State, V) + Clone + 'static,
+    fit: Fit,
+    look: Look,
+) -> El {
     let c = look.c;
-    let mut track = row()
-        .key(key)
-        .w_full()
-        .padding(t::SPACE_4)
-        .gap(t::SPACE_4)
-        .radius(t::RADIUS_12)
-        .fill(c.track)
-        .role("radiogroup")
-        .label(label);
+    let mut track = row().key(key).fill(c.track).role("radiogroup").label(label);
+    track = match fit {
+        Fit::Full => track
+            .w_full()
+            .padding(t::SPACE_4)
+            .gap(t::SPACE_4)
+            .radius(t::RADIUS_12),
+        Fit::Words(_) => track
+            .padding(t::SPACE_2 + 1.0)
+            .gap(t::SPACE_2)
+            .radius(t::RADIUS_10),
+    };
     for (i, (value, name)) in options.iter().enumerate() {
         let (value, on) = (*value, *value == selected);
         let pick = pick.clone();
         let mut segment = row()
             .key(format!("{key}-{i}"))
-            .grow(1.0)
-            .h(t::SEGMENT_HEIGHT)
             .center()
-            .radius(t::RADIUS_9)
             .role("radio")
             .label(*name)
             .checked(on)
             .cursor(Cursor::Pointer)
             .focusable(true)
             .focus_ring(2.0, 0.0, c.focus)
-            .on_press(move |s: &mut State| pick(s, value))
-            .child(
-                text(*name)
-                    .font(t::TEXT_TAB)
-                    .color(if on { c.ink } else { c.ink_quiet }),
-            );
+            .on_press(move |s: &mut State| pick(s, value));
+        segment = match fit {
+            Fit::Full => segment
+                .grow(1.0)
+                .h(t::SEGMENT_HEIGHT)
+                .radius(t::RADIUS_9)
+                .child(
+                    text(*name)
+                        .font(t::TEXT_TAB)
+                        .color(if on { c.ink } else { c.ink_quiet }),
+                ),
+            Fit::Words(width) => {
+                let segment = segment.h(t::SEGMENT_COMPACT).radius(t::RADIUS_8);
+                let segment = match width {
+                    Some(width) => segment.w(width),
+                    None => segment.px(t::SPACE_12),
+                };
+                segment.hover_group().child(
+                    text(*name)
+                        .font(t::TEXT_LINK_SM)
+                        .color(if on { c.ink } else { c.ink_muted })
+                        .group_color(c.ink),
+                )
+            }
+        };
         if on {
             segment = shadowed(segment.fill(c.tab_active), look.shadows.tab);
         }
         track = track.child(segment);
     }
     track
+}
+
+/// A choice that is on or off, as a switch: the accent's track with the knob at its end when
+/// on, a grey one with the knob at its start when off. `label` names it for assistive
+/// technology; the words beside it are the caller's.
+pub fn switch(
+    key: impl Into<String>,
+    label: &str,
+    on: bool,
+    press: impl Fn(&mut State) + 'static,
+    look: Look,
+) -> El {
+    let c = look.c;
+    // The knob is near white on either ground, as a system's switch's is.
+    let knob = if look.dark { c.ink } else { c.surface };
+    let track = row()
+        .key(key)
+        .size(t::SWITCH_WIDTH, t::SWITCH_HEIGHT)
+        .padding((t::SWITCH_HEIGHT - t::SWITCH_KNOB) / 2.0)
+        .radius(t::RADIUS_PILL)
+        .fill(if on { c.accent } else { c.border_hover })
+        .role("switch")
+        .label(label)
+        .checked(on)
+        .cursor(Cursor::Pointer)
+        .focusable(true)
+        .focus_ring(2.0, 2.0, c.focus)
+        .on_press(press);
+    let track = if on {
+        track.child(el().grow(1.0))
+    } else {
+        track
+    };
+    track.child(shadowed(
+        el().size(t::SWITCH_KNOB, t::SWITCH_KNOB)
+            .radius(t::RADIUS_PILL)
+            .fill(knob)
+            .a11y_hidden(),
+        look.shadows.tab,
+    ))
+}
+
+/// One of a few choices drawn as pictures (the Preferences boards' themes and presets): its
+/// `sketch` on a box 92 tall, ringed in the accent when it is the one chosen and outlined
+/// otherwise, its name under it with a tick when chosen, and `caption` under that.
+pub fn picture_choice(
+    key: impl Into<String>,
+    name: &str,
+    caption: Option<&str>,
+    sketch: El,
+    on: bool,
+    press: impl Fn(&mut State) + 'static,
+    look: Look,
+) -> El {
+    let c = look.c;
+    let inner = t::RADIUS_12;
+    let mut picture = sketch
+        .w_full()
+        .h(t::CHOICE_SKETCH)
+        .radius(inner)
+        .clip_rounded(inner);
+    if !on {
+        picture = picture.border(1.0, c.line_strong);
+    }
+    // The ring stands off the picture by its own width: a frame as thick again, in the
+    // panel's fill, between the two.
+    let ring = el()
+        .w_full()
+        .padding(t::CHOICE_RING * 2.0)
+        .radius(inner + t::CHOICE_RING * 2.0)
+        .border(
+            t::CHOICE_RING,
+            if on {
+                c.accent
+            } else {
+                rune::Color::TRANSPARENT
+            },
+        )
+        .child(picture);
+    let mut named =
+        row()
+            .gap(t::SPACE_6)
+            .items_center()
+            .child(
+                text(name)
+                    .font(t::TEXT_MEMBER)
+                    .color(if on { c.ink } else { c.ink_body }),
+            );
+    if on {
+        named = named.child(icon(&icons::CHECK, t::SPACE_14).color(c.accent_ink));
+    }
+    let mut words = col()
+        .w_full()
+        .gap(t::SPACE_2)
+        .px(t::CHOICE_RING * 2.0)
+        .child(named);
+    if let Some(caption) = caption {
+        words = words.child(text(caption).font(t::TEXT_META).color(c.ink_muted).wrap());
+    }
+    col()
+        .key(key)
+        .grow(1.0)
+        .min_w(0.0)
+        .gap(t::SPACE_6)
+        .radius(inner + t::CHOICE_RING * 2.0)
+        .role("radio")
+        .label(name)
+        .checked(on)
+        .cursor(Cursor::Pointer)
+        .focusable(true)
+        .focus_ring(2.0, 2.0, c.focus)
+        .on_press(press)
+        .child(ring)
+        .child(words)
 }
 
 /// A surface floating beside the control keyed `anchor`, with a title, a line under it and

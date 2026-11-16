@@ -49,9 +49,29 @@ fn rect(rt: &Runtime<State>, row: &str, key: &str) -> [f32; 4] {
         .rect
 }
 
-/// Whether the segment keyed `key` is the one chosen: drawn on the active tab's fill.
+/// The accessibility node keyed `key`, anywhere in the tree.
+fn node<'a>(tree: &'a serde_json::Value, key: &str) -> Option<&'a serde_json::Value> {
+    if tree["key"] == key {
+        return Some(tree);
+    }
+    tree["children"]
+        .as_array()?
+        .iter()
+        .find_map(|child| node(child, key))
+}
+
+/// Whether the choice keyed `key` (a segment, a picture or a switch) says it is chosen.
 fn chosen(rt: &Runtime<State>, key: &str) -> bool {
-    is(fill(rt, key), tokens::colors(false).tab_active)
+    let tree = rt.accessibility_json();
+    let found = node(&tree, key).unwrap_or_else(|| panic!("{key} is not in the tree"));
+    found["states"]
+        .as_array()
+        .is_some_and(|states| states.iter().any(|s| s == "checked"))
+}
+
+/// Whether an element keyed `key` is on screen.
+fn shows(rt: &Runtime<State>, key: &str) -> bool {
+    rt.find(key).is_some()
 }
 
 /// Which of the preset's three segments is chosen, if any, once a change has faded in.
@@ -76,8 +96,8 @@ fn the_account_menu_leads_to_preferences_and_each_choice_is_kept() {
         "Light, dark, or whichever this computer is in.",
         "Messages",
         "Start from a preset, then change anything below.",
-        "Preset",
         "Comfortable",
+        "Large avatars, room to breathe",
         "Compact",
         "Minimal",
         "Layout",
@@ -92,8 +112,11 @@ fn the_account_menu_leads_to_preferences_and_each_choice_is_kept() {
         "Small",
         "Hidden",
         "Font size",
+        "Messages and names, in points.",
         "Reactions",
-        "Shown",
+        "Shown under each message.",
+        "Preview",
+        "Kept on this computer only. Your other devices and your account are not changed.",
     ] {
         assert!(shown.contains(expected), "{expected:?} in:\n{shown}");
     }
@@ -107,22 +130,26 @@ fn the_account_menu_leads_to_preferences_and_each_choice_is_kept() {
     assert_eq!(preset_shown(&mut rt), Some(0));
     assert!(chosen(&rt, "font-size-2"));
     assert_eq!(rt.state.settings.reactions, Reactions::Shown);
-    assert!(chosen(&rt, "reactions-0"));
+    assert!(chosen(&rt, "reactions"));
     assert!(rt.find("preset-custom").is_none());
     // Images and embeds, shown (specs/media.md 5).
-    assert!(shown.contains("Images") && shown.contains("Embeds") && shown.contains("As links"));
-    assert!(chosen(&rt, "images-0") && chosen(&rt, "embeds-0"));
+    assert!(shown.contains("Images") && shown.contains("Embeds"));
+    assert!(
+        shown.contains("Shown in their messages.") && shown.contains("A card under each link.")
+    );
+    assert!(chosen(&rt, "images") && chosen(&rt, "embeds"));
+    // The theme as a picture, System chosen.
+    assert!(chosen(&rt, "appearance-2") && !chosen(&rt, "appearance-0"));
 
     press(&mut rt, "appearance-0");
     assert_eq!(rt.state.settings.appearance, Appearance::Light);
     press(&mut rt, "appearance-1");
     assert_eq!(rt.state.settings.appearance, Appearance::Dark);
+    assert!(chosen(&rt, "appearance-1") && !chosen(&rt, "appearance-2"));
 
     // The scroll bar's choice is offered where the app can carry it out.
     if cfg!(target_os = "macos") {
-        assert!(words(&rt).contains(
-            "When a list shows its scroll bar. Automatic follows this Mac's own setting."
-        ));
+        assert!(words(&rt).contains("Automatic follows this Mac's own setting."));
         press(&mut rt, "scroll-bars-2");
         assert_eq!(rt.state.settings.scroll_bars, ScrollBars::Always);
         press(&mut rt, "scroll-bars-1");
@@ -157,11 +184,15 @@ fn a_preset_writes_its_values_and_a_change_after_it_is_custom() {
     // Minimal is one line, where there are no avatars to choose, with the reactions hidden.
     assert_eq!(rt.state.settings.layout, Layout::OneLine);
     assert_eq!(rt.state.settings.reactions, Reactions::Hidden);
-    assert!(chosen(&rt, "reactions-1"));
+    assert!(!chosen(&rt, "reactions"));
     assert!(rt.find("avatars").is_none());
     assert!(!words(&rt).contains("Avatars"));
-    // ...and pictures and cards as links.
-    assert!(chosen(&rt, "images-1") && chosen(&rt, "embeds-1"));
+    // ...and pictures and cards as links, which their lines say.
+    assert!(!chosen(&rt, "images") && !chosen(&rt, "embeds"));
+    let shown = words(&rt);
+    assert!(shown.contains("As links: each one a file row that opens the viewer."));
+    assert!(shown.contains("As links: no cards."));
+    assert!(shown.contains("Hidden. You can still add one from a message's toolbar."));
 
     // One change after it, and no preset matches: none is shown, and the line says so.
     press(&mut rt, "spacing-0");
@@ -199,18 +230,19 @@ fn a_preset_writes_its_values_and_a_change_after_it_is_custom() {
     );
 
     // Reactions are compared like the rest: hidden, Compact is custom...
-    press(&mut rt, "reactions-1");
+    press(&mut rt, "reactions");
     assert_eq!(rt.state.settings.reactions, Reactions::Hidden);
-    assert!(chosen(&rt, "reactions-1"));
+    assert!(!chosen(&rt, "reactions"));
     assert_eq!(preset_shown(&mut rt), None);
     assert!(words(&rt).contains("Custom: these settings match no preset."));
     // ...and shown again, Compact.
-    press(&mut rt, "reactions-0");
+    press(&mut rt, "reactions");
     assert_eq!(rt.state.settings.reactions, Reactions::Shown);
     assert_eq!(preset_shown(&mut rt), Some(1));
     // Minimal with them shown is custom too.
     press(&mut rt, "preset-2");
-    press(&mut rt, "reactions-0");
+    press(&mut rt, "reactions");
+    assert_eq!(rt.state.settings.reactions, Reactions::Shown);
     assert_eq!(preset_shown(&mut rt), None);
 }
 
@@ -224,7 +256,7 @@ fn each_message_setting_is_kept_across_a_launch() {
     press(&mut rt, "layout-0");
     press(&mut rt, "avatars-2");
     press(&mut rt, "font-size-4");
-    press(&mut rt, "reactions-1");
+    press(&mut rt, "reactions");
     let set = (
         rt.state.settings.display(),
         rt.state.settings.font_size.points(),
@@ -602,4 +634,136 @@ fn hidden_reactions_are_not_drawn_or_read_and_leave_no_room() {
     });
     assert!(chips(&one_line, "c0"));
     assert!(words(&one_line).contains(reaction));
+}
+
+/// Whether the element keyed `key` is drawn inside the one keyed `within`.
+fn inside(rt: &Runtime<State>, within: &str, key: &str) -> bool {
+    rt.elements()
+        .into_iter()
+        .any(|e| e.key.as_deref() == Some(key) && e.path.contains(&format!("/{within}/")))
+}
+
+/// The rect of the element keyed `key`.
+fn rect_of(rt: &Runtime<State>, key: &str) -> [f32; 4] {
+    rt.elements()
+        .into_iter()
+        .find(|e| e.key.as_deref() == Some(key))
+        .unwrap_or_else(|| panic!("{key} is not on screen"))
+        .rect
+}
+
+/// The height of the preview's first message.
+fn first_sample(rt: &Runtime<State>) -> f32 {
+    rect_of(rt, "message-sample-0")[3]
+}
+
+#[test]
+fn the_preview_draws_messages_as_the_settings_say() {
+    let mut rt = runtime(signed_in());
+    rt.update(|s, _| s.go_home(HomeView::Preferences));
+    settle(&mut rt);
+
+    // Comfortable: a block of two, the second without its own name; a picture, a card and
+    // reactions.
+    assert!(inside(&rt, "message-sample-0", "author"));
+    assert!(
+        !inside(&rt, "message-sample-1", "author"),
+        "Priya's second joins her block"
+    );
+    for part in ["preview-picture", "preview-card", "preview-reactions"] {
+        assert!(shows(&rt, part), "{part}");
+    }
+    assert!(!shows(&rt, "preview-file"));
+
+    // Each switch takes its part away, or puts the file row in the picture's place.
+    press(&mut rt, "images");
+    assert!(shows(&rt, "preview-file") && !shows(&rt, "preview-picture"));
+    press(&mut rt, "embeds");
+    assert!(!shows(&rt, "preview-card"));
+    press(&mut rt, "reactions");
+    assert!(!shows(&rt, "preview-reactions"));
+
+    // One line names every message.
+    press(&mut rt, "layout-1");
+    assert!(inside(&rt, "message-sample-1", "author"));
+
+    // The font size sets the preview's type.
+    press(&mut rt, "font-size-0");
+    let small = first_sample(&rt);
+    press(&mut rt, "font-size-5");
+    assert!(first_sample(&rt) > small, "20 points is taller than 13");
+}
+
+#[test]
+fn nothing_in_the_preview_presses_and_it_reads_as_one_picture() {
+    let mut rt = runtime(signed_in());
+    rt.update(|s, _| s.go_home(HomeView::Preferences));
+    settle(&mut rt);
+    let focusable: Vec<_> = rt
+        .elements()
+        .into_iter()
+        .filter(|e| e.path.contains("/preview-messages/") && e.focusable)
+        .filter_map(|e| e.key)
+        .collect();
+    assert!(focusable.is_empty(), "{focusable:?}");
+    let tree = rt.accessibility_json();
+    let preview = node(&tree, "preview-messages").expect("the preview in the tree");
+    assert_eq!(preview["role"], "image");
+    assert_eq!(preview["name"], "Preview of messages with these settings");
+    assert!(
+        preview["children"]
+            .as_array()
+            .is_none_or(|children| children.is_empty()),
+        "its messages are not read one by one"
+    );
+    // Pressing a sample's avatar or name opens no one's card.
+    press(&mut rt, "message-sample-0");
+    assert_eq!(rt.state.popover, None);
+}
+
+#[test]
+fn a_wide_window_has_the_preview_beside_the_settings_and_a_narrow_one_over_them() {
+    let mut narrow = runtime(signed_in());
+    narrow.update(|s, _| s.go_home(HomeView::Preferences));
+    settle(&mut narrow);
+    assert!(inside(&narrow, "messages-card", "preview"));
+
+    let mut wide = Runtime::new(
+        signed_in(),
+        lumia_shell::ui::view,
+        (1600.0, 1000.0),
+        Env::new(false, 2.0),
+    );
+    wide.update(|s, _| s.go_home(HomeView::Preferences));
+    settle(&mut wide);
+    assert!(!inside(&wide, "messages-card", "preview"));
+    let preview = rect_of(&wide, "preview");
+    let settings = rect_of(&wide, "messages-card");
+    assert!(
+        preview[0] >= settings[0] + settings[2],
+        "beside, to the right"
+    );
+
+    // Held in view while the settings scroll under the page's header, in a window tall
+    // enough to show the whole preview and too short for the whole page.
+    let mut short = Runtime::new(
+        signed_in(),
+        lumia_shell::ui::view,
+        (1600.0, 1000.0),
+        Env::new(false, 2.0),
+    );
+    short.update(|s, _| s.go_home(HomeView::Preferences));
+    settle(&mut short);
+    let top = rect_of(&short, "appearance-card")[1];
+    short.update(|_, tx| tx.scroll_into_view("reactions-row"));
+    settle(&mut short);
+    let scrolled = top - rect_of(&short, "appearance-card")[1];
+    assert!(scrolled > tokens::SPACE_40, "the page scrolled: {scrolled}");
+    let header = rect_of(&short, "header");
+    let under = header[1] + header[3] + tokens::SPACE_16;
+    let held = rect_of(&short, "preview")[1];
+    assert!(
+        (held - under).abs() < 1.0,
+        "the preview holds under the header: {held}, {under} wanted"
+    );
 }
