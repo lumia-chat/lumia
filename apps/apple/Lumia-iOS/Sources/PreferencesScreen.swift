@@ -604,7 +604,7 @@ private struct MessagesPreview: View {
             // The conversation list's own room around its rows.
             .padding(.vertical, LumiaTokens.space8)
         }
-        .background(LumiaTokens.bg.color)
+        .background(LumiaTokens.surface.color)
         .clipShape(RoundedRectangle(cornerRadius: LumiaTokens.radius16))
         .overlay(RoundedRectangle(cornerRadius: LumiaTokens.radius16).strokeBorder(LumiaTokens.lineStrong.color))
     }
