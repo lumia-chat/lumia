@@ -51,6 +51,11 @@ export function sizeWords(bytes: number): string {
   return `${(mb / 1024).toFixed(1).replace(/\.0$/, "")} GB`;
 }
 
+/** What a server's files take: "1.2 GB of 5 GB used", or "1.2 GB used" where the instance sets no limit (specs/media.md 4.5). */
+export function usageWords(storage: { usedBytes: number; maxBytes: number }): string {
+  return storage.maxBytes === 0 ? `${sizeWords(storage.usedBytes)} used` : `${sizeWords(storage.usedBytes)} of ${sizeWords(storage.maxBytes)} used`;
+}
+
 /** What the page does with a file before the core sees it: a video gets a poster, HEIC is decoded by the browser where it can be. */
 export type FileKind = "still" | "heic" | "video" | "audio" | "other";
 
@@ -96,9 +101,11 @@ export function tooLargeWords(size: number, kind: FileKind, fileMaxBytes: number
 }
 
 /** An attachment not made or not uploaded, in words on its tile. */
-export function attachErrorWords(message: string, code = "", fileMaxBytes?: number): string {
+export function attachErrorWords(message: string, code = "", fileMaxBytes?: number, state?: string): string {
   const m = message.trim().replace(/^api error [A-Z_]+: /, "");
   if (code === "PERMISSION_DENIED" || /PERMISSION_DENIED/.test(m)) return "You can’t attach files here.";
+  // The server's files are at its limit (specs/media.md 4.5).
+  if (code === "RESOURCE_EXHAUSTED" && state === "storage") return "This server is out of space for files.";
   if (/does not keep attachments/i.test(m)) return "This instance doesn’t keep attachments.";
   if (/over the limit of/i.test(m) || code === "RESOURCE_EXHAUSTED" || /too_large/i.test(m)) return fileMaxBytes ? `Too large: files can be up to ${sizeWords(fileMaxBytes)} here.` : "Too large to send.";
   if (/too large to send/i.test(m)) return "This picture is too large to send, even made smaller.";

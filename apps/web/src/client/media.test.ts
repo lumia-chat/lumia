@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { BlobUrls, attachErrorWords, debounce, editCardUrls, fileKind, fitSize, keptCardUrls, mediaGrid, panBy, pasteTakesFiles, sizeWords, sniffImage, tooLargeWords, zoomAt } from "./media";
+import { BlobUrls, attachErrorWords, debounce, editCardUrls, fileKind, fitSize, keptCardUrls, mediaGrid, panBy, pasteTakesFiles, sizeWords, sniffImage, tooLargeWords, usageWords, zoomAt } from "./media";
 
 /** Timers run by hand. */
 function fakeTimers() {
@@ -101,6 +101,7 @@ describe("files", () => {
     expect(attachErrorWords("this instance does not keep attachments")).toBe("This instance doesn’t keep attachments.");
     expect(attachErrorWords("this picture is too large to send, even made smaller")).toBe("This picture is too large to send, even made smaller.");
     expect(attachErrorWords("nope", "PERMISSION_DENIED")).toBe("You can’t attach files here.");
+    expect(attachErrorWords("quota exceeded", "RESOURCE_EXHAUSTED", 10 * 1024 * 1024, "storage")).toBe("This server is out of space for files.");
     expect(attachErrorWords("something odd details=reason=x")).toBe("Something odd.");
   });
   test("a paste is files when it holds no words but their names", () => {
@@ -258,5 +259,13 @@ describe("BlobUrls", () => {
     await flush();
     cache.clear();
     expect(revoked.sort()).toEqual(["blob:1", "blob:2"]);
+  });
+});
+
+describe("a server's storage", () => {
+  test("names the limit only where there is one", () => {
+    const gb = 1024 * 1024 * 1024;
+    expect(usageWords({ usedBytes: 1.2 * gb, maxBytes: 0 })).toBe("1.2 GB used");
+    expect(usageWords({ usedBytes: 1.2 * gb, maxBytes: 5 * gb })).toBe("1.2 GB of 5 GB used");
   });
 });

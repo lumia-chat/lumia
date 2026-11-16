@@ -1,13 +1,14 @@
 // A server's settings (architecture 6.7): its picture and name, the
-// channels newcomers join (architecture 6.8), and how long it keeps its
-// messages. Offered from the menu under the server's
+// channels newcomers join (architecture 6.8), how long it keeps its
+// messages, and its files (specs/media.md 4.5). Offered from the menu under the server's
 // name to whoever may change them (`canManage`, from the account's own
 // membership); the instance decides all the same. Shown in the server's
 // main pane until a channel is chosen. No board draws it: it is the
 // Profile page's cards, worded as the desktop shell's and the phones'.
-import { Show, createEffect, createMemo, createSignal, on } from "solid-js";
+import { Show, createEffect, createMemo, createResource, createSignal, on } from "solid-js";
 import { Button, Card, ChannelHeader, Checkbox, SegmentedTabs, TextField } from "../design/components";
 import { ClientError, type ServerSummary, type SnapshotSummary } from "../client/bridge";
+import { usageWords } from "../client/media";
 import { avatarSrc, client, pictureRefusal, queryClient } from "../client/state";
 import { initialsOf } from "./app";
 import { DefaultChannelsCard } from "./channels";
@@ -101,12 +102,41 @@ export function ServerSettings(props: { server: ServerSummary; snapshot: Snapsho
   // Another server on screen is another page. The id, not the server: a
   // snapshot that changes this one (its own save among them) is the same page.
   const serverId = createMemo(() => props.server.serverId);
+
+  // Its files (specs/media.md 4.5): what they take, how long attachments are
+  // kept and what a full server does, the last two saved together.
+  const [storage] = createResource(serverId, (id) => client().serverStorage(id));
+  const [keepFiles, setKeepFiles] = createSignal(props.server.attachmentRetentionDays);
+  const [deleteOldest, setDeleteOldest] = createSignal(props.server.deleteOldestWhenFull);
+  const [filesBusy, setFilesBusy] = createSignal(false);
+  const [filesError, setFilesError] = createSignal("");
+  const [filesSaved, setFilesSaved] = createSignal(false);
+  const fileChoices = () => (RETENTION_CHOICES.includes(props.server.attachmentRetentionDays) ? RETENTION_CHOICES : [...RETENTION_CHOICES, props.server.attachmentRetentionDays]);
+  const filesChanged = () => keepFiles() !== props.server.attachmentRetentionDays || deleteOldest() !== props.server.deleteOldestWhenFull;
+  const saveFiles = async () => {
+    if (filesBusy() || !filesChanged()) return;
+    setFilesBusy(true);
+    setFilesError("");
+    setFilesSaved(false);
+    try {
+      took(await client().setServerFiles(props.server.serverId, keepFiles(), deleteOldest()));
+      setFilesSaved(true);
+    } catch (err) {
+      setFilesError(settingRefusal(err));
+    } finally {
+      setFilesBusy(false);
+    }
+  };
   createEffect(
     on(
       serverId,
       () => {
         setName(props.server.name);
         setRetention(props.server.retentionDays);
+        setKeepFiles(props.server.attachmentRetentionDays);
+        setDeleteOldest(props.server.deleteOldestWhenFull);
+        setFilesError("");
+        setFilesSaved(false);
         setNameError("");
         setNameSaved(false);
         setRetentionError("");
@@ -245,6 +275,55 @@ export function ServerSettings(props: { server: ServerSummary; snapshot: Snapsho
                 {deletedError()}
               </p>
             </Show>
+          </div>
+        </Card>
+        <Card title="Files" subtitle="The attachments sent in this server's channels.">
+          <div class="auth__form">
+            <Show when={!storage.error} fallback={<p class="auth__error">{settingRefusal(storage.error)}</p>}>
+              <p class="auth__note" role="status">
+                {storage() ? usageWords(storage()!) : "Counting…"}
+              </p>
+            </Show>
+            <SegmentedTabs
+              label="Keep attachments"
+              tabs={fileChoices().map((days) => ({ id: String(days), label: retentionWords(days) }))}
+              value={String(keepFiles())}
+              onChange={(id) => {
+                setKeepFiles(Number(id));
+                setFilesSaved(false);
+              }}
+            />
+            <Show when={shortens(props.server.attachmentRetentionDays, keepFiles())}>
+              <p class="auth__error">Attachments older than {retentionWords(keepFiles())} will be deleted for everyone. Their messages stay. This cannot be undone.</p>
+            </Show>
+            <SegmentedTabs
+              label="When the server is full"
+              tabs={[
+                { id: "refuse", label: "Refuse new uploads" },
+                { id: "delete", label: "Delete the oldest attachments" },
+              ]}
+              value={deleteOldest() ? "delete" : "refuse"}
+              onChange={(id) => {
+                setDeleteOldest(id === "delete");
+                setFilesSaved(false);
+              }}
+            />
+            <p class="auth__note">
+              {deleteOldest() ? "When an upload would not fit, the oldest messages' attachments are deleted for everyone to make room." : "When an upload would not fit, it is refused until files are deleted."}
+            </p>
+            <Show when={filesError()}>
+              <p class="auth__error" role="alert">
+                {filesError()}
+              </p>
+            </Show>
+            <Show when={filesSaved()}>
+              <p class="auth__note" role="status">
+                Saved.
+              </p>
+            </Show>
+            <Button variant="primary" size="md" disabled={filesBusy() || !filesChanged()} onClick={() => void saveFiles()}>
+              Save
+            </Button>
           </div>
         </Card>
       </div>

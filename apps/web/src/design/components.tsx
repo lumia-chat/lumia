@@ -1692,6 +1692,8 @@ export interface AttachmentProps {
   onRemove?: () => void;
   /** Said in place of the size: "Loading…", or why it could not be opened. */
   note?: string;
+  /** The server let it go (specs/media.md 4.5): nothing to save, and the note says so. */
+  gone?: boolean;
   class?: string;
 }
 
@@ -1710,12 +1712,14 @@ export function Attachment(props: AttachmentProps) {
       <Show when={props.note ?? props.size}>
         <span class="lu-attach__size">{props.note ?? props.size}</span>
       </Show>
-      <Show when={props.href} fallback={<IconButton icon="download" label={"Download " + props.name} size={32} onClick={() => props.onDownload?.()} />}>
-        {(href) => (
-          <a class="lu-iconbtn lu-iconbtn--ghost lu-iconbtn--32 lu-attach__save" href={href()} download={props.name} aria-label={"Download " + props.name}>
-            <Icon name="download" size={16} />
-          </a>
-        )}
+      <Show when={!props.gone}>
+        <Show when={props.href} fallback={<IconButton icon="download" label={"Download " + props.name} size={32} onClick={() => props.onDownload?.()} />}>
+          {(href) => (
+            <a class="lu-iconbtn lu-iconbtn--ghost lu-iconbtn--32 lu-attach__save" href={href()} download={props.name} aria-label={"Download " + props.name}>
+              <Icon name="download" size={16} />
+            </a>
+          )}
+        </Show>
       </Show>
       <Show when={props.onRemove}>
         <IconButton icon="close" label={"Remove " + props.name} size={32} iconSize={14} class="lu-attach__remove" onClick={() => props.onRemove?.()} />

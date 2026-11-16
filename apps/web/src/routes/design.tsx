@@ -1677,6 +1677,7 @@ function MediaPieces() {
               <Attachment kind="image" name="ridge.jpg" size="412 KB" onOpen={() => {}} />
               <Attachment kind="video" name="launch.mp4" size="8.4 MB" onOpen={() => {}} />
               <Attachment kind="file" name="Q4-roadmap.pdf" size="1.2 MB" note="Couldn’t be opened." />
+              <Attachment kind="image" name="offsite.jpg" note="No longer available" gone />
             </div>
           </Message>
           <Message {...PEOPLE.leo} author={PEOPLE.leo.name} time="11:31 AM" actions={false}>

@@ -183,6 +183,8 @@ function FileRow(props: { a: AttachmentSummary; open?: () => void; onRemove?: ()
     setBusy(false);
     setNote(ok ? undefined : "Couldn’t be opened.");
   };
+  // One the server let go is its name and nothing to open (spec 4.5).
+  if (props.a.expired) return <Attachment kind={props.a.kind} name={props.a.name || "Attachment"} note="No longer available" gone onRemove={props.onRemove} />;
   return (
     <Attachment
       kind={props.a.kind}
@@ -243,12 +245,12 @@ function CardView(props: { card: CardSummary; onRemove?: () => void }) {
 export function MessageMedia(props: MessageMediaProps) {
   const kept = createMemo(() => props.attachments.filter((a) => !props.editing?.removedAttachments.has(a.attachmentId)));
   const linked = () => props.images === "link";
-  const visual = createMemo(() => (linked() ? [] : kept().filter((a) => a.kind === "image" || a.kind === "gif" || a.kind === "video")));
+  const visual = createMemo(() => (linked() ? [] : kept().filter((a) => !a.expired && (a.kind === "image" || a.kind === "gif" || a.kind === "video"))));
   const tiles = createMemo(mapArray(visual, (a) => ({ a, tile: tileOf(a, props) })));
   const shownTiles = createMemo(() => tiles().filter((t) => !t.tile.failed()));
   const rows = createMemo(() => {
     const failed = new Set(tiles().filter((t) => t.tile.failed()).map((t) => t.a.attachmentId));
-    return kept().filter((a) => linked() || failed.has(a.attachmentId) || a.kind === "audio" || a.kind === "file");
+    return kept().filter((a) => linked() || a.expired || failed.has(a.attachmentId) || a.kind === "audio" || a.kind === "file");
   });
   const cards = createMemo(() => (props.embeds === "link" ? [] : props.cards.filter((c) => !props.editing?.removedCards.has(c.url))));
   const remover = (id: string) => (props.editing ? () => props.editing?.removeAttachment(id) : undefined);
@@ -260,7 +262,7 @@ export function MessageMedia(props: MessageMediaProps) {
         </Show>
         <For each={rows()}>
           {(a) => (
-            <Show when={a.kind === "audio" && !linked()} fallback={<FileRow a={a} open={viewable(a) ? () => props.onView(a) : undefined} onRemove={remover(a.attachmentId)} />}>
+            <Show when={a.kind === "audio" && !a.expired && !linked()} fallback={<FileRow a={a} open={viewable(a) ? () => props.onView(a) : undefined} onRemove={remover(a.attachmentId)} />}>
               <AudioRow a={a} onRemove={remover(a.attachmentId)} />
             </Show>
           )}
@@ -490,7 +492,7 @@ function start(channelId: string, file: File, limits: UploadLimits) {
       update(key, { state: "ready", draft: made, kind: made.kind });
       return made;
     } catch (e) {
-      if (!gone.has(key)) update(key, { state: "failed", error: attachErrorWords(e instanceof Error ? e.message : String(e), e instanceof ClientError ? e.code : "", limits.fileMaxBytes) });
+      if (!gone.has(key)) update(key, { state: "failed", error: attachErrorWords(e instanceof Error ? e.message : String(e), e instanceof ClientError ? e.code : "", limits.fileMaxBytes, e instanceof ClientError ? e.details.state : undefined) });
       return null;
     }
   };

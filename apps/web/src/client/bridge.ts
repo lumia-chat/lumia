@@ -27,6 +27,10 @@ export interface ServerSummary {
   retentionDays: number;
   /** Whether a deleted message keeps its place as "(deleted)" (architecture 6.7); off, the core's reads leave it out. */
   showDeleted: boolean;
+  /** How long the server keeps its attachments, in days; 0 for ever (specs/media.md 4.5). */
+  attachmentRetentionDays: number;
+  /** A full server lets its oldest attachments go; false, it refuses uploads. */
+  deleteOldestWhenFull: boolean;
   /** Whether this account may change the server's settings (architecture 6.7). */
   canManage: boolean;
   /** Whether it may create channels there (architecture 6.8). */
@@ -342,6 +346,14 @@ export interface AttachmentSummary {
   main: BlobSummary;
   /** At most 400 px: an image's, a GIF's first frame, a video's poster. */
   thumbnail: BlobSummary | null;
+  /** The server let it go (specs/media.md 4.5): drawn as its name and "No longer available", opening nothing. */
+  expired: boolean;
+}
+/** What a server's files take (specs/media.md 4.5). */
+export interface StorageSummary {
+  usedBytes: number;
+  /** 0 when the instance sets no limit. */
+  maxBytes: number;
 }
 /** A link's card (specs/media.md 6): drawn under the link, named by `host` (never `siteName`), opening `url`. */
 export interface CardSummary {
@@ -706,6 +718,14 @@ export class Bridge {
    */
   updateServer(serverId: string, name?: string, retentionDays?: number): Promise<SnapshotSummary> {
     return this.call("updateServer", serverId, name, retentionDays);
+  }
+  /** How long a server keeps its attachments in days (0 for ever), and whether a full one lets its oldest go; one left out stays (specs/media.md 4.5). */
+  setServerFiles(serverId: string, attachmentRetentionDays?: number, deleteOldestWhenFull?: boolean): Promise<SnapshotSummary> {
+    return this.call("setServerFiles", serverId, attachmentRetentionDays, deleteOldestWhenFull);
+  }
+  /** What a server's files take, for its settings (`MANAGE_SERVER`). */
+  serverStorage(serverId: string): Promise<StorageSummary> {
+    return this.call("serverStorage", serverId);
   }
   /** Whether a server's deleted messages keep their place as "(deleted)" (architecture 6.7). */
   setShowDeleted(serverId: string, show: boolean): Promise<SnapshotSummary> {
