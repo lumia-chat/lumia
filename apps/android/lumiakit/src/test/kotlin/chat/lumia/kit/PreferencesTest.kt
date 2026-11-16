@@ -327,4 +327,36 @@ class PreferencesTest {
         assertEquals(12.5f * 20 / 15, LumiaTokens.textMeta.size.scaled(20f / 15).value, 0.001f)
         assertEquals(LumiaTokens.textMeta.style, LumiaTokens.textMeta.style.scaled(1f))
     }
+
+    @Test
+    fun segmentsKeepTheirWidthsWhereTheyFit() {
+        // Roomy, Cozy, Tight at their words' widths, 2 apart, in a row with room to spare: as the boards draw them.
+        assertEquals(SegmentLines(3, listOf(70, 60, 62)), segmentLines(listOf(70, 60, 62), listOf(70, 60, 62), 300, 2))
+        assertEquals(SegmentLines(3, listOf(70, 60, 62)), segmentLines(listOf(70, 60, 62), listOf(70, 60, 62), 196, 2))
+        // The font sizes at 36 each, whatever less their numbers need.
+        assertEquals(SegmentLines(6, List(6) { 36 }), segmentLines(List(6) { 36 }, List(6) { 24 }, 226, 2))
+        assertEquals(SegmentLines(0, emptyList()), segmentLines(emptyList(), emptyList(), 100, 2))
+    }
+
+    @Test
+    fun segmentsTooWideForTheRowShareItAndWrapBeforeAWordIsCut() {
+        // The font sizes squeezed: one line while every number still fits its share.
+        assertEquals(SegmentLines(6, List(6) { 30 }), segmentLines(List(6) { 36 }, List(6) { 24 }, 190, 2))
+        // Text at twice its size on a narrow phone: Large, Small, Hidden do not fit three across, so two and one,
+        // each half the row, and no word cut.
+        assertEquals(SegmentLines(2, List(3) { 124 }), segmentLines(listOf(94, 96, 112), listOf(94, 96, 112), 250, 2))
+        // Six numbers that no longer fit one line are three and three, not five and one.
+        assertEquals(SegmentLines(3, List(6) { 62 }), segmentLines(List(6) { 40 }, List(6) { 40 }, 190, 2))
+        // Narrower than one segment's words: one to a line, the row's whole width.
+        assertEquals(SegmentLines(1, List(3) { 80 }), segmentLines(listOf(94, 96, 112), listOf(94, 96, 112), 80, 2))
+    }
+
+    @Test
+    fun segmentsAreNeverLessThanNothingWide() {
+        // No room at all, as between two large As in a sliver of a window: nothing to draw in, and nothing negative
+        // to hand a layout (which stops the app).
+        assertEquals(SegmentLines(1, List(6) { 0 }), segmentLines(List(6) { 36 }, List(6) { 24 }, 0, 2))
+        assertEquals(SegmentLines(1, List(6) { 0 }), segmentLines(List(6) { 36 }, List(6) { 24 }, -10, 2))
+        for (room in -20..400) assertTrue(segmentLines(List(6) { 36 }, List(6) { 24 }, room, 2).widths.all { it >= 0 })
+    }
 }

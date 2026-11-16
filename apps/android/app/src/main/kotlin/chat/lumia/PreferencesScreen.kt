@@ -89,13 +89,21 @@ import chat.lumia.kit.cardsDrawn
 import chat.lumia.kit.fileKindOf
 import chat.lumia.kit.fitted
 import chat.lumia.kit.mediaShape
+import chat.lumia.kit.segmentLines
 import chat.lumia.kit.sizeWords
 
-/** A choice's picture: the boards' 92 tall, made shorter for a third of a phone's width. */
-private val PictureHeight = 72.dp
+/** A choice's picture, 72 tall: the boards' 92, made shorter for a third of a phone's width. */
+private val PictureHeight = LumiaTokens.tileSize + LumiaTokens.space28
 
-/** A font size's segment, the boards' 36 wide: no token is. */
-private val FontSegment = 36.dp
+/** A font size's segment, the boards' 36 wide. */
+private val FontSegment = LumiaTokens.rowHeight + LumiaTokens.space4
+
+/** The ring around the picture chosen, the boards' 2 wide and 2 out from it. */
+private val RingWidth = LumiaTokens.space2
+private val RingGap = LumiaTokens.space2
+
+/** "PREVIEW"'s letters, the boards' 0.06em apart: the tokens' type has no tracking. */
+private val PreviewTracking = 0.06.em
 
 /**
  * How Lumia looks on this phone: light or dark (or as the phone is), and
@@ -204,8 +212,9 @@ private fun RowScope.PictureChoice(name: String, caption: String?, chosen: Boole
                 .height(PictureHeight)
                 .drawBehind {
                     if (chosen) {
-                        val stroke = LumiaTokens.space2.toPx()
-                        val out = stroke * 1.5f
+                        val stroke = RingWidth.toPx()
+                        // The stroke is drawn about its middle: the gap, then half of it.
+                        val out = RingGap.toPx() + stroke / 2
                         drawRoundRect(
                             accent,
                             topLeft = Offset(-out, -out),
@@ -417,9 +426,11 @@ private fun SettingRow(label: String, caption: String, control: @Composable () -
  * A setting's choices as compact segments on the track (radius 10, 2
  * inside it), each sized to its words, or [each] wide; the chosen one on
  * the active tab's fill, raised, in the ink, the rest in the muted ink.
- * Too wide for the room they are given, they share it evenly. Each is a
- * radio button to TalkBack: its words, whether it is chosen, and its place
- * among the rest; the font sizes' say "13 points".
+ * Too wide for the room they are given (the phone's text made large, a
+ * narrow window), they share it evenly, on more lines than one when a
+ * line would cut their words (`segmentLines`). Each is a radio button to
+ * TalkBack: its words, whether it is chosen, and its place among the rest;
+ * the font sizes' say "13 points".
  */
 @Composable
 private fun Segments(options: List<Pair<String, String>>, chosen: String, onChoose: (String) -> Unit, each: Dp?) {
@@ -449,7 +460,8 @@ private fun Segments(options: List<Pair<String, String>>, chosen: String, onChoo
                         .then(if (each != null) Modifier.semantics { contentDescription = "$label points" } else Modifier)
                         .height(LumiaTokens.rowHeight)
                         .wrapContentHeight(Alignment.CenterVertically)
-                        .then(if (each == null) Modifier.padding(horizontal = LumiaTokens.space12) else Modifier),
+                        // Words have 12 beside them; a number in its fixed segment keeps 4 when the segments are squeezed.
+                        .padding(horizontal = if (each == null) LumiaTokens.space12 else LumiaTokens.space4),
                 )
             }
         },
@@ -459,18 +471,22 @@ private fun Segments(options: List<Pair<String, String>>, chosen: String, onChoo
             .selectableGroup(),
     ) { measurables, constraints ->
         val gap = LumiaTokens.space2.roundToPx()
-        val n = measurables.size
         val fixed = each?.roundToPx()
-        val wanted = measurables.map { fixed ?: it.maxIntrinsicWidth(Constraints.Infinity) }
-        val room = constraints.maxWidth - gap * (n - 1)
-        val widths = if (wanted.sum() <= room) wanted else List(n) { room / n }
-        val placeables = measurables.mapIndexed { i, m -> m.measure(Constraints.fixedWidth(widths[i])) }
-        val height = placeables.maxOf { it.height }
-        layout(widths.sum() + gap * (n - 1), height) {
-            var x = 0
-            for (p in placeables) {
-                p.placeRelative(x, (height - p.height) / 2)
-                x += p.width + gap
+        val needs = measurables.map { it.maxIntrinsicWidth(Constraints.Infinity) }
+        val wanted = if (fixed == null) needs else needs.map { maxOf(it, fixed) }
+        val lines = segmentLines(wanted, needs, constraints.maxWidth, gap)
+        val rows = measurables.mapIndexed { i, m -> m.measure(Constraints.fixedWidth(lines.widths[i])) }.chunked(lines.perLine.coerceAtLeast(1))
+        val heights = rows.map { row -> row.maxOf { it.height } }
+        val width = rows.maxOfOrNull { row -> row.sumOf { it.width } + gap * (row.size - 1) } ?: 0
+        layout(width, heights.sum() + gap * (rows.size - 1).coerceAtLeast(0)) {
+            var y = 0
+            rows.forEachIndexed { r, row ->
+                var x = 0
+                for (p in row) {
+                    p.placeRelative(x, y + (heights[r] - p.height) / 2)
+                    x += p.width + gap
+                }
+                y += heights[r] + gap
             }
         }
     }
@@ -550,7 +566,7 @@ private fun MessagesPreview(display: Display) {
     Column(verticalArrangement = Arrangement.spacedBy(LumiaTokens.space8)) {
         Text(
             "PREVIEW",
-            style = LumiaTokens.textSection.style.copy(fontWeight = FontWeight(LumiaTokens.textCount.weight), letterSpacing = 0.06.em),
+            style = LumiaTokens.textSection.style.copy(fontWeight = FontWeight(LumiaTokens.textCount.weight), letterSpacing = PreviewTracking),
             color = LumiaTokens.inkMuted.color,
             modifier = Modifier.clearAndSetSemantics {},
         )

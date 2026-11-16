@@ -121,7 +121,7 @@ import chat.lumia.kit.attachmentPlayKey
 import chat.lumia.kit.embedPlayKey
 import chat.lumia.kit.embedPressLabel
 import chat.lumia.kit.embedSize
-import chat.lumia.kit.playKindOf
+import chat.lumia.kit.playingOf
 import chat.lumia.kit.cardsDrawn
 import chat.lumia.kit.decodeAnimated
 import chat.lumia.kit.decodePicture
@@ -350,8 +350,8 @@ fun MessageMedia(session: LumiaSession, playback: Playback, messageId: String, a
     val drawnCards = if (cardsDrawn(display.embeds)) cards else emptyList()
     var viewing by remember { mutableStateOf<AttachmentSummary?>(null) }
     // A video or a recording plays here, in its row (spec 5); anything else opens the viewer.
-    val open = { a: AttachmentSummary -> if (playKindOf(a) != null) playback.play(attachmentPlayKey(messageId, a.attachmentId), a) else viewing = a }
-    // The row leaving the screen: a video pauses, a site's player or post goes back to its card, audio plays on.
+    val open = { a: AttachmentSummary -> if (playingOf(a) != null) playback.play(attachmentPlayKey(messageId, a.attachmentId), a) else viewing = a }
+    // The row leaving the screen: what the core says stops then does (a video pauses, a site's player goes back to its card).
     DisposableEffect(messageId, playback) { onDispose { playback.rowGone(messageId) } }
     Column(Modifier.fillMaxWidth().padding(top = LumiaTokens.space4), verticalArrangement = Arrangement.spacedBy(LumiaTokens.space6)) {
         if (pictures.isNotEmpty()) PictureGrid(session, playback, messageId, pictures, open, onLongPress)
@@ -361,11 +361,11 @@ fun MessageMedia(session: LumiaSession, playback: Playback, messageId: String, a
                 a.expired -> ExpiredRow(a, onLongPress)
                 a.kind == "audio" -> AudioRow(session, playback, key, a, onLongPress)
                 // Images as links: a video's row plays it in the row's place.
-                a.kind == "video" && playback.current == key && !playback.loading -> BoxWithConstraints(Modifier.fillMaxWidth()) {
+                a.kind == "video" && playback.attachment == key && !playback.opening -> BoxWithConstraints(Modifier.fillMaxWidth()) {
                     val (w, h) = fitted(a.width.toInt(), a.height.toInt(), maxWidth.value)
                     InlineVideo(playback, a, Modifier.width(w.dp).height(h.dp))
                 }
-                else -> FileRow(session, a, onOpen = if (a.kind == "file") null else ({ open(a) }), onLongPress, busy = playback.current == key && playback.loading)
+                else -> FileRow(session, a, onOpen = if (a.kind == "file") null else ({ open(a) }), onLongPress, busy = playback.attachment == key && playback.opening)
             }
         }
         for (a in attachments) playback.errors[attachmentPlayKey(messageId, a.attachmentId)]?.let { LumiaErrorText(it) }
@@ -416,11 +416,11 @@ private fun PictureGrid(session: LumiaSession, playback: Playback, messageId: St
 @Composable
 private fun PictureTile(session: LumiaSession, playback: Playback, messageId: String, a: AttachmentSummary, modifier: Modifier, open: (AttachmentSummary) -> Unit, onLongPress: (() -> Unit)?) {
     val key = attachmentPlayKey(messageId, a.attachmentId)
-    if (a.kind == "video" && playback.current == key && !playback.loading) {
+    if (a.kind == "video" && playback.attachment == key && !playback.opening) {
         InlineVideo(playback, a, modifier)
         return
     }
-    val busy = a.kind == "video" && playback.current == key
+    val busy = a.kind == "video" && playback.attachment == key
     val context = LocalContext.current
     val shape = RoundedCornerShape(LumiaTokens.radius12)
     val still = remember { animationsOff(context) }
@@ -456,10 +456,7 @@ private fun PictureTile(session: LumiaSession, playback: Playback, messageId: St
         if (animate) AnimatedGif(session, a.main, Modifier.fillMaxSize())
         if (gif && !animate) Badge("GIF", Modifier.align(Alignment.BottomStart).padding(LumiaTokens.space6))
         if (a.kind == "video") {
-            Box(Modifier.size(LumiaTokens.avatarLg).background(LumiaTokens.scrim.color, CircleShape), contentAlignment = Alignment.Center) {
-                if (busy) CircularProgressIndicator(Modifier.size(28.dp), color = Color.White, strokeWidth = 2.dp)
-                else Icon(Icons.Filled.PlayArrow, null, tint = Color.White, modifier = Modifier.size(28.dp))
-            }
+            PlaySymbol(busy)
             if (a.durationMs > 0u) Badge(lengthWords(a.durationMs.toLong()), Modifier.align(Alignment.BottomStart).padding(LumiaTokens.space6))
         }
     }
@@ -504,16 +501,36 @@ private fun kindIcon(kind: FileKind): ImageVector = when (kind) {
     FileKind.OTHER -> Icons.AutoMirrored.Filled.InsertDriveFile
 }
 
+/** A file row's tile, the boards' 34, and the glyph on it and on Save and Share, 18. */
+private val FileTile = LumiaTokens.avatarMd
+private val FileGlyph = LumiaTokens.space18
+
+/** A file's size and, for one with a length, that: "2.4 MB · 0:12". */
+private fun fileMeta(a: AttachmentSummary): String =
+    listOfNotNull(sizeWords(a.sizeBytes.toLong()), a.durationMs.takeIf { it > 0u }?.let { lengthWords(it.toLong()) }).joinToString(" · ")
+
 /**
  * A file as the design's attachment row (`lu-attach`): its kind's icon on
  * a tile, its name and size, Save (the system's "save to" picker) and
- * Share. A picture, video or audio drawn as a row opens its viewer or
- * player on a tap ([onOpen]); a file is saved or shared. A long press
- * anywhere on it, Save and Share too, is the message's ([onLongPress]).
+ * Share, and under it why one of them failed. A picture, video or audio
+ * drawn as a row opens its viewer or player on a tap ([onOpen]); a file
+ * is saved or shared. A long press anywhere on it, Save and Share too, is
+ * the message's ([onLongPress]). A recording's row plays in itself
+ * ([AudioRow]): [playing], what its press does ([press]), where it is in
+ * place of its size ([meta]) and its position bar under its words ([more]).
  */
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun FileRow(session: LumiaSession, a: AttachmentSummary, onOpen: (() -> Unit)?, onLongPress: (() -> Unit)?, busy: Boolean = false) {
+private fun FileRow(
+    session: LumiaSession,
+    a: AttachmentSummary,
+    onOpen: (() -> Unit)?,
+    onLongPress: (() -> Unit)?,
+    busy: Boolean = false,
+    playing: Boolean = false,
+    press: String = "Open",
+    meta: String = fileMeta(a),
+    more: @Composable ColumnScope.() -> Unit = {},
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var error by remember { mutableStateOf<String?>(null) }
@@ -526,13 +543,16 @@ private fun FileRow(session: LumiaSession, a: AttachmentSummary, onOpen: (() -> 
             kind = fileKindOf(a.mediaType, a.name),
             plays = a.kind == "audio" || a.kind == "video",
             name = a.name,
-            meta = listOfNotNull(sizeWords(a.sizeBytes.toLong()), a.durationMs.takeIf { it > 0u }?.let { lengthWords(it.toLong()) }).joinToString(" · "),
-            label = attachmentLabel(a.kind.takeIf { onOpen != null } ?: "file", a.name, a.alt, a.sizeBytes.toLong(), a.durationMs.toLong()),
+            meta = meta,
+            label = attachmentLabel(a.kind.takeIf { onOpen != null } ?: "file", a.name, a.alt, a.sizeBytes.toLong(), a.durationMs.toLong()) + if (playing) ", playing" else "",
             onOpen = onOpen,
             onLongPress = onLongPress,
             onSave = { save.launch(a.name) },
             onShare = { scope.launch { error = share(context, session, a) } },
             busy = busy,
+            playing = playing,
+            press = press,
+            more = more,
         )
         error?.let { LumiaErrorText(it) }
     }
@@ -540,10 +560,12 @@ private fun FileRow(session: LumiaSession, a: AttachmentSummary, onOpen: (() -> 
 
 /**
  * A file's row as drawn, what [FileRow] does left to it: [kind]'s icon on
- * its tile (the play glyph for audio or video, which [plays]), [name] and
- * [meta] under it, Save and Share. With no [onOpen], [onSave] and
- * [onShare] nothing in it can be pressed: Preferences' preview draws the
- * row this way, a picture of a file's row.
+ * its tile (the play glyph for audio or video, which [plays], the pause
+ * glyph while it is [playing], a spinner while it is [busy]), [name] and
+ * [meta] under it, [more] under those, Save and Share. A tap is [onOpen],
+ * named [press] to TalkBack. With no [onOpen], [onSave] and [onShare]
+ * nothing in it can be pressed: Preferences' preview draws the row this
+ * way, a picture of a file's row.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -558,29 +580,35 @@ internal fun FileRowView(
     onSave: (() -> Unit)?,
     onShare: (() -> Unit)?,
     busy: Boolean = false,
+    playing: Boolean = false,
+    press: String = "Open",
+    more: @Composable ColumnScope.() -> Unit = {},
 ) {
     val shape = RoundedCornerShape(LumiaTokens.radius12)
     Row(
         Modifier.fillMaxWidth().clip(shape).background(LumiaTokens.inset.color, shape)
-            .then(if (onOpen != null) Modifier.combinedClickable(onClickLabel = "Open", role = Role.Button, onLongClickLabel = onLongPress?.let { MESSAGE_ACTIONS }, onLongClick = onLongPress, onClick = onOpen) else Modifier)
+            .then(if (onOpen != null) Modifier.combinedClickable(onClickLabel = press, role = Role.Button, onLongClickLabel = onLongPress?.let { MESSAGE_ACTIONS }, onLongClick = onLongPress, onClick = onOpen) else Modifier)
             .padding(LumiaTokens.space8),
         horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space10),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         val (fill, ink) = kindTone(kind)
-        Box(Modifier.size(34.dp).background(fill, RoundedCornerShape(LumiaTokens.radius9)), contentAlignment = Alignment.Center) {
-            if (busy) CircularProgressIndicator(Modifier.size(18.dp), color = ink, strokeWidth = 2.dp)
-            else Icon(if (plays) Icons.Filled.PlayArrow else kindIcon(kind), null, tint = ink, modifier = Modifier.size(18.dp))
+        Box(Modifier.size(FileTile).background(fill, RoundedCornerShape(LumiaTokens.radius9)), contentAlignment = Alignment.Center) {
+            if (busy) CircularProgressIndicator(Modifier.size(FileGlyph), color = ink, strokeWidth = LumiaTokens.space2)
+            else Icon(if (playing) Icons.Filled.Pause else if (plays) Icons.Filled.PlayArrow else kindIcon(kind), null, tint = ink, modifier = Modifier.size(FileGlyph))
         }
-        Column(
-            Modifier.weight(1f).semantics(mergeDescendants = true) {
-                contentDescription = label
-                // A file's row takes no tap of its own, so the row's long press reaches it; TalkBack's is here.
-                if (onLongPress != null) onLongClick(label = MESSAGE_ACTIONS) { onLongPress(); true }
-            },
-        ) {
-            Text(name, style = LumiaTokens.textAuthor.style, color = LumiaTokens.ink.color, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(meta, style = LumiaTokens.textMeta.style, color = LumiaTokens.inkMuted.color)
+        Column(Modifier.weight(1f)) {
+            Column(
+                Modifier.semantics(mergeDescendants = true) {
+                    contentDescription = label
+                    // A file's row takes no tap of its own, so the row's long press reaches it; TalkBack's is here.
+                    if (onLongPress != null) onLongClick(label = MESSAGE_ACTIONS) { onLongPress(); true }
+                },
+            ) {
+                Text(name, style = LumiaTokens.textAuthor.style, color = LumiaTokens.ink.color, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(meta, style = LumiaTokens.textMeta.style, color = LumiaTokens.inkMuted.color)
+            }
+            more()
         }
         RowButton(Icons.Filled.Download, "Save $name", onLongPress, onSave)
         RowButton(Icons.Filled.Share, "Share $name", onLongPress, onShare)
@@ -618,8 +646,8 @@ private fun ExpiredRow(a: AttachmentSummary, onLongPress: (() -> Unit)?) {
         horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space10),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.size(34.dp).background(LumiaTokens.toneStone.color, RoundedCornerShape(LumiaTokens.radius9)), contentAlignment = Alignment.Center) {
-            Icon(kindIcon(fileKindOf(a.mediaType, a.name)), null, tint = LumiaTokens.toneStoneInk.color, modifier = Modifier.size(18.dp))
+        Box(Modifier.size(FileTile).background(LumiaTokens.toneStone.color, RoundedCornerShape(LumiaTokens.radius9)), contentAlignment = Alignment.Center) {
+            Icon(kindIcon(fileKindOf(a.mediaType, a.name)), null, tint = LumiaTokens.toneStoneInk.color, modifier = Modifier.size(FileGlyph))
         }
         Column(Modifier.weight(1f)) {
             Text(a.name, style = LumiaTokens.textAuthor.style, color = LumiaTokens.inkSecondary.color, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -640,7 +668,7 @@ private fun RowButton(icon: ImageVector, description: String, onLongPress: (() -
             .then(if (onClick != null) Modifier.combinedClickable(role = Role.Button, onLongClickLabel = onLongPress?.let { MESSAGE_ACTIONS }, onLongClick = onLongPress, onClick = onClick) else Modifier),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, contentDescription = description.takeIf { onClick != null }, tint = LumiaTokens.iconStrong.color, modifier = Modifier.size(18.dp))
+        Icon(icon, contentDescription = description.takeIf { onClick != null }, tint = LumiaTokens.iconStrong.color, modifier = Modifier.size(FileGlyph))
     }
 }
 
@@ -743,8 +771,8 @@ private fun CardView(
                     horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space6),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    if (busy) CircularProgressIndicator(Modifier.size(14.dp), color = LumiaTokens.accent.color, strokeWidth = 2.dp)
-                    else if (plays) Icon(Icons.Filled.PlayArrow, null, tint = LumiaTokens.iconStrong.color, modifier = Modifier.size(16.dp))
+                    if (busy) CircularProgressIndicator(Modifier.size(LumiaTokens.space14), color = LumiaTokens.accent.color, strokeWidth = LumiaTokens.space2)
+                    else if (plays) Icon(Icons.Filled.PlayArrow, null, tint = LumiaTokens.iconStrong.color, modifier = Modifier.size(LumiaTokens.space16))
                     Text(if (plays) "Play" else "Show post", style = LumiaTokens.textAuthor.style, color = LumiaTokens.ink.color)
                 }
             }
@@ -773,12 +801,12 @@ internal fun CardFrame(host: String, title: String, description: String, stripe:
     }
 }
 
-/** The play symbol over a picture, a spinner in it while what it plays is had. */
+/** The play symbol over a picture or a poster (the boards' 28 in a circle of 40), a spinner in it while what it plays is had. */
 @Composable
 private fun PlaySymbol(busy: Boolean) {
     Box(Modifier.size(LumiaTokens.avatarLg).background(LumiaTokens.scrim.color, CircleShape), contentAlignment = Alignment.Center) {
-        if (busy) CircularProgressIndicator(Modifier.size(28.dp), color = Color.White, strokeWidth = 2.dp)
-        else Icon(Icons.Filled.PlayArrow, null, tint = Color.White, modifier = Modifier.size(28.dp))
+        if (busy) CircularProgressIndicator(Modifier.size(LumiaTokens.space28), color = Color.White, strokeWidth = LumiaTokens.space2)
+        else Icon(Icons.Filled.PlayArrow, null, tint = Color.White, modifier = Modifier.size(LumiaTokens.space28))
     }
 }
 
@@ -795,10 +823,10 @@ private fun PlaySymbol(busy: Boolean) {
 private fun EmbedCard(session: LumiaSession, playback: Playback, messageId: String, card: CardSummary, embed: EmbedSummary, onLongPress: (() -> Unit)?) {
     val context = LocalContext.current
     val key = embedPlayKey(messageId, card.url)
-    val shown = playback.current == key && playback.address != null
+    val shown = playback.embed == key && playback.address != null
     if (!shown) {
         val error = playback.errors[key]
-        CardView(session, card, onLongPress, embed, busy = playback.current == key && playback.loading, error = error) {
+        CardView(session, card, onLongPress, embed, busy = playback.embed == key && playback.resolving, error = error) {
             if (error != null) openInBrowser(context, card.url) else playback.show(key, embed)
         }
         return
@@ -937,22 +965,16 @@ private fun InlineVideo(playback: Playback, a: AttachmentSummary, modifier: Modi
 
 /**
  * An attached recording as the design's attachment row, playing in it
- * (spec 5): its tile is Play and Pause, and while it is the one playing,
- * a bar for its position and its time under its name. It plays on as the
- * list scrolls, until another starts or the conversation is left. Save,
- * Share and the long press are a file row's.
+ * (spec 5), with Preferences' Images as links too: a file's row
+ * ([FileRow]) whose tile is Play and Pause, and while it is the one
+ * playing, a bar for its position and its time in place of its size. It
+ * plays on as the list scrolls, until another starts or the conversation
+ * is left. Save, Share and the long press are a file row's.
  */
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun AudioRow(session: LumiaSession, playback: Playback, key: String, a: AttachmentSummary, onLongPress: (() -> Unit)?) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var error by remember { mutableStateOf<String?>(null) }
-    val save = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(a.mediaType.ifEmpty { "application/octet-stream" })) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
-        scope.launch { error = saveTo(context, session, a.main, uri) }
-    }
-    val active = playback.current == key
+    val active = playback.attachment == key
+    val had = active && !playback.opening
     val playing = active && playback.playing
     var position by remember(key) { mutableLongStateOf(0L) }
     var length by remember(key) { mutableLongStateOf(a.durationMs.toLong()) }
@@ -966,49 +988,24 @@ private fun AudioRow(session: LumiaSession, playback: Playback, key: String, a: 
             delay(250)
         }
     }
-    val press = { if (active && !playback.loading) playback.toggle() else if (!active) playback.play(key, a) }
-    val shape = RoundedCornerShape(LumiaTokens.radius12)
-    val (fill, ink) = kindTone(FileKind.AUDIO)
-    Column {
-        Row(
-            Modifier.fillMaxWidth().clip(shape).background(LumiaTokens.inset.color, shape)
-                .combinedClickable(onClickLabel = if (playing) "Pause" else "Play", role = Role.Button, onLongClickLabel = onLongPress?.let { MESSAGE_ACTIONS }, onLongClick = onLongPress, onClick = press)
-                .padding(LumiaTokens.space8),
-            horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space10),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(Modifier.size(34.dp).background(fill, RoundedCornerShape(LumiaTokens.radius9)), contentAlignment = Alignment.Center) {
-                if (active && playback.loading) CircularProgressIndicator(Modifier.size(18.dp), color = ink, strokeWidth = 2.dp)
-                else Icon(if (playing) Icons.Filled.Pause else Icons.Filled.PlayArrow, null, tint = ink, modifier = Modifier.size(18.dp))
-            }
-            Column(Modifier.weight(1f)) {
-                Column(
-                    Modifier.semantics(mergeDescendants = true) {
-                        contentDescription = attachmentLabel(a) + if (playing) ", playing" else ""
-                        if (onLongPress != null) onLongClick(label = MESSAGE_ACTIONS) { onLongPress(); true }
-                    },
-                ) {
-                    Text(a.name, style = LumiaTokens.textAuthor.style, color = LumiaTokens.ink.color, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(
-                        if (active && !playback.loading) "${lengthWords(position)} / ${lengthWords(length)}"
-                        else listOfNotNull(sizeWords(a.sizeBytes.toLong()), a.durationMs.takeIf { it > 0u }?.let { lengthWords(it.toLong()) }).joinToString(" · "),
-                        style = LumiaTokens.textMeta.style, color = LumiaTokens.inkMuted.color,
-                    )
-                }
-                if (active && !playback.loading && length > 0) {
-                    Slider(
-                        value = position.coerceAtMost(length).toFloat(),
-                        onValueChange = { position = it.toLong(); playback.player?.seekTo(it.toLong()) },
-                        valueRange = 0f..length.toFloat(),
-                        colors = SliderDefaults.colors(thumbColor = LumiaTokens.accent.color, activeTrackColor = LumiaTokens.accent.color, inactiveTrackColor = LumiaTokens.line.color),
-                        modifier = Modifier.fillMaxWidth().height(LumiaTokens.controlHeight).semantics { contentDescription = "Position in ${a.name}" },
-                    )
-                }
-            }
-            RowButton(Icons.Filled.Download, "Save ${a.name}", onLongPress) { save.launch(a.name) }
-            RowButton(Icons.Filled.Share, "Share ${a.name}", onLongPress) { scope.launch { error = share(context, session, a) } }
+    FileRow(
+        session, a,
+        onOpen = { if (had) playback.toggle() else if (!active) playback.play(key, a) },
+        onLongPress = onLongPress,
+        busy = active && playback.opening,
+        playing = playing,
+        press = if (playing) "Pause" else "Play",
+        meta = if (had) "${lengthWords(position)} / ${lengthWords(length)}" else fileMeta(a),
+    ) {
+        if (had && length > 0) {
+            Slider(
+                value = position.coerceAtMost(length).toFloat(),
+                onValueChange = { position = it.toLong(); playback.player?.seekTo(it.toLong()) },
+                valueRange = 0f..length.toFloat(),
+                colors = SliderDefaults.colors(thumbColor = LumiaTokens.accent.color, activeTrackColor = LumiaTokens.accent.color, inactiveTrackColor = LumiaTokens.line.color),
+                modifier = Modifier.fillMaxWidth().height(LumiaTokens.controlHeight).semantics { contentDescription = "Position in ${a.name}" },
+            )
         }
-        error?.let { LumiaErrorText(it) }
     }
 }
 

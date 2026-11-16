@@ -7,7 +7,8 @@
 // stored under the name every client stores it by. They are this phone's
 // and not the account's: `AppStore` keeps them beside the saved instance,
 // and nothing of them is sent to it. And the page itself, as values: the
-// rows it offers (`DisplaySetting`), its switches and what the line under
+// rows it offers (`DisplaySetting`), how a row's segments share its width
+// (`segmentLines`), its switches and what the line under
 // each says (`DisplaySwitch`), and the sample messages its preview draws
 // (`PreviewMessage`).
 package chat.lumia.kit
@@ -271,6 +272,31 @@ enum class DisplaySetting(val label: String, val caption: String) {
         fun offered(display: Display): List<DisplaySetting> =
             entries.filter { it != AVATARS || display.layout != Layout.ONE_LINE }
     }
+}
+
+/** A setting's segments as laid out: how many to a line, and each one's width. */
+data class SegmentLines(val perLine: Int, val widths: List<Int>)
+
+/**
+ * How a setting's segments share a line [room] wide, [gap] apart (all in
+ * one unit): each as wide as it is [wanted] where they all fit, as the
+ * boards draw them. Where they do not (the phone's text made large, a
+ * narrow window), all the same width: on one line while the widest's
+ * words, which it [needs], still fit that, and otherwise on as few lines
+ * as hold them, the lines even (six are three and three, not five and
+ * one), so the control wraps and no word is cut. No width is less than
+ * nothing, however little room there is.
+ */
+fun segmentLines(wanted: List<Int>, needs: List<Int>, room: Int, gap: Int): SegmentLines {
+    val n = wanted.size
+    if (n == 0) return SegmentLines(0, emptyList())
+    if (wanted.sum() + gap * (n - 1) <= room) return SegmentLines(n, wanted)
+    val widest = needs.max()
+    val fit = (n downTo 1).firstOrNull { it * widest + gap * (it - 1) <= room } ?: 1
+    val lines = (n + fit - 1) / fit
+    val perLine = (n + lines - 1) / lines
+    val width = ((room - gap * (perLine - 1)) / perLine).coerceAtLeast(0)
+    return SegmentLines(perLine, List(n) { width })
 }
 
 /**

@@ -2,10 +2,10 @@
 // an attached video in its row through Media3's player and view, with the
 // platform's controls and a full-screen button; an attached recording in
 // its row; a site's player, audio or post in a web view in its card's
-// place. One at a time, embeds included, and never before a press. A
-// video pauses when its row leaves the screen, a site's player or post
-// goes back to its card, audio plays on until another starts or the
-// conversation is left. The rules are the kit's `Embeds.kt`.
+// place. Never before a press, one attachment and one embed at most, and
+// what a start stops and what leaving the screen stops are the core's
+// rules (`playbackStops`, `playbackStopsOffScreen`), carried out here as
+// each can be: an attachment pauses, an embed goes back to its card.
 package chat.lumia
 
 import android.annotation.SuppressLint
@@ -54,59 +54,70 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import chat.lumia.kit.BLUESKY_NOT_FOUND
 import chat.lumia.kit.EMBED_BRIDGE
+import chat.lumia.kit.Having
 import chat.lumia.kit.LumiaSession
-import chat.lumia.kit.OffScreen
-import chat.lumia.kit.PlayKind
 import chat.lumia.kit.attachmentLabel
 import chat.lumia.kit.embedAddress
 import chat.lumia.kit.embedFrameTitle
 import chat.lumia.kit.embedPage
 import chat.lumia.kit.isEmbedOrigin
-import chat.lumia.kit.offScreen
 import chat.lumia.kit.originOf
-import chat.lumia.kit.playKindOf
-import chat.lumia.kit.reportedHeight
+import chat.lumia.kit.playKeyIn
+import chat.lumia.kit.playingOf
 import java.io.File
 import java.security.SecureRandom
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import uniffi.lumia_ffi.AttachmentSummary
 import uniffi.lumia_ffi.EmbedSummary
+import uniffi.lumia_ffi.PlayingSummary
 import uniffi.lumia_ffi.blueskyEmbedUrl
 import uniffi.lumia_ffi.embedOrigins
+import uniffi.lumia_ffi.playbackStops
+import uniffi.lumia_ffi.playbackStopsOffScreen
+import uniffi.lumia_ffi.reportedEmbedHeight
 
 /**
- * One conversation's playing: what plays ([current], by the kit's
- * `attachmentPlayKey` or `embedPlayKey`, and its [kind]), the one player
- * its attachments share, and the web view of the embed shown. It outlives
- * the activity being made again (the phone turned), so a video plays on
- * through a turn; an embed's web view belongs to the activity and goes
- * back to its card then.
+ * One conversation's playing: the attachment that plays ([attachment], by
+ * the kit's `attachmentPlayKey`) through the one player its attachments
+ * share, and the embed shown ([embed], by its `embedPlayKey`) in its web
+ * view. A post being read and an attachment playing can both be there;
+ * the core says what a start stops. It outlives the activity being made
+ * again (the phone turned), so a video plays on through a turn; an
+ * embed's web view belongs to the activity and goes back to its card then.
  */
 class Playback(private val app: Context, val session: LumiaSession) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val main = Handler(Looper.getMainLooper())
-    private var job: Job? = null
-
-    var current by mutableStateOf<String?>(null)
-        private set
-    var kind by mutableStateOf<PlayKind?>(null)
-        private set
-
-    /** An attachment's file or a Bluesky handle being had for [current]. */
-    var loading by mutableStateOf(false)
-        private set
 
     /** Why something could not play, by its key, in words; said where it would have played. */
     val errors = mutableStateMapOf<String, String>()
 
+    /**
+     * Something is starting: what the core's rule says it stops
+     * (`playbackStops`) stops as it can. A card pressed pauses the
+     * attachment and puts the other embed back; an attachment started puts
+     * back an embed that plays and leaves a post where it is.
+     */
+    private fun starting(what: PlayingSummary) {
+        attachmentIs?.let { if (playbackStops(what, it)) pauseAttachment() }
+        embedIs?.let { if (playbackStops(what, it)) stopEmbed() }
+    }
+
     // Attachments
+
+    /** The attachment playing in its row, or paused there; one at a time. */
+    var attachment by mutableStateOf<String?>(null)
+        private set
+    private var attachmentIs: PlayingSummary? = null
+    private val file = Having(scope)
+
+    /** [attachment]'s file is still being had: its poster or its row, with a spinner, until it is. */
+    val opening: Boolean get() = file.busy
 
     private var exo by mutableStateOf<ExoPlayer?>(null)
     val player: Player? get() = exo
@@ -121,28 +132,29 @@ class Playback(private val app: Context, val session: LumiaSession) {
         p.addListener(object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) { playing = isPlaying }
             override fun onPlayerError(error: PlaybackException) {
-                current?.let { errors[it] = "This can't be played on this phone." }
-                stop()
+                attachment?.let { errors[it] = "This can't be played on this phone." }
+                stopAttachment()
             }
         })
     }
 
     /** Plays an attached video or recording in its row, from its file opened into the app's cache; nothing for one that cannot play (an expired one has no blobs). */
     fun play(key: String, a: AttachmentSummary) {
-        val k = playKindOf(a) ?: return
-        if (current == key) {
-            exo?.let { p -> if (!p.isPlaying) toggle() }
+        val what = playingOf(a) ?: return
+        if (attachment == key) {
+            if (!opening) exo?.let { p -> if (!p.isPlaying) toggle() }
             return
         }
-        stop()
-        current = key
-        kind = k
+        starting(what)
+        // The one player takes this file, so whatever it held leaves its row.
+        stopAttachment()
+        attachment = key
+        attachmentIs = what
         errors.remove(key)
-        loading = true
-        job = scope.launch {
+        file.start {
             try {
                 val bytes = session.attachmentBytes(a.main)
-                val file = withContext(Dispatchers.IO) {
+                val opened = withContext(Dispatchers.IO) {
                     val dir = File(app.cacheDir, "play").apply { mkdirs() }
                     // Named by the attachment and the media type's extension, never the name its sender chose.
                     val ext = a.mediaType.substringAfter('/', "").substringBefore(';').filter { it.isLetterOrDigit() }.take(5).ifEmpty { "bin" }
@@ -150,18 +162,15 @@ class Playback(private val app: Context, val session: LumiaSession) {
                         if (!exists() || length() != bytes.size.toLong()) writeBytes(bytes)
                     }
                 }
-                if (current != key) return@launch
                 val p = ensurePlayer()
-                p.setMediaItem(MediaItem.fromUri(Uri.fromFile(file)))
+                p.setMediaItem(MediaItem.fromUri(Uri.fromFile(opened)))
                 p.prepare()
                 p.play()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 errors[key] = "This can't be played: ${e.message ?: "the file could not be had"}"
-                if (current == key) stop()
-            } finally {
-                if (current == key || current == null) loading = false
+                stopAttachment()
             }
         }
     }
@@ -176,6 +185,15 @@ class Playback(private val app: Context, val session: LumiaSession) {
     }
 
     // Embeds
+
+    /** The embed shown in its card's place; one at a time. */
+    var embed by mutableStateOf<String?>(null)
+        private set
+    private var embedIs: PlayingSummary? = null
+    private val account = Having(scope)
+
+    /** [embed] is a Bluesky post whose account is still being looked up: its card, with a spinner, until it is. */
+    val resolving: Boolean get() = account.busy
 
     /** The address the shown embed loads, once had (at once, or after its Bluesky handle resolved). */
     var address by mutableStateOf<String?>(null)
@@ -195,37 +213,36 @@ class Playback(private val app: Context, val session: LumiaSession) {
 
     /** Shows a link's embed in its card's place. A Bluesky post named by handle resolves it first, from Bluesky, on this press. */
     fun show(key: String, e: EmbedSummary) {
-        if (current == key) return
-        stop()
-        current = key
-        kind = playKindOf(e)
+        if (embed == key) return
+        val what = playingOf(e)
+        starting(what)
+        // One web view: whatever it showed is back to its card.
+        stopEmbed()
+        embed = key
+        embedIs = what
         errors.remove(key)
         val now = embedAddress(e, hostOf(session.instanceOrigin))
         if (now != null) {
             address = now
             return
         }
-        loading = true
-        job = scope.launch {
+        account.start {
             try {
-                val did = session.resolveBlueskyHandle(e.blueskyHandle)
-                val url = blueskyEmbedUrl(did, e.blueskyRkey) ?: error("no embed for that account")
-                if (current == key) address = url
+                val did = session.resolveBlueskyHandle(e.blueskyHandle) ?: error("no account by that handle")
+                address = blueskyEmbedUrl(did, e.blueskyRkey) ?: error("no embed for that account")
             } catch (x: CancellationException) {
                 throw x
             } catch (x: Exception) {
                 errors[key] = BLUESKY_NOT_FOUND
-                if (current == key) stop()
-            } finally {
-                loading = false
+                stopEmbed()
             }
         }
     }
 
     /**
-     * The web view of the embed shown as [key]: the one already held (audio
-     * played on while its row was away), or a new one holding the embed's
-     * page. JavaScript on, playing without another gesture (the press was
+     * The web view of the embed shown as [key]: the one already held (its
+     * row was away while its audio played on or its post stayed shown), or
+     * a new one holding the embed's page. JavaScript on, playing without another gesture (the press was
      * one), no file or content access, no third-party cookies; it goes
      * only to the embeds' origins, anything else and any new window opening
      * in the browser.
@@ -264,7 +281,7 @@ class Playback(private val app: Context, val session: LumiaSession) {
             }
 
             override fun onRenderProcessGone(v: WebView, detail: RenderProcessGoneDetail): Boolean {
-                if (held === v) stop()
+                if (held === v) stopEmbed()
                 return true
             }
         }
@@ -300,7 +317,8 @@ class Playback(private val app: Context, val session: LumiaSession) {
                 @JavascriptInterface
                 fun report(from: String, data: String) {
                     if (from != token) return
-                    val h = reportedHeight(provider, data) ?: return
+                    // The core reads each site's form and holds the height in bounds.
+                    val h = reportedEmbedHeight(provider, data)?.toInt() ?: return
                     main.post { if (heldKey == key) reported = h }
                 }
             }, EMBED_BRIDGE)
@@ -312,7 +330,7 @@ class Playback(private val app: Context, val session: LumiaSession) {
         return view
     }
 
-    /** The web view's place in the list has gone: kept while its audio plays on, else let go. */
+    /** The web view's place in the list has gone: kept while it is still the embed shown (its audio playing on, its post scrolled past), else let go. */
     fun released(view: WebView) {
         if (view !== held) destroy(view)
     }
@@ -326,52 +344,60 @@ class Playback(private val app: Context, val session: LumiaSession) {
 
     // Leaving
 
-    /** A message's row has left the screen: what plays there pauses, goes back to its card or plays on, by its kind. */
-    fun rowGone(messageId: String) {
-        val key = current ?: return
-        if (!key.startsWith("a:$messageId:") && !key.startsWith("e:$messageId:")) return
-        when (kind?.let { offScreen(it) }) {
-            OffScreen.PAUSE -> exo?.pause()
-            OffScreen.BACK_TO_CARD -> stop()
-            OffScreen.PLAYS_ON, null -> Unit
-        }
+    /**
+     * What leaving the screen stops, by the core's rule
+     * (`playbackStopsOffScreen`), of [messageId]'s row, or with none of the
+     * whole conversation: an attached video pauses where it is and a site's
+     * player goes back to its card; audio plays on and a post stays shown.
+     */
+    private fun offScreen(messageId: String? = null) {
+        fun left(key: String?, what: PlayingSummary?): Boolean =
+            key != null && what != null && (messageId == null || playKeyIn(key, messageId)) && playbackStopsOffScreen(what)
+        if (left(attachment, attachmentIs)) pauseAttachment()
+        if (left(embed, embedIs)) stopEmbed()
     }
 
-    /** The app has gone to the background: a video pauses, a site's player or post goes back to its card, audio plays on. */
-    fun backgrounded() {
-        when (kind?.let { offScreen(it) }) {
-            OffScreen.PAUSE -> exo?.pause()
-            OffScreen.BACK_TO_CARD -> stop()
-            OffScreen.PLAYS_ON, null -> Unit
-        }
-    }
+    /** A message's row has left the screen. */
+    fun rowGone(messageId: String) = offScreen(messageId)
+
+    /** The app has gone to the background. */
+    fun backgrounded() = offScreen()
 
     /** The activity is being made again: an embed's web view is the old activity's, so it goes back to its card; the player plays on. */
-    fun activityRemade() {
-        if (kind?.isEmbed == true) stop()
+    fun activityRemade() = stopEmbed()
+
+    /** An attachment stopped as it can be: paused where it is, or, its file not yet here, left as it was before the press. */
+    private fun pauseAttachment() {
+        if (opening) stopAttachment() else exo?.pause()
     }
 
-    /** Stops whatever plays: the player emptied, the embed back to its card. */
-    fun stop() {
-        job?.cancel()
-        job = null
+    /** The attachment leaves its row: the player emptied. */
+    private fun stopAttachment() {
+        file.cancel()
         exo?.let { it.stop(); it.clearMediaItems() }
         playing = false
         fullScreen = false
+        attachment = null
+        attachmentIs = null
+    }
+
+    /** The embed goes back to its card. */
+    private fun stopEmbed() {
+        account.cancel()
         if (customView != null) hideCustomView()
         held?.let { view -> if (view.parent == null) destroy(view) }
         held = null
         heldKey = null
         address = null
         reported = null
-        current = null
-        kind = null
-        loading = false
+        embed = null
+        embedIs = null
     }
 
-    /** The conversation was left. */
+    /** The conversation was left: everything stops. */
     fun release() {
-        stop()
+        stopAttachment()
+        stopEmbed()
         exo?.release()
         exo = null
         scope.cancel()
@@ -400,9 +426,9 @@ private object Playbacks {
 
 /**
  * A conversation's playback: kept through the activity being made again,
- * let go (everything stopping) when the conversation is left; a video
- * pauses and a site's player goes back to its card when the app goes to
- * the background.
+ * let go (everything stopping) when the conversation is left; when the
+ * app goes to the background, what the core says stops off screen does (a
+ * video pauses, a site's player goes back to its card).
  */
 @Composable
 fun rememberPlayback(session: LumiaSession, channelId: String): Playback {

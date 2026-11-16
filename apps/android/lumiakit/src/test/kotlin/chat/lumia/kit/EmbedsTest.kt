@@ -1,8 +1,14 @@
-// What plays inside a conversation: what an attachment or an embed is
-// while it plays, what its row leaving does, an embed's address, origins,
-// size, the height a post reports, the page that holds it and its words.
+// What plays inside a conversation: what an attachment or an embed is to
+// the core's rules of what playing stops, what each is called, what is
+// being had for the one pressed last, an embed's address, origins and
+// size, the page that holds it and its words.
 package chat.lumia.kit
 
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -11,6 +17,7 @@ import org.junit.Test
 import uniffi.lumia_ffi.AttachmentSummary
 import uniffi.lumia_ffi.BlobSummary
 import uniffi.lumia_ffi.EmbedSummary
+import uniffi.lumia_ffi.PlayingSummary
 
 private val blob = BlobSummary("b", 10u, ByteArray(0), ByteArray(0), ByteArray(0))
 
@@ -32,31 +39,78 @@ private fun embed(
 class EmbedsTest {
     @Test
     fun onlyAVideoOrARecordingStillHeldPlays() {
-        assertEquals(PlayKind.VIDEO, playKindOf(attachment("video")))
-        assertEquals(PlayKind.AUDIO, playKindOf(attachment("audio")))
-        assertNull(playKindOf(attachment("image")))
-        assertNull(playKindOf(attachment("file")))
+        assertEquals(PlayingSummary(embed = false, kind = "video"), playingOf(attachment("video")))
+        assertEquals(PlayingSummary(embed = false, kind = "audio"), playingOf(attachment("audio")))
+        assertNull(playingOf(attachment("image")))
+        assertNull(playingOf(attachment("gif")))
+        assertNull(playingOf(attachment("file")))
         // One its server let go has no blobs: never offered.
-        assertNull(playKindOf(attachment("video", expired = true)))
-        assertNull(playKindOf(attachment("audio", expired = true)))
+        assertNull(playingOf(attachment("video", expired = true)))
+        assertNull(playingOf(attachment("audio", expired = true)))
     }
 
     @Test
-    fun anEmbedPlaysByItsKind() {
-        assertEquals(PlayKind.EMBED_PLAYER, playKindOf(embed()))
-        assertEquals(PlayKind.EMBED_AUDIO, playKindOf(embed(kind = "audio")))
-        assertEquals(PlayKind.EMBED_POST, playKindOf(embed(kind = "post")))
-        assertTrue(PlayKind.EMBED_POST.isEmbed)
-        assertFalse(PlayKind.VIDEO.isEmbed)
+    fun anEmbedIsToTheCoresRulesWhatTheCoreCallsIt() {
+        // The kinds the core's `playbackStops` and `playbackStopsOffScreen` read: an embed's `player` is its video.
+        assertEquals(PlayingSummary(embed = true, kind = "player"), playingOf(embed()))
+        assertEquals(PlayingSummary(embed = true, kind = "audio"), playingOf(embed(kind = "audio")))
+        assertEquals(PlayingSummary(embed = true, kind = "post"), playingOf(embed(kind = "post")))
     }
 
     @Test
-    fun aVideoPausesAnEmbedGoesBackAndAudioPlaysOn() {
-        assertEquals(OffScreen.PAUSE, offScreen(PlayKind.VIDEO))
-        assertEquals(OffScreen.BACK_TO_CARD, offScreen(PlayKind.EMBED_PLAYER))
-        assertEquals(OffScreen.BACK_TO_CARD, offScreen(PlayKind.EMBED_POST))
-        assertEquals(OffScreen.PLAYS_ON, offScreen(PlayKind.AUDIO))
-        assertEquals(OffScreen.PLAYS_ON, offScreen(PlayKind.EMBED_AUDIO))
+    fun aRowsLeavingIsAboutWhatIsInThatRow() {
+        assertTrue(playKeyIn(attachmentPlayKey("m1", "a"), "m1"))
+        assertTrue(playKeyIn(embedPlayKey("m1", "https://youtu.be/dQw4w9WgXcQ"), "m1"))
+        assertFalse(playKeyIn(attachmentPlayKey("m1", "a"), "m2"))
+        assertFalse(playKeyIn(embedPlayKey("m12", "https://youtu.be/dQw4w9WgXcQ"), "m1"))
+    }
+
+    @Test
+    fun whatIsBeingHadIsBusyUntilItIsHadOrCancelled() {
+        val having = Having(CoroutineScope(Dispatchers.Unconfined))
+        assertFalse(having.busy)
+        val file = CompletableDeferred<Unit>()
+        var had = false
+        having.start { file.await(); had = true }
+        assertTrue(having.busy)
+        file.complete(Unit)
+        assertTrue(had)
+        assertFalse(having.busy)
+        // Cancelled, its work goes no further.
+        val never = CompletableDeferred<Unit>()
+        var went = false
+        having.start { never.await(); went = true }
+        having.cancel()
+        assertFalse(having.busy)
+        never.complete(Unit)
+        assertFalse(went)
+    }
+
+    @Test
+    fun aPressCancelledAndEndingLateLeavesTheNextPresssSpinner() {
+        // A Bluesky card is pressed and its account looked up; a video is pressed before the answer. The
+        // lookup is a call the core is in the middle of: cancelled, it still ends only when the core answers.
+        val having = Having(CoroutineScope(Dispatchers.Unconfined))
+        val lookup = CompletableDeferred<Unit>()
+        val file = CompletableDeferred<Unit>()
+        having.start { withContext(NonCancellable) { lookup.await() } }
+        having.start { file.await() }
+        assertTrue(having.busy)
+        // The lookup ends now: the video's file is still being had, and still says so.
+        lookup.complete(Unit)
+        assertTrue(having.busy)
+        file.complete(Unit)
+        assertFalse(having.busy)
+        // The same after a stop: an old press ending says nothing of a new one.
+        val first = CompletableDeferred<Unit>()
+        val second = CompletableDeferred<Unit>()
+        having.start { withContext(NonCancellable) { first.await() } }
+        having.cancel()
+        having.start { second.await() }
+        first.complete(Unit)
+        assertTrue(having.busy)
+        second.complete(Unit)
+        assertFalse(having.busy)
     }
 
     @Test
@@ -109,20 +163,6 @@ class EmbedsTest {
         assertEquals(360f to 250f, embedSize(x, 360f))
         assertEquals(360f to 612f, embedSize(x, 360f, 612))
         assertEquals(360f to 640f, embedSize(instagram, 360f, 300))
-    }
-
-    @Test
-    fun aPostsHeightIsReadInItsSitesOwnForm() {
-        assertEquals(412, reportedHeight("bluesky", """{"height":412.4,"id":"abc"}"""))
-        assertEquals(538, reportedHeight("x", """{"twttr.embed":{"id":"0","method":"twttr.private.resize","params":[{"height":538,"width":550}]}}"""))
-        assertEquals(700, reportedHeight("reddit", """{"type":"resize.embed","data":700}"""))
-        // Anything else is not a height: another method, another site's form, a site that does not resize, out of bounds.
-        assertNull(reportedHeight("x", """{"twttr.embed":{"method":"twttr.private.rendered","params":[{"height":538}]}}"""))
-        assertNull(reportedHeight("reddit", """{"type":"other","data":700}"""))
-        assertNull(reportedHeight("instagram", """{"height":700}"""))
-        assertNull(reportedHeight("bluesky", """{"height":0}"""))
-        assertNull(reportedHeight("bluesky", """{"height":99999}"""))
-        assertNull(reportedHeight("bluesky", "not json"))
     }
 
     @Test

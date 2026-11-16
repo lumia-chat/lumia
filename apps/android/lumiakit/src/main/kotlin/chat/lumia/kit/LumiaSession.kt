@@ -1141,9 +1141,10 @@ class LumiaSession(
     /**
      * A Bluesky handle's account (its DID), asked of Bluesky's public API
      * on the press of a post named by handle (specs/media.md 6.6), never
-     * through the instance. Throws when it does not resolve.
+     * through the instance. None when Bluesky has no account for it; throws
+     * when Bluesky gave no answer.
      */
-    suspend fun resolveBlueskyHandle(handle: String): String = client.call { resolveBlueskyHandle(handle) }
+    suspend fun resolveBlueskyHandle(handle: String): String? = client.call { resolveBlueskyHandle(handle) }
 
     /** The instance's origin, `https://chat.example` (its port when it names one): the base of the page an embed is held in. */
     val instanceOrigin: String get() = originOf(client.baseUrl) ?: client.baseUrl.trimEnd('/')

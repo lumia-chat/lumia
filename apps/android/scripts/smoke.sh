@@ -391,7 +391,9 @@ echo "  attachments: $work/channel-media.png (the CLI's picture and file drawn, 
 # the internet), a YouTube link's card has its play button and a press
 # puts the site's player in a web view in its place (`embed-youtube.png`),
 # and an X post's "Show post" does the same (`embed-post.png`), the
-# player going back to its card, one shown at a time. The script checks
+# player going back to its card, one shown at a time; a recording then
+# started in its row plays and leaves the post shown (`audio-post.png`),
+# the core's rule of what playing stops. The script checks
 # the web view is there; what the sites drew is the screenshots'. YouTube
 # refuses a page whose referrer is a bare address over http, as a dev
 # instance at 10.0.2.2 is ("This video is unavailable"); an instance on
@@ -430,13 +432,34 @@ if curl -s "$instance/api/v1/instance" | grep -q '"linkCardsEnabled":true'; then
   press_card "Show post from X"
   # The card gives way to the post's web view (its description the card's title).
   for _ in $(seq 1 20); do [ -z "$(starting "Show post from X")" ] && break; sleep 1; done
+  # The player's card, back in its place with its picture, is taller than the player was and
+  # can push the post under the composer: the end of the list is brought into view.
+  list_end() { "$adb" shell input swipe 540 1600 540 500 300; sleep 1; }
+  list_end
   [ -z "$(starting "Show post from X")" ] && await 'class="android.webkit.WebView"' 10 \
     || { shot embed-post; echo "FAIL: Show post put no web view in the X card's place; see $work/embed-post.png"; exit 1; }
   sleep 6
   shot embed-post
   # One at a time: the YouTube player went back to its card (a web view's frames read as web views too, so the card is what is looked for).
   [ -n "$(starting "Play video from YouTube")" ] || { echo "FAIL: the YouTube player did not go back to its card when the post was shown; see $work/embed-post.png"; exit 1; }
-  echo "  playing: $work/video-inline.png, $work/embed-youtube.png, $work/embed-post.png (look at what the sites drew)"
+  # A post is being read, not played (the core's `playbackStops`): a recording the CLI sends
+  # plays in its row on a tap, and the post stays shown over it.
+  python3 -c '
+import math, struct, sys, wave
+w = wave.open(sys.argv[1], "wb"); w.setnchannels(1); w.setsampwidth(2); w.setframerate(8000)
+w.writeframes(b"".join(struct.pack("<h", int(3000 * math.sin(2 * math.pi * 330 * i / 8000))) for i in range(8000 * 40)))
+w.close()' "$work/tone.wav"
+  "$cli" --data-dir "$data" send "$media" "A recording" --attach "$work/tone.wav" >/dev/null \
+    || { echo "FAIL: the CLI could not send the recording"; exit 1; }
+  sleep 3
+  list_end
+  await 'content-desc="Audio, tone.wav"' 30 || { shot audio-post; echo "FAIL: the channel does not draw the recording the CLI sent; see $work/audio-post.png"; exit 1; }
+  tap "Audio, tone.wav"
+  await 'content-desc="Audio, tone.wav, playing"' 20 || { shot audio-post; echo "FAIL: the recording did not play in its row; see $work/audio-post.png"; exit 1; }
+  shot audio-post
+  [ -z "$(starting "Show post from X")" ] && await 'class="android.webkit.WebView"' 5 \
+    || { echo "FAIL: the X post went back to its card when a recording started; see $work/audio-post.png"; exit 1; }
+  echo "  playing: $work/video-inline.png, $work/embed-youtube.png, $work/embed-post.png, $work/audio-post.png (look at what the sites drew)"
 else
   echo "  playing: $work/video-inline.png; the instance makes no link cards (LUMIA_LINK_CARDS), so no embed was pressed"
 fi
