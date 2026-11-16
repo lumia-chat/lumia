@@ -263,6 +263,8 @@ fun LumiaMessageRow(
     // A long body collapsed (`LumiaBody`), and whether this one is open.
     expanded: Boolean = false,
     onExpanded: ((Boolean) -> Unit)? = null,
+    // What it carries under its words (specs/media.md 5 and 6): its attachments and link cards.
+    media: (@Composable () -> Unit)? = null,
     reactions: (@Composable () -> Unit)? = null,
     editor: (@Composable () -> Unit)? = null,
     under: (@Composable () -> Unit)? = null,
@@ -273,12 +275,18 @@ fun LumiaMessageRow(
     // Who wrote it, tapped on the avatar or the name: their profile card, where a screen offers one.
     val authorTap = if (onAuthor != null) Modifier.clickable(onClickLabel = "view $author's profile", role = Role.Button, onClick = onAuthor) else Modifier
     val body = @Composable { modifier: Modifier ->
-        Column(modifier, verticalArrangement = Arrangement.spacedBy(LumiaTokens.space4)) {
+        // The words are a touch target of their own, taking nothing from a press: else the name's
+        // touch area, grown to the 48 dp minimum, covered the first line, and a long press there
+        // opened the profile card instead of the message's actions.
+        Column(modifier.pointerInput(Unit) { awaitPointerEventScope { while (true) awaitPointerEvent() } }, verticalArrangement = Arrangement.spacedBy(LumiaTokens.space4)) {
             when {
                 editor != null -> editor()
                 deleted -> Text("(deleted)", style = LumiaTokens.textMessage.scaled, color = LumiaTokens.inkQuiet.color)
+                // A message of attachments alone has no words to draw.
+                text.isEmpty() && media != null && !edited -> Unit
                 else -> LumiaBody(text, mentions = mentions, nameOf = nameOf, edited = edited, expanded = expanded, onExpanded = onExpanded)
             }
+            if (media != null && !deleted) media()
             if (reactions != null && editor == null) Box(Modifier.padding(top = LumiaTokens.space2)) { reactions() }
             under?.invoke()
         }
@@ -519,6 +527,11 @@ fun LumiaComposer(
     active: Boolean = false,
     onKey: ((KeyEvent) -> Boolean)? = null,
     room: MessageRoom? = null,
+    // What the composer holds besides its words (specs/media.md 5): the strip of files over the field,
+    // the attach button before it, and whether Send is offered for files alone (null: words only).
+    strip: (@Composable () -> Unit)? = null,
+    leading: (@Composable () -> Unit)? = null,
+    sendable: Boolean? = null,
     onSend: () -> Unit,
 ) {
     val shape = RoundedCornerShape(LumiaTokens.radius16)
@@ -531,11 +544,13 @@ fun LumiaComposer(
             .border(1.dp, if (active) LumiaTokens.borderActive.color else LumiaTokens.borderComposer.color, shape),
     ) {
         header?.invoke()
+        strip?.invoke()
         Row(
             modifier = Modifier.fillMaxWidth().padding(LumiaTokens.space10),
             horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space8),
             verticalAlignment = Alignment.Bottom,
         ) {
+            leading?.invoke()
             BasicTextField(
                 value = value,
                 onValueChange = onValue,
@@ -554,7 +569,7 @@ fun LumiaComposer(
                     }
                 },
             )
-            LumiaPrimaryButton("Send", enabled = enabled && value.text.isNotBlank() && !isOver(room), onClick = onSend)
+            LumiaPrimaryButton("Send", enabled = enabled && (sendable ?: value.text.isNotBlank()) && !isOver(room), onClick = onSend)
         }
         LumiaCounter(room, Modifier.padding(start = LumiaTokens.space10, end = LumiaTokens.space10, bottom = LumiaTokens.space8))
     }

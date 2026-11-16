@@ -76,8 +76,9 @@ enum class Avatars(override val stored: String) : Stored {
 
 /**
  * Whether a message's pictures, or its links' previews, are drawn in it or
- * left as a link. In the settings and the presets only: nothing draws
- * either yet, so Preferences offers no control for them.
+ * left as a link: Images at Link draws every attachment as a file's row
+ * that opens it, Embeds at Link draws no cards (specs/media.md 5,
+ * `mediaShape`, `cardsDrawn`).
  */
 enum class Shown(override val stored: String) : Stored {
     SHOWN("shown"),

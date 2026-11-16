@@ -5,7 +5,9 @@
 # with two of its own; installs the debug build, launches it signed in as
 # the first account (the LUMIA_DEV_* extras a debug build honours, through
 # the launch intent) and screenshots each screen the LUMIA_DEV_SCREEN
-# switch can open. Then the rail: a second server dragged onto the first
+# switch can open. Then attachments: a picture and a file sent from the
+# CLI drawn in a channel and the picture opened in the viewer, and a
+# picture attached through the Photo Picker, sent and drawn. Then the rail: a second server dragged onto the first
 # makes a folder the instance keeps, a tap opens it, Folder settings names
 # it and Delete folder takes it away. Then Preferences: dark, Compact, Minimal (light and
 # dark) and the font size at 20 as a launch can be told to look
@@ -276,6 +278,70 @@ alive=$(running)
 "$cli" --data-dir "$data" send "$channel" "Still here?" >/dev/null
 for screen in server channel requests devices approve profile preferences new add newchannel invite serversettings browse members addpeople newdm profilecard yoursettings startover needssetup signin link; do shoot "$screen" 7; done
 [ -n "$alive" ] || { echo "FAIL: the app was not running after launch"; exit 1; }
+
+# Attachments (specs/media.md 5), in a channel of their own so the rest
+# reads #general as it was: the phone's account sends a picture and a file
+# from the CLI, another device of its own, which the channel must draw
+# (the picture, with no alt text, as "Photo"; the file as "File, name,
+# size") and the viewer open; then the phone attaches a picture the way a
+# person does, through the attach button and the system's Photo Picker,
+# and sends it, and the channel must draw it (`channel-media.png`). A CLI
+# without `send --attach` cannot seed this, and the script says so.
+"$cli" --data-dir "$data" channel-create "$server" media >/dev/null
+media=$("$cli" --data-dir "$data" channels "$server" | grep " #media " | grep -oE "[0-9a-f-]{36}" | head -1)
+[ -n "$media" ] || { echo "FAIL: the media channel was not made"; exit 1; }
+square="$work/square.png"
+python3 -c '
+import struct, sys, zlib
+w, h = 320, 200
+rows = b"".join(b"\x00" + b"\x20\xc0\x40" * w for _ in range(h))
+def chunk(kind, data):
+    return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xffffffff)
+png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b"")
+open(sys.argv[1], "wb").write(png)
+' "$square"
+printf 'Notes for the smoke.\n' > "$work/notes.txt"
+"$cli" --data-dir "$data" send "$media" "A picture and a file" --attach "$square" --attach "$work/notes.txt" >/dev/null \
+  || { echo "FAIL: the CLI could not send attachments (LUMIA_CLI must name one with send --attach)"; exit 1; }
+launch channel 0 --es LUMIA_DEV_CHANNEL media
+await 'content-desc="Photo"' 30 || { shot channel-media; echo "FAIL: the channel does not draw the picture the CLI sent; see $work/channel-media.png"; exit 1; }
+await 'content-desc="File, notes.txt, 21 bytes"' 5 || { shot channel-media; echo "FAIL: the channel does not draw the file the CLI sent as a row; see $work/channel-media.png"; exit 1; }
+tap "Photo"
+await 'content-desc="Share"' 10 || { shot viewer; echo "FAIL: the picture did not open in the viewer; see $work/viewer.png"; exit 1; }
+shot viewer
+"$adb" shell input keyevent BACK
+sleep 1
+# The phone's own: the picture put where the Photo Picker finds it, newest first.
+"$adb" push "$square" "/sdcard/Pictures/lumia-smoke-$stamp.png" >/dev/null
+"$adb" shell am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d "file:///sdcard/Pictures/lumia-smoke-$stamp.png" >/dev/null
+sleep 2
+tap "Attach"
+tap "Photo or video"
+await 'Photo taken on' 15 || { shot picker; echo "FAIL: the Photo Picker did not open; see $work/picker.png"; exit 1; }
+first=$(ui | python3 -c '
+import re, sys
+for node in re.findall(r"<node [^>]*>", sys.stdin.read()):
+    if "content-desc=\"Photo taken on" in node:
+        x0, y0, x1, y1 = (int(n) for n in re.search(r"bounds=\"\[(\d+),(\d+)\]\[(\d+),(\d+)\]\"", node).groups())
+        print("%d %d" % ((x0 + x1) // 2, (y0 + y1) // 2))
+        break
+')
+# shellcheck disable=SC2086
+"$adb" shell input tap $first
+sleep 1
+tap "Add (1)"
+# In the strip with its × (the picker names it by its own id, not the file's name).
+await 'content-desc="Remove ' 15 || { shot attaching; echo "FAIL: the picture chosen is not in the composer's strip; see $work/attaching.png"; exit 1; }
+shot attaching
+tap "Send"
+for _ in $(seq 1 30); do
+  [ "$(count "$(ui)" 'content-desc="Photo"')" -ge 2 ] && break
+  sleep 1
+done
+shot channel-media
+[ "$(count "$(ui)" 'content-desc="Photo"')" -ge 2 ] || { echo "FAIL: the picture the phone sent is not drawn in the channel; see $work/channel-media.png"; exit 1; }
+"$adb" shell rm -f "/sdcard/Pictures/lumia-smoke-$stamp.png" >/dev/null 2>&1 || true
+echo "  attachments: $work/channel-media.png (the CLI's picture and file drawn, the viewer opened, the phone's picture attached through the Photo Picker, sent and drawn)"
 
 # The rail's order and folders (architecture 6.9). A second server of the
 # phone's account, long pressed and dragged onto the first's middle, makes

@@ -128,6 +128,12 @@ import chat.lumia.kit.quoteOf
 import chat.lumia.kit.serverDmNote
 import chat.lumia.kit.timeOfMicros
 import chat.lumia.kit.rememberClock
+import chat.lumia.kit.draftIds
+import chat.lumia.kit.editWithMediaOutcome
+import chat.lumia.kit.maySend
+import chat.lumia.kit.waitsFor
+import uniffi.lumia_ffi.AttachmentSummary
+import uniffi.lumia_ffi.CardSummary
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import uniffi.lumia_ffi.DmMessageSummary
@@ -136,6 +142,40 @@ import uniffi.lumia_ffi.QuoteSummary
 
 /** Those a message mentioned who are not in its channel: the bar after a send, while adding them, and once an add made invitations, what it says for a few seconds. */
 private data class Outside(val accountIds: List<String>, val adding: Boolean = false, val said: String? = null, val error: String = "")
+
+/**
+ * What an edit takes off its message (specs/media.md 4.4): attachments by
+ * id and cards by link, each marked with its × until the edit is saved or
+ * put away.
+ */
+private class EditRemovals {
+    val attachments = mutableStateMapOf<String, Boolean>()
+    val cards = mutableStateMapOf<String, Boolean>()
+
+    fun clear() { attachments.clear(); cards.clear() }
+
+    fun toggle(map: MutableMap<String, Boolean>, key: String) { if (map.remove(key) == null) map[key] = true }
+
+    /** Saves the edit of a message carrying [carried] and [cards] with its words now [draft]: [plain] when nothing is taken off, [withMedia] when something is, [delete] for words emptied with nothing left. */
+    fun save(before: String, draft: String, carried: List<AttachmentSummary>, cards: List<CardSummary>, close: () -> Unit, delete: () -> Unit, plain: (String) -> Unit, withMedia: (String, List<String>, List<String>?) -> Unit) {
+        val removing = carried.map { it.attachmentId }.filter { it in attachments }
+        val cardsGone = cards.map { it.url }.filter { it in this.cards }
+        val keeps = carried.size > removing.size || cards.size > cardsGone.size
+        when (val outcome = editWithMediaOutcome(before, draft, removing.size + cardsGone.size, keeps)) {
+            EditOutcome.Unchanged -> close()
+            EditOutcome.Delete -> delete()
+            is EditOutcome.Save -> {
+                close()
+                if (removing.isEmpty() && cardsGone.isEmpty()) plain(outcome.body)
+                else withMedia(outcome.body, removing, if (cardsGone.isEmpty()) null else cards.map { it.url } - cardsGone.toSet())
+            }
+        }
+    }
+
+    @Composable
+    fun Field(carried: List<AttachmentSummary>, cards: List<CardSummary>) =
+        EditMedia(carried, cards, attachments.keys, this.cards.keys, { toggle(attachments, it) }, { toggle(this.cards, it) })
+}
 
 private fun copy(context: Context, text: String) {
     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -231,6 +271,11 @@ fun ConversationScreen(store: AppStore, session: LumiaSession, channelId: String
     // Their picture, by the account `whoOf` names; none for a sender known only by an identity among several.
     val pictureOf = { m: DmMessageSummary -> session.avatarOf(if (m.mine) me else m.senderAccountId.ifEmpty { others.singleOrNull() ?: "" }) }
     val sent = log?.messages ?: emptyList()
+    // The files waiting in the composer and the link previews over it (specs/media.md 5, 6.5); a send asked for while files upload waits for them.
+    val pending = session.attaching[channelId].orEmpty()
+    val cards = rememberComposerCards(session, channelId, draft.text)
+    var waiting by rememberSaveable { mutableStateOf(false) }
+    val removals = remember { EditRemovals() }
     // The long messages opened while the conversation is.
     val expanded = remember { mutableStateMapOf<String, Boolean>() }
     // The room the draft and the field being edited have under the instance's limit.
@@ -245,6 +290,7 @@ fun ConversationScreen(store: AppStore, session: LumiaSession, channelId: String
     val firstIndex = 2
 
     LaunchedEffect(channelId) {
+        session.askUploadLimits()
         // A phone that cannot read or send here says what it needs (#20), over the conversation.
         session.readyForPrivate()
         session.refreshDmChannels()
@@ -271,16 +317,40 @@ fun ConversationScreen(store: AppStore, session: LumiaSession, channelId: String
     fun edit(m: DmMessageSummary) {
         editing = m.messageId
         editDraft = TextFieldValue(m.body, TextRange(m.body.length))
+        removals.clear()
     }
 
     fun saveEdit(m: DmMessageSummary) {
         if (isOver(editRoom)) return
-        when (val outcome = editOutcome(m.body, editDraft.text)) {
-            EditOutcome.Unchanged -> editing = null
-            EditOutcome.Delete -> deleting = m.messageId
-            is EditOutcome.Save -> { editing = null; session.dmEdit(channelId, m.messageId, outcome.body) }
-        }
+        removals.save(
+            m.body, editDraft.text, m.attachments, m.cards,
+            close = { editing = null },
+            delete = { deleting = m.messageId },
+            plain = { session.dmEdit(channelId, m.messageId, it) },
+            withMedia = { body, removing, kept -> session.dmEditWithMedia(channelId, m.messageId, body, removing, kept) },
+        )
     }
+
+    /** Sends the draft with its files and kept cards, or, while files upload, waits for them ([waiting]). */
+    fun send() {
+        val body = draft.text.trim()
+        // Over the limit nothing is sent, and the draft stays.
+        val now = session.attaching[channelId].orEmpty()
+        if (isOver(room) || !maySend(body, now, false)) { waiting = false; return }
+        if (waitsFor(now)) { waiting = true; return }
+        waiting = false
+        if (body.isEmpty() && draftIds(now).isEmpty()) return
+        val quote = replying
+        val urls = cards.cardUrls(body)
+        draft = TextFieldValue("")
+        replying = null
+        error = ""
+        holding = false
+        cards.reset()
+        session.clearError()
+        scope.launch { try { session.dmSendWith(channelId, body, quote, urls) } catch (e: Exception) { error = e.lumiaMessage } }
+    }
+    LaunchedEffect(waiting, pending) { if (waiting && !waitsFor(pending)) send() }
 
     val newestVisible = follow(listState, sent.lastOrNull()?.messageId, sent.size, firstIndex, newLine, holding, { holding = it }) { false }
     BringEditing(listState, editing?.let { id -> sent.indexOfFirst { it.messageId == id } }?.takeIf { it >= 0 }?.plus(firstIndex)) { holding = true }
@@ -332,8 +402,9 @@ fun ConversationScreen(store: AppStore, session: LumiaSession, channelId: String
                             expanded = expanded[m.messageId] == true,
                             onExpanded = { expanded[m.messageId] = it },
                             // None while Preferences hides them: no row and no room for one, Add reaction still in the actions.
+                            media = if (m.attachments.isNotEmpty() || m.cards.isNotEmpty()) ({ MessageMedia(session, m.attachments, m.cards, display) }) else null,
                             reactions = display.drawn(m.reactions).takeIf { it.isNotEmpty() && !m.deleted }?.let { drawn -> @Composable { ReactionChips(drawn, session.me, session::knownNameOf, { react(m.messageId, it) }, { pickerFor = m.messageId }) } },
-                            editor = if (editing == m.messageId && !m.deleted) ({ EditField(editDraft, { editDraft = it }, editRoom, { saveEdit(m) }, { editing = null }) }) else null,
+                            editor = if (editing == m.messageId && !m.deleted) ({ EditField(editDraft, { editDraft = it }, editRoom, { saveEdit(m) }, { editing = null }) { removals.Field(m.attachments, m.cards) } }) else null,
                             under = session.editRefusals[m.messageId]?.let { words -> @Composable { LumiaErrorText(words) } },
                             // A reply to this account, from someone else.
                             washed = !m.mine && m.reply?.authorAccountId == me && me.isNotEmpty(),
@@ -354,18 +425,10 @@ fun ConversationScreen(store: AppStore, session: LumiaSession, channelId: String
                 // Up in an empty composer edits this account's newest message.
                 onKey = { e -> upEdits(e, draft.text) { lastEditable(sent) { it.mine && !it.deleted }?.let { edit(it); true } ?: false } },
                 room = room,
-            ) {
-                val body = draft.text.trim()
-                // Over the limit nothing is sent, and the draft stays.
-                if (body.isEmpty() || isOver(room)) return@LumiaComposer
-                val quote = replying
-                draft = TextFieldValue("")
-                replying = null
-                error = ""
-                holding = false
-                session.clearError()
-                scope.launch { try { session.dmSendWith(channelId, body, quote) } catch (e: Exception) { error = e.lumiaMessage } }
-            }
+                strip = { ComposerStrip(session, channelId, cards, waiting) },
+                leading = if (member) ({ AttachButton(session, channelId) }) else null,
+                sendable = maySend(draft.text, pending, false) && !waiting,
+            ) { send() }
             // Nobody is shown typing in a personal conversation, and nothing is sent when this
             // person does (protocol 6.7); the line keeps its room, so the composer sits where a
             // channel's does and the boards draw it.
@@ -433,6 +496,11 @@ fun ChannelScreen(store: AppStore, session: LumiaSession, channelId: String, dis
     val channel = session.channelOf(channelId)
     val server = session.snapshot?.servers?.firstOrNull { it.serverId == channel?.serverId }
     val messages = session.messages[channelId] ?: emptyList()
+    // The files waiting in the composer and the link previews over it (specs/media.md 5, 6.4); a send asked for while files upload waits for them.
+    val pending = session.attaching[channelId].orEmpty()
+    val cards = rememberComposerCards(session, channelId, draft.text)
+    var waiting by rememberSaveable { mutableStateOf(false) }
+    val removals = remember { EditRemovals() }
     // The long messages opened while the channel is.
     val expanded = remember { mutableStateMapOf<String, Boolean>() }
     // The room the draft and the field being edited have under the instance's limit.
@@ -456,6 +524,7 @@ fun ChannelScreen(store: AppStore, session: LumiaSession, channelId: String, dis
 
     LaunchedEffect(channelId) {
         session.clearError()
+        session.askUploadLimits()
         session.refreshMessages(channelId)
         if (channel?.kind == TEXT) session.loadChannelMembers(channelId)
     }
@@ -513,31 +582,41 @@ fun ChannelScreen(store: AppStore, session: LumiaSession, channelId: String, dis
     fun edit(m: MessageSummary) {
         editing = m.messageId
         editDraft = TextFieldValue(m.body, TextRange(m.body.length))
+        removals.clear()
     }
 
     fun saveEdit(m: MessageSummary) {
         if (isOver(editRoom)) return
-        when (val outcome = editOutcome(m.body, editDraft.text)) {
-            EditOutcome.Unchanged -> editing = null
-            EditOutcome.Delete -> deleting = m.messageId
-            is EditOutcome.Save -> { editing = null; session.editMessage(channelId, m.messageId, outcome.body) }
-        }
+        removals.save(
+            m.body, editDraft.text, m.attachments, m.cards,
+            close = { editing = null },
+            delete = { deleting = m.messageId },
+            plain = { session.editMessage(channelId, m.messageId, it) },
+            withMedia = { body, removing, kept -> session.editMessageWithMedia(channelId, m.messageId, body, removing, kept) },
+        )
     }
 
+    /** Sends the draft with its files and kept cards, or, while files upload, waits for them ([waiting]). */
     fun send() {
         val body = draft.text.trim()
         // Over the limit nothing is sent, and the draft stays.
-        if (body.isEmpty() || isOver(room)) return
+        val now = session.attaching[channelId].orEmpty()
+        if (isOver(room) || !maySend(body, now, false)) { waiting = false; return }
+        if (waitsFor(now)) { waiting = true; return }
+        waiting = false
+        if (body.isEmpty() && draftIds(now).isEmpty()) return
         val quote = replying?.let { sentQuote(it, mentionOn, session.me) }
+        val urls = cards.cardUrls(body)
         draft = TextFieldValue("")
         replying = null
         error = ""
         holding = false
         outside = null
+        cards.reset()
         session.clearError()
         scope.launch {
             try {
-                val missed = session.sendMessageWith(channelId, body, quote)
+                val missed = session.sendMessageWith(channelId, body, quote, urls)
                 if (missed.isNotEmpty()) outside = Outside(missed)
             } catch (e: Exception) {
                 error = e.lumiaMessage
@@ -556,6 +635,7 @@ fun ChannelScreen(store: AppStore, session: LumiaSession, channelId: String, dis
             delay(MARK_EVERY_MS)
         }
     }
+    LaunchedEffect(waiting, pending) { if (waiting && !waitsFor(pending)) send() }
     LaunchedEffect(replying) { if (replying != null) { mentionOn = true; focus.requestFocus(); keyboard?.show() } }
     BackHandler(enabled = replying != null && editing == null) { replying = null }
     BackHandler(enabled = editing != null) { editing = null }
@@ -589,8 +669,9 @@ fun ChannelScreen(store: AppStore, session: LumiaSession, channelId: String, dis
                                 expanded = expanded[m.messageId] == true,
                                 onExpanded = { expanded[m.messageId] = it },
                                 // None while Preferences hides them: no row and no room for one, Add reaction still in the actions.
+                                media = if (m.attachments.isNotEmpty() || m.cards.isNotEmpty()) ({ MessageMedia(session, m.attachments, m.cards, display) }) else null,
                                 reactions = display.drawn(m.reactions).takeIf { it.isNotEmpty() && !m.deleted }?.let { drawn -> @Composable { ReactionChips(drawn, session.me, session::knownNameOf, { if (member) react(m.messageId, it) }, { if (member) pickerFor = m.messageId }) } },
-                                editor = if (editing == m.messageId && !m.deleted) ({ EditField(editDraft, { editDraft = it }, editRoom, { saveEdit(m) }, { editing = null }) }) else null,
+                                editor = if (editing == m.messageId && !m.deleted) ({ EditField(editDraft, { editDraft = it }, editRoom, { saveEdit(m) }, { editing = null }) { removals.Field(m.attachments, m.cards) } }) else null,
                                 under = session.editRefusals[m.messageId]?.let { words -> @Composable { LumiaErrorText(words) } },
                                 washed = m.mentionsMe,
                                 flashed = flash == m.messageId,
@@ -634,6 +715,9 @@ fun ChannelScreen(store: AppStore, session: LumiaSession, channelId: String, dis
                     // Up in an empty composer edits this account's newest message.
                     onKey = { e -> upEdits(e, draft.text) { lastEditable(messages) { mayEdit(it.authorAccountId, session.me, it.notice.isNotEmpty(), it.deleted) }?.let { edit(it); true } ?: false } },
                     room = room,
+                    strip = { ComposerStrip(session, channelId, cards, waiting) },
+                    leading = if (member) ({ AttachButton(session, channelId) }) else null,
+                    sendable = maySend(draft.text, pending, false) && !waiting,
                 ) { send() }
             } else {
                 // Not in it: read it, and join from here (architecture 6.8).

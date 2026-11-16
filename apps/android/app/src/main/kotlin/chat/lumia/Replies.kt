@@ -431,7 +431,7 @@ private fun EmojiCell(emoji: String, name: String, onPick: (String) -> Unit) {
  * over it, Save and Return refused and the words kept.
  */
 @Composable
-fun EditField(value: TextFieldValue, onValue: (TextFieldValue) -> Unit, room: MessageRoom?, onSave: () -> Unit, onCancel: () -> Unit) {
+fun EditField(value: TextFieldValue, onValue: (TextFieldValue) -> Unit, room: MessageRoom?, onSave: () -> Unit, onCancel: () -> Unit, media: (@Composable () -> Unit)? = null) {
     val over = isOver(room)
     val focus = remember { FocusRequester() }
     val shape = RoundedCornerShape(LumiaTokens.radius12)
@@ -460,6 +460,8 @@ fun EditField(value: TextFieldValue, onValue: (TextFieldValue) -> Unit, room: Me
             maxLines = 12,
         )
         LumiaCounter(room, Modifier.padding(horizontal = LumiaTokens.space12))
+        // What the message carries, each to be taken off with the edit (specs/media.md 4.4).
+        media?.invoke()
         Row(horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space4), verticalAlignment = Alignment.CenterVertically) {
             LumiaLinkButton("Cancel", onClick = onCancel)
             LumiaLinkButton("Save", enabled = !over, onClick = onSave)

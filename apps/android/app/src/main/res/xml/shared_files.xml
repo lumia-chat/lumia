@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- What the app hands other apps by its provider: an attachment opened
+     into the cache to share (Media.kt), and nothing else. -->
+<paths>
+    <cache-path name="shared" path="shared/" />
+</paths>

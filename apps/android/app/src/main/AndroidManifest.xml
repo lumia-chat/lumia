@@ -33,6 +33,17 @@
                 <data android:scheme="lumia" />
             </intent-filter>
         </activity>
+        <!-- An attachment shared to another app (specs/media.md 5): the file the
+             core opened, from the cache's shared/ only, read by the app it went to. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/shared_files" />
+        </provider>
         <!-- Push (architecture 15.5): the UnifiedPush distributor's events, and FCM's. -->
         <service
             android:name=".push.LumiaPushService"

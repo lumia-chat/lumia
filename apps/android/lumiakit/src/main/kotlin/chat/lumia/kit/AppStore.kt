@@ -47,6 +47,8 @@ class AppStore(context: Context) {
     /** The store's own: what is begun in it is not cut short by the screen that asked going away. */
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     val dataDirectory: File = dataDirectory(context)
+    /** Where the core keeps the attachments it opened (specs/media.md 4.3): the app's cache, which the system may clear. */
+    private val mediaCache: File = File(context.cacheDir, "media")
 
     var session by mutableStateOf<LumiaSession?>(null)
         private set
@@ -194,6 +196,8 @@ class AppStore(context: Context) {
         session?.stop()
         dataDirectory.mkdirs()
         val client = LumiaClient(url, dataDirectory)
+        // Opened attachments go in the app's cache, which the system may clear, rather than beside the stores (and backups).
+        client.now { setMediaCacheDir(mediaCache.absolutePath) }
         // The phone's push subscription is kept in its preferences, which the store can reach.
         val s = LumiaSession(client, pushLeft = { chosen -> PushRegistrar.left(context, client, chosen) }, erased = ::forgetAccount)
         // A conversation read, here or on another device: its delivered notifications go, and the rest carry the badge.
@@ -278,6 +282,8 @@ class AppStore(context: Context) {
         phraseSnooze = null
         recentEmoji = emptyList()
         forgetPictures()
+        forgetMediaPictures()
+        mediaCache.deleteRecursively()
     }
 
     fun forgetInstance() {

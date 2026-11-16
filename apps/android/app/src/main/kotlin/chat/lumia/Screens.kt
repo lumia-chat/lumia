@@ -55,6 +55,7 @@ import chat.lumia.kit.FONT_SIZES
 import chat.lumia.kit.Layout
 import chat.lumia.kit.Preset
 import chat.lumia.kit.Reactions
+import chat.lumia.kit.Shown
 import chat.lumia.kit.Spacing
 import chat.lumia.kit.fontSizeNamed
 import chat.lumia.kit.storedAs
@@ -613,10 +614,12 @@ fun ProfileScreen(store: AppStore, session: LumiaSession, back: () -> Unit) {
  * chosen while they all match; none is chosen once one is changed, and the
  * line under them says so. Then each setting, its label over it (the
  * words every client uses, the web's): the avatars are not offered
- * in one line, which draws none. Images and embeds have no control until
- * there is something they change. The six font sizes are the same
+ * in one line, which draws none. The six font sizes are the same
  * segmented choice as the rest: six short numbers fit a phone's width.
- * Reactions, after them, draws a message's chips or none.
+ * Images draws a message's pictures, GIFs and videos in it, or every
+ * attachment as a file's row that opens it; Embeds draws link cards or
+ * none (specs/media.md 5). Reactions, after them, draws a message's chips
+ * or none.
  */
 @Composable
 fun PreferencesScreen(store: AppStore, back: () -> Unit) {
@@ -668,6 +671,20 @@ fun PreferencesScreen(store: AppStore, back: () -> Unit) {
                         FONT_SIZES.map { "$it" to "$it" },
                         "${display.fontSize}",
                         { name -> fontSizeNamed(name)?.let { store.choose(display.copy(fontSize = it)) } },
+                    )
+                }
+                Setting("Images") {
+                    LumiaChoice(
+                        listOf(Shown.SHOWN.stored to "Shown", Shown.LINK.stored to "As links"),
+                        display.images.stored,
+                        { name -> storedAs<Shown>(name)?.let { store.choose(display.copy(images = it)) } },
+                    )
+                }
+                Setting("Embeds") {
+                    LumiaChoice(
+                        listOf(Shown.SHOWN.stored to "Shown", Shown.LINK.stored to "As links"),
+                        display.embeds.stored,
+                        { name -> storedAs<Shown>(name)?.let { store.choose(display.copy(embeds = it)) } },
                     )
                 }
                 Setting("Reactions") {

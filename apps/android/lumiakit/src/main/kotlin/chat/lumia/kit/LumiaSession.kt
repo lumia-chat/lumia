@@ -40,6 +40,10 @@ import uniffi.lumia_ffi.QuoteSummary
 import uniffi.lumia_ffi.RailItem
 import uniffi.lumia_ffi.ReadStateSummary
 import uniffi.lumia_ffi.Client
+import uniffi.lumia_ffi.AttachmentInput
+import uniffi.lumia_ffi.BlobSummary
+import uniffi.lumia_ffi.CardSummary
+import uniffi.lumia_ffi.UploadLimits
 
 sealed class ConnectionState(val label: String) {
     data object Idle : ConnectionState("not connected")
@@ -479,6 +483,9 @@ class LumiaSession(
                 promptDone = null
                 promptLoop?.cancel()
                 promptDoneJob?.cancel()
+                attaching.clear()
+                uploadLimits = null
+                limitsAsked = false
             },
         )
     }
@@ -994,19 +1001,129 @@ class LumiaSession(
      * who it mentioned that is not in the channel, so not notified, as far
      * as who is in it is known (`loadChannelMembers`).
      */
-    suspend fun sendMessageWith(channelId: String, body: String, reply: QuoteSummary?): List<String> {
+    suspend fun sendMessageWith(channelId: String, body: String, reply: QuoteSummary?, cardUrls: List<String> = emptyList()): List<String> {
         val mentions = mentionsIn(channelId, body)
         val outside = outsideOf(mentions, channelMemberIds[channelId], me)
-        client.call { sendMessageWith(channelId, body, mentions, reply) }
+        // The waiting attachments ready to go (`draftIds`) and the links whose cards were kept.
+        val going = readyAttachments(channelId)
+        if (going.isEmpty() && cardUrls.isEmpty()) {
+            client.call { sendMessageWith(channelId, body, mentions, reply) }
+        } else {
+            client.call { sendMessageWithMedia(channelId, body, mentions, reply, draftIds(going), cardUrls) }
+            sent(channelId, going)
+        }
         refreshMessages(channelId)
         return outside
     }
 
-    /** Sends to a personal conversation, quoting [quote] or nothing (inside the encryption). */
-    suspend fun dmSendWith(channelId: String, body: String, quote: QuoteSummary?) {
-        client.call { dmSendWith(channelId, body, quote) }
+    /** Sends to a personal conversation, quoting [quote] or nothing (inside the encryption), with its attachments and cards as a channel's. */
+    suspend fun dmSendWith(channelId: String, body: String, quote: QuoteSummary?, cardUrls: List<String> = emptyList()) {
+        val going = readyAttachments(channelId)
+        if (going.isEmpty() && cardUrls.isEmpty()) {
+            client.call { dmSendWith(channelId, body, quote) }
+        } else {
+            client.call { dmSendWithMedia(channelId, body, quote, draftIds(going), cardUrls) }
+            sent(channelId, going)
+        }
         refreshDmLog(channelId)
     }
+
+    // Attachments and link cards (specs/media.md)
+
+    /** What the instance takes of attachments, once asked (`askUploadLimits`); none when it keeps none, and the composer then offers no way to attach. */
+    var uploadLimits by mutableStateOf<UploadLimits?>(null)
+        private set
+    private var limitsAsked = false
+
+    /** Asks the instance what it takes of attachments, once a session (again after a failure to reach it). */
+    fun askUploadLimits() {
+        if (limitsAsked || !signedIn) return
+        limitsAsked = true
+        scope.launch {
+            try { uploadLimits = client.call { uploadLimits() } } catch (e: Exception) { limitsAsked = false }
+        }
+    }
+
+    /** The files in each conversation's composer, by channel id: kept here so turning the phone or leaving the conversation keeps them, and their uploads go on in the session's scope. */
+    val attaching = mutableStateMapOf<String, List<PendingAttachment>>()
+
+    private var attachedCount = 0
+
+    /**
+     * Adds a file to [channelId]'s composer and makes an attachment of it:
+     * [describe] says what it is at once (name, size, type, read without
+     * its bytes), [input] reads and decodes it off the main thread, and
+     * the core processes, seals and uploads it (`attach`). A failure is
+     * said in words on the file; one taken out meanwhile is discarded.
+     */
+    fun attach(channelId: String, name: String, sizeBytes: Long, mediaType: String, input: suspend () -> AttachmentInput) {
+        val localId = "local-${++attachedCount}"
+        attaching[channelId] = attaching[channelId].orEmpty() + PendingAttachment(localId, name, sizeBytes, mediaType)
+        scope.launch {
+            val outcome = try {
+                val made = input()
+                Result.success(client.call { attach(channelId, made) })
+            } catch (e: OutOfMemoryError) {
+                Result.failure(IllegalStateException("too large to read on this phone"))
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
+            val now = attaching[channelId].orEmpty()
+            if (now.none { it.localId == localId }) {
+                // Taken out while it uploaded: its blobs go too.
+                outcome.getOrNull()?.let { draft -> client.call { discardAttachment(draft.draftId) } }
+                return@launch
+            }
+            attaching[channelId] = now.map { p ->
+                if (p.localId != localId) p
+                else outcome.fold({ p.copy(draft = it) }, { p.copy(error = attachRefused(it.lumiaMessage)) })
+            }
+        }
+    }
+
+    /** Says a file could not even be read, on itself in the strip. */
+    fun attachFailed(channelId: String, name: String, words: String) {
+        val localId = "local-${++attachedCount}"
+        attaching[channelId] = attaching[channelId].orEmpty() + PendingAttachment(localId, name, 0, "", error = attachRefused(words))
+    }
+
+    /** Takes a file out of the composer, and its blobs off the instance when it was uploaded. */
+    fun removeAttachment(channelId: String, localId: String) {
+        val gone = attaching[channelId].orEmpty().firstOrNull { it.localId == localId } ?: return
+        attaching[channelId] = attaching[channelId].orEmpty().filter { it.localId != localId }
+        gone.draft?.let { d -> scope.launch { runCatching { client.call { discardAttachment(d.draftId) } } } }
+    }
+
+    /** A waiting picture's alt text, as typed; given to the core as it is sent. */
+    fun setAlt(channelId: String, localId: String, alt: String) {
+        attaching[channelId] = attaching[channelId].orEmpty().map { if (it.localId == localId) it.copy(alt = alt) else it }
+    }
+
+    /** The attachments ready to send, their alt text given to the core first. */
+    private suspend fun readyAttachments(channelId: String): List<PendingAttachment> {
+        val ready = attaching[channelId].orEmpty().filter { it.ready }
+        for (p in ready) {
+            val d = p.draft ?: continue
+            if (p.alt != d.alt) client.call { setAttachmentAlt(d.draftId, p.alt) }
+        }
+        return ready
+    }
+
+    /** Those sent, out of the strip; a refused one stays, with its words, until taken out. */
+    private fun sent(channelId: String, going: List<PendingAttachment>) {
+        val ids = going.map { it.localId }.toSet()
+        attaching[channelId] = attaching[channelId].orEmpty().filter { it.localId !in ids }
+    }
+
+    /** The card a link would have while composing: the instance's in a server channel, this phone's in a personal one; none when the page gives none or it cannot be had. */
+    suspend fun cardPreview(channelId: String, url: String): CardSummary? =
+        runCatching { client.call { cardPreview(channelId, url) } }.getOrNull()
+
+    /** An attachment's or a personal card's blob, fetched, opened and kept by the core. */
+    suspend fun attachmentBytes(blob: BlobSummary): ByteArray = client.call { attachmentBytes(blob) }
+
+    /** A server card's picture, by its address. */
+    suspend fun cardImage(imageUrl: String): ByteArray = client.call { cardImage(imageUrl) }
 
     // Reactions (architecture 6.6)
 
@@ -1065,6 +1182,22 @@ class LumiaSession(
         }
     }
 
+    /**
+     * The same, dropping the attachments [removeIds] names and, with
+     * [cardUrls], keeping only those links' cards (spec 4.4, 6.4).
+     */
+    fun editMessageWithMedia(channelId: String, messageId: String, body: String, removeIds: List<String>, cardUrls: List<String>?) {
+        editRefusals.remove(messageId)
+        scope.launch {
+            try {
+                val mentions = mentionsIn(channelId, body)
+                editsSent[client.call { editMessageWithMedia(channelId, messageId, body, mentions, removeIds, cardUrls) }] = messageId
+            } catch (e: Exception) {
+                editRefusals[messageId] = notSaved(e.lumiaMessage)
+            }
+        }
+    }
+
     /** Deletes a message of a server's channel: this account's own, or anyone's for a moderator. A refusal is shown as `lastError`. */
     fun deleteMessage(channelId: String, messageId: String) {
         scope.launch {
@@ -1078,6 +1211,19 @@ class LumiaSession(
         scope.launch {
             try {
                 client.call { dmEdit(channelId, messageId, body) }
+                refreshDmLog(channelId)
+            } catch (e: Exception) {
+                editRefusals[messageId] = notSaved(e.lumiaMessage)
+            }
+        }
+    }
+
+    /** The same, dropping attachments and cards as a channel's edit does; the core takes their blobs off the instance. */
+    fun dmEditWithMedia(channelId: String, messageId: String, body: String, removeIds: List<String>, cardUrls: List<String>?) {
+        editRefusals.remove(messageId)
+        scope.launch {
+            try {
+                client.call { dmEditWithMedia(channelId, messageId, body, removeIds, cardUrls) }
                 refreshDmLog(channelId)
             } catch (e: Exception) {
                 editRefusals[messageId] = notSaved(e.lumiaMessage)
