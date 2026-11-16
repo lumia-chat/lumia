@@ -6202,19 +6202,41 @@ impl App {
 /// attachments, what they are (specs/media.md 5: notifications stay text).
 fn notification_text(body: &str, attachments: &[lumia_core::proto::Attachment]) -> String {
     use lumia_core::proto::AttachmentKind;
-    if !body.trim().is_empty() || attachments.is_empty() {
+    let kinds = attachments
+        .iter()
+        .map(|a| match AttachmentKind::try_from(a.kind) {
+            Ok(AttachmentKind::Image | AttachmentKind::Gif) => "photo",
+            Ok(AttachmentKind::Video) => "video",
+            Ok(AttachmentKind::Audio) => "recording",
+            _ => "file",
+        });
+    words_for(body, &kinds.collect::<Vec<_>>())
+}
+
+/// [`notification_text`] from a message summary's attachments, for a shell that words a
+/// notice itself (the desktop's, of a personal conversation it reads back from the store).
+#[must_use]
+pub fn notice_text(body: &str, attachments: &[AttachmentSummary]) -> String {
+    let kinds = attachments.iter().map(|a| match a.kind.as_str() {
+        "image" | "gif" => "photo",
+        "video" => "video",
+        "audio" => "recording",
+        _ => "file",
+    });
+    words_for(body, &kinds.collect::<Vec<_>>())
+}
+
+/// The body when it says anything, else what `kinds` are: "Sent a photo", "Sent 2 files".
+fn words_for(body: &str, kinds: &[&str]) -> String {
+    let Some(first) = kinds.first().copied() else {
+        return body.to_owned();
+    };
+    if !body.trim().is_empty() {
         return body.to_owned();
     }
-    let kind = |a: &lumia_core::proto::Attachment| match AttachmentKind::try_from(a.kind) {
-        Ok(AttachmentKind::Image | AttachmentKind::Gif) => "photo",
-        Ok(AttachmentKind::Video) => "video",
-        Ok(AttachmentKind::Audio) => "recording",
-        _ => "file",
-    };
-    let first = kind(&attachments[0]);
-    match attachments.len() {
+    match kinds.len() {
         1 => format!("Sent a {first}"),
-        n if attachments.iter().all(|a| kind(a) == first) => format!("Sent {n} {first}s"),
+        n if kinds.iter().all(|k| *k == first) => format!("Sent {n} {first}s"),
         n => format!("Sent {n} attachments"),
     }
 }
@@ -6363,7 +6385,7 @@ mod mention_tests {
 
 #[cfg(test)]
 mod media_tests {
-    use super::{cards_kept, notification_text};
+    use super::{cards_kept, notice_text, notification_text, AttachmentSummary};
     use lumia_core::proto::{Attachment, AttachmentKind};
 
     fn of(kind: AttachmentKind) -> Attachment {
@@ -6393,6 +6415,23 @@ mod media_tests {
             "Sent 2 attachments"
         );
         assert_eq!(notification_text("", &[]), "");
+    }
+
+    #[test]
+    fn a_summary_of_attachments_alone_is_told_in_the_same_words() {
+        let of = |kind: &str| AttachmentSummary {
+            kind: kind.into(),
+            ..AttachmentSummary::default()
+        };
+        assert_eq!(notice_text("look", &[of("image")]), "look");
+        assert_eq!(notice_text("", &[of("gif")]), "Sent a photo");
+        assert_eq!(notice_text("", &[of("audio")]), "Sent a recording");
+        assert_eq!(notice_text("", &[of("file"), of("file")]), "Sent 2 files");
+        assert_eq!(
+            notice_text("", &[of("video"), of("file")]),
+            "Sent 2 attachments"
+        );
+        assert_eq!(notice_text("", &[]), "");
     }
 
     #[test]
