@@ -174,8 +174,12 @@ fn convert<V: Copy + Default>(transform: &dyn TransformExecutor<V>, samples: &mu
 }
 
 /// Platform-decoded pixels (RGBA8, upright) as an image.
+///
+/// Held to the same bounds as a decode of the core's own: a shell that
+/// hands over a larger picture has decoded more than any attachment may be,
+/// and resizing it would cost what the bounds exist to refuse.
 pub(super) fn from_pixels(rgba: Vec<u8>, width: u32, height: u32) -> Result<RgbaImage, MediaError> {
-    if width == 0 || height == 0 {
+    if !super::within_bounds(width, height) {
         return Err(MediaError::Pixels);
     }
     RgbaImage::from_raw(width, height, rgba).ok_or(MediaError::Pixels)

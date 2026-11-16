@@ -131,7 +131,8 @@ enum Cmd {
     /// `--count N` sends N of them over one connection, `{n}` in the body numbering
     /// them from 0 (to seed a long channel). `--attach <file>` (repeatable) carries a
     /// file, processed and encrypted here first (a picture resized, its metadata
-    /// stripped; `--as-file` keeps its pixels).
+    /// stripped; `--as-file` keeps its pixels). `--cards` asks for a link card on every
+    /// link the body has (at most three), which the instance builds when it makes cards.
     Send {
         channel_id: String,
         body: String,
@@ -147,6 +148,8 @@ enum Cmd {
         attach: Vec<PathBuf>,
         #[arg(long)]
         as_file: bool,
+        #[arg(long)]
+        cards: bool,
     },
     /// Save the attachments of a message of a server channel, opened, into a
     /// directory (`--out`, default the current one); prints each file written.
@@ -620,6 +623,7 @@ async fn run(cli: Cli) -> Result<(), ClientError> {
             count,
             attach,
             as_file,
+            cards,
         } => {
             let channel = parse_uuid(&channel_id)?;
             if !attach.is_empty() && count > 1 {
@@ -646,11 +650,18 @@ async fn run(cli: Cli) -> Result<(), ClientError> {
             };
             let ops = (0..count.max(1))
                 .map(|n| {
+                    let body = body.replace("{n}", &n.to_string());
+                    let card_urls = if cards {
+                        lumia_core::cards::card_links(&body)
+                    } else {
+                        Vec::new()
+                    };
                     command::Op::SendMessage(SendMessage {
-                        body: body.replace("{n}", &n.to_string()),
+                        body,
                         mentions: mentions.clone(),
                         reply_to: reply_to.clone(),
                         attachments: attachments.clone(),
+                        card_urls,
                         ..Default::default()
                     })
                 })

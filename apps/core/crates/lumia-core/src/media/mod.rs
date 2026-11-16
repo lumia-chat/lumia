@@ -50,8 +50,9 @@ pub enum MediaError {
     /// No thumbnail of the picture fits in 256 KiB.
     #[error("no thumbnail of this picture fits")]
     ThumbnailTooLarge,
-    /// Pixels handed in do not match their width and height.
-    #[error("the pixels do not match their dimensions")]
+    /// Pixels handed in do not match their width and height, or are past
+    /// the bounds (8,192 a side, 40 million in all).
+    #[error("the pixels do not match their dimensions or are too large")]
     Pixels,
     /// The encoder refused the pixels.
     #[error("the picture could not be encoded: {0}")]

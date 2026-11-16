@@ -612,6 +612,18 @@ fn platform_pixels_make_the_image() {
         ..input(heic(), "IMG_0002.HEIC")
     });
     assert_eq!(wrong, Err(MediaError::Pixels));
+
+    // Past the bounds a decode of the core's own is held to: refused before
+    // the buffer is looked at, so no picture that size is ever resized.
+    let huge = process(Input {
+        pixels: Some(Pixels {
+            rgba: Vec::new(),
+            width: 9_000,
+            height: 10,
+        }),
+        ..input(heic(), "IMG_0002.HEIC")
+    });
+    assert_eq!(huge, Err(MediaError::Pixels));
 }
 
 #[test]
