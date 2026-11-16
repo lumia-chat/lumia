@@ -1,9 +1,11 @@
 // What the Server settings screen decides before anything is sent
 // (architecture 6.7), as values the tests cover: the name a server may
 // have, the choices of how long it keeps its messages and when a choice
-// deletes what it keeps now, and where a picture the instance names is.
+// deletes what it keeps now, its files (what they take, how long they are
+// kept, what a full server does), and where a picture the instance names is.
 // The same rules and words as the web's and the desktop shell's.
 import Foundation
+import LumiaFFI
 
 /// A server's name as the instance keeps it: trimmed, 1 to 100 characters.
 public enum ServerName {
@@ -69,6 +71,67 @@ public enum Retention {
     }
 }
 
+/// A server's files (specs/media.md 4.5): what they take against the
+/// instance's limit, how long its attachments are kept (`Retention`'s
+/// choices, 0 for ever), and whether a full server refuses uploads or lets
+/// its oldest attachments go. Nothing is deleted until Save; the warnings
+/// say before it what Save will do.
+public enum ServerFiles {
+    /// A number of bytes as the system's byte formatter says a file's size
+    /// ("1.2 GB"), 0 as a number rather than "Zero KB".
+    public static func size(_ bytes: UInt64) -> String {
+        let f = ByteCountFormatter()
+        f.countStyle = .file
+        f.allowsNonnumericFormatting = false
+        return f.string(fromByteCount: Int64(clamping: bytes))
+    }
+
+    /// The usage line: "1.2 GB of 5 GB used", or "1.2 GB used" where the
+    /// instance sets no limit (`max` 0).
+    public static func usage(used: UInt64, max: UInt64) -> String {
+        max == 0 ? "\(size(used)) used" : "\(size(used)) of \(size(max)) used"
+    }
+
+    public static func usage(_ storage: StorageSummary) -> String {
+        usage(used: storage.usedBytes, max: storage.maxBytes)
+    }
+
+    /// What is said above Save when the choice keeps attachments for less
+    /// time than now, so the next daily run deletes some; nil when it
+    /// deletes none. The words every client uses.
+    public static func retentionWarning(chosen: UInt32, current: UInt32) -> String? {
+        guard Retention.isShorter(chosen, than: current) else { return nil }
+        return "Attachments older than \(Retention.span(chosen)) will be deleted for everyone. Their messages stay. This cannot be undone."
+    }
+
+    /// When the server is full: refuse new uploads (false, the default) or
+    /// delete the oldest attachments (true), in that order.
+    public static let fullChoices: [Bool] = [false, true]
+
+    public static func fullLabel(_ deleteOldest: Bool) -> String {
+        deleteOldest ? "Delete the oldest attachments" : "Refuse new uploads"
+    }
+
+    /// What the chosen one does, said under the choice: before Save, so
+    /// choosing to delete says first what it will delete.
+    public static func fullDescription(_ deleteOldest: Bool) -> String {
+        deleteOldest
+            ? "When an upload would not fit, the oldest messages’ attachments are deleted for everyone to make room."
+            : "When an upload would not fit, it is refused until files are deleted."
+    }
+
+    /// Whether that description is a warning, drawn as one: a choice to
+    /// delete that the server has not made yet.
+    public static func fullWarns(chosen: Bool, current: Bool) -> Bool {
+        chosen && !current
+    }
+
+    /// Whether Save does anything: a choice that is not what the server has.
+    public static func canSave(retention: UInt32, deleteOldest: Bool, server: ServerSummary) -> Bool {
+        retention != server.attachmentRetentionDays || deleteOldest != server.deleteOldestWhenFull
+    }
+}
+
 /// Show deleted messages (architecture 6.7): off, the core's reads leave a
 /// server's deleted messages out; on, each keeps its place as "(deleted)".
 public enum ShowDeleted {
@@ -87,7 +150,7 @@ public enum ServerSettingsRefusal {
     public static let notAllowed = "You cannot change this server's settings."
     public static let defaultChannels = "Default channels must be public channels of this server."
 
-    /// A name or retention refused.
+    /// A name, a retention or a server's files refused.
     public static func settings(code: String?, details: [String: String], message: String) -> String {
         switch code {
         case "PERMISSION_DENIED": notAllowed

@@ -407,8 +407,8 @@ struct InviteScreen: View {
 
 // MARK: Server settings
 
-/// A server's name, picture and how long it keeps messages (architecture
-/// 6.7), for whoever may change them: offered under the server's channels
+/// A server's name, picture, how long it keeps messages and its files
+/// (architecture 6.7, specs/media.md 4.5), for whoever may change them: offered under the server's channels
 /// when the snapshot says this account may. The words, states and errors
 /// are the web's and the desktop shell's; the Profile screen's cards, and
 /// the photo's picker and refusals.
@@ -432,6 +432,16 @@ struct ServerSettingsScreen: View {
     @State private var showDeletedBusy = false
     @State private var showDeletedError = ""
     @State private var showDeletedSaved = false
+    // A server's files (specs/media.md 4.5): what they take, asked as the
+    // screen opens, and how long they are kept and what a full server
+    // does, both saved by one Save.
+    @State private var storage: StorageSummary?
+    @State private var storageError = ""
+    @State private var fileRetention: UInt32 = 0
+    @State private var deleteOldest = false
+    @State private var filesBusy = false
+    @State private var filesError = ""
+    @State private var filesSaved = false
     // The form waits for the server: fields shown before it would be overwritten by it.
     @State private var loaded = false
     // Default channels (architecture 6.8): the server's public channels, those
@@ -452,6 +462,7 @@ struct ServerSettingsScreen: View {
                         VStack(alignment: .leading, spacing: LumiaTokens.space12) {
                             overview(server)
                             history(server)
+                            files(server)
                             defaultChannels(server).id("defaults")
                         }
                         .padding(LumiaTokens.space16)
@@ -471,8 +482,12 @@ struct ServerSettingsScreen: View {
             name = server.name
             retention = server.retentionDays
             showDeleted = server.showDeleted
+            fileRetention = server.attachmentRetentionDays
+            deleteOldest = server.deleteOldestWhenFull
             loaded = true
+            async let asked: () = loadStorage(server)
             await loadDefaults(server)
+            await asked
         }
         .onChange(of: picked) { _, item in
             guard let item else { return }
@@ -564,6 +579,53 @@ struct ServerSettingsScreen: View {
         .onChange(of: retention) { _, _ in retentionSaved = false; retentionError = "" }
     }
 
+    private func files(_ server: ServerSummary) -> some View {
+        LumiaCard(title: "Files", subtitle: "What this server’s attachments take, and how long it keeps them.", width: nil) {
+            VStack(alignment: .leading, spacing: LumiaTokens.space16) {
+                if let storage {
+                    Text(ServerFiles.usage(storage)).font(LumiaTokens.textMember.font).foregroundStyle(LumiaTokens.ink.color)
+                        .accessibilityIdentifier("storage-usage")
+                } else if !storageError.isEmpty {
+                    LumiaErrorText(storageError)
+                } else {
+                    ProgressView()
+                }
+                PreferenceRow("Keep attachments for") {
+                    LumiaSegmentedTabs("Keep attachments for", tabs: Retention.choices(current: server.attachmentRetentionDays).map { .init(id: $0, label: Retention.label($0)) }, selected: $fileRetention)
+                    // Nothing is deleted until Save; this says what Save will do.
+                    if let warning = ServerFiles.retentionWarning(chosen: fileRetention, current: server.attachmentRetentionDays) { LumiaErrorText(warning) }
+                }
+                PreferenceRow("When the server is full") {
+                    // Two choices too long for a segment each on a phone: one under the other.
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(ServerFiles.fullChoices, id: \.self) { choice in
+                            ChoiceRow(ServerFiles.fullLabel(choice), chosen: deleteOldest == choice) { deleteOldest = choice }
+                        }
+                    }
+                    .accessibilityElement(children: .contain)
+                    .accessibilityLabel("When the server is full")
+                    // What the chosen one does; a warning while it would start deleting.
+                    if ServerFiles.fullWarns(chosen: deleteOldest, current: server.deleteOldestWhenFull) {
+                        LumiaErrorText(ServerFiles.fullDescription(deleteOldest))
+                    } else {
+                        Text(ServerFiles.fullDescription(deleteOldest)).font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkSecondary.color)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                VStack(alignment: .leading, spacing: LumiaTokens.space12) {
+                    if !filesError.isEmpty { LumiaErrorText(filesError) }
+                    if filesSaved { Text("Saved.").font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkSecondary.color) }
+                    Button { Task { await saveFiles(server) } } label: { Text("Save").frame(maxWidth: .infinity) }
+                        .buttonStyle(.lumiaPrimary).disabled(filesBusy || !ServerFiles.canSave(retention: fileRetention, deleteOldest: deleteOldest, server: server))
+                        .accessibilityHint("Saves how long this server keeps its attachments and what it does when full")
+                        .accessibilityIdentifier("save-files")
+                }
+            }
+        }
+        .onChange(of: fileRetention) { _, _ in filesSaved = false; filesError = "" }
+        .onChange(of: deleteOldest) { _, _ in filesSaved = false; filesError = "" }
+    }
+
     private func defaultChannels(_ server: ServerSummary) -> some View {
         LumiaCard(title: "Default channels", subtitle: "New members join these channels.", width: nil) {
             VStack(alignment: .leading, spacing: LumiaTokens.space4) {
@@ -589,6 +651,34 @@ struct ServerSettingsScreen: View {
                     .accessibilityIdentifier("save-defaults")
                     .padding(.top, LumiaTokens.space8)
             }
+        }
+    }
+
+    /// What the server's files take; asked only here, where the settings
+    /// are offered, since the instance answers whoever may manage it alone.
+    private func loadStorage(_ server: ServerSummary) async {
+        do {
+            storage = try await session.serverStorage(serverID: server.serverId)
+        } catch {
+            storageError = ServerSettingsRefusal.settings(code: error.lumiaCode, details: error.lumiaDetails, message: error.lumiaMessage)
+        }
+    }
+
+    /// Only what changed is sent; nil leaves the other as the server has it.
+    private func saveFiles(_ server: ServerSummary) async {
+        filesError = ""
+        filesSaved = false
+        filesBusy = true
+        defer { filesBusy = false }
+        do {
+            try await session.setServerFiles(
+                serverID: server.serverId,
+                attachmentRetentionDays: fileRetention == server.attachmentRetentionDays ? nil : fileRetention,
+                deleteOldestWhenFull: deleteOldest == server.deleteOldestWhenFull ? nil : deleteOldest
+            )
+            filesSaved = true
+        } catch {
+            filesError = ServerSettingsRefusal.settings(code: error.lumiaCode, details: error.lumiaDetails, message: error.lumiaMessage)
         }
     }
 
@@ -945,6 +1035,33 @@ struct PreferencesScreen: View {
 }
 
 /// One of the Messages card's settings: its name over its choice.
+/// One of a few choices too long for a segment each, with a mark that
+/// says which is chosen, as a segment says it.
+private struct ChoiceRow: View {
+    let label: String
+    let chosen: Bool
+    let choose: () -> Void
+
+    init(_ label: String, chosen: Bool, choose: @escaping () -> Void) { self.label = label; self.chosen = chosen; self.choose = choose }
+
+    var body: some View {
+        Button(action: choose) {
+            HStack(spacing: LumiaTokens.space12) {
+                Image(systemName: chosen ? "largecircle.fill.circle" : "circle")
+                    .font(.system(size: 20))
+                    .foregroundStyle(chosen ? LumiaTokens.accent.color : LumiaTokens.inkQuiet.color)
+                Text(label).font(LumiaTokens.textMember.font).foregroundStyle(LumiaTokens.ink.color)
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, LumiaTokens.space6)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+        .accessibilityAddTraits(chosen ? .isSelected : [])
+    }
+}
+
 private struct PreferenceRow<Content: View>: View {
     let label: String
     @ViewBuilder let content: () -> Content

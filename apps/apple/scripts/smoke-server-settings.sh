@@ -5,7 +5,10 @@
 # (LumiaUITests/SmokeUITests/testServerSettingsAreChangedHere), and this
 # script reads both back from the instance: the name with the release CLI,
 # the retention over HTTP. The screen then turns Show deleted messages on,
-# which the script reads back over HTTP. Then it gives the server a picture with the CLI,
+# which the script reads back over HTTP, and sets its files to be kept 30
+# days and the oldest deleted when full (specs/media.md 4.5), which the
+# script reads back over HTTP with the usage line against the instance's
+# limit. Then it gives the server a picture with the CLI,
 # as another of the owner's clients would; the screen and the rail must
 # draw it, which is checked by the colour at the middle of the rail's
 # tile. Last, the phone signs in as a member the owner invited, who may not
@@ -53,6 +56,7 @@ token=$(curl -s -H "content-type: application/json" -H "accept: application/json
 server_field() { curl -s -H "accept: application/json" -H "authorization: Bearer $token" "$instance/api/v1/servers/$server" | field "$1"; }
 [ "$(server_field 'd.get("retentionDays", 0)')" = "0" ] || { echo "FAIL: a new server does not keep its messages for ever"; exit 1; }
 [ "$(server_field 'd.get("showDeleted", False)')" = "False" ] || { echo "FAIL: a new server shows its deleted messages"; exit 1; }
+[ "$(server_field 'd.get("attachmentRetentionDays", 0)')" = "0" ] || { echo "FAIL: a new server does not keep its attachments for ever"; exit 1; }
 
 udid=$(xcrun simctl list devices available -j | python3 -c "
 import json,sys
@@ -146,6 +150,22 @@ shown=$(server_field 'd.get("showDeleted", False)')
 [ "$shown" = "True" ] || { echo "FAIL: the instance does not show the server's deleted messages after the switch was turned on (showDeleted $shown)"; exit 1; }
 echo "Show deleted messages turned on through the screen: showDeleted on the instance"
 seen shown
+reached files 60
+kept=$(server_field 'd.get("attachmentRetentionDays", 0)')
+[ "$kept" = "30" ] || { echo "FAIL: the instance keeps the server's attachments for $kept days, not 30"; exit 1; }
+full=$(server_field 'd.get("storageFull", "STORAGE_FULL_REFUSE")')
+[ "$full" = "STORAGE_FULL_DELETE_OLDEST" ] || { echo "FAIL: a full server does $full, not STORAGE_FULL_DELETE_OLDEST"; exit 1; }
+# The usage line against what the instance says the files take: a limit named only where there is one.
+usage=$(cat "$work/steps/files")
+limit=$(curl -s -H "accept: application/json" -H "authorization: Bearer $token" "$instance/api/v1/servers/$server/storage" | python3 -c "import sys, json; print(int(json.load(sys.stdin).get('maxBytes', 0)))")
+case "$limit:$usage" in
+  0:*" of "*) echo "FAIL: the usage line names a limit the instance does not set: \"$usage\""; exit 1 ;;
+  0:*" used") ;;
+  *:*" of "*" used") ;;
+  *) echo "FAIL: the usage line \"$usage\" does not name the instance's limit of $limit bytes"; exit 1 ;;
+esac
+echo "Files: \"$usage\" (limit $limit bytes); attachments kept 30 days and the oldest deleted when full, read back from the instance"
+seen files
 reached picture 60
 seen picture
 echo "the picture set elsewhere reached the screen: it is labelled and Remove is offered"
@@ -184,4 +204,4 @@ seen member
 passed
 echo "a member who may not change them is not offered Server settings"
 xcrun simctl terminate "$udid" "$bundle" 2>/dev/null || true
-echo "smoke-server-settings: ok (renamed, retention set and Show deleted messages turned on through the screen and read back from the instance, a picture set elsewhere drawn on the screen and the rail, and nothing offered to a member; screenshots under $work)"
+echo "smoke-server-settings: ok (renamed, retention set, Show deleted messages turned on and the files' settings changed through the screen and read back from the instance, a picture set elsewhere drawn on the screen and the rail, and nothing offered to a member; screenshots under $work)"

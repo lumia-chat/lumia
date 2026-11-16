@@ -336,11 +336,15 @@ final class SmokeUITests: XCTestCase {
     /// becomes LUMIA_UITEST_RENAME and 30 days is chosen, which says what it
     /// will delete before Save and nothing after. The smoke then gives the
     /// server a picture from elsewhere, which the screen and the rail draw.
-    /// Show deleted messages, off, is turned on.
+    /// Show deleted messages, off, is turned on. Files says what they take,
+    /// and keeping attachments 30 days and deleting the oldest when full
+    /// each say what they will delete before Save; once saved, only what
+    /// the chosen one does stays said under it.
     /// Steps (each waits for `<step>.seen`): `open`, `warning`, `saved`
     /// (the smoke reads the server from the instance and sets the picture),
-    /// `shown` (the smoke reads `showDeleted` from the instance),
-    /// `picture`, and `rail`, which carries where the server's tile is, as
+    /// `shown` (the smoke reads `showDeleted` from the instance), `files`
+    /// (which carries the usage line; the smoke reads the file settings and
+    /// the storage from the instance), `picture`, and `rail`, which carries where the server's tile is, as
     /// fractions of the window: "x y width height".
     func testServerSettingsAreChangedHere() throws {
         let env = ProcessInfo.processInfo.environment
@@ -421,9 +425,46 @@ final class SmokeUITests: XCTestCase {
         XCTAssertEqual(shown.value as? String, "1", "the switch went back: the instance refused it")
         reached("shown", under: steps)
 
+        // Files (specs/media.md 4.5): what they take, then 30 days and the
+        // oldest let go when full, each saying first what it will delete.
+        let usage = app.staticTexts["storage-usage"]
+        for _ in 0..<3 where !(usage.exists && usage.isHittable) { app.swipeUp() }
+        XCTAssertTrue(usage.waitForExistence(timeout: 20), "the Files card does not say what the server's files take")
+        XCTAssertTrue(usage.label.hasSuffix(" used"), "the usage line says \"\(usage.label)\"")
+        let kept = { (label: String) in anything.matching(NSPredicate(format: "label == %@", "Keep attachments for")).buttons[label] }
+        for label in choices { XCTAssertTrue(kept(label).exists, "no \(label) under Keep attachments for") }
+        XCTAssertEqual(choices.filter { kept($0).isSelected }, ["Forever"], "a new server keeps its attachments for ever")
+        let full = { (label: String) in anything.matching(NSPredicate(format: "label == %@", "When the server is full")).buttons[label] }
+        let fullChoices = ["Refuse new uploads", "Delete the oldest attachments"]
+        for label in fullChoices { XCTAssertTrue(full(label).exists, "no \(label) under When the server is full") }
+        XCTAssertEqual(fullChoices.filter { full($0).isSelected }, ["Refuse new uploads"], "a new server refuses uploads when full")
+        let saveFiles = app.buttons["save-files"]
+        XCTAssertFalse(saveFiles.isEnabled, "Save is offered for the files unchanged")
+        let filesWarning = anything.matching(NSPredicate(format: "label == %@", "Attachments older than 30 days will be deleted for everyone. Their messages stay. This cannot be undone.")).firstMatch
+        // Under the choice, what the chosen one does.
+        let refuses = anything.matching(NSPredicate(format: "label == %@", "When an upload would not fit, it is refused until files are deleted.")).firstMatch
+        let fullWarning = anything.matching(NSPredicate(format: "label == %@", "When an upload would not fit, the oldest messages’ attachments are deleted for everyone to make room.")).firstMatch
+        XCTAssertTrue(refuses.exists, "nothing says what refusing new uploads does")
+        XCTAssertFalse(filesWarning.exists || fullWarning.exists, "a warning before anything is chosen")
+        kept("30 days").tap()
+        XCTAssertTrue(filesWarning.waitForExistence(timeout: 5), "nothing says what 30 days will delete")
+        if !full("Delete the oldest attachments").isHittable { app.swipeUp() }
+        full("Delete the oldest attachments").tap()
+        XCTAssertEqual(fullChoices.filter { full($0).isSelected }, ["Delete the oldest attachments"])
+        XCTAssertTrue(fullWarning.waitForExistence(timeout: 5), "nothing says what deleting the oldest does")
+        if !saveFiles.isHittable { app.swipeUp() }
+        XCTAssertTrue(saveFiles.isEnabled)
+        saveFiles.tap()
+        let warningGone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: filesWarning)
+        XCTAssertEqual(XCTWaiter().wait(for: [warningGone], timeout: 20), .completed, "the retention's warning is still there once the files are saved")
+        // What deleting the oldest does is still said, now as a description.
+        XCTAssertTrue(fullWarning.exists, "nothing says what the chosen Delete the oldest attachments does once saved")
+        XCTAssertFalse(saveFiles.isEnabled, "Save is still offered once the files are saved")
+        reached("files", under: steps, saying: usage.label)
+
         // The smoke has given the server a picture from elsewhere; the
         // account event brings it here.
-        app.swipeDown()
+        for _ in 0..<3 { app.swipeDown() }
         let remove = app.buttons["Remove"]
         XCTAssertTrue(remove.waitForExistence(timeout: 30), "the picture set elsewhere did not reach the screen")
         XCTAssertTrue(anything.matching(NSPredicate(format: "label == %@", "Server picture")).firstMatch.exists, "the picture is not labelled")

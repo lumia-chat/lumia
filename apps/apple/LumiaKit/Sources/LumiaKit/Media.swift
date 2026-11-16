@@ -271,7 +271,17 @@ public enum MediaWords {
     }
 
     public static func label(_ a: AttachmentSummary, asFile: Bool = false) -> String {
-        label(kind: AttachmentKind(a.kind), name: a.name, alt: a.alt, sizeBytes: a.sizeBytes, durationMs: a.durationMs, asFile: asFile)
+        if a.expired { return expiredLabel(name: a.name) }
+        return label(kind: AttachmentKind(a.kind), name: a.name, alt: a.alt, sizeBytes: a.sizeBytes, durationMs: a.durationMs, asFile: asFile)
+    }
+
+    /// What a file row says under the name of an attachment its server let
+    /// go (specs/media.md 4.5), in place of its size.
+    public static let expired = "No longer available"
+
+    /// Such an attachment as assistive technology hears it: "File, notes.pdf, no longer available".
+    public static func expiredLabel(name: String) -> String {
+        "File, \(name), no longer available"
     }
 
     /// A file row's second line: its size, and a video's or audio's length.
@@ -316,15 +326,20 @@ public enum MediaWords {
     }
 
     /// What the instance's refusal of an upload says on the file; the
-    /// core's own words (a picture that cannot be made small enough) as they are.
-    public static func refusal(code: String?, message: String) -> String {
+    /// core's own words (a picture that cannot be made small enough) as they
+    /// are. A server out of room for its files (specs/media.md 4.5) is
+    /// `RESOURCE_EXHAUSTED` with `state` `storage` in the details.
+    public static func refusal(code: String?, details: [String: String] = [:], message: String) -> String {
         switch code {
         case "PERMISSION_DENIED": "You can’t attach files here."
         case "PAYLOAD_TOO_LARGE": "Too large for this instance."
         case "RATE_LIMITED": "Too many uploads just now. Try again in a minute."
+        case "RESOURCE_EXHAUSTED" where details["state"] == "storage": outOfSpace
         default: message
         }
     }
+
+    public static let outOfSpace = "This server is out of space for files."
 
     /// The composer's attach button.
     public static let attach = "Attach"

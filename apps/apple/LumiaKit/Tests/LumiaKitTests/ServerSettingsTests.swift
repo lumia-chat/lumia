@@ -1,8 +1,9 @@
 // The Server settings screen's rules (architecture 6.7): the name a server
 // may have, the retention choices and which of them delete messages, the
-// words for what the instance refuses, and where a picture is.
+// words for what the instance refuses, a server's files, and where a picture is.
 import Foundation
 @testable import LumiaKit
+import LumiaFFI
 import XCTest
 
 final class ServerSettingsTests: XCTestCase {
@@ -54,6 +55,48 @@ final class ServerSettingsTests: XCTestCase {
         XCTAssertNil(Retention.warning(chosen: 0, current: 30))
         XCTAssertNil(Retention.warning(chosen: 90, current: 30))
         XCTAssertNil(Retention.warning(chosen: 90, current: 90))
+    }
+
+    // MARK: A server's files (specs/media.md 4.5)
+
+    func testTheUsageLineSaysTheLimitWhereThereIsOne() {
+        XCTAssertEqual(ServerFiles.usage(used: 1_200_000_000, max: 5_000_000_000), "\(ServerFiles.size(1_200_000_000)) of \(ServerFiles.size(5_000_000_000)) used")
+        XCTAssertEqual(ServerFiles.usage(used: 1_200_000_000, max: 0), "\(ServerFiles.size(1_200_000_000)) used", "no limit, none said")
+        XCTAssertEqual(ServerFiles.usage(StorageSummary(usedBytes: 2048, maxBytes: 0)), "\(ServerFiles.size(2048)) used")
+        // Nothing yet is a number, not the formatter's "Zero KB".
+        XCTAssertFalse(ServerFiles.size(0).localizedCaseInsensitiveContains("zero"), ServerFiles.size(0))
+        // As the Files app says a size, where its decimal point is a point.
+        if Locale.current.decimalSeparator == "." {
+            XCTAssertEqual(ServerFiles.usage(used: 1_200_000_000, max: 5_000_000_000), "1.2 GB of 5 GB used")
+            XCTAssertEqual(ServerFiles.usage(used: 1_200_000_000, max: 0), "1.2 GB used")
+        }
+    }
+
+    func testAttachmentsAreKeptForTheSameChoicesAsMessages() {
+        XCTAssertEqual(Retention.choices(current: 0).map(Retention.label), ["Forever", "1 year", "90 days", "30 days"])
+        XCTAssertEqual(ServerFiles.retentionWarning(chosen: 90, current: 0), "Attachments older than 90 days will be deleted for everyone. Their messages stay. This cannot be undone.")
+        XCTAssertEqual(ServerFiles.retentionWarning(chosen: 30, current: 365), "Attachments older than 30 days will be deleted for everyone. Their messages stay. This cannot be undone.")
+        XCTAssertEqual(ServerFiles.retentionWarning(chosen: 365, current: 0), "Attachments older than 1 year will be deleted for everyone. Their messages stay. This cannot be undone.")
+        XCTAssertNil(ServerFiles.retentionWarning(chosen: 0, current: 30), "keeping them longer deletes nothing")
+        XCTAssertNil(ServerFiles.retentionWarning(chosen: 365, current: 90))
+        XCTAssertNil(ServerFiles.retentionWarning(chosen: 90, current: 90))
+    }
+
+    func testWhatAFullServerDoesRefusesFirstAndSaysBeforeItDeletes() {
+        XCTAssertEqual(ServerFiles.fullChoices.map(ServerFiles.fullLabel), ["Refuse new uploads", "Delete the oldest attachments"])
+        XCTAssertEqual(ServerFiles.fullDescription(false), "When an upload would not fit, it is refused until files are deleted.")
+        XCTAssertEqual(ServerFiles.fullDescription(true), "When an upload would not fit, the oldest messages’ attachments are deleted for everyone to make room.")
+        XCTAssertTrue(ServerFiles.fullWarns(chosen: true, current: false), "choosing to delete warns before Save")
+        XCTAssertFalse(ServerFiles.fullWarns(chosen: true, current: true), "already so: Save changes nothing")
+        XCTAssertFalse(ServerFiles.fullWarns(chosen: false, current: true))
+        XCTAssertFalse(ServerFiles.fullWarns(chosen: false, current: false))
+    }
+
+    func testSaveIsOfferedForAFileSettingThatChanged() {
+        let server = ServerSummary(serverId: "s", name: "S", iconUrl: "", retentionDays: 0, showDeleted: false, attachmentRetentionDays: 90, deleteOldestWhenFull: false, canManage: true, canManageChannels: true, canStartDms: true, canMentionEveryone: true, canManageMessages: true, channelAddsByInvitation: false, serverDmsOff: false)
+        XCTAssertFalse(ServerFiles.canSave(retention: 90, deleteOldest: false, server: server))
+        XCTAssertTrue(ServerFiles.canSave(retention: 30, deleteOldest: false, server: server))
+        XCTAssertTrue(ServerFiles.canSave(retention: 90, deleteOldest: true, server: server))
     }
 
     func testShowDeletedChangedNamesTheServersToReadAgain() {

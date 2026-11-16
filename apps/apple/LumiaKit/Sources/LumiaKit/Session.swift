@@ -487,6 +487,19 @@ public final class LumiaSession {
         take(try await client.setShowDeleted(serverID: serverID, show: show))
     }
 
+    /// How long the server keeps its attachments (0 for ever), what a full
+    /// server does, or both (specs/media.md 4.5); nil leaves one as it is.
+    /// The snapshot it answers with is held, as a name's is.
+    public func setServerFiles(serverID: String, attachmentRetentionDays: UInt32?, deleteOldestWhenFull: Bool?) async throws {
+        hold(try await client.setServerFiles(serverID: serverID, attachmentRetentionDays: attachmentRetentionDays, deleteOldestWhenFull: deleteOldestWhenFull))
+    }
+
+    /// What the server's files take, for its settings: asked only where
+    /// they are offered, since the instance answers `MANAGE_SERVER` alone.
+    public func serverStorage(serverID: String) async throws -> StorageSummary {
+        try await client.serverStorage(serverID: serverID)
+    }
+
     /// Where a picture this instance names is (`pictureURL(_:base:)`); nil for none.
     public func pictureURL(_ path: String) -> URL? {
         LumiaKit.pictureURL(path, base: client.baseURL)

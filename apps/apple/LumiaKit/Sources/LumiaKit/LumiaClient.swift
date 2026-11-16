@@ -76,6 +76,14 @@ public actor LumiaClient {
     public func setShowDeleted(serverID: String, show: Bool) throws -> SnapshotSummary {
         try inner.setShowDeleted(serverId: serverID, show: show)
     }
+    /// How long the server keeps its attachments in days (0 for ever), and
+    /// whether a full one lets its oldest go; nil leaves one as it is
+    /// (specs/media.md 4.5). Returns the snapshot as it then is.
+    public func setServerFiles(serverID: String, attachmentRetentionDays: UInt32?, deleteOldestWhenFull: Bool?) throws -> SnapshotSummary {
+        try inner.setServerFiles(serverId: serverID, attachmentRetentionDays: attachmentRetentionDays, deleteOldestWhenFull: deleteOldestWhenFull)
+    }
+    /// What the server's files take, and its limit (0 for none); `MANAGE_SERVER` only.
+    public func serverStorage(serverID: String) throws -> StorageSummary { try inner.serverStorage(serverId: serverID) }
     /// A text channel in a server this account may manage channels in, private when asked.
     public func createChannel(serverID: String, name: String, isPrivate: Bool) throws -> ChannelSummary {
         try inner.createChannel(serverId: serverID, name: name, private: isPrivate)

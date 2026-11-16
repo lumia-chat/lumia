@@ -115,7 +115,7 @@ final class ComposerMedia {
             } catch let failure as MediaFailure {
                 strip.failed(id, failure.words)
             } catch {
-                strip.failed(id, MediaWords.refusal(code: error.lumiaCode, message: error.lumiaMessage))
+                strip.failed(id, MediaWords.refusal(code: error.lumiaCode, details: error.lumiaDetails, message: error.lumiaMessage))
             }
         }
     }
@@ -421,8 +421,9 @@ struct MessageMedia: View {
 
     var body: some View {
         let asRows = preferences.images == .link
-        let visual = asRows ? [] : shown.filter { AttachmentKind($0.kind).visual }
-        let rows = asRows ? shown : shown.filter { !AttachmentKind($0.kind).visual }
+        // One the server let go is a row whatever it was, and opens nothing.
+        let visual = asRows ? [] : shown.filter { !$0.expired && AttachmentKind($0.kind).visual }
+        let rows = asRows ? shown : shown.filter { $0.expired || !AttachmentKind($0.kind).visual }
         VStack(alignment: .leading, spacing: LumiaTokens.space6) {
             if !visual.isEmpty {
                 PictureGrid(sizes: visual.map { ($0.width, $0.height) }, gap: Self.gap) {
@@ -435,7 +436,9 @@ struct MessageMedia: View {
             }
             ForEach(rows, id: \.attachmentId) { a in
                 removable(a.attachmentId) {
-                    if AttachmentKind(a.kind) == .audio, !asRows {
+                    if a.expired {
+                        ExpiredRow(attachment: a, hold: hold)
+                    } else if AttachmentKind(a.kind) == .audio, !asRows {
                         AudioRow(attachment: a, session: session, hold: hold) { open(.file(a)) }
                     } else {
                         FileRow(attachment: a, asFile: asRows, hold: hold) { open(.of(a)) }
@@ -674,6 +677,40 @@ struct FileRow: View {
         .accessibilityLabel(MediaWords.label(attachment, asFile: asFile || kind == .file))
         .accessibilityHint(kind.visual ? "Opens it" : "Opens the share sheet to save or share it")
         .accessibilityAddTraits(.isButton)
+        .accessibilityIdentifier("attachment")
+        .messageActions(hold)
+    }
+}
+
+/// An attachment its server let go (specs/media.md 4.5): a file row with
+/// its name and "No longer available", fetching nothing and opening
+/// nothing; a long press still opens its message's actions.
+private struct ExpiredRow: View {
+    let attachment: AttachmentSummary
+    var hold: (() -> Void)?
+
+    var body: some View {
+        let kind = AttachmentKind(attachment.kind)
+        HStack(spacing: LumiaTokens.space10) {
+            Image(systemName: MediaWords.symbol(kind: kind, mediaType: attachment.mediaType, name: attachment.name))
+                .font(.system(size: 18))
+                .foregroundStyle(LumiaTokens.inkMuted.color)
+                .frame(width: 40, height: 40)
+                .background(LumiaTokens.inset.color, in: RoundedRectangle(cornerRadius: LumiaTokens.radius8))
+            VStack(alignment: .leading, spacing: LumiaTokens.space2) {
+                Text(attachment.name).font(LumiaTokens.textCompact.font).foregroundStyle(LumiaTokens.inkSecondary.color).lineLimit(1).truncationMode(.middle)
+                Text(MediaWords.expired).font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkMuted.color)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(LumiaTokens.space8)
+        .frame(maxWidth: 360, alignment: .leading)
+        .background(LumiaTokens.surface.color, in: RoundedRectangle(cornerRadius: LumiaTokens.radius12))
+        .overlay(RoundedRectangle(cornerRadius: LumiaTokens.radius12).stroke(LumiaTokens.line.color))
+        .contentShape(Rectangle())
+        .onLongPressGesture(minimumDuration: MediaPress.hold) { hold?() }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(MediaWords.label(attachment))
         .accessibilityIdentifier("attachment")
         .messageActions(hold)
     }

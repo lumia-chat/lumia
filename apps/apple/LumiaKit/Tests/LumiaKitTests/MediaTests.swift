@@ -23,9 +23,9 @@ final class MediaTests: XCTestCase {
         CardSummary(url: url, title: title, description: "", siteName: "Site", host: URL(string: url)?.host ?? "", color: "", imageUrl: "", image: nil, imageWidth: 0, imageHeight: 0, video: false)
     }
 
-    private func attachment(_ id: String, kind: String = "image") -> AttachmentSummary {
+    private func attachment(_ id: String, kind: String = "image", expired: Bool = false) -> AttachmentSummary {
         let blob = BlobSummary(blobId: "b\(id)", sizeBytes: 10, key: Data(), nonce: Data(), hash: Data())
-        return AttachmentSummary(attachmentId: id, kind: kind, name: "\(id).jpg", mediaType: "image/jpeg", width: 4, height: 3, durationMs: 0, placeholder: Data(), alt: "", sizeBytes: 10, main: blob, thumbnail: nil)
+        return AttachmentSummary(attachmentId: id, kind: kind, name: "\(id).jpg", mediaType: "image/jpeg", width: 4, height: 3, durationMs: 0, placeholder: Data(), alt: "", sizeBytes: 10, main: blob, thumbnail: nil, expired: expired)
     }
 
     // MARK: The composer's strip
@@ -192,6 +192,21 @@ final class MediaTests: XCTestCase {
         XCTAssertEqual(MediaWords.cardLabel(card("https://example.com/x", title: "Example")), "Link, example.com, Example")
         XCTAssertEqual(MediaWords.refusal(code: "PERMISSION_DENIED", message: "x"), "You can’t attach files here.")
         XCTAssertEqual(MediaWords.refusal(code: nil, message: "This picture can’t be made small enough."), "This picture can’t be made small enough.")
+    }
+
+    func testAServerOutOfSpaceSaysSoOnTheFile() {
+        XCTAssertEqual(MediaWords.refusal(code: "RESOURCE_EXHAUSTED", details: ["state": "storage", "quota": "5000000000"], message: "server storage is full"), "This server is out of space for files.")
+        // Another quota keeps its own words.
+        XCTAssertEqual(MediaWords.refusal(code: "RESOURCE_EXHAUSTED", details: ["state": "history"], message: "over quota"), "over quota")
+        XCTAssertEqual(MediaWords.refusal(code: "RESOURCE_EXHAUSTED", message: "over quota"), "over quota")
+    }
+
+    func testAnAttachmentTheServerLetGoIsAFileNoLongerAvailable() {
+        XCTAssertEqual(MediaWords.expired, "No longer available")
+        // Whatever it was, it is heard as a file, with no size.
+        XCTAssertEqual(MediaWords.label(attachment("a", expired: true)), "File, a.jpg, no longer available")
+        XCTAssertEqual(MediaWords.label(attachment("v", kind: "video", expired: true)), "File, v.jpg, no longer available")
+        XCTAssertEqual(MediaWords.label(attachment("a")), "Photo, a.jpg")
     }
 
     func testLengthsSizesAndSymbols() {
