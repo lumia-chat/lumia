@@ -12,7 +12,7 @@
 // where it is drawn, and a delete asks first unless Shift is held. The
 // composer over a conversation is here too, with the reply bar atop its
 // frame, the @ list, the note after a send and the counter near the limit.
-import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount, type JSX } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, mapArray, on, onCleanup, onMount, type JSX } from "solid-js";
 import {
   ComposerNote,
   Composer,
@@ -33,6 +33,7 @@ import {
   ReplyBar,
   ReplyRef,
   type MentionOption,
+  type MessagePart,
   type ReactionChipProps,
   type Tone,
 } from "../design/components";
@@ -42,6 +43,7 @@ import { avatarSrc, client, markRead } from "../client/state";
 import { composing } from "../design/body";
 import { ComposerMedia, type DraftTileProps, type LinkCardProps } from "../design/components";
 import { editCardUrls } from "../client/media";
+import { liveItems, sameIds } from "../client/live";
 import { DropTarget, MediaViewer, MessageMedia, pastedFiles } from "./media";
 import type { Display } from "../client/preferences";
 import { byBlock, byDay, initialsOf, shortTimeOf, timeOf, toneFor } from "./app";
@@ -285,19 +287,26 @@ export function Timeline(props: TimelineProps) {
     if (from === null || from === undefined) return undefined;
     return props.items.find((m) => m.seq > from && !m.notice && m.authorId !== props.me)?.id;
   });
+  // Days and blocks by key: a day by its date, a block by its first message's id, a message by
+  // its id, each drawn from what the conversation holds of it now. A message read again (a
+  // reaction, an edit, its cards, another message arriving) is the same row, so what it is
+  // playing or showing (a video, an embed) and where the reader is in it stay.
+  const byId = createMemo(() => new Map(props.items.map((m) => [m.id, m])));
+  const live = liveItems(byId);
   const days = createMemo(() =>
-    byDay(props.items, (m) => m.at).map((day) => ({
-      label: day.label,
-      blocks: byBlock(
+    byDay(props.items, (m) => m.at).map((day) => {
+      const blocks = byBlock(
         day.messages,
         // A notice has no one, so it joins no block and opens none.
         (m) => (m.notice ? "" : m.blockKey),
         (m) => m.at,
         // A quote starts a block with its own name, and so does the first new message, under its line.
         (m) => !!m.reply || m.id === firstNew(),
-      ),
-    })),
+      );
+      return { key: day.key, label: day.label, firsts: blocks.map((b) => b.first.id), rest: new Map(blocks.map((b) => [b.first.id, b.rest.map((m) => m.id)])) };
+    }),
   );
+  const dayKeys = createMemo(() => days().map((d) => d.key), [], { equals: sameIds });
 
   // A jump: scrolled to, loading older pages where it must, and flashed.
   const [flash, setFlash] = createSignal<string | undefined>();
@@ -353,7 +362,6 @@ export function Timeline(props: TimelineProps) {
   );
 
   // "Quote reply" beside text selected inside one message's body.
-  const byId = createMemo(() => new Map(props.items.map((m) => [m.id, m])));
   const [selected, setSelected] = createSignal<{ left: number; top: number; item: TimelineItem; text: string } | null>(null);
   const onSelection = () => {
     const sel = document.getSelection();
@@ -566,13 +574,48 @@ export function Timeline(props: TimelineProps) {
         }}
       >
         {props.before}
-        <For each={days()}>
-          {(day) => (
+        <For each={dayKeys()}>
+          {(key) => {
+            const day = createMemo(() => days().find((d) => d.key === key));
+            const firsts = createMemo(() => day()?.firsts ?? [], [], { equals: sameIds });
+            return (
             <>
-              <Divider variant="day" label={day.label} />
-              <For each={day.blocks}>
-                {(block) => {
-                  const first = block.first;
+              <Divider variant="day" label={day()?.label ?? ""} />
+              <For each={firsts()}>
+                {(firstId) => {
+                  const first = live(firstId);
+                  const rest = createMemo(() => day()?.rest.get(firstId) ?? [], [], { equals: sameIds });
+                  // Each message after the first in the block, made once for its id.
+                  const parts = createMemo(
+                    mapArray(rest, (id): MessagePart => {
+                      const m = live(id);
+                      return {
+                        // One line shows it whole; grouped, in the avatar's column, without its "AM" or "PM".
+                        get time() {
+                          return props.display.layout === "one_line" ? timeOf(m.at).time : shortTimeOf(m.at);
+                        },
+                        datetime: timeOf(m.at).datetime,
+                        children: body(m),
+                        id: m.id,
+                        get reactions() {
+                          return chips(m);
+                        },
+                        get onAddReaction() {
+                          return adder(m);
+                        },
+                        tools: tools(m),
+                        get mentioned() {
+                          return m.mentionsMe;
+                        },
+                        get flash() {
+                          return flash() === m.id;
+                        },
+                        get replying() {
+                          return props.replyingTo === m.id;
+                        },
+                      };
+                    }),
+                  );
                   const t = timeOf(first.at);
                   return (
                     <>
@@ -606,25 +649,7 @@ export function Timeline(props: TimelineProps) {
                           mentioned={first.mentionsMe}
                           flash={flash() === first.id}
                           replying={props.replyingTo === first.id}
-                          parts={block.rest.map((m) => ({
-                            // One line shows it whole; grouped, in the avatar's column, without its "AM" or "PM".
-                            time: props.display.layout === "one_line" ? timeOf(m.at).time : shortTimeOf(m.at),
-                            datetime: timeOf(m.at).datetime,
-                            children: body(m),
-                            id: m.id,
-                            get reactions() {
-                              return chips(m);
-                            },
-                            onAddReaction: adder(m),
-                            tools: tools(m),
-                            mentioned: m.mentionsMe,
-                            get flash() {
-                              return flash() === m.id;
-                            },
-                            get replying() {
-                              return props.replyingTo === m.id;
-                            },
-                          }))}
+                          parts={parts()}
                         >
                           {body(first)}
                         </Message>
@@ -634,7 +659,8 @@ export function Timeline(props: TimelineProps) {
                 }}
               </For>
             </>
-          )}
+            );
+          }}
         </For>
         {props.after}
       </MessageList>

@@ -4,7 +4,8 @@
 // the top. Not a product screen.
 import { For, Show, createSignal, onCleanup, onMount, type JSX } from "solid-js";
 import { applyPreferences } from "../client/preferences";
-import type { BodyBlock, BodyLink, BodyRun, DeviceSummary } from "../client/bridge";
+import type { BodyBlock, BodyLink, BodyRun, DeviceSummary, EmbedSummary } from "../client/bridge";
+import { frameBox } from "../client/embeds";
 import { QUICK_REACTIONS } from "../design/emoji";
 import {
   AppShell,
@@ -12,6 +13,7 @@ import {
   AudioAttachment,
   ComposerMedia,
   DropZone,
+  EmbedFrame,
   LinkCard,
   MediaGrid,
   Viewer,
@@ -1630,6 +1632,10 @@ const PICTURES = {
   placeholder: samplePicture(1200, 800, "#9fb6d8", "#5b7f6a", true),
 };
 
+/** The shapes of a shown player and post, as the core gives them, for the embeds' boxes. */
+const GALLERY_PLAYER: EmbedSummary = { provider: "youtube", providerName: "YouTube", kind: "player", url: "", blueskyHandle: "", blueskyRkey: "", needsParent: false, aspectWidth: 16, aspectHeight: 9, fixedHeight: 0, resizes: false, maxWidth: 0, label: "Play video from YouTube" };
+const GALLERY_POST: EmbedSummary = { ...GALLERY_PLAYER, provider: "x", providerName: "X", kind: "post", aspectWidth: 0, aspectHeight: 0, fixedHeight: 250, resizes: true, maxWidth: 550, label: "Show post from X" };
+
 function MediaPieces() {
   const grid = (n: number): MediaTileProps[] =>
     [PICTURES.wide, PICTURES.square, PICTURES.dusk, PICTURES.tall, PICTURES.wide].slice(0, n).map((src, i) => ({ kind: "image", name: `photo-${i + 1}.jpg`, width: 1200, height: 800, src, onOpen: () => {} }));
@@ -1686,6 +1692,24 @@ function MediaPieces() {
               <LinkCard url="https://example.com/posts/field-notes" host="example.com" title="Field notes from a week of building in the open" description="What went well, what did not, and the three things we would do again." color="#2f6fde" image={PICTURES.square} imageWidth={400} imageHeight={400} />
               <LinkCard url="https://video.example.org/watch" host="video.example.org" title="The launch, in four minutes" description="A short walk through what shipped." color="#e0484f" image={PICTURES.wide} imageWidth={400} imageHeight={225} video />
               <LinkCard url="https://docs.example.net/start" host="docs.example.net" title="Getting started" description="Install, sign in, and make your first server." />
+            </div>
+          </Message>
+        </MessageList>
+      </div>
+      <h2>Embeds (specs/media.md 6.6): a link to a player or audio has Play on its picture, a post “Show post”; one being found, one Bluesky could not find; pressed, the site’s embed in the card’s place (blank here: nothing is loaded from a site in the gallery); with Images “As links”, a video’s row plays under it</h2>
+      <div class="pieces__row pieces__row--top" style={{ "flex-direction": "column", "align-items": "stretch", "max-width": "760px" }}>
+        <MessageList>
+          <Message {...PEOPLE.leo} author={PEOPLE.leo.name} time="2:05 PM" actions={false}>
+            <MessageBody blocks={[para("Watch this, then read the thread.")]} />
+            <div class="lu-mediablock">
+              <LinkCard url="https://www.youtube.com/watch?v=dQw4w9WgXcQ" host="youtube.com" title="The launch, in four minutes" description="A short walk through what shipped." color="#e0484f" image={PICTURES.wide} imageWidth={400} imageHeight={225} video embed={{ press: "play", label: "Play video from YouTube, The launch, in four minutes", onPress: () => {} }} />
+              <LinkCard url="https://open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQC" host="open.spotify.com" title="Field recordings, vol. 2" description="An album by Ridge." image={PICTURES.square} imageWidth={400} imageHeight={400} embed={{ press: "play", label: "Play audio from Spotify, Field recordings, vol. 2", onPress: () => {} }} />
+              <LinkCard url="https://x.com/example/status/20" host="x.com" title="Ridge on X" description="Shipping the field notes today. Thread below." embed={{ press: "show", label: "Show post from X, Ridge on X", onPress: () => {} }} />
+              <LinkCard url="https://bsky.app/profile/ridge.example/post/3k2la3rsg5w2y" host="bsky.app" title="Ridge (@ridge.example)" description="The write-up is up." embed={{ press: "show", label: "Show post from Bluesky, Ridge (@ridge.example)", busy: true, onPress: () => {} }} />
+              <LinkCard url="https://bsky.app/profile/gone.example/post/3k2la3rsg5w2y" host="bsky.app" title="A post" description="Its account was not found." note="Couldn’t show this here. The link opens it on Bluesky." />
+              <EmbedFrame src="about:blank" title="The launch, in four minutes" kind="player" box={frameBox(GALLERY_PLAYER)} />
+              <EmbedFrame src="about:blank" title="Ridge on X" kind="post" box={frameBox(GALLERY_POST, 320)} />
+              <AudioAttachment kind="video" name="launch.mp4" size="8.4 MB" />
             </div>
           </Message>
         </MessageList>

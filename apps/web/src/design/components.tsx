@@ -1760,6 +1760,8 @@ export interface MediaTileProps {
   onOpen?: () => void;
   /** Taken out of a message being edited. */
   onRemove?: () => void;
+  /** The video element once there is one: the page pauses it when another starts or it scrolls away. */
+  mediaRef?: (el: HTMLVideoElement) => void;
 }
 
 /** One picture, GIF or video of a message, drawn at its shape over its placeholder. */
@@ -1798,7 +1800,7 @@ export function MediaTile(props: MediaTileProps & { style?: JSX.CSSProperties })
       >
         {(src) => (
           // Never on its own: a video plays only once it was pressed.
-          <video class="lu-media__video" src={src()} controls autoplay playsinline aria-label={props.alt || props.name} />
+          <video ref={(el) => props.mediaRef?.(el)} class="lu-media__video" src={src()} controls autoplay playsinline aria-label={props.alt || props.name} />
         )}
       </Show>
       <Show when={props.onRemove}>
@@ -1841,7 +1843,9 @@ export function MediaGrid(props: MediaGridProps) {
 export interface AudioAttachmentProps {
   name: string;
   size?: string;
-  /** The audio, once fetched: its player with controls. */
+  /** A recording, or a video drawn as its file row (Images as links): a video plays under its row. */
+  kind?: "audio" | "video";
+  /** The audio or video, once fetched: its player with controls. */
   src?: string;
   busy?: boolean;
   note?: string;
@@ -1849,22 +1853,29 @@ export interface AudioAttachmentProps {
   href?: string;
   onDownload?: () => void;
   onRemove?: () => void;
+  /** The player once there is one: the page pauses it when another starts, and a video when it scrolls away. */
+  mediaRef?: (el: HTMLMediaElement) => void;
 }
 
-/** A message's audio: its file row, and under it a player once Play fetched it. */
+/** A message's audio, or a video as its file row: the row, and under it a player once Play fetched it, playing as it was pressed. */
 export function AudioAttachment(props: AudioAttachmentProps) {
+  const video = () => props.kind === "video";
   return (
-    <div class="lu-audio">
-      <Attachment kind="audio" name={props.name} size={props.size} note={props.note} href={props.href} onDownload={props.onDownload} onRemove={props.onRemove} />
+    <div class={cx("lu-audio", video() && "lu-audio--video")}>
+      <Attachment kind={video() ? "video" : "audio"} name={props.name} size={props.size} note={props.note} href={props.href} onDownload={props.onDownload} onRemove={props.onRemove} />
       <Show
         when={props.src}
         fallback={
-          <Button size="sm" class="lu-audio__play" disabled={props.busy} aria-label={"Play " + props.name} onClick={() => props.onPlay?.()}>
+          <Button size="sm" class="lu-audio__play" disabled={props.busy} aria-label={(video() ? "Play video " : "Play ") + props.name} onClick={() => props.onPlay?.()}>
             {props.busy ? "Loading…" : "Play"}
           </Button>
         }
       >
-        {(src) => <audio class="lu-audio__player" src={src()} controls autoplay aria-label={props.name} />}
+        {(src) => (
+          <Show when={video()} fallback={<audio ref={(el) => props.mediaRef?.(el)} class="lu-audio__player" src={src()} controls autoplay aria-label={props.name} />}>
+            <video ref={(el) => props.mediaRef?.(el)} class="lu-audio__player lu-audio__video" src={src()} controls autoplay playsinline aria-label={props.name} />
+          </Show>
+        )}
       </Show>
     </div>
   );
@@ -1884,41 +1895,135 @@ export interface LinkCardProps {
   imageHeight?: number;
   /** The page is a video: a play symbol over its picture; it still opens in the browser. */
   video?: boolean;
+  /** The link has an embed: its press. The words still open the link in the browser. */
+  embed?: LinkCardEmbed;
+  /** Said under its words: why its embed could not be shown. */
+  note?: string;
   /** Put away: a composer's preview, or a card of a message being edited. */
   onRemove?: () => void;
   class?: string;
 }
 
-/** A link's card under a message, or over the composer while it is written: opening the link in a new tab. */
+/** What pressing a card loads in its place (specs/media.md 6.6). */
+export interface LinkCardEmbed {
+  /** `play`: a play button on its picture (a player or audio); `show`: "Show post" under its words. */
+  press: "play" | "show";
+  /** The press's accessible name: "Play video from YouTube, <title>", "Show post from X". */
+  label: string;
+  /** Finding what the press needs first (a Bluesky handle's account). */
+  busy?: boolean;
+  onPress: () => void;
+}
+
+/** A link's card under a message, or over the composer while it is written: opening the link in a new tab, or with an embed, a press that loads it in the card's place. */
 export function LinkCard(props: LinkCardProps) {
   const color = () => (props.color && /^#[0-9a-f]{6}$/i.test(props.color) ? props.color : undefined);
   // A picture much wider than tall, and large, goes under the words; else beside them.
   const wide = () => !!props.image && (props.imageWidth ?? 0) >= 320 && (props.imageWidth ?? 0) >= (props.imageHeight ?? 0) * 1.5;
+  const picStyle = () => (wide() && props.imageWidth && props.imageHeight ? { "aspect-ratio": `${props.imageWidth} / ${props.imageHeight}` } : undefined);
+  const words = () => (
+    <>
+      <span class="lu-linkcard__host">{props.host}</span>
+      <span class="lu-linkcard__title">{props.title}</span>
+      <Show when={props.description}>
+        <span class="lu-linkcard__desc">{props.description}</span>
+      </Show>
+    </>
+  );
+  const note = () => (
+    <Show when={props.note}>
+      <span class="lu-linkcard__note" role="status">
+        {props.note}
+      </span>
+    </Show>
+  );
   return (
-    <div class={cx("lu-linkcard", wide() && "lu-linkcard--wide", props.class)} style={color() ? { "--card-color": color() } : undefined}>
-      <a class="lu-linkcard__link" href={props.url} target="_blank" rel="noopener noreferrer">
-        <span class="lu-linkcard__text">
-          <span class="lu-linkcard__host">{props.host}</span>
-          <span class="lu-linkcard__title">{props.title}</span>
-          <Show when={props.description}>
-            <span class="lu-linkcard__desc">{props.description}</span>
-          </Show>
-        </span>
-        <Show when={props.image || props.video}>
-          <span class="lu-linkcard__pic" style={wide() && props.imageWidth && props.imageHeight ? { "aspect-ratio": `${props.imageWidth} / ${props.imageHeight}` } : undefined}>
-            <Show when={props.image}>
-              <img src={props.image} alt="" decoding="async" />
+    <div class={cx("lu-linkcard", wide() && "lu-linkcard--wide", !!props.embed && "lu-linkcard--embed", props.class)} style={color() ? { "--card-color": color() } : undefined}>
+      <Show
+        when={props.embed}
+        fallback={
+          <a class="lu-linkcard__link" href={props.url} target="_blank" rel="noopener noreferrer">
+            <span class="lu-linkcard__text">
+              {words()}
+              {note()}
+            </span>
+            <Show when={props.image || props.video}>
+              <span class="lu-linkcard__pic" style={picStyle()}>
+                <Show when={props.image}>
+                  <img src={props.image} alt="" decoding="async" />
+                </Show>
+                <Show when={props.video}>
+                  <PlayMark small={!wide()} />
+                </Show>
+              </span>
             </Show>
-            <Show when={props.video}>
-              <PlayMark small={!wide()} />
+          </a>
+        }
+      >
+        {(embed) => (
+          // The words are the link; the press is a button of its own beside them, never inside the link.
+          <div class="lu-linkcard__link">
+            <span class="lu-linkcard__text">
+              <a class="lu-linkcard__words" href={props.url} target="_blank" rel="noopener noreferrer">
+                {words()}
+              </a>
+              <Show when={embed().press === "show"}>
+                <Button size="sm" class="lu-linkcard__show" disabled={embed().busy} aria-label={embed().label} onClick={() => embed().onPress()}>
+                  {embed().busy ? "Loading…" : "Show post"}
+                </Button>
+              </Show>
+              {note()}
+            </span>
+            <Show when={embed().press === "play"}>
+              <button type="button" class="lu-linkcard__pic lu-linkcard__play" style={picStyle()} disabled={embed().busy} aria-label={embed().label} onClick={() => embed().onPress()}>
+                <Show when={props.image}>
+                  <img src={props.image} alt="" decoding="async" />
+                </Show>
+                <PlayMark small={!wide()} />
+                <Show when={embed().busy}>
+                  <span class="lu-media__busy" aria-hidden="true" />
+                </Show>
+              </button>
             </Show>
-          </span>
-        </Show>
-      </a>
+          </div>
+        )}
+      </Show>
       <Show when={props.onRemove}>
         <IconButton icon="close" label={"Remove the preview of " + props.host} size={28} iconSize={14} strokeWidth={2.2} class="lu-linkcard__remove" onClick={() => props.onRemove?.()} />
       </Show>
     </div>
+  );
+}
+
+export interface EmbedFrameProps {
+  /** The embed's address, from the core's rules for the link (never the card). */
+  src: string;
+  /** The card's title, or the site's name. */
+  title: string;
+  kind: "player" | "audio" | "post";
+  /** Its box: a player's shape, audio's height, a post's width and height (`frameBox` in `client/embeds.ts`). */
+  box: JSX.CSSProperties;
+  frameRef?: (el: HTMLIFrameElement) => void;
+}
+
+/**
+ * A site's embed in its card's place (specs/media.md 6.6): an iframe
+ * sandboxed to scripts, its own origin, its links in a new tab outside the
+ * sandbox, and full screen; it is told the page's origin and no more.
+ */
+export function EmbedFrame(props: EmbedFrameProps) {
+  return (
+    <iframe
+      ref={(el) => props.frameRef?.(el)}
+      class={cx("lu-embed", "lu-embed--" + props.kind)}
+      src={props.src}
+      title={props.title}
+      style={props.box}
+      sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-presentation"
+      allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
+      referrerpolicy="strict-origin-when-cross-origin"
+      loading="eager"
+    />
   );
 }
 

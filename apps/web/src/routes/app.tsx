@@ -107,7 +107,7 @@ export function dayLabel(micros: number, now = Date.now()): string {
 }
 
 /** Messages in order, split where the local day changes. */
-export function byDay<T>(messages: T[], at: (m: T) => number): { label: string; messages: T[] }[] {
+export function byDay<T>(messages: T[], at: (m: T) => number): { key: string; label: string; messages: T[] }[] {
   const days: { key: string; label: string; messages: T[] }[] = [];
   for (const m of messages) {
     const key = dayKey(at(m));

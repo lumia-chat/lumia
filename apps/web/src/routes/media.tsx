@@ -5,11 +5,14 @@
 // written, in a server's channel only). Every blob is fetched and opened
 // by the core; the page turns the bytes into blob URLs, one per blob,
 // kept in `blobUrls` so a row drawn again draws the same one.
-import { For, Show, createEffect, createMemo, createSignal, mapArray, on, onCleanup, onMount, type Accessor } from "solid-js";
-import { Attachment, AudioAttachment, DropZone, LinkCard, MediaGrid, Viewer, type DraftTileProps, type LinkCardProps, type MediaKind, type MediaTileProps } from "../design/components";
-import { ClientError, type AttachOptions, type AttachmentDraft, type AttachmentSummary, type BlobSummary, type CardSummary, type Pixels, type UploadLimits } from "../client/bridge";
+import { For, Show, createEffect, createMemo, createSignal, mapArray, on, onCleanup, onMount, untrack, type Accessor } from "solid-js";
+import { Attachment, AudioAttachment, DropZone, EmbedFrame, LinkCard, MediaGrid, Viewer, type DraftTileProps, type LinkCardProps, type MediaKind, type MediaTileProps } from "../design/components";
+import { ClientError, type AttachOptions, type AttachmentDraft, type AttachmentSummary, type BlobSummary, type CardSummary, type EmbedSummary, type Pixels, type UploadLimits } from "../client/bridge";
 import { cardImageSrc, client } from "../client/state";
 import { MAX_ATTACHMENTS, PREVIEW_PAUSE_MS, attachErrorWords, blobUrls, debounce, fileKind, keptCardUrls, pasteTakesFiles, sizeWords, sniffImage, tooLargeWords, type BlobState } from "../client/media";
+import { EmbedLookup, allowedSrc, frameBox, frameSrc, frameTitle, originOf, pressLabel, pressOf, pressable, reportedHeight } from "../client/embeds";
+import { playback } from "../client/playback";
+import { sameIds } from "../client/live";
 import type { Media } from "../client/preferences";
 
 // ---- Blobs drawn ----
@@ -168,6 +171,8 @@ function tileOf(a: AttachmentSummary, props: MessageMediaProps): MediaTileProps 
       const e = props.editing;
       return e ? () => e.removeAttachment(a.attachmentId) : undefined;
     },
+    // Pressed, it plays: one at a time, paused when it scrolls away.
+    mediaRef: (el: HTMLVideoElement) => watchMedia(el, "video"),
     // A picture whose header is out of bounds, or that is not served, is drawn as a file row (spec 5).
     failed: () => (a.kind !== "video" && thumb.state() === "failed") || (a.kind === "gif" && gif.state() === "failed"),
   };
@@ -198,7 +203,8 @@ function FileRow(props: { a: AttachmentSummary; open?: () => void; onRemove?: ()
   );
 }
 
-function AudioRow(props: { a: AttachmentSummary; onRemove?: () => void }) {
+/** A recording, or a video drawn as its file row (Images as links): Play fetches it and plays it under the row. */
+function AudioRow(props: { a: AttachmentSummary; kind: "audio" | "video"; onRemove?: () => void }) {
   const [wanted, setWanted] = createSignal(false);
   const audio = useBlob(
     () => (wanted() ? keyOf(props.a.main) : undefined),
@@ -206,7 +212,8 @@ function AudioRow(props: { a: AttachmentSummary; onRemove?: () => void }) {
   );
   return (
     <AudioAttachment
-      name={props.a.name || "Audio"}
+      kind={props.kind}
+      name={props.a.name || (props.kind === "video" ? "Video" : "Audio")}
       size={sizeWords(props.a.sizeBytes)}
       src={audio.url()}
       busy={wanted() && audio.state() === "loading"}
@@ -215,45 +222,231 @@ function AudioRow(props: { a: AttachmentSummary; onRemove?: () => void }) {
       href={audio.url()}
       onDownload={() => void saveAttachment(props.a)}
       onRemove={props.onRemove}
+      mediaRef={(el) => watchMedia(el, props.kind)}
     />
   );
 }
 
-/** A card under a message: its host from the link, never the page's name; its picture by address (a server's) or as a blob (a personal one's). */
+// ---- Playing: one at a time (specs/media.md 5, 6.6) ----
+
+let playSeq = 0;
+
+/** Whether an element is shown over everything (full screen, picture in picture), where scrolling its row away does not stop it. */
+const outOfPage = (el: Element) => document.fullscreenElement === el || (document as Document & { pictureInPictureElement?: Element | null }).pictureInPictureElement === el;
+
+/**
+ * Calls `away` when `el` has scrolled wholly out of view (the list it is
+ * in clips it), unless it is full screen or in picture in picture.
+ */
+function whenScrolledAway(el: Element, away: () => void) {
+  if (typeof IntersectionObserver === "undefined") return;
+  const io = new IntersectionObserver((entries) => {
+    for (const e of entries) if (!e.isIntersecting && !outOfPage(el)) away();
+  });
+  io.observe(el);
+  onCleanup(() => io.disconnect());
+}
+
+/**
+ * An attached video's or recording's player, from the moment it is made
+ * until its row goes: it pauses whatever else plays as it starts, and a
+ * video pauses when it scrolls out of view. Going (the conversation left)
+ * stops it.
+ */
+function watchMedia(el: HTMLMediaElement, kind: "video" | "audio") {
+  const id = `m${++playSeq}`;
+  const started = () => playback.start({ id, embed: false, kind, stop: () => el.pause() });
+  const stopped = () => playback.end(id);
+  el.addEventListener("play", started);
+  el.addEventListener("pause", stopped);
+  el.addEventListener("ended", stopped);
+  if (kind === "video") whenScrolledAway(el, () => el.pause());
+  onCleanup(() => {
+    el.removeEventListener("play", started);
+    el.removeEventListener("pause", stopped);
+    el.removeEventListener("ended", stopped);
+    el.pause();
+    playback.end(id);
+  });
+}
+
+// ---- A link's embed in its card's place (specs/media.md 6.6) ----
+
+const embeds = new EmbedLookup((url) => client().embedFor(url));
+let originsAsked: Promise<string[]> | undefined;
+const embedOrigins = () => (originsAsked ??= client().embedOrigins().catch(() => ((originsAsked = undefined), [])));
+/** A Bluesky handle's post resolved once for the page: its embed's address. */
+const blueskyResolved = new Map<string, string>();
+
+/** The address a press loads, Bluesky's handle resolved first; empty when there is none. */
+async function addressOf(e: EmbedSummary): Promise<string> {
+  if (e.url) return e.url;
+  const key = e.blueskyHandle + "/" + e.blueskyRkey;
+  const known = blueskyResolved.get(key);
+  if (known) return known;
+  const did = await client().resolveBlueskyHandle(e.blueskyHandle);
+  const url = (await client().blueskyEmbedUrl(did, e.blueskyRkey)) ?? "";
+  if (url) blueskyResolved.set(key, url);
+  return url;
+}
+
+/** An embed shown: its box (a post's height as it reports it, from its own window only), back to its card when a player scrolls away. */
+function EmbedView(props: { e: EmbedSummary; src: string; title: string; onAway: () => void }) {
+  const [reported, setReported] = createSignal<number>();
+  let frame: HTMLIFrameElement | undefined;
+  onMount(() => {
+    const el = frame;
+    if (!el) return;
+    // The press's button has gone: the keyboard goes on into what it loaded.
+    if (!document.activeElement || document.activeElement === document.body) el.focus({ preventScroll: true });
+    if (props.e.resizes) {
+      const origin = originOf(props.src);
+      const listen = (ev: MessageEvent) => {
+        const h = reportedHeight(props.e, el.contentWindow, origin, ev);
+        if (h !== undefined) setReported(h);
+      };
+      window.addEventListener("message", listen);
+      onCleanup(() => window.removeEventListener("message", listen));
+    }
+    // A player cannot be paused from outside it: it goes back to its card.
+    if (props.e.kind === "player") whenScrolledAway(el, props.onAway);
+  });
+  return <EmbedFrame src={props.src} title={props.title} kind={props.e.kind} box={frameBox(props.e, reported())} frameRef={(el) => (frame = el)} />;
+}
+
+/** A card under a message: its host from the link, never the page's name; its picture by address (a server's) or as a blob (a personal one's); and where its link has an embed, the press that loads it in the card's place. */
 function CardView(props: { card: CardSummary; onRemove?: () => void }) {
   const blob = useBlob(
     () => keyOf(props.card.image),
     () => (props.card.image ? pictureBlob(props.card.image) : Promise.resolve(null)),
   );
+  const id = `e${++playSeq}`;
+  const [shown, setShown] = createSignal<string>();
+  const [busy, setBusy] = createSignal(false);
+  // Bluesky's handle not found: the card opens the browser, and says why.
+  const [failed, setFailed] = createSignal(false);
+  // From the link, never from the card (spec 6.6); asked again only when the link changes, not
+  // when the card is read again.
+  const link = createMemo(() => props.card.url);
+  const [embed, setEmbed] = createSignal<EmbedSummary | null>(null);
+  createEffect(
+    on(link, (url) => {
+      setShown(undefined);
+      setFailed(false);
+      setEmbed(null);
+      void embeds.of(url).then((e) => link() === url && setEmbed(e));
+    }),
+  );
+  const showing = createMemo(() => {
+    const e = embed();
+    const src = shown();
+    return e && src ? { e, src } : undefined;
+  });
+  let presses = 0;
+  const putBack = () => {
+    presses++;
+    setBusy(false);
+    setShown(undefined);
+    playback.end(id);
+  };
+  onCleanup(() => {
+    presses++;
+    playback.end(id);
+  });
+  const press = async () => {
+    const e = embed();
+    if (!pressable(e) || busy()) return;
+    const n = ++presses;
+    // Whatever else plays stops now, before any wait.
+    playback.start({ id, embed: true, kind: e.kind === "player" ? "video" : e.kind, stop: putBack });
+    if (!e.url) setBusy(true);
+    const [url, origins] = await Promise.all([addressOf(e).catch((err) => (console.warn("bluesky:", err), "")), embedOrigins()]);
+    if (n !== presses) return;
+    setBusy(false);
+    const src = url ? frameSrc(e, url, location.hostname) : "";
+    if (!src || !allowedSrc(src, origins)) {
+      if (src) console.warn("embed: not an embed origin:", src);
+      setFailed(true);
+      playback.end(id);
+      return;
+    }
+    setShown(src);
+  };
   return (
-    <LinkCard
-      url={props.card.url}
-      host={props.card.host}
-      title={props.card.title}
-      description={props.card.description}
-      color={props.card.color}
-      image={cardImageSrc(props.card.imageUrl) ?? blob.url()}
-      imageWidth={props.card.imageWidth}
-      imageHeight={props.card.imageHeight}
-      video={props.card.video}
-      onRemove={props.onRemove}
-    />
+    <Show
+      when={showing()}
+      keyed
+      fallback={
+        <LinkCard
+          url={props.card.url}
+          host={props.card.host}
+          title={props.card.title}
+          description={props.card.description}
+          color={props.card.color}
+          image={cardImageSrc(props.card.imageUrl) ?? blob.url()}
+          imageWidth={props.card.imageWidth}
+          imageHeight={props.card.imageHeight}
+          video={props.card.video}
+          embed={(() => {
+            const e = embed();
+            return pressable(e) && !failed() && !props.onRemove ? { press: pressOf(e), label: pressLabel(e, props.card.title), busy: busy(), onPress: () => void press() } : undefined;
+          })()}
+          note={failed() ? `Couldn’t show this here. The link opens it on ${embed()?.providerName ?? "the site"}.` : undefined}
+          onRemove={props.onRemove}
+        />
+      }
+    >
+      {(s) => <EmbedView e={s.e} src={s.src} title={frameTitle(s.e, props.card.title)} onAway={putBack} />}
+    </Show>
   );
 }
 
-/** What a message carries, under its body: its pictures in a grid, its audio and files as rows, then its cards. */
+/**
+ * One element of a list by its key, as the list now holds it, or as it
+ * last did once it has gone (a row is let go after the list has changed).
+ */
+function latest<T>(list: () => readonly T[]) {
+  return (key: string, keyOf: (t: T) => string): Accessor<T> => {
+    let last: T | undefined;
+    return () => {
+      const now = list().find((t) => keyOf(t) === key);
+      if (now !== undefined) last = now;
+      return last as T;
+    };
+  };
+}
+
+/**
+ * What a message carries, under its body: its pictures in a grid, its
+ * audio and files as rows, then its cards. Each is kept by its id (a card
+ * by its link), so a message read again keeps a video playing and an
+ * embed shown.
+ */
 export function MessageMedia(props: MessageMediaProps) {
   const kept = createMemo(() => props.attachments.filter((a) => !props.editing?.removedAttachments.has(a.attachmentId)));
   const linked = () => props.images === "link";
-  const visual = createMemo(() => (linked() ? [] : kept().filter((a) => !a.expired && (a.kind === "image" || a.kind === "gif" || a.kind === "video"))));
-  const tiles = createMemo(mapArray(visual, (a) => ({ a, tile: tileOf(a, props) })));
+  // One the server let go has no blobs: never a tile, never played.
+  const visual = createMemo(() => (linked() ? [] : kept().filter((a) => !a.expired && (a.kind === "image" || a.kind === "gif" || a.kind === "video")).map((a) => a.attachmentId)), [], { equals: sameIds });
+  const attachments = latest(() => props.attachments);
+  const attachmentOf = (id: string) => attachments(id, (a) => a.attachmentId);
+  // What it is drawn from does not change for an id: the tile is made from it once.
+  const tiles = createMemo(mapArray(visual, (id) => ({ id, tile: tileOf(untrack(attachmentOf(id)), props) })));
   const shownTiles = createMemo(() => tiles().filter((t) => !t.tile.failed()));
-  const rows = createMemo(() => {
-    const failed = new Set(tiles().filter((t) => t.tile.failed()).map((t) => t.a.attachmentId));
-    return kept().filter((a) => linked() || a.expired || failed.has(a.attachmentId) || a.kind === "audio" || a.kind === "file");
-  });
-  const cards = createMemo(() => (props.embeds === "link" ? [] : props.cards.filter((c) => !props.editing?.removedCards.has(c.url))));
+  const rows = createMemo(
+    () => {
+      const failed = new Set(tiles().filter((t) => t.tile.failed()).map((t) => t.id));
+      return kept()
+        .filter((a) => linked() || a.expired || failed.has(a.attachmentId) || a.kind === "audio" || a.kind === "file")
+        .map((a) => a.attachmentId);
+    },
+    [],
+    { equals: sameIds },
+  );
+  const cards = createMemo(() => (props.embeds === "link" ? [] : props.cards.filter((c) => !props.editing?.removedCards.has(c.url)).map((c) => c.url)), [], { equals: sameIds });
+  const cardOf = latest(() => props.cards);
   const remover = (id: string) => (props.editing ? () => props.editing?.removeAttachment(id) : undefined);
+  /** A row that plays under itself: a recording, and a video where Images is a link; never one the server let go. */
+  const playsAs = (a: AttachmentSummary): "audio" | "video" | undefined => (a.expired ? undefined : a.kind === "audio" ? "audio" : a.kind === "video" && linked() ? "video" : undefined);
   return (
     <Show when={shownTiles().length || rows().length || cards().length}>
       <div class="lu-mediablock">
@@ -261,13 +454,21 @@ export function MessageMedia(props: MessageMediaProps) {
           <MediaGrid items={shownTiles().map((t) => t.tile)} />
         </Show>
         <For each={rows()}>
-          {(a) => (
-            <Show when={a.kind === "audio" && !a.expired && !linked()} fallback={<FileRow a={a} open={viewable(a) ? () => props.onView(a) : undefined} onRemove={remover(a.attachmentId)} />}>
-              <AudioRow a={a} onRemove={remover(a.attachmentId)} />
-            </Show>
-          )}
+          {(id) => {
+            const a = attachmentOf(id);
+            return (
+              <Show when={playsAs(a())} keyed fallback={<FileRow a={a()} open={viewable(a()) ? () => props.onView(a()) : undefined} onRemove={remover(id)} />}>
+                {(kind) => <AudioRow a={a()} kind={kind} onRemove={remover(id)} />}
+              </Show>
+            );
+          }}
         </For>
-        <For each={cards()}>{(c) => <CardView card={c} onRemove={props.editing ? () => props.editing?.removeCard(c.url) : undefined} />}</For>
+        <For each={cards()}>
+          {(url) => {
+            const card = cardOf(url, (c) => c.url);
+            return <CardView card={card()} onRemove={props.editing ? () => props.editing?.removeCard(url) : undefined} />;
+          }}
+        </For>
       </div>
     </Show>
   );
