@@ -109,8 +109,9 @@ fn the_account_menu_leads_to_preferences_and_each_choice_is_kept() {
     assert_eq!(rt.state.settings.reactions, Reactions::Shown);
     assert!(chosen(&rt, "reactions-0"));
     assert!(rt.find("preset-custom").is_none());
-    // Images and embeds have no control while the shell draws neither.
-    assert!(!shown.contains("Images") && !shown.contains("Embeds"));
+    // Images and embeds, shown (specs/media.md 5).
+    assert!(shown.contains("Images") && shown.contains("Embeds") && shown.contains("As links"));
+    assert!(chosen(&rt, "images-0") && chosen(&rt, "embeds-0"));
 
     press(&mut rt, "appearance-0");
     assert_eq!(rt.state.settings.appearance, Appearance::Light);
@@ -159,6 +160,8 @@ fn a_preset_writes_its_values_and_a_change_after_it_is_custom() {
     assert!(chosen(&rt, "reactions-1"));
     assert!(rt.find("avatars").is_none());
     assert!(!words(&rt).contains("Avatars"));
+    // ...and pictures and cards as links.
+    assert!(chosen(&rt, "images-1") && chosen(&rt, "embeds-1"));
 
     // One change after it, and no preset matches: none is shown, and the line says so.
     press(&mut rt, "spacing-0");

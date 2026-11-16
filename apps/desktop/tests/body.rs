@@ -735,6 +735,7 @@ fn command_a_takes_the_conversation_and_command_c_copies_it_as_a_transcript() {
             body: "Not stored yet.".into(),
             sent_at_micros: 0,
             failed: None,
+            attachments: Vec::new(),
             reply: None,
         });
         s.session.revision += 1;
@@ -877,6 +878,7 @@ fn links_open_only_as_web_addresses() {
             body: "[pending](https://example.com/pending)".into(),
             sent_at_micros: 0,
             failed: None,
+            attachments: Vec::new(),
             reply: None,
         });
         s.session.revision += 1;

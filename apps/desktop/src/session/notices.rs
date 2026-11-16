@@ -83,7 +83,11 @@ async fn dm_notice(app: &App, channel_id: &str, seq: u64) -> Option<Notice> {
         channel_id: channel_id.to_string(),
         seq: message.seq,
         title,
-        body: shorten(&message.body),
+        // A message of attachments alone is told in words, as the core tells a server's.
+        body: shorten(&lumia_client::app::notice_text(
+            &message.body,
+            &message.attachments,
+        )),
     })
 }
 

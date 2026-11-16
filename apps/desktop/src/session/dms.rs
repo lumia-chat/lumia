@@ -7,7 +7,7 @@
 //! each ([`DmState::logs`]). Both are asked for again when the engine reports a change.
 //! Every call here needs this device to hold an identity ([`Session::has_identity`]).
 //!
-//! Not built: editing and deleting a message, history backup, group conversations with
+//! Not built: history backup, group conversations with
 //! more than one other person being started from here (one that exists is read and written
 //! like any other).
 //!
@@ -18,7 +18,9 @@
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 
-use lumia_client::app::{AppEvent, ChannelSummary, DmChannelSummary, DmLogSummary, QuoteSummary};
+use lumia_client::app::{
+    AppEvent, AttachmentDraft, ChannelSummary, DmChannelSummary, DmLogSummary, QuoteSummary,
+};
 
 use super::{Conversation, Entry, Failure, Pending, Session, Update};
 
@@ -463,6 +465,8 @@ impl Session {
                     mentions: Vec::new(),
                     reactions: m.reactions.clone(),
                     mentions_me: false,
+                    attachments: m.attachments.clone(),
+                    cards: m.cards.clone(),
                 }
             })
             .collect()
@@ -488,6 +492,8 @@ impl Session {
         body: &str,
         now_micros: i64,
         reply: Option<&QuoteSummary>,
+        drafts: &[AttachmentDraft],
+        cards: &[String],
     ) -> bool {
         let Some(app) = self.client() else {
             return false;
@@ -505,14 +511,17 @@ impl Session {
             body: body.to_string(),
             sent_at_micros: now_micros,
             reply: reply.cloned(),
+            attachments: super::names(drafts),
             failed: None,
         });
         self.revision += 1;
         let (channel_id, body) = (channel_id.to_string(), body.to_string());
         let reply = reply.cloned();
+        let ids: Vec<String> = drafts.iter().map(|d| d.draft_id.clone()).collect();
+        let cards = cards.to_vec();
         self.task_local(move || async move {
             let result = app
-                .dm_send_with(&channel_id, &body, reply.as_ref())
+                .dm_send_with_media(&channel_id, &body, reply.as_ref(), &ids, &cards)
                 .await
                 .map_err(Failure::from);
             Update::Dm(DmUpdate::Sent { pending_id, result })

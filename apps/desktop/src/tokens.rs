@@ -357,6 +357,10 @@ pub struct MessageType {
     /// A code block, and inline code's size.
     pub code: TextStyle,
     pub code_inline: f32,
+    /// A file's name in a message (`text-member`: "file names"), and a link card's title.
+    pub file: TextStyle,
+    /// A link card's description (`text-compact`).
+    pub compact: TextStyle,
 }
 
 impl MessageType {
@@ -375,9 +379,38 @@ impl MessageType {
             reaction_count: scaled(TEXT_LABEL, k),
             code: scaled(TEXT_CODE, k),
             code_inline: TEXT_MESSAGE.size * k * CODE_SCALE,
+            file: scaled(TEXT_MEMBER, k),
+            compact: scaled(TEXT_COMPACT, k),
         }
     }
 }
+
+// What attachments and link cards need (specs/media.md 5 and 6). The design system draws a
+// file row (`Attachment`, `lu-attach`) and the composer's attach button and nothing else of
+// them yet: no board has a picture in a message, a link card or the viewer. These are its
+// pieces' metrics, and the spec's numbers, as arithmetic on tokens.
+
+/// The tallest a picture in a message is drawn, and the widest a card (spec 5: "at most
+/// 400 px tall", the thumbnail's longest edge).
+pub const MEDIA_MAX: f32 = SPACE_40 * 10.0;
+/// A side of the squares several pictures of one message stand in.
+pub const MEDIA_CELL: f32 = SPACE_40 * 5.0;
+/// Between pictures of one message, and between them and a card.
+pub const MEDIA_GAP: f32 = SPACE_4;
+/// A file row's kind tile (`lu-attach__type`: 34, a member's avatar) and its glyph (17).
+pub const FILE_TILE: f32 = AVATAR_MD;
+pub const FILE_GLYPH: f32 = SPACE_18 - 1.0;
+/// A file row's download button (32): a row's height.
+pub const FILE_ACTION: f32 = ROW_HEIGHT;
+/// A link card's picture beside its words, square.
+pub const CARD_PICTURE: f32 = SPACE_40 * 2.0;
+/// The play symbol's disc over a poster or a card's picture.
+pub const PLAY_DISC: f32 = AVATAR_LG + SPACE_8;
+/// The alt text field of a picture waiting in the composer.
+pub const ALT_FIELD: f32 = SPACE_40 * 6.0;
+/// The viewer's bars over and under the picture, and its margin to the window's edge.
+pub const VIEWER_BAR: f32 = HEADER_HEIGHT;
+pub const VIEWER_MARGIN: f32 = SPACE_24;
 
 /// The styles at the design system's message size, where the font size is not a setting
 /// (the Mentions page).

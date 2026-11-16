@@ -15,6 +15,7 @@ pub mod autoscroll;
 pub mod channels;
 pub mod home;
 pub mod links;
+pub mod media;
 pub mod menu;
 pub mod notices;
 pub mod pictures;
@@ -157,6 +158,9 @@ pub struct State {
     pub notices: notices::Notices,
     /// The avatars the session holds, decoded for drawing.
     pub pictures: pictures::Pictures,
+    /// Attachments and link cards: their pictures decoded, the composer's alt text, the
+    /// viewer (`media`).
+    pub media: media::MediaUi,
     /// The pane the middle button scrolls while it is held (`autoscroll`).
     pub autoscroll: autoscroll::Autoscroll,
     /// The window's width in points, as the shell's layout last reported it (`aside`).
@@ -185,7 +189,7 @@ impl State {
         let session = Session::new(&data_dir)
             .unwrap_or_else(|error| panic!("lumia: starting the client runtime: {error}"));
         let settings = Settings::load(&data_dir);
-        Self {
+        let mut state = Self {
             session,
             sign_in: SignIn::new(settings.instance.as_deref().unwrap_or_default()),
             settings,
@@ -210,6 +214,7 @@ impl State {
             links: links::Links::default(),
             notices: notices::Notices::default(),
             pictures: pictures::Pictures::default(),
+            media: media::MediaUi::default(),
             autoscroll: autoscroll::Autoscroll::default(),
             window_width: None,
             aside_open: false,
@@ -217,7 +222,9 @@ impl State {
             rail: rail::RailUi::default(),
             clock_24: false,
             updater: None,
-        }
+        };
+        state.follow_media_settings();
+        state
     }
 
     /// Where this state keeps what it remembers between launches.
@@ -378,12 +385,23 @@ impl State {
         self.change_display(|settings| settings.font_size = font_size);
     }
 
+    /// Images: attachments drawn in their messages, or each as a file row (specs/media.md 5).
+    pub fn set_images(&mut self, images: settings::Media) {
+        self.change_display(|settings| settings.images = images);
+    }
+
+    /// Embeds: links' cards drawn under their messages, or none.
+    pub fn set_embeds(&mut self, embeds: settings::Media) {
+        self.change_display(|settings| settings.embeds = embeds);
+    }
+
     /// Changes how messages are drawn and keeps it, when `change` changes anything.
     fn change_display(&mut self, change: impl FnOnce(&mut Settings)) {
         let before = (self.settings.display(), self.settings.font_size);
         change(&mut self.settings);
         if (self.settings.display(), self.settings.font_size) != before {
             self.settings.save(&self.data_dir);
+            self.follow_media_settings();
             // The list keeps the rows it has built: these are drawn otherwise now.
             self.session.revision += 1;
         }
@@ -408,7 +426,7 @@ impl State {
     /// nothing: the counter under the composer says why, and the draft stays.
     pub fn send(&mut self, tx: &mut Tx) {
         if self.draft.is_composing()
-            || self.draft.text.trim().is_empty()
+            || !self.can_send()
             || self.session.room(&self.draft.text).over()
         {
             return;
@@ -421,11 +439,20 @@ impl State {
         ) {
             self.draft.clear();
             self.draft_seen.clear();
+            self.forget_typed();
             self.replies.replying = None;
             self.replies.mention = None;
             self.sent_outside(outside);
             tx.scroll_to_bottom("messages");
         }
+    }
+
+    /// Whether the composer has something to send: words, or files uploaded with none still
+    /// on their way (a send waits for every file in the strip).
+    pub fn can_send(&self) -> bool {
+        let words = !self.draft.text.trim().is_empty();
+        let files = self.session.waiting_here().any(|w| w.draft().is_some());
+        (words || files) && !self.session.uploading_here()
     }
 
     /// After the draft changes: the @ list follows the caret, and a screen reader is told
@@ -458,7 +485,8 @@ impl State {
         let pictured = self.pictures.sync(&self.session.avatars);
         let replied = self.tick_replies();
         let prompted = self.tick_prompts(now_micros);
-        expired || pictured || replied || prompted
+        let media = self.tick_media(now_micros);
+        expired || pictured || replied || prompted || media
     }
 
     /// Enters the shell for a session the stores already hold, at launch: with what the
@@ -494,6 +522,9 @@ impl State {
         self.account = account::Account::default();
         self.setup = setup::SetupForms::default();
         self.prompts = prompts::Prompts::default();
+        self.media.viewer = None;
+        self.media.alts.clear();
+        self.media.playing.clear();
     }
 
     /// Keeps the place and the channel on screen ones the snapshot still has. The first
@@ -574,6 +605,7 @@ impl State {
             Update::Browser(update) => self.react_browser(update),
             Update::Notice(update) => self.react_notice(update),
             Update::Avatar(update) => self.react_avatar(update),
+            Update::Media(update) => self.react_media(update),
             Update::Gateway(event) => {
                 if matches!(
                     event,
@@ -668,6 +700,7 @@ pub fn room_words(room: Room) -> String {
 pub fn setup(state: &mut State, waker: Waker) {
     state.session.set_wake(Arc::clone(&waker));
     state.pictures.start(Arc::clone(&waker));
+    state.media.start(Arc::clone(&waker));
     // Anything that finished between `init` and here is already queued.
     waker();
 }
@@ -707,6 +740,11 @@ pub fn poll(state: &mut State, now: f64, tx: &mut Tx) -> bool {
     // A link session moves by an account event, and one missed would leave it unseen: the
     // window wakes to ask about it (`prompts`).
     if let Some(left) = state.prompt_wake(now) {
+        tx.wake_after(std::time::Duration::from_micros(left.unsigned_abs()));
+    }
+    // The draft's links are previewed once the words rest (`media`): nothing else wakes the
+    // window for that.
+    if let Some(left) = state.preview_wake(now) {
         tx.wake_after(std::time::Duration::from_micros(left.unsigned_abs()));
     }
     drained || ticked || found

@@ -265,6 +265,12 @@ pub fn settle(state: &mut State, tx: &mut Tx) -> bool {
     notify(state);
     remember_frame();
     if WINDOWED.load(Ordering::Relaxed) {
+        for file in std::mem::take(&mut state.media.to_open) {
+            if let Err(error) = open_file(&file) {
+                state.session.last_error = Some(format!("Could not open it: {error}"));
+                changed = true;
+            }
+        }
         system::follow(state);
         badge(state);
         if !CLOCK_READ.load(Ordering::Relaxed) {
@@ -277,6 +283,25 @@ pub fn settle(state: &mut State, tx: &mut Tx) -> bool {
     #[cfg(target_os = "linux")]
     appimage::pay(state, tx);
     changed
+}
+
+/// Opens a video or a recording in the system's player: a file the session wrote under the
+/// temporary directory, named by its attachment's id and an extension its media type gives
+/// (`session::media::player_extension`), never by the name its sender chose. Rune's
+/// `open_url` opens no `file:` link, so this asks the system as a person would: `open` on
+/// macOS, `xdg-open` on Linux, Explorer on Windows. Only a real window does; a test or a
+/// headless picture leaves the file in `state.media.to_open`.
+fn open_file(path: &std::path::Path) -> std::io::Result<()> {
+    #[cfg(target_os = "macos")]
+    let mut command = std::process::Command::new("open");
+    #[cfg(target_os = "windows")]
+    let mut command = std::process::Command::new("explorer");
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let mut command = std::process::Command::new("xdg-open");
+    let mut child = command.arg(path).spawn()?;
+    // Waited for off this thread, so it leaves nothing behind once it has handed the file on.
+    std::thread::spawn(move || child.wait());
+    Ok(())
 }
 
 /// Shows the window and brings it in front.

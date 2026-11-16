@@ -7,7 +7,7 @@ use rune::{Cursor, Cycle, El, Icon, Span, col, el, icon, rich, row, text, text_i
 use super::components::{
     Look, empty_state, error_text, icon_button, panel, title_rule, topic as topic_line,
 };
-use super::{replies, timeline};
+use super::{media, replies, timeline};
 use crate::app::{State, room_words};
 use crate::tokens::{self as t, icons};
 
@@ -78,13 +78,25 @@ pub fn view_with(s: &State, chrome: Chrome<'_>, extras: Extras, look: Look) -> E
     if let Some(error) = &s.session.last_error {
         pane = pane.child(el().w_full().px(t::SPACE_24).child(error_text(error, look)));
     }
-    pane.child(if let Some(instead) = extras.instead_of_composer {
+    let writable = extras.instead_of_composer.is_none() && !extras.composer_disabled;
+    pane = pane.child(if let Some(instead) = extras.instead_of_composer {
         instead
     } else if extras.composer_disabled {
         composer_off(&chrome.placeholder, &timeline::type_of(s), look)
     } else {
         composer(s, &chrome.placeholder, look)
-    })
+    });
+    // Files dropped anywhere on a conversation that takes them are attached (specs/media.md
+    // 5, "Composing"), with a word over it while they are dragged there.
+    if writable && s.session.can_attach() {
+        pane = pane
+            .on_drop_files(|s: &mut State, files, _| s.drop_files(files))
+            .on_drop_hover(|s: &mut State, over, _| s.media.dropping = over);
+        if s.media.dropping {
+            pane = pane.child(media::drop_target(look));
+        }
+    }
+    pane
 }
 
 /// A panel with a header and an empty state, for a place with no conversation.
@@ -317,7 +329,8 @@ fn composer(s: &State, placeholder: &str, look: Look) -> El {
     let accent = c.accent;
     // Over the limit on a message there is nothing to send until the words are cut.
     let room = s.session.room(&s.draft.text);
-    let can_send = !s.draft.text.trim().is_empty() && !room.over();
+    // Words or files, with no file still uploading (a send waits for every one).
+    let can_send = s.can_send() && !room.over();
     // The words at the size chosen for messages, as they will be drawn once sent.
     let ty = timeline::type_of(s);
     let input = text_input(&s.draft, ty.message)
@@ -329,6 +342,7 @@ fn composer(s: &State, placeholder: &str, look: Look) -> El {
         .w_full()
         .on_edit(|s: &mut State| &mut s.draft)
         .on_input_key(|s: &mut State, key, tx| s.composer_key(key) || s.composer_up(key, tx))
+        .on_input_paste(|s: &mut State, content, _| s.composer_paste(content))
         .on_input_change(State::draft_changed)
         .on_submit(|s: &mut State, tx| s.send(tx));
     // A line tall, growing with its lines up to eight, then scrolling inside with the caret
@@ -360,13 +374,24 @@ fn composer(s: &State, placeholder: &str, look: Look) -> El {
     }
     // One line is the board's 42 points with the words and the button centred in it; more
     // lines grow the frame upwards from the button.
-    let line = row()
+    // The attach button at the field's start, as the design system's composer has it, when
+    // the instance keeps attachments; the words then start nearer it.
+    let attach = s.session.can_attach();
+    let mut line = row()
         .w_full()
         .items_end()
         .gap(t::SPACE_6)
-        .pl(t::SPACE_16)
+        .pl(if attach { t::SPACE_6 } else { t::SPACE_16 })
         .pr(t::SPACE_6)
-        .py(t::SPACE_6)
+        .py(t::SPACE_6);
+    if attach {
+        line = line.child(
+            el().h(t::COMPOSER_LINE)
+                .center()
+                .child(media::attach_button(look)),
+        );
+    }
+    let line = line
         .child(
             col()
                 .grow(1.0)
@@ -408,6 +433,14 @@ fn composer(s: &State, placeholder: &str, look: Look) -> El {
     let mut above = col().w_full().gap(t::SPACE_6);
     let mut any = false;
     if let Some(part) = replies::outside_bar(s, look) {
+        any = true;
+        above = above.child(part);
+    }
+    // The links' cards, then the files waiting to go (specs/media.md 5, 6.4).
+    for part in [media::previews(s, look), media::strip(s, look)]
+        .into_iter()
+        .flatten()
+    {
         any = true;
         above = above.child(part);
     }

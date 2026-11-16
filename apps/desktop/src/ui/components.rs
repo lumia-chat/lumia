@@ -25,6 +25,9 @@ pub struct Look {
     pub c: &'static Colors,
     pub shadows: &'static Shadows,
     pub dark: bool,
+    /// The system asks for reduced motion: a GIF in a message is drawn still until pressed
+    /// (specs/media.md 5).
+    pub still: bool,
 }
 
 impl Look {
@@ -33,6 +36,7 @@ impl Look {
             c: t::colors(dark),
             shadows: t::shadows(dark),
             dark,
+            still: false,
         }
     }
 }

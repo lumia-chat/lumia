@@ -19,6 +19,7 @@ pub mod browser;
 pub mod channels;
 pub mod dms;
 pub mod identity;
+pub mod media;
 pub mod notices;
 pub mod rail;
 pub mod reads;
@@ -32,9 +33,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use lumia_client::ClientError;
 use lumia_client::app::{
-    self, App, AppEvent, ChannelSummary, InstanceSummary, MemberSummary, MentionSummary,
-    MessageSummary, Opener, Place, QuoteSummary, ReactionSummary, ServerSummary, SnapshotSummary,
-    StoreName,
+    self, App, AppEvent, AttachmentDraft, AttachmentSummary, CardSummary, ChannelSummary,
+    InstanceSummary, MemberSummary, MentionSummary, MessageSummary, Opener, Place, QuoteSummary,
+    ReactionSummary, ServerSummary, SnapshotSummary, StoreName,
 };
 use lumia_client::body;
 use lumia_client::sqlite::SqliteStore;
@@ -135,6 +136,7 @@ pub enum Update {
     Avatar(avatars::AvatarUpdate),
     Read(reads::ReadUpdate),
     Rail(rail::RailUpdate),
+    Media(media::MediaUpdate),
 }
 
 /// What is on screen to read and write: a server's channel, or a personal conversation.
@@ -178,6 +180,10 @@ pub struct Entry {
     pub reactions: Vec<ReactionSummary>,
     /// It mentions this account or everyone, or quotes this account.
     pub mentions_me: bool,
+    /// What it carries (specs/media.md 5).
+    pub attachments: Vec<AttachmentSummary>,
+    /// Its links' cards, in the order the links appear (spec 6).
+    pub cards: Vec<CardSummary>,
 }
 
 impl From<MessageSummary> for Entry {
@@ -196,6 +202,8 @@ impl From<MessageSummary> for Entry {
             mentions: m.mentions,
             reactions: m.reactions,
             mentions_me: m.mentions_me,
+            attachments: m.attachments,
+            cards: m.cards,
         }
     }
 }
@@ -248,6 +256,8 @@ pub struct Pending {
     pub sent_at_micros: i64,
     /// What it quotes.
     pub reply: Option<QuoteSummary>,
+    /// The names of the files it carries.
+    pub attachments: Vec<String>,
     /// Why the instance refused it, when it did.
     pub failed: Option<String>,
 }
@@ -331,6 +341,9 @@ pub struct Session {
     pub unfolded: HashSet<String>,
     /// The pictures of the people on screen, as bytes ([`avatars`]).
     pub avatars: avatars::Avatars,
+    /// Attachments waiting in the composer, the cards it previews, and the pictures of the
+    /// messages on screen ([`media`]).
+    pub media: media::MediaState,
     /// A public channel this account is not in, open to read before joining (architecture
     /// 6.8): what Browse said of it.
     pub previewing: Option<ChannelSummary>,
@@ -405,6 +418,7 @@ impl Session {
             revision: 0,
             unfolded: HashSet::new(),
             avatars: avatars::Avatars::default(),
+            media: media::MediaState::default(),
             previewing: None,
             channel_members: HashMap::new(),
             browse: HashMap::new(),
@@ -486,6 +500,9 @@ impl Session {
         self.host = app.host();
         self.signed_in = app.signed_in();
         self.app = Some(Arc::clone(&app));
+        // The attachments the core opens are kept beside the avatars, under the instance's
+        // directory, and go with them when this computer is removed.
+        app.set_media_cache_dir(self.media_dir());
         self.check_identity();
         if self.signed_in {
             self.restore();
@@ -549,6 +566,7 @@ impl Session {
         self.presence.clear();
         self.typing.clear();
         self.forget_pictures();
+        self.forget_all_media();
         self.profiles.clear();
         self.conversation = None;
         self.reach = Reach::default();
@@ -610,6 +628,7 @@ impl Session {
         self.forget_account();
         if !self.host.is_empty() {
             let _ = std::fs::remove_dir_all(self.avatars_dir());
+            let _ = std::fs::remove_dir_all(self.media_dir());
         }
     }
 
@@ -742,6 +761,7 @@ impl Session {
         for id in strangers {
             self.look_up(&id);
         }
+        self.want_media();
     }
 
     /// Asks the instance for someone's public profile, once.
@@ -822,6 +842,7 @@ impl Session {
         }
         self.note_new_since(&conversation);
         self.conversation = Some(conversation);
+        self.forget_media();
         self.entries.clear();
         self.unfolded.clear();
         self.reach = Reach {
@@ -919,8 +940,11 @@ impl Session {
     }
 
     /// [`Session::send`] quoting another message, or nothing, with the mentions the body
-    /// makes of the server's members (and of everyone, for one who may). The answer is who
-    /// was mentioned and is not in the channel, so not notified; `None` when nothing could be
+    /// makes of the server's members (and of everyone, for one who may). It carries the
+    /// files uploaded in the conversation's composer and asks for the cards of the links
+    /// whose preview was not put away (specs/media.md 4.2, 6.4); with files, the words may be
+    /// empty. Nothing is sent while a file is still uploading. The answer is who was
+    /// mentioned and is not in the channel, so not notified; `None` when nothing could be
     /// queued.
     pub fn send_with(
         &mut self,
@@ -929,30 +953,40 @@ impl Session {
         reply: Option<&QuoteSummary>,
     ) -> Option<Vec<String>> {
         let body = body.trim();
-        if body.is_empty() {
+        let drafts = self.drafts_here();
+        if (body.is_empty() && drafts.is_empty()) || self.uploading_here() {
             return None;
         }
         let channel = match self.conversation.clone() {
             Some(Conversation::Channel(id)) => id,
             Some(Conversation::Dm(id)) => {
-                return self.send_dm(&id, body, now_micros, reply).then(Vec::new);
+                let cards = self.kept_links(&id, body);
+                let sent = self.send_dm(&id, body, now_micros, reply, &drafts, &cards);
+                if sent {
+                    self.sent_media(&id, &drafts);
+                }
+                return sent.then(Vec::new);
             }
             None => return None,
         };
         let app = self.app.clone()?;
         let mentions = self.mentions_in(&channel, body);
         let outside = self.outside(&channel, &mentions);
+        let ids: Vec<String> = drafts.iter().map(|d| d.draft_id.clone()).collect();
+        let cards = self.kept_links(&channel, body);
         self.revision += 1;
-        match app.send_message_with(&channel, body, &mentions, reply) {
+        match app.send_message_with_media(&channel, body, &mentions, reply, &ids, &cards) {
             Ok(id) => {
                 self.pending.push(Pending {
                     id,
-                    channel_id: channel,
+                    channel_id: channel.clone(),
                     body: body.to_string(),
                     sent_at_micros: now_micros,
                     reply: reply.cloned(),
+                    attachments: names(&drafts),
                     failed: None,
                 });
+                self.sent_media(&channel, &drafts);
                 Some(outside)
             }
             Err(error) => {
@@ -1252,6 +1286,7 @@ impl Session {
                 }
                 self.dm_snapshot_applied();
                 self.want_pictures();
+                self.ask_upload_limits();
                 self.refresh_reads();
                 // A server's show_deleted may have changed, which decides what the core reads.
                 self.read_entries();
@@ -1325,6 +1360,7 @@ impl Session {
             Update::Avatar(update) => self.apply_avatar(update),
             Update::Read(update) => self.apply_read(update),
             Update::Rail(update) => self.apply_rail(update),
+            Update::Media(update) => self.apply_media(update),
         }
     }
 
@@ -1516,6 +1552,11 @@ fn server_channels(snapshot: &SnapshotSummary) -> Vec<String> {
         .filter(|c| !PERSONAL_KINDS.contains(&c.kind.as_str()))
         .map(|c| c.channel_id.clone())
         .collect()
+}
+
+/// The names of what a send carries, for its row until the store holds it.
+pub(crate) fn names(drafts: &[AttachmentDraft]) -> Vec<String> {
+    drafts.iter().map(|d| d.name.clone()).collect()
 }
 
 /// The name a person goes by: display name, else nickname, else handle, else the id's start.

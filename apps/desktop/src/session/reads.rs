@@ -14,7 +14,7 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use lumia_client::app::{MessageSummary, QuoteSummary, ReadStateSummary};
+use lumia_client::app::{App, MessageSummary, QuoteSummary, ReadStateSummary};
 
 use super::{Conversation, Entry, Failure, Session, Update};
 
@@ -245,26 +245,32 @@ impl Session {
     }
 
     /// Edits one of this account's messages in the open conversation: its new body, with the
-    /// mentions it makes found again. The store has it when the edit comes back; a refusal
-    /// meanwhile is kept in [`Reads::refused`].
-    pub fn edit(&mut self, message_id: &str, body: &str) {
+    /// mentions it makes found again, without the attachments `removed` names and the cards
+    /// of the links `dropped` names (specs/media.md 4.4, 6.4). The store has it when the edit
+    /// comes back; a refusal meanwhile is kept in [`Reads::refused`].
+    pub fn edit(&mut self, message_id: &str, body: &str, removed: &[String], dropped: &[String]) {
         let (Some(app), Some(conversation)) = (self.client(), self.conversation.clone()) else {
             return;
         };
         let body = body.trim().to_string();
-        let was = self
-            .entries
-            .iter()
-            .find(|e| e.id == message_id)
-            .map(|e| e.body.clone())
-            .unwrap_or_default();
+        let entry = self.entries.iter().find(|e| e.id == message_id);
+        let was = entry.map(|e| e.body.clone()).unwrap_or_default();
+        let cards = entry.and_then(|e| edited_cards(e, &body, dropped));
         self.reads.editing = Some((message_id.to_string(), was));
         self.reads.editing_command = None;
         self.reads.refused = None;
+        let removed = removed.to_vec();
         match conversation {
             Conversation::Channel(channel_id) => {
                 let mentions = self.mentions_in(&channel_id, &body);
-                match app.edit_message(&channel_id, message_id, &body, &mentions) {
+                match app.edit_message_with_media(
+                    &channel_id,
+                    message_id,
+                    &body,
+                    &mentions,
+                    &removed,
+                    cards.as_deref(),
+                ) {
                     Ok(command) => self.reads.editing_command = Some(command),
                     Err(error) => self.last_error = Some(format!("Not saved: {error}")),
                 }
@@ -272,7 +278,15 @@ impl Session {
             Conversation::Dm(channel_id) => {
                 let message_id = message_id.to_string();
                 self.task_local(move || async move {
-                    let result = app.dm_edit(&channel_id, &message_id, &body).await;
+                    let result = app
+                        .dm_edit_with_media(
+                            &channel_id,
+                            &message_id,
+                            &body,
+                            &removed,
+                            cards.as_deref(),
+                        )
+                        .await;
                     Update::Read(ReadUpdate::Reacted(result.map_err(Failure::from)))
                 });
             }
@@ -402,4 +416,24 @@ pub fn quote_of(entry: &Entry, part: Option<&str>) -> QuoteSummary {
         original_deleted: false,
         silent: false,
     }
+}
+
+/// The links whose cards an edit keeps, or `None` to leave them as the instance would (the
+/// cards of the links still in the body): named only when the author put a card away or the
+/// edit adds a link. A link the edit adds is asked for, as at a send; in a personal
+/// conversation one gets a card only if this computer built it (`App::card_preview`), which
+/// editing does not ask for.
+pub fn edited_cards(entry: &Entry, body: &str, dropped: &[String]) -> Option<Vec<String>> {
+    let before = App::card_links(&entry.body);
+    let now = App::card_links(body);
+    let added = now.iter().any(|url| !before.contains(url));
+    if dropped.is_empty() && !added {
+        return None;
+    }
+    Some(
+        now.into_iter()
+            .filter(|url| !dropped.contains(url))
+            .filter(|url| !before.contains(url) || entry.cards.iter().any(|c| c.url == *url))
+            .collect(),
+    )
 }

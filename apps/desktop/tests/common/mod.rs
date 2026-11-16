@@ -244,6 +244,8 @@ pub fn message(id: &str, author: &str, body: &str, micros: i64) -> Entry {
         reactions: Vec::new(),
         mentions_me: false,
         edited: false,
+        attachments: Vec::new(),
+        cards: Vec::new(),
     }
 }
 

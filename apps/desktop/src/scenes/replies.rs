@@ -24,6 +24,8 @@ fn entry(id: &str, seq: u64, author: &str, body: &str, ago: i64) -> Entry {
         reactions: Vec::new(),
         mentions_me: false,
         edited: false,
+        attachments: Vec::new(),
+        cards: Vec::new(),
     }
 }
 

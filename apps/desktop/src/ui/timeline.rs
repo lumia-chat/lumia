@@ -57,6 +57,7 @@ use rune::{Cursor, El, GrowthSpec, ScrollSpec, col, el, icon, row, text};
 
 use super::body;
 use super::components::{Look, avatar_of};
+use super::media;
 use super::scroll::WithScrollBar;
 use super::{conversation, replies};
 use crate::app::State;
@@ -179,7 +180,6 @@ const BLOCK_WITHIN_MICROS: i64 = 5 * 60 * 1_000_000;
 /// Call it only when there is something to list.
 pub fn view(s: &State, label: String, look: Look) -> El {
     let count = s.session.entries.len() + s.session.pending_here().count();
-    let dark = look.dark;
     // How wide the list is, which a long body is measured at to know whether it folds
     // ([`fold_of`], in each row): read here as well, as laid out, so that the view and its
     // rows run again when the window is resized, and not as it scrolls.
@@ -232,7 +232,6 @@ pub fn view(s: &State, label: String, look: Look) -> El {
                     .map_or(Cow::Borrowed(""), |p| Cow::Borrowed(p.id.as_str())),
             },
             move |s: &State, i| {
-                let look = Look::of(dark);
                 let place = Place::of(s, i);
                 match s.session.entries.get(i) {
                     Some(entry) => stored_row(s, i, entry, place, look),
@@ -752,6 +751,16 @@ fn notice_row(s: &State, entry: &Entry, look: Look) -> El {
 /// does not change, and measuring there would start a text system of its own (a second and
 /// a half on a first Cmd+A, as its fonts load). A layout read is none there.
 fn fold_of(s: &State, id: &str, author: &str, m: Measures) -> Option<body::Fold> {
+    Some(body::Fold {
+        width: content_width(s, author, m)?,
+        open: s.session.unfolded.contains(id),
+    })
+}
+
+/// The width a message's words are laid out at in its row, found from the list's as
+/// [`grouped_frame`] and [`line_frame`] place them: what a body folds at and what its
+/// pictures fit in. None until the list has been laid out (see [`fold_of`]).
+fn content_width(s: &State, author: &str, m: Measures) -> Option<f32> {
     let list = rune::memo::layout_with(LIST, |rect| rect[2].round())?;
     // The list's padding and the row's.
     let inside = list - 2.0 * (t::SPACE_14 + t::SPACE_12);
@@ -763,10 +772,7 @@ fn fold_of(s: &State, id: &str, author: &str, m: Measures) -> Option<body::Fold>
             inside - time_width(m.ty.meta, s.clock_24) - name - 2.0 * t::SPACE_8
         }
     };
-    Some(body::Fold {
-        width: width.max(1.0),
-        open: s.session.unfolded.contains(id),
-    })
+    Some(width.max(1.0))
 }
 
 /// Which of a message's code blocks was just copied, counting from its first.
@@ -800,7 +806,8 @@ fn stored_row(s: &State, i: usize, entry: &Entry, place: Place, look: Look) -> E
     let content = if entry.deleted {
         body::note("(deleted)", c.ink_quiet, drawn, look).key("body")
     } else {
-        message_content(s, entry, drawn, look)
+        let width = content_width(s, &author, m);
+        message_content(s, entry, drawn, width, look)
     };
     let head = Head {
         author: &author,
@@ -864,7 +871,13 @@ fn shown_body(s: &State, entry: &Entry) -> (String, Vec<Range<usize>>) {
 /// A message's words with what architecture 6.6 adds: its mentions as pills in them,
 /// "(edited)" after them, and its reactions under them; in their place the field while this
 /// account edits it, and under them why an edit or a delete of it was refused.
-fn message_content(s: &State, entry: &Entry, drawn: body::Drawn<'_>, look: Look) -> El {
+fn message_content(
+    s: &State,
+    entry: &Entry,
+    drawn: body::Drawn<'_>,
+    width: Option<f32>,
+    look: Look,
+) -> El {
     let c = look.c;
     let ty = drawn.ty;
     let editing = s
@@ -879,6 +892,8 @@ fn message_content(s: &State, entry: &Entry, drawn: body::Drawn<'_>, look: Look)
             let room = s.session.room(&field.text);
             content = content.child(edit_field(&entry.id, field, room, ty, look));
         }
+        // A message of files alone has no words to draw.
+        None if entry.body.trim().is_empty() && !entry.attachments.is_empty() => {}
         None => {
             let (source, mentions) = shown_body(s, entry);
             // "(edited)" follows the words on their last line when they end in a paragraph,
@@ -900,6 +915,15 @@ fn message_content(s: &State, entry: &Entry, drawn: body::Drawn<'_>, look: Look)
                 );
             }
         }
+    }
+    // What it carries, then its links' cards (specs/media.md 5, 6); each with its × while
+    // it is edited.
+    let editing = editing.is_some();
+    if let Some(files) = media::attachments(s, entry, width, ty, editing, look) {
+        content = content.child(files.mt(t::SPACE_2));
+    }
+    if let Some(cards) = media::cards(s, entry, ty, editing, look) {
+        content = content.child(cards.mt(t::SPACE_2));
     }
     if let Some((_, why)) = s
         .session
@@ -1043,7 +1067,13 @@ fn pending_row(s: &State, pending: &Pending, place: Place, look: Look) -> El {
         fold: fold_of(s, &pending.id, s.session.self_name(), m),
         copied: copied_in(s, &pending.id),
     };
-    let body = body::view_with(&pending.body, false, &[], drawn, look).key("body");
+    let mut body = col()
+        .w_full()
+        .gap(t::SPACE_4)
+        .child(body::view_with(&pending.body, false, &[], drawn, look).key("body"));
+    if let Some(files) = media::pending(&pending.attachments, &m.ty, look) {
+        body = body.child(files);
+    }
     let content = match &pending.failed {
         None => col().w_full().opacity(0.5).child(body),
         Some(why) => {

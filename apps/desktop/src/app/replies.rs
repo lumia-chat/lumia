@@ -206,6 +206,8 @@ impl State {
         field.set_caret(entry.body.len());
         self.replies.editing = Some((message_id.to_string(), field));
         self.replies.edit_over = false;
+        self.media.edit_removed.clear();
+        self.media.edit_dropped.clear();
         self.close_popover();
         // The row shows the field now: rebuilt.
         self.session.revision += 1;
@@ -215,6 +217,8 @@ impl State {
     /// Escape in the field: the message as it was.
     pub fn cancel_edit(&mut self, tx: &mut Tx) {
         if self.replies.editing.take().is_some() {
+            self.media.edit_removed.clear();
+            self.media.edit_dropped.clear();
             self.session.revision += 1;
             tx.focus("composer", false);
         }
@@ -233,15 +237,20 @@ impl State {
         self.replies.edit_over = false;
         self.session.revision += 1;
         let body = field.text.trim();
-        let unchanged = self
-            .session
-            .entries
-            .iter()
-            .any(|e| e.id == id && e.body.trim() == body);
-        if body.is_empty() {
+        let removed = std::mem::take(&mut self.media.edit_removed);
+        let dropped = std::mem::take(&mut self.media.edit_dropped);
+        let entry = self.session.entries.iter().find(|e| e.id == id);
+        let unchanged = entry.is_some_and(|e| e.body.trim() == body);
+        // What the edit leaves of the message's files: with none and no words, it is gone.
+        let files_left = entry.is_some_and(|e| {
+            crate::session::media::kept_attachments(e, &removed)
+                .next()
+                .is_some()
+        });
+        if body.is_empty() && !files_left {
             self.ask_delete(&id);
-        } else if !unchanged {
-            self.session.edit(&id, body);
+        } else if !unchanged || !removed.is_empty() || !dropped.is_empty() {
+            self.session.edit(&id, body, &removed, &dropped);
         }
         tx.focus("composer", false);
     }

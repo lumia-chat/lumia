@@ -8,10 +8,11 @@
 //!
 //! The Messages card starts from a preset (Comfortable, Compact, Minimal), which writes the
 //! settings under it and is not kept itself: the segment lit is the preset whose values all
-//! match, and when none does, none is lit and a line says so. Images and embeds are set by
-//! the presets with no control of their own, since the shell draws neither yet; the avatars'
-//! control is not drawn in one line, which has none. Reactions, shown or hidden (Minimal
-//! hides them), comes last, after the font size.
+//! match, and when none does, none is lit and a line says so. The avatars' control is not
+//! drawn in one line, which has none. After the font size: Images (shown in their messages,
+//! or "As links": every attachment a file row, a picture's opening the viewer) and Embeds
+//! (links' cards drawn, or "As links": none), which Minimal sets to links (specs/media.md
+//! 5), then Reactions, shown or hidden (Minimal hides them).
 //!
 //! The scroll bar's card is drawn on macOS only: there the choice is carried out by the
 //! system's own setting, made for this app alone (`platform::system`). Rune gives an app
@@ -27,7 +28,8 @@ use super::devices::{page, page_column};
 use crate::app::State;
 use crate::app::updates::{Phase, Updater};
 use crate::settings::{
-    Appearance, Avatars, FontSize, Layout, Preset, Reactions, ScrollBars, Spacing, UpdateChecks,
+    Appearance, Avatars, FontSize, Layout, Media, Preset, Reactions, ScrollBars, Spacing,
+    UpdateChecks,
 };
 use crate::tokens as t;
 use crate::ui::components::{
@@ -197,6 +199,30 @@ fn messages(s: &State, look: Look) -> El {
             &sizes,
             s.settings.font_size,
             |s: &mut State, choice| s.set_font_size(choice),
+            look,
+        ),
+        look,
+    ))
+    .child(labelled(
+        "Images",
+        segmented(
+            "images",
+            "Images",
+            &[(Media::Shown, "Shown"), (Media::Link, "As links")],
+            s.settings.images,
+            |s: &mut State, choice| s.set_images(choice),
+            look,
+        ),
+        look,
+    ))
+    .child(labelled(
+        "Embeds",
+        segmented(
+            "embeds",
+            "Embeds",
+            &[(Media::Shown, "Shown"), (Media::Link, "As links")],
+            s.settings.embeds,
+            |s: &mut State, choice| s.set_embeds(choice),
             look,
         ),
         look,

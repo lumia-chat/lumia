@@ -9,6 +9,7 @@ use lumia_client::app::{
 };
 
 mod account;
+mod media;
 mod rail;
 mod replies;
 
@@ -295,6 +296,12 @@ pub const SCENES: &[Scene] = &[
     ("bodies", bodies),
     ("long-messages", long_messages),
     ("blocks", blocks),
+    // Attachments and link cards (specs/media.md 5, 6): in messages, in the composer, as
+    // links, the viewer, and a message with a card being edited.
+    ("media", media::media),
+    ("media-links", media::media_links),
+    ("media-viewer", media::media_viewer),
+    ("media-edit", media::media_edit),
     // Quote replies, reactions, mentions and read state (architecture 6.6).
     ("replies", replies::replies),
     ("mention-list", replies::mention_list),
@@ -518,6 +525,8 @@ fn channels_sample(state: &mut State) {
         reactions: Vec::new(),
         mentions_me: false,
         edited: false,
+        attachments: Vec::new(),
+        cards: Vec::new(),
     };
     state.session.entries = vec![
         entry("n1", "grace", "", 40, "joined", "grace"),
@@ -1057,6 +1066,8 @@ pub fn blocks(state: &mut State) {
             reactions: Vec::new(),
             mentions_me: false,
             edited: false,
+            attachments: Vec::new(),
+            cards: Vec::new(),
         })
         .collect();
     // Reactions to a message in the middle of a block, one of them this account's.
@@ -1092,6 +1103,7 @@ pub fn blocks(state: &mut State) {
         body: "Does it relocate before or after linking?".into(),
         sent_at_micros: now,
         failed: None,
+        attachments: Vec::new(),
         reply: None,
     }];
     state.session.revision += 1;
@@ -1182,6 +1194,8 @@ pub fn bodies(state: &mut State) {
             reactions: Vec::new(),
             mentions_me: false,
             edited: false,
+            attachments: Vec::new(),
+            cards: Vec::new(),
         })
         .collect();
     state.session.revision += 1;

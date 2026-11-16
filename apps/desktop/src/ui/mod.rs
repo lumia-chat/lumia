@@ -8,6 +8,7 @@ mod conversation;
 mod emoji;
 mod home;
 mod link;
+mod media;
 mod mentions;
 mod menus;
 mod prompt;
@@ -41,7 +42,10 @@ pub fn others(n: usize) -> String {
 /// `AppSpec::view`.
 pub fn view(s: &State, cx: &mut Cx<State>) -> El {
     // Light or dark as Preferences says, which may be "as the system is".
-    let look = Look::of(s.settings.appearance.dark(cx.system_dark()));
+    let look = Look {
+        still: cx.system_reduced_motion() || cx.is_reduced_motion(),
+        ..Look::of(s.settings.appearance.dark(cx.system_dark()))
+    };
     let screen = match s.route {
         Route::SignIn => sign_in::view(s, look),
         Route::Link => link::view(s, look),
@@ -84,6 +88,12 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
         && let Some(layer) = rail::drag_layer(s, look)
     {
         screen = screen.child(layer);
+    }
+    // A picture opened from a message, over the whole window.
+    if s.route == Route::Shell
+        && let Some(viewer) = media::viewer(s, look)
+    {
+        screen = screen.child(viewer);
     }
     // Another device asking this computer to link it, over whatever is on screen.
     if s.route != Route::SignIn
