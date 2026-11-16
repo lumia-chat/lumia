@@ -8,6 +8,14 @@ import type { BodyBlock, BodyLink, BodyRun, DeviceSummary } from "../client/brid
 import { QUICK_REACTIONS } from "../design/emoji";
 import {
   AppShell,
+  Attachment,
+  AudioAttachment,
+  ComposerMedia,
+  DropZone,
+  LinkCard,
+  MediaGrid,
+  Viewer,
+  type MediaTileProps,
   Avatar,
   AvatarStack,
   Badge,
@@ -1603,6 +1611,123 @@ function Pieces() {
           </ul>
         </div>
       </section>
+      <MediaPieces />
     </div>
+  );
+}
+
+/** A sample picture: a sky over hills, in two colours, at a shape. Data, not a product asset. */
+function samplePicture(width: number, height: number, sky: string, hill: string, blur = false): string {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${blur ? '<filter id="b"><feGaussianBlur stdDeviation="18"/></filter>' : ""}<g${blur ? ' filter="url(#b)"' : ""}><defs><linearGradient id="s" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${sky}"/><stop offset="1" stop-color="#fff4e0"/></linearGradient></defs><rect width="100%" height="100%" fill="url(#s)"/><circle cx="${width * 0.7}" cy="${height * 0.32}" r="${Math.min(width, height) * 0.1}" fill="#ffd56b"/><path d="M0 ${height * 0.72} Q ${width * 0.3} ${height * 0.5} ${width * 0.55} ${height * 0.7} T ${width} ${height * 0.62} V ${height} H 0 Z" fill="${hill}"/></g></svg>`;
+  return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+}
+
+const PICTURES = {
+  tall: samplePicture(900, 1200, "#7aa7e8", "#4f8a5b"),
+  wide: samplePicture(1600, 900, "#f0a38a", "#6c5aa8"),
+  square: samplePicture(800, 800, "#8fd3c9", "#2f6f73"),
+  dusk: samplePicture(1200, 800, "#b28be0", "#3b3f7a"),
+  placeholder: samplePicture(1200, 800, "#9fb6d8", "#5b7f6a", true),
+};
+
+function MediaPieces() {
+  const grid = (n: number): MediaTileProps[] =>
+    [PICTURES.wide, PICTURES.square, PICTURES.dusk, PICTURES.tall, PICTURES.wide].slice(0, n).map((src, i) => ({ kind: "image", name: `photo-${i + 1}.jpg`, width: 1200, height: 800, src, onOpen: () => {} }));
+  return (
+    <section>
+      <h2>Attachments in a message (specs/media.md 5): a picture alone at its shape, at most 400 tall; grids of two, three and five; a GIF held still for reduced motion with its badge; a video’s poster, a video with none, and a picture still drawn as its placeholder</h2>
+      <div class="pieces__row pieces__row--top" style={{ "flex-direction": "column", "align-items": "stretch", "max-width": "760px" }}>
+        <MessageList>
+          <Message {...PEOPLE.maya} author={PEOPLE.maya.name} time="10:02 AM" actions={false}>
+            <MessageBody blocks={[para("The view from the ridge this morning.")]} />
+            <div class="lu-mediablock">
+              <MediaGrid items={[{ kind: "image", name: "ridge.jpg", alt: "A blue sky over green hills, the sun high on the right", width: 900, height: 1200, src: PICTURES.tall, onOpen: () => {} }]} />
+            </div>
+          </Message>
+          <Message {...PEOPLE.devon} author={PEOPLE.devon.name} time="10:05 AM" actions={false}>
+            <div class="lu-mediablock">
+              <MediaGrid items={grid(2)} />
+              <MediaGrid items={grid(3)} />
+              <MediaGrid items={grid(5)} />
+            </div>
+          </Message>
+          <Message {...PEOPLE.sam} author={PEOPLE.sam.name} time="10:09 AM" actions={false}>
+            <div class="lu-mediablock">
+              <MediaGrid
+                items={[
+                  { kind: "gif", name: "wave.gif", width: 480, height: 360, src: PICTURES.square, still: true, onOpen: () => {} },
+                  { kind: "video", name: "launch.mp4", width: 1600, height: 900, src: PICTURES.wide, onOpen: () => {} },
+                  { kind: "video", name: "screen.webm", width: 1280, height: 720, onOpen: () => {} },
+                  { kind: "image", name: "late.jpg", width: 1200, height: 800, placeholder: PICTURES.placeholder, onOpen: () => {} },
+                ]}
+              />
+            </div>
+          </Message>
+        </MessageList>
+      </div>
+      <h2>Audio and files (with Images “As a link”, every attachment is such a row, its name opening the viewer), and link cards: a picture beside, a wide picture under, a video’s, none; the site is always the link’s host</h2>
+      <div class="pieces__row pieces__row--top" style={{ "flex-direction": "column", "align-items": "stretch", "max-width": "760px" }}>
+        <MessageList>
+          <Message {...PEOPLE.priya} author={PEOPLE.priya.name} time="11:20 AM" actions={false}>
+            <MessageBody blocks={[para("Notes and the recording from Thursday.")]} />
+            <div class="lu-mediablock">
+              <AudioAttachment name="standup-thursday.m4a" size="3.1 MB" />
+              <AudioAttachment name="standup-friday.m4a" size="2.8 MB" busy />
+              <Attachment kind="file" name="Q4-roadmap.pdf" size="1.2 MB" />
+              <Attachment kind="image" name="ridge.jpg" size="412 KB" onOpen={() => {}} />
+              <Attachment kind="video" name="launch.mp4" size="8.4 MB" onOpen={() => {}} />
+              <Attachment kind="file" name="Q4-roadmap.pdf" size="1.2 MB" note="Couldn’t be opened." />
+            </div>
+          </Message>
+          <Message {...PEOPLE.leo} author={PEOPLE.leo.name} time="11:31 AM" actions={false}>
+            <MessageBody blocks={[para("The write-up: https://example.com/posts/field-notes", { words: "https://example.com/posts/field-notes", url: "https://example.com/posts/field-notes" })]} />
+            <div class="lu-mediablock">
+              <LinkCard url="https://example.com/posts/field-notes" host="example.com" title="Field notes from a week of building in the open" description="What went well, what did not, and the three things we would do again." color="#2f6fde" image={PICTURES.square} imageWidth={400} imageHeight={400} />
+              <LinkCard url="https://video.example.org/watch" host="video.example.org" title="The launch, in four minutes" description="A short walk through what shipped." color="#e0484f" image={PICTURES.wide} imageWidth={400} imageHeight={225} video />
+              <LinkCard url="https://docs.example.net/start" host="docs.example.net" title="Getting started" description="Install, sign in, and make your first server." />
+            </div>
+          </Message>
+        </MessageList>
+      </div>
+      <h2>Editing a message of one’s own: × on each attachment and card</h2>
+      <div class="pieces__row" style={{ "flex-direction": "column", "align-items": "stretch", "max-width": "760px" }}>
+        <MessageList>
+          <Message author={PEOPLE.self.name} initials="RW" tone="indigo" time="12:10 PM" actions={false}>
+            <MessageEdit value="Two from the ridge, and the write-up." onSave={() => {}} onCancel={() => {}} />
+            <div class="lu-mediablock">
+              <MediaGrid items={grid(2).map((t) => ({ ...t, onRemove: () => {} }))} />
+              <Attachment kind="file" name="Q4-roadmap.pdf" size="1.2 MB" onRemove={() => {}} />
+              <LinkCard url="https://example.com/posts/field-notes" host="example.com" title="Field notes from a week of building in the open" image={PICTURES.square} imageWidth={400} imageHeight={400} onRemove={() => {}} />
+            </div>
+          </Message>
+        </MessageList>
+      </div>
+      <h2>Over the composer: the files being attached (preparing, uploading, ready with its alt text, refused in words) and the card of a link being written, each with its ×; and a conversation with files dragged over it</h2>
+      <div class="pieces__row" style={{ "flex-direction": "column", "align-items": "stretch", "max-width": "760px" }}>
+        <Composer
+          placeholder="Message #design"
+          tools={false}
+          onAttach={() => {}}
+          value="The write-up: https://example.com/posts/field-notes"
+          above={
+            <ComposerMedia
+              drafts={[
+                { id: "1", name: "clip.mov", kind: "video", size: "8.4 MB", state: "processing", onRemove: () => {} },
+                { id: "2", name: "ridge.jpg", kind: "image", size: "2.1 MB", preview: PICTURES.tall, state: "uploading", onAlt: () => {}, onRemove: () => {} },
+                { id: "3", name: "dusk.jpg", kind: "image", size: "640 KB", preview: PICTURES.dusk, state: "ready", alt: "The hills at dusk", onAlt: () => {}, onRemove: () => {} },
+                { id: "4", name: "archive.zip", kind: "file", size: "48 MB", state: "failed", error: "Too large: files can be up to 10 MB here.", onRemove: () => {} },
+              ]}
+              cards={[{ url: "https://example.com/posts/field-notes", host: "example.com", title: "Field notes from a week of building in the open", description: "What went well, what did not, and the three things we would do again.", color: "#2f6fde", image: PICTURES.square, imageWidth: 400, imageHeight: 400, onRemove: () => {} }]}
+            />
+          }
+        />
+        <Composer placeholder="Message #design" tools={false} onAttach={() => {}} above={<ComposerMedia drafts={[{ id: "5", name: "ridge.jpg", kind: "image", size: "2.1 MB", preview: PICTURES.tall, state: "uploading", onAlt: () => {}, onRemove: () => {} }]} note="Sending when the files are uploaded…" />} />
+        <DropZone label="Drop to attach to #design" />
+      </div>
+      <h2>The viewer: the picture over the window (here in a frame), zoomed by a press or the wheel, Save, the alt text, Escape to close</h2>
+      <div class="pieces__row" style={{ "flex-direction": "column", "align-items": "stretch", "max-width": "960px" }}>
+        <Viewer inline name="ridge.jpg" kind="image" alt="A blue sky over green hills, the sun high on the right" src={PICTURES.wide} width={1600} height={900} saveHref={PICTURES.wide} onClose={() => {}} />
+      </div>
+    </section>
   );
 }

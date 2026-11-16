@@ -7,12 +7,13 @@
 // instead of `className`, `for` instead of `htmlFor`, `style` objects with
 // CSS property names.
 
-import { For, Show, children, createEffect, createMemo, createSignal, createUniqueId, on, onCleanup, onMount, splitProps, type JSX } from "solid-js";
+import { For, Match, Show, Switch, children, createEffect, createMemo, createSignal, createUniqueId, on, onCleanup, onMount, splitProps, type JSX } from "solid-js";
 import { Dynamic, Portal } from "solid-js/web";
 import { ICONS } from "./icons";
 import { emojiMatches, loadEmoji, type EmojiGroup } from "./emoji";
 import { COLLAPSED_LINES, collapsedLines, composing, linesOf, roomWords, stretches, type Piece } from "./body";
 import type { BodyBlock, MessageRoom } from "../client/bridge";
+import { VIEW_FIT, ZOOM_MAX, fitSize, mediaGrid, panBy, zoomAt, type View } from "../client/media";
 
 export type Tone = "peach" | "blue" | "purple" | "mint" | "amber" | "sky" | "stone" | "green" | "indigo";
 export type Status = "online" | "away" | "dnd";
@@ -335,6 +336,7 @@ export interface ComposerProps extends JSX.TextareaHTMLAttributes<HTMLTextAreaEl
   /** The attach, formatting, emoji and mention buttons; a screen with nothing behind them leaves them out. */
   tools?: boolean;
   onSend?: () => void;
+  /** The attach button, which is drawn with this even where the other tools are not. */
   onAttach?: () => void;
   /** What stands over the field: a note after sending, the @ list (which floats over the conversation). */
   above?: JSX.Element;
@@ -374,8 +376,8 @@ export function Composer(props: ComposerProps) {
       {/* Always the same frame, so the field keeps its focus as a bar comes and goes. */}
       <div class={cx("lu-composer__frame", !!bar() && "has-bar")}>
         {bar()}
-        <div class={cx("lu-composer__field", !tools() && "is-bare")}>
-          <Show when={tools()}>
+        <div class={cx("lu-composer__field", !tools() && !local.onAttach && "is-bare")}>
+          <Show when={tools() || local.onAttach}>
             <IconButton icon="plus" label="Attach a file" class="lu-composer__attach" onClick={() => local.onAttach?.()} />
           </Show>
           <label for={fid} class="lu-sr">
@@ -1670,12 +1672,26 @@ export function Mention(props: MentionProps) {
   );
 }
 
+/* ── Attachments and link cards (specs/media.md 5 and 6) ── */
+
+/** What a message can carry. */
+export type MediaKind = "image" | "gif" | "video" | "audio" | "file";
+
 export interface AttachmentProps {
   name: string;
   size?: string;
-  kind?: "pdf";
+  /** The tint of its square: a board's PDF, or the kind of what a message carries. */
+  kind?: "pdf" | MediaKind;
+  /** The file to save (a Blob URL): the download control is a link with `download`. */
   href?: string;
+  /** Pressed before there is anything to save: the page fetches it, then saves it. */
   onDownload?: () => void;
+  /** It opens (the viewer, where Images is a link): the name is a button. */
+  onOpen?: () => void;
+  /** Taken out of a message being edited. */
+  onRemove?: () => void;
+  /** Said in place of the size: "Loading…", or why it could not be opened. */
+  note?: string;
   class?: string;
 }
 
@@ -1686,13 +1702,498 @@ export function Attachment(props: AttachmentProps) {
       <span aria-hidden="true" class={cx("lu-attach__type", "lu-attach__type--" + (props.kind ?? "pdf"))}>
         <Icon name="file" size={17} />
       </span>
-      <span class="lu-attach__name">{props.name}</span>
-      <Show when={props.size}>
-        <span class="lu-attach__size">{props.size}</span>
+      <Show when={props.onOpen} fallback={<span class="lu-attach__name">{props.name}</span>}>
+        <button type="button" class="lu-attach__name lu-attach__open" aria-haspopup="dialog" onClick={() => props.onOpen?.()}>
+          {props.name}
+        </button>
       </Show>
-      <IconButton icon="download" label={"Download " + props.name} size={32} onClick={() => props.onDownload?.()} />
+      <Show when={props.note ?? props.size}>
+        <span class="lu-attach__size">{props.note ?? props.size}</span>
+      </Show>
+      <Show when={props.href} fallback={<IconButton icon="download" label={"Download " + props.name} size={32} onClick={() => props.onDownload?.()} />}>
+        {(href) => (
+          <a class="lu-iconbtn lu-iconbtn--ghost lu-iconbtn--32 lu-attach__save" href={href()} download={props.name} aria-label={"Download " + props.name}>
+            <Icon name="download" size={16} />
+          </a>
+        )}
+      </Show>
+      <Show when={props.onRemove}>
+        <IconButton icon="close" label={"Remove " + props.name} size={32} iconSize={14} class="lu-attach__remove" onClick={() => props.onRemove?.()} />
+      </Show>
     </div>
   );
+}
+
+/** The play symbol over a video's poster, a card of a video, a GIF held still. */
+function PlayMark(props: { small?: boolean }) {
+  return (
+    <span aria-hidden="true" class={cx("lu-playmark", props.small && "lu-playmark--small")}>
+      <svg viewBox="0 0 24 24" width={props.small ? 14 : 20} height={props.small ? 14 : 20} fill="currentColor" ref={(el) => el.setAttribute("focusable", "false")}>
+        <path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.6-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5Z" />
+      </svg>
+    </span>
+  );
+}
+
+export interface MediaTileProps {
+  kind: "image" | "gif" | "video";
+  name: string;
+  /** Its accessibility label (an image's alt text); the name stands in without one. */
+  alt?: string;
+  /** Its size, after orientation; 0 when unknown. */
+  width: number;
+  height: number;
+  /** What it is drawn from: the thumbnail, a GIF itself, a video's poster. Until then the placeholder. */
+  src?: string;
+  placeholder?: string;
+  /** A GIF held still (reduced motion): its first frame with a GIF badge, playing when pressed. */
+  still?: boolean;
+  /** A video being played: its player, with controls, in the tile's place. */
+  video?: string;
+  /** Fetching what a press asked for (a video, a GIF to play). */
+  busy?: boolean;
+  /** Pressed: an image opens the viewer, a video or a still GIF plays. */
+  onOpen?: () => void;
+  /** Taken out of a message being edited. */
+  onRemove?: () => void;
+}
+
+/** One picture, GIF or video of a message, drawn at its shape over its placeholder. */
+export function MediaTile(props: MediaTileProps & { style?: JSX.CSSProperties }) {
+  const label = () => {
+    const what = props.alt || props.name;
+    if (props.kind === "video") return "Play video " + what;
+    if (props.kind === "gif" && props.still) return "Play GIF " + what;
+    return what;
+  };
+  return (
+    <figure class={cx("lu-media__tile", "lu-media__tile--" + props.kind)} style={props.style}>
+      <Show
+        when={props.video}
+        fallback={
+          <button type="button" class="lu-media__open" aria-label={label()} aria-haspopup={props.kind === "image" || (props.kind === "gif" && !props.still) ? "dialog" : undefined} onClick={() => props.onOpen?.()}>
+            <Show when={props.placeholder}>
+              <img class="lu-media__placeholder" src={props.placeholder} alt="" aria-hidden="true" />
+            </Show>
+            <Show when={props.src}>
+              <img class="lu-media__img" src={props.src} alt="" decoding="async" />
+            </Show>
+            <Show when={props.kind === "video" || (props.kind === "gif" && props.still)}>
+              <PlayMark />
+            </Show>
+            <Show when={props.kind === "gif" && props.still}>
+              <span class="lu-media__badge" aria-hidden="true">
+                GIF
+              </span>
+            </Show>
+            <Show when={props.busy}>
+              <span class="lu-media__busy" aria-hidden="true" />
+            </Show>
+          </button>
+        }
+      >
+        {(src) => (
+          // Never on its own: a video plays only once it was pressed.
+          <video class="lu-media__video" src={src()} controls autoplay playsinline aria-label={props.alt || props.name} />
+        )}
+      </Show>
+      <Show when={props.onRemove}>
+        <IconButton icon="close" label={"Remove " + props.name} size={28} iconSize={14} strokeWidth={2.2} class="lu-media__remove" onClick={() => props.onRemove?.()} />
+      </Show>
+    </figure>
+  );
+}
+
+export interface MediaGridProps {
+  items: MediaTileProps[];
+  class?: string;
+}
+
+/**
+ * A message's pictures, GIFs and videos: one alone at its shape (at most
+ * 400 tall, never wider than the column), several in rows of two and three.
+ */
+export function MediaGrid(props: MediaGridProps) {
+  const cells = createMemo(() => mediaGrid(props.items.length));
+  return (
+    <div class={cx("lu-media", props.items.length > 1 && "lu-media--grid", props.class)}>
+      <For each={props.items}>
+        {(item, i) => {
+          const style = (): JSX.CSSProperties => {
+            if (props.items.length === 1) {
+              const fit = fitSize(item.width, item.height);
+              return { width: fit.width + "px", "aspect-ratio": `${fit.width} / ${fit.height}` };
+            }
+            const cell = cells()[i()];
+            return { "grid-column": `span ${cell?.span ?? 2}`, height: (cell?.height ?? 150) + "px" };
+          };
+          return <MediaTile {...item} style={style()} />;
+        }}
+      </For>
+    </div>
+  );
+}
+
+export interface AudioAttachmentProps {
+  name: string;
+  size?: string;
+  /** The audio, once fetched: its player with controls. */
+  src?: string;
+  busy?: boolean;
+  note?: string;
+  onPlay?: () => void;
+  href?: string;
+  onDownload?: () => void;
+  onRemove?: () => void;
+}
+
+/** A message's audio: its file row, and under it a player once Play fetched it. */
+export function AudioAttachment(props: AudioAttachmentProps) {
+  return (
+    <div class="lu-audio">
+      <Attachment kind="audio" name={props.name} size={props.size} note={props.note} href={props.href} onDownload={props.onDownload} onRemove={props.onRemove} />
+      <Show
+        when={props.src}
+        fallback={
+          <Button size="sm" class="lu-audio__play" disabled={props.busy} aria-label={"Play " + props.name} onClick={() => props.onPlay?.()}>
+            {props.busy ? "Loading…" : "Play"}
+          </Button>
+        }
+      >
+        {(src) => <audio class="lu-audio__player" src={src()} controls autoplay aria-label={props.name} />}
+      </Show>
+    </div>
+  );
+}
+
+export interface LinkCardProps {
+  /** Where it goes: the link in the message's text. */
+  url: string;
+  /** The site as the link's host says it, never the page's own name for itself. */
+  host: string;
+  title: string;
+  description?: string;
+  /** The page's `#rrggbb`, its edge's colour; anything else is not drawn. */
+  color?: string;
+  image?: string;
+  imageWidth?: number;
+  imageHeight?: number;
+  /** The page is a video: a play symbol over its picture; it still opens in the browser. */
+  video?: boolean;
+  /** Put away: a composer's preview, or a card of a message being edited. */
+  onRemove?: () => void;
+  class?: string;
+}
+
+/** A link's card under a message, or over the composer while it is written: opening the link in a new tab. */
+export function LinkCard(props: LinkCardProps) {
+  const color = () => (props.color && /^#[0-9a-f]{6}$/i.test(props.color) ? props.color : undefined);
+  // A picture much wider than tall, and large, goes under the words; else beside them.
+  const wide = () => !!props.image && (props.imageWidth ?? 0) >= 320 && (props.imageWidth ?? 0) >= (props.imageHeight ?? 0) * 1.5;
+  return (
+    <div class={cx("lu-linkcard", wide() && "lu-linkcard--wide", props.class)} style={color() ? { "--card-color": color() } : undefined}>
+      <a class="lu-linkcard__link" href={props.url} target="_blank" rel="noopener noreferrer">
+        <span class="lu-linkcard__text">
+          <span class="lu-linkcard__host">{props.host}</span>
+          <span class="lu-linkcard__title">{props.title}</span>
+          <Show when={props.description}>
+            <span class="lu-linkcard__desc">{props.description}</span>
+          </Show>
+        </span>
+        <Show when={props.image || props.video}>
+          <span class="lu-linkcard__pic" style={wide() && props.imageWidth && props.imageHeight ? { "aspect-ratio": `${props.imageWidth} / ${props.imageHeight}` } : undefined}>
+            <Show when={props.image}>
+              <img src={props.image} alt="" decoding="async" />
+            </Show>
+            <Show when={props.video}>
+              <PlayMark small={!wide()} />
+            </Show>
+          </span>
+        </Show>
+      </a>
+      <Show when={props.onRemove}>
+        <IconButton icon="close" label={"Remove the preview of " + props.host} size={28} iconSize={14} strokeWidth={2.2} class="lu-linkcard__remove" onClick={() => props.onRemove?.()} />
+      </Show>
+    </div>
+  );
+}
+
+export interface DraftTileProps {
+  /** Its key in the strip. */
+  id: string;
+  name: string;
+  size?: string;
+  kind: MediaKind;
+  /** A picture of it: the picture itself, a video's poster, the placeholder. */
+  preview?: string;
+  state: "processing" | "uploading" | "ready" | "sending" | "failed";
+  /** Why it was not attached, in words. */
+  error?: string;
+  /** Pictures only: its alt text, set as it is typed. */
+  alt?: string;
+  onAlt?: (alt: string) => void;
+  onRemove: () => void;
+}
+
+const DRAFT_WORDS: Record<DraftTileProps["state"], string> = { processing: "Preparing…", uploading: "Uploading…", ready: "", sending: "Sending…", failed: "" };
+
+/** One file in the composer's strip: its preview, name, where it stands, a × and, for a picture, its alt text. */
+export function DraftTile(props: DraftTileProps) {
+  const busy = () => props.state === "processing" || props.state === "uploading" || props.state === "sending";
+  return (
+    <li class={cx("lu-draft", props.state === "failed" && "is-failed", busy() && "is-busy")}>
+      <div class="lu-draft__row">
+        <span class="lu-draft__thumb" aria-hidden="true">
+          <Show when={props.preview} fallback={<Icon name="file" size={18} />}>
+            <img src={props.preview} alt="" />
+          </Show>
+          <Show when={props.kind === "video" && !busy()}>
+            <PlayMark small />
+          </Show>
+          <Show when={busy()}>
+            <span class="lu-media__busy" />
+          </Show>
+        </span>
+        <span class="lu-draft__text">
+          <span class="lu-draft__name">{props.name}</span>
+          <span class={cx("lu-draft__meta", props.state === "failed" && "is-error")} role={props.state === "failed" ? "alert" : undefined}>
+            {props.state === "failed" ? (props.error ?? "Not attached.") : DRAFT_WORDS[props.state] || props.size}
+          </span>
+        </span>
+        <IconButton icon="close" label={"Remove " + props.name} size={28} iconSize={14} strokeWidth={2.2} class="lu-draft__remove" onClick={() => props.onRemove()} />
+      </div>
+      <Show when={props.onAlt && (props.kind === "image" || props.kind === "gif") && props.state !== "failed"}>
+        <input
+          class="lu-draft__alt"
+          type="text"
+          maxlength={1000}
+          placeholder="Describe this picture"
+          aria-label={"Alt text for " + props.name}
+          value={props.alt ?? ""}
+          onChange={(e) => props.onAlt?.(e.currentTarget.value)}
+        />
+      </Show>
+    </li>
+  );
+}
+
+export interface ComposerMediaProps {
+  drafts: DraftTileProps[];
+  /** The cards the links being written will have (a server's channel only). */
+  cards?: LinkCardProps[];
+  /** Why a send is waiting or did not go: "Sending when the uploads finish." */
+  note?: string;
+}
+
+/** What stands over the composer's field while a message is written: its attachments, then its links' cards. */
+export function ComposerMedia(props: ComposerMediaProps) {
+  return (
+    <Show when={props.drafts.length || props.cards?.length || props.note}>
+      <div class="lu-composermedia">
+        <Show when={props.drafts.length}>
+          <ul class="lu-strip" aria-label="Attachments">
+            <For each={props.drafts}>{(d) => <DraftTile {...d} />}</For>
+          </ul>
+        </Show>
+        <Show when={props.cards?.length}>
+          <div class="lu-composermedia__cards" aria-label="Link previews" role="group">
+            <For each={props.cards}>{(c) => <LinkCard {...c} />}</For>
+          </div>
+        </Show>
+        <Show when={props.note}>
+          <p class="lu-composermedia__note" role="status">
+            {props.note}
+          </p>
+        </Show>
+      </div>
+    </Show>
+  );
+}
+
+export interface DropZoneProps {
+  /** "Drop to attach to #design". */
+  label: string;
+  /** Where it covers, in the window; inline (the gallery) it fills its frame. */
+  rect?: { left: number; top: number; width: number; height: number };
+}
+
+/** What a conversation shows while files are dragged over it. */
+export function DropZone(props: DropZoneProps) {
+  const zone = () => (
+    <div
+      class={cx("lu-dropzone", !props.rect && "lu-dropzone--inline")}
+      style={props.rect ? { left: props.rect.left + "px", top: props.rect.top + "px", width: props.rect.width + "px", height: props.rect.height + "px" } : undefined}
+      aria-hidden="true"
+    >
+      <div class="lu-dropzone__box">
+        <Icon name="plus" size={22} />
+        <p>{props.label}</p>
+      </div>
+    </div>
+  );
+  return <Show when={props.rect} fallback={zone()}>{<Portal>{zone()}</Portal>}</Show>;
+}
+
+export interface ViewerProps {
+  name: string;
+  /** Its accessibility label, shown under it. */
+  alt?: string;
+  kind: "image" | "gif" | "video" | "audio";
+  /** What is shown: the picture at its display size, a GIF, a video, an audio. */
+  src?: string;
+  /** Drawn until `src` arrives: the thumbnail, the placeholder. */
+  preview?: string;
+  width?: number;
+  height?: number;
+  /** Save: the file as a link with `download`. */
+  saveHref?: string;
+  /** Why it could not be opened, in words. */
+  failed?: string;
+  onClose: () => void;
+  /** Drawn in its frame rather than over the window (the gallery). */
+  inline?: boolean;
+}
+
+/**
+ * A picture over the whole window: zoomed by a press (twice, or back to
+ * fit) or the wheel, about the pointer, and moved by a drag; Save, the alt
+ * text, Escape to close; focus kept inside and given back as it closes.
+ */
+export function Viewer(props: ViewerProps) {
+  let box: HTMLDivElement | undefined;
+  let stage: HTMLDivElement | undefined;
+  let closer: HTMLButtonElement | undefined;
+  const [view, setView] = createSignal<View>(VIEW_FIT);
+  const [room, setRoom] = createSignal({ width: 0, height: 0 });
+  const zoomable = () => props.kind === "image" || props.kind === "gif";
+  // The picture fitted to the stage at its display size, so the thumbnail and the picture draw the same.
+  const fit = createMemo(() => {
+    const r = room();
+    if (!r.width || !r.height) return undefined;
+    return fitSize(props.width ?? 0, props.height ?? 0, r.height, r.width);
+  });
+  const fromCentre = (e: MouseEvent) => {
+    const r = stage?.getBoundingClientRect();
+    return r ? { x: e.clientX - r.left - r.width / 2, y: e.clientY - r.top - r.height / 2 } : { x: 0, y: 0 };
+  };
+  let drag: { x: number; y: number; moved: number } | null = null;
+  const onKeyDown = (e: KeyboardEvent) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      props.onClose();
+      return;
+    }
+    if (zoomable() && (e.key === "+" || e.key === "=")) setView((v) => zoomAt(v, { x: 0, y: 0 }, v.scale * 1.5));
+    else if (zoomable() && e.key === "-") setView((v) => zoomAt(v, { x: 0, y: 0 }, v.scale / 1.5));
+    else if (zoomable() && e.key === "0") setView(VIEW_FIT);
+    if (e.key !== "Tab" || !box) return;
+    const all = [...box.querySelectorAll<HTMLElement>(FOCUSABLE)];
+    const first = all[0];
+    const last = all[all.length - 1];
+    if (!first || !last) return;
+    const at = document.activeElement;
+    if (e.shiftKey && (at === first || !box.contains(at))) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && (at === last || !box.contains(at))) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
+  onMount(() => {
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    closer?.focus({ preventScroll: true });
+    const measure = () => stage && setRoom({ width: stage.clientWidth, height: stage.clientHeight });
+    measure();
+    const watch = new ResizeObserver(measure);
+    if (stage) watch.observe(stage);
+    if (!props.inline) document.addEventListener("keydown", onKeyDown, true);
+    onCleanup(() => {
+      watch.disconnect();
+      document.removeEventListener("keydown", onKeyDown, true);
+      if (!props.inline && opener?.isConnected) opener.focus({ preventScroll: true });
+    });
+  });
+  const picture = () => props.src ?? props.preview;
+  const body = (
+    <div ref={box} class={cx("lu-viewer", props.inline && "lu-viewer--inline")} role="dialog" aria-modal={props.inline ? undefined : "true"} aria-label={props.alt || props.name}>
+      <div class="lu-viewer__bar">
+        <p class="lu-viewer__name">{props.name}</p>
+        <Show when={zoomable()}>
+          <IconButton glyph="−" label="Zoom out" size={34} disabled={view().scale <= 1} onClick={() => setView((v) => zoomAt(v, { x: 0, y: 0 }, v.scale / 1.5))} />
+          <IconButton glyph="+" label="Zoom in" size={34} disabled={view().scale >= ZOOM_MAX} onClick={() => setView((v) => zoomAt(v, { x: 0, y: 0 }, v.scale * 1.5))} />
+        </Show>
+        <Show when={props.saveHref}>
+          {(href) => (
+            <a class="lu-btn lu-btn--secondary lu-btn--sm" href={href()} download={props.name}>
+              <Icon name="download" size={17} />
+              Save
+            </a>
+          )}
+        </Show>
+        <IconButton ref={closer} icon="close" label="Close" size={34} onClick={() => props.onClose()} />
+      </div>
+      <div
+        ref={stage}
+        class={cx("lu-viewer__stage", view().scale > 1 && "is-zoomed")}
+        onWheel={(e) => {
+          if (!zoomable() || !picture()) return;
+          e.preventDefault();
+          const p = fromCentre(e);
+          setView((v) => zoomAt(v, p, v.scale * Math.exp(-e.deltaY * 0.0025)));
+        }}
+        onPointerDown={(e) => {
+          if (!zoomable() || e.button !== 0) return;
+          drag = { x: e.clientX, y: e.clientY, moved: 0 };
+          if (view().scale > 1) e.currentTarget.setPointerCapture(e.pointerId);
+        }}
+        onPointerMove={(e) => {
+          if (!drag) return;
+          const dx = e.clientX - drag.x;
+          const dy = e.clientY - drag.y;
+          drag = { x: e.clientX, y: e.clientY, moved: drag.moved + Math.abs(dx) + Math.abs(dy) };
+          const f = fit();
+          if (view().scale > 1 && f) setView((v) => panBy(v, dx, dy, f));
+        }}
+        onPointerUp={() => queueMicrotask(() => (drag = null))}
+        onClick={(e) => {
+          if (!zoomable() || !picture() || (drag && drag.moved > 4)) return;
+          const p = fromCentre(e);
+          setView((v) => (v.scale > 1 ? VIEW_FIT : zoomAt(v, p, 2)));
+        }}
+      >
+        <Show when={!props.failed} fallback={<p class="lu-viewer__failed">{props.failed}</p>}>
+          <Switch>
+            <Match when={props.kind === "video" && props.src}>{(src) => <video class="lu-viewer__media" src={src() as string} controls autoplay playsinline aria-label={props.alt || props.name} />}</Match>
+            <Match when={props.kind === "audio" && props.src}>{(src) => <audio class="lu-viewer__audio" src={src() as string} controls autoplay aria-label={props.name} />}</Match>
+            <Match when={zoomable() && picture()}>
+              {(src) => (
+                <img
+                  class="lu-viewer__img"
+                  src={src() as string}
+                  alt={props.alt || props.name}
+                  draggable={false}
+                  style={{
+                    width: fit() ? fit()!.width + "px" : undefined,
+                    height: fit() ? fit()!.height + "px" : undefined,
+                    transform: `translate(${view().x}px, ${view().y}px) scale(${view().scale})`,
+                  }}
+                />
+              )}
+            </Match>
+            <Match when={true}>
+              <span class="lu-media__busy" aria-label="Loading" role="img" />
+            </Match>
+          </Switch>
+        </Show>
+      </div>
+      <Show when={props.alt}>
+        <p class="lu-viewer__alt">{props.alt}</p>
+      </Show>
+    </div>
+  );
+  return <Show when={!props.inline} fallback={body}>{<Portal>{body}</Portal>}</Show>;
 }
 
 export interface ThreadSummaryProps {

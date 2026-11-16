@@ -37,9 +37,12 @@ import {
   type Tone,
 } from "../design/components";
 import { frequentEmoji, usedEmoji } from "../design/emoji";
-import { ClientError, type BodyBlock, type MemberSummary, type MentionSummary, type MessageRoom, type QuoteSummary, type ReactionSummary, type ReadStateSummary } from "../client/bridge";
+import { ClientError, type AttachmentSummary, type BodyBlock, type CardSummary, type MemberSummary, type MentionSummary, type MessageRoom, type QuoteSummary, type ReactionSummary, type ReadStateSummary } from "../client/bridge";
 import { avatarSrc, client, markRead } from "../client/state";
 import { composing } from "../design/body";
+import { ComposerMedia, type DraftTileProps, type LinkCardProps } from "../design/components";
+import { editCardUrls } from "../client/media";
+import { DropTarget, MediaViewer, MessageMedia, pastedFiles } from "./media";
 import type { Display } from "../client/preferences";
 import { byBlock, byDay, initialsOf, shortTimeOf, timeOf, toneFor } from "./app";
 
@@ -66,6 +69,17 @@ export interface TimelineItem {
   mentions: MentionSummary[];
   reactions: ReactionSummary[];
   mentionsMe: boolean;
+  /** What it carries (specs/media.md 5). */
+  attachments: AttachmentSummary[];
+  /** Its link cards. */
+  cards: CardSummary[];
+}
+
+/** What an edit does to a message's attachments and cards, beside its text. */
+export interface EditMedia {
+  removeAttachmentIds: string[];
+  /** The links whose cards stay and are made, or null to leave them as they are (`editCardUrls`). */
+  cardUrls: string[] | null;
 }
 
 /** What is being replied to, over the composer. */
@@ -208,7 +222,7 @@ export interface TimelineProps {
   items: TimelineItem[];
   label: string;
   /** How messages are drawn (Preferences). */
-  display: Pick<Display, "layout" | "spacing" | "avatars" | "reactions">;
+  display: Pick<Display, "layout" | "spacing" | "avatars" | "reactions" | "images" | "embeds">;
   me: string;
   authorName: (item: TimelineItem) => string;
   authorPhoto: (item: TimelineItem) => string | undefined;
@@ -235,8 +249,8 @@ export interface TimelineProps {
   /** The message being edited where it is drawn, and the way in and out of it. */
   editing?: string;
   onEditing: (id: string | undefined) => void;
-  /** Saves an edit: the new body, trimmed and not empty. */
-  onEdit: (item: TimelineItem, body: string) => void;
+  /** Saves an edit: the new body, trimmed (empty only where attachments stay), and the attachments and cards taken off. */
+  onEdit: (item: TimelineItem, body: string, media: EditMedia) => void;
   onDelete: (item: TimelineItem) => void;
   /** An edit or a delete refused, said under its message. */
   refused?: Refusal | null;
@@ -379,16 +393,31 @@ export function Timeline(props: TimelineProps) {
     if (now) props.onDelete(item);
     else setConfirming({ anchor, item });
   };
+  // While editing: the attachments and cards taken off, with the × on each, until it is saved or cancelled.
+  const [removedAttachments, setRemovedAttachments] = createSignal<ReadonlySet<string>>(new Set());
+  const [removedCards, setRemovedCards] = createSignal<ReadonlySet<string>>(new Set());
   const save = async (m: TimelineItem, text: string) => {
     const body = text.trim();
+    const removed = [...removedAttachments()].filter((id) => m.attachments.some((a) => a.attachmentId === id));
+    const cardsOff = removedCards();
     // Asked of the core for this very text, before the field goes: a counter answered for an
     // earlier text must not let an edit over the limit close and be lost.
     if (body && (await client().messageRoom(body)).left < 0) return;
     props.onEditing(undefined);
-    // Nothing left is a delete, which asks first.
-    if (!body) return askDelete(m, find(m.id), false);
-    if (body !== m.body.trim()) props.onEdit(m, body);
+    // Nothing left, no text and no attachment, is a delete, which asks first.
+    if (!body && m.attachments.length === removed.length) return askDelete(m, find(m.id), false);
+    const same = body === m.body.trim();
+    const [oldLinks, newLinks] = same && !cardsOff.size ? [[], []] : await Promise.all([client().cardLinks(m.body), client().cardLinks(body)]);
+    const cardUrls = editCardUrls(
+      m.cards.map((c) => c.url),
+      oldLinks,
+      newLinks,
+      cardsOff,
+    );
+    if (!same || removed.length || cardUrls) props.onEdit(m, body, { removeAttachmentIds: removed, cardUrls });
   };
+  // An attachment opened over the window.
+  const [viewing, setViewing] = createSignal<AttachmentSummary | null>(null);
   // The message taken up for editing comes into view (Up in the composer edits one that may be off screen).
   // Its text is counted against the limit as it changes, from the body it opens with.
   const [editText, setEditText] = createSignal("");
@@ -399,6 +428,8 @@ export function Timeline(props: TimelineProps) {
       () => props.editing,
       (id) => {
         setEditText(id ? (byId().get(id)?.body ?? "") : "");
+        setRemovedAttachments(new Set<string>());
+        setRemovedCards(new Set<string>());
         if (id) void frame().then(() => find(id)?.scrollIntoView({ block: "nearest" }));
       },
     ),
@@ -433,12 +464,34 @@ export function Timeline(props: TimelineProps) {
       }}
     </Show>
   );
+  const media = (m: TimelineItem, editing = false) => (
+    <Show when={m.attachments.length || m.cards.length}>
+      <MessageMedia
+        attachments={m.attachments}
+        cards={m.cards}
+        images={props.display.images}
+        embeds={props.display.embeds}
+        onView={setViewing}
+        editing={
+          editing
+            ? {
+                removedAttachments: removedAttachments(),
+                removedCards: removedCards(),
+                removeAttachment: (id) => setRemovedAttachments((s) => new Set(s).add(id)),
+                removeCard: (url) => setRemovedCards((s) => new Set(s).add(url)),
+              }
+            : undefined
+        }
+      />
+    </Show>
+  );
   const body = (m: TimelineItem) => (
     <Show
       when={props.editing === m.id && !m.deleted}
       fallback={
         <>
           <Show when={!m.deleted} fallback={<p>(deleted)</p>}>
+            <Show when={m.blocks.length || m.edited || !m.attachments.length}>
             <MessageBody
               blocks={m.blocks}
               mention={(index, typed) => {
@@ -453,6 +506,8 @@ export function Timeline(props: TimelineProps) {
               expanded={expanded().has(m.id)}
               onExpanded={(open) => expand(m.id, open)}
             />
+            </Show>
+            {media(m)}
           </Show>
           <Show when={props.refused?.messageId === m.id ? props.refused : undefined}>
             {(r) => (
@@ -465,6 +520,7 @@ export function Timeline(props: TimelineProps) {
       }
     >
       <MessageEdit value={m.body} onSave={(text) => save(m, text)} onCancel={() => props.onEditing(undefined)} onText={setEditText} room={editRoom()} />
+      {media(m, true)}
     </Show>
   );
   // Hidden (Preferences), a message draws no chips and so no row and no
@@ -639,6 +695,9 @@ export function Timeline(props: TimelineProps) {
           </Popover>
         )}
       </Show>
+      <Show when={viewing()} keyed>
+        {(a) => <MediaViewer a={a} onClose={() => setViewing(null)} />}
+      </Show>
       <Show when={confirming()} keyed>
         {(c) => (
           <Popover anchor={c.anchor} onClose={() => setConfirming(null)} closeLabel="Keep the message">
@@ -693,6 +752,20 @@ export interface ComposeProps {
   /** What a send left to say, over the field. */
   note?: JSX.Element;
   inputRef?: (el: HTMLTextAreaElement) => void;
+  /** Attachments and the cards of links being written (specs/media.md 5, 6.4). */
+  media?: ComposeMedia;
+}
+
+/** The composer's attachments: its strip and cards, and where files come in. */
+export interface ComposeMedia {
+  drafts: DraftTileProps[];
+  cards: LinkCardProps[];
+  /** Why a send waits or did not go. */
+  note?: string;
+  /** Files chosen, pasted or dropped; absent where the instance keeps no attachments, and there is no attach button. */
+  onFiles?: (files: File[]) => void;
+  /** "Drop to attach to #design". */
+  dropLabel: string;
 }
 
 const MENTION_LIST_MAX = 8;
@@ -706,6 +779,7 @@ let listIds = 0;
  */
 export function Compose(props: ComposeProps) {
   let input: HTMLTextAreaElement | undefined;
+  let picker: HTMLInputElement | undefined;
   // What is counted is what is sent: the draft without its blanks at either end.
   const room = createRoom(() => props.value.trim());
   const over = () => (room()?.left ?? 0) < 0;
@@ -783,6 +857,15 @@ export function Compose(props: ComposeProps) {
       }}
       onClick={look}
       onBlur={() => setAt(null)}
+      onAttach={props.media?.onFiles ? () => picker?.click() : undefined}
+      onPaste={(e) => {
+        const onFiles = props.media?.onFiles;
+        if (!onFiles) return;
+        const files = pastedFiles(e);
+        if (!files.length) return;
+        e.preventDefault();
+        onFiles(files);
+      }}
       onKeyDown={(e) => {
         if (open()) {
           if (e.key === "ArrowDown" || e.key === "ArrowUp") {
@@ -832,6 +915,29 @@ export function Compose(props: ComposeProps) {
           <span class="lu-sr" aria-live="polite">
             {open() ? `${options().length} to mention, Up and Down to choose, Return to pick` : ""}
           </span>
+          <Show when={props.media}>
+            {(m) => <ComposerMedia drafts={m().drafts} cards={m().cards} note={m().note} />}
+          </Show>
+          <Show when={props.media?.onFiles}>
+            {(onFiles) => (
+              <>
+                <input
+                  ref={picker}
+                  type="file"
+                  multiple
+                  hidden
+                  tabindex={-1}
+                  aria-hidden="true"
+                  onChange={(e) => {
+                    const files = Array.from(e.currentTarget.files ?? []);
+                    e.currentTarget.value = "";
+                    if (files.length) onFiles()(files);
+                  }}
+                />
+                <DropTarget within={() => input} label={props.media?.dropLabel ?? "Drop to attach"} onFiles={(files) => onFiles()(files)} />
+              </>
+            )}
+          </Show>
           {props.note}
         </>
       }

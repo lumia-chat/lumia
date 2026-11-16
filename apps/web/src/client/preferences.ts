@@ -18,7 +18,7 @@ export type Appearance = "light" | "dark" | "system";
 export type Layout = "grouped" | "one_line";
 export type Spacing = "roomy" | "cozy" | "tight";
 export type Avatars = "large" | "small" | "hidden";
-/** Shown where they are, or a link in their place. Nothing has either yet: no control until attachments and unfurling exist. */
+/** Shown where they are, or a link in their place: Images draws every attachment as a file row that opens the viewer, Embeds draws no link cards (specs/media.md 5). */
 export type Media = "shown" | "link";
 /** A message's reaction chips under it, or none and no room kept for them; Add reaction stays in its toolbar either way. */
 export type Reactions = "shown" | "hidden";

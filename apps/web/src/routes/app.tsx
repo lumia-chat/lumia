@@ -42,14 +42,15 @@ import {
   type Tone,
 } from "../design/components";
 import { signedOut, type ChannelSummary, type MessageSummary, type ServerSummary } from "../client/bridge";
-import { avatarSrc, channelMembersQuery, checkPush, client, commandError, connection, loadMyStatus, loadOlderMessages, membersQuery, messagesQuery, presence, customStatusOf, presenceOf, queryClient, readStatesQuery, sessionEnded, signOut, snapshotQuery, startGateway, tookSnapshot, typingIn, watchPresence } from "../client/state";
+import { avatarSrc, channelMembersQuery, checkPush, client, commandError, connection, loadMyStatus, loadOlderMessages, membersQuery, messagesQuery, presence, customStatusOf, presenceOf, queryClient, readStatesQuery, sessionEnded, signOut, snapshotQuery, startGateway, tookSnapshot, typingIn, uploadLimitsQuery, watchPresence } from "../client/state";
 import { useNames } from "../client/names";
 import { preferences, setAsideHidden } from "../client/preferences";
 import { ConversationAside, HomeMain, HomeSidebar, type HomeView } from "./home";
 import { Overlay, myStatusDot, type Over } from "./menus";
 import { ServerSettings } from "./server-settings";
 import { BrowsePage, ChannelMembersAside, YourSettingsPage, channelRefusal, joinChannel } from "./channels";
-import { Compose, ComposerNote, Timeline, createMarkRead, invitedWords, notNotifiedWords, quoteOf, refusalWords, type Refusal, type Replying, type TimelineItem } from "./timeline";
+import { Compose, ComposerNote, Timeline, createMarkRead, invitedWords, notNotifiedWords, quoteOf, refusalWords, type EditMedia, type Refusal, type Replying, type TimelineItem } from "./timeline";
+import { attachFiles, createCardPreviews, filesForSend, filesSent, hasFiles, stripOf } from "./media";
 import { MentionsPage } from "./mentions";
 import { dismissRailNote, dropOnRail, railCache, railNote, railSaid, railTiles } from "./rail";
 
@@ -366,9 +367,18 @@ function Frame() {
       setAtEnd(true);
       setEditing(undefined);
       setRefused(null);
+      setMediaNote(undefined);
     }),
   );
   const serverMembers = membersQuery(() => (home() ? undefined : serverId()));
+  // Attachments (specs/media.md): none where the instance keeps none; a server's channel previews its links' cards, a server DM too.
+  const uploadLimits = uploadLimitsQuery();
+  const [mediaNote, setMediaNote] = createSignal<string>();
+  const previews = createCardPreviews({ channelId, text: draft, enabled: () => !home() });
+  const addFiles = (id: string, files: File[]) => {
+    const limits = uploadLimits.data;
+    if (limits) setMediaNote(attachFiles(id, files, limits));
+  };
   const channelMembers = channelMembersQuery(() => (current()?.kind === "TEXT" && joined() ? channelId() : undefined));
   // What the gateway refused of what this view sent (architecture 6.6: a mention of everyone without the permission, a quote of a message that is gone).
   const sent = new Set<string>();
@@ -393,19 +403,28 @@ function Frame() {
     const id = channelId();
     const ch = current();
     const body = draft().trim();
-    if (!id || !ch || !body) return;
+    if (!id || !ch || (!body && !hasFiles(id))) return;
     const reply = replying();
     setDraft("");
     setError("");
     setReplying(null);
     setNote(null);
     setNoteError("");
+    setMediaNote(undefined);
     try {
       const srv = server();
       const isChannel = ch.kind === "TEXT";
       // Typed or picked, every @handle of a member is a mention; a DM has none.
       const mentions = isChannel && srv ? await client().findMentions(body, serverMembers.data ?? [], srv.canMentionEveryone) : [];
-      sent.add(await client().sendMessageWith(id, body, mentions, reply ? quoteOf(reply) : null));
+      const cardUrls = body ? await previews.urlsFor(body) : [];
+      // The files go when they are made and uploaded; the message waits for them.
+      if (hasFiles(id)) setMediaNote("Sending when the files are uploaded…");
+      const files = await filesForSend(id);
+      setMediaNote(undefined);
+      if ("error" in files) throw new Error(files.error);
+      sent.add(await client().sendMessageWithMedia(id, body, mentions, reply ? quoteOf(reply) : null, files.ids, cardUrls));
+      filesSent(files.keys);
+      previews.reset();
       void queryClient.invalidateQueries({ queryKey: ["messages", id] });
       const inChannel = channelMembers.data;
       if (isChannel && inChannel) {
@@ -460,7 +479,7 @@ function Frame() {
     setReplying({ messageId: item.id, authorAccountId: item.authorId, name: item.authorId ? nameOf(item.authorId) : "", text, notify: item.authorId && item.authorId !== accountId() ? true : undefined });
     composerInput?.focus();
   };
-  const saveEdit = async (item: TimelineItem, body: string) => {
+  const saveEdit = async (item: TimelineItem, body: string, media: EditMedia) => {
     const id = channelId();
     const ch = current();
     const srv = server();
@@ -469,7 +488,7 @@ function Frame() {
     try {
       // An edit carries its mentions again, found as a send finds them; a server DM has none.
       const mentions = ch.kind === "TEXT" && srv ? await client().findMentions(body, serverMembers.data ?? [], srv.canMentionEveryone) : [];
-      waiting.set(await client().editMessage(id, item.id, body, mentions), { messageId: item.id, kind: "edit" });
+      waiting.set(await client().editMessageWithMedia(id, item.id, body, mentions, media.removeAttachmentIds, media.cardUrls), { messageId: item.id, kind: "edit" });
     } catch (e) {
       setRefused({ messageId: item.id, text: refusalWords("edit", "", e instanceof Error ? e.message : String(e)) });
     }
@@ -513,6 +532,8 @@ function Frame() {
       mentions: m.mentions,
       reactions: m.reactions,
       mentionsMe: m.mentionsMe,
+      attachments: m.attachments ?? [],
+      cards: m.cards ?? [],
     })),
   );
   // Read while it is on screen: the window in front and the list at its newest message.
@@ -746,6 +767,10 @@ function Frame() {
                   const ch = () => (shown = current() ?? shown);
                   const isDm = () => ch().kind === "SERVER_DM";
                   const title = () => (isDm() ? nameOf(partnerOf(ch())) : ch().name);
+                  // Read in the composer's handlers as well as drawn: a memo made here, not one per keystroke.
+                  const mentionSource = createMemo(() =>
+                    !isDm() && server() ? { members: serverMembers.data ?? [], inChannel: new Set(channelMembers.data ?? []), channel: ch().name, canEveryone: !!server()?.canMentionEveryone } : undefined,
+                  );
                   return (
                     <>
                       <ChannelHeader
@@ -795,7 +820,7 @@ function Frame() {
                                 if (mid) setRefused(null);
                                 else composerInput?.focus();
                               }}
-                              onEdit={(m, body) => void saveEdit(m, body)}
+                              onEdit={(m, body, media) => void saveEdit(m, body, media)}
                               onDelete={(m) => void deleteMessage(m)}
                               refused={refused()}
                               jumpTo={pendingJump()?.channelId === id ? pendingJump()?.messageId : undefined}
@@ -825,13 +850,16 @@ function Frame() {
                           onCancelReply={() => setReplying(null)}
                           onReplyNotify={(on) => setReplying((r) => (r ? { ...r, notify: on } : r))}
                           onEditLast={editLast}
-                          mentions={
-                            !isDm() && server()
-                              ? { members: serverMembers.data ?? [], inChannel: new Set(channelMembers.data ?? []), channel: ch().name, canEveryone: !!server()?.canMentionEveryone }
-                              : undefined
-                          }
+                          mentions={mentionSource()}
                           note={noteShown()}
                           inputRef={(el) => (composerInput = el)}
+                          media={{
+                            drafts: stripOf(ch().channelId),
+                            cards: previews.cards(),
+                            note: mediaNote(),
+                            onFiles: uploadLimits.data ? (files) => addFiles(ch().channelId, files) : undefined,
+                            dropLabel: isDm() ? `Drop to send to ${title()}` : `Drop to attach to #${ch().name}`,
+                          }}
                         />
                       </Show>
                     </>

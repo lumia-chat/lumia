@@ -1844,6 +1844,92 @@ async function profileStep(which: string, stamp: number) {
   console.log(`  ${which}: a member renamed themself and set a picture, then another, and their message and the member list drew each at once, with no reload, in ${Date.now() - t0} ms`);
 }
 
+// Attachments (specs/media.md 5): a member sends a picture from the CLI and
+// the page draws it, its thumbnail decoded; the page attaches a picture
+// through the attach button's file input, gives it alt text, sends it with
+// words, draws it from what it sent, opens it in the viewer and closes it
+// with Escape; the member's CLI opens the picture the page sent.
+async function mediaStep(which: string, stamp: number) {
+  const ownerDir = resolve(work, `cli-media-owner-${which}`);
+  const otherDir = resolve(work, `cli-media-other-${which}`);
+  const owner = `attaches${which}${stamp}`;
+  const other = `sees${which}${stamp}`;
+  lumia(ownerDir, "instance", "add", instance);
+  lumia(ownerDir, "account", "create", "--handle", owner, "--password", password);
+  const server = lumia(ownerDir, "server-create", `Media ${stamp}`).match(/[0-9a-f-]{36}/)?.[0];
+  if (!server) throw new Error("no server id");
+  const general = lumia(ownerDir, "channel-create", server, "general").match(/[0-9a-f-]{36}/)?.[0];
+  if (!general) throw new Error("no channel id");
+  const code = lumia(ownerDir, "invite-create", server).trim().split(/\s+/)[0];
+  if (!code) throw new Error("no invite code");
+  lumia(otherDir, "instance", "add", instance);
+  lumia(otherDir, "account", "create", "--handle", other, "--password", password);
+  lumia(otherDir, "join", code);
+  const theirs = resolve(work, `media-theirs-${which}.png`);
+  await Bun.write(theirs, png(320, [40, 120, 220]));
+  lumia(otherDir, "send", general, "A picture from the other side", "--attach", theirs);
+  const { ctx, page } = await open(which, "media");
+  const t0 = Date.now();
+  // Whether an <img> has decoded something to draw.
+  const drawn = (img: ReturnType<Page["locator"]>) => img.evaluate((el) => (el as HTMLImageElement).complete && (el as HTMLImageElement).naturalWidth > 0);
+  try {
+    await trustCard(page);
+    await page.getByLabel("Email or handle").fill(owner);
+    await page.getByRole("textbox", { name: "Password" }).fill(password);
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await later(page);
+    await page.getByPlaceholder("Message #general").waitFor();
+    phase("received");
+    const received = page.locator(".lu-msg__part", { hasText: "A picture from the other side" }).locator(".lu-media__img");
+    await received.waitFor({ timeout: 30_000 });
+    for (let i = 0; i < 50 && !(await drawn(received)); i++) await Bun.sleep(100);
+    if (!(await drawn(received))) throw new Error("the received picture is not drawn");
+    phase("attach");
+    const [chooser] = await Promise.all([page.waitForEvent("filechooser"), page.getByRole("button", { name: "Attach a file" }).click()]);
+    await chooser.setFiles({ name: "square.png", mimeType: "image/png", buffer: png(240, [30, 180, 90]) });
+    const tile = page.locator(".lu-draft", { hasText: "square.png" });
+    await tile.waitFor();
+    await tile.getByLabel("Alt text for square.png").fill("A green square");
+    await tile.getByLabel("Alt text for square.png").press("Tab");
+    await tile.locator(".lu-draft__meta", { hasText: /KB|bytes/ }).waitFor({ timeout: 30_000 });
+    await page.getByPlaceholder("Message #general").fill("Here is mine");
+    await page.getByPlaceholder("Message #general").press("Enter");
+    phase("sent");
+    await tile.waitFor({ state: "detached", timeout: 30_000 });
+    const mine = page.locator(".lu-msg__part", { hasText: "Here is mine" });
+    const picture = mine.getByRole("button", { name: "A green square" });
+    await picture.waitFor({ timeout: 30_000 });
+    const img = picture.locator(".lu-media__img");
+    await img.waitFor();
+    for (let i = 0; i < 50 && !(await drawn(img)); i++) await Bun.sleep(100);
+    if (!(await drawn(img))) throw new Error("the picture sent is not drawn");
+    await page.screenshot({ path: `${out}/${which}-media-sent.png` });
+    phase("viewer");
+    await picture.click();
+    const viewer = page.getByRole("dialog", { name: "A green square" });
+    await viewer.waitFor();
+    await viewer.getByRole("img", { name: "A green square" }).waitFor();
+    await viewer.getByRole("link", { name: "Save" }).waitFor();
+    await page.screenshot({ path: `${out}/${which}-media-viewer.png` });
+    await page.keyboard.press("Escape");
+    await viewer.waitFor({ state: "detached" });
+    phase("opened by the other side");
+    const id = await mine.getAttribute("data-message-id");
+    if (!id) throw new Error("the message sent has no id");
+    const saved = resolve(work, `media-saved-${which}`);
+    mkdirSync(saved, { recursive: true });
+    let said = "";
+    for (let i = 0; i < 20 && !/square/.test(said); i++) {
+      said = lumia(otherDir, "attachments", general, id, "--out", saved);
+      if (!/square/.test(said)) await Bun.sleep(500);
+    }
+    if (!/square/.test(said)) throw new Error(`the other side did not open the picture: ${said}`);
+  } finally {
+    await ctx.close();
+  }
+  console.log(`  ${which}: a picture from the CLI drawn; one attached here with alt text, sent, drawn, opened in the viewer and closed, and opened by the other member, in ${Date.now() - t0} ms`);
+}
+
 // Long messages, code blocks and long pastes (#18): a message over 14 lines
 // shows 10 and opens with Show more; a code block keeps its long line on one
 // line, scrolling sideways, and copies its text; a pasted draft keeps its
@@ -2528,6 +2614,7 @@ try {
       ["replies", () => repliesStep(which, stamp)],
       ["editing", () => editingStep(which, stamp)],
       ["profile", () => profileStep(which, stamp)],
+      ["media", () => mediaStep(which, stamp)],
       ["long", () => longStep(which, stamp)],
       ["history", () => historyStep(which, stamp)],
       ["push", () => webPush(which, `web${stamp}`, passwordDir, server, general, webAccount)],

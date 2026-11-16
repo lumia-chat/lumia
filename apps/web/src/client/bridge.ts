@@ -1014,7 +1014,8 @@ export class Bridge {
   }
   /** A blob of an attachment or a DM card, fetched, opened and kept in memory. Check `attachmentDrawable` before decoding a picture. */
   attachmentBytes(blob: BlobSummary): Promise<Uint8Array> {
-    return this.call("attachmentBytes", blob);
+    // Copied: a summary read from a query is a store's proxy, which a worker's message cannot carry.
+    return this.call("attachmentBytes", { blobId: blob.blobId, sizeBytes: blob.sizeBytes, key: blob.key, nonce: blob.nonce, hash: blob.hash });
   }
   /** A server card's picture by its `imageUrl`. */
   cardImage(imageUrl: string): Promise<Uint8Array> {

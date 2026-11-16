@@ -2,6 +2,7 @@
 // signed in to, the account snapshot and a channel's messages as queries
 // that the gateway's events invalidate. Screens read these and call the
 // bridge; nothing here renders.
+import { blobUrls } from "./media";
 import { QueryClient, createInfiniteQuery, createQuery, useQueryClient } from "@tanstack/solid-query";
 import { createSignal } from "solid-js";
 import { Bridge, ClientError, claimOwnership, type ClientEvent, type MemberSummary, type MessageSummary, type Opened, type ReadStateSummary, type SnapshotSummary, type StatusSummary } from "./bridge";
@@ -394,6 +395,7 @@ function forgetPage(): void {
   setPresence(new Map());
   setTypingAndWatch(new Map());
   setPushState("unknown");
+  blobUrls.clear();
   const o = opened();
   if (o) setOpened({ ...o, signedIn: false });
 }
@@ -737,6 +739,24 @@ const history = new Map<string, History>();
 /** How many messages the store gave for a channel at its last read: fewer than asked means it has no older. */
 const storedCount = new Map<string, number>();
 const loadingOlder = new Set<string>();
+
+/** What the instance takes of attachments (specs/media.md 2), asked once a session; null where it keeps none, and nothing can be attached. */
+export function uploadLimitsQuery() {
+  return settled(createQuery(() => ({
+    queryKey: ["uploadLimits"],
+    queryFn: () => client().uploadLimits().catch((e) => {
+      console.warn("upload limits:", e);
+      return null;
+    }),
+  })));
+}
+
+/** A server card's picture by its address on this instance, loaded as an avatar is; none for anything else. */
+export function cardImageSrc(imageUrl: string | undefined): string | undefined {
+  if (!imageUrl || !/^\/api\/v1\/cards\/[0-9A-Za-z]+$/.test(imageUrl)) return undefined;
+  const base = SERVED_BY_INSTANCE ? location.origin : savedInstance();
+  return base ? base.replace(/\/+$/, "") + imageUrl : undefined;
+}
 
 /** A channel's messages: what the instance gave from before the store begins, then the store's newest pages. */
 export function messagesQuery(channelId: () => string | undefined) {

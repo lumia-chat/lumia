@@ -25,14 +25,15 @@ import {
   type ChannelItem,
   type DeviceEntry,
 } from "../design/components";
-import { ClientError, type ChannelSummary, type DeviceSummary, type DmMessageSummary, type InvitePreviewSummary, type MemberSummary, type MessageSummary, type PasskeySummary, type ProfileSummary, type SnapshotSummary } from "../client/bridge";
-import { SERVED_BY_INSTANCE, avatarSrc, client, pictureRefusal, savedInstance, dmChannelsQuery, dmMessagesQuery, enableNotifications, hasIdentityQuery, myStatus, peopleQuery, privateStateQuery, pushState, queryClient, readStatesQuery, rosterQuery, setMyStatus, snapshotQuery, type PrivateState } from "../client/state";
+import { ClientError, type ChannelSummary, type DeviceSummary, type DmMessageSummary, type InvitePreviewSummary, type MemberSummary, type MessageSummary, type PasskeySummary, type ProfileSummary, type SnapshotSummary, type UploadLimits } from "../client/bridge";
+import { SERVED_BY_INSTANCE, avatarSrc, client, pictureRefusal, savedInstance, dmChannelsQuery, dmMessagesQuery, enableNotifications, hasIdentityQuery, myStatus, peopleQuery, privateStateQuery, pushState, queryClient, readStatesQuery, rosterQuery, setMyStatus, snapshotQuery, uploadLimitsQuery, type PrivateState } from "../client/state";
 import { NeedsBrowser } from "./private";
 import { useNames } from "../client/names";
-import { FONT_SIZES, choosePreset, preferences, presetOf, setAppearance, setPreferences, type Appearance, type Avatars, type FontSize, type Layout, type Preset, type Reactions, type Spacing } from "../client/preferences";
+import { FONT_SIZES, choosePreset, preferences, presetOf, setAppearance, setPreferences, type Appearance, type Avatars, type FontSize, type Layout, type Media, type Preset, type Reactions, type Spacing } from "../client/preferences";
 import { addPasskey, passkeysAvailable } from "../client/passkeys";
 import { initialsOf, toneFor } from "./app";
-import { Compose, Timeline, createMarkRead, quoteOf, thrownRefusal, type Refusal, type Replying, type TimelineItem } from "./timeline";
+import { Compose, Timeline, createMarkRead, quoteOf, thrownRefusal, type EditMedia, type Refusal, type Replying, type TimelineItem } from "./timeline";
+import { attachFiles, filesForSend, filesSent, hasFiles, stripOf } from "./media";
 import { MentionsPage } from "./mentions";
 
 export type HomeView = "dm" | "requests" | "devices" | "profile" | "preferences" | "new" | "add" | "mentions";
@@ -389,6 +390,8 @@ function Conversation(props: HomeProps) {
       mentions: [],
       reactions: m.reactions,
       mentionsMe: false,
+      attachments: m.attachments ?? [],
+      cards: m.cards ?? [],
     })),
   );
   const knownName = (id: string): string | undefined => {
@@ -405,16 +408,27 @@ function Conversation(props: HomeProps) {
     state: () => (props.channelId ? readStates.data?.byChannel.get(props.channelId) : undefined),
   });
 
+  // Attachments (specs/media.md): sealed for the conversation's group like its text. The web makes no
+  // cards in a personal conversation (spec 6.5): a link sent from here goes without one.
+  const uploadLimits = uploadLimitsQuery();
+  const [mediaNote, setMediaNote] = createSignal<string>();
+  createEffect(on(() => props.channelId, () => setMediaNote(undefined)));
   const send = async () => {
     const id = props.channelId;
     const body = draft().trim();
-    if (!id || !body) return;
+    if (!id || (!body && !hasFiles(id))) return;
     const reply = replying();
     setDraft("");
     setError("");
     setReplying(null);
+    setMediaNote(undefined);
     try {
-      await client().dmSendWith(id, body, reply ? quoteOf(reply) : null);
+      if (hasFiles(id)) setMediaNote("Sending when the files are uploaded…");
+      const files = await filesForSend(id);
+      setMediaNote(undefined);
+      if ("error" in files) throw new Error(files.error);
+      await client().dmSendWithMedia(id, body, reply ? quoteOf(reply) : null, files.ids, []);
+      filesSent(files.keys);
     } catch (e) {
       // The text comes back to the composer unless something new was typed meanwhile.
       setDraft((d) => d || body);
@@ -437,12 +451,12 @@ function Conversation(props: HomeProps) {
     composerInput?.focus();
   };
   // Only this identity's own, in a personal conversation: the clients check it (architecture 11).
-  const saveEdit = async (item: TimelineItem, body: string) => {
+  const saveEdit = async (item: TimelineItem, body: string, media: EditMedia) => {
     const id = props.channelId;
     if (!id) return;
     setRefused(null);
     try {
-      await client().dmEdit(id, item.id, body);
+      await client().dmEditWithMedia(id, item.id, body, media.removeAttachmentIds, media.cardUrls);
     } catch (e) {
       setRefused({ messageId: item.id, text: thrownRefusal("edit", e) });
     }
@@ -512,7 +526,7 @@ function Conversation(props: HomeProps) {
                   if (mid) setRefused(null);
                   else composerInput?.focus();
                 }}
-                onEdit={(m, body) => void saveEdit(m, body)}
+                onEdit={(m, body, media) => void saveEdit(m, body, media)}
                 onDelete={(m) => void deleteMessage(m)}
                 refused={refused()}
                 onAtEnd={setAtEnd}
@@ -553,6 +567,13 @@ function Conversation(props: HomeProps) {
             onCancelReply={() => setReplying(null)}
             onEditLast={state()?.member ? editLast : undefined}
             inputRef={(el) => (composerInput = el)}
+            media={{
+              drafts: stripOf(ch().channelId),
+              cards: [],
+              note: mediaNote(),
+              onFiles: uploadLimits.data && state()?.member ? (files) => setMediaNote(attachFiles(ch().channelId, files, uploadLimits.data as UploadLimits)) : undefined,
+              dropLabel: `Drop to send to ${title()}`,
+            }}
           />
         </>
       )}
@@ -1095,6 +1116,28 @@ function Preferences(props: HomeProps) {
                 ]}
                 value={preferences().reactions}
                 onChange={(id) => setPreferences({ reactions: id as Reactions })}
+              />
+            </PreferenceRow>
+            <PreferenceRow label="Images">
+              <SegmentedTabs
+                label="Images"
+                tabs={[
+                  { id: "shown", label: "Shown" },
+                  { id: "link", label: "As a link" },
+                ]}
+                value={preferences().images}
+                onChange={(id) => setPreferences({ images: id as Media })}
+              />
+            </PreferenceRow>
+            <PreferenceRow label="Embeds">
+              <SegmentedTabs
+                label="Embeds"
+                tabs={[
+                  { id: "shown", label: "Shown" },
+                  { id: "link", label: "As a link" },
+                ]}
+                value={preferences().embeds}
+                onChange={(id) => setPreferences({ embeds: id as Media })}
               />
             </PreferenceRow>
           </div>
