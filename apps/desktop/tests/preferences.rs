@@ -316,6 +316,33 @@ fn height(rt: &Runtime<State>) -> f32 {
 }
 
 #[test]
+fn one_lines_code_blocks_keep_room_between_them() {
+    // Minimal is Tight: no room between lines, which two boxes in a row would touch at.
+    let now = chrono::Utc::now().timestamp_micros();
+    let mut state = signed_in();
+    state.session.entries = vec![
+        message("c0", "grace", "```\nlet foo = 1;\n```", now - 120_000_000),
+        message("c1", "grace", "```\nfoo = bar\n```", now - 60_000_000),
+        message("c2", "me", "Three.", now),
+    ];
+    state.settings.apply(Preset::Minimal);
+    state.session.revision += 1;
+    let rt = runtime(state);
+    let (first, second, words) = (
+        rect(&rt, "c0", "body"),
+        rect(&rt, "c1", "body"),
+        rect(&rt, "c2", "body"),
+    );
+    let gap = second[1] - (first[1] + first[3]);
+    assert!(
+        gap >= 2.0 * tokens::SPACE_4 - 0.5,
+        "between the blocks: {gap}"
+    );
+    let under = words[1] - (second[1] + second[3]);
+    assert!(under >= tokens::SPACE_4 - 0.5, "under the block: {under}");
+}
+
+#[test]
 fn compact_gives_messages_less_room_and_the_same_words() {
     let comfortable = conversation(|_| {});
     let mut compact = conversation(|_| {});

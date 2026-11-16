@@ -167,6 +167,14 @@ pub fn edited_inline(source: &str, mentions: &[Range<usize>]) -> bool {
     ends_in_paragraph(&parse_with(source, mentions))
 }
 
+/// Whether a body draws a box of its own (a code block), which in one line needs room from
+/// the rows beside it: their spacing there can be none.
+pub fn boxed(source: &str) -> bool {
+    parse(source)
+        .iter()
+        .any(|block| matches!(block, Block::Code { .. }))
+}
+
 fn ends_in_paragraph(blocks: &[Block]) -> bool {
     matches!(blocks.last(), Some(Block::Para(_)))
 }

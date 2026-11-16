@@ -426,6 +426,9 @@ struct Decor<'a> {
     lit: bool,
     /// What a reply quotes, for its line of reference.
     quote: Option<&'a QuoteSummary>,
+    /// It draws boxes (a code block, pictures, a card): in one line it keeps room from the
+    /// rows beside it, so two boxes never touch.
+    boxed: bool,
 }
 
 /// The message whose body a selected text is in: the row under the list (keyed by the
@@ -504,6 +507,7 @@ fn message_frame(
         head,
         content,
         quote: decor.quote,
+        boxed: decor.boxed,
         m,
     };
     match m.layout {
@@ -520,6 +524,7 @@ struct Row<'a> {
     head: Head<'a>,
     content: El,
     quote: Option<&'a QuoteSummary>,
+    boxed: bool,
     m: Measures,
 }
 
@@ -527,12 +532,14 @@ struct Row<'a> {
 /// the ones after it are the message alone under those, in the same column.
 fn grouped_frame(s: &State, row_: Row<'_>, place: Place, look: Look) -> El {
     let c = look.c;
+    // Grouped rows keep their room from their spacing; only one line needs it for boxes.
     let Row {
         frame,
         key,
         head,
         content,
         quote,
+        boxed: _,
         m,
     } = row_;
     let Head {
@@ -637,6 +644,7 @@ fn line_frame(s: &State, row_: Row<'_>, look: Look) -> El {
         head,
         content,
         quote,
+        boxed,
         m,
     } = row_;
     // The time and the name each stand in the height of the words' first line, centred in
@@ -668,7 +676,14 @@ fn line_frame(s: &State, row_: Row<'_>, look: Look) -> El {
         words = words.child(replies::reference_short(s, quote, height, &m.ty, look));
     }
     let lead = lead.child(row().gap(t::SPACE_8).child(time).child(name));
-    frame.py(m.between / 2.0).radius(t::RADIUS_8).child(
+    // A box (a code block, a picture, a card) keeps room from the rows beside it, which at
+    // Tight is none, so two boxes in a row never touch.
+    let room = if boxed {
+        (m.between / 2.0).max(t::SPACE_4)
+    } else {
+        m.between / 2.0
+    };
+    frame.py(room).radius(t::RADIUS_8).child(
         row()
             .w_full()
             .gap(t::SPACE_8)
@@ -825,6 +840,10 @@ fn stored_row(s: &State, i: usize, entry: &Entry, place: Place, look: Look) -> E
             .as_ref()
             .is_some_and(|q| q.message_id == entry.id),
         quote: entry.reply.as_ref(),
+        boxed: !entry.deleted
+            && (body::boxed(&entry.body)
+                || !entry.attachments.is_empty()
+                || !entry.cards.is_empty()),
     };
     let row = message_frame(s, &entry.id, head, content, place, decor, look);
     with_divider(s, i, entry, place, row, look)
@@ -1124,6 +1143,7 @@ fn pending_row(s: &State, pending: &Pending, place: Place, look: Look) -> El {
         place,
         Decor {
             quote: pending.reply.as_ref(),
+            boxed: body::boxed(&pending.body) || !pending.attachments.is_empty(),
             ..Decor::default()
         },
         look,
