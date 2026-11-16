@@ -382,6 +382,68 @@ final class MediaTests: XCTestCase {
         return url
     }
 
+    // MARK: How an attachment is drawn, and its file
+
+    func testARecordingsRowPlaysItWithImagesAsLinksToo() {
+        XCTAssertEqual(AttachmentDrawn.of(attachment("a", kind: "audio"), asLinks: false), .recording)
+        XCTAssertEqual(AttachmentDrawn.of(attachment("a", kind: "audio"), asLinks: true), .recording, "a recording's row plays it on a press, never the share sheet")
+        XCTAssertEqual(AttachmentDrawn.of(attachment("v", kind: "video"), asLinks: false), .picture, "by its poster")
+        XCTAssertEqual(AttachmentDrawn.of(attachment("v", kind: "video"), asLinks: true), .videoRow, "its row plays it under itself")
+        for kind in ["image", "gif"] {
+            XCTAssertEqual(AttachmentDrawn.of(attachment("p", kind: kind), asLinks: false), .picture)
+            XCTAssertEqual(AttachmentDrawn.of(attachment("p", kind: kind), asLinks: true), .fileRow, "a row that opens the viewer")
+        }
+        XCTAssertEqual(AttachmentDrawn.of(attachment("f", kind: "file"), asLinks: false), .fileRow)
+        XCTAssertEqual(AttachmentDrawn.of(attachment("f", kind: "file"), asLinks: true), .fileRow)
+        XCTAssertEqual(AttachmentDrawn.of(attachment("?", kind: "hologram"), asLinks: false), .fileRow, "a kind not known here is a file")
+        for kind in ["image", "gif", "video", "audio", "file"] {
+            for asLinks in [false, true] {
+                XCTAssertEqual(AttachmentDrawn.of(attachment("x", kind: kind, expired: true), asLinks: asLinks), .expired, "one its server let go opens and plays nothing")
+            }
+        }
+    }
+
+    func testEveryUseOfAnAttachmentHasAFileOfItsOwn() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("lumia-media-tests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fm = FileManager.default
+        // A recording playing from its file, then shared, and the sheet dismissed.
+        let playing = try MediaFiles.write(Data("tone".utf8), named: "tone.m4a", under: root)
+        let shared = try MediaFiles.write(Data("tone".utf8), named: "tone.m4a", under: root)
+        XCTAssertNotEqual(playing, shared)
+        XCTAssertEqual(playing.lastPathComponent, "tone.m4a", "under its own name, which the share sheet shows")
+        XCTAssertEqual(shared.lastPathComponent, "tone.m4a")
+        MediaFiles.remove(shared)
+        XCTAssertFalse(fm.fileExists(atPath: shared.path))
+        XCTAssertFalse(fm.fileExists(atPath: shared.deletingLastPathComponent().path), "with its folder")
+        XCTAssertEqual(try Data(contentsOf: playing), Data("tone".utf8), "the player's file is still there")
+        // And the other way: the conversation left while a share sheet holds a file.
+        let again = try MediaFiles.write(Data("tone".utf8), named: "tone.m4a", under: root)
+        MediaFiles.remove(playing)
+        XCTAssertTrue(fm.fileExists(atPath: again.path))
+
+        XCTAssertEqual(try MediaFiles.write(Data(), named: "a/b.txt", under: root).lastPathComponent, "a-b.txt")
+        for odd in ["", ".", ".."] {
+            let url = try MediaFiles.write(Data("x".utf8), named: odd, under: root)
+            XCTAssertEqual(url.lastPathComponent, "attachment", "a name that is no file's")
+            XCTAssertEqual(url.deletingLastPathComponent().deletingLastPathComponent().lastPathComponent, "lumia-media")
+        }
+
+        // Only what `write` made is removed.
+        let stray = root.appendingPathComponent("kept/file.txt")
+        try fm.createDirectory(at: stray.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("kept".utf8).write(to: stray)
+        MediaFiles.remove(stray)
+        XCTAssertTrue(fm.fileExists(atPath: stray.path))
+        MediaFiles.remove(nil)
+
+        // At launch, whatever a run left behind goes.
+        MediaFiles.clear(under: root)
+        XCTAssertFalse(fm.fileExists(atPath: again.path))
+        XCTAssertFalse(fm.fileExists(atPath: root.appendingPathComponent("lumia-media").path))
+        XCTAssertTrue(fm.fileExists(atPath: stray.path))
+    }
+
     func testAVideosPosterLengthAndTurnedSizeComeFromAVFoundation() async throws {
         let url = try await movie(width: 64, height: 32, frames: 20)
         defer { try? FileManager.default.removeItem(at: url) }

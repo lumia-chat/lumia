@@ -3,8 +3,10 @@
 // composer's strip holds and when a send may go (`ComposerAttachments`),
 // which links' cards are previewed while composing and which are kept
 // (`LinkPreviews`), how pictures sit in a message's column
-// (`MediaLayout`), and the words a person reads and hears of each
-// (`MediaWords`). The processing, the sealing and the fetching are the
+// (`MediaLayout`), the words a person reads and hears of each
+// (`MediaWords`), how each attachment is drawn, with Images as links too
+// (`AttachmentDrawn`), and the file a player or the share sheet is handed
+// (`MediaFiles`). The processing, the sealing and the fetching are the
 // core's; `MediaInput` hands it what the platform decodes.
 import CoreGraphics
 import Foundation
@@ -19,6 +21,78 @@ public enum AttachmentKind: String, Sendable {
     /// Drawn as a picture in a message's column (a video by its poster),
     /// when Preferences shows images.
     public var visual: Bool { self == .image || self == .gif || self == .video }
+}
+
+/// How a message's attachment is drawn (specs/media.md 5), by what it is,
+/// whether its server let it go and whether Images are drawn as links.
+public enum AttachmentDrawn: Equatable, Sendable {
+    /// A picture, a GIF or a video's poster, in the message's pictures.
+    case picture
+    /// A recording's row, which plays it in place: as links too, where a
+    /// recording's row plays it on a press as it always does.
+    case recording
+    /// Images as links: a video's row, which plays it under itself.
+    case videoRow
+    /// A file's row, which opens the share sheet; Images as links, a
+    /// picture's row, which opens the viewer.
+    case fileRow
+    /// One its server let go: its name and "No longer available", opening nothing.
+    case expired
+
+    public static func of(_ kind: AttachmentKind, expired: Bool, asLinks: Bool) -> AttachmentDrawn {
+        if expired { return .expired }
+        switch kind {
+        case .audio: return .recording
+        case .video: return asLinks ? .videoRow : .picture
+        case .image, .gif: return asLinks ? .fileRow : .picture
+        case .file: return .fileRow
+        }
+    }
+
+    public static func of(_ a: AttachmentSummary, asLinks: Bool) -> AttachmentDrawn {
+        of(AttachmentKind(a.kind), expired: a.expired, asLinks: asLinks)
+    }
+}
+
+/// An attachment's bytes as a file of its name, for the share sheet and
+/// the players. Every write has a folder of its own under `lumia-media`
+/// in the temporary directory, so two uses of one attachment (a recording
+/// playing while it is shared, the viewer's share beside a row's) never
+/// write over or remove each other's file.
+public enum MediaFiles {
+    static let folder = "lumia-media"
+
+    /// The file's name as one path component.
+    static func fileName(_ name: String) -> String {
+        let name = name.replacingOccurrences(of: "/", with: "-")
+        return name.isEmpty || name == "." || name == ".." ? "attachment" : name
+    }
+
+    public static func write(_ data: Data, named name: String, under root: URL = FileManager.default.temporaryDirectory) throws -> URL {
+        let dir = root.appendingPathComponent(folder, isDirectory: true).appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent(fileName(name))
+        try data.write(to: url, options: .atomic)
+        return url
+    }
+
+    public static func write(_ data: Data, for a: AttachmentSummary) throws -> URL {
+        try write(data, named: a.name)
+    }
+
+    /// Removes a file `write` made, with its folder; nothing else.
+    public static func remove(_ url: URL?) {
+        guard let url else { return }
+        let dir = url.deletingLastPathComponent()
+        guard dir.deletingLastPathComponent().lastPathComponent == folder else { return }
+        try? FileManager.default.removeItem(at: dir)
+    }
+
+    /// Removes every file written, at launch: what a run that was ended
+    /// with something playing or being shared left behind.
+    public static func clear(under root: URL = FileManager.default.temporaryDirectory) {
+        try? FileManager.default.removeItem(at: root.appendingPathComponent(folder, isDirectory: true))
+    }
 }
 
 // MARK: The composer's strip

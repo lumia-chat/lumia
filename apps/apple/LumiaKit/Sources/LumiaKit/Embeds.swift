@@ -1,12 +1,15 @@
 // Inline video and audio, and embeds (specs/media.md 5 and 6.6), as the
 // phone decides them before anything is drawn or loaded, as values the
-// tests cover: what plays and what stops when another starts, its row
-// scrolls away or the conversation is left (`PlaybackRules`); how large
-// an embed is drawn (`EmbedLayout`); the address it loads, the page that
-// holds it and which navigations its web view lets through
-// (`EmbedPage`, `EmbedNavigation`); and the words said of it
-// (`EmbedWords`). Which links have an embed, and the embed's address, are
-// the core's (`embedFor`), from the link in the text, never the card.
+// tests cover: what a conversation holds and which of it plays, with the
+// press that came last (`PlaybackHeld`; what starting one stops and what
+// stops off screen are the core's, `playbackStops` and
+// `playbackStopsOffScreen`); how large an embed is drawn (`EmbedLayout`);
+// the address it loads, the page that holds it and which navigations its
+// web view lets through (`EmbedPage`, `EmbedNavigation`); and the words
+// said of it (`EmbedWords`). Which links have an embed, the embed's
+// address and the height a post reports are the core's (`embedFor`, asked
+// once a link through `EmbedLookup`, and `reportedEmbedHeight`), from the
+// link in the text, never the card.
 import CoreGraphics
 import Foundation
 import LumiaFFI
@@ -25,7 +28,7 @@ public struct PlaybackSlot: Hashable, Sendable {
         case embedPlayer
         /// A site's audio (`audio`): plays on while scrolling.
         case embedAudio
-        /// A site's post (`post`): back to its card when its row scrolls away.
+        /// A site's post (`post`): stays shown while scrolling and when an attachment starts.
         case embedPost
 
         public var isEmbed: Bool { self == .embedPlayer || self == .embedAudio || self == .embedPost }
@@ -46,6 +49,17 @@ public struct PlaybackSlot: Hashable, Sendable {
     public init(key: String, kind: Kind) {
         self.key = key; self.kind = kind
     }
+
+    /// What it is as the core's rules take it: an embed's player is a video.
+    public var summary: PlayingSummary {
+        switch kind {
+        case .video: PlayingSummary(embed: false, kind: "video")
+        case .audio: PlayingSummary(embed: false, kind: "audio")
+        case .embedPlayer: PlayingSummary(embed: true, kind: "video")
+        case .embedAudio: PlayingSummary(embed: true, kind: "audio")
+        case .embedPost: PlayingSummary(embed: true, kind: "post")
+        }
+    }
 }
 
 /// What becomes of one when something else happens: paused where it is
@@ -57,17 +71,24 @@ public enum PlaybackStop: Equatable, Sendable {
     case close
 }
 
-/// One thing plays at a time in a conversation (specs/media.md 5 and
-/// 6.6): starting one pauses any other attached video or recording and
-/// puts any embed back to its card; at most one embed is shown. A video
-/// pauses when its row scrolls away and an embed (but a site's audio)
-/// goes back to its card; audio plays on until another starts or the
-/// conversation is left, which closes everything.
-public struct PlaybackRules: Equatable, Sendable {
+/// What a conversation holds that plays or is shown, which of it plays,
+/// and the press that came last (specs/media.md 5 and 6.6). The rules are
+/// the core's and are only carried out here: `playbackStops` says what
+/// starting one stops (a card pressed, everything else; an attachment
+/// started, every other attachment and an embed that plays, a post left
+/// shown) and `playbackStopsOffScreen` what stops when its row scrolls
+/// away (a video; audio plays on and a post stays). An attachment that
+/// stops is paused where it is; an embed goes back to its card. Leaving
+/// the conversation closes everything.
+public struct PlaybackHeld: Equatable, Sendable {
     /// What has a player or is shown, in the order it started.
     public private(set) var held: [PlaybackSlot] = []
-    /// The one playing (or shown, for an embed), if any.
+    /// The one that started last and has not stopped, if any.
     public private(set) var playing: String?
+    /// The press that came last, while what it asked for is on its way (a
+    /// file fetched, an embed's address made): only that one starts when it
+    /// arrives, so a slow fetch never takes over from a later press.
+    public private(set) var wanted: String?
 
     public init() {}
 
@@ -76,11 +97,29 @@ public struct PlaybackRules: Equatable, Sendable {
     /// The embed shown, if any.
     public var embed: PlaybackSlot? { held.first { $0.kind.isEmbed } }
 
-    /// `slot` starts, pressed or from its own controls: what becomes of
-    /// each other one held.
+    /// `key` was pressed and is on its way.
+    public mutating func want(_ key: String) {
+        wanted = key
+    }
+
+    /// What `key`'s press asked for is here: true when it is still the one
+    /// wanted, and so starts; false when another press came after it.
+    public mutating func arrived(_ key: String) -> Bool {
+        guard wanted == key else { return false }
+        wanted = nil
+        return true
+    }
+
+    /// What `key`'s press asked for could not be had.
+    public mutating func failed(_ key: String) {
+        if wanted == key { wanted = nil }
+    }
+
+    /// `slot` starts, pressed or from its own controls, which makes it the
+    /// last press: what becomes of each other one held, by the core's rule.
     public mutating func start(_ slot: PlaybackSlot) -> [(PlaybackSlot, PlaybackStop)] {
         var effects: [(PlaybackSlot, PlaybackStop)] = []
-        for other in held where other.key != slot.key {
+        for other in held where other.key != slot.key && playbackStops(starting: slot.summary, other: other.summary) {
             if other.kind.isEmbed {
                 effects.append((other, .close))
             } else if playing == other.key {
@@ -90,6 +129,7 @@ public struct PlaybackRules: Equatable, Sendable {
         held.removeAll { h in effects.contains { $0.0.key == h.key && $0.1 == .close } }
         if !holds(slot.key) { held.append(slot) }
         playing = slot.key
+        wanted = nil
         return effects
     }
 
@@ -98,51 +138,67 @@ public struct PlaybackRules: Equatable, Sendable {
         if playing == key { playing = nil }
     }
 
-    /// Its row scrolled away: a video pauses, an embed but a site's audio
-    /// goes back to its card; audio plays on. Nil when nothing changes.
+    /// Its row scrolled away: by the core's rule a video pauses and a
+    /// site's player goes back to its card; audio plays on and a post
+    /// stays shown. Nil when nothing changes.
     public mutating func away(_ key: String) -> PlaybackStop? {
-        guard let slot = held.first(where: { $0.key == key }) else { return nil }
-        switch slot.kind {
-        case .audio, .embedAudio:
-            return nil
-        case .video:
-            guard playing == key else { return nil }
-            playing = nil
-            return .pause
-        case .embedPlayer, .embedPost:
+        guard let slot = held.first(where: { $0.key == key }), playbackStopsOffScreen(playing: slot.summary) else { return nil }
+        if slot.kind.isEmbed {
             close(key)
             return .close
         }
+        guard playing == key else { return nil }
+        playing = nil
+        return .pause
     }
 
     /// Closed by hand, or its player could not be made.
     public mutating func close(_ key: String) {
         held.removeAll { $0.key == key }
         if playing == key { playing = nil }
+        if wanted == key { wanted = nil }
     }
 
-    /// The conversation was left: everything closed.
+    /// The conversation was left: everything closed, and nothing wanted.
     public mutating func leave() -> [PlaybackSlot] {
         let all = held
         held = []
         playing = nil
+        wanted = nil
         return all
     }
 }
 
 // MARK: Embeds
 
+/// A link's embed, asked of the core once a link: a card is drawn again
+/// whenever anything it reads changes, and asks here each time.
+public final class EmbedLookup {
+    private var found: [String: EmbedSummary?] = [:]
+    private let find: (String) -> EmbedSummary?
+
+    public init(find: @escaping (String) -> EmbedSummary? = { embedFor(url: $0) }) {
+        self.find = find
+    }
+
+    /// The embed `url` has, if any.
+    public func embed(for url: String) -> EmbedSummary? {
+        if let known = found[url] { return known }
+        let embed = find(url)
+        found[url] = .some(embed)
+        return embed
+    }
+}
+
 /// How large an embed is drawn in a column (specs/media.md 6.6): a
 /// player at the column's width at its shape and at most 400 tall, audio
 /// at the column's width and the site's height, a post at most 550 wide
-/// and its fixed height, or the height it reports when it grows.
+/// and its fixed height, or the height it reports when it grows (the
+/// core's `reportedEmbedHeight`, which holds it in its bounds).
 public enum EmbedLayout {
     public static let tallest: CGFloat = 400
-    /// The least and most a post that grows is drawn, whatever it reports.
-    public static let shortestReported: CGFloat = 80
-    public static let tallestReported: CGFloat = 2000
 
-    public static func size(_ embed: EmbedSummary, column: CGFloat, reported: CGFloat? = nil) -> CGSize {
+    public static func size(_ embed: EmbedSummary, column: CGFloat, reported: UInt32? = nil) -> CGSize {
         guard column > 0 else { return .zero }
         let widest = embed.maxWidth > 0 ? min(column, CGFloat(embed.maxWidth)) : column
         if embed.aspectWidth > 0, embed.aspectHeight > 0 {
@@ -155,21 +211,19 @@ public enum EmbedLayout {
             }
             return CGSize(width: w.rounded(.down), height: h.rounded(.down))
         }
-        var height = CGFloat(embed.fixedHeight)
-        if embed.resizes, let reported, reported.isFinite, reported > 0 {
-            height = min(max(reported, shortestReported), tallestReported)
-        }
-        return CGSize(width: widest.rounded(.down), height: height.rounded(.up))
+        let height = embed.resizes ? reported ?? embed.fixedHeight : embed.fixedHeight
+        return CGSize(width: widest.rounded(.down), height: CGFloat(height))
     }
 }
 
 /// The page a phone's web view holds an embed in (specs/media.md 6.6):
 /// the embed's iframe alone, with the instance's origin as its base so
-/// that a site refusing an embed with no referrer (YouTube) plays, and a
-/// listener that takes a post's height only from that iframe's own window
-/// and origin and hands it to the app.
+/// that a site refusing an embed with no referrer (YouTube) plays, and,
+/// for a post that grows, a listener that hands the app what that
+/// iframe's own window posts from the embed's origin, as text, for the
+/// core to read a height from.
 public enum EmbedPage {
-    /// The name the page posts heights to (`window.webkit.messageHandlers`).
+    /// The name the page posts the embed's messages to (`window.webkit.messageHandlers`).
     public static let handler = "lumiaEmbed"
 
     /// The instance's origin, the page's base: `https://chat.acme.dev/`.
@@ -200,12 +254,14 @@ public enum EmbedPage {
         return "\(scheme)://\(host)\(port)"
     }
 
-    /// The page holding `src`, titled `title`, which takes heights only
-    /// from the iframe's window and `src`'s origin. Only a post of a fixed
+    /// The page holding `src`, titled `title`. Only a post of a fixed
     /// height (`scrolls`) scrolls inside itself; any other embed is drawn
-    /// whole, so a drag over it scrolls the conversation.
-    public static func html(src: String, title: String, scrolls: Bool = false) -> String {
-        let origin = URL(string: src).flatMap(origin) ?? ""
+    /// whole, so a drag over it scrolls the conversation. For one that
+    /// grows (`reports`) the page passes on what the iframe's window posts
+    /// from `src`'s origin, and nothing from anywhere else: a string as it
+    /// was posted, an object as its JSON, which is how the core's
+    /// `reportedEmbedHeight` takes a message. The page reads nothing in it.
+    public static func html(src: String, title: String, scrolls: Bool = false, reports: Bool = false) -> String {
         let scrolling = scrolls ? "" : #" scrolling="no""#
         return """
         <!doctype html>
@@ -215,28 +271,26 @@ public enum EmbedPage {
         <meta name="referrer" content="strict-origin-when-cross-origin">
         <style>html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:transparent}iframe{display:block;border:0;width:100%;height:100%}</style>
         </head><body>
-        <iframe id="embed" src="\(escape(src))" title="\(escape(title))" allow="autoplay; encrypted-media; fullscreen; picture-in-picture" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"\(scrolling)></iframe>
-        <script>
+        <iframe id="embed" src="\(escape(src))" title="\(escape(title))" allow="autoplay; encrypted-media; fullscreen; picture-in-picture" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"\(scrolling)></iframe>\(reports ? "\n<script>\n\(listener(src: src))\n</script>" : "")
+        </body></html>
+        """
+    }
+
+    /// The page's script for an embed that grows: what the iframe's own
+    /// window posts from `src`'s origin, handed on as text.
+    static func listener(src: String) -> String {
+        let origin = URL(string: src).flatMap(origin) ?? ""
+        return """
         (function () {
           var frame = document.getElementById("embed");
           var origin = \(json(origin));
-          function heightOf(d) {
-            if (typeof d === "string") { try { d = JSON.parse(d); } catch (e) { return 0; } }
-            if (!d || typeof d !== "object") return 0;
-            var t = d["twttr.embed"];
-            if (t && t.method === "twttr.private.resize" && t.params && t.params[0]) return Number(t.params[0].height) || 0;
-            if (d.type === "resize.embed") return Number(d.data) || 0;
-            if (typeof d.height === "number") return d.height;
-            return 0;
-          }
           window.addEventListener("message", function (event) {
             if (event.source !== frame.contentWindow || event.origin !== origin) return;
-            var height = heightOf(event.data);
-            if (height > 0 && isFinite(height)) window.webkit.messageHandlers.\(handler).postMessage(height);
+            var text = event.data;
+            if (typeof text !== "string") { try { text = JSON.stringify(text); } catch (e) { return; } }
+            if (typeof text === "string") window.webkit.messageHandlers.\(handler).postMessage(text);
           });
         })();
-        </script>
-        </body></html>
         """
     }
 

@@ -250,6 +250,8 @@ private struct CompactSegments<ID: Hashable>: View {
     /// A segment's height and the track's padding around it.
     private static var height: CGFloat { LumiaTokens.space28 + LumiaTokens.space2 }
     private static var inset: CGFloat { LumiaTokens.space6 / 2 }
+    /// The raised segment's shadow: 1.5 soft, 1 down.
+    private static var shadow: (radius: CGFloat, y: CGFloat) { (inset / 2, inset / 3) }
 
     /// The widest of the controls these labels would make, each segment
     /// sized to its words, as drawn.
@@ -278,7 +280,7 @@ private struct CompactSegments<ID: Hashable>: View {
                                 RoundedRectangle(cornerRadius: LumiaTokens.radius8)
                                     .fill(LumiaTokens.tabActive.color)
                                     // The tab's shadow: light only, where the raised segment is the track's own white.
-                                    .shadow(color: scheme == .dark ? .clear : LumiaTokens.ink.color.opacity(0.12), radius: 1.5, y: 1)
+                                    .shadow(color: scheme == .dark ? .clear : LumiaTokens.ink.color.opacity(0.12), radius: Self.shadow.radius, y: Self.shadow.y)
                             }
                         }
                         .contentShape(RoundedRectangle(cornerRadius: LumiaTokens.radius8))
@@ -343,6 +345,12 @@ private struct ChoiceTile<Sketch: View>: View {
 
     /// The picture's height on a phone, where a tile is a third of the column.
     static var pictureHeight: CGFloat { LumiaTokens.space40 + LumiaTokens.space24 + LumiaTokens.space12 }
+    /// The ring round the chosen one: 2 wide and 2 off the picture, so its
+    /// middle runs 3 out from the picture's edge.
+    private static var ring: CGFloat { LumiaTokens.space2 }
+    private static var ringOut: CGFloat { ring + ring / 2 }
+    /// The tick after the chosen one's name (11).
+    private static var tick: CGFloat { LumiaTokens.textCount.size }
 
     var body: some View {
         Button(action: choose) {
@@ -352,10 +360,9 @@ private struct ChoiceTile<Sketch: View>: View {
                     .clipShape(RoundedRectangle(cornerRadius: LumiaTokens.radius12))
                     .overlay {
                         if chosen {
-                            // 2 wide, 2 out: its middle 3 out from the picture's edge.
-                            RoundedRectangle(cornerRadius: LumiaTokens.radius12 + 3)
-                                .stroke(LumiaTokens.accent.color, lineWidth: 2)
-                                .padding(-3)
+                            RoundedRectangle(cornerRadius: LumiaTokens.radius12 + Self.ringOut)
+                                .stroke(LumiaTokens.accent.color, lineWidth: Self.ring)
+                                .padding(-Self.ringOut)
                         } else {
                             RoundedRectangle(cornerRadius: LumiaTokens.radius12).strokeBorder(LumiaTokens.lineStrong.color)
                         }
@@ -367,7 +374,7 @@ private struct ChoiceTile<Sketch: View>: View {
                             .lineLimit(1)
                             .minimumScaleFactor(0.8)
                         if chosen {
-                            Image(systemName: "checkmark").font(.system(size: 11, weight: .heavy)).foregroundStyle(LumiaTokens.accentInk.color)
+                            Image(systemName: "checkmark").font(.system(size: Self.tick, weight: .heavy)).foregroundStyle(LumiaTokens.accentInk.color)
                         }
                     }
                     if let caption {
@@ -388,6 +395,15 @@ private struct ChoiceTile<Sketch: View>: View {
 
 // MARK: Sketches
 
+/// What the sketches are drawn at, from the tokens: a bar (the boards' 5
+/// tall), the sample screenshot's heading (7) and its sign-in card (120
+/// by 128).
+private enum SketchMetrics {
+    static let bar = LumiaTokens.space10 / 2
+    static let heading = LumiaTokens.space14 / 2
+    static let card = CGSize(width: LumiaTokens.space40 * 3, height: LumiaTokens.space40 * 3 + LumiaTokens.space8)
+}
+
 /// A bar of a sketch, `fraction` of the width it is given, with round ends.
 private struct SketchBar: Shape {
     let fraction: CGFloat
@@ -401,7 +417,7 @@ private struct SketchBar: Shape {
 private struct SketchLines: View {
     let fractions: [CGFloat]
     let color: Color
-    var height: CGFloat = 5
+    var height: CGFloat = SketchMetrics.bar
 
     var body: some View {
         VStack(alignment: .leading, spacing: LumiaTokens.space6) {
@@ -431,7 +447,7 @@ private struct AppearanceSketch: View {
 
     private func panel(dark: Bool) -> some View {
         VStack(alignment: .leading, spacing: LumiaTokens.space6) {
-            SketchBar(fraction: 0.5).fill(c(LumiaTokens.accent, dark: dark)).frame(height: 5)
+            SketchBar(fraction: 0.5).fill(c(LumiaTokens.accent, dark: dark)).frame(height: SketchMetrics.bar)
             SketchLines(fractions: [0.9, 0.72], color: c(LumiaTokens.lineStrong, dark: dark))
         }
         .padding(LumiaTokens.space8)
@@ -475,12 +491,12 @@ private struct PresetSketch: View {
     private var words: Color { LumiaTokens.borderForm.color }
 
     private func bar(_ fraction: CGFloat, _ color: Color) -> some View {
-        SketchBar(fraction: fraction).fill(color).frame(height: 5)
+        SketchBar(fraction: fraction).fill(color).frame(height: SketchMetrics.bar)
     }
 
     /// A bar of a set width.
     private func stub(_ width: CGFloat, _ color: Color) -> some View {
-        Capsule().fill(color).frame(width: width, height: 5)
+        Capsule().fill(color).frame(width: width, height: SketchMetrics.bar)
     }
 
     /// Comfortable's: a large avatar beside a name and a line of words.
@@ -654,14 +670,14 @@ private struct PreviewMedia: View {
 /// session, so this draws one that looks the same, the tile's corners and
 /// edge over a sketch of a sign-in card on the blue tone.
 private struct SampleScreenshot: View {
-    private static let card = CGSize(width: 120, height: 128)
+    private static let card = SketchMetrics.card
     private static let field = LumiaTokens.space18
 
     var body: some View {
         ZStack(alignment: .bottom) {
             LumiaTokens.toneBlue.color
             VStack(alignment: .leading, spacing: LumiaTokens.space8) {
-                SketchBar(fraction: 0.6).fill(LumiaTokens.borderActive.color).frame(height: 7)
+                SketchBar(fraction: 0.6).fill(LumiaTokens.borderActive.color).frame(height: SketchMetrics.heading)
                 RoundedRectangle(cornerRadius: LumiaTokens.radius6).strokeBorder(LumiaTokens.lineStrong.color).frame(height: Self.field)
                 RoundedRectangle(cornerRadius: LumiaTokens.radius6).strokeBorder(LumiaTokens.lineStrong.color).frame(height: Self.field)
                 RoundedRectangle(cornerRadius: LumiaTokens.radius6).fill(LumiaTokens.accent.color).frame(height: Self.field)

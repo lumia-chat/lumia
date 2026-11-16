@@ -9,10 +9,12 @@
 // press; the full-screen picture with pinch zoom, Save to Photos and
 // Share; a file shared or saved through the share sheet. Videos and
 // recordings play in their rows (`Playback.swift`). Images and Embeds in
-// Preferences draw every attachment as a file row and no cards when set
-// to links. The kit has
-// the rules (`Media.swift`), the platform's decoding (`MediaInput`) and
-// the session's side (`MediaSession.swift`).
+// Preferences draw every attachment as a row and no cards when set to
+// links; a recording's row still plays it. The kit has the rules
+// (`Media.swift`: how each attachment is drawn, `AttachmentDrawn`, and
+// the files handed to a player or the share sheet, `MediaFiles`, a folder
+// to each so neither removes the other's), the platform's decoding
+// (`MediaInput`) and the session's side (`MediaSession.swift`).
 import AVFoundation
 import AVKit
 import LumiaFFI
@@ -424,10 +426,10 @@ struct MessageMedia: View {
     }
 
     var body: some View {
-        let asRows = preferences.images == .link
+        let asLinks = preferences.images == .link
         // One the server let go is a row whatever it was, and opens nothing.
-        let visual = asRows ? [] : shown.filter { !$0.expired && AttachmentKind($0.kind).visual }
-        let rows = asRows ? shown : shown.filter { $0.expired || !AttachmentKind($0.kind).visual }
+        let visual = shown.filter { AttachmentDrawn.of($0, asLinks: asLinks) == .picture }
+        let rows = shown.filter { AttachmentDrawn.of($0, asLinks: asLinks) != .picture }
         VStack(alignment: .leading, spacing: LumiaTokens.space6) {
             if !visual.isEmpty {
                 PictureGrid(sizes: visual.map { ($0.width, $0.height) }, gap: Self.gap) {
@@ -440,15 +442,17 @@ struct MessageMedia: View {
             }
             ForEach(rows, id: \.attachmentId) { a in
                 removable(a.attachmentId) {
-                    if a.expired {
+                    switch AttachmentDrawn.of(a, asLinks: asLinks) {
+                    case .expired:
                         ExpiredRow(attachment: a, hold: hold)
-                    } else if AttachmentKind(a.kind) == .audio, !asRows {
+                    case .recording:
+                        // Images as links too: a recording's row plays it on a press.
                         AudioRow(attachment: a, messageID: messageID, session: session, hold: hold) { open(.file(a)) }
-                    } else if AttachmentKind(a.kind) == .video {
+                    case .videoRow:
                         // Images as links: a video's row plays it under itself on a press.
                         VideoFileRow(attachment: a, messageID: messageID, session: session, hold: hold)
-                    } else {
-                        FileRow(attachment: a, asFile: asRows, hold: hold) { open(.of(a)) }
+                    case .fileRow, .picture:
+                        FileRow(attachment: a, asFile: asLinks, hold: hold) { open(.of(a)) }
                     }
                 }
             }
@@ -502,6 +506,20 @@ struct PictureGrid: Layout {
             view.place(at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY), proposal: ProposedViewSize(frame.size))
         }
     }
+}
+
+/// What the pieces that play are drawn at, from the tokens, the number
+/// each comes to beside it.
+private enum MediaMetrics {
+    /// The play mark over a video's poster or a player's picture: its
+    /// glyph (18) in a circle (44).
+    static let playGlyph = LumiaTokens.space18
+    static let playMark = LumiaTokens.space40 + LumiaTokens.space4
+    /// A small glyph beside words: a card's Play or Show post, an embed's Close (12).
+    static let smallGlyph = LumiaTokens.space12
+    /// An embed's bar: Open in browser's glyph (14) and a button's place (32 by 28).
+    static let barGlyph = LumiaTokens.space14
+    static let barButton = CGSize(width: LumiaTokens.space28 + LumiaTokens.space4, height: LumiaTokens.space28)
 }
 
 /// An attachment's placeholder, drawn until its thumbnail arrives.
@@ -571,11 +589,11 @@ private struct AttachmentTile: View {
                     if playback?.loading.contains(attachment.attachmentId) == true {
                         ProgressView().tint(.white)
                     } else {
-                        Image(systemName: "play.fill").font(.system(size: 18, weight: .semibold))
+                        Image(systemName: "play.fill").font(.system(size: MediaMetrics.playGlyph, weight: .semibold))
                     }
                 }
                 .foregroundStyle(.white)
-                .frame(width: 44, height: 44)
+                .frame(width: MediaMetrics.playMark, height: MediaMetrics.playMark)
                 .background(.black.opacity(0.55), in: Circle())
             }
         }
@@ -679,7 +697,8 @@ private struct MediaBadge: View {
 
 /// A file as a row: an icon for its kind, its name, its size (and a
 /// length), and Save, which opens the share sheet. Tapped, it opens as
-/// what it is: a picture in the viewer, a video in the player.
+/// what it is: a picture in the viewer, a video in the player. A
+/// recording's row is `AudioRow`, with Images as links too.
 struct FileRow: View {
     let attachment: AttachmentSummary
     var asFile = false
@@ -876,14 +895,16 @@ struct LinkCardView: View {
     /// squarer one, or any in the composer's preview, small at their side.
     private var wide: Bool { !compact && card.imageHeight > 0 && Double(card.imageWidth) / Double(card.imageHeight) >= 1.4 }
 
-    /// The link's embed, while its press loads one here.
+    /// The link's embed, while its press loads one here: the core's, which
+    /// the conversation's playback asks once a link and keeps, since this
+    /// is read every time the card is drawn again.
     private var embed: EmbedSummary? {
         guard let embedKey, let playback, !playback.unavailable.contains(embedKey) else { return nil }
-        return embedFor(url: card.url)
+        return playback.embeds.embed(for: card.url)
     }
 
     var body: some View {
-        if let embedKey, let playback, playback.shows(embedKey), let web = playback.webView, let embed = embedFor(url: card.url) {
+        if let embedKey, let playback, playback.shows(embedKey), let web = playback.webView, let embed = playback.embeds.embed(for: card.url) {
             EmbedFrame(card: card, embed: embed, key: embedKey, web: web, playback: playback, hold: hold)
         } else {
             cardView
@@ -958,8 +979,8 @@ struct LinkCardView: View {
             LumiaTokens.inset.color
             if let picture { Image(decorative: picture, scale: 1).resizable().scaledToFill() }
             if embed != nil {
-                Image(systemName: "play.fill").font(.system(size: 18, weight: .semibold)).foregroundStyle(.white)
-                    .frame(width: 44, height: 44).background(.black.opacity(0.55), in: Circle())
+                Image(systemName: "play.fill").font(.system(size: MediaMetrics.playGlyph, weight: .semibold)).foregroundStyle(.white)
+                    .frame(width: MediaMetrics.playMark, height: MediaMetrics.playMark).background(.black.opacity(0.55), in: Circle())
             } else if card.video {
                 Image(systemName: "play.fill").font(.system(size: 12, weight: .semibold)).foregroundStyle(.white)
                     .frame(width: 28, height: 28).background(.black.opacity(0.55), in: Circle())
@@ -981,7 +1002,7 @@ private struct EmbedButton: View {
                 ProgressView().controlSize(.small)
                 Text(EmbedWords.finding)
             } else {
-                Image(systemName: embed.kind == "post" ? "text.bubble" : "play.fill").font(.system(size: 12, weight: .semibold))
+                Image(systemName: embed.kind == "post" ? "text.bubble" : "play.fill").font(.system(size: MediaMetrics.smallGlyph, weight: .semibold))
                 Text(EmbedWords.button(embed))
             }
         }
@@ -998,7 +1019,8 @@ private struct EmbedButton: View {
 /// browser and Close (back to the card), and the site's own embed under
 /// it at its size. The bar takes the long press for the message's
 /// actions, since the embed's own touches are the site's. Out of sight, a
-/// player or a post goes back to its card; a site's audio plays on.
+/// player goes back to its card; a site's audio plays on and a post stays
+/// shown (the core's `playbackStopsOffScreen`).
 private struct EmbedFrame: View {
     @Environment(\.openURL) private var openURL
     let card: CardSummary
@@ -1019,13 +1041,15 @@ private struct EmbedFrame: View {
                 Button {
                     if let url = URL(string: card.url) { openURL(url) }
                 } label: {
-                    Image(systemName: "safari").font(.system(size: 14)).frame(width: 32, height: 28)
+                    Image(systemName: "safari").font(.system(size: MediaMetrics.barGlyph))
+                        .frame(width: MediaMetrics.barButton.width, height: MediaMetrics.barButton.height)
                 }
                 .accessibilityLabel("Open in browser")
                 Button {
                     playback.close(key)
                 } label: {
-                    Image(systemName: "xmark").font(.system(size: 12, weight: .semibold)).frame(width: 32, height: 28)
+                    Image(systemName: "xmark").font(.system(size: MediaMetrics.smallGlyph, weight: .semibold))
+                        .frame(width: MediaMetrics.barButton.width, height: MediaMetrics.barButton.height)
                 }
                 .accessibilityLabel("Close \(embed.providerName)")
             }
@@ -1086,23 +1110,6 @@ extension View {
         .sheet(item: shared) { (open: MediaOpen) in
             if case let .file(a) = open { FileShareSheet(attachment: a, session: session) }
         }
-    }
-}
-
-/// An attachment's bytes as a file of its name, for the share sheet and the players.
-enum MediaFiles {
-    static func write(_ data: Data, for a: AttachmentSummary) throws -> URL {
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lumia-media/\(a.attachmentId)", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let name = a.name.replacingOccurrences(of: "/", with: "-").isEmpty ? "attachment" : a.name.replacingOccurrences(of: "/", with: "-")
-        let url = dir.appendingPathComponent(name)
-        try data.write(to: url, options: .atomic)
-        return url
-    }
-
-    static func remove(_ url: URL?) {
-        guard let url else { return }
-        try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
     }
 }
 

@@ -1,14 +1,17 @@
 """Files for the media smoke, with no dependencies: a landscape picture as a
 PNG (a sky going pale toward a horizon over green hills, so its shape and
-its way up are plain at a glance; sips makes the JPEG of it), and a
-one-page PDF.
+its way up are plain at a glance; sips makes the JPEG of it), a one-page
+PDF, and a quiet tone as a WAV (afconvert makes the recording of it), long
+enough to still be playing after a test has scrolled away and come back.
 
     python3 scripts/media.py picture <file.png> [<width> <height>]
     python3 scripts/media.py pdf <file.pdf> <words>
+    python3 scripts/media.py tone <file.wav> <seconds>
 """
 import math
 import struct
 import sys
+import wave
 import zlib
 
 
@@ -60,8 +63,19 @@ def pdf(path, words):
         f.write(out)
 
 
+def tone(path, seconds):
+    rate = 8000
+    with wave.open(path, "wb") as out:
+        out.setnchannels(1)
+        out.setsampwidth(2)
+        out.setframerate(rate)
+        out.writeframes(b"".join(struct.pack("<h", int(1200 * math.sin(2 * math.pi * 440 * n / rate))) for n in range(rate * seconds)))
+
+
 if sys.argv[1] == "picture":
     w, h = (int(sys.argv[3]), int(sys.argv[4])) if len(sys.argv) > 4 else (1200, 800)
     png(sys.argv[2], w, h)
 elif sys.argv[1] == "pdf":
     pdf(sys.argv[2], sys.argv[3])
+elif sys.argv[1] == "tone":
+    tone(sys.argv[2], int(sys.argv[3]))

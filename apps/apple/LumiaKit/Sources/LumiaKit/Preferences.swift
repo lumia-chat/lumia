@@ -127,7 +127,9 @@ public enum AvatarSize: String, CaseIterable, Sendable {
 
 /// Whether attachments and link cards are drawn in a message or left as
 /// links (specs/media.md 5): Images `link` draws every attachment as a
-/// file row, a picture's opening the viewer; Embeds `link` draws no cards.
+/// row, a picture's opening the viewer, a video's playing it under itself
+/// and a recording's playing it in place as it always does
+/// (`AttachmentDrawn`); Embeds `link` draws no cards.
 public enum MediaDisplay: String, CaseIterable, Sendable {
     case shown, link
 

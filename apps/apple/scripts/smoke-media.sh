@@ -15,13 +15,18 @@
 # PDF, each opening its message's actions and nothing else, then opens the
 # viewer (Save to Photos, Share, Close) and the PDF's share sheet with a
 # tap. Then inline video and embeds (specs/media.md 5 and 6.6) in #watch:
-# a recording, links to a YouTube video, an X post and a Bluesky post
-# named by its handle (cards from the internet, which the instance builds
-# only with LUMIA_LINK_CARDS=true; without three cards the script fails),
-# and a video; testVideoPlaysInPlaceAndEmbedsLoadOnAPress plays the video
-# in its row, loads each embed on a press and plays the recording, and the
-# script screenshots video, youtube, bluesky and x. What each site drew is
-# for the eye. Screenshots land in .build/smoke-media/.
+# a recording three minutes long, a photo, links to a YouTube video, an X
+# post and a Bluesky post named by its handle (cards from the internet,
+# which the instance builds only with LUMIA_LINK_CARDS=true; without three
+# cards the script fails), and a video;
+# testVideoPlaysInPlaceAndEmbedsLoadOnAPress plays the video in its row,
+# loads each embed on a press, plays the recording, which leaves X's post
+# shown and plays on under the picture viewer and while scrolled away,
+# and presses YouTube's card again, which pauses it and puts the post
+# back; the script screenshots video, youtube, bluesky and x. What each
+# site drew is for the eye. Last, launched in Minimal (Images as links),
+# testARecordingPlaysInItsRowWithImagesAsLinks plays the recording from
+# its row. Screenshots land in .build/smoke-media/.
 #
 #   scripts/smoke-media.sh     # expects the app and its tests built for the simulator (xcodebuild build-for-testing, see AGENTS.md) and the CLI
 #   LUMIA_INSTANCE=http://localhost:4083 LUMIA_SIMULATOR="iPhone 15 Pro Max" LUMIA_CLI=/path/to/lumia-cli scripts/smoke-media.sh
@@ -200,16 +205,22 @@ log="$work/uitest-embeds.log"
 shoot after 12
 
 # Inline video and embeds (specs/media.md 5 and 6.6), in #watch: the other
-# person sends a recording, links to a YouTube video, an X post and a
-# Bluesky post named by its handle (cards the instance builds from the
-# internet), and last a video. testVideoPlaysInPlaceAndEmbedsLoadOnAPress
-# plays the video in its row and loads each embed on a press; what each
-# site drew is in the screenshots, for the eye.
+# person sends a recording (three minutes of a tone, so it is still playing
+# when the test comes back to it), a photo, links to a YouTube video, an X
+# post and a Bluesky post named by its handle (cards the instance builds
+# from the internet), and last a video.
+# testVideoPlaysInPlaceAndEmbedsLoadOnAPress plays the video in its row,
+# loads each embed on a press and plays the recording under the viewer
+# and beside a post; what each site drew is in the screenshots, for the
+# eye.
 mine=$(token "$handle")
 watch=$(api "$mine" POST /channels "{\"serverId\":\"$server\",\"kind\":\"TEXT\",\"name\":\"watch\"}" | py "d = d.get('channel', d); print(d['channelId'])")
 api "$theirs" POST "/channels/$watch/join" >/dev/null
 scenes="$root/apps/desktop/src/scenes"
-c other send "$watch" "The tone from the call." --attach "$scenes/tone.m4a" >/dev/null
+python3 "$here/media.py" tone "$work/tone.wav" 180
+afconvert -f m4af -d aac "$work/tone.wav" "$work/tone.m4a"
+c other send "$watch" "The tone from the call." --attach "$work/tone.m4a" >/dev/null
+c other send "$watch" "And the ridge again." --attach "$work/ridge.jpg" >/dev/null
 c other send "$watch" "This one again: ${LUMIA_SMOKE_YOUTUBE:-https://www.youtube.com/watch?v=dQw4w9WgXcQ}" --cards >/dev/null
 c other send "$watch" "The first one: ${LUMIA_SMOKE_X:-https://x.com/jack/status/20}" --cards >/dev/null
 c other send "$watch" "Have you seen this? ${LUMIA_SMOKE_BLUESKY:-https://bsky.app/profile/bsky.app/post/3n25midjy722x}" --cards >/dev/null
@@ -221,7 +232,7 @@ for _ in $(seq 1 30); do
   sleep 1
 done
 [ "$cards" -ge 3 ] || fail "the instance built $cards of the three cards in #watch (it needs the internet and LUMIA_LINK_CARDS=true)"
-echo "seeded #watch: a recording, three links with cards and a video"
+echo "seeded #watch: a recording, a photo, three links with cards and a video"
 rm -f "$work/steps"/*
 TEST_RUNNER_LUMIA_DEV_INSTANCE="$instance" TEST_RUNNER_LUMIA_DEV_HANDLE="$handle" TEST_RUNNER_LUMIA_DEV_PASSWORD="$password" TEST_RUNNER_LUMIA_DEV_SCREEN=channel TEST_RUNNER_LUMIA_DEV_CHANNEL=watch TEST_RUNNER_LUMIA_DEV_NO_PUSH=1 \
 TEST_RUNNER_LUMIA_UITEST_STEPS="$work/steps" \
@@ -240,6 +251,24 @@ echo "the Bluesky card's press resolved the handle and showed the post: $work/bl
 reached x 90
 seen x
 echo "the X card's press showed the post: $work/x.png"
+reached recording 120
+seen recording
+echo "the recording plays with X's post still shown: $work/recording.png"
 wait "$uitest" || { echo "FAIL: the UI test did not pass; see $log"; grep -E "error|failed|XCTAssert" "$log" | head -10; exit 1; }
 uitest=""
-echo "smoke-media: ok (a photo, a file and a card drawn; a picture from the library attached, sent, drawn and opened by the other side; the viewer and the share sheet opened; a video played in its row; YouTube, Bluesky and X loaded on a press; screenshots under $work)"
+echo "the recording played on under the picture viewer and while scrolled away; a card pressed paused it and put the post back"
+
+# Images as links (Minimal): a recording's row plays it on a press.
+log="$work/uitest-links.log"
+rm -f "$work/steps"/*
+TEST_RUNNER_LUMIA_DEV_INSTANCE="$instance" TEST_RUNNER_LUMIA_DEV_HANDLE="$handle" TEST_RUNNER_LUMIA_DEV_PASSWORD="$password" TEST_RUNNER_LUMIA_DEV_SCREEN=channel TEST_RUNNER_LUMIA_DEV_CHANNEL=watch TEST_RUNNER_LUMIA_DEV_NO_PUSH=1 \
+TEST_RUNNER_LUMIA_DEV_PRESET=minimal TEST_RUNNER_LUMIA_UITEST_STEPS="$work/steps" \
+  xcodebuild test-without-building -project "$project/Lumia.xcodeproj" -scheme Lumia -destination "id=$udid" -derivedDataPath "$project/.build" \
+  -only-testing:LumiaUITests/SmokeUITests/testARecordingPlaysInItsRowWithImagesAsLinks > "$log" 2>&1 &
+uitest=$!
+reached links 240
+seen links
+echo "with Images as links the recording plays from its row: $work/links.png"
+wait "$uitest" || { echo "FAIL: the UI test did not pass; see $log"; grep -E "error|failed|XCTAssert" "$log" | head -10; exit 1; }
+uitest=""
+echo "smoke-media: ok (a photo, a file and a card drawn; a picture from the library attached, sent, drawn and opened by the other side; the viewer and the share sheet opened; a video played in its row; YouTube, Bluesky and X loaded on a press; a recording played on beside a post, under the viewer and scrolled away, and from its row with Images as links; screenshots under $work)"

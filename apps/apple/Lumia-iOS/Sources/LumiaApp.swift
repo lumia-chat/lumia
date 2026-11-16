@@ -13,6 +13,11 @@ struct LumiaApp: App {
     // not the account's and signing out leaves them be.
     @State private var preferences = Preferences()
 
+    init() {
+        // What a run that ended with something playing or being shared left behind.
+        MediaFiles.clear()
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView()

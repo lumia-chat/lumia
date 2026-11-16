@@ -1542,10 +1542,14 @@ final class SmokeUITests: XCTestCase {
     /// held while it plays it is still its message's actions. The YouTube
     /// card is a button named for what it plays; pressed, a web view takes
     /// its place. The Bluesky card is "Show post"; pressed, it is resolved
-    /// and shown, and YouTube's goes back to its card; then X's. Last the
-    /// recording plays in its row and X's post goes back to its card. The smoke
-    /// looks at `video`, `youtube`, `bluesky` and `x`; what each site drew
-    /// is for the eye.
+    /// and shown, and YouTube's goes back to its card; then X's. Then the
+    /// recording plays in its row and X's post stays shown, being read and
+    /// not played; a picture opened over the conversation and closed again
+    /// leaves the recording playing, and so does scrolling away from it,
+    /// past the post, which stays too. Last YouTube's card pressed again
+    /// pauses the recording and puts X's post back to its card. The smoke
+    /// looks at `video`, `youtube`, `bluesky`, `x` and `recording`; what
+    /// each site drew is for the eye.
     func testVideoPlaysInPlaceAndEmbedsLoadOnAPress() throws {
         let env = ProcessInfo.processInfo.environment
         let steps = try XCTUnwrap(env["LUMIA_UITEST_STEPS"])
@@ -1627,12 +1631,64 @@ final class SmokeUITests: XCTestCase {
         sleep(10)
         reached("x")
 
-        // The recording at the top plays in its row, and X's post goes back to its card.
+        // The recording at the top plays in its row, and X's post stays
+        // shown: an attachment started leaves a post being read where it is.
         let play = anything.matching(NSPredicate(format: "label == 'Play' AND value == 'tone.m4a'")).firstMatch
+        let pause = anything.matching(NSPredicate(format: "label == 'Pause' AND value == 'tone.m4a'")).firstMatch
         XCTAssertTrue(find(play, true), "the recording has no Play")
         play.tap()
-        XCTAssertTrue(anything.matching(NSPredicate(format: "label == 'Pause' AND value == 'tone.m4a'")).firstMatch.waitForExistence(timeout: 20), "the recording did not play in its row")
-        XCTAssertTrue(find(x, false), "the X post did not go back to its card when the recording started")
-        XCTAssertEqual(embeds.count, 0, "an embed is still shown after the recording started")
+        XCTAssertTrue(pause.waitForExistence(timeout: 20), "the recording did not play in its row")
+
+        // A picture opened over the conversation is not the conversation
+        // left: the recording plays on under the viewer.
+        let photo = labelled("Photo, ridge.jpg")
+        XCTAssertTrue(find(photo, false), "the photo under the recording is not there to open")
+        photo.tap()
+        XCTAssertTrue(app.buttons["Save to Photos"].waitForExistence(timeout: 10), "the photo did not open the viewer")
+        sleep(2)
+        app.buttons["Close"].tap()
+        XCTAssertTrue(find(pause, true), "the recording stopped when a picture was opened over the conversation")
+
+        // Scrolled away from, it plays on; and X's post, scrolled past
+        // and with an attachment started since, is still shown.
+        XCTAssertTrue(find(embeds.firstMatch, false), "the X post did not stay shown when the recording started and it was scrolled past")
+        XCTAssertFalse(x.exists, "the X post went back to its card")
+        reached("recording")
+        XCTAssertTrue(find(pause, true), "the recording did not play on while its row was out of sight")
+
+        // A card pressed stops everything else: the recording pauses, and
+        // the post goes back to its card for the one embed shown.
+        XCTAssertTrue(find(youtube, false), "the YouTube card is not there to press again")
+        pressed(youtube, "YouTube")
+        XCTAssertTrue(find(x, false), "the X post did not go back to its card when another card was pressed")
+        XCTAssertTrue(find(play, true), "the recording did not pause when a card was pressed")
+        XCTAssertFalse(pause.exists)
+    }
+
+    /// Images as links (scripts/smoke-media.sh launches in Minimal, specs/media.md
+    /// 5): a recording is still a row that plays it in place on a press, and
+    /// does not open the share sheet; a picture is a file's row.
+    func testARecordingPlaysInItsRowWithImagesAsLinks() throws {
+        let env = ProcessInfo.processInfo.environment
+        let steps = try XCTUnwrap(env["LUMIA_UITEST_STEPS"])
+        let app = launch()
+        let anything = app.descendants(matching: .any)
+        let list = app.scrollViews.firstMatch
+        let play = anything.matching(NSPredicate(format: "label == 'Play' AND value == 'tone.m4a'")).firstMatch
+        let row = anything.matching(NSPredicate(format: "label BEGINSWITH %@", "File, ridge.jpg")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 90) || play.exists, "the channel did not draw")
+        for _ in 0..<10 where !(play.exists && play.isHittable) {
+            list.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.3)).press(forDuration: 0.05, thenDragTo: list.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.7)))
+        }
+        if !play.exists { print("the channel in Minimal without the recording's Play:\n" + app.debugDescription) }
+        XCTAssertTrue(play.exists && play.isHittable, "with Images as links the recording's row has no Play")
+        XCTAssertTrue(row.exists, "with Images as links the photo is not a file's row")
+        XCTAssertFalse(anything.matching(NSPredicate(format: "label BEGINSWITH %@", "Photo, ridge.jpg")).firstMatch.exists, "the photo is drawn with Images as links")
+        sleep(1)
+        play.tap()
+        XCTAssertTrue(anything.matching(NSPredicate(format: "label == 'Pause' AND value == 'tone.m4a'")).firstMatch.waitForExistence(timeout: 20), "with Images as links the recording did not play from its row")
+        XCTAssertFalse(app.otherElements["ActivityListView"].waitForExistence(timeout: 2) || app.buttons["Save to Files"].exists, "the recording's row opened the share sheet")
+        sleep(1)
+        reached("links", under: steps)
     }
 }
