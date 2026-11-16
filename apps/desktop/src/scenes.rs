@@ -322,6 +322,7 @@ pub const SCENES: &[Scene] = &[
     ("media-edit", media::media_edit),
     // An attached video and a recording played in the conversation (#21).
     ("media-playing", media::media_playing),
+    ("media-failed", media::media_failed),
     // Quote replies, reactions, mentions and read state (architecture 6.6).
     ("replies", replies::replies),
     ("mention-list", replies::mention_list),

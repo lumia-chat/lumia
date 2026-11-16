@@ -303,6 +303,19 @@ impl State {
         }
     }
 
+    /// Whether the open conversation is what the main pane draws: not while a page stands
+    /// in its place (Home's other views, a server's settings, Browse, Mentions), nor on a
+    /// screen over the shell. The session keeps the conversation open through those, to come
+    /// back to; what belongs to its being on screen (a clip playing, marking it read) asks
+    /// this.
+    pub fn conversation_shown(&self) -> bool {
+        self.route == Route::Shell
+            && match self.place {
+                Place::Home => self.home_view == HomeView::Conversations,
+                Place::Server(_) => !self.server_settings_open() && self.server_page().is_none(),
+            }
+    }
+
     /// Goes to Home, showing `view`. No server is on screen there, so none is watched.
     pub fn go_home(&mut self, view: HomeView) {
         self.aside_open = false;

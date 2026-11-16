@@ -1,8 +1,9 @@
 //! Attached videos and recordings played in the conversation (#21, `app::playback`) through
 //! a windowless `Runtime`: nothing before a press, the video in its poster's place or under
 //! its row, one clip playing at a time, a video pausing when its row leaves the view, every
-//! clip ending with its conversation and its file removed, full screen, Preferences' Images
-//! "As links", an expired attachment, and Linux's system player. The clips are the scenes'
+//! clip ending with its conversation (or a page in its place) and its file removed, a file
+//! that could not be fetched asked for again, full screen, Preferences' Images "As links",
+//! an expired attachment, and Linux's system player. The clips are the scenes'
 //! own (`scenes::media::CLIP`, `TONE`), written as a fetch would write them; headless, Rune
 //! decodes the video's frames itself and plays no sound. Fetching needs an instance and is
 //! in the live tests.
@@ -13,10 +14,11 @@ mod common;
 
 use common::*;
 use lumia_client::app::{AttachmentSummary, BlobSummary};
-use lumia_shell::app::State;
 use lumia_shell::app::media::fetched;
+use lumia_shell::app::{HomeView, State};
 use lumia_shell::scenes::media::{CLIP, TONE, written};
-use lumia_shell::session::media::player_file;
+use lumia_shell::session::media::{MediaUpdate, player_file};
+use lumia_shell::session::{Failure, Update};
 use lumia_shell::settings::Media;
 use rune::{Key, KeyEvent, Mods, Runtime};
 
@@ -118,6 +120,17 @@ fn arrives(rt: &mut Runtime<State>, attachment: &AttachmentSummary) {
     let update = written(attachment, bytes);
     rt.update(move |s, _| s.receive(&update));
     settle(rt);
+}
+
+/// What the session reports when the clip's file could not be fetched.
+fn refused(attachment: &AttachmentSummary) -> Update {
+    Update::Media(MediaUpdate::Written {
+        attachment_id: attachment.attachment_id.clone(),
+        file: Err(Failure {
+            message: "the network is away".into(),
+            ..Failure::default()
+        }),
+    })
 }
 
 fn tick(rt: &mut Runtime<State>) {
@@ -241,6 +254,80 @@ fn a_video_pauses_when_its_row_leaves_the_view_and_a_recording_plays_on() {
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 #[test]
+fn a_video_whose_file_arrives_after_its_row_left_the_view_waits_paused() {
+    let (state, video, audio) = with_clips("late");
+    let mut rt = runtime(state);
+    press(&mut rt, &format!("picture-{}", video.attachment_id));
+    // Scrolled away before the file is there: the last row only is in view.
+    let count = rt.state.session.entries.len();
+    rt.update(move |s, _| {
+        s.rows_visible(&(count - 1..count));
+    });
+    arrives(&mut rt, &video);
+    let clip = rt.state.playback.clip(&video.attachment_id).unwrap();
+    assert!(
+        clip.player().is_some(),
+        "ready for when it is scrolled back"
+    );
+    assert!(!clip.playing(), "nothing plays out of view");
+    // A recording pressed and scrolled away plays when it arrives, as one playing goes on.
+    press(&mut rt, &format!("play-{}", audio.attachment_id));
+    rt.update(|s, _| {
+        s.rows_visible(&(0..1));
+    });
+    arrives(&mut rt, &audio);
+    assert!(playing(&rt, &audio.attachment_id));
+}
+
+#[test]
+fn a_clip_whose_file_could_not_be_fetched_is_asked_for_again() {
+    let (state, video, audio) = with_clips("again");
+    let mut rt = runtime(state);
+    for (attachment, pressed) in [(&video, "picture"), (&audio, "play")] {
+        let id = &attachment.attachment_id;
+        press(&mut rt, &format!("{pressed}-{id}"));
+        let update = refused(attachment);
+        rt.update(move |s, _| s.receive(&update));
+        settle(&mut rt);
+        assert!(words(&rt).contains("Could not fetch it: the network is away"));
+        // Its Play is still there, and a press asks for the file again.
+        assert!(label(&rt, &format!("toggle-{id}")).starts_with("Play "));
+        press(&mut rt, &format!("toggle-{id}"));
+        assert!(words(&rt).contains("Loading…"));
+        assert!(rt.state.playback.clip(id).unwrap().failure().is_none());
+        assert!(!has(&rt, &format!("toggle-{id}")));
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[test]
+fn a_clip_pressed_again_while_its_file_is_on_its_way_waits_for_that_file() {
+    let (state, video, _) = with_clips("twice");
+    let mut rt = runtime(state);
+    let id = video.attachment_id.clone();
+    let entries = rt.state.session.entries.clone();
+    press(&mut rt, &format!("picture-{id}"));
+    assert!(rt.state.playback.writing(&id));
+    // Another conversation and back before the file is there, and the video pressed again:
+    // the first write is still the one waited for, and the clip plays from it.
+    rt.update(|s, _| s.select_channel("design"));
+    tick(&mut rt);
+    assert!(rt.state.playback.clip(&id).is_none());
+    assert!(rt.state.playback.writing(&id), "its file is still coming");
+    rt.update(move |s, _| {
+        s.select_channel("general");
+        s.session.entries = entries;
+        s.session.revision += 1;
+    });
+    tick(&mut rt);
+    press(&mut rt, &format!("picture-{id}"));
+    arrives(&mut rt, &video);
+    assert!(playing(&rt, &id));
+    assert!(!rt.state.playback.writing(&id));
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[test]
 fn scrolling_the_list_away_from_a_video_pauses_it() {
     // Enough messages before the video that the list's head is far from it.
     let (mut state, video, _) = with_clips("list");
@@ -276,6 +363,47 @@ fn another_conversation_ends_every_clip_and_removes_its_file() {
     let late = clip("leave-late", "video");
     rt.update(|s, _| s.receive(&written(&late, CLIP)));
     assert!(!player_file(&late).unwrap().exists());
+}
+
+#[test]
+fn a_page_in_the_conversations_place_ends_its_clips() {
+    // A server's page over its channel: the session keeps the channel open under it.
+    let (mut state, video, audio) = with_clips("page");
+    for open in [
+        State::open_server_settings,
+        State::open_browse,
+        State::open_server_mentions,
+    ] {
+        state.play_attachment(&audio);
+        state.receive(&written(&audio, TONE));
+        assert!(state.conversation_shown());
+        open(&mut state);
+        assert!(!state.conversation_shown());
+        assert!(state.session.conversation.is_some());
+        state.tick(chrono::Utc::now().timestamp_micros());
+        assert!(state.playback.clip(&audio.attachment_id).is_none());
+        assert!(!player_file(&audio).unwrap().exists());
+        state.close_server_settings();
+        state.close_page();
+    }
+    // A personal conversation at Home, then Preferences from the account menu.
+    state.open_dm("page-dm");
+    let mut sent = message("page-p3", "grace", "Here too.", 1);
+    sent.attachments = vec![video.clone()];
+    state.session.entries = vec![sent];
+    state.play_attachment(&video);
+    state.receive(&written(&video, CLIP));
+    state.tick(chrono::Utc::now().timestamp_micros());
+    assert!(state.playback.clip(&video.attachment_id).is_some());
+    state.go_home(HomeView::Preferences);
+    assert!(!state.conversation_shown());
+    state.tick(chrono::Utc::now().timestamp_micros());
+    assert!(state.playback.clip(&video.attachment_id).is_none());
+    assert!(!player_file(&video).unwrap().exists());
+    // Back at the conversation, which the session kept.
+    state.go_home(HomeView::Conversations);
+    assert!(state.conversation_shown());
+    assert!(state.session.conversation.is_some());
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -326,6 +454,13 @@ fn the_position_moves_by_a_press_and_by_the_arrow_keys() {
         .unwrap()
         .clone();
     let duration = player.duration().expect("the clip's length, once drawn");
+    // The bar is a stop for the keyboard, where the arrow keys move it.
+    let bar = format!("seek-{}", video.attachment_id);
+    assert!(
+        rt.elements()
+            .into_iter()
+            .any(|e| e.key.as_deref() == Some(bar.as_str()) && e.focusable)
+    );
     rt.update(move |s, _| s.seek_clip(&id, 0.5));
     settle(&mut rt);
     assert!(

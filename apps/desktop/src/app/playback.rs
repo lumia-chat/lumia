@@ -4,25 +4,31 @@
 //!
 //! Nothing plays before a press. A press writes the attachment under the temporary directory
 //! by its id and its media type's extension (`session::media::player_file`), and the clip
-//! plays from that file once it is there, unless another was started meanwhile. Starting one
-//! pauses every other: one clip plays at a time in the window. A video pauses when its
-//! message's row leaves the list's view ([`State::rows_visible`]); a recording plays on
-//! while the list scrolls. Both stop and go, with their files, when another conversation
-//! opens or the shell is left: a clip belongs to the conversation it was started in.
+//! plays from that file once it is there, unless another was started meanwhile; one whose
+//! file could not be fetched keeps a Play that asks again. What starting one stops and what
+//! stops off screen are the core's rules (`lumia_core::playback`, specs/media.md 6.6), of
+//! which the shell has the attachments' half: starting one pauses every other, so one clip
+//! plays at a time in the window; a video pauses when its message's row leaves the list's
+//! view ([`State::rows_visible`]), and one whose file arrives while its row is away waits
+//! paused; a recording plays on while the list scrolls. Both stop and go, with their files,
+//! when the conversation leaves the screen (another opens, a page takes its place, the shell
+//! is left): a clip belongs to the conversation it was started in.
 //!
 //! Where Rune has no player (Linux, [`INLINE`]), or for an attachment the server let go
 //! (`expired`, which has nothing to fetch), nothing here holds a clip: Play opens the
 //! system's player as before, and an expired file does nothing.
 //!
 //! Full screen is the video over the whole window, as the viewer is, with the window taken
-//! full screen with it and brought back when it closes. Rune does not say whether the
-//! window was full screen already, so one that was leaves full screen when the video does.
+//! full screen with it and brought back when it closes. A window that was full screen
+//! already stays so afterwards, and one the person brought back themselves meanwhile is
+//! left alone ([`Playback::settle_window`], from what the platform says of the window).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::path::PathBuf;
 
 use lumia_client::app::AttachmentSummary;
+use lumia_core::playback::{Kind, Playing, stops, stops_off_screen};
 use rune::{Key, KeyEvent, Player, PlayerState, Tx, Waker};
 
 use super::State;
@@ -35,6 +41,18 @@ pub const INLINE: bool = cfg!(any(target_os = "macos", target_os = "windows"));
 
 /// How far the arrow keys move a clip, in seconds.
 pub const STEP_SECONDS: f64 = 5.0;
+
+/// What an attachment played is to the core's rules of what playing stops.
+fn playing_as(attachment: &AttachmentSummary) -> Playing {
+    Playing {
+        embed: false,
+        kind: if attachment.kind == "video" {
+            Kind::Video
+        } else {
+            Kind::Audio
+        },
+    }
+}
 
 /// Where a clip pressed stands.
 pub enum Stage {
@@ -63,6 +81,16 @@ impl Clip {
 
     pub fn is_video(&self) -> bool {
         self.attachment.kind == "video"
+    }
+
+    fn playing_as(&self) -> Playing {
+        playing_as(&self.attachment)
+    }
+
+    /// Whether its file could not be fetched, which a press may ask for again; a file the
+    /// player cannot open would be the same file again.
+    pub fn fetch_failed(&self) -> bool {
+        matches!(self.stage, Stage::Failed(_))
     }
 
     /// Whether it plays, or will as soon as it has loaded.
@@ -111,13 +139,21 @@ pub struct Playback {
     clips: HashMap<String, Clip>,
     /// The clip pressed last: it plays once its file is written, unless another was pressed.
     wanted: Option<String>,
+    /// The attachments whose files are being written. A clip pressed again while its file
+    /// is on its way (after another conversation and back) waits for that one: a second
+    /// write would land over the file already playing.
+    writing: HashSet<String>,
     /// The conversation the clips were started in.
     conversation: Option<Conversation>,
+    /// The list's rows last in its view; none until it has said.
+    visible: Option<Range<usize>>,
     /// The video over the whole window.
     pub full_screen: Option<String>,
-    /// The window is owed a turn into or out of full screen, which the next poll pays: a
-    /// change of the clips has no `Tx` (a modal's Escape, a conversation's end).
-    toggle_owed: bool,
+    /// Whether the window has followed the video: a change of the clips has no `Tx` (a
+    /// modal's Escape, a conversation's end), so the poll carries it out.
+    window_followed: bool,
+    /// Whether the window was taken full screen for the video, to be brought back with it.
+    took_window: bool,
     waker: Option<Waker>,
     /// The quarter second of the playing clip the view was last run for.
     shown: Option<(String, i64)>,
@@ -129,9 +165,12 @@ impl Default for Playback {
             inline: INLINE,
             clips: HashMap::new(),
             wanted: None,
+            writing: HashSet::new(),
             conversation: None,
+            visible: None,
             full_screen: None,
-            toggle_owed: false,
+            window_followed: false,
+            took_window: false,
             waker: None,
             shown: None,
         }
@@ -161,6 +200,11 @@ impl Playback {
         self.clips.get(attachment_id)
     }
 
+    /// Whether the attachment's file is being written for a clip.
+    pub fn writing(&self, attachment_id: &str) -> bool {
+        self.writing.contains(attachment_id)
+    }
+
     /// The clip playing, if one is.
     pub fn playing(&self) -> Option<&str> {
         self.clips
@@ -169,9 +213,11 @@ impl Playback {
             .map(|(id, _)| id.as_str())
     }
 
-    fn pause_others(&mut self, attachment_id: &str) {
+    /// `starting` is about to play: what that stops pauses.
+    fn pause_others(&mut self, starting: &AttachmentSummary) {
         for (id, clip) in &self.clips {
-            if id != attachment_id
+            if *id != starting.attachment_id
+                && stops(playing_as(starting), clip.playing_as())
                 && let Some(player) = clip.player()
             {
                 player.pause();
@@ -185,10 +231,32 @@ impl Playback {
         self.clips.clear();
         self.wanted = None;
         self.shown = None;
-        if self.full_screen.take().is_some() {
-            self.toggle_owed ^= true;
-        }
+        self.visible = None;
+        self.full_screen = None;
         had
+    }
+
+    /// Whether the window has yet to follow the video into or out of full screen.
+    pub fn owes_window(&self) -> bool {
+        self.full_screen.is_some() != self.window_followed
+    }
+
+    /// The window follows the video: true when it is to be turned into or out of full
+    /// screen now. `window` is whether it is full screen as the platform says, none where
+    /// nothing says (the window is then taken to be as the shell left it). One full screen
+    /// already is not turned and stays so when the video closes; one taken full screen for
+    /// the video is brought back with it, unless the person brought it back themselves.
+    pub fn settle_window(&mut self, window: Option<bool>) -> bool {
+        if !self.owes_window() {
+            return false;
+        }
+        self.window_followed = self.full_screen.is_some();
+        if self.window_followed {
+            self.took_window = window != Some(true);
+            self.took_window
+        } else {
+            std::mem::take(&mut self.took_window) && window != Some(false)
+        }
     }
 }
 
@@ -206,21 +274,23 @@ impl State {
         }
         self.follow_conversation();
         let id = attachment.attachment_id.clone();
-        self.playback.pause_others(&id);
+        self.playback.pause_others(attachment);
         self.playback.wanted = Some(id.clone());
         match self.playback.clips.get(&id).map(|clip| &clip.stage) {
             Some(Stage::Ready(player)) => player.play(),
             Some(Stage::Fetching) => {}
             Some(Stage::Failed(_)) | None => {
                 self.playback.clips.insert(
-                    id,
+                    id.clone(),
                     Clip {
                         attachment: attachment.clone(),
                         stage: Stage::Fetching,
                         file: None,
                     },
                 );
-                self.session.write_for_inline(attachment);
+                if self.playback.writing.insert(id) {
+                    self.session.write_for_inline(attachment);
+                }
             }
         }
         self.session.revision += 1;
@@ -297,14 +367,12 @@ impl State {
             return;
         }
         self.playback.full_screen = Some(attachment_id.to_string());
-        self.playback.toggle_owed ^= true;
         self.session.revision += 1;
     }
 
     /// Escape or the full-screen video's button: back in its message, the window as it was.
     pub fn exit_full_screen(&mut self) {
         if self.playback.full_screen.take().is_some() {
-            self.playback.toggle_owed ^= true;
             self.session.revision += 1;
         }
     }
@@ -325,22 +393,14 @@ impl State {
         true
     }
 
-    /// The list's rows `visible` are in its view: a video whose message is not pauses.
-    /// True when one did.
+    /// The list's rows `visible` are in its view: what stops off screen (a video) and whose
+    /// message is not there pauses. True when one did.
     pub fn rows_visible(&mut self, visible: &Range<usize>) -> bool {
+        self.playback.visible = Some(visible.clone());
         let mut paused = false;
         for clip in self.playback.clips.values() {
-            if !clip.is_video() || !clip.playing() {
-                continue;
-            }
-            let id = clip.attachment.attachment_id.as_str();
-            let row = self
-                .session
-                .entries
-                .iter()
-                .position(|e| e.attachments.iter().any(|a| a.attachment_id == id));
-            if row.is_none_or(|row| !visible.contains(&row))
-                && self.playback.full_screen.as_deref() != Some(id)
+            if clip.playing()
+                && self.off_screen(clip)
                 && let Some(player) = clip.player()
             {
                 player.pause();
@@ -350,9 +410,36 @@ impl State {
         paused
     }
 
-    /// The clips belong to the conversation on screen: another, or none, ends them.
+    /// Whether `clip` is one that stops off screen and its message's row is out of the
+    /// list's view, as the list last said it. The video over the whole window is on screen
+    /// wherever its row is.
+    fn off_screen(&self, clip: &Clip) -> bool {
+        let id = clip.attachment.attachment_id.as_str();
+        let Some(visible) = self
+            .playback
+            .visible
+            .as_ref()
+            .filter(|_| stops_off_screen(clip.playing_as()))
+        else {
+            return false;
+        };
+        let row = self
+            .session
+            .entries
+            .iter()
+            .position(|e| e.attachments.iter().any(|a| a.attachment_id == id));
+        row.is_none_or(|row| !visible.contains(&row))
+            && self.playback.full_screen.as_deref() != Some(id)
+    }
+
+    /// The clips belong to the conversation on screen: another, or none (a page in its
+    /// place among them, [`State::conversation_shown`]), ends them.
     fn follow_conversation(&mut self) -> bool {
-        let now = self.session.conversation.as_ref();
+        let now = self
+            .session
+            .conversation
+            .as_ref()
+            .filter(|_| self.conversation_shown());
         if self.playback.conversation.as_ref() == now {
             return false;
         }
@@ -360,10 +447,12 @@ impl State {
         self.playback.forget()
     }
 
-    /// On the way out of the shell: every clip stops and goes.
+    /// On the way out of the shell: every clip stops and goes. A file still on its way is
+    /// the session's that is left, and nothing is waited for.
     pub(crate) fn forget_clips(&mut self) {
         self.playback.forget();
         self.playback.conversation = None;
+        self.playback.writing.clear();
     }
 
     /// What the passing of time does for the clips: they end with their conversation, and
@@ -385,19 +474,19 @@ impl State {
         ended || moved
     }
 
-    /// While a clip plays the window is woken for its time; the window is taken into or out
-    /// of full screen as the video was.
+    /// While a clip plays the window is woken for its time. The window following the video
+    /// into and out of full screen is the platform's to carry out, which knows the window
+    /// (`platform::settle`).
     pub(crate) fn poll_playback(&mut self, tx: &mut Tx) {
         if self.playback.playing().is_some() {
             tx.wake_after(std::time::Duration::from_millis(250));
         }
-        if std::mem::take(&mut self.playback.toggle_owed) {
-            tx.toggle_full_screen();
-        }
     }
 
     /// A clip's file was written, or could not be: it is ready, and plays when it is still
-    /// the one pressed last. One no longer held (its conversation ended) is removed.
+    /// the one pressed last and its row has not left the view meanwhile (a video's; it
+    /// waits paused, as one that was playing would have been). One no longer held (its
+    /// conversation ended) is removed.
     pub(crate) fn react_playback(&mut self, update: &MediaUpdate) {
         let MediaUpdate::Written {
             attachment_id,
@@ -406,7 +495,13 @@ impl State {
         else {
             return;
         };
-        let wanted = self.playback.wanted.as_deref() == Some(attachment_id);
+        self.playback.writing.remove(attachment_id);
+        let wanted = self.playback.wanted.as_deref() == Some(attachment_id)
+            && !self
+                .playback
+                .clips
+                .get(attachment_id)
+                .is_some_and(|clip| self.off_screen(clip));
         let waker = self.playback.waker.clone();
         let Some(clip) = self
             .playback
@@ -462,7 +557,49 @@ pub fn clock(seconds: f64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::clock;
+    use super::{Playback, clock};
+
+    /// The video goes full screen and comes back, with the window as `before`, then as
+    /// `after` when the video closes: whether the window was turned each time.
+    fn turns(before: Option<bool>, after: Option<bool>) -> (bool, bool) {
+        let mut playback = Playback {
+            full_screen: Some("v".into()),
+            ..Playback::default()
+        };
+        let entering = playback.settle_window(before);
+        assert!(!playback.settle_window(before), "paid once");
+        playback.full_screen = None;
+        (entering, playback.settle_window(after))
+    }
+
+    #[test]
+    fn the_window_follows_the_video_into_full_screen_and_back() {
+        assert_eq!(turns(Some(false), Some(true)), (true, true));
+        // Where nothing says how the window is, it is taken to be as the shell left it.
+        assert_eq!(turns(None, None), (true, true));
+    }
+
+    #[test]
+    fn a_window_already_full_screen_stays_so_when_the_video_closes() {
+        assert_eq!(turns(Some(true), Some(true)), (false, false));
+    }
+
+    #[test]
+    fn a_window_the_person_brought_back_is_not_turned_again() {
+        assert_eq!(turns(Some(false), Some(false)), (true, false));
+    }
+
+    #[test]
+    fn a_video_opened_and_closed_before_the_window_followed_owes_nothing() {
+        let mut playback = Playback {
+            full_screen: Some("v".into()),
+            ..Playback::default()
+        };
+        assert!(playback.owes_window());
+        playback.full_screen = None;
+        assert!(!playback.owes_window());
+        assert!(!playback.settle_window(Some(false)));
+    }
 
     #[test]
     fn a_clips_time_reads_as_a_player_says_it() {

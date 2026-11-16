@@ -199,6 +199,37 @@ fn main() {
             cpu,
         );
     }
+    // What a clip playing costs while the list sits still: the view is run again each quarter
+    // second for the clip's time and bar, which bumps the list's version, and every row on
+    // screen is built again (`State::tick_playback`). Beside it, the same run with the
+    // version kept, which is what a version of the playing row's own would come to.
+    if wants("tick") {
+        for bump in [true, false] {
+            let mut rt = runtime();
+            let cpu = measure(&mut rt, 480, |rt, i| {
+                if i.is_multiple_of(30) {
+                    rt.update(|s, _| {
+                        if bump {
+                            s.session.revision += 1;
+                        }
+                    });
+                }
+            });
+            let mut each: Vec<f64> = cpu.iter().step_by(30).copied().collect();
+            each.sort_by(f64::total_cmp);
+            println!(
+                "{:<10} the frame after each quarter second's run: p50 {:.3} ms  max {:.3}  ({})",
+                "tick",
+                each[each.len() / 2],
+                each[each.len() - 1],
+                if bump {
+                    "the list's version bumped"
+                } else {
+                    "the version kept"
+                },
+            );
+        }
+    }
     if wants("open") {
         let start = rune::thread_cpu_ms();
         let mut rt = Runtime::new(state(), ui::view, SIZE, Env::new(false, 2.0));

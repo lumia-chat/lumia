@@ -669,6 +669,7 @@ impl State {
         }
         if self.notices.in_front
             && self.replies.newest_visible
+            && self.conversation_shown()
             && self.session.previewing.is_none()
             && let (Some(conversation), Some(newest)) = (
                 self.session.conversation.clone(),

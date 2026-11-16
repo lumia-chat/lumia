@@ -345,15 +345,27 @@ fn clip_controls(clip: &Clip, ty: &t::MessageType, full_screen: bool, look: Look
         .gap(t::SPACE_6)
         .items_center();
     if let Some(why) = clip.failure() {
-        return line.child(
-            text(why)
-                .font(ty.meta)
-                .color(c.ink_muted)
-                .wrap()
-                .grow(1.0)
-                .min_w(0.0)
-                .role("alert"),
-        );
+        let why = text(why)
+            .font(ty.meta)
+            .color(c.ink_muted)
+            .wrap()
+            .grow(1.0)
+            .min_w(0.0)
+            .role("alert");
+        // One whose file could not be fetched keeps its Play, which asks for it again.
+        return if clip.fetch_failed() {
+            let again = id.clone();
+            line.child(icon_button(
+                format!("toggle-{id}"),
+                &icons::PLAY,
+                &play_label(a),
+                move |s: &mut State| s.toggle_clip(&again),
+                look,
+            ))
+            .child(why)
+        } else {
+            line.child(why)
+        };
     }
     let Some(player) = clip.player() else {
         return line.child(

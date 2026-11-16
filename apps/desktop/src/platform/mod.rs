@@ -42,10 +42,11 @@ pub mod instance;
 mod system;
 pub mod updates;
 
+use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock, PoisonError};
 
-use rune::{App, AppHandle, MenuError, Tx};
+use rune::{App, AppHandle, MenuError, Tx, WindowHandle};
 use rune_notify::{Click, Notification};
 
 use crate::app::{self, Route, State, menu};
@@ -89,6 +90,12 @@ static POSTED: Mutex<Vec<String>> = Mutex::new(Vec::new());
 /// The count last put on the Dock icon.
 static BADGE: Mutex<Option<u32>> = Mutex::new(None);
 
+thread_local! {
+    /// The window, from when it is made (`install`): asked whether it is full screen when a
+    /// video goes there or comes back. It stays on the window's thread.
+    static WINDOW: RefCell<Option<WindowHandle>> = const { RefCell::new(None) };
+}
+
 /// The size to open the window at: the one remembered from the last launch on macOS,
 /// else the default. A headless run always draws [`HEADLESS_SIZE`].
 pub fn window_size(headless: bool) -> (f32, f32) {
@@ -103,7 +110,10 @@ pub fn window_size(headless: bool) -> (f32, f32) {
 /// Adds the shell's hooks to the app: links, focus, the Account menu, and on macOS a
 /// process that outlives its window.
 pub fn install(app: App<State>) -> App<State> {
-    let mut app = app.on_open_url(open_url).on_focus(focus);
+    let mut app = app
+        .on_open_url(open_url)
+        .on_focus(focus)
+        .on_window(|window| WINDOW.with_borrow_mut(|held| *held = Some(window.clone())));
     // The update items join when the updater has started, which needs the app running.
     for item in menu::items((false, false), None) {
         app = app.menu_item(item);
@@ -264,6 +274,11 @@ pub fn settle(state: &mut State, tx: &mut Tx) -> bool {
     }
     notify(state);
     remember_frame();
+    // A video gone full screen or back takes the window with it, by how the window stands
+    // (`app::playback`): one full screen already is left so.
+    if state.playback.owes_window() && state.playback.settle_window(window_full_screen()) {
+        tx.toggle_full_screen();
+    }
     if WINDOWED.load(Ordering::Relaxed) {
         for file in std::mem::take(&mut state.media.to_open) {
             if let Err(error) = open_file(&file) {
@@ -411,6 +426,12 @@ fn badge(state: &State) {
     let set = lumia_sparkle::set_badge(label.as_deref());
     trace(|| format!("badge {count} set={set}"));
     *last = Some(count);
+}
+
+/// Whether the window is full screen, where there is one that says: none headless, in a
+/// test, and on Wayland, which keeps a window's place to itself.
+fn window_full_screen() -> Option<bool> {
+    WINDOW.with_borrow(|window| Some(window.as_ref()?.placement()?.full_screen))
 }
 
 /// Has AppKit save the window's frame and restore it at the next launch. Asked until the

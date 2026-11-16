@@ -285,6 +285,25 @@ pub fn media_playing(state: &mut State) {
     }
 }
 
+/// `media-failed`: the demo video and the voice note pressed and neither file fetched: what
+/// each says, beside the Play that asks for it again.
+pub fn media_failed(state: &mut State) {
+    media(state);
+    let Some(entry) = state.session.entries.iter().find(|e| e.id == "x5") else {
+        return;
+    };
+    for attachment in entry.attachments.clone() {
+        state.play_attachment(&attachment);
+        state.receive(&Update::Media(MediaUpdate::Written {
+            attachment_id: attachment.attachment_id,
+            file: Err(Failure {
+                message: "the instance could not be reached".into(),
+                ..Failure::default()
+            }),
+        }));
+    }
+}
+
 /// What the session reports once an attachment's bytes are written for the window's player,
 /// here with the bytes given: for a scene or a test, with no instance to fetch them from.
 pub fn written(attachment: &AttachmentSummary, bytes: &[u8]) -> Update {
