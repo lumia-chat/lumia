@@ -570,7 +570,7 @@ defmodule Lumia.Servers do
   defp drop_icon(same, same), do: :ok
 
   defp drop_icon(old, _new) do
-    if address = Accounts.avatar_address(old), do: Lumia.Blobs.delete(address)
+    if address = Accounts.avatar_address(old), do: Lumia.Blobs.delete(address, kind: "icon")
     :ok
   end
 

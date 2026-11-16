@@ -101,19 +101,62 @@ defmodule Lumia.Blobs do
   @doc """
   Removes the blob at `address`, object and then row; fine when it is not
   there. `{:error, reason}` when the store would not let the object go,
-  and the row stays to say it is there.
-  """
-  def delete(address) when is_binary(address) do
-    case Repo.get(Blob, address) do
-      nil ->
-        :ok
+  and the row stays to say it is there (`sweep_pictures/0` tries again).
 
-      %Blob{kind: kind} ->
-        with :ok <- Store.delete(object_name(kind, address)) do
-          Repo.delete_all(from b in Blob, where: b.address == ^address)
-          :ok
-        end
+  `only` (`kind: "icon"`, `owner_account_id: id`) names what the blob must
+  be for it to go; another is left. An account's `avatar_url` can name a
+  blob that is not its own (a signed profile may say anything), so what
+  replaces a picture deletes only the picture it owned.
+  """
+  def delete(address, only \\ []) when is_binary(address) do
+    case Repo.get(Blob, address) do
+      nil -> :ok
+      %Blob{} = blob -> if matches?(blob, only), do: delete_blob(blob), else: :ok
     end
+  end
+
+  defp matches?(blob, only),
+    do: Enum.all?(only, fn {field, value} -> Map.fetch!(blob, field) == value end)
+
+  defp delete_blob(%Blob{kind: kind, address: address}) do
+    with :ok <- Store.delete(object_name(kind, address)) do
+      Repo.delete_all(from b in Blob, where: b.address == ^address)
+      :ok
+    end
+  end
+
+  @doc """
+  Removes account and server pictures more than an hour old that no
+  account's `avatar_url` and no server's `icon_url` names: one whose
+  replacement could not delete it (the store refused), or one left by a
+  failure between keeping it and naming it. Hourly from `SweepMedia`.
+  Returns how many went.
+  """
+  def sweep_pictures do
+    before = DateTime.add(DateTime.utc_now(), -1, :hour)
+
+    Repo.all(
+      from b in Blob,
+        as: :blob,
+        where:
+          b.kind in ["avatar", "icon"] and b.inserted_at < ^before and
+            not exists(
+              from a in "accounts",
+                where:
+                  a.avatar_url ==
+                    fragment("'/api/v1/avatars/' || encode(?, 'hex')", parent_as(:blob).address),
+                select: 1
+            ) and
+            not exists(
+              from s in "servers",
+                where:
+                  s.icon_url ==
+                    fragment("'/api/v1/avatars/' || encode(?, 'hex')", parent_as(:blob).address),
+                select: 1
+            ),
+        limit: 1_000
+    )
+    |> Enum.count(&(delete_blob(&1) == :ok))
   end
 
   @doc "The names of the blobs the table has and the store does not, for a restore to report."

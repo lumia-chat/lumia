@@ -184,16 +184,19 @@ defmodule Lumia.Accounts do
       end)
 
     with {:ok, updated} <- result do
-      drop_avatar(account.avatar_url, updated.avatar_url)
+      drop_avatar(account.avatar_url, updated.avatar_url, account.id)
       {:ok, updated}
     end
   end
 
   # The picture an account no longer names is nobody's: its blob goes.
-  defp drop_avatar(same, same), do: :ok
+  # Only a picture of its own: a signed profile may have named another's.
+  defp drop_avatar(same, same, _account_id), do: :ok
 
-  defp drop_avatar(old, _new) do
-    if address = avatar_address(old), do: Lumia.Blobs.delete(address)
+  defp drop_avatar(old, _new, account_id) do
+    if address = avatar_address(old),
+      do: Lumia.Blobs.delete(address, kind: "avatar", owner_account_id: account_id)
+
     :ok
   end
 
@@ -311,7 +314,7 @@ defmodule Lumia.Accounts do
            |> Repo.update(),
          {:ok, _} <-
            profile_changed(updated) do
-      Tx.after_commit(fn -> drop_avatar(account.avatar_url, updated.avatar_url) end)
+      Tx.after_commit(fn -> drop_avatar(account.avatar_url, updated.avatar_url, account.id) end)
       {:ok, updated}
     end
   end

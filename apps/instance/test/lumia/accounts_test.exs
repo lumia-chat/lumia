@@ -3,6 +3,8 @@ defmodule Lumia.AccountsTest do
   # test reads), which a test running beside it would see.
   use Lumia.DataCase, async: false
 
+  import Ecto.Query
+
   import Lumia.Fixtures
 
   alias Lumia.Accounts
@@ -178,6 +180,43 @@ defmodule Lumia.AccountsTest do
       assert none.avatar_url == nil
       assert {:error, :not_found} = Lumia.Blobs.fetch(new, "avatar")
       assert {:ok, ^none} = Accounts.remove_avatar(none)
+    end
+
+    test "replacing a picture named by an imported profile never deletes another's", %{
+      account: account
+    } do
+      {:ok, victim} = Accounts.set_avatar(account, @photo)
+
+      # A signed profile may name any path, this instance's pictures of
+      # other people included; account creation takes it as it is.
+      {:ok, borrower} =
+        Accounts.create_account(%{
+          handle: "borrower#{System.unique_integer([:positive])}",
+          avatar_url: victim.avatar_url
+        })
+
+      {:ok, _} = Accounts.set_avatar(borrower, @logo)
+      {:ok, _} = Accounts.remove_avatar(Lumia.Repo.reload!(borrower))
+
+      assert {:ok, _} = Lumia.Blobs.fetch(Accounts.avatar_address(victim.avatar_url), "avatar")
+    end
+
+    test "a picture nothing names is swept after an hour, one named never", %{account: account} do
+      {:ok, named} = Accounts.set_avatar(account, @photo)
+      {:ok, lost} = Lumia.Blobs.put("a picture whose delete failed", "avatar", "image/png", nil)
+      {:ok, fresh} = Lumia.Blobs.put("a picture about to be named", "icon", "image/png", nil)
+
+      hour_ago = DateTime.add(DateTime.utc_now(), -2, :hour)
+
+      Lumia.Repo.update_all(
+        from(b in Lumia.Blobs.Blob, where: b.address != ^fresh.address),
+        set: [inserted_at: hour_ago]
+      )
+
+      assert Lumia.Blobs.sweep_pictures() == 1
+      assert {:error, :not_found} = Lumia.Blobs.fetch(lost.address, "avatar")
+      assert {:ok, _} = Lumia.Blobs.fetch(Accounts.avatar_address(named.avatar_url), "avatar")
+      assert {:ok, _} = Lumia.Blobs.fetch(fresh.address, "icon")
     end
 
     test "what is not a picture is refused and changes nothing", %{account: account} do
