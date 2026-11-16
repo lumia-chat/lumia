@@ -708,6 +708,81 @@ pub struct CardSummary {
     pub video: bool,
 }
 
+/// A link's embed (specs/media.md 6.6): what pressing its card loads in the
+/// card's place. It comes from the link in the text, never from the card.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbedSummary {
+    /// `youtube`, `vimeo`, `twitch`, `soundcloud`, `spotify`, `x`,
+    /// `bluesky`, `facebook`, `instagram`, `tiktok` or `reddit`.
+    pub provider: String,
+    /// The site's name as a person reads it: `YouTube`, `X`.
+    pub provider_name: String,
+    /// `player` (a video: back to its card when its row scrolls away or the
+    /// conversation changes), `audio` (plays on until another starts or the
+    /// conversation is left) or `post`.
+    pub kind: String,
+    /// The address to load; empty for a Bluesky post named by handle.
+    pub url: String,
+    /// A Bluesky post named by its account's handle: resolve the handle
+    /// ([`App::resolve_bluesky_handle`]) on the press and load
+    /// [`App::bluesky_embed_url`] of the DID and `bluesky_rkey`. Empty
+    /// otherwise.
+    pub bluesky_handle: String,
+    pub bluesky_rkey: String,
+    /// Twitch: append `&parent=<the page's host>` to `url` before loading
+    /// it (the instance's host on the web and the phones).
+    pub needs_parent: bool,
+    /// A player's shape, drawn at the column's width at most and at most
+    /// 400 tall; both 0 when it has none.
+    pub aspect_width: u32,
+    pub aspect_height: u32,
+    /// The height to draw it, when it has no shape: fixed for audio and for
+    /// Facebook's, Instagram's posts (the rest scrolls inside), or the
+    /// height to hold until the embed reports its own when `resizes`.
+    pub fixed_height: u32,
+    /// X, Bluesky and Reddit: grow to the height the embed reports by
+    /// `postMessage`.
+    pub resizes: bool,
+    /// The widest to draw it: 550 for a post, 0 for the column's width.
+    pub max_width: u32,
+    /// The press's accessible name before the card's title:
+    /// `Play video from YouTube`, `Show post from X`.
+    pub label: String,
+}
+
+impl From<lumia_core::embeds::Embed> for EmbedSummary {
+    fn from(e: lumia_core::embeds::Embed) -> Self {
+        use lumia_core::embeds::{Shape, Source};
+        let label = e.label();
+        let max_width = e.max_width().unwrap_or(0);
+        let (url, bluesky_handle, bluesky_rkey) = match e.source {
+            Source::Url(url) => (url, String::new(), String::new()),
+            Source::BlueskyHandle { handle, rkey } => (String::new(), handle, rkey),
+        };
+        let (aspect_width, aspect_height, fixed_height, resizes) = match e.shape {
+            Shape::Ratio { width, height } => (width, height, 0, false),
+            Shape::Fixed { height } => (0, 0, height, false),
+            Shape::Resizes { height } => (0, 0, height, true),
+        };
+        Self {
+            provider: e.provider.id().to_string(),
+            provider_name: e.provider.name().to_string(),
+            kind: e.kind.id().to_string(),
+            url,
+            bluesky_handle,
+            bluesky_rkey,
+            needs_parent: e.needs_parent,
+            aspect_width,
+            aspect_height,
+            fixed_height,
+            resizes,
+            max_width,
+            label,
+        }
+    }
+}
+
 /// An attachment uploaded and waiting in the composer: what its strip shows.
 /// It goes with the next send that names `draft_id`, or with
 /// [`App::discard_attachment`].
@@ -1893,6 +1968,11 @@ struct Draft {
     channel_id: Vec<u8>,
     attachment: lumia_core::proto::Attachment,
 }
+
+/// Where a Bluesky handle is resolved to its account's DID: Bluesky's
+/// public AppView, which answers without a session and with CORS headers.
+const BLUESKY_RESOLVE_HANDLE: &str =
+    "https://public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle";
 
 /// The largest picture of a server card fetched.
 const CARD_IMAGE_MAX_BYTES: usize = 1 << 20;
@@ -6102,6 +6182,71 @@ impl App {
         lumia_core::cards::card_links(body)
     }
 
+    /// The embed of a link in a message's text (specs/media.md 6.6), or
+    /// none: one of the listed sites' videos, audio or posts, matched by the
+    /// core's rules. Nothing is fetched; the card's press loads it.
+    #[must_use]
+    pub fn embed_for(url: &str) -> Option<EmbedSummary> {
+        lumia_core::embeds::embed_for(url).map(Into::into)
+    }
+
+    /// The address of a Bluesky post's embed, from its account's DID (as
+    /// [`App::resolve_bluesky_handle`] gives it) and its record key; none
+    /// when either is not one.
+    #[must_use]
+    pub fn bluesky_embed_url(did: &str, rkey: &str) -> Option<String> {
+        lumia_core::embeds::bluesky_embed_url(did, rkey)
+    }
+
+    /// The origins an embed loads from: the web's `frame-src`, and what the
+    /// phones' web views may load.
+    #[must_use]
+    pub fn embed_origins() -> Vec<String> {
+        lumia_core::embeds::embed_origins()
+            .iter()
+            .map(|o| (*o).to_string())
+            .collect()
+    }
+
+    /// A Bluesky handle's DID, asked of Bluesky's public API
+    /// (`com.atproto.identity.resolveHandle`) when a person presses a post
+    /// named by handle (specs/media.md 6.6). The one request is to Bluesky,
+    /// never through the instance, and only on that press.
+    ///
+    /// # Errors
+    /// [`ClientError::State`] when `handle` is not a handle or the answer
+    /// holds no DID an embed takes; [`ClientError::Transport`] when the
+    /// request fails or Bluesky refuses it (an unknown handle is a 400).
+    pub async fn resolve_bluesky_handle(&self, handle: &str) -> Result<String, ClientError> {
+        let handle = handle.to_ascii_lowercase();
+        if !lumia_core::embeds::is_bluesky_handle(&handle) {
+            return Err(ClientError::State("not a Bluesky handle".into()));
+        }
+        let mut url = url::Url::parse(BLUESKY_RESOLVE_HANDLE)
+            .map_err(|e| ClientError::Transport(e.to_string()))?;
+        url.query_pairs_mut().append_pair("handle", &handle);
+        let response = reqwest::Client::new()
+            .get(url)
+            .header("accept", "application/json")
+            .timeout(std::time::Duration::from_secs(5))
+            .send()
+            .await?
+            .error_for_status()?;
+        let body = response.bytes().await?;
+        #[derive(Deserialize)]
+        struct Resolved {
+            did: String,
+        }
+        let resolved: Resolved = serde_json::from_slice(&body)
+            .map_err(|_| ClientError::State("Bluesky gave no account for that handle".into()))?;
+        if !lumia_core::embeds::is_did(&resolved.did) {
+            return Err(ClientError::State(
+                "Bluesky gave no account for that handle".into(),
+            ));
+        }
+        Ok(resolved.did)
+    }
+
     /// Whether this instance makes link cards in server channels
     /// (`InstanceInfo.link_cards_enabled`), as learnt by
     /// [`App::upload_limits`]; false until then.
@@ -7299,5 +7444,67 @@ mod kept_tests {
         app.keep(KEPT_MEMBERS, &all);
         assert_eq!(app.kept_members("s").unwrap()[0].pronouns, "she/her");
         assert!(app.kept_members("other").unwrap().is_empty());
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod embed_tests {
+    use std::sync::Arc;
+
+    use super::{App, Opener, Place};
+    use crate::sqlite::SqliteStore;
+    use crate::ClientError;
+
+    /// Asks Bluesky only with `LUMIA_LIVE_BLUESKY` set, so the suite needs
+    /// no network; a name that is no handle is refused before any request.
+    #[tokio::test]
+    async fn a_handle_resolves_to_a_did() {
+        let opener: Opener = Arc::new(|_| SqliteStore::in_memory());
+        let app = App::open("http://127.0.0.1:9", Place::Native, opener).unwrap();
+        for name in ["not a handle", "alice", "did:plc:z72i7hdynmk6r22z27h6tvur"] {
+            assert!(matches!(
+                app.resolve_bluesky_handle(name).await,
+                Err(ClientError::State(_))
+            ));
+        }
+        if std::env::var_os("LUMIA_LIVE_BLUESKY").is_some() {
+            let did = app.resolve_bluesky_handle("BSKY.app").await.unwrap();
+            assert_eq!(did, "did:plc:z72i7hdynmk6r22z27h6tvur");
+            assert!(app
+                .resolve_bluesky_handle("no-such-handle-zz9.bsky.social")
+                .await
+                .is_err());
+        }
+    }
+
+    #[test]
+    fn a_summary_flattens_the_shape_and_the_source() {
+        let short = App::embed_for("https://youtube.com/shorts/dQw4w9WgXcQ").unwrap();
+        assert_eq!(
+            (short.provider.as_str(), short.kind.as_str()),
+            ("youtube", "player")
+        );
+        assert_eq!((short.aspect_width, short.aspect_height), (9, 16));
+        assert_eq!(
+            (short.fixed_height, short.resizes, short.max_width),
+            (0, false, 0)
+        );
+        assert_eq!(short.label, "Play video from YouTube");
+
+        let post = App::embed_for("https://bsky.app/profile/bsky.app/post/3k2la3rsg5w2y").unwrap();
+        assert!(post.url.is_empty());
+        assert_eq!(post.bluesky_handle, "bsky.app");
+        assert_eq!(post.bluesky_rkey, "3k2la3rsg5w2y");
+        assert_eq!(
+            (post.fixed_height, post.resizes, post.max_width),
+            (250, true, 550)
+        );
+        assert_eq!(post.provider_name, "Bluesky");
+
+        let clip = App::embed_for("https://clips.twitch.tv/Funny").unwrap();
+        assert!(clip.needs_parent);
+        assert!(App::embed_for("https://example.com/").is_none());
+        assert!(App::embed_origins().contains(&"https://embed.bsky.app".to_string()));
     }
 }

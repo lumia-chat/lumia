@@ -1887,6 +1887,43 @@ impl Client {
         self.app.card_image(&image_url).await.map_err(js_api)
     }
 
+    /// The embed of a link in a message's text (specs/media.md 6.6), or
+    /// null: `{provider, providerName, kind, url, blueskyHandle,
+    /// blueskyRkey, needsParent, aspectWidth, aspectHeight, fixedHeight,
+    /// resizes, maxWidth, label}`. Nothing is fetched.
+    ///
+    /// # Errors
+    /// Only when the summary cannot be made a JS object.
+    #[wasm_bindgen(js_name = embedFor)]
+    pub fn embed_for(&self, url: String) -> Result<JsValue, JsError> {
+        to_js(&App::embed_for(&url))
+    }
+
+    /// The address of a Bluesky post's embed from its account's DID and
+    /// its record key; undefined when either is not one.
+    #[must_use]
+    #[wasm_bindgen(js_name = blueskyEmbedUrl)]
+    pub fn bluesky_embed_url(&self, did: String, rkey: String) -> Option<String> {
+        App::bluesky_embed_url(&did, &rkey)
+    }
+
+    /// The origins an embed loads from: the page's `frame-src`.
+    #[must_use]
+    #[wasm_bindgen(js_name = embedOrigins)]
+    pub fn embed_origins(&self) -> Vec<String> {
+        App::embed_origins()
+    }
+
+    /// A Bluesky handle's DID, asked of Bluesky's public API (which sends
+    /// CORS headers) on the press of a post named by handle.
+    ///
+    /// # Errors
+    /// Not a handle, no account for it, or the transport.
+    #[wasm_bindgen(js_name = resolveBlueskyHandle)]
+    pub async fn resolve_bluesky_handle(&self, handle: String) -> Result<String, JsError> {
+        self.app.resolve_bluesky_handle(&handle).await.map_err(js)
+    }
+
     /// Whether a picture someone sent may be decoded: its header names a
     /// size within the bounds (specs/media.md 5).
     #[must_use]

@@ -647,6 +647,64 @@ impl From<app::CardSummary> for CardSummary {
     }
 }
 
+/// A link's embed (specs/media.md 6.6): what pressing its card loads in the
+/// card's place, from the link in the text, never from the card.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct EmbedSummary {
+    /// `youtube`, `vimeo`, `twitch`, `soundcloud`, `spotify`, `x`,
+    /// `bluesky`, `facebook`, `instagram`, `tiktok` or `reddit`.
+    pub provider: String,
+    /// The site's name as a person reads it: `YouTube`, `X`.
+    pub provider_name: String,
+    /// `player` (back to its card when its row scrolls away or the conversation
+    /// changes), `audio` (plays on until another starts or the conversation
+    /// is left) or `post`.
+    pub kind: String,
+    /// The address to load; empty for a Bluesky post named by handle.
+    pub url: String,
+    /// A Bluesky post named by handle: [`Client::resolve_bluesky_handle`]
+    /// on the press, then [`bluesky_embed_url`] of the DID and
+    /// `bluesky_rkey`. Empty otherwise.
+    pub bluesky_handle: String,
+    pub bluesky_rkey: String,
+    /// Twitch: append `&parent=<the instance's host>` to `url`.
+    pub needs_parent: bool,
+    /// A player's shape, at the column's width at most and at most 400
+    /// tall; both 0 when it has none.
+    pub aspect_width: u32,
+    pub aspect_height: u32,
+    /// The height when it has no shape: fixed (the rest scrolls inside), or
+    /// held until the embed reports its own when `resizes`.
+    pub fixed_height: u32,
+    /// Grows to the height the embed reports by `postMessage`.
+    pub resizes: bool,
+    /// The widest to draw it: 550 for a post, 0 for the column's width.
+    pub max_width: u32,
+    /// The press's accessible name before the card's title:
+    /// `Play video from YouTube`, `Show post from X`.
+    pub label: String,
+}
+
+impl From<app::EmbedSummary> for EmbedSummary {
+    fn from(e: app::EmbedSummary) -> Self {
+        Self {
+            provider: e.provider,
+            provider_name: e.provider_name,
+            kind: e.kind,
+            url: e.url,
+            bluesky_handle: e.bluesky_handle,
+            bluesky_rkey: e.bluesky_rkey,
+            needs_parent: e.needs_parent,
+            aspect_width: e.aspect_width,
+            aspect_height: e.aspect_height,
+            fixed_height: e.fixed_height,
+            resizes: e.resizes,
+            max_width: e.max_width,
+            label: e.label,
+        }
+    }
+}
+
 /// An attachment uploaded and waiting in the composer.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct AttachmentDraft {
@@ -1633,6 +1691,26 @@ pub fn link_request_summary(request: String) -> Result<LinkRequestSummary, Lumia
 #[uniffi::export]
 pub fn card_links(body: String) -> Vec<String> {
     App::card_links(&body)
+}
+
+/// The embed of a link in a message's text (specs/media.md 6.6), or none.
+/// Nothing is fetched; the card's press loads it.
+#[uniffi::export]
+pub fn embed_for(url: String) -> Option<EmbedSummary> {
+    App::embed_for(&url).map(Into::into)
+}
+
+/// The address of a Bluesky post's embed from its account's DID and its
+/// record key; none when either is not one.
+#[uniffi::export]
+pub fn bluesky_embed_url(did: String, rkey: String) -> Option<String> {
+    App::bluesky_embed_url(&did, &rkey)
+}
+
+/// The origins an embed loads from: what a web view holding one may load.
+#[uniffi::export]
+pub fn embed_origins() -> Vec<String> {
+    App::embed_origins()
 }
 
 /// Whether a picture someone sent may be handed to a decoder: its header
@@ -3105,5 +3183,13 @@ impl Client {
     /// A server card's picture, by its `image_url`.
     pub fn card_image(&self, image_url: String) -> Res<Vec<u8>> {
         Ok(self.runtime.block_on(self.app.card_image(&image_url))?)
+    }
+
+    /// A Bluesky handle's DID, asked of Bluesky (not the instance) on the
+    /// press of a post named by handle ([`EmbedSummary::bluesky_handle`]).
+    pub fn resolve_bluesky_handle(&self, handle: String) -> Res<String> {
+        Ok(self
+            .runtime
+            .block_on(self.app.resolve_bluesky_handle(&handle))?)
     }
 }

@@ -9,6 +9,8 @@
 //! * [`body`] is a message body's grammar (protocol 14) and its size limit.
 //! * [`cards`] is link cards' rules (docs/specs/media.md 6): which links,
 //!   what a page's head gives, which addresses a fetcher may reach.
+//! * [`embeds`] is which links play or show inside a conversation and what
+//!   each loads on a press (docs/specs/media.md 6.6).
 //! * [`media`] makes attachments before upload and opens their blobs
 //!   after fetching (docs/specs/media.md).
 //!
@@ -18,6 +20,7 @@
 
 pub mod body;
 pub mod cards;
+pub mod embeds;
 pub mod identity;
 pub mod keystore;
 pub mod media;

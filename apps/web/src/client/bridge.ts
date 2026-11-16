@@ -374,6 +374,35 @@ export interface CardSummary {
   /** The page is a video: a play symbol over its picture. */
   video: boolean;
 }
+/**
+ * A link's embed (specs/media.md 6.6): what pressing its card loads in the card's place. It comes
+ * from the link in the text (`embedFor`), never from the card.
+ */
+export interface EmbedSummary {
+  provider: "youtube" | "vimeo" | "twitch" | "soundcloud" | "spotify" | "x" | "bluesky" | "facebook" | "instagram" | "tiktok" | "reddit";
+  /** The site's name as a person reads it: "YouTube", "X". */
+  providerName: string;
+  /** A player goes back to its card when its row scrolls away or the conversation changes; audio plays on until another starts or the conversation is left. */
+  kind: "player" | "audio" | "post";
+  /** The address to load; empty for a Bluesky post named by handle. */
+  url: string;
+  /** A Bluesky post named by handle: `resolveBlueskyHandle` on the press, then `blueskyEmbedUrl(did, blueskyRkey)`. Empty otherwise. */
+  blueskyHandle: string;
+  blueskyRkey: string;
+  /** Twitch: append `&parent=<location.hostname>` to `url`. */
+  needsParent: boolean;
+  /** A player's shape, at the column's width at most and at most 400 tall; both 0 when it has none. */
+  aspectWidth: number;
+  aspectHeight: number;
+  /** The height when it has no shape: fixed (the rest scrolls inside), or held until the embed reports its own when `resizes`. */
+  fixedHeight: number;
+  /** Grows to the height the embed reports by `postMessage`. */
+  resizes: boolean;
+  /** The widest to draw it: 550 for a post, 0 for the column's width. */
+  maxWidth: number;
+  /** The press's accessible name before the card's title: "Play video from YouTube", "Show post from X". */
+  label: string;
+}
 /** An attachment uploaded and waiting in the composer; a send names it by `draftId`. */
 export interface AttachmentDraft {
   draftId: string;
@@ -1044,6 +1073,22 @@ export class Bridge {
   /** A server card's picture by its `imageUrl`. */
   cardImage(imageUrl: string): Promise<Uint8Array> {
     return this.call("cardImage", imageUrl);
+  }
+  /** The embed of a link in a message's text, or null. Nothing is fetched. */
+  embedFor(url: string): Promise<EmbedSummary | null> {
+    return this.call<EmbedSummary | null | undefined>("embedFor", url).then((e) => e ?? null);
+  }
+  /** The address of a Bluesky post's embed from its account's DID and its record key; null when either is not one. */
+  blueskyEmbedUrl(did: string, rkey: string): Promise<string | null> {
+    return this.call<string | null | undefined>("blueskyEmbedUrl", did, rkey).then((u) => u ?? null);
+  }
+  /** The origins an embed loads from: the `frame-src` the page needs. */
+  embedOrigins(): Promise<string[]> {
+    return this.call("embedOrigins");
+  }
+  /** A Bluesky handle's DID, asked of Bluesky (not the instance) on the press of a post named by handle. */
+  resolveBlueskyHandle(handle: string): Promise<string> {
+    return this.call("resolveBlueskyHandle", handle);
   }
   /** Whether a picture someone sent may be decoded: its header names a size within the bounds. */
   attachmentDrawable(bytes: Uint8Array): Promise<boolean> {

@@ -1,0 +1,1631 @@
+{
+  "vectors": [
+    {
+      "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+      "expect": {
+        "provider": "youtube",
+        "kind": "player",
+        "url": "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?autoplay=1",
+        "ratio": [
+          16,
+          9
+        ],
+        "label": "Play video from YouTube"
+      },
+      "why": "watch page; the privacy-enhanced domain, starting on the press"
+    },
+    {
+      "url": "https://youtube.com/watch?v=dQw4w9WgXcQ",
+      "expect": {
+        "provider": "youtube",
+        "kind": "player",
+        "url": "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?autoplay=1",
+        "ratio": [
+          16,
+          9
+        ],
+        "label": "Play video from YouTube"
+      },
+      "why": "without www"
+    },
+    {
+      "url": "https://m.youtube.com/watch?v=dQw4w9WgXcQ&feature=share",
+      "expect": {
+        "provider": "youtube",
+        "kind": "player",
+        "url": "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?autoplay=1",
+        "ratio": [
+          16,
+          9
+        ],
+        "label": "Play video from YouTube"
+      },
+      "why": "mobile site; other parameters dropped"
+    },
+    {
+      "url": "http://www.youtube.com/watch?v=dQw4w9WgXcQ",
+      "expect": {
+        "provider": "youtube",
+        "kind": "player",
+        "url": "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?autoplay=1",
+        "ratio": [
+          16,
+          9
+        ],
+        "label": "Play video from YouTube"
+      },
+      "why": "http is accepted; the embed is always https"
+    },
+    {
+      "url": "https://WWW.YouTube.com/watch?v=dQw4w9WgXcQ",
+      "expect": {
+        "provider": "youtube",
+        "kind": "player",
+        "url": "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?autoplay=1",
+        "ratio": [
+          16,
+          9
+        ],
+        "label": "Play video from YouTube"
+      },
+      "why": "the host in any case"
+    },
+    {
+      "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PL0123456789",
+      "expect": {
+        "provider": "youtube",
+        "kind": "player",
+        "url": "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?autoplay=1",
+        "ratio": [
+          16,
+          9
+        ],
+        "label": "Play video from YouTube"
+      },
+      "why": "a playlist's video plays alone"
+    },
+    {
+      "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=90",
+      "expect": {
+        "provider": "youtube",
+        "kind": "player",
+        "url": "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?autoplay=1&start=90",
+        "ratio": [
+          16,
+          9
+        ],
+        "label": "Play video from YouTube"
+      },
+      "why": "t in seconds"
+    },
+    {
+      "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=1m30s",
+      "expect": {
+        "provider": "youtube",
+        "kind": "player",
+        "url": "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?autoplay=1&start=90",
+        "ratio": [
+          16,
+          9
+        ],
+        "label": "Play video from YouTube"
+      },
+      "why": "t in minutes and seconds"
+    },
+    {
+      "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=1h2m3s",
+      "expect": {
+        "provider": "youtube",
+        "kind": "player",
+        "url": "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?autoplay=1&start=3723",
+        "ratio": [
+          16,
+          9
+        ],
+        "label": "Play video from YouTube"
+      },
+      "why": "t in hours, minutes and seconds"
+    },
+    {
+      "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&start=42",
+      "expect": {
+        "provider": "youtube",
+        "kind": "player",
+        "url": "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?autoplay=1&start=42",
+        "ratio": [
+          16,
+          9
+        ],
+        "label": "Play video from YouTube"
+      },
+      "why": "start in seconds"
+    },
+    {
+      "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=0",
+      "expect": {
+        "provider": "youtube",
+        "kind": "player",
+        "url": "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?autoplay=1",
+        "ratio": [
+          16,
+          9
+        ],
+        "label": "Play video from YouTube"
+      },
+      "why": "a start of 0 is none"
+    },
+    {
+      "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=1s1m",
+      "expect": {
+        "provider": "youtube",
+        "kind": "player",
+        "url": "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?autoplay=1",
+        "ratio": [
+          16,
+          9
+        ],
+        "label": "Play video from YouTube"
+      },
+      "why": "a malformed t is ignored, not the video"
+    },
+    {
+      "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=abc",
+      "expect": {
+        "provider": "youtube",
+        "kind": "player",
+        "url": "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?autoplay=1",
+        "ratio": [
+          16,
+          9
+        ],
+        "label": "Play video from YouTube"
+      },
+      "why": "a t that is no time is ignored"
+    },
+    {
+      "url": "https://youtu.be/dQw4w9WgXcQ",
+      "expect": {
+        "provider": "youtube",
+        "kind": "player",
+        "url": "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?autoplay=1",
+        "ratio": [
+          16,
+          9
+        ],
+        "label": "Play video from YouTube"
+      },
+      "why": "short link"
+    },
+    {
+      "url": "https://youtu.be/dQw4w9WgXcQ?si=abcDEF123&t=75",
+      "expect": {
+        "provider": "youtube",
+        "kind": "player",
+        "url": "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?autoplay=1&start=75",
+        "ratio": [
+          16,
+          9
+        ],
+        "label": "Play video from YouTube"
+      },
+      "why": "short link with a share id and a time"
+    },
+    {
+      "url": "https://www.youtube.com/shorts/dQw4w9WgXcQ",
+      "expect": {
+        "provider": "youtube",
+        "kind": "player",
+        "url": "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?autoplay=1",
+        "ratio": [
+          9,
+          16
+        ],
+        "label": "Play video from YouTube"
+      },
+      "why": "a Short is upright"
+    },
+    {
+      "url": "https://youtube.com/shorts/dQw4w9WgXcQ?feature=share",
+      "expect": {
+        "provider": "youtube",
+        "kind": "player",
+        "url": "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?autoplay=1",
+        "ratio": [
+          9,
+          16
+        ],
+        "label": "Play video from YouTube"
+      },
+      "why": "a Short shared"
+    },
+    {
+      "url": "https://www.youtube.com/live/dQw4w9WgXcQ?si=x",
+      "expect": {
+        "provider": "youtube",
+        "kind": "player",
+        "url": "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?autoplay=1",
+        "ratio": [
+          16,
+          9
+        ],
+        "label": "Play video from YouTube"
+      },
+      "why": "a live stream or its recording"
+    },
+    {
+      "url": "https://www.youtube.com/embed/dQw4w9WgXcQ",
+      "expect": {
+        "provider": "youtube",
+        "kind": "player",
+        "url": "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?autoplay=1",
+        "ratio": [
+          16,
+          9
+        ],
+        "label": "Play video from YouTube"
+      },
+      "why": "an embed address is moved to the privacy-enhanced domain"
+    },
+    {
+      "url": "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?start=10",
+      "expect": {
+        "provider": "youtube",
+        "kind": "player",
+        "url": "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?autoplay=1&start=10",
+        "ratio": [
+          16,
+          9
+        ],
+        "label": "Play video from YouTube"
+      },
+      "why": "already privacy-enhanced"
+    },
+    {
+      "url": "https://music.youtube.com/watch?v=dQw4w9WgXcQ",
+      "expect": {
+        "provider": "youtube",
+        "kind": "player",
+        "url": "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?autoplay=1",
+        "ratio": [
+          16,
+          9
+        ],
+        "label": "Play video from YouTube"
+      },
+      "why": "YouTube Music's watch page plays the video"
+    },
+    {
+      "url": "https://www.youtube.com/watch?v=dQw4w9WgXc",
+      "expect": null,
+      "why": "an id of 10 characters"
+    },
+    {
+      "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQQ",
+      "expect": null,
+      "why": "an id of 12 characters"
+    },
+    {
+      "url": "https://www.youtube.com/watch?v=dQw4w9WgX%3CQ",
+      "expect": null,
+      "why": "an id with a character no id has"
+    },
+    {
+      "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&v=aaaaaaaaaaa",
+      "expect": null,
+      "why": "two ids: ambiguous"
+    },
+    {
+      "url": "https://www.youtube.com/watch",
+      "expect": null,
+      "why": "no id"
+    },
+    {
+      "url": "https://www.youtube.com/@channel",
+      "expect": null,
+      "why": "a channel"
+    },
+    {
+      "url": "https://www.youtube.com/playlist?list=PL0123456789",
+      "expect": null,
+      "why": "a playlist"
+    },
+    {
+      "url": "https://www.youtube.com/results?search_query=cats",
+      "expect": null,
+      "why": "a search"
+    },
+    {
+      "url": "https://www.youtube.com/shorts/dQw4w9WgXcQ/extra",
+      "expect": null,
+      "why": "more after the id"
+    },
+    {
+      "url": "https://youtu.be/dQw4w9WgXcQ/extra",
+      "expect": null,
+      "why": "more after a short link's id"
+    },
+    {
+      "url": "https://music.youtube.com/shorts/dQw4w9WgXcQ",
+      "expect": null,
+      "why": "YouTube Music has no Shorts"
+    },
+    {
+      "url": "https://www.youtube-nocookie.com/watch?v=dQw4w9WgXcQ",
+      "expect": null,
+      "why": "the privacy-enhanced domain serves embeds only"
+    },
+    {
+      "url": "ftp://www.youtube.com/watch?v=dQw4w9WgXcQ",
+      "expect": null,
+      "why": "not http or https"
+    },
+    {
+      "url": "https://www.youtube.com:8443/watch?v=dQw4w9WgXcQ",
+      "expect": null,
+      "why": "another port"
+    },
+    {
+      "url": "https://user@www.youtube.com/watch?v=dQw4w9WgXcQ",
+      "expect": null,
+      "why": "a user name in the link"
+    },
+    {
+      "url": "https://youtube.com.example.org/watch?v=dQw4w9WgXcQ",
+      "expect": null,
+      "why": "another site whose name begins like YouTube's"
+    },
+    {
+      "url": "https://notyoutube.com/watch?v=dQw4w9WgXcQ",
+      "expect": null,
+      "why": "another site whose name ends like YouTube's"
+    },
+    {
+      "url": "https://gaming.youtube.com/watch?v=dQw4w9WgXcQ",
+      "expect": null,
+      "why": "a host not listed"
+    },
+    {
+      "url": "youtube.com/watch?v=dQw4w9WgXcQ",
+      "expect": null,
+      "why": "no scheme: not a link this reads"
+    },
+    {
+      "url": "https://vimeo.com/76979871",
+      "expect": {
+        "provider": "vimeo",
+        "kind": "player",
+        "url": "https://player.vimeo.com/video/76979871?autoplay=1",
+        "ratio": [
+          16,
+          9
+        ],
+        "label": "Play video from Vimeo"
+      },
+      "why": "a video"
+    },
+    {
+      "url": "https://www.vimeo.com/76979871/",
+      "expect": {
+        "provider": "vimeo",
+        "kind": "player",
+        "url": "https://player.vimeo.com/video/76979871?autoplay=1",
+        "ratio": [
+          16,
+          9
+        ],
+        "label": "Play video from Vimeo"
+      },
+      "why": "www and a trailing slash"
+    },
+    {
+      "url": "https://vimeo.com/76979871/a1b2c3d4e5",
+      "expect": {
+        "provider": "vimeo",
+        "kind": "player",
+        "url": "https://player.vimeo.com/video/76979871?autoplay=1&h=a1b2c3d4e5",
+        "ratio": [
+          16,
+          9
+        ],
+        "label": "Play video from Vimeo"
+      },
+      "why": "an unlisted video carries its hash"
+    },
+    {
+      "url": "https://vimeo.com/channels/staffpicks/76979871",
+      "expect": {
+        "provider": "vimeo",
+        "kind": "player",
+        "url": "https://player.vimeo.com/video/76979871?autoplay=1",
+        "ratio": [
+          16,
+          9
+        ],
+        "label": "Play video from Vimeo"
+      },
+      "why": "in a channel"
+    },
+    {
+      "url": "https://vimeo.com/groups/shortfilms/videos/76979871",
+      "expect": {
+        "provider": "vimeo",
+        "kind": "player",
+        "url": "https://player.vimeo.com/video/76979871?autoplay=1",
+        "ratio": [
+          16,
+          9
+        ],
+        "label": "Play video from Vimeo"
+      },
+      "why": "in a group"
+    },
+    {
+      "url": "https://player.vimeo.com/video/76979871",
+      "expect": {
+        "provider": "vimeo",
+        "kind": "player",
+        "url": "https://player.vimeo.com/video/76979871?autoplay=1",
+        "ratio": [
+          16,
+          9
+        ],
+        "label": "Play video from Vimeo"
+      },
+      "why": "the player's own address"
+    },
+    {
+      "url": "https://player.vimeo.com/video/76979871?h=a1b2c3d4e5&badge=0",
+      "expect": {
+        "provider": "vimeo",
+        "kind": "player",
+        "url": "https://player.vimeo.com/video/76979871?autoplay=1&h=a1b2c3d4e5",
+        "ratio": [
+          16,
+          9
+        ],
+        "label": "Play video from Vimeo"
+      },
+      "why": "the player's address, unlisted"
+    },
+    {
+      "url": "https://vimeo.com/user12345",
+      "expect": null,
+      "why": "an account"
+    },
+    {
+      "url": "https://vimeo.com/76979871a",
+      "expect": null,
+      "why": "an id that is not a number"
+    },
+    {
+      "url": "https://vimeo.com/76979871/NOTHEX",
+      "expect": null,
+      "why": "a hash that is not hexadecimal"
+    },
+    {
+      "url": "https://vimeo.com/1234567890123",
+      "expect": null,
+      "why": "an id longer than any"
+    },
+    {
+      "url": "https://vimeo.com/channels/staffpicks",
+      "expect": null,
+      "why": "a channel"
+    },
+    {
+      "url": "https://player.vimeo.com/video/76979871?h=zz",
+      "expect": null,
+      "why": "a player hash that is not one"
+    },
+    {
+      "url": "https://www.twitch.tv/videos/1234567890",
+      "expect": {
+        "provider": "twitch",
+        "kind": "player",
+        "url": "https://player.twitch.tv/?video=1234567890",
+        "ratio": [
+          16,
+          9
+        ],
+        "needs_parent": true,
+        "label": "Play video from Twitch"
+      },
+      "why": "a past broadcast; the client names its host as parent"
+    },
+    {
+      "url": "https://m.twitch.tv/videos/1234567890",
+      "expect": {
+        "provider": "twitch",
+        "kind": "player",
+        "url": "https://player.twitch.tv/?video=1234567890",
+        "ratio": [
+          16,
+          9
+        ],
+        "needs_parent": true,
+        "label": "Play video from Twitch"
+      },
+      "why": "mobile site"
+    },
+    {
+      "url": "https://twitch.tv/videos/1234567890?t=1h2m",
+      "expect": {
+        "provider": "twitch",
+        "kind": "player",
+        "url": "https://player.twitch.tv/?video=1234567890",
+        "ratio": [
+          16,
+          9
+        ],
+        "needs_parent": true,
+        "label": "Play video from Twitch"
+      },
+      "why": "a time is dropped"
+    },
+    {
+      "url": "https://clips.twitch.tv/AwkwardHelplessSalamanderSwiftRage",
+      "expect": {
+        "provider": "twitch",
+        "kind": "player",
+        "url": "https://clips.twitch.tv/embed?clip=AwkwardHelplessSalamanderSwiftRage",
+        "ratio": [
+          16,
+          9
+        ],
+        "needs_parent": true,
+        "label": "Play video from Twitch"
+      },
+      "why": "a clip on the clips host"
+    },
+    {
+      "url": "https://www.twitch.tv/somechannel/clip/FunnyClip-AbC_12dEf",
+      "expect": {
+        "provider": "twitch",
+        "kind": "player",
+        "url": "https://clips.twitch.tv/embed?clip=FunnyClip-AbC_12dEf",
+        "ratio": [
+          16,
+          9
+        ],
+        "needs_parent": true,
+        "label": "Play video from Twitch"
+      },
+      "why": "a clip on its channel"
+    },
+    {
+      "url": "https://www.twitch.tv/somechannel",
+      "expect": null,
+      "why": "a channel's live stream: not in the list"
+    },
+    {
+      "url": "https://www.twitch.tv/videos/abc",
+      "expect": null,
+      "why": "a video id that is not a number"
+    },
+    {
+      "url": "https://www.twitch.tv/directory",
+      "expect": null,
+      "why": "the directory"
+    },
+    {
+      "url": "https://clips.twitch.tv/embed?clip=Funny",
+      "expect": null,
+      "why": "the clip embed's own address"
+    },
+    {
+      "url": "https://www.twitch.tv/some-channel/clip/Funny",
+      "expect": null,
+      "why": "a channel name Twitch cannot have"
+    },
+    {
+      "url": "https://clips.twitch.tv/Funny%20Clip",
+      "expect": null,
+      "why": "a clip slug with a space"
+    },
+    {
+      "url": "https://soundcloud.com/forss/flickermood",
+      "expect": {
+        "provider": "soundcloud",
+        "kind": "audio",
+        "url": "https://w.soundcloud.com/player/?url=https%3A%2F%2Fsoundcloud.com%2Fforss%2Fflickermood&auto_play=true",
+        "height": 166,
+        "label": "Play audio from SoundCloud"
+      },
+      "why": "a track"
+    },
+    {
+      "url": "https://www.soundcloud.com/forss/flickermood?utm_source=x",
+      "expect": {
+        "provider": "soundcloud",
+        "kind": "audio",
+        "url": "https://w.soundcloud.com/player/?url=https%3A%2F%2Fsoundcloud.com%2Fforss%2Fflickermood&auto_play=true",
+        "height": 166,
+        "label": "Play audio from SoundCloud"
+      },
+      "why": "www; parameters dropped"
+    },
+    {
+      "url": "https://m.soundcloud.com/forss/flickermood",
+      "expect": {
+        "provider": "soundcloud",
+        "kind": "audio",
+        "url": "https://w.soundcloud.com/player/?url=https%3A%2F%2Fsoundcloud.com%2Fforss%2Fflickermood&auto_play=true",
+        "height": 166,
+        "label": "Play audio from SoundCloud"
+      },
+      "why": "mobile site; the track's canonical address is given to the widget"
+    },
+    {
+      "url": "https://soundcloud.com/forss/flickermood/s-AbCdEf123",
+      "expect": {
+        "provider": "soundcloud",
+        "kind": "audio",
+        "url": "https://w.soundcloud.com/player/?url=https%3A%2F%2Fsoundcloud.com%2Fforss%2Fflickermood%2Fs-AbCdEf123&auto_play=true",
+        "height": 166,
+        "label": "Play audio from SoundCloud"
+      },
+      "why": "a private track's link"
+    },
+    {
+      "url": "https://soundcloud.com/forss/sets/soulhack",
+      "expect": {
+        "provider": "soundcloud",
+        "kind": "audio",
+        "url": "https://w.soundcloud.com/player/?url=https%3A%2F%2Fsoundcloud.com%2Fforss%2Fsets%2Fsoulhack&auto_play=true",
+        "height": 450,
+        "label": "Play audio from SoundCloud"
+      },
+      "why": "a playlist"
+    },
+    {
+      "url": "https://soundcloud.com/forss/sets/soulhack/s-XyZ",
+      "expect": {
+        "provider": "soundcloud",
+        "kind": "audio",
+        "url": "https://w.soundcloud.com/player/?url=https%3A%2F%2Fsoundcloud.com%2Fforss%2Fsets%2Fsoulhack%2Fs-XyZ&auto_play=true",
+        "height": 450,
+        "label": "Play audio from SoundCloud"
+      },
+      "why": "a private playlist's link"
+    },
+    {
+      "url": "https://soundcloud.com/forss",
+      "expect": null,
+      "why": "an account"
+    },
+    {
+      "url": "https://soundcloud.com/forss/tracks",
+      "expect": null,
+      "why": "an account's tracks"
+    },
+    {
+      "url": "https://soundcloud.com/forss/likes",
+      "expect": null,
+      "why": "an account's likes"
+    },
+    {
+      "url": "https://soundcloud.com/forss/sets",
+      "expect": null,
+      "why": "an account's playlists"
+    },
+    {
+      "url": "https://soundcloud.com/discover/sets/weekly",
+      "expect": null,
+      "why": "a page that is not an account"
+    },
+    {
+      "url": "https://soundcloud.com/search/sounds",
+      "expect": null,
+      "why": "a search"
+    },
+    {
+      "url": "https://on.soundcloud.com/AbCdE",
+      "expect": null,
+      "why": "a short link only SoundCloud can follow"
+    },
+    {
+      "url": "https://soundcloud.com/forss/flickermood/secret",
+      "expect": null,
+      "why": "a third segment that is not a private token"
+    },
+    {
+      "url": "https://soundcloud.com/forss/flicker%2Fmood",
+      "expect": null,
+      "why": "an encoded slash"
+    },
+    {
+      "url": "https://open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQC",
+      "expect": {
+        "provider": "spotify",
+        "kind": "audio",
+        "url": "https://open.spotify.com/embed/track/4uLU6hMCjMI75M1A2tKUQC",
+        "height": 152,
+        "label": "Play audio from Spotify"
+      },
+      "why": "a track, compact"
+    },
+    {
+      "url": "https://open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQC?si=abc123",
+      "expect": {
+        "provider": "spotify",
+        "kind": "audio",
+        "url": "https://open.spotify.com/embed/track/4uLU6hMCjMI75M1A2tKUQC",
+        "height": 152,
+        "label": "Play audio from Spotify"
+      },
+      "why": "a shared track"
+    },
+    {
+      "url": "https://open.spotify.com/intl-de/track/4uLU6hMCjMI75M1A2tKUQC",
+      "expect": {
+        "provider": "spotify",
+        "kind": "audio",
+        "url": "https://open.spotify.com/embed/track/4uLU6hMCjMI75M1A2tKUQC",
+        "height": 152,
+        "label": "Play audio from Spotify"
+      },
+      "why": "a localised link"
+    },
+    {
+      "url": "https://open.spotify.com/intl-pt-br/track/4uLU6hMCjMI75M1A2tKUQC",
+      "expect": {
+        "provider": "spotify",
+        "kind": "audio",
+        "url": "https://open.spotify.com/embed/track/4uLU6hMCjMI75M1A2tKUQC",
+        "height": 152,
+        "label": "Play audio from Spotify"
+      },
+      "why": "a localised link with a region"
+    },
+    {
+      "url": "https://open.spotify.com/album/4uLU6hMCjMI75M1A2tKUQC",
+      "expect": {
+        "provider": "spotify",
+        "kind": "audio",
+        "url": "https://open.spotify.com/embed/album/4uLU6hMCjMI75M1A2tKUQC",
+        "height": 352,
+        "label": "Play audio from Spotify"
+      },
+      "why": "an album"
+    },
+    {
+      "url": "https://open.spotify.com/playlist/4uLU6hMCjMI75M1A2tKUQC",
+      "expect": {
+        "provider": "spotify",
+        "kind": "audio",
+        "url": "https://open.spotify.com/embed/playlist/4uLU6hMCjMI75M1A2tKUQC",
+        "height": 352,
+        "label": "Play audio from Spotify"
+      },
+      "why": "a playlist"
+    },
+    {
+      "url": "https://open.spotify.com/episode/4uLU6hMCjMI75M1A2tKUQC",
+      "expect": {
+        "provider": "spotify",
+        "kind": "audio",
+        "url": "https://open.spotify.com/embed/episode/4uLU6hMCjMI75M1A2tKUQC",
+        "height": 152,
+        "label": "Play audio from Spotify"
+      },
+      "why": "a podcast episode, compact"
+    },
+    {
+      "url": "https://open.spotify.com/show/4uLU6hMCjMI75M1A2tKUQC",
+      "expect": {
+        "provider": "spotify",
+        "kind": "audio",
+        "url": "https://open.spotify.com/embed/show/4uLU6hMCjMI75M1A2tKUQC",
+        "height": 352,
+        "label": "Play audio from Spotify"
+      },
+      "why": "a podcast"
+    },
+    {
+      "url": "https://open.spotify.com/artist/4uLU6hMCjMI75M1A2tKUQC",
+      "expect": {
+        "provider": "spotify",
+        "kind": "audio",
+        "url": "https://open.spotify.com/embed/artist/4uLU6hMCjMI75M1A2tKUQC",
+        "height": 352,
+        "label": "Play audio from Spotify"
+      },
+      "why": "an artist"
+    },
+    {
+      "url": "https://open.spotify.com/embed/track/4uLU6hMCjMI75M1A2tKUQC",
+      "expect": {
+        "provider": "spotify",
+        "kind": "audio",
+        "url": "https://open.spotify.com/embed/track/4uLU6hMCjMI75M1A2tKUQC",
+        "height": 152,
+        "label": "Play audio from Spotify"
+      },
+      "why": "the embed's own address"
+    },
+    {
+      "url": "https://open.spotify.com/user/4uLU6hMCjMI75M1A2tKUQC",
+      "expect": null,
+      "why": "an account"
+    },
+    {
+      "url": "https://open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQ",
+      "expect": null,
+      "why": "an id of 21 characters"
+    },
+    {
+      "url": "https://open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQ_",
+      "expect": null,
+      "why": "an id with a character no id has"
+    },
+    {
+      "url": "https://spotify.com/track/4uLU6hMCjMI75M1A2tKUQC",
+      "expect": null,
+      "why": "not the open player's host"
+    },
+    {
+      "url": "https://spotify.link/AbCdEf",
+      "expect": null,
+      "why": "a short link only Spotify can follow"
+    },
+    {
+      "url": "https://open.spotify.com/intl-deu/track/4uLU6hMCjMI75M1A2tKUQC",
+      "expect": null,
+      "why": "a locale that is not one"
+    },
+    {
+      "url": "https://x.com/jack/status/20",
+      "expect": {
+        "provider": "x",
+        "kind": "post",
+        "url": "https://platform.twitter.com/embed/Tweet.html?id=20&dnt=true",
+        "height": 250,
+        "resizes": true,
+        "label": "Show post from X"
+      },
+      "why": "a post"
+    },
+    {
+      "url": "https://twitter.com/jack/status/20",
+      "expect": {
+        "provider": "x",
+        "kind": "post",
+        "url": "https://platform.twitter.com/embed/Tweet.html?id=20&dnt=true",
+        "height": 250,
+        "resizes": true,
+        "label": "Show post from X"
+      },
+      "why": "on twitter.com"
+    },
+    {
+      "url": "https://www.twitter.com/jack/status/20?s=20&t=abc",
+      "expect": {
+        "provider": "x",
+        "kind": "post",
+        "url": "https://platform.twitter.com/embed/Tweet.html?id=20&dnt=true",
+        "height": 250,
+        "resizes": true,
+        "label": "Show post from X"
+      },
+      "why": "www, with share parameters"
+    },
+    {
+      "url": "https://mobile.twitter.com/jack/status/20",
+      "expect": {
+        "provider": "x",
+        "kind": "post",
+        "url": "https://platform.twitter.com/embed/Tweet.html?id=20&dnt=true",
+        "height": 250,
+        "resizes": true,
+        "label": "Show post from X"
+      },
+      "why": "mobile site"
+    },
+    {
+      "url": "https://x.com/jack/statuses/20",
+      "expect": {
+        "provider": "x",
+        "kind": "post",
+        "url": "https://platform.twitter.com/embed/Tweet.html?id=20&dnt=true",
+        "height": 250,
+        "resizes": true,
+        "label": "Show post from X"
+      },
+      "why": "the old plural"
+    },
+    {
+      "url": "https://x.com/jack/status/1234567890123456789/photo/1",
+      "expect": {
+        "provider": "x",
+        "kind": "post",
+        "url": "https://platform.twitter.com/embed/Tweet.html?id=1234567890123456789&dnt=true",
+        "height": 250,
+        "resizes": true,
+        "label": "Show post from X"
+      },
+      "why": "a post's picture"
+    },
+    {
+      "url": "https://x.com/jack/status/1234567890123456789/video/1",
+      "expect": {
+        "provider": "x",
+        "kind": "post",
+        "url": "https://platform.twitter.com/embed/Tweet.html?id=1234567890123456789&dnt=true",
+        "height": 250,
+        "resizes": true,
+        "label": "Show post from X"
+      },
+      "why": "a post's video"
+    },
+    {
+      "url": "https://x.com/i/status/20",
+      "expect": {
+        "provider": "x",
+        "kind": "post",
+        "url": "https://platform.twitter.com/embed/Tweet.html?id=20&dnt=true",
+        "height": 250,
+        "resizes": true,
+        "label": "Show post from X"
+      },
+      "why": "a post with no account in the link"
+    },
+    {
+      "url": "https://x.com/i/web/status/20",
+      "expect": {
+        "provider": "x",
+        "kind": "post",
+        "url": "https://platform.twitter.com/embed/Tweet.html?id=20&dnt=true",
+        "height": 250,
+        "resizes": true,
+        "label": "Show post from X"
+      },
+      "why": "the web client's form"
+    },
+    {
+      "url": "https://x.com/jack",
+      "expect": null,
+      "why": "an account"
+    },
+    {
+      "url": "https://x.com/jack/status/abc",
+      "expect": null,
+      "why": "an id that is not a number"
+    },
+    {
+      "url": "https://x.com/jack/status/20/likes",
+      "expect": null,
+      "why": "more after the post"
+    },
+    {
+      "url": "https://x.com/jack/status/123456789012345678901",
+      "expect": null,
+      "why": "an id longer than any"
+    },
+    {
+      "url": "https://x.com/this-is-not-a-handle/status/20",
+      "expect": null,
+      "why": "an account name X cannot have"
+    },
+    {
+      "url": "https://t.co/AbCdEf",
+      "expect": null,
+      "why": "a short link only X can follow"
+    },
+    {
+      "url": "https://x.com/search?q=lumia",
+      "expect": null,
+      "why": "a search"
+    },
+    {
+      "url": "https://bsky.app/profile/did:plc:z72i7hdynmk6r22z27h6tvur/post/3k2la3rsg5w2y",
+      "expect": {
+        "provider": "bluesky",
+        "kind": "post",
+        "url": "https://embed.bsky.app/embed/did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.post/3k2la3rsg5w2y",
+        "height": 250,
+        "resizes": true,
+        "label": "Show post from Bluesky"
+      },
+      "why": "a post named by its account's DID"
+    },
+    {
+      "url": "https://bsky.app/profile/did:web:example.com/post/3k2la3rsg5w2y",
+      "expect": {
+        "provider": "bluesky",
+        "kind": "post",
+        "url": "https://embed.bsky.app/embed/did:web:example.com/app.bsky.feed.post/3k2la3rsg5w2y",
+        "height": 250,
+        "resizes": true,
+        "label": "Show post from Bluesky"
+      },
+      "why": "a did:web account"
+    },
+    {
+      "url": "https://bsky.app/profile/bsky.app/post/3k2la3rsg5w2y",
+      "expect": {
+        "provider": "bluesky",
+        "kind": "post",
+        "bluesky_handle": "bsky.app",
+        "bluesky_rkey": "3k2la3rsg5w2y",
+        "height": 250,
+        "resizes": true,
+        "label": "Show post from Bluesky"
+      },
+      "why": "a handle: resolved on the press"
+    },
+    {
+      "url": "https://bsky.app/profile/Alice.Bsky.Social/post/3k2la3rsg5w2y",
+      "expect": {
+        "provider": "bluesky",
+        "kind": "post",
+        "bluesky_handle": "alice.bsky.social",
+        "bluesky_rkey": "3k2la3rsg5w2y",
+        "height": 250,
+        "resizes": true,
+        "label": "Show post from Bluesky"
+      },
+      "why": "a handle is lowercased"
+    },
+    {
+      "url": "https://bsky.app/profile/did:plc:z72i7hdynmk6r22z27h6tvur/post/3k2la3rsg5w2y?ref=x",
+      "expect": {
+        "provider": "bluesky",
+        "kind": "post",
+        "url": "https://embed.bsky.app/embed/did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.post/3k2la3rsg5w2y",
+        "height": 250,
+        "resizes": true,
+        "label": "Show post from Bluesky"
+      },
+      "why": "parameters dropped"
+    },
+    {
+      "url": "https://bsky.app/profile/did:plc:z72i7hdynmk6r22z27h6tvur",
+      "expect": null,
+      "why": "an account"
+    },
+    {
+      "url": "https://bsky.app/profile/did:plc:z72i7hdynmk6r22z27h6tvur/post/3k2la3rsg5w2y/liked-by",
+      "expect": null,
+      "why": "more after the post"
+    },
+    {
+      "url": "https://bsky.app/profile/did:plc:z72i7hdynmk6r22z27h6tvur/post/3K2LA3RSG5W2Y",
+      "expect": null,
+      "why": "a record key in capitals is not a TID"
+    },
+    {
+      "url": "https://bsky.app/profile/did:plc:z72i7hdynmk6r22z27h6tvur/post/zk2la3rsg5w2y",
+      "expect": null,
+      "why": "a TID cannot begin past j"
+    },
+    {
+      "url": "https://bsky.app/profile/did:plc:z72i7hdynmk6r22z27h6tvur/post/3k2la3rsg5w2",
+      "expect": null,
+      "why": "a record key of 12 characters"
+    },
+    {
+      "url": "https://bsky.app/profile/did:plc:short/post/3k2la3rsg5w2y",
+      "expect": null,
+      "why": "a did:plc that is not one"
+    },
+    {
+      "url": "https://bsky.app/profile/did:key:z6Mkabc/post/3k2la3rsg5w2y",
+      "expect": null,
+      "why": "a DID method embeds do not take"
+    },
+    {
+      "url": "https://bsky.app/profile/alice/post/3k2la3rsg5w2y",
+      "expect": null,
+      "why": "a handle of one label"
+    },
+    {
+      "url": "https://bsky.app/profile/alice.123/post/3k2la3rsg5w2y",
+      "expect": null,
+      "why": "a handle whose last label begins with a digit"
+    },
+    {
+      "url": "https://staging.bsky.app/profile/did:plc:z72i7hdynmk6r22z27h6tvur/post/3k2la3rsg5w2y",
+      "expect": null,
+      "why": "a host not listed"
+    },
+    {
+      "url": "https://bsky.app/profile/did:plc:z72i7hdynmk6r22z27h6tvur/feed/abc",
+      "expect": null,
+      "why": "a feed"
+    },
+    {
+      "url": "https://www.facebook.com/somepage/videos/1234567890/",
+      "expect": {
+        "provider": "facebook",
+        "kind": "player",
+        "url": "https://www.facebook.com/plugins/video.php?href=https%3A%2F%2Fwww.facebook.com%2Fsomepage%2Fvideos%2F1234567890%2F",
+        "ratio": [
+          16,
+          9
+        ],
+        "label": "Play video from Facebook"
+      },
+      "why": "a page's video"
+    },
+    {
+      "url": "https://www.facebook.com/somepage/videos/a-title/1234567890",
+      "expect": {
+        "provider": "facebook",
+        "kind": "player",
+        "url": "https://www.facebook.com/plugins/video.php?href=https%3A%2F%2Fwww.facebook.com%2Fsomepage%2Fvideos%2F1234567890%2F",
+        "ratio": [
+          16,
+          9
+        ],
+        "label": "Play video from Facebook"
+      },
+      "why": "a page's video with its title; the title dropped"
+    },
+    {
+      "url": "https://m.facebook.com/some.page/videos/1234567890?ref=x",
+      "expect": {
+        "provider": "facebook",
+        "kind": "player",
+        "url": "https://www.facebook.com/plugins/video.php?href=https%3A%2F%2Fwww.facebook.com%2Fsome.page%2Fvideos%2F1234567890%2F",
+        "ratio": [
+          16,
+          9
+        ],
+        "label": "Play video from Facebook"
+      },
+      "why": "mobile site; the link rebuilt on www"
+    },
+    {
+      "url": "https://www.facebook.com/watch/?v=1234567890",
+      "expect": {
+        "provider": "facebook",
+        "kind": "player",
+        "url": "https://www.facebook.com/plugins/video.php?href=https%3A%2F%2Fwww.facebook.com%2Fwatch%2F%3Fv%3D1234567890",
+        "ratio": [
+          16,
+          9
+        ],
+        "label": "Play video from Facebook"
+      },
+      "why": "Watch"
+    },
+    {
+      "url": "https://facebook.com/watch?v=1234567890",
+      "expect": {
+        "provider": "facebook",
+        "kind": "player",
+        "url": "https://www.facebook.com/plugins/video.php?href=https%3A%2F%2Fwww.facebook.com%2Fwatch%2F%3Fv%3D1234567890",
+        "ratio": [
+          16,
+          9
+        ],
+        "label": "Play video from Facebook"
+      },
+      "why": "Watch without its slash"
+    },
+    {
+      "url": "https://fb.watch/AbC-12_dE/",
+      "expect": {
+        "provider": "facebook",
+        "kind": "player",
+        "url": "https://www.facebook.com/plugins/video.php?href=https%3A%2F%2Ffb.watch%2FAbC-12_dE%2F",
+        "ratio": [
+          16,
+          9
+        ],
+        "label": "Play video from Facebook"
+      },
+      "why": "Watch's short link, handed to the plugin"
+    },
+    {
+      "url": "https://www.facebook.com/somepage/posts/1234567890",
+      "expect": {
+        "provider": "facebook",
+        "kind": "post",
+        "url": "https://www.facebook.com/plugins/post.php?href=https%3A%2F%2Fwww.facebook.com%2Fsomepage%2Fposts%2F1234567890%2F",
+        "height": 500,
+        "label": "Show post from Facebook"
+      },
+      "why": "a page's post"
+    },
+    {
+      "url": "https://www.facebook.com/somepage/posts/pfbid02AbCdEf123",
+      "expect": {
+        "provider": "facebook",
+        "kind": "post",
+        "url": "https://www.facebook.com/plugins/post.php?href=https%3A%2F%2Fwww.facebook.com%2Fsomepage%2Fposts%2Fpfbid02AbCdEf123%2F",
+        "height": 500,
+        "label": "Show post from Facebook"
+      },
+      "why": "a post's newer id"
+    },
+    {
+      "url": "https://www.facebook.com/permalink.php?story_fbid=pfbid0AbC&id=100012345",
+      "expect": {
+        "provider": "facebook",
+        "kind": "post",
+        "url": "https://www.facebook.com/plugins/post.php?href=https%3A%2F%2Fwww.facebook.com%2Fpermalink.php%3Fstory_fbid%3Dpfbid0AbC%26id%3D100012345",
+        "height": 500,
+        "label": "Show post from Facebook"
+      },
+      "why": "a person's post by permalink"
+    },
+    {
+      "url": "https://www.facebook.com/somepage",
+      "expect": null,
+      "why": "a page"
+    },
+    {
+      "url": "https://www.facebook.com/watch/?v=abc",
+      "expect": null,
+      "why": "a Watch id that is not a number"
+    },
+    {
+      "url": "https://www.facebook.com/watch/?v=1&v=2",
+      "expect": null,
+      "why": "two Watch ids: ambiguous"
+    },
+    {
+      "url": "https://www.facebook.com/groups/somegroup/posts/1234567890",
+      "expect": null,
+      "why": "a group's post: not in the list"
+    },
+    {
+      "url": "https://www.facebook.com/reel/1234567890",
+      "expect": null,
+      "why": "a reel: not in the list"
+    },
+    {
+      "url": "https://www.facebook.com/share/p/AbCdEf/",
+      "expect": null,
+      "why": "a share link only Facebook can follow"
+    },
+    {
+      "url": "https://www.facebook.com/somepage/posts/abc",
+      "expect": null,
+      "why": "a post id that is neither digits nor pfbid"
+    },
+    {
+      "url": "https://www.facebook.com/somepage/videos/1234567890/extra/more",
+      "expect": null,
+      "why": "more after the video"
+    },
+    {
+      "url": "https://www.facebook.com/permalink.php?story_fbid=123",
+      "expect": null,
+      "why": "a permalink with no account"
+    },
+    {
+      "url": "https://l.facebook.com/l.php?u=https%3A%2F%2Fexample.com",
+      "expect": null,
+      "why": "Facebook's redirector"
+    },
+    {
+      "url": "https://www.facebook.com/plugins/video.php?href=x",
+      "expect": null,
+      "why": "the plugin's own address"
+    },
+    {
+      "url": "https://www.instagram.com/p/CxYz123abcD/",
+      "expect": {
+        "provider": "instagram",
+        "kind": "post",
+        "url": "https://www.instagram.com/p/CxYz123abcD/embed",
+        "height": 640,
+        "label": "Show post from Instagram"
+      },
+      "why": "a post"
+    },
+    {
+      "url": "https://instagram.com/p/CxYz123abcD?igsh=abc",
+      "expect": {
+        "provider": "instagram",
+        "kind": "post",
+        "url": "https://www.instagram.com/p/CxYz123abcD/embed",
+        "height": 640,
+        "label": "Show post from Instagram"
+      },
+      "why": "a shared post"
+    },
+    {
+      "url": "https://www.instagram.com/reel/C-AbC_12dEf/",
+      "expect": {
+        "provider": "instagram",
+        "kind": "post",
+        "url": "https://www.instagram.com/reel/C-AbC_12dEf/embed",
+        "height": 640,
+        "label": "Show post from Instagram"
+      },
+      "why": "a reel"
+    },
+    {
+      "url": "https://www.instagram.com/reels/C-AbC_12dEf/",
+      "expect": {
+        "provider": "instagram",
+        "kind": "post",
+        "url": "https://www.instagram.com/reel/C-AbC_12dEf/embed",
+        "height": 640,
+        "label": "Show post from Instagram"
+      },
+      "why": "a reel by the plural"
+    },
+    {
+      "url": "https://www.instagram.com/tv/CxYz123abcD/",
+      "expect": {
+        "provider": "instagram",
+        "kind": "post",
+        "url": "https://www.instagram.com/p/CxYz123abcD/embed",
+        "height": 640,
+        "label": "Show post from Instagram"
+      },
+      "why": "an old IGTV video, shown as a post"
+    },
+    {
+      "url": "https://www.instagram.com/some.account/p/CxYz123abcD/",
+      "expect": {
+        "provider": "instagram",
+        "kind": "post",
+        "url": "https://www.instagram.com/p/CxYz123abcD/embed",
+        "height": 640,
+        "label": "Show post from Instagram"
+      },
+      "why": "a post after its account's name"
+    },
+    {
+      "url": "https://www.instagram.com/some_account/reel/C-AbC_12dEf/",
+      "expect": {
+        "provider": "instagram",
+        "kind": "post",
+        "url": "https://www.instagram.com/reel/C-AbC_12dEf/embed",
+        "height": 640,
+        "label": "Show post from Instagram"
+      },
+      "why": "a reel after its account's name"
+    },
+    {
+      "url": "https://www.instagram.com/some.account/",
+      "expect": null,
+      "why": "an account"
+    },
+    {
+      "url": "https://www.instagram.com/stories/some.account/1234567890/",
+      "expect": null,
+      "why": "a story"
+    },
+    {
+      "url": "https://www.instagram.com/explore/tags/cats/",
+      "expect": null,
+      "why": "a tag"
+    },
+    {
+      "url": "https://www.instagram.com/p/abc/",
+      "expect": null,
+      "why": "a code shorter than any"
+    },
+    {
+      "url": "https://www.instagram.com/p/CxYz123abcD/embed",
+      "expect": null,
+      "why": "more after the code"
+    },
+    {
+      "url": "https://www.instagram.com/stories/p/CxYz123abcD/",
+      "expect": null,
+      "why": "a reserved name where an account would be"
+    },
+    {
+      "url": "https://www.tiktok.com/@scout2015/video/6718335390845095173",
+      "expect": {
+        "provider": "tiktok",
+        "kind": "player",
+        "url": "https://www.tiktok.com/player/v1/6718335390845095173?autoplay=1",
+        "ratio": [
+          9,
+          16
+        ],
+        "label": "Play video from TikTok"
+      },
+      "why": "a video, played upright in TikTok's embed player"
+    },
+    {
+      "url": "https://tiktok.com/@scout2015/video/6718335390845095173?is_from_webapp=1&sender_device=pc",
+      "expect": {
+        "provider": "tiktok",
+        "kind": "player",
+        "url": "https://www.tiktok.com/player/v1/6718335390845095173?autoplay=1",
+        "ratio": [
+          9,
+          16
+        ],
+        "label": "Play video from TikTok"
+      },
+      "why": "a shared video"
+    },
+    {
+      "url": "https://m.tiktok.com/@scout.2015/video/6718335390845095173",
+      "expect": {
+        "provider": "tiktok",
+        "kind": "player",
+        "url": "https://www.tiktok.com/player/v1/6718335390845095173?autoplay=1",
+        "ratio": [
+          9,
+          16
+        ],
+        "label": "Play video from TikTok"
+      },
+      "why": "mobile site"
+    },
+    {
+      "url": "https://www.tiktok.com/embed/v2/6718335390845095173",
+      "expect": {
+        "provider": "tiktok",
+        "kind": "player",
+        "url": "https://www.tiktok.com/player/v1/6718335390845095173?autoplay=1",
+        "ratio": [
+          9,
+          16
+        ],
+        "label": "Play video from TikTok"
+      },
+      "why": "the older embed's address"
+    },
+    {
+      "url": "https://www.tiktok.com/player/v1/6718335390845095173",
+      "expect": {
+        "provider": "tiktok",
+        "kind": "player",
+        "url": "https://www.tiktok.com/player/v1/6718335390845095173?autoplay=1",
+        "ratio": [
+          9,
+          16
+        ],
+        "label": "Play video from TikTok"
+      },
+      "why": "the player's own address"
+    },
+    {
+      "url": "https://www.tiktok.com/@scout2015",
+      "expect": null,
+      "why": "an account"
+    },
+    {
+      "url": "https://www.tiktok.com/scout2015/video/6718335390845095173",
+      "expect": null,
+      "why": "an account without its @"
+    },
+    {
+      "url": "https://www.tiktok.com/@scout2015/video/abc",
+      "expect": null,
+      "why": "an id that is not a number"
+    },
+    {
+      "url": "https://www.tiktok.com/@scout2015/photo/6718335390845095173",
+      "expect": null,
+      "why": "a photo post: the player shows video"
+    },
+    {
+      "url": "https://vm.tiktok.com/ZMabcdef/",
+      "expect": null,
+      "why": "a short link only TikTok can follow"
+    },
+    {
+      "url": "https://www.reddit.com/r/rust/comments/1abcde/some_title/",
+      "expect": {
+        "provider": "reddit",
+        "kind": "post",
+        "url": "https://embed.reddit.com/r/rust/comments/1abcde/",
+        "height": 250,
+        "resizes": true,
+        "label": "Show post from Reddit"
+      },
+      "why": "a post"
+    },
+    {
+      "url": "https://reddit.com/r/rust/comments/1abcde",
+      "expect": {
+        "provider": "reddit",
+        "kind": "post",
+        "url": "https://embed.reddit.com/r/rust/comments/1abcde/",
+        "height": 250,
+        "resizes": true,
+        "label": "Show post from Reddit"
+      },
+      "why": "a post without its title"
+    },
+    {
+      "url": "https://old.reddit.com/r/rust/comments/1abcde/some_title/",
+      "expect": {
+        "provider": "reddit",
+        "kind": "post",
+        "url": "https://embed.reddit.com/r/rust/comments/1abcde/",
+        "height": 250,
+        "resizes": true,
+        "label": "Show post from Reddit"
+      },
+      "why": "old Reddit"
+    },
+    {
+      "url": "https://new.reddit.com/r/rust/comments/1abcde/some_title/?utm_source=share",
+      "expect": {
+        "provider": "reddit",
+        "kind": "post",
+        "url": "https://embed.reddit.com/r/rust/comments/1abcde/",
+        "height": 250,
+        "resizes": true,
+        "label": "Show post from Reddit"
+      },
+      "why": "new Reddit, shared"
+    },
+    {
+      "url": "https://m.reddit.com/r/AskReddit/comments/1abcde/some_title/",
+      "expect": {
+        "provider": "reddit",
+        "kind": "post",
+        "url": "https://embed.reddit.com/r/AskReddit/comments/1abcde/",
+        "height": 250,
+        "resizes": true,
+        "label": "Show post from Reddit"
+      },
+      "why": "mobile site"
+    },
+    {
+      "url": "https://www.reddit.com/r/rust/",
+      "expect": null,
+      "why": "a subreddit"
+    },
+    {
+      "url": "https://www.reddit.com/r/rust/comments/1abcde/some_title/kxyz123/",
+      "expect": null,
+      "why": "a comment: not in the list"
+    },
+    {
+      "url": "https://www.reddit.com/r/rust/s/AbCdEf",
+      "expect": null,
+      "why": "a share link only Reddit can follow"
+    },
+    {
+      "url": "https://redd.it/1abcde",
+      "expect": null,
+      "why": "a short link without its subreddit"
+    },
+    {
+      "url": "https://www.reddit.com/r/rust/comments/1ABCDE/",
+      "expect": null,
+      "why": "a post id in capitals"
+    },
+    {
+      "url": "https://www.reddit.com/r/r/comments/1abcde/",
+      "expect": null,
+      "why": "a subreddit name too short"
+    },
+    {
+      "url": "https://www.reddit.com/user/someone/comments/1abcde/",
+      "expect": null,
+      "why": "a profile's post"
+    },
+    {
+      "url": "https://example.com/watch?v=dQw4w9WgXcQ",
+      "expect": null,
+      "why": "a site not listed"
+    },
+    {
+      "url": "https://mastodon.social/@someone/112233445566",
+      "expect": null,
+      "why": "Mastodon: its posts cannot be told from any other site's"
+    },
+    {
+      "url": "https://192.168.1.1/watch?v=dQw4w9WgXcQ",
+      "expect": null,
+      "why": "an address, not a host name"
+    },
+    {
+      "url": "not a link",
+      "expect": null,
+      "why": "not a link"
+    },
+    {
+      "url": "",
+      "expect": null,
+      "why": "empty"
+    }
+  ]
+}
