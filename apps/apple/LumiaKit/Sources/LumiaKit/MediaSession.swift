@@ -103,17 +103,13 @@ public extension LumiaSession {
     /// The address of a link's embed, made on its press (specs/media.md
     /// 6.6): the core's, a Bluesky post named by handle once Bluesky has
     /// said whose it is, and Twitch's `parent` the instance's host. Throws
-    /// the words to show when the handle does not resolve.
+    /// an `EmbedUnavailable`, the words to show: Bluesky has no account for
+    /// the handle, or gave no answer (`blueskyAddress`).
     func embedAddress(_ embed: EmbedSummary) async throws -> String {
         var url = embed.url
         if url.isEmpty, !embed.blueskyHandle.isEmpty {
-            do {
-                let did = try await client.resolveBlueskyHandle(embed.blueskyHandle)
-                url = blueskyEmbedUrl(did: did, rkey: embed.blueskyRkey) ?? ""
-            } catch {
-                throw EmbedUnavailable(words: EmbedWords.notFound(handle: embed.blueskyHandle))
-            }
-            guard !url.isEmpty else { throw EmbedUnavailable(words: EmbedWords.notFound(handle: embed.blueskyHandle)) }
+            let client = client
+            url = try await blueskyAddress(handle: embed.blueskyHandle, rkey: embed.blueskyRkey) { try await client.resolveBlueskyHandle($0) }
         }
         guard let address = EmbedPage.address(url, needsParent: embed.needsParent, instance: client.baseURL) else {
             throw EmbedUnavailable(words: "This can’t be shown here.")
@@ -135,7 +131,3 @@ public extension LumiaSession {
     }
 }
 
-/// An embed that could not be made, in words.
-public struct EmbedUnavailable: Error, Sendable {
-    public let words: String
-}

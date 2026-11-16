@@ -340,7 +340,8 @@ public actor LumiaClient {
     }
     /// A Bluesky handle's DID, asked of Bluesky's public API on the press
     /// of a post named by handle (specs/media.md 6.6); never the instance.
-    public nonisolated func resolveBlueskyHandle(_ handle: String) async throws -> String {
+    /// Nil when Bluesky has no account for it; throws when it gave no answer.
+    public nonisolated func resolveBlueskyHandle(_ handle: String) async throws -> String? {
         let inner = inner
         return try await Task.detached { try inner.resolveBlueskyHandle(handle: handle) }.value
     }

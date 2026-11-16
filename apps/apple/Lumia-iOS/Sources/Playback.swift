@@ -33,7 +33,7 @@ final class MediaPlayback {
     private(set) var positions: [String: UInt32] = [:]
     /// The height a post that grows last reported, by key, as the core read it.
     private(set) var heights: [String: UInt32] = [:]
-    /// Embeds whose card opens the browser instead (a handle that did not resolve).
+    /// Embeds whose card opens the browser instead (a handle Bluesky has no account for).
     private(set) var unavailable: Set<String> = []
     /// The embed shown, in its web view.
     private(set) var webView: WKWebView?
@@ -207,8 +207,9 @@ final class MediaPlayback {
     /// resolved first), then the embed loaded in the card's place; any other
     /// embed goes back to its card and any video or recording pauses. One
     /// whose address is made after another press stays a card. A handle
-    /// that does not resolve leaves the card, saying so, and its next press
-    /// opens the browser.
+    /// Bluesky has no account for leaves the card, saying so, and its next
+    /// press opens the browser; a lookup Bluesky did not answer says that,
+    /// and the next press asks again.
     func show(_ embed: EmbedSummary, key: String, title: String, session: LumiaSession) {
         guard !shows(key) else { return }
         held.want(key)
@@ -230,8 +231,9 @@ final class MediaPlayback {
                 guard epoch == self.epoch else { return }
                 loading.remove(key)
                 held.failed(key)
-                failures[key] = (error as? EmbedUnavailable)?.words ?? error.lumiaMessage
-                unavailable.insert(key)
+                let unavailable = error as? EmbedUnavailable
+                failures[key] = unavailable?.words ?? error.lumiaMessage
+                if unavailable?.again != true { self.unavailable.insert(key) }
             }
         }
     }

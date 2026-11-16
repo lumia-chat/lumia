@@ -374,6 +374,32 @@ final class EmbedsTests: XCTestCase {
 
     // MARK: Words
 
+    func testABlueskyLookupSaysWhetherThePostWasNotFoundOrBlueskyNotReached() async throws {
+        let (did, rkey) = ("did:plc:z72i7hdynmk6r22z27h6tvur", "3k2la3rsg5w2y")
+        let address = try await blueskyAddress(handle: "ada.bsky.social", rkey: rkey) { handle in
+            XCTAssertEqual(handle, "ada.bsky.social")
+            return did
+        }
+        XCTAssertEqual(address, blueskyEmbedUrl(did: did, rkey: rkey))
+        func unavailable(_ lookup: (String) async throws -> String?) async -> EmbedUnavailable? {
+            do {
+                _ = try await blueskyAddress(handle: "ada.bsky.social", rkey: rkey, lookup: lookup)
+                return nil
+            } catch {
+                return error as? EmbedUnavailable
+            }
+        }
+        // No account for the handle, or a DID no embed takes: the card opens the browser from then on.
+        let notFound = EmbedUnavailable(words: "Bluesky couldn’t find @ada.bsky.social. The card opens it in the browser.", again: false)
+        var found = await unavailable { _ in nil }
+        XCTAssertEqual(found, notFound)
+        found = await unavailable { _ in "did:plc:short" }
+        XCTAssertEqual(found, notFound)
+        // No answer from Bluesky is not word about the post: the next press asks again.
+        found = await unavailable { _ in throw URLError(.timedOut) }
+        XCTAssertEqual(found, EmbedUnavailable(words: "Couldn’t reach Bluesky. Try again.", again: true))
+    }
+
     func testThePressIsNamedByTheCoresLabelAndTheCardsTitle() throws {
         let youtube = try embed("https://youtu.be/dQw4w9WgXcQ")
         XCTAssertEqual(EmbedWords.press(youtube, title: "Never Gonna Give You Up"), "Play video from YouTube, Never Gonna Give You Up")
@@ -384,6 +410,7 @@ final class EmbedsTests: XCTestCase {
         XCTAssertEqual(EmbedWords.title(x, cardTitle: ""), "X")
         XCTAssertEqual(EmbedWords.title(youtube, cardTitle: "Song"), "Song")
         XCTAssertEqual(EmbedWords.notFound(handle: "ada.bsky.social"), "Bluesky couldn’t find @ada.bsky.social. The card opens it in the browser.")
+        XCTAssertEqual(EmbedWords.unreached, "Couldn’t reach Bluesky. Try again.")
         XCTAssertEqual(MediaWords.position(ms: 12_000, of: 90_000), "0:12 / 1:30")
         XCTAssertEqual(MediaWords.position(ms: 95_000, of: 90_000), "1:30 / 1:30")
         XCTAssertEqual(MediaWords.position(ms: 12_000, of: 0), "0:12")

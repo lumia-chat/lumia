@@ -366,10 +366,14 @@ public enum EmbedWords {
     /// While a Bluesky handle is resolved on the press.
     public static let finding = "Finding the post…"
 
-    /// A Bluesky handle that did not resolve: the card stays, and opens the browser.
+    /// A handle Bluesky has no account for: the card stays, and opens the browser.
     public static func notFound(handle: String) -> String {
         "Bluesky couldn’t find @\(handle). The card opens it in the browser."
     }
+
+    /// A lookup Bluesky gave no answer to (no network, a timeout, a failure
+    /// of its own): not word about the post, so the next press asks again.
+    public static let unreached = "Couldn’t reach Bluesky. Try again."
 }
 
 public extension MediaWords {
@@ -377,4 +381,35 @@ public extension MediaWords {
     static func position(ms: UInt32, of total: UInt32) -> String {
         total > 0 ? "\(duration(ms: min(ms, total))) / \(duration(ms: total))" : duration(ms: ms)
     }
+}
+
+/// An embed that could not be made, in words. `again` when another press may
+/// come to something else (Bluesky gave no answer); where it may not, the
+/// card opens the browser from then on.
+public struct EmbedUnavailable: Error, Sendable, Equatable {
+    public let words: String
+    public let again: Bool
+
+    public init(words: String, again: Bool = false) {
+        self.words = words
+        self.again = again
+    }
+}
+
+/// The address of a Bluesky post named by handle (specs/media.md 6.6), once
+/// `lookup` (the core's `resolveBlueskyHandle`) has said whose the handle
+/// is. Throws the words to show: a handle Bluesky has no account for (nil,
+/// or a DID no embed takes) is not found, and its card opens the browser; a
+/// lookup that threw got no answer, and the press may be made again.
+public func blueskyAddress(handle: String, rkey: String, lookup: (String) async throws -> String?) async throws -> String {
+    let did: String?
+    do {
+        did = try await lookup(handle)
+    } catch {
+        throw EmbedUnavailable(words: EmbedWords.unreached, again: true)
+    }
+    guard let did, let url = blueskyEmbedUrl(did: did, rkey: rkey), !url.isEmpty else {
+        throw EmbedUnavailable(words: EmbedWords.notFound(handle: handle))
+    }
+    return url
 }
