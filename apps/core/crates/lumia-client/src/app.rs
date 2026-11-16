@@ -651,7 +651,7 @@ pub struct AttachmentSummary {
     pub size_bytes: u64,
     /// The display picture, the GIF, the video, the audio or the file.
     pub main: BlobSummary,
-    /// At most 400 px: an image's, a GIF's first frame, a video's poster.
+    /// At most 800 px: an image's, a GIF's first frame, a video's poster.
     pub thumbnail: Option<BlobSummary>,
 }
 
@@ -6319,7 +6319,7 @@ fn cards_kept(body: &str, urls: &[String]) -> Vec<String> {
 }
 
 /// A card's picture made a thumbnail (specs/media.md 6.3): decoded within
-/// the bounds and at most 400 px, or none.
+/// the bounds and at most 800 px, or none.
 #[cfg(not(target_arch = "wasm32"))]
 fn card_thumbnail(bytes: Vec<u8>) -> Option<Vec<u8>> {
     use lumia_core::media::AttachmentKind;

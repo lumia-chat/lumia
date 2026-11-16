@@ -39,8 +39,9 @@ const MAX_PIXELS: u64 = 25_000_000;
 const MAX_ALLOC: u64 = 160 * 1024 * 1024;
 /// The side of the square an avatar is kept as.
 const AVATAR_SIDE: u32 = 512;
-/// The longest side a link card's picture is kept at (specs/media.md 6.3).
-const CARD_SIDE: u32 = 400;
+/// The longest side a link card's picture is kept at (specs/media.md 6.3): twice the
+/// widest a client draws one, for a display of two pixels a point.
+const CARD_SIDE: u32 = 800;
 const JPEG_QUALITY: u8 = 85;
 
 enum Refusal {
@@ -251,7 +252,7 @@ fn avatar<'a>(env: Env<'a>, upload: Binary<'a>) -> Term<'a> {
 }
 
 /// A page's picture as a link card keeps it: `{:ok, {media_type, bytes, width, height}}`,
-/// its longest side at most 400 pixels, encoded here, or `{:error, reason}` as for an avatar.
+/// its longest side at most 800 pixels, encoded here, or `{:error, reason}` as for an avatar.
 #[rustler::nif(schedule = "DirtyCpu")]
 fn card<'a>(env: Env<'a>, upload: Binary<'a>) -> Term<'a> {
     let made = decode(upload.as_slice()).and_then(|image| {
@@ -377,11 +378,11 @@ mod tests {
     }
 
     #[test]
-    fn a_card_picture_keeps_its_shape_within_400_pixels() {
-        let wide = fit(&DynamicImage::new_rgb8(1200, 600));
-        assert_eq!((wide.width(), wide.height()), (400, 200));
-        let tall = fit(&DynamicImage::new_rgb8(300, 900));
-        assert_eq!((tall.width(), tall.height()), (133, 400));
+    fn a_card_picture_keeps_its_shape_within_800_pixels() {
+        let wide = fit(&DynamicImage::new_rgb8(2400, 1200));
+        assert_eq!((wide.width(), wide.height()), (800, 400));
+        let tall = fit(&DynamicImage::new_rgb8(600, 1800));
+        assert_eq!((tall.width(), tall.height()), (267, 800));
         let small = fit(&DynamicImage::new_rgb8(100, 50));
         assert_eq!((small.width(), small.height()), (100, 50));
     }

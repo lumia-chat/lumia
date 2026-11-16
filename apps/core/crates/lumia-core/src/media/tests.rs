@@ -1201,3 +1201,18 @@ fn a_placeholder_opens_as_a_small_picture_of_the_same_shape() {
     assert!(placeholder_image(&[]).is_none());
     assert!(placeholder_image(&[1, 2, 3]).is_none());
 }
+
+#[test]
+fn a_thumbnail_is_sharp_at_twice_the_size_a_message_draws_it() {
+    // Drawn at most 400 points tall, on a display of two pixels a point.
+    let processed = process(input(jpeg(2000, 1000), "wide.jpg")).unwrap();
+    let thumbnail = decoded(processed.thumbnail.as_deref().unwrap());
+    assert_eq!((thumbnail.width(), thumbnail.height()), (800, 400));
+    let small = process(input(jpeg(600, 300), "small.jpg")).unwrap();
+    let thumbnail = decoded(small.thumbnail.as_deref().unwrap());
+    assert_eq!(
+        (thumbnail.width(), thumbnail.height()),
+        (600, 300),
+        "never enlarged"
+    );
+}

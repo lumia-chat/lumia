@@ -22,8 +22,8 @@ Three rules hold everywhere:
 
 | Kind | What | Main blob | Thumbnail blob | Cap on the main blob |
 |---|---|---|---|---|
-| `IMAGE` | A still picture, processed (section 3.1) | JPEG or PNG made by the core | JPEG or PNG, ≤ 400 px | `LUMIA_UPLOAD_IMAGE_MAX_BYTES`, default 2 MiB |
-| `GIF` | An animated GIF, as chosen | the GIF | first frame, ≤ 400 px | `LUMIA_UPLOAD_FILE_MAX_BYTES`, default 10 MiB |
+| `IMAGE` | A still picture, processed (section 3.1) | JPEG or PNG made by the core | JPEG or PNG, ≤ 800 px | `LUMIA_UPLOAD_IMAGE_MAX_BYTES`, default 2 MiB |
+| `GIF` | An animated GIF, as chosen | the GIF | first frame, ≤ 800 px | `LUMIA_UPLOAD_FILE_MAX_BYTES`, default 10 MiB |
 | `VIDEO` | MP4, MOV (metadata stripped) or WebM (as chosen) | the video | poster frame when the platform made one | file cap |
 | `AUDIO` | MP3, M4A, AAC, OGG, Opus, WAV, FLAC | the audio | none | file cap |
 | `FILE` | Anything else, and any picture sent "as a file" | the file, metadata stripped where section 3.4 says | none | file cap |
@@ -41,7 +41,7 @@ Decoding is bounded exactly as the instance bounds an avatar: the format from th
 Formats decoded by the core: JPEG, PNG, WebP, and a GIF with one frame. HEIC and HEIF have no Rust decoder; a shell whose platform decodes them (iOS, Android, macOS, Safari) hands the core the decoded pixels and the orientation, and a shell that cannot sends the file as a `FILE`.
 
 - **Display**: the orientation applied, every other piece of metadata dropped (EXIF, XMP, IPTC, comments, ICC beyond sRGB conversion), the longest edge at most 2,560 px. Encoded as PNG when it has transparency and the PNG fits under the image cap; otherwise JPEG, starting at quality 85 and stepping down by 10 to 55, then the longest edge down by a quarter at a time, until it fits. A picture that cannot fit at 640 px is refused in words.
-- **Thumbnail**: the display image with its longest edge at most 400 px, JPEG at 80 (PNG when transparent).
+- **Thumbnail**: the display image with its longest edge at most 800 px (twice the most a message draws a picture at, for a display of two pixels a point), JPEG at 85 (PNG when transparent), stepping down in quality and then size to fit 256 KiB.
 - **Placeholder**: the ThumbHash of a 100 px version, carried inline in the attachment (about 25 bytes).
 - **Dimensions**: the display image's width and height, after orientation.
 
@@ -134,7 +134,7 @@ The same rules in Elixir (the instance) and Rust (`lumia-client`, native targets
 - 5 s for the whole fetch: resolving the name, the page and its picture share one deadline. At most 1 MiB of HTML, reading stopped once the head has ended as the card's tokenizer reads it (a `</head>` or `<body>` outside comments and scripts); only `text/html` and `application/xhtml+xml` are parsed. The image at most 5 MiB.
 - A link as people write it: a character a URL cannot hold as written (a space, `|`, a letter outside ASCII in the path) is percent-encoded before the URL is parsed, as browsers do.
 - User agent `LumiaBot/<version> (+https://lumia.chat/bot)`; no cookies; `Accept-Language` from the sharer's locale on the client and `en` on the instance.
-- The image is fetched by the same rules, decoded under the same bounds as 3, and kept as a thumbnail (longest edge 400 px, JPEG or PNG). Receivers never contact the site until they open the link.
+- The image is fetched by the same rules, decoded under the same bounds as 3, and kept as a thumbnail (longest edge 800 px, JPEG or PNG). Receivers never contact the site until they open the link.
 
 ### 6.4 Server content: the instance builds the card
 

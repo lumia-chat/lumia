@@ -25,13 +25,14 @@ pub(super) const DISPLAY_EDGE: u32 = 2560;
 /// The smallest longest edge a display image is shrunk to before the
 /// picture is refused.
 pub(super) const MIN_DISPLAY_EDGE: u32 = 640;
-/// The thumbnail's longest edge.
-pub(super) const THUMBNAIL_EDGE: u32 = 400;
+/// The thumbnail's longest edge: twice the most a client draws a picture
+/// at in a message (400 points tall), for a display of two pixels a point.
+pub(super) const THUMBNAIL_EDGE: u32 = 800;
 /// The longest edge of what the placeholder is computed from (ThumbHash
 /// takes at most 100 a side).
 const PLACEHOLDER_EDGE: u32 = 100;
 const JPEG_QUALITIES: [u8; 4] = [85, 75, 65, 55];
-const THUMBNAIL_QUALITIES: [u8; 4] = [80, 70, 60, 50];
+const THUMBNAIL_QUALITIES: [u8; 4] = [85, 75, 65, 55];
 
 /// A picture made ready to send.
 #[derive(Debug)]
@@ -324,7 +325,7 @@ fn jpeg_still(main: Vec<u8>, shown: RgbImage) -> Result<Still, MediaError> {
     })
 }
 
-/// The thumbnail (at most [`THUMBNAIL_EDGE`], JPEG at 80 or PNG when
+/// The thumbnail (at most [`THUMBNAIL_EDGE`], JPEG at 85 or PNG when
 /// `png`, within [`THUMBNAIL_MAX_BYTES`] sealed) and the placeholder of an
 /// upright picture. A thumbnail over the limit steps down in quality, then
 /// in size, as the display image does.

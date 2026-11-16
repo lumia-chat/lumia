@@ -41,7 +41,7 @@ defmodule Lumia.Media do
 
   @doc """
   A page's picture as a link card keeps it (specs/media.md 6.3): its
-  longest side at most 400 pixels, its shape kept, as JPEG (or PNG when it
+  longest side at most 800 pixels, its shape kept, as JPEG (or PNG when it
   has transparency). `{:ok, {media_type, bytes, width, height}}`, or the
   refusals of `avatar/1`.
   """
