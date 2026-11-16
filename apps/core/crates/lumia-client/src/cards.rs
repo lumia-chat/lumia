@@ -435,11 +435,20 @@ mod tests {
                     let path = request.split(' ').nth(1).unwrap_or("/").to_owned();
                     seen.lock().unwrap().push(request);
                     // Written in pieces, a pause between each: what a reader gets as
-                    // separate chunks, or waits for.
+                    // separate chunks, or waits for. Pauses in a row are one sleep, so
+                    // a long one is not late by a busy machine's lag at every step.
                     let answer = route(&path, port);
+                    let mut pauses = 0;
                     for (i, piece) in split_on(&answer, PAUSE).into_iter().enumerate() {
                         if i > 0 {
-                            tokio::time::sleep(PAUSE_FOR).await;
+                            pauses += 1;
+                        }
+                        if piece.is_empty() {
+                            continue;
+                        }
+                        if pauses > 0 {
+                            tokio::time::sleep(PAUSE_FOR * pauses).await;
+                            pauses = 0;
                         }
                         let _ = socket.write_all(piece).await;
                     }
@@ -543,9 +552,9 @@ mod tests {
                 b"<title>After the script</title></head><body>",
             ]
             .concat(),
-            // A page and then its image, each 1.5 s in coming.
+            // A page 1 s in coming, and then its image 2.5 s.
             "/slow" => [
-                PAUSE.repeat(15),
+                PAUSE.repeat(10),
                 response(
                     "200 OK",
                     &html,
@@ -554,7 +563,7 @@ mod tests {
             ]
             .concat(),
             "/slow.png" => [
-                PAUSE.repeat(15),
+                PAUSE.repeat(25),
                 response("200 OK", &[("content-type", "image/png")], b"\x89PNG slow"),
             ]
             .concat(),
@@ -778,12 +787,17 @@ mod tests {
     #[tokio::test]
     async fn the_page_and_its_image_share_one_deadline() {
         let server = serve(site).await;
-        // The page takes 1.5 s and its image 1.5 s more: either is within 2.5 s, both are
-        // not, and the page has a second to spare on a busy machine.
+        // The page takes 1 s and its image 2.5 s more: either is within 3 s, both are not.
+        // The image cannot come early, and the page has 2 s to spare on a busy machine.
         let rules = Rules {
-            timeout: Duration::from_millis(2500),
+            timeout: Duration::from_millis(3000),
             ..local(server.port)
         };
+        // A first connection to the test server can be held up by the machine (a second
+        // or more on a Mac with a network filter); one made before the timed fetch takes
+        // that out of what is measured.
+        let warm = format!("http://127.0.0.1:{}/page", server.port);
+        fetch_with(&local(server.port), &warm, "en").await.unwrap();
         let url = format!("http://127.0.0.1:{}/slow", server.port);
         let got = fetch_with(&rules, &url, "en").await.unwrap().unwrap();
         assert_eq!(got.card.title, "Slow");
