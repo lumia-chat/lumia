@@ -324,8 +324,24 @@ fn a_pasted_picture_and_dropped_files_wait_in_the_strip() {
 }
 
 #[test]
+fn no_link_is_previewed_where_the_instance_makes_no_cards() {
+    let mut state = signed_in();
+    state.select_channel("general");
+    state.draft.replace_text("Read https://lumia.chat/blog");
+    let now = chrono::Utc::now().timestamp_micros();
+    state.tick(now);
+    state.tick(now + 600_000);
+    assert_eq!(
+        state.session.previews_here().count(),
+        0,
+        "nothing waits for a card"
+    );
+}
+
+#[test]
 fn a_link_is_previewed_once_the_words_rest_and_its_x_puts_it_away() {
     let mut state = signed_in();
+    state.session.media.link_cards = true;
     state.select_channel("general");
     let link = "https://lumia.chat/blog";
     state.draft.replace_text(format!("Read {link}"));

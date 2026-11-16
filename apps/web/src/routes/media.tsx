@@ -590,8 +590,10 @@ export function createCardPreviews(opts: { channelId: () => string | undefined; 
     const n = ++asked;
     const channelId = opts.channelId();
     if (!channelId || !opts.enabled() || !text.trim()) return setLinks([]);
+    // None where this conversation cannot have cards (an instance that makes
+    // none), so no preview waits for one.
     client()
-      .cardLinks(text)
+      .previewLinks(channelId, text)
       .then((found) => {
         if (n !== asked) return;
         setLinks(found);

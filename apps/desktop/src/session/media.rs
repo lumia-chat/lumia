@@ -10,7 +10,7 @@
 //! video without a poster (spec 3.1, 3.3).
 //!
 //! **Previews.** Once the person stops typing for a moment (the window decides when,
-//! `app::media`), the links the core says may have cards (`App::card_links`, at most three)
+//! `app::media`), the links the core says may have cards (`App::card_links`, at most three, and none in a server channel of an instance that makes no cards)
 //! are each asked of `App::card_preview`: the instance builds a server channel's, this
 //! computer a personal conversation's. A × puts one away, and a send asks for the cards of
 //! the links whose preview was not put away (spec 6.4, 6.5).
@@ -46,7 +46,8 @@ const PICTURE_READ_MAX: u64 = 64 * 1024 * 1024;
 #[derive(Debug, Clone)]
 pub enum MediaUpdate {
     /// What the instance takes of attachments: `None` when it keeps none.
-    Limits(Result<Option<UploadLimitsSummary>, Failure>),
+    /// What the instance takes of attachments, and whether it makes server link cards.
+    Limits(Result<(Option<UploadLimitsSummary>, bool), Failure>),
     /// A file waiting in the composer was uploaded, or could not be.
     Attached {
         local: u64,
@@ -151,6 +152,9 @@ pub struct MediaState {
     /// What the instance takes; `None` until it answers, and when it keeps no attachments,
     /// in which case the composer offers no way to attach.
     pub limits: Option<UploadLimitsSummary>,
+    /// Whether the instance makes link cards in server channels; a composer there
+    /// previews none until it says so.
+    pub link_cards: bool,
     asked_limits: bool,
     /// The files in the composers' strips, every conversation's, in the order added.
     pub waiting: Vec<Waiting>,
@@ -174,6 +178,7 @@ impl Default for MediaState {
     fn default() -> Self {
         Self {
             limits: None,
+            link_cards: false,
             asked_limits: false,
             waiting: Vec::new(),
             next_local: 0,
@@ -309,9 +314,9 @@ impl Session {
             return;
         }
         self.task(async move {
-            Update::Media(MediaUpdate::Limits(
-                app.upload_limits().await.map_err(Failure::from),
-            ))
+            let limits = app.upload_limits().await.map_err(Failure::from);
+            let cards = app.server_link_cards();
+            Update::Media(MediaUpdate::Limits(limits.map(|l| (l, cards))))
         });
     }
 
@@ -492,7 +497,15 @@ impl Session {
         let Some(channel_id) = self.conversation.as_ref().map(|c| c.id().to_string()) else {
             return false;
         };
-        let links = App::card_links(body);
+        // None where the conversation cannot have cards (a server channel of an instance
+        // that makes none), so nothing is shown waiting for one. A personal one's are this
+        // computer's own.
+        let personal = matches!(self.conversation, Some(Conversation::Dm(_)));
+        let links = if personal || self.media.link_cards {
+            App::card_links(body)
+        } else {
+            Vec::new()
+        };
         let before = self.media.previews.len();
         self.media
             .previews
@@ -726,8 +739,9 @@ impl Session {
 
     pub(super) fn apply_media(&mut self, update: &MediaUpdate) {
         match update {
-            MediaUpdate::Limits(Ok(limits)) => {
+            MediaUpdate::Limits(Ok((limits, cards))) => {
                 self.media.limits = *limits;
+                self.media.link_cards = *cards;
                 self.revision += 1;
             }
             // Asked again with the next snapshot.

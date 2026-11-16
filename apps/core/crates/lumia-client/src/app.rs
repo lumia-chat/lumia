@@ -1856,6 +1856,8 @@ struct Media {
     /// What `GET /instance` said of uploads: `Some(None)` when it keeps no
     /// blobs.
     limits: Option<Option<lumia_core::proto::UploadLimits>>,
+    /// What `GET /instance` said of server link cards.
+    link_cards: Option<bool>,
     cache: crate::attachments::BlobCache,
 }
 
@@ -5891,9 +5893,18 @@ impl App {
         if let Some(known) = known {
             return Ok(known);
         }
-        let limits = self.api.instance_info().await?.upload_limits;
-        self.media().limits = Some(limits);
-        Ok(limits)
+        Ok(self.learn_instance().await?.0)
+    }
+
+    /// `GET /instance`'s uploads and link cards, kept for the launch.
+    async fn learn_instance(
+        &self,
+    ) -> Result<(Option<lumia_core::proto::UploadLimits>, bool), ClientError> {
+        let info = self.api.instance_info().await?;
+        let mut media = self.media();
+        media.limits = Some(info.upload_limits);
+        media.link_cards = Some(info.link_cards_enabled);
+        Ok((info.upload_limits, info.link_cards_enabled))
     }
 
     /// Makes an attachment of a file and uploads it into the conversation
@@ -6015,6 +6026,46 @@ impl App {
     #[must_use]
     pub fn card_links(body: &str) -> Vec<String> {
         lumia_core::cards::card_links(body)
+    }
+
+    /// Whether this instance makes link cards in server channels
+    /// (`InstanceInfo.link_cards_enabled`), as learnt by
+    /// [`App::upload_limits`]; false until then.
+    #[must_use]
+    pub fn server_link_cards(&self) -> bool {
+        self.media().link_cards == Some(true)
+    }
+
+    /// The links a composer previews in `channel_id` (at most three, in
+    /// order): [`App::card_links`] when the conversation can have cards, and
+    /// none when it cannot, so a composer shows nothing waiting for one. A
+    /// server channel has cards when its instance makes them
+    /// (`InstanceInfo.link_cards_enabled`, learnt by [`App::upload_limits`],
+    /// which every shell asks when it opens; none until then); a personal
+    /// conversation has them natively, where this device fetches the page,
+    /// and never on the web (specs/media.md 6.5). Answers at once from what
+    /// this client holds, for a composer that follows every keystroke.
+    #[must_use]
+    pub fn preview_links(&self, channel_id: &str, body: &str) -> Vec<String> {
+        let Ok(channel) = parse_uuid(channel_id) else {
+            return Vec::new();
+        };
+        let personal = self
+            .lock()
+            .reads
+            .by_channel
+            .get(&channel)
+            .is_some_and(|c| c.kind.starts_with("PERSONAL"));
+        let cards = if personal {
+            cfg!(not(target_arch = "wasm32"))
+        } else {
+            self.server_link_cards()
+        };
+        if cards {
+            Self::card_links(body)
+        } else {
+            Vec::new()
+        }
     }
 
     /// The card a composer shows under a link while the person writes

@@ -1804,6 +1804,15 @@ impl Client {
         App::card_links(&body)
     }
 
+    /// The links a composer previews in a conversation, at most three: none
+    /// where it cannot have cards (a server channel of an instance that
+    /// makes none, and a personal one on the web), so nothing is shown
+    /// waiting for one.
+    #[wasm_bindgen(js_name = previewLinks)]
+    pub fn preview_links(&self, channel_id: String, body: String) -> Vec<String> {
+        self.app.preview_links(&channel_id, &body)
+    }
+
     /// The card to show under a link while composing, or null: the
     /// instance's in a server channel; none in a personal one on the web.
     ///

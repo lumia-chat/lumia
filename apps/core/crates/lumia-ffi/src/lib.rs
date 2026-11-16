@@ -3021,6 +3021,13 @@ impl Client {
         ))?)
     }
 
+    /// The links a composer previews in a conversation, at most three: none
+    /// where it cannot have cards (a server channel of an instance that
+    /// makes none), so nothing is shown waiting for one.
+    pub fn preview_links(&self, channel_id: String, body: String) -> Vec<String> {
+        self.app.preview_links(&channel_id, &body)
+    }
+
     /// The card to show under a link while composing: the instance's in a
     /// server channel, this device's own in a personal one. None when the
     /// page gives none.

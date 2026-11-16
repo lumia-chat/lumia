@@ -1008,6 +1008,10 @@ export class Bridge {
   cardLinks(body: string): Promise<string[]> {
     return this.call("cardLinks", body);
   }
+  /** The links a composer previews in a conversation: none where it cannot have cards (an instance that makes none, or a personal conversation on the web). */
+  previewLinks(channelId: string, body: string): Promise<string[]> {
+    return this.call("previewLinks", channelId, body);
+  }
   /** The card under a link while composing: the instance's in a server channel, none in a personal one on the web. */
   cardPreview(channelId: string, url: string): Promise<CardSummary | null> {
     return this.call<CardSummary | null | undefined>("cardPreview", channelId, url).then((c) => c ?? null);

@@ -1115,6 +1115,10 @@ class LumiaSession(
         attaching[channelId] = attaching[channelId].orEmpty().filter { it.localId !in ids }
     }
 
+    /** The draft's links a composer previews here: none where the conversation cannot have cards (an instance that makes none), so nothing waits for one. */
+    suspend fun previewLinks(channelId: String, body: String): List<String> =
+        runCatching { client.call { previewLinks(channelId, body) } }.getOrDefault(emptyList())
+
     /** The card a link would have while composing: the instance's in a server channel, this phone's in a personal one; none when the page gives none or it cannot be had. */
     suspend fun cardPreview(channelId: String, url: String): CardSummary? =
         runCatching { client.call { cardPreview(channelId, url) } }.getOrNull()

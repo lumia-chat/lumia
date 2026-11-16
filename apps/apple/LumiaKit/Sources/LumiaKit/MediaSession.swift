@@ -67,6 +67,12 @@ public extension LumiaSession {
         Task { await client.discardAttachment(draftID: draftID) }
     }
 
+    /// The draft's links a composer previews here: none where the
+    /// conversation cannot have cards, so nothing waits for one.
+    func previewLinks(channelID: String, body: String) -> [String] {
+        client.previewLinks(channelID: channelID, body: body)
+    }
+
     /// The card a link has while composing, or none (a page with none, or
     /// one that could not be read, which the composer simply does not show).
     func cardPreview(channelID: String, url: String) async -> CardSummary? {

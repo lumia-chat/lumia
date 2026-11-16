@@ -167,7 +167,7 @@ class ComposerCards {
 
     suspend fun follow(session: LumiaSession, channelId: String, draft: String, launch: (suspend () -> Unit) -> Unit) {
         delay(CARD_PAUSE_MS)
-        val now = cardLinks(draft)
+        val now = session.previewLinks(channelId, draft)
         links = now
         for (url in linksToAsk(now, dismissed.keys, asked)) {
             asked += url

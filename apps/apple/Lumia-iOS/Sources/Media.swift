@@ -143,7 +143,7 @@ final class ComposerMedia {
 
     /// Typing has paused: the draft's links that may have cards, each asked for once.
     func links(in draft: String, session: LumiaSession, channelID: String) {
-        for url in previews.update(links: cardLinks(body: draft)) {
+        for url in previews.update(links: session.previewLinks(channelID: channelID, body: draft)) {
             Task {
                 let card = await session.cardPreview(channelID: channelID, url: url)
                 previews.arrived(url, card: card)

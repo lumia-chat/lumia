@@ -309,6 +309,11 @@ public actor LumiaClient {
         let inner = inner
         await Task.detached { inner.discardAttachment(draftId: draftID) }.value
     }
+    /// The links a composer previews in a conversation, at most three: none
+    /// where it cannot have cards (an instance that makes none).
+    public nonisolated func previewLinks(channelID: String, body: String) -> [String] {
+        inner.previewLinks(channelId: channelID, body: body)
+    }
     /// The card a link has while composing: the instance's in a server's
     /// conversation, this phone's own in a personal one; nil for none.
     public nonisolated func cardPreview(channelID: String, url: String) async throws -> CardSummary? {
