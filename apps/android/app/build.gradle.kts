@@ -85,6 +85,11 @@ dependencies {
     // A sign-in through the system browser (a Custom Tab): the instance's
     // OIDC provider, or its web page for a passkey (architecture 6.3).
     implementation(libs.androidx.browser)
+    // Attached video and audio playing in the conversation (specs/media.md
+    // 5): Media3's player and its view, with the platform's controls and a
+    // full-screen button.
+    implementation(libs.media3.exoplayer)
+    implementation(libs.media3.ui)
     // Push (architecture 15.5): UnifiedPush through any installed
     // distributor, FCM through the relay otherwise.
     implementation(libs.unifiedpush.connector)

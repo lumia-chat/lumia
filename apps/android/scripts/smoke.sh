@@ -8,7 +8,9 @@
 # switch can open. Then attachments: a picture and a file sent from the
 # CLI drawn in a channel, a long press on the picture and on the file's
 # Share opening the message's actions, the picture opened in the viewer, and a
-# picture attached through the Photo Picker, sent and drawn. Then the rail: a second server dragged onto the first
+# picture attached through the Photo Picker, sent and drawn. Then a video
+# the CLI sent plays in its row, and with link cards on, a YouTube card's
+# player and an X post load in their cards' place on a press. Then the rail: a second server dragged onto the first
 # makes a folder the instance keeps, a tap opens it, Folder settings names
 # it and Delete folder takes it away. Then Preferences: dark, Compact, Minimal (light and
 # dark) and the font size at 20 as a launch can be told to look
@@ -365,6 +367,63 @@ shot channel-media
 [ "$(count "$(ui)" 'content-desc="Photo"')" -ge 2 ] || { echo "FAIL: the picture the phone sent is not drawn in the channel; see $work/channel-media.png"; exit 1; }
 "$adb" shell rm -f "/sdcard/Pictures/lumia-smoke-$stamp.png" >/dev/null 2>&1 || true
 echo "  attachments: $work/channel-media.png (the CLI's picture and file drawn, a long press on either the message's actions, the viewer opened by a tap, the phone's picture attached through the Photo Picker, sent and drawn)"
+
+# Playing in the conversation (specs/media.md 5 and 6.6, issue #21), in
+# the media channel: a video the CLI sends plays in its row on a tap,
+# with Media3's controls and its full-screen button (`video-inline.png`).
+# Then, where the instance makes link cards (LUMIA_LINK_CARDS=true, and
+# the internet), a YouTube link's card has its play button and a press
+# puts the site's player in a web view in its place (`embed-youtube.png`),
+# and an X post's "Show post" does the same (`embed-post.png`), the
+# player going back to its card, one shown at a time. The script checks
+# the web view is there; what the sites drew is the screenshots'. YouTube
+# refuses a page whose referrer is a bare address over http, as a dev
+# instance at 10.0.2.2 is ("This video is unavailable"); an instance on
+# its https name plays.
+"$cli" --data-dir "$data" send "$media" "A video" --attach "$root/apps/desktop/src/scenes/clip.mp4" >/dev/null \
+  || { echo "FAIL: the CLI could not send the video"; exit 1; }
+launch channel 0 --es LUMIA_DEV_CHANNEL media
+await 'content-desc="Video, clip.mp4, 0:03"' 30 || { shot video-inline; echo "FAIL: the channel does not draw the video the CLI sent; see $work/video-inline.png"; exit 1; }
+tap "Video, clip.mp4, 0:03"
+await 'content-desc="Enter fullscreen"' 20 || { shot video-inline; echo "FAIL: the video did not play in its row with the player's controls; see $work/video-inline.png"; exit 1; }
+shot video-inline
+# The middle of the first thing whose description starts with <words>.
+starting() { # <words>
+  ui | python3 -c '
+import re, sys
+for node in re.findall(r"<node [^>]*>", sys.stdin.read()):
+    if "content-desc=\"%s" % sys.argv[1] in node:
+        x0, y0, x1, y1 = (int(n) for n in re.search(r"bounds=\"\[(\d+),(\d+)\]\[(\d+),(\d+)\]\"", node).groups())
+        print("%d %d" % ((x0 + x1) // 2, (y0 + y1) // 2))
+        break
+' "$1"
+}
+press_card() { # <label>: the card's own press, under its words
+  for _ in $(seq 1 60); do at=$(starting "$1"); [ -n "$at" ] && break; sleep 1; done
+  [ -n "$at" ] || { shot embeds; echo "FAIL: no card reads \"$1\"; see $work/embeds.png"; exit 1; }
+  # shellcheck disable=SC2086
+  "$adb" shell input tap $at
+}
+if curl -s "$instance/api/v1/instance" | grep -q '"linkCardsEnabled":true'; then
+  "$cli" --data-dir "$data" send "$media" "https://www.youtube.com/watch?v=dQw4w9WgXcQ" --cards >/dev/null
+  press_card "Play video from YouTube"
+  await 'class="android.webkit.WebView"' 20 || { shot embed-youtube; echo "FAIL: pressing the YouTube card put no web view in its place; see $work/embed-youtube.png"; exit 1; }
+  sleep 8
+  shot embed-youtube
+  "$cli" --data-dir "$data" send "$media" "https://x.com/jack/status/20" --cards >/dev/null
+  press_card "Show post from X"
+  # The card gives way to the post's web view (its description the card's title).
+  for _ in $(seq 1 20); do [ -z "$(starting "Show post from X")" ] && break; sleep 1; done
+  [ -z "$(starting "Show post from X")" ] && await 'class="android.webkit.WebView"' 10 \
+    || { shot embed-post; echo "FAIL: Show post put no web view in the X card's place; see $work/embed-post.png"; exit 1; }
+  sleep 6
+  shot embed-post
+  # One at a time: the YouTube player went back to its card (a web view's frames read as web views too, so the card is what is looked for).
+  [ -n "$(starting "Play video from YouTube")" ] || { echo "FAIL: the YouTube player did not go back to its card when the post was shown; see $work/embed-post.png"; exit 1; }
+  echo "  playing: $work/video-inline.png, $work/embed-youtube.png, $work/embed-post.png (look at what the sites drew)"
+else
+  echo "  playing: $work/video-inline.png; the instance makes no link cards (LUMIA_LINK_CARDS), so no embed was pressed"
+fi
 
 # The rail's order and folders (architecture 6.9). A second server of the
 # phone's account, long pressed and dragged onto the first's middle, makes

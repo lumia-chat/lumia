@@ -1138,6 +1138,16 @@ class LumiaSession(
     /** A server card's picture, by its address. */
     suspend fun cardImage(imageUrl: String): ByteArray = client.call { cardImage(imageUrl) }
 
+    /**
+     * A Bluesky handle's account (its DID), asked of Bluesky's public API
+     * on the press of a post named by handle (specs/media.md 6.6), never
+     * through the instance. Throws when it does not resolve.
+     */
+    suspend fun resolveBlueskyHandle(handle: String): String = client.call { resolveBlueskyHandle(handle) }
+
+    /** The instance's origin, `https://chat.example` (its port when it names one): the base of the page an embed is held in. */
+    val instanceOrigin: String get() = originOf(client.baseUrl) ?: client.baseUrl.trimEnd('/')
+
     // Reactions (architecture 6.6)
 
     /**

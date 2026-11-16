@@ -264,6 +264,8 @@ fun ConversationScreen(store: AppStore, session: LumiaSession, channelId: String
     val others = channel?.participantAccountIds?.filter { it != session.me } ?: emptyList()
     val title = channel?.let { session.conversationName(it) } ?: "Conversation"
     val listState = rememberLazyListState()
+    // What plays here, one thing at a time, stopped as the conversation is left (specs/media.md 5, 6.6).
+    val playback = rememberPlayback(session, channelId)
     // Whose a message is: this account's from any of its devices, else the sender's.
     val me = session.me
     val senderOf = { m: DmMessageSummary -> if (m.mine) me else m.senderAccountId.ifEmpty { m.senderIdentityId } }
@@ -402,7 +404,7 @@ fun ConversationScreen(store: AppStore, session: LumiaSession, channelId: String
                             expanded = expanded[m.messageId] == true,
                             onExpanded = { expanded[m.messageId] = it },
                             // None while Preferences hides them: no row and no room for one, Add reaction still in the actions.
-                            media = if (m.attachments.isNotEmpty() || m.cards.isNotEmpty()) ({ hold -> MessageMedia(session, m.attachments, m.cards, display, hold) }) else null,
+                            media = if (m.attachments.isNotEmpty() || m.cards.isNotEmpty()) ({ hold -> MessageMedia(session, playback, m.messageId, m.attachments, m.cards, display, hold) }) else null,
                             reactions = display.drawn(m.reactions).takeIf { it.isNotEmpty() && !m.deleted }?.let { drawn -> @Composable { ReactionChips(drawn, session.me, session::knownNameOf, { react(m.messageId, it) }, { pickerFor = m.messageId }) } },
                             editor = if (editing == m.messageId && !m.deleted) ({ EditField(editDraft, { editDraft = it }, editRoom, { saveEdit(m) }, { editing = null }) { removals.Field(m.attachments, m.cards) } }) else null,
                             under = session.editRefusals[m.messageId]?.let { words -> @Composable { LumiaErrorText(words) } },
@@ -512,6 +514,8 @@ fun ChannelScreen(store: AppStore, session: LumiaSession, channelId: String, dis
     val title = if (dm) channel?.let { session.conversationName(it) } ?: "Conversation" else "# $name"
     val member = session.isIn(channelId)
     val listState = rememberLazyListState()
+    // What plays here, one thing at a time, stopped as the channel is left (specs/media.md 5, 6.6).
+    val playback = rememberPlayback(session, channelId)
     // A notice is never in a block, and the message after one opens its own; nor is a quote, which opens one under its name.
     val places = remember(messages) { blockPlaces(messages.map { Stamp(if (it.notice.isEmpty()) it.authorAccountId else "notice:${it.messageId}", it.createdAtMicros, quotes = it.reply != null) }) }
     val readTo = remember { session.readStates[channelId]?.takeIf { it.unread > 0u }?.readSeq }
@@ -669,7 +673,7 @@ fun ChannelScreen(store: AppStore, session: LumiaSession, channelId: String, dis
                                 expanded = expanded[m.messageId] == true,
                                 onExpanded = { expanded[m.messageId] = it },
                                 // None while Preferences hides them: no row and no room for one, Add reaction still in the actions.
-                                media = if (m.attachments.isNotEmpty() || m.cards.isNotEmpty()) ({ hold -> MessageMedia(session, m.attachments, m.cards, display, hold) }) else null,
+                                media = if (m.attachments.isNotEmpty() || m.cards.isNotEmpty()) ({ hold -> MessageMedia(session, playback, m.messageId, m.attachments, m.cards, display, hold) }) else null,
                                 reactions = display.drawn(m.reactions).takeIf { it.isNotEmpty() && !m.deleted }?.let { drawn -> @Composable { ReactionChips(drawn, session.me, session::knownNameOf, { if (member) react(m.messageId, it) }, { if (member) pickerFor = m.messageId }) } },
                                 editor = if (editing == m.messageId && !m.deleted) ({ EditField(editDraft, { editDraft = it }, editRoom, { saveEdit(m) }, { editing = null }) { removals.Field(m.attachments, m.cards) } }) else null,
                                 under = session.editRefusals[m.messageId]?.let { words -> @Composable { LumiaErrorText(words) } },

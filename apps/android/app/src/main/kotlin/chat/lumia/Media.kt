@@ -3,12 +3,13 @@
 // and videos, its document picker for any file), the strip of files over
 // the field with each one's state and alt text, the link previews over
 // it; under a message, its pictures at their shape or in a grid, its
-// videos and audio as a poster or row that plays in the system's player
-// view, its files as rows with Save and Share, those its server let go as
-// rows that open nothing, its cards; the full-screen
-// viewer with pinch zoom; and what editing a message may take away. The
-// rules are `Media.kt`'s in the kit; the platform's side of a file is
-// `Attachments.kt`'s.
+// videos as a poster and its audio as a row, each playing in its place
+// on a press (`Playback.kt`), its files as rows with Save and Share,
+// those its server let go as rows that open nothing, its cards, and a
+// card whose link has an embed loading it in its place on a press; the
+// full-screen viewer with pinch zoom; and what editing a message may take
+// away. The rules are `Media.kt`'s and `Embeds.kt`'s in the kit; the
+// platform's side of a file is `Attachments.kt`'s.
 package chat.lumia
 
 import android.content.Context
@@ -16,11 +17,7 @@ import android.content.Intent
 import android.graphics.drawable.AnimatedImageDrawable
 import android.graphics.drawable.Drawable
 import android.net.Uri
-import android.view.Gravity
-import android.widget.FrameLayout
 import android.widget.ImageView
-import android.widget.MediaController
-import android.widget.VideoView
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -60,6 +57,7 @@ import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.FolderZip
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.VideoFile
@@ -67,12 +65,16 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -114,6 +116,11 @@ import chat.lumia.kit.PendingAttachment
 import chat.lumia.kit.animationsOff
 import chat.lumia.kit.attachmentInput
 import chat.lumia.kit.attachmentLabel
+import chat.lumia.kit.attachmentPlayKey
+import chat.lumia.kit.embedPlayKey
+import chat.lumia.kit.embedPressLabel
+import chat.lumia.kit.embedSize
+import chat.lumia.kit.playKindOf
 import chat.lumia.kit.cardsDrawn
 import chat.lumia.kit.decodeAnimated
 import chat.lumia.kit.decodePicture
@@ -140,7 +147,9 @@ import kotlinx.coroutines.withContext
 import uniffi.lumia_ffi.AttachmentSummary
 import uniffi.lumia_ffi.BlobSummary
 import uniffi.lumia_ffi.CardSummary
+import uniffi.lumia_ffi.EmbedSummary
 import uniffi.lumia_ffi.cardLinks
+import uniffi.lumia_ffi.embedFor
 
 // The composer
 
@@ -333,34 +342,49 @@ private const val MESSAGE_ACTIONS = "Message actions"
  * each one's "Message actions".
  */
 @Composable
-fun MessageMedia(session: LumiaSession, attachments: List<AttachmentSummary>, cards: List<CardSummary>, display: Display, onLongPress: (() -> Unit)? = null) {
+fun MessageMedia(session: LumiaSession, playback: Playback, messageId: String, attachments: List<AttachmentSummary>, cards: List<CardSummary>, display: Display, onLongPress: (() -> Unit)? = null) {
     val pictures = attachments.filter { mediaShape(it.kind, display.images, it.expired) == MediaShape.PICTURE }
     // Rows keep the message's order, those its server let go among them.
     val rows = attachments.filter { mediaShape(it.kind, display.images, it.expired) != MediaShape.PICTURE }
     val drawnCards = if (cardsDrawn(display.embeds)) cards else emptyList()
     var viewing by remember { mutableStateOf<AttachmentSummary?>(null) }
-    var playing by remember { mutableStateOf<AttachmentSummary?>(null) }
-    val open = { a: AttachmentSummary -> if (a.kind == "video" || a.kind == "audio") playing = a else viewing = a }
+    // A video or a recording plays here, in its row (spec 5); anything else opens the viewer.
+    val open = { a: AttachmentSummary -> if (playKindOf(a) != null) playback.play(attachmentPlayKey(messageId, a.attachmentId), a) else viewing = a }
+    // The row leaving the screen: a video pauses, a site's player or post goes back to its card, audio plays on.
+    DisposableEffect(messageId, playback) { onDispose { playback.rowGone(messageId) } }
     Column(Modifier.fillMaxWidth().padding(top = LumiaTokens.space4), verticalArrangement = Arrangement.spacedBy(LumiaTokens.space6)) {
-        if (pictures.isNotEmpty()) PictureGrid(session, pictures, open, onLongPress)
+        if (pictures.isNotEmpty()) PictureGrid(session, playback, messageId, pictures, open, onLongPress)
         for (a in rows) {
-            if (a.expired) ExpiredRow(a, onLongPress) else FileRow(session, a, onOpen = if (a.kind == "file") null else ({ open(a) }), onLongPress)
+            val key = attachmentPlayKey(messageId, a.attachmentId)
+            when {
+                a.expired -> ExpiredRow(a, onLongPress)
+                a.kind == "audio" -> AudioRow(session, playback, key, a, onLongPress)
+                // Images as links: a video's row plays it in the row's place.
+                a.kind == "video" && playback.current == key && !playback.loading -> BoxWithConstraints(Modifier.fillMaxWidth()) {
+                    val (w, h) = fitted(a.width.toInt(), a.height.toInt(), maxWidth.value)
+                    InlineVideo(playback, a, Modifier.width(w.dp).height(h.dp))
+                }
+                else -> FileRow(session, a, onOpen = if (a.kind == "file") null else ({ open(a) }), onLongPress, busy = playback.current == key && playback.loading)
+            }
         }
-        for (card in drawnCards) CardView(session, card, onLongPress)
+        for (a in attachments) playback.errors[attachmentPlayKey(messageId, a.attachmentId)]?.let { LumiaErrorText(it) }
+        for (card in drawnCards) {
+            val embed = remember(card.url) { embedFor(card.url) }
+            if (embed == null) CardView(session, card, onLongPress) else EmbedCard(session, playback, messageId, card, embed, onLongPress)
+        }
     }
     viewing?.let { a -> ImageViewer(session, a) { viewing = null } }
-    playing?.let { a -> PlayerDialog(session, a) { playing = null } }
 }
 
 /** One picture at its shape fitted to the column, or several in rows of two (`mediaRows`), each cut square-ish to its tile. */
 @Composable
-private fun PictureGrid(session: LumiaSession, pictures: List<AttachmentSummary>, open: (AttachmentSummary) -> Unit, onLongPress: (() -> Unit)?) {
+private fun PictureGrid(session: LumiaSession, playback: Playback, messageId: String, pictures: List<AttachmentSummary>, open: (AttachmentSummary) -> Unit, onLongPress: (() -> Unit)?) {
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         val column = maxWidth.value
         if (pictures.size == 1) {
             val a = pictures[0]
             val (w, h) = fitted(a.width.toInt(), a.height.toInt(), column)
-            PictureTile(session, a, Modifier.width(w.dp).height(h.dp), open, onLongPress)
+            PictureTile(session, playback, messageId, a, Modifier.width(w.dp).height(h.dp), open, onLongPress)
             return@BoxWithConstraints
         }
         val gap = LumiaTokens.space4
@@ -370,7 +394,7 @@ private fun PictureGrid(session: LumiaSession, pictures: List<AttachmentSummary>
                 val row = pictures.subList(at, at + n)
                 at += n
                 Row(Modifier.fillMaxWidth().height((column / 2).dp), horizontalArrangement = Arrangement.spacedBy(gap)) {
-                    for (a in row) PictureTile(session, a, Modifier.weight(1f).fillMaxSize(), open, onLongPress)
+                    for (a in row) PictureTile(session, playback, messageId, a, Modifier.weight(1f).fillMaxSize(), open, onLongPress)
                 }
             }
         }
@@ -382,13 +406,20 @@ private fun PictureGrid(session: LumiaSession, pictures: List<AttachmentSummary>
  * the thumbnail is here, then the thumbnail. A GIF animates in place from
  * its whole file unless the system asks for no motion, then it is its
  * first frame with a GIF badge and plays on a tap. A video has the play
- * symbol and its length. A tap opens the viewer or the player, a long
- * press the message's actions ([onLongPress]). A picture that cannot be
- * drawn says so with its name, as a file would.
+ * symbol and its length, and pressed plays in its place ([InlineVideo]),
+ * a spinner over its poster while its file is had. A tap opens the viewer
+ * or plays, a long press the message's actions ([onLongPress]). A picture
+ * that cannot be drawn says so with its name, as a file would.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun PictureTile(session: LumiaSession, a: AttachmentSummary, modifier: Modifier, open: (AttachmentSummary) -> Unit, onLongPress: (() -> Unit)?) {
+private fun PictureTile(session: LumiaSession, playback: Playback, messageId: String, a: AttachmentSummary, modifier: Modifier, open: (AttachmentSummary) -> Unit, onLongPress: (() -> Unit)?) {
+    val key = attachmentPlayKey(messageId, a.attachmentId)
+    if (a.kind == "video" && playback.current == key && !playback.loading) {
+        InlineVideo(playback, a, modifier)
+        return
+    }
+    val busy = a.kind == "video" && playback.current == key
     val context = LocalContext.current
     val shape = RoundedCornerShape(LumiaTokens.radius12)
     val still = remember { animationsOff(context) }
@@ -406,7 +437,7 @@ private fun PictureTile(session: LumiaSession, a: AttachmentSummary, modifier: M
                 role = Role.Button
             }
             .combinedClickable(
-                onClickLabel = if (gif && still && !played) "Play" else "Open",
+                onClickLabel = if ((gif && still && !played) || a.kind == "video") "Play" else "Open",
                 onLongClickLabel = onLongPress?.let { MESSAGE_ACTIONS },
                 onLongClick = onLongPress,
             ) { if (gif && still && !played) played = true else open(a) },
@@ -425,7 +456,8 @@ private fun PictureTile(session: LumiaSession, a: AttachmentSummary, modifier: M
         if (gif && !animate) Badge("GIF", Modifier.align(Alignment.BottomStart).padding(LumiaTokens.space6))
         if (a.kind == "video") {
             Box(Modifier.size(LumiaTokens.avatarLg).background(LumiaTokens.scrim.color, CircleShape), contentAlignment = Alignment.Center) {
-                Icon(Icons.Filled.PlayArrow, null, tint = Color.White, modifier = Modifier.size(28.dp))
+                if (busy) CircularProgressIndicator(Modifier.size(28.dp), color = Color.White, strokeWidth = 2.dp)
+                else Icon(Icons.Filled.PlayArrow, null, tint = Color.White, modifier = Modifier.size(28.dp))
             }
             if (a.durationMs > 0u) Badge(lengthWords(a.durationMs.toLong()), Modifier.align(Alignment.BottomStart).padding(LumiaTokens.space6))
         }
@@ -480,7 +512,7 @@ private fun kindIcon(kind: FileKind): ImageVector = when (kind) {
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun FileRow(session: LumiaSession, a: AttachmentSummary, onOpen: (() -> Unit)?, onLongPress: (() -> Unit)?) {
+private fun FileRow(session: LumiaSession, a: AttachmentSummary, onOpen: (() -> Unit)?, onLongPress: (() -> Unit)?, busy: Boolean = false) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var error by remember { mutableStateOf<String?>(null) }
@@ -500,7 +532,8 @@ private fun FileRow(session: LumiaSession, a: AttachmentSummary, onOpen: (() -> 
         ) {
             val (fill, ink) = kindTone(kind)
             Box(Modifier.size(34.dp).background(fill, RoundedCornerShape(LumiaTokens.radius9)), contentAlignment = Alignment.Center) {
-                Icon(if (a.kind == "audio" || a.kind == "video") Icons.Filled.PlayArrow else kindIcon(kind), null, tint = ink, modifier = Modifier.size(18.dp))
+                if (busy) CircularProgressIndicator(Modifier.size(18.dp), color = ink, strokeWidth = 2.dp)
+                else Icon(if (a.kind == "audio" || a.kind == "video") Icons.Filled.PlayArrow else kindIcon(kind), null, tint = ink, modifier = Modifier.size(18.dp))
             }
             Column(
                 Modifier.weight(1f).semantics(mergeDescendants = true) {
@@ -615,37 +648,120 @@ private suspend fun share(context: Context, session: LumiaSession, a: Attachment
  * own name for itself), its title and description, its picture with a
  * play symbol for a video page; a stripe in the page's colour. A tap
  * opens the link in the browser, a long press the message's actions.
+ *
+ * A card whose link has an embed ([embed], the core's from the link, spec
+ * 6.6) is pressed to load it instead ([onPress]): a play button over its
+ * picture for a player or audio, "Show post" under it for a post, a
+ * spinner while a Bluesky handle resolves ([busy]), and the words of a
+ * failure under it ([error]). The press is a button named by the core's
+ * label and the card's title.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun CardView(session: LumiaSession, card: CardSummary, onLongPress: (() -> Unit)?) {
+private fun CardView(
+    session: LumiaSession,
+    card: CardSummary,
+    onLongPress: (() -> Unit)?,
+    embed: EmbedSummary? = null,
+    busy: Boolean = false,
+    error: String? = null,
+    onPress: (() -> Unit)? = null,
+) {
     val context = LocalContext.current
     val shape = RoundedCornerShape(LumiaTokens.radius12)
     val stripe = parseColour(card.color) ?: LumiaTokens.lineStrong.color
-    Row(
-        Modifier.fillMaxWidth().clip(shape).background(LumiaTokens.inset.color, shape)
-            .combinedClickable(onClickLabel = "Open the link", role = Role.Button, onLongClickLabel = onLongPress?.let { MESSAGE_ACTIONS }, onLongClick = onLongPress) { openInBrowser(context, card.url) }
-            .semantics(mergeDescendants = true) { contentDescription = listOf("Link preview", card.host, card.title, card.description).filter { it.isNotEmpty() }.joinToString(", ") },
-    ) {
-        Box(Modifier.width(3.dp).heightIn(min = 48.dp).background(stripe))
-        Column(Modifier.weight(1f).padding(LumiaTokens.space10), verticalArrangement = Arrangement.spacedBy(LumiaTokens.space2)) {
-            Text(card.host, style = LumiaTokens.textMeta.style, color = LumiaTokens.inkMuted.color, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(card.title, style = LumiaTokens.textAuthor.style, color = LumiaTokens.link.color, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            if (card.description.isNotEmpty()) Text(card.description, style = LumiaTokens.textMeta.style, color = LumiaTokens.inkSecondary.color, maxLines = 3, overflow = TextOverflow.Ellipsis)
-            if (card.imageUrl.isNotEmpty() || card.image != null) {
-                val picture = rememberCardPicture(session, card)
-                if (picture !is Fetched.Failed) {
-                    BoxWithConstraints(Modifier.fillMaxWidth().padding(top = LumiaTokens.space6)) {
-                        val (w, h) = fitted(card.imageWidth.toInt(), card.imageHeight.toInt(), maxWidth.value, 240f)
-                        Box(Modifier.width(w.dp).height(h.dp).clip(RoundedCornerShape(LumiaTokens.radius8)).background(LumiaTokens.surface.color), contentAlignment = Alignment.Center) {
-                            (picture as? Fetched.Here)?.let { Image(it.value, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }
-                            if (card.video) Box(Modifier.size(LumiaTokens.avatarLg).background(LumiaTokens.scrim.color, CircleShape), contentAlignment = Alignment.Center) {
-                                Icon(Icons.Filled.PlayArrow, null, tint = Color.White, modifier = Modifier.size(28.dp))
+    val plays = embed != null && embed.kind != "post"
+    Column {
+        Row(
+            Modifier.fillMaxWidth().clip(shape).background(LumiaTokens.inset.color, shape)
+                .combinedClickable(
+                    onClickLabel = embed?.label ?: "Open the link",
+                    role = Role.Button,
+                    onLongClickLabel = onLongPress?.let { MESSAGE_ACTIONS },
+                    onLongClick = onLongPress,
+                ) { (onPress ?: { openInBrowser(context, card.url) })() }
+                .semantics(mergeDescendants = true) {
+                    contentDescription = if (embed != null) embedPressLabel(embed, card.title)
+                    else listOf("Link preview", card.host, card.title, card.description).filter { it.isNotEmpty() }.joinToString(", ")
+                },
+        ) {
+            Box(Modifier.width(3.dp).heightIn(min = 48.dp).background(stripe))
+            Column(Modifier.weight(1f).padding(LumiaTokens.space10), verticalArrangement = Arrangement.spacedBy(LumiaTokens.space2)) {
+                Text(card.host, style = LumiaTokens.textMeta.style, color = LumiaTokens.inkMuted.color, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(card.title, style = LumiaTokens.textAuthor.style, color = LumiaTokens.link.color, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                if (card.description.isNotEmpty()) Text(card.description, style = LumiaTokens.textMeta.style, color = LumiaTokens.inkSecondary.color, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                var pictured = false
+                if (card.imageUrl.isNotEmpty() || card.image != null) {
+                    val picture = rememberCardPicture(session, card)
+                    if (picture !is Fetched.Failed) {
+                        pictured = true
+                        BoxWithConstraints(Modifier.fillMaxWidth().padding(top = LumiaTokens.space6)) {
+                            val (w, h) = fitted(card.imageWidth.toInt(), card.imageHeight.toInt(), maxWidth.value, 240f)
+                            Box(Modifier.width(w.dp).height(h.dp).clip(RoundedCornerShape(LumiaTokens.radius8)).background(LumiaTokens.surface.color), contentAlignment = Alignment.Center) {
+                                (picture as? Fetched.Here)?.let { Image(it.value, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }
+                                if (card.video || plays) PlaySymbol(busy)
                             }
                         }
                     }
                 }
+                // A post, or a player with no picture to put its button on: the press as words under the card.
+                if (embed != null && (!plays || !pictured)) {
+                    Row(
+                        Modifier.padding(top = LumiaTokens.space6).background(LumiaTokens.surface.color, RoundedCornerShape(LumiaTokens.radius8))
+                            .border(1.dp, LumiaTokens.line.color, RoundedCornerShape(LumiaTokens.radius8))
+                            .padding(horizontal = LumiaTokens.space10, vertical = LumiaTokens.space6),
+                        horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space6),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        if (busy) CircularProgressIndicator(Modifier.size(14.dp), color = LumiaTokens.accent.color, strokeWidth = 2.dp)
+                        else if (plays) Icon(Icons.Filled.PlayArrow, null, tint = LumiaTokens.iconStrong.color, modifier = Modifier.size(16.dp))
+                        Text(if (plays) "Play" else "Show post", style = LumiaTokens.textAuthor.style, color = LumiaTokens.ink.color)
+                    }
+                }
             }
+        }
+        error?.let { LumiaErrorText(it) }
+    }
+}
+
+/** The play symbol over a picture, a spinner in it while what it plays is had. */
+@Composable
+private fun PlaySymbol(busy: Boolean) {
+    Box(Modifier.size(LumiaTokens.avatarLg).background(LumiaTokens.scrim.color, CircleShape), contentAlignment = Alignment.Center) {
+        if (busy) CircularProgressIndicator(Modifier.size(28.dp), color = Color.White, strokeWidth = 2.dp)
+        else Icon(Icons.Filled.PlayArrow, null, tint = Color.White, modifier = Modifier.size(28.dp))
+    }
+}
+
+/**
+ * A card with an embed (spec 6.6): the card until it is pressed, then the
+ * site's embed in its place at its size ([embedSize]): a player at the
+ * column's width at its shape, at most 400 tall; audio at its site's
+ * height; a post at most 550 wide, its site's height or, for X, Bluesky
+ * and Reddit, the height it reports. One shown at a time in a
+ * conversation ([Playback]); a Bluesky post whose handle did not resolve
+ * says so, and its card then opens the browser.
+ */
+@Composable
+private fun EmbedCard(session: LumiaSession, playback: Playback, messageId: String, card: CardSummary, embed: EmbedSummary, onLongPress: (() -> Unit)?) {
+    val context = LocalContext.current
+    val key = embedPlayKey(messageId, card.url)
+    val shown = playback.current == key && playback.address != null
+    if (!shown) {
+        val error = playback.errors[key]
+        CardView(session, card, onLongPress, embed, busy = playback.current == key && playback.loading, error = error) {
+            if (error != null) openInBrowser(context, card.url) else playback.show(key, embed)
+        }
+        return
+    }
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val (w, h) = embedSize(embed, maxWidth.value, playback.reported)
+        Box(Modifier.width(w.dp).height(h.dp).background(LumiaTokens.inset.color, RoundedCornerShape(LumiaTokens.radius12))) {
+            AndroidView(
+                factory = { c -> playback.embedView(c, key, embed, card.title) },
+                onRelease = { playback.released(it) },
+                modifier = Modifier.fillMaxSize(),
+            )
         }
     }
 }
@@ -736,58 +852,114 @@ private fun Modifier.pointerInputs(onDoubleTap: () -> Unit, onTransform: (androi
         .then(Modifier.pointerInput(Unit) { detectTapGestures(onDoubleTap = { onDoubleTap() }) })
 
 /**
- * A video or audio full screen, in the platform's `VideoView` with its
- * media controls: the core opens the file into the app's cache (the
- * instance never holds it in the clear) and it plays from there. Never
- * before a tap.
+ * An attached video playing in its row (spec 5): Media3's view over the
+ * conversation's one player, with the platform's controls and its
+ * full-screen button, which draws the same player full screen
+ * ([Playback.fullScreen]) and back.
  */
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable
-private fun PlayerDialog(session: LumiaSession, a: AttachmentSummary, onClose: () -> Unit) {
+private fun InlineVideo(playback: Playback, a: AttachmentSummary, modifier: Modifier) {
+    val shape = RoundedCornerShape(LumiaTokens.radius12)
+    val player = playback.player ?: return
+    Box(modifier.clip(shape).background(Color.Black)) {
+        AndroidView(
+            factory = { c ->
+                playerView(c).apply {
+                    describePlayer(this, a)
+                    setFullscreenButtonClickListener { playback.fullScreen = true }
+                }
+            },
+            update = { view ->
+                // Full screen takes the player; back in the row, the button reads "Enter fullscreen" again.
+                val target = if (playback.fullScreen) null else player
+                if (view.player !== target) {
+                    view.player = target
+                    // A paused video back on screen draws its frame on the new surface.
+                    if (target != null && !target.isPlaying && target.playbackState == androidx.media3.common.Player.STATE_READY) target.seekTo(target.currentPosition)
+                }
+                view.setFullscreenButtonState(playback.fullScreen)
+            },
+            onRelease = { it.player = null },
+            modifier = Modifier.fillMaxSize(),
+        )
+    }
+}
+
+/**
+ * An attached recording as the design's attachment row, playing in it
+ * (spec 5): its tile is Play and Pause, and while it is the one playing,
+ * a bar for its position and its time under its name. It plays on as the
+ * list scrolls, until another starts or the conversation is left. Save,
+ * Share and the long press are a file row's.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun AudioRow(session: LumiaSession, playback: Playback, key: String, a: AttachmentSummary, onLongPress: (() -> Unit)?) {
     val context = LocalContext.current
-    var uri by remember(a.attachmentId) { mutableStateOf<Uri?>(null) }
-    var error by remember(a.attachmentId) { mutableStateOf<String?>(null) }
-    LaunchedEffect(a.attachmentId) {
-        try {
-            val bytes = session.attachmentBytes(a.main)
-            uri = withContext(Dispatchers.IO) {
-                val dir = File(context.cacheDir, "play").apply { mkdirs() }
-                val ext = a.name.substringAfterLast('.', "").takeIf { it.length in 1..5 } ?: "bin"
-                Uri.fromFile(File(dir, "${a.attachmentId}.$ext").apply { if (!exists() || length() != bytes.size.toLong()) writeBytes(bytes) })
+    val scope = rememberCoroutineScope()
+    var error by remember { mutableStateOf<String?>(null) }
+    val save = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(a.mediaType.ifEmpty { "application/octet-stream" })) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch { error = saveTo(context, session, a.main, uri) }
+    }
+    val active = playback.current == key
+    val playing = active && playback.playing
+    var position by remember(key) { mutableLongStateOf(0L) }
+    var length by remember(key) { mutableLongStateOf(a.durationMs.toLong()) }
+    LaunchedEffect(active, playing) {
+        while (active) {
+            playback.player?.let { p ->
+                position = p.currentPosition.coerceAtLeast(0)
+                if (p.duration > 0) length = p.duration
             }
-        } catch (e: Exception) {
-            error = "This can't be played: ${e.message ?: "the file could not be had"}"
+            if (!playing) break
+            delay(250)
         }
     }
-    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
-            val here = uri
-            when {
-                error != null -> Text(error ?: "", style = LumiaTokens.textBody.style, color = Color.White, modifier = Modifier.padding(LumiaTokens.space16))
-                here == null -> CircularProgressIndicator(color = Color.White)
-                // The view fits itself to the video's shape inside a frame the size of the screen, centred.
-                else -> AndroidView(
-                    factory = { c ->
-                        FrameLayout(c).apply {
-                            val video = VideoView(c)
-                            addView(video, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT, Gravity.CENTER))
-                            val controls = MediaController(c)
-                            controls.setAnchorView(video)
-                            video.setMediaController(controls)
-                            video.contentDescription = attachmentLabel(a)
-                            video.setOnPreparedListener { video.start(); controls.show(0) }
-                            video.setOnErrorListener { _, _, _ -> error = "This can't be played on this phone."; true }
-                            video.setVideoURI(here)
-                        }
+    val press = { if (active && !playback.loading) playback.toggle() else if (!active) playback.play(key, a) }
+    val shape = RoundedCornerShape(LumiaTokens.radius12)
+    val (fill, ink) = kindTone(FileKind.AUDIO)
+    Column {
+        Row(
+            Modifier.fillMaxWidth().clip(shape).background(LumiaTokens.inset.color, shape)
+                .combinedClickable(onClickLabel = if (playing) "Pause" else "Play", role = Role.Button, onLongClickLabel = onLongPress?.let { MESSAGE_ACTIONS }, onLongClick = onLongPress, onClick = press)
+                .padding(LumiaTokens.space8),
+            horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space10),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(Modifier.size(34.dp).background(fill, RoundedCornerShape(LumiaTokens.radius9)), contentAlignment = Alignment.Center) {
+                if (active && playback.loading) CircularProgressIndicator(Modifier.size(18.dp), color = ink, strokeWidth = 2.dp)
+                else Icon(if (playing) Icons.Filled.Pause else Icons.Filled.PlayArrow, null, tint = ink, modifier = Modifier.size(18.dp))
+            }
+            Column(Modifier.weight(1f)) {
+                Column(
+                    Modifier.semantics(mergeDescendants = true) {
+                        contentDescription = attachmentLabel(a) + if (playing) ", playing" else ""
+                        if (onLongPress != null) onLongClick(label = MESSAGE_ACTIONS) { onLongPress(); true }
                     },
-                    onRelease = { (it.getChildAt(0) as? VideoView)?.stopPlayback() },
-                    modifier = Modifier.fillMaxSize(),
-                )
+                ) {
+                    Text(a.name, style = LumiaTokens.textAuthor.style, color = LumiaTokens.ink.color, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(
+                        if (active && !playback.loading) "${lengthWords(position)} / ${lengthWords(length)}"
+                        else listOfNotNull(sizeWords(a.sizeBytes.toLong()), a.durationMs.takeIf { it > 0u }?.let { lengthWords(it.toLong()) }).joinToString(" · "),
+                        style = LumiaTokens.textMeta.style, color = LumiaTokens.inkMuted.color,
+                    )
+                }
+                if (active && !playback.loading && length > 0) {
+                    Slider(
+                        value = position.coerceAtMost(length).toFloat(),
+                        onValueChange = { position = it.toLong(); playback.player?.seekTo(it.toLong()) },
+                        valueRange = 0f..length.toFloat(),
+                        colors = SliderDefaults.colors(thumbColor = LumiaTokens.accent.color, activeTrackColor = LumiaTokens.accent.color, inactiveTrackColor = LumiaTokens.line.color),
+                        modifier = Modifier.fillMaxWidth().height(LumiaTokens.controlHeight).semantics { contentDescription = "Position in ${a.name}" },
+                    )
+                }
             }
-            Row(Modifier.align(Alignment.TopStart).fillMaxWidth().statusBarsPadding().padding(horizontal = LumiaTokens.space4), verticalAlignment = Alignment.CenterVertically) {
-                androidx.compose.material3.IconButton(onClick = onClose) { Icon(Icons.Filled.Close, contentDescription = "Close", tint = Color.White) }
-                Text(a.name, style = LumiaTokens.textAuthor.style, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
+            RowButton(Icons.Filled.Download, "Save ${a.name}", onLongPress) { save.launch(a.name) }
+            RowButton(Icons.Filled.Share, "Share ${a.name}", onLongPress) { scope.launch { error = share(context, session, a) } }
         }
+        error?.let { LumiaErrorText(it) }
     }
 }
 

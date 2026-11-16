@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- An attached video's player (specs/media.md 5): Media3's view with the
+     platform's controls, drawn on a texture so it scrolls and clips with
+     its message's row. -->
+<androidx.media3.ui.PlayerView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    app:surface_type="texture_view"
+    app:use_artwork="false"
+    app:show_buffering="when_playing" />
