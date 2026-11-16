@@ -10,7 +10,7 @@ import { Attachment, AudioAttachment, DropZone, EmbedFrame, LinkCard, MediaGrid,
 import { ClientError, type AttachOptions, type AttachmentDraft, type AttachmentSummary, type BlobSummary, type CardSummary, type EmbedSummary, type Pixels, type UploadLimits } from "../client/bridge";
 import { cardImageSrc, client } from "../client/state";
 import { MAX_ATTACHMENTS, PREVIEW_PAUSE_MS, attachErrorWords, blobUrls, debounce, fileKind, keptCardUrls, pasteTakesFiles, sizeWords, sniffImage, tooLargeWords, type BlobState } from "../client/media";
-import { EmbedLookup, allowedSrc, frameBox, frameSrc, frameTitle, originOf, playingOf, pressLabel, pressOf, pressable, reportedHeights } from "../client/embeds";
+import { EmbedLookup, frameBox, frameTitle, originOf, playingOf, pressLabel, pressOf, pressable, pressed, reportedHeights } from "../client/embeds";
 import { playback, stopsOffScreen, type PlayingKind } from "../client/playback";
 import { sameList } from "../client/live";
 import type { Media } from "../client/preferences";
@@ -294,13 +294,14 @@ const embedOrigins = () => (originsAsked ??= client().embedOrigins().catch(() =>
 /** A Bluesky handle's post resolved once for the page: its embed's address. */
 const blueskyResolved = new Map<string, string>();
 
-/** The address a press loads, Bluesky's handle resolved first; empty when there is none. */
+/** The address a press loads, Bluesky's handle resolved first; empty when Bluesky has no account for the handle. Refused when Bluesky gave no answer. */
 async function addressOf(e: EmbedSummary): Promise<string> {
   if (e.url) return e.url;
   const key = e.blueskyHandle + "/" + e.blueskyRkey;
   const known = blueskyResolved.get(key);
   if (known) return known;
   const did = await client().resolveBlueskyHandle(e.blueskyHandle);
+  if (!did) return "";
   const url = (await client().blueskyEmbedUrl(did, e.blueskyRkey)) ?? "";
   if (url) blueskyResolved.set(key, url);
   return url;
@@ -336,8 +337,10 @@ function CardView(props: { card: CardSummary; onRemove?: () => void }) {
   const id = `e${++playSeq}`;
   const [shown, setShown] = createSignal<string>();
   const [busy, setBusy] = createSignal(false);
-  // Bluesky's handle not found: the card opens the browser, and says why.
-  const [failed, setFailed] = createSignal(false);
+  // Why the last press loaded nothing, in words; `gone` once another press would come to the
+  // same (Bluesky has no such account), and the card opens its link from then on.
+  const [note, setNote] = createSignal<string>();
+  const [gone, setGone] = createSignal(false);
   // From the link, never from the card (spec 6.6). A card is kept by its link, so this one's
   // never changes: asked once.
   const [embed, setEmbed] = createSignal<EmbedSummary | null>(null);
@@ -364,18 +367,16 @@ function CardView(props: { card: CardSummary; onRemove?: () => void }) {
     const n = ++presses;
     // Whatever else plays stops now, before any wait.
     playback.start({ id, ...playingOf(e), stop: putBack });
+    setNote(undefined);
     if (!e.url) setBusy(true);
-    const [url, origins] = await Promise.all([addressOf(e).catch((err) => (console.warn("bluesky:", err), "")), embedOrigins()]);
+    const [address, origins] = await Promise.all([addressOf(e).catch((err) => (console.warn("bluesky:", err), undefined)), embedOrigins()]);
     if (n !== presses) return;
     setBusy(false);
-    const src = url ? frameSrc(e, url, location.hostname) : "";
-    if (!src || !allowedSrc(src, origins)) {
-      if (src) console.warn("embed: not an embed origin:", src);
-      setFailed(true);
-      playback.end(id);
-      return;
-    }
-    setShown(src);
+    const came = pressed(e, address, origins, location.hostname);
+    if ("src" in came) return void setShown(came.src);
+    setNote(came.note);
+    setGone(!came.again);
+    playback.end(id);
   };
   return (
     <Show
@@ -394,9 +395,9 @@ function CardView(props: { card: CardSummary; onRemove?: () => void }) {
           video={props.card.video}
           embed={(() => {
             const e = embed();
-            return pressable(e) && !failed() && !props.onRemove ? { press: pressOf(e), label: pressLabel(e, props.card.title), busy: busy(), onPress: () => void press() } : undefined;
+            return pressable(e) && !gone() && !props.onRemove ? { press: pressOf(e), label: pressLabel(e, props.card.title), busy: busy(), onPress: () => void press() } : undefined;
           })()}
-          note={failed() ? `Couldn’t show this here. The link opens it on ${embed()?.providerName ?? "the site"}.` : undefined}
+          note={note()}
           onRemove={props.onRemove}
         />
       }

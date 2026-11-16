@@ -1095,7 +1095,8 @@ export class Bridge {
     return this.call<number | null | undefined>("reportedEmbedHeight", provider, message).then((h) => h ?? null);
   }
   /** A Bluesky handle's DID, asked of Bluesky (not the instance) on the press of a post named by handle. */
-  resolveBlueskyHandle(handle: string): Promise<string> {
+  /** A Bluesky handle's DID, asked of Bluesky on the press; undefined when Bluesky has no account for it, and a refusal when it gave no answer (the press may be made again). */
+  resolveBlueskyHandle(handle: string): Promise<string | undefined> {
     return this.call("resolveBlueskyHandle", handle);
   }
   /** Whether a picture someone sent may be decoded: its header names a size within the bounds. */

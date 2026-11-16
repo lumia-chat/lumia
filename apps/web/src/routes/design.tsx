@@ -1822,7 +1822,7 @@ function MediaPieces() {
               <LinkCard url="https://open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQC" host="open.spotify.com" title="Field recordings, vol. 2" description="An album by Ridge." image={PICTURES.square} imageWidth={400} imageHeight={400} embed={{ press: "play", label: "Play audio from Spotify, Field recordings, vol. 2", onPress: () => {} }} />
               <LinkCard url="https://x.com/example/status/20" host="x.com" title="Ridge on X" description="Shipping the field notes today. Thread below." embed={{ press: "show", label: "Show post from X, Ridge on X", onPress: () => {} }} />
               <LinkCard url="https://bsky.app/profile/ridge.example/post/3k2la3rsg5w2y" host="bsky.app" title="Ridge (@ridge.example)" description="The write-up is up." embed={{ press: "show", label: "Show post from Bluesky, Ridge (@ridge.example)", busy: true, onPress: () => {} }} />
-              <LinkCard url="https://bsky.app/profile/gone.example/post/3k2la3rsg5w2y" host="bsky.app" title="A post" description="Its account was not found." note="Couldn’t show this here. The link opens it on Bluesky." />
+              <LinkCard url="https://bsky.app/profile/gone.example/post/3k2la3rsg5w2y" host="bsky.app" title="A post" description="Its account was not found." note="Bluesky couldn’t find @gone.example. The link opens it on Bluesky." />
               <EmbedFrame src="about:blank" title="The launch, in four minutes" kind="player" box={frameBox(GALLERY_PLAYER)} />
               <EmbedFrame src="about:blank" title="Ridge on X" kind="post" box={frameBox(GALLERY_POST, 320)} />
               <AudioAttachment kind="video" name="launch.mp4" size="8.4 MB" />

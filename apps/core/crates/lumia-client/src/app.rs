@@ -1983,6 +1983,17 @@ const CARD_IMAGE_MAX_BYTES: usize = 1 << 20;
 /// The most of Bluesky's answer to a handle read: it is a DID in a small JSON object.
 const BLUESKY_ANSWER_MAX_BYTES: usize = 16 * 1024;
 
+/// The DID in Bluesky's answer to a handle lookup (`{"did": "did:plc:…"}`), when it holds
+/// one an embed takes.
+fn resolved_did(answer: &[u8]) -> Option<String> {
+    #[derive(Deserialize)]
+    struct Resolved {
+        did: String,
+    }
+    let resolved: Resolved = serde_json::from_slice(answer).ok()?;
+    lumia_core::embeds::is_did(&resolved.did).then_some(resolved.did)
+}
+
 /// A response's body, or [`ClientError::State`] once it says or proves longer than `limit`:
 /// natively read a chunk at a time and stopped there, in the browser (whose `fetch` has no
 /// chunks here) refused by its length when it gives one.
@@ -6299,14 +6310,21 @@ impl App {
     /// named by handle (specs/media.md 6.6). The one request is to Bluesky,
     /// never through the instance, and only on that press.
     ///
+    /// None when Bluesky has no account for it: `handle` is not a handle,
+    /// Bluesky says it cannot resolve it (its 400), or its answer holds no
+    /// DID an embed takes. The card then opens the browser, and asking
+    /// again would be told the same.
+    ///
     /// # Errors
-    /// [`ClientError::State`] when `handle` is not a handle or the answer
-    /// holds no DID an embed takes; [`ClientError::Transport`] when the
-    /// request fails or Bluesky refuses it (an unknown handle is a 400).
-    pub async fn resolve_bluesky_handle(&self, handle: &str) -> Result<String, ClientError> {
+    /// When Bluesky gave no answer to go by (no network, a timeout, a
+    /// failure of its own, an answer too long): the press may be made again.
+    pub async fn resolve_bluesky_handle(
+        &self,
+        handle: &str,
+    ) -> Result<Option<String>, ClientError> {
         let handle = handle.to_ascii_lowercase();
         if !lumia_core::embeds::is_bluesky_handle(&handle) {
-            return Err(ClientError::State("not a Bluesky handle".into()));
+            return Ok(None);
         }
         let mut url = url::Url::parse(BLUESKY_RESOLVE_HANDLE)
             .map_err(|e| ClientError::Transport(e.to_string()))?;
@@ -6317,21 +6335,15 @@ impl App {
             .header("accept", "application/json")
             .timeout(std::time::Duration::from_secs(5))
             .send()
-            .await?
-            .error_for_status()?;
+            .await?;
+        // "Unable to resolve handle" is a 400 (`InvalidRequest`); any other refusal is
+        // Bluesky's own trouble, not word about the handle.
+        if response.status() == reqwest::StatusCode::BAD_REQUEST {
+            return Ok(None);
+        }
+        let response = response.error_for_status()?;
         let body = read_at_most(response, BLUESKY_ANSWER_MAX_BYTES).await?;
-        #[derive(Deserialize)]
-        struct Resolved {
-            did: String,
-        }
-        let resolved: Resolved = serde_json::from_slice(&body)
-            .map_err(|_| ClientError::State("Bluesky gave no account for that handle".into()))?;
-        if !lumia_core::embeds::is_did(&resolved.did) {
-            return Err(ClientError::State(
-                "Bluesky gave no account for that handle".into(),
-            ));
-        }
-        Ok(resolved.did)
+        Ok(resolved_did(&body))
     }
 
     /// Whether this instance makes link cards in server channels
@@ -7539,30 +7551,43 @@ mod kept_tests {
 mod embed_tests {
     use std::sync::Arc;
 
-    use super::{App, Opener, Place};
+    use super::{resolved_did, App, Opener, Place};
     use crate::sqlite::SqliteStore;
-    use crate::ClientError;
 
     /// Asks Bluesky only with `LUMIA_LIVE_BLUESKY` set, so the suite needs
-    /// no network; a name that is no handle is refused before any request.
+    /// no network; a name that is no handle has no account before any
+    /// request, as one Bluesky does not know has none after it.
     #[tokio::test]
     async fn a_handle_resolves_to_a_did() {
         let opener: Opener = Arc::new(|_| SqliteStore::in_memory());
         let app = App::open("http://127.0.0.1:9", Place::Native, opener).unwrap();
         for name in ["not a handle", "alice", "did:plc:z72i7hdynmk6r22z27h6tvur"] {
-            assert!(matches!(
-                app.resolve_bluesky_handle(name).await,
-                Err(ClientError::State(_))
-            ));
+            assert_eq!(app.resolve_bluesky_handle(name).await.unwrap(), None);
         }
         if std::env::var_os("LUMIA_LIVE_BLUESKY").is_some() {
             let did = app.resolve_bluesky_handle("BSKY.app").await.unwrap();
-            assert_eq!(did, "did:plc:z72i7hdynmk6r22z27h6tvur");
-            assert!(app
+            assert_eq!(did.as_deref(), Some("did:plc:z72i7hdynmk6r22z27h6tvur"));
+            let unknown = app
                 .resolve_bluesky_handle("no-such-handle-zz9.bsky.social")
-                .await
-                .is_err());
+                .await;
+            assert_eq!(unknown.unwrap(), None);
         }
+    }
+
+    #[test]
+    fn a_lookups_answer_gives_its_did_only_when_an_embed_takes_it() {
+        assert_eq!(
+            resolved_did(br#"{"did":"did:plc:z72i7hdynmk6r22z27h6tvur"}"#).as_deref(),
+            Some("did:plc:z72i7hdynmk6r22z27h6tvur")
+        );
+        // No account in it, a DID no embed takes, or no answer of Bluesky's at all.
+        assert_eq!(resolved_did(br#"{"error":"InvalidRequest"}"#), None);
+        assert_eq!(resolved_did(br#"{"did":"did:plc:short"}"#), None);
+        assert_eq!(
+            resolved_did(br#"{"did":"did:plc:z72i7hdynmk6r22z27h6tvur\"><script>"}"#),
+            None
+        );
+        assert_eq!(resolved_did(b"<html>Bad gateway</html>"), None);
     }
 
     #[test]

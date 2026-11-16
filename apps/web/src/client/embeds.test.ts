@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { EmbedSummary } from "./bridge";
-import { EmbedLookup, allowedSrc, frameBox, frameSrc, frameTitle, originOf, playingOf, postedText, pressLabel, pressOf, pressable, reportedHeights } from "./embeds";
+import { BLUESKY_UNREACHED, EmbedLookup, allowedSrc, frameBox, frameSrc, frameTitle, originOf, playingOf, postedText, pressLabel, pressOf, pressable, pressed, reportedHeights } from "./embeds";
 import { stopsOffScreen } from "./playback";
 
 const base: EmbedSummary = {
@@ -272,5 +272,30 @@ describe("EmbedLookup", () => {
     expect(await lookup.of("https://youtube.com/watch?v=dQw4w9WgXcQ")).toBe(youtube);
     expect(await lookup.of("https://example.com")).toBeNull();
     expect(asked).toBe(3);
+  });
+});
+
+describe("what a card's press comes to", () => {
+  const origins = ["https://www.youtube-nocookie.com", "https://embed.bsky.app"];
+  const byHandle: EmbedSummary = { ...base, provider: "bluesky", providerName: "Bluesky", kind: "post", url: "", blueskyHandle: "ada.example", blueskyRkey: "3k2la3rsg5w2y" };
+
+  test("an address of an embed origin is loaded", () => {
+    expect(pressed(base, base.url, origins, "lumia.example")).toEqual({ src: base.url });
+    const post = "https://embed.bsky.app/embed/did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.post/3k2la3rsg5w2y";
+    expect(pressed(byHandle, post, origins, "lumia.example")).toEqual({ src: post });
+  });
+
+  test("a handle Bluesky has no account for says so, and the card opens its link from then on", () => {
+    expect(pressed(byHandle, "", origins, "lumia.example")).toEqual({ note: "Bluesky couldn’t find @ada.example. The link opens it on Bluesky.", again: false });
+  });
+
+  test("a lookup Bluesky did not answer is not word about the post: the next press asks again", () => {
+    expect(pressed(byHandle, undefined, origins, "lumia.example")).toEqual({ note: BLUESKY_UNREACHED, again: true });
+    expect(BLUESKY_UNREACHED).toBe("Couldn’t reach Bluesky. Try again.");
+  });
+
+  test("an address of no embed origin is never loaded", () => {
+    expect(pressed(base, "https://evil.example/embed/x", origins, "lumia.example")).toEqual({ note: "Couldn’t show this here. The link opens it on YouTube.", again: false });
+    expect(pressed(base, base.url, [], "lumia.example")).toEqual({ note: "Couldn’t show this here. The link opens it on YouTube.", again: false });
   });
 });

@@ -58,6 +58,18 @@ export function allowedSrc(url: string, origins: readonly string[]): boolean {
   return !!o && url.startsWith("https://") && origins.includes(o);
 }
 
+/** A Bluesky lookup that got no answer (no network, a timeout, Bluesky failing): not word about the post, so the card's next press asks again. */
+export const BLUESKY_UNREACHED = "Couldn’t reach Bluesky. Try again.";
+
+/** What a card's press came to: the address its frame loads, or why there is none, in words, and whether another press may come to something else (`again`); where it may not, the card opens the link from then on. `address` is the embed's own, a Bluesky handle's once resolved, empty when Bluesky has no account for the handle, and undefined when Bluesky gave no answer. */
+export function pressed(e: EmbedSummary, address: string | undefined, origins: readonly string[], hostname: string): { src: string } | { note: string; again: boolean } {
+  if (address === undefined) return { note: BLUESKY_UNREACHED, again: true };
+  const src = address ? frameSrc(e, address, hostname) : "";
+  if (src && allowedSrc(src, origins)) return { src };
+  const goes = `The link opens it on ${e.providerName || "the site"}.`;
+  return { note: !address && e.blueskyHandle ? `Bluesky couldn’t find @${e.blueskyHandle}. ${goes}` : `Couldn’t show this here. ${goes}`, again: false };
+}
+
 /** The embed's box, as CSS: a player at the column's width at its shape and at most 400 tall; audio at the column's width and the site's height; a post at most 550 wide, the height it reported or its own. */
 export function frameBox(e: EmbedSummary, reported?: number): Record<string, string> {
   const max = e.maxWidth > 0 ? `${e.maxWidth}px` : "100%";

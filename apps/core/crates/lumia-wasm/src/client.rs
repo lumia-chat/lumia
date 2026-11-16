@@ -1926,10 +1926,13 @@ impl Client {
     /// A Bluesky handle's DID, asked of Bluesky's public API (which sends
     /// CORS headers) on the press of a post named by handle.
     ///
+    /// Undefined when Bluesky has no account for it (the card opens the
+    /// browser).
+    ///
     /// # Errors
-    /// Not a handle, no account for it, or the transport.
+    /// Bluesky gave no answer: the press may be made again.
     #[wasm_bindgen(js_name = resolveBlueskyHandle)]
-    pub async fn resolve_bluesky_handle(&self, handle: String) -> Result<String, JsError> {
+    pub async fn resolve_bluesky_handle(&self, handle: String) -> Result<Option<String>, JsError> {
         self.app.resolve_bluesky_handle(&handle).await.map_err(js)
     }
 

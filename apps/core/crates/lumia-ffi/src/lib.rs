@@ -3226,7 +3226,9 @@ impl Client {
 
     /// A Bluesky handle's DID, asked of Bluesky (not the instance) on the
     /// press of a post named by handle ([`EmbedSummary::bluesky_handle`]).
-    pub fn resolve_bluesky_handle(&self, handle: String) -> Res<String> {
+    /// None when Bluesky has no account for it (the card opens the browser);
+    /// an error when Bluesky gave no answer, and the press may be made again.
+    pub fn resolve_bluesky_handle(&self, handle: String) -> Res<Option<String>> {
         Ok(self
             .runtime
             .block_on(self.app.resolve_bluesky_handle(&handle))?)
