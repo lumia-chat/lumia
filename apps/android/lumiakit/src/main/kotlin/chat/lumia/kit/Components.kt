@@ -80,9 +80,11 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import uniffi.lumia_ffi.BodyBlock
 import uniffi.lumia_ffi.DeviceSummary
 import uniffi.lumia_ffi.MentionSummary
 import uniffi.lumia_ffi.MessageRoom
+import uniffi.lumia_ffi.parseBody
 
 /**
  * A person's avatar: their initials on their tone, and their [picture]
@@ -293,6 +295,10 @@ fun LumiaMessageRow(
         }
     }
     val editing = editor != null
+    // In one line, a row that draws a box (a code block, pictures, a card) keeps room from the
+    // rows beside it, which at Tight is none, so two boxes in a row never touch.
+    val boxed = !deleted && (media != null || remember(text, mentions) { parseBody(text, mentions).any { it is BodyBlock.Code } })
+    val lineRoom = if (boxed) maxOf(measures.line / 2, LumiaTokens.space4) else measures.line / 2
     val shape = RoundedCornerShape(LumiaTokens.radius12)
     val fill = when {
         flashed -> LumiaTokens.accentSoft.color
@@ -320,12 +326,12 @@ fun LumiaMessageRow(
             start = LumiaTokens.space10,
             end = LumiaTokens.space10,
             top = when {
-                measures.oneLine -> measures.line / 2
+                measures.oneLine -> lineRoom
                 place.opens -> measures.edge
                 else -> measures.within / 2
             },
             bottom = when {
-                measures.oneLine -> measures.line / 2
+                measures.oneLine -> lineRoom
                 place.closes -> measures.edge
                 else -> measures.within / 2
             },

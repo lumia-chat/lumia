@@ -230,14 +230,22 @@ public struct LumiaMessageRow: View {
     /// technology does not hear them; Add reaction stays among the actions.
     private var chips: Bool { measures.reactions == .shown && !extras.reactions.isEmpty && !deleted && !editing }
 
+    /// In one line, a row that draws a box (a code block, pictures, a card)
+    /// keeps room from the rows beside it, which at Tight is none, so two
+    /// boxes in a row never touch.
+    private func lineRoom(_ blocks: [BodyBlock]) -> CGFloat {
+        let boxed = extras.media != nil || blocks.contains { if case .code = $0 { true } else { false } }
+        return boxed ? max(measures.within, LumiaTokens.space4) : measures.within
+    }
+
     public var body: some View {
         let blocks = blocks
         Group {
             if oneLine { line(blocks) } else { grouped(blocks) }
         }
         .padding(.horizontal, LumiaTokens.space12)
-        .padding(.top, place.opens && !oneLine ? measures.edge : measures.within)
-        .padding(.bottom, place.closes && !oneLine ? measures.edge : measures.within)
+        .padding(.top, place.opens && !oneLine ? measures.edge : oneLine ? lineRoom(blocks) : measures.within)
+        .padding(.bottom, place.closes && !oneLine ? measures.edge : oneLine ? lineRoom(blocks) : measures.within)
         .background {
             background.clipShape(RoundedRectangle(cornerRadius: LumiaTokens.radius12)).accessibilityHidden(true)
         }

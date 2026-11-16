@@ -492,6 +492,8 @@ button.lu-mention:hover { text-decoration: underline; text-underline-offset: 3px
 .lu-msg--line .lu-msg__part { display: grid; grid-template-columns: auto auto minmax(0, 1fr); column-gap: var(--space-8); row-gap: var(--space-2); align-items: baseline; }
 .lu-msg.lu-msg--line .lu-msg__part::before { top: calc(var(--line-gap, var(--space-4)) / -2); bottom: calc(var(--line-gap, var(--space-4)) / -2); }
 .lu-msg--line .lu-msg__part:where(:hover)::before { background: var(--hover-message); border-radius: var(--radius-8); }
+/* A line that draws a box (code, pictures, a card, a file or audio row) keeps 8 between its box and the next whatever the spacing, which at Tight is none: two boxes in a row never touch. */
+.lu-msg--line .lu-msg__part:has(.lu-body__code, .lu-media, .lu-linkcard, .lu-attach, .lu-audio) { padding-block: max(0px, calc(var(--space-4) - var(--line-gap, var(--space-4)) / 2)); }
 .lu-line__time { grid-column: 1; grid-row: 1; font-size: calc(12.5px * var(--msg-scale, 1)); font-variant-numeric: tabular-nums; color: var(--ink-muted); white-space: nowrap; }
 .lu-line__name { grid-column: 2; grid-row: 1; white-space: nowrap; }
 .lu-line__text { grid-column: 3; grid-row: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-2); }
