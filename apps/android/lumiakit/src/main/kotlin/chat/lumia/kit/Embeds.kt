@@ -149,8 +149,36 @@ fun embedPressLabel(e: EmbedSummary, title: String): String =
 /** The iframe's title: the card's title, or the site's name when there is none. */
 fun embedFrameTitle(e: EmbedSummary, title: String): String = title.trim().ifEmpty { e.providerName }
 
-/** What a card says when its Bluesky post could not be found (a handle that does not resolve): its press then opens the browser. */
-const val BLUESKY_NOT_FOUND = "This post couldn't be shown. Tap it again to open it in your browser."
+/**
+ * What came of looking up a Bluesky post's account on its press (spec
+ * 6.6), as the core's `resolveBlueskyHandle` tells them apart: an account
+ * an embed takes, word from Bluesky that it has none for the handle (the
+ * core's none), or no answer at all (no network, a timeout, a failure of
+ * Bluesky's own; the core throws).
+ */
+enum class BlueskyLookup { FOUND, NO_ACCOUNT, NO_ANSWER }
+
+/** What a card says under it when its press showed no embed, and whether its next press asks for the embed [again] or opens the link in the browser. */
+data class CardNote(val words: String, val again: Boolean)
+
+/** What a card says when Bluesky could not be asked: its next press asks again. */
+const val BLUESKY_UNREACHED = "Couldn’t reach Bluesky. Try again."
+
+/** What a card says when Bluesky has no account for [handle]: its press opens the browser from then on. */
+fun blueskyNotFound(handle: String): String = "Bluesky couldn’t find @$handle. The card opens it in the browser."
+
+/**
+ * What the card of a Bluesky post named by [handle] says after its
+ * [lookup], none once the post is found: no account is word about the
+ * handle, so the card opens the browser for as long as the conversation
+ * is open; no answer is not, so the card says only that and stays the
+ * press for its embed.
+ */
+fun blueskyNote(lookup: BlueskyLookup, handle: String): CardNote? = when (lookup) {
+    BlueskyLookup.FOUND -> null
+    BlueskyLookup.NO_ACCOUNT -> CardNote(blueskyNotFound(handle), again = false)
+    BlueskyLookup.NO_ANSWER -> CardNote(BLUESKY_UNREACHED, again = true)
+}
 
 private fun escapeHtml(s: String): String = buildString {
     for (c in s) when (c) {

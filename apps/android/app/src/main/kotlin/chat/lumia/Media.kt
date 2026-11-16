@@ -816,8 +816,9 @@ private fun PlaySymbol(busy: Boolean) {
  * column's width at its shape, at most 400 tall; audio at its site's
  * height; a post at most 550 wide, its site's height or, for X, Bluesky
  * and Reddit, the height it reports. One shown at a time in a
- * conversation ([Playback]); a Bluesky post whose handle did not resolve
- * says so, and its card then opens the browser.
+ * conversation ([Playback]); a Bluesky post whose handle Bluesky has no
+ * account for says so, and its card then opens the browser; one Bluesky
+ * could not be asked about says that, and its next press asks again.
  */
 @Composable
 private fun EmbedCard(session: LumiaSession, playback: Playback, messageId: String, card: CardSummary, embed: EmbedSummary, onLongPress: (() -> Unit)?) {
@@ -825,9 +826,10 @@ private fun EmbedCard(session: LumiaSession, playback: Playback, messageId: Stri
     val key = embedPlayKey(messageId, card.url)
     val shown = playback.embed == key && playback.address != null
     if (!shown) {
-        val error = playback.errors[key]
-        CardView(session, card, onLongPress, embed, busy = playback.embed == key && playback.resolving, error = error) {
-            if (error != null) openInBrowser(context, card.url) else playback.show(key, embed)
+        val note = playback.notes[key]
+        CardView(session, card, onLongPress, embed, busy = playback.embed == key && playback.resolving, error = note?.words) {
+            // Word that there is no such post, and the card is its link; anything else, and the press is for the embed (again).
+            if (note?.again == false) openInBrowser(context, card.url) else playback.show(key, embed)
         }
         return
     }

@@ -174,6 +174,20 @@ class EmbedsTest {
     }
 
     @Test
+    fun aBlueskyLookupSaysWhichItWasAndWhatThePressIsNext() {
+        // Found: nothing to say, the post is in the card's place.
+        assertNull(blueskyNote(BlueskyLookup.FOUND, "ada.bsky.social"))
+        // No account for the handle: word about the handle, so the card is its link from then on.
+        assertEquals(
+            CardNote("Bluesky couldn’t find @ada.bsky.social. The card opens it in the browser.", again = false),
+            blueskyNote(BlueskyLookup.NO_ACCOUNT, "ada.bsky.social"),
+        )
+        // No answer: not word about the handle, and never kept as not found; the next press asks again.
+        assertEquals(CardNote("Couldn’t reach Bluesky. Try again.", again = true), blueskyNote(BlueskyLookup.NO_ANSWER, "ada.bsky.social"))
+        assertFalse(blueskyNote(BlueskyLookup.NO_ANSWER, "ada.bsky.social")!!.words.contains("ada.bsky.social"))
+    }
+
+    @Test
     fun thePageHoldsTheIframeAloneAndPassesOnOnlyItsOwnMessages() {
         val page = embedPage("https://embed.bsky.app/embed/did:plc:abc/app.bsky.feed.post/3k?a=1&b=\"2\"", "A <post>", "t0k3n", forwards = true)
         assertTrue(page.contains("""src="https://embed.bsky.app/embed/did:plc:abc/app.bsky.feed.post/3k?a=1&amp;b=&quot;2&quot;""""))

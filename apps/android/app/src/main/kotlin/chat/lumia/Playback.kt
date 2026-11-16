@@ -52,11 +52,13 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
-import chat.lumia.kit.BLUESKY_NOT_FOUND
+import chat.lumia.kit.BlueskyLookup
+import chat.lumia.kit.CardNote
 import chat.lumia.kit.EMBED_BRIDGE
 import chat.lumia.kit.Having
 import chat.lumia.kit.LumiaSession
 import chat.lumia.kit.attachmentLabel
+import chat.lumia.kit.blueskyNote
 import chat.lumia.kit.embedAddress
 import chat.lumia.kit.embedFrameTitle
 import chat.lumia.kit.embedPage
@@ -94,8 +96,11 @@ class Playback(private val app: Context, val session: LumiaSession) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val main = Handler(Looper.getMainLooper())
 
-    /** Why something could not play, by its key, in words; said where it would have played. */
+    /** Why an attachment could not play, by its key, in words; said where it would have played. */
     val errors = mutableStateMapOf<String, String>()
+
+    /** What a card says under it since its press showed no embed, by its key, and whether its next press asks again. */
+    val notes = mutableStateMapOf<String, CardNote>()
 
     /**
      * Something is starting: what the core's rule says it stops
@@ -211,7 +216,13 @@ class Playback(private val app: Context, val session: LumiaSession) {
     private var held: WebView? = null
     private var heldKey: String? = null
 
-    /** Shows a link's embed in its card's place. A Bluesky post named by handle resolves it first, from Bluesky, on this press. */
+    /**
+     * Shows a link's embed in its card's place. A Bluesky post named by
+     * handle resolves it first, from Bluesky, on this press: no account for
+     * it, and the card says so and opens the browser from then on; no
+     * answer, and the card says that and its next press asks again
+     * (`blueskyNote`).
+     */
     fun show(key: String, e: EmbedSummary) {
         if (embed == key) return
         val what = playingOf(e)
@@ -220,20 +231,28 @@ class Playback(private val app: Context, val session: LumiaSession) {
         stopEmbed()
         embed = key
         embedIs = what
-        errors.remove(key)
+        notes.remove(key)
         val now = embedAddress(e, hostOf(session.instanceOrigin))
         if (now != null) {
             address = now
             return
         }
         account.start {
-            try {
-                val did = session.resolveBlueskyHandle(e.blueskyHandle) ?: error("no account by that handle")
-                address = blueskyEmbedUrl(did, e.blueskyRkey) ?: error("no embed for that account")
+            val lookup = try {
+                val url = session.resolveBlueskyHandle(e.blueskyHandle)?.let { did -> blueskyEmbedUrl(did, e.blueskyRkey) }
+                if (url != null) {
+                    address = url
+                    BlueskyLookup.FOUND
+                } else {
+                    BlueskyLookup.NO_ACCOUNT
+                }
             } catch (x: CancellationException) {
                 throw x
             } catch (x: Exception) {
-                errors[key] = BLUESKY_NOT_FOUND
+                BlueskyLookup.NO_ANSWER
+            }
+            blueskyNote(lookup, e.blueskyHandle)?.let { note ->
+                notes[key] = note
                 stopEmbed()
             }
         }
