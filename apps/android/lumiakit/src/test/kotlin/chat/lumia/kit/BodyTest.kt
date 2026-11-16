@@ -130,6 +130,11 @@ class BodyTest {
         assertEquals("https://lumia.chat", (links[0].item as LinkAnnotation.Url).url)
         assertEquals("${T}x()$T docs", s.text.text.substring(links[0].start, links[0].end))
         assertEquals("see x() docs now", s.words)
+        // Under Preferences' preview the link is drawn as one and opens nothing.
+        val drawn = styledInline(i, look.copy(pressable = false), emptyList(), { _, typed -> typed })
+        assertEquals(s.text.text, drawn.text.text)
+        assertTrue(drawn.text.getLinkAnnotations(0, drawn.text.length).isEmpty())
+        assertEquals(listOf("${T}x()$T docs"), drawn.covered(look.link))
     }
 
     @Test

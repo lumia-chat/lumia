@@ -33,6 +33,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -520,38 +521,69 @@ private fun FileRow(session: LumiaSession, a: AttachmentSummary, onOpen: (() -> 
         if (uri == null) return@rememberLauncherForActivityResult
         scope.launch { error = saveTo(context, session, a.main, uri) }
     }
-    val kind = fileKindOf(a.mediaType, a.name)
-    val shape = RoundedCornerShape(LumiaTokens.radius12)
     Column {
-        Row(
-            Modifier.fillMaxWidth().clip(shape).background(LumiaTokens.inset.color, shape)
-                .then(if (onOpen != null) Modifier.combinedClickable(onClickLabel = "Open", role = Role.Button, onLongClickLabel = onLongPress?.let { MESSAGE_ACTIONS }, onLongClick = onLongPress, onClick = onOpen) else Modifier)
-                .padding(LumiaTokens.space8),
-            horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space10),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            val (fill, ink) = kindTone(kind)
-            Box(Modifier.size(34.dp).background(fill, RoundedCornerShape(LumiaTokens.radius9)), contentAlignment = Alignment.Center) {
-                if (busy) CircularProgressIndicator(Modifier.size(18.dp), color = ink, strokeWidth = 2.dp)
-                else Icon(if (a.kind == "audio" || a.kind == "video") Icons.Filled.PlayArrow else kindIcon(kind), null, tint = ink, modifier = Modifier.size(18.dp))
-            }
-            Column(
-                Modifier.weight(1f).semantics(mergeDescendants = true) {
-                    contentDescription = attachmentLabel(a.kind.takeIf { onOpen != null } ?: "file", a.name, a.alt, a.sizeBytes.toLong(), a.durationMs.toLong())
-                    // A file's row takes no tap of its own, so the row's long press reaches it; TalkBack's is here.
-                    if (onLongPress != null) onLongClick(label = MESSAGE_ACTIONS) { onLongPress(); true }
-                },
-            ) {
-                Text(a.name, style = LumiaTokens.textAuthor.style, color = LumiaTokens.ink.color, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(
-                    listOfNotNull(sizeWords(a.sizeBytes.toLong()), a.durationMs.takeIf { it > 0u }?.let { lengthWords(it.toLong()) }).joinToString(" · "),
-                    style = LumiaTokens.textMeta.style, color = LumiaTokens.inkMuted.color,
-                )
-            }
-            RowButton(Icons.Filled.Download, "Save ${a.name}", onLongPress) { save.launch(a.name) }
-            RowButton(Icons.Filled.Share, "Share ${a.name}", onLongPress) { scope.launch { error = share(context, session, a) } }
-        }
+        FileRowView(
+            kind = fileKindOf(a.mediaType, a.name),
+            plays = a.kind == "audio" || a.kind == "video",
+            name = a.name,
+            meta = listOfNotNull(sizeWords(a.sizeBytes.toLong()), a.durationMs.takeIf { it > 0u }?.let { lengthWords(it.toLong()) }).joinToString(" · "),
+            label = attachmentLabel(a.kind.takeIf { onOpen != null } ?: "file", a.name, a.alt, a.sizeBytes.toLong(), a.durationMs.toLong()),
+            onOpen = onOpen,
+            onLongPress = onLongPress,
+            onSave = { save.launch(a.name) },
+            onShare = { scope.launch { error = share(context, session, a) } },
+            busy = busy,
+        )
         error?.let { LumiaErrorText(it) }
+    }
+}
+
+/**
+ * A file's row as drawn, what [FileRow] does left to it: [kind]'s icon on
+ * its tile (the play glyph for audio or video, which [plays]), [name] and
+ * [meta] under it, Save and Share. With no [onOpen], [onSave] and
+ * [onShare] nothing in it can be pressed: Preferences' preview draws the
+ * row this way, a picture of a file's row.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+internal fun FileRowView(
+    kind: FileKind,
+    plays: Boolean,
+    name: String,
+    meta: String,
+    label: String,
+    onOpen: (() -> Unit)?,
+    onLongPress: (() -> Unit)?,
+    onSave: (() -> Unit)?,
+    onShare: (() -> Unit)?,
+    busy: Boolean = false,
+) {
+    val shape = RoundedCornerShape(LumiaTokens.radius12)
+    Row(
+        Modifier.fillMaxWidth().clip(shape).background(LumiaTokens.inset.color, shape)
+            .then(if (onOpen != null) Modifier.combinedClickable(onClickLabel = "Open", role = Role.Button, onLongClickLabel = onLongPress?.let { MESSAGE_ACTIONS }, onLongClick = onLongPress, onClick = onOpen) else Modifier)
+            .padding(LumiaTokens.space8),
+        horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space10),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        val (fill, ink) = kindTone(kind)
+        Box(Modifier.size(34.dp).background(fill, RoundedCornerShape(LumiaTokens.radius9)), contentAlignment = Alignment.Center) {
+            if (busy) CircularProgressIndicator(Modifier.size(18.dp), color = ink, strokeWidth = 2.dp)
+            else Icon(if (plays) Icons.Filled.PlayArrow else kindIcon(kind), null, tint = ink, modifier = Modifier.size(18.dp))
+        }
+        Column(
+            Modifier.weight(1f).semantics(mergeDescendants = true) {
+                contentDescription = label
+                // A file's row takes no tap of its own, so the row's long press reaches it; TalkBack's is here.
+                if (onLongPress != null) onLongClick(label = MESSAGE_ACTIONS) { onLongPress(); true }
+            },
+        ) {
+            Text(name, style = LumiaTokens.textAuthor.style, color = LumiaTokens.ink.color, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(meta, style = LumiaTokens.textMeta.style, color = LumiaTokens.inkMuted.color)
+        }
+        RowButton(Icons.Filled.Download, "Save $name", onLongPress, onSave)
+        RowButton(Icons.Filled.Share, "Share $name", onLongPress, onShare)
     }
 }
 
@@ -596,16 +628,19 @@ private fun ExpiredRow(a: AttachmentSummary, onLongPress: (() -> Unit)?) {
     }
 }
 
-/** Save or Share on a file's row, an icon button's size and touch area, whose long press is the message's. */
+/**
+ * Save or Share on a file's row, an icon button's size and touch area, whose long press is the message's.
+ * With no [onClick], its glyph in the same room and nothing to press (Preferences' preview).
+ */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun RowButton(icon: ImageVector, description: String, onLongPress: (() -> Unit)?, onClick: () -> Unit) {
+private fun RowButton(icon: ImageVector, description: String, onLongPress: (() -> Unit)?, onClick: (() -> Unit)?) {
     Box(
         Modifier.size(32.dp).minimumInteractiveComponentSize().clip(CircleShape)
-            .combinedClickable(role = Role.Button, onLongClickLabel = onLongPress?.let { MESSAGE_ACTIONS }, onLongClick = onLongPress, onClick = onClick),
+            .then(if (onClick != null) Modifier.combinedClickable(role = Role.Button, onLongClickLabel = onLongPress?.let { MESSAGE_ACTIONS }, onLongClick = onLongPress, onClick = onClick) else Modifier),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, contentDescription = description, tint = LumiaTokens.iconStrong.color, modifier = Modifier.size(18.dp))
+        Icon(icon, contentDescription = description.takeIf { onClick != null }, tint = LumiaTokens.iconStrong.color, modifier = Modifier.size(18.dp))
     }
 }
 
@@ -668,12 +703,12 @@ private fun CardView(
     onPress: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
-    val shape = RoundedCornerShape(LumiaTokens.radius12)
     val stripe = parseColour(card.color) ?: LumiaTokens.lineStrong.color
     val plays = embed != null && embed.kind != "post"
     Column {
-        Row(
-            Modifier.fillMaxWidth().clip(shape).background(LumiaTokens.inset.color, shape)
+        CardFrame(
+            card.host, card.title, card.description, stripe,
+            Modifier
                 .combinedClickable(
                     onClickLabel = embed?.label ?: "Open the link",
                     role = Role.Button,
@@ -685,42 +720,56 @@ private fun CardView(
                     else listOf("Link preview", card.host, card.title, card.description).filter { it.isNotEmpty() }.joinToString(", ")
                 },
         ) {
-            Box(Modifier.width(3.dp).heightIn(min = 48.dp).background(stripe))
-            Column(Modifier.weight(1f).padding(LumiaTokens.space10), verticalArrangement = Arrangement.spacedBy(LumiaTokens.space2)) {
-                Text(card.host, style = LumiaTokens.textMeta.style, color = LumiaTokens.inkMuted.color, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(card.title, style = LumiaTokens.textAuthor.style, color = LumiaTokens.link.color, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                if (card.description.isNotEmpty()) Text(card.description, style = LumiaTokens.textMeta.style, color = LumiaTokens.inkSecondary.color, maxLines = 3, overflow = TextOverflow.Ellipsis)
-                var pictured = false
-                if (card.imageUrl.isNotEmpty() || card.image != null) {
-                    val picture = rememberCardPicture(session, card)
-                    if (picture !is Fetched.Failed) {
-                        pictured = true
-                        BoxWithConstraints(Modifier.fillMaxWidth().padding(top = LumiaTokens.space6)) {
-                            val (w, h) = fitted(card.imageWidth.toInt(), card.imageHeight.toInt(), maxWidth.value, 240f)
-                            Box(Modifier.width(w.dp).height(h.dp).clip(RoundedCornerShape(LumiaTokens.radius8)).background(LumiaTokens.surface.color), contentAlignment = Alignment.Center) {
-                                (picture as? Fetched.Here)?.let { Image(it.value, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }
-                                if (card.video || plays) PlaySymbol(busy)
-                            }
+            var pictured = false
+            if (card.imageUrl.isNotEmpty() || card.image != null) {
+                val picture = rememberCardPicture(session, card)
+                if (picture !is Fetched.Failed) {
+                    pictured = true
+                    BoxWithConstraints(Modifier.fillMaxWidth().padding(top = LumiaTokens.space6)) {
+                        val (w, h) = fitted(card.imageWidth.toInt(), card.imageHeight.toInt(), maxWidth.value, 240f)
+                        Box(Modifier.width(w.dp).height(h.dp).clip(RoundedCornerShape(LumiaTokens.radius8)).background(LumiaTokens.surface.color), contentAlignment = Alignment.Center) {
+                            (picture as? Fetched.Here)?.let { Image(it.value, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }
+                            if (card.video || plays) PlaySymbol(busy)
                         }
                     }
                 }
-                // A post, or a player with no picture to put its button on: the press as words under the card.
-                if (embed != null && (!plays || !pictured)) {
-                    Row(
-                        Modifier.padding(top = LumiaTokens.space6).background(LumiaTokens.surface.color, RoundedCornerShape(LumiaTokens.radius8))
-                            .border(1.dp, LumiaTokens.line.color, RoundedCornerShape(LumiaTokens.radius8))
-                            .padding(horizontal = LumiaTokens.space10, vertical = LumiaTokens.space6),
-                        horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space6),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        if (busy) CircularProgressIndicator(Modifier.size(14.dp), color = LumiaTokens.accent.color, strokeWidth = 2.dp)
-                        else if (plays) Icon(Icons.Filled.PlayArrow, null, tint = LumiaTokens.iconStrong.color, modifier = Modifier.size(16.dp))
-                        Text(if (plays) "Play" else "Show post", style = LumiaTokens.textAuthor.style, color = LumiaTokens.ink.color)
-                    }
+            }
+            // A post, or a player with no picture to put its button on: the press as words under the card.
+            if (embed != null && (!plays || !pictured)) {
+                Row(
+                    Modifier.padding(top = LumiaTokens.space6).background(LumiaTokens.surface.color, RoundedCornerShape(LumiaTokens.radius8))
+                        .border(1.dp, LumiaTokens.line.color, RoundedCornerShape(LumiaTokens.radius8))
+                        .padding(horizontal = LumiaTokens.space10, vertical = LumiaTokens.space6),
+                    horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space6),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (busy) CircularProgressIndicator(Modifier.size(14.dp), color = LumiaTokens.accent.color, strokeWidth = 2.dp)
+                    else if (plays) Icon(Icons.Filled.PlayArrow, null, tint = LumiaTokens.iconStrong.color, modifier = Modifier.size(16.dp))
+                    Text(if (plays) "Play" else "Show post", style = LumiaTokens.textAuthor.style, color = LumiaTokens.ink.color)
                 }
             }
         }
         error?.let { LumiaErrorText(it) }
+    }
+}
+
+/**
+ * A card as drawn, what [CardView] does left to it: the [stripe], then
+ * [host], [title] in the link ink and [description], and [more] under
+ * them (the picture, the embed's press). [modifier] is what it does when
+ * pressed; with none it is a picture of a card (Preferences' preview).
+ */
+@Composable
+internal fun CardFrame(host: String, title: String, description: String, stripe: Color, modifier: Modifier = Modifier, more: @Composable ColumnScope.() -> Unit = {}) {
+    val shape = RoundedCornerShape(LumiaTokens.radius12)
+    Row(Modifier.fillMaxWidth().clip(shape).background(LumiaTokens.inset.color, shape).then(modifier)) {
+        Box(Modifier.width(3.dp).heightIn(min = 48.dp).background(stripe))
+        Column(Modifier.weight(1f).padding(LumiaTokens.space10), verticalArrangement = Arrangement.spacedBy(LumiaTokens.space2)) {
+            Text(host, style = LumiaTokens.textMeta.style, color = LumiaTokens.inkMuted.color, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(title, style = LumiaTokens.textAuthor.style, color = LumiaTokens.link.color, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            if (description.isNotEmpty()) Text(description, style = LumiaTokens.textMeta.style, color = LumiaTokens.inkSecondary.color, maxLines = 3, overflow = TextOverflow.Ellipsis)
+            more()
+        }
     }
 }
 

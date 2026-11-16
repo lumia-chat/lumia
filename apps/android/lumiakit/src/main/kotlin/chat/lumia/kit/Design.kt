@@ -63,6 +63,13 @@ data class LumiaType(val size: TextUnit, val weight: Int, val display: Boolean) 
 val LocalTextScale = staticCompositionLocalOf { 1f }
 
 /**
+ * Whether what a message row draws can be pressed: its links, here. False
+ * only under Preferences' preview, which draws real rows from sample
+ * messages as a picture of them, with nothing in it to press or focus.
+ */
+val LocalPressable = staticCompositionLocalOf { true }
+
+/**
  * This style [by] times as large. The size stays in sp, so the phone's
  * own text scale still applies over it; with no line height of its own,
  * the line grows with the text.

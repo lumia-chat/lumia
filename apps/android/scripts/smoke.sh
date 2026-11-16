@@ -164,15 +164,18 @@ running() { "$adb" shell pidof "$bundle" 2>/dev/null | tr -d '\r' || true; }
 # One fact about the first thing on screen whose text or description is the
 # one named: where its middle is, whether it is the choice made (a radio
 # button that is checked), whether the switch it labels is on (the row that
-# takes the tap is what is checked, around the text), how far down the
-# screen it starts, or whether a screen reader has it as a button (Compose
+# takes the tap is what is checked, around the text; a choice drawn as a
+# picture over its name, Preferences' themes and presets, is the same), how
+# far down the screen it starts, whether it is wholly in view between the
+# screen's top eighth and its last sixteenth (clear of a panel's header and
+# the navigation bar), or whether a screen reader has it as a button (Compose
 # gives what takes the tap a node of the Button class beside the text,
 # inside the one that is clickable).
-node() { # <text or description> <middle|chosen|on|top|button>
+node() { # <text or description> <middle|chosen|on|top|inview|button>
   fact "$(ui)" "$1" "$2"
 }
 # The same of a screen already read, for several facts about one screen.
-fact() { # <screen> <text or description> <middle|chosen|on|top|button>
+fact() { # <screen> <text or description> <middle|chosen|on|top|inview|button>
   printf '%s' "$1" | python3 -c '
 import re, sys
 want, fact = sys.argv[1], sys.argv[2]
@@ -181,6 +184,7 @@ def box(node):
     return tuple(int(n) for n in re.search(r"bounds=\"\[(\d+),(\d+)\]\[(\d+),(\d+)\]\"", node).groups())
 def within(a, b):
     return a[0] >= b[0] and a[1] >= b[1] and a[2] <= b[2] and a[3] <= b[3]
+tall = box(nodes[0])[3] if nodes else 0
 for node in nodes:
     if "text=\"%s\"" % want in node or "content-desc=\"%s\"" % want in node:
         x0, y0, x1, y1 = box(node)
@@ -188,9 +192,21 @@ for node in nodes:
         button = bool(taps) and any("class=\"android.widget.Button\"" in n and within(box(n), taps[0]) for n in nodes)
         switch = sorted((n for n in nodes if "checkable=\"true\"" in n and within(box(node), box(n))), key=lambda n: (box(n)[2] - box(n)[0]) * (box(n)[3] - box(n)[1]))
         on = bool(switch) and "checked=\"true\"" in switch[0]
-        print({"middle": "%d %d" % ((x0 + x1) // 2, (y0 + y1) // 2), "chosen": "yes" if "checked=\"true\"" in node else "no", "on": "yes" if on else "no", "top": y0, "button": "yes" if button else "no"}[fact])
+        inview = y0 >= tall // 8 and y1 <= tall - tall // 16
+        print({"middle": "%d %d" % ((x0 + x1) // 2, (y0 + y1) // 2), "chosen": "yes" if "checked=\"true\"" in node else "no", "on": "yes" if on else "no", "top": y0, "inview": "yes" if inview else "no", "button": "yes" if button else "no"}[fact])
         break
 ' "$2" "$3"
+}
+# Scrolls a long screen (Preferences) to its top and then down a little at
+# a time until something reading <text> is wholly in view; fails if it never is.
+reveal() { # <text>
+  for _ in 1 2 3 4 5; do "$adb" shell input swipe 540 700 540 2000 150; done
+  for _ in $(seq 1 12); do
+    [ "$(node "$1" inview)" = yes ] && return 0
+    "$adb" shell input swipe 540 1700 540 1000 600
+    sleep 1
+  done
+  echo "FAIL: scrolled through the screen and nothing reading \"$1\" came wholly into view"; exit 1
 }
 # The middle of the first thing reading <text> below the first reading
 # <above>: one of two buttons with the same name, told apart by what is over it.
@@ -520,7 +536,7 @@ launch channel 7
 roomy=$(room)
 launch preferences 7 --es LUMIA_DEV_APPEARANCE dark
 shot preferences-dark
-[ "$(node Dark chosen)" = yes ] || { echo "FAIL: a launch told to be dark does not show Dark as the choice; see $work/preferences-dark.png"; exit 1; }
+[ "$(node Dark on)" = yes ] || { echo "FAIL: a launch told to be dark does not show Dark as the choice; see $work/preferences-dark.png"; exit 1; }
 launch channel 7 --es LUMIA_DEV_PRESET compact
 shot channel-compact
 tight=$(room)
@@ -574,8 +590,15 @@ done
 tap Preferences
 seen=$(ui)
 case "$seen" in *"How Lumia looks on this phone"*) ;; *) echo "FAIL: the account menu did not lead to Preferences; see $work/account.png"; exit 1 ;; esac
-[ "$(fact "$seen" System chosen)" = yes ] && [ "$(fact "$seen" Comfortable chosen)" = yes ] \
-  || { echo "FAIL: a phone that has chosen nothing is not System and Comfortable"; exit 1; }
+[ "$(fact "$seen" System on)" = yes ] || { echo "FAIL: a phone that has chosen nothing is not System"; exit 1; }
+# The preview, at the head of Messages, is one picture to a screen reader:
+# its name, and none of its sample messages' words.
+shot preferences
+case "$seen" in *'content-desc="Preview of messages with these settings"'*) ;; *) echo "FAIL: Preferences has no preview of messages named for a screen reader; see $work/preferences.png"; exit 1 ;; esac
+case "$seen" in *"Priya Nair"*|*"design-review"*) echo "FAIL: the preview's messages are read out one by one, not as one picture; see $work/preferences.png"; exit 1 ;; esac
+reveal Comfortable
+[ "$(node Comfortable on)" = yes ] || { echo "FAIL: a phone that has chosen nothing is not Comfortable"; exit 1; }
+reveal Appearance
 # The phone turned with the screen open, and turned back. Android makes
 # the activity again for that, and it must be the same app over the same
 # session: the process it was, and the screen the person was on, which
@@ -587,35 +610,65 @@ for way in 1 0; do
   case "$(ui)" in *"How Lumia looks on this phone"*) ;; *) echo "FAIL: the phone was turned and the app left the screen it was on; see $work/preferences-turned.png"; exit 1 ;; esac
   [ -n "$process" ] && [ "$(running)" = "$process" ] || { echo "FAIL: the app did not survive the phone being turned"; exit 1; }
 done
-# Minimal writes its values and is the preset shown; one line draws no
-# avatars, so they are not offered. Then the spacing changed after it: no
-# preset matches, none is shown chosen, and the page says Custom. All of
-# it is what the next launch has.
+# Minimal writes its values and its card is lit; one line draws no
+# avatars, so they are not offered, and its switches are off, each line
+# saying what that does. A switch turned on says so, and off again it is
+# Minimal again. Then the spacing changed after it: no preset matches,
+# none is lit, and the page says Custom. All of it is what the next launch
+# has. The page is taller than the screen, so each is scrolled to first.
 tap Dark
+reveal Minimal
 tap Minimal
+seen=$(ui)
+[ "$(fact "$seen" Minimal on)" = yes ] || { shot preferences-minimal; echo "FAIL: Minimal was chosen and its card is not lit; see $work/preferences-minimal.png"; exit 1; }
+case "$seen" in *"match no preset"*) shot preferences-minimal; echo "FAIL: Minimal was chosen and the page says Custom; see $work/preferences-minimal.png"; exit 1 ;; esac
+reveal "Font size"
 shot preferences-minimal
 seen=$(ui)
-[ "$(fact "$seen" Minimal chosen)" = yes ] && [ "$(fact "$seen" "One line" chosen)" = yes ] && [ "$(fact "$seen" Tight chosen)" = yes ] \
-  || { echo "FAIL: Minimal was chosen and is not shown as Minimal, one line and tight; see $work/preferences-minimal.png"; exit 1; }
+[ "$(fact "$seen" "One line" chosen)" = yes ] && [ "$(fact "$seen" Tight chosen)" = yes ] \
+  || { echo "FAIL: Minimal was chosen and is not shown as one line and tight; see $work/preferences-minimal.png"; exit 1; }
 case "$seen" in *'text="Avatars"'*) echo "FAIL: one line offers the avatars it does not draw; see $work/preferences-minimal.png"; exit 1 ;; esac
-case "$seen" in *"match no preset"*) echo "FAIL: Minimal was chosen and the page says Custom; see $work/preferences-minimal.png"; exit 1 ;; esac
+reveal Reactions
+shot preferences-switches
+seen=$(ui)
+for switch in Images Embeds Reactions; do
+  [ "$(fact "$seen" "$switch" on)" = no ] || { echo "FAIL: Minimal was chosen and $switch is still on; see $work/preferences-switches.png"; exit 1; }
+done
+case "$seen" in *"As links: each one a file row that opens the viewer."*"As links: no cards."*"Hidden. You can still add one from a message"*) ;; *) echo "FAIL: the switches off do not say what that does; see $work/preferences-switches.png"; exit 1 ;; esac
+tap Reactions
+seen=$(ui)
+[ "$(fact "$seen" Reactions on)" = yes ] || { echo "FAIL: Reactions was tapped and is not on"; exit 1; }
+case "$seen" in *"Shown under each message."*) ;; *) echo "FAIL: Reactions turned on does not say so"; exit 1 ;; esac
+tap Reactions
+reveal Roomy
 tap Roomy
 launch preferences 7
+[ "$(node Dark on)" = yes ] || { shot preferences-kept; echo "FAIL: Dark was chosen and the next launch does not have it; see $work/preferences-kept.png"; exit 1; }
+reveal Comfortable
 shot preferences-kept
 seen=$(ui)
-[ "$(fact "$seen" Dark chosen)" = yes ] && [ "$(fact "$seen" "One line" chosen)" = yes ] && [ "$(fact "$seen" Roomy chosen)" = yes ] \
-  || { echo "FAIL: Dark, one line and roomy were chosen and the next launch does not have them; see $work/preferences-kept.png"; exit 1; }
 for preset in Comfortable Compact Minimal; do
-  [ "$(fact "$seen" "$preset" chosen)" = no ] || { echo "FAIL: one line and roomy match no preset, and $preset is shown chosen; see $work/preferences-kept.png"; exit 1; }
+  [ "$(fact "$seen" "$preset" on)" = no ] || { echo "FAIL: one line and roomy match no preset, and $preset is lit; see $work/preferences-kept.png"; exit 1; }
 done
 case "$seen" in *"Custom: these settings match no preset."*) ;; *) echo "FAIL: settings that match no preset do not say Custom; see $work/preferences-kept.png"; exit 1 ;; esac
+reveal "Font size"
+seen=$(ui)
+[ "$(fact "$seen" "One line" chosen)" = yes ] && [ "$(fact "$seen" Roomy chosen)" = yes ] \
+  || { echo "FAIL: one line and roomy were chosen and the next launch does not have them; see $work/preferences-kept.png"; exit 1; }
+reveal Appearance
 tap System
+reveal Comfortable
 tap Comfortable
 launch preferences 7
+[ "$(node System on)" = yes ] || { echo "FAIL: System was chosen again and the next launch does not have it"; exit 1; }
+reveal Comfortable
 seen=$(ui)
-[ "$(fact "$seen" System chosen)" = yes ] && [ "$(fact "$seen" Comfortable chosen)" = yes ] && [ "$(fact "$seen" Grouped chosen)" = yes ] && [ "$(fact "$seen" Large chosen)" = yes ] \
-  || { echo "FAIL: System and Comfortable were chosen again and the next launch does not have them"; exit 1; }
+[ "$(fact "$seen" Comfortable on)" = yes ] || { echo "FAIL: Comfortable was chosen again and the next launch does not have it"; exit 1; }
 case "$seen" in *"match no preset"*) echo "FAIL: Comfortable was chosen again and the page says Custom"; exit 1 ;; esac
+reveal "Font size"
+seen=$(ui)
+[ "$(fact "$seen" Grouped chosen)" = yes ] && [ "$(fact "$seen" Large chosen)" = yes ] \
+  || { echo "FAIL: Comfortable was chosen again and the page is not grouped with large avatars"; exit 1; }
 # System is whichever the phone is in, as it changes: the phone goes dark
 # with the screen open, the picture is dark for the eye, and the screen is
 # still the one the person was on (a phone going dark at sunset does not
@@ -627,7 +680,7 @@ shot preferences-system-dark
 seen=$(ui)
 "$adb" shell cmd uimode night "${night:-no}" >/dev/null
 case "$seen" in *"How Lumia looks on this phone"*) ;; *) echo "FAIL: the phone went dark and the app left the screen it was on; see $work/preferences-system-dark.png"; exit 1 ;; esac
-echo "  preferences: ok (dark, Compact, Minimal and the font size 20 for a launch and not kept, $roomy against $tight, $least and $large; Minimal one line a message; reached from the account menu; the screen kept as the phone was turned and turned back; Minimal chosen, then Custom, kept across a launch and put back; the screen kept as the phone went dark)"
+echo "  preferences: ok (dark, Compact, Minimal and the font size 20 for a launch and not kept, $roomy against $tight, $least and $large; Minimal one line a message; reached from the account menu; the screen kept as the phone was turned and turned back; the preview one picture to a screen reader; Minimal chosen and lit, no Avatars, its switches off and saying so, Reactions turned on and off, then Custom, kept across a launch and put back; the screen kept as the phone went dark)"
 
 # Server settings (architecture 6.7), as the server's owner gets there:
 # under its channels, Server settings; the name changed and saved, and the

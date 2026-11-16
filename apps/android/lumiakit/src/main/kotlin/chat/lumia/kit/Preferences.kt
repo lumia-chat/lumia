@@ -6,11 +6,16 @@
 // that write those values and are not kept themselves. Each setting is
 // stored under the name every client stores it by. They are this phone's
 // and not the account's: `AppStore` keeps them beside the saved instance,
-// and nothing of them is sent to it.
+// and nothing of them is sent to it. And the page itself, as values: the
+// rows it offers (`DisplaySetting`), its switches and what the line under
+// each says (`DisplaySwitch`), and the sample messages its preview draws
+// (`PreviewMessage`).
 package chat.lumia.kit
 
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import java.time.ZoneOffset
+import uniffi.lumia_ffi.ReactionSummary
 
 /** A choice kept under a name: the one every client stores it by. */
 interface Stored {
@@ -202,6 +207,14 @@ enum class Preset(
     COMPACT("compact", "Compact", Layout.GROUPED, Spacing.COZY, Avatars.SMALL, Shown.SHOWN, Shown.SHOWN, Reactions.SHOWN),
     MINIMAL("minimal", "Minimal", Layout.ONE_LINE, Spacing.TIGHT, Avatars.HIDDEN, Shown.LINK, Shown.LINK, Reactions.HIDDEN);
 
+    /** What its card says under its name. */
+    val caption: String
+        get() = when (this) {
+            COMFORTABLE -> "Large avatars, room to breathe"
+            COMPACT -> "Small avatars, more on screen"
+            MINIMAL -> "A line each, media as links"
+        }
+
     /** Whether [display] is this preset: every value it writes, but the avatars in one line, which draws none. */
     fun matches(display: Display): Boolean =
         display.layout == layout &&
@@ -214,6 +227,138 @@ enum class Preset(
     companion object {
         /** The preset named this, for a debug launch. */
         fun named(stored: String?): Preset? = storedAs<Preset>(stored)
+    }
+}
+
+/**
+ * The settings Preferences offers a row each under the presets: the
+ * setting's name over a line that says what it changes, and its choices
+ * as segments beside or under them, in the words every client uses.
+ */
+enum class DisplaySetting(val label: String, val caption: String) {
+    LAYOUT("Layout", "One person’s messages as a block, or a line each."),
+    SPACING("Spacing", "Room between messages."),
+    AVATARS("Avatars", "Beside each block of messages."),
+    FONT_SIZE("Font size", "Messages and names, in points.");
+
+    /** Its choices in order: what each is stored as, and its words. */
+    val options: List<Pair<String, String>>
+        get() = when (this) {
+            LAYOUT -> listOf(Layout.GROUPED.stored to "Grouped", Layout.ONE_LINE.stored to "One line")
+            SPACING -> listOf(Spacing.ROOMY.stored to "Roomy", Spacing.COZY.stored to "Cozy", Spacing.TIGHT.stored to "Tight")
+            AVATARS -> listOf(Avatars.LARGE.stored to "Large", Avatars.SMALL.stored to "Small", Avatars.HIDDEN.stored to "Hidden")
+            FONT_SIZE -> FONT_SIZES.map { "$it" to "$it" }
+        }
+
+    /** The choice [display] has, as it is stored. */
+    fun chosen(display: Display): String = when (this) {
+        LAYOUT -> display.layout.stored
+        SPACING -> display.spacing.stored
+        AVATARS -> display.avatars.stored
+        FONT_SIZE -> "${display.fontSize}"
+    }
+
+    /** [display] with the choice stored as [name] made; null for a name that is none of its choices. */
+    fun choose(display: Display, name: String): Display? = when (this) {
+        LAYOUT -> storedAs<Layout>(name)?.let { display.copy(layout = it) }
+        SPACING -> storedAs<Spacing>(name)?.let { display.copy(spacing = it) }
+        AVATARS -> storedAs<Avatars>(name)?.let { display.copy(avatars = it) }
+        FONT_SIZE -> fontSizeNamed(name)?.let { display.copy(fontSize = it) }
+    }
+
+    companion object {
+        /** The rows offered for [display]: every one but the avatars in one line, which draws none. */
+        fun offered(display: Display): List<DisplaySetting> =
+            entries.filter { it != AVATARS || display.layout != Layout.ONE_LINE }
+    }
+}
+
+/**
+ * Images, Embeds and Reactions: a switch each in Preferences, on for shown
+ * and off for as links (Images, Embeds) or hidden (Reactions), the values
+ * stored as ever. The line under each name says what the state it is in
+ * does.
+ */
+enum class DisplaySwitch(val label: String, private val onWords: String, private val offWords: String) {
+    IMAGES("Images", "Shown in their messages.", "As links: each one a file row that opens the viewer."),
+    EMBEDS("Embeds", "A card under each link.", "As links: no cards."),
+
+    // A phone has no toolbar over a message: Add reaction is in the menu a long press opens.
+    REACTIONS("Reactions", "Shown under each message.", "Hidden. You can still add one from a message’s menu.");
+
+    /** Whether it is on in [display]. */
+    fun on(display: Display): Boolean = when (this) {
+        IMAGES -> display.images == Shown.SHOWN
+        EMBEDS -> display.embeds == Shown.SHOWN
+        REACTIONS -> display.reactions == Reactions.SHOWN
+    }
+
+    /** [display] with it turned on or off. */
+    fun turned(display: Display, on: Boolean): Display = when (this) {
+        IMAGES -> display.copy(images = if (on) Shown.SHOWN else Shown.LINK)
+        EMBEDS -> display.copy(embeds = if (on) Shown.SHOWN else Shown.LINK)
+        REACTIONS -> display.copy(reactions = if (on) Reactions.SHOWN else Reactions.HIDDEN)
+    }
+
+    /** The line under its name in [display]. */
+    fun caption(display: Display): String = if (on(display)) onWords else offWords
+}
+
+/**
+ * One of the four messages Preferences' preview draws in #design-review,
+ * the same on every client: who sent it and when, its words (Markdown, as
+ * a message's are), and what it carries: a picture of an app's sign-in
+ * screen ([picture]), a link's card ([card]) and reactions, each drawn or
+ * not as the settings say, by the rules a conversation draws by.
+ */
+data class PreviewMessage(
+    val author: String,
+    val tone: AvatarTone,
+    val time: String,
+    /** Its minute of the morning, for which messages are one block. */
+    val minute: Int,
+    val text: String,
+    val picture: Boolean = false,
+    val card: Boolean = false,
+    val reactions: List<ReactionSummary> = emptyList(),
+) {
+    companion object {
+        /** The preview's reader, whose reaction the 🎉 is. */
+        const val ME = "me"
+
+        /** The preview to a screen reader: one picture, named this. */
+        const val LABEL = "Preview of messages with these settings"
+
+        /** The channel its messages are in. */
+        const val CHANNEL = "design-review"
+
+        /** The picture's file, as its row names it with Images as links. */
+        const val PICTURE_NAME = "onboarding-first-screen.png"
+        const val PICTURE_TYPE = "image/png"
+        const val PICTURE_BYTES = 412_000L
+
+        /** The picture's own dimensions, fitted to the column as any message's are. */
+        const val PICTURE_WIDTH = 240
+        const val PICTURE_HEIGHT = 150
+
+        /** The card under Mei's link. */
+        const val CARD_HOST = "lumia.chat"
+        const val CARD_TITLE = "What’s new in Lumia 0.13"
+        const val CARD_DESCRIPTION = "Video and audio play in the conversation, and links open as cards on every client."
+
+        val SAMPLES = listOf(
+            PreviewMessage("Priya Nair", AvatarTone.MINT, "10:42", 642, "Pushed the new onboarding flow to staging. Could you look before standup?"),
+            PreviewMessage("Priya Nair", AvatarTone.MINT, "10:42", 642, "The invite step is the one I’m least sure about."),
+            PreviewMessage(
+                "Tomás Reyes", AvatarTone.AMBER, "10:44", 644, "On it. Here’s the first screen on my phone:",
+                picture = true,
+                reactions = listOf(ReactionSummary("👀", 2u, false, emptyList()), ReactionSummary("🎉", 3u, true, listOf(ME))),
+            ),
+            PreviewMessage("Mei Chen", AvatarTone.INDIGO, "10:51", 651, "Release notes are up for review too: [lumia.chat/blog/0-13](https://lumia.chat/blog/0-13)", card = true),
+        )
+
+        /** Each sample's place in its block, by the conversation's own rule: Priya's two are one block. */
+        val PLACES: List<BlockPlace> = blockPlaces(SAMPLES.map { Stamp(it.author, it.minute * 60_000_000L) }, ZoneOffset.UTC)
     }
 }
 

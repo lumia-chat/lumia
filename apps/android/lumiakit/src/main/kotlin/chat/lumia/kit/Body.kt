@@ -73,6 +73,8 @@ data class InlineLook(
     val mention: SpanStyle,
     val link: SpanStyle,
     val edited: SpanStyle,
+    /** Whether a link opens when pressed; else it is only drawn as one (Preferences' preview, `LocalPressable`). */
+    val pressable: Boolean = true,
 )
 
 /**
@@ -149,7 +151,9 @@ fun styledInline(
     for (link in inline.links) {
         val start = startOf(link.start.toInt())
         val end = endOf(link.end.toInt())
-        if (start < end) builder.addLink(LinkAnnotation.Url(link.url, TextLinkStyles(style = look.link)), start, end)
+        if (start >= end) continue
+        if (look.pressable) builder.addLink(LinkAnnotation.Url(link.url, TextLinkStyles(style = look.link)), start, end)
+        else builder.addStyle(look.link, start, end)
     }
     for (run in inline.runs) {
         val start = startOf(run.start.toInt())

@@ -115,6 +115,7 @@ fun LumiaBody(
         mention = SpanStyle(color = LumiaTokens.accentInk.color, fontWeight = FontWeight(LumiaTokens.textSection.weight)),
         link = SpanStyle(color = LumiaTokens.link.color, textDecoration = TextDecoration.Underline),
         edited = SpanStyle(color = LumiaTokens.inkMuted.color, fontSize = LumiaTokens.textMeta.size.scaled(scale)),
+        pressable = LocalPressable.current,
     )
     // The names drawn, so a name that changes draws again.
     val names = mentions.map { if (it.everyone) null else nameOf(it.accountId) }

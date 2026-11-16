@@ -281,19 +281,17 @@ private fun Minus() {
  * a long press says who reacted ("You and Ada reacted with 👍", [me] being
  * this account and [nameOf] the others). After them, Add reaction opens the
  * picker. Not drawn at all while Preferences hides reactions (`Display.drawn`).
+ * With no [onToggle] the chips are drawn and nothing more, no tap, no long
+ * press and no Add reaction: Preferences' preview, a picture of messages.
  */
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
-fun ReactionChips(reactions: List<ReactionSummary>, me: String, nameOf: (String) -> String?, onToggle: (String) -> Unit, onAdd: () -> Unit) {
+fun ReactionChips(reactions: List<ReactionSummary>, me: String, nameOf: (String) -> String?, onToggle: ((String) -> Unit)?, onAdd: () -> Unit) {
     FlowRow(horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space6), verticalArrangement = Arrangement.spacedBy(LumiaTokens.space6)) {
         for (r in reactions) {
             val words = reactedWords(r, me, nameOf)
             val shape = RoundedCornerShape(LumiaTokens.radiusPill)
-            TooltipBox(
-                positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
-                tooltip = { PlainTooltip { Text(words) } },
-                state = rememberTooltipState(),
-            ) {
+            val chip = @Composable {
                 Row(
                     Modifier
                         // Taller only where the text has grown past it (a large font size, the phone's text scale).
@@ -301,7 +299,7 @@ fun ReactionChips(reactions: List<ReactionSummary>, me: String, nameOf: (String)
                         .clip(shape)
                         .background(if (r.me) LumiaTokens.accentSoft.color else LumiaTokens.reaction.color, shape)
                         .border(1.dp, if (r.me) LumiaTokens.reactionOnBorder.color else LumiaTokens.reaction.color, shape)
-                        .clickable(role = Role.Button) { onToggle(r.reaction) }
+                        .then(if (onToggle != null) Modifier.clickable(role = Role.Button) { onToggle(r.reaction) } else Modifier)
                         .semantics(mergeDescendants = true) {
                             contentDescription = "$words, ${r.count}"
                             selected = r.me
@@ -314,12 +312,23 @@ fun ReactionChips(reactions: List<ReactionSummary>, me: String, nameOf: (String)
                     Text("${r.count}", style = LumiaTokens.textLinkSm.scaled, color = if (r.me) LumiaTokens.accentInk.color else LumiaTokens.inkSecondary.color)
                 }
             }
+            if (onToggle == null) {
+                chip()
+            } else {
+                TooltipBox(
+                    positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+                    tooltip = { PlainTooltip { Text(words) } },
+                    state = rememberTooltipState(),
+                ) { chip() }
+            }
         }
-        Box(
-            Modifier.size(ChipHeight).clip(CircleShape).clickable(role = Role.Button, onClick = onAdd).semantics { contentDescription = "Add reaction" },
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(Icons.Outlined.AddReaction, contentDescription = null, tint = LumiaTokens.inkMuted.color, modifier = Modifier.size(LumiaTokens.space16))
+        if (onToggle != null) {
+            Box(
+                Modifier.size(ChipHeight).clip(CircleShape).clickable(role = Role.Button, onClick = onAdd).semantics { contentDescription = "Add reaction" },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Outlined.AddReaction, contentDescription = null, tint = LumiaTokens.inkMuted.color, modifier = Modifier.size(LumiaTokens.space16))
+            }
         }
     }
 }

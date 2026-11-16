@@ -213,6 +213,110 @@ class PreferencesTest {
     }
 
     @Test
+    fun thePresetsCardLitIsTheOneTheSettingsMatchAndNoneIsCustom() {
+        assertEquals(listOf("Comfortable", "Compact", "Minimal"), Preset.entries.map { it.label })
+        assertEquals(
+            listOf("Large avatars, room to breathe", "Small avatars, more on screen", "A line each, media as links"),
+            Preset.entries.map { it.caption },
+        )
+        // A preset chosen lights its card, and no other.
+        for (preset in Preset.entries) {
+            val chosen = Display().with(preset)
+            assertEquals(listOf(preset), Preset.entries.filter { it == chosen.preset })
+        }
+        // A row changed after it lights none: the page says Custom.
+        val compact = Display().with(Preset.COMPACT)
+        assertNull(DisplaySetting.SPACING.choose(compact, Spacing.ROOMY.stored)!!.preset)
+        assertNull(DisplaySwitch.EMBEDS.turned(compact, false).preset)
+        assertNull(DisplaySwitch.REACTIONS.turned(Display(), false).preset)
+        // And turned back, the card is lit again.
+        assertEquals(Preset.COMPACT, DisplaySwitch.EMBEDS.turned(DisplaySwitch.EMBEDS.turned(compact, false), true).preset)
+    }
+
+    @Test
+    fun theRowsAreLayoutSpacingAvatarsAndFontSizeAndOneLineOffersNoAvatars() {
+        assertEquals(DisplaySetting.entries, DisplaySetting.offered(Display()))
+        assertEquals(listOf("Layout", "Spacing", "Avatars", "Font size"), DisplaySetting.entries.map { it.label })
+        val oneLine = Display(layout = Layout.ONE_LINE)
+        assertEquals(listOf(DisplaySetting.LAYOUT, DisplaySetting.SPACING, DisplaySetting.FONT_SIZE), DisplaySetting.offered(oneLine))
+        assertFalse(DisplaySetting.AVATARS in DisplaySetting.offered(Display().with(Preset.MINIMAL)))
+        // Grouped again, the avatars are offered as they were left.
+        val back = DisplaySetting.LAYOUT.choose(oneLine.copy(avatars = Avatars.SMALL), Layout.GROUPED.stored)!!
+        assertTrue(DisplaySetting.AVATARS in DisplaySetting.offered(back))
+        assertEquals(Avatars.SMALL.stored, DisplaySetting.AVATARS.chosen(back))
+    }
+
+    @Test
+    fun eachRowsChoicesAreTheSettingsStoredNamesAndChoosingOneWritesItAlone() {
+        assertEquals(listOf("Grouped", "One line"), DisplaySetting.LAYOUT.options.map { it.second })
+        assertEquals(listOf("Roomy", "Cozy", "Tight"), DisplaySetting.SPACING.options.map { it.second })
+        assertEquals(listOf("Large", "Small", "Hidden"), DisplaySetting.AVATARS.options.map { it.second })
+        assertEquals(listOf("13", "14", "15", "16", "18", "20"), DisplaySetting.FONT_SIZE.options.map { it.second })
+        val start = Display()
+        for (setting in DisplaySetting.entries) {
+            for ((stored, _) in setting.options) {
+                val chosen = setting.choose(start, stored)!!
+                assertEquals(stored, setting.chosen(chosen))
+                // Nothing but its own setting changes.
+                for (other in DisplaySetting.entries - setting) assertEquals(other.chosen(start), other.chosen(chosen))
+                for (switch in DisplaySwitch.entries) assertEquals(switch.on(start), switch.on(chosen))
+            }
+            // A name that is none of its choices chooses nothing.
+            assertNull(setting.choose(start, "Roomy"))
+            assertNull(setting.choose(start, "17"))
+        }
+        assertEquals(18, DisplaySetting.FONT_SIZE.choose(start, "18")!!.fontSize)
+    }
+
+    @Test
+    fun aSwitchIsOnForShownAndOffForAsLinksOrHiddenAndItsLineSaysWhatThatDoes() {
+        val shown = Display()
+        val minimal = Display().with(Preset.MINIMAL)
+        for (switch in DisplaySwitch.entries) {
+            assertTrue(switch.on(shown))
+            assertFalse(switch.on(minimal))
+            assertEquals(shown, switch.turned(switch.turned(shown, false), true))
+        }
+        assertEquals(listOf("Images", "Embeds", "Reactions"), DisplaySwitch.entries.map { it.label })
+        // The same stored values as ever: off is link for Images and Embeds, hidden for Reactions.
+        assertEquals(Shown.LINK, DisplaySwitch.IMAGES.turned(shown, false).images)
+        assertEquals(Shown.LINK, DisplaySwitch.EMBEDS.turned(shown, false).embeds)
+        assertEquals(Reactions.HIDDEN, DisplaySwitch.REACTIONS.turned(shown, false).reactions)
+        assertEquals(shown.copy(images = Shown.LINK), DisplaySwitch.IMAGES.turned(shown, false))
+        assertEquals(minimal.copy(reactions = Reactions.SHOWN), DisplaySwitch.REACTIONS.turned(minimal, true))
+        assertEquals("Shown in their messages.", DisplaySwitch.IMAGES.caption(shown))
+        assertEquals("As links: each one a file row that opens the viewer.", DisplaySwitch.IMAGES.caption(minimal))
+        assertEquals("A card under each link.", DisplaySwitch.EMBEDS.caption(shown))
+        assertEquals("As links: no cards.", DisplaySwitch.EMBEDS.caption(minimal))
+        assertEquals("Shown under each message.", DisplaySwitch.REACTIONS.caption(shown))
+        assertEquals("Hidden. You can still add one from a message’s menu.", DisplaySwitch.REACTIONS.caption(minimal))
+    }
+
+    @Test
+    fun thePreviewIsFourMessagesPriyasTwoOneBlockDrawnByTheConversationsRules() {
+        val samples = PreviewMessage.SAMPLES
+        assertEquals(listOf("Priya Nair", "Priya Nair", "Tomás Reyes", "Mei Chen"), samples.map { it.author })
+        assertEquals(listOf("10:42", "10:42", "10:44", "10:51"), samples.map { it.time })
+        assertEquals(
+            listOf(BlockPlace(opens = true, closes = false), BlockPlace(opens = false, closes = true), BlockPlace.Alone, BlockPlace.Alone),
+            PreviewMessage.PLACES,
+        )
+        val tomas = samples[2]
+        assertTrue(tomas.picture)
+        assertEquals(listOf("👀" to false, "🎉" to true), tomas.reactions.map { it.reaction to it.me })
+        assertTrue(samples[3].card)
+        // The picture is a picture while Images is on and a file's row while off; the card is drawn
+        // while Embeds is on; the reactions while Reactions is: the settings' own rules.
+        assertEquals(MediaShape.PICTURE, mediaShape("image", Display().images))
+        assertEquals(MediaShape.FILE_ROW, mediaShape("image", DisplaySwitch.IMAGES.turned(Display(), false).images))
+        assertEquals(FileKind.IMAGE, fileKindOf(PreviewMessage.PICTURE_TYPE, PreviewMessage.PICTURE_NAME))
+        assertEquals("412 KB", sizeWords(PreviewMessage.PICTURE_BYTES))
+        assertFalse(cardsDrawn(DisplaySwitch.EMBEDS.turned(Display(), false).embeds))
+        assertEquals(emptyList<Any>(), DisplaySwitch.REACTIONS.turned(Display(), false).drawn(tomas.reactions))
+        assertEquals(tomas.reactions, Display().drawn(tomas.reactions))
+    }
+
+    @Test
     fun theFontSizeScalesTheTextByItsShareOf15AndNothingElse() {
         assertEquals(listOf(13f / 15, 14f / 15, 1f, 16f / 15, 18f / 15, 20f / 15), FONT_SIZES.map { Display(fontSize = it).textScale })
         for (size in FONT_SIZES) assertEquals(Display().measures, Display(fontSize = size).measures)
