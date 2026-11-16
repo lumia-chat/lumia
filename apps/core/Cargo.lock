@@ -2349,8 +2349,10 @@ dependencies = [
 name = "lumia-ffi"
 version = "0.13.1"
 dependencies = [
+ "jni",
  "lumia-client",
  "lumia-core",
+ "rustls-platform-verifier",
  "thiserror",
  "tokio",
  "uniffi",

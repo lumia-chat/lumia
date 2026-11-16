@@ -19,5 +19,11 @@ uuid.workspace = true
 uniffi = "0.32"
 tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
 
+# Android's TLS (src/android.rs): the JNI entry point that sets up the
+# platform verifier, on the jni the verifier itself uses.
+[target.'cfg(target_os = "android")'.dependencies]
+jni = { version = "0.22", default-features = false }
+rustls-platform-verifier = "0.7"
+
 [lints]
 workspace = true

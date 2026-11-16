@@ -26,9 +26,43 @@ android {
     }
 }
 
+// The core's TLS verifier (rustls-platform-verifier, Tls.kt) calls a Kotlin
+// component of its own, which must be the version its crate expects: the
+// version of `rustls-platform-verifier-android` in the core's Cargo.lock,
+// read at configuration (and again when the lock changes), as the crate's
+// README has it. The repository is settings.gradle.kts's.
+abstract class RustlsVersion : ValueSource<String, RustlsVersion.Params> {
+    interface Params : ValueSourceParameters {
+        val lockFile: RegularFileProperty
+    }
+
+    companion object {
+        const val CRATE_NAME = "rustls-platform-verifier-android"
+    }
+
+    override fun obtain(): String {
+        val lines = parameters.lockFile.get().asFile.readLines()
+        val at = lines.indexOfFirst { it.trim() == "name = \"$CRATE_NAME\"" }
+        val version = if (at < 0) null else lines.drop(at + 1)
+            .firstOrNull { it.trimStart().startsWith("version = ") }
+            ?.substringAfter('"', "")
+            ?.substringBefore('"', "")
+            ?.takeIf { it.isNotEmpty() }
+        return version ?: error("$CRATE_NAME not found in Cargo.lock")
+    }
+}
+
+val rustlsPlatformVerifierVersion = providers.of(RustlsVersion::class.java) {
+    parameters.lockFile.set(layout.projectDirectory.file("../../core/Cargo.lock"))
+}
+
 dependencies {
     // UniFFI's Kotlin bindings call the native library through JNA.
     api(libs.jna) { artifact { type = "aar" } }
+    // The TLS verifier's Kotlin component at the Cargo.lock's version (above),
+    // named with it here rather than by a resolution rule, so the app's
+    // classpath, which takes it through this project, has it too.
+    implementation(rustlsPlatformVerifierVersion.map { "org.rustls:rustls-platform-verifier:$it" })
     implementation(libs.androidx.core.ktx)
     implementation(libs.coroutines.android)
     api(platform(libs.compose.bom))

@@ -10,6 +10,7 @@ package chat.lumia
 import android.app.Application
 import chat.lumia.kit.AppStore
 import chat.lumia.kit.PushRegistrar
+import chat.lumia.kit.Tls
 import chat.lumia.push.PushSetup
 
 class LumiaApp : Application() {
@@ -18,6 +19,8 @@ class LumiaApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // The core's HTTPS trusts the system's certificates once its verifier has the application (Tls.kt); before any client.
+        Tls.initialize(this)
         // Leaving a session gives up the phone's own push registrations, which only the app's libraries can.
         PushRegistrar.unregister = PushSetup::unregister
     }

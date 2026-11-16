@@ -14,6 +14,9 @@
 //! clear: the platform keystore for the at-rest key is the shells' next
 //! step (plan step 7).
 
+#[cfg(target_os = "android")]
+mod android;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 
