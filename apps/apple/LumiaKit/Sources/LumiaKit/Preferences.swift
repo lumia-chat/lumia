@@ -10,8 +10,11 @@
 // sent to the instance, and signing out leaves them as they are. The same
 // choices, value names and defaults on every client (the plan's "Display
 // settings"), without the desktop's scroll bars: a phone's scroll
-// indicators are the system's.
+// indicators are the system's. The page's words, its rows and switches
+// and its preview's sample messages (the redesign of 2026-11-16) are here
+// too, so the tests cover them.
 import Foundation
+import LumiaFFI
 import Observation
 import SwiftUI
 
@@ -425,4 +428,169 @@ public final class Preferences {
         fontSize = environment["LUMIA_DEV_FONT_SIZE"].flatMap(Int.init).flatMap(FontSize.init)
             ?? FontSize(stored: defaults.object(forKey: Self.fontSizeKey))
     }
+}
+
+// MARK: The page
+
+/// What the Preferences page says, in the words every client uses (the
+/// redesign of 2026-11-16), a phone's where they differ: "this phone",
+/// and a reaction added "from a message's menu".
+public enum PreferenceWords {
+    public static let title = "Preferences"
+    public static let topic = "How Lumia looks on this phone"
+    public static let appearance = "Light, dark, or whichever this phone is in."
+    public static let messages = "Start from a preset, then change anything below."
+    /// Over the preview, drawn in capitals.
+    public static let preview = "Preview"
+    /// The preview as assistive technology hears it: one picture.
+    public static let previewLabel = "Preview of messages with these settings"
+    public static let kept = "Kept on this phone only. Your other devices and your account are not changed."
+}
+
+public extension MessagePreset {
+    /// Under its name on its card.
+    var caption: String {
+        switch self {
+        case .comfortable: "Large avatars, room to breathe"
+        case .compact: "Small avatars, more on screen"
+        case .minimal: "A line each, media as links"
+        }
+    }
+}
+
+/// The message settings chosen among a few, in the page's order, each a
+/// row of the first outlined group with its name, its caption and its
+/// segments.
+public enum MessageSetting: CaseIterable, Sendable {
+    case layout, spacing, avatars, fontSize
+
+    public var name: String {
+        switch self {
+        case .layout: "Layout"
+        case .spacing: "Spacing"
+        case .avatars: "Avatars"
+        case .fontSize: "Font size"
+        }
+    }
+
+    public var caption: String {
+        switch self {
+        case .layout: "One person’s messages as a block, or a line each."
+        case .spacing: "Room between messages."
+        case .avatars: "Beside each block of messages."
+        case .fontSize: "Messages and names, in points."
+        }
+    }
+
+    /// The rows drawn: Avatars only while grouped, since one line draws none.
+    public static func shown(_ layout: MessageLayout) -> [MessageSetting] {
+        allCases.filter { $0 != .avatars || layout == .grouped }
+    }
+}
+
+/// The message settings that are on or off, each a switch in the second
+/// outlined group, whose caption says what the state it is in does. On
+/// is Shown; off is As links for Images and Embeds, Hidden for Reactions:
+/// the same stored values as before there were switches.
+public enum MessageSwitch: CaseIterable, Sendable {
+    case images, embeds, reactions
+
+    public var name: String {
+        switch self {
+        case .images: "Images"
+        case .embeds: "Embeds"
+        case .reactions: "Reactions"
+        }
+    }
+
+    public func caption(on: Bool) -> String {
+        switch (self, on) {
+        case (.images, true): "Shown in their messages."
+        case (.images, false): "As links: each one a file row that opens the viewer."
+        case (.embeds, true): "A card under each link."
+        case (.embeds, false): "As links: no cards."
+        case (.reactions, true): "Shown under each message."
+        case (.reactions, false): "Hidden. You can still add one from a message’s menu."
+        }
+    }
+}
+
+public extension Preferences {
+    /// Whether a switch is on: its setting Shown.
+    func isOn(_ setting: MessageSwitch) -> Bool {
+        switch setting {
+        case .images: images == .shown
+        case .embeds: embeds == .shown
+        case .reactions: reactions == .shown
+        }
+    }
+
+    /// Turns a switch on (Shown) or off (As links, or Hidden), stored as each setting is.
+    func set(_ setting: MessageSwitch, on: Bool) {
+        switch setting {
+        case .images: images = on ? .shown : .link
+        case .embeds: embeds = on ? .shown : .link
+        case .reactions: reactions = on ? .shown : .hidden
+        }
+    }
+}
+
+/// The preview's four sample messages in "# design-review", the same on
+/// every client: Priya's two as one block, Tomás's with a picture and two
+/// reactions (🎉 this account's), Mei's with a link and its card. What each
+/// carries is drawn as the conversation draws it under the settings.
+public enum PreferencesPreview {
+    public static let channel = "design-review"
+
+    public struct Message: Identifiable {
+        public let id: Int
+        public let author: String
+        public let time: String
+        /// The body as the core reads it, in the protocol's Markdown.
+        public let text: String
+        /// Its place in a grouped conversation: Priya's second is under her first.
+        public let place: MessagePlace
+        public let picture: Bool
+        public let card: Bool
+        public let reactions: [ReactionDisplay]
+    }
+
+    /// What a message carries, as the settings draw it.
+    public enum Piece: Equatable, Sendable {
+        /// The picture in its message, at its shape.
+        case picture
+        /// The picture as a file row (Images as links).
+        case file
+        /// The link's card (Embeds shown).
+        case card
+    }
+
+    public static let messages: [Message] = [
+        Message(id: 1, author: "Priya Nair", time: "10:42", text: "Pushed the new onboarding flow to staging. Could you look before standup?", place: MessagePlace(closes: false), picture: false, card: false, reactions: []),
+        Message(id: 2, author: "Priya Nair", time: "10:42", text: "The invite step is the one I’m least sure about.", place: MessagePlace(opens: false), picture: false, card: false, reactions: []),
+        Message(id: 3, author: "Tomás Reyes", time: "10:44", text: "On it. Here’s the first screen on my phone:", place: MessagePlace(), picture: true, card: false, reactions: [
+            ReactionDisplay(emoji: "👀", count: 2, me: false, words: "Priya Nair and Mei Chen reacted with 👀"),
+            ReactionDisplay(emoji: "🎉", count: 3, me: true, words: "You, Priya Nair and Mei Chen reacted with 🎉"),
+        ]),
+        Message(id: 4, author: "Mei Chen", time: "10:51", text: "Release notes are up for review too: [lumia.chat/blog/0-13](https://lumia.chat/blog/0-13)", place: MessagePlace(), picture: false, card: true, reactions: []),
+    ]
+
+    /// What `message` carries drawn, in its order: the picture, or its file
+    /// row with Images as links; the card, or nothing with Embeds as links.
+    public static func pieces(_ message: Message, images: MediaDisplay, embeds: MediaDisplay) -> [Piece] {
+        var all: [Piece] = []
+        if message.picture { all.append(images == .shown ? .picture : .file) }
+        if message.card, embeds == .shown { all.append(.card) }
+        return all
+    }
+
+    /// Tomás's picture's size in pixels: drawn at it, being narrower than any column.
+    public static let pictureWidth: UInt32 = 240
+    public static let pictureHeight: UInt32 = 150
+
+    /// Tomás's picture as an attachment, for its file row.
+    public static let file = AttachmentSummary(attachmentId: "preview", kind: "image", name: "onboarding-first-screen.png", mediaType: "image/png", width: pictureWidth, height: pictureHeight, durationMs: 0, placeholder: Data(), alt: "", sizeBytes: 412_000, main: BlobSummary(blobId: "", sizeBytes: 412_000, key: Data(), nonce: Data(), hash: Data()), thumbnail: nil, expired: false)
+
+    /// Mei's link's card, with no picture, so nothing is fetched for it.
+    public static let card = CardSummary(url: "https://lumia.chat/blog/0-13", title: "What’s new in Lumia 0.13", description: "Video and audio play in the conversation, and links open as cards on every client.", siteName: "Lumia", host: "lumia.chat", color: "", imageUrl: "", image: nil, imageWidth: 0, imageHeight: 0, video: false)
 }

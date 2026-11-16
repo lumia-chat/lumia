@@ -29,10 +29,13 @@ final class SmokeUITests: XCTestCase {
 
     /// Preferences by hand (scripts/smoke-preferences.sh): the account menu
     /// on the rail's own avatar leads there, each choice is an element that
-    /// says whether it is the one selected, a choice takes effect as it is
+    /// says whether it is the one selected (Images, Embeds and Reactions
+    /// switches), the preview is one picture, a choice takes effect as it is
     /// made and is there at the next launch, which draws a channel by it.
-    /// Minimal chosen writes its values; a setting changed after it leaves
-    /// no preset selected and says "Custom". The smoke looks at the screen
+    /// A switch turned leaves no preset's card lit and says "Custom";
+    /// Minimal chosen writes its values, lights its card and takes the
+    /// Avatars row away; a setting changed after it leaves no preset
+    /// selected and says "Custom". The smoke looks at the screen
     /// at each step announced under LUMIA_UITEST_STEPS: `menu`, `dark`,
     /// `kept` (a channel, dark, in one line, cozy and at 18 from what was
     /// stored alone) and `system`.
@@ -55,7 +58,8 @@ final class SmokeUITests: XCTestCase {
             for item in items { XCTAssertTrue(item.waitForExistence(timeout: 10), "the account menu has no \(item)") }
             XCTAssertEqual(items.map(\.frame.minY), items.map(\.frame.minY).sorted(), "View profile, Preferences, Devices from the top")
         }
-        /// One of a card's choices, inside the group that says what is being chosen.
+        /// One of a group's choices (a picture, a preset's card, a segment),
+        /// inside the group that says what is being chosen.
         func choice(_ group: String, _ label: String) -> XCUIElement {
             app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", group)).buttons[label]
         }
@@ -69,44 +73,81 @@ final class SmokeUITests: XCTestCase {
             ("Layout", ["Grouped", "One line"]),
             ("Spacing", ["Roomy", "Cozy", "Tight"]),
             ("Avatars", ["Large", "Small", "Hidden"]),
-            ("Font size", ["13", "14", "15", "16", "18", "20"]),
-            ("Reactions", ["Shown", "Hidden"]),
-            ("Images", ["Shown", "As links"]),
-            ("Embeds", ["Shown", "As links"]),
+            ("Font size", ["13 points", "14 points", "15 points", "16 points", "18 points", "20 points"]),
         ]
+        let switches = ["Images", "Embeds", "Reactions"]
         let labels = Dictionary(uniqueKeysWithValues: groups)
-        /// What each group has selected, from the top; a group not drawn has none.
+        /// A switch, by the name of its row.
+        func toggle(_ name: String) -> XCUIElement { app.switches[name] }
+        /// What each group has selected, from the top, a group not drawn having
+        /// none, and each switch "on" or "off".
         func chosen() -> [String: [String]] {
-            Dictionary(uniqueKeysWithValues: groups.map { ($0.0, selected($0.0, of: $0.1)) })
+            var all = Dictionary(uniqueKeysWithValues: groups.map { ($0.0, selected($0.0, of: $0.1)) })
+            for name in switches { all[name] = [(toggle(name).value as? String) == "1" ? "on" : "off"] }
+            return all
         }
         let custom = "Custom: these settings match no preset."
-        // Images and Embeds go together in every preset, so one value stands for both.
-        let page = { (dark: String, preset: [String], layout: String, spacing: String, avatars: [String], size: String, reactions: String, media: String) -> [String: [String]] in
-            ["Appearance": [dark], "Preset": preset, "Layout": [layout], "Spacing": [spacing], "Avatars": avatars, "Font size": [size], "Reactions": [reactions], "Images": [media], "Embeds": [media]]
+        // Images, Embeds and Reactions are on together, or off together, in every preset.
+        let page = { (dark: String, preset: [String], layout: String, spacing: String, avatars: [String], size: String, on: Bool) -> [String: [String]] in
+            let state = on ? "on" : "off"
+            return ["Appearance": [dark], "Preset": preset, "Layout": [layout], "Spacing": [spacing], "Avatars": avatars, "Font size": ["\(size) points"], "Images": [state], "Embeds": [state], "Reactions": [state]]
         }
+        let preview = app.descendants(matching: .any)["Preview of messages with these settings"]
 
         openPreferences()
         _ = reached("menu")
         app.collectionViews.buttons["Preferences"].tap()
-        for words in ["Preferences", "How Lumia looks on this phone", "Appearance", "Light, dark, or whichever this phone is in.", "Messages", "Start from a preset, then change anything below."] {
+        for words in ["Preferences", "How Lumia looks on this phone", "Appearance", "Light, dark, or whichever this phone is in.", "Messages", "Start from a preset, then change anything below.", "Kept on this phone only. Your other devices and your account are not changed."] {
             XCTAssertTrue(app.staticTexts[words].waitForExistence(timeout: 10), "the screen does not say \"\(words)\"")
         }
         for (group, all) in groups { for label in all { XCTAssertTrue(choice(group, label).exists, "no \(label) under \(group)") } }
+        for name in switches { XCTAssertTrue(toggle(name).exists, "no \(name) switch") }
         XCTAssertFalse(app.staticTexts["Scroll bars"].exists, "a phone's scroll indicators are the system's")
+        // The preview is one picture to assistive technology: its messages,
+        // names, chips and card are found only inside it (a UI test still
+        // lists what is under an element; VoiceOver stops at the element).
+        XCTAssertTrue(preview.exists, "no preview of the messages")
+        XCTAssertEqual(preview.elementType, .image)
+        for inside in ["Priya Nair", "design-review", "reacted with", "What’s new in Lumia 0.13"] {
+            let named = NSPredicate(format: "label CONTAINS %@", inside)
+            XCTAssertTrue(preview.descendants(matching: .any).matching(named).firstMatch.exists, "the preview does not draw \"\(inside)\"")
+            XCTAssertEqual(app.descendants(matching: .any).matching(named).count, preview.descendants(matching: .any).matching(named).count, "\"\(inside)\" is drawn outside the preview")
+        }
         // As a new phone has them.
-        XCTAssertEqual(chosen(), page("System", ["Comfortable"], "Grouped", "Roomy", ["Large"], "15", "Shown", "Shown"))
+        XCTAssertEqual(chosen(), page("System", ["Comfortable"], "Grouped", "Roomy", ["Large"], "15", true))
         XCTAssertFalse(app.staticTexts[custom].exists)
 
+        // A switch turned from a preset leaves no card lit and says Custom; turned back, Comfortable is lit again.
+        /// Whether the preview draws something labelled with `words`.
+        func previewed(_ words: String) -> Bool {
+            preview.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", words)).firstMatch.exists
+        }
+        let card = "What’s new in Lumia 0.13"
+        toggle("Embeds").tap()
+        XCTAssertEqual((toggle("Embeds").value as? String), "0", "Embeds did not turn off")
+        XCTAssertEqual(selected("Preset", of: labels["Preset"]!), [])
+        XCTAssertTrue(app.staticTexts[custom].waitForExistence(timeout: 5), "the screen does not say \"\(custom)\"")
+        XCTAssertFalse(previewed(card), "the preview draws the card with Embeds off")
+        toggle("Embeds").tap()
+        XCTAssertEqual(selected("Preset", of: labels["Preset"]!), ["Comfortable"])
+        XCTAssertFalse(app.staticTexts[custom].exists)
+        XCTAssertTrue(previewed(card), "the preview draws no card with Embeds on")
+
         choice("Appearance", "Dark").tap()
-        // Minimal writes its values, reactions hidden among them; one line has no avatars to choose.
+        // Minimal writes its values, its three switches off among them, and lights its card; one line has no avatars to choose.
         choice("Preset", "Minimal").tap()
-        XCTAssertEqual(chosen(), page("Dark", ["Minimal"], "One line", "Tight", [], "15", "Hidden", "As links"))
+        XCTAssertEqual(chosen(), page("Dark", ["Minimal"], "One line", "Tight", [], "15", false))
         XCTAssertFalse(choice("Avatars", "Large").exists, "one line draws no avatar")
+        XCTAssertFalse(app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Avatars")).firstMatch.exists, "Avatars is a row in one line")
+        // And the preview follows: the picture a file row, no reactions, no card.
+        XCTAssertTrue(previewed("File, onboarding-first-screen.png"), "the preview draws no file row with Images as links")
+        XCTAssertFalse(previewed("reacted with"), "the preview draws reactions in Minimal")
+        XCTAssertFalse(previewed(card), "the preview draws the card in Minimal")
         // A setting changed after it is Custom, and the font size is no preset's.
-        choice("Font size", "18").tap()
+        choice("Font size", "18 points").tap()
         XCTAssertEqual(selected("Preset", of: labels["Preset"]!), ["Minimal"])
         choice("Spacing", "Cozy").tap()
-        XCTAssertEqual(chosen(), page("Dark", [], "One line", "Cozy", [], "18", "Hidden", "As links"))
+        XCTAssertEqual(chosen(), page("Dark", [], "One line", "Cozy", [], "18", false))
         XCTAssertTrue(app.staticTexts[custom].waitForExistence(timeout: 5), "the screen does not say \"\(custom)\"")
         _ = reached("dark")
 
@@ -123,14 +164,14 @@ final class SmokeUITests: XCTestCase {
         openPreferences()
         app.collectionViews.buttons["Preferences"].tap()
         XCTAssertTrue(choice("Appearance", "Dark").waitForExistence(timeout: 10))
-        XCTAssertEqual(chosen(), page("Dark", [], "One line", "Cozy", [], "18", "Hidden", "As links"))
+        XCTAssertEqual(chosen(), page("Dark", [], "One line", "Cozy", [], "18", false))
         XCTAssertTrue(app.staticTexts[custom].exists)
 
         // And back, as it is made: the phone's own appearance again, Comfortable at 15.
         choice("Appearance", "System").tap()
         choice("Preset", "Comfortable").tap()
-        choice("Font size", "15").tap()
-        XCTAssertEqual(chosen(), page("System", ["Comfortable"], "Grouped", "Roomy", ["Large"], "15", "Shown", "Shown"))
+        choice("Font size", "15 points").tap()
+        XCTAssertEqual(chosen(), page("System", ["Comfortable"], "Grouped", "Roomy", ["Large"], "15", true))
         XCTAssertFalse(app.staticTexts[custom].exists)
         _ = reached("system")
     }

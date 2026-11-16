@@ -969,72 +969,6 @@ struct ProfileScreen: View {
     }
 }
 
-// MARK: Preferences
-
-// How Lumia looks on this phone: light or dark (or as the phone is), and
-// how a conversation's messages are drawn. Each choice takes effect as it
-// is made and is kept on this phone (`Preferences` in LumiaKit); nothing
-// here is the account's or is sent to the instance. The other clients'
-// page in their words, without the desktop's scroll bars, which on a phone
-// are the system's. No board draws it, so it is the Profile screen's cards
-// with the design's segmented choice. Reactions, shown or hidden, come
-// after Font size, then Images and Embeds, shown or as links (specs/media.md 5).
-struct PreferencesScreen: View {
-    @Environment(Preferences.self) private var preferences
-
-    var body: some View {
-        @Bindable var preferences = preferences
-        PanelScreen(back: "Home", title: "Preferences", subtitle: "How Lumia looks on this phone") {
-            ScrollView {
-                VStack(alignment: .leading, spacing: LumiaTokens.space12) {
-                    LumiaCard(title: "Appearance", subtitle: "Light, dark, or whichever this phone is in.", width: nil) {
-                        LumiaSegmentedTabs("Appearance", tabs: Appearance.allCases.map { .init(id: $0, label: $0.label) }, selected: $preferences.appearance)
-                    }
-                    LumiaCard(title: "Messages", subtitle: "Start from a preset, then change anything below.", width: nil) {
-                        VStack(alignment: .leading, spacing: LumiaTokens.space16) {
-                            // None selected when the settings below match no preset.
-                            PreferenceRow("Preset") {
-                                LumiaSegmentedTabs("Preset", tabs: MessagePreset.allCases.map { .init(id: Optional($0), label: $0.label) }, selected: $preferences.preset)
-                                if preferences.preset == nil {
-                                    Text(MessagePreset.custom).font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkMuted.color)
-                                }
-                            }
-                            PreferenceRow("Layout") {
-                                LumiaSegmentedTabs("Layout", tabs: MessageLayout.allCases.map { .init(id: $0, label: $0.label) }, selected: $preferences.layout)
-                            }
-                            PreferenceRow("Spacing") {
-                                LumiaSegmentedTabs("Spacing", tabs: MessageSpacing.allCases.map { .init(id: $0, label: $0.label) }, selected: $preferences.spacing)
-                            }
-                            // One line draws no avatar.
-                            if preferences.layout == .grouped {
-                                PreferenceRow("Avatars") {
-                                    LumiaSegmentedTabs("Avatars", tabs: AvatarSize.allCases.map { .init(id: $0, label: $0.label) }, selected: $preferences.avatars)
-                                }
-                            }
-                            // Six segments of two digits fit the narrowest phone's card.
-                            PreferenceRow("Font size") {
-                                LumiaSegmentedTabs("Font size", tabs: FontSize.choices.map { .init(id: $0, label: $0.label) }, selected: $preferences.fontSize)
-                            }
-                            PreferenceRow("Reactions") {
-                                LumiaSegmentedTabs("Reactions", tabs: ReactionVisibility.allCases.map { .init(id: $0, label: $0.label) }, selected: $preferences.reactions)
-                            }
-                            // Attachments as file rows, and no link cards, when set to links.
-                            PreferenceRow("Images") {
-                                LumiaSegmentedTabs("Images", tabs: MediaDisplay.allCases.map { .init(id: $0, label: $0.label) }, selected: $preferences.images)
-                            }
-                            PreferenceRow("Embeds") {
-                                LumiaSegmentedTabs("Embeds", tabs: MediaDisplay.allCases.map { .init(id: $0, label: $0.label) }, selected: $preferences.embeds)
-                            }
-                        }
-                    }
-                }
-                .padding(LumiaTokens.space16)
-            }
-        }
-    }
-}
-
-/// One of the Messages card's settings: its name over its choice.
 /// One of a few choices too long for a segment each, with a mark that
 /// says which is chosen, as a segment says it.
 private struct ChoiceRow: View {
@@ -1062,6 +996,7 @@ private struct ChoiceRow: View {
     }
 }
 
+/// One of a card's settings (Server settings' Files card): its name over its choice.
 private struct PreferenceRow<Content: View>: View {
     let label: String
     @ViewBuilder let content: () -> Content

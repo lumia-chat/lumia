@@ -3,7 +3,9 @@
 # smoke-ios.sh cannot show, since it only launches and looks. The UI test
 # (LumiaUITests/SmokeUITests/testPreferencesAreChosenAndKept) opens the
 # account menu on the rail's own avatar, goes to Preferences, reads each
-# choice as assistive technology does, chooses Dark and Minimal, then font
+# choice and switch as assistive technology does and the preview as one
+# picture, turns Embeds off (Custom) and on (Comfortable), chooses Dark
+# and Minimal (the preview following), then font
 # size 18 and Cozy, which leaves no preset selected and says Custom,
 # launches again on the channel with nothing named (one line, cozy, at 18,
 # each message still one stop that says whose and when), and then chooses

@@ -121,6 +121,95 @@ final class PreferencesTests: XCTestCase {
         XCTAssertEqual(defaults.string(forKey: Preferences.reactionsKey), "shown")
     }
 
+    // MARK: The page
+
+    func testThePageSaysWhatEveryClientSaysInAPhonesWords() {
+        XCTAssertEqual(PreferenceWords.topic, "How Lumia looks on this phone")
+        XCTAssertEqual(PreferenceWords.appearance, "Light, dark, or whichever this phone is in.")
+        XCTAssertEqual(PreferenceWords.messages, "Start from a preset, then change anything below.")
+        XCTAssertEqual(PreferenceWords.previewLabel, "Preview of messages with these settings")
+        XCTAssertEqual(PreferenceWords.kept, "Kept on this phone only. Your other devices and your account are not changed.")
+        XCTAssertEqual(MessagePreset.allCases.map(\.caption), ["Large avatars, room to breathe", "Small avatars, more on screen", "A line each, media as links"])
+        XCTAssertEqual(MessageSetting.allCases.map(\.name), ["Layout", "Spacing", "Avatars", "Font size"])
+        XCTAssertEqual(MessageSetting.allCases.map(\.caption), ["One person’s messages as a block, or a line each.", "Room between messages.", "Beside each block of messages.", "Messages and names, in points."])
+        XCTAssertEqual(MessageSwitch.allCases.map(\.name), ["Images", "Embeds", "Reactions"])
+    }
+
+    func testAvatarsAreARowOnlyWhileGrouped() {
+        XCTAssertEqual(MessageSetting.shown(.grouped), [.layout, .spacing, .avatars, .fontSize])
+        XCTAssertEqual(MessageSetting.shown(.oneLine), [.layout, .spacing, .fontSize])
+        // Minimal is one line: choosing it takes the row away.
+        let preferences = Preferences(defaults: scratch(), environment: [:])
+        XCTAssertTrue(MessageSetting.shown(preferences.layout).contains(.avatars))
+        preferences.preset = .minimal
+        XCTAssertFalse(MessageSetting.shown(preferences.layout).contains(.avatars))
+    }
+
+    func testEachSwitchSaysWhatItsStateDoes() {
+        XCTAssertEqual(MessageSwitch.images.caption(on: true), "Shown in their messages.")
+        XCTAssertEqual(MessageSwitch.images.caption(on: false), "As links: each one a file row that opens the viewer.")
+        XCTAssertEqual(MessageSwitch.embeds.caption(on: true), "A card under each link.")
+        XCTAssertEqual(MessageSwitch.embeds.caption(on: false), "As links: no cards.")
+        XCTAssertEqual(MessageSwitch.reactions.caption(on: true), "Shown under each message.")
+        // A phone adds one from a message's menu, not a toolbar.
+        XCTAssertEqual(MessageSwitch.reactions.caption(on: false), "Hidden. You can still add one from a message’s menu.")
+    }
+
+    func testASwitchIsItsSettingShownAndStoresTheSameValues() {
+        let defaults = scratch()
+        let preferences = Preferences(defaults: defaults, environment: [:])
+        for setting in MessageSwitch.allCases { XCTAssertTrue(preferences.isOn(setting), "\(setting) is on on a new phone") }
+        preferences.set(.images, on: false)
+        XCTAssertEqual(preferences.images, .link)
+        XCTAssertEqual(defaults.string(forKey: Preferences.imagesKey), "link")
+        preferences.set(.embeds, on: false)
+        XCTAssertEqual(defaults.string(forKey: Preferences.embedsKey), "link")
+        preferences.set(.reactions, on: false)
+        XCTAssertEqual(preferences.reactions, .hidden)
+        XCTAssertEqual(defaults.string(forKey: Preferences.reactionsKey), "hidden")
+        XCTAssertEqual(MessageSwitch.allCases.map(preferences.isOn), [false, false, false])
+        // A switch turned from Comfortable is Custom, as any other setting is.
+        let again = Preferences(defaults: scratch(), environment: [:])
+        again.set(.embeds, on: false)
+        XCTAssertNil(again.preset)
+        again.set(.embeds, on: true)
+        XCTAssertEqual(again.preset, .comfortable)
+        // Minimal turns all three off; on again, they are Shown.
+        again.preset = .minimal
+        XCTAssertEqual(MessageSwitch.allCases.map(again.isOn), [false, false, false])
+        again.set(.reactions, on: true)
+        XCTAssertEqual(again.reactions, .shown)
+        XCTAssertNil(again.preset)
+    }
+
+    func testThePreviewIsFourMessagesDrawnAsTheSettingsSay() {
+        let m = PreferencesPreview.messages
+        XCTAssertEqual(PreferencesPreview.channel, "design-review")
+        XCTAssertEqual(m.map(\.author), ["Priya Nair", "Priya Nair", "Tomás Reyes", "Mei Chen"])
+        XCTAssertEqual(m.map(\.time), ["10:42", "10:42", "10:44", "10:51"])
+        // Priya's two are one block.
+        XCTAssertEqual(m.map(\.place.opens), [true, false, true, true])
+        XCTAssertEqual(m.map(\.place.closes), [false, true, true, true])
+        // Tomás's reactions, the 🎉 this account's.
+        XCTAssertEqual(m[2].reactions.map(\.emoji), ["👀", "🎉"])
+        XCTAssertEqual(m[2].reactions.map(\.count), [2, 3])
+        XCTAssertEqual(m[2].reactions.map(\.me), [false, true])
+        // Mei's address is a link, as the core reads the body.
+        XCTAssertTrue(m[3].text.hasSuffix("[lumia.chat/blog/0-13](https://lumia.chat/blog/0-13)"))
+        // What each carries, by Images and Embeds.
+        XCTAssertEqual(PreferencesPreview.pieces(m[2], images: .shown, embeds: .shown), [.picture])
+        XCTAssertEqual(PreferencesPreview.pieces(m[2], images: .link, embeds: .shown), [.file])
+        XCTAssertEqual(PreferencesPreview.pieces(m[3], images: .shown, embeds: .shown), [.card])
+        XCTAssertEqual(PreferencesPreview.pieces(m[3], images: .shown, embeds: .link), [])
+        XCTAssertEqual(PreferencesPreview.pieces(m[0], images: .shown, embeds: .shown), [])
+        // The file row's words, and a card with no picture, so nothing is fetched for either.
+        XCTAssertEqual(PreferencesPreview.file.name, "onboarding-first-screen.png")
+        XCTAssertEqual(MediaWords.detail(kind: .image, sizeBytes: PreferencesPreview.file.sizeBytes, durationMs: 0), MediaWords.size(412_000))
+        XCTAssertEqual([PreferencesPreview.card.host, PreferencesPreview.card.title], ["lumia.chat", "What’s new in Lumia 0.13"])
+        XCTAssertTrue(PreferencesPreview.card.imageUrl.isEmpty)
+        XCTAssertNil(PreferencesPreview.card.image)
+    }
+
     // MARK: Reactions
 
     func testReactionsAreShownButInMinimal() {

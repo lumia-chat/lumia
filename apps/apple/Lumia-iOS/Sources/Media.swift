@@ -855,7 +855,9 @@ struct LinkCardView: View {
     @Environment(\.openURL) private var openURL
     @Environment(MediaPlayback.self) private var playback: MediaPlayback?
     let card: CardSummary
-    let session: LumiaSession
+    /// What fetches its picture and loads its embed; none in Preferences'
+    /// preview, whose card has no picture and plays nothing.
+    let session: LumiaSession?
     var compact = false
     /// The message's actions, on a long press; none in the composer's preview.
     var hold: (() -> Void)?
@@ -931,7 +933,7 @@ struct LinkCardView: View {
             .overlay(RoundedRectangle(cornerRadius: LumiaTokens.radius10).stroke(LumiaTokens.line.color))
         }
         .pressed(hold: hold) {
-            if let embed, let embedKey, let playback {
+            if let embed, let embedKey, let playback, let session {
                 playback.show(embed, key: embedKey, title: EmbedWords.title(embed, cardTitle: card.title), session: session)
             } else if let url = URL(string: card.url) {
                 openURL(url)
@@ -945,7 +947,7 @@ struct LinkCardView: View {
         .accessibilityIdentifier("card")
         .messageActions(hold)
         .task(id: card.url) {
-            if hasPicture { picture = await session.cardPicture(card) }
+            if hasPicture, let session { picture = await session.cardPicture(card) }
         }
     }
 
