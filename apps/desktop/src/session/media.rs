@@ -22,6 +22,11 @@
 //! someone else's choice of bytes: one the core says not to decode (`App::attachment_drawable`)
 //! is held as such and drawn as a file. The display picture is fetched only for the viewer.
 //!
+//! **Playing.** A video or a recording is written under this computer's temporary directory,
+//! named by its attachment's id and an extension its media type gives ([`player_file`]):
+//! for the window's own player where Rune has one (`app::playback`), for the system's
+//! player where it has none.
+//!
 //! Decoding is the toolkit's, in `app`.
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -68,6 +73,11 @@ pub enum MediaUpdate {
     Saved(Result<PathBuf, Failure>),
     /// A video or a recording was written where the system's player can open it.
     Opened(Result<PathBuf, Failure>),
+    /// A video or a recording was written for the window's own player.
+    Written {
+        attachment_id: String,
+        file: Result<PathBuf, Failure>,
+    },
     /// A draft taken out of the composer was taken off the instance (best effort).
     Discarded,
 }
@@ -255,6 +265,18 @@ pub fn player_extension(media_type: &str) -> Option<&'static str> {
         "audio/flac" | "audio/x-flac" => "flac",
         _ => return None,
     })
+}
+
+/// Where a video or a recording is written to be played: under the temporary directory, named
+/// by its attachment's id and the extension its media type gives. `None` for a media type
+/// no player is handed.
+pub fn player_file(attachment: &AttachmentSummary) -> Option<PathBuf> {
+    let extension = player_extension(&attachment.media_type)?;
+    Some(
+        std::env::temp_dir()
+            .join("lumia-media")
+            .join(format!("{}.{extension}", attachment.attachment_id)),
+    )
 }
 
 /// Whether a file's name says it is a picture, so it may be larger than the file cap before
@@ -694,18 +716,31 @@ impl Session {
         });
     }
 
-    /// Writes a video or a recording under this computer's temporary directory, named by
-    /// its id and an extension its media type gives ([`player_extension`]), for the system's
-    /// player to open. Nothing else is written there.
+    /// Writes a video or a recording where [`player_file`] says, for the system's player to
+    /// open. Nothing else is written there.
     pub fn open_attachment(&self, attachment: &AttachmentSummary) {
+        self.write_for_player(attachment, |_, file| MediaUpdate::Opened(file));
+    }
+
+    /// Writes a video or a recording where [`player_file`] says, for the window's own player
+    /// (`app::playback`).
+    pub fn write_for_inline(&self, attachment: &AttachmentSummary) {
+        self.write_for_player(attachment, |attachment_id, file| MediaUpdate::Written {
+            attachment_id,
+            file,
+        });
+    }
+
+    fn write_for_player(
+        &self,
+        attachment: &AttachmentSummary,
+        done: impl FnOnce(String, Result<PathBuf, Failure>) -> MediaUpdate + Send + 'static,
+    ) {
         let Some(app) = self.client() else { return };
-        let Some(extension) = player_extension(&attachment.media_type) else {
+        let Some(file) = player_file(attachment) else {
             return;
         };
-        let blob = attachment.main.clone();
-        let file = std::env::temp_dir()
-            .join("lumia-media")
-            .join(format!("{}.{extension}", attachment.attachment_id));
+        let (blob, id) = (attachment.main.clone(), attachment.attachment_id.clone());
         self.task(async move {
             let written = match app.attachment_bytes(&blob).await {
                 Ok(bytes) => file
@@ -719,7 +754,7 @@ impl Session {
                     }),
                 Err(error) => Err(Failure::from(error)),
             };
-            Update::Media(MediaUpdate::Opened(written))
+            Update::Media(done(id, written))
         });
     }
 
@@ -813,7 +848,11 @@ impl Session {
             MediaUpdate::Opened(Err(failure)) => {
                 self.last_error = Some(format!("Could not open it: {}", failure.message));
             }
-            MediaUpdate::Saved(Ok(_)) | MediaUpdate::Opened(Ok(_)) | MediaUpdate::Discarded => {}
+            // The window says why a clip of its own could not be fetched, where the clip was.
+            MediaUpdate::Saved(Ok(_))
+            | MediaUpdate::Opened(Ok(_))
+            | MediaUpdate::Written { .. }
+            | MediaUpdate::Discarded => {}
         }
     }
 }
@@ -855,6 +894,25 @@ mod tests {
         assert_eq!(player_extension("application/x-msdownload"), None);
         assert_eq!(player_extension("text/html"), None);
         assert_eq!(player_extension(""), None);
+    }
+
+    #[test]
+    fn a_clip_is_written_under_its_id_never_its_senders_name() {
+        let clip = AttachmentSummary {
+            attachment_id: "att-7".into(),
+            name: "totally a video.exe".into(),
+            media_type: "video/mp4".into(),
+            ..AttachmentSummary::default()
+        };
+        assert_eq!(
+            player_file(&clip),
+            Some(std::env::temp_dir().join("lumia-media").join("att-7.mp4"))
+        );
+        let program = AttachmentSummary {
+            media_type: "application/x-msdownload".into(),
+            ..clip
+        };
+        assert_eq!(player_file(&program), None);
     }
 
     #[test]

@@ -245,11 +245,13 @@ pub fn view(s: &State, label: String, look: Look) -> El {
         .virtual_rows_version(s.session.revision)
         // Reading up to the oldest rows on screen asks for the page before them; the newest
         // on screen is what marks the conversation read.
+        // A video whose message leaves the view pauses (`app::playback`).
         .on_visible_rows(move |s: &mut State, visible| {
             let newest = visible.end >= count;
             let changed = s.replies.newest_visible != newest;
             s.replies.newest_visible = newest;
-            (visible.start < OLDER_WITHIN && s.load_older()) || changed
+            let paused = s.rows_visible(&visible);
+            (visible.start < OLDER_WITHIN && s.load_older()) || changed || paused
         });
     // A conversation shorter than the pane sits at its foot, against the composer, as the
     // board's does: the space above the first message takes what the rows leave.

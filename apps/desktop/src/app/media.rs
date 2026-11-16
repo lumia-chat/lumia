@@ -12,11 +12,11 @@
 //! timeline draws its first frame (the thumbnail) with a GIF badge instead, and a click
 //! plays it ([`State::play_gif`]).
 //!
-//! Rune has a video player on macOS and Windows and none on Linux; the shell does not use
-//! it yet. A video or a recording opens in the system's own player: the core opens it, it is
-//! written to the temporary directory under a name its media type gives, and the platform
-//! opens that file (`platform::settle`). A video's poster is drawn when its sender's platform
-//! made one; this shell makes none when it sends one.
+//! Rune has a video player on macOS and Windows and none on Linux. Where it has one, a video
+//! or a recording plays in the conversation (`playback`). On Linux it opens in the system's
+//! own player: the core opens it, it is written to the temporary directory under a name its
+//! media type gives, and the platform opens that file (`platform::settle`). A video's poster
+//! is drawn when its sender's platform made one; this shell makes none when it sends one.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -417,11 +417,6 @@ impl State {
         });
     }
 
-    /// A video's or a recording's Play: opened in the system's player.
-    pub fn open_attachment(&mut self, attachment: &AttachmentSummary) {
-        self.session.open_attachment(attachment);
-    }
-
     /// A still GIF pressed under Reduce Motion: it plays.
     pub fn play_gif(&mut self, attachment_id: &str) {
         self.media.playing.insert(attachment_id.to_string());
@@ -454,6 +449,7 @@ impl State {
     pub(crate) fn react_media(&mut self, update: &MediaUpdate) {
         match update {
             MediaUpdate::Opened(Ok(path)) => self.media.to_open.push(path.clone()),
+            MediaUpdate::Written { .. } => self.react_playback(update),
             MediaUpdate::Attached { .. } => {
                 // A picture uploaded takes alt text: its field starts empty.
                 let ready: Vec<u64> = self

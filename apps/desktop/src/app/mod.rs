@@ -19,6 +19,7 @@ pub mod media;
 pub mod menu;
 pub mod notices;
 pub mod pictures;
+pub mod playback;
 pub mod prompts;
 pub mod rail;
 pub mod replies;
@@ -161,6 +162,8 @@ pub struct State {
     /// Attachments and link cards: their pictures decoded, the composer's alt text, the
     /// viewer (`media`).
     pub media: media::MediaUi,
+    /// Videos and recordings played in the conversation (`playback`).
+    pub playback: playback::Playback,
     /// The pane the middle button scrolls while it is held (`autoscroll`).
     pub autoscroll: autoscroll::Autoscroll,
     /// The window's width in points, as the shell's layout last reported it (`aside`).
@@ -215,6 +218,7 @@ impl State {
             notices: notices::Notices::default(),
             pictures: pictures::Pictures::default(),
             media: media::MediaUi::default(),
+            playback: playback::Playback::default(),
             autoscroll: autoscroll::Autoscroll::default(),
             window_width: None,
             aside_open: false,
@@ -486,7 +490,8 @@ impl State {
         let replied = self.tick_replies();
         let prompted = self.tick_prompts(now_micros);
         let media = self.tick_media(now_micros);
-        expired || pictured || replied || prompted || media
+        let played = self.tick_playback();
+        expired || pictured || replied || prompted || media || played
     }
 
     /// Enters the shell for a session the stores already hold, at launch: with what the
@@ -525,6 +530,7 @@ impl State {
         self.media.viewer = None;
         self.media.alts.clear();
         self.media.playing.clear();
+        self.forget_clips();
     }
 
     /// Keeps the place and the channel on screen ones the snapshot still has. The first
@@ -701,6 +707,7 @@ pub fn setup(state: &mut State, waker: Waker) {
     state.session.set_wake(Arc::clone(&waker));
     state.pictures.start(Arc::clone(&waker));
     state.media.start(Arc::clone(&waker));
+    state.playback.start(Arc::clone(&waker));
     // Anything that finished between `init` and here is already queued.
     waker();
 }
@@ -717,6 +724,7 @@ pub fn poll(state: &mut State, now: f64, tx: &mut Tx) -> bool {
     let drained = state.drain();
     let now = chrono::Utc::now().timestamp_micros();
     let ticked = state.tick(now);
+    state.poll_playback(tx);
     state.land(tx);
     let found = state.show_found(tx);
     if state.replies.flash.is_some()

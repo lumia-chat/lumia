@@ -95,6 +95,12 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
     {
         screen = screen.child(viewer);
     }
+    // A video played full screen, over the whole window.
+    if s.route == Route::Shell
+        && let Some(video) = media::full_screen_video(s, look)
+    {
+        screen = screen.child(video);
+    }
     // Another device asking this computer to link it, over whatever is on screen.
     if s.route != Route::SignIn
         && let Some(prompt) = prompt::view(s, look)

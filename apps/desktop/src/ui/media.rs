@@ -19,16 +19,26 @@
 //! attachment as a file row, a picture's opening the viewer; Embeds at "As links" draws no
 //! card.
 //!
+//! A video pressed plays in its poster's place, at its shape and at most 400 tall, or under
+//! its file row, with the shell's controls under the picture: play or pause, the position
+//! (a slider: a press or a drag, the arrow keys five seconds, Home and End), the time, sound
+//! on or off, and full screen, over the whole window (`app::playback`). A recording's row
+//! holds the same controls, without full screen, under its name. No board draws a player:
+//! the controls are the design system's icon buttons and a 4-point track for the position,
+//! in the accent where it has played. On Linux, where Rune has no player, Play opens the
+//! system's as before. One the server let go stays the row that says so.
+//!
 //! A card is the host the link names (never the page's own name for its site), the title,
 //! the description and the picture beside them, with a play symbol over a video's; a press
 //! opens the link as the message's words have it.
 
 use lumia_client::app::{AttachmentSummary, CardSummary};
-use rune::{Cursor, El, Icon, SurfaceFit, Tx, col, el, icon, row, text, text_input};
+use rune::{Cursor, El, Icon, Player, SurfaceFit, Tx, col, el, icon, row, text, text_input};
 
 use super::components::{Look, drawn, icon_button};
 use crate::app::State;
 use crate::app::media::{ZOOM_MAX, ZOOM_MIN, fitted, grid};
+use crate::app::playback::{Clip, clock};
 use crate::session::Entry;
 use crate::session::media::{Stage, Waiting, blob_key, card_key, is_picture, size_words};
 use crate::settings::Media;
@@ -129,7 +139,7 @@ fn picture_tile(
         .fill(c.inset)
         .role("button")
         .label(if video {
-            format!("Play {}", attachment.name)
+            play_label(attachment)
         } else {
             picture_label(attachment)
         })
@@ -156,7 +166,7 @@ fn picture_tile(
     let a = attachment.clone();
     if video {
         tile = tile
-            .on_press(move |s: &mut State| s.open_attachment(&a))
+            .on_press(move |s: &mut State| s.play_attachment(&a))
             .center()
             .child(play_disc(look));
     } else if gif && !moving {
@@ -248,23 +258,20 @@ fn file_row(
             .focus_ring(2.0, 2.0, c.focus)
             .on_press(move |s: &mut State| s.open_viewer(&a));
     }
-    let mut frame = row()
-        .key(format!("file-{}", attachment.attachment_id))
-        .max_w(t::MEDIA_MAX)
-        .padding(t::SPACE_8)
-        .gap(t::SPACE_10)
-        .items_center()
-        .radius(t::RADIUS_12)
-        .fill(c.inset)
-        .child(words);
-    if playable {
+    let mut frame = row().w_full().gap(t::SPACE_10).items_center().child(words);
+    // Once started, the clip's own controls play and pause it: the row's Play goes.
+    let clip = s
+        .playback
+        .clip(&attachment.attachment_id)
+        .filter(|_| playable);
+    if playable && clip.is_none() {
         let a = attachment.clone();
         frame = frame.child(glyph_button(
             format!("play-{}", attachment.attachment_id),
             &icons::PLAY,
-            &format!("Play {}", attachment.name),
+            &play_label(attachment),
             t::FILE_ACTION,
-            move |s: &mut State, _| s.open_attachment(&a),
+            move |s: &mut State, _| s.play_attachment(&a),
             look,
         ));
     }
@@ -282,7 +289,267 @@ fn file_row(
     if editing {
         frame = frame.child(remove_button(attachment, look));
     }
-    frame
+    let mut framed = col()
+        .key(format!("file-{}", attachment.attachment_id))
+        .max_w(t::MEDIA_MAX)
+        .padding(t::SPACE_8)
+        .gap(t::SPACE_6)
+        .radius(t::RADIUS_12)
+        .fill(c.inset)
+        .child(frame);
+    // A recording plays in its row; a video under it (`attachments`).
+    if let Some(clip) = clip.filter(|clip| !clip.is_video()) {
+        framed = framed.child(clip_controls(clip, ty, false, look));
+    }
+    framed
+}
+
+/// What a video's or a recording's Play is called.
+fn play_label(attachment: &AttachmentSummary) -> String {
+    if attachment.kind == "video" {
+        format!("Play video, {}", attachment.name)
+    } else {
+        format!("Play {}", attachment.name)
+    }
+}
+
+/// A clip's controls: play or pause, the position, the time, sound, and for a video full
+/// screen (or, in full screen, the way out). "Loading…", or why it cannot play, until it can.
+fn clip_controls(clip: &Clip, ty: &t::MessageType, full_screen: bool, look: Look) -> El {
+    let c = look.c;
+    let a = &clip.attachment;
+    let id = a.attachment_id.clone();
+    let line = row()
+        .key(format!("controls-{id}"))
+        .w_full()
+        .min_h(t::ICON_BUTTON)
+        .gap(t::SPACE_6)
+        .items_center();
+    if let Some(why) = clip.failure() {
+        return line.child(
+            text(why)
+                .font(ty.meta)
+                .color(c.ink_muted)
+                .wrap()
+                .grow(1.0)
+                .min_w(0.0)
+                .role("alert"),
+        );
+    }
+    let Some(player) = clip.player() else {
+        return line.child(
+            text("Loading…")
+                .font(ty.meta)
+                .color(c.ink_muted)
+                .role("status"),
+        );
+    };
+    let playing = player.is_playing();
+    let time = player.time();
+    let duration = player.duration().filter(|d| d.is_finite() && *d > 0.0);
+    // A length is said to the nearest second (a 2.98-second clip is 0:03), a time as it runs.
+    let length = |d: f64| clock(d.round());
+    #[allow(clippy::cast_possible_truncation)]
+    let played = duration.map_or(0.0, |d| (time / d).clamp(0.0, 1.0)) as f32;
+    let toggle = {
+        let id = id.clone();
+        icon_button(
+            format!("toggle-{id}"),
+            if playing { &icons::PAUSE } else { &icons::PLAY },
+            &if playing {
+                format!("Pause {}", a.name)
+            } else {
+                play_label(a)
+            },
+            move |s: &mut State| s.toggle_clip(&id),
+            look,
+        )
+    };
+    let (drag_id, step_id, end_id) = (id.clone(), id.clone(), id.clone());
+    let position = el()
+        .key(format!("seek-{id}"))
+        .grow(1.0)
+        .min_w(t::SPACE_40)
+        .h(t::ICON_BUTTON)
+        .center()
+        .role("slider")
+        .label(format!("Position in {}", a.name))
+        .range_value(time, 0.0, duration.unwrap_or(0.0))
+        .a11y_value(format!(
+            "{} of {}",
+            clock(time),
+            length(duration.unwrap_or(0.0))
+        ))
+        .cursor(Cursor::Pointer)
+        .focus_ring(2.0, 0.0, c.focus)
+        .no_window_drag()
+        .on_drag(move |s: &mut State, drag, _| {
+            if drag.w > 0.0 {
+                s.seek_clip(&drag_id, drag.x / drag.w);
+            }
+        })
+        .on_step(move |s: &mut State, steps, _| s.step_clip(&step_id, steps))
+        .on_step_limit(move |s: &mut State, end, _| s.clip_to_end(&end_id, end))
+        .child(
+            el().w_full()
+                .h(t::SPACE_4)
+                .radius(t::SPACE_2)
+                .fill(c.line_strong)
+                .a11y_hidden()
+                .child(
+                    el().w_frac(played)
+                        .h(t::SPACE_4)
+                        .radius(t::SPACE_2)
+                        .fill(c.accent),
+                ),
+        );
+    let shown = format!(
+        "{} / {}",
+        clock(time),
+        duration.map_or_else(|| "–:––".to_string(), length)
+    );
+    let muted = player.muted();
+    let sound = {
+        let id = id.clone();
+        icon_button(
+            format!("sound-{id}"),
+            if muted {
+                &icons::VOLUME_OFF
+            } else {
+                &icons::VOLUME
+            },
+            if muted { "Unmute" } else { "Mute" },
+            move |s: &mut State| s.toggle_clip_sound(&id),
+            look,
+        )
+    };
+    let mut line = line
+        .child(toggle)
+        .child(position)
+        .child(text(shown).font(ty.meta).color(c.ink_muted).a11y_hidden())
+        .child(sound);
+    if clip.is_video() {
+        line = line.child(if full_screen {
+            icon_button(
+                "exit-full-screen",
+                &icons::CLOSE,
+                "Exit full screen",
+                State::exit_full_screen,
+                look,
+            )
+        } else {
+            icon_button(
+                format!("full-screen-{id}"),
+                &icons::FULL_SCREEN,
+                "Full screen",
+                move |s: &mut State| s.enter_full_screen(&id),
+                look,
+            )
+        });
+    }
+    line
+}
+
+/// A video started in a message, in its poster's place: the picture at the video's shape,
+/// no wider than `max_width` nor taller than 400 (16:9 until its size is known), with its
+/// controls under it. While it is fetched, and while it is full screen, its poster stands
+/// there.
+fn video_player(s: &State, clip: &Clip, max_width: f32, ty: &t::MessageType, look: Look) -> El {
+    let c = look.c;
+    let a = &clip.attachment;
+    let id = &a.attachment_id;
+    let (w, h) = if a.width > 0 && a.height > 0 {
+        (a.width, a.height)
+    } else {
+        // A shape more than a size: the column's width, at 16:9.
+        clip.player()
+            .and_then(Player::natural_size)
+            .unwrap_or((1600, 900))
+    };
+    let size = fitted(w, h, max_width, t::MEDIA_MAX);
+    // Never narrower than its controls need.
+    let width = size[0].max(t::MEDIA_CELL).min(max_width);
+    let away = s.playback.full_screen.as_deref() == Some(id.as_str());
+    let mut stage = el()
+        .key(format!("video-{id}"))
+        .w(width)
+        .h(size[1])
+        .center()
+        .clip_rounded(0.0);
+    match clip.player() {
+        Some(player) if !away && clip.failure().is_none() => {
+            stage = stage
+                .video(player, SurfaceFit::Fit)
+                .role("img")
+                .label(format!("Video, {}", a.name));
+        }
+        _ => {
+            let picture = shown_picture(s, a, false).or_else(|| s.media.placeholder(id));
+            if let Some(picture) = picture {
+                stage = stage.child(
+                    el().absolute(0.0, 0.0)
+                        .size(width, size[1])
+                        .pixels_fit(picture.pixels(), SurfaceFit::Fit)
+                        .a11y_hidden(),
+                );
+            }
+        }
+    }
+    col()
+        .key(format!("player-{id}"))
+        .w(width)
+        .radius(t::RADIUS_12)
+        .clip_rounded(t::RADIUS_12)
+        .fill(c.inset)
+        .role("group")
+        .label(format!("Video, {}", a.name))
+        .child(stage)
+        .child(
+            el().w_full()
+                .px(t::SPACE_6)
+                .py(t::SPACE_2)
+                .child(clip_controls(clip, ty, false, look)),
+        )
+}
+
+/// The video in full screen: over the whole window, as the viewer is, its controls under it.
+/// Escape or the button at the controls' end brings it back into its message.
+pub fn full_screen_video(s: &State, look: Look) -> Option<El> {
+    let id = s.playback.full_screen.as_deref()?;
+    let clip = s.playback.clip(id)?;
+    let player = clip.player()?;
+    let c = look.c;
+    let ty = super::timeline::type_of(s);
+    let id = id.to_string();
+    Some(
+        col()
+            .key("full-screen")
+            .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+            .fill(c.bg)
+            .role("dialog")
+            .label(format!("Video, {}", clip.attachment.name))
+            .modal(true, State::exit_full_screen)
+            .on_key(|s: &mut State, key, _| s.full_screen_key(key))
+            .no_window_drag()
+            .child(
+                el().key("full-screen-stage")
+                    .w_full()
+                    .grow(1.0)
+                    .min_h(0.0)
+                    .video(player, SurfaceFit::Fit)
+                    .role("img")
+                    .label(format!("Video, {}", clip.attachment.name))
+                    .on_press(move |s: &mut State| s.toggle_clip(&id)),
+            )
+            .child(
+                el().w_full()
+                    .px(t::VIEWER_MARGIN)
+                    .py(t::SPACE_8)
+                    .fill(c.surface)
+                    .border_sides([1.0, 0.0, 0.0, 0.0], c.line)
+                    .child(clip_controls(clip, &ty, true, look)),
+            ),
+    )
 }
 
 /// While editing, an attachment's ×.
@@ -322,6 +589,14 @@ pub fn attachments(
     };
     let (pictures, files): (Vec<&AttachmentSummary>, Vec<&AttachmentSummary>) =
         shown.iter().partition(|a| as_picture(a));
+    // A video started here leaves the grid and plays at its own shape after it.
+    let clip_of = |a: &AttachmentSummary| {
+        (a.kind == "video" && !a.expired)
+            .then(|| s.playback.clip(&a.attachment_id))
+            .flatten()
+    };
+    let (players, pictures): (Vec<&AttachmentSummary>, Vec<&AttachmentSummary>) =
+        pictures.into_iter().partition(|a| clip_of(a).is_some());
     let max_width = width.unwrap_or(t::MEDIA_MAX).min(t::MEDIA_MAX * 1.5);
     let mut column = col().key("attachments").w_full().gap(t::MEDIA_GAP);
     match pictures.as_slice() {
@@ -353,8 +628,21 @@ pub fn attachments(
             column = column.child(rows);
         }
     }
+    for a in players {
+        if let Some(clip) = clip_of(a) {
+            column = column.child(with_remove(
+                video_player(s, clip, max_width, ty, look),
+                a,
+                editing,
+                look,
+            ));
+        }
+    }
     for a in files {
         column = column.child(file_row(s, a, ty, editing, look));
+        if let Some(clip) = clip_of(a) {
+            column = column.child(video_player(s, clip, max_width, ty, look));
+        }
     }
     Some(column)
 }

@@ -9,10 +9,14 @@ use lumia_core::media::{Caps, Input, process};
 
 use crate::app::State;
 use crate::app::media::fetched;
-use crate::session::Entry;
-use crate::session::media::{Preview, Stage, Waiting};
+use crate::session::media::{MediaUpdate, Preview, Stage, Waiting, player_file};
+use crate::session::{Entry, Failure, Update};
 
 const PORTRAIT: &[u8] = include_bytes!("portrait.jpg");
+/// Three seconds of a test pattern over a tone, and of a tone alone, made for the scenes and
+/// the tests from FFmpeg's own sources (`testsrc`, `sine`): 640 by 360, H.264 and AAC.
+pub const CLIP: &[u8] = include_bytes!("clip.mp4");
+pub const TONE: &[u8] = include_bytes!("tone.m4a");
 const ICON: &[u8] = include_bytes!("../../../../assets/brand/lumia-original-icon.png");
 
 /// A picture as the core makes it for sending: its attachment, and its thumbnail's bytes.
@@ -257,4 +261,48 @@ pub fn media_edit(state: &mut State) {
     let field = rune::TextEdit::new("Notes here: https://example.com/notes/compilers");
     state.replies.editing = Some(("x4".into(), field));
     state.session.revision += 1;
+}
+
+/// `media-playing`: the demo video started from its row and playing under it, and the voice
+/// note started first and paused when the video began (one plays at a time). On Linux,
+/// where Rune has no player, Play opens the system's and this is `media` again.
+/// `--snap out.png --scene media-playing --size 1180x1500`.
+pub fn media_playing(state: &mut State) {
+    media(state);
+    let Some(entry) = state.session.entries.iter_mut().find(|e| e.id == "x5") else {
+        return;
+    };
+    // The size a send would have read from the video (spec 3.3).
+    if let Some(video) = entry.attachments.first_mut() {
+        video.width = 640;
+        video.height = 360;
+    }
+    let attachments = entry.attachments.clone();
+    state.session.revision += 1;
+    for (attachment, bytes) in attachments.iter().rev().zip([TONE, CLIP]) {
+        state.play_attachment(attachment);
+        state.receive(&written(attachment, bytes));
+    }
+}
+
+/// What the session reports once an attachment's bytes are written for the window's player,
+/// here with the bytes given: for a scene or a test, with no instance to fetch them from.
+pub fn written(attachment: &AttachmentSummary, bytes: &[u8]) -> Update {
+    let file = player_file(attachment)
+        .ok_or_else(|| "no player takes this media type".to_string())
+        .and_then(|file| {
+            file.parent()
+                .map_or(Ok(()), std::fs::create_dir_all)
+                .and_then(|()| std::fs::write(&file, bytes))
+                .map(|()| file)
+                .map_err(|e| e.to_string())
+        })
+        .map_err(|message| Failure {
+            message,
+            ..Failure::default()
+        });
+    Update::Media(MediaUpdate::Written {
+        attachment_id: attachment.attachment_id.clone(),
+        file,
+    })
 }
