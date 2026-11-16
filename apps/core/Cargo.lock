@@ -2294,6 +2294,8 @@ dependencies = [
  "prost-types",
  "reqwest",
  "rusqlite",
+ "rustls",
+ "rustls-platform-verifier",
  "serde",
  "serde_json",
  "sqlite-wasm-rs",

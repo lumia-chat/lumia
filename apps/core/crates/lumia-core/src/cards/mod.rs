@@ -11,7 +11,7 @@ mod address;
 mod head;
 
 pub use address::address_allowed;
-pub use head::parse_head;
+pub use head::{head_ended, parse_head};
 
 use crate::body::{parse, Block, Inline};
 

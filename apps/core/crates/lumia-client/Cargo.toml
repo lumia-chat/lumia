@@ -30,6 +30,10 @@ ed25519-dalek = "3"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net"] }
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2"] }
+# The link-card fetcher's one TLS configuration, as reqwest builds its own
+# (cards.rs); both already in the tree under reqwest.
+rustls = { version = "0.23.4", default-features = false, features = ["std", "tls12", "aws-lc-rs"] }
+rustls-platform-verifier = "0.7"
 rusqlite = { version = "0.41", features = ["bundled"] }
 
 # Web: the browser's fetch and WebSocket, gloo timers, SQLite compiled for

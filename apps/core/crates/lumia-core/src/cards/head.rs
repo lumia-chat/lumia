@@ -25,6 +25,19 @@ pub fn parse_head(html: &[u8], page_url: &str) -> Option<CardDraft> {
     build(&head, page_url)
 }
 
+/// Whether the head of `html`, a page's start as far as it has arrived, has ended: whether
+/// [`parse_head`] would stop at a `</head>` or `<body>` in it rather than at its end. A
+/// fetcher reads until this says so (or [`MAX_HTML_BYTES`]); unlike a search for the bytes
+/// `</head`, it reads past one in a comment, a script or an attribute, as `parse_head` does.
+/// A tag name `html` ends in is not taken for one: `</head` may yet be `</header`.
+///
+/// It reads all of `html` each time, so a fetcher asks only when what has just arrived
+/// holds `</head` or `<body` in some case.
+pub fn head_ended(html: &[u8]) -> bool {
+    let html = html.get(..MAX_HTML_BYTES).unwrap_or(html);
+    scan(&String::from_utf8_lossy(html)).ended
+}
+
 /// What the scanner keeps of a head.
 #[derive(Default)]
 struct Head {
@@ -33,6 +46,8 @@ struct Head {
     /// Each `<meta>`'s key (its `property`, and its `name` when that differs, lowercase)
     /// and `content`, decoded, in document order.
     metas: Vec<(String, String)>,
+    /// Scanning stopped at `</head>` or `<body>`, not at the end of the text.
+    ended: bool,
 }
 
 impl Head {
@@ -224,6 +239,8 @@ fn scan(text: &str) -> Head {
                 continue;
             }
             if name == "head" {
+                // A name the text ends in may go on (`</header`).
+                head.ended = after < text.len();
                 break;
             }
             i = find(text, after, ">").map_or(text.len(), |end| end + 1);
@@ -237,7 +254,10 @@ fn scan(text: &str) -> Head {
         let (attrs, end) = attributes(text, after);
         i = end;
         match name.as_str() {
-            "body" => break,
+            "body" => {
+                head.ended = after < text.len();
+                break;
+            }
             "meta" => meta(&attrs, &mut head),
             "base" if head.base.is_none() => {
                 head.base = attr(&attrs, "href").map(str::to_owned);
@@ -668,5 +688,35 @@ mod tests {
         html.resize(MAX_HTML_BYTES, b' ');
         html.extend_from_slice(b"<title>late</title>");
         assert_eq!(parse_head(&html, "https://a.example/"), None);
+    }
+
+    #[test]
+    fn the_head_ends_where_the_scanner_says_and_not_at_the_bytes() {
+        for ended in [
+            "<head><title>x</title></head>",
+            "<head><title>x</title></HEAD >",
+            "<head><title>x</title><body>",
+            "<title>x</title><BODY class=a",
+            "<head><!-- </head> --></head>",
+            "<head><script>if (a</head>b) {}</script></head>",
+        ] {
+            assert!(head_ended(ended.as_bytes()), "{ended}");
+        }
+        for open in [
+            "",
+            "<head><title>x</title>",
+            "<head><!-- </head> -->",
+            "<head><!-- </head>",
+            "<head><script>document.write('<body>')",
+            "<head><script>x</script><meta content=\"</head><body>\"",
+            "<head><title></head></title>",
+            "<head><style>/* </head> */</style>",
+            // Not yet a whole name: `</header`, `<bodyx` may follow.
+            "<head></head",
+            "<head><body",
+            "<head></header><bodyx>",
+        ] {
+            assert!(!head_ended(open.as_bytes()), "{open}");
+        }
     }
 }

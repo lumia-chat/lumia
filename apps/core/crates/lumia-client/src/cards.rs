@@ -6,13 +6,14 @@
 //! [`cards::address_allowed`], and the connection made to those vetted addresses only (a
 //! client built per hop, with its resolver overridden for the host and every other name
 //! refused, no proxy, redirects off and followed here). This keeps a link in a message from
-//! reading the sharer's own router or anything else on their network.
+//! reading the sharer's own router or anything else on their network. The clients share one
+//! TLS configuration, built once.
 //!
 //! Native only: a browser cannot read other sites (CORS), so the web client sends no cards
 //! in personal DMs (6.5) and has no fetcher.
 
 use std::net::{IpAddr, SocketAddr};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use lumia_core::cards::{self, CardDraft, MAX_HTML_BYTES, MAX_IMAGE_BYTES, MAX_REDIRECTS};
@@ -29,7 +30,8 @@ pub const USER_AGENT: &str = concat!(
     " (+https://lumia.chat/bot)"
 );
 
-/// How long a fetch may take: the page with its redirects, and then the image, each.
+/// How long a fetch may take, all of it: the page with its redirects, and its image with
+/// its own. What is left of it when the page is read is the image's.
 pub const TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A card as fetched: what the page's head gave, its `url` the link as given, and its
@@ -122,7 +124,9 @@ async fn fetch_with(
     url: &str,
     accept_language: &str,
 ) -> Result<Option<FetchedCard>, CardError> {
-    let page = tokio::time::timeout(rules.timeout, get(rules, url, accept_language, Want::Page))
+    // One deadline for the page and its image together (6.3).
+    let deadline = tokio::time::Instant::now() + rules.timeout;
+    let page = tokio::time::timeout_at(deadline, get(rules, url, accept_language, Want::Page))
         .await
         .map_err(|_| CardError::Timeout)??;
     let Some((at, html)) = page else {
@@ -136,7 +140,7 @@ async fn fetch_with(
         None
     } else {
         let fetch = get(rules, &card.image_url, accept_language, Want::Image);
-        match tokio::time::timeout(rules.timeout, fetch).await {
+        match tokio::time::timeout_at(deadline, fetch).await {
             Ok(Ok(Some((_, bytes)))) => Some(bytes),
             Ok(Ok(None)) => None,
             Ok(Err(e)) => {
@@ -230,11 +234,12 @@ async fn vetted(rules: &Rules, url: &Url) -> Result<(reqwest::Client, String), C
     if !rules.ports.contains(&port) {
         return Err(CardError::Port(port));
     }
+    // No timeout of its own: the fetch's one deadline covers every hop.
     let builder = reqwest::Client::builder()
         .redirect(redirect::Policy::none())
         .no_proxy()
         .user_agent(USER_AGENT)
-        .timeout(rules.timeout)
+        .tls_backend_preconfigured(tls()?)
         .dns_resolver(Arc::new(Refuse));
     let vet = |host: &str, address: IpAddr| {
         if (rules.allowed)(address) {
@@ -273,6 +278,30 @@ async fn vetted(rules: &Rules, url: &Url) -> Result<(reqwest::Client, String), C
     Ok((builder.build()?, host))
 }
 
+/// The TLS configuration every hop's client shares, built once: what reqwest builds for
+/// itself (the platform's verifier, TLS 1.2 and 1.3, `h2` and `http/1.1`), but not again
+/// per client, which on Linux would read and parse the system's certificates every hop.
+fn tls() -> Result<rustls::ClientConfig, CardError> {
+    static TLS: OnceLock<Result<rustls::ClientConfig, String>> = OnceLock::new();
+    TLS.get_or_init(|| {
+        let provider = rustls::crypto::CryptoProvider::get_default()
+            .cloned()
+            .unwrap_or_else(|| Arc::new(rustls::crypto::aws_lc_rs::default_provider()));
+        let verifier =
+            rustls_platform_verifier::Verifier::new(provider.clone()).map_err(|e| e.to_string())?;
+        let mut config = rustls::ClientConfig::builder_with_provider(provider)
+            .with_protocol_versions(rustls::ALL_VERSIONS)
+            .map_err(|e| e.to_string())?
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(verifier))
+            .with_no_client_auth();
+        config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+        Ok(config)
+    })
+    .clone()
+    .map_err(CardError::Transport)
+}
+
 /// A resolver that resolves nothing: every name a fetch connects to is overridden with the
 /// addresses vetted for it, so a lookup that reaches this one is refused.
 struct Refuse;
@@ -297,22 +326,49 @@ fn is_html(response: &reqwest::Response) -> bool {
         || essence.eq_ignore_ascii_case("application/xhtml+xml")
 }
 
-/// A page's body up to the end of its head or [`MAX_HTML_BYTES`], whichever is first.
+/// A page's body up to the end of its head or [`MAX_HTML_BYTES`], whichever is first. The
+/// head has ended where [`cards::head_ended`] says, so a `</head` in a comment or a script
+/// does not end it; that reads the whole body, so it is asked only when what has just
+/// arrived holds `</head` or `<body`, and at most [`MAX_HEAD_CHECKS`] times.
 async fn read_head(response: &mut reqwest::Response) -> Result<Vec<u8>, CardError> {
-    const END: &[u8] = b"</head";
     let mut body = Vec::new();
+    let mut checks = 0;
     while let Some(chunk) = response.chunk().await? {
-        let from = body.len().saturating_sub(END.len() - 1);
+        let from = body.len().saturating_sub(HEAD_END_OVERLAP);
         body.extend_from_slice(&chunk);
-        let ended = body
-            .get(from..)
-            .is_some_and(|tail| tail.windows(END.len()).any(|w| w.eq_ignore_ascii_case(END)));
-        if ended || body.len() >= MAX_HTML_BYTES {
+        if body.len() >= MAX_HTML_BYTES {
             break;
+        }
+        if may_end_head(body.get(from..).unwrap_or_default()) {
+            checks += 1;
+            if checks > MAX_HEAD_CHECKS || cards::head_ended(&body) {
+                break;
+            }
         }
     }
     body.truncate(MAX_HTML_BYTES);
     Ok(body)
+}
+
+/// What can end a head.
+const HEAD_ENDS: [&[u8]; 2] = [b"</head", b"<body"];
+/// How much of what was read before a chunk is searched again with it: a whole `</head`,
+/// so one that arrived as the last bytes of a chunk, its name not yet known to be whole, is
+/// asked about again when the next arrives.
+const HEAD_END_OVERLAP: usize = 6;
+/// The most times a page's head is asked whether it has ended. A page with more `</head`
+/// and `<body` in its comments and scripts than this, each in its own chunk, is read up to
+/// where it was when this ran out, as a search for the bytes would have read it, rather than
+/// scanned from its start once per chunk.
+const MAX_HEAD_CHECKS: usize = 16;
+
+/// Whether `bytes` hold `</head` or `<body`, in any case.
+fn may_end_head(bytes: &[u8]) -> bool {
+    HEAD_ENDS.iter().any(|end| {
+        bytes
+            .windows(end.len())
+            .any(|w| w.eq_ignore_ascii_case(end))
+    })
 }
 
 /// An image's body, or `None` when it is larger than [`MAX_IMAGE_BYTES`].
@@ -378,8 +434,16 @@ mod tests {
                     let request = String::from_utf8_lossy(&request).into_owned();
                     let path = request.split(' ').nth(1).unwrap_or("/").to_owned();
                     seen.lock().unwrap().push(request);
-                    let _ = socket.write_all(&route(&path, port)).await;
-                    if path == "/forever" || path == "/silent" {
+                    // Written in pieces, a pause between each: what a reader gets as
+                    // separate chunks, or waits for.
+                    let answer = route(&path, port);
+                    for (i, piece) in split_on(&answer, PAUSE).into_iter().enumerate() {
+                        if i > 0 {
+                            tokio::time::sleep(PAUSE_FOR).await;
+                        }
+                        let _ = socket.write_all(piece).await;
+                    }
+                    if path == "/forever" || path == "/silent" || path.starts_with("/held") {
                         tokio::time::sleep(Duration::from_secs(60)).await;
                     }
                     let _ = socket.shutdown().await;
@@ -391,6 +455,21 @@ mod tests {
             connections,
             requests,
         }
+    }
+
+    /// Where a route's answer pauses, for [`PAUSE_FOR`].
+    const PAUSE: &[u8] = b"\0PAUSE\0";
+    const PAUSE_FOR: Duration = Duration::from_millis(100);
+
+    fn split_on<'a>(bytes: &'a [u8], marker: &[u8]) -> Vec<&'a [u8]> {
+        let mut pieces = Vec::new();
+        let mut rest = bytes;
+        while let Some(at) = rest.windows(marker.len()).position(|w| w == marker) {
+            pieces.push(&rest[..at]);
+            rest = &rest[at + marker.len()..];
+        }
+        pieces.push(rest);
+        pieces
     }
 
     fn response(status: &str, headers: &[(&str, &str)], body: &[u8]) -> Vec<u8> {
@@ -449,6 +528,36 @@ mod tests {
                 out
             }
             "/silent" => Vec::new(),
+            // A `</head` that does not end the head arrives first, the rest later.
+            "/held/comment" => [
+                &b"HTTP/1.1 200 OK\r\ncontent-type: text/html\r\n\r\n"[..],
+                b"<head><!-- </head> -->",
+                PAUSE,
+                b"<meta property=og:title content=\"After the comment\"></head><body>",
+            ]
+            .concat(),
+            "/held/script" => [
+                &b"HTTP/1.1 200 OK\r\ncontent-type: text/html\r\n\r\n"[..],
+                b"<head><script>document.write('<BODY>')</script>",
+                PAUSE,
+                b"<title>After the script</title></head><body>",
+            ]
+            .concat(),
+            // A page and then its image, each 1.5 s in coming.
+            "/slow" => [
+                PAUSE.repeat(15),
+                response(
+                    "200 OK",
+                    &html,
+                    b"<head><title>Slow</title><meta property=og:image content=/slow.png>",
+                ),
+            ]
+            .concat(),
+            "/slow.png" => [
+                PAUSE.repeat(15),
+                response("200 OK", &[("content-type", "image/png")], b"\x89PNG slow"),
+            ]
+            .concat(),
             _ => response("404 Not Found", &[], b""),
         }
     }
@@ -633,5 +742,58 @@ mod tests {
         let url = format!("http://127.0.0.1:{}/silent", server.port);
         let got = fetch_with(&rules, &url, "en").await;
         assert!(matches!(got, Err(CardError::Timeout)), "{got:?}");
+    }
+
+    #[tokio::test]
+    async fn a_head_end_in_a_comment_or_a_script_does_not_stop_the_read() {
+        let server = serve(site).await;
+        // The pages hold their connections after their heads: a read that waited for more
+        // would run into the time limit and fail. Long enough not to race a loaded machine.
+        let rules = Rules {
+            timeout: Duration::from_secs(30),
+            ..local(server.port)
+        };
+        for (path, title) in [
+            ("/held/comment", "After the comment"),
+            ("/held/script", "After the script"),
+        ] {
+            let url = format!("http://127.0.0.1:{}{path}", server.port);
+            let got = fetch_with(&rules, &url, "en").await.unwrap();
+            assert_eq!(got.map(|c| c.card.title), Some(title.into()), "{path}");
+        }
+    }
+
+    #[test]
+    fn a_head_end_split_across_chunks_is_still_seen() {
+        let page = b"<head><title>x</title></head><body>";
+        for cut in 1..page.len() {
+            let (first, second) = page.split_at(cut);
+            let from = first.len().saturating_sub(HEAD_END_OVERLAP);
+            let seen = may_end_head(first) && cards::head_ended(first)
+                || may_end_head(&page[from..]) && cards::head_ended(page);
+            assert!(seen, "cut at {cut}: {:?}", std::str::from_utf8(second));
+        }
+    }
+
+    #[tokio::test]
+    async fn the_page_and_its_image_share_one_deadline() {
+        let server = serve(site).await;
+        // The page takes 1.5 s and its image 1.5 s more: either is within 2.5 s, both are
+        // not, and the page has a second to spare on a busy machine.
+        let rules = Rules {
+            timeout: Duration::from_millis(2500),
+            ..local(server.port)
+        };
+        let url = format!("http://127.0.0.1:{}/slow", server.port);
+        let got = fetch_with(&rules, &url, "en").await.unwrap().unwrap();
+        assert_eq!(got.card.title, "Slow");
+        assert_eq!(got.image, None);
+    }
+
+    #[test]
+    fn every_hop_shares_one_tls_configuration() {
+        let (a, b) = (tls().unwrap(), tls().unwrap());
+        assert!(Arc::ptr_eq(a.crypto_provider(), b.crypto_provider()));
+        assert_eq!(a.alpn_protocols, [b"h2".to_vec(), b"http/1.1".to_vec()]);
     }
 }
