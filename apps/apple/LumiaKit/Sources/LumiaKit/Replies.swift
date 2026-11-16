@@ -196,10 +196,14 @@ public enum MessageEdits {
     /// The confirmation before a message is deleted.
     public static let deleteTitle = "Delete this message?"
 
-    public static func outcome(original: String, draft: String) -> EditOutcome {
+    /// What saving does. `mediaChanged` is an attachment or a card taken
+    /// off while editing, which is worth saving with the words as they
+    /// were; `mediaLeft` is an attachment the message still carries, beside
+    /// which the words may be emptied without deleting it.
+    public static func outcome(original: String, draft: String, mediaChanged: Bool = false, mediaLeft: Bool = false) -> EditOutcome {
         let body = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        if body.isEmpty { return .delete }
-        if body == original.trimmingCharacters(in: .whitespacesAndNewlines) { return .unchanged }
+        if body.isEmpty, !mediaLeft { return .delete }
+        if body == original.trimmingCharacters(in: .whitespacesAndNewlines), !mediaChanged { return .unchanged }
         return .save(body)
     }
 

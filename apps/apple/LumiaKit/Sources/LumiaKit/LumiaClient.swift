@@ -15,10 +15,20 @@ public actor LumiaClient {
 
     /// Opens the client for `baseURL` with state under `dataDirectory`
     /// (`<dir>/<host>/` for the instance, `<dir>/identity/` shared).
-    public init(baseURL: URL, dataDirectory: URL) throws {
+    /// Opened attachments are kept under `mediaCache` (the platform's caches,
+    /// which the system may clear and a backup leaves out), by host.
+    public init(baseURL: URL, dataDirectory: URL, mediaCache: URL? = LumiaClient.mediaCache) throws {
         self.baseURL = baseURL
-        self.inner = try Client(baseUrl: baseURL.absoluteString, dataDir: dataDirectory.path)
+        let inner = try Client(baseUrl: baseURL.absoluteString, dataDir: dataDirectory.path)
+        if let mediaCache {
+            inner.setMediaCacheDir(path: mediaCache.appendingPathComponent(inner.host(), isDirectory: true).path)
+        }
+        self.inner = inner
     }
+
+    /// This app's caches, where opened attachments are kept.
+    public static let mediaCache: URL? = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
+        .appendingPathComponent("Lumia/media", isDirectory: true)
 
     public var host: String { inner.host() }
     public var deviceID: String { inner.deviceId() }
@@ -282,6 +292,51 @@ public actor LumiaClient {
     /// the composer's counter on every key: it reads only the limit the
     /// welcome gave, so it runs where it is asked.
     public nonisolated func messageRoom(_ body: String) -> MessageRoom { inner.messageRoom(body: body) }
+
+    // MARK: Attachments and link cards (specs/media.md)
+
+    /// What the instance takes of attachments; nil when it keeps none.
+    public func uploadLimits() throws -> UploadLimits? { try inner.uploadLimits() }
+    /// A file made an attachment and uploaded into a conversation. Slow for
+    /// a large file, so it runs beside this actor's other calls rather than
+    /// holding them up, as do the fetches below.
+    public nonisolated func attach(channelID: String, input: AttachmentInput) async throws -> AttachmentDraft {
+        let inner = inner
+        return try await Task.detached { try inner.attach(channelId: channelID, input: input) }.value
+    }
+    public func setAttachmentAlt(draftID: String, alt: String) throws -> AttachmentDraft { try inner.setAttachmentAlt(draftId: draftID, alt: alt) }
+    public nonisolated func discardAttachment(draftID: String) async {
+        let inner = inner
+        await Task.detached { inner.discardAttachment(draftId: draftID) }.value
+    }
+    /// The card a link has while composing: the instance's in a server's
+    /// conversation, this phone's own in a personal one; nil for none.
+    public nonisolated func cardPreview(channelID: String, url: String) async throws -> CardSummary? {
+        let inner = inner
+        return try await Task.detached { try inner.cardPreview(channelId: channelID, url: url) }.value
+    }
+    /// An attachment's or a personal card's blob, fetched, opened, checked and kept.
+    public nonisolated func attachmentBytes(_ blob: BlobSummary) async throws -> Data {
+        let inner = inner
+        return try await Task.detached { try inner.attachmentBytes(blob: blob) }.value
+    }
+    /// A server card's picture, by its `imageUrl`.
+    public nonisolated func cardImage(_ imageURL: String) async throws -> Data {
+        let inner = inner
+        return try await Task.detached { try inner.cardImage(imageUrl: imageURL) }.value
+    }
+    public func sendMessageWithMedia(channelID: String, body: String, mentions: [MentionSummary], replyTo: QuoteSummary?, attachments: [String], cardURLs: [String]) throws -> String {
+        try inner.sendMessageWithMedia(channelId: channelID, body: body, mentions: mentions, replyTo: replyTo, attachments: attachments, cardUrls: cardURLs)
+    }
+    public func editMessageWithMedia(channelID: String, messageID: String, body: String, mentions: [MentionSummary], removeAttachmentIDs: [String], cardURLs: [String]?) throws -> String {
+        try inner.editMessageWithMedia(channelId: channelID, messageId: messageID, body: body, mentions: mentions, removeAttachmentIds: removeAttachmentIDs, cardUrls: cardURLs)
+    }
+    public func dmSendWithMedia(channelID: String, body: String, quote: QuoteSummary?, attachments: [String], cardURLs: [String]) throws -> String {
+        try inner.dmSendWithMedia(channelId: channelID, body: body, quote: quote, attachments: attachments, cardUrls: cardURLs)
+    }
+    public func dmEditWithMedia(channelID: String, messageID: String, body: String, removeAttachmentIDs: [String], cardURLs: [String]?) throws {
+        try inner.dmEditWithMedia(channelId: channelID, messageId: messageID, body: body, removeAttachmentIds: removeAttachmentIDs, cardUrls: cardURLs)
+    }
 
     public func dmChannels() throws -> [DmChannelSummary] { try inner.dmChannels() }
     public func dmOpen(accountIDs: [String]) throws -> DmOpened { try inner.dmOpen(accountIds: accountIDs) }

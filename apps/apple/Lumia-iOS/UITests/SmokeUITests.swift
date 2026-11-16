@@ -1,8 +1,9 @@
 // The things the simulator cannot do from the command line: answer the
 // notification permission prompt, tap a notification, type into a
 // composer, make a choice in Preferences, sign out from the account menu,
-// look into Notification Center, put a link request on the clipboard, and
-// read a screen as assistive technology does. scripts/smoke-push.sh,
+// look into Notification Center, put a link request on the clipboard,
+// choose a picture in the system's photo picker, and read a screen as
+// assistive technology does. scripts/smoke-push.sh, scripts/smoke-media.sh,
 // scripts/smoke-typing.sh, scripts/smoke-preferences.sh,
 // scripts/smoke-signout.sh, scripts/smoke-server-settings.sh, scripts/smoke-rail.sh
 // and scripts/smoke-approve.sh run these tests with the app signed in
@@ -70,6 +71,8 @@ final class SmokeUITests: XCTestCase {
             ("Avatars", ["Large", "Small", "Hidden"]),
             ("Font size", ["13", "14", "15", "16", "18", "20"]),
             ("Reactions", ["Shown", "Hidden"]),
+            ("Images", ["Shown", "As links"]),
+            ("Embeds", ["Shown", "As links"]),
         ]
         let labels = Dictionary(uniqueKeysWithValues: groups)
         /// What each group has selected, from the top; a group not drawn has none.
@@ -77,8 +80,9 @@ final class SmokeUITests: XCTestCase {
             Dictionary(uniqueKeysWithValues: groups.map { ($0.0, selected($0.0, of: $0.1)) })
         }
         let custom = "Custom: these settings match no preset."
-        let page = { (dark: String, preset: [String], layout: String, spacing: String, avatars: [String], size: String, reactions: String) -> [String: [String]] in
-            ["Appearance": [dark], "Preset": preset, "Layout": [layout], "Spacing": [spacing], "Avatars": avatars, "Font size": [size], "Reactions": [reactions]]
+        // Images and Embeds go together in every preset, so one value stands for both.
+        let page = { (dark: String, preset: [String], layout: String, spacing: String, avatars: [String], size: String, reactions: String, media: String) -> [String: [String]] in
+            ["Appearance": [dark], "Preset": preset, "Layout": [layout], "Spacing": [spacing], "Avatars": avatars, "Font size": [size], "Reactions": [reactions], "Images": [media], "Embeds": [media]]
         }
 
         openPreferences()
@@ -89,21 +93,20 @@ final class SmokeUITests: XCTestCase {
         }
         for (group, all) in groups { for label in all { XCTAssertTrue(choice(group, label).exists, "no \(label) under \(group)") } }
         XCTAssertFalse(app.staticTexts["Scroll bars"].exists, "a phone's scroll indicators are the system's")
-        XCTAssertFalse(app.staticTexts["Images"].exists || app.staticTexts["Embeds"].exists, "no control until there is something for it to do")
         // As a new phone has them.
-        XCTAssertEqual(chosen(), page("System", ["Comfortable"], "Grouped", "Roomy", ["Large"], "15", "Shown"))
+        XCTAssertEqual(chosen(), page("System", ["Comfortable"], "Grouped", "Roomy", ["Large"], "15", "Shown", "Shown"))
         XCTAssertFalse(app.staticTexts[custom].exists)
 
         choice("Appearance", "Dark").tap()
         // Minimal writes its values, reactions hidden among them; one line has no avatars to choose.
         choice("Preset", "Minimal").tap()
-        XCTAssertEqual(chosen(), page("Dark", ["Minimal"], "One line", "Tight", [], "15", "Hidden"))
+        XCTAssertEqual(chosen(), page("Dark", ["Minimal"], "One line", "Tight", [], "15", "Hidden", "As links"))
         XCTAssertFalse(choice("Avatars", "Large").exists, "one line draws no avatar")
         // A setting changed after it is Custom, and the font size is no preset's.
         choice("Font size", "18").tap()
         XCTAssertEqual(selected("Preset", of: labels["Preset"]!), ["Minimal"])
         choice("Spacing", "Cozy").tap()
-        XCTAssertEqual(chosen(), page("Dark", [], "One line", "Cozy", [], "18", "Hidden"))
+        XCTAssertEqual(chosen(), page("Dark", [], "One line", "Cozy", [], "18", "Hidden", "As links"))
         XCTAssertTrue(app.staticTexts[custom].waitForExistence(timeout: 5), "the screen does not say \"\(custom)\"")
         _ = reached("dark")
 
@@ -120,14 +123,14 @@ final class SmokeUITests: XCTestCase {
         openPreferences()
         app.collectionViews.buttons["Preferences"].tap()
         XCTAssertTrue(choice("Appearance", "Dark").waitForExistence(timeout: 10))
-        XCTAssertEqual(chosen(), page("Dark", [], "One line", "Cozy", [], "18", "Hidden"))
+        XCTAssertEqual(chosen(), page("Dark", [], "One line", "Cozy", [], "18", "Hidden", "As links"))
         XCTAssertTrue(app.staticTexts[custom].exists)
 
         // And back, as it is made: the phone's own appearance again, Comfortable at 15.
         choice("Appearance", "System").tap()
         choice("Preset", "Comfortable").tap()
         choice("Font size", "15").tap()
-        XCTAssertEqual(chosen(), page("System", ["Comfortable"], "Grouped", "Roomy", ["Large"], "15", "Shown"))
+        XCTAssertEqual(chosen(), page("System", ["Comfortable"], "Grouped", "Roomy", ["Large"], "15", "Shown", "Shown"))
         XCTAssertFalse(app.staticTexts[custom].exists)
         _ = reached("system")
     }
@@ -1320,5 +1323,90 @@ final class SmokeUITests: XCTestCase {
         waitForExpectations(timeout: 10)
         XCTAssertTrue(app.staticTexts["2 linked to you"].waitForExistence(timeout: 10), "Devices does not count the new device")
         reached("listed")
+    }
+
+    // MARK: Attachments and link cards (specs/media.md; scripts/smoke-media.sh)
+
+    /// A channel where someone sent a photo, a PDF and a link with a card
+    /// draws each as an element of its own that says what it is ("Photo,
+    /// ridge.jpg", "File, notes.pdf, …", "Link, <host>, …"); the attach
+    /// button opens the system's photo picker, the picture the smoke put in
+    /// the library is chosen and goes into the strip, uploads, and is sent
+    /// with words; the phone draws it in its message, which opens full
+    /// screen with Save to Photos, Share and Close; the PDF opens the share
+    /// sheet. Steps under LUMIA_UITEST_STEPS: `drawn`, `picker`, `strip`,
+    /// `sent`, `viewer`, `share`.
+    func testAttachingAPictureFromThePhotoLibrary() throws {
+        let env = ProcessInfo.processInfo.environment
+        let steps = try XCTUnwrap(env["LUMIA_UITEST_STEPS"])
+        let reached = { (step: String) in self.reached(step, under: steps) }
+        let carded = (env["LUMIA_UITEST_CARD"].flatMap(Int.init) ?? 0) > 0
+        let app = launch()
+        let anything = app.descendants(matching: .any)
+        let labelled = { (prefix: String) in anything.matching(NSPredicate(format: "label BEGINSWITH %@", prefix)) }
+
+        let photo = labelled("Photo, ridge.jpg").firstMatch
+        if !photo.waitForExistence(timeout: 90) { print("the channel without the photo:\n" + app.debugDescription) }
+        XCTAssertTrue(photo.exists, "the photo is not an element that says what it is")
+        XCTAssertTrue(labelled("File, notes.pdf, ").firstMatch.waitForExistence(timeout: 10), "the PDF is not a file row that says its name and size")
+        if carded { XCTAssertTrue(labelled("Link, ").firstMatch.waitForExistence(timeout: 20), "the link has no card") }
+        reached("drawn")
+
+        // The attach button's menu, then the system's photo picker.
+        let attach = anything["attach"]
+        XCTAssertTrue(attach.waitForExistence(timeout: 10), "no attach button: the instance's upload limits were not read")
+        attach.tap()
+        let photos = app.buttons["Photos and videos"]
+        XCTAssertTrue(photos.waitForExistence(timeout: 10), "the attach menu has no Photos and videos")
+        XCTAssertTrue(app.buttons["Files"].exists, "the attach menu has no Files")
+        photos.tap()
+        // The picker's newest picture, the one the smoke added.
+        let picked = app.images.matching(NSPredicate(format: "label BEGINSWITH %@", "Photo")).firstMatch
+        if !picked.waitForExistence(timeout: 30) { print("the picker without a photo:\n" + app.debugDescription) }
+        XCTAssertTrue(picked.exists, "the photo picker shows no picture")
+        reached("picker")
+        picked.tap()
+        let add = app.buttons["Add"]
+        if add.waitForExistence(timeout: 5) { add.tap() }
+
+        // In the strip: uploading, then its size; Send waits until then.
+        let strip = labelled("lake").firstMatch
+        let anyStrip = anything.matching(NSPredicate(format: "label CONTAINS %@ OR label CONTAINS %@", "Uploading…", " KB")).firstMatch
+        XCTAssertTrue(strip.waitForExistence(timeout: 30) || anyStrip.waitForExistence(timeout: 1), "the picture is not in the strip")
+        let uploaded = XCTNSPredicateExpectation(predicate: NSPredicate(format: "count == 0"), object: anything.matching(NSPredicate(format: "label CONTAINS %@", "Uploading…")))
+        XCTAssertEqual(XCTWaiter().wait(for: [uploaded], timeout: 60), .completed, "the picture never finished uploading")
+        XCTAssertFalse(anything.matching(NSPredicate(format: "label CONTAINS %@", "Too large")).firstMatch.exists)
+        reached("strip")
+
+        let field = anything.matching(NSPredicate(format: "placeholderValue BEGINSWITH %@", "Message #")).firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 10), "no composer")
+        field.tap()
+        field.typeText("From the phone.")
+        app.buttons["Send"].tap()
+        // The phone's own picture in its message: a photo that is not the one it was sent.
+        let mine = anything.matching(NSPredicate(format: "identifier == 'attachment' AND label BEGINSWITH 'Photo, ' AND NOT (label BEGINSWITH 'Photo, ridge')")).firstMatch
+        if !mine.waitForExistence(timeout: 60) { print("the channel without the phone's picture:\n" + app.debugDescription) }
+        XCTAssertTrue(mine.exists, "the phone's picture is not drawn in its message")
+        let label = mine.label
+        reached("sent")
+
+        // The picture full screen, with its ways out, and back.
+        if app.keyboards.firstMatch.exists { app.swipeDown() }
+        mine.tap()
+        XCTAssertTrue(app.buttons["Save to Photos"].waitForExistence(timeout: 10), "the viewer has no Save to Photos")
+        XCTAssertTrue(app.buttons["Share"].exists, "the viewer has no Share")
+        XCTAssertTrue(anything.matching(NSPredicate(format: "label == %@", label)).firstMatch.waitForExistence(timeout: 20), "the viewer does not say what the picture is")
+        reached("viewer")
+        app.buttons["Close"].tap()
+
+        // The PDF, further up: the share sheet, where it can be saved to Files.
+        let file = labelled("File, notes.pdf, ").firstMatch
+        for _ in 0..<6 where !(file.exists && file.isHittable) { app.scrollViews.firstMatch.swipeDown() }
+        XCTAssertTrue(file.waitForExistence(timeout: 10), "the PDF's row is not there to open")
+        file.tap()
+        let sheet = app.otherElements["ActivityListView"]
+        let saveToFiles = app.buttons["Save to Files"]
+        XCTAssertTrue(sheet.waitForExistence(timeout: 20) || saveToFiles.waitForExistence(timeout: 1), "the file did not open the share sheet")
+        reached("share")
     }
 }

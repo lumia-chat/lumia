@@ -888,8 +888,7 @@ struct ProfileScreen: View {
 // page in their words, without the desktop's scroll bars, which on a phone
 // are the system's. No board draws it, so it is the Profile screen's cards
 // with the design's segmented choice. Reactions, shown or hidden, come
-// after Font size. Images and Embeds have no control until attachments and
-// unfurling exist.
+// after Font size, then Images and Embeds, shown or as links (specs/media.md 5).
 struct PreferencesScreen: View {
     @Environment(Preferences.self) private var preferences
 
@@ -928,6 +927,13 @@ struct PreferencesScreen: View {
                             }
                             PreferenceRow("Reactions") {
                                 LumiaSegmentedTabs("Reactions", tabs: ReactionVisibility.allCases.map { .init(id: $0, label: $0.label) }, selected: $preferences.reactions)
+                            }
+                            // Attachments as file rows, and no link cards, when set to links.
+                            PreferenceRow("Images") {
+                                LumiaSegmentedTabs("Images", tabs: MediaDisplay.allCases.map { .init(id: $0, label: $0.label) }, selected: $preferences.images)
+                            }
+                            PreferenceRow("Embeds") {
+                                LumiaSegmentedTabs("Embeds", tabs: MediaDisplay.allCases.map { .init(id: $0, label: $0.label) }, selected: $preferences.embeds)
                             }
                         }
                     }

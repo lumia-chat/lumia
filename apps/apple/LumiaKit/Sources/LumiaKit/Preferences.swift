@@ -1,8 +1,8 @@
 // Preferences: how Lumia looks on this phone. Light or dark (or as the
 // phone is), and how a conversation's messages are drawn: their layout,
 // the room between them, their avatars, their text's size, whether their
-// reactions are drawn, and (once attachments and unfurling exist) whether
-// images and embeds are shown or left as links. Each takes effect as it is made and is kept in
+// reactions are drawn, and whether attachments and link cards are shown
+// or left as links. Each takes effect as it is made and is kept in
 // `UserDefaults` for the next launch, each on its own key and each read as
 // its default when missing or not understood. Comfortable, Compact and
 // Minimal are presets that write the message settings and are not stored
@@ -122,15 +122,22 @@ public enum AvatarSize: String, CaseIterable, Sendable {
     }
 }
 
-/// Whether an image or an embed is drawn in a message or left as its link.
-/// Nothing draws either yet: these are in the model and the presets only,
-/// with no control until attachments and unfurling exist.
+/// Whether attachments and link cards are drawn in a message or left as
+/// links (specs/media.md 5): Images `link` draws every attachment as a
+/// file row, a picture's opening the viewer; Embeds `link` draws no cards.
 public enum MediaDisplay: String, CaseIterable, Sendable {
     case shown, link
 
     public static let standard = MediaDisplay.shown
 
     public init(stored: String?) { self = stored.flatMap(MediaDisplay.init(rawValue:)) ?? .standard }
+
+    public var label: String {
+        switch self {
+        case .shown: "Shown"
+        case .link: "As links"
+        }
+    }
 }
 
 /// Whether a message's reactions are drawn under it. Hidden draws none of

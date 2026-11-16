@@ -37,6 +37,9 @@ struct MessageRef: Equatable {
     let drawn: String
     /// What it offers, in the sheet's order.
     let actions: [MessageAction]
+    /// What it carries, which an edit may take off (specs/media.md 4.4).
+    var attachments: [AttachmentSummary] = []
+    var cards: [CardSummary] = []
 }
 
 /// The sheet a conversation opens over a message: its actions, or the

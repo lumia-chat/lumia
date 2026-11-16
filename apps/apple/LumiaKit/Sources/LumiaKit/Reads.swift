@@ -150,11 +150,12 @@ public extension LumiaSession {
     /// makes of the server's members (and of everyone, for one who may; none
     /// in a server DM, where both are told of every message) and what it
     /// quotes. The answer is who was mentioned and is not in the channel, so
-    /// not notified.
-    func send(channelID: String, body: String, quote: QuoteSummary?) async throws -> [String] {
+    /// not notified. It carries the composer's attachments, by draft id,
+    /// and the cards of the links whose previews were kept (specs/media.md).
+    func send(channelID: String, body: String, quote: QuoteSummary?, attachments: [String] = [], cardURLs: [String] = []) async throws -> [String] {
         let mentions = await mentions(in: body, channelID: channelID)
         let outside = Replies.outside(mentions, inside: channelMemberIDs[channelID], me: me)
-        _ = try await client.sendMessageWith(channelID: channelID, body: body, mentions: mentions, replyTo: quote)
+        _ = try await client.sendMessageWithMedia(channelID: channelID, body: body, mentions: mentions, replyTo: quote, attachments: attachments, cardURLs: cardURLs)
         await refreshMessages(channelID: channelID)
         return outside
     }
@@ -182,15 +183,17 @@ public extension LumiaSession {
     /// event and a refusal as the error naming its command (`editsSent`); in
     /// a personal one through its encryption. What is refused is kept under
     /// the message, "Not saved: …" (`editRefusals`), until it is edited again.
-    func edit(channelID: String, messageID: String, body: String) async {
+    /// An edit may take attachments off and, with `cardURLs`, keep only
+    /// those links' cards (specs/media.md 4.4, 6.4); it never adds a file.
+    func edit(channelID: String, messageID: String, body: String, removeAttachmentIDs: [String] = [], cardURLs: [String]? = nil) async {
         editRefusals[messageID] = nil
         do {
             if dmLogs[channelID] != nil {
-                try await client.dmEdit(channelID: channelID, messageID: messageID, body: body)
+                try await client.dmEditWithMedia(channelID: channelID, messageID: messageID, body: body, removeAttachmentIDs: removeAttachmentIDs, cardURLs: cardURLs)
                 await refreshDmLog(channelID: channelID)
             } else {
                 let mentions = await mentions(in: body, channelID: channelID)
-                let command = try await client.editMessage(channelID: channelID, messageID: messageID, body: body, mentions: mentions)
+                let command = try await client.editMessageWithMedia(channelID: channelID, messageID: messageID, body: body, mentions: mentions, removeAttachmentIDs: removeAttachmentIDs, cardURLs: cardURLs)
                 editsSent.sent(command: command, message: messageID)
             }
         } catch {
@@ -213,9 +216,10 @@ public extension LumiaSession {
         }
     }
 
-    /// Sends a message in a personal conversation, quoting another or not.
-    func dmSend(channelID: String, body: String, quote: QuoteSummary?) async throws {
-        try await client.dmSendWith(channelID: channelID, body: body, quote: quote)
+    /// Sends a message in a personal conversation, quoting another or not,
+    /// with the composer's attachments and the cards this phone made.
+    func dmSend(channelID: String, body: String, quote: QuoteSummary?, attachments: [String] = [], cardURLs: [String] = []) async throws {
+        _ = try await client.dmSendWithMedia(channelID: channelID, body: body, quote: quote, attachments: attachments, cardURLs: cardURLs)
         await refreshDmLog(channelID: channelID)
     }
 

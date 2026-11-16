@@ -201,6 +201,14 @@ public final class LumiaSession {
     @ObservationIgnored var messageLimits: [String: UInt32] = [:]
     @ObservationIgnored var readMarks = ReadMarks()
 
+    // Attachments and link cards (specs/media.md; `MediaSession.swift`).
+    /// What the instance takes of attachments, once asked; nil while not
+    /// known or when it keeps none, and the composer offers no way to attach.
+    public internal(set) var uploadLimits: UploadLimits?
+    @ObservationIgnored var uploadLimitsAsked = false
+    /// Pictures decoded for drawing, by blob.
+    @ObservationIgnored public let mediaImages = MediaImages()
+
     // The rail's order and folders (architecture 6.9; `Rail.swift`).
     /// A rail edited here and not yet answered: drawn in place of the snapshot's.
     var railSending: [RailItem]?

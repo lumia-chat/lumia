@@ -9,7 +9,8 @@
 // bar after a send that mentioned someone not in it; the "New messages"
 // line, which the list opens at when it is above the fold; and the
 // conversation marked read while its newest message is on screen and the
-// app is active.
+// app is active. Attachments and link cards, in the composer and under a
+// message, are `Media.swift`'s.
 import LumiaFFI
 import LumiaKit
 import SwiftUI
@@ -87,6 +88,8 @@ private struct Reading: ViewModifier {
 struct Changes {
     var editing: String?
     var draft = ""
+    /// What the ×s took off the message being edited (specs/media.md 4.4).
+    var media = MediaEdit()
     var deleting: MessageRef?
     var chosen: (MessageRef, MessageAction)?
 }
@@ -103,7 +106,14 @@ struct Changer {
     func start(_ ref: MessageRef) {
         changes.editing = ref.id
         changes.draft = ref.body
+        changes.media = MediaEdit()
         session.clearEditRefusal(ref.id)
+    }
+
+    /// While a message is edited, the ×s on what it carries.
+    func mediaEditing(_ id: String) -> MediaEditing? {
+        guard changes.editing == id else { return nil }
+        return MediaEditing(removed: changes.media, removeAttachment: { changes.media.removedAttachments.insert($0) }, removeCard: { changes.media.removedCards.insert($0) })
     }
 
     /// The field, for the message being edited.
@@ -118,14 +128,17 @@ struct Changer {
     func save(_ ref: MessageRef) {
         // Over the instance's limit the field stays, holding its words.
         guard !MessageCounter.over(session.client.messageRoom(changes.draft.trimmingCharacters(in: .whitespacesAndNewlines))) else { return }
-        switch MessageEdits.outcome(original: ref.body, draft: changes.draft) {
+        // Taking a file or a card off is worth saving with the words as they
+        // were, and words emptied beside a file left keep the message.
+        let media = changes.media
+        switch MessageEdits.outcome(original: ref.body, draft: changes.draft, mediaChanged: media.changed, mediaLeft: media.leaves(ref.attachments)) {
         case .unchanged:
             changes.editing = nil
         case .delete:
             changes.deleting = ref
         case let .save(body):
             changes.editing = nil
-            Task { await session.edit(channelID: channelID, messageID: ref.id, body: body) }
+            Task { await session.edit(channelID: channelID, messageID: ref.id, body: body, removeAttachmentIDs: media.removing(ref.attachments), cardURLs: media.cardURLs(ref.cards)) }
         }
     }
 
@@ -181,6 +194,9 @@ struct ConversationScreen: View {
     @State private var scroll: ScrollRequest?
     /// The long messages shown whole after their Show more, while this conversation is open.
     @State private var expanded: Set<String> = []
+    /// The files and link previews the composer holds, and what an attachment opened.
+    @State private var media = ComposerMedia()
+    @State private var opening: MediaOpen?
     @FocusState private var composing: Bool
     /// The message text at the system's text size, which the font size scales.
     @ScaledMetric(relativeTo: .body) private var systemText = LumiaTokens.textMessage.size
@@ -262,12 +278,15 @@ struct ConversationScreen: View {
             // it either: the instance is not to learn who is writing in a
             // personal conversation (protocol 6.7; an open item of the E2EE spec).
             // The reply bar has no "@ On" here: every message of a personal conversation notifies.
-            LumiaComposer(text: $draft, placeholder: member ? "Message \(title)" : session.privateMessages.needsSomething ? "Private messages need this phone" : "Setting up the encrypted group…", disabled: !member, hint: nil, focused: $composing, reply: replying.map { _ in ComposerReply(name: replyingTo, mention: nil) { replying = nil } }, editLast: editLast, textScale: measures.text, room: { session.client.messageRoom($0) }) {
+            LumiaComposer(text: $draft, placeholder: member ? "Message \(title)" : session.privateMessages.needsSomething ? "Private messages need this phone" : "Setting up the encrypted group…", disabled: !member, hint: nil, focused: $composing, reply: replying.map { _ in ComposerReply(name: replyingTo, mention: nil) { replying = nil } }, editLast: editLast, textScale: measures.text, room: { session.client.messageRoom($0) }, attach: member && session.uploadLimits != nil ? AnyView(AttachButton(media: media)) : nil, hasAttachments: !media.strip.draftIDs.isEmpty, waiting: media.strip.uploading) {
                 Task { await send() }
             } above: {
-                EmptyView()
+                ComposerMediaBars(media: media, session: session)
             }
         }
+        .composerMedia(media, session: session, channelID: channelID)
+        .linkPreviews(media, draft: member ? draft : "", session: session, channelID: channelID)
+        .mediaOpening($opening, session: session)
         .modifier(Reading(session: session, channelID: channelID, newest: log?.messages.last?.seq ?? 0, marks: member, load: {
             await session.refreshDmChannels()
             await session.refreshDmLog(channelID: channelID)
@@ -309,11 +328,14 @@ struct ConversationScreen: View {
 
     /// A message as its actions need it: only one's own is edited or deleted here.
     private func ref(_ m: DmMessageSummary) -> MessageRef {
-        MessageRef(id: m.messageId, authorID: authorID(of: m), authorName: who(m), body: m.body, drawn: m.body, actions: MessageAction.offered(mine: m.mine, personal: true, canManageMessages: false))
+        MessageRef(id: m.messageId, authorID: authorID(of: m), authorName: who(m), body: m.body, drawn: m.body, actions: MessageAction.offered(mine: m.mine, personal: true, canManageMessages: false), attachments: m.attachments, cards: m.cards)
     }
 
     private func extras(_ m: DmMessageSummary) -> MessageExtras {
         var x = MessageExtras()
+        if !m.attachments.isEmpty || !m.cards.isEmpty {
+            x.media = AnyView(MessageMedia(attachments: m.attachments, cards: m.cards, session: session, open: { opening = $0 }, editing: changer.mediaEditing(m.messageId)))
+        }
         // A quote whose author is not known draws no name.
         x.quote = m.reply.map { q in QuoteDisplay(authorID: q.authorAccountId, name: q.authorAccountId.isEmpty ? nil : session.name(of: q.authorAccountId), picture: session.picture(of: q.authorAccountId), text: q.text, deleted: q.originalDeleted, quotesMe: q.authorAccountId == session.me, open: { jump(q.messageId) }) }
         x.reactions = reactionDisplays(m.reactions, session: session)
@@ -367,13 +389,20 @@ struct ConversationScreen: View {
 
     private func send() async {
         let body = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Over the instance's limit the draft stays, as the counter says.
-        guard !body.isEmpty, !MessageCounter.over(session.client.messageRoom(body)) else { return }
+        // Over the instance's limit the draft stays, as the counter says; a
+        // file still on its way holds the send.
+        guard media.strip.canSend(body: body), !MessageCounter.over(session.client.messageRoom(body)) else { return }
         let quote = replying
+        let (attachments, cards) = media.outgoing(body: body)
         draft = ""
         replying = nil
         error = ""
-        do { try await session.dmSend(channelID: channelID, body: body, quote: quote) } catch { self.error = error.lumiaMessage }
+        do {
+            try await session.dmSend(channelID: channelID, body: body, quote: quote, attachments: attachments, cardURLs: cards)
+            media.sent()
+        } catch {
+            self.error = error.lumiaMessage
+        }
     }
 
     private func rejoin() async {
@@ -409,6 +438,9 @@ struct ChannelScreen: View {
     @State private var scroll: ScrollRequest?
     /// The long messages shown whole after their Show more, while this conversation is open.
     @State private var expanded: Set<String> = []
+    /// The files and link previews the composer holds, and what an attachment opened.
+    @State private var media = ComposerMedia()
+    @State private var opening: MediaOpen?
     @FocusState private var composing: Bool
     /// The message text at the system's text size, which the font size scales.
     @ScaledMetric(relativeTo: .body) private var systemText = LumiaTokens.textMessage.size
@@ -491,7 +523,7 @@ struct ChannelScreen: View {
             }
             if member {
                 // Who is typing goes under the field, in a server's channel only (protocol 6.7).
-                LumiaComposer(text: $draft, placeholder: isDM ? "Message \(title)" : "Message #\(name)", hint: nil, typing: session.typingNames(in: channelID), focused: $composing, reply: replyBar, editLast: editLast, textScale: measures.text, room: { session.client.messageRoom($0) }) {
+                LumiaComposer(text: $draft, placeholder: isDM ? "Message \(title)" : "Message #\(name)", hint: nil, typing: session.typingNames(in: channelID), focused: $composing, reply: replyBar, editLast: editLast, textScale: measures.text, room: { session.client.messageRoom($0) }, attach: session.uploadLimits != nil ? AnyView(AttachButton(media: media)) : nil, hasAttachments: !media.strip.draftIDs.isEmpty, waiting: media.strip.uploading) {
                     Task { await send() }
                 } above: {
                     composerBars
@@ -500,6 +532,9 @@ struct ChannelScreen: View {
                 JoinBar(line: Membership.notIn(name), busy: joining) { Task { await join() } }
             }
         }
+        .composerMedia(media, session: session, channelID: channelID)
+        .linkPreviews(media, draft: member ? draft : "", session: session, channelID: channelID)
+        .mediaOpening($opening, session: session)
         .modifier(Reading(session: session, channelID: channelID, newest: messages.last?.seq ?? 0, marks: member, load: {
             await session.refreshMessages(channelID: channelID)
             if member, !isDM { await session.loadChannelMembers(channelID: channelID) }
@@ -529,8 +564,10 @@ struct ChannelScreen: View {
         return ComposerReply(name: session.name(of: replying.authorAccountId), mention: switchable ? $mentionOn : nil) { self.replying = nil }
     }
 
-    /// Over the composer: the bar after a send and the @ list.
+    /// Over the composer: the cards and files it will send, the bar after a
+    /// send and the @ list.
     @ViewBuilder private var composerBars: some View {
+        ComposerMediaBars(media: media, session: session)
         if let outside {
             LumiaComposerBar {
                 VStack(alignment: .leading, spacing: LumiaTokens.space8) {
@@ -575,11 +612,14 @@ struct ChannelScreen: View {
     private func ref(_ m: MessageSummary) -> MessageRef {
         let drawn = MentionSpans.drawn(body: m.body, mentions: m.mentions) { knownName($0, session: session) }
         let actions = MessageAction.offered(mine: m.authorAccountId == session.me, personal: false, canManageMessages: session.canManageMessages(channelID: channelID))
-        return MessageRef(id: m.messageId, authorID: m.authorAccountId, authorName: session.name(of: m.authorAccountId), body: m.body, drawn: drawn, actions: actions)
+        return MessageRef(id: m.messageId, authorID: m.authorAccountId, authorName: session.name(of: m.authorAccountId), body: m.body, drawn: drawn, actions: actions, attachments: m.attachments, cards: m.cards)
     }
 
     private func extras(_ m: MessageSummary) -> MessageExtras {
         var x = MessageExtras()
+        if !m.attachments.isEmpty || !m.cards.isEmpty {
+            x.media = AnyView(MessageMedia(attachments: m.attachments, cards: m.cards, session: session, open: { opening = $0 }, editing: changer.mediaEditing(m.messageId)))
+        }
         x.mentions = m.mentions
         x.name = { knownName($0, session: session) }
         x.quote = m.reply.map { q in QuoteDisplay(authorID: q.authorAccountId, name: q.authorAccountId.isEmpty ? nil : session.name(of: q.authorAccountId), picture: session.picture(of: q.authorAccountId), text: q.text, deleted: q.originalDeleted, quotesMe: q.authorAccountId == session.me, open: { jump(q.messageId) }) }
@@ -649,16 +689,19 @@ struct ChannelScreen: View {
 
     private func send() async {
         let body = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Over the instance's limit the draft stays, as the counter says.
-        guard !body.isEmpty, !MessageCounter.over(session.client.messageRoom(body)) else { return }
+        // Over the instance's limit the draft stays, as the counter says; a
+        // file still on its way holds the send.
+        guard media.strip.canSend(body: body), !MessageCounter.over(session.client.messageRoom(body)) else { return }
         // "@ On" turned off: the reply notifies nobody.
         var quote = replying
         if let q = quote { quote?.silent = Replies.offersMentionSwitch(quotedAuthor: q.authorAccountId, me: session.me, personal: false) && !mentionOn }
+        let (attachments, cards) = media.outgoing(body: body)
         draft = ""
         replying = nil
         error = ""
         do {
-            let missed = try await session.send(channelID: channelID, body: body, quote: quote)
+            let missed = try await session.send(channelID: channelID, body: body, quote: quote, attachments: attachments, cardURLs: cards)
+            media.sent()
             outside = missed.isEmpty ? nil : OutsideNote(channelID: channelID, accountIDs: missed)
         } catch {
             self.error = error.lumiaMessage

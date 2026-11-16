@@ -258,6 +258,9 @@ public struct LumiaMessageRow: View {
                     LumiaShowMore(expanded: extras.expanded, scale: scale, toggle: expand)
                         .padding(.leading, measures.gutter)
                 }
+                if let media = extras.media, !deleted {
+                    media.padding(.leading, measures.gutter)
+                }
                 if chips {
                     LumiaReactionChips(reactions: extras.reactions, toggle: extras.toggle, add: extras.addReaction, scale: scale)
                         .padding(.leading, measures.gutter)
@@ -292,6 +295,9 @@ public struct LumiaMessageRow: View {
             .layoutValue(key: OneLineLayout.Words.self, value: true)
             if collapsible, let expand = extras.expand {
                 LumiaShowMore(expanded: extras.expanded, scale: scale, toggle: expand)
+            }
+            if let media = extras.media, !deleted {
+                media.padding(.top, LumiaTokens.space2)
             }
             if chips {
                 LumiaReactionChips(reactions: extras.reactions, toggle: extras.toggle, add: extras.addReaction, scale: scale)
@@ -522,6 +528,9 @@ public struct MessageExtras {
     public var deleteMessage: (() -> Void)?
     public var actions: (() -> Void)?
     public var openPerson: ((String) -> Void)?
+    /// What it carries (specs/media.md 5): its attachments and link cards,
+    /// drawn under the words in their column, each a stop of its own.
+    public var media: AnyView?
 
     public init() {}
 }
@@ -671,6 +680,13 @@ public struct LumiaComposer<Above: View>: View {
     /// The room a draft has under the instance's limit (the core's
     /// `messageRoom`); nil counts nothing.
     var room: ((String) -> MessageRoom)?
+    /// The attach button at the field's start (specs/media.md 5); none
+    /// where the instance keeps no attachments.
+    var attach: AnyView?
+    /// Files wait in the strip over the field, so Send goes with no words.
+    var hasAttachments = false
+    /// A file is still being processed or uploaded: Send waits.
+    var waiting = false
     let send: () -> Void
     @ViewBuilder let above: () -> Above
 
@@ -686,12 +702,12 @@ public struct LumiaComposer<Above: View>: View {
     /// a keyboard that has one: this account's newest message, edited.
     /// Near the limit `room` sets the counter at the end of the line under
     /// the field; over it Send and Return do nothing and the draft stays.
-    public init(text: Binding<String>, placeholder: String, disabled: Bool = false, hint: String? = "Return to send", typing: [String]? = nil, focused: FocusState<Bool>.Binding? = nil, reply: ComposerReply? = nil, editLast: (() -> Void)? = nil, textScale: CGFloat = 1, room: ((String) -> MessageRoom)? = nil, send: @escaping () -> Void, @ViewBuilder above: @escaping () -> Above) {
-        self._text = text; self.placeholder = placeholder; self.disabled = disabled; self.hint = hint; self.typing = typing; self.focused = focused; self.reply = reply; self.editLast = editLast; self.textScale = textScale; self.room = room; self.send = send; self.above = above
+    public init(text: Binding<String>, placeholder: String, disabled: Bool = false, hint: String? = "Return to send", typing: [String]? = nil, focused: FocusState<Bool>.Binding? = nil, reply: ComposerReply? = nil, editLast: (() -> Void)? = nil, textScale: CGFloat = 1, room: ((String) -> MessageRoom)? = nil, attach: AnyView? = nil, hasAttachments: Bool = false, waiting: Bool = false, send: @escaping () -> Void, @ViewBuilder above: @escaping () -> Above) {
+        self._text = text; self.placeholder = placeholder; self.disabled = disabled; self.hint = hint; self.typing = typing; self.focused = focused; self.reply = reply; self.editLast = editLast; self.textScale = textScale; self.room = room; self.attach = attach; self.hasAttachments = hasAttachments; self.waiting = waiting; self.send = send; self.above = above
     }
 
     private func canSend(_ left: MessageRoom?) -> Bool {
-        !disabled && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !MessageCounter.over(left)
+        !disabled && !waiting && (hasAttachments || !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) && !MessageCounter.over(left)
     }
 
     @ViewBuilder private var field: some View {
@@ -709,10 +725,11 @@ public struct LumiaComposer<Above: View>: View {
             VStack(spacing: 0) {
                 if let reply { LumiaReplyStrip(reply: reply) }
                 HStack(alignment: .center, spacing: LumiaTokens.space2) {
-                    Image(systemName: "plus")
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(LumiaTokens.inkQuiet.color)
-                        .frame(width: 36, height: 36)
+                    if let attach {
+                        attach.frame(width: 36, height: 36)
+                    } else {
+                        Color.clear.frame(width: LumiaTokens.space4, height: 36)
+                    }
                     field
                         .accessibilityIdentifier("composer")
                         .textFieldStyle(.plain)
@@ -720,7 +737,7 @@ public struct LumiaComposer<Above: View>: View {
                         .font(LumiaTokens.textMessage.font(scale: textScale))
                         .foregroundStyle(LumiaTokens.inkField.color)
                         .disabled(disabled)
-                        .onSubmit { if !MessageCounter.over(left) { send() } }
+                        .onSubmit { if canSend { send() } }
                         .announcesGoingOver(left)
                         .onKeyPress(.upArrow) {
                             guard text.isEmpty, let editLast else { return .ignored }
