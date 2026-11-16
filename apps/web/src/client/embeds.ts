@@ -1,15 +1,15 @@
 // A link's embed on the page (specs/media.md 6.6): the rules that need no
 // page. Which embed a card has is the core's (`embedFor`, from the link);
 // here are its address as the page loads it (Twitch's parent), its box, the
-// press's words, and the heights an embed reports, taken only from that
-// embed's own window and origin.
+// press's words, and which of the messages the page receives are an
+// embed's own to report its height with: only those from its window and
+// origin. What height one says is the core's to read
+// (`reportedEmbedHeight`), in each site's own form and held to its bounds.
 import type { EmbedSummary } from "./bridge";
+import type { PlayingKind } from "./playback";
 
 /** Players at most this tall, as pictures are (spec 5). */
 export const PLAYER_MAX_HEIGHT = 400;
-/** A height an embed reports is held within these, whatever it says. */
-export const REPORTED_MIN = 50;
-export const REPORTED_MAX = 5000;
 
 /** Whether a card's embed can be pressed: an address, or a Bluesky handle and record key to resolve on the press. */
 export function pressable(e: EmbedSummary | null | undefined): e is EmbedSummary {
@@ -25,6 +25,11 @@ export function pressOf(e: EmbedSummary): "play" | "show" {
 export function pressLabel(e: EmbedSummary, title: string): string {
   const t = title.trim();
   return t ? `${e.label}, ${t}` : e.label;
+}
+
+/** What an embed is to the rules of what plays and what stops (`client/playback.ts`): a site's player is a video. */
+export function playingOf(e: EmbedSummary): PlayingKind {
+  return { embed: true, kind: e.kind === "player" ? "video" : e.kind };
 }
 
 /** The iframe's title: the card's title, or the site's name when there is none. */
@@ -73,56 +78,47 @@ export interface FrameMessage {
 }
 
 /**
- * The height an embed reports, or undefined: only from the very window
- * the embed was loaded into (`source`) and only from its origin, and only
- * in that site's own format, each read without trusting its shape.
+ * What an embed posted, as the text the core reads its height from, or
+ * undefined for a message that is not this embed's to report with: only
+ * one from the very window the embed was loaded into (`source`) and from
+ * its origin is taken. A string goes as it was posted and an object as
+ * its JSON; anything else, and an object that has no JSON, is refused.
  */
-export function reportedHeight(e: EmbedSummary, frameWindow: unknown, origin: string, m: FrameMessage): number | undefined {
+export function postedText(e: EmbedSummary, frameWindow: unknown, origin: string, m: FrameMessage): string | undefined {
   if (!e.resizes || !frameWindow || m.source !== frameWindow || !origin || m.origin !== origin) return undefined;
-  const h = heightIn(e.provider, m.data);
-  if (h === undefined || !Number.isFinite(h) || h <= 0) return undefined;
-  return Math.min(REPORTED_MAX, Math.max(REPORTED_MIN, Math.ceil(h)));
-}
-
-function parsed(data: unknown): unknown {
-  if (typeof data !== "string") return data;
+  if (typeof m.data === "string") return m.data;
+  if (!m.data || typeof m.data !== "object") return undefined;
   try {
-    return JSON.parse(data);
+    const text: unknown = JSON.stringify(m.data);
+    return typeof text === "string" ? text : undefined;
   } catch {
+    // What a message can carry and JSON cannot: an object that holds itself, a BigInt.
     return undefined;
   }
 }
 
-const record = (v: unknown): Record<string, unknown> | undefined => (v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined);
-const num = (v: unknown): number | undefined => (typeof v === "number" ? v : typeof v === "string" && /^\d+(\.\d+)?$/.test(v.trim()) ? Number(v) : undefined);
-
-function heightIn(provider: EmbedSummary["provider"], data: unknown): number | undefined {
-  switch (provider) {
-    case "x": {
-      // platform.twitter.com/widgets.js receives JSON-RPC filtered by
-      // "twttr.embed": a string that starts with it (the JSON after it), or
-      // an object with it as a key; and binds "twttr.private.resize" to a
-      // handler reading params[0].height (`a.asInt(e.height)`).
-      const key = "twttr.embed";
-      const rpc = record(typeof data === "string" && data.startsWith(key) ? parsed(data.slice(key.length)) : parsed(record(parsed(data))?.[key]));
-      if (rpc?.method !== "twttr.private.resize" || !Array.isArray(rpc.params)) return undefined;
-      return num(record(rpc.params[0])?.height);
-    }
-    case "bluesky":
-      // bluesky-social/social-app, bskyembed/src/components/container.tsx:
-      // `window.parent.postMessage({height, id: …get('id')}, …)`, read by
-      // embed.bsky.app/static/embed.js as `event.data.height`.
-      return num(record(data)?.height);
-    case "reddit": {
-      // embed.reddit.com/widgets.js: `r = JSON.parse(t.data)` from a string,
-      // then `"resize.embed" === r.type` and the height is `r.data`.
-      if (typeof data !== "string") return undefined;
-      const m = record(parsed(data));
-      return m?.type === "resize.embed" ? num(m.data) : undefined;
-    }
-    default:
-      return undefined;
-  }
+/**
+ * The heights an embed reports while it is shown: each message that is
+ * the embed's own (`postedText`) is read by the core (`read`, which is
+ * `reportedEmbedHeight`: the site's own form, held to 50–5000, null for
+ * anything else) and its height handed to `draw`. The core answers later,
+ * so an answer to an earlier message never replaces a later one's.
+ */
+export function reportedHeights(e: EmbedSummary, origin: string, read: (provider: string, message: string) => Promise<number | null>, draw: (height: number) => void): (frameWindow: unknown, m: FrameMessage) => void {
+  let posted = 0;
+  let drawn = 0;
+  return (frameWindow, m) => {
+    const text = postedText(e, frameWindow, origin, m);
+    if (text === undefined) return;
+    const n = ++posted;
+    read(e.provider, text)
+      .then((height) => {
+        if (height === null || n < drawn) return;
+        drawn = n;
+        draw(height);
+      })
+      .catch((err) => console.warn("embed height:", err));
+  };
 }
 
 /** Each link's embed asked of the core once for the page: nothing is fetched, so a link's answer never changes. */

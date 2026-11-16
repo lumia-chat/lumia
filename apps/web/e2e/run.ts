@@ -1750,7 +1750,9 @@ async function repliesStep(which: string, stamp: number) {
 }
 
 // Editing and deleting (architecture 6.6): this account's own message is
-// edited where it is drawn and then says "(edited)"; Up in the empty
+// edited where it is drawn and then says "(edited)", and what is typed
+// stays while the conversation is read again under the field (another
+// message arriving, a reaction to the message itself); Up in the empty
 // composer takes the newest one up again and Escape puts it down; Delete
 // message asks "Delete this message?" first, and Shift skips the
 // question; someone else's message offers neither to a member.
@@ -1796,6 +1798,8 @@ async function editingStep(which: string, stamp: number) {
     await composer.fill("First draft.");
     await composer.press("Enter");
     await part("First draft.").waitFor();
+    const draftId = await part("First draft.").getAttribute("data-message-id");
+    if (!draftId) throw new Error("the message sent has no id");
     await more("First draft.");
     await page.getByRole("menuitem", { name: "Edit message" }).click();
     const field = page.getByRole("textbox", { name: "Edit message" });
@@ -1803,6 +1807,18 @@ async function editingStep(which: string, stamp: number) {
     if ((await field.inputValue()) !== "First draft.") throw new Error(`the edit opened with ${JSON.stringify(await field.inputValue())}`);
     await page.getByText("Esc to cancel · Return to save").waitFor();
     await field.fill(`Second draft for @${owner}.`);
+    phase("read again while typing");
+    // The conversation is read again under the field, for another message and then for a
+    // reaction to the very message being edited: the field is the one it was, with what was
+    // typed in it and the keyboard.
+    await field.evaluate((el) => ((el as HTMLElement).dataset.typedIn = "yes"));
+    lumia(ownerDir, "send", general, "While you type.");
+    await part("While you type.").waitFor();
+    lumia(ownerDir, "react", general, draftId, "👍");
+    await page.locator(`[data-message-id="${draftId}"]`).getByRole("button", { name: /reacted with 👍/ }).waitFor();
+    if ((await field.inputValue()) !== `Second draft for @${owner}.`) throw new Error(`what was typed did not stay when the conversation was read again: ${JSON.stringify(await field.inputValue())}`);
+    if (!(await field.evaluate((el) => (el as HTMLElement).dataset.typedIn === "yes" && el === document.activeElement))) throw new Error("the edit field was made again, or lost the keyboard, when the conversation was read again");
+    phase("edit");
     await page.screenshot({ path: `${out}/${which}-editing-field.png` });
     await field.press("Enter");
     await field.waitFor({ state: "detached" });
@@ -1843,7 +1859,7 @@ async function editingStep(which: string, stamp: number) {
   } finally {
     await ctx.close();
   }
-  console.log(`  ${which}: edited its own message in place ("(edited)"), took it up again with Up and put it down with Escape, deleted one after the question and one at once with Shift, and was offered neither on someone else's, in ${Date.now() - t0} ms`);
+  console.log(`  ${which}: edited its own message in place ("(edited)"), what it typed staying while a message and a reaction arrived, took it up again with Up and put it down with Escape, deleted one after the question and one at once with Shift, and was offered neither on someone else's, in ${Date.now() - t0} ms`);
 }
 
 // A changed name or picture (#15): someone in the browser account's server
@@ -1910,8 +1926,10 @@ async function profileStep(which: string, stamp: number) {
 // Attachments (specs/media.md 5): a member sends a picture from the CLI and
 // the page draws it, its thumbnail decoded; the page attaches a picture
 // through the attach button's file input, gives it alt text, sends it with
-// words, draws it from what it sent, opens it in the viewer and closes it
-// with Escape; the member's CLI opens the picture the page sent.
+// words, draws it from what it sent; the member sends another message and
+// reacts to the one with the picture, and each picture is still the element
+// it was; the page opens its picture in the viewer and closes it with
+// Escape; the member's CLI opens the picture the page sent.
 async function mediaStep(which: string, stamp: number) {
   const ownerDir = resolve(work, `cli-media-owner-${which}`);
   const otherDir = resolve(work, `cli-media-other-${which}`);
@@ -1967,6 +1985,22 @@ async function mediaStep(which: string, stamp: number) {
     for (let i = 0; i < 50 && !(await drawn(img)); i++) await Bun.sleep(100);
     if (!(await drawn(img))) throw new Error("the picture sent is not drawn");
     await page.screenshot({ path: `${out}/${which}-media-sent.png` });
+    phase("read again");
+    // The conversation read again, for another message and then for a reaction to the one
+    // that carries the picture: each picture is the element it was (so a video would play
+    // on), not one made again.
+    const sentId = await mine.getAttribute("data-message-id");
+    if (!sentId) throw new Error("the message sent has no id");
+    await img.evaluate((el) => ((el as HTMLElement).dataset.drawnOnce = "yes"));
+    await received.evaluate((el) => ((el as HTMLElement).dataset.drawnOnce = "yes"));
+    lumia(otherDir, "send", general, "And another message");
+    await page.locator(".lu-msg__part", { hasText: "And another message" }).waitFor();
+    lumia(otherDir, "react", general, sentId, "👍");
+    await mine.getByRole("button", { name: /reacted with 👍/ }).waitFor();
+    for (const [name, shown] of [["sent", img], ["received", received]] as const) {
+      if ((await shown.getAttribute("data-drawn-once")) !== "yes") throw new Error(`the ${name} picture was made again when the conversation was read again`);
+      if (!(await drawn(shown))) throw new Error(`the ${name} picture is no longer drawn`);
+    }
     phase("viewer");
     await picture.click();
     const viewer = page.getByRole("dialog", { name: "A green square" });
@@ -1990,7 +2024,89 @@ async function mediaStep(which: string, stamp: number) {
   } finally {
     await ctx.close();
   }
-  console.log(`  ${which}: a picture from the CLI drawn; one attached here with alt text, sent, drawn, opened in the viewer and closed, and opened by the other member, in ${Date.now() - t0} ms`);
+  console.log(`  ${which}: a picture from the CLI drawn; one attached here with alt text, sent, drawn, each still the element it was once the conversation was read again, opened in the viewer and closed, and opened by the other member, in ${Date.now() - t0} ms`);
+}
+
+// An attachment the server lets go while its row is on screen (specs/media.md
+// 4.5): the server deletes its oldest attachments when it is full, a member
+// sends a file that fills it and then another, and the first one's row, on
+// screen all the while, turns to "No longer available" with nothing to
+// download. Needs an instance that limits a server's files
+// (`LUMIA_SERVER_STORAGE_MAX_BYTES`, small enough that two files fill it);
+// against one that does not, it says so and checks nothing.
+async function expiredStep(which: string, stamp: number) {
+  const ownerDir = resolve(work, `cli-expired-owner-${which}`);
+  const otherDir = resolve(work, `cli-expired-other-${which}`);
+  const owner = `keepsfiles${which}${stamp}`;
+  const other = `sendsfiles${which}${stamp}`;
+  lumia(ownerDir, "instance", "add", instance);
+  lumia(ownerDir, "account", "create", "--handle", owner, "--password", password);
+  const server = lumia(ownerDir, "server-create", `Expired ${stamp}`).match(/[0-9a-f-]{36}/)?.[0];
+  if (!server) throw new Error("no server id");
+  const general = lumia(ownerDir, "channel-create", server, "general").match(/[0-9a-f-]{36}/)?.[0];
+  if (!general) throw new Error("no channel id");
+  const code = lumia(ownerDir, "invite-create", server).trim().split(/\s+/)[0];
+  if (!code) throw new Error("no invite code");
+  lumia(otherDir, "instance", "add", instance);
+  lumia(otherDir, "account", "create", "--handle", other, "--password", password);
+  lumia(otherDir, "join", code);
+  const { ctx, page } = await open(which, "expired");
+  const t0 = Date.now();
+  try {
+    await trustCard(page);
+    await page.getByLabel("Email or handle").fill(owner);
+    await page.getByRole("textbox", { name: "Password" }).fill(password);
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await later(page);
+    await page.getByPlaceholder("Message #general").waitFor();
+    phase("the limit");
+    await page.getByRole("button", { name: /server menu/ }).click();
+    await page.getByRole("menuitem", { name: "Server settings" }).click();
+    const files = page.locator("section", { has: page.getByRole("heading", { name: "Files" }) });
+    const usage = files.getByRole("status").filter({ hasText: /used$/ });
+    await usage.waitFor();
+    // "0 bytes of 2 MB used", in 1,000s; "0 bytes used" where the instance sets no limit.
+    const said = /of ([\d.]+) (bytes|KB|MB|GB|TB) used$/.exec((await usage.textContent())?.trim() ?? "");
+    const limit = said ? Number(said[1]) * 1000 ** ["bytes", "KB", "MB", "GB", "TB"].indexOf(said[2] ?? "") : 0;
+    // Two files of this size: the first fits, both do not, and each is under what one upload may be.
+    const size = Math.round(limit * 0.55);
+    if (!limit || size > 9_000_000) {
+      console.log(`  ${which}: the instance ${limit ? "lets a server's files grow past what two uploads fill" : "sets no limit on a server's files"} (LUMIA_SERVER_STORAGE_MAX_BYTES), so an attachment let go while on screen is not checked`);
+      return;
+    }
+    phase("delete the oldest");
+    await files.getByRole("tab", { name: "Delete the oldest attachments" }).click();
+    await files.getByRole("button", { name: "Save", exact: true }).click();
+    await files.getByText("Saved.").waitFor();
+    await page.locator(".lu-shell__sidebar").getByRole("link", { name: /general/ }).click();
+    await page.getByPlaceholder("Message #general").waitFor();
+    phase("the old file");
+    const send = (name: string, text: string) => {
+      const path = resolve(work, `expired-${which}-${name}`);
+      mkdirSync(path, { recursive: true });
+      const file = resolve(path, name);
+      return Bun.write(file, new Uint8Array(size).fill(7)).then(() => lumia(otherDir, "send", general, text, "--attach", file));
+    };
+    await send("old.bin", "The old file");
+    const row = page.locator(".lu-msg__part", { hasText: "The old file" }).locator(".lu-attach");
+    await row.getByRole("button", { name: "Download old.bin" }).waitFor({ timeout: 30_000 });
+    await row.evaluate((el) => ((el as HTMLElement).dataset.drawnOnce = "yes"));
+    phase("the new file");
+    await send("new.bin", "The new file");
+    await page.locator(".lu-msg__part", { hasText: "The new file" }).getByRole("button", { name: "Download new.bin" }).waitFor({ timeout: 30_000 });
+    phase("let go");
+    try {
+      await row.getByText("No longer available").waitFor({ timeout: 15_000 });
+    } catch {
+      throw new Error(`the old file's row did not say it was let go; it reads ${JSON.stringify((await row.textContent())?.trim())}`);
+    }
+    if ((await row.getByRole("button", { name: "Download old.bin" }).count()) > 0) throw new Error("a file the server let go is still offered to download");
+    if ((await row.getAttribute("data-drawn-once")) !== "yes") throw new Error("the row was made again rather than told");
+    await page.screenshot({ path: `${out}/${which}-expired.png` });
+    console.log(`  ${which}: a file on screen was let go by a full server making room, and its row said "No longer available" with nothing to download, in ${Date.now() - t0} ms`);
+  } finally {
+    await ctx.close();
+  }
 }
 
 // Long messages, code blocks and long pastes (#18): a message over 14 lines
@@ -2678,6 +2794,7 @@ try {
       ["editing", () => editingStep(which, stamp)],
       ["profile", () => profileStep(which, stamp)],
       ["media", () => mediaStep(which, stamp)],
+      ["expired", () => expiredStep(which, stamp)],
       ["long", () => longStep(which, stamp)],
       ["history", () => historyStep(which, stamp)],
       ["push", () => webPush(which, `web${stamp}`, passwordDir, server, general, webAccount)],

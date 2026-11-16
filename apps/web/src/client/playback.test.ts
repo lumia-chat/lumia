@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { OneAtATime, stops, type Playing } from "./playback";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { OneAtATime, stops, stopsOffScreen, type Playing, type PlayingKind } from "./playback";
 
 function world() {
   const stopped: string[] = [];
@@ -7,6 +9,33 @@ function world() {
   const make = (id: string, embed: boolean, kind: Playing["kind"]): Playing => ({ id, embed, kind, stop: () => stopped.push(id) });
   return { one, stopped, make };
 }
+
+// The cases every client agrees on (lumia_core::playback).
+const cases = JSON.parse(readFileSync(resolve(import.meta.dir, "../../../../proto/vectors/playback/cases.json"), "utf8")) as {
+  starts: { starting: PlayingKind; other: PlayingKind; stops: boolean; why: string }[];
+  off_screen: { playing: PlayingKind; stops: boolean; why: string }[];
+};
+
+describe("the shared cases", () => {
+  test("what something starting stops", () => {
+    expect(cases.starts.length).toBeGreaterThan(0);
+    for (const c of cases.starts) expect({ why: c.why, stops: stops(c.starting, c.other) }).toEqual({ why: c.why, stops: c.stops });
+  });
+
+  test("what stops when its row scrolls away", () => {
+    expect(cases.off_screen.length).toBeGreaterThan(0);
+    for (const c of cases.off_screen) expect({ why: c.why, stops: stopsOffScreen(c.playing) }).toEqual({ why: c.why, stops: c.stops });
+  });
+
+  test("carried out as each starts", () => {
+    for (const c of cases.starts) {
+      const { one, stopped, make } = world();
+      one.start(make("other", c.other.embed, c.other.kind));
+      expect({ why: c.why, stopped: one.start(make("starting", c.starting.embed, c.starting.kind)) }).toEqual({ why: c.why, stopped: c.stops ? ["other"] : [] });
+      expect(stopped).toEqual(c.stops ? ["other"] : []);
+    }
+  });
+});
 
 describe("one at a time", () => {
   test("an attached video started pauses the audio playing", () => {
@@ -59,13 +88,5 @@ describe("one at a time", () => {
     one.start(make("w", false, "video"));
     expect(stopped).toEqual([]);
     expect(one.has("v")).toBe(false);
-  });
-
-  test("the rule itself", () => {
-    const { make } = world();
-    expect(stops(make("e", true, "post"), make("p", true, "post"))).toBe(true);
-    expect(stops(make("a", false, "audio"), make("p", true, "post"))).toBe(false);
-    expect(stops(make("a", false, "audio"), make("s", true, "audio"))).toBe(true);
-    expect(stops(make("a", false, "audio"), make("a", false, "audio"))).toBe(false);
   });
 });

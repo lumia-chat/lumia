@@ -1086,6 +1086,14 @@ export class Bridge {
   embedOrigins(): Promise<string[]> {
     return this.call("embedOrigins");
   }
+  /**
+   * The height a post's embed reported (specs/media.md 6.6), from what its window posted as text (a
+   * string as posted, an object as its JSON): read in the site's own form and held to 50–5000; null
+   * for any other message or site. Only what came from the embed's own window and origin is asked.
+   */
+  reportedEmbedHeight(provider: string, message: string): Promise<number | null> {
+    return this.call<number | null | undefined>("reportedEmbedHeight", provider, message).then((h) => h ?? null);
+  }
   /** A Bluesky handle's DID, asked of Bluesky (not the instance) on the press of a post named by handle. */
   resolveBlueskyHandle(handle: string): Promise<string> {
     return this.call("resolveBlueskyHandle", handle);

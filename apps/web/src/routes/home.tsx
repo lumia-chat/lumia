@@ -33,7 +33,7 @@ import { preferences } from "../client/preferences";
 import { PreferencesPage } from "./preferences";
 import { addPasskey, passkeysAvailable } from "../client/passkeys";
 import { initialsOf, toneFor } from "./app";
-import { Compose, Timeline, createMarkRead, quoteOf, thrownRefusal, type EditMedia, type Refusal, type Replying, type TimelineItem } from "./timeline";
+import { Compose, Timeline, createMarkRead, keptItems, quoteOf, thrownRefusal, type EditMedia, type Refusal, type Replying, type TimelineItem } from "./timeline";
 import { attachFiles, filesForSend, filesSent, hasFiles, stripOf } from "./media";
 import { MentionsPage } from "./mentions";
 
@@ -374,7 +374,8 @@ function Conversation(props: HomeProps) {
   const others = () => participants().filter((p) => p.id !== me());
   const who = (m: DmMessageSummary) => (m.mine ? nameOf(me()) : m.senderAccountId || others().length !== 1 ? nameOf(m.senderAccountId) : (others()[0]?.name ?? "Someone"));
   const byId = createMemo(() => new Map((log.data?.messages ?? []).map((m) => [m.messageId, m])));
-  const items = createMemo<TimelineItem[]>(() =>
+  // Kept by id: the core hands over new objects every time the conversation is read again, and a row is drawn from its message itself.
+  const items = keptItems(() =>
     (log.data?.messages ?? []).map((m) => ({
       id: m.messageId,
       seq: m.seq,
@@ -473,7 +474,7 @@ function Conversation(props: HomeProps) {
     }
   };
   const editLast = () => {
-    const last = [...items()].reverse().find((m) => m.mine && !m.deleted);
+    const last = [...items].reverse().find((m) => m.mine && !m.deleted);
     if (last) setEditing(last.id);
   };
   const rejoin = async () => {
@@ -499,7 +500,7 @@ function Conversation(props: HomeProps) {
           <Show when={ch().channelId} keyed>
             {(id) => (
               <Timeline
-                items={items()}
+                items={items}
                 label={`Messages with ${title()}`}
                 display={preferences()}
                 me={me()}

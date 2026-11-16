@@ -3,10 +3,11 @@
 // Mentions row atop its sidebar, or across every server from Home. Each
 // item is where it was said over the message as the timeline draws it;
 // pressing it opens the channel at that message.
-import { For, Show, createMemo, createSignal } from "solid-js";
+import { For, Show, createSignal } from "solid-js";
 import { ChannelHeader, EmptyState, Mention, MentionEntry, Message, MessageBody, ReplyRef } from "../design/components";
 import type { MessageSummary, ServerSummary, SnapshotSummary } from "../client/bridge";
 import { mentionsQuery } from "../client/state";
+import { keptById } from "../client/live";
 import { useNames } from "../client/names";
 import { preferences } from "../client/preferences";
 import { dayLabel, initialsOf, timeOf, toneFor } from "./app";
@@ -24,7 +25,8 @@ export interface MentionsPageProps {
 export function MentionsPage(props: MentionsPageProps) {
   const { nameOf, photoOf, profile } = useNames(() => props.snapshot);
   const pages = mentionsQuery(() => props.server?.serverId ?? null);
-  const messages = createMemo(() => pages.data?.pages.flatMap((p) => p.messages) ?? []);
+  // Kept by id: the pages are read again whenever a message arrives anywhere, and an item is drawn from its message itself.
+  const messages = keptById(() => pages.data?.pages.flatMap((p) => p.messages) ?? [], { key: "messageId" });
   const where = (m: MessageSummary) => {
     const ch = props.snapshot?.channels.find((c) => c.channelId === m.channelId);
     const channel = ch ? (ch.kind === "SERVER_DM" ? nameOf(ch.participantAccountIds.find((id) => id !== props.snapshot?.accountId) ?? "") : `#${ch.name}`) : "A channel you left";
@@ -58,14 +60,14 @@ export function MentionsPage(props: MentionsPageProps) {
             {pages.error instanceof Error ? pages.error.message : String(pages.error)}
           </p>
         </Show>
-        <Show when={!pages.isPending && messages().length === 0 && !pages.isError}>
+        <Show when={!pages.isPending && messages.length === 0 && !pages.isError}>
           <EmptyState icon="mention" title="No mentions yet">
             When someone mentions you or replies to you, it shows up here.
           </EmptyState>
         </Show>
-        <Show when={messages().length > 0}>
+        <Show when={messages.length > 0}>
           <ul class="lu-mentionentries" aria-label="Mentions">
-            <For each={messages()}>
+            <For each={messages}>
               {(m) => (
                 <MentionEntry where={where(m)} onOpen={() => props.open(m)}>
                   <Message

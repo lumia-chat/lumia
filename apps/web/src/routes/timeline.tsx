@@ -43,7 +43,7 @@ import { avatarSrc, client, markRead } from "../client/state";
 import { composing } from "../design/body";
 import { ComposerMedia, type DraftTileProps, type LinkCardProps } from "../design/components";
 import { editCardUrls } from "../client/media";
-import { liveItems, sameIds } from "../client/live";
+import { keptById, sameList } from "../client/live";
 import { DropTarget, MediaViewer, MessageMedia, pastedFiles } from "./media";
 import type { Display } from "../client/preferences";
 import { byBlock, byDay, initialsOf, shortTimeOf, timeOf, toneFor } from "./app";
@@ -75,6 +75,17 @@ export interface TimelineItem {
   attachments: AttachmentSummary[];
   /** Its link cards. */
   cards: CardSummary[];
+}
+
+/**
+ * A conversation's items kept by id (`keptById`), which is what `Timeline`
+ * is handed: each message the same object for as long as it is in the
+ * conversation, however often the core is read again, its attachments
+ * kept by their id and its cards by their link in the same way. Called
+ * where the items are made, under the owner that holds the conversation.
+ */
+export function keptItems(items: () => TimelineItem[]): TimelineItem[] {
+  return keptById(items, { key: "id", lists: { attachments: { key: "attachmentId" }, cards: { key: "url" } } });
 }
 
 /** What an edit does to a message's attachments and cards, beside its text. */
@@ -287,12 +298,12 @@ export function Timeline(props: TimelineProps) {
     if (from === null || from === undefined) return undefined;
     return props.items.find((m) => m.seq > from && !m.notice && m.authorId !== props.me)?.id;
   });
-  // Days and blocks by key: a day by its date, a block by its first message's id, a message by
-  // its id, each drawn from what the conversation holds of it now. A message read again (a
-  // reaction, an edit, its cards, another message arriving) is the same row, so what it is
-  // playing or showing (a video, an embed) and where the reader is in it stay.
+  // A message stays the object it was while the conversation is read again (`keptById`, where
+  // the items come from: a reaction, an edit, its cards, another message arriving), and a row is
+  // drawn from the message itself: a day by its date, a block by its first message, the rest of
+  // a block each by its own. So what a row is playing or showing (a video, an embed), what is
+  // being typed in it and where the reader is in it stay, and it is told only of what it read.
   const byId = createMemo(() => new Map(props.items.map((m) => [m.id, m])));
-  const live = liveItems(byId);
   const days = createMemo(() =>
     byDay(props.items, (m) => m.at).map((day) => {
       const blocks = byBlock(
@@ -303,10 +314,10 @@ export function Timeline(props: TimelineProps) {
         // A quote starts a block with its own name, and so does the first new message, under its line.
         (m) => !!m.reply || m.id === firstNew(),
       );
-      return { key: day.key, label: day.label, firsts: blocks.map((b) => b.first.id), rest: new Map(blocks.map((b) => [b.first.id, b.rest.map((m) => m.id)])) };
+      return { key: day.key, label: day.label, firsts: blocks.map((b) => b.first), rest: new Map(blocks.map((b) => [b.first, b.rest])) };
     }),
   );
-  const dayKeys = createMemo(() => days().map((d) => d.key), [], { equals: sameIds });
+  const dayKeys = createMemo(() => days().map((d) => d.key), [], { equals: sameList });
 
   // A jump: scrolled to, loading older pages where it must, and flashed.
   const [flash, setFlash] = createSignal<string | undefined>();
@@ -479,7 +490,8 @@ export function Timeline(props: TimelineProps) {
         cards={m.cards}
         images={props.display.images}
         embeds={props.display.embeds}
-        onView={setViewing}
+        // As it is when it is opened: the viewer goes on showing what it fetched if the server lets the attachment go meanwhile.
+        onView={(a) => setViewing({ ...a })}
         editing={
           editing
             ? {
@@ -577,19 +589,18 @@ export function Timeline(props: TimelineProps) {
         <For each={dayKeys()}>
           {(key) => {
             const day = createMemo(() => days().find((d) => d.key === key));
-            const firsts = createMemo(() => day()?.firsts ?? [], [], { equals: sameIds });
+            const firsts = createMemo(() => day()?.firsts ?? [], [], { equals: sameList });
             return (
             <>
               <Divider variant="day" label={day()?.label ?? ""} />
               <For each={firsts()}>
-                {(firstId) => {
-                  const first = live(firstId);
-                  const rest = createMemo(() => day()?.rest.get(firstId) ?? [], [], { equals: sameIds });
-                  // Each message after the first in the block, made once for its id.
+                {(first) => {
+                  const rest = createMemo(() => day()?.rest.get(first) ?? [], [], { equals: sameList });
+                  // Each message after the first in the block, made once for it.
                   const parts = createMemo(
-                    mapArray(rest, (id): MessagePart => {
-                      const m = live(id);
-                      return {
+                    mapArray(
+                      rest,
+                      (m): MessagePart => ({
                         // One line shows it whole; grouped, in the avatar's column, without its "AM" or "PM".
                         get time() {
                           return props.display.layout === "one_line" ? timeOf(m.at).time : shortTimeOf(m.at);
@@ -613,8 +624,8 @@ export function Timeline(props: TimelineProps) {
                         get replying() {
                           return props.replyingTo === m.id;
                         },
-                      };
-                    }),
+                      }),
+                    ),
                   );
                   const t = timeOf(first.at);
                   return (

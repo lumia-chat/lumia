@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import type { EmbedSummary } from "./bridge";
-import { EmbedLookup, allowedSrc, frameBox, frameSrc, frameTitle, originOf, pressLabel, pressOf, pressable, reportedHeight } from "./embeds";
+import { EmbedLookup, allowedSrc, frameBox, frameSrc, frameTitle, originOf, playingOf, postedText, pressLabel, pressOf, pressable, reportedHeights } from "./embeds";
+import { stopsOffScreen } from "./playback";
 
 const base: EmbedSummary = {
   provider: "youtube",
@@ -40,6 +43,16 @@ describe("which card has a press", () => {
     expect(pressOf(youtube)).toBe("play");
     expect(pressOf(spotify)).toBe("play");
     expect(pressOf(x)).toBe("show");
+  });
+});
+
+describe("what plays", () => {
+  test("a site's player is a video to the rules; audio and a post are themselves", () => {
+    expect(playingOf(youtube)).toEqual({ embed: true, kind: "video" });
+    expect(playingOf(spotify)).toEqual({ embed: true, kind: "audio" });
+    expect(playingOf(x)).toEqual({ embed: true, kind: "post" });
+    // So scrolled away, only a player goes back to its card.
+    expect([youtube, short, twitch, spotify, x, bluesky, reddit, instagram].filter((e) => stopsOffScreen(playingOf(e)))).toEqual([youtube, short, twitch]);
   });
 });
 
@@ -90,46 +103,151 @@ describe("frameBox", () => {
   });
 });
 
-describe("reportedHeight", () => {
+describe("postedText", () => {
   const frame = { name: "the embed's window" };
   const other = { name: "another window" };
   const xMessage = { "twttr.embed": { id: "1", jsonrpc: "2.0", method: "twttr.private.resize", params: [{ width: 550, height: 612.5 }] } };
 
-  test("X: twttr.private.resize, as an object, as JSON, or as JSON after the filter's name", () => {
-    expect(reportedHeight(x, frame, "https://platform.twitter.com", { source: frame, origin: "https://platform.twitter.com", data: xMessage })).toBe(613);
-    expect(reportedHeight(x, frame, "https://platform.twitter.com", { source: frame, origin: "https://platform.twitter.com", data: JSON.stringify(xMessage) })).toBe(613);
-    expect(reportedHeight(x, frame, "https://platform.twitter.com", { source: frame, origin: "https://platform.twitter.com", data: "twttr.embed" + JSON.stringify(xMessage["twttr.embed"]) })).toBe(613);
-    expect(reportedHeight(x, frame, "https://platform.twitter.com", { source: frame, origin: "https://platform.twitter.com", data: { "twttr.embed": { method: "twttr.private.rendered", params: [{ height: 400 }] } } })).toBeUndefined();
-  });
-  test("Bluesky: {height, id}", () => {
-    expect(reportedHeight(bluesky, frame, "https://embed.bsky.app", { source: frame, origin: "https://embed.bsky.app", data: { height: 420, id: null } })).toBe(420);
-    expect(reportedHeight(bluesky, frame, "https://embed.bsky.app", { source: frame, origin: "https://embed.bsky.app", data: { height: "lots" } })).toBeUndefined();
-  });
-  test("Reddit: resize.embed in a JSON string", () => {
-    expect(reportedHeight(reddit, frame, "https://embed.reddit.com", { source: frame, origin: "https://embed.reddit.com", data: JSON.stringify({ type: "resize.embed", data: 377 }) })).toBe(377);
-    expect(reportedHeight(reddit, frame, "https://embed.reddit.com", { source: frame, origin: "https://embed.reddit.com", data: { type: "resize.embed", data: 377 } })).toBeUndefined();
-    expect(reportedHeight(reddit, frame, "https://embed.reddit.com", { source: frame, origin: "https://embed.reddit.com", data: "{not json" })).toBeUndefined();
-  });
   test("only from the embed's own window and its origin", () => {
     const data = { height: 420 };
-    expect(reportedHeight(bluesky, frame, "https://embed.bsky.app", { source: other, origin: "https://embed.bsky.app", data })).toBeUndefined();
-    expect(reportedHeight(bluesky, frame, "https://embed.bsky.app", { source: frame, origin: "https://evil.example", data })).toBeUndefined();
-    expect(reportedHeight(bluesky, null, "https://embed.bsky.app", { source: null, origin: "https://embed.bsky.app", data })).toBeUndefined();
-    expect(reportedHeight(bluesky, frame, "", { source: frame, origin: "", data })).toBeUndefined();
-  });
-  test("one site's format is not read for another", () => {
-    expect(reportedHeight(x, frame, "https://platform.twitter.com", { source: frame, origin: "https://platform.twitter.com", data: { height: 420 } })).toBeUndefined();
+    expect(postedText(bluesky, frame, "https://embed.bsky.app", { source: frame, origin: "https://embed.bsky.app", data })).toBe('{"height":420}');
+    expect(postedText(bluesky, frame, "https://embed.bsky.app", { source: other, origin: "https://embed.bsky.app", data })).toBeUndefined();
+    expect(postedText(bluesky, frame, "https://embed.bsky.app", { source: frame, origin: "https://evil.example", data })).toBeUndefined();
+    expect(postedText(bluesky, null, "https://embed.bsky.app", { source: null, origin: "https://embed.bsky.app", data })).toBeUndefined();
+    expect(postedText(bluesky, frame, "", { source: frame, origin: "", data })).toBeUndefined();
   });
   test("an embed that does not grow is not listened to", () => {
-    expect(reportedHeight(instagram, frame, "https://www.instagram.com", { source: frame, origin: "https://www.instagram.com", data: { height: 420 } })).toBeUndefined();
+    expect(postedText(instagram, frame, "https://www.instagram.com", { source: frame, origin: "https://www.instagram.com", data: { height: 420 } })).toBeUndefined();
   });
-  test("held within bounds", () => {
-    const at = (height: number) => reportedHeight(bluesky, frame, "https://embed.bsky.app", { source: frame, origin: "https://embed.bsky.app", data: { height } });
-    expect(at(1e9)).toBe(5000);
-    expect(at(3)).toBe(50);
-    expect(at(0)).toBeUndefined();
-    expect(at(-10)).toBeUndefined();
-    expect(at(Number.NaN)).toBeUndefined();
+  test("a string as it was posted, an object as its JSON", () => {
+    const xText = "twttr.embed" + JSON.stringify(xMessage["twttr.embed"]);
+    expect(postedText(x, frame, "https://platform.twitter.com", { source: frame, origin: "https://platform.twitter.com", data: xText })).toBe(xText);
+    expect(postedText(x, frame, "https://platform.twitter.com", { source: frame, origin: "https://platform.twitter.com", data: xMessage })).toBe(JSON.stringify(xMessage));
+    // Not read here: text that is not JSON is the core's to refuse.
+    expect(postedText(reddit, frame, "https://embed.reddit.com", { source: frame, origin: "https://embed.reddit.com", data: "{not json" })).toBe("{not json");
+    expect(postedText(bluesky, frame, "https://embed.bsky.app", { source: frame, origin: "https://embed.bsky.app", data: [420] })).toBe("[420]");
+  });
+  test("what is neither, or has no JSON, is refused", () => {
+    const at = (data: unknown) => postedText(bluesky, frame, "https://embed.bsky.app", { source: frame, origin: "https://embed.bsky.app", data });
+    const itself: Record<string, unknown> = { height: 420 };
+    itself.self = itself;
+    expect(at(itself)).toBeUndefined();
+    expect(at({ height: 420n })).toBeUndefined();
+    expect(at({ toJSON: () => undefined })).toBeUndefined();
+    expect(at(undefined)).toBeUndefined();
+    expect(at(null)).toBeUndefined();
+    expect(at(420)).toBeUndefined();
+    expect(at(true)).toBeUndefined();
+  });
+});
+
+describe("reportedHeights", () => {
+  const frame = { name: "the embed's window" };
+  const origin = "https://embed.bsky.app";
+  const from = (data: unknown, source: unknown = frame, at = origin) => ({ source, origin: at, data });
+  // The core's answers, given when the test says so.
+  function core() {
+    const asked: { provider: string; message: string; answer: (height: number | null) => void; fail: (err: Error) => void }[] = [];
+    const read = (provider: string, message: string) => new Promise<number | null>((answer, fail) => asked.push({ provider, message, answer, fail }));
+    return { asked, read };
+  }
+  const settled = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  test("the core reads what the embed's own window posted, and its height is drawn", async () => {
+    const { asked, read } = core();
+    const drawn: number[] = [];
+    const posted = reportedHeights(bluesky, origin, read, (h) => drawn.push(h));
+    posted(frame, from({ height: 412.2, id: "abc" }));
+    expect(asked.map((a) => [a.provider, a.message])).toEqual([["bluesky", '{"height":412.2,"id":"abc"}']]);
+    asked[0]?.answer(413);
+    await settled();
+    expect(drawn).toEqual([413]);
+  });
+
+  test("nothing is asked for another window's message, another origin's, or one with no JSON", () => {
+    const { asked, read } = core();
+    const posted = reportedHeights(bluesky, origin, read, () => {});
+    posted(frame, from({ height: 420 }, { name: "another window" }));
+    posted(frame, from({ height: 420 }, frame, "https://evil.example"));
+    posted(null, from({ height: 420 }, null));
+    posted(frame, from(420));
+    expect(asked).toEqual([]);
+  });
+
+  test("a message that is no height draws nothing, and does not take a height back", async () => {
+    const { asked, read } = core();
+    const drawn: number[] = [];
+    const posted = reportedHeights(bluesky, origin, read, (h) => drawn.push(h));
+    posted(frame, from({ height: 700 }));
+    posted(frame, from({ ready: true }));
+    asked[1]?.answer(null);
+    asked[0]?.answer(700);
+    await settled();
+    expect(drawn).toEqual([700]);
+  });
+
+  test("an answer to an earlier message never replaces a later one's", async () => {
+    const { asked, read } = core();
+    const drawn: number[] = [];
+    const posted = reportedHeights(bluesky, origin, read, (h) => drawn.push(h));
+    posted(frame, from({ height: 300 }));
+    posted(frame, from({ height: 900 }));
+    asked[1]?.answer(900);
+    asked[0]?.answer(300);
+    await settled();
+    expect(drawn).toEqual([900]);
+  });
+
+  test("the core not answering is said, and the next message is still read", async () => {
+    const { asked, read } = core();
+    const drawn: number[] = [];
+    const posted = reportedHeights(bluesky, origin, read, (h) => drawn.push(h));
+    const warn = console.warn;
+    const warned: unknown[] = [];
+    console.warn = (...args: unknown[]) => warned.push(args);
+    try {
+      posted(frame, from({ height: 300 }));
+      asked[0]?.fail(new Error("the worker went"));
+      await settled();
+    } finally {
+      console.warn = warn;
+    }
+    expect(warned).toHaveLength(1);
+    posted(frame, from({ height: 500 }));
+    asked[1]?.answer(500);
+    await settled();
+    expect(drawn).toEqual([500]);
+  });
+
+  // What height a message says is the core's to read (lumia_core::embeds::reported_height), in
+  // every form the shared vectors hold. Here: the page hands it each of those messages as the
+  // vectors write them, whether the embed posted the text or the object it is the JSON of.
+  test("the shared vectors' messages reach the core as they are written", () => {
+    const { vectors } = JSON.parse(readFileSync(resolve(import.meta.dir, "../../../../proto/vectors/embeds/heights.json"), "utf8")) as { vectors: { provider: string; message: string; expect: number | null }[] };
+    expect(vectors.length).toBeGreaterThan(0);
+    const sites: Record<string, EmbedSummary> = { x, bluesky, reddit };
+    let objects = 0;
+    for (const v of vectors) {
+      const e = sites[v.provider] ?? { ...bluesky, provider: v.provider as EmbedSummary["provider"] };
+      const at = originOf(e.url);
+      const { asked, read } = core();
+      const posted = reportedHeights(e, at, read, () => {});
+      posted(frame, from(v.message, frame, at));
+      expect(asked.map((a) => [a.provider, a.message])).toEqual([[v.provider, v.message]]);
+      // A browser hands over an object where the embed posted one: the same JSON value reaches the core.
+      let value: unknown;
+      try {
+        value = JSON.parse(v.message);
+      } catch {
+        continue;
+      }
+      if (!value || typeof value !== "object") continue;
+      posted(frame, from(value, frame, at));
+      // (A number JSON cannot write, as `1e400` is once read, goes as null: no height either.)
+      expect(JSON.parse(asked[1]?.message ?? "null")).toEqual(JSON.parse(JSON.stringify(value)));
+      objects++;
+    }
+    expect(objects).toBeGreaterThan(0);
   });
 });
 

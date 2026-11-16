@@ -49,7 +49,7 @@ import { ConversationAside, HomeMain, HomeSidebar, type HomeView } from "./home"
 import { Overlay, myStatusDot, type Over } from "./menus";
 import { ServerSettings } from "./server-settings";
 import { BrowsePage, ChannelMembersAside, YourSettingsPage, channelRefusal, joinChannel } from "./channels";
-import { Compose, ComposerNote, Timeline, createMarkRead, invitedWords, notNotifiedWords, quoteOf, refusalWords, type EditMedia, type Refusal, type Replying, type TimelineItem } from "./timeline";
+import { Compose, ComposerNote, Timeline, createMarkRead, invitedWords, keptItems, notNotifiedWords, quoteOf, refusalWords, type EditMedia, type Refusal, type Replying, type TimelineItem } from "./timeline";
 import { attachFiles, createCardPreviews, filesForSend, filesSent, hasFiles, stripOf } from "./media";
 import { MentionsPage } from "./mentions";
 import { dismissRailNote, dropOnRail, railCache, railNote, railSaid, railTiles } from "./rail";
@@ -505,7 +505,7 @@ function Frame() {
   };
   /** Up in the empty composer: this account's newest message here. */
   const editLast = () => {
-    const last = [...timelineItems()].reverse().find((m) => m.mine && !m.notice && !m.deleted);
+    const last = [...timelineItems].reverse().find((m) => m.mine && !m.notice && !m.deleted);
     if (last) setEditing(last.id);
   };
   const react = (item: TimelineItem, emoji: string, remove: boolean) => {
@@ -515,7 +515,8 @@ function Frame() {
       .react(id, item.id, emoji, remove)
       .catch((e) => setError(e instanceof Error ? e.message : String(e)));
   };
-  const timelineItems = createMemo<TimelineItem[]>(() =>
+  // Kept by id: the core hands over new objects every time the channel is read again, and a row is drawn from its message itself.
+  const timelineItems = keptItems(() =>
     (messages.data ?? []).map((m) => ({
       id: m.messageId,
       seq: m.seq,
@@ -785,7 +786,7 @@ function Frame() {
                         <Notice icon="eye" tone="caution">Messages here are kept by {server()?.name ?? "this server"} and follow its message history settings. For an encrypted conversation, message privately.</Notice>
                       </Show>
                       <Show
-                        when={!messages.data || timelineItems().length > 0}
+                        when={!messages.data || timelineItems.length > 0}
                         fallback={
                           <div class="lu-page">
                             <EmptyState title={isDm() ? "No messages yet" : "Nothing here yet"}>{isDm() ? "Say hello." : joined() ? "Say something." : "Join to say something."}</EmptyState>
@@ -795,7 +796,7 @@ function Frame() {
                         <Show when={ch().channelId} keyed>
                           {(id) => (
                             <Timeline
-                              items={timelineItems()}
+                              items={timelineItems}
                               label={isDm() ? `Messages with ${title()}` : `Messages in #${ch().name}`}
                               display={preferences()}
                               me={accountId()}
