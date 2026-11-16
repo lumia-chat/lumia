@@ -1123,7 +1123,7 @@ function Preferences(props: HomeProps) {
                 label="Images"
                 tabs={[
                   { id: "shown", label: "Shown" },
-                  { id: "link", label: "As a link" },
+                  { id: "link", label: "As links" },
                 ]}
                 value={preferences().images}
                 onChange={(id) => setPreferences({ images: id as Media })}
@@ -1134,7 +1134,7 @@ function Preferences(props: HomeProps) {
                 label="Embeds"
                 tabs={[
                   { id: "shown", label: "Shown" },
-                  { id: "link", label: "As a link" },
+                  { id: "link", label: "As links" },
                 ]}
                 value={preferences().embeds}
                 onChange={(id) => setPreferences({ embeds: id as Media })}

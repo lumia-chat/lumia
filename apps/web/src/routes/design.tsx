@@ -1665,7 +1665,7 @@ function MediaPieces() {
           </Message>
         </MessageList>
       </div>
-      <h2>Audio and files (with Images “As a link”, every attachment is such a row, its name opening the viewer), and link cards: a picture beside, a wide picture under, a video’s, none; the site is always the link’s host</h2>
+      <h2>Audio and files (with Images “As links”, every attachment is such a row, its name opening the viewer), and link cards: a picture beside, a wide picture under, a video’s, none; the site is always the link’s host</h2>
       <div class="pieces__row pieces__row--top" style={{ "flex-direction": "column", "align-items": "stretch", "max-width": "760px" }}>
         <MessageList>
           <Message {...PEOPLE.priya} author={PEOPLE.priya.name} time="11:20 AM" actions={false}>
