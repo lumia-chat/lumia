@@ -11,7 +11,7 @@ public typealias LumiaEvent = ClientEvent
 /// One instance's client, off the main thread.
 public actor LumiaClient {
     private let inner: Client
-    public let baseURL: URL
+    public nonisolated let baseURL: URL
 
     /// Opens the client for `baseURL` with state under `dataDirectory`
     /// (`<dir>/<host>/` for the instance, `<dir>/identity/` shared).
@@ -337,6 +337,12 @@ public actor LumiaClient {
     public nonisolated func cardImage(_ imageURL: String) async throws -> Data {
         let inner = inner
         return try await Task.detached { try inner.cardImage(imageUrl: imageURL) }.value
+    }
+    /// A Bluesky handle's DID, asked of Bluesky's public API on the press
+    /// of a post named by handle (specs/media.md 6.6); never the instance.
+    public nonisolated func resolveBlueskyHandle(_ handle: String) async throws -> String {
+        let inner = inner
+        return try await Task.detached { try inner.resolveBlueskyHandle(handle: handle) }.value
     }
     public func sendMessageWithMedia(channelID: String, body: String, mentions: [MentionSummary], replyTo: QuoteSummary?, attachments: [String], cardURLs: [String]) throws -> String {
         try inner.sendMessageWithMedia(channelId: channelID, body: body, mentions: mentions, replyTo: replyTo, attachments: attachments, cardUrls: cardURLs)

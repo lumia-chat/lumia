@@ -5,10 +5,12 @@
 // picture, and the cards its links will have; a message's attachments
 // under its words (pictures at their shape or in a grid, a GIF playing
 // unless Reduce Motion is on, a video's poster, an audio player, a file
-// row) and its cards; the full-screen picture with pinch zoom, Save to
-// Photos and Share; a video played full screen; a file shared or saved
-// through the share sheet. Images and Embeds in Preferences draw every
-// attachment as a file row and no cards when set to links. The kit has
+// row) and its cards, a card with an embed loading it in its place on a
+// press; the full-screen picture with pinch zoom, Save to Photos and
+// Share; a file shared or saved through the share sheet. Videos and
+// recordings play in their rows (`Playback.swift`). Images and Embeds in
+// Preferences draw every attachment as a file row and no cards when set
+// to links. The kit has
 // the rules (`Media.swift`), the platform's decoding (`MediaInput`) and
 // the session's side (`MediaSession.swift`).
 import AVFoundation
@@ -20,6 +22,7 @@ import PhotosUI
 import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
+import WebKit
 
 // MARK: Composing
 
@@ -358,17 +361,15 @@ struct RemoveButton: View {
 
 // MARK: A message's media
 
-/// What a message carries, opened: a picture in the viewer, a video in the
-/// player, anything else through the share sheet.
+/// What a message carries, opened: a picture in the viewer, anything else
+/// through the share sheet. A video or a recording plays in its row instead.
 enum MediaOpen: Identifiable {
     case picture(AttachmentSummary)
-    case video(AttachmentSummary)
     case file(AttachmentSummary)
 
     var id: String {
         switch self {
         case let .picture(a): "picture-\(a.attachmentId)"
-        case let .video(a): "video-\(a.attachmentId)"
         case let .file(a): "file-\(a.attachmentId)"
         }
     }
@@ -383,8 +384,7 @@ enum MediaOpen: Identifiable {
     static func of(_ a: AttachmentSummary) -> MediaOpen {
         switch AttachmentKind(a.kind) {
         case .image, .gif: .picture(a)
-        case .video: .video(a)
-        case .audio, .file: .file(a)
+        case .video, .audio, .file: .file(a)
         }
     }
 }
@@ -401,8 +401,12 @@ struct MediaEditing {
 /// files as rows, then the cards. Preferences may draw every attachment
 /// as a row and no cards. A long press anywhere on them is `hold`, the
 /// message's actions, as on its words; a tap still opens, plays or shares.
+/// A video or a recording plays in place, and a card with an embed loads
+/// it in its place, keyed by `messageID` so one link in two messages is
+/// two embeds.
 struct MessageMedia: View {
     @Environment(Preferences.self) private var preferences
+    let messageID: String
     let attachments: [AttachmentSummary]
     let cards: [CardSummary]
     let session: LumiaSession
@@ -429,7 +433,7 @@ struct MessageMedia: View {
                 PictureGrid(sizes: visual.map { ($0.width, $0.height) }, gap: Self.gap) {
                     ForEach(visual, id: \.attachmentId) { a in
                         removable(a.attachmentId) {
-                            AttachmentTile(attachment: a, session: session, single: visual.count == 1, hold: hold) { open(.of(a)) }
+                            AttachmentTile(attachment: a, messageID: messageID, session: session, single: visual.count == 1, hold: hold) { open(.of(a)) }
                         }
                     }
                 }
@@ -439,7 +443,10 @@ struct MessageMedia: View {
                     if a.expired {
                         ExpiredRow(attachment: a, hold: hold)
                     } else if AttachmentKind(a.kind) == .audio, !asRows {
-                        AudioRow(attachment: a, session: session, hold: hold) { open(.file(a)) }
+                        AudioRow(attachment: a, messageID: messageID, session: session, hold: hold) { open(.file(a)) }
+                    } else if AttachmentKind(a.kind) == .video {
+                        // Images as links: a video's row plays it under itself on a press.
+                        VideoFileRow(attachment: a, messageID: messageID, session: session, hold: hold)
                     } else {
                         FileRow(attachment: a, asFile: asRows, hold: hold) { open(.of(a)) }
                     }
@@ -452,7 +459,7 @@ struct MessageMedia: View {
                         RemoveButton(label: "Remove the card for \(card.host)") { editing.removeCard(card.url) }
                     }
                 } else {
-                    LinkCardView(card: card, session: session, hold: hold)
+                    LinkCardView(card: card, session: session, hold: hold, embedKey: "\(messageID)|\(card.url)")
                 }
             }
         }
@@ -505,11 +512,14 @@ private func placeholderPicture(_ a: AttachmentSummary) -> CGImage? {
 /// A picture, GIF or video in a message: its placeholder, then its
 /// thumbnail (the video's poster) with a play symbol over a video and the
 /// GIF badge over a GIF that is still; a GIF plays in place unless Reduce
-/// Motion is on, when a tap plays it first. A picture whose header is
-/// over the bounds is drawn as what it is, a file.
+/// Motion is on, when a tap plays it first. A video pressed plays in its
+/// place with the system's controls and pauses when it scrolls away. A
+/// picture whose header is over the bounds is drawn as what it is, a file.
 private struct AttachmentTile: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(MediaPlayback.self) private var playback: MediaPlayback?
     let attachment: AttachmentSummary
+    let messageID: String
     let session: LumiaSession
     let single: Bool
     let hold: (() -> Void)?
@@ -523,6 +533,21 @@ private struct AttachmentTile: View {
     private var kind: AttachmentKind { AttachmentKind(attachment.kind) }
 
     var body: some View {
+        // One view around both, so the poster giving way to the player is
+        // not its going out of sight.
+        ZStack {
+            if kind == .video, let playback, let player = playback.players[attachment.attachmentId] {
+                InlineVideo(player: player, key: attachment.attachmentId, playback: playback, hold: hold)
+                    .clipShape(RoundedRectangle(cornerRadius: single ? LumiaTokens.radius12 : LumiaTokens.radius6))
+                    .accessibilityLabel(MediaWords.label(attachment))
+            } else {
+                tile
+            }
+        }
+        .onDisappear { if kind == .video { playback?.away(attachment.attachmentId) } }
+    }
+
+    private var tile: some View {
         ZStack {
             LumiaTokens.inset.color
             if undrawable {
@@ -542,25 +567,41 @@ private struct AttachmentTile: View {
                 Image(systemName: "film").font(.system(size: 24)).foregroundStyle(LumiaTokens.inkMuted.color)
             }
             if kind == .video {
-                Image(systemName: "play.fill")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 44, height: 44)
-                    .background(.black.opacity(0.55), in: Circle())
+                Group {
+                    if playback?.loading.contains(attachment.attachmentId) == true {
+                        ProgressView().tint(.white)
+                    } else {
+                        Image(systemName: "play.fill").font(.system(size: 18, weight: .semibold))
+                    }
+                }
+                .foregroundStyle(.white)
+                .frame(width: 44, height: 44)
+                .background(.black.opacity(0.55), in: Circle())
             }
         }
         .overlay(alignment: .bottomLeading) {
             if kind == .gif, reduceMotion, !playing { MediaBadge(text: MediaWords.gifBadge) }
-            if kind == .video, attachment.durationMs > 0 { MediaBadge(text: MediaWords.duration(ms: attachment.durationMs)) }
+            if kind == .video, let failure = playback?.failures[attachment.attachmentId] {
+                MediaBadge(text: failure)
+            } else if kind == .video, attachment.durationMs > 0 {
+                MediaBadge(text: MediaWords.duration(ms: attachment.durationMs))
+            }
         }
         .clipShape(RoundedRectangle(cornerRadius: single ? LumiaTokens.radius12 : LumiaTokens.radius6))
         .overlay(RoundedRectangle(cornerRadius: single ? LumiaTokens.radius12 : LumiaTokens.radius6).stroke(LumiaTokens.line.color))
         .pressed(hold: hold) {
             // Reduce Motion: the first tap plays a still GIF in place.
-            if kind == .gif, reduceMotion, !playing, animation != nil { playing = true } else { open() }
+            if kind == .gif, reduceMotion, !playing, animation != nil {
+                playing = true
+            } else if kind == .video, let playback {
+                playback.press(attachment, in: messageID, session: session)
+            } else {
+                open()
+            }
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(MediaWords.label(attachment, asFile: undrawable))
+        .accessibilityHint(kind == .video ? "Plays it here" : "")
         .accessibilityAddTraits(.isButton)
         .accessibilityIdentifier("attachment")
         .messageActions(hold)
@@ -643,6 +684,8 @@ struct FileRow: View {
     let attachment: AttachmentSummary
     var asFile = false
     var hold: (() -> Void)?
+    /// Said in place of its size: a video loading, or why it cannot play.
+    var note: String?
     let open: () -> Void
 
     private var kind: AttachmentKind { AttachmentKind(attachment.kind) }
@@ -658,11 +701,11 @@ struct FileRow: View {
                     .background(pdf ? LumiaTokens.filePdf.color : LumiaTokens.inset.color, in: RoundedRectangle(cornerRadius: LumiaTokens.radius8))
                 VStack(alignment: .leading, spacing: LumiaTokens.space2) {
                     Text(attachment.name).font(LumiaTokens.textCompact.font).foregroundStyle(LumiaTokens.ink.color).lineLimit(1).truncationMode(.middle)
-                    Text(MediaWords.detail(kind: kind, sizeBytes: attachment.sizeBytes, durationMs: attachment.durationMs))
+                    Text(note ?? MediaWords.detail(kind: kind, sizeBytes: attachment.sizeBytes, durationMs: attachment.durationMs))
                         .font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkMuted.color)
                 }
                 Spacer(minLength: 0)
-                Image(systemName: kind.visual ? "arrow.up.left.and.arrow.down.right" : "square.and.arrow.down")
+                Image(systemName: kind == .video ? "play.fill" : kind.visual ? "arrow.up.left.and.arrow.down.right" : "square.and.arrow.down")
                     .font(.system(size: 15))
                     .foregroundStyle(LumiaTokens.inkSecondary.color)
                     .frame(width: 32, height: 32)
@@ -675,7 +718,7 @@ struct FileRow: View {
         .pressed(hold: hold, open)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(MediaWords.label(attachment, asFile: asFile || kind == .file))
-        .accessibilityHint(kind.visual ? "Opens it" : "Opens the share sheet to save or share it")
+        .accessibilityHint(kind == .video ? "Plays it here" : kind.visual ? "Opens it" : "Opens the share sheet to save or share it")
         .accessibilityAddTraits(.isButton)
         .accessibilityIdentifier("attachment")
         .messageActions(hold)
@@ -716,18 +759,24 @@ private struct ExpiredRow: View {
     }
 }
 
-/// An audio file: play and pause in place, its name and length, and Save.
+/// An audio file: play and pause in place, its name and length (where it
+/// is while it plays), and Save. It plays on while scrolled away, until
+/// another starts or the conversation is left (`MediaPlayback`).
 private struct AudioRow: View {
+    @Environment(MediaPlayback.self) private var playback: MediaPlayback?
     let attachment: AttachmentSummary
+    let messageID: String
     let session: LumiaSession
     let hold: (() -> Void)?
     let share: () -> Void
-    @State private var player: AVAudioPlayer?
-    @State private var playing = false
-    @State private var loading = false
-    @State private var error = ""
+
+    private var key: String { attachment.attachmentId }
 
     var body: some View {
+        let playing = playback?.isPlaying(key) ?? false
+        let loading = playback?.loading.contains(key) ?? false
+        let error = playback?.failures[key] ?? ""
+        let started = playback?.players[key] != nil
         HStack(spacing: LumiaTokens.space10) {
             Group {
                 if loading { ProgressView() } else { Image(systemName: playing ? "pause.fill" : "play.fill").font(.system(size: 16)) }
@@ -735,15 +784,17 @@ private struct AudioRow: View {
             .foregroundStyle(LumiaTokens.onAccent.color)
             .frame(width: 40, height: 40)
             .background(LumiaTokens.accent.color, in: Circle())
-            .pressed(hold: hold, toggle)
+            .pressed(hold: hold) { playback?.press(attachment, in: messageID, session: session) }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(playing ? "Pause" : "Play")
+            .accessibilityValue(attachment.name)
             .accessibilityAddTraits(.isButton)
             .messageActions(hold)
             VStack(alignment: .leading, spacing: LumiaTokens.space2) {
                 Text(attachment.name).font(LumiaTokens.textCompact.font).foregroundStyle(LumiaTokens.ink.color).lineLimit(1).truncationMode(.middle)
-                Text(error.isEmpty ? MediaWords.detail(kind: .audio, sizeBytes: attachment.sizeBytes, durationMs: attachment.durationMs) : error)
+                Text(!error.isEmpty ? error : started ? MediaWords.position(ms: playback?.positions[key] ?? 0, of: attachment.durationMs) : MediaWords.detail(kind: .audio, sizeBytes: attachment.sizeBytes, durationMs: attachment.durationMs))
                     .font(LumiaTokens.textMeta.font).foregroundStyle(error.isEmpty ? LumiaTokens.inkMuted.color : LumiaTokens.danger.color)
+                    .monospacedDigit()
             }
             .accessibilityElement(children: .combine)
             .messageActions(hold)
@@ -762,44 +813,55 @@ private struct AudioRow: View {
         // Between its buttons the row's own ground takes the long press too.
         .contentShape(Rectangle())
         .onLongPressGesture(minimumDuration: MediaPress.hold) { hold?() }
-        .onDisappear { player?.stop(); playing = false }
     }
+}
 
-    private func toggle() {
-        if let player {
-            if player.isPlaying { player.pause(); playing = false } else { player.play(); playing = true }
-            return
-        }
-        loading = true
-        Task {
-            defer { loading = false }
-            do {
-                let data = try await session.attachmentData(attachment.main)
-                try? AVAudioSession.sharedInstance().setCategory(.playback)
-                let made = try AVAudioPlayer(data: data)
-                player = made
-                made.play()
-                playing = true
-                // Back to Play once it has played through.
-                while made.isPlaying { try? await Task.sleep(for: .milliseconds(250)) }
-                playing = false
-            } catch {
-                self.error = "This can’t be played here."
+/// A video drawn as a file row (Images as links): pressed, it plays under
+/// the row at its shape, and pauses when the row scrolls away.
+private struct VideoFileRow: View {
+    @Environment(MediaPlayback.self) private var playback: MediaPlayback?
+    let attachment: AttachmentSummary
+    let messageID: String
+    let session: LumiaSession
+    let hold: (() -> Void)?
+
+    private var key: String { attachment.attachmentId }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: LumiaTokens.space6) {
+            FileRow(attachment: attachment, asFile: true, hold: hold, note: playback?.loading.contains(key) == true ? "Loading…" : playback?.failures[key]) {
+                playback?.press(attachment, in: messageID, session: session)
+            }
+            if let playback, let player = playback.players[key] {
+                PictureGrid(sizes: [(attachment.width, attachment.height)], gap: 0) {
+                    InlineVideo(player: player, key: key, playback: playback, hold: hold)
+                        .clipShape(RoundedRectangle(cornerRadius: LumiaTokens.radius12))
+                        .accessibilityLabel(MediaWords.label(attachment))
+                }
             }
         }
+        .onDisappear { playback?.away(key) }
     }
 }
 
 /// A link's card: the site's host as the link names it (never what the
 /// page says it is), the title, the description, the picture with a play
-/// symbol for a video page; tapped, the link opens in the browser.
+/// symbol for a video page; tapped, the link opens in the browser. A link
+/// with an embed (specs/media.md 6.6, the core's `embedFor` of the link,
+/// never the card) has a play button or "Show post" instead, and its press
+/// loads the embed in the card's place; nothing is fetched from the site
+/// before it.
 struct LinkCardView: View {
     @Environment(\.openURL) private var openURL
+    @Environment(MediaPlayback.self) private var playback: MediaPlayback?
     let card: CardSummary
     let session: LumiaSession
     var compact = false
     /// The message's actions, on a long press; none in the composer's preview.
     var hold: (() -> Void)?
+    /// Where its embed is kept while shown: none in the composer, nor while
+    /// its message is edited, where a card is only a card.
+    var embedKey: String?
     @State private var picture: CGImage?
 
     private var bar: Color {
@@ -812,8 +874,25 @@ struct LinkCardView: View {
     /// squarer one, or any in the composer's preview, small at their side.
     private var wide: Bool { !compact && card.imageHeight > 0 && Double(card.imageWidth) / Double(card.imageHeight) >= 1.4 }
 
+    /// The link's embed, while its press loads one here.
+    private var embed: EmbedSummary? {
+        guard let embedKey, let playback, !playback.unavailable.contains(embedKey) else { return nil }
+        return embedFor(url: card.url)
+    }
+
     var body: some View {
-        Group {
+        if let embedKey, let playback, playback.shows(embedKey), let web = playback.webView, let embed = embedFor(url: card.url) {
+            EmbedFrame(card: card, embed: embed, key: embedKey, web: web, playback: playback, hold: hold)
+        } else {
+            cardView
+        }
+    }
+
+    private var cardView: some View {
+        let embed = embed
+        let busy = embedKey.map { playback?.loading.contains($0) == true } ?? false
+        let failure = embedKey.flatMap { playback?.failures[$0] }
+        return Group {
             VStack(alignment: .leading, spacing: LumiaTokens.space8) {
                 HStack(alignment: .top, spacing: LumiaTokens.space10) {
                     VStack(alignment: .leading, spacing: LumiaTokens.space4) {
@@ -825,12 +904,20 @@ struct LinkCardView: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     if hasPicture, !wide {
-                        cardPicture.frame(width: compact ? 44 : 72, height: compact ? 44 : 72)
+                        cardPicture(play: nil).frame(width: compact ? 44 : 72, height: compact ? 44 : 72)
                     }
                 }
                 if hasPicture, wide {
-                    cardPicture.aspectRatio(CGFloat(card.imageWidth) / CGFloat(card.imageHeight), contentMode: .fit)
+                    cardPicture(play: embed.flatMap { $0.kind == "post" ? nil : $0 })
+                        .aspectRatio(CGFloat(card.imageWidth) / CGFloat(card.imageHeight), contentMode: .fit)
                         .frame(maxHeight: 200, alignment: .leading)
+                }
+                if let embed {
+                    EmbedButton(embed: embed, busy: busy)
+                }
+                if let failure {
+                    Text(failure).font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.danger.color)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             .padding(.leading, LumiaTokens.space10 + 3)
@@ -844,13 +931,17 @@ struct LinkCardView: View {
             .overlay(RoundedRectangle(cornerRadius: LumiaTokens.radius10).stroke(LumiaTokens.line.color))
         }
         .pressed(hold: hold) {
-            if let url = URL(string: card.url) { openURL(url) }
+            if let embed, let embedKey, let playback {
+                playback.show(embed, key: embedKey, title: EmbedWords.title(embed, cardTitle: card.title), session: session)
+            } else if let url = URL(string: card.url) {
+                openURL(url)
+            }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(MediaWords.cardLabel(card))
-        .accessibilityValue(card.description)
-        .accessibilityHint("Opens the link in the browser")
-        .accessibilityAddTraits(.isLink)
+        .accessibilityLabel(embed.map { EmbedWords.press($0, title: card.title) } ?? MediaWords.cardLabel(card))
+        .accessibilityValue([card.description, busy ? EmbedWords.finding : "", failure ?? ""].filter { !$0.isEmpty }.joined(separator: ", "))
+        .accessibilityHint(embed == nil ? "Opens the link in the browser" : "")
+        .accessibilityAddTraits(embed == nil ? .isLink : .isButton)
         .accessibilityIdentifier("card")
         .messageActions(hold)
         .task(id: card.url) {
@@ -858,17 +949,95 @@ struct LinkCardView: View {
         }
     }
 
-    /// The page's picture, with a play symbol over a video page's.
-    private var cardPicture: some View {
+    /// The page's picture, with a play symbol over a video page's, and a
+    /// larger one over a player's or a site's audio, whose press plays it.
+    private func cardPicture(play embed: EmbedSummary?) -> some View {
         ZStack {
             LumiaTokens.inset.color
             if let picture { Image(decorative: picture, scale: 1).resizable().scaledToFill() }
-            if card.video {
+            if embed != nil {
+                Image(systemName: "play.fill").font(.system(size: 18, weight: .semibold)).foregroundStyle(.white)
+                    .frame(width: 44, height: 44).background(.black.opacity(0.55), in: Circle())
+            } else if card.video {
                 Image(systemName: "play.fill").font(.system(size: 12, weight: .semibold)).foregroundStyle(.white)
                     .frame(width: 28, height: 28).background(.black.opacity(0.55), in: Circle())
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: LumiaTokens.radius8))
+    }
+}
+
+/// A card's play button or "Show post"; a spinner and "Finding the post…"
+/// while a Bluesky handle is resolved. The card as a whole is the press.
+private struct EmbedButton: View {
+    let embed: EmbedSummary
+    let busy: Bool
+
+    var body: some View {
+        HStack(spacing: LumiaTokens.space6) {
+            if busy {
+                ProgressView().controlSize(.small)
+                Text(EmbedWords.finding)
+            } else {
+                Image(systemName: embed.kind == "post" ? "text.bubble" : "play.fill").font(.system(size: 12, weight: .semibold))
+                Text(EmbedWords.button(embed))
+            }
+        }
+        .font(LumiaTokens.textMeta.font)
+        .foregroundStyle(busy ? LumiaTokens.inkSecondary.color : LumiaTokens.onAccent.color)
+        .padding(.horizontal, LumiaTokens.space10)
+        .padding(.vertical, LumiaTokens.space6)
+        .background(busy ? LumiaTokens.inset.color : LumiaTokens.accent.color, in: Capsule())
+        .accessibilityHidden(true)
+    }
+}
+
+/// An embed in its card's place: a bar with the site's name, Open in
+/// browser and Close (back to the card), and the site's own embed under
+/// it at its size. The bar takes the long press for the message's
+/// actions, since the embed's own touches are the site's. Out of sight, a
+/// player or a post goes back to its card; a site's audio plays on.
+private struct EmbedFrame: View {
+    @Environment(\.openURL) private var openURL
+    let card: CardSummary
+    let embed: EmbedSummary
+    let key: String
+    let web: WKWebView
+    let playback: MediaPlayback
+    let hold: (() -> Void)?
+
+    var body: some View {
+        EmbedBox(embed: embed, reported: playback.heights[key]) {
+            HStack(spacing: LumiaTokens.space4) {
+                Text(embed.providerName).font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkMuted.color).lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                    .onLongPressGesture(minimumDuration: MediaPress.hold) { hold?() }
+                    .accessibilityHidden(true)
+                Button {
+                    if let url = URL(string: card.url) { openURL(url) }
+                } label: {
+                    Image(systemName: "safari").font(.system(size: 14)).frame(width: 32, height: 28)
+                }
+                .accessibilityLabel("Open in browser")
+                Button {
+                    playback.close(key)
+                } label: {
+                    Image(systemName: "xmark").font(.system(size: 12, weight: .semibold)).frame(width: 32, height: 28)
+                }
+                .accessibilityLabel("Close \(embed.providerName)")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(LumiaTokens.inkSecondary.color)
+            .padding(.leading, LumiaTokens.space10)
+            .padding(.vertical, LumiaTokens.space2)
+            EmbedHost(web: web)
+                .accessibilityIdentifier("embed")
+        }
+        .background(LumiaTokens.surface.color)
+        .clipShape(RoundedRectangle(cornerRadius: LumiaTokens.radius10))
+        .overlay(RoundedRectangle(cornerRadius: LumiaTokens.radius10).stroke(LumiaTokens.line.color))
+        .onDisappear { playback.away(key) }
     }
 }
 
@@ -901,15 +1070,14 @@ extension View {
 // MARK: Opening
 
 extension View {
-    /// What a conversation's attachments open into: the picture viewer and
-    /// the video player full screen, the share sheet for anything else.
+    /// What a conversation's attachments open into: the picture viewer full
+    /// screen, the share sheet for anything else.
     func mediaOpening(_ opening: Binding<MediaOpen?>, session: LumiaSession) -> some View {
         let full = Binding<MediaOpen?>(get: { opening.wrappedValue?.fullScreen == true ? opening.wrappedValue : nil }, set: { if $0 == nil { opening.wrappedValue = nil } })
         let shared = Binding<MediaOpen?>(get: { opening.wrappedValue?.fullScreen == false ? opening.wrappedValue : nil }, set: { if $0 == nil { opening.wrappedValue = nil } })
         return fullScreenCover(item: full) { (open: MediaOpen) in
             switch open {
             case let .picture(a): PictureViewer(attachment: a, session: session)
-            case let .video(a): VideoViewer(attachment: a, session: session)
             case .file: EmptyView()
             }
         }
@@ -919,7 +1087,7 @@ extension View {
     }
 }
 
-/// An attachment's bytes as a file of its name, for the share sheet and the player.
+/// An attachment's bytes as a file of its name, for the share sheet and the players.
 enum MediaFiles {
     static func write(_ data: Data, for a: AttachmentSummary) throws -> URL {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lumia-media/\(a.attachmentId)", isDirectory: true)
@@ -1138,52 +1306,6 @@ private struct ZoomingImage: UIViewRepresentable {
                 let size = CGSize(width: scroll.bounds.width / 2.5, height: scroll.bounds.height / 2.5)
                 scroll.zoom(to: CGRect(x: at.x - size.width / 2, y: at.y - size.height / 2, width: size.width, height: size.height), animated: true)
             }
-        }
-    }
-}
-
-/// A video full screen: fetched and opened into a file of its name, then
-/// the system's player. It never plays by itself before it is opened.
-private struct VideoViewer: View {
-    @Environment(\.dismiss) private var dismiss
-    let attachment: AttachmentSummary
-    let session: LumiaSession
-    @State private var player: AVPlayer?
-    @State private var file: URL?
-    @State private var error = ""
-
-    var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-            if let player {
-                VideoPlayer(player: player).ignoresSafeArea()
-                    .accessibilityLabel(MediaWords.label(attachment))
-            } else if !error.isEmpty {
-                LumiaErrorText(error)
-            } else {
-                ProgressView().tint(.white)
-            }
-        }
-        .overlay(alignment: .topLeading) {
-            ViewerButton(symbol: "xmark", label: "Close") { dismiss() }
-                .padding(.horizontal, LumiaTokens.space16)
-                .padding(.top, LumiaTokens.space8)
-        }
-        .task {
-            do {
-                let url = try MediaFiles.write(try await session.attachmentData(attachment.main), for: attachment)
-                file = url
-                try? AVAudioSession.sharedInstance().setCategory(.playback)
-                let made = AVPlayer(url: url)
-                player = made
-                made.play()
-            } catch {
-                self.error = error.lumiaMessage
-            }
-        }
-        .onDisappear {
-            player?.pause()
-            MediaFiles.remove(file)
         }
     }
 }

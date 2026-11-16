@@ -100,6 +100,27 @@ public extension LumiaSession {
         }
     }
 
+    /// The address of a link's embed, made on its press (specs/media.md
+    /// 6.6): the core's, a Bluesky post named by handle once Bluesky has
+    /// said whose it is, and Twitch's `parent` the instance's host. Throws
+    /// the words to show when the handle does not resolve.
+    func embedAddress(_ embed: EmbedSummary) async throws -> String {
+        var url = embed.url
+        if url.isEmpty, !embed.blueskyHandle.isEmpty {
+            do {
+                let did = try await client.resolveBlueskyHandle(embed.blueskyHandle)
+                url = blueskyEmbedUrl(did: did, rkey: embed.blueskyRkey) ?? ""
+            } catch {
+                throw EmbedUnavailable(words: EmbedWords.notFound(handle: embed.blueskyHandle))
+            }
+            guard !url.isEmpty else { throw EmbedUnavailable(words: EmbedWords.notFound(handle: embed.blueskyHandle)) }
+        }
+        guard let address = EmbedPage.address(url, needsParent: embed.needsParent, instance: client.baseURL) else {
+            throw EmbedUnavailable(words: "This can’t be shown here.")
+        }
+        return address
+    }
+
     /// A card's picture: the instance's copy for a server's card, the
     /// sharer's blob for a personal one; nil for a card without one.
     func cardPicture(_ card: CardSummary) async -> CGImage? {
@@ -112,4 +133,9 @@ public extension LumiaSession {
         mediaImages.keep(decoded, as: key)
         return decoded
     }
+}
+
+/// An embed that could not be made, in words.
+public struct EmbedUnavailable: Error, Sendable {
+    public let words: String
 }

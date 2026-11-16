@@ -1492,4 +1492,106 @@ final class SmokeUITests: XCTestCase {
         XCTAssertTrue(sheet.waitForExistence(timeout: 20) || saveToFiles.waitForExistence(timeout: 1), "the file did not open the share sheet")
         reached("share")
     }
+
+    /// Inline video and embeds (scripts/smoke-media.sh, specs/media.md 5
+    /// and 6.6), in a channel where someone sent a recording, links to a
+    /// YouTube video, an X post and a Bluesky post named by its handle, and
+    /// last a video. The video held is its message's actions and plays
+    /// nothing; pressed, it plays in its row with the system's controls, and
+    /// held while it plays it is still its message's actions. The YouTube
+    /// card is a button named for what it plays; pressed, a web view takes
+    /// its place. The Bluesky card is "Show post"; pressed, it is resolved
+    /// and shown, and YouTube's goes back to its card; then X's. Last the
+    /// recording plays in its row and X's post goes back to its card. The smoke
+    /// looks at `video`, `youtube`, `bluesky` and `x`; what each site drew
+    /// is for the eye.
+    func testVideoPlaysInPlaceAndEmbedsLoadOnAPress() throws {
+        let env = ProcessInfo.processInfo.environment
+        let steps = try XCTUnwrap(env["LUMIA_UITEST_STEPS"])
+        let reached = { (step: String) in self.reached(step, under: steps) }
+        let app = launch()
+        let anything = app.descendants(matching: .any)
+        let labelled = { (prefix: String) in anything.matching(NSPredicate(format: "label BEGINSWITH %@", prefix)).firstMatch }
+        let list = app.scrollViews.firstMatch
+        // Scrolls toward something not yet on screen: up the conversation (earlier messages) or down it.
+        let find = { (element: XCUIElement, earlier: Bool) -> Bool in
+            for _ in 0..<10 where !(element.exists && element.isHittable) {
+                let from = list.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: earlier ? 0.3 : 0.7))
+                from.press(forDuration: 0.05, thenDragTo: list.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: earlier ? 0.7 : 0.3)))
+            }
+            let found = element.exists && element.isHittable
+            // Settled, so a tap that follows is a tap and not the end of a fling.
+            sleep(1)
+            if !found {
+                // What the screen held, for whoever reads the failure.
+                try? XCUIScreen.main.screenshot().pngRepresentation.write(to: URL(fileURLWithPath: "\(steps)/not-found-\(Int(Date().timeIntervalSince1970)).png"))
+                print("not found (exists: \(element.exists)):\n" + app.debugDescription)
+            }
+            return found
+        }
+        // A card pressed gives its place to its embed: its press's name goes, and a web view is there.
+        let embeds = app.webViews
+        let pressed = { (card: XCUIElement, name: String) in
+            card.tap()
+            let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: card)
+            XCTAssertEqual(XCTWaiter().wait(for: [gone], timeout: 30), .completed, "pressing \(name)'s card did not load its embed in its place")
+            XCTAssertTrue(embeds.firstMatch.waitForExistence(timeout: 10), "pressing \(name)'s card loaded no web view")
+        }
+
+        let clip = labelled("Video, clip.mp4")
+        if !clip.waitForExistence(timeout: 90) { print("the channel without the video:\n" + app.debugDescription) }
+        XCTAssertTrue(clip.exists, "the video is not an element that says what it is")
+        let inline = anything["inline-video"]
+        clip.press(forDuration: 1.0)
+        XCTAssertTrue(app.buttons["action-reply"].waitForExistence(timeout: 10), "a long press on the video's poster did not open its message's actions")
+        putAwaySheet(app, showing: app.buttons["action-reply"])
+        XCTAssertFalse(inline.exists, "the video played on a long press")
+        clip.tap()
+        if !inline.waitForExistence(timeout: 30) { print("the channel without the video playing:\n" + app.debugDescription) }
+        XCTAssertTrue(inline.exists, "the video did not play in its row")
+        XCTAssertFalse(app.buttons["Close"].exists, "the video opened full screen")
+        sleep(2)
+        reached("video")
+        inline.press(forDuration: 1.0)
+        XCTAssertTrue(app.buttons["action-reply"].waitForExistence(timeout: 10), "a long press on the playing video did not open its message's actions")
+        putAwaySheet(app, showing: app.buttons["action-reply"])
+
+        let youtube = labelled("Play video from YouTube, ")
+        XCTAssertTrue(find(youtube, true), "the YouTube link's card has no play button named for what it plays")
+        pressed(youtube, "YouTube")
+        // The player whole on screen for the eye: a little further up when its top is under the header.
+        let web = app.webViews.firstMatch
+        for _ in 0..<4 where web.frame.minY < list.frame.minY + 40 {
+            list.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.4)).press(forDuration: 0.05, thenDragTo: list.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.55)))
+        }
+        sleep(10)
+        reached("youtube")
+
+        let bluesky = labelled("Show post from Bluesky")
+        XCTAssertTrue(find(bluesky, false), "the Bluesky link's card has no Show post")
+        pressed(bluesky, "Bluesky")
+        XCTAssertFalse(labelled("Bluesky couldn’t find").exists, "the Bluesky handle did not resolve")
+        sleep(10)
+        reached("bluesky")
+        // A drag that starts on the post scrolls the conversation, not the post.
+        let post = app.webViews.firstMatch
+        let top = post.frame.minY
+        post.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3)).press(forDuration: 0.05, thenDragTo: post.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7)))
+        XCTAssertNotEqual(post.frame.minY, top, "a drag over the Bluesky post did not scroll the conversation")
+        XCTAssertTrue(find(youtube, true), "the YouTube embed did not go back to its card when another was shown")
+
+        let x = labelled("Show post from X")
+        XCTAssertTrue(find(x, false), "the X link's card has no Show post")
+        pressed(x, "X")
+        sleep(10)
+        reached("x")
+
+        // The recording at the top plays in its row, and X's post goes back to its card.
+        let play = anything.matching(NSPredicate(format: "label == 'Play' AND value == 'tone.m4a'")).firstMatch
+        XCTAssertTrue(find(play, true), "the recording has no Play")
+        play.tap()
+        XCTAssertTrue(anything.matching(NSPredicate(format: "label == 'Pause' AND value == 'tone.m4a'")).firstMatch.waitForExistence(timeout: 20), "the recording did not play in its row")
+        XCTAssertTrue(find(x, false), "the X post did not go back to its card when the recording started")
+        XCTAssertEqual(embeds.count, 0, "an embed is still shown after the recording started")
+    }
 }

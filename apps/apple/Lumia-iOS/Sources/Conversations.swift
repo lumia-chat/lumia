@@ -197,6 +197,8 @@ struct ConversationScreen: View {
     /// The files and link previews the composer holds, and what an attachment opened.
     @State private var media = ComposerMedia()
     @State private var opening: MediaOpen?
+    /// What plays here, one at a time, and the one embed shown; let go on leaving.
+    @State private var playback = MediaPlayback()
     @FocusState private var composing: Bool
     /// The message text at the system's text size, which the font size scales.
     @ScaledMetric(relativeTo: .body) private var systemText = LumiaTokens.textMessage.size
@@ -273,6 +275,10 @@ struct ConversationScreen: View {
                     guard let request else { return }
                     withAnimation { proxy.scrollTo(request.id, anchor: request.anchor) }
                 }
+                // An embed above went back to its card: what was pressed, back in view.
+                .onChange(of: playback.reveal) { _, request in
+                    if let request { proxy.scrollTo(request.id, anchor: request.anchor) }
+                }
             }
             // No one is said to be typing here, and this device says nothing of
             // it either: the instance is not to learn who is writing in a
@@ -287,6 +293,8 @@ struct ConversationScreen: View {
         .composerMedia(media, session: session, channelID: channelID)
         .linkPreviews(media, draft: member ? draft : "", session: session, channelID: channelID)
         .mediaOpening($opening, session: session)
+        .environment(playback)
+        .onDisappear { playback.leave() }
         .modifier(Reading(session: session, channelID: channelID, newest: log?.messages.last?.seq ?? 0, marks: member, load: {
             await session.refreshDmChannels()
             await session.refreshDmLog(channelID: channelID)
@@ -297,7 +305,10 @@ struct ConversationScreen: View {
             MessageSheetView(sheet: sheet, react: react, reply: { m, part in startReply(id: m.id, name: m.authorName, body: m.drawn, part: part) }, chose: { changes.chosen = ($0, $1) })
         }
         .deleteConfirmation(changer)
-        .onChange(of: channelID) { _, _ in expanded = [] }
+        .onChange(of: channelID) { _, _ in
+            expanded = []
+            playback.leave()
+        }
         // Opened on a phone that needs bringing in: the sheet says what it can do.
         .task(id: session.privateMessages) {
             if session.privateMessages == .bringIn { setUp() }
@@ -337,7 +348,7 @@ struct ConversationScreen: View {
             let editing = changer.mediaEditing(m.messageId)
             // A long press on what it carries is its actions, as on its words; not while it is edited.
             let hold: (() -> Void)? = member && editing == nil ? { sheet = .actions(self.ref(m)) } : nil
-            x.media = AnyView(MessageMedia(attachments: m.attachments, cards: m.cards, session: session, open: { opening = $0 }, editing: editing, hold: hold))
+            x.media = AnyView(MessageMedia(messageID: m.messageId, attachments: m.attachments, cards: m.cards, session: session, open: { opening = $0 }, editing: editing, hold: hold))
         }
         // A quote whose author is not known draws no name.
         x.quote = m.reply.map { q in QuoteDisplay(authorID: q.authorAccountId, name: q.authorAccountId.isEmpty ? nil : session.name(of: q.authorAccountId), picture: session.picture(of: q.authorAccountId), text: q.text, deleted: q.originalDeleted, quotesMe: q.authorAccountId == session.me, open: { jump(q.messageId) }) }
@@ -444,6 +455,8 @@ struct ChannelScreen: View {
     /// The files and link previews the composer holds, and what an attachment opened.
     @State private var media = ComposerMedia()
     @State private var opening: MediaOpen?
+    /// What plays here, one at a time, and the one embed shown; let go on leaving.
+    @State private var playback = MediaPlayback()
     @FocusState private var composing: Bool
     /// The message text at the system's text size, which the font size scales.
     @ScaledMetric(relativeTo: .body) private var systemText = LumiaTokens.textMessage.size
@@ -523,6 +536,10 @@ struct ChannelScreen: View {
                     guard let request else { return }
                     withAnimation { proxy.scrollTo(request.id, anchor: request.anchor) }
                 }
+                // An embed above went back to its card: what was pressed, back in view.
+                .onChange(of: playback.reveal) { _, request in
+                    if let request { proxy.scrollTo(request.id, anchor: request.anchor) }
+                }
             }
             if member {
                 // Who is typing goes under the field, in a server's channel only (protocol 6.7).
@@ -538,6 +555,8 @@ struct ChannelScreen: View {
         .composerMedia(media, session: session, channelID: channelID)
         .linkPreviews(media, draft: member ? draft : "", session: session, channelID: channelID)
         .mediaOpening($opening, session: session)
+        .environment(playback)
+        .onDisappear { playback.leave() }
         .modifier(Reading(session: session, channelID: channelID, newest: messages.last?.seq ?? 0, marks: member, load: {
             await session.refreshMessages(channelID: channelID)
             if member, !isDM { await session.loadChannelMembers(channelID: channelID) }
@@ -556,7 +575,10 @@ struct ChannelScreen: View {
             MessageSheetView(sheet: sheet, react: react, reply: { m, part in startReply(id: m.id, authorID: m.authorID, body: m.drawn, part: part) }, chose: { changes.chosen = ($0, $1) })
         }
         .deleteConfirmation(changer)
-        .onChange(of: channelID) { _, _ in expanded = [] }
+        .onChange(of: channelID) { _, _ in
+            expanded = []
+            playback.leave()
+        }
     }
 
     /// The reply bar inside the composer, with its "@ On" for a reply to
@@ -624,7 +646,7 @@ struct ChannelScreen: View {
             let editing = changer.mediaEditing(m.messageId)
             // A long press on what it carries is its actions, as on its words; not while it is edited.
             let hold: (() -> Void)? = member && editing == nil ? { sheet = .actions(self.ref(m)) } : nil
-            x.media = AnyView(MessageMedia(attachments: m.attachments, cards: m.cards, session: session, open: { opening = $0 }, editing: editing, hold: hold))
+            x.media = AnyView(MessageMedia(messageID: m.messageId, attachments: m.attachments, cards: m.cards, session: session, open: { opening = $0 }, editing: editing, hold: hold))
         }
         x.mentions = m.mentions
         x.name = { knownName($0, session: session) }

@@ -14,8 +14,14 @@
 # CLI as the other person; the test holds the picture, the card and the
 # PDF, each opening its message's actions and nothing else, then opens the
 # viewer (Save to Photos, Share, Close) and the PDF's share sheet with a
-# tap. Screenshots land in
-# .build/smoke-media/.
+# tap. Then inline video and embeds (specs/media.md 5 and 6.6) in #watch:
+# a recording, links to a YouTube video, an X post and a Bluesky post
+# named by its handle (cards from the internet, which the instance builds
+# only with LUMIA_LINK_CARDS=true; without three cards the script fails),
+# and a video; testVideoPlaysInPlaceAndEmbedsLoadOnAPress plays the video
+# in its row, loads each embed on a press and plays the recording, and the
+# script screenshots video, youtube, bluesky and x. What each site drew is
+# for the eye. Screenshots land in .build/smoke-media/.
 #
 #   scripts/smoke-media.sh     # expects the app and its tests built for the simulator (xcodebuild build-for-testing, see AGENTS.md) and the CLI
 #   LUMIA_INSTANCE=http://localhost:4083 LUMIA_SIMULATOR="iPhone 15 Pro Max" LUMIA_CLI=/path/to/lumia-cli scripts/smoke-media.sh
@@ -132,13 +138,14 @@ shoot channel-minimal 8 "" minimal
 xcrun simctl terminate "$udid" "$bundle" 2>/dev/null || true
 
 uitest=""
+log="$work/uitest.log"
 # shellcheck disable=SC2329
 finish() { [ -z "$uitest" ] || kill "$uitest" 2>/dev/null || true; }
 trap finish EXIT
 TEST_RUNNER_LUMIA_DEV_INSTANCE="$instance" TEST_RUNNER_LUMIA_DEV_HANDLE="$handle" TEST_RUNNER_LUMIA_DEV_PASSWORD="$password" TEST_RUNNER_LUMIA_DEV_SCREEN=channel TEST_RUNNER_LUMIA_DEV_NO_PUSH=1 \
 TEST_RUNNER_LUMIA_UITEST_STEPS="$work/steps" TEST_RUNNER_LUMIA_UITEST_CARD="$carded" \
   xcodebuild test-without-building -project "$project/Lumia.xcodeproj" -scheme Lumia -destination "id=$udid" -derivedDataPath "$project/.build" \
-  -only-testing:LumiaUITests/SmokeUITests/testAttachingAPictureFromThePhotoLibrary > "$work/uitest.log" 2>&1 &
+  -only-testing:LumiaUITests/SmokeUITests/testAttachingAPictureFromThePhotoLibrary > "$log" 2>&1 &
 uitest=$!
 
 # Waits for the test to announce a step; fails with the test's log when it ends first.
@@ -150,8 +157,8 @@ reached() { # <step> <seconds>
   done
   [ -f "$work/steps/$1" ] && return 0
   xcrun simctl io "$udid" screenshot "$work/failed-$1.png" >/dev/null 2>&1 || true
-  echo "FAIL: the UI test did not reach \"$1\"; see $work/uitest.log"
-  grep -E "error|failed|XCTAssert" "$work/uitest.log" | head -10
+  echo "FAIL: the UI test did not reach \"$1\"; see $log"
+  grep -E "error|failed|XCTAssert" "$log" | head -10
   exit 1
 }
 seen() { xcrun simctl io "$udid" screenshot "$work/$1.png" >/dev/null 2>&1 || true; echo > "$work/steps/$1.seen"; }
@@ -188,6 +195,51 @@ reached share 60
 seen share
 wait "$uitest" || { echo "FAIL: the UI test did not pass; see $work/uitest.log"; grep -E "error|failed|XCTAssert" "$work/uitest.log" | head -10; exit 1; }
 uitest=""
+log="$work/uitest-embeds.log"
 # The channel again, landing at its end: the phone's own picture drawn from its thumbnail.
 shoot after 12
-echo "smoke-media: ok (a photo, a file and a card drawn; a picture from the library attached, sent, drawn and opened by the other side; the viewer and the share sheet opened; screenshots under $work)"
+
+# Inline video and embeds (specs/media.md 5 and 6.6), in #watch: the other
+# person sends a recording, links to a YouTube video, an X post and a
+# Bluesky post named by its handle (cards the instance builds from the
+# internet), and last a video. testVideoPlaysInPlaceAndEmbedsLoadOnAPress
+# plays the video in its row and loads each embed on a press; what each
+# site drew is in the screenshots, for the eye.
+mine=$(token "$handle")
+watch=$(api "$mine" POST /channels "{\"serverId\":\"$server\",\"kind\":\"TEXT\",\"name\":\"watch\"}" | py "d = d.get('channel', d); print(d['channelId'])")
+api "$theirs" POST "/channels/$watch/join" >/dev/null
+scenes="$root/apps/desktop/src/scenes"
+c other send "$watch" "The tone from the call." --attach "$scenes/tone.m4a" >/dev/null
+c other send "$watch" "This one again: ${LUMIA_SMOKE_YOUTUBE:-https://www.youtube.com/watch?v=dQw4w9WgXcQ}" --cards >/dev/null
+c other send "$watch" "The first one: ${LUMIA_SMOKE_X:-https://x.com/jack/status/20}" --cards >/dev/null
+c other send "$watch" "Have you seen this? ${LUMIA_SMOKE_BLUESKY:-https://bsky.app/profile/bsky.app/post/3n25midjy722x}" --cards >/dev/null
+c other send "$watch" "A clip from the ridge." --attach "$scenes/clip.mp4" >/dev/null
+cards=0
+for _ in $(seq 1 30); do
+  cards=$(api "$theirs" GET "/channels/$watch/messages?limit=10" | py "print(sum(len(m.get('cards', [])) for m in d.get('messages', [])))")
+  [ "$cards" -ge 3 ] && break
+  sleep 1
+done
+[ "$cards" -ge 3 ] || fail "the instance built $cards of the three cards in #watch (it needs the internet and LUMIA_LINK_CARDS=true)"
+echo "seeded #watch: a recording, three links with cards and a video"
+rm -f "$work/steps"/*
+TEST_RUNNER_LUMIA_DEV_INSTANCE="$instance" TEST_RUNNER_LUMIA_DEV_HANDLE="$handle" TEST_RUNNER_LUMIA_DEV_PASSWORD="$password" TEST_RUNNER_LUMIA_DEV_SCREEN=channel TEST_RUNNER_LUMIA_DEV_CHANNEL=watch TEST_RUNNER_LUMIA_DEV_NO_PUSH=1 \
+TEST_RUNNER_LUMIA_UITEST_STEPS="$work/steps" \
+  xcodebuild test-without-building -project "$project/Lumia.xcodeproj" -scheme Lumia -destination "id=$udid" -derivedDataPath "$project/.build" \
+  -only-testing:LumiaUITests/SmokeUITests/testVideoPlaysInPlaceAndEmbedsLoadOnAPress > "$log" 2>&1 &
+uitest=$!
+reached video 240
+seen video
+echo "the video plays in its row: $work/video.png"
+reached youtube 90
+seen youtube
+echo "the YouTube card's press loaded its embed: $work/youtube.png"
+reached bluesky 90
+seen bluesky
+echo "the Bluesky card's press resolved the handle and showed the post: $work/bluesky.png"
+reached x 90
+seen x
+echo "the X card's press showed the post: $work/x.png"
+wait "$uitest" || { echo "FAIL: the UI test did not pass; see $log"; grep -E "error|failed|XCTAssert" "$log" | head -10; exit 1; }
+uitest=""
+echo "smoke-media: ok (a photo, a file and a card drawn; a picture from the library attached, sent, drawn and opened by the other side; the viewer and the share sheet opened; a video played in its row; YouTube, Bluesky and X loaded on a press; screenshots under $work)"
