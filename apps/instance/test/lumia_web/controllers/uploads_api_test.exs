@@ -152,7 +152,7 @@ defmodule LumiaWeb.UploadsApiTest do
 
   test "each role has its cap, and the instance says what they are", ctx do
     assert slot(ctx.grace, ctx.general.id, :BLOB_ROLE_DISPLAY, 2 * 1024 * 1024 + 1).status == 413
-    assert slot(ctx.grace, ctx.general.id, :BLOB_ROLE_THUMBNAIL, 256 * 1024 + 1).status == 413
+    assert slot(ctx.grace, ctx.general.id, :BLOB_ROLE_THUMBNAIL, 512 * 1024 + 1).status == 413
     assert slot(ctx.grace, ctx.general.id, :BLOB_ROLE_FILE, 10 * 1024 * 1024 + 1).status == 413
     assert slot(ctx.grace, ctx.general.id, :BLOB_ROLE_FILE, 10 * 1024 * 1024).status == 201
     assert slot(ctx.grace, ctx.general.id, :BLOB_ROLE_UNSPECIFIED, 100).status == 400
@@ -162,7 +162,7 @@ defmodule LumiaWeb.UploadsApiTest do
     limits = V1.InstanceInfo.decode(info.resp_body).upload_limits
     assert limits.image_max_bytes == 2 * 1024 * 1024
     assert limits.file_max_bytes == 10 * 1024 * 1024
-    assert limits.thumbnail_max_bytes == 256 * 1024
+    assert limits.thumbnail_max_bytes == 512 * 1024
   end
 
   test "a body of another length is refused and the slot stays empty", ctx do

@@ -15,7 +15,7 @@ use moxcms::{
 };
 
 use super::detect::{probe, Format, MAX_SIDE};
-use super::{MediaError, TAG_BYTES, THUMBNAIL_MAX_BYTES};
+use super::{MediaError, TAG_BYTES};
 
 /// What the decoder may allocate: the most pixels allowed as RGBA, and
 /// room to work.
@@ -25,9 +25,10 @@ pub(super) const DISPLAY_EDGE: u32 = 2560;
 /// The smallest longest edge a display image is shrunk to before the
 /// picture is refused.
 pub(super) const MIN_DISPLAY_EDGE: u32 = 640;
-/// The thumbnail's longest edge: twice the most a client draws a picture
-/// at in a message (400 points tall), for a display of two pixels a point.
-pub(super) const THUMBNAIL_EDGE: u32 = 800;
+/// The thumbnail's longest edge: a picture across a phone's column (some
+/// 360 to 430 points) on a display of three pixels a point, and a desktop's
+/// at two.
+pub(super) const THUMBNAIL_EDGE: u32 = 1080;
 /// The longest edge of what the placeholder is computed from (ThumbHash
 /// takes at most 100 a side).
 const PLACEHOLDER_EDGE: u32 = 100;
@@ -273,12 +274,12 @@ fn fits(len: usize, cap: u64) -> bool {
 /// down by a quarter at a time (at 55) until it fits. A picture that does
 /// not fit at [`MIN_DISPLAY_EDGE`] is refused. A transparent picture made
 /// JPEG is flattened onto white.
-pub(super) fn display(image: RgbaImage, cap: u64) -> Result<Still, MediaError> {
+pub(super) fn display(image: RgbaImage, cap: u64, thumbnail_cap: u64) -> Result<Still, MediaError> {
     if transparent(&image) {
         let png = encode_png(&image)?;
         if fits(png.len(), cap) {
             let (width, height) = image.dimensions();
-            let preview = preview(&DynamicImage::ImageRgba8(image), true)?;
+            let preview = preview(&DynamicImage::ImageRgba8(image), true, thumbnail_cap)?;
             return Ok(Still {
                 main: png,
                 png: true,
@@ -294,7 +295,7 @@ pub(super) fn display(image: RgbaImage, cap: u64) -> Result<Still, MediaError> {
     for quality in JPEG_QUALITIES {
         let jpeg = encode_jpeg(&rgb, quality)?;
         if fits(jpeg.len(), cap) {
-            return jpeg_still(jpeg, rgb);
+            return jpeg_still(jpeg, rgb, thumbnail_cap);
         }
     }
     let mut edge = rgb.width().max(rgb.height());
@@ -307,14 +308,14 @@ pub(super) fn display(image: RgbaImage, cap: u64) -> Result<Still, MediaError> {
         let smaller = imageops::resize(&rgb, w, h, FilterType::CatmullRom);
         let jpeg = encode_jpeg(&smaller, 55)?;
         if fits(jpeg.len(), cap) {
-            return jpeg_still(jpeg, smaller);
+            return jpeg_still(jpeg, smaller, thumbnail_cap);
         }
     }
 }
 
-fn jpeg_still(main: Vec<u8>, shown: RgbImage) -> Result<Still, MediaError> {
+fn jpeg_still(main: Vec<u8>, shown: RgbImage, thumbnail_cap: u64) -> Result<Still, MediaError> {
     let (width, height) = shown.dimensions();
-    let preview = preview(&DynamicImage::ImageRgb8(shown), false)?;
+    let preview = preview(&DynamicImage::ImageRgb8(shown), false, thumbnail_cap)?;
     Ok(Still {
         main,
         png: false,
@@ -326,10 +327,10 @@ fn jpeg_still(main: Vec<u8>, shown: RgbImage) -> Result<Still, MediaError> {
 }
 
 /// The thumbnail (at most [`THUMBNAIL_EDGE`], JPEG at 85 or PNG when
-/// `png`, within [`THUMBNAIL_MAX_BYTES`] sealed) and the placeholder of an
+/// `png`, within `cap` sealed) and the placeholder of an
 /// upright picture. A thumbnail over the limit steps down in quality, then
 /// in size, as the display image does.
-pub(super) fn preview(image: &DynamicImage, png: bool) -> Result<Preview, MediaError> {
+pub(super) fn preview(image: &DynamicImage, png: bool, cap: u64) -> Result<Preview, MediaError> {
     let (w, h) = fit(image.width(), image.height(), THUMBNAIL_EDGE);
     let small = image.thumbnail_exact(w, h).to_rgba8();
     let (pw, ph) = fit(w, h, PLACEHOLDER_EDGE);
@@ -337,7 +338,7 @@ pub(super) fn preview(image: &DynamicImage, png: bool) -> Result<Preview, MediaE
     let placeholder = thumbhash::rgba_to_thumb_hash(pw as usize, ph as usize, tiny.as_raw());
     if png {
         let encoded = encode_png(&small)?;
-        if fits(encoded.len(), THUMBNAIL_MAX_BYTES) {
+        if fits(encoded.len(), cap) {
             return Ok(Preview {
                 thumbnail: encoded,
                 placeholder,
@@ -347,7 +348,7 @@ pub(super) fn preview(image: &DynamicImage, png: bool) -> Result<Preview, MediaE
     let rgb = flatten(&small);
     for quality in THUMBNAIL_QUALITIES {
         let encoded = encode_jpeg(&rgb, quality)?;
-        if fits(encoded.len(), THUMBNAIL_MAX_BYTES) {
+        if fits(encoded.len(), cap) {
             return Ok(Preview {
                 thumbnail: encoded,
                 placeholder,
@@ -359,7 +360,7 @@ pub(super) fn preview(image: &DynamicImage, png: bool) -> Result<Preview, MediaE
         edge = (edge - edge / 4).max(PLACEHOLDER_EDGE);
         let (tw, th) = fit(w, h, edge);
         let encoded = encode_jpeg(&imageops::thumbnail(&rgb, tw, th), 50)?;
-        if fits(encoded.len(), THUMBNAIL_MAX_BYTES) {
+        if fits(encoded.len(), cap) {
             return Ok(Preview {
                 thumbnail: encoded,
                 placeholder,

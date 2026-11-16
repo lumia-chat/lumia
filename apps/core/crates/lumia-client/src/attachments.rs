@@ -23,6 +23,7 @@ pub fn caps(limits: &UploadLimits) -> media::Caps {
     media::Caps {
         image_bytes: limits.image_max_bytes,
         file_bytes: limits.file_max_bytes,
+        thumbnail_bytes: limits.thumbnail_max_bytes,
     }
 }
 

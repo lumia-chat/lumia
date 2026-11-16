@@ -76,7 +76,7 @@ pub fn media(state: &mut State) {
     state.session.media.limits = Some(UploadLimitsSummary {
         image_max_bytes: 2 * 1024 * 1024,
         file_max_bytes: 10 * 1024 * 1024,
-        thumbnail_max_bytes: 256 * 1024,
+        thumbnail_max_bytes: 512 * 1024,
     });
     let (portrait, portrait_thumb) = picture(
         "a-portrait",

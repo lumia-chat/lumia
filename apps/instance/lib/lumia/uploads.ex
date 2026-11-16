@@ -27,7 +27,7 @@ defmodule Lumia.Uploads do
   alias Lumia.V1
 
   @tag_bytes 16
-  @thumbnail_max 256 * 1024
+  @thumbnail_max 512 * 1024
   @put_seconds 15 * 60
   # Long enough to start a download, short enough that a deleted message's
   # blob stops being reachable within a minute.

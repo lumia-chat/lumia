@@ -32,7 +32,7 @@ pub use detect::{detect, probe, within_bounds, Format, Probe, MAX_PIXELS, MAX_SI
 /// its plaintext's plus this.
 pub const TAG_BYTES: usize = 16;
 /// The most a sealed thumbnail may be.
-pub const THUMBNAIL_MAX_BYTES: u64 = 256 * 1024;
+pub const THUMBNAIL_MAX_BYTES: u64 = 512 * 1024;
 /// The longest a name may be, in bytes of UTF-8.
 pub const NAME_MAX_BYTES: usize = 255;
 /// The most attachments one message carries (spec 2).
@@ -47,7 +47,7 @@ pub enum MediaError {
     /// The file is over the file cap.
     #[error("this file is {size} bytes, over the limit of {cap}")]
     FileTooLarge { size: u64, cap: u64 },
-    /// No thumbnail of the picture fits in 256 KiB.
+    /// No thumbnail of the picture fits the thumbnail cap.
     #[error("no thumbnail of this picture fits")]
     ThumbnailTooLarge,
     /// Pixels handed in do not match their width and height, or are past
@@ -168,6 +168,9 @@ pub struct Caps {
     pub image_bytes: u64,
     /// Every other main blob (`LUMIA_UPLOAD_FILE_MAX_BYTES`).
     pub file_bytes: u64,
+    /// A thumbnail blob (`UploadLimits.thumbnail_max_bytes`), so a client
+    /// newer than its instance makes thumbnails that instance takes.
+    pub thumbnail_bytes: u64,
 }
 
 impl Default for Caps {
@@ -175,6 +178,7 @@ impl Default for Caps {
         Self {
             image_bytes: 2 * 1024 * 1024,
             file_bytes: 10 * 1024 * 1024,
+            thumbnail_bytes: THUMBNAIL_MAX_BYTES,
         }
     }
 }
@@ -311,14 +315,20 @@ pub fn process(input: Input) -> Result<Processed, MediaError> {
     if !as_file {
         if let Some(pixels) = pixels {
             let image = still::from_pixels(pixels.rgba, pixels.width, pixels.height)?;
-            return image_attachment(still::display(still::shrink(image), image_cap)?, &name);
+            return image_attachment(
+                still::display(still::shrink(image), image_cap, caps.thumbnail_bytes)?,
+                &name,
+            );
         }
         match format {
             Format::Jpeg | Format::Png | Format::WebP => {
                 if let Some(image) = still::decode(&bytes) {
                     let shown = still::shrink_decoded(&image);
                     drop(image);
-                    return image_attachment(still::display(shown, image_cap)?, &name);
+                    return image_attachment(
+                        still::display(shown, image_cap, caps.thumbnail_bytes)?,
+                        &name,
+                    );
                 }
             }
             Format::Gif => {
@@ -330,7 +340,7 @@ pub fn process(input: Input) -> Result<Processed, MediaError> {
                 return movie(bytes, format, &name, poster, duration_ms, caps);
             }
             Format::WebM => {
-                let preview = poster_preview(poster.as_ref())?;
+                let preview = poster_preview(poster.as_ref(), caps.thumbnail_bytes)?;
                 let size = video_size.or_else(|| poster.as_ref().map(|p| (p.width, p.height)));
                 return finish(
                     Processed {
@@ -404,14 +414,22 @@ fn gif(bytes: &[u8], name: &str, caps: Caps) -> Result<Option<Processed>, MediaE
     if frames == 1 {
         let shown = still::shrink_decoded(&first);
         drop(first);
-        return image_attachment(still::display(shown, caps.image_bytes)?, name).map(Some);
+        return image_attachment(
+            still::display(shown, caps.image_bytes, caps.thumbnail_bytes)?,
+            name,
+        )
+        .map(Some);
     }
     let Some(screen) = probe(&stripped) else {
         return Ok(None);
     };
     let first = first.to_rgba8();
     let png = first.pixels().any(|p| p.0[3] < 255);
-    let preview = still::preview(&image::DynamicImage::ImageRgba8(first), png)?;
+    let preview = still::preview(
+        &image::DynamicImage::ImageRgba8(first),
+        png,
+        caps.thumbnail_bytes,
+    )?;
     finish(
         Processed {
             kind: AttachmentKind::Gif,
@@ -464,7 +482,7 @@ fn movie(
             caps,
         );
     }
-    let preview = poster_preview(poster.as_ref())?;
+    let preview = poster_preview(poster.as_ref(), caps.thumbnail_bytes)?;
     let (width, height) = if movie.has_video {
         (movie.width, movie.height)
     } else {
@@ -490,13 +508,16 @@ fn movie(
 }
 
 /// A poster frame's thumbnail and placeholder.
-fn poster_preview(poster: Option<&Pixels>) -> Result<Option<still::Preview>, MediaError> {
+fn poster_preview(
+    poster: Option<&Pixels>,
+    thumbnail_cap: u64,
+) -> Result<Option<still::Preview>, MediaError> {
     let Some(poster) = poster else {
         return Ok(None);
     };
     let image = still::from_pixels(poster.rgba.clone(), poster.width, poster.height)?;
     let png = image.pixels().any(|p| p.0[3] < 255);
-    still::preview(&image::DynamicImage::ImageRgba8(image), png).map(Some)
+    still::preview(&image::DynamicImage::ImageRgba8(image), png, thumbnail_cap).map(Some)
 }
 
 /// A `FILE`: pictures and movies lose their metadata losslessly (spec

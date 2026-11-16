@@ -22,13 +22,13 @@ Three rules hold everywhere:
 
 | Kind | What | Main blob | Thumbnail blob | Cap on the main blob |
 |---|---|---|---|---|
-| `IMAGE` | A still picture, processed (section 3.1) | JPEG or PNG made by the core | JPEG or PNG, ≤ 800 px | `LUMIA_UPLOAD_IMAGE_MAX_BYTES`, default 2 MiB |
-| `GIF` | An animated GIF, as chosen | the GIF | first frame, ≤ 800 px | `LUMIA_UPLOAD_FILE_MAX_BYTES`, default 10 MiB |
+| `IMAGE` | A still picture, processed (section 3.1) | JPEG or PNG made by the core | JPEG or PNG, ≤ 1,080 px | `LUMIA_UPLOAD_IMAGE_MAX_BYTES`, default 2 MiB |
+| `GIF` | An animated GIF, as chosen | the GIF | first frame, ≤ 1,080 px | `LUMIA_UPLOAD_FILE_MAX_BYTES`, default 10 MiB |
 | `VIDEO` | MP4, MOV (metadata stripped) or WebM (as chosen) | the video | poster frame when the platform made one | file cap |
 | `AUDIO` | MP3, M4A, AAC, OGG, Opus, WAV, FLAC | the audio | none | file cap |
 | `FILE` | Anything else, and any picture sent "as a file" | the file, metadata stripped where section 3.4 says | none | file cap |
 
-A thumbnail blob is at most 256 KiB. A message carries at most 10 attachments. The caps are instance-wide until entitlements exist (architecture 16); they then come from the plan of whoever pays, and the two variables become the instance's ceiling. The instance enforces a blob's size against the cap of the role it was created for (section 4.1) and, at send, that each attachment's blobs were created for the roles its kind needs. It cannot check that a blob holds what its kind says, since it never sees the bytes; a client that lies about a kind still cannot store more than the file cap.
+A thumbnail blob is at most 512 KiB. A message carries at most 10 attachments. The caps are instance-wide until entitlements exist (architecture 16); they then come from the plan of whoever pays, and the two variables become the instance's ceiling. The instance enforces a blob's size against the cap of the role it was created for (section 4.1) and, at send, that each attachment's blobs were created for the roles its kind needs. It cannot check that a blob holds what its kind says, since it never sees the bytes; a client that lies about a kind still cannot store more than the file cap.
 
 ## 3. Processing in the client
 
@@ -41,7 +41,7 @@ Decoding is bounded exactly as the instance bounds an avatar: the format from th
 Formats decoded by the core: JPEG, PNG, WebP, and a GIF with one frame. HEIC and HEIF have no Rust decoder; a shell whose platform decodes them (iOS, Android, macOS, Safari) hands the core the decoded pixels and the orientation, and a shell that cannot sends the file as a `FILE`.
 
 - **Display**: the orientation applied, every other piece of metadata dropped (EXIF, XMP, IPTC, comments, ICC beyond sRGB conversion), the longest edge at most 2,560 px. Encoded as PNG when it has transparency and the PNG fits under the image cap; otherwise JPEG, starting at quality 85 and stepping down by 10 to 55, then the longest edge down by a quarter at a time, until it fits. A picture that cannot fit at 640 px is refused in words.
-- **Thumbnail**: the display image with its longest edge at most 800 px (twice the most a message draws a picture at, for a display of two pixels a point), JPEG at 85 (PNG when transparent), stepping down in quality and then size to fit 256 KiB.
+- **Thumbnail**: the display image with its longest edge at most 1,080 px (a picture across a phone's column on a display of three pixels a point), JPEG at 85 (PNG when transparent), stepping down in quality and then size to fit the instance's thumbnail cap (`UploadLimits.thumbnail_max_bytes`, 512 KiB).
 - **Placeholder**: the ThumbHash of a 100 px version, carried inline in the attachment (about 25 bytes).
 - **Dimensions**: the display image's width and height, after orientation.
 
@@ -79,7 +79,7 @@ client                          instance                          blob store
   | send the message naming it    -> state=referenced                  |
 ```
 
-- **Roles**: `DISPLAY` (an `IMAGE`'s main blob, image cap), `THUMBNAIL` (256 KiB), `FILE` (every other main blob, file cap). The size is the ciphertext's: the plaintext plus the 16-byte tag.
+- **Roles**: `DISPLAY` (an `IMAGE`'s main blob, image cap), `THUMBNAIL` (512 KiB), `FILE` (every other main blob, file cap). The size is the ciphertext's: the plaintext plus the 16-byte tag.
 - **The upload URL** is a presigned S3 `PUT` for `att/<blob id>`, valid for 15 minutes, with `content-length` among its signed headers so the store refuses any other length. For a `local:` or `fs:` store it is the instance's own `PUT /api/v1/blobs/upload/{token}`, where the token is a signed, expiring statement of the blob id and size, needing no session. Clients treat both the same: `PUT` the ciphertext with the headers the response names.
 - **Complete** checks the stored object's length against the declared size and deletes the object and the row on a mismatch.
 - **Orphans**: a blob neither referenced nor deleted 24 hours after it was created is removed, object and row, by an Oban job.

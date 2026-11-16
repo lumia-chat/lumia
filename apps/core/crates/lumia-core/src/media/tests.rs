@@ -1203,11 +1203,10 @@ fn a_placeholder_opens_as_a_small_picture_of_the_same_shape() {
 }
 
 #[test]
-fn a_thumbnail_is_sharp_at_twice_the_size_a_message_draws_it() {
-    // Drawn at most 400 points tall, on a display of two pixels a point.
-    let processed = process(input(jpeg(2000, 1000), "wide.jpg")).unwrap();
+fn a_thumbnail_is_sharp_across_a_phone_at_three_pixels_a_point() {
+    let processed = process(input(jpeg(2160, 1080), "wide.jpg")).unwrap();
     let thumbnail = decoded(processed.thumbnail.as_deref().unwrap());
-    assert_eq!((thumbnail.width(), thumbnail.height()), (800, 400));
+    assert_eq!((thumbnail.width(), thumbnail.height()), (1080, 540));
     let small = process(input(jpeg(600, 300), "small.jpg")).unwrap();
     let thumbnail = decoded(small.thumbnail.as_deref().unwrap());
     assert_eq!(
@@ -1215,4 +1214,18 @@ fn a_thumbnail_is_sharp_at_twice_the_size_a_message_draws_it() {
         (600, 300),
         "never enlarged"
     );
+}
+
+#[test]
+fn a_thumbnail_fits_the_cap_its_instance_names() {
+    // An instance older than this client takes smaller thumbnails.
+    let processed = process(Input {
+        caps: Caps {
+            thumbnail_bytes: 24 * 1024,
+            ..Caps::default()
+        },
+        ..input(png(&noise(1600, 1200, 5)), "noise.png")
+    })
+    .unwrap();
+    assert!(sealed_len(processed.thumbnail.unwrap().len()) <= 24 * 1024);
 }
