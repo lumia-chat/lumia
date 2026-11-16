@@ -1914,6 +1914,15 @@ impl Client {
         App::embed_origins()
     }
 
+    /// The height a post's embed reported (specs/media.md 6.6), from what its
+    /// window posted as text (a string as posted, an object as its JSON),
+    /// held to 50..=5000; undefined for any other message or site.
+    #[must_use]
+    #[wasm_bindgen(js_name = reportedEmbedHeight)]
+    pub fn reported_embed_height(&self, provider: String, message: String) -> Option<u32> {
+        App::reported_embed_height(&provider, &message)
+    }
+
     /// A Bluesky handle's DID, asked of Bluesky's public API (which sends
     /// CORS headers) on the press of a post named by handle.
     ///

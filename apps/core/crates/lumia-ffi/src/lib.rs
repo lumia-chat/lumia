@@ -1716,6 +1716,42 @@ pub fn embed_origins() -> Vec<String> {
     App::embed_origins()
 }
 
+/// The height a post's embed reported (specs/media.md 6.6), from what its
+/// window posted as text (a string as posted, an object as its JSON), held to
+/// 50..=5000; none for any other message or site. `provider` is
+/// [`EmbedSummary::provider`]. Pass on only messages from the embed's own
+/// window and origin.
+#[uniffi::export]
+pub fn reported_embed_height(provider: String, message: String) -> Option<u32> {
+    App::reported_embed_height(&provider, &message)
+}
+
+/// What is playing or shown, for the one-at-a-time rules (specs/media.md 5
+/// and 6.6).
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct PlayingSummary {
+    /// A site's embed in its card's place, rather than an attachment.
+    pub embed: bool,
+    /// `video` (an embed's `player` too), `audio` or `post`.
+    pub kind: String,
+}
+
+/// Whether `starting` stops `other`, already playing or shown: a card
+/// pressed stops everything else; an attachment started stops every other
+/// attachment and an embed that plays, and leaves a post where it is.
+#[uniffi::export]
+pub fn playback_stops(starting: PlayingSummary, other: PlayingSummary) -> bool {
+    App::playback_stops((starting.embed, &starting.kind), (other.embed, &other.kind))
+}
+
+/// Whether what is playing stops when its row scrolls away: a video (an
+/// attachment pauses, an embed's player goes back to its card). Audio plays
+/// on and a post stays.
+#[uniffi::export]
+pub fn playback_stops_off_screen(playing: PlayingSummary) -> bool {
+    App::playback_stops_off_screen(playing.embed, &playing.kind)
+}
+
 /// Whether a picture someone sent may be handed to a decoder: its header
 /// names a size within the bounds (specs/media.md 5). One that is not is
 /// drawn as a file row.

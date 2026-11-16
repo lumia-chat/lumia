@@ -1944,6 +1944,9 @@ pub struct App {
     /// Attachments waiting to be sent, cards made for personal DMs, and the
     /// blobs opened (specs/media.md).
     media: Mutex<Media>,
+    /// For Bluesky's public API alone ([`App::resolve_bluesky_handle`]): made
+    /// once, its connections kept between presses, and following no redirect.
+    bluesky: reqwest::Client,
 }
 
 /// What this client holds of attachments and cards between calls. Memory
@@ -1976,6 +1979,42 @@ const BLUESKY_RESOLVE_HANDLE: &str =
 
 /// The largest picture of a server card fetched.
 const CARD_IMAGE_MAX_BYTES: usize = 1 << 20;
+
+/// The most of Bluesky's answer to a handle read: it is a DID in a small JSON object.
+const BLUESKY_ANSWER_MAX_BYTES: usize = 16 * 1024;
+
+/// A response's body, or [`ClientError::State`] once it says or proves longer than `limit`:
+/// natively read a chunk at a time and stopped there, in the browser (whose `fetch` has no
+/// chunks here) refused by its length when it gives one.
+async fn read_at_most(response: reqwest::Response, limit: usize) -> Result<Vec<u8>, ClientError> {
+    let too_long = || ClientError::State("the answer is too long".into());
+    if response
+        .content_length()
+        .is_some_and(|length| length > limit as u64)
+    {
+        return Err(too_long());
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let mut response = response;
+        let mut body = Vec::new();
+        while let Some(chunk) = response.chunk().await? {
+            if body.len() + chunk.len() > limit {
+                return Err(too_long());
+            }
+            body.extend_from_slice(&chunk);
+        }
+        Ok(body)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let body = response.bytes().await?;
+        if body.len() > limit {
+            return Err(too_long());
+        }
+        Ok(body.to_vec())
+    }
+}
 
 impl std::fmt::Debug for App {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -2124,6 +2163,7 @@ impl App {
                 quiz: None,
             }),
             rail_turn: AsyncMutex::new(()),
+            bluesky: crate::transport::http_without_redirects(),
             max_message_bytes: AtomicU32::new(body::MAX_MESSAGE_BYTES),
             identity: AsyncMutex::new(IdentityStores {
                 store: identity_store,
@@ -6198,6 +6238,52 @@ impl App {
         lumia_core::embeds::bluesky_embed_url(did, rkey)
     }
 
+    /// The height a post's embed reported (specs/media.md 6.6), from what its
+    /// window posted as text (a string as posted, an object as its JSON), held
+    /// to 50..=5000; none for any other message or site. `provider` is
+    /// [`EmbedSummary::provider`]. Pass on only messages from the embed's own
+    /// window and origin.
+    #[must_use]
+    pub fn reported_embed_height(provider: &str, message: &str) -> Option<u32> {
+        let provider = lumia_core::embeds::Provider::from_id(provider)?;
+        lumia_core::embeds::reported_height(provider, message)
+    }
+
+    /// Whether `starting` stops `other` (specs/media.md 5 and 6.6): each an
+    /// embed or an attachment of kind `video` (an embed's `player` too),
+    /// `audio` or `post`. False for a kind that is none of them.
+    #[must_use]
+    pub fn playback_stops(
+        (starting_embed, starting_kind): (bool, &str),
+        (other_embed, other_kind): (bool, &str),
+    ) -> bool {
+        use lumia_core::playback::{Kind, Playing};
+        let (Some(starting), Some(other)) =
+            (Kind::from_id(starting_kind), Kind::from_id(other_kind))
+        else {
+            return false;
+        };
+        lumia_core::playback::stops(
+            Playing {
+                embed: starting_embed,
+                kind: starting,
+            },
+            Playing {
+                embed: other_embed,
+                kind: other,
+            },
+        )
+    }
+
+    /// Whether what is playing stops when its row scrolls away: a video
+    /// (an attachment pauses, an embed's player goes back to its card).
+    #[must_use]
+    pub fn playback_stops_off_screen(embed: bool, kind: &str) -> bool {
+        lumia_core::playback::Kind::from_id(kind).is_some_and(|kind| {
+            lumia_core::playback::stops_off_screen(lumia_core::playback::Playing { embed, kind })
+        })
+    }
+
     /// The origins an embed loads from: the web's `frame-src`, and what the
     /// phones' web views may load.
     #[must_use]
@@ -6225,14 +6311,15 @@ impl App {
         let mut url = url::Url::parse(BLUESKY_RESOLVE_HANDLE)
             .map_err(|e| ClientError::Transport(e.to_string()))?;
         url.query_pairs_mut().append_pair("handle", &handle);
-        let response = reqwest::Client::new()
+        let response = self
+            .bluesky
             .get(url)
             .header("accept", "application/json")
             .timeout(std::time::Duration::from_secs(5))
             .send()
             .await?
             .error_for_status()?;
-        let body = response.bytes().await?;
+        let body = read_at_most(response, BLUESKY_ANSWER_MAX_BYTES).await?;
         #[derive(Deserialize)]
         struct Resolved {
             did: String,

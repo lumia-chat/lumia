@@ -144,3 +144,42 @@ fn the_origins_file_is_the_cores_list() {
     let file: Origins = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
     assert_eq!(file.origins, lumia_core::embeds::EMBED_ORIGINS);
 }
+
+/// `proto/vectors/embeds/heights.json`: what a post's embed reports, and the height drawn.
+#[test]
+fn every_reported_height_is_read_as_the_vectors_say() {
+    #[derive(Deserialize)]
+    struct Heights {
+        vectors: Vec<Height>,
+    }
+    #[derive(Deserialize)]
+    struct Height {
+        provider: String,
+        message: String,
+        expect: Option<u32>,
+        why: String,
+    }
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../../proto/vectors/embeds/heights.json"
+    );
+    let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{path}: {e}"));
+    let file: Heights = serde_json::from_str(&text).unwrap_or_else(|e| panic!("{path}: {e}"));
+    assert!(file.vectors.len() >= 20, "{path} has too few vectors");
+    let mut failed = Vec::new();
+    for case in file.vectors {
+        let provider = lumia_core::embeds::Provider::from_id(&case.provider)
+            .unwrap_or_else(|| panic!("{} is no provider", case.provider));
+        let got = lumia_core::embeds::reported_height(provider, &case.message);
+        if got != case.expect {
+            failed.push(format!(
+                "{} {} ({}): got {got:?}, want {:?}",
+                case.provider,
+                case.message.chars().take(80).collect::<String>(),
+                case.why,
+                case.expect
+            ));
+        }
+    }
+    assert!(failed.is_empty(), "{}", failed.join("\n"));
+}

@@ -1,0 +1,347 @@
+{
+  "about": "One thing playing at a time (docs/specs/media.md 5 and 6.6): `starts` says whether something starting (an attachment, or a card pressed) stops another already playing or shown; `off_screen` whether something stops when its row scrolls away. An embed's player is kind `video`. Leaving the conversation stops everything. Every client agrees on every case (lumia_core::playback).",
+  "starts": [
+    {
+      "starting": {
+        "embed": false,
+        "kind": "video"
+      },
+      "other": {
+        "embed": false,
+        "kind": "video"
+      },
+      "stops": true,
+      "why": "an attached video starting, an attached video playing: starting a video pauses any other (5)"
+    },
+    {
+      "starting": {
+        "embed": false,
+        "kind": "video"
+      },
+      "other": {
+        "embed": false,
+        "kind": "audio"
+      },
+      "stops": true,
+      "why": "an attached video starting, attached audio playing: starting one pauses any other: audio plays on only until another starts (5)"
+    },
+    {
+      "starting": {
+        "embed": false,
+        "kind": "video"
+      },
+      "other": {
+        "embed": true,
+        "kind": "video"
+      },
+      "stops": true,
+      "why": "an attached video starting, a site's player playing: a site's player playing goes back to its card when an attachment starts (6.6)"
+    },
+    {
+      "starting": {
+        "embed": false,
+        "kind": "video"
+      },
+      "other": {
+        "embed": true,
+        "kind": "audio"
+      },
+      "stops": true,
+      "why": "an attached video starting, a site's audio playing: a site's audio plays on only until another starts (6.6)"
+    },
+    {
+      "starting": {
+        "embed": false,
+        "kind": "video"
+      },
+      "other": {
+        "embed": true,
+        "kind": "post"
+      },
+      "stops": false,
+      "why": "an attached video starting, a site's post playing: a post is being read, not played: it stays"
+    },
+    {
+      "starting": {
+        "embed": false,
+        "kind": "audio"
+      },
+      "other": {
+        "embed": false,
+        "kind": "video"
+      },
+      "stops": true,
+      "why": "attached audio starting, an attached video playing: starting one pauses any other (5)"
+    },
+    {
+      "starting": {
+        "embed": false,
+        "kind": "audio"
+      },
+      "other": {
+        "embed": false,
+        "kind": "audio"
+      },
+      "stops": true,
+      "why": "attached audio starting, attached audio playing: audio plays on until another starts (5)"
+    },
+    {
+      "starting": {
+        "embed": false,
+        "kind": "audio"
+      },
+      "other": {
+        "embed": true,
+        "kind": "video"
+      },
+      "stops": true,
+      "why": "attached audio starting, a site's player playing: a site's player goes back to its card"
+    },
+    {
+      "starting": {
+        "embed": false,
+        "kind": "audio"
+      },
+      "other": {
+        "embed": true,
+        "kind": "audio"
+      },
+      "stops": true,
+      "why": "attached audio starting, a site's audio playing: a site's audio plays on only until another starts"
+    },
+    {
+      "starting": {
+        "embed": false,
+        "kind": "audio"
+      },
+      "other": {
+        "embed": true,
+        "kind": "post"
+      },
+      "stops": false,
+      "why": "attached audio starting, a site's post playing: a post stays"
+    },
+    {
+      "starting": {
+        "embed": true,
+        "kind": "video"
+      },
+      "other": {
+        "embed": false,
+        "kind": "video"
+      },
+      "stops": true,
+      "why": "a site's player starting, an attached video playing: pressing a card pauses any attached video or audio (6.6)"
+    },
+    {
+      "starting": {
+        "embed": true,
+        "kind": "video"
+      },
+      "other": {
+        "embed": false,
+        "kind": "audio"
+      },
+      "stops": true,
+      "why": "a site's player starting, attached audio playing: pressing a card pauses any attached video or audio (6.6)"
+    },
+    {
+      "starting": {
+        "embed": true,
+        "kind": "video"
+      },
+      "other": {
+        "embed": true,
+        "kind": "video"
+      },
+      "stops": true,
+      "why": "a site's player starting, a site's player playing: pressing a card puts back any other embed (6.6)"
+    },
+    {
+      "starting": {
+        "embed": true,
+        "kind": "video"
+      },
+      "other": {
+        "embed": true,
+        "kind": "audio"
+      },
+      "stops": true,
+      "why": "a site's player starting, a site's audio playing: pressing a card puts back any other embed"
+    },
+    {
+      "starting": {
+        "embed": true,
+        "kind": "video"
+      },
+      "other": {
+        "embed": true,
+        "kind": "post"
+      },
+      "stops": true,
+      "why": "a site's player starting, a site's post playing: one embed shown at a time: a post goes back to its card too"
+    },
+    {
+      "starting": {
+        "embed": true,
+        "kind": "audio"
+      },
+      "other": {
+        "embed": false,
+        "kind": "video"
+      },
+      "stops": true,
+      "why": "a site's audio starting, an attached video playing: pressing a card pauses any attached video or audio"
+    },
+    {
+      "starting": {
+        "embed": true,
+        "kind": "audio"
+      },
+      "other": {
+        "embed": false,
+        "kind": "audio"
+      },
+      "stops": true,
+      "why": "a site's audio starting, attached audio playing: pressing a card pauses any attached video or audio"
+    },
+    {
+      "starting": {
+        "embed": true,
+        "kind": "audio"
+      },
+      "other": {
+        "embed": true,
+        "kind": "video"
+      },
+      "stops": true,
+      "why": "a site's audio starting, a site's player playing: pressing a card puts back any other embed"
+    },
+    {
+      "starting": {
+        "embed": true,
+        "kind": "audio"
+      },
+      "other": {
+        "embed": true,
+        "kind": "audio"
+      },
+      "stops": true,
+      "why": "a site's audio starting, a site's audio playing: pressing a card puts back any other embed"
+    },
+    {
+      "starting": {
+        "embed": true,
+        "kind": "audio"
+      },
+      "other": {
+        "embed": true,
+        "kind": "post"
+      },
+      "stops": true,
+      "why": "a site's audio starting, a site's post playing: one embed shown at a time"
+    },
+    {
+      "starting": {
+        "embed": true,
+        "kind": "post"
+      },
+      "other": {
+        "embed": false,
+        "kind": "video"
+      },
+      "stops": true,
+      "why": "a site's post starting, an attached video playing: pressing a card pauses any attached video or audio"
+    },
+    {
+      "starting": {
+        "embed": true,
+        "kind": "post"
+      },
+      "other": {
+        "embed": false,
+        "kind": "audio"
+      },
+      "stops": true,
+      "why": "a site's post starting, attached audio playing: pressing a card pauses any attached video or audio"
+    },
+    {
+      "starting": {
+        "embed": true,
+        "kind": "post"
+      },
+      "other": {
+        "embed": true,
+        "kind": "video"
+      },
+      "stops": true,
+      "why": "a site's post starting, a site's player playing: pressing a card puts back any other embed"
+    },
+    {
+      "starting": {
+        "embed": true,
+        "kind": "post"
+      },
+      "other": {
+        "embed": true,
+        "kind": "audio"
+      },
+      "stops": true,
+      "why": "a site's post starting, a site's audio playing: pressing a card puts back any other embed"
+    },
+    {
+      "starting": {
+        "embed": true,
+        "kind": "post"
+      },
+      "other": {
+        "embed": true,
+        "kind": "post"
+      },
+      "stops": true,
+      "why": "a site's post starting, a site's post playing: one embed shown at a time"
+    }
+  ],
+  "off_screen": [
+    {
+      "playing": {
+        "embed": false,
+        "kind": "video"
+      },
+      "stops": true,
+      "why": "an attached video pauses when its row scrolls away (5)"
+    },
+    {
+      "playing": {
+        "embed": false,
+        "kind": "audio"
+      },
+      "stops": false,
+      "why": "attached audio plays on until another starts or the conversation is left (5)"
+    },
+    {
+      "playing": {
+        "embed": true,
+        "kind": "video"
+      },
+      "stops": true,
+      "why": "a site's player goes back to its card when its row scrolls away (6.6)"
+    },
+    {
+      "playing": {
+        "embed": true,
+        "kind": "audio"
+      },
+      "stops": false,
+      "why": "a site's audio plays on until another starts or the conversation is left (6.6)"
+    },
+    {
+      "playing": {
+        "embed": true,
+        "kind": "post"
+      },
+      "stops": false,
+      "why": "a post scrolled past stays shown: nothing is playing to stop"
+    }
+  ]
+}

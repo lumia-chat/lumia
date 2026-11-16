@@ -19,6 +19,12 @@ pub const MAX_PLAYER_HEIGHT: u32 = 400;
 pub const MAX_POST_WIDTH: u32 = 550;
 /// The height a post that grows to its content holds until its embed reports one.
 pub const POST_START_HEIGHT: u32 = 250;
+/// The shortest and the tallest a post that grows is drawn, whatever its embed reports
+/// ([`reported_height`]).
+pub const REPORTED_MIN: u32 = 50;
+pub const REPORTED_MAX: u32 = 5000;
+/// The longest message from an embed read for a height: a resize is a few dozen bytes.
+pub const REPORTED_MESSAGE_MAX: usize = 8192;
 
 /// The origins an embed is loaded from: the web's `frame-src`, and what the phones' web
 /// views may load. Every address [`embed_for`] and [`bluesky_embed_url`] give is on one.
@@ -91,6 +97,12 @@ impl Provider {
             Self::TikTok => "tiktok",
             Self::Reddit => "reddit",
         }
+    }
+
+    /// The site [`Provider::id`] names.
+    #[must_use]
+    pub fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|p| p.id() == id)
     }
 
     /// The site's name as a person reads it: `YouTube`, `SoundCloud`, `X`.
@@ -753,8 +765,9 @@ const INSTAGRAM_RESERVED: &[&str] = &[
     "p", "reel", "reels", "tv", "stories", "explore", "accounts", "direct", "about", "legal",
 ];
 
-/// `instagram.com/p/<code>`, `/reel/<code>`, `/reels/<code>`, `/tv/<code>`, each also
-/// after an account's name (`/<account>/p/<code>`).
+/// `instagram.com/p/<code>`, `/reel/<code>`, `/reels/<code>` and `/tv/<code>`; and `/p/` and
+/// `/reel/` after an account's name (`/<account>/p/<code>`), the two forms Instagram's own
+/// links take there.
 fn instagram(segs: &[&str]) -> Option<Embed> {
     let (kind, code) = match segs {
         [kind, code] => (*kind, *code),
@@ -857,6 +870,76 @@ fn word(s: &str, min: usize, max: usize) -> bool {
 /// `s` encoded as a query value.
 fn encode(s: &str) -> String {
     url::form_urlencoded::byte_serialize(s.as_bytes()).collect()
+}
+
+/// The height a post's embed reported to the page holding it (media spec 6.6), in that
+/// site's own form, rounded up and held to [`REPORTED_MIN`]..=[`REPORTED_MAX`]; none for
+/// any other message or site. `message` is what the embed's window posted, as text: a
+/// string as it was posted, an object as its JSON (`JSON.stringify`). The caller passes on
+/// only messages from the embed's own window and origin; nothing in one is trusted to have
+/// the shape its site gives it. `proto/vectors/embeds/heights.json` holds the cases.
+///
+/// - **X**: `platform.twitter.com/widgets.js` takes JSON-RPC under `"twttr.embed"`, as a
+///   string that starts with it (the JSON after it) or an object with it as a key (its value
+///   an object or JSON text), and reads `twttr.private.resize`'s `params[0].height`.
+/// - **Bluesky**: `bskyembed`'s `{height, id}`, read by `embed.bsky.app`'s `embed.js` as
+///   `data.height`.
+/// - **Reddit**: `embed.reddit.com`'s `{"type": "resize.embed", "data": <height>}`.
+#[must_use]
+pub fn reported_height(provider: Provider, message: &str) -> Option<u32> {
+    if message.len() > REPORTED_MESSAGE_MAX {
+        return None;
+    }
+    let height = match provider {
+        Provider::X => x_height(message),
+        Provider::Bluesky => number(json(message)?.get("height")?),
+        Provider::Reddit => {
+            let m = json(message)?;
+            (m.get("type")?.as_str()? == "resize.embed").then_some(())?;
+            number(m.get("data")?)
+        }
+        _ => None,
+    }?;
+    (height.is_finite() && height > 0.0).then(|| {
+        // Held in range before it becomes a whole number, so no height overflows one.
+        let held = height
+            .ceil()
+            .clamp(f64::from(REPORTED_MIN), f64::from(REPORTED_MAX));
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let whole = held as u32;
+        whole
+    })
+}
+
+fn json(text: &str) -> Option<serde_json::Value> {
+    serde_json::from_str(text).ok()
+}
+
+/// A height as a number, or as a string of digits with or without a fraction.
+fn number(v: &serde_json::Value) -> Option<f64> {
+    match v {
+        serde_json::Value::Number(n) => n.as_f64(),
+        serde_json::Value::String(s) => {
+            let t = s.trim();
+            let (whole, fraction) = t.split_once('.').unwrap_or((t, "0"));
+            let digits = |part: &str| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit());
+            (digits(whole) && digits(fraction)).then(|| t.parse().ok())?
+        }
+        _ => None,
+    }
+}
+
+fn x_height(message: &str) -> Option<f64> {
+    const KEY: &str = "twttr.embed";
+    let rpc = match message.strip_prefix(KEY) {
+        Some(rest) => json(rest)?,
+        None => match json(message)?.get(KEY)? {
+            serde_json::Value::String(inner) => json(inner)?,
+            inner => inner.clone(),
+        },
+    };
+    (rpc.get("method")?.as_str()? == "twttr.private.resize").then_some(())?;
+    number(rpc.get("params")?.as_array()?.first()?.get("height")?)
 }
 
 #[cfg(test)]
