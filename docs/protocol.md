@@ -228,7 +228,8 @@ Base path `/api/v1`. All endpoints require `Authorization: Bearer <access_token>
 | `GET /servers` | → `ListServersResponse` |
 | `POST /servers` | `CreateServerRequest` → `Server` |
 | `GET /servers/{server_id}` | → `Server` |
-| `PATCH /servers/{server_id}` | `UpdateServerRequest` → `Server` | The server's name, its retention, its default channels, whether it shows deleted messages, any of them (architecture 6.7 and 6.8); a field left out is left as it is, and `retention_days` 0 keeps messages for ever. Needs `MANAGE_SERVER` (the owner and `ADMINISTRATOR` have it): `PERMISSION_DENIED` otherwise. `INVALID_ARGUMENT` with `details.field` `name` for a name that is empty or over 100 characters once trimmed, and `default_channels` for a channel that is not a public text channel of the server. Every member gets `ServerUpdated` on its account log for a name, picture, retention or `show_deleted`. |
+| `PATCH /servers/{server_id}` | `UpdateServerRequest` → `Server` | The server's name, its retention, its default channels, whether it shows deleted messages, how long it keeps attachments and what happens when it is full, any of them (architecture 6.7 and 6.8, specs/media.md 4.5); a field left out is left as it is, and `retention_days` and `attachment_retention_days` 0 keep for ever. Needs `MANAGE_SERVER` (the owner and `ADMINISTRATOR` have it): `PERMISSION_DENIED` otherwise. `INVALID_ARGUMENT` with `details.field` `name` for a name that is empty or over 100 characters once trimmed, and `default_channels` for a channel that is not a public text channel of the server. Every member gets `ServerUpdated` on its account log for any of them and for a new picture. |
+| `GET /servers/{server_id}/storage` | → `ServerStorage`: the bytes the server's files take and its limit, 0 for none (specs/media.md 4.5). `MANAGE_SERVER`. |
 | `PUT /servers/{server_id}/icon` | a picture's bytes → `Server` | The server's picture, taken as `PUT /account/avatar` takes an account's (the same formats, limits and refusals) and named in `Server.icon_url`, a path under `/api/v1/avatars/`. `MANAGE_SERVER`; `ServerUpdated` to every member. |
 | `DELETE /servers/{server_id}/icon` | → `Server` | The server has no picture again. `MANAGE_SERVER`; `ServerUpdated` to every member. |
 | `GET /servers/{server_id}/channels` | → `ListChannelsResponse`: the channels the caller is in and can see, its server DMs among them, in sidebar order |
@@ -276,7 +277,7 @@ Permission changes, overwrite changes, and membership changes each bump the affe
 
 | Method and path | Body → Response |
 |---|---|
-| `POST /uploads` | `CreateUploadRequest` → `CreateUploadResponse` |
+| `POST /uploads` | `CreateUploadRequest` → `CreateUploadResponse`; `RESOURCE_EXHAUSTED` with `details.state` `storage` when the server's files would pass its limit (specs/media.md 4.5) |
 | `PUT <upload_url>` | the ciphertext, with exactly `upload_headers` → 2xx |
 | `POST /uploads/{blob_id}/complete` | → 204 |
 | `GET /blobs/{blob_id}` | → `302` to the ciphertext, or the ciphertext |
@@ -364,7 +365,7 @@ Every non-2xx response body is an `Error`. HTTP status is derived from `code`:
 | `UNAVAILABLE` | 503 |
 | `RESOURCE_EXHAUSTED` | 507 |
 
-`details` keys by code: `INVALID_ARGUMENT.field`; `FAILED_PRECONDITION.mfa`, `.state`; `ALREADY_EXISTS.existing_id` (only when the caller may see it); `PAYLOAD_TOO_LARGE.max`; `RATE_LIMITED.scope`; `RESOURCE_EXHAUSTED.quota` (bytes). `NOT_FOUND` is returned both for things that do not exist and for things the caller may not know exist. Clients never distinguish the two.
+`details` keys by code: `INVALID_ARGUMENT.field`; `FAILED_PRECONDITION.mfa`, `.state`; `ALREADY_EXISTS.existing_id` (only when the caller may see it); `PAYLOAD_TOO_LARGE.max`; `RATE_LIMITED.scope`; `RESOURCE_EXHAUSTED.quota` (bytes), `.state` (`storage` for a server's files; absent for a history quota). `NOT_FOUND` is returned both for things that do not exist and for things the caller may not know exist. Clients never distinguish the two.
 
 ## 11. Pagination
 

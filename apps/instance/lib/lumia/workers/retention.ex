@@ -10,6 +10,9 @@ defmodule Lumia.Workers.Retention do
   cached bodies. Resumed clients see `Redacted` tombstones at the original
   sequence numbers.
 
+  Servers with `attachment_retention_days` have the attachments of their
+  older messages expired, the messages kept (specs/media.md 4.5).
+
   Daily from the Oban cron; idempotent, so a rerun purges nothing new.
   """
 
@@ -21,6 +24,7 @@ defmodule Lumia.Workers.Retention do
   alias Lumia.Events.Channel
   alias Lumia.Repo
   alias Lumia.Servers.Server
+  alias Lumia.Uploads
 
   @impl Oban.Worker
   def perform(%Oban.Job{}) do
@@ -30,7 +34,19 @@ defmodule Lumia.Workers.Retention do
       |> Enum.map(fn {server_id, days} -> apply_to_server(server_id, days) end)
       |> Enum.sum()
 
-    {:ok, purged}
+    expired =
+      from(s in Server,
+        where: not is_nil(s.attachment_retention_days),
+        select: {s.id, s.attachment_retention_days}
+      )
+      |> Repo.all()
+      |> Enum.map(fn {server_id, days} ->
+        {:ok, n} = Uploads.expire_before(server_id, DateTime.add(DateTime.utc_now(), -days, :day))
+        n
+      end)
+      |> Enum.sum()
+
+    {:ok, purged + expired}
   end
 
   @doc "Purges one server's channels now. Returns how many channels were purged."

@@ -11,6 +11,9 @@ defmodule Lumia.Uploads.Upload do
   schema "uploads" do
     field :uploader_account_id, Ecto.UUID
     field :channel_id, Ecto.UUID
+    # The server whose storage it counts against (specs/media.md 4.5); nil
+    # for a personal conversation's.
+    field :server_id, Ecto.UUID
     field :role, :string
     field :size, :integer
     field :stored, :boolean, default: false

@@ -56,9 +56,14 @@ defmodule Lumia.Proto do
       owner_account_id: uuid(s.owner_account_id),
       created_at: timestamp(s.inserted_at),
       retention_days: s.retention_days || 0,
-      show_deleted: s.show_deleted || false
+      show_deleted: s.show_deleted || false,
+      attachment_retention_days: s.attachment_retention_days || 0,
+      storage_full: storage_full(s.storage_full)
     }
   end
+
+  defp storage_full("delete_oldest"), do: :STORAGE_FULL_DELETE_OLDEST
+  defp storage_full(_refuse), do: :STORAGE_FULL_REFUSE
 
   def invite(%Lumia.Invites.Invite{} = i) do
     %V1.Invite{

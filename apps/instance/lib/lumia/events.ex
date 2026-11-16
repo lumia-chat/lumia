@@ -276,6 +276,89 @@ defmodule Lumia.Events do
     end
   end
 
+  @doc """
+  Expires the attachments of every message in the channel below
+  `before_seq` whose blobs are still kept (specs/media.md 4.5): the blobs
+  are removed, each such message's attachments are rewritten with
+  `expired` set and no blobs, in the message and in the stored events that
+  carried them, and one `AttachmentsExpired` is appended. `{:ok, n}`, the
+  messages rewritten; nothing is appended when there were none.
+  """
+  def expire_attachments(channel_id, before_seq) do
+    Tx.transact(fn ->
+      kept =
+        from u in Uploads.Upload,
+          where: u.channel_id == ^channel_id and not u.deleting and not is_nil(u.message_id),
+          select: u.message_id
+
+      messages =
+        Repo.all(
+          from m in Message,
+            where:
+              m.channel_id == ^channel_id and m.seq < ^before_seq and
+                m.id in subquery(kept),
+            lock: "FOR UPDATE"
+        )
+
+      expire_messages(channel_id, messages, before_seq)
+    end)
+  end
+
+  defp expire_messages(_channel_id, [], _before_seq), do: {:ok, 0}
+
+  defp expire_messages(channel_id, messages, before_seq) do
+    Enum.each(messages, &expire_message/1)
+    ids = Enum.map(messages, & &1.id)
+    Uploads.release(channel_id, from(m in Message, where: m.id in ^ids, select: m.id))
+
+    with {:ok, _} <-
+           append_system(
+             channel_id,
+             {:attachments_expired, %V1.AttachmentsExpired{before_seq: before_seq}}
+           ),
+         do: {:ok, length(messages)}
+  end
+
+  defp expire_message(%Message{} = message) do
+    attachments = Enum.map(message.attachments, &(&1 |> V1.Attachment.decode() |> expired()))
+
+    Repo.update_all(from(m in Message, where: m.id == ^message.id),
+      set: [attachments: Enum.map(attachments, &V1.Attachment.encode/1)]
+    )
+
+    Repo.all(
+      from p in EventPayload,
+        where:
+          p.channel_id == ^message.channel_id and p.seq in ^[message.seq | message.revision_seqs] and
+            not is_nil(p.payload)
+    )
+    |> Enum.each(fn p ->
+      event = V1.Event.decode(p.payload)
+      rewritten = %{event | payload: expire_payload(event.payload)}
+
+      if rewritten != event do
+        Repo.update_all(
+          from(q in EventPayload, where: q.channel_id == ^p.channel_id and q.seq == ^p.seq),
+          set: [payload: V1.Event.encode(rewritten)]
+        )
+      end
+    end)
+  end
+
+  defp expire_payload({:message_created, %V1.MessageCreated{message: message} = created}) do
+    attachments = Enum.map(message.attachments, &expired/1)
+    {:message_created, %{created | message: %{message | attachments: attachments}}}
+  end
+
+  defp expire_payload({:message_edited, %V1.MessageEdited{} = edited}),
+    do: {:message_edited, %{edited | attachments: Enum.map(edited.attachments, &expired/1)}}
+
+  defp expire_payload(other), do: other
+
+  # What a client draws in its place: the name, the kind and the shape,
+  # and nothing that opens anything.
+  defp expired(%V1.Attachment{} = a), do: %{a | expired: true, main: nil, thumbnail: nil}
+
   @doc "Events after `after_seq`, in order, as `Lumia.V1.Event` structs. The sync query."
   def events_after(channel_id, after_seq, limit \\ 200) do
     from(e in Event,

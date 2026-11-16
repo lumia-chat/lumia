@@ -22,6 +22,7 @@ defmodule Lumia.Uploads do
   alias Lumia.Events.Message
   alias Lumia.Proto
   alias Lumia.Repo
+  alias Lumia.Servers.Server
   alias Lumia.Tx
   alias Lumia.Uploads.Upload
   alias Lumia.V1
@@ -80,24 +81,17 @@ defmodule Lumia.Uploads do
   expires_at:}}`; `url` is absolute for a bucket and a path under the
   instance for a directory store. Errors: `{:failed_precondition,
   "blobs"}` with no blob store, `{:payload_too_large, max}`,
-  `:invalid_argument`, or the channel's access error.
+  `{:resource_exhausted, "storage", max}` when the server's files would
+  pass its limit (specs/media.md 4.5), `:invalid_argument`, or the
+  channel's access error.
   """
   def create(account_id, channel_id, role, size) when is_integer(size) do
     with true <- enabled?() || {:error, {:failed_precondition, "blobs"}},
          {:ok, role} <- role(role),
          :ok <- within(role, size),
-         {:ok, _access} <- Access.require(account_id, channel_id, :attach_files) do
-      now = DateTime.utc_now()
-
-      upload =
-        Repo.insert!(%Upload{
-          uploader_account_id: account_id,
-          channel_id: channel_id,
-          role: role,
-          size: size,
-          created_at: now
-        })
-
+         {:ok, access} <- Access.require(account_id, channel_id, :attach_files),
+         now = DateTime.utc_now(),
+         {:ok, upload} <- insert(account_id, access.server_id, channel_id, role, size, now) do
       url =
         case Store.presign(object(upload.id), :put, @put_seconds, size) do
           {:ok, url} -> url
@@ -115,6 +109,132 @@ defmodule Lumia.Uploads do
          expires_at: DateTime.add(now, @put_seconds, :second)
        }}
     end
+  end
+
+  # The slot's row, its bytes counted against the server first.
+  defp insert(account_id, server_id, channel_id, role, size, now) do
+    Tx.transact(fn ->
+      with :ok <- reserve(server_id, size) do
+        {:ok,
+         Repo.insert!(%Upload{
+           uploader_account_id: account_id,
+           channel_id: channel_id,
+           server_id: server_id,
+           role: role,
+           size: size,
+           created_at: now
+         })}
+      end
+    end)
+  end
+
+  # ---- A server's storage (specs/media.md 4.5) ---------------------------------
+
+  @doc "The most a server's files may take, in bytes, or nil for no limit."
+  def server_max_bytes, do: Application.get_env(:lumia, :uploads, [])[:server_storage_max_bytes]
+
+  # Counts `size` more bytes against the server, unless that takes it past
+  # its limit: then, if the server says so, its oldest attachments expire
+  # to make room first. A personal conversation's blob counts against
+  # nobody yet.
+  defp reserve(nil, _size), do: :ok
+
+  defp reserve(server_id, size) do
+    max = server_max_bytes()
+
+    cond do
+      add(server_id, size, max) ->
+        :ok
+
+      size <= max and storage_full(server_id) == "delete_oldest" and
+        make_room(server_id, size, max) and add(server_id, size, max) ->
+        :ok
+
+      true ->
+        {:error, {:resource_exhausted, "storage", max}}
+    end
+  end
+
+  # Adds `size` to the server's count if it stays within `max`, in one
+  # statement, so two uploads at once cannot both pass the limit.
+  defp add(server_id, size, nil) do
+    {1, _} =
+      Repo.update_all(from(s in Server, where: s.id == ^server_id), inc: [stored_bytes: size])
+
+    true
+  end
+
+  defp add(server_id, size, max) do
+    {n, _} =
+      Repo.update_all(
+        from(s in Server, where: s.id == ^server_id and s.stored_bytes + ^size <= ^max),
+        inc: [stored_bytes: size]
+      )
+
+    n == 1
+  end
+
+  defp storage_full(server_id),
+    do: Repo.one(from s in Server, where: s.id == ^server_id, select: s.storage_full)
+
+  # Expires the attachments of the server's oldest messages, a stretch of
+  # each channel's log at a time, until `size` more bytes fit. Holds the
+  # server's row while it does, so uploads making room do not each expire
+  # their own. Whether enough was freed.
+  defp make_room(server_id, size, limit) do
+    used =
+      Repo.one(
+        from s in Server, where: s.id == ^server_id, lock: "FOR UPDATE", select: s.stored_bytes
+      )
+
+    need = used + size - limit
+
+    oldest =
+      Repo.all(
+        from u in Upload,
+          join: m in Message,
+          on: m.id == u.message_id and m.channel_id == u.channel_id,
+          where: u.server_id == ^server_id and not u.deleting,
+          order_by: [asc: m.created_at],
+          select: {m.channel_id, m.seq, u.size},
+          limit: 10_000
+      )
+
+    {through, freed} =
+      Enum.reduce_while(oldest, {%{}, 0}, fn {channel_id, seq, size}, {through, freed} ->
+        if freed >= need,
+          do: {:halt, {through, freed}},
+          else: {:cont, {Map.update(through, channel_id, seq, &max(&1, seq)), freed + size}}
+      end)
+
+    freed >= need and match?({:ok, _}, expire_through(through))
+  end
+
+  @doc """
+  Expires the attachments of the server's messages sent before `cutoff`,
+  its attachment retention (specs/media.md 4.5). `{:ok, n}`, how many
+  messages lost theirs.
+  """
+  def expire_before(server_id, %DateTime{} = cutoff) do
+    from(u in Upload,
+      join: m in Message,
+      on: m.id == u.message_id and m.channel_id == u.channel_id,
+      where: u.server_id == ^server_id and not u.deleting and m.created_at < ^cutoff,
+      group_by: m.channel_id,
+      select: {m.channel_id, max(m.seq)}
+    )
+    |> Repo.all()
+    |> expire_through()
+  end
+
+  # Expires each channel's attachments through the seq given for it.
+  defp expire_through(through) do
+    Enum.reduce_while(through, {:ok, 0}, fn {channel_id, seq}, {:ok, n} ->
+      case Lumia.Events.expire_attachments(channel_id, seq + 1) do
+        {:ok, k} -> {:cont, {:ok, n + k}}
+        error -> {:halt, error}
+      end
+    end)
   end
 
   defp role(:BLOB_ROLE_DISPLAY), do: {:ok, "display"}
@@ -490,9 +610,23 @@ defmodule Lumia.Uploads do
   defp remove(query) do
     {:ok, ids} =
       Tx.transact(fn ->
-        {_, ids} =
-          Repo.update_all(select(query, [u], u.id), set: [deleting: true, removed: true])
+        {_, rows} =
+          Repo.update_all(
+            query |> where([u], not u.deleting) |> select([u], {u.id, u.server_id, u.size}),
+            set: [deleting: true, removed: true]
+          )
 
+        # A blob being removed no longer counts against its server.
+        rows
+        |> Enum.reject(fn {_, server_id, _} -> is_nil(server_id) end)
+        |> Enum.group_by(fn {_, server_id, _} -> server_id end, fn {_, _, size} -> size end)
+        |> Enum.each(fn {server_id, sizes} ->
+          Repo.update_all(from(s in Server, where: s.id == ^server_id),
+            inc: [stored_bytes: -Enum.sum(sizes)]
+          )
+        end)
+
+        ids = Enum.map(rows, &elem(&1, 0))
         Tx.after_commit(fn -> delete_objects(ids) end)
         {:ok, ids}
       end)

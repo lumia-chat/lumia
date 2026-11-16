@@ -97,6 +97,20 @@ message Server {
   // Whether a deleted message keeps its place as "(deleted)"; off, it is
   // gone from its conversation (architecture 6.7).
   bool show_deleted = 9;
+  // How long the server keeps its attachments, in days; 0 keeps them for
+  // ever (specs/media.md 4.5).
+  uint32 attachment_retention_days = 10;
+  // What happens when the server's files reach its limit.
+  StorageFull storage_full = 11;
+}
+
+// specs/media.md 4.5.
+enum StorageFull {
+  // New uploads are refused until something is deleted or the limit is
+  // raised.
+  STORAGE_FULL_REFUSE = 0;
+  // The attachments of the server's oldest messages expire to make room.
+  STORAGE_FULL_DELETE_OLDEST = 1;
 }
 
 message Role {
@@ -222,6 +236,9 @@ message Attachment {
   // At most 400 px, for IMAGE and GIF, and VIDEO when the sharer's
   // platform made a poster.
   BlobRef thumbnail = 11;
+  // Server content: the server let the blobs go (specs/media.md 4.5), so
+  // main and thumbnail are empty and clients draw "No longer available".
+  bool expired = 12;
 }
 
 // A link's preview (specs/media.md 6). In server content the instance built

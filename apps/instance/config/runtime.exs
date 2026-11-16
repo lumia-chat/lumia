@@ -116,7 +116,15 @@ config :lumia, :uploads,
   image_max_bytes:
     String.to_integer(System.get_env("LUMIA_UPLOAD_IMAGE_MAX_BYTES") || "#{2 * 1024 * 1024}"),
   file_max_bytes:
-    String.to_integer(System.get_env("LUMIA_UPLOAD_FILE_MAX_BYTES") || "#{10 * 1024 * 1024}")
+    String.to_integer(System.get_env("LUMIA_UPLOAD_FILE_MAX_BYTES") || "#{10 * 1024 * 1024}"),
+  # What each server's files may take in all (specs/media.md 4.5); none
+  # unless set.
+  server_storage_max_bytes:
+    (case System.get_env("LUMIA_SERVER_STORAGE_MAX_BYTES") do
+       nil -> nil
+       "" -> nil
+       bytes -> String.to_integer(bytes)
+     end)
 
 # Link cards (specs/media.md 6.4): the instance fetches the pages its
 # members link only when the operator says so (architecture hard rule 3).

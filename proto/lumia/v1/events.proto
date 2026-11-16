@@ -54,11 +54,16 @@ message Event {
     // A message's cards, in full, once the instance fetched them after the
     // send or an edit (specs/media.md 6.4).
     MessageCardsSet message_cards_set = 34;
+    // Every attachment of a message with seq < before_seq is expired: its
+    // blobs are gone (specs/media.md 4.5).
+    AttachmentsExpired attachments_expired = 35;
     EncryptedPayload encrypted = 40;
   }
 }
 
 message PayloadsPurged { uint64 before_seq = 1; }
+
+message AttachmentsExpired { uint64 before_seq = 1; }
 
 message MessageCreated { Message message = 1; }
 

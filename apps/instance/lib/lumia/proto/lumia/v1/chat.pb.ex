@@ -89,6 +89,19 @@ defmodule Lumia.V1.Permission do
   field :MANAGE_BOTS, 31
 end
 
+defmodule Lumia.V1.StorageFull do
+  @moduledoc false
+
+  use Protobuf,
+    enum: true,
+    full_name: "lumia.v1.StorageFull",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :STORAGE_FULL_REFUSE, 0
+  field :STORAGE_FULL_DELETE_OLDEST, 1
+end
+
 defmodule Lumia.V1.AttachmentKind do
   @moduledoc false
 
@@ -156,6 +169,8 @@ defmodule Lumia.V1.Server do
   field :host, 7, type: :string
   field :retention_days, 8, type: :uint32, json_name: "retentionDays"
   field :show_deleted, 9, type: :bool, json_name: "showDeleted"
+  field :attachment_retention_days, 10, type: :uint32, json_name: "attachmentRetentionDays"
+  field :storage_full, 11, type: Lumia.V1.StorageFull, json_name: "storageFull", enum: true
 end
 
 defmodule Lumia.V1.Role do
@@ -286,6 +301,7 @@ defmodule Lumia.V1.Attachment do
   field :alt, 9, type: :string
   field :main, 10, type: Lumia.V1.BlobRef
   field :thumbnail, 11, type: Lumia.V1.BlobRef
+  field :expired, 12, type: :bool
 end
 
 defmodule Lumia.V1.Card do

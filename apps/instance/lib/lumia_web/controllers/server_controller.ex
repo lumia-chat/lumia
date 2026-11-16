@@ -57,9 +57,18 @@ defmodule LumiaWeb.ServerController do
     with {:ok, _server} <- member_server(conn, server_id),
          {:ok, req} <- ProtoConn.decode(conn, V1.UpdateServerRequest),
          changes =
-           Map.reject(Map.take(req, [:name, :retention_days, :show_deleted]), fn {_, v} ->
-             is_nil(v)
-           end),
+           Map.reject(
+             Map.take(req, [
+               :name,
+               :retention_days,
+               :show_deleted,
+               :attachment_retention_days,
+               :storage_full
+             ]),
+             fn {_, v} ->
+               is_nil(v)
+             end
+           ),
          {:ok, _} <-
            set_defaults(server_id, conn.assigns.current_account_id, req.default_channels),
          {:ok, updated} <-
@@ -71,6 +80,15 @@ defmodule LumiaWeb.ServerController do
 
       other ->
         other
+    end
+  end
+
+  @doc "GET /servers/{id}/storage: what the server's files take (specs/media.md 4.5)."
+  def storage(conn, %{"server_id" => server_id}) do
+    with {:ok, _server} <- member_server(conn, server_id),
+         {:ok, %{used: used, max: max}} <-
+           Servers.storage(server_id, conn.assigns.current_account_id) do
+      ProtoConn.render(conn, %V1.ServerStorage{used_bytes: used, max_bytes: max || 0})
     end
   end
 

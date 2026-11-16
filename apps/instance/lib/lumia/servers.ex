@@ -519,8 +519,9 @@ defmodule Lumia.Servers do
 
   @doc """
   Changes a server's settings: `:name`, `:retention_days` (0 keeps
-  messages for ever), `:show_deleted`, any of them; a key left out is
-  left as it is.
+  messages for ever), `:show_deleted`, `:attachment_retention_days` (0
+  keeps attachments for ever), `:storage_full` (a `Lumia.V1.StorageFull`),
+  any of them; a key left out is left as it is.
   Needs `MANAGE_SERVER` (the owner and `ADMINISTRATOR` have it). Each
   setting changed is audited, and every member is told (`ServerUpdated`).
   """
@@ -528,6 +529,18 @@ defmodule Lumia.Servers do
     with {:ok, changes} <- settings(changes),
          {:ok, {_before, updated}} <- change_server(server_id, actor_id, changes) do
       {:ok, updated}
+    end
+  end
+
+  @doc """
+  What the server's files take (specs/media.md 4.5): `{:ok, %{used:
+  bytes, max: bytes | nil}}`, `max` nil when the instance sets no limit.
+  `MANAGE_SERVER`.
+  """
+  def storage(server_id, actor_id) do
+    with {:ok, server} <- fetch_server(server_id),
+         :ok <- may_manage(server_id, actor_id) do
+      {:ok, %{used: server.stored_bytes, max: Lumia.Uploads.server_max_bytes()}}
     end
   end
 
@@ -612,6 +625,18 @@ defmodule Lumia.Servers do
       {:show_deleted, show}, {:ok, acc} when is_boolean(show) ->
         {:cont, {:ok, Map.put(acc, :show_deleted, show)}}
 
+      {:attachment_retention_days, 0}, {:ok, acc} ->
+        {:cont, {:ok, Map.put(acc, :attachment_retention_days, nil)}}
+
+      {:attachment_retention_days, days}, {:ok, acc} when is_integer(days) and days > 0 ->
+        {:cont, {:ok, Map.put(acc, :attachment_retention_days, days)}}
+
+      {:storage_full, :STORAGE_FULL_REFUSE}, {:ok, acc} ->
+        {:cont, {:ok, Map.put(acc, :storage_full, "refuse")}}
+
+      {:storage_full, :STORAGE_FULL_DELETE_OLDEST}, {:ok, acc} ->
+        {:cont, {:ok, Map.put(acc, :storage_full, "delete_oldest")}}
+
       {key, _}, _ ->
         {:halt, {:error, {:invalid_argument, Atom.to_string(key)}}}
     end)
@@ -624,6 +649,8 @@ defmodule Lumia.Servers do
             name: "server.name",
             retention_days: "server.retention",
             show_deleted: "server.show_deleted",
+            attachment_retention_days: "server.attachment_retention",
+            storage_full: "server.storage_full",
             icon_url: "server.icon"
           ],
           Map.get(before, key) != Map.get(after_change, key),

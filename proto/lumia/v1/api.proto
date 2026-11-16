@@ -269,6 +269,17 @@ message UpdateServerRequest {
   ChannelIds default_channels = 3;
   // Whether deleted messages keep their place as "(deleted)".
   optional bool show_deleted = 4;
+  // Days the server keeps its attachments; 0 keeps them for ever.
+  optional uint32 attachment_retention_days = 5;
+  optional StorageFull storage_full = 6;
+}
+
+// GET /servers/{server_id}/storage, for MANAGE_SERVER: what the server's
+// files take (specs/media.md 4.5).
+message ServerStorage {
+  uint64 used_bytes = 1;
+  // 0 when the instance sets no limit.
+  uint64 max_bytes = 2;
 }
 
 message ChannelIds { repeated bytes channel_ids = 1; }

@@ -3,7 +3,8 @@ defmodule LumiaWeb.UploadsApiTest do
   Attachments (specs/media.md 4): a slot, the ciphertext sent to it, the
   word it arrived, a message that names it, and who may fetch it then;
   edits that drop one, deletes, a personal conversation's blobs, and the
-  sweep. The test instance keeps blobs in a directory, so uploads go to
+  sweep; and a server's storage, its limit and the two settings that say
+  what happens to its files (4.5). The test instance keeps blobs in a directory, so uploads go to
   the instance's own signed URL; the bucket's presigned one is checked by
   its shape.
   """
@@ -34,7 +35,7 @@ defmodule LumiaWeb.UploadsApiTest do
     {:ok, general} = Servers.create_channel(server.id, owner.id, "general")
     {:ok, _} = Servers.add_member(server.id, grace.id, owner.id)
     {:ok, _} = Lumia.Channels.join(general.id, grace.id)
-    %{owner: owner, grace: grace, stranger: stranger, general: general}
+    %{owner: owner, grace: grace, stranger: stranger, server: server, general: general}
   end
 
   defp authed(conn, account) do
@@ -395,5 +396,162 @@ defmodule LumiaWeb.UploadsApiTest do
     assert query["X-Amz-Expires"] == "900"
     assert query["X-Amz-SignedHeaders"] == "content-length;host"
     assert byte_size(query["X-Amz-Signature"]) == 64
+  end
+
+  # ---- A server's storage (specs/media.md 4.5) -------------------------------
+
+  defp limit_storage(bytes) do
+    config = Application.get_env(:lumia, :uploads, [])
+    Application.put_env(:lumia, :uploads, Keyword.put(config, :server_storage_max_bytes, bytes))
+    on_exit(fn -> Application.put_env(:lumia, :uploads, config) end)
+  end
+
+  defp storage(account, server) do
+    conn = build_conn() |> authed(account) |> get("/api/v1/servers/#{server.id}/storage")
+    if conn.status == 200, do: V1.ServerStorage.decode(conn.resp_body), else: conn.status
+  end
+
+  defp set_server(account, server, %V1.UpdateServerRequest{} = req) do
+    conn =
+      build_conn()
+      |> authed(account)
+      |> put_req_header("content-type", @proto)
+      |> patch("/api/v1/servers/#{server.id}", V1.UpdateServerRequest.encode(req))
+
+    assert conn.status == 200
+    V1.Server.decode(conn.resp_body)
+  end
+
+  defp file(channel, account, body) do
+    {blob_id, ref} = upload(account, channel.id)
+    {{:ok, _}, message_id} = send(channel, account, body, [attachment(:FILE, ref)])
+    {blob_id, message_id}
+  end
+
+  defp created_attachments(channel_id, message_id) do
+    Events.events_after(channel_id, 0, 200)
+    |> Enum.find_value(fn
+      %V1.Event{payload: {:message_created, %{message: m}}} ->
+        if Proto.from_uuid(m.message_id) == message_id, do: m.attachments
+
+      _ ->
+        nil
+    end)
+  end
+
+  test "a server's files are counted from slot to removal, and its managers can see it", ctx do
+    assert %V1.ServerStorage{used_bytes: 0, max_bytes: 0} = storage(ctx.owner, ctx.server)
+    assert storage(ctx.grace, ctx.server) == 403
+
+    {kept, _} = upload(ctx.grace, ctx.general.id)
+    {taken_back, _} = upload(ctx.grace, ctx.general.id)
+    assert slot(ctx.grace, ctx.general.id, :BLOB_ROLE_FILE, 50).status == 201
+    assert storage(ctx.owner, ctx.server).used_bytes == 250
+
+    assert build_conn()
+           |> authed(ctx.grace)
+           |> delete("/api/v1/blobs/#{taken_back}")
+           |> Map.get(:status) ==
+             204
+
+    assert storage(ctx.owner, ctx.server).used_bytes == 150
+    assert Repo.get(Upload, kept).server_id == ctx.server.id
+  end
+
+  test "a full server refuses an upload by default, and says how much it may hold", ctx do
+    limit_storage(250)
+    upload(ctx.grace, ctx.general.id)
+    upload(ctx.grace, ctx.general.id)
+
+    refused = slot(ctx.grace, ctx.general.id, :BLOB_ROLE_FILE, 100)
+    assert refused.status == 507
+
+    assert %V1.Error{
+             code: :RESOURCE_EXHAUSTED,
+             details: %{"state" => "storage", "quota" => "250"}
+           } =
+             V1.Error.decode(refused.resp_body)
+
+    assert %V1.ServerStorage{used_bytes: 200, max_bytes: 250} = storage(ctx.owner, ctx.server)
+    assert slot(ctx.grace, ctx.general.id, :BLOB_ROLE_FILE, 50).status == 201
+  end
+
+  test "a server set to let its oldest files go makes room, and the message says what went",
+       ctx do
+    limit_storage(250)
+
+    assert %V1.Server{storage_full: :STORAGE_FULL_DELETE_OLDEST} =
+             set_server(ctx.owner, ctx.server, %V1.UpdateServerRequest{
+               storage_full: :STORAGE_FULL_DELETE_OLDEST
+             })
+
+    {old_blob, old_message} = file(ctx.general, ctx.grace, "first")
+    {new_blob, new_message} = file(ctx.general, ctx.grace, "second")
+
+    assert slot(ctx.grace, ctx.general.id, :BLOB_ROLE_FILE, 100).status == 201
+
+    # The oldest message keeps its text, and its file is drawn as gone.
+    assert fetch(ctx.owner, old_blob).status == 404
+    refute Store.exists?("att/" <> old_blob)
+    message = Repo.get(Message, old_message)
+    assert message.body == "first"
+
+    assert [%V1.Attachment{expired: true, main: nil, name: "photo.jpg"}] =
+             Proto.message(message).attachments
+
+    assert [%V1.Attachment{expired: true, main: nil}] =
+             created_attachments(ctx.general.id, old_message)
+
+    assert %V1.Event{payload: {:attachments_expired, %V1.AttachmentsExpired{before_seq: before}}} =
+             List.last(Events.events_after(ctx.general.id, 0, 200))
+
+    assert before == message.seq + 1
+
+    # The newer one is untouched.
+    assert fetch(ctx.owner, new_blob).status == 200
+
+    assert [%V1.Attachment{expired: false, main: %V1.BlobRef{}}] =
+             created_attachments(ctx.general.id, new_message)
+
+    assert storage(ctx.owner, ctx.server).used_bytes == 200
+  end
+
+  test "room is not made from blobs no message names yet, nor for a blob past the limit", ctx do
+    limit_storage(250)
+
+    set_server(ctx.owner, ctx.server, %V1.UpdateServerRequest{
+      storage_full: :STORAGE_FULL_DELETE_OLDEST
+    })
+
+    upload(ctx.grace, ctx.general.id)
+    upload(ctx.grace, ctx.general.id)
+
+    assert slot(ctx.grace, ctx.general.id, :BLOB_ROLE_FILE, 100).status == 507
+    assert slot(ctx.grace, ctx.general.id, :BLOB_ROLE_FILE, 251).status == 507
+    assert storage(ctx.owner, ctx.server).used_bytes == 200
+  end
+
+  test "attachments older than the server keeps them expire daily; their messages stay", ctx do
+    assert %V1.Server{attachment_retention_days: 30} =
+             set_server(ctx.owner, ctx.server, %V1.UpdateServerRequest{
+               attachment_retention_days: 30
+             })
+
+    {old_blob, old_message} = file(ctx.general, ctx.grace, "old")
+    {new_blob, _} = file(ctx.general, ctx.grace, "new")
+
+    long_ago = DateTime.add(DateTime.utc_now(), -31, :day)
+    Repo.update_all(from(m in Message, where: m.id == ^old_message), set: [created_at: long_ago])
+
+    assert {:ok, _} = Lumia.Workers.Retention.perform(%Oban.Job{})
+    assert fetch(ctx.owner, old_blob).status == 404
+    assert fetch(ctx.owner, new_blob).status == 200
+    assert Repo.get(Message, old_message).body == "old"
+    assert [%V1.Attachment{expired: true}] = created_attachments(ctx.general.id, old_message)
+
+    # Nothing more to expire, so a rerun appends nothing.
+    count = length(Events.events_after(ctx.general.id, 0, 200))
+    assert {:ok, _} = Lumia.Workers.Retention.perform(%Oban.Job{})
+    assert length(Events.events_after(ctx.general.id, 0, 200)) == count
   end
 end

@@ -35,6 +35,13 @@ defmodule LumiaWeb.FallbackController do
         "quota" => Integer.to_string(Lumia.History.quota_bytes())
       })
 
+  def call(conn, {:error, {:resource_exhausted, state, quota}}),
+    do:
+      ProtoConn.render_error(conn, :resource_exhausted, %{
+        "state" => state,
+        "quota" => Integer.to_string(quota)
+      })
+
   def call(conn, {:error, {:payload_too_large, max}}),
     do: ProtoConn.render_error(conn, :payload_too_large, %{"max" => Integer.to_string(max)})
 

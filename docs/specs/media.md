@@ -1,6 +1,6 @@
 # Attachments and Link Cards
 
-Status: accepted, 2026-11-15 (settled in a grill with Ryan the same day). This specification makes the attachment half of section 12 of [architecture.md](../architecture.md) and the link cards of section 6 implementable. Wire shapes are in `proto/lumia/v1/chat.proto` (`Attachment`, `BlobRef`, `Card`), `commands.proto` (`SendMessage`, `EditMessage`, `SendEncrypted`), `events.proto` (`MessageCardsSet`), `api.proto` (uploads, `UnfurlRequest`) and `e2ee.proto` (`DmAttachment`, `DmCard`). Where this document and the architecture disagree, the architecture wins and this document is fixed.
+Status: accepted, 2026-11-15 (settled in a grill with Ryan the same day). This specification makes the attachment half of section 12 of [architecture.md](../architecture.md) and the link cards of section 6 implementable. Wire shapes are in `proto/lumia/v1/chat.proto` (`Attachment`, `BlobRef`, `Card`), `commands.proto` (`SendMessage`, `EditMessage`, `SendEncrypted`), `events.proto` (`MessageCardsSet`, `AttachmentsExpired`), `api.proto` (uploads, `UnfurlRequest`, `ServerStorage`) and `e2ee.proto` (`DmAttachment`, `DmCard`). Where this document and the architecture disagree, the architecture wins and this document is fixed.
 
 ## 1. Model
 
@@ -98,8 +98,24 @@ client                          instance                          blob store
 
 ### 4.4 Removal
 
-- **Server content**: an edit may remove attachments (`EditMessage.remove_attachment_ids`) but not add them. A delete tombstones the message and its attachments stop being served at once; their blobs go when the message is purged (after the instance's delete window, 30 days by default, architecture 8.5), by the same job that serves retention, account erasure and "also delete my messages". Moderators remove media by deleting the message.
+- **Server content**: an edit may remove attachments (`EditMessage.remove_attachment_ids`) but not add them. A delete tombstones the message and its attachments stop being served at once; their blobs go when the message is purged (after the instance's delete window, 30 days by default, architecture 8.5), by the same job that serves retention, account erasure and "also delete my messages". Moderators remove media by deleting the message. A server's settings can also expire its attachments by age or to make room (4.5).
 - **Personal DMs**: the sender's client, on a `DmDelete` or a `DmEdit` that drops attachments, calls `DELETE /api/v1/blobs/{blob_id}` (the uploader only; the object goes at once). Blobs also go with their conversation when it is gone for every participant, and with their uploader's account on erasure.
+
+### 4.5 A server's storage
+
+Decided with Ryan 2026-11-15 (architecture 6.7, "A server's files").
+
+- **What counts.** Every blob made for one of the server's channels, server DMs included, by its stored length, from the moment its slot is made (`POST /uploads`) until it is marked for removal: blobs uploading, stored, named by a message, and those of deleted messages still in their delete window. The instance keeps the sum on the server's row, changed in the transaction that makes a slot or marks blobs, so the limit is checked without listing the bucket and two uploads at once cannot both pass it. Link cards' pictures and the server's picture are the instance's and do not count. Personal conversations count against nobody yet (architecture 16 says the sender; not built).
+- **The limit** is `LUMIA_SERVER_STORAGE_MAX_BYTES`, the same for every server, with none when it is unset. A per-server allowance comes with plans (architecture 16).
+- **Usage**: `GET /servers/{id}/storage` answers `ServerStorage {used_bytes, max_bytes}` (`max_bytes` 0 for no limit) to whoever holds `MANAGE_SERVER`. The server's settings show it: "1.2 GB of 5 GB used", or "1.2 GB used".
+- **When the server is full** (`Server.storage_full`, changed as the other settings are, architecture 6.7):
+  - `REFUSE` (the default): a slot that would take the server past its limit is refused with `RESOURCE_EXHAUSTED`, `details.state` `storage` and `details.quota` the limit in bytes. Clients say "This server is out of space for files" on the file.
+  - `DELETE_OLDEST`: the instance first expires the attachments of the server's oldest messages, across its channels, until the new blob fits, then makes the slot. What blobs that are not yet in a message hold cannot be freed this way, so a blob that still does not fit, or one larger than the limit, is refused as above.
+- **How long attachments are kept** (`Server.attachment_retention_days`, 0 for ever, the default): a daily job expires the attachments of every message older than that. It is apart from message retention: a server can keep its text for ever and its files for 90 days. Message retention still takes a message's attachments with it.
+- **Expiring** is done per channel, for every message below a `seq`, so one event says it: the messages' blobs are marked and removed as in 4.1; each such message's attachments are rewritten in place with `expired` set and their `BlobRef`s gone (name, kind, media type, dimensions and placeholder stay; the message's text and cards are untouched), in the messages and in the stored events that carry them, so history served later says so too; and `AttachmentsExpired {before_seq}` is appended to the channel. A client marks every attachment below `before_seq` expired in its store, stops fetching it, and draws it as a file row with the name and "No longer available". What a client already holds in its own cache may stay there: this frees the instance's storage and is not a deletion promise (a message deleted is, 4.4).
+- **Personal DMs** are untouched by both settings: no server governs them.
+
+**Rejected.** *Counting by listing the bucket, with a prefix per server.* S3 and R2 can neither total a prefix nor delete one in a call, so it would be a listing per check; the rows already know each blob's server and length, and they are what finds an object, so an object removed from the bucket by prefix would leave rows naming nothing. *Letting the limit decide what goes.* A server whose admins chose `REFUSE` never loses a file to the limit (architecture 16: no entitlement overrides governance).
 
 ## 5. Showing attachments
 
@@ -162,4 +178,4 @@ A forged card can mislead about a page's title and picture, never about where it
 
 ## 7. Not in v1
 
-Inline players for linked video, oEmbed, spoilers, text and code file previews, image editing or cropping before sending, re-encoding video, an instance moderation action that removes one attachment, per-plan caps, quotas on stored bytes, cards in personal DMs sent from the web.
+Inline players for linked video, oEmbed, spoilers, text and code file previews, image editing or cropping before sending, re-encoding video, an instance moderation action that removes one attachment, per-plan caps and allowances, a limit on what personal conversations store, cards in personal DMs sent from the web.

@@ -107,6 +107,7 @@ pub async fn upload(
         alt: clip_alt(alt),
         main: Some(main),
         thumbnail,
+        expired: false,
     })
 }
 

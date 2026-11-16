@@ -120,6 +120,11 @@ defmodule Lumia.V1.Event do
     json_name: "messageCardsSet",
     oneof: 0
 
+  field :attachments_expired, 35,
+    type: Lumia.V1.AttachmentsExpired,
+    json_name: "attachmentsExpired",
+    oneof: 0
+
   field :encrypted, 40, type: Lumia.V1.EncryptedPayload, oneof: 0
 end
 
@@ -128,6 +133,17 @@ defmodule Lumia.V1.PayloadsPurged do
 
   use Protobuf,
     full_name: "lumia.v1.PayloadsPurged",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :before_seq, 1, type: :uint64, json_name: "beforeSeq"
+end
+
+defmodule Lumia.V1.AttachmentsExpired do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.AttachmentsExpired",
     protoc_gen_elixir_version: "0.17.1",
     syntax: :proto3
 

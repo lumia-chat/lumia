@@ -399,6 +399,29 @@ defmodule Lumia.V1.UpdateServerRequest do
   field :retention_days, 2, proto3_optional: true, type: :uint32, json_name: "retentionDays"
   field :default_channels, 3, type: Lumia.V1.ChannelIds, json_name: "defaultChannels"
   field :show_deleted, 4, proto3_optional: true, type: :bool, json_name: "showDeleted"
+
+  field :attachment_retention_days, 5,
+    proto3_optional: true,
+    type: :uint32,
+    json_name: "attachmentRetentionDays"
+
+  field :storage_full, 6,
+    proto3_optional: true,
+    type: Lumia.V1.StorageFull,
+    json_name: "storageFull",
+    enum: true
+end
+
+defmodule Lumia.V1.ServerStorage do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.ServerStorage",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :used_bytes, 1, type: :uint64, json_name: "usedBytes"
+  field :max_bytes, 2, type: :uint64, json_name: "maxBytes"
 end
 
 defmodule Lumia.V1.ChannelIds do
