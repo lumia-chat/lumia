@@ -74,7 +74,7 @@ object Retention {
      */
     fun attachmentsWarning(from: Int, to: Int): String? =
         if (shortens(from, to)) {
-            "Attachments older than ${label(to)} will be deleted for everyone at the next daily run. Their messages stay, saying the files are no longer available. This cannot be undone."
+            "Attachments older than ${label(to)} will be deleted for everyone. Their messages stay. This cannot be undone."
         } else {
             null
         }
@@ -92,7 +92,7 @@ object WhenFull {
     /** What the screen says above Save when the choice would start deleting attachments; none when it would not. */
     fun warning(from: Boolean, to: Boolean): String? =
         if (to && !from) {
-            "When this server is full, the attachments of its oldest messages will be deleted for everyone to make room for new ones. This cannot be undone."
+            "When an upload would not fit, the oldest messages' attachments are deleted for everyone to make room."
         } else {
             null
         }

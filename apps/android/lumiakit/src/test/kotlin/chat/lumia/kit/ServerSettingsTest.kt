@@ -110,11 +110,11 @@ class ServerSettingsTest {
     @Test
     fun shorterAttachmentRetentionWarnsOfTheNextDailyRun() {
         assertEquals(
-            "Attachments older than 90 days will be deleted for everyone at the next daily run. Their messages stay, saying the files are no longer available. This cannot be undone.",
+            "Attachments older than 90 days will be deleted for everyone. Their messages stay. This cannot be undone.",
             Retention.attachmentsWarning(0, 90),
         )
         assertEquals(
-            "Attachments older than 30 days will be deleted for everyone at the next daily run. Their messages stay, saying the files are no longer available. This cannot be undone.",
+            "Attachments older than 30 days will be deleted for everyone. Their messages stay. This cannot be undone.",
             Retention.attachmentsWarning(365, 30),
         )
         assertNull(Retention.attachmentsWarning(30, 90))
@@ -127,7 +127,7 @@ class ServerSettingsTest {
         assertEquals(listOf("Refuse new uploads", "Delete the oldest attachments"), WhenFull.choices.map { it.second })
         assertEquals(listOf(false, true), WhenFull.choices.map { it.first })
         assertEquals(
-            "When this server is full, the attachments of its oldest messages will be deleted for everyone to make room for new ones. This cannot be undone.",
+            "When an upload would not fit, the oldest messages' attachments are deleted for everyone to make room.",
             WhenFull.warning(false, true),
         )
         assertNull(WhenFull.warning(true, true))
