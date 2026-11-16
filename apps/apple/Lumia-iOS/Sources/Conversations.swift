@@ -334,7 +334,10 @@ struct ConversationScreen: View {
     private func extras(_ m: DmMessageSummary) -> MessageExtras {
         var x = MessageExtras()
         if !m.attachments.isEmpty || !m.cards.isEmpty {
-            x.media = AnyView(MessageMedia(attachments: m.attachments, cards: m.cards, session: session, open: { opening = $0 }, editing: changer.mediaEditing(m.messageId)))
+            let editing = changer.mediaEditing(m.messageId)
+            // A long press on what it carries is its actions, as on its words; not while it is edited.
+            let hold: (() -> Void)? = member && editing == nil ? { sheet = .actions(ref(m)) } : nil
+            x.media = AnyView(MessageMedia(attachments: m.attachments, cards: m.cards, session: session, open: { opening = $0 }, editing: editing, hold: hold))
         }
         // A quote whose author is not known draws no name.
         x.quote = m.reply.map { q in QuoteDisplay(authorID: q.authorAccountId, name: q.authorAccountId.isEmpty ? nil : session.name(of: q.authorAccountId), picture: session.picture(of: q.authorAccountId), text: q.text, deleted: q.originalDeleted, quotesMe: q.authorAccountId == session.me, open: { jump(q.messageId) }) }
@@ -618,7 +621,10 @@ struct ChannelScreen: View {
     private func extras(_ m: MessageSummary) -> MessageExtras {
         var x = MessageExtras()
         if !m.attachments.isEmpty || !m.cards.isEmpty {
-            x.media = AnyView(MessageMedia(attachments: m.attachments, cards: m.cards, session: session, open: { opening = $0 }, editing: changer.mediaEditing(m.messageId)))
+            let editing = changer.mediaEditing(m.messageId)
+            // A long press on what it carries is its actions, as on its words; not while it is edited.
+            let hold: (() -> Void)? = member && editing == nil ? { sheet = .actions(ref(m)) } : nil
+            x.media = AnyView(MessageMedia(attachments: m.attachments, cards: m.cards, session: session, open: { opening = $0 }, editing: editing, hold: hold))
         }
         x.mentions = m.mentions
         x.name = { knownName($0, session: session) }

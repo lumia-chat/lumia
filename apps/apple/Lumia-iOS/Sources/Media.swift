@@ -399,7 +399,8 @@ struct MediaEditing {
 /// A message's attachments and cards under its words: the pictures (and
 /// videos by their posters) at their shape or in a grid, then audio and
 /// files as rows, then the cards. Preferences may draw every attachment
-/// as a row and no cards.
+/// as a row and no cards. A long press anywhere on them is `hold`, the
+/// message's actions, as on its words; a tap still opens, plays or shares.
 struct MessageMedia: View {
     @Environment(Preferences.self) private var preferences
     let attachments: [AttachmentSummary]
@@ -407,6 +408,8 @@ struct MessageMedia: View {
     let session: LumiaSession
     let open: (MediaOpen) -> Void
     var editing: MediaEditing?
+    /// The message's actions: nil while it is edited, or where it has none.
+    var hold: (() -> Void)?
 
     private static let gap = LumiaTokens.space2
 
@@ -425,7 +428,7 @@ struct MessageMedia: View {
                 PictureGrid(sizes: visual.map { ($0.width, $0.height) }, gap: Self.gap) {
                     ForEach(visual, id: \.attachmentId) { a in
                         removable(a.attachmentId) {
-                            AttachmentTile(attachment: a, session: session, single: visual.count == 1) { open(.of(a)) }
+                            AttachmentTile(attachment: a, session: session, single: visual.count == 1, hold: hold) { open(.of(a)) }
                         }
                     }
                 }
@@ -433,20 +436,20 @@ struct MessageMedia: View {
             ForEach(rows, id: \.attachmentId) { a in
                 removable(a.attachmentId) {
                     if AttachmentKind(a.kind) == .audio, !asRows {
-                        AudioRow(attachment: a, session: session) { open(.file(a)) }
+                        AudioRow(attachment: a, session: session, hold: hold) { open(.file(a)) }
                     } else {
-                        FileRow(attachment: a, asFile: asRows) { open(.of(a)) }
+                        FileRow(attachment: a, asFile: asRows, hold: hold) { open(.of(a)) }
                     }
                 }
             }
             ForEach(shownCards, id: \.url) { card in
                 if let editing {
                     HStack(alignment: .top, spacing: LumiaTokens.space8) {
-                        LinkCardView(card: card, session: session)
+                        LinkCardView(card: card, session: session, hold: hold)
                         RemoveButton(label: "Remove the card for \(card.host)") { editing.removeCard(card.url) }
                     }
                 } else {
-                    LinkCardView(card: card, session: session)
+                    LinkCardView(card: card, session: session, hold: hold)
                 }
             }
         }
@@ -506,6 +509,7 @@ private struct AttachmentTile: View {
     let attachment: AttachmentSummary
     let session: LumiaSession
     let single: Bool
+    let hold: (() -> Void)?
     let open: () -> Void
     @State private var picture: CGImage?
     @State private var placeholder: CGImage?
@@ -548,8 +552,7 @@ private struct AttachmentTile: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: single ? LumiaTokens.radius12 : LumiaTokens.radius6))
         .overlay(RoundedRectangle(cornerRadius: single ? LumiaTokens.radius12 : LumiaTokens.radius6).stroke(LumiaTokens.line.color))
-        .contentShape(Rectangle())
-        .onTapGesture {
+        .pressed(hold: hold) {
             // Reduce Motion: the first tap plays a still GIF in place.
             if kind == .gif, reduceMotion, !playing, animation != nil { playing = true } else { open() }
         }
@@ -557,6 +560,7 @@ private struct AttachmentTile: View {
         .accessibilityLabel(MediaWords.label(attachment, asFile: undrawable))
         .accessibilityAddTraits(.isButton)
         .accessibilityIdentifier("attachment")
+        .messageActions(hold)
         .task(id: attachment.attachmentId) { await load() }
     }
 
@@ -635,13 +639,14 @@ private struct MediaBadge: View {
 struct FileRow: View {
     let attachment: AttachmentSummary
     var asFile = false
+    var hold: (() -> Void)?
     let open: () -> Void
 
     private var kind: AttachmentKind { AttachmentKind(attachment.kind) }
     private var pdf: Bool { MediaWords.symbol(kind: kind, mediaType: attachment.mediaType, name: attachment.name) == "doc.richtext" }
 
     var body: some View {
-        Button(action: open) {
+        Group {
             HStack(spacing: LumiaTokens.space10) {
                 Image(systemName: MediaWords.symbol(kind: kind, mediaType: attachment.mediaType, name: attachment.name))
                     .font(.system(size: 18))
@@ -663,14 +668,14 @@ struct FileRow: View {
             .frame(maxWidth: 360, alignment: .leading)
             .background(LumiaTokens.surface.color, in: RoundedRectangle(cornerRadius: LumiaTokens.radius12))
             .overlay(RoundedRectangle(cornerRadius: LumiaTokens.radius12).stroke(LumiaTokens.line.color))
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .pressed(hold: hold, open)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(MediaWords.label(attachment, asFile: asFile || kind == .file))
         .accessibilityHint(kind.visual ? "Opens it" : "Opens the share sheet to save or share it")
         .accessibilityAddTraits(.isButton)
         .accessibilityIdentifier("attachment")
+        .messageActions(hold)
     }
 }
 
@@ -678,6 +683,7 @@ struct FileRow: View {
 private struct AudioRow: View {
     let attachment: AttachmentSummary
     let session: LumiaSession
+    let hold: (() -> Void)?
     let share: () -> Void
     @State private var player: AVAudioPlayer?
     @State private var playing = false
@@ -686,33 +692,39 @@ private struct AudioRow: View {
 
     var body: some View {
         HStack(spacing: LumiaTokens.space10) {
-            Button(action: toggle) {
-                Group {
-                    if loading { ProgressView() } else { Image(systemName: playing ? "pause.fill" : "play.fill").font(.system(size: 16)) }
-                }
-                .foregroundStyle(LumiaTokens.onAccent.color)
-                .frame(width: 40, height: 40)
-                .background(LumiaTokens.accent.color, in: Circle())
+            Group {
+                if loading { ProgressView() } else { Image(systemName: playing ? "pause.fill" : "play.fill").font(.system(size: 16)) }
             }
-            .buttonStyle(.plain)
+            .foregroundStyle(LumiaTokens.onAccent.color)
+            .frame(width: 40, height: 40)
+            .background(LumiaTokens.accent.color, in: Circle())
+            .pressed(hold: hold, toggle)
+            .accessibilityElement(children: .ignore)
             .accessibilityLabel(playing ? "Pause" : "Play")
+            .accessibilityAddTraits(.isButton)
+            .messageActions(hold)
             VStack(alignment: .leading, spacing: LumiaTokens.space2) {
                 Text(attachment.name).font(LumiaTokens.textCompact.font).foregroundStyle(LumiaTokens.ink.color).lineLimit(1).truncationMode(.middle)
                 Text(error.isEmpty ? MediaWords.detail(kind: .audio, sizeBytes: attachment.sizeBytes, durationMs: attachment.durationMs) : error)
                     .font(LumiaTokens.textMeta.font).foregroundStyle(error.isEmpty ? LumiaTokens.inkMuted.color : LumiaTokens.danger.color)
             }
             .accessibilityElement(children: .combine)
+            .messageActions(hold)
             Spacer(minLength: 0)
-            Button(action: share) {
-                Image(systemName: "square.and.arrow.down").font(.system(size: 15)).foregroundStyle(LumiaTokens.inkSecondary.color).frame(width: 32, height: 32)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Save \(attachment.name)")
+            Image(systemName: "square.and.arrow.down").font(.system(size: 15)).foregroundStyle(LumiaTokens.inkSecondary.color).frame(width: 32, height: 32)
+                .pressed(hold: hold, share)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Save \(attachment.name)")
+                .accessibilityAddTraits(.isButton)
+                .messageActions(hold)
         }
         .padding(LumiaTokens.space8)
         .frame(maxWidth: 360, alignment: .leading)
         .background(LumiaTokens.surface.color, in: RoundedRectangle(cornerRadius: LumiaTokens.radius12))
         .overlay(RoundedRectangle(cornerRadius: LumiaTokens.radius12).stroke(LumiaTokens.line.color))
+        // Between its buttons the row's own ground takes the long press too.
+        .contentShape(Rectangle())
+        .onLongPressGesture(minimumDuration: MediaPress.hold) { hold?() }
         .onDisappear { player?.stop(); playing = false }
     }
 
@@ -749,6 +761,8 @@ struct LinkCardView: View {
     let card: CardSummary
     let session: LumiaSession
     var compact = false
+    /// The message's actions, on a long press; none in the composer's preview.
+    var hold: (() -> Void)?
     @State private var picture: CGImage?
 
     private var bar: Color {
@@ -762,9 +776,7 @@ struct LinkCardView: View {
     private var wide: Bool { !compact && card.imageHeight > 0 && Double(card.imageWidth) / Double(card.imageHeight) >= 1.4 }
 
     var body: some View {
-        Button {
-            if let url = URL(string: card.url) { openURL(url) }
-        } label: {
+        Group {
             VStack(alignment: .leading, spacing: LumiaTokens.space8) {
                 HStack(alignment: .top, spacing: LumiaTokens.space10) {
                     VStack(alignment: .leading, spacing: LumiaTokens.space4) {
@@ -794,13 +806,16 @@ struct LinkCardView: View {
             .clipShape(RoundedRectangle(cornerRadius: LumiaTokens.radius10))
             .overlay(RoundedRectangle(cornerRadius: LumiaTokens.radius10).stroke(LumiaTokens.line.color))
         }
-        .buttonStyle(.plain)
+        .pressed(hold: hold) {
+            if let url = URL(string: card.url) { openURL(url) }
+        }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(MediaWords.cardLabel(card))
         .accessibilityValue(card.description)
         .accessibilityHint("Opens the link in the browser")
         .accessibilityAddTraits(.isLink)
         .accessibilityIdentifier("card")
+        .messageActions(hold)
         .task(id: card.url) {
             if hasPicture { picture = await session.cardPicture(card) }
         }
@@ -817,6 +832,32 @@ struct LinkCardView: View {
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: LumiaTokens.radius8))
+    }
+}
+
+/// A piece of a message's media pressed: a tap does what the piece does,
+/// and a long press is the message's actions, as on its words. They are
+/// one view's gestures, so only one of them happens: a long press that
+/// opened the actions does not also open the picture when the finger
+/// lifts, as a button's tap would however long it was held.
+enum MediaPress {
+    /// As long as the row's own long press.
+    static let hold = 0.4
+}
+
+extension View {
+    func pressed(hold: (() -> Void)?, _ tap: @escaping () -> Void) -> some View {
+        contentShape(Rectangle())
+            .onTapGesture(perform: tap)
+            .onLongPressGesture(minimumDuration: MediaPress.hold) { hold?() }
+    }
+
+    /// The message's actions for VoiceOver on a piece that is a stop of
+    /// its own, as its row has them.
+    func messageActions(_ hold: (() -> Void)?) -> some View {
+        accessibilityActions {
+            if let hold { Button("Message actions", action: hold) }
+        }
     }
 }
 

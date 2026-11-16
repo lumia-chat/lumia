@@ -11,8 +11,10 @@
 # through the attach button and the system's photo picker, uploaded,
 # sent with words and drawn; the script reads the message on the instance
 # (one IMAGE, upright: taller than wide) and opens the attachment with the
-# CLI as the other person; the test opens the viewer (Save to Photos,
-# Share, Close) and the PDF's share sheet. Screenshots land in
+# CLI as the other person; the test holds the picture, the card and the
+# PDF, each opening its message's actions and nothing else, then opens the
+# viewer (Save to Photos, Share, Close) and the PDF's share sheet with a
+# tap. Screenshots land in
 # .build/smoke-media/.
 #
 #   scripts/smoke-media.sh     # expects the app and its tests built for the simulator (xcodebuild build-for-testing, see AGENTS.md) and the CLI
@@ -95,7 +97,7 @@ for _ in $(seq 1 20); do
   [ "$carded" -gt 0 ] && break
   sleep 1
 done
-[ "$carded" -gt 0 ] && echo "the instance built a card for $link" || echo "note: no card for $link (the instance could not fetch it); the pictures will have none"
+[ "$carded" -gt 0 ] && echo "the instance built a card for $link" || echo "note: no card for $link (the instance could not fetch it, or runs without LUMIA_LINK_CARDS=true); the pictures will have none"
 echo "seeded $handle and $other in server $server, channel $channel"
 
 udid=$(xcrun simctl list devices available -j | python3 -c "
@@ -177,6 +179,9 @@ c other attachments "$channel" "$1" --out "$work/received" >/dev/null
 opened=$(ls "$work/received" | head -1)
 [ -n "$opened" ] || fail "the other person could not open the phone's attachment"
 echo "the phone sent one picture, $4×$5, opened by the other person as $opened ($(sips -g pixelWidth -g pixelHeight "$work/received/$opened" | awk '/pixel/ {print $2}' | paste -sd x -))"
+reached held 60
+seen held
+echo "a long press on the picture opened its message's actions and not the viewer"
 reached viewer 60
 seen viewer
 reached share 60

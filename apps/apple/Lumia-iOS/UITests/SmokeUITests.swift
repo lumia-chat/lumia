@@ -685,6 +685,17 @@ final class SmokeUITests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: "\(steps)/\(step).seen"), "the smoke never looked at \"\(step)\"")
     }
 
+    /// Puts a sheet at its medium height away as a person does, by a tap
+    /// over the conversation above it, and waits for `showing` to go.
+    private func putAwaySheet(_ app: XCUIApplication, showing: XCUIElement) {
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.12)).tap()
+        let gone = { XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: showing)], timeout: 5) }
+        if gone() != .completed {
+            app.swipeDown(velocity: .fast)
+            XCTAssertEqual(gone(), .completed, "the sheet did not go")
+        }
+    }
+
     /// Whether Notification Center lists a notification that says `words`,
     /// looked at as a person does: pulled down from the top edge over the
     /// app, read, and pushed back up. `within` is how long one that is on
@@ -1332,10 +1343,12 @@ final class SmokeUITests: XCTestCase {
     /// ridge.jpg", "File, notes.pdf, …", "Link, <host>, …"); the attach
     /// button opens the system's photo picker, the picture the smoke put in
     /// the library is chosen and goes into the strip, uploads, and is sent
-    /// with words; the phone draws it in its message, which opens full
-    /// screen with Save to Photos, Share and Close; the PDF opens the share
-    /// sheet. Steps under LUMIA_UITEST_STEPS: `drawn`, `picker`, `strip`,
-    /// `sent`, `viewer`, `share`.
+    /// with words; the phone draws it in its message. Held, the picture,
+    /// the card and the PDF each open their message's actions and nothing
+    /// else; tapped, the picture opens full screen with Save to Photos,
+    /// Share and Close, and the PDF the share sheet. Steps under
+    /// LUMIA_UITEST_STEPS: `drawn`, `picker`, `strip`, `sent`, `held`,
+    /// `viewer`, `share`.
     func testAttachingAPictureFromThePhotoLibrary() throws {
         let env = ProcessInfo.processInfo.environment
         let steps = try XCTUnwrap(env["LUMIA_UITEST_STEPS"])
@@ -1390,8 +1403,20 @@ final class SmokeUITests: XCTestCase {
         let label = mine.label
         reached("sent")
 
-        // The picture full screen, with its ways out, and back.
+        // A long press on the picture is its message's actions, as on its
+        // words (Edit message: this account's own), and the viewer does not
+        // open as well when the finger lifts.
         if app.keyboards.firstMatch.exists { app.swipeDown() }
+        let viewer = app.buttons["Save to Photos"]
+        mine.press(forDuration: 1.0)
+        XCTAssertTrue(app.buttons["action-reply"].waitForExistence(timeout: 10), "a long press on the picture did not open its message's actions")
+        XCTAssertTrue(app.buttons["action-edit"].exists, "the actions a long press on the picture opened are not its message's")
+        XCTAssertFalse(viewer.waitForExistence(timeout: 2), "a long press on the picture opened the viewer as well")
+        reached("held")
+        putAwaySheet(app, showing: app.buttons["action-reply"])
+        XCTAssertFalse(viewer.exists, "the viewer opened once the actions went")
+
+        // The picture full screen, with its ways out, and back.
         mine.tap()
         XCTAssertTrue(app.buttons["Save to Photos"].waitForExistence(timeout: 10), "the viewer has no Save to Photos")
         XCTAssertTrue(app.buttons["Share"].exists, "the viewer has no Share")
@@ -1399,13 +1424,30 @@ final class SmokeUITests: XCTestCase {
         reached("viewer")
         app.buttons["Close"].tap()
 
+        // Someone else's card, further up: their actions (no Edit message), and the link not opened.
+        if carded {
+            let card = labelled("Link, ").firstMatch
+            for _ in 0..<6 where !(card.exists && card.isHittable) { app.scrollViews.firstMatch.swipeDown() }
+            XCTAssertTrue(card.isHittable, "the card is not there to hold")
+            card.press(forDuration: 1.0)
+            XCTAssertTrue(app.buttons["action-reply"].waitForExistence(timeout: 10), "a long press on the card did not open its message's actions")
+            XCTAssertFalse(app.buttons["action-edit"].exists, "the card's actions are not its message's")
+            XCTAssertEqual(app.state, .runningForeground, "a long press on the card opened the link as well")
+            putAwaySheet(app, showing: app.buttons["action-reply"])
+        }
+
         // The PDF, further up: the share sheet, where it can be saved to Files.
         let file = labelled("File, notes.pdf, ").firstMatch
         for _ in 0..<6 where !(file.exists && file.isHittable) { app.scrollViews.firstMatch.swipeDown() }
         XCTAssertTrue(file.waitForExistence(timeout: 10), "the PDF's row is not there to open")
-        file.tap()
         let sheet = app.otherElements["ActivityListView"]
         let saveToFiles = app.buttons["Save to Files"]
+        // Held, its message's actions and not the share sheet.
+        file.press(forDuration: 1.0)
+        XCTAssertTrue(app.buttons["action-reply"].waitForExistence(timeout: 10), "a long press on the PDF did not open its message's actions")
+        XCTAssertFalse(sheet.waitForExistence(timeout: 2) || saveToFiles.exists, "a long press on the PDF opened the share sheet as well")
+        putAwaySheet(app, showing: app.buttons["action-reply"])
+        file.tap()
         XCTAssertTrue(sheet.waitForExistence(timeout: 20) || saveToFiles.waitForExistence(timeout: 1), "the file did not open the share sheet")
         reached("share")
     }
