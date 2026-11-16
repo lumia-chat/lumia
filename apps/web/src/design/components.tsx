@@ -7,7 +7,7 @@
 // instead of `className`, `for` instead of `htmlFor`, `style` objects with
 // CSS property names.
 
-import { For, Match, Show, Switch, children, createEffect, createMemo, createSignal, createUniqueId, on, onCleanup, onMount, splitProps, type JSX } from "solid-js";
+import { For, Match, Show, Switch, children, createEffect, createMemo, createSignal, createUniqueId, on, onCleanup, onMount, splitProps, untrack, type JSX } from "solid-js";
 import { Dynamic, Portal } from "solid-js/web";
 import { ICONS } from "./icons";
 import { emojiMatches, loadEmoji, type EmojiGroup } from "./emoji";
@@ -3920,6 +3920,301 @@ export function ToneSwatches(props: ToneSwatchesProps) {
           </button>
         )}
       </For>
+    </div>
+  );
+}
+
+/* ── Settings (the Preferences boards) ─────────────────────── */
+
+/** An arrow key's step through a radio group: the next, the one before, or none. */
+function arrowStep(e: KeyboardEvent): number {
+  return e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : e.key === "ArrowLeft" || e.key === "ArrowUp" ? -1 : 0;
+}
+
+/** Moves a radio group's choice by an arrow key, and the focus with it to the radio it lands on. */
+function radioKeys<T>(e: KeyboardEvent & { currentTarget: HTMLElement }, values: T[], current: T | undefined, pick: ((value: T) => void) | undefined) {
+  const step = arrowStep(e);
+  if (!step || !values.length) return;
+  e.preventDefault();
+  const at = values.indexOf(current as T);
+  const index = at < 0 ? (step > 0 ? 0 : values.length - 1) : (at + step + values.length) % values.length;
+  pick?.(values[index] as T);
+  e.currentTarget.querySelectorAll<HTMLElement>('[role="radio"]')[index]?.focus();
+}
+
+export interface SegmentedProps<T extends string | number> {
+  /** Each segment's value and words; `name` is its accessible name where the words alone say too little ("15 points"). */
+  options: { value: T; label: string; name?: string }[];
+  value: T;
+  onChange?: (value: T) => void;
+  /** The group's name, or the id of what names it (a setting's row). */
+  label?: string;
+  labelledBy?: string;
+  describedBy?: string;
+  /** Segments of one width (a row of numbers); else each is as wide as its words. */
+  even?: boolean;
+  class?: string;
+}
+
+/** One of a few, compact: segments as wide as their words on a track sized to them, the chosen one raised. A radio group the arrow keys move through. */
+export function Segmented<T extends string | number>(props: SegmentedProps<T>) {
+  return (
+    <div
+      role="radiogroup"
+      aria-label={props.label}
+      aria-labelledby={props.labelledBy}
+      aria-describedby={props.describedBy}
+      class={cx("lu-seg", props.even && "lu-seg--even", props.class)}
+      onKeyDown={(e) =>
+        radioKeys(
+          e,
+          props.options.map((o) => o.value),
+          props.value,
+          props.onChange,
+        )
+      }
+    >
+      <For each={props.options}>
+        {(o) => (
+          <button type="button" role="radio" aria-checked={props.value === o.value} aria-label={o.name} tabindex={props.value === o.value ? 0 : -1} class="lu-seg__opt" onClick={() => props.onChange?.(o.value)}>
+            {o.label}
+          </button>
+        )}
+      </For>
+    </div>
+  );
+}
+
+export interface ToggleProps {
+  checked: boolean;
+  onChange?: (checked: boolean) => void;
+  label?: string;
+  /** The id of what names it (a setting's row) and of what says what its state does (the row's caption). */
+  labelledBy?: string;
+  describedBy?: string;
+  class?: string;
+}
+
+/** A switch, on or off: on, the accent track with the knob at its end; off, a grey one with the knob at its start. */
+export function Toggle(props: ToggleProps) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={props.checked}
+      aria-label={props.label}
+      aria-labelledby={props.labelledBy}
+      aria-describedby={props.describedBy}
+      class={cx("lu-switch", props.class)}
+      onClick={() => props.onChange?.(!props.checked)}
+    >
+      <span aria-hidden="true" class="lu-switch__knob lu-in-light" />
+    </button>
+  );
+}
+
+export interface PictureChoicesProps<T extends string> {
+  /** Each tile: its value, its name, a line under the name, and the drawing over it. */
+  options: { value: T; label: string; caption?: string; picture: JSX.Element }[];
+  /** The one chosen; none is ringed when it is none of them (a preset when the values match none). */
+  value: T | undefined;
+  onChange?: (value: T) => void;
+  label?: string;
+  labelledBy?: string;
+  class?: string;
+}
+
+/**
+ * One of a few as tiles in a row, each a small drawing over its name: the
+ * chosen one ringed in the accent with a tick after its name, the others
+ * outlined. A radio group the arrow keys move through.
+ */
+export function PictureChoices<T extends string>(props: PictureChoicesProps<T>) {
+  const chosen = () => props.options.some((o) => o.value === props.value);
+  return (
+    <div
+      role="radiogroup"
+      aria-label={props.label}
+      aria-labelledby={props.labelledBy}
+      class={cx("lu-pictiles", props.class)}
+      onKeyDown={(e) =>
+        radioKeys(
+          e,
+          props.options.map((o) => o.value),
+          props.value,
+          props.onChange,
+        )
+      }
+    >
+      <For each={props.options}>
+        {(o, i) => {
+          const nid = fieldId();
+          const cid = fieldId();
+          const on = () => props.value === o.value;
+          return (
+            <button
+              type="button"
+              role="radio"
+              aria-checked={on()}
+              aria-labelledby={nid}
+              aria-describedby={o.caption ? cid : undefined}
+              tabindex={on() || (!chosen() && i() === 0) ? 0 : -1}
+              class="lu-pictile"
+              onClick={() => props.onChange?.(o.value)}
+            >
+              <span aria-hidden="true" class="lu-pictile__thumb">
+                {o.picture}
+              </span>
+              <span class="lu-pictile__text">
+                <span id={nid} class="lu-pictile__name">
+                  {o.label}
+                  <Show when={on()}>
+                    <Icon name="check" size={15} strokeWidth={2.6} class="lu-pictile__tick" />
+                  </Show>
+                </span>
+                <Show when={o.caption}>
+                  <span id={cid} class="lu-pictile__caption">
+                    {o.caption}
+                  </span>
+                </Show>
+              </span>
+            </button>
+          );
+        }}
+      </For>
+    </div>
+  );
+}
+
+/** A small drawing of the app's window in a theme, whatever the page is in: System is half of each. */
+export function ThemeSketch(props: { theme: "light" | "dark" | "system" }) {
+  const side = () => (
+    <span class="lu-sketch__side">
+      <span class="lu-sketch__bar lu-sketch__bar--80" />
+      <span class="lu-sketch__bar" />
+      <span class="lu-sketch__bar lu-sketch__bar--64" />
+    </span>
+  );
+  const pane = () => (
+    <span class="lu-sketch__pane">
+      <span class="lu-sketch__bar lu-sketch__bar--accent" />
+      <span class="lu-sketch__bar lu-sketch__bar--90" />
+      <span class="lu-sketch__bar lu-sketch__bar--72" />
+    </span>
+  );
+  return (
+    <Show
+      when={props.theme !== "system"}
+      fallback={
+        <span class="lu-sketch lu-sketch--theme lu-sketch--split">
+          <span class="lu-sketch__half lu-in-light">
+            <span class="lu-sketch__rail" />
+            {side()}
+          </span>
+          <span class="lu-sketch__half lu-in-dark">{pane()}</span>
+        </span>
+      }
+    >
+      <span class={cx("lu-sketch", "lu-sketch--theme", "lu-in-" + props.theme)}>
+        <span class="lu-sketch__rail" />
+        {side()}
+        {pane()}
+      </span>
+    </Show>
+  );
+}
+
+/** A small drawing of a preset's messages: two blocks with large avatars, smaller ones closer together, or a line each. */
+export function LayoutSketch(props: { layout: "comfortable" | "compact" | "minimal" }) {
+  // Each block: its avatar's tone, its name's width, and its lines' (beside the name, or under it in Compact).
+  const blocks = () =>
+    props.layout === "compact"
+      ? [
+          { tone: "mint", name: 30, lines: [80] },
+          { tone: "amber", name: 26, lines: [64, 72] },
+        ]
+      : [
+          { tone: "mint", name: 36, lines: [88] },
+          { tone: "amber", name: 30, lines: [70] },
+        ];
+  // Minimal's lines: a time, a name, the words.
+  const lines: [number, number][] = [
+    [22, 50],
+    [22, 38],
+    [18, 60],
+    [22, 30],
+    [18, 46],
+  ];
+  const bar = (width: string, extra?: string) => <span class={cx("lu-sketch__bar", extra)} style={{ width }} />;
+  return (
+    <span class={cx("lu-sketch", "lu-sketch--layout", "lu-sketch--" + props.layout)}>
+      <Show
+        when={props.layout === "minimal"}
+        fallback={
+          <For each={blocks()}>
+            {(b) => (
+              <>
+                <span class="lu-sketch__head">
+                  <span class={cx("lu-sketch__face", "lu-tone-" + b.tone)} />
+                  <span class="lu-sketch__lines">
+                    {bar(b.name + "%", "lu-sketch__bar--name")}
+                    <Show when={props.layout === "comfortable"}>
+                      <For each={b.lines}>{(w) => bar(w + "%")}</For>
+                    </Show>
+                  </span>
+                </span>
+                <Show when={props.layout === "compact"}>
+                  <For each={b.lines}>{(w) => bar(w + "%", "lu-sketch__bar--under")}</For>
+                </Show>
+              </>
+            )}
+          </For>
+        }
+      >
+        <For each={lines}>
+          {([name, text]) => (
+            <span class="lu-sketch__line">
+              <span class="lu-sketch__bar lu-sketch__bar--time" />
+              {bar(name + "px", "lu-sketch__bar--name")}
+              {bar(text + "%")}
+            </span>
+          )}
+        </For>
+      </Show>
+    </span>
+  );
+}
+
+export function SettingsGroup(props: { children?: JSX.Element; class?: string }) {
+  return <div class={cx("lu-setgroup", props.class)}>{props.children}</div>;
+}
+
+export interface SettingRowProps {
+  name: string;
+  /** What the setting does, or what its state does now (a switch's). */
+  caption?: string;
+  /** The control, made once and handed the ids of the row's name and caption to be named and described by. */
+  control: (ids: { name: string; caption: string }) => JSX.Element;
+  class?: string;
+}
+
+/** One setting in an outlined group: its name over a caption, its control at the row's end. */
+export function SettingRow(props: SettingRowProps) {
+  const nid = fieldId();
+  const cid = fieldId();
+  return (
+    <div class={cx("lu-setrow", props.class)}>
+      <div class="lu-setrow__text">
+        <span id={nid} class="lu-setrow__name">
+          {props.name}
+        </span>
+        <Show when={props.caption}>
+          <span id={cid} class="lu-setrow__caption">
+            {props.caption}
+          </span>
+        </Show>
+      </div>
+      <div class="lu-setrow__control">{untrack(() => props.control({ name: nid, caption: cid }))}</div>
     </div>
   );
 }

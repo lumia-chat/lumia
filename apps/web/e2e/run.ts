@@ -920,9 +920,13 @@ async function account(which: string, taken: string, stamp: number) {
 // Preferences, from the account menu: a chosen appearance holds whatever
 // the system is in and "System" follows it again; Compact draws the
 // small avatar and a block in less room; both are this browser's and are
-// still there after a reload. An account of its own with three quick
-// messages, so the channel is one block of known size, the second with a
-// reaction, which Minimal does not draw.
+// still there after a reload. The page's preview draws its sample
+// messages as each choice says (grouped or one line, the avatar's size,
+// the spacing, the font size, the picture or its file row, the card, the
+// reactions), and each switch's caption says what its state does. An
+// account of its own with three quick messages, so the channel is one
+// block of known size, the second with a reaction, which Minimal does not
+// draw.
 async function preferencesStep(which: string, stamp: number) {
   const dir = resolve(work, `cli-preferences-${which}`);
   const handle = `pref${which}${stamp}`;
@@ -966,23 +970,52 @@ async function preferencesStep(which: string, stamp: number) {
     const ground = () => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
     const DARK = "rgb(15, 18, 24)";
     const LIGHT = "rgb(242, 244, 248)";
-    const appearance = page.getByRole("tablist", { name: "Appearance" });
-    await appearance.getByRole("tab", { name: "Dark" }).click();
+    const appearance = page.getByRole("radiogroup", { name: "Appearance" });
+    await appearance.getByRole("radio", { name: "Dark" }).click();
     if ((await ground()) !== DARK) throw new Error(`Dark under a light system draws the ground ${await ground()}`);
+    if ((await appearance.getByRole("radio", { name: "Dark" }).getAttribute("aria-checked")) !== "true") throw new Error("Dark chosen is not the tile checked");
     await page.screenshot({ path: `${out}/${which}-preferences-dark.png` });
-    await appearance.getByRole("tab", { name: "Light" }).click();
+    await appearance.getByRole("radio", { name: "Light" }).click();
     await page.emulateMedia({ colorScheme: "dark" });
     if ((await ground()) !== LIGHT) throw new Error(`Light under a dark system draws the ground ${await ground()}`);
-    await appearance.getByRole("tab", { name: "System" }).click();
+    await appearance.getByRole("radio", { name: "System" }).click();
     if ((await ground()) !== DARK) throw new Error(`System under a dark system draws the ground ${await ground()}`);
     await page.emulateMedia({ colorScheme: "light" });
     if ((await ground()) !== LIGHT) throw new Error(`System under a light system draws the ground ${await ground()}`);
+    phase("the preview");
+    // The preview is one picture to assistive technology, drawn by the conversation's rows; nothing in it is pressable.
+    await page.getByRole("img", { name: "Preview of messages with these settings" }).waitFor();
+    const drawn = () =>
+      page.evaluate(() => {
+        const p = document.querySelector(".lu-preview");
+        const n = (s: string) => p?.querySelectorAll(s).length ?? 0;
+        return {
+          lines: n(".lu-msg--line .lu-msg__part"),
+          blocks: n(".lu-msg:not(.lu-msg--line)"),
+          avatar: p?.querySelector(".lu-avatar")?.getBoundingClientRect().width ?? 0,
+          picture: n(".lu-preview__shot"),
+          file: n(".lu-attach"),
+          card: n(".lu-linkcard"),
+          reactions: n(".lu-reaction"),
+          spacing: p?.querySelector(".lu-msglist")?.className.match(/lu-msglist--(cozy|tight)/)?.[1] ?? "roomy",
+          size: getComputedStyle(p?.querySelector(".lu-body") ?? document.body).fontSize,
+          inert: !!p?.querySelector("[inert] .lu-msglist"),
+        };
+      });
+    const expectDrawn = async (what: string, want: Partial<Awaited<ReturnType<typeof drawn>>>) => {
+      const got = await drawn();
+      for (const [k, v] of Object.entries(want)) if (got[k as keyof typeof got] !== v) throw new Error(`the preview ${what}: ${k} is ${JSON.stringify(got[k as keyof typeof got])}, not ${JSON.stringify(v)} (${JSON.stringify(got)})`);
+    };
+    await expectDrawn("as Comfortable", { lines: 0, blocks: 3, avatar: 40, picture: 1, file: 0, card: 1, reactions: 2, spacing: "roomy", size: "15px", inert: true });
     phase("compact");
-    await appearance.getByRole("tab", { name: "Dark" }).click();
-    const preset = page.getByRole("tablist", { name: "Preset" });
-    if ((await preset.getByRole("tab", { name: "Comfortable" }).getAttribute("aria-selected")) !== "true") throw new Error("the preset at first is not Comfortable");
-    await preset.getByRole("tab", { name: "Compact" }).click();
-    if ((await page.getByRole("tablist", { name: "Avatars" }).getByRole("tab", { name: "Small" }).getAttribute("aria-selected")) !== "true") throw new Error("Compact did not choose small avatars");
+    await appearance.getByRole("radio", { name: "Dark" }).click();
+    const preset = page.getByRole("radiogroup", { name: "Preset" });
+    if ((await preset.getByRole("radio", { name: "Comfortable" }).getAttribute("aria-checked")) !== "true") throw new Error("the preset at first is not Comfortable");
+    await preset.getByRole("radio", { name: "Compact" }).click();
+    if ((await preset.getByRole("radio", { name: "Compact" }).getAttribute("aria-checked")) !== "true") throw new Error("Compact chosen is not the card lit");
+    if ((await page.getByRole("radiogroup", { name: "Avatars" }).getByRole("radio", { name: "Small" }).getAttribute("aria-checked")) !== "true") throw new Error("Compact did not choose small avatars");
+    if ((await page.getByRole("radiogroup", { name: "Spacing" }).getByRole("radio", { name: "Cozy" }).getAttribute("aria-checked")) !== "true") throw new Error("Compact did not choose Cozy");
+    await expectDrawn("as Compact", { blocks: 3, avatar: 28, spacing: "cozy" });
     // A load from nothing: what is drawn now is what the browser kept.
     await goto(page, `${base}/app`);
     await page.getByText(`Three of ${stamp}`).waitFor();
@@ -995,22 +1028,52 @@ async function preferencesStep(which: string, stamp: number) {
     phase("minimal");
     await page.getByRole("button", { name: /account menu/ }).click();
     await page.getByRole("menuitem", { name: "Preferences" }).click();
-    await preset.getByRole("tab", { name: "Minimal" }).click();
-    if (await page.getByRole("tablist", { name: "Avatars" }).isVisible()) throw new Error("one line still offers avatars");
-    await page.getByRole("tablist", { name: "Font size" }).getByRole("tab", { name: "20" }).click();
+    await preset.getByRole("radio", { name: "Minimal" }).click();
+    if (await page.getByRole("radiogroup", { name: "Avatars" }).isVisible()) throw new Error("one line still offers avatars");
+    await expectDrawn("as Minimal", { lines: 4, blocks: 0, avatar: 0, picture: 0, file: 1, card: 0, reactions: 0, spacing: "tight" });
+    await page.getByRole("radiogroup", { name: "Font size" }).getByRole("radio", { name: "20 points" }).click();
+    await expectDrawn("at 20", { size: "20px" });
     // Font size is no part of a preset: still Minimal.
-    if ((await preset.getByRole("tab", { name: "Minimal" }).getAttribute("aria-selected")) !== "true") throw new Error("a font size undid the preset");
-    await page.getByRole("tablist", { name: "Spacing" }).getByRole("tab", { name: "Roomy" }).click();
+    if ((await preset.getByRole("radio", { name: "Minimal" }).getAttribute("aria-checked")) !== "true") throw new Error("a font size undid the preset");
+    await page.getByRole("radiogroup", { name: "Spacing" }).getByRole("radio", { name: "Roomy" }).click();
     await page.getByText("Custom: these settings match no preset.").waitFor();
-    if ((await preset.locator('[aria-selected="true"]').count()) !== 0) throw new Error("Custom still selects a preset");
-    await page.getByRole("tablist", { name: "Spacing" }).getByRole("tab", { name: "Tight" }).click();
-    if ((await preset.getByRole("tab", { name: "Minimal" }).getAttribute("aria-selected")) !== "true") throw new Error("Minimal's values again are not Minimal");
-    const reactions = page.getByRole("tablist", { name: "Reactions" });
-    if ((await reactions.getByRole("tab", { name: "Hidden" }).getAttribute("aria-selected")) !== "true") throw new Error("Minimal did not hide reactions");
-    await reactions.getByRole("tab", { name: "Shown" }).click();
+    if ((await preset.locator('[aria-checked="true"]').count()) !== 0) throw new Error("Custom still lights a preset");
+    await expectDrawn("at Roomy", { spacing: "roomy", lines: 4 });
+    await page.getByRole("radiogroup", { name: "Spacing" }).getByRole("radio", { name: "Tight" }).click();
+    if ((await preset.getByRole("radio", { name: "Minimal" }).getAttribute("aria-checked")) !== "true") throw new Error("Minimal's values again are not Minimal");
+    phase("the switches");
+    // Each switch: its caption says what its state does, the preview follows, and a change from Minimal is Custom.
+    const toggle = async (name: string, on: boolean, caption: string, want: Partial<Awaited<ReturnType<typeof drawn>>>) => {
+      const sw = page.getByRole("switch", { name });
+      if ((await sw.getAttribute("aria-checked")) === String(on)) throw new Error(`${name} is already ${on ? "on" : "off"}`);
+      await sw.click();
+      if ((await sw.getAttribute("aria-checked")) !== String(on)) throw new Error(`${name} did not turn ${on ? "on" : "off"}`);
+      await page.getByText(caption, { exact: true }).waitFor();
+      await expectDrawn(`with ${name} ${on ? "on" : "off"}`, want);
+    };
+    const reactionsOff = "Hidden. You can still add one from a message’s toolbar.";
+    await page.getByText(reactionsOff, { exact: true }).waitFor();
+    await page.getByText("As links: each one a file row that opens the viewer.", { exact: true }).waitFor();
+    await page.getByText("As links: no cards.", { exact: true }).waitFor();
+    await toggle("Reactions", true, "Shown under each message.", { reactions: 2 });
     await page.getByText("Custom: these settings match no preset.").waitFor();
-    await reactions.getByRole("tab", { name: "Hidden" }).click();
-    if ((await preset.getByRole("tab", { name: "Minimal" }).getAttribute("aria-selected")) !== "true") throw new Error("reactions hidden again are not Minimal");
+    await toggle("Images", true, "Shown in their messages.", { picture: 1, file: 0 });
+    await toggle("Embeds", true, "A card under each link.", { card: 1 });
+    await toggle("Embeds", false, "As links: no cards.", { card: 0 });
+    await toggle("Images", false, "As links: each one a file row that opens the viewer.", { picture: 0, file: 1 });
+    await toggle("Reactions", false, reactionsOff, { reactions: 0 });
+    if ((await preset.getByRole("radio", { name: "Minimal" }).getAttribute("aria-checked")) !== "true") throw new Error("reactions hidden again are not Minimal");
+    if (await page.getByText("Custom: these settings match no preset.").isVisible()) throw new Error("Minimal again still says Custom");
+    phase("layout");
+    const layout = page.getByRole("radiogroup", { name: "Layout" });
+    await layout.getByRole("radio", { name: "Grouped" }).click();
+    await page.getByRole("radiogroup", { name: "Avatars" }).waitFor();
+    await expectDrawn("grouped", { lines: 0, blocks: 3 });
+    await page.screenshot({ path: `${out}/${which}-preferences-custom.png` });
+    await layout.getByRole("radio", { name: "One line" }).click();
+    if (await page.getByRole("radiogroup", { name: "Avatars" }).isVisible()) throw new Error("one line offers avatars again");
+    await expectDrawn("one line again", { lines: 4, blocks: 0 });
+    if ((await preset.getByRole("radio", { name: "Minimal" }).getAttribute("aria-checked")) !== "true") throw new Error("one line again is not Minimal");
     await goto(page, `${base}/app`);
     await page.getByText(`Three of ${stamp}`).waitFor();
     const lines = await page.evaluate(() =>
@@ -1045,7 +1108,7 @@ async function preferencesStep(which: string, stamp: number) {
   } finally {
     await ctx.close();
   }
-  console.log(`  ${which}: opened Preferences from the account menu, chose each appearance against the system's, drew a block compact with its reaction and then as Minimal's lines at 20 with none, Custom between, and kept them through a reload and a sign-out, in ${Date.now() - t0} ms`);
+  console.log(`  ${which}: opened Preferences from the account menu, chose each appearance against the system's, followed each choice and switch in the preview, drew a block compact with its reaction and then as Minimal's lines at 20 with none, Custom between, and kept them through a reload and a sign-out, in ${Date.now() - t0} ms`);
 }
 
 // A server's settings (architecture 6.7): its owner renames it, keeps its

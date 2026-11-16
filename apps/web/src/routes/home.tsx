@@ -1,7 +1,7 @@
 // Home: personal DMs grouped by the instance that hosts them, message
 // requests, this identity's devices, and starting a conversation. From
 // the "Home", "Requests" and "Devices" boards in the gallery.
-import { For, Show, createEffect, createMemo, createSignal, on, untrack, type JSX } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, on, untrack } from "solid-js";
 import { useNavigate } from "@tanstack/solid-router";
 import {
   Avatar,
@@ -29,7 +29,8 @@ import { ClientError, type ChannelSummary, type DeviceSummary, type DmMessageSum
 import { SERVED_BY_INSTANCE, avatarSrc, client, pictureRefusal, savedInstance, dmChannelsQuery, dmMessagesQuery, enableNotifications, hasIdentityQuery, myStatus, peopleQuery, privateStateQuery, pushState, queryClient, readStatesQuery, rosterQuery, setMyStatus, snapshotQuery, uploadLimitsQuery, type PrivateState } from "../client/state";
 import { NeedsBrowser } from "./private";
 import { useNames } from "../client/names";
-import { FONT_SIZES, choosePreset, preferences, presetOf, setAppearance, setPreferences, type Appearance, type Avatars, type FontSize, type Layout, type Media, type Preset, type Reactions, type Spacing } from "../client/preferences";
+import { preferences } from "../client/preferences";
+import { PreferencesPage } from "./preferences";
 import { addPasskey, passkeysAvailable } from "../client/passkeys";
 import { initialsOf, toneFor } from "./app";
 import { Compose, Timeline, createMarkRead, quoteOf, thrownRefusal, type EditMedia, type Refusal, type Replying, type TimelineItem } from "./timeline";
@@ -266,7 +267,7 @@ export function HomeMain(props: HomeProps) {
         ) : props.view === "profile" ? (
           <Profile {...props} />
         ) : props.view === "preferences" ? (
-          <Preferences {...props} />
+          <PreferencesPage back={props.back} />
         ) : props.view === "mentions" ? (
           <MentionsPage snapshot={props.snapshot} back={props.back} open={props.toMessage} />
         ) : (
@@ -1023,139 +1024,6 @@ function Profile(props: HomeProps) {
         </Show>
       </div>
     </>
-  );
-}
-
-// How Lumia looks in this browser: the desktop shell's Preferences page
-// without its scroll bar choice, which a page cannot keep. Each choice
-// takes effect as it is made (`client/preferences.ts`).
-function Preferences(props: HomeProps) {
-  return (
-    <>
-      <ChannelHeader kind="page" name="Preferences" topic="How Lumia looks in this browser" actions={[]} onBack={props.back} backLabel="Back to Home" />
-      <div class="lu-page">
-        <Card title="Appearance" subtitle="Light, dark, or whichever this device is in.">
-          <SegmentedTabs
-            label="Appearance"
-            tabs={[
-              { id: "light", label: "Light" },
-              { id: "dark", label: "Dark" },
-              { id: "system", label: "System" },
-            ]}
-            value={preferences().appearance}
-            onChange={(id) => setAppearance(id as Appearance)}
-          />
-        </Card>
-        {/* A preset writes its values; the one shown is the one they match, or none. Images and embeds have no control until there are any. */}
-        <Card title="Messages" subtitle="Start from a preset, then change anything below.">
-          <div class="lu-prefs">
-            <SegmentedTabs
-              label="Preset"
-              tabs={[
-                { id: "comfortable", label: "Comfortable" },
-                { id: "compact", label: "Compact" },
-                { id: "minimal", label: "Minimal" },
-              ]}
-              value={presetOf(preferences()) ?? ""}
-              onChange={(id) => choosePreset(id as Preset)}
-            />
-            <Show when={!presetOf(preferences())}>
-              <p class="lu-prefs__note">Custom: these settings match no preset.</p>
-            </Show>
-            <PreferenceRow label="Layout">
-              <SegmentedTabs
-                label="Layout"
-                tabs={[
-                  { id: "grouped", label: "Grouped" },
-                  { id: "one_line", label: "One line" },
-                ]}
-                value={preferences().layout}
-                onChange={(id) => setPreferences({ layout: id as Layout })}
-              />
-            </PreferenceRow>
-            <PreferenceRow label="Spacing">
-              <SegmentedTabs
-                label="Spacing"
-                tabs={[
-                  { id: "roomy", label: "Roomy" },
-                  { id: "cozy", label: "Cozy" },
-                  { id: "tight", label: "Tight" },
-                ]}
-                value={preferences().spacing}
-                onChange={(id) => setPreferences({ spacing: id as Spacing })}
-              />
-            </PreferenceRow>
-            <Show when={preferences().layout === "grouped"}>
-              <PreferenceRow label="Avatars">
-                <SegmentedTabs
-                  label="Avatars"
-                  tabs={[
-                    { id: "large", label: "Large" },
-                    { id: "small", label: "Small" },
-                    { id: "hidden", label: "Hidden" },
-                  ]}
-                  value={preferences().avatars}
-                  onChange={(id) => setPreferences({ avatars: id as Avatars })}
-                />
-              </PreferenceRow>
-            </Show>
-            <PreferenceRow label="Font size">
-              <SegmentedTabs
-                label="Font size"
-                tabs={FONT_SIZES.map((size) => ({ id: String(size), label: String(size) }))}
-                value={String(preferences().fontSize)}
-                onChange={(id) => setPreferences({ fontSize: Number(id) as FontSize })}
-              />
-            </PreferenceRow>
-            <PreferenceRow label="Reactions">
-              <SegmentedTabs
-                label="Reactions"
-                tabs={[
-                  { id: "shown", label: "Shown" },
-                  { id: "hidden", label: "Hidden" },
-                ]}
-                value={preferences().reactions}
-                onChange={(id) => setPreferences({ reactions: id as Reactions })}
-              />
-            </PreferenceRow>
-            <PreferenceRow label="Images">
-              <SegmentedTabs
-                label="Images"
-                tabs={[
-                  { id: "shown", label: "Shown" },
-                  { id: "link", label: "As links" },
-                ]}
-                value={preferences().images}
-                onChange={(id) => setPreferences({ images: id as Media })}
-              />
-            </PreferenceRow>
-            <PreferenceRow label="Embeds">
-              <SegmentedTabs
-                label="Embeds"
-                tabs={[
-                  { id: "shown", label: "Shown" },
-                  { id: "link", label: "As links" },
-                ]}
-                value={preferences().embeds}
-                onChange={(id) => setPreferences({ embeds: id as Media })}
-              />
-            </PreferenceRow>
-          </div>
-        </Card>
-      </div>
-    </>
-  );
-}
-
-/** One of the Messages card's settings: its name over its choice. */
-function PreferenceRow(props: { label: string; children: JSX.Element }) {
-  return (
-    <div class="lu-prefs__row">
-      <span class="lu-prefs__label" aria-hidden="true">
-        {props.label}
-      </span>
-      {props.children}
-    </div>
   );
 }
 

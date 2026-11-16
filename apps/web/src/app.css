@@ -13,6 +13,10 @@ a { color: var(--link); }
 .gallery__tab { font: inherit; border: 0; background: var(--track); color: var(--ink-secondary); padding: 6px 12px; border-radius: var(--radius-8); cursor: pointer; }
 .gallery__tab[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent-ink); font-weight: 600; }
 .gallery__board { flex: 1; min-width: 0; }
+/* The Preferences boards, at their 1440 wide. */
+.gallery-prefs { width: 1440px; max-width: 100%; }
+.pieces__settings { max-width: 620px; display: flex; flex-direction: column; gap: var(--space-16); }
+.pieces__preview { flex: 1 1 360px; max-width: 480px; }
 /* The "Inline replies" board, at its size. */
 .gallery-replies { box-sizing: border-box; width: 960px; height: 800px; display: flex; padding: var(--space-24); background: var(--bg); }
 .gallery-replies__panel { flex: 1; min-height: 0; }

@@ -1,5 +1,37 @@
 import { describe, expect, test } from "bun:test";
-import { PRESETS, presetOf, readPreferences } from "./preferences";
+import { PRESETS, presetOf, readPreferences, switchCaption, switchOn, switchValue } from "./preferences";
+
+describe("the switches", () => {
+  test("on is Shown; off is As links for Images and Embeds, Hidden for Reactions", () => {
+    expect(switchValue("images", true)).toEqual({ images: "shown" });
+    expect(switchValue("images", false)).toEqual({ images: "link" });
+    expect(switchValue("embeds", false)).toEqual({ embeds: "link" });
+    expect(switchValue("reactions", false)).toEqual({ reactions: "hidden" });
+    expect(switchValue("reactions", true)).toEqual({ reactions: "shown" });
+  });
+
+  test("each caption says what the state does", () => {
+    const on = PRESETS.comfortable;
+    const off = PRESETS.minimal;
+    expect(switchCaption(on, "images")).toBe("Shown in their messages.");
+    expect(switchCaption(off, "images")).toBe("As links: each one a file row that opens the viewer.");
+    expect(switchCaption(on, "embeds")).toBe("A card under each link.");
+    expect(switchCaption(off, "embeds")).toBe("As links: no cards.");
+    expect(switchCaption(on, "reactions")).toBe("Shown under each message.");
+    expect(switchCaption(off, "reactions")).toBe("Hidden. You can still add one from a message’s toolbar.");
+  });
+
+  test("a switch turned writes a value its state reads back", () => {
+    for (const setting of ["images", "embeds", "reactions"] as const) {
+      for (const on of [true, false]) expect(switchOn({ ...PRESETS.comfortable, ...switchValue(setting, on) }, setting)).toBe(on);
+    }
+  });
+
+  test("one turned off from Comfortable is Custom", () => {
+    expect(presetOf({ ...PRESETS.comfortable, ...switchValue("embeds", false) })).toBeUndefined();
+    expect(presetOf({ ...PRESETS.minimal, ...switchValue("reactions", true) })).toBeUndefined();
+  });
+});
 
 describe("presets", () => {
   test("each preset's values are that preset", () => {

@@ -271,11 +271,103 @@ h1.lu-serverhead__name:hover { background: none; }
 .lu-segtabs__tab { display: flex; align-items: center; justify-content: center; gap: var(--space-6); height: 34px; border-radius: var(--radius-9); background: transparent; color: var(--ink-quiet); font-size: 13.5px; font-weight: 700; }
 .lu-segtabs__tab.is-on { background: var(--tab-active); color: var(--ink); box-shadow: var(--shadow-tab); }
 .lu-segtabs__count { font-size: 12px; font-weight: 600; color: var(--ink-muted); }
-/* Preferences' Messages card: the preset, what it says when nothing matches, and each setting's name over its choice. */
-.lu-prefs { display: flex; flex-direction: column; gap: var(--space-14); }
-.lu-prefs__note { margin: calc(var(--space-6) * -1) 0 0; font-size: 13.5px; color: var(--ink-muted); }
-.lu-prefs__row { display: flex; flex-direction: column; gap: var(--space-6); }
-.lu-prefs__label { font-size: 13.5px; font-weight: 600; color: var(--ink-body); }
+/* ── Settings (the Preferences boards) ── */
+/* The compact segmented control: segments as wide as their words (or 36 each, for numbers) on a track sized to them. */
+.lu-seg { flex: none; display: inline-flex; gap: var(--space-2); padding: 3px; border-radius: var(--radius-10); background: var(--track); font-family: var(--font-sans); }
+.lu-seg__opt { height: 30px; padding: 0 12px; margin: 0; border: 0; border-radius: var(--radius-8); background: transparent; font: inherit; font-family: var(--font-sans); font-size: 13px; font-weight: 600; white-space: nowrap; color: var(--ink-muted); cursor: pointer; }
+.lu-seg--even .lu-seg__opt { width: 36px; padding: 0; font-variant-numeric: tabular-nums; }
+.lu-seg__opt[aria-checked="false"]:hover { color: var(--ink); }
+.lu-seg__opt[aria-checked="true"] { background: var(--tab-active); color: var(--ink); box-shadow: var(--shadow-tab); }
+/* The switch. Its knob is the light theme's surface (`lu-in-light`) in either theme. */
+.lu-switch { flex: none; display: flex; justify-content: flex-start; width: 42px; height: 26px; padding: 3px; margin: 0; border: 0; border-radius: 13px; background: var(--border-hover); cursor: pointer; transition: background .15s ease; }
+.lu-switch[aria-checked="true"] { justify-content: flex-end; background: var(--accent); }
+.lu-switch__knob { width: 20px; height: 20px; border-radius: var(--radius-round); background: var(--surface); box-shadow: var(--shadow-tab); }
+/* Picture tiles: a drawing over a name and a line, the chosen one ringed 2 out from it in the accent, the others outlined. */
+.lu-pictiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-16); }
+.lu-pictile { width: 100%; min-width: 0; display: flex; flex-direction: column; align-items: stretch; gap: var(--space-10); padding: 0; margin: 0; border: 0; border-radius: var(--radius-12); background: none; font: inherit; font-family: var(--font-sans); text-align: left; color: inherit; cursor: pointer; }
+.lu-pictile__thumb { position: relative; display: flex; height: 92px; border-radius: var(--radius-12); }
+.lu-pictile__thumb > * { border-radius: inherit; overflow: hidden; }
+.lu-pictile__thumb::after { content: ""; position: absolute; inset: 0; border-radius: inherit; box-shadow: inset 0 0 0 1px var(--line-strong); pointer-events: none; }
+.lu-pictile[aria-checked="false"]:hover .lu-pictile__thumb::after { box-shadow: inset 0 0 0 1px var(--border-hover); }
+.lu-pictile[aria-checked="true"] .lu-pictile__thumb::after { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent); }
+.lu-pictile__text { display: flex; flex-direction: column; gap: var(--space-2); }
+.lu-pictile__name { display: flex; align-items: center; gap: var(--space-6); font-size: 14px; font-weight: 600; color: var(--ink-body); }
+.lu-pictile[aria-checked="true"] .lu-pictile__name { color: var(--ink); }
+.lu-pictile__tick { color: var(--accent-ink); }
+.lu-pictile__caption { font-size: 12.5px; line-height: 1.4; color: var(--ink-muted); }
+/* The tiles' drawings: the app's window in a theme (its colours whatever the page is in, `lu-in-*`), and a preset's messages. */
+.lu-sketch { flex: 1; min-width: 0; display: flex; }
+.lu-sketch__bar { display: block; flex: none; width: 100%; height: 5px; border-radius: var(--radius-pill); background: var(--line-strong); }
+.lu-sketch__bar--64 { width: 64%; }
+.lu-sketch__bar--72 { width: 72%; }
+.lu-sketch__bar--80 { width: 80%; }
+.lu-sketch__bar--90 { width: 90%; }
+.lu-sketch--theme, .lu-sketch__half { background: var(--bg); }
+.lu-sketch__rail { flex: none; width: 14px; background: var(--rail); }
+.lu-sketch__side { flex: none; width: 40px; display: flex; flex-direction: column; gap: var(--space-6); padding: 10px 7px; }
+.lu-sketch__side .lu-sketch__bar { background: var(--rail-divider); }
+.lu-sketch__pane { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--space-6); margin: 6px 6px 6px 0; padding: 10px; border-radius: var(--radius-7); background: var(--surface); }
+.lu-sketch__bar--accent { width: 50%; background: var(--accent); }
+.lu-sketch__half { flex: 1; min-width: 0; display: flex; }
+.lu-sketch__half .lu-sketch__side { flex: 1; }
+.lu-sketch__half .lu-sketch__pane { margin-left: 6px; }
+.lu-sketch--layout { flex-direction: column; gap: 7px; padding: 14px; background: var(--track); }
+.lu-sketch--comfortable { gap: 12px; }
+.lu-sketch--layout .lu-sketch__bar { background: var(--border-form); }
+.lu-sketch--layout .lu-sketch__bar--name { background: var(--border-active); }
+.lu-sketch__head { display: flex; gap: var(--space-8); }
+.lu-sketch__face { flex: none; width: 20px; height: 20px; border-radius: var(--radius-round); }
+.lu-sketch__lines { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; padding-top: 2px; }
+.lu-sketch--compact .lu-sketch__head { align-items: center; gap: 7px; }
+.lu-sketch--compact .lu-sketch__face { width: 12px; height: 12px; }
+.lu-sketch--compact .lu-sketch__lines { padding-top: 0; }
+.lu-sketch__bar--under { margin-left: 19px; }
+.lu-sketch__line { display: flex; gap: var(--space-6); }
+.lu-sketch__bar--time { width: 14px; }
+/* An outlined group of settings: each row its name over a caption and its control at the end, under them where the row is too narrow. */
+.lu-setgroup { display: flex; flex-direction: column; border-radius: var(--radius-14); box-shadow: inset 0 0 0 1px var(--line-strong); font-family: var(--font-sans); }
+.lu-setrow { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-10) var(--space-16); padding: 14px 16px; }
+.lu-setrow + .lu-setrow { border-top: 1px solid var(--line); }
+.lu-setrow__text { flex: 1 1 200px; min-width: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.lu-setrow__name { font-size: 14px; font-weight: 600; color: var(--ink); }
+.lu-setrow__caption { font-size: 12.5px; line-height: 1.4; color: var(--ink-muted); }
+.lu-setrow__control { flex: none; max-width: 100%; margin-left: auto; display: flex; align-items: center; gap: var(--space-8); }
+@media (prefers-reduced-motion: reduce) {
+  .lu-switch { transition: none; }
+}
+
+/* ── Preferences: Appearance and Messages, the preview of messages beside them (above Messages where the page is narrow) ── */
+.lu-page > .lu-prefs { max-width: calc(620px + var(--space-40) + 480px); container-type: inline-size; }
+.lu-prefs__grid { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-areas: "appearance" "preview" "messages"; gap: var(--space-40); padding: var(--space-16) 0 var(--space-40); }
+@container (min-width: 920px) {
+  .lu-prefs__grid { grid-template-columns: minmax(0, 620px) minmax(0, 480px); grid-template-rows: auto 1fr; grid-template-areas: "appearance preview" "messages preview"; }
+  .lu-prefs__preview { position: sticky; top: var(--space-16); align-self: start; }
+}
+.lu-prefs__section { min-width: 0; display: flex; flex-direction: column; gap: var(--space-16); }
+.lu-prefs__head { display: flex; flex-direction: column; gap: var(--space-4); }
+.lu-prefs__title { margin: 0; font-family: var(--font-display); font-size: 17px; font-weight: 700; letter-spacing: -0.005em; color: var(--ink); }
+.lu-prefs__subtitle { margin: 0; font-size: 13.5px; color: var(--ink-muted); }
+.lu-prefs__custom { margin: 0; display: flex; align-items: center; gap: var(--space-8); font-size: 13px; color: var(--ink-muted); }
+.lu-prefs__custom::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: var(--radius-round); background: var(--accent); }
+.lu-prefs__a { font-size: 11px; font-weight: 700; color: var(--ink-muted); }
+.lu-prefs__a--large { font-size: 17px; }
+.lu-prefs__preview { grid-area: preview; min-width: 0; display: flex; flex-direction: column; gap: var(--space-12); }
+.lu-prefs__label { margin: 0; font-size: 12px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-muted); }
+.lu-prefs__kept { margin: 0; font-size: 12.5px; line-height: 1.45; color: var(--ink-muted); }
+/* The preview: a conversation's real rows from sample messages, one picture to assistive technology and nothing in it pressable. */
+.lu-preview { overflow: hidden; border-radius: var(--radius-16); background: var(--bg); box-shadow: inset 0 0 0 1px var(--line-strong); font-family: var(--font-sans); }
+.lu-preview__head { display: flex; align-items: center; gap: var(--space-8); padding: 12px 16px; border-bottom: 1px solid var(--line); }
+.lu-preview__hash { font-size: 16px; font-weight: 700; color: var(--ink-muted); }
+.lu-preview__name { font-family: var(--font-display); font-size: 15px; font-weight: 700; color: var(--ink); }
+.lu-preview__body { pointer-events: none; user-select: none; }
+.lu-preview .lu-msglist { flex: none; overflow: visible; }
+.lu-preview .lu-msglist__log { padding: var(--space-10) var(--space-4) var(--space-16); }
+/* A picture as a message's tile draws one, from no file: a sign-in screen on a phone. */
+.lu-preview__shot { width: 240px; height: 150px; display: flex; align-items: flex-end; justify-content: center; background: var(--tone-blue); }
+.lu-preview__screen { width: 120px; height: 128px; display: flex; flex-direction: column; gap: var(--space-8); padding: 14px 12px; border-radius: var(--radius-12) var(--radius-12) 0 0; background: var(--surface); }
+.lu-preview__title { height: 7px; width: 60%; border-radius: var(--radius-pill); background: var(--border-active); }
+.lu-preview__field { height: 18px; border-radius: var(--radius-6); box-shadow: inset 0 0 0 1px var(--line-strong); }
+.lu-preview__button { height: 18px; border-radius: var(--radius-6); background: var(--accent); }
 
 /* ── ChannelHeader ── */
 .lu-chhead { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; min-height: var(--header-height); padding: 10px 14px 10px 24px; border-bottom: 1px solid var(--line); }

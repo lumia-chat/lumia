@@ -3,7 +3,7 @@
 // data, plus the smaller pieces in isolation. Theme and layout toggles at
 // the top. Not a product screen.
 import { For, Show, createSignal, onCleanup, onMount, type JSX } from "solid-js";
-import { applyPreferences } from "../client/preferences";
+import { PRESETS, applyPreferences, type Preferences } from "../client/preferences";
 import type { BodyBlock, BodyLink, BodyRun, DeviceSummary, EmbedSummary } from "../client/bridge";
 import { frameBox } from "../client/embeds";
 import { QUICK_REACTIONS } from "../design/emoji";
@@ -79,6 +79,13 @@ import {
   ThreadPanel,
   TypingIndicator,
   FolderSettings,
+  LayoutSketch,
+  PictureChoices,
+  Segmented,
+  SettingRow,
+  SettingsGroup,
+  ThemeSketch,
+  Toggle,
   icons,
   type IconName,
   type RailDrop,
@@ -91,6 +98,7 @@ import {
 import { NeedsBrowser, PhraseStep, RestoreAsk, RestoreForm, RestoreKeep, StartOver } from "./private";
 import { endedNotice } from "../client/ended";
 import { LinkPromptCard } from "./link";
+import { MessagesPreview, PreferencesView } from "./preferences";
 
 type Theme = "light" | "dark";
 
@@ -1167,13 +1175,13 @@ const SAMPLE_KEEP: DeviceSummary[] = [
 
 export function DesignGallery() {
   const { theme, apply } = useTheme();
-  const [board, setBoard] = createSignal<"split" | "replies" | "home" | "requests" | "devices" | "signin" | "private" | "phone" | "folders" | "pieces">("split");
+  const [board, setBoard] = createSignal<"split" | "replies" | "home" | "requests" | "devices" | "signin" | "private" | "phone" | "folders" | "preferences" | "pieces">("split");
   return (
     <div class="gallery">
       <header class="gallery__bar">
         <strong>Lumia design system</strong>
         <nav class="gallery__nav" aria-label="Boards">
-          <For each={[["split", "Quiet Split"], ["replies", "Inline replies"], ["home", "Home"], ["requests", "Requests"], ["devices", "Devices"], ["signin", "Sign in"], ["private", "Private messages"], ["phone", "Phone"], ["folders", "Server folders"], ["pieces", "Pieces"]] as const}>
+          <For each={[["split", "Quiet Split"], ["replies", "Inline replies"], ["home", "Home"], ["requests", "Requests"], ["devices", "Devices"], ["signin", "Sign in"], ["private", "Private messages"], ["phone", "Phone"], ["folders", "Server folders"], ["preferences", "Preferences"], ["pieces", "Pieces"]] as const}>
             {([id, label]) => (
               <button type="button" class="gallery__tab" aria-pressed={board() === id} onClick={() => setBoard(id)}>
                 {label}
@@ -1191,7 +1199,7 @@ export function DesignGallery() {
         </nav>
       </header>
       <div class="gallery__board">
-        {board() === "split" ? <QuietSplit /> : board() === "replies" ? <RepliesBoard /> : board() === "home" ? <HomeBoard view="dm" /> : board() === "requests" ? <HomeBoard view="requests" /> : board() === "devices" ? <HomeBoard view="devices" /> : board() === "signin" ? <SignIn /> : board() === "private" ? <PrivateBoard /> : board() === "phone" ? <PhoneBoard /> : board() === "folders" ? <FoldersBoard /> : <Pieces />}
+        {board() === "split" ? <QuietSplit /> : board() === "replies" ? <RepliesBoard /> : board() === "home" ? <HomeBoard view="dm" /> : board() === "requests" ? <HomeBoard view="requests" /> : board() === "devices" ? <HomeBoard view="devices" /> : board() === "signin" ? <SignIn /> : board() === "private" ? <PrivateBoard /> : board() === "phone" ? <PhoneBoard /> : board() === "folders" ? <FoldersBoard /> : board() === "preferences" ? <PreferencesBoard /> : <Pieces />}
       </div>
     </div>
   );
@@ -1294,6 +1302,113 @@ function OneLine(props: { label: string; reactions: boolean }) {
   );
 }
 
+/** Preferences' pieces on their own: picture tiles (one chosen, and none), the compact segmented control, switches, an outlined group of rows, and the preview at two settings. */
+function SettingsPieces() {
+  const [theme, setTheme] = createSignal<"light" | "dark" | "system">("system");
+  const [spacing, setSpacing] = createSignal("cozy");
+  const [size, setSize] = createSignal(15);
+  const [on, setOn] = createSignal(true);
+  return (
+    <>
+      <section>
+        <h2>Picture tiles: a theme chosen; presets with none chosen (Custom)</h2>
+        <div class="pieces__settings">
+          <PictureChoices
+            label="Appearance"
+            value={theme()}
+            onChange={setTheme}
+            options={[
+              { value: "light", label: "Light", picture: <ThemeSketch theme="light" /> },
+              { value: "dark", label: "Dark", picture: <ThemeSketch theme="dark" /> },
+              { value: "system", label: "System", picture: <ThemeSketch theme="system" /> },
+            ]}
+          />
+          <PictureChoices
+            label="Preset"
+            value={undefined}
+            options={[
+              { value: "comfortable", label: "Comfortable", caption: "Large avatars, room to breathe", picture: <LayoutSketch layout="comfortable" /> },
+              { value: "compact", label: "Compact", caption: "Small avatars, more on screen", picture: <LayoutSketch layout="compact" /> },
+              { value: "minimal", label: "Minimal", caption: "A line each, media as links", picture: <LayoutSketch layout="minimal" /> },
+            ]}
+          />
+        </div>
+      </section>
+      <section>
+        <h2>An outlined group: compact segmented controls (words, and numbers of one width) and switches, each caption saying what its state does</h2>
+        <div class="pieces__settings">
+          <SettingsGroup>
+            <SettingRow
+              name="Spacing"
+              caption="Room between messages."
+              control={(ids) => (
+                <Segmented
+                  labelledBy={ids.name}
+                  options={[
+                    { value: "roomy", label: "Roomy" },
+                    { value: "cozy", label: "Cozy" },
+                    { value: "tight", label: "Tight" },
+                  ]}
+                  value={spacing()}
+                  onChange={setSpacing}
+                />
+              )}
+            />
+            <SettingRow
+              name="Font size"
+              caption="Messages and names, in points."
+              control={(ids) => <Segmented even labelledBy={ids.name} options={[13, 14, 15, 16, 18, 20].map((s) => ({ value: s, label: String(s), name: `${s} points` }))} value={size()} onChange={setSize} />}
+            />
+          </SettingsGroup>
+          <SettingsGroup>
+            <SettingRow name="Embeds" caption={on() ? "A card under each link." : "As links: no cards."} control={(ids) => <Toggle labelledBy={ids.name} describedBy={ids.caption} checked={on()} onChange={setOn} />} />
+            <SettingRow name="Reactions" caption="Hidden. You can still add one from a message’s toolbar." control={(ids) => <Toggle labelledBy={ids.name} describedBy={ids.caption} checked={false} />} />
+          </SettingsGroup>
+        </div>
+      </section>
+      <section>
+        <h2>The preview of messages: Comfortable, and Minimal</h2>
+        <div class="pieces__row pieces__row--top">
+          <div class="pieces__preview">
+            <MessagesPreview display={PRESETS.comfortable} />
+          </div>
+          <div class="pieces__preview">
+            <MessagesPreview display={PRESETS.minimal} />
+          </div>
+        </div>
+      </section>
+    </>
+  );
+}
+
+// The "Preferences · Light" and "· Dark" boards (1440 by 900): the page
+// drawn from values of its own, so a choice here changes nothing of this
+// browser's; its preview at the font size chosen.
+function PreferencesBoard() {
+  const [value, setValue] = createSignal<Preferences>({ appearance: "light", ...PRESETS.comfortable, fontSize: 15, asideHidden: false });
+  const set = (next: Partial<Preferences>) => setValue((v) => ({ ...v, ...next }));
+  return (
+    <div class="gallery-prefs" style={{ "--msg-scale": String(value().fontSize / 15) }}>
+      <AppShell
+        height={900}
+        rail={
+          <ServerRail
+            logoSrc="/brand/lumia-original-icon.svg"
+            homeCurrent
+            servers={[
+              { name: "Acme", initials: "AC" },
+              { name: "Trail Runners", initials: "TR", ink: "amber" },
+            ]}
+            self={{ ...PEOPLE.self, status: "online" }}
+          />
+        }
+        sidebar={<HomeSidebar view="requests" />}
+        main={<PreferencesView value={value()} onAppearance={(appearance) => set({ appearance })} onPreset={(preset) => set(PRESETS[preset])} onChange={set} />}
+      />
+    </div>
+  );
+}
+
 function Pieces() {
   return (
     <div class="pieces">
@@ -1362,6 +1477,7 @@ function Pieces() {
         <h2>The same lines with reactions shown (Custom)</h2>
         <OneLine label="One line" reactions />
       </section>
+      <SettingsPieces />
       <section>
         <h2>Over the frame: the account menu, a server's menu, the profile card, a popover</h2>
         <div class="pieces__row pieces__row--top">

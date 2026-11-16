@@ -50,6 +50,12 @@ for (const theme of themes.slice(1)) {
   lines.push(`:root[data-theme="${theme}"] {`, ...colours("  "), "}");
   lines.push(`@media (prefers-color-scheme: ${theme}) {`, "  :root:not([data-theme]) {", ...colours("    "), "  }", "}");
 }
+// Every theme's colours on one element and what it holds, whatever the
+// page is in (`lu-in-light`, `lu-in-dark`): a drawing of the app in a
+// theme, as Preferences' Appearance tiles are.
+for (const theme of themes) {
+  lines.push(`.lu-in-${theme} {`, ...tokens.color.tokens.map((token) => `  --${token.name}: ${value(token, theme)};`), "}");
+}
 // Text styles as classes, for the screens that set type outside a component.
 for (const group of tokens.type.groups) {
   for (const style of group.styles) {

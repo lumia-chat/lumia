@@ -59,6 +59,30 @@ export function presetOf(d: Display): Preset | undefined {
   });
 }
 
+/** The settings Preferences draws as switches: on is Shown; off is As links (Images, Embeds) or Hidden (Reactions). */
+export type SwitchSetting = "images" | "embeds" | "reactions";
+
+/** What each switch's caption says its state does, the same words on every client. */
+export const SWITCH_CAPTIONS: Record<SwitchSetting, { on: string; off: string }> = {
+  images: { on: "Shown in their messages.", off: "As links: each one a file row that opens the viewer." },
+  embeds: { on: "A card under each link.", off: "As links: no cards." },
+  reactions: { on: "Shown under each message.", off: "Hidden. You can still add one from a message’s toolbar." },
+};
+
+export function switchOn(d: Display, setting: SwitchSetting): boolean {
+  return d[setting] === "shown";
+}
+
+/** The value a switch writes, turned on or off. */
+export function switchValue(setting: SwitchSetting, on: boolean): Partial<Display> {
+  if (setting === "reactions") return { reactions: on ? "shown" : "hidden" };
+  return { [setting]: on ? "shown" : "link" };
+}
+
+export function switchCaption(d: Display, setting: SwitchSetting): string {
+  return switchOn(d, setting) ? SWITCH_CAPTIONS[setting].on : SWITCH_CAPTIONS[setting].off;
+}
+
 const KEY = "lumia:preferences";
 const DEFAULTS: Preferences = { appearance: "system", ...PRESETS.comfortable, fontSize: 15, asideHidden: false };
 
