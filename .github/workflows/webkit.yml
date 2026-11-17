@@ -1,0 +1,118 @@
+# The browser suite in WebKit on demand, alone: the macos workflow's last
+# step without the forty minutes before it (LumiaKit, the iOS build and its
+# smokes, the desktop shell), for chasing a step that fails only on the
+# runner. `only` names the steps to run and `times` runs them again and
+# again against the one instance, each run with its own accounts.
+name: webkit
+
+on:
+  workflow_dispatch:
+    inputs:
+      only:
+        description: "The steps to run, comma-separated (run.ts's names); empty for the whole suite"
+        required: false
+        default: ""
+      times:
+        description: "How many times to run them"
+        required: false
+        default: "1"
+
+permissions:
+  contents: read
+
+jobs:
+  suite:
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      MIX_ENV: dev
+      DB_URL: postgres://postgres:postgres@localhost:5432/lumia_dev
+      # As macos.yml: no code reloader in an instance nothing edits.
+      LUMIA_CODE_RELOADER: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.20.4"
+          otp-version: "29"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.4"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.96.0"
+          targets: wasm32-unknown-unknown
+          components: llvm-tools
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen-cli@0.2.130
+      - run: brew install postgresql@18
+      # As macos.yml: the runner's Apple clang has no WebAssembly target.
+      - run: echo "CC_wasm32_unknown_unknown=$(brew --prefix llvm@20)/bin/clang" >> "$GITHUB_ENV"
+      - name: Start Postgres
+        run: |
+          pg="$(brew --prefix postgresql@18)/bin"
+          "$pg/pg_ctl" -D "$(brew --prefix)/var/postgresql@18" -l "$RUNNER_TEMP/postgres.log" -w start
+          "$pg/createuser" -s postgres
+      - uses: actions/cache@v4
+        with:
+          path: |
+            apps/instance/deps
+            apps/instance/_build
+            apps/instance/priv/native
+          key: mix-dev-noreload-${{ runner.os }}-${{ hashFiles('apps/instance/mix.lock', 'apps/instance/native/lumia_media/src/**', 'apps/instance/native/lumia_media/Cargo.*') }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/core
+          key: webkit
+          cache-on-failure: true
+      - uses: actions/cache@v4
+        id: browsers
+        with:
+          path: ~/Library/Caches/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('apps/web/bun.lock') }}
+      - run: cargo build --release -p lumia-cli
+        working-directory: apps/core
+      - run: mix deps.get && mix ecto.setup
+        working-directory: apps/instance
+      - run: bun install --frozen-lockfile && bun run wasm
+        working-directory: apps/web
+      - if: steps.browsers.outputs.cache-hit != 'true'
+        run: bunx playwright install webkit
+        working-directory: apps/web
+      - name: Start the instance
+        working-directory: apps/instance
+        run: |
+          nohup mix phx.server > "$RUNNER_TEMP/phx.log" 2>&1 &
+          for i in $(seq 1 60); do
+            curl -sf -H 'accept: application/json' http://localhost:4000/api/v1/instance > /dev/null && exit 0
+            sleep 2
+          done
+          echo "the instance did not come up" >&2; tail -50 "$RUNNER_TEMP/phx.log"; exit 1
+      # Every run is made, whatever the one before came to; the step fails
+      # if any did. Each run's screenshots are kept under its number.
+      - name: The suite
+        working-directory: apps/web
+        timeout-minutes: 30
+        env:
+          LUMIA_E2E_ONLY: ${{ inputs.only }}
+          TIMES: ${{ inputs.times }}
+        run: |
+          failed=0
+          for n in $(seq 1 "$TIMES"); do
+            echo "::group::run $n"
+            bun run e2e -- webkit || failed=$((failed + 1))
+            mkdir -p "$RUNNER_TEMP/shots/$n" && cp -R e2e/.work/shots/. "$RUNNER_TEMP/shots/$n/" 2>/dev/null || true
+            echo "::endgroup::"
+          done
+          echo "$failed of $TIMES runs failed"
+          [ "$failed" -eq 0 ]
+      - if: failure()
+        run: tail -400 "$RUNNER_TEMP/phx.log" || true
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: webkit-screenshots
+          path: ${{ runner.temp }}/shots
+          if-no-files-found: ignore
+          retention-days: 7

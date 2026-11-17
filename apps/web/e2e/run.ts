@@ -109,9 +109,11 @@ async function open(which: string, name: string, keep = false): Promise<{ ctx: B
 function watch(which: string, ctx: BrowserContext, page: Page) {
   page.on("pageerror", (e) => console.log(`  [${which}] page error: ${e.stack ?? e.message}`));
   page.on("crash", () => console.log(`  [${which}] the page crashed`));
+  // A document loaded again in the middle of a step (a reload nobody asked for) names itself.
+  page.on("load", () => console.log(`  [${which}] document loaded: ${page.url()}`));
   page.on("worker", (w) => w.on("close", () => console.log(`  [${which}] worker closed: ${w.url().split("/").pop()}`)));
   page.on("console", (m) => {
-    if (m.type() === "error") console.log(`  [${which}] console: ${m.text()}`);
+    if (m.type() === "error" || m.text().startsWith("[vite]")) console.log(`  [${which}] console: ${m.text()}`);
   });
   if (which === "chromium" && slow > 1) void throttle(ctx, page).catch(() => {});
 }
@@ -2818,6 +2820,16 @@ try {
       const beat = setInterval(() => {
         const secs = Math.round((Date.now() - started) / 1000);
         console.log(`  [${which}] ${name}: ${secs} s, ${live.phase}, at ${live.page?.url() ?? "no page"}`);
+        // What the page says of itself while a step waits: how long its document has been
+        // loaded, whether it has the focus and is visible, and where the keyboard is.
+        void live.page
+          ?.evaluate(() => {
+            const a = document.activeElement;
+            const where = a ? `${a.tagName.toLowerCase()}${a.getAttribute("aria-label") ? `[${a.getAttribute("aria-label")}]` : a.getAttribute("placeholder") ? `[${a.getAttribute("placeholder")}]` : ""}` : "nothing";
+            return `document loaded ${Math.round(performance.now())} ms ago, ${document.hasFocus() ? "focused" : "not focused"}, ${document.visibilityState}, the keyboard in ${where}`;
+          })
+          .then((said) => console.log(`  [${which}] ${name}: ${said}`))
+          .catch(() => {});
         void live.page?.screenshot({ path: `${out}/${which}-${name.replace(/\s+/g, "-")}-${secs}s.png`, timeout: 5_000 }).catch(() => {});
       }, 30_000);
       try {
