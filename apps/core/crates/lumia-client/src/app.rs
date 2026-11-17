@@ -1717,6 +1717,15 @@ struct Inner {
     answers: HashMap<Vec<u8>, Answered>,
     /// The positions last asked for, of the held or kept phrase.
     quiz: Option<Vec<usize>>,
+    /// The gateway's last welcome, and whether the DM engine has yet to
+    /// hear it. The engine is built on first use, which an identity call
+    /// holding the identity's stores can put off past the welcome (a link
+    /// just claimed, the roster being read at launch); a welcome that came
+    /// before it would otherwise never reach it, and this device's key
+    /// packages would stay unpublished, so that nobody could add it to a
+    /// group, until its next connection.
+    welcome: Option<lumia_core::proto::Welcome>,
+    welcome_missed: bool,
 }
 
 /// The link session this device opened as the new device, and what it
@@ -2172,6 +2181,8 @@ impl App {
                 link_runs: 0,
                 answers: HashMap::new(),
                 quiz: None,
+                welcome: None,
+                welcome_missed: false,
             }),
             rail_turn: AsyncMutex::new(()),
             bluesky: crate::transport::http_without_redirects(),
@@ -3307,6 +3318,8 @@ impl App {
             .store
             .take()
             .ok_or_else(|| ClientError::State("already started".into()))?;
+        inner.welcome = None;
+        inner.welcome_missed = false;
         let (tx, rx) = mpsc::unbounded();
         let (etx, mut erx) = mpsc::unbounded();
         let api = self.api.clone();
@@ -3349,6 +3362,7 @@ impl App {
                             .reader
                             .meta_set(gateway::ACCOUNT_META, &hex::encode(&w.account_id));
                         inner.reads.me = w.account_id.clone();
+                        inner.welcome = Some(w.clone());
                         drop(inner);
                         if let Some(max) = w
                             .limits
@@ -3378,7 +3392,15 @@ impl App {
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)
                     .clone();
+                let welcomed = matches!(&ev, GatewayEvent::Notice(Notice::Welcomed(_)));
+                if welcomed {
+                    // With no engine yet, the first one built hears this welcome.
+                    app.lock().welcome_missed = engine.is_none();
+                }
                 if let Some(engine) = engine {
+                    if !welcomed {
+                        app.hear_missed_welcome(&engine).await;
+                    }
                     let mut e = engine.lock().await;
                     let outcomes = match &ev {
                         GatewayEvent::Notice(Notice::Welcomed(w)) => {
@@ -4621,6 +4643,8 @@ impl App {
         if !self.started() {
             return;
         }
+        // The welcome below stands for the one the engine was not there for.
+        self.lock().welcome_missed = false;
         let Ok(engine) = self.dm_engine_ready().await else {
             return;
         };
@@ -5546,15 +5570,45 @@ impl App {
     /// being read at launch, a link being claimed), this waits for it instead
     /// of failing with "an identity flow is running".
     async fn dm_engine_ready(&self) -> Result<Arc<AsyncMutex<DmEngine>>, ClientError> {
-        if let Some(engine) = self.built_engine() {
-            return Ok(engine);
+        let engine = match self.built_engine() {
+            Some(engine) => engine,
+            None => {
+                let mut stores = self.identity.lock().await;
+                // Another caller may have built it while this one waited.
+                match self.built_engine() {
+                    Some(engine) => engine,
+                    None => self.build_engine(&mut stores)?,
+                }
+            }
+        };
+        self.hear_missed_welcome(&engine).await;
+        Ok(engine)
+    }
+
+    /// Gives the engine the gateway's welcome when it was built after it
+    /// (`Inner::welcome_missed`): its key packages are published and its
+    /// conversations caught up, as a welcome it was there for would have
+    /// had them. Once; an engine that could not take it is given it again
+    /// the next time it is asked for.
+    async fn hear_missed_welcome(&self, engine: &Arc<AsyncMutex<DmEngine>>) {
+        let welcome = {
+            let mut inner = self.lock();
+            if !inner.welcome_missed {
+                return;
+            }
+            inner.welcome_missed = false;
+            inner.welcome.clone()
+        };
+        let Some(welcome) = welcome else { return };
+        let outcomes = {
+            let mut engine = engine.lock().await;
+            engine.set_account(welcome.account_id.clone());
+            engine.on_welcome(&welcome).await
+        };
+        match outcomes {
+            Ok(outcomes) => self.dispatch(outcomes),
+            Err(_) => self.lock().welcome_missed = true,
         }
-        let mut stores = self.identity.lock().await;
-        // Another caller may have built it while this one waited.
-        if let Some(engine) = self.built_engine() {
-            return Ok(engine);
-        }
-        self.build_engine(&mut stores)
     }
 
     fn built_engine(&self) -> Option<Arc<AsyncMutex<DmEngine>>> {

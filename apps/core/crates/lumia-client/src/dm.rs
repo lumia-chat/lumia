@@ -39,6 +39,18 @@ use crate::api::Api;
 use crate::sqlite::{DmRow, DmStatus, SqliteStore};
 use crate::ClientError;
 
+/// How the note a device's key packages being published leaves begins.
+const PUBLISHED_NOTE: &str = "published ";
+
+/// Whether a note the engine printed says this device's key packages were
+/// published: from then a group another device makes can hold this one. A
+/// shell that waits for that (its live tests, before someone else opens a
+/// conversation with it) asks this rather than read the words itself.
+#[must_use]
+pub fn says_published(note: &str) -> bool {
+    note.starts_with(PUBLISHED_NOTE) && note.contains("key packages")
+}
+
 /// What the application must do after feeding the engine.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Outcome {
@@ -466,6 +478,9 @@ impl DmEngine {
         Ok(out)
     }
 
+    /// Publishes a pool of key packages when the instance holds few of this
+    /// device's ([`Welcome::key_package_count`]), and says so in a note
+    /// ([`says_published`]).
     async fn top_up_key_packages(
         &mut self,
         welcome: &Welcome,
@@ -498,7 +513,7 @@ impl DmEngine {
         })?;
         self.api.publish_key_packages(packages, last_resort).await?;
         Ok(vec![Outcome::Print(format!(
-            "published {n} key packages and a last-resort package"
+            "{PUBLISHED_NOTE}{n} key packages and a last-resort package"
         ))])
     }
 
