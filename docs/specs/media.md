@@ -141,6 +141,8 @@ Up to 3 per message, in order of appearance: `http` and `https` URLs in the text
 
 From the page's `<head>`: `og:title`, `og:description`, `og:site_name`, `og:image` (with `og:image:width` and `height`), `theme-color`; failing Open Graph, `twitter:title`, `twitter:description`, `twitter:image`; failing those, `<title>` and `<meta name="description">`. A title is at most 300 characters and a description at most 1,000, trimmed with an ellipsis. A page with no title gets no card. An `og:video` or `og:type` of `video.*` marks the card as a video, drawn with a play symbol over its image. Pressing a card whose link has an embed (6.6) loads the embed in its place; any other card opens the URL in the browser, video or not. oEmbed comes later.
 
+A card is its host, its title and its description, with its picture. A picture that is a banner, which is what most pages give (at least 320 wide and half again as wide as tall; `CardSummary::picture_under` in the core, one rule for every client), is drawn whole under the words, at the card's width and its own shape, at most 240 tall. A squarer or a smaller one (a logo, a portrait, one whose size the page did not give) is drawn small beside the words, cropped to a square.
+
 ### 6.3 The fetcher
 
 The same rules in Elixir (the instance) and Rust (`lumia-client`, native targets only):

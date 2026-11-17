@@ -20,6 +20,7 @@ use lumia_shell::app::media::fetched;
 use lumia_shell::session::Update;
 use lumia_shell::session::media::{MediaUpdate, Stage, Waiting};
 use lumia_shell::settings::Media;
+use lumia_shell::tokens;
 use rune::{ClipboardContent, Key, KeyEvent, Mods, Runtime};
 
 const ICON: &[u8] = include_bytes!("../../../assets/brand/lumia-original-icon.png");
@@ -188,6 +189,67 @@ fn a_picture_opens_in_the_viewer_and_escape_closes_it() {
     settle(&mut rt);
     assert!(rt.state.media.viewer.is_none());
     assert!(!has(&rt, "viewer"));
+}
+
+#[test]
+fn a_cards_banner_is_drawn_whole_under_its_words_and_a_squarer_picture_beside_them() {
+    let picture_of = |width: u32, height: u32| {
+        let mut state = with_media();
+        let last = state.session.entries.last_mut().unwrap();
+        last.cards[0].image_width = width;
+        last.cards[0].image_height = height;
+        state.session.revision += 1;
+        // A window tall enough to hold the whole card: a rect is what of it is in view.
+        let mut rt = Runtime::new(
+            state,
+            lumia_shell::ui::view,
+            (1180.0, 1400.0),
+            rune::Env::new(false, 2.0),
+        );
+        settle(&mut rt);
+        (
+            element(&rt, "cards").rect,
+            element(&rt, "card-https://example.com/notes").rect,
+            element(&rt, "card-picture-https://example.com/notes").rect,
+        )
+    };
+    // A page's banner, as GitHub's is: under the words, the card's width, its own shape.
+    let (cards, card, picture) = picture_of(1200, 600);
+    assert!(
+        (picture[2] - card[2]).abs() < 1.0 && (picture[0] - card[0]).abs() < 1.0,
+        "as wide as the card's words: {picture:?} in {card:?}"
+    );
+    assert!(
+        (picture[2] / picture[3] - 2.0).abs() < 0.05,
+        "at its own shape: {picture:?}"
+    );
+    assert!(
+        picture[1] > card[1] + tokens::SPACE_40,
+        "under the words: {picture:?} in {card:?}"
+    );
+    assert!(
+        picture[1] + picture[3] < cards[1] + cards[3],
+        "inside its card: {picture:?} in {cards:?}"
+    );
+    // A banner taller than that at the card's width is held to the most one stands.
+    let (_, _, tall) = picture_of(900, 600);
+    assert!(
+        (tall[3] - tokens::CARD_PICTURE_UNDER).abs() < 0.5,
+        "no taller than 240: {tall:?}"
+    );
+    // A logo, a portrait, or a picture whose size the page did not give: small, beside.
+    for (width, height) in [(400, 400), (600, 900), (0, 0)] {
+        let (_, card, picture) = picture_of(width, height);
+        assert_eq!(
+            (picture[2], picture[3]),
+            (tokens::CARD_PICTURE, tokens::CARD_PICTURE),
+            "{width}x{height}"
+        );
+        assert!(
+            picture[0] > card[0] + card[2] / 2.0 && (picture[1] - card[1]).abs() < 1.0,
+            "at the card's end, beside the words: {picture:?} in {card:?}"
+        );
+    }
 }
 
 #[test]

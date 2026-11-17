@@ -708,6 +708,22 @@ pub struct CardSummary {
     pub video: bool,
 }
 
+impl CardSummary {
+    /// Whether the card's picture is drawn whole under its words, at the
+    /// card's width, rather than small beside them (specs/media.md 6.2): a
+    /// picture much wider than tall and large enough to be read there, which
+    /// is what most pages give as their `og:image` (a banner made to be seen
+    /// whole; cropped to a square it loses its words). At least 320 wide and
+    /// half again as wide as tall. A squarer or a smaller one (a logo, a
+    /// portrait) stays beside the words.
+    #[must_use]
+    pub fn picture_under(&self) -> bool {
+        self.image_width >= 320
+            && self.image_height > 0
+            && u64::from(self.image_width) * 2 >= u64::from(self.image_height) * 3
+    }
+}
+
 /// A link's embed (specs/media.md 6.6): what pressing its card loads in the
 /// card's place. It comes from the link in the text, never from the card.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -6808,8 +6824,33 @@ mod mention_tests {
 
 #[cfg(test)]
 mod media_tests {
-    use super::{cards_kept, notice_text, notification_text, AttachmentSummary};
+    use super::{cards_kept, notice_text, notification_text, AttachmentSummary, CardSummary};
     use lumia_core::proto::{Attachment, AttachmentKind};
+
+    #[test]
+    fn a_banner_goes_under_a_cards_words_and_a_squarer_or_small_picture_beside_them() {
+        let sized = |image_width, image_height| CardSummary {
+            image_width,
+            image_height,
+            ..CardSummary::default()
+        };
+        // GitHub's and most pages' picture, as the page gives it and as the instance keeps it.
+        assert!(sized(1200, 600).picture_under());
+        assert!(sized(800, 400).picture_under());
+        assert!(
+            sized(480, 320).picture_under(),
+            "half again as wide as tall"
+        );
+        assert!(!sized(479, 320).picture_under());
+        assert!(!sized(400, 400).picture_under(), "a logo");
+        assert!(!sized(300, 100).picture_under(), "too small to read there");
+        assert!(!sized(600, 900).picture_under(), "a portrait");
+        assert!(
+            !sized(800, 0).picture_under(),
+            "a size the page did not give"
+        );
+        assert!(!sized(0, 0).picture_under());
+    }
 
     fn of(kind: AttachmentKind) -> Attachment {
         Attachment {

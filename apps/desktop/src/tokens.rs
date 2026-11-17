@@ -452,6 +452,8 @@ pub const FILE_GLYPH: f32 = SPACE_18 - 1.0;
 pub const FILE_ACTION: f32 = ROW_HEIGHT;
 /// A link card's picture beside its words, square.
 pub const CARD_PICTURE: f32 = SPACE_40 * 2.0;
+/// The most a card's picture under its words stands (240, the web's `lu-linkcard--wide`).
+pub const CARD_PICTURE_UNDER: f32 = SPACE_40 * 6.0;
 /// The play symbol's disc over a poster or a card's picture.
 pub const PLAY_DISC: f32 = AVATAR_LG + SPACE_8;
 /// The alt text field of a picture waiting in the composer.

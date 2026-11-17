@@ -696,6 +696,7 @@ fn with_remove(tile: El, attachment: &AttachmentSummary, editing: bool, look: Lo
 pub fn cards(
     s: &State,
     entry: &Entry,
+    width: Option<f32>,
     ty: &t::MessageType,
     editing: bool,
     look: Look,
@@ -704,11 +705,12 @@ pub fn cards(
         return None;
     }
     let dropped: &[String] = if editing { &s.media.edit_dropped } else { &[] };
+    let max_width = width.map_or(t::MEDIA_MAX, |w| w.min(t::MEDIA_MAX));
     let mut column = col().key("cards").w_full().gap(t::MEDIA_GAP);
     let mut any = false;
     for card in entry.cards.iter().filter(|c| !dropped.contains(&c.url)) {
         any = true;
-        let mut drawn = link_card(s, card, ty, look);
+        let mut drawn = link_card(s, card, max_width, ty, look);
         if editing {
             let url = card.url.clone();
             drawn = drawn.child(icon_button(
@@ -724,12 +726,24 @@ pub fn cards(
     any.then_some(column)
 }
 
-/// One link's card: the host, the title and the description, the picture beside them.
-fn link_card(s: &State, card: &CardSummary, ty: &t::MessageType, look: Look) -> El {
+/// One link's card: the host, the title and the description, with its picture whole under
+/// them at the card's width when it is a banner (`CardSummary::picture_under`, the core's
+/// rule for every client), and small beside them when it is squarer or small. `max_width`
+/// is the room the message's column gives it.
+fn link_card(s: &State, card: &CardSummary, max_width: f32, ty: &t::MessageType, look: Look) -> El {
     let c = look.c;
     let words = card_words(&card.host, &card.title, &card.description, ty, look);
     let url = card.url.clone();
-    let mut body = row()
+    let picture = card_key(card)
+        .and_then(|key| s.media.image(&key))
+        .filter(|i| drawn(i));
+    let under = picture.is_some() && card.picture_under();
+    let frame = if under {
+        col().gap(t::SPACE_10)
+    } else {
+        row().gap(t::SPACE_12)
+    };
+    let body = frame
         .key(format!("card-{}", card.url))
         .grow(1.0)
         .min_w(0.0)
@@ -741,28 +755,39 @@ fn link_card(s: &State, card: &CardSummary, ty: &t::MessageType, look: Look) -> 
         .focus_ring(2.0, 2.0, c.focus)
         .on_press_tx(move |s: &mut State, tx| s.open_card(&url, tx))
         .child(words);
-    let picture = card_key(card)
-        .and_then(|key| s.media.image(&key))
-        .filter(|i| drawn(i));
-    if let Some(picture) = picture {
-        let mut tile = el()
+    let Some(picture) = picture else {
+        return card_box(body, look);
+    };
+    // A banner's card is as wide as cards go, whatever its words come to.
+    let wide = max_width.min(t::MEDIA_MAX);
+    let mut tile = if under {
+        // At the card's width and the picture's own shape, no taller than the web's 240:
+        // one taller than that at this width is cropped to it.
+        let width = wide - 2.0 * t::SPACE_12;
+        #[allow(clippy::cast_precision_loss)]
+        let shape = card.image_width as f32 / card.image_height as f32;
+        el().key(format!("card-picture-{}", card.url))
+            .size(width, (width / shape).min(t::CARD_PICTURE_UNDER))
+            .pixels_fit(picture.pixels(), SurfaceFit::Fill)
+    } else {
+        el().key(format!("card-picture-{}", card.url))
             .size(t::CARD_PICTURE, t::CARD_PICTURE)
-            .radius(t::RADIUS_8)
-            .clip_rounded(t::RADIUS_8)
-            .fill(c.inset)
-            .center()
-            .a11y_hidden()
             .child(
                 el().absolute(0.0, 0.0)
                     .size(t::CARD_PICTURE, t::CARD_PICTURE)
                     .pixels_fit(picture.pixels(), SurfaceFit::Fill),
-            );
-        if card.video {
-            tile = tile.child(play_disc(look));
-        }
-        body = body.child(tile);
+            )
     }
-    card_box(body, look)
+    .radius(t::RADIUS_8)
+    .clip_rounded(t::RADIUS_8)
+    .fill(c.inset)
+    .center()
+    .a11y_hidden();
+    if card.video {
+        tile = tile.child(play_disc(look));
+    }
+    let card = card_box(body.child(tile), look);
+    if under { card.w(wide) } else { card }
 }
 
 /// A link card's host, title and description, as the conversation draws them.

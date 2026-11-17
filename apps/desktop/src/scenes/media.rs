@@ -122,6 +122,17 @@ pub fn media(state: &mut State) {
         image_height: 400,
         ..CardSummary::default()
     };
+    // A page whose picture is a banner, as most are: drawn whole under the card's words.
+    let banner = CardSummary {
+        url: "https://example.com/releases/0.13.3".into(),
+        title: "Release Lumia 0.13.3".into(),
+        description: "Preferences redesigned, and what the review found.".into(),
+        host: "example.com".into(),
+        image_url: "/api/v1/cards/7b1e".into(),
+        image_width: 800,
+        image_height: 400,
+        ..CardSummary::default()
+    };
     state.session.entries = vec![
         Entry {
             attachments: vec![AttachmentSummary {
@@ -153,11 +164,12 @@ pub fn media(state: &mut State) {
             ..entry("x3", "grace", "", 20)
         },
         Entry {
-            cards: vec![card],
+            cards: vec![card, banner],
             ..entry(
                 "x4",
                 "me",
-                "Notes here: https://example.com/notes/compilers",
+                "Notes here: https://example.com/notes/compilers and the release: \
+                 https://example.com/releases/0.13.3",
                 10,
             )
         },
@@ -175,6 +187,7 @@ pub fn media(state: &mut State) {
         ("a-portrait-2-thumb", &portrait_thumb),
         ("a-icon-thumb", &icon_thumb),
         ("/api/v1/cards/9f2c", &icon_thumb),
+        ("/api/v1/cards/7b1e", &icon_thumb),
     ] {
         state.receive(&fetched(key, bytes));
     }

@@ -1032,7 +1032,7 @@ fn message_content(
     if let Some(files) = media::attachments(s, entry, width, ty, editing, look) {
         content = content.child(files.mt(t::SPACE_2));
     }
-    if let Some(cards) = media::cards(s, entry, ty, editing, look) {
+    if let Some(cards) = media::cards(s, entry, width, ty, editing, look) {
         content = content.child(cards.mt(t::SPACE_2));
     }
     if let Some((_, why)) = s
