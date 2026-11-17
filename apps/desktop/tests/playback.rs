@@ -20,7 +20,10 @@ use lumia_shell::scenes::media::{CLIP, TONE, written};
 use lumia_shell::session::media::{MediaUpdate, player_file};
 use lumia_shell::session::{Failure, Update};
 use lumia_shell::settings::Media;
-use rune::{Key, KeyEvent, Mods, Runtime};
+use rune::Runtime;
+// The keys are the full-screen video's, which only a platform Rune plays on has.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+use rune::{Key, KeyEvent, Mods};
 
 const ICON: &[u8] = include_bytes!("../../../assets/brand/lumia-original-icon.png");
 
