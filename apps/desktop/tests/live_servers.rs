@@ -147,7 +147,15 @@ fn a_server_is_made_given_a_channel_and_joined_by_invite() {
         (expires - in_a_day).abs() < 120_000_000,
         "expires in a day: {expires}"
     );
-    assert_eq!(owner.server_forms.invite.list[0].code, made.code);
+    // The list is read again once the invite is made, which may come after the link does.
+    let code = made.code.clone();
+    wait(&mut owner, "the invite in the server's list", move |s| {
+        s.server_forms
+            .invite
+            .list
+            .first()
+            .is_some_and(|invite| invite.code == code)
+    });
     assert_eq!(owner.server_forms.invite.error, "");
 
     // ---- A second account sees what the link leads to, then joins ---------------------

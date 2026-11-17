@@ -153,8 +153,11 @@ fn a_personal_message_is_owed_a_notice_and_its_click_opens_the_conversation() {
     wait(&mut state, "the gateway", |s| {
         s.session.connection == Connection::Connected && s.session.snapshot.is_some()
     });
-    // Its key packages are published on connect; the group below is made with a leaf for it.
-    idle(&mut state, Duration::from_secs(2));
+    // Its key packages are published once connected; the group below is made with a leaf
+    // for it, so they are waited for, however long a loaded machine takes over them.
+    wait(&mut state, "this device's key packages", |s| {
+        s.session.dm.published
+    });
 
     // Someone else asks for a conversation, and the first device accepts, which makes it.
     let them = account(&bin, &other, &instance, &theirs);
@@ -171,18 +174,16 @@ fn a_personal_message_is_owed_a_notice_and_its_click_opens_the_conversation() {
     wait(&mut state, "the conversation in the snapshot", |s| {
         s.session.channel_summary(&channel).is_some()
     });
-    // Their device joins from its welcome by following the conversation for a moment.
-    let mut tail = Command::new(&bin)
-        .arg("--data-dir")
-        .arg(&other)
-        .args(["dm", "tail", &channel])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("the CLI runs");
-    idle(&mut state, Duration::from_secs(3));
-    let _ = tail.kill();
-    let _ = tail.wait();
+    // Their device takes its welcome into the group.
+    let joined = cli(&bin, &other, &["dm", "open", &me]);
+    assert!(
+        joined.contains("group ready") || joined.contains("already a member"),
+        "{joined}"
+    );
+    // And this one its own, from the first device.
+    wait(&mut state, "the welcome into the group", |s| {
+        s.session.dm_member(&channel) == Some(true)
+    });
 
     // The window is not in front. They write.
     state.window_focused(false);

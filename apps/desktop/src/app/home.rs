@@ -133,7 +133,10 @@ impl State {
                     self.home.rejoin_error.clone_from(&failure.message);
                 }
             }
-            DmUpdate::Channels(_) | DmUpdate::Log { .. } | DmUpdate::Sent { .. } => {}
+            DmUpdate::Channels(_)
+            | DmUpdate::ChannelsAsked(_)
+            | DmUpdate::Log { .. }
+            | DmUpdate::Sent { .. } => {}
         }
     }
 }

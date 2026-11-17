@@ -173,6 +173,10 @@ fn linked_shell(bin: &str, instance: &str, holder: &Path, data: PathBuf) -> Stat
     wait(&mut state, "the gateway", |s| {
         s.session.connection == Connection::Connected
     });
+    // A group someone else makes holds this device only once its key packages are out.
+    wait(&mut state, "this device's key packages", |s| {
+        s.session.dm.published
+    });
     state
 }
 

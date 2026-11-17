@@ -53,8 +53,11 @@ impl Answer {
 /// What a finished personal-conversation call reports.
 #[derive(Debug, Clone)]
 pub enum DmUpdate {
-    /// The conversations this device's engine knows, with whether it holds each group.
+    /// The conversations this device's engine knows, with whether it holds each group, as
+    /// a call that changed them read them (a rejoin), or as a test or a scene gives them.
     Channels(Result<Vec<DmChannelSummary>, Failure>),
+    /// The same, in answer to [`Session::refresh_dm_channels`]: the one ask in flight.
+    ChannelsAsked(Result<Vec<DmChannelSummary>, Failure>),
     /// A conversation as this device can read it.
     Log {
         channel_id: String,
@@ -94,6 +97,18 @@ pub struct DmState {
     pub logs: HashMap<String, DmLogSummary>,
     /// Asks for [`DmState::channels`] that failed in a row.
     channel_failures: u32,
+    /// Whether the engine is being asked for `channels`, and whether they were asked for
+    /// again meanwhile. Each ask answers from a thread of its own, so two at once could
+    /// land the older answer over the newer, and a conversation joined in between would
+    /// read as not joined until something else asked: one is asked at a time, and what was
+    /// asked meanwhile is asked when the first has answered.
+    asking: bool,
+    ask_again: bool,
+    /// Whether this device has published its key packages since the session began, which
+    /// it does once connected when the instance holds few of them. Until it has, a group
+    /// another device makes cannot hold this one. The engine says so only in a note; the
+    /// live tests wait for it before someone else opens a conversation with the shell.
+    pub published: bool,
     /// How many sends this session has minted a placeholder id for.
     sends: u64,
 }
@@ -152,19 +167,25 @@ impl Session {
         self.open_conversation(Conversation::Dm(channel_id.to_string()));
     }
 
-    /// Asks the engine which conversations it knows ([`DmUpdate::Channels`]).
-    pub fn refresh_dm_channels(&self) {
-        self.refresh_dm_channels_after(std::time::Duration::ZERO);
+    /// Asks the engine which conversations it knows ([`DmUpdate::ChannelsAsked`]), one ask
+    /// at a time: asked while one is on its way, it is asked again when that one answers.
+    pub fn refresh_dm_channels(&mut self) {
+        if self.dm.asking {
+            self.dm.ask_again = true;
+            return;
+        }
+        self.ask_dm_channels(std::time::Duration::ZERO);
     }
 
-    fn refresh_dm_channels_after(&self, wait: std::time::Duration) {
+    fn ask_dm_channels(&mut self, wait: std::time::Duration) {
         let Some(app) = self.client() else { return };
         if !app.has_identity() {
             return;
         }
+        self.dm.asking = true;
         self.task_local(move || async move {
             tokio::time::sleep(wait).await;
-            Update::Dm(DmUpdate::Channels(
+            Update::Dm(DmUpdate::ChannelsAsked(
                 app.dm_channels().await.map_err(Failure::from),
             ))
         });
@@ -299,20 +320,30 @@ impl Session {
 
     pub(super) fn apply_dm(&mut self, update: &DmUpdate) {
         match update {
-            DmUpdate::Channels(Ok(channels)) => {
+            DmUpdate::Channels(Ok(channels)) => self.dm.channels.clone_from(channels),
+            DmUpdate::Channels(Err(_)) => {}
+            DmUpdate::ChannelsAsked(Ok(channels)) => {
+                self.dm.asking = false;
                 self.dm.channels.clone_from(channels);
                 self.dm.channel_failures = 0;
+                if std::mem::take(&mut self.dm.ask_again) {
+                    self.ask_dm_channels(std::time::Duration::ZERO);
+                }
             }
             // The engine is built on first use and gives up when an identity call holds the
             // identity's stores at that moment (the roster being read at launch, a link
             // being claimed). Nothing else would ask again until the next event, so this
-            // does, a few times.
-            DmUpdate::Channels(Err(_)) => {
+            // does, a few times; past those, only when it was asked for meanwhile.
+            DmUpdate::ChannelsAsked(Err(_)) => {
+                self.dm.asking = false;
+                let again = std::mem::take(&mut self.dm.ask_again);
                 if self.dm.channel_failures < CHANNEL_RETRIES {
                     self.dm.channel_failures += 1;
-                    self.refresh_dm_channels_after(std::time::Duration::from_millis(
+                    self.ask_dm_channels(std::time::Duration::from_millis(
                         250 * u64::from(self.dm.channel_failures),
                     ));
+                } else if again {
+                    self.ask_dm_channels(std::time::Duration::ZERO);
                 }
             }
             DmUpdate::Log {
@@ -402,7 +433,8 @@ impl Session {
             // it. But a row this device could not read (sent before it joined, or not
             // decryptable) is reported only as a note, and the log counts those rows: the
             // conversation on screen is read again.
-            AppEvent::DmNote { .. } => {
+            AppEvent::DmNote { message } => {
+                self.dm.published |= lumia_client::dm::says_published(message);
                 if let Some(channel_id) = self.dm().map(str::to_string) {
                     self.refresh_dm_log(&channel_id);
                 }
