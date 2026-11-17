@@ -14,7 +14,11 @@
 # Connect API key given as ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_PATH (the
 # .p8), which is what the release workflow uses. The first export creates
 # the Apple Distribution certificate and the App Store profile if the
-# account has none.
+# account has none. With a key, on a machine with an empty keychain (a
+# runner), the archive makes a new Apple Development certificate every
+# time, whose private key goes with the machine; the ones earlier runs left
+# are revoked first (asc-certificates.rb), or the account fills up and the
+# archive stops at "maximum number of certificates".
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 app="$here/../Lumia-iOS"
@@ -34,6 +38,7 @@ build=$(git -C "$here" rev-list --count HEAD)
 auth=""
 if [ -n "${ASC_KEY_ID:-}" ]; then
   auth="-authenticationKeyPath $ASC_KEY_PATH -authenticationKeyID $ASC_KEY_ID -authenticationKeyIssuerID $ASC_ISSUER_ID"
+  ruby "$here/asc-certificates.rb" --revoke
 fi
 versioning=""
 [ -n "$version" ] && versioning="MARKETING_VERSION=$version"
