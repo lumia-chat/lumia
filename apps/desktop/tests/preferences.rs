@@ -744,12 +744,17 @@ fn a_wide_window_has_the_preview_beside_the_settings_and_a_narrow_one_over_them(
         "beside, to the right"
     );
 
-    // Held in view while the settings scroll under the page's header, in a window tall
-    // enough to show the whole preview and too short for the whole page.
+    // Held in view while the settings scroll under the page's header, in a window just tall
+    // enough to show the whole preview, which is too short for the whole page: measured, not
+    // a number, since the page's height is the system's faces' (at 1,000 tall Linux's left
+    // it 26 points to scroll, this Mac's 90).
+    let header = rect_of(&wide, "header");
+    let under = header[1] + header[3] + tokens::SPACE_16;
+    let tall = under + preview[3] + tokens::SPACE_40;
     let mut short = Runtime::new(
         signed_in(),
         lumia_shell::ui::view,
-        (1600.0, 1000.0),
+        (1600.0, tall),
         Env::new(false, 2.0),
     );
     short.update(|s, _| s.go_home(HomeView::Preferences));
@@ -758,10 +763,13 @@ fn a_wide_window_has_the_preview_beside_the_settings_and_a_narrow_one_over_them(
     short.update(|_, tx| tx.scroll_into_view("reactions-row"));
     settle(&mut short);
     let scrolled = top - rect_of(&short, "appearance-card")[1];
-    assert!(scrolled > tokens::SPACE_40, "the page scrolled: {scrolled}");
-    let header = rect_of(&short, "header");
-    let under = header[1] + header[3] + tokens::SPACE_16;
-    let held = rect_of(&short, "preview")[1];
+    assert!(scrolled > tokens::SPACE_16, "the page scrolled: {scrolled}");
+    let preview = rect_of(&short, "preview");
+    assert!(
+        preview[1] + preview[3] <= tall,
+        "the whole preview is in the window: {preview:?}"
+    );
+    let held = preview[1];
     assert!(
         (held - under).abs() < 1.0,
         "the preview holds under the header: {held}, {under} wanted"
