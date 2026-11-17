@@ -91,6 +91,14 @@ async function open(which: string, name: string, keep = false): Promise<{ ctx: B
   // opens itself too.
   const launched = engine.launchPersistentContext(profile, options).then(async (ctx) => {
     ctx.on("page", (p) => watch(which, ctx, p));
+    // How often the app's frame has left the document it was put in (`framesLeft`).
+    await ctx.addInitScript(() => {
+      const w = window as unknown as { lumiaFrameLeft: number };
+      w.lumiaFrameLeft = 0;
+      new MutationObserver((records) => {
+        for (const r of records) for (const n of r.removedNodes) if (n instanceof Element && (n.matches(".lu-shell") || n.querySelector(".lu-shell"))) w.lumiaFrameLeft++;
+      }).observe(document, { childList: true, subtree: true });
+    });
     const page = await ctx.newPage();
     if (which === "chromium" && slow > 1) await throttle(ctx, page);
     return { ctx, page };
@@ -102,6 +110,14 @@ async function open(which: string, name: string, keep = false): Promise<{ ctx: B
   page.setDefaultNavigationTimeout(90_000);
   if (!keep) await clearStores(which, page, base);
   return { ctx, page };
+}
+
+// How many times the app's frame (`.lu-shell`) has been taken out of this document since
+// it loaded. Once drawn it stays until the app is left: a frame that leaves and comes
+// straight back (a query read as it suspends, `settled` in client/state.ts) takes the
+// keyboard from whatever had it, and what is typed or pressed just then goes nowhere.
+async function framesLeft(page: Page): Promise<number> {
+  return page.evaluate(() => (window as unknown as { lumiaFrameLeft?: number }).lumiaFrameLeft ?? 0);
 }
 
 // What a page says that a step should show: what it threw, with where
@@ -275,6 +291,8 @@ async function signInSteps(which: string, page: Page, handle: string) {
   await composer.fill(body);
   await page.keyboard.press("Enter");
   await page.getByText(body).waitFor();
+  const left = await framesLeft(page);
+  if (left) throw new Error(`the app's frame left the document ${left} times after it was drawn`);
   await page.reload();
   await page.getByText(body).waitFor();
   await page.screenshot({ path: `${out}/${which}-channel.png` });

@@ -17,17 +17,33 @@ export const queryClient = new QueryClient({
  * A query whose `data` is undefined until it has some, instead of
  * suspending; every query here is made through it. Solid Query reads
  * `data` through a resource, and a resource read with nothing in it yet
- * suspends the navigation in progress (the router runs each one as a
- * Solid transition), which then waits for the query. While it waits,
- * whatever changes meanwhile (an event, another query answering) runs
- * outside the transition and reads what the new screen made inside it as
- * undefined: the conversation Accept opens fell over that way on a slow
- * machine, "reading 'defaultQueryOptions'" of undefined or "a stale value
- * from <Show>", with nothing on the page. Every screen says what it is
- * still looking for, so none needs to suspend.
+ * suspends, in two ways that both cost a screen:
+ *
+ * - The navigation in progress (the router runs each one as a Solid
+ *   transition) waits for the query. While it waits, whatever changes
+ *   meanwhile (an event, another query answering) runs outside the
+ *   transition and reads what the new screen made inside it as undefined:
+ *   the conversation Accept opens fell over that way on a slow machine,
+ *   "reading 'defaultQueryOptions'" of undefined or "a stale value from
+ *   <Show>", with nothing on the page. So a pending query's `data` is
+ *   undefined here and never asked of the resource.
+ * - A query made when its answer is already held (a conversation gone back
+ *   to, the members beside it) says at once that it has data, but its
+ *   resource takes that answer a moment later, and a read in between
+ *   suspends the route: the whole frame left the document and came straight
+ *   back, the same elements, and whatever had the keyboard lost it. On a
+ *   slow machine that landed after a person or a test had begun to type,
+ *   and the words or the press went nowhere (the WebKit suite on the macOS
+ *   runner, a different step each run). So `data` is undefined too until
+ *   the resource has had its turn: two microtasks, with nothing drawn
+ *   between.
+ *
+ * Every screen says what it is still looking for, so none needs to suspend.
  */
 function settled<Q extends { readonly isPending: boolean }>(query: Q): Q {
-  return new Proxy(query, { get: (q, key) => (key === "data" && q.isPending ? undefined : Reflect.get(q, key)) });
+  const [answered, setAnswered] = createSignal(false);
+  queueMicrotask(() => queueMicrotask(() => setAnswered(true)));
+  return new Proxy(query, { get: (q, key) => (key === "data" && (q.isPending || !answered()) ? undefined : Reflect.get(q, key)) });
 }
 
 const INSTANCE_KEY = "lumia:instance";
