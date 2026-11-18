@@ -16,6 +16,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import uniffi.lumia_ffi.ClientEvent
 import uniffi.lumia_ffi.DeviceSummary
 import uniffi.lumia_ffi.DmChannelSummary
@@ -1036,6 +1037,33 @@ class LumiaSession(
         }
         refreshDmLog(channelId)
     }
+
+    // Drafts (issue #23)
+
+    /**
+     * The store's draft calls, one at a time and in the order they were
+     * asked, off the main thread: a draft kept as a conversation leaves the
+     * screen is in the store before the next screen reads one, and a send's
+     * clearing is never overtaken by a save handed over before it.
+     */
+    private val draftCalls = Dispatchers.IO.limitedParallelism(1)
+
+    /**
+     * What keeps the draft of a conversation while its screen is open
+     * (`DraftKeeper`): a server's channel, a server DM or a personal
+     * conversation, by its channel id, in the core's local store and
+     * nowhere else. The saves are the session's own work, so one handed
+     * over as the screen goes is not cut short with it, and a failure of
+     * the store is said nowhere. Nothing is kept once the session is over,
+     * a screen still open then flushing into nothing: the core forgets
+     * every draft at a sign-out and at a removed device's erasure, and what
+     * was typed is not for whoever signs in next.
+     */
+    fun draftKeeper(channelId: String): DraftKeeper = DraftKeeper(
+        read = { withContext(draftCalls) { client.now { draft(channelId) } } },
+        keep = { body, reply -> if (signedIn) scope.launch(draftCalls) { runCatching { client.now { setDraft(channelId, body, reply) } } } },
+        after = { ms, run -> scope.launch { delay(ms); run() }.let { job -> { job.cancel() } } },
+    )
 
     // Attachments and link cards (specs/media.md)
 

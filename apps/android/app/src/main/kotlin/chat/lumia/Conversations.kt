@@ -6,7 +6,10 @@
 // reply bar in the composer's frame, edits a message in place and asks
 // before deleting one, and is marked read while its newest message is on
 // screen with the app in front. The same states and words as the
-// desktop's and the web's.
+// desktop's and the web's. What is typed in a composer and not sent, and
+// the reply it answers, is the conversation's draft, which the core keeps
+// on the phone (issue #23, `rememberDraft` below): it is in the field again
+// when the conversation is opened again, after a quit or a crash too.
 package chat.lumia
 
 import android.content.ClipData
@@ -42,13 +45,16 @@ import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -71,11 +77,13 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.currentStateAsState
 import chat.lumia.kit.AppStore
 import chat.lumia.kit.AvatarTone
 import chat.lumia.kit.Display
+import chat.lumia.kit.DraftKeeper
 import chat.lumia.kit.FLASH_MS
 import chat.lumia.kit.LumiaAvatar
 import chat.lumia.kit.LumiaBody
@@ -104,6 +112,8 @@ import chat.lumia.kit.firstUnread
 import chat.lumia.kit.frequentEmoji
 import chat.lumia.kit.initialsOf
 import chat.lumia.kit.invitedWords
+import chat.lumia.kit.keptReply
+import chat.lumia.kit.mentionKept
 import chat.lumia.kit.isOver
 import chat.lumia.kit.lumiaCode
 import chat.lumia.kit.lumiaMessage
@@ -137,6 +147,7 @@ import uniffi.lumia_ffi.CardSummary
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import uniffi.lumia_ffi.DmMessageSummary
+import uniffi.lumia_ffi.DraftSummary
 import uniffi.lumia_ffi.MessageSummary
 import uniffi.lumia_ffi.QuoteSummary
 
@@ -238,6 +249,39 @@ private fun BringEditing(listState: LazyListState, item: Int?, onHold: () -> Uni
     }
 }
 
+/**
+ * A conversation's draft, kept while its screen is open (issue #23): the
+ * composer's words ([body]) and the reply they answer ([reply]), in the
+ * core's local store by the conversation's channel id and never sent to
+ * the instance. As the screen appears, at a cold launch too, what was kept
+ * is handed to [put] for the field and the reply bar. What is typed is
+ * kept once it has rested (`DRAFT_REST_MS`), and at once as the screen goes
+ * away and as the app is stopped, which Android may then end without a
+ * word; an emptied field keeps nothing. A send calls the keeper's `sent`,
+ * which clears it at once. The field a message is edited in is another
+ * (`EditField`, in the message's row), so an edit is never a draft and the
+ * draft is as it was when the edit ends. The files waiting in the strip are
+ * not kept, and a store that fails says nothing.
+ */
+@Composable
+private fun rememberDraft(session: LumiaSession, channelId: String, body: String, reply: QuoteSummary?, put: (DraftSummary) -> Unit): DraftKeeper {
+    val keeper = remember(session, channelId) { session.draftKeeper(channelId) }
+    val putBack by rememberUpdatedState(put)
+    LaunchedEffect(keeper) { keeper.kept()?.let { putBack(it) } }
+    // Told what the composer holds each time it is drawn; what the keeper already has is nothing to it.
+    SideEffect { keeper.changed(body, reply) }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    DisposableEffect(keeper, lifecycle) {
+        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_STOP) keeper.flush() }
+        lifecycle.addObserver(observer)
+        onDispose {
+            lifecycle.removeObserver(observer)
+            keeper.flush()
+        }
+    }
+    return keeper
+}
+
 // A personal conversation
 
 @Composable
@@ -246,9 +290,17 @@ fun ConversationScreen(store: AppStore, session: LumiaSession, channelId: String
     val context = LocalContext.current
     val measures = display.measures
     val clock = rememberClock()
-    var draft by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue("")) }
+    // The draft: the composer's words and the reply they answer, which the store keeps (`rememberDraft`), so no saved state does.
+    var draft by remember { mutableStateOf(TextFieldValue("")) }
     var error by rememberSaveable { mutableStateOf("") }
     var replying by remember { mutableStateOf<QuoteSummary?>(null) }
+    // A reply put back with a kept draft is not one just begun: the keyboard is not raised for it.
+    val replyKept = remember { mutableStateOf(false) }
+    val keeper = rememberDraft(session, channelId, draft.text, replying) { d ->
+        draft = TextFieldValue(d.body, TextRange(d.body.length))
+        replyKept.value = d.reply != null
+        replying = d.reply
+    }
     var actionsFor by remember { mutableStateOf<String?>(null) }
     var pickerFor by remember { mutableStateOf<String?>(null) }
     var flash by remember { mutableStateOf<String?>(null) }
@@ -347,6 +399,8 @@ fun ConversationScreen(store: AppStore, session: LumiaSession, channelId: String
         val urls = cards.cardUrls(body)
         draft = TextFieldValue("")
         replying = null
+        // Sent: nothing of it is kept, from now.
+        keeper.sent()
         error = ""
         holding = false
         cards.reset()
@@ -364,7 +418,10 @@ fun ConversationScreen(store: AppStore, session: LumiaSession, channelId: String
             delay(MARK_EVERY_MS)
         }
     }
-    LaunchedEffect(replying) { if (replying != null) { focus.requestFocus(); keyboard?.show() } }
+    LaunchedEffect(replying) {
+        if (replying == null) return@LaunchedEffect
+        if (replyKept.value) replyKept.value = false else { focus.requestFocus(); keyboard?.show() }
+    }
     BackHandler(enabled = replying != null && editing == null) { replying = null }
     BackHandler(enabled = editing != null) { editing = null }
 
@@ -479,7 +536,8 @@ fun ChannelScreen(store: AppStore, session: LumiaSession, channelId: String, dis
     val context = LocalContext.current
     val measures = display.measures
     val clock = rememberClock()
-    var draft by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue("")) }
+    // The draft: the composer's words and the reply they answer, which the store keeps (`rememberDraft`), so no saved state does.
+    var draft by remember { mutableStateOf(TextFieldValue("")) }
     var error by rememberSaveable { mutableStateOf("") }
     var joining by remember { mutableStateOf(false) }
     var card by remember { mutableStateOf<String?>(null) }
@@ -491,6 +549,14 @@ fun ChannelScreen(store: AppStore, session: LumiaSession, channelId: String, dis
     var holding by remember { mutableStateOf(false) }
     // Whether the reply notifies the person it quotes: on for each reply, until turned off.
     var mentionOn by remember { mutableStateOf(true) }
+    // A reply put back with a kept draft is not one just begun: its switch is as it was left, and the keyboard is not raised for it.
+    val replyKept = remember { mutableStateOf(false) }
+    val keeper = rememberDraft(session, channelId, draft.text, keptReply(replying, mentionOn)) { d ->
+        draft = TextFieldValue(d.body, TextRange(d.body.length))
+        replyKept.value = d.reply != null
+        mentionOn = d.reply?.let { mentionKept(it) } ?: true
+        replying = d.reply?.copy(silent = false)
+    }
     var editing by rememberSaveable { mutableStateOf<String?>(null) }
     var editDraft by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue("")) }
     var deleting by remember { mutableStateOf<String?>(null) }
@@ -614,6 +680,8 @@ fun ChannelScreen(store: AppStore, session: LumiaSession, channelId: String, dis
         val urls = cards.cardUrls(body)
         draft = TextFieldValue("")
         replying = null
+        // Sent: nothing of it is kept, from now.
+        keeper.sent()
         error = ""
         holding = false
         outside = null
@@ -641,7 +709,10 @@ fun ChannelScreen(store: AppStore, session: LumiaSession, channelId: String, dis
         }
     }
     LaunchedEffect(waiting, pending) { if (waiting && !waitsFor(pending)) send() }
-    LaunchedEffect(replying) { if (replying != null) { mentionOn = true; focus.requestFocus(); keyboard?.show() } }
+    LaunchedEffect(replying) {
+        if (replying == null) return@LaunchedEffect
+        if (replyKept.value) replyKept.value = false else { mentionOn = true; focus.requestFocus(); keyboard?.show() }
+    }
     BackHandler(enabled = replying != null && editing == null) { replying = null }
     BackHandler(enabled = editing != null) { editing = null }
 

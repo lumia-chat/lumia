@@ -521,7 +521,9 @@ fun LumiaComposer(text: String, onText: (String) -> Unit, placeholder: String, e
  * The field keeps the draft's line breaks and grows to 8 lines, then
  * scrolls inside itself. [room] is the core's for the draft
  * (`LumiaSession.roomOf`): its counter under the field near the limit,
- * and over it, Send refused and the draft kept.
+ * and over it, Send refused and the draft kept. It holds nothing itself:
+ * [value] is the screen's, which keeps it through a switch, a quit or a
+ * crash as the conversation's draft (issue #23, `DraftKeeper`).
  */
 @Composable
 fun LumiaComposer(

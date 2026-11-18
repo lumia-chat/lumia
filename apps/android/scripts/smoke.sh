@@ -25,7 +25,10 @@
 # the picture and is not offered the screen). Then the channel is read as assistive technology has it: each account's
 # messages in a row are one block, and the second account, typing through
 # the CLI, is named under the composer until it falls silent (protocol
-# 6.7), in light and dark. Then push. Then signing out from the account
+# 6.7), in light and dark. Then drafts (issue #23): a reply and words
+# typed in a channel and not sent are that channel's alone, there again
+# when it is come back to and after a force-stop, untouched by an edit of
+# a message, and gone for good once sent. Then push. Then signing out from the account
 # menu: the phone's push subscription and its session must be gone from
 # the instance, the sign-in screen must say nothing of it, a push that
 # still arrives must show nothing, and signing in again must subscribe
@@ -830,6 +833,118 @@ wait
 "$adb" shell am force-stop "$bundle" >/dev/null 2>&1 || true
 echo "  blocks and typing: ok ($other_handle was named once over two messages, shown typing, and no longer after its silence)"
 
+# Drafts (issue #23; architecture 13, "Local-first"): what is typed in a
+# conversation and not sent is that conversation's, kept on the phone with
+# the reply it answers. In the media channel, so #general stays as the
+# rest reads it: a reply begun and words typed, the channel left for
+# #general, whose composer must be empty, and come back to, which must
+# have both again; more typed and a second later the app force-stopped, as
+# a crash ends it with nothing told, and the next launch must have it all;
+# an edit of a message begun and typed in, which is not a draft, so the
+# launch after it must have the draft as it was and the message as it was;
+# then Send, which must empty the composer and leave it empty when the
+# channel is left and come back to, and at another launch.
+# What the composer's field holds: the last field on the screen, one a
+# message is edited in being over it.
+composer() {
+  ui | python3 -c '
+import html, re, sys
+fields = [n for n in re.findall(r"<node [^>]*>", sys.stdin.read()) if "class=\"android.widget.EditText\"" in n]
+if fields:
+    print(html.unescape(re.search(r" text=\"([^\"]*)\"", fields[-1]).group(1)))
+'
+}
+# Whether it comes to hold <words> within twenty seconds.
+composed() { # <words>
+  for _ in $(seq 1 20); do
+    [ "$(composer)" = "$1" ] && return 0
+    sleep 1
+  done
+  return 1
+}
+# Taps the first thing whose description starts with <words>: the panel's
+# Back, whatever it goes back to (the Back key would cancel the reply
+# first), and a channel's row, which says what is unread after its name.
+tap_starting() { # <words>
+  at=$(starting "$1")
+  [ -n "$at" ] || { echo "FAIL: nothing on screen is described as \"$1…\" to tap"; exit 1; }
+  # shellcheck disable=SC2086
+  "$adb" shell input tap $at
+  sleep 1
+}
+# From one channel's screen to another's, as a person goes: back to the server's list and into it.
+switch() { # <channel>
+  tap_starting "Back to "
+  await 'text="Channels"' 10 || { echo "FAIL: Back did not leave the channel for the server's list"; exit 1; }
+  tap_starting "$1 channel"
+  await "text=\"# $1\"" 10 || { echo "FAIL: #$1 did not open from the server's list"; exit 1; }
+}
+asked="Reply to this $stamp"
+words="Kept for later"
+"$cli" --data-dir "$data" send "$media" "$asked" >/dev/null
+launch channel 0 --es LUMIA_DEV_CHANNEL media
+await "text=\"$asked\"" 30 || { shot draft; echo "FAIL: the media channel does not show the message to reply to; see $work/draft.png"; exit 1; }
+[ -z "$(composer)" ] || { shot draft; echo "FAIL: the media channel's composer is not empty before anything was typed: $(composer)"; exit 1; }
+press "$asked"
+await 'content-desc="Message actions"' 5 || { shot draft; echo "FAIL: a long press on the message did not open its actions; see $work/draft.png"; exit 1; }
+tap "Reply"
+await "text=\"Replying to $handle\"" 5 || { shot draft; echo "FAIL: Reply did not put the reply bar in the composer; see $work/draft.png"; exit 1; }
+"$adb" shell input text "$(printf '%s' "$words" | sed 's/ /%s/g')"
+composed "$words" || { shot draft; echo "FAIL: the composer does not hold what was typed; see $work/draft.png"; exit 1; }
+shot draft
+switch general
+seen=$(ui)
+[ -z "$(composer)" ] || { shot draft-other; echo "FAIL: #general's composer holds what was typed in #media: $(composer)"; exit 1; }
+case "$seen" in *'text="Message #general"'*) ;; *) shot draft-other; echo "FAIL: #general's composer does not show its empty words; see $work/draft-other.png"; exit 1 ;; esac
+case "$seen" in *"text=\"Replying to"*) shot draft-other; echo "FAIL: #general's composer has the reply begun in #media; see $work/draft-other.png"; exit 1 ;; esac
+switch media
+composed "$words" || { shot draft-back; echo "FAIL: the media channel, left and come back to, does not have its draft: $(composer); see $work/draft-back.png"; exit 1; }
+case "$(ui)" in *"text=\"Replying to $handle\""*) ;; *) shot draft-back; echo "FAIL: the draft come back to has lost the reply it answers; see $work/draft-back.png"; exit 1 ;; esac
+shot draft-back
+# More, and the app ended a second later with nothing told.
+tap "$words"
+"$adb" shell input keyevent KEYCODE_MOVE_END
+"$adb" shell input text "%sand%smore"
+words="$words and more"
+composed "$words" || { shot draft-more; echo "FAIL: the composer does not hold what was typed after the draft was put back; see $work/draft-more.png"; exit 1; }
+sleep 1
+launch channel 0 --es LUMIA_DEV_CHANNEL media
+composed "$words" || { shot draft-launched; echo "FAIL: after a force-stop and a launch the composer does not have the draft: $(composer); see $work/draft-launched.png"; exit 1; }
+case "$(ui)" in *"text=\"Replying to $handle\""*) ;; *) shot draft-launched; echo "FAIL: after a force-stop and a launch the draft has lost the reply it answers; see $work/draft-launched.png"; exit 1 ;; esac
+shot draft-launched
+# An edit of a message has a field of its own, and is not a draft.
+press "$asked"
+await 'content-desc="Message actions"' 5 || { shot draft-edit; echo "FAIL: a long press on the message did not open its actions the second time; see $work/draft-edit.png"; exit 1; }
+tap "Edit message"
+await 'text="Save"' 5 || { shot draft-edit; echo "FAIL: Edit message did not open the message's field; see $work/draft-edit.png"; exit 1; }
+"$adb" shell input text "%sedited"
+for _ in $(seq 1 10); do case "$(ui)" in *"text=\"$asked edited\""*) break ;; esac; sleep 1; done
+seen=$(ui)
+case "$seen" in *"text=\"$asked edited\""*) ;; *) shot draft-edit; echo "FAIL: what was typed did not go into the field the message is edited in; see $work/draft-edit.png"; exit 1 ;; esac
+[ "$(composer)" = "$words" ] || { shot draft-edit; echo "FAIL: editing a message changed the composer's draft: $(composer); see $work/draft-edit.png"; exit 1; }
+shot draft-edit
+sleep 1
+launch channel 0 --es LUMIA_DEV_CHANNEL media
+composed "$words" || { shot draft-edit; echo "FAIL: an edit left unsaved changed the draft the next launch has: $(composer); see $work/draft-edit.png"; exit 1; }
+seen=$(ui)
+case "$seen" in *"$asked edited"*) echo "FAIL: an edit left unsaved was kept, as a draft or as the message"; exit 1 ;; esac
+case "$seen" in *"text=\"$asked\""*) ;; *) echo "FAIL: the message whose edit was left unsaved is not as it was"; exit 1 ;; esac
+# Sent: the composer is empty, and stays empty.
+tap "Send"
+composed "" || { shot draft-sent; echo "FAIL: Send did not empty the composer: $(composer); see $work/draft-sent.png"; exit 1; }
+await "text=\"$words\"" 20 || { shot draft-sent; echo "FAIL: the draft sent is not drawn in the channel; see $work/draft-sent.png"; exit 1; }
+case "$(ui)" in *"text=\"Replying to"*) shot draft-sent; echo "FAIL: the reply bar is still in the composer after the send; see $work/draft-sent.png"; exit 1 ;; esac
+shot draft-sent
+switch general
+switch media
+await 'text="Message #media"' 10 && [ -z "$(composer)" ] || { shot draft-sent; echo "FAIL: the sent words came back to the composer when the channel was left and come back to: $(composer); see $work/draft-sent.png"; exit 1; }
+sleep 1
+launch channel 0 --es LUMIA_DEV_CHANNEL media
+await 'text="Message #media"' 30 && [ -z "$(composer)" ] || { shot draft-sent; echo "FAIL: the sent words came back to the composer at the next launch: $(composer); see $work/draft-sent.png"; exit 1; }
+case "$(ui)" in *"text=\"Replying to"*) shot draft-sent; echo "FAIL: the reply sent came back to the composer at the next launch; see $work/draft-sent.png"; exit 1 ;; esac
+"$adb" shell am force-stop "$bundle" >/dev/null 2>&1 || true
+echo "  drafts: $work/draft-back.png, $work/draft-launched.png, $work/draft-sent.png (a reply and words typed in #media were not in #general, were there again when #media was come back to and after a force-stop and a launch; an edit left unsaved changed neither the draft nor the message; sent, the composer was empty and stayed empty, left and come back to and at the next launch)"
+
 # Push (architecture 15.5): the second account mentions the phone's
 # account while the app is away. The receivers' stand-in, a launch with
 # LUMIA_DEV_SCREEN=notify, makes the same call under the same lock as a
@@ -1140,4 +1255,4 @@ case "$(ui)" in *"Server settings"*) echo "FAIL: $other_handle, a plain member, 
 [ -n "$drawn" ] || { echo "FAIL: the rail does not draw the server's picture for a member; see $work/member-server.png"; exit 1; }
 "$adb" shell am force-stop "$bundle" >/dev/null 2>&1 || true
 echo "  a member: $work/member-server.png ($other_handle is not offered Server settings, and the rail draws the server's picture)"
-echo "smoke: ok (launched signed in, every screen screenshotted under $work; server settings renamed the server, kept its messages 30 days after saying what that deletes, and a picture set and removed reached the screen and the rail, offered to the owner and not to a member; preferences reached from the account menu, kept across a launch and as the phone was turned, dark, Compact, Minimal and the font size 20 drawn, a setting changed after a preset shown as Custom; messages in blocks and someone typing in the channel; a mention became a notification and its tap opened the channel; Sign out in the account menu ended the session and the push subscription and said nothing; another account signed in on the same phone was the only one it showed and was sent notices for; a session revoked from elsewhere took the subscription with it, and the app went back to sign-in and said so, opened afterwards or open at the time)"
+echo "smoke: ok (launched signed in, every screen screenshotted under $work; server settings renamed the server, kept its messages 30 days after saying what that deletes, and a picture set and removed reached the screen and the rail, offered to the owner and not to a member; preferences reached from the account menu, kept across a launch and as the phone was turned, dark, Compact, Minimal and the font size 20 drawn, a setting changed after a preset shown as Custom; messages in blocks and someone typing in the channel; a draft and its reply kept through another channel and a force-stop, and cleared by its send; a mention became a notification and its tap opened the channel; Sign out in the account menu ended the session and the push subscription and said nothing; another account signed in on the same phone was the only one it showed and was sent notices for; a session revoked from elsewhere took the subscription with it, and the app went back to sign-in and said so, opened afterwards or open at the time)"
