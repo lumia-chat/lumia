@@ -42,6 +42,9 @@ impl State {
             self.session.came_forward();
             // Another device may be asking to be linked (`prompts`).
             self.ask_prompts(chrono::Utc::now().timestamp_micros());
+        } else {
+            // Behind another window, where a quit or the power may find it (`drafts`).
+            self.keep_draft();
         }
     }
 

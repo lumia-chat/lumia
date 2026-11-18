@@ -13,6 +13,7 @@ pub mod account;
 pub mod aside;
 pub mod autoscroll;
 pub mod channels;
+pub mod drafts;
 pub mod home;
 pub mod links;
 pub mod media;
@@ -172,6 +173,8 @@ pub struct State {
     pub aside_open: bool,
     /// Quote replies, reactions and mentions (`replies`).
     pub replies: replies::Replies,
+    /// Whose words the composer holds, and what is kept of them (`drafts`).
+    pub(crate) drafts: drafts::Drafts,
     /// The rail's drag, its menus and Folder settings (`rail`).
     pub rail: rail::RailUi,
     /// Whether the system shows times on a 24-hour clock, which the timeline's times
@@ -223,6 +226,7 @@ impl State {
             window_width: None,
             aside_open: false,
             replies: replies::Replies::default(),
+            drafts: drafts::Drafts::default(),
             rail: rail::RailUi::default(),
             clock_24: false,
             updater: None,
@@ -248,6 +252,7 @@ impl State {
 
     /// Puts a server on screen with its first channel.
     pub fn select_server(&mut self, server_id: &str) {
+        self.leave_draft();
         self.close_server_settings();
         self.close_page();
         self.session.previewing = None;
@@ -255,7 +260,6 @@ impl State {
         self.place = Place::Server(server_id.to_string());
         self.placed = true;
         self.popover = None;
-        self.draft.clear();
         self.replies = replies::Replies::default();
         self.member_filter.clear();
         self.session.watch_presence(&[server_id.to_string()]);
@@ -274,6 +278,7 @@ impl State {
     }
 
     pub fn select_channel(&mut self, channel_id: &str) {
+        self.leave_draft();
         self.close_server_settings();
         self.close_page();
         if self.session.joined(channel_id) {
@@ -284,7 +289,6 @@ impl State {
         }
         self.session.open_channel(channel_id);
         self.session.channel_members(channel_id);
-        self.draft.clear();
         self.remember_channel();
     }
 
@@ -321,8 +325,8 @@ impl State {
         self.aside_open = false;
         let arriving = self.place != Place::Home || self.home_view != view;
         if self.place != Place::Home {
+            self.leave_draft();
             self.session.close_conversation();
-            self.draft.clear();
             self.replies = replies::Replies::default();
         }
         self.place = Place::Home;
@@ -459,6 +463,8 @@ impl State {
             self.forget_typed();
             self.replies.replying = None;
             self.replies.mention = None;
+            // Sent: nothing is kept of it, now and not once the field has rested.
+            self.keep_draft();
             self.sent_outside(outside);
             // Without a glide: a send from further up is at the newest message at once (#26).
             tx.scroll_to_bottom_instant("messages");
@@ -484,12 +490,14 @@ impl State {
         self.draft_over = room.over();
     }
 
-    /// What the passing of time does, apart from anything the session reports: says this
-    /// person is typing when the draft has changed since the last look (the composer has
-    /// no hook of its own for an edit), stops showing those whose typing has run out by
+    /// What the passing of time does, apart from anything the session reports: reads a
+    /// conversation's kept draft into the composer and keeps what is typed there
+    /// (`drafts`), says this person is typing when the draft has changed since the last
+    /// look (the composer has no hook of its own for an edit), stops showing those whose typing has run out by
     /// `now_micros`, and asks about link sessions on screen (`prompts`). True when that
     /// changed what is on screen.
     pub fn tick(&mut self, now_micros: i64) -> bool {
+        let drafted = self.tick_draft(now_micros);
         if self.draft.text != self.draft_seen {
             self.draft_seen.clone_from(&self.draft.text);
             // Emptied by a send or another conversation, which the field does not report.
@@ -505,7 +513,7 @@ impl State {
         let prompted = self.tick_prompts(now_micros);
         let media = self.tick_media(now_micros);
         let played = self.tick_playback();
-        expired || pictured || replied || prompted || media || played
+        drafted || expired || pictured || replied || prompted || media || played
     }
 
     /// Enters the shell for a session the stores already hold, at launch: with what the
@@ -533,7 +541,7 @@ impl State {
         self.home_view = HomeView::default();
         self.placed = false;
         self.popover = None;
-        self.draft.clear();
+        self.forget_draft();
         self.replies = replies::Replies::default();
         self.home = home::Home::default();
         self.server_forms = server::ServerForms::default();
@@ -767,6 +775,10 @@ pub fn poll(state: &mut State, now: f64, tx: &mut Tx) -> bool {
     // The draft's links are previewed once the words rest (`media`): nothing else wakes the
     // window for that.
     if let Some(left) = state.preview_wake(now) {
+        tx.wake_after(std::time::Duration::from_micros(left.unsigned_abs()));
+    }
+    // Nor to keep what was typed once the keys stop (`drafts`).
+    if let Some(left) = state.draft_wake(now) {
         tx.wake_after(std::time::Duration::from_micros(left.unsigned_abs()));
     }
     drained || ticked || found

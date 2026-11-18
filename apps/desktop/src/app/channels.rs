@@ -162,9 +162,9 @@ impl State {
         else {
             return;
         };
+        self.leave_draft();
         self.close_page();
         self.close_server_settings();
-        self.draft.clear();
         self.channel_forms.join_error.clear();
         self.session.preview(&channel);
     }

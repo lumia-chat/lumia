@@ -7,6 +7,7 @@
 
 use std::time::{Duration, Instant};
 
+use lumia_shell::app::drafts::KEEP_AFTER_MICROS;
 use lumia_shell::app::{Route, State};
 use lumia_shell::session::Connection;
 use lumia_shell::ui;
@@ -80,13 +81,43 @@ fn a_message_sent_from_the_shell_goes_from_pending_into_the_store() {
     assert_eq!(stored.author_account_id, state.session.me());
     assert_eq!(state.session.entries.len(), before + 1);
 
+    // What is typed and not sent is kept once it rests, a send from the composer keeps
+    // nothing, and what is in the field when the window goes is there at the next launch
+    // (#23).
+    let here = state.session.channel().expect("a channel").to_string();
+    let mut rt = Runtime::new(state, ui::view, (1180.0, 760.0), Env::new(false, 2.0));
+    rt.frame(0.0);
+    let at = chrono::Utc::now().timestamp_micros();
+    rt.update(move |s, _| {
+        s.tick(at);
+        s.draft.replace_text("Typed in the live test");
+        s.tick(at + 1);
+        s.tick(at + 1 + KEEP_AFTER_MICROS);
+    });
+    let kept = rt.state.session.draft(&here).expect("kept once rested");
+    assert_eq!(kept.body, "Typed in the live test");
+    rt.update(|s, tx| s.send(tx));
+    assert_eq!(rt.state.draft.text, "", "{:?}", rt.state.session.last_error);
+    assert!(
+        rt.state.session.draft(&here).is_none(),
+        "a send keeps nothing of what it sent"
+    );
+    wait(&mut rt.state, "the composer's send to land", |s| {
+        s.session.pending.is_empty()
+    });
+    rt.update(|s, _| {
+        s.draft.replace_text("For the next launch");
+        s.keep_draft();
+    });
+    let state = &rt.state;
+
     // A second launch over the same stores has the place, the channel, its messages and
     // the names at once, from what the core kept and from SQLite, before the instance has
     // been heard from: nothing is drained between opening and these assertions.
     let me = state.session.me().to_string();
     let name = state.session.self_name().to_string();
     let channel = state.session.channel().map(str::to_string);
-    drop(state);
+    drop(rt);
     let mut again = State::new(dir);
     assert_eq!(
         again.settings.instance.as_deref(),
@@ -99,6 +130,11 @@ fn a_message_sent_from_the_shell_goes_from_pending_into_the_store() {
     assert!(
         again.session.entries.iter().any(|e| e.id == id),
         "read back from the local store"
+    );
+    again.tick(chrono::Utc::now().timestamp_micros());
+    assert_eq!(
+        again.draft.text, "For the next launch",
+        "what was typed and not sent is in the composer"
     );
     assert_eq!(
         again.session.name_of(&me),

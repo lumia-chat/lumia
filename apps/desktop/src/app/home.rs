@@ -29,7 +29,7 @@ impl State {
     /// Puts a personal conversation on screen, at Home.
     pub fn open_dm(&mut self, channel_id: &str) {
         if self.session.dm() != Some(channel_id) {
-            self.draft.clear();
+            self.leave_draft();
             self.home.rejoining = false;
             self.home.rejoin_error.clear();
         }

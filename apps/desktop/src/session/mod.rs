@@ -34,8 +34,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 use lumia_client::ClientError;
 use lumia_client::app::{
     self, App, AppEvent, AttachmentDraft, AttachmentSummary, CardSummary, ChannelSummary,
-    InstanceSummary, MemberSummary, MentionSummary, MessageSummary, Opener, Place, QuoteSummary,
-    ReactionSummary, ServerSummary, SnapshotSummary, StoreName,
+    DraftSummary, InstanceSummary, MemberSummary, MentionSummary, MessageSummary, Opener, Place,
+    QuoteSummary, ReactionSummary, ServerSummary, SnapshotSummary, StoreName,
 };
 use lumia_client::body;
 use lumia_client::sqlite::SqliteStore;
@@ -918,6 +918,22 @@ impl Session {
         match &self.conversation {
             Some(Conversation::Channel(id)) => Some(id),
             _ => None,
+        }
+    }
+
+    /// What this computer kept of the words typed in a conversation and not sent, with the
+    /// reply they answer, from the core's local store. None when nothing is kept, or the
+    /// store could not be read.
+    pub fn draft(&self, conversation: &str) -> Option<DraftSummary> {
+        self.app.as_ref()?.draft(conversation).ok().flatten()
+    }
+
+    /// Keeps the words typed in a conversation and the reply they answer in the core's
+    /// local store, in place of what it kept; empty words keep nothing. A store that
+    /// refuses costs the draft and nothing else.
+    pub fn keep_draft(&self, conversation: &str, words: &str, reply: Option<&QuoteSummary>) {
+        if let Some(app) = &self.app {
+            let _ = app.set_draft(conversation, words, reply);
         }
     }
 

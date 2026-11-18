@@ -113,6 +113,9 @@ pub fn install(app: App<State>) -> App<State> {
     let mut app = app
         .on_open_url(open_url)
         .on_focus(focus)
+        // What is typed and not sent is kept before the window or the app goes (#23).
+        .on_close(|state: &mut State, _: &mut Tx| state.keep_draft())
+        .on_quit(|state: &mut State, _: &mut Tx| state.keep_draft())
         .on_window(|window| WINDOW.with_borrow_mut(|held| *held = Some(window.clone())));
     // The update items join when the updater has started, which needs the app running.
     for item in menu::items((false, false), None) {
