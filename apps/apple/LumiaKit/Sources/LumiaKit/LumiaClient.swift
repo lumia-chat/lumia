@@ -301,6 +301,19 @@ public actor LumiaClient {
     /// welcome gave, so it runs where it is asked.
     public nonisolated func messageRoom(_ body: String) -> MessageRoom { inner.messageRoom(body: body) }
 
+    /// What was typed into a conversation's composer and not sent (issue
+    /// #23, architecture 13), nil for nothing, and what is typed there now
+    /// kept in its place, with the message it replies to; words that are
+    /// empty or all blank keep nothing. Each one read or write of the
+    /// instance's local store, on this phone only, so they run where they
+    /// are asked: the field is filled as its screen appears, and what is in
+    /// it is kept before the app has left the foreground, not after a call
+    /// that reaches the instance has had its turn.
+    public nonisolated func draft(channelID: String) throws -> DraftSummary? { try inner.draft(channelId: channelID) }
+    public nonisolated func setDraft(channelID: String, body: String, reply: QuoteSummary?) throws {
+        try inner.setDraft(channelId: channelID, body: body, reply: reply)
+    }
+
     // MARK: Attachments and link cards (specs/media.md)
 
     /// What the instance takes of attachments; nil when it keeps none.

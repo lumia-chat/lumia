@@ -9,8 +9,10 @@
 // bar after a send that mentioned someone not in it; the "New messages"
 // line, which the list opens at when it is above the fold; and the
 // conversation marked read while its newest message is on screen and the
-// app is active. Attachments and link cards, in the composer and under a
-// message, are `Media.swift`'s.
+// app is active; and what is typed in the composer and not sent, with the
+// reply it answers, kept by conversation through a switch to another, a
+// quit or a crash (issue #23, `Drafting`). Attachments and link cards, in
+// the composer and under a message, are `Media.swift`'s.
 import LumiaFFI
 import LumiaKit
 import SwiftUI
@@ -75,6 +77,45 @@ private struct Reading: ViewModifier {
                 guard landed, marks, newestVisible, scenePhase == .active, newest > 0 else { return }
                 Task { await session.markRead(channelID: channelID, seq: newest) }
             }
+    }
+}
+
+/// Keeps what is typed in a conversation's composer and not sent (issue
+/// #23): what both kinds share. As the conversation comes on screen, at a
+/// cold launch too, the draft the core keeps for it is put in the field
+/// and the reply bar (`place`); what the composer then holds, its words and
+/// the reply they answer, is kept once it has rested for 400 ms, and at
+/// once when the screen goes away and when the app leaves the foreground,
+/// since iOS may end it there without a word (the kit's `DraftKeeper`,
+/// which a send tells to keep nothing). The files waiting in the strip
+/// are not kept, and a message's edit is typed in a field of its own, so
+/// it is never the draft.
+private struct Drafting: ViewModifier {
+    @Environment(\.scenePhase) private var scenePhase
+    let session: LumiaSession
+    let channelID: String
+    let keeper: DraftKeeper
+    /// What the composer holds: its words, and the reply being written as it is kept.
+    let words: String
+    let reply: QuoteSummary?
+    /// Puts a conversation's kept draft in the field and the reply bar, or empties them for none.
+    let place: (DraftSummary?) -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .onAppear(perform: open)
+            // Another conversation in the same screen: this one's words stay its own.
+            .onChange(of: channelID) { _, _ in open() }
+            .onChange(of: words) { _, words in keeper.changed(body: words, reply: reply) }
+            .onChange(of: reply) { _, reply in keeper.changed(body: words, reply: reply) }
+            .onChange(of: scenePhase) { _, phase in if phase != .active { keeper.leave() } }
+            .onDisappear { keeper.leave() }
+    }
+
+    /// Back from a screen pushed over this one, the field is as it was left: nothing is read again.
+    private func open() {
+        guard keeper.channelID != channelID else { return }
+        place(keeper.open(channelID, in: session.drafts))
     }
 }
 
@@ -186,7 +227,10 @@ struct ConversationScreen: View {
     @State private var draft = ""
     @State private var error = ""
     @State private var replying: QuoteSummary?
+    /// Whose message the reply answers, as it was begun; empty for one kept with a draft.
     @State private var replyingTo = ""
+    /// Keeps the draft and the reply through a switch, a quit or a crash.
+    @State private var drafts = DraftKeeper()
     @State private var sheet: MessageSheet?
     @State private var changes = Changes()
     @State private var flash: String?
@@ -284,7 +328,7 @@ struct ConversationScreen: View {
             // it either: the instance is not to learn who is writing in a
             // personal conversation (protocol 6.7; an open item of the E2EE spec).
             // The reply bar has no "@ On" here: every message of a personal conversation notifies.
-            LumiaComposer(text: $draft, placeholder: member ? "Message \(title)" : session.privateMessages.needsSomething ? "Private messages need this phone" : "Setting up the encrypted group…", disabled: !member, hint: nil, focused: $composing, reply: replying.map { _ in ComposerReply(name: replyingTo, mention: nil) { replying = nil } }, editLast: editLast, textScale: measures.text, room: { session.client.messageRoom($0) }, attach: member && session.uploadLimits != nil ? AnyView(AttachButton(media: media)) : nil, hasAttachments: !media.strip.draftIDs.isEmpty, waiting: media.strip.uploading) {
+            LumiaComposer(text: $draft, placeholder: member ? "Message \(title)" : session.privateMessages.needsSomething ? "Private messages need this phone" : "Setting up the encrypted group…", disabled: !member, hint: nil, focused: $composing, reply: replying.map { _ in ComposerReply(name: replyName, mention: nil) { replying = nil } }, editLast: editLast, textScale: measures.text, room: { session.client.messageRoom($0) }, attach: member && session.uploadLimits != nil ? AnyView(AttachButton(media: media)) : nil, hasAttachments: !media.strip.draftIDs.isEmpty, waiting: media.strip.uploading) {
                 Task { await send() }
             } above: {
                 ComposerMediaBars(media: media, session: session)
@@ -295,6 +339,7 @@ struct ConversationScreen: View {
         .mediaOpening($opening, session: session)
         .environment(playback)
         .onDisappear { playback.leave() }
+        .modifier(Drafting(session: session, channelID: channelID, keeper: drafts, words: draft, reply: replying, place: place))
         .modifier(Reading(session: session, channelID: channelID, newest: log?.messages.last?.seq ?? 0, marks: member, load: {
             await session.refreshDmChannels()
             await session.refreshDmLog(channelID: channelID)
@@ -384,6 +429,22 @@ struct ConversationScreen: View {
         composing = true
     }
 
+    /// Who the reply bar names: whoever the reply was begun to, and for a
+    /// reply kept with a draft, which names no one here, whoever sent the
+    /// message it answers once that is read; "a message" until then.
+    private var replyName: String {
+        if !replyingTo.isEmpty { return replyingTo }
+        guard let id = replying?.messageId, let m = log?.messages.first(where: { $0.messageId == id }) else { return "a message" }
+        return who(m)
+    }
+
+    /// The conversation's kept draft, in the field and the reply bar.
+    private func place(_ kept: DraftSummary?) {
+        draft = kept?.body ?? ""
+        replying = kept?.reply
+        replyingTo = ""
+    }
+
     private func react(_ messageID: String, _ emoji: String) {
         Task {
             do { try await session.react(channelID: channelID, messageID: messageID, emoji: emoji) } catch { self.error = error.lumiaMessage }
@@ -407,15 +468,27 @@ struct ConversationScreen: View {
         // file still on its way holds the send.
         guard media.strip.canSend(body: body), !MessageCounter.over(session.client.messageRoom(body)) else { return }
         let quote = replying
+        let name = replyName
         let (attachments, cards) = media.outgoing(body: body)
         draft = ""
         replying = nil
         error = ""
+        // Sent, the conversation keeps no draft, and no save still waits to bring these words back.
+        drafts.sent()
         do {
             try await session.dmSend(channelID: channelID, body: body, quote: quote, attachments: attachments, cardURLs: cards)
             media.sent()
         } catch {
             self.error = error.lumiaMessage
+            // Not sent: the words come back to the field, as on the web, unless
+            // something new was typed meanwhile or another conversation is here
+            // now, and are kept again.
+            guard drafts.channelID == channelID, draft.isEmpty else { return }
+            draft = body
+            if replying == nil, quote != nil {
+                replying = quote
+                replyingTo = name
+            }
         }
     }
 
@@ -444,6 +517,10 @@ struct ChannelScreen: View {
     @State private var replying: QuoteSummary?
     /// The reply bar's "@ On": on for each new reply.
     @State private var mentionOn = true
+    /// Keeps the draft and the reply through a switch, a quit or a crash.
+    @State private var drafts = DraftKeeper()
+    /// The kept draft's words as they were put in the field, which is not typing.
+    @State private var placed = ""
     @State private var sheet: MessageSheet?
     @State private var changes = Changes()
     @State private var outside: OutsideNote?
@@ -557,14 +634,16 @@ struct ChannelScreen: View {
         .mediaOpening($opening, session: session)
         .environment(playback)
         .onDisappear { playback.leave() }
+        .modifier(Drafting(session: session, channelID: channelID, keeper: drafts, words: draft, reply: keptReply, place: place))
         .modifier(Reading(session: session, channelID: channelID, newest: messages.last?.seq ?? 0, marks: member, load: {
             await session.refreshMessages(channelID: channelID)
             if member, !isDM { await session.loadChannelMembers(channelID: channelID) }
         }, jump: jump, newestVisible: $newestVisible, scroll: $scroll))
         // Every edit that leaves something in the field is typing; emptied
-        // is not (a send). The core spaces what is sent.
+        // is not (a send), nor is a kept draft put back in it, which nobody
+        // is typing now. The core spaces what is sent.
         .onChange(of: draft) { _, draft in
-            if !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { session.typed(channelID: channelID) }
+            if !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, draft != placed { session.typed(channelID: channelID) }
         }
         .onChange(of: session.commandError) { _, _ in
             if let refused = session.takeCommandError() { error = refused }
@@ -587,6 +666,23 @@ struct ChannelScreen: View {
         guard let replying else { return nil }
         let switchable = Replies.offersMentionSwitch(quotedAuthor: replying.authorAccountId, me: session.me, personal: false)
         return ComposerReply(name: session.name(of: replying.authorAccountId), mention: switchable ? $mentionOn : nil) { self.replying = nil }
+    }
+
+    /// The reply being written as a send carries it and a draft keeps it:
+    /// silent when the bar's "@ On" is turned off, so the reply notifies nobody.
+    private var keptReply: QuoteSummary? {
+        guard var quote = replying else { return nil }
+        quote.silent = Replies.offersMentionSwitch(quotedAuthor: quote.authorAccountId, me: session.me, personal: false) && !mentionOn
+        return quote
+    }
+
+    /// The conversation's kept draft, in the field and the reply bar, whose
+    /// "@ On" is as it was left.
+    private func place(_ kept: DraftSummary?) {
+        placed = kept?.body ?? ""
+        draft = placed
+        replying = kept?.reply
+        mentionOn = kept?.reply?.silent != true
     }
 
     /// Over the composer: the cards and files it will send, the bar after a
@@ -721,18 +817,28 @@ struct ChannelScreen: View {
         // file still on its way holds the send.
         guard media.strip.canSend(body: body), !MessageCounter.over(session.client.messageRoom(body)) else { return }
         // "@ On" turned off: the reply notifies nobody.
-        var quote = replying
-        if let q = quote { quote?.silent = Replies.offersMentionSwitch(quotedAuthor: q.authorAccountId, me: session.me, personal: false) && !mentionOn }
+        let quote = keptReply
         let (attachments, cards) = media.outgoing(body: body)
         draft = ""
         replying = nil
         error = ""
+        // Sent, the conversation keeps no draft, and no save still waits to bring these words back.
+        drafts.sent()
         do {
             let missed = try await session.send(channelID: channelID, body: body, quote: quote, attachments: attachments, cardURLs: cards)
             media.sent()
             outside = missed.isEmpty ? nil : OutsideNote(channelID: channelID, accountIDs: missed)
         } catch {
             self.error = error.lumiaMessage
+            // Not sent: the words come back to the field, as on the web, unless
+            // something new was typed meanwhile or another conversation is here
+            // now, and are kept again.
+            guard drafts.channelID == channelID, draft.isEmpty else { return }
+            draft = body
+            if replying == nil, let quote {
+                replying = quote
+                mentionOn = !quote.silent
+            }
         }
     }
 

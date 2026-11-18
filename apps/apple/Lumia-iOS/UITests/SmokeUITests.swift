@@ -6,8 +6,8 @@
 // drag in the picture viewer, and read a screen as
 // assistive technology does. scripts/smoke-push.sh, scripts/smoke-media.sh,
 // scripts/smoke-typing.sh, scripts/smoke-preferences.sh,
-// scripts/smoke-signout.sh, scripts/smoke-server-settings.sh, scripts/smoke-rail.sh
-// and scripts/smoke-approve.sh run these tests with the app signed in
+// scripts/smoke-signout.sh, scripts/smoke-server-settings.sh, scripts/smoke-rail.sh,
+// scripts/smoke-drafts.sh and scripts/smoke-approve.sh run these tests with the app signed in
 // (the LUMIA_DEV_* environment, passed through xcodebuild's TEST_RUNNER_
 // prefix); scripts/smoke-viewer.sh runs its test with no account at all.
 import UIKit
@@ -762,6 +762,23 @@ final class SmokeUITests: XCTestCase {
         return fields.matching(NSPredicate(format: "placeholderValue == %@ OR label == %@", placeholder, placeholder)).firstMatch
     }
 
+    /// The composer for a test that reads it again and again: looked for
+    /// among the text fields and the text views alone, waiting up to
+    /// `seconds` for it. `composer(in:)` asks every element on screen for
+    /// its identifiers, each of the keyboard's keys among them, and XCTest
+    /// logs every answer from inside the app; a test that asks that often
+    /// has the app's log quarantined for its volume on iOS 17.4, where
+    /// XCTest's own handler for that then crashes the app.
+    private func composerField(in app: XCUIApplication, within seconds: TimeInterval = 0) -> XCUIElement {
+        let (field, view) = (app.textFields["composer"], app.textViews["composer"])
+        let until = Date().addingTimeInterval(seconds)
+        while true {
+            if field.exists { return field }
+            if view.exists || Date() >= until { return view }
+            usleep(300_000)
+        }
+    }
+
     private func reached(_ step: String, under steps: String, saying words: String? = nil) {
         try? (words ?? step).write(toFile: "\(steps)/\(step)", atomically: true, encoding: .utf8)
         for _ in 0..<1200 where !FileManager.default.fileExists(atPath: "\(steps)/\(step).seen") { usleep(100_000) }
@@ -1159,6 +1176,243 @@ final class SmokeUITests: XCTestCase {
         _ = reached("quiet")
         // A moment for the smoke's screenshot of the composer with nothing under it.
         sleep(3)
+    }
+
+    /// What is typed and not sent is kept, by conversation (issue #23;
+    /// scripts/smoke-drafts.sh, which seeds a server with #general, where
+    /// LUMIA_UITEST_OTHER has asked something and this account,
+    /// LUMIA_UITEST_ME, has a message of its own, and a server DM between
+    /// the two). A reply is begun in #general, its "@ On" turned off, and
+    /// words typed and not sent; the server DM's field is empty and takes
+    /// words of its own; back in #general the words and the reply bar are
+    /// as they were left. A message edited in place there is not the
+    /// draft. More is typed and left to rest, and the smoke kills the app
+    /// where it stands (`typed`), with no leaving: launched again, both
+    /// conversations hold their words. Sent, #general's field is empty and
+    /// stays empty through leaving, returning and another launch; the DM's
+    /// field emptied by hand keeps nothing either. Each step is announced
+    /// through a file under LUMIA_UITEST_STEPS and waits for the smoke.
+    func testADraftIsKeptThroughASwitchAQuitAndASend() throws {
+        let env = ProcessInfo.processInfo.environment
+        let other = try XCTUnwrap(env["LUMIA_UITEST_OTHER"])
+        let me = try XCTUnwrap(env["LUMIA_UITEST_ME"])
+        let asked = try XCTUnwrap(env["LUMIA_UITEST_LAST"])
+        let steps = try XCTUnwrap(env["LUMIA_UITEST_STEPS"])
+        let reached = { (step: String) in self.reached(step, under: steps) }
+        var app = launch(screen: "server")
+        var anything: XCUIElementQuery { app.descendants(matching: .any) }
+        func labelled(_ words: String) -> XCUIElement { anything.matching(NSPredicate(format: "label == %@", words)).firstMatch }
+        func row(of who: String, saying words: String) -> XCUIElement {
+            anything.matching(NSPredicate(format: "label BEGINSWITH %@ AND value == %@", "\(who), ", words)).firstMatch
+        }
+        var field: XCUIElement { composerField(in: app) }
+        var general: XCUIElement { app.buttons["general"] }
+        /// The server DM's row in the sidebar, named for the other person.
+        var direct: XCUIElement { app.buttons.matching(NSPredicate(format: "label CONTAINS %@", other)).firstMatch }
+        var replyBar: XCUIElement { labelled("Replying to \(other)") }
+        var mention: XCUIElement { app.buttons["Mention \(other)"] }
+        /// What the composer holds: an empty field reports its placeholder, "Message #general", as its value.
+        func held() -> String {
+            let value = field.value as? String ?? ""
+            return value.hasPrefix("Message ") ? "" : value
+        }
+        func expectHeld(_ words: String, _ why: String) {
+            for _ in 0..<50 where held() != words { usleep(200_000) }
+            XCTAssertEqual(held(), words, why)
+        }
+        func sidebar() {
+            let back = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Back to ")).firstMatch
+            while back.exists { back.tap(); sleep(1) }
+            XCTAssertTrue(general.waitForExistence(timeout: 10), "not back at the server's sidebar")
+        }
+        func open(_ conversation: XCUIElement) {
+            sidebar()
+            conversation.tap()
+            XCTAssertTrue(composerField(in: app, within: 20).exists, "no composer")
+        }
+        /// Puts the caret after the field's last word.
+        func tapEnd() { field.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap() }
+
+        // #general, nothing kept yet: a reply begun to the other person's
+        // message, its "@ On" turned off, and words typed and not sent.
+        XCTAssertTrue(general.waitForExistence(timeout: 90), "no #general in the sidebar")
+        open(general)
+        expectHeld("", "a conversation nobody has typed in opens with words in its field")
+        let theirs = row(of: other, saying: asked)
+        XCTAssertTrue(theirs.waitForExistence(timeout: 30), "no message of \(other)'s in #general")
+        theirs.press(forDuration: 1.0)
+        XCTAssertTrue(app.buttons["Reply"].waitForExistence(timeout: 10), "the message's actions have no Reply")
+        app.buttons["Reply"].tap()
+        XCTAssertTrue(replyBar.waitForExistence(timeout: 10), "no reply bar in the composer")
+        XCTAssertEqual(mention.value as? String, "On", "@ On is not on for a new reply")
+        mention.tap()
+        if app.buttons["Continue"].exists { app.buttons["Continue"].tap() }
+        field.typeText("Half a thought")
+        expectHeld("Half a thought", "the composer does not hold what was typed")
+
+        // The server DM has none of it, and takes words of its own.
+        open(direct)
+        expectHeld("", "#general's words followed into another conversation")
+        XCTAssertFalse(app.buttons["Cancel reply"].exists, "#general's reply followed into another conversation")
+        field.tap()
+        field.typeText("Elsewhere")
+
+        // Back in #general: the words, the reply and its "@ On" as they were left.
+        open(general)
+        expectHeld("Half a thought", "#general did not keep what was typed in it through a switch to another conversation")
+        XCTAssertTrue(replyBar.waitForExistence(timeout: 10), "#general did not keep the reply being written")
+        XCTAssertEqual(mention.value as? String, "Off", "the kept reply's @ On is on again")
+        reached("switched")
+
+        // A message edited in place is typed in a field of its own: the
+        // draft is as it was while it is typed and once it is saved, here and
+        // after leaving and returning.
+        let mine = row(of: me, saying: "Mine to edit.")
+        XCTAssertTrue(mine.waitForExistence(timeout: 10), "no message of this account's in #general")
+        mine.press(forDuration: 1.0)
+        XCTAssertTrue(app.buttons["Edit message"].waitForExistence(timeout: 10), "one's own message's actions have no Edit message")
+        app.buttons["Edit message"].tap()
+        let editor = anything.matching(identifier: "message-editor").firstMatch
+        XCTAssertTrue(editor.waitForExistence(timeout: 10), "Edit message put no field where the words were")
+        editor.typeText(" Edited.")
+        sleep(1)
+        expectHeld("Half a thought", "the composer took an edit's words")
+        editor.typeText("\n")
+        XCTAssertTrue(row(of: me, saying: "Mine to edit. Edited., edited").waitForExistence(timeout: 20), "the edit did not come back as the message's words")
+        open(general)
+        expectHeld("Half a thought", "an edit of a message changed the conversation's draft")
+        XCTAssertTrue(replyBar.exists, "an edit of a message took the draft's reply")
+
+        // More typed and left to rest; then the smoke kills the app where it
+        // stands, as a crash would: nothing is told that it is leaving.
+        tapEnd()
+        field.typeText(" and more")
+        expectHeld("Half a thought and more", "the composer does not hold what was typed")
+        sleep(2)
+        reached("typed")
+        XCTAssertTrue(app.wait(for: .notRunning, timeout: 20), "the smoke did not end the app")
+
+        // Launched again: each conversation has its own words, and #general its reply.
+        app = launch(screen: "server")
+        XCTAssertTrue(general.waitForExistence(timeout: 90), "no #general in the sidebar after the launch")
+        open(general)
+        expectHeld("Half a thought and more", "what was typed in #general was not there at the next launch")
+        XCTAssertTrue(replyBar.waitForExistence(timeout: 10), "the reply being written was not there at the next launch")
+        XCTAssertEqual(mention.value as? String, "Off", "the kept reply's @ On is on again at the next launch")
+        reached("relaunched")
+        open(direct)
+        expectHeld("Elsewhere", "what was typed in the server DM was not there at the next launch")
+        XCTAssertFalse(app.buttons["Cancel reply"].exists, "the server DM has #general's reply at the next launch")
+
+        // Sent: the field is empty, and stays empty once a save that waited
+        // would have run, through leaving and returning and another launch.
+        open(general)
+        expectHeld("Half a thought and more", "#general lost its words while the server DM was on screen")
+        app.buttons["Send"].tap()
+        XCTAssertTrue(row(of: me, saying: "Half a thought and more").waitForExistence(timeout: 20), "the message is not drawn")
+        expectHeld("", "the field still holds what was sent")
+        XCTAssertFalse(app.buttons["Cancel reply"].exists, "the reply bar is still in the composer after the send")
+        sleep(2)
+        open(general)
+        expectHeld("", "sent words came back to the field after leaving and returning")
+        XCTAssertFalse(app.buttons["Cancel reply"].exists, "a sent reply came back to the composer after leaving and returning")
+        reached("sent")
+        app.terminate()
+        app = launch(screen: "server")
+        XCTAssertTrue(general.waitForExistence(timeout: 90), "no #general in the sidebar after the second launch")
+        open(general)
+        expectHeld("", "sent words came back to the field at the next launch")
+        XCTAssertFalse(app.buttons["Cancel reply"].exists, "a sent reply came back to the composer at the next launch")
+
+        // A field emptied by hand keeps nothing.
+        open(direct)
+        expectHeld("Elsewhere", "the server DM lost its words to #general's send")
+        tapEnd()
+        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: "Elsewhere".count))
+        expectHeld("", "the field was not emptied")
+        open(direct)
+        expectHeld("", "words taken out of the field came back after leaving and returning")
+        reached("emptied")
+    }
+
+    /// The same in a personal conversation (scripts/smoke-drafts.sh, after
+    /// the test above on the same phone, which set private messages up as
+    /// it signed in). LUMIA_UITEST_OTHER has asked for a conversation:
+    /// accepted from Requests, it opens, and the smoke has them write
+    /// LUMIA_UITEST_LAST in it (`accepted`). A reply to that is begun and
+    /// words typed and left to rest; the smoke kills the app (`typed`);
+    /// launched again on the conversation, the words are there and the
+    /// reply bar names the same person, found from the message the kept
+    /// reply answers. Sent, the field is empty and stays empty at another
+    /// launch (`sent`, where the smoke reads the conversation as the other
+    /// person).
+    func testAPersonalConversationKeepsItsDraft() throws {
+        let env = ProcessInfo.processInfo.environment
+        let asked = try XCTUnwrap(env["LUMIA_UITEST_LAST"])
+        let steps = try XCTUnwrap(env["LUMIA_UITEST_STEPS"])
+        let reached = { (step: String) in self.reached(step, under: steps) }
+        var app = launch(screen: "requests")
+        var anything: XCUIElementQuery { app.descendants(matching: .any) }
+        var field: XCUIElement { composerField(in: app) }
+        var replyBar: XCUIElement { anything.matching(NSPredicate(format: "label BEGINSWITH %@", "Replying to ")).firstMatch }
+        func held() -> String {
+            let value = field.value as? String ?? ""
+            return value.hasPrefix("Message ") ? "" : value
+        }
+        func expectHeld(_ words: String, _ why: String) {
+            for _ in 0..<50 where held() != words { usleep(200_000) }
+            XCTAssertEqual(held(), words, why)
+        }
+
+        // Accepting opens the conversation, with this phone in its group.
+        XCTAssertTrue(app.buttons["Accept"].waitForExistence(timeout: 90), "no request waiting")
+        app.buttons["Accept"].tap()
+        let opened = composerField(in: app, within: 60)
+        XCTAssertTrue(opened.exists, "accepting opened no conversation")
+        let ready = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isEnabled == true"), object: opened)
+        XCTAssertEqual(XCTWaiter().wait(for: [ready], timeout: 60), .completed, "the conversation's composer never came on")
+        expectHeld("", "a conversation nobody has typed in opens with words in its field")
+        reached("accepted")
+
+        // The other person's message: a reply begun, and words typed and left to rest.
+        let theirs = anything.matching(NSPredicate(format: "value == %@", asked)).firstMatch
+        XCTAssertTrue(theirs.waitForExistence(timeout: 60), "the other person's message is not drawn")
+        theirs.press(forDuration: 1.0)
+        XCTAssertTrue(app.buttons["Reply"].waitForExistence(timeout: 10), "the message's actions have no Reply")
+        app.buttons["Reply"].tap()
+        XCTAssertTrue(replyBar.waitForExistence(timeout: 10), "no reply bar in the composer")
+        let named = replyBar.label
+        XCTAssertNotEqual(named, "Replying to a message", "the reply bar does not say whose message it answers")
+        if app.buttons["Continue"].exists { app.buttons["Continue"].tap() }
+        field.typeText("Thursday works")
+        expectHeld("Thursday works", "the composer does not hold what was typed")
+        sleep(2)
+        reached("typed")
+        XCTAssertTrue(app.wait(for: .notRunning, timeout: 20), "the smoke did not end the app")
+
+        // Launched again on the conversation: the words, and the reply bar
+        // naming the same person once the conversation is read.
+        app = launch(screen: "conversation")
+        XCTAssertTrue(composerField(in: app, within: 90).exists, "no conversation after the launch")
+        expectHeld("Thursday works", "what was typed in the conversation was not there at the next launch")
+        XCTAssertTrue(replyBar.waitForExistence(timeout: 10), "the reply being written was not there at the next launch")
+        for _ in 0..<50 where replyBar.label != named { usleep(200_000) }
+        XCTAssertEqual(replyBar.label, named, "the kept reply does not say whose message it answers")
+        reached("relaunched")
+
+        // Sent: empty, and still empty at another launch.
+        app.buttons["Send"].tap()
+        XCTAssertTrue(anything.matching(NSPredicate(format: "value == %@", "Thursday works")).firstMatch.waitForExistence(timeout: 20), "the message is not drawn")
+        expectHeld("", "the field still holds what was sent")
+        XCTAssertFalse(app.buttons["Cancel reply"].exists, "the reply bar is still in the composer after the send")
+        sleep(2)
+        app.terminate()
+        app = launch(screen: "conversation")
+        XCTAssertTrue(composerField(in: app, within: 90).exists, "no conversation after the second launch")
+        XCTAssertTrue(anything.matching(NSPredicate(format: "value == %@", "Thursday works")).firstMatch.waitForExistence(timeout: 30), "the sent message is not drawn after the launch")
+        expectHeld("", "sent words came back to the field at the next launch")
+        XCTAssertFalse(app.buttons["Cancel reply"].exists, "a sent reply came back to the composer at the next launch")
+        reached("sent")
     }
 
     // MARK: Setting up private messages (issue #20; scripts/smoke-private-messages.sh)
