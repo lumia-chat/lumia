@@ -1944,8 +1944,7 @@ async function profileStep(which: string, stamp: number) {
 }
 
 // Attachments (specs/media.md 5): a member sends a picture from the CLI and
-// the page draws it, its display picture decoded (an image has no
-// thumbnail); the page attaches a picture
+// the page draws it, its thumbnail decoded; the page attaches a picture
 // through the attach button's file input, gives it alt text, sends it with
 // words, draws it from what it sent; the member sends another message and
 // reacts to the one with the picture, and each picture is still the element

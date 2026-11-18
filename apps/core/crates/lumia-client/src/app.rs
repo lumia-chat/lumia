@@ -654,19 +654,16 @@ pub struct AttachmentSummary {
     /// Video and audio, when known; 0 otherwise.
     pub duration_ms: u32,
     /// ThumbHash of the picture, poster or first frame, drawn until the
-    /// picture arrives ([`App::placeholder_image`]); empty when none.
+    /// thumbnail arrives ([`App::placeholder_image`]); empty when none.
     #[serde(with = "b64")]
     pub placeholder: Vec<u8>,
     /// An image's accessibility text.
     pub alt: String,
     /// The size of the file itself, for a file row.
     pub size_bytes: u64,
-    /// The display picture, the GIF, the video, the audio or the file. An
-    /// image is drawn from this in a conversation as in the viewer.
+    /// The display picture, the GIF, the video, the audio or the file.
     pub main: BlobSummary,
-    /// A GIF's first frame or a video's poster, at most 1,080 px. Never an
-    /// image's: one sent with a thumbnail, before images lost theirs, is
-    /// given without it.
+    /// At most 800 px: an image's, a GIF's first frame, a video's poster.
     pub thumbnail: Option<BlobSummary>,
     /// The server let its blobs go (specs/media.md 4.5): `main` and
     /// `thumbnail` open nothing, and a shell draws a file row with the name
@@ -922,11 +919,7 @@ fn attachment_summary(a: &lumia_core::proto::Attachment) -> AttachmentSummary {
             .size_bytes
             .saturating_sub(lumia_core::media::TAG_BYTES as u64),
         main,
-        thumbnail: a
-            .thumbnail
-            .as_ref()
-            .filter(|_| a.kind != lumia_core::proto::AttachmentKind::Image as i32)
-            .map(blob_summary),
+        thumbnail: a.thumbnail.as_ref().map(blob_summary),
         expired: a.expired,
     }
 }
@@ -6191,9 +6184,8 @@ impl App {
 
     /// Makes an attachment of a file and uploads it into the conversation
     /// `channel_id` (specs/media.md 3 and 4.1): processed on this device
-    /// (metadata stripped, a picture resized and re-encoded, its placeholder
-    /// made, and a thumbnail of a GIF or a video), each blob sealed under a
-    /// key of its own and
+    /// (metadata stripped, a picture resized and re-encoded, a thumbnail and
+    /// a placeholder made), each blob sealed under a key of its own and
     /// stored. Answers the draft a composer shows; [`App::send_message_with_media`]
     /// or [`App::dm_send_with_media`] sends it by its id.
     ///
@@ -6533,11 +6525,7 @@ impl App {
             video: page.video,
             ..Default::default()
         };
-        if let Some(thumbnail) = fetched
-            .image
-            .as_deref()
-            .and_then(lumia_core::media::card_picture)
-        {
+        if let Some(thumbnail) = fetched.image.and_then(card_thumbnail) {
             match crate::attachments::upload_blob(
                 &self.api,
                 channel,
@@ -6638,7 +6626,7 @@ impl App {
     }
 
     /// An attachment's placeholder as a tiny picture, to scale up and draw
-    /// until its picture arrives; `None` for an empty or malformed one.
+    /// until its thumbnail arrives; `None` for an empty or malformed one.
     #[must_use]
     pub fn placeholder_image(placeholder: &[u8]) -> Option<PlaceholderImage> {
         lumia_core::media::placeholder_image(placeholder).map(|p| PlaceholderImage {
@@ -6716,6 +6704,22 @@ fn cards_kept(body: &str, urls: &[String]) -> Vec<String> {
         .filter(|u| links.contains(u))
         .take(lumia_core::cards::MAX_CARDS)
         .collect()
+}
+
+/// A card's picture made a thumbnail (specs/media.md 6.3): decoded within
+/// the bounds and at most 800 px, or none.
+#[cfg(not(target_arch = "wasm32"))]
+fn card_thumbnail(bytes: Vec<u8>) -> Option<Vec<u8>> {
+    use lumia_core::media::AttachmentKind;
+    let processed = lumia_core::media::process(lumia_core::media::Input {
+        bytes,
+        name: "card".into(),
+        ..lumia_core::media::Input::default()
+    })
+    .ok()?;
+    matches!(processed.kind, AttachmentKind::Image | AttachmentKind::Gif)
+        .then_some(processed.thumbnail)
+        .flatten()
 }
 
 /// A personal conversation's projection from this device's log, with the
@@ -6820,35 +6824,8 @@ mod mention_tests {
 
 #[cfg(test)]
 mod media_tests {
-    use super::{
-        attachment_summary, cards_kept, notice_text, notification_text, AttachmentSummary,
-        CardSummary,
-    };
-    use lumia_core::proto::{Attachment, AttachmentKind, BlobRef};
-
-    /// An image is drawn from its display picture (#22): one sent while images still had
-    /// thumbnails is given without it, and a GIF's first frame and a video's poster stay.
-    #[test]
-    fn an_image_has_no_thumbnail_and_a_gif_and_a_video_keep_theirs() {
-        let of = |kind: AttachmentKind| {
-            attachment_summary(&Attachment {
-                kind: kind as i32,
-                main: Some(BlobRef {
-                    blob_id: vec![1; 16],
-                    ..Default::default()
-                }),
-                thumbnail: Some(BlobRef {
-                    blob_id: vec![2; 16],
-                    ..Default::default()
-                }),
-                ..Default::default()
-            })
-        };
-        assert_eq!(of(AttachmentKind::Image).thumbnail, None);
-        assert!(!of(AttachmentKind::Image).main.blob_id.is_empty());
-        assert!(of(AttachmentKind::Gif).thumbnail.is_some());
-        assert!(of(AttachmentKind::Video).thumbnail.is_some());
-    }
+    use super::{cards_kept, notice_text, notification_text, AttachmentSummary, CardSummary};
+    use lumia_core::proto::{Attachment, AttachmentKind};
 
     #[test]
     fn a_banner_goes_under_a_cards_words_and_a_squarer_or_small_picture_beside_them() {

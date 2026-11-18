@@ -27,7 +27,7 @@ use rune::{Key, KeyEvent, Mods};
 
 const ICON: &[u8] = include_bytes!("../../../assets/brand/lumia-original-icon.png");
 
-/// A video with a poster (the brand's icon, a picture the core made, as a poster is), or a
+/// A video with a poster (the brand's icon, made by the core as a send makes one), or a
 /// recording. Ids are the test's own: the files go in one temporary directory.
 fn clip(id: &str, kind: &str) -> AttachmentSummary {
     let blob = |part: &str| BlobSummary {
@@ -61,7 +61,8 @@ fn poster() -> Vec<u8> {
         caps: lumia_core::media::Caps::default(),
     })
     .unwrap()
-    .main
+    .thumbnail
+    .unwrap()
 }
 
 /// Signed in, in #general, where Grace sent a video with its poster and a recording; the

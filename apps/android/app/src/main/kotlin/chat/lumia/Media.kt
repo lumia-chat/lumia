@@ -140,7 +140,6 @@ import chat.lumia.kit.rememberCardPicture
 import chat.lumia.kit.roomForAttachments
 import chat.lumia.kit.shownPreviews
 import chat.lumia.kit.sizeWords
-import chat.lumia.kit.stillBlob
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -405,8 +404,7 @@ private fun PictureGrid(session: LumiaSession, playback: Playback, messageId: St
 
 /**
  * A picture, a GIF or a video's poster in its tile: the placeholder until
- * its still is here ([stillBlob]: an image's display picture, a GIF's first
- * frame, a video's poster), then that. A GIF animates in place from
+ * the thumbnail is here, then the thumbnail. A GIF animates in place from
  * its whole file unless the system asks for no motion, then it is its
  * first frame with a GIF badge and plays on a tap. A video has the play
  * symbol and its length, and pressed plays in its place ([InlineVideo]),
@@ -429,7 +427,7 @@ private fun PictureTile(session: LumiaSession, playback: Playback, messageId: St
     var played by remember(a.attachmentId) { mutableStateOf(false) }
     val gif = a.kind == "gif"
     val animate = gif && (!still || played)
-    val thumbnail = rememberBlobPicture(session, a.stillBlob())
+    val thumbnail = rememberBlobPicture(session, a.thumbnail)
     val placeholder = remember(a.attachmentId) { placeholderPicture(a.placeholder) }
     Box(
         modifier
@@ -475,7 +473,7 @@ private fun Badge(text: String, modifier: Modifier) {
     )
 }
 
-/** A GIF's whole file, animating, once it is here; nothing before (its first frame under it shows). */
+/** A GIF's whole file, animating, once it is here; nothing before (the thumbnail under it shows). */
 @Composable
 private fun AnimatedGif(session: LumiaSession, blob: BlobSummary, modifier: Modifier, contentScale: ImageView.ScaleType = ImageView.ScaleType.CENTER_CROP) {
     val bytes = rememberBlobBytes(session, blob)
@@ -874,8 +872,7 @@ private fun ImageViewer(session: LumiaSession, a: AttachmentSummary, onClose: ()
         picture = withContext(Dispatchers.Default) { decodePicture(here) }
         undrawable = picture == null
     }
-    // What the message drew, kept decoded, until the whole picture is.
-    val thumbnail = rememberBlobPicture(session, a.stillBlob())
+    val thumbnail = rememberBlobPicture(session, a.thumbnail)
     var scale by remember { mutableStateOf(1f) }
     var offsetX by remember { mutableStateOf(0f) }
     var offsetY by remember { mutableStateOf(0f) }

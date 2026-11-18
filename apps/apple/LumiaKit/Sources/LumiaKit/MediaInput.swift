@@ -20,13 +20,8 @@ public enum MediaInput {
     public static let maxPixels = 40_000_000
     /// The longest edge handed to the core: its display picture's.
     public static let longestEdge = 2560
-    /// A video's poster: the core makes its thumbnail of at most 1,080 px from it.
+    /// A video's poster: the core makes its thumbnail of at most 400 px from it.
     public static let posterEdge = 1280
-    /// The longest edge a message's picture is decoded at: the tallest one
-    /// is drawn (400 points) on a display of three pixels a point. An image
-    /// has no thumbnail, so this is its display picture made smaller in
-    /// memory; a poster or a GIF's first frame is smaller already.
-    public static let tileEdge = 1200
 
     /// What kind of file the name and bytes say this is.
     public enum Nature: Equatable, Sendable {

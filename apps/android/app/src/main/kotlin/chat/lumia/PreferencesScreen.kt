@@ -616,7 +616,7 @@ private fun MessagesPreview(display: Display) {
  * the picture while Images is on and its file's row (the conversation's
  * own, `FileRowView`) while off, and the card (`CardFrame`) while Embeds
  * is on. The picture is drawn here and not by `MessageMedia`'s tile, which
- * fetches its picture from the instance and opens the viewer: a box in
+ * fetches its thumbnail from the instance and opens the viewer: a box in
  * the blue tone at the picture's size fitted to the column, a sign-in
  * screen standing in it, cut to the tile's radius as a picture is.
  */

@@ -1,6 +1,5 @@
-//! Still pictures: the bounded decode, the display image and its placeholder
-//! (specs/media.md 3.1), and the thumbnail of a GIF's first frame, a video's
-//! poster and a card's picture.
+//! Still pictures: the bounded decode, the display image, the thumbnail and
+//! the placeholder (specs/media.md 3.1).
 
 use std::io::Cursor;
 
@@ -26,12 +25,10 @@ pub(super) const DISPLAY_EDGE: u32 = 2560;
 /// The smallest longest edge a display image is shrunk to before the
 /// picture is refused.
 pub(super) const MIN_DISPLAY_EDGE: u32 = 640;
-/// A thumbnail's longest edge (a GIF's first frame, a video's poster): a
-/// picture across a phone's column (some 360 to 430 points) on a display of
-/// three pixels a point, and a desktop's at two.
+/// The thumbnail's longest edge: a picture across a phone's column (some
+/// 360 to 430 points) on a display of three pixels a point, and a desktop's
+/// at two.
 pub(super) const THUMBNAIL_EDGE: u32 = 1080;
-/// The longest edge of a card's picture (spec 6.3).
-pub(super) const CARD_EDGE: u32 = 800;
 /// The longest edge of what the placeholder is computed from (ThumbHash
 /// takes at most 100 a side).
 const PLACEHOLDER_EDGE: u32 = 100;
@@ -45,6 +42,7 @@ pub(super) struct Still {
     pub png: bool,
     pub width: u32,
     pub height: u32,
+    pub thumbnail: Vec<u8>,
     pub placeholder: Vec<u8>,
 }
 
@@ -203,9 +201,9 @@ fn fit(width: u32, height: u32, edge: u32) -> (u32, u32) {
     (scale(width), scale(height))
 }
 
-/// A decoded picture with its longest edge brought within `edge`, as RGBA.
-pub(super) fn shrink_decoded(image: &DynamicImage, edge: u32) -> RgbaImage {
-    let (w, h) = fit(image.width(), image.height(), edge);
+/// A decoded picture brought within the display edge, as RGBA.
+pub(super) fn shrink_decoded(image: &DynamicImage) -> RgbaImage {
+    let (w, h) = fit(image.width(), image.height(), DISPLAY_EDGE);
     if (w, h) == (image.width(), image.height()) {
         image.to_rgba8()
     } else {
@@ -276,17 +274,19 @@ fn fits(len: usize, cap: u64) -> bool {
 /// down by a quarter at a time (at 55) until it fits. A picture that does
 /// not fit at [`MIN_DISPLAY_EDGE`] is refused. A transparent picture made
 /// JPEG is flattened onto white.
-pub(super) fn display(image: RgbaImage, cap: u64) -> Result<Still, MediaError> {
+pub(super) fn display(image: RgbaImage, cap: u64, thumbnail_cap: u64) -> Result<Still, MediaError> {
     if transparent(&image) {
         let png = encode_png(&image)?;
         if fits(png.len(), cap) {
             let (width, height) = image.dimensions();
+            let preview = preview(&DynamicImage::ImageRgba8(image), true, thumbnail_cap)?;
             return Ok(Still {
                 main: png,
                 png: true,
                 width,
                 height,
-                placeholder: placeholder(&DynamicImage::ImageRgba8(image)),
+                thumbnail: preview.thumbnail,
+                placeholder: preview.placeholder,
             });
         }
     }
@@ -295,7 +295,7 @@ pub(super) fn display(image: RgbaImage, cap: u64) -> Result<Still, MediaError> {
     for quality in JPEG_QUALITIES {
         let jpeg = encode_jpeg(&rgb, quality)?;
         if fits(jpeg.len(), cap) {
-            return Ok(jpeg_still(jpeg, rgb));
+            return jpeg_still(jpeg, rgb, thumbnail_cap);
         }
     }
     let mut edge = rgb.width().max(rgb.height());
@@ -308,41 +308,30 @@ pub(super) fn display(image: RgbaImage, cap: u64) -> Result<Still, MediaError> {
         let smaller = imageops::resize(&rgb, w, h, FilterType::CatmullRom);
         let jpeg = encode_jpeg(&smaller, 55)?;
         if fits(jpeg.len(), cap) {
-            return Ok(jpeg_still(jpeg, smaller));
+            return jpeg_still(jpeg, smaller, thumbnail_cap);
         }
     }
 }
 
-fn jpeg_still(main: Vec<u8>, shown: RgbImage) -> Still {
+fn jpeg_still(main: Vec<u8>, shown: RgbImage, thumbnail_cap: u64) -> Result<Still, MediaError> {
     let (width, height) = shown.dimensions();
-    Still {
+    let preview = preview(&DynamicImage::ImageRgb8(shown), false, thumbnail_cap)?;
+    Ok(Still {
         main,
         png: false,
         width,
         height,
-        placeholder: placeholder(&DynamicImage::ImageRgb8(shown)),
-    }
+        thumbnail: preview.thumbnail,
+        placeholder: preview.placeholder,
+    })
 }
 
-/// The placeholder of an upright picture: the ThumbHash of it at
-/// [`PLACEHOLDER_EDGE`].
-fn placeholder(image: &DynamicImage) -> Vec<u8> {
-    let (pw, ph) = fit(image.width(), image.height(), PLACEHOLDER_EDGE);
-    let tiny = image.thumbnail_exact(pw, ph).to_rgba8();
-    thumbhash::rgba_to_thumb_hash(pw as usize, ph as usize, tiny.as_raw())
-}
-
-/// The thumbnail (at most `edge`, JPEG at 85 or PNG when `png`, within
-/// `cap` sealed) and the placeholder of an upright picture: a GIF's first
-/// frame, a video's poster, a card's picture. A thumbnail over the limit
-/// steps down in quality, then in size, as the display image does.
-pub(super) fn preview(
-    image: &DynamicImage,
-    png: bool,
-    edge: u32,
-    cap: u64,
-) -> Result<Preview, MediaError> {
-    let (w, h) = fit(image.width(), image.height(), edge);
+/// The thumbnail (at most [`THUMBNAIL_EDGE`], JPEG at 85 or PNG when
+/// `png`, within `cap` sealed) and the placeholder of an
+/// upright picture. A thumbnail over the limit steps down in quality, then
+/// in size, as the display image does.
+pub(super) fn preview(image: &DynamicImage, png: bool, cap: u64) -> Result<Preview, MediaError> {
+    let (w, h) = fit(image.width(), image.height(), THUMBNAIL_EDGE);
     let small = image.thumbnail_exact(w, h).to_rgba8();
     let (pw, ph) = fit(w, h, PLACEHOLDER_EDGE);
     let tiny = imageops::thumbnail(&small, pw, ph);

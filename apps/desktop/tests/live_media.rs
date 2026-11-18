@@ -1,6 +1,6 @@
 //! Attachments against a real instance (specs/media.md): two accounts in one channel, each
 //! a shell of its own. One attaches a picture from a file, gives it alt text and sends it;
-//! the other sees it arrive, has its picture fetched, opened and decoded, opens the viewer
+//! the other sees it arrive, has its thumbnail fetched, opened and decoded, opens the viewer
 //! (the display picture fetched), and saves it; then the sender's edit takes the picture out
 //! and it goes from the other's screen. Runs only with `LUMIA_DEV_INSTANCE` set; without it
 //! it passes having checked nothing, and says so. It makes its own accounts, so it needs an
@@ -13,7 +13,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use lumia_shell::app::{HomeView, Place, Route, State};
 use lumia_shell::session::Connection;
-use lumia_shell::session::media::{Stage, blob_key, still_key};
+use lumia_shell::session::media::{Stage, blob_key};
 use rune::TextEdit;
 
 const PASSWORD: &str = "correct-horse-battery-staple";
@@ -150,7 +150,7 @@ fn a_picture_sent_from_one_shell_is_seen_opened_and_saved_in_another() {
                 .any(|e| e.body == words && e.attachments.len() == 1)
     });
 
-    // ---- The owner sees it, its picture decoded and made small -------------------------
+    // ---- The owner sees it, its thumbnail decoded --------------------------------------
     wait(&mut owner, "the picture at the owner", |s| {
         s.session
             .entries
@@ -168,11 +168,10 @@ fn a_picture_sent_from_one_shell_is_seen_opened_and_saved_in_another() {
     assert_eq!(picture.kind, "image");
     assert_eq!(picture.alt, "The Lumia mark");
     assert!(picture.width > 0 && picture.height > 0 && !picture.placeholder.is_empty());
-    assert_eq!(picture.thumbnail, None, "an image has no thumbnail");
-    let shown = still_key(&picture).expect("an image is drawn from its display picture");
-    wait(&mut owner, "the picture, opened and decoded", |s| {
+    let thumb = blob_key(picture.thumbnail.as_ref().expect("a thumbnail"));
+    wait(&mut owner, "the thumbnail, opened and decoded", |s| {
         s.media
-            .image(&shown)
+            .image(&thumb)
             .is_some_and(|i| i.is_ready() && i.error().is_none())
     });
     assert!(owner.media.placeholder(&picture.attachment_id).is_some());

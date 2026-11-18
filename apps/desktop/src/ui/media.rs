@@ -11,7 +11,7 @@
 //! are to be checked against boards once there are some.
 //!
 //! A picture is drawn at its own shape, at most 400 tall, its placeholder under it until
-//! its picture has decoded; several stand in a grid of equal squares, cropped to fill
+//! its thumbnail has decoded; several stand in a grid of equal squares, cropped to fill
 //! them. A GIF moves unless the system asks for reduced motion, when its first frame is
 //! drawn with a GIF badge and a press plays it. A video is its poster with a play symbol, or
 //! a file row with a Play button when it has none; a recording is a file row with Play.
@@ -40,9 +40,7 @@ use crate::app::State;
 use crate::app::media::{ZOOM_MAX, ZOOM_MIN, fitted, grid};
 use crate::app::playback::{Clip, clock};
 use crate::session::Entry;
-use crate::session::media::{
-    Stage, Waiting, blob_key, card_key, is_picture, size_words, still_key,
-};
+use crate::session::media::{Stage, Waiting, blob_key, card_key, is_picture, size_words};
 use crate::settings::Media;
 use crate::tokens::{self as t, icons};
 
@@ -89,9 +87,8 @@ fn picture_label(attachment: &AttachmentSummary) -> String {
     }
 }
 
-/// The best picture held for an attachment: a GIF itself while it may move, else its still
-/// (an image's display picture, a GIF's first frame, a video's poster). None when nothing
-/// has decoded yet.
+/// The best picture held for an attachment: a GIF itself while it may move, else the
+/// thumbnail. None when nothing has decoded yet.
 fn shown_picture<'a>(
     s: &'a State,
     attachment: &AttachmentSummary,
@@ -101,17 +98,22 @@ fn shown_picture<'a>(
         .then(|| s.media.image(&blob_key(&attachment.main)))
         .flatten()
         .filter(|image| drawn(image));
-    let still = still_key(attachment)
-        .and_then(|key| s.media.image(&key))
+    let thumbnail = attachment
+        .thumbnail
+        .as_ref()
+        .and_then(|blob| s.media.image(&blob_key(blob)))
         .filter(|image| drawn(image));
-    main.or(still)
+    main.or(thumbnail)
 }
 
-/// Whether an attachment drawn as a picture may not be: its still, or a GIF itself, arrived
-/// and names more than may be decoded (spec 5). It is drawn as a file row then.
+/// Whether an attachment drawn as a picture may not be: its thumbnail, or a GIF itself,
+/// arrived and names more than may be decoded (spec 5). It is drawn as a file row then.
 fn undrawable(s: &State, attachment: &AttachmentSummary) -> bool {
     let media = &s.session.media;
-    still_key(attachment).is_some_and(|key| media.undrawable(&key))
+    attachment
+        .thumbnail
+        .as_ref()
+        .is_some_and(|blob| media.undrawable(&blob_key(blob)))
         || (attachment.kind == "gif" && media.undrawable(&blob_key(&attachment.main)))
 }
 
@@ -1090,8 +1092,8 @@ pub fn drop_target(look: Look) -> El {
 
 // ---- The viewer ---------------------------------------------------------------------
 
-/// The picture opened from a message, over the whole window: the display picture whole (as
-/// the message draws it, then its placeholder, until it has arrived), zoomed with the bar's buttons or
+/// The picture opened from a message, over the whole window: the display picture (its
+/// thumbnail, then its placeholder, until it has arrived), zoomed with the bar's buttons or
 /// the plus and minus keys, moved by a drag while zoomed, its alt text under it. Escape, the
 /// × or a press beside the picture closes it.
 pub fn viewer(s: &State, look: Look) -> Option<El> {
@@ -1105,8 +1107,9 @@ pub fn viewer(s: &State, look: Look) -> Option<El> {
         .image(&main_key)
         .filter(|i| drawn(i))
         .or_else(|| {
-            still_key(a)
-                .and_then(|key| s.media.image(&key))
+            a.thumbnail
+                .as_ref()
+                .and_then(|b| s.media.image(&blob_key(b)))
                 .filter(|i| drawn(i))
         })
         .or_else(|| s.media.placeholder(&a.attachment_id));

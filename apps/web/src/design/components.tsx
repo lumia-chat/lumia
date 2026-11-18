@@ -1747,7 +1747,7 @@ export interface MediaTileProps {
   /** Its size, after orientation; 0 when unknown. */
   width: number;
   height: number;
-  /** What it is drawn from: an image's picture, a GIF itself or its first frame, a video's poster. Until then the placeholder. */
+  /** What it is drawn from: the thumbnail, a GIF itself, a video's poster. Until then the placeholder. */
   src?: string;
   placeholder?: string;
   /** A GIF held still (reduced motion): its first frame with a GIF badge, playing when pressed. */
@@ -2150,7 +2150,7 @@ export interface ViewerProps {
   kind: "image" | "gif" | "video" | "audio";
   /** What is shown: the picture at its display size, a GIF, a video, an audio. */
   src?: string;
-  /** Drawn until `src` arrives: what the message drew, the placeholder. */
+  /** Drawn until `src` arrives: the thumbnail, the placeholder. */
   preview?: string;
   width?: number;
   height?: number;
@@ -2175,7 +2175,7 @@ export function Viewer(props: ViewerProps) {
   const [view, setView] = createSignal<View>(VIEW_FIT);
   const [room, setRoom] = createSignal({ width: 0, height: 0 });
   const zoomable = () => props.kind === "image" || props.kind === "gif";
-  // The picture fitted to the stage at its display size, so the preview and the picture draw the same.
+  // The picture fitted to the stage at its display size, so the thumbnail and the picture draw the same.
   const fit = createMemo(() => {
     const r = room();
     if (!r.width || !r.height) return undefined;

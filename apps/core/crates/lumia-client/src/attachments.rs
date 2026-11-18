@@ -73,8 +73,8 @@ pub async fn upload_blob(
 
 /// Uploads a processed attachment's blobs into `channel_id` and answers the
 /// attachment, with a fresh id and its keys, ready to send. `alt` is cut to
-/// the protocol's 1,000 characters. A thumbnail (a GIF's or a video's) that
-/// fails takes the main blob back with it.
+/// the protocol's 1,000 characters. A thumbnail that fails takes the main
+/// blob back with it.
 ///
 /// # Errors
 /// As [`upload_blob`].

@@ -9,8 +9,6 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import uniffi.lumia_ffi.AttachmentDraft
-import uniffi.lumia_ffi.AttachmentSummary
-import uniffi.lumia_ffi.BlobSummary
 
 private fun draft(id: String, kind: String = "image", alt: String = "") =
     AttachmentDraft(id, "channel", kind, "$id.jpg", "image/jpeg", 800u, 600u, 0u, ByteArray(0), alt, 1234u)
@@ -192,23 +190,6 @@ class MediaTest {
         assertEquals("Not attached: too many uploads", uploadRefused("RESOURCE_EXHAUSTED", "uploads", "too many uploads"))
         assertEquals("Not attached: file too large", uploadRefused("PAYLOAD_TOO_LARGE", null, "file too large"))
         assertEquals("Not attached: offline", uploadRefused(null, null, "offline"))
-    }
-
-    /** An image has no thumbnail (#22): a message draws its display picture; a GIF and a video draw theirs. */
-    @Test
-    fun aMessageDrawsAnImageFromItsDisplayPictureAndAGifOrAVideoFromItsThumbnail() {
-        val blob = { id: String -> BlobSummary(id, 10u, ByteArray(0), ByteArray(0), ByteArray(0)) }
-        val of = { kind: String, thumbnail: BlobSummary? ->
-            AttachmentSummary("a", kind, "a", "", 4u, 3u, 0u, ByteArray(0), "", 10u, blob("main"), thumbnail, false)
-        }
-        assertEquals("main", of("image", null).stillBlob()?.blobId)
-        // One sent while images had thumbnails, should a core ever hand it over.
-        assertEquals("main", of("image", blob("thumb")).stillBlob()?.blobId)
-        assertEquals("thumb", of("gif", blob("thumb")).stillBlob()?.blobId)
-        assertEquals("thumb", of("video", blob("thumb")).stillBlob()?.blobId)
-        assertEquals(null, of("video", null).stillBlob())
-        // A display picture's 2,560 px halves to it, and a thumbnail's 1,080 is under it.
-        assertEquals(2560, TILE_EDGE * 2)
     }
 
     @Test

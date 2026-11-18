@@ -522,14 +522,13 @@ private enum MediaMetrics {
     static let barButton = CGSize(width: LumiaTokens.space28 + LumiaTokens.space4, height: LumiaTokens.space28)
 }
 
-/// An attachment's placeholder, drawn until its picture arrives.
+/// An attachment's placeholder, drawn until its thumbnail arrives.
 private func placeholderPicture(_ a: AttachmentSummary) -> CGImage? {
     placeholderImage(placeholder: a.placeholder).flatMap(MediaInput.image)
 }
 
-/// A picture, GIF or video in a message: its placeholder, then its still
-/// (an image's display picture, which is all it has; a GIF's first frame; a
-/// video's poster) with a play symbol over a video and the
+/// A picture, GIF or video in a message: its placeholder, then its
+/// thumbnail (the video's poster) with a play symbol over a video and the
 /// GIF badge over a GIF that is still; a GIF plays in place unless Reduce
 /// Motion is on, when a tap plays it first. A video pressed plays in its
 /// place with the system's controls and pauses when it scrolls away. A
@@ -629,8 +628,8 @@ private struct AttachmentTile: View {
 
     private func load() async {
         placeholder = placeholderPicture(attachment)
-        guard let blob = kind == .image ? attachment.main : attachment.thumbnail else { return }
-        switch await session.picture(blob, longest: MediaInput.tileEdge) {
+        guard let blob = attachment.thumbnail ?? (kind == .image ? attachment.main : nil) else { return }
+        switch await session.picture(blob, longest: 800) {
         case let .image(image): picture = image
         case .undrawable: undrawable = true
         case .failed: break
@@ -1149,8 +1148,8 @@ private struct FileShareSheet: View {
     }
 }
 
-/// A picture full screen: its display picture whole (as its message drew
-/// it until that comes), pinch to zoom and a double tap, its alt text under it and as
+/// A picture full screen: its display picture (the thumbnail until it
+/// comes), pinch to zoom and a double tap, its alt text under it and as
 /// what VoiceOver says of it, Save to Photos and Share.
 private struct PictureViewer: View {
     @Environment(\.dismiss) private var dismiss
@@ -1206,10 +1205,7 @@ private struct PictureViewer: View {
             ActivityView(items: [shared.url]).presentationDetents([.medium, .large])
         }
         .task {
-            // What the message drew is kept decoded, so it is here at once.
-            if let still = attachment.kind == "image" ? attachment.main : attachment.thumbnail {
-                picture = await session.picture(still, longest: MediaInput.tileEdge).image
-            }
+            if let thumbnail = attachment.thumbnail { picture = await session.picture(thumbnail, longest: 800).image }
             switch await session.picture(attachment.main) {
             case let .image(image): picture = image
             case .undrawable: if picture == nil { undrawable = true }
