@@ -816,6 +816,25 @@ impl From<app::UploadLimitsSummary> for UploadLimits {
     }
 }
 
+/// What was typed into a conversation's composer and not sent, as this
+/// device keeps it.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct DraftSummary {
+    /// The words, as typed.
+    pub body: String,
+    /// The message they were being written in reply to, if any.
+    pub reply: Option<QuoteSummary>,
+}
+
+impl From<app::DraftSummary> for DraftSummary {
+    fn from(d: app::DraftSummary) -> Self {
+        Self {
+            body: d.body,
+            reply: d.reply.map(Into::into),
+        }
+    }
+}
+
 /// A quote of another message of the conversation (architecture 6.6).
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct QuoteSummary {
@@ -2455,6 +2474,28 @@ impl Client {
             .into_iter()
             .map(Into::into)
             .collect())
+    }
+
+    /// What was typed into a conversation's composer and not sent, from
+    /// the local store; none when nothing is kept. Read when the
+    /// conversation comes on screen, at a launch too.
+    pub fn draft(&self, channel_id: String) -> Res<Option<DraftSummary>> {
+        Ok(self.app.draft(&channel_id)?.map(Into::into))
+    }
+
+    /// Keeps what is typed in a conversation's composer, with the message
+    /// it is a reply to, in place of what was kept before; words that are
+    /// empty or all blank keep nothing. On this device only. Called as the
+    /// words are typed, once they rest, and when the conversation leaves
+    /// the screen.
+    pub fn set_draft(
+        &self,
+        channel_id: String,
+        body: String,
+        reply: Option<QuoteSummary>,
+    ) -> Res<()> {
+        let reply = reply.map(app::QuoteSummary::from);
+        Ok(self.app.set_draft(&channel_id, &body, reply.as_ref())?)
     }
 
     /// Starts the gateway loop; `listener` gets every event, in order,

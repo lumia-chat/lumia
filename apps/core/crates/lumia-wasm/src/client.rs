@@ -862,6 +862,35 @@ impl Client {
         to_js(&self.app.messages(&channel_id, limit).map_err(js)?)
     }
 
+    /// What was typed into a conversation's composer and not sent, from
+    /// the local store: `{body, reply}`, or `null` when nothing is kept.
+    ///
+    /// # Errors
+    /// On a store failure or a malformed id.
+    pub fn draft(&self, channel_id: String) -> Result<JsValue, JsError> {
+        to_js(&self.app.draft(&channel_id).map_err(js)?)
+    }
+
+    /// Keeps what is typed in a conversation's composer, with the message
+    /// it is a reply to (or `null`), in place of what was kept before;
+    /// words that are empty or all blank keep nothing. In this browser
+    /// only.
+    ///
+    /// # Errors
+    /// On a store failure or a malformed id.
+    #[wasm_bindgen(js_name = setDraft)]
+    pub fn set_draft(
+        &self,
+        channel_id: String,
+        body: String,
+        reply: JsValue,
+    ) -> Result<(), JsError> {
+        let reply: Option<QuoteSummary> = from_js(reply)?;
+        self.app
+            .set_draft(&channel_id, &body, reply.as_ref())
+            .map_err(js)
+    }
+
     /// `GET /channels/{id}/messages`: scrollback from the instance, older
     /// than the store holds: `{messages, hasMore}`, the newest `limit` below
     /// `before_seq`, oldest first. Not stored.

@@ -974,6 +974,17 @@ pub struct QuoteSummary {
     pub silent: bool,
 }
 
+/// What was typed into a conversation's composer and not sent, as this
+/// device keeps it ([`App::draft`]).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DraftSummary {
+    /// The words, as typed.
+    pub body: String,
+    /// The message they were being written in reply to, if any.
+    pub reply: Option<QuoteSummary>,
+}
+
 /// A mention: an account, or everyone, and its byte range in the body.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -1368,6 +1379,11 @@ const DELETED_PAGES: usize = 10;
 /// instance store's meta area (`App::kept_snapshot`, `App::kept_members`).
 const KEPT_SNAPSHOT: &str = "kept_snapshot";
 const KEPT_MEMBERS: &str = "kept_members";
+
+/// The most of a draft that is kept, in bytes: far past the limit on a
+/// message, so anything a composer would send is whole, and a bound on what
+/// a paste can put in the store.
+const DRAFT_MAX_BYTES: usize = 64 * 1024;
 
 /// Kept in the keys store from the moment a call hears that the identity
 /// revoked this device until it has erased: one that closed first erases
@@ -3083,6 +3099,62 @@ impl App {
         Ok(json
             .filter(|j| !j.is_empty())
             .and_then(|j| serde_json::from_str(&j).ok()))
+    }
+
+    /// What was typed into a conversation's composer and not sent, from the
+    /// instance store: a server's channel, a server DM or a personal
+    /// conversation, by its id. `None` when nothing is kept. A shell reads
+    /// it when the conversation comes on screen, at a launch too, so a
+    /// switch, a quit or a crash loses nothing that [`App::set_draft`] was
+    /// given. It is this device's: never sent to the instance, and gone
+    /// with a sign-out, a sign-in in a held session's place and a removed
+    /// device's erasure.
+    ///
+    /// # Errors
+    /// On a store failure or a malformed id.
+    pub fn draft(&self, channel_id: &str) -> Result<Option<DraftSummary>, ClientError> {
+        let id = parse_uuid(channel_id)?;
+        let kept = self.lock().reader.draft(&id)?;
+        Ok(kept.map(|(body, reply)| DraftSummary {
+            body,
+            // One this build cannot read is no reply; the words are still theirs.
+            reply: Some(reply)
+                .filter(|r| !r.is_empty())
+                .and_then(|r| serde_json::from_str(&r).ok()),
+        }))
+    }
+
+    /// Keeps what is typed in a conversation's composer, in place of what
+    /// was kept before: the words as typed, and the message they are a
+    /// reply to. Words that are empty or all blank keep nothing, the reply
+    /// neither: that is how a send and an emptied field clear the draft. A
+    /// shell calls it as the words are typed (once they rest is enough) and
+    /// when the conversation leaves the screen. Only the first
+    /// 64 KiB of the words are kept.
+    ///
+    /// # Errors
+    /// On a store failure or a malformed id.
+    pub fn set_draft(
+        &self,
+        channel_id: &str,
+        body: &str,
+        reply: Option<&QuoteSummary>,
+    ) -> Result<(), ClientError> {
+        let id = parse_uuid(channel_id)?;
+        let inner = self.lock();
+        if body.trim().is_empty() {
+            return Ok(inner.reader.clear_draft(&id)?);
+        }
+        let mut end = body.len().min(DRAFT_MAX_BYTES);
+        while !body.is_char_boundary(end) {
+            end -= 1;
+        }
+        let reply = reply
+            .and_then(|r| serde_json::to_string(r).ok())
+            .unwrap_or_default();
+        Ok(inner
+            .reader
+            .set_draft(&id, &body[..end], &reply, crate::time::now_micros())?)
     }
 
     /// `GET /accounts/{id}`: another account's public profile, when
@@ -6103,6 +6175,9 @@ impl App {
         // brings its own or none (identity spec 10).
         self.lock().reauth = Some(pair.reauth_token.clone()).filter(|t| !t.is_empty());
         if held.access.is_some() {
+            // Whoever signs in over a held session may not be who typed
+            // what it kept unsent.
+            let _ = self.lock().reader.forget_drafts();
             let _ = self.api.revoke(held).await;
         }
         Ok(())
@@ -7407,6 +7482,85 @@ mod kept_tests {
         let page = app.messages(id, 5).unwrap();
         assert!(page.iter().all(|m| m.deleted));
         assert_eq!(page.last().map(|m| m.seq), Some(30));
+    }
+
+    #[test]
+    fn a_draft_is_there_at_the_next_launch_until_it_is_sent_or_emptied() {
+        let dir = std::env::temp_dir().join(format!("lumia-draft-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (here, there) = (
+            "01890000-0000-7000-8000-000000000031",
+            "01890000-0000-7000-8000-000000000032",
+        );
+        let quote = QuoteSummary {
+            message_id: "01890000-0000-7000-8000-000000000041".into(),
+            author_account_id: "01890000-0000-7000-8000-000000000051".into(),
+            text: "shall we?".into(),
+            ..QuoteSummary::default()
+        };
+        {
+            let app = app_at(&dir);
+            assert_eq!(app.draft(here).unwrap(), None);
+            app.set_draft(here, "Half a thou", None).unwrap();
+            app.set_draft(here, "Half a thought\n", Some(&quote))
+                .unwrap();
+            app.set_draft(there, "Elsewhere", None).unwrap();
+        }
+        // The process gone (a quit, a crash, the power): another launch on the same files.
+        let app = app_at(&dir);
+        assert_eq!(
+            app.draft(here).unwrap(),
+            Some(DraftSummary {
+                body: "Half a thought\n".into(),
+                reply: Some(quote.clone()),
+            })
+        );
+        assert_eq!(app.draft(there).unwrap().unwrap().body, "Elsewhere");
+        // Sent, or the field emptied: nothing is kept, the reply neither.
+        app.set_draft(here, "  \n", Some(&quote)).unwrap();
+        assert_eq!(app.draft(here).unwrap(), None);
+        assert!(app.draft(there).unwrap().is_some());
+        // A reply this build cannot read is none, and the words stay.
+        app.lock()
+            .reader
+            .set_draft(&parse_uuid(there).unwrap(), "Elsewhere", "{not json", 1)
+            .unwrap();
+        assert_eq!(
+            app.draft(there).unwrap(),
+            Some(DraftSummary {
+                body: "Elsewhere".into(),
+                reply: None,
+            })
+        );
+        assert!(app.draft("not an id").is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_draft_past_what_is_kept_is_cut_between_characters() {
+        let app = app();
+        let id = "01890000-0000-7000-8000-000000000031";
+        // 'é' is two bytes: an odd limit would fall inside one.
+        let long = format!("a{}", "é".repeat(DRAFT_MAX_BYTES));
+        app.set_draft(id, &long, None).unwrap();
+        let kept = app.draft(id).unwrap().unwrap().body;
+        assert_eq!(kept.len(), DRAFT_MAX_BYTES - 1);
+        assert!(long.starts_with(&kept));
+    }
+
+    #[tokio::test]
+    async fn signing_out_forgets_the_drafts() {
+        // On files, as a device has them: the store the loop holds and the one read
+        // through are then the same.
+        let dir = std::env::temp_dir().join(format!("lumia-draft-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let app = app_at(&dir);
+        let id = "01890000-0000-7000-8000-000000000031";
+        app.set_draft(id, "Not for whoever is next", None).unwrap();
+        app.sign_out().await.unwrap();
+        assert_eq!(app.draft(id).unwrap(), None);
+        drop(app);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

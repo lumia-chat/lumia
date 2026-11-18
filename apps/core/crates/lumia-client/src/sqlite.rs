@@ -96,6 +96,12 @@ CREATE TABLE IF NOT EXISTS dm_operations (
   bytes BLOB NOT NULL,
   PRIMARY KEY (channel_id, seq)
 );
+CREATE TABLE IF NOT EXISTS drafts (
+  channel_id BLOB PRIMARY KEY,
+  body TEXT NOT NULL,
+  reply TEXT NOT NULL DEFAULT '',
+  updated_at_micros INTEGER NOT NULL
+);
 ";
 
 /// One row of a conversation's decrypted log (e2ee spec section 5).
@@ -339,9 +345,9 @@ impl SqliteStore {
 
     /// Forgets what an account that signed out leaves here: its account log
     /// (the cursor with the events, so the next account starts from the
-    /// beginning of its own) and the commands it had not sent, which would
-    /// otherwise go out at the next welcome as whoever signs in next. The
-    /// channels' logs stay: they are the channels', not the account's, and a
+    /// beginning of its own), the commands it had not sent, which would
+    /// otherwise go out at the next welcome as whoever signs in next, and
+    /// what it had typed and not sent. The channels' logs stay: they are the channels', not the account's, and a
     /// personal conversation's decrypted history could not be fetched again.
     ///
     /// # Errors
@@ -361,8 +367,75 @@ impl SqliteStore {
                 .conn
                 .execute("DELETE FROM outbox", [])
                 .map_err(backend)?;
+            store.forget_drafts()?;
             Ok::<_, StoreError>(())
         })
+    }
+
+    /// What was typed into a conversation's composer and not sent: the
+    /// words, and the reply they were being written to as the caller
+    /// encoded it (empty for none). This device's alone: nothing here is
+    /// ever sent to the instance.
+    ///
+    /// # Errors
+    /// On a database failure.
+    pub fn draft(&self, channel_id: &[u8]) -> Result<Option<(String, String)>, StoreError> {
+        self.conn
+            .query_row(
+                "SELECT body, reply FROM drafts WHERE channel_id = ?1",
+                params![channel_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(backend)
+    }
+
+    /// Keeps a conversation's draft in place of the one before.
+    ///
+    /// # Errors
+    /// On a database failure.
+    pub fn set_draft(
+        &self,
+        channel_id: &[u8],
+        body: &str,
+        reply: &str,
+        now_micros: i64,
+    ) -> Result<(), StoreError> {
+        self.conn
+            .execute(
+                "INSERT INTO drafts (channel_id, body, reply, updated_at_micros) VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT (channel_id) DO UPDATE SET body = excluded.body, reply = excluded.reply,
+                   updated_at_micros = excluded.updated_at_micros",
+                params![channel_id, body, reply, now_micros],
+            )
+            .map(|_| ())
+            .map_err(backend)
+    }
+
+    /// Forgets a conversation's draft: it was sent, or its field emptied.
+    ///
+    /// # Errors
+    /// On a database failure.
+    pub fn clear_draft(&self, channel_id: &[u8]) -> Result<(), StoreError> {
+        self.conn
+            .execute(
+                "DELETE FROM drafts WHERE channel_id = ?1",
+                params![channel_id],
+            )
+            .map(|_| ())
+            .map_err(backend)
+    }
+
+    /// Forgets every conversation's draft: whoever typed them is gone, or
+    /// may not be who is here next.
+    ///
+    /// # Errors
+    /// On a database failure.
+    pub fn forget_drafts(&self) -> Result<(), StoreError> {
+        self.conn
+            .execute("DELETE FROM drafts", [])
+            .map(|_| ())
+            .map_err(backend)
     }
 
     /// Adds to the outbox through a shared reference.
@@ -1830,6 +1903,33 @@ mod tests {
     /// gateway resumed its own log from it: the events after it were
     /// refused as a gap, for ever.
     #[test]
+    fn a_draft_is_kept_by_conversation_until_it_is_cleared_or_erased() {
+        let store = SqliteStore::in_memory().unwrap();
+        let (here, there) = (vec![5u8; 16], vec![6u8; 16]);
+        assert_eq!(store.draft(&here).unwrap(), None);
+        store.set_draft(&here, "half a thought", "", 1).unwrap();
+        store.set_draft(&there, "another", "{\"q\":1}", 2).unwrap();
+        // The later one takes the earlier one's place, in its own conversation alone.
+        store
+            .set_draft(&here, "half a thought, finished", "", 3)
+            .unwrap();
+        assert_eq!(
+            store.draft(&here).unwrap(),
+            Some(("half a thought, finished".into(), String::new()))
+        );
+        assert_eq!(
+            store.draft(&there).unwrap(),
+            Some(("another".into(), "{\"q\":1}".into()))
+        );
+        store.clear_draft(&here).unwrap();
+        assert_eq!(store.draft(&here).unwrap(), None);
+        assert!(store.draft(&there).unwrap().is_some());
+        // A removed device keeps none (identity spec 4.4).
+        store.erase().unwrap();
+        assert_eq!(store.draft(&there).unwrap(), None);
+    }
+
+    #[test]
     fn forgetting_an_account_leaves_the_channels_and_nothing_of_the_account() {
         let mut store = SqliteStore::in_memory().unwrap();
         let (account, channel) = (vec![4u8; 16], vec![5u8; 16]);
@@ -1851,11 +1951,14 @@ mod tests {
             })
             .unwrap();
 
+        store.set_draft(&channel, "half a thought", "", 1).unwrap();
+
         store.forget_account().unwrap();
 
         assert!(store.cursors(LogKind::Account).unwrap().is_empty());
         assert!(store.account_events().unwrap().is_empty());
         assert!(store.outbox().unwrap().is_empty());
+        assert_eq!(store.draft(&channel).unwrap(), None);
         assert_eq!(
             store.cursors(LogKind::Channel).unwrap(),
             vec![(channel.clone(), 1)]
