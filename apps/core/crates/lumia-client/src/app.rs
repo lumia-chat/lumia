@@ -1758,6 +1758,11 @@ struct Inner {
     /// group, until its next connection.
     welcome: Option<lumia_core::proto::Welcome>,
     welcome_missed: bool,
+    /// The account signed out, or this device erased what it kept: nothing
+    /// more is kept of what was typed until someone signs in. A shell's
+    /// save of a composer's words may arrive after the sign-out it was
+    /// leaving for, and would otherwise outlive the forgetting.
+    drafts_closed: bool,
 }
 
 /// The link session this device opened as the new device, and what it
@@ -2215,6 +2220,7 @@ impl App {
                 quiz: None,
                 welcome: None,
                 welcome_missed: false,
+                drafts_closed: false,
             }),
             rail_turn: AsyncMutex::new(()),
             bluesky: crate::transport::http_without_redirects(),
@@ -2930,6 +2936,8 @@ impl App {
             // it is back, or through the reader on the same file.
             let snapshot = inner.reader.meta_set(KEPT_SNAPSHOT, "");
             let members = inner.reader.meta_set(KEPT_MEMBERS, "");
+            // Its drafts go with the log, and none typed is kept after.
+            inner.drafts_closed = true;
             let log = inner
                 .store
                 .as_ref()
@@ -3130,7 +3138,9 @@ impl App {
     /// neither: that is how a send and an emptied field clear the draft. A
     /// shell calls it as the words are typed (once they rest is enough) and
     /// when the conversation leaves the screen. Only the first
-    /// 64 KiB of the words are kept.
+    /// 64 KiB of the words are kept. After a sign-out or this device's
+    /// erasure nothing is kept until a sign-in: a save a shell made on its
+    /// way out does not outlive what it was leaving.
     ///
     /// # Errors
     /// On a store failure or a malformed id.
@@ -3142,6 +3152,9 @@ impl App {
     ) -> Result<(), ClientError> {
         let id = parse_uuid(channel_id)?;
         let inner = self.lock();
+        if inner.drafts_closed {
+            return Ok(());
+        }
         if body.trim().is_empty() {
             return Ok(inner.reader.clear_draft(&id)?);
         }
@@ -3603,6 +3616,7 @@ impl App {
         inner.quiz = None;
         inner.linking = None;
         inner.answers.clear();
+        inner.drafts_closed = true;
         // What says this device is to erase, kept until everything went: an
         // erase that did not finish is tried again (`erase_if_revoked`, and
         // at the next launch).
@@ -6192,6 +6206,8 @@ impl App {
             inner
                 .keys
                 .put("refresh_token", pair.refresh_token.as_bytes())?;
+            // Someone is signed in: what they type is kept again.
+            inner.drafts_closed = false;
         }
         self.api.take_pair(pair);
         Ok(())
@@ -7559,6 +7575,18 @@ mod kept_tests {
         app.set_draft(id, "Not for whoever is next", None).unwrap();
         app.sign_out().await.unwrap();
         assert_eq!(app.draft(id).unwrap(), None);
+        // A shell's save on its way out of the account, arriving after: not kept.
+        app.set_draft(id, "Not for whoever is next", None).unwrap();
+        assert_eq!(app.draft(id).unwrap(), None);
+        // Whoever signs in next has their own kept again.
+        app.save_tokens(&TokenPair {
+            access_token: "a".into(),
+            refresh_token: "r".into(),
+            ..TokenPair::default()
+        })
+        .unwrap();
+        app.set_draft(id, "Mine", None).unwrap();
+        assert_eq!(app.draft(id).unwrap().unwrap().body, "Mine");
         drop(app);
         std::fs::remove_dir_all(&dir).unwrap();
     }
