@@ -40,7 +40,7 @@ import uniffi.lumia_ffi.placeholderImage
 /** The longest side a picture is handed to the core at: its display picture's (spec 3.1), so nothing larger crosses into it. */
 private const val DISPLAY_EDGE = 2560
 
-/** A video's poster frame's longest side: the core makes a 400 px thumbnail of it. */
+/** A video's poster frame's longest side: the core makes a thumbnail of at most 1,080 px of it. */
 private const val POSTER_EDGE = 1280
 
 /** The longest side the viewer decodes a picture at. */
@@ -160,9 +160,9 @@ private fun lengthOf(context: Context, uri: Uri): UInt? {
 
 // Drawing what a message carries
 
-/** Pictures decoded, by blob id or card address, up to 32 MB of them; placeholders by their bytes. */
+/** Pictures decoded, by blob id or card address, up to 64 MB of them (some eighteen thumbnails decoded whole); placeholders by their bytes. */
 private object MediaPictures {
-    val held = object : LruCache<String, ImageBitmap>(32 * 1024 * 1024) {
+    val held = object : LruCache<String, ImageBitmap>(64 * 1024 * 1024) {
         override fun sizeOf(key: String, value: ImageBitmap): Int = value.width * value.height * 4
     }
 }
@@ -181,14 +181,13 @@ fun placeholderPicture(placeholder: ByteArray): ImageBitmap? {
     return bitmap.asImageBitmap().also { MediaPictures.held.put(key, it) }
 }
 
-/** Bytes someone sent decoded as a picture, its longest side at most [edge]; none when they are not within the bounds (`attachmentDrawable`) or will not decode. */
+/** Bytes someone sent decoded as a picture, its longest side at most [edge], by halves ([sampleFor]); none when they are not within the bounds (`attachmentDrawable`) or will not decode. */
 fun decodePicture(bytes: ByteArray, edge: Int = VIEWER_EDGE): ImageBitmap? {
     if (!runCatching { attachmentDrawable(bytes) }.getOrDefault(false)) return null
     return runCatching {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
-        var sample = 1
-        while (maxOf(bounds.outWidth, bounds.outHeight) / sample > edge) sample *= 2
+        val sample = sampleFor(maxOf(bounds.outWidth, bounds.outHeight), edge)
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })?.asImageBitmap()
     }.getOrNull()
 }
@@ -209,7 +208,7 @@ sealed class Fetched<out T> {
 
 /** An attachment's blob as a picture (a thumbnail, a personal card's picture): fetched and opened by the core, decoded once and kept by blob id. */
 @Composable
-fun rememberBlobPicture(session: LumiaSession, blob: BlobSummary?, edge: Int = 1024): Fetched<ImageBitmap> {
+fun rememberBlobPicture(session: LumiaSession, blob: BlobSummary?, edge: Int = THUMBNAIL_EDGE): Fetched<ImageBitmap> {
     val key = blob?.let { "blob:${it.blobId}:$edge" }
     val state = remember(key) { mutableStateOf<Fetched<ImageBitmap>>(key?.let { MediaPictures.held.get(it) }?.let { Fetched.Here(it) } ?: Fetched.Waiting) }
     LaunchedEffect(key) {
@@ -225,7 +224,8 @@ fun rememberBlobPicture(session: LumiaSession, blob: BlobSummary?, edge: Int = 1
 @Composable
 fun rememberCardPicture(session: LumiaSession, card: CardSummary): Fetched<ImageBitmap> {
     val image = card.image
-    if (image != null) return rememberBlobPicture(session, image, 800)
+    // A personal card's picture is a thumbnail blob the sharer's core made, up to a thumbnail's size.
+    if (image != null) return rememberBlobPicture(session, image, THUMBNAIL_EDGE)
     val key = card.imageUrl.takeIf { it.isNotEmpty() }?.let { "card:$it" }
     val state = remember(key) { mutableStateOf<Fetched<ImageBitmap>>(key?.let { MediaPictures.held.get(it) }?.let { Fetched.Here(it) } ?: Fetched.Waiting) }
     LaunchedEffect(key) {

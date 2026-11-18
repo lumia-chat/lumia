@@ -20,8 +20,13 @@ public enum MediaInput {
     public static let maxPixels = 40_000_000
     /// The longest edge handed to the core: its display picture's.
     public static let longestEdge = 2560
-    /// A video's poster: the core makes its thumbnail of at most 400 px from it.
+    /// A video's poster: the core makes its thumbnail of at most 1,080 px from it.
     public static let posterEdge = 1280
+    /// The longest edge a message's picture is decoded at: a thumbnail's
+    /// own (specs/media.md 3.1), so one is drawn with every pixel it was
+    /// sent with. It was 800 while thumbnails were 400, and stayed 800 when
+    /// they became 1,080, so a phone drew them soft.
+    public static let thumbnailEdge = 1080
 
     /// What kind of file the name and bytes say this is.
     public enum Nature: Equatable, Sendable {

@@ -629,7 +629,7 @@ private struct AttachmentTile: View {
     private func load() async {
         placeholder = placeholderPicture(attachment)
         guard let blob = attachment.thumbnail ?? (kind == .image ? attachment.main : nil) else { return }
-        switch await session.picture(blob, longest: 800) {
+        switch await session.picture(blob, longest: MediaInput.thumbnailEdge) {
         case let .image(image): picture = image
         case .undrawable: undrawable = true
         case .failed: break
@@ -1205,7 +1205,7 @@ private struct PictureViewer: View {
             ActivityView(items: [shared.url]).presentationDetents([.medium, .large])
         }
         .task {
-            if let thumbnail = attachment.thumbnail { picture = await session.picture(thumbnail, longest: 800).image }
+            if let thumbnail = attachment.thumbnail { picture = await session.picture(thumbnail, longest: MediaInput.thumbnailEdge).image }
             switch await session.picture(attachment.main) {
             case let .image(image): picture = image
             case .undrawable: if picture == nil { undrawable = true }

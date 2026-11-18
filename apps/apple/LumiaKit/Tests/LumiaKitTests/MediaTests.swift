@@ -342,6 +342,19 @@ final class MediaTests: XCTestCase {
         XCTAssertNil(MediaInput.drawable(wide), "over the bounds: a file row")
     }
 
+    /// A thumbnail is at most 1,080 px (specs/media.md 3.1) and a message
+    /// draws it at the edge it is decoded at here: all of it, where at 800
+    /// it was made smaller and then stretched.
+    func testAThumbnailIsDecodedWholeForAMessage() throws {
+        let thumbnail = try encoded(.jpeg, width: 1080, height: 810)
+        let whole = try XCTUnwrap(MediaInput.drawable(thumbnail, longest: MediaInput.thumbnailEdge))
+        XCTAssertEqual([whole.width, whole.height], [1080, 810])
+        XCTAssertEqual(MediaInput.drawable(thumbnail, longest: 800)?.width, 800)
+        // One smaller than that is never enlarged.
+        let small = try encoded(.jpeg, width: 400, height: 300)
+        XCTAssertEqual(MediaInput.drawable(small, longest: MediaInput.thumbnailEdge)?.width, 400)
+    }
+
     func testPixelsBecomeAnImageToDraw() throws {
         let pixels = Pixels(rgba: Data(repeating: 200, count: 3 * 2 * 4), width: 3, height: 2)
         let image = try XCTUnwrap(MediaInput.image(pixels))

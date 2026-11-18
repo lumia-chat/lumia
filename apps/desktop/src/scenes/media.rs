@@ -261,7 +261,15 @@ pub fn media_links(state: &mut State) {
 /// `media-viewer`: the portrait opened in the viewer, its display picture arrived.
 pub fn media_viewer(state: &mut State) {
     media(state);
-    let portrait = state.session.entries[0].attachments[0].clone();
+    // By its id: the conversation's first attachment is the one its server let go.
+    let portrait = state
+        .session
+        .entries
+        .iter()
+        .flat_map(|e| &e.attachments)
+        .find(|a| a.attachment_id == "a-portrait")
+        .cloned()
+        .unwrap_or_default();
     state.open_viewer(&portrait);
     state.receive(&fetched("a-portrait-main", PORTRAIT));
     state.tick(chrono::Utc::now().timestamp_micros());

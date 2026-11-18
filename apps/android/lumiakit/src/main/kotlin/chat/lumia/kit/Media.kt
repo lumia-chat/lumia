@@ -147,6 +147,26 @@ fun mediaShape(kind: String, images: Shown, expired: Boolean = false): MediaShap
     else -> MediaShape.FILE_ROW
 }
 
+/**
+ * A thumbnail's longest side as the core makes one (specs/media.md 3.1),
+ * and so the edge a message's picture is decoded at: all of it. It was
+ * 1,024 while thumbnails were 400 px and stayed so when they became 1,080,
+ * which [sampleFor] halves: a phone drew them at 540.
+ */
+const val THUMBNAIL_EDGE = 1080
+
+/**
+ * What a picture [longest] px on its longest side is sampled down by to be
+ * at most [edge] there. The platform's decoder samples by powers of two
+ * only, so a picture a little over the edge comes out at about half of it:
+ * an edge meant to keep a picture whole is that picture's own.
+ */
+fun sampleFor(longest: Int, edge: Int): Int {
+    var sample = 1
+    while (longest / sample > edge) sample *= 2
+    return sample
+}
+
 /** Whether a message's cards are drawn: Preferences' Embeds at Link draws none. */
 fun cardsDrawn(embeds: Shown): Boolean = embeds == Shown.SHOWN
 

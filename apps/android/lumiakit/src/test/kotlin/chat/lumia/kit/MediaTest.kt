@@ -192,6 +192,18 @@ class MediaTest {
         assertEquals("Not attached: offline", uploadRefused(null, null, "offline"))
     }
 
+    /** A message draws a thumbnail with every pixel it was sent with: at an edge of 1,024 the decoder halved a 1,080 px one. */
+    @Test
+    fun aThumbnailIsDecodedWholeAndALargerPictureByHalves() {
+        assertEquals(1, sampleFor(1080, THUMBNAIL_EDGE))
+        assertEquals(2, sampleFor(1080, 1024))
+        assertEquals(1, sampleFor(400, THUMBNAIL_EDGE))
+        // The viewer's display picture, and the largest the bounds allow.
+        assertEquals(1, sampleFor(2560, 4096))
+        assertEquals(2, sampleFor(8192, 4096))
+        assertEquals(4, sampleFor(4096, 1080))
+    }
+
     @Test
     fun anAttachmentItsServerLetGoIsARowWhateverItsKindOrImages() {
         for (kind in listOf("image", "gif", "video", "audio", "file")) {
