@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { BlobUrls, attachErrorWords, debounce, editCardUrls, fileKind, fitSize, keptCardUrls, mediaGrid, panBy, pasteTakesFiles, sizeWords, sniffImage, tooLargeWords, usageWords, zoomAt } from "./media";
+import { BlobUrls, attachErrorWords, debounce, editCardUrls, fileKind, fitSize, keptCardUrls, mediaGrid, pasteTakesFiles, sizeWords, sniffImage, tooLargeWords, usageWords } from "./media";
 
 /** Timers run by hand. */
 function fakeTimers() {
@@ -167,23 +167,6 @@ describe("debounce", () => {
     d.cancel();
     t.advance(1000);
     expect(ran).toEqual([]);
-  });
-});
-
-describe("zoom", () => {
-  test("the spot under the pointer stays under it", () => {
-    const v = zoomAt({ scale: 1, x: 0, y: 0 }, { x: 100, y: 50 }, 2);
-    expect(v).toEqual({ scale: 2, x: -100, y: -50 });
-    // The point (100, 50) from the centre was picture point (100, 50); at 2x it is at 2*100 - 100 = 100.
-    expect(100 * v.scale + v.x).toBe(100);
-  });
-  test("held between fit and four times, centred at fit", () => {
-    expect(zoomAt({ scale: 2, x: 30, y: 30 }, { x: 0, y: 0 }, 0.5)).toEqual({ scale: 1, x: 0, y: 0 });
-    expect(zoomAt({ scale: 1, x: 0, y: 0 }, { x: 0, y: 0 }, 9).scale).toBe(4);
-  });
-  test("a drag stops where the picture's edge would leave the stage", () => {
-    expect(panBy({ scale: 2, x: 0, y: 0 }, 500, -500, { width: 400, height: 300 })).toEqual({ scale: 2, x: 200, y: -150 });
-    expect(panBy({ scale: 1, x: 0, y: 0 }, 50, 50, { width: 400, height: 300 })).toEqual({ scale: 1, x: 0, y: 0 });
   });
 });
 

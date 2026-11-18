@@ -2,8 +2,9 @@
 // rules that need no page, and the one cache of what a picture is drawn
 // from. The core makes, seals, uploads, fetches and opens every blob; this
 // decides how many tiles a grid draws in a row, how a size is said, which
-// links a composer previews and sends, what an edit keeps, what a paste
-// is, and how the viewer zooms. `media.test.ts` tests them.
+// links a composer previews and sends, what an edit keeps, and what a
+// paste is. `media.test.ts` tests them. How the viewer zooms is
+// `viewer.ts`.
 import { createSignal, type Accessor } from "solid-js";
 
 /** A message carries at most ten attachments (spec 2). */
@@ -155,35 +156,6 @@ export function sniffImage(bytes: Uint8Array): string | undefined {
   if (b(0) === 0x47 && b(1) === 0x49 && b(2) === 0x46 && b(3) === 0x38) return "image/gif";
   if (b(0) === 0x52 && b(1) === 0x49 && b(2) === 0x46 && b(3) === 0x46 && b(8) === 0x57 && b(9) === 0x45 && b(10) === 0x42 && b(11) === 0x50) return "image/webp";
   return undefined;
-}
-
-/** The viewer's zoom: a scale and the picture's offset from the stage's centre, in pixels. */
-export interface View {
-  scale: number;
-  x: number;
-  y: number;
-}
-export const VIEW_FIT: View = { scale: 1, x: 0, y: 0 };
-export const ZOOM_MAX = 4;
-
-/**
- * Zoomed to `scale` about `point` (from the stage's centre): the spot under
- * the pointer stays under it. Between 1 and `ZOOM_MAX`; back at 1, centred.
- */
-export function zoomAt(view: View, point: { x: number; y: number }, scale: number): View {
-  const next = Math.min(ZOOM_MAX, Math.max(1, scale));
-  if (next === 1) return VIEW_FIT;
-  const k = next / view.scale;
-  return { scale: next, x: point.x - (point.x - view.x) * k, y: point.y - (point.y - view.y) * k };
-}
-
-/** Moved by a drag, kept so the picture still covers the stage's centre. */
-export function panBy(view: View, dx: number, dy: number, size: { width: number; height: number }): View {
-  if (view.scale <= 1) return VIEW_FIT;
-  const limX = (size.width * (view.scale - 1)) / 2;
-  const limY = (size.height * (view.scale - 1)) / 2;
-  const clamp = (v: number, lim: number) => Math.min(lim, Math.max(-lim, v));
-  return { scale: view.scale, x: clamp(view.x + dx, limX), y: clamp(view.y + dy, limY) };
 }
 
 /**

@@ -13,7 +13,8 @@ import { ICONS } from "./icons";
 import { emojiMatches, loadEmoji, type EmojiGroup } from "./emoji";
 import { COLLAPSED_LINES, collapsedLines, composing, linesOf, roomWords, stretches, type Piece } from "./body";
 import type { BodyBlock, MessageRoom } from "../client/bridge";
-import { VIEW_FIT, ZOOM_MAX, fitSize, mediaGrid, panBy, zoomAt, type View } from "../client/media";
+import { fitSize, mediaGrid } from "../client/media";
+import { VIEW_FIT, held, maxScale, ownSize, panBy, pressed as pressedAt, viewFrame, wheelFactor, zoomAt, zoomStep, type View } from "../client/viewer";
 
 export type Tone = "peach" | "blue" | "purple" | "mint" | "amber" | "sky" | "stone" | "green" | "indigo";
 export type Status = "online" | "away" | "dnd";
@@ -2164,28 +2165,44 @@ export interface ViewerProps {
 }
 
 /**
- * A picture over the whole window: zoomed by a press (twice, or back to
- * fit) or the wheel, about the pointer, and moved by a drag; Save, the alt
- * text, Escape to close; focus kept inside and given back as it closes.
+ * A picture over the whole window, fitted and never drawn larger than its
+ * own size. It zooms as specs/media.md 5 says (`client/viewer.ts`), up to
+ * four times its own size: about the pointer with the wheel or a
+ * trackpad's pinch, to its own size and back with a press on it, and by
+ * the bar's buttons or the keys (+ and − a step, 0 fitted, 1 its own
+ * size). A drag moves it while it is zoomed. Save, the alt text, Escape to
+ * close; focus kept inside and given back as it closes.
  */
 export function Viewer(props: ViewerProps) {
   let box: HTMLDivElement | undefined;
   let stage: HTMLDivElement | undefined;
   let closer: HTMLButtonElement | undefined;
-  const [view, setView] = createSignal<View>(VIEW_FIT);
+  const [zoomed, setView] = createSignal<View>(VIEW_FIT);
   const [room, setRoom] = createSignal({ width: 0, height: 0 });
   const zoomable = () => props.kind === "image" || props.kind === "gif";
-  // The picture fitted to the stage at its display size, so the thumbnail and the picture draw the same.
-  const fit = createMemo(() => {
+  // The picture fitted to the stage at its display size, so the thumbnail and the picture draw the same; 4:3 when its size is unknown.
+  const frame = createMemo(() => {
     const r = room();
     if (!r.width || !r.height) return undefined;
-    return fitSize(props.width ?? 0, props.height ?? 0, r.height, r.width);
+    const known = (props.width ?? 0) > 0 && (props.height ?? 0) > 0;
+    return viewFrame(known ? props.width! : 320, known ? props.height! : 240, r.width, r.height);
   });
+  // As the stage is now: a window made smaller holds a zoomed picture further in.
+  const view = () => {
+    const f = frame();
+    return f ? held(zoomed(), f) : VIEW_FIT;
+  };
+  /** A move of the view, once the stage has been measured. */
+  const move = (to: (v: View, f: NonNullable<ReturnType<typeof frame>>) => View) => {
+    const f = frame();
+    if (f) setView(to(view(), f));
+  };
   const fromCentre = (e: MouseEvent) => {
     const r = stage?.getBoundingClientRect();
     return r ? { x: e.clientX - r.left - r.width / 2, y: e.clientY - r.top - r.height / 2 } : { x: 0, y: 0 };
   };
-  let drag: { x: number; y: number; moved: number } | null = null;
+  // The pointer's last press on the stage: where it is, whether it is still down, and how far it has travelled, which the click that ends it reads.
+  let drag: { x: number; y: number; moved: number; down: boolean } | null = null;
   const onKeyDown = (e: KeyboardEvent) => {
     if (e.key === "Escape") {
       e.preventDefault();
@@ -2193,9 +2210,10 @@ export function Viewer(props: ViewerProps) {
       props.onClose();
       return;
     }
-    if (zoomable() && (e.key === "+" || e.key === "=")) setView((v) => zoomAt(v, { x: 0, y: 0 }, v.scale * 1.5));
-    else if (zoomable() && e.key === "-") setView((v) => zoomAt(v, { x: 0, y: 0 }, v.scale / 1.5));
+    if (zoomable() && (e.key === "+" || e.key === "=")) move((v, f) => zoomStep(v, 1, f));
+    else if (zoomable() && e.key === "-") move((v, f) => zoomStep(v, -1, f));
     else if (zoomable() && e.key === "0") setView(VIEW_FIT);
+    else if (zoomable() && e.key === "1") move(ownSize);
     if (e.key !== "Tab" || !box) return;
     const all = [...box.querySelectorAll<HTMLElement>(FOCUSABLE)];
     const first = all[0];
@@ -2230,8 +2248,14 @@ export function Viewer(props: ViewerProps) {
       <div class="lu-viewer__bar">
         <p class="lu-viewer__name">{props.name}</p>
         <Show when={zoomable()}>
-          <IconButton glyph="−" label="Zoom out" size={34} disabled={view().scale <= 1} onClick={() => setView((v) => zoomAt(v, { x: 0, y: 0 }, v.scale / 1.5))} />
-          <IconButton glyph="+" label="Zoom in" size={34} disabled={view().scale >= ZOOM_MAX} onClick={() => setView((v) => zoomAt(v, { x: 0, y: 0 }, v.scale * 1.5))} />
+          <IconButton glyph="−" label="Zoom out" size={34} disabled={view().scale <= 1} onClick={() => move((v, f) => zoomStep(v, -1, f))} />
+          <button type="button" class="lu-viewer__zoom" title="Fit to window" aria-label="Fit to window" disabled={view().scale <= 1} onClick={() => setView(VIEW_FIT)}>
+            Fit
+          </button>
+          <button type="button" class="lu-viewer__zoom" title="Actual size" aria-label="Actual size" disabled={!frame() || view().scale === frame()!.own} onClick={() => move(ownSize)}>
+            1:1
+          </button>
+          <IconButton glyph="+" label="Zoom in" size={34} disabled={!frame() || view().scale >= maxScale(frame()!)} onClick={() => move((v, f) => zoomStep(v, 1, f))} />
         </Show>
         <Show when={props.saveHref}>
           {(href) => (
@@ -2250,26 +2274,29 @@ export function Viewer(props: ViewerProps) {
           if (!zoomable() || !picture()) return;
           e.preventDefault();
           const p = fromCentre(e);
-          setView((v) => zoomAt(v, p, v.scale * Math.exp(-e.deltaY * 0.0025)));
+          // A wheel that counts in lines sends three a notch, which is 100 pixels of a wheel that counts in those.
+          const delta = e.deltaMode === WheelEvent.DOM_DELTA_LINE ? (e.deltaY * 100) / 3 : e.deltaY;
+          move((v, f) => zoomAt(v, v.scale * wheelFactor(delta, e.ctrlKey), p, f));
         }}
         onPointerDown={(e) => {
           if (!zoomable() || e.button !== 0) return;
-          drag = { x: e.clientX, y: e.clientY, moved: 0 };
+          drag = { x: e.clientX, y: e.clientY, moved: 0, down: true };
           if (view().scale > 1) e.currentTarget.setPointerCapture(e.pointerId);
         }}
         onPointerMove={(e) => {
-          if (!drag) return;
+          if (!drag?.down) return;
           const dx = e.clientX - drag.x;
           const dy = e.clientY - drag.y;
-          drag = { x: e.clientX, y: e.clientY, moved: drag.moved + Math.abs(dx) + Math.abs(dy) };
-          const f = fit();
-          if (view().scale > 1 && f) setView((v) => panBy(v, dx, dy, f));
+          drag = { x: e.clientX, y: e.clientY, moved: drag.moved + Math.abs(dx) + Math.abs(dy), down: true };
+          if (view().scale > 1) move((v, f) => panBy(v, dx, dy, f));
         }}
-        onPointerUp={() => queueMicrotask(() => (drag = null))}
+        onPointerUp={() => drag && (drag.down = false)}
+        onPointerCancel={() => drag && (drag.down = false)}
         onClick={(e) => {
+          // The click a drag ends with is no press.
           if (!zoomable() || !picture() || (drag && drag.moved > 4)) return;
           const p = fromCentre(e);
-          setView((v) => (v.scale > 1 ? VIEW_FIT : zoomAt(v, p, 2)));
+          move((v, f) => pressedAt(v, p, f));
         }}
       >
         <Show when={!props.failed} fallback={<p class="lu-viewer__failed">{props.failed}</p>}>
@@ -2284,8 +2311,8 @@ export function Viewer(props: ViewerProps) {
                   alt={props.alt || props.name}
                   draggable={false}
                   style={{
-                    width: fit() ? fit()!.width + "px" : undefined,
-                    height: fit() ? fit()!.height + "px" : undefined,
+                    width: frame() ? frame()!.width + "px" : undefined,
+                    height: frame() ? frame()!.height + "px" : undefined,
                     transform: `translate(${view().x}px, ${view().y}px) scale(${view().scale})`,
                   }}
                 />

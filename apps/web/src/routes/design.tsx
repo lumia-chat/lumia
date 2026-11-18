@@ -1865,7 +1865,7 @@ function MediaPieces() {
         <Composer placeholder="Message #design" tools={false} onAttach={() => {}} above={<ComposerMedia drafts={[{ id: "5", name: "ridge.jpg", kind: "image", size: "2.1 MB", preview: PICTURES.tall, state: "uploading", onAlt: () => {}, onRemove: () => {} }]} note="Sending when the files are uploaded…" />} />
         <DropZone label="Drop to attach to #design" />
       </div>
-      <h2>The viewer: the picture over the window (here in a frame), zoomed by a press or the wheel, Save, the alt text, Escape to close</h2>
+      <h2>The viewer: the picture over the window (here in a frame), zoomed by a press, the wheel or its bar up to four times its own size, Save, the alt text, Escape to close</h2>
       <div class="pieces__row" style={{ "flex-direction": "column", "align-items": "stretch", "max-width": "960px" }}>
         <Viewer inline name="ridge.jpg" kind="image" alt="A blue sky over green hills, the sun high on the right" src={PICTURES.wide} width={1600} height={900} saveHref={PICTURES.wide} onClose={() => {}} />
       </div>

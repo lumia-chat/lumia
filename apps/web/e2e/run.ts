@@ -1948,8 +1948,9 @@ async function profileStep(which: string, stamp: number) {
 // through the attach button's file input, gives it alt text, sends it with
 // words, draws it from what it sent; the member sends another message and
 // reacts to the one with the picture, and each picture is still the element
-// it was; the page opens its picture in the viewer and closes it with
-// Escape; the member's CLI opens the picture the page sent.
+// it was; the page opens its picture in the viewer, zooms it by a press,
+// the wheel and the keys, drags it, and closes it with Escape; the member's
+// CLI opens the picture the page sent.
 async function mediaStep(which: string, stamp: number) {
   const ownerDir = resolve(work, `cli-media-owner-${which}`);
   const otherDir = resolve(work, `cli-media-other-${which}`);
@@ -2028,6 +2029,33 @@ async function mediaStep(which: string, stamp: number) {
     await viewer.getByRole("img", { name: "A green square" }).waitFor();
     await viewer.getByRole("link", { name: "Save" }).waitFor();
     await page.screenshot({ path: `${out}/${which}-media-viewer.png` });
+    // Zoomed by a press on it; a drag leaves it zoomed (the click a drag ends with is no press); the wheel towards the hand takes it back to fitted, where Fit has nothing to do; a key zooms and 0 fits.
+    const shown = viewer.getByRole("img", { name: "A green square" });
+    const scale = async () => Number(/scale\(([\d.]+)\)/.exec(await shown.evaluate((e) => (e as HTMLElement).style.transform))?.[1]);
+    const fit = viewer.getByRole("button", { name: "Fit to window" });
+    if (!(await fit.isDisabled())) throw new Error("Fit is offered on a fitted picture");
+    const at = await shown.boundingBox();
+    if (!at) throw new Error("the viewer's picture has no box");
+    const [x, y] = [at.x + at.width / 2, at.y + at.height / 2];
+    await page.mouse.click(x, y);
+    const pressed = await scale();
+    if (!(pressed > 1)) throw new Error(`a press on the picture zoomed to ${pressed}`);
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x + 40, y + 12, { steps: 4 });
+    await page.mouse.up();
+    if ((await scale()) !== pressed) throw new Error(`a drag left the picture at ${await scale()}, from ${pressed}`);
+    for (let i = 0; i < 8; i++) await page.mouse.wheel(0, 100);
+    await fit.and(page.locator(":disabled")).waitFor();
+    if ((await scale()) !== 1) throw new Error(`the wheel left the picture at ${await scale()}`);
+    await page.mouse.wheel(0, -100);
+    await fit.and(page.locator(":enabled")).waitFor();
+    if (!(Math.abs((await scale()) - Math.exp(0.25)) < 0.001)) throw new Error(`a notch of the wheel zoomed to ${await scale()}`);
+    await page.keyboard.press("0");
+    await page.keyboard.press("+");
+    if ((await scale()) !== 1.5) throw new Error(`the plus key zoomed to ${await scale()}`);
+    await page.keyboard.press("0");
+    await fit.and(page.locator(":disabled")).waitFor();
     await page.keyboard.press("Escape");
     await viewer.waitFor({ state: "detached" });
     phase("opened by the other side");
@@ -2044,7 +2072,7 @@ async function mediaStep(which: string, stamp: number) {
   } finally {
     await ctx.close();
   }
-  console.log(`  ${which}: a picture from the CLI drawn; one attached here with alt text, sent, drawn, each still the element it was once the conversation was read again, opened in the viewer and closed, and opened by the other member, in ${Date.now() - t0} ms`);
+  console.log(`  ${which}: a picture from the CLI drawn; one attached here with alt text, sent, drawn, each still the element it was once the conversation was read again, opened in the viewer, zoomed and closed, and opened by the other member, in ${Date.now() - t0} ms`);
 }
 
 // An attachment the server lets go while its row is on screen (specs/media.md

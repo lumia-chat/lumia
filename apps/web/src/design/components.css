@@ -548,6 +548,9 @@ h1.lu-serverhead__name:hover { background: none; }
 .lu-viewer__bar { flex: none; display: flex; align-items: center; gap: var(--space-8); padding: var(--space-10) var(--space-12) var(--space-10) var(--space-18); }
 .lu-viewer__name { flex: 1; min-width: 0; margin: 0; font-size: 14.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .lu-viewer__bar a.lu-btn { text-decoration: none; font-family: var(--font-sans); }
+.lu-viewer__zoom { flex: none; height: 34px; min-width: 34px; padding: 0 var(--space-8); border: 0; border-radius: var(--radius-9); background: none; color: var(--ink-quiet); font-family: var(--font-sans); font-size: 13px; font-weight: 700; cursor: pointer; }
+.lu-viewer__zoom:hover:not(:disabled) { background: var(--hover-icon); color: var(--ink-field); }
+.lu-viewer__zoom:disabled { opacity: .5; cursor: default; }
 .lu-viewer__stage { position: relative; flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; margin: 0 var(--space-16) var(--space-16); touch-action: none; }
 .lu-viewer__img { display: block; flex: none; max-width: none; transform-origin: center; cursor: zoom-in; user-select: none; transition: transform .12s ease-out; }
 .lu-viewer__stage.is-zoomed .lu-viewer__img { cursor: grab; transition: none; }
