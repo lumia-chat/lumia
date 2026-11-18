@@ -13,6 +13,8 @@
 //!   each loads on a press (docs/specs/media.md 6.6).
 //! * [`media`] makes attachments before upload and opens their blobs
 //!   after fetching (docs/specs/media.md).
+//! * [`viewer`] is how a picture opened from a message zooms and moves
+//!   (docs/specs/media.md 5).
 //!
 //! Transports (`lumia-client` natively, `lumia-wasm` in the browser) feed
 //! this crate frames and carry out the effects it returns. Tests here run
@@ -28,6 +30,7 @@ pub mod mls;
 pub mod playback;
 pub mod store;
 pub mod sync;
+pub mod viewer;
 pub mod wire;
 
 pub use lumia_proto::v1 as proto;

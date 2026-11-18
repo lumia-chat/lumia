@@ -1,0 +1,848 @@
+{
+  "about": "The picture viewer's zoom (docs/specs/media.md 5). `frames`: a picture of `own` pixels fitted into a `room` of points with `margin` clear on each side, shrunk to fit and never grown; `own_scale` is the scale of its own size (a picture pixel a point), `max_scale` the furthest zoom and `detail_scale` where a press on a fitted picture goes. `moves`: a view (`scale` in times the fitted size, `x` and `y` the picture's centre from the room's, in points) and what a move makes of it; a point (`at`) is from the room's centre too. `wheel`: what one wheel event multiplies the scale by, `delta` the points it would scroll a page, positive down, `pinch` a trackpad's pinch arriving as a wheel with Control held. Numbers agree to a thousandth. Every client agrees on every case (lumia_core::viewer).",
+  "frames": [
+    {
+      "own": [
+        2000,
+        1000
+      ],
+      "room": [
+        1000,
+        800
+      ],
+      "margin": 0,
+      "width": 1000,
+      "height": 500,
+      "own_scale": 2,
+      "max_scale": 8,
+      "detail_scale": 2,
+      "why": "twice the room's width: fitted at half, its own size is 2 and a press goes there"
+    },
+    {
+      "own": [
+        400,
+        300
+      ],
+      "room": [
+        1000,
+        800
+      ],
+      "margin": 0,
+      "width": 400,
+      "height": 300,
+      "own_scale": 1,
+      "max_scale": 4,
+      "detail_scale": 2,
+      "why": "smaller than the room: never grown to fit, and a press goes to twice it"
+    },
+    {
+      "own": [
+        1200,
+        900
+      ],
+      "room": [
+        1000,
+        800
+      ],
+      "margin": 0,
+      "width": 1000,
+      "height": 750,
+      "own_scale": 1.2,
+      "max_scale": 4.8,
+      "detail_scale": 2,
+      "why": "a little larger than the room: its own size is hardly a zoom, so a press goes to twice the fitted size"
+    },
+    {
+      "own": [
+        2560,
+        1440
+      ],
+      "room": [
+        1040,
+        840
+      ],
+      "margin": 20,
+      "width": 1000,
+      "height": 562.5,
+      "own_scale": 2.56,
+      "max_scale": 10.24,
+      "detail_scale": 2.56,
+      "why": "the margin is kept clear of the fitted picture"
+    },
+    {
+      "own": [
+        2560,
+        1920
+      ],
+      "room": [
+        390,
+        700
+      ],
+      "margin": 0,
+      "width": 390,
+      "height": 292.5,
+      "own_scale": 6.5641,
+      "max_scale": 26.2564,
+      "detail_scale": 6.5641,
+      "why": "the largest picture on a phone: the limit is from its own size, not from fitted"
+    }
+  ],
+  "moves": [
+    {
+      "picture": {
+        "own": [
+          2000,
+          1000
+        ],
+        "room": [
+          1000,
+          800
+        ],
+        "margin": 0
+      },
+      "view": {
+        "scale": 1,
+        "x": 0,
+        "y": 0
+      },
+      "move": {
+        "kind": "zoom_at",
+        "scale": 2,
+        "at": [
+          100,
+          50
+        ]
+      },
+      "gives": {
+        "scale": 2,
+        "x": -100,
+        "y": -50
+      },
+      "why": "the point zoomed about stays where it is"
+    },
+    {
+      "picture": {
+        "own": [
+          2000,
+          1000
+        ],
+        "room": [
+          1000,
+          800
+        ],
+        "margin": 0
+      },
+      "view": {
+        "scale": 1,
+        "x": 0,
+        "y": 0
+      },
+      "move": {
+        "kind": "zoom_at",
+        "scale": 1.5,
+        "at": [
+          0,
+          200
+        ]
+      },
+      "gives": {
+        "scale": 1.5,
+        "x": 0,
+        "y": 0
+      },
+      "why": "750 tall in a room of 800: centred along a side that fits, whatever the point"
+    },
+    {
+      "picture": {
+        "own": [
+          2000,
+          1000
+        ],
+        "room": [
+          1000,
+          800
+        ],
+        "margin": 0
+      },
+      "view": {
+        "scale": 2,
+        "x": -100,
+        "y": -50
+      },
+      "move": {
+        "kind": "zoom_at",
+        "scale": 0.5,
+        "at": [
+          0,
+          0
+        ]
+      },
+      "gives": {
+        "scale": 1,
+        "x": 0,
+        "y": 0
+      },
+      "why": "never smaller than fitted, and fitted is centred"
+    },
+    {
+      "picture": {
+        "own": [
+          2000,
+          1000
+        ],
+        "room": [
+          1000,
+          800
+        ],
+        "margin": 0
+      },
+      "view": {
+        "scale": 1,
+        "x": 0,
+        "y": 0
+      },
+      "move": {
+        "kind": "zoom_at",
+        "scale": 99,
+        "at": [
+          0,
+          0
+        ]
+      },
+      "gives": {
+        "scale": 8,
+        "x": 0,
+        "y": 0
+      },
+      "why": "never past four times its own size"
+    },
+    {
+      "picture": {
+        "own": [
+          2000,
+          1000
+        ],
+        "room": [
+          1000,
+          800
+        ],
+        "margin": 0
+      },
+      "view": {
+        "scale": 2,
+        "x": -500,
+        "y": 0
+      },
+      "move": {
+        "kind": "zoom_at",
+        "scale": 4,
+        "at": [
+          -500,
+          0
+        ]
+      },
+      "gives": {
+        "scale": 4,
+        "x": -500,
+        "y": 0
+      },
+      "why": "about a point at the room's edge: the point stays, inside what the edges allow"
+    },
+    {
+      "picture": {
+        "own": [
+          2000,
+          1000
+        ],
+        "room": [
+          1000,
+          800
+        ],
+        "margin": 0
+      },
+      "view": {
+        "scale": 4,
+        "x": 1500,
+        "y": 0
+      },
+      "move": {
+        "kind": "zoom_at",
+        "scale": 2,
+        "at": [
+          -500,
+          0
+        ]
+      },
+      "gives": {
+        "scale": 2,
+        "x": 500,
+        "y": 0
+      },
+      "why": "zooming out pulls the picture's edge back to the room's"
+    },
+    {
+      "picture": {
+        "own": [
+          2000,
+          1000
+        ],
+        "room": [
+          1000,
+          800
+        ],
+        "margin": 0
+      },
+      "view": {
+        "scale": 2,
+        "x": 0,
+        "y": 0
+      },
+      "move": {
+        "kind": "pan_by",
+        "by": [
+          900,
+          -900
+        ]
+      },
+      "gives": {
+        "scale": 2,
+        "x": 500,
+        "y": -100
+      },
+      "why": "a drag stops where the picture's edge meets the room's"
+    },
+    {
+      "picture": {
+        "own": [
+          2000,
+          1000
+        ],
+        "room": [
+          1000,
+          800
+        ],
+        "margin": 0
+      },
+      "view": {
+        "scale": 1,
+        "x": 0,
+        "y": 0
+      },
+      "move": {
+        "kind": "pan_by",
+        "by": [
+          50,
+          50
+        ]
+      },
+      "gives": {
+        "scale": 1,
+        "x": 0,
+        "y": 0
+      },
+      "why": "a fitted picture does not move"
+    },
+    {
+      "picture": {
+        "own": [
+          400,
+          300
+        ],
+        "room": [
+          1000,
+          800
+        ],
+        "margin": 0
+      },
+      "view": {
+        "scale": 2,
+        "x": 0,
+        "y": 0
+      },
+      "move": {
+        "kind": "pan_by",
+        "by": [
+          50,
+          50
+        ]
+      },
+      "gives": {
+        "scale": 2,
+        "x": 0,
+        "y": 0
+      },
+      "why": "800 by 600 in a room of 1000 by 800: fits both ways, so it stays centred"
+    },
+    {
+      "picture": {
+        "own": [
+          2000,
+          1000
+        ],
+        "room": [
+          1000,
+          800
+        ],
+        "margin": 0
+      },
+      "view": {
+        "scale": 1,
+        "x": 0,
+        "y": 0
+      },
+      "move": {
+        "kind": "step",
+        "steps": 1
+      },
+      "gives": {
+        "scale": 1.5,
+        "x": 0,
+        "y": 0
+      },
+      "why": "a step in is one and a half times"
+    },
+    {
+      "picture": {
+        "own": [
+          2000,
+          1000
+        ],
+        "room": [
+          1000,
+          800
+        ],
+        "margin": 0
+      },
+      "view": {
+        "scale": 1.5,
+        "x": 0,
+        "y": 0
+      },
+      "move": {
+        "kind": "step",
+        "steps": 1
+      },
+      "gives": {
+        "scale": 2.25,
+        "x": 0,
+        "y": 0
+      },
+      "why": "and another"
+    },
+    {
+      "picture": {
+        "own": [
+          2000,
+          1000
+        ],
+        "room": [
+          1000,
+          800
+        ],
+        "margin": 0
+      },
+      "view": {
+        "scale": 2.25,
+        "x": 0,
+        "y": 0
+      },
+      "move": {
+        "kind": "step",
+        "steps": -1
+      },
+      "gives": {
+        "scale": 1.5,
+        "x": 0,
+        "y": 0
+      },
+      "why": "a step out undoes one in"
+    },
+    {
+      "picture": {
+        "own": [
+          2000,
+          1000
+        ],
+        "room": [
+          1000,
+          800
+        ],
+        "margin": 0
+      },
+      "view": {
+        "scale": 1,
+        "x": 0,
+        "y": 0
+      },
+      "move": {
+        "kind": "step",
+        "steps": -1
+      },
+      "gives": {
+        "scale": 1,
+        "x": 0,
+        "y": 0
+      },
+      "why": "no step out of fitted"
+    },
+    {
+      "picture": {
+        "own": [
+          2000,
+          1000
+        ],
+        "room": [
+          1000,
+          800
+        ],
+        "margin": 0
+      },
+      "view": {
+        "scale": 6,
+        "x": 0,
+        "y": 0
+      },
+      "move": {
+        "kind": "step",
+        "steps": 1
+      },
+      "gives": {
+        "scale": 8,
+        "x": 0,
+        "y": 0
+      },
+      "why": "the last step in stops at the limit"
+    },
+    {
+      "picture": {
+        "own": [
+          2000,
+          1000
+        ],
+        "room": [
+          1000,
+          800
+        ],
+        "margin": 0
+      },
+      "view": {
+        "scale": 2,
+        "x": 100,
+        "y": 0
+      },
+      "move": {
+        "kind": "step",
+        "steps": 1
+      },
+      "gives": {
+        "scale": 3,
+        "x": 150,
+        "y": 0
+      },
+      "why": "a step is about the room's centre, so what is there stays"
+    },
+    {
+      "picture": {
+        "own": [
+          2000,
+          1000
+        ],
+        "room": [
+          1000,
+          800
+        ],
+        "margin": 0
+      },
+      "view": {
+        "scale": 1,
+        "x": 0,
+        "y": 0
+      },
+      "move": {
+        "kind": "pressed",
+        "at": [
+          100,
+          50
+        ]
+      },
+      "gives": {
+        "scale": 2,
+        "x": -100,
+        "y": -50
+      },
+      "why": "a press on a fitted picture: its own size, about the point"
+    },
+    {
+      "picture": {
+        "own": [
+          2000,
+          1000
+        ],
+        "room": [
+          1000,
+          800
+        ],
+        "margin": 0
+      },
+      "view": {
+        "scale": 2,
+        "x": -100,
+        "y": -50
+      },
+      "move": {
+        "kind": "pressed",
+        "at": [
+          300,
+          10
+        ]
+      },
+      "gives": {
+        "scale": 1,
+        "x": 0,
+        "y": 0
+      },
+      "why": "a press on a zoomed picture: fitted again"
+    },
+    {
+      "picture": {
+        "own": [
+          400,
+          300
+        ],
+        "room": [
+          1000,
+          800
+        ],
+        "margin": 0
+      },
+      "view": {
+        "scale": 1,
+        "x": 0,
+        "y": 0
+      },
+      "move": {
+        "kind": "pressed",
+        "at": [
+          100,
+          50
+        ]
+      },
+      "gives": {
+        "scale": 2,
+        "x": 0,
+        "y": 0
+      },
+      "why": "a small picture: twice its size, which still fits the room, so centred"
+    },
+    {
+      "picture": {
+        "own": [
+          2560,
+          1440
+        ],
+        "room": [
+          1040,
+          840
+        ],
+        "margin": 20
+      },
+      "view": {
+        "scale": 1,
+        "x": 0,
+        "y": 0
+      },
+      "move": {
+        "kind": "pressed",
+        "at": [
+          0,
+          0
+        ]
+      },
+      "gives": {
+        "scale": 2.56,
+        "x": 0,
+        "y": 0
+      },
+      "why": "its own size from the middle"
+    },
+    {
+      "picture": {
+        "own": [
+          2000,
+          1000
+        ],
+        "room": [
+          1000,
+          800
+        ],
+        "margin": 0
+      },
+      "view": {
+        "scale": 1.5,
+        "x": 0,
+        "y": 0
+      },
+      "move": {
+        "kind": "own_size"
+      },
+      "gives": {
+        "scale": 2,
+        "x": 0,
+        "y": 0
+      },
+      "why": "its own size from wherever it was"
+    },
+    {
+      "picture": {
+        "own": [
+          2000,
+          1000
+        ],
+        "room": [
+          1000,
+          800
+        ],
+        "margin": 0
+      },
+      "view": {
+        "scale": 4,
+        "x": 300,
+        "y": 200
+      },
+      "move": {
+        "kind": "own_size"
+      },
+      "gives": {
+        "scale": 2,
+        "x": 150,
+        "y": 100
+      },
+      "why": "and from further in, about the room's centre"
+    },
+    {
+      "picture": {
+        "own": [
+          400,
+          300
+        ],
+        "room": [
+          1000,
+          800
+        ],
+        "margin": 0
+      },
+      "view": {
+        "scale": 1,
+        "x": 0,
+        "y": 0
+      },
+      "move": {
+        "kind": "own_size"
+      },
+      "gives": {
+        "scale": 1,
+        "x": 0,
+        "y": 0
+      },
+      "why": "a picture that fits is at its own size already"
+    },
+    {
+      "picture": {
+        "own": [
+          2000,
+          1000
+        ],
+        "room": [
+          1000,
+          1200
+        ],
+        "margin": 0
+      },
+      "view": {
+        "scale": 2,
+        "x": 500,
+        "y": -100
+      },
+      "move": {
+        "kind": "held"
+      },
+      "gives": {
+        "scale": 2,
+        "x": 500,
+        "y": 0
+      },
+      "why": "the room grown taller than the zoomed picture: centred along that side"
+    },
+    {
+      "picture": {
+        "own": [
+          2000,
+          1000
+        ],
+        "room": [
+          500,
+          400
+        ],
+        "margin": 0
+      },
+      "view": {
+        "scale": 8,
+        "x": 0,
+        "y": 0
+      },
+      "move": {
+        "kind": "held"
+      },
+      "gives": {
+        "scale": 8,
+        "x": 0,
+        "y": 0
+      },
+      "why": "the room shrunk: fitted is smaller, and the same scale is still inside its limit of 16"
+    }
+  ],
+  "wheel": [
+    {
+      "delta": -100,
+      "pinch": false,
+      "factor": 1.284,
+      "why": "a mouse's notch up zooms in by about 1.28"
+    },
+    {
+      "delta": 100,
+      "pinch": false,
+      "factor": 0.7788,
+      "why": "and a notch down zooms out by as much"
+    },
+    {
+      "delta": -4,
+      "pinch": false,
+      "factor": 1.0101,
+      "why": "a trackpad's small scroll is a small zoom"
+    },
+    {
+      "delta": -10,
+      "pinch": true,
+      "factor": 1.1052,
+      "why": "a pinch's deltas are small, and count four times as much"
+    },
+    {
+      "delta": -1000,
+      "pinch": false,
+      "factor": 1.8221,
+      "why": "one event zooms by 1.82 at most"
+    },
+    {
+      "delta": 1000,
+      "pinch": true,
+      "factor": 0.5488,
+      "why": "and out by as much at most"
+    },
+    {
+      "delta": 0,
+      "pinch": false,
+      "factor": 1,
+      "why": "nothing scrolled, nothing zoomed"
+    }
+  ]
+}

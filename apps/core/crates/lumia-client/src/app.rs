@@ -6365,6 +6365,57 @@ impl App {
         })
     }
 
+    /// A picture fitted into the viewer's room (specs/media.md 5,
+    /// `lumia_core::viewer`): `own` its size in pixels, `room` the room's in
+    /// points, `margin` kept clear on each side of the fitted picture.
+    #[must_use]
+    pub fn viewer_frame(own: [f32; 2], room: [f32; 2], margin: f32) -> lumia_core::viewer::Frame {
+        lumia_core::viewer::frame(own[0], own[1], room[0], room[1], margin)
+    }
+
+    /// The viewer's picture zoomed to `scale` about the point `at`, from the
+    /// room's centre, as a pinch does.
+    #[must_use]
+    pub fn viewer_zoom_at(
+        view: lumia_core::viewer::View,
+        scale: f32,
+        at: [f32; 2],
+        frame: &lumia_core::viewer::Frame,
+    ) -> lumia_core::viewer::View {
+        lumia_core::viewer::zoom_at(view, scale, at, frame)
+    }
+
+    /// The viewer's picture moved by a drag.
+    #[must_use]
+    pub fn viewer_pan_by(
+        view: lumia_core::viewer::View,
+        by: [f32; 2],
+        frame: &lumia_core::viewer::Frame,
+    ) -> lumia_core::viewer::View {
+        lumia_core::viewer::pan_by(view, by[0], by[1], frame)
+    }
+
+    /// Two taps on the viewer's picture at `at`: in to its own size about
+    /// the point, or back to fitted.
+    #[must_use]
+    pub fn viewer_pressed(
+        view: lumia_core::viewer::View,
+        at: [f32; 2],
+        frame: &lumia_core::viewer::Frame,
+    ) -> lumia_core::viewer::View {
+        lumia_core::viewer::pressed(view, at, frame)
+    }
+
+    /// The viewer's picture kept inside a frame that changed, as when the
+    /// screen turns.
+    #[must_use]
+    pub fn viewer_held(
+        view: lumia_core::viewer::View,
+        frame: &lumia_core::viewer::Frame,
+    ) -> lumia_core::viewer::View {
+        lumia_core::viewer::held(view, frame)
+    }
+
     /// The origins an embed loads from: the web's `frame-src`, and what the
     /// phones' web views may load.
     #[must_use]

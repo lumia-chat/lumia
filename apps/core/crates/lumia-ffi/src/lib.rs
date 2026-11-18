@@ -1752,6 +1752,125 @@ pub fn playback_stops_off_screen(playing: PlayingSummary) -> bool {
     App::playback_stops_off_screen(playing.embed, &playing.kind)
 }
 
+/// A picture fitted into the viewer's room, in points (specs/media.md 5).
+#[derive(Debug, Clone, Copy, uniffi::Record)]
+pub struct ViewerFrame {
+    /// The fitted picture: shrunk into the room, never grown.
+    pub width: f32,
+    pub height: f32,
+    /// The room it zooms in.
+    pub room_width: f32,
+    pub room_height: f32,
+    /// The scale of the picture's own size, a pixel a point: 1 for one that
+    /// fits as it is.
+    pub own: f32,
+    /// The furthest scale.
+    pub max_scale: f32,
+    /// Where two taps on a fitted picture zoom to.
+    pub detail_scale: f32,
+}
+
+impl From<lumia_core::viewer::Frame> for ViewerFrame {
+    fn from(f: lumia_core::viewer::Frame) -> Self {
+        Self {
+            width: f.width,
+            height: f.height,
+            room_width: f.room_width,
+            room_height: f.room_height,
+            own: f.own,
+            max_scale: f.max_scale(),
+            detail_scale: f.detail_scale(),
+        }
+    }
+}
+
+impl From<ViewerFrame> for lumia_core::viewer::Frame {
+    fn from(f: ViewerFrame) -> Self {
+        Self {
+            width: f.width,
+            height: f.height,
+            room_width: f.room_width,
+            room_height: f.room_height,
+            own: f.own,
+        }
+    }
+}
+
+/// How the viewer's picture is zoomed and moved: `scale` in times the
+/// fitted size, `x` and `y` its centre from the room's, in points.
+#[derive(Debug, Clone, Copy, uniffi::Record)]
+pub struct ViewerView {
+    pub scale: f32,
+    pub x: f32,
+    pub y: f32,
+}
+
+impl From<lumia_core::viewer::View> for ViewerView {
+    fn from(v: lumia_core::viewer::View) -> Self {
+        Self {
+            scale: v.scale,
+            x: v.x,
+            y: v.y,
+        }
+    }
+}
+
+impl From<ViewerView> for lumia_core::viewer::View {
+    fn from(v: ViewerView) -> Self {
+        Self {
+            scale: v.scale,
+            x: v.x,
+            y: v.y,
+        }
+    }
+}
+
+/// A picture of `own_width` by `own_height` pixels fitted into the
+/// viewer's room, `margin` points kept clear on each side of it.
+#[uniffi::export]
+pub fn viewer_frame(
+    own_width: f32,
+    own_height: f32,
+    room_width: f32,
+    room_height: f32,
+    margin: f32,
+) -> ViewerFrame {
+    App::viewer_frame([own_width, own_height], [room_width, room_height], margin).into()
+}
+
+/// The viewer's picture zoomed to `scale` about the point (`x`, `y`), from
+/// the room's centre: the point stays where it is, as under a pinch.
+#[uniffi::export]
+pub fn viewer_zoom_at(
+    view: ViewerView,
+    scale: f32,
+    x: f32,
+    y: f32,
+    frame: ViewerFrame,
+) -> ViewerView {
+    App::viewer_zoom_at(view.into(), scale, [x, y], &frame.into()).into()
+}
+
+/// The viewer's picture moved by a drag, stopped at its edges.
+#[uniffi::export]
+pub fn viewer_pan_by(view: ViewerView, dx: f32, dy: f32, frame: ViewerFrame) -> ViewerView {
+    App::viewer_pan_by(view.into(), [dx, dy], &frame.into()).into()
+}
+
+/// Two taps on the viewer's picture at (`x`, `y`): in to its own size about
+/// the point, or back to fitted.
+#[uniffi::export]
+pub fn viewer_pressed(view: ViewerView, x: f32, y: f32, frame: ViewerFrame) -> ViewerView {
+    App::viewer_pressed(view.into(), [x, y], &frame.into()).into()
+}
+
+/// The viewer's picture kept inside a frame that changed, as when the
+/// screen turns.
+#[uniffi::export]
+pub fn viewer_held(view: ViewerView, frame: ViewerFrame) -> ViewerView {
+    App::viewer_held(view.into(), &frame.into()).into()
+}
+
 /// Whether a picture someone sent may be handed to a decoder: its header
 /// names a size within the bounds (specs/media.md 5). One that is not is
 /// drawn as a file row.
