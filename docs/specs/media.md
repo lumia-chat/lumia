@@ -1,6 +1,6 @@
 # Attachments and Link Cards
 
-Status: accepted, 2026-11-15 (settled in a grill with Ryan the same day); amended 2026-11-16 for inline video and embeds (issue #21, decided with Ryan that day). This specification makes the attachment half of section 12 of [architecture.md](../architecture.md) and the link cards of section 6 implementable. Wire shapes are in `proto/lumia/v1/chat.proto` (`Attachment`, `BlobRef`, `Card`), `commands.proto` (`SendMessage`, `EditMessage`, `SendEncrypted`), `events.proto` (`MessageCardsSet`, `AttachmentsExpired`), `api.proto` (uploads, `UnfurlRequest`, `ServerStorage`) and `e2ee.proto` (`DmAttachment`, `DmCard`). Where this document and the architecture disagree, the architecture wins and this document is fixed.
+Status: accepted, 2026-11-15 (settled in a grill with Ryan the same day); amended 2026-11-16 for inline video and embeds (issue #21, decided with Ryan that day), and 2026-11-18 for images without thumbnails (issue #22, Ryan's). This specification makes the attachment half of section 12 of [architecture.md](../architecture.md) and the link cards of section 6 implementable. Wire shapes are in `proto/lumia/v1/chat.proto` (`Attachment`, `BlobRef`, `Card`), `commands.proto` (`SendMessage`, `EditMessage`, `SendEncrypted`), `events.proto` (`MessageCardsSet`, `AttachmentsExpired`), `api.proto` (uploads, `UnfurlRequest`, `ServerStorage`) and `e2ee.proto` (`DmAttachment`, `DmCard`). Where this document and the architecture disagree, the architecture wins and this document is fixed.
 
 ## 1. Model
 
@@ -8,13 +8,13 @@ Status: accepted, 2026-11-15 (settled in a grill with Ryan the same day); amende
 Blob        one encrypted object in the blob store, uploaded by a client, named by an instance-minted id
 BlobRef     a blob's id, its stored size, and what opens it: key, nonce, BLAKE3 of the plaintext
 Attachment  one thing a message carries: a kind, a name, a media type, dimensions, a placeholder,
-            alt text, a main BlobRef and an optional thumbnail BlobRef
+            alt text, a main BlobRef and, for a GIF or a video, an optional thumbnail BlobRef
 Card        a link's preview: URL, title, description, site name, colour, optional image
 ```
 
 Three rules hold everywhere:
 
-- **The sharer's client does all attachment work.** Stripping metadata, resizing, thumbnails, the placeholder and encryption happen in `lumia-core` on the sharer's device, for server content and personal DMs alike. The instance never decodes an attachment's bytes; it never sees them in the clear. Avatars and server icons are not attachments and stay as built (architecture 12, "Avatars").
+- **The sharer's client does all attachment work.** Stripping metadata, resizing, a GIF's or a video's thumbnail, the placeholder and encryption happen in `lumia-core` on the sharer's device, for server content and personal DMs alike. The instance never decodes an attachment's bytes; it never sees them in the clear. Avatars and server icons are not attachments and stay as built (architecture 12, "Avatars").
 - **Every blob is client-encrypted.** A random 32-byte key and a 24-byte nonce per blob, XChaCha20-Poly1305 over the whole plaintext, the BLAKE3-256 of the plaintext checked after decryption. The blob store, and the bucket's operator, hold only ciphertext.
 - **An attachment is never a link.** It is a structured record on the message. Every fetch of an attachment blob is access-checked against the message that carries it (section 4.3). A card's image is the one exception, served by its unguessable address (section 6.4).
 
@@ -22,13 +22,13 @@ Three rules hold everywhere:
 
 | Kind | What | Main blob | Thumbnail blob | Cap on the main blob |
 |---|---|---|---|---|
-| `IMAGE` | A still picture, processed (section 3.1) | JPEG or PNG made by the core | JPEG or PNG, ≤ 1,080 px | `LUMIA_UPLOAD_IMAGE_MAX_BYTES`, default 2 MiB |
+| `IMAGE` | A still picture, processed (section 3.1) | JPEG or PNG made by the core | none: the main blob is what a conversation draws | `LUMIA_UPLOAD_IMAGE_MAX_BYTES`, default 2 MiB |
 | `GIF` | An animated GIF, as chosen | the GIF | first frame, ≤ 1,080 px | `LUMIA_UPLOAD_FILE_MAX_BYTES`, default 10 MiB |
 | `VIDEO` | MP4, MOV (metadata stripped) or WebM (as chosen) | the video | poster frame when the platform made one | file cap |
 | `AUDIO` | MP3, M4A, AAC, OGG, Opus, WAV, FLAC | the audio | none | file cap |
 | `FILE` | Anything else, and any picture sent "as a file" | the file, metadata stripped where section 3.4 says | none | file cap |
 
-A thumbnail blob is at most 512 KiB. A message carries at most 10 attachments. The caps are instance-wide until entitlements exist (architecture 16); they then come from the plan of whoever pays, and the two variables become the instance's ceiling. The instance enforces a blob's size against the cap of the role it was created for (section 4.1) and, at send, that each attachment's blobs were created for the roles its kind needs. It cannot check that a blob holds what its kind says, since it never sees the bytes; a client that lies about a kind still cannot store more than the file cap.
+A thumbnail blob is at most 512 KiB. An `IMAGE` has none (issue #22, 2026-11-18): its display picture is small enough to draw in a conversation, so a second copy was a second upload and a second thing to store for a picture that looked worse. A client from before that sent one; the instance still takes it at send and no client reads it (the core gives an image's attachment to a shell without it). A message carries at most 10 attachments. The caps are instance-wide until entitlements exist (architecture 16); they then come from the plan of whoever pays, and the two variables become the instance's ceiling. The instance enforces a blob's size against the cap of the role it was created for (section 4.1) and, at send, that each attachment's blobs were created for the roles its kind needs. It cannot check that a blob holds what its kind says, since it never sees the bytes; a client that lies about a kind still cannot store more than the file cap.
 
 ## 3. Processing in the client
 
@@ -41,7 +41,7 @@ Decoding is bounded exactly as the instance bounds an avatar: the format from th
 Formats decoded by the core: JPEG, PNG, WebP, and a GIF with one frame. HEIC and HEIF have no Rust decoder; a shell whose platform decodes them (iOS, Android, macOS, Safari) hands the core the decoded pixels and the orientation, and a shell that cannot sends the file as a `FILE`.
 
 - **Display**: the orientation applied, every other piece of metadata dropped (EXIF, XMP, IPTC, comments, ICC beyond sRGB conversion), the longest edge at most 2,560 px. Encoded as PNG when it has transparency and the PNG fits under the image cap; otherwise JPEG, starting at quality 85 and stepping down by 10 to 55, then the longest edge down by a quarter at a time, until it fits. A picture that cannot fit at 640 px is refused in words.
-- **Thumbnail**: the display image with its longest edge at most 1,080 px (a picture across a phone's column on a display of three pixels a point), JPEG at 85 (PNG when transparent), stepping down in quality and then size to fit the instance's thumbnail cap (`UploadLimits.thumbnail_max_bytes`, 512 KiB).
+- **No thumbnail.** The display image is the only blob. (A GIF's first frame and a video's poster are made thumbnails as 3.2 and 3.3 say: the image at most 1,080 px on its longest edge, JPEG at 85 or PNG when transparent, stepping down in quality and then size to fit the instance's thumbnail cap, `UploadLimits.thumbnail_max_bytes`, 512 KiB.)
 - **Placeholder**: the ThumbHash of a 100 px version, carried inline in the attachment (about 25 bytes).
 - **Dimensions**: the display image's width and height, after orientation.
 
@@ -79,7 +79,7 @@ client                          instance                          blob store
   | send the message naming it    -> state=referenced                  |
 ```
 
-- **Roles**: `DISPLAY` (an `IMAGE`'s main blob, image cap), `THUMBNAIL` (512 KiB), `FILE` (every other main blob, file cap). The size is the ciphertext's: the plaintext plus the 16-byte tag.
+- **Roles**: `DISPLAY` (an `IMAGE`'s main blob, image cap), `THUMBNAIL` (a GIF's first frame, a video's poster, a personal card's picture; 512 KiB), `FILE` (every other main blob, file cap). The size is the ciphertext's: the plaintext plus the 16-byte tag.
 - **The upload URL** is a presigned S3 `PUT` for `att/<blob id>`, valid for 15 minutes, with `content-length` among its signed headers so the store refuses any other length. For a `local:` or `fs:` store it is the instance's own `PUT /api/v1/blobs/upload/{token}`, where the token is a signed, expiring statement of the blob id and size, needing no session. Clients treat both the same: `PUT` the ciphertext with the headers the response names.
 - **Complete** checks the stored object's length against the declared size and deletes the object and the row on a mismatch.
 - **Orphans**: a blob neither referenced nor deleted 24 hours after it was created is removed, object and row, by an Oban job.
@@ -119,7 +119,7 @@ Decided with Ryan 2026-11-15 (architecture 6.7, "A server's files").
 
 ## 5. Showing attachments
 
-- **Images**: drawn at their dimensions scaled to the column (at most 400 px tall), the placeholder until the thumbnail arrives, the display blob fetched when opened. Clicking opens a full-screen viewer with zoom and Save.
+- **Images**: drawn at their dimensions scaled to the column (at most 400 px tall), the placeholder until the display blob arrives: the one blob an image has, which the viewer draws too. A client decodes it no larger than it draws it where its toolkit would otherwise hold every picture of a conversation whole (the desktop at 1,200 px, by the core's `media::fitted`; iOS at 1,200 and Android at 1,280 by the platform's decoder; a browser manages its own). Clicking opens a full-screen viewer with zoom and Save.
 - **GIFs**: animate in place unless the system asks for reduced motion, in which case the first frame is shown with a GIF badge and plays on click.
 - **Video**: the poster (or the play placeholder) with a play button. Pressed, it plays in the message row with the platform's controls and a full-screen button: a `<video>` element on the web, AVPlayer on iOS, Media3 on Android, Rune's video element in the desktop shell on macOS and Windows. Linux, where Rune has none, opens it in the system's player. Never autoplays; starting one pauses any other, and it pauses when its row scrolls away or the conversation changes.
 - **Audio**: an inline player with controls. It plays on until another starts or the conversation is left.
@@ -152,7 +152,7 @@ The same rules in Elixir (the instance) and Rust (`lumia-client`, native targets
 - 5 s for the whole fetch: resolving the name, the page and its picture share one deadline. At most 1 MiB of HTML, reading stopped once the head has ended as the card's tokenizer reads it (a `</head>` or `<body>` outside comments and scripts); only `text/html` and `application/xhtml+xml` are parsed. The image at most 5 MiB.
 - A link as people write it: a character a URL cannot hold as written (a space, `|`, a letter outside ASCII in the path) is percent-encoded before the URL is parsed, as browsers do.
 - User agent `LumiaBot/<version> (+https://lumia.chat/bot)`; no cookies; `Accept-Language` from the sharer's locale on the client and `en` on the instance.
-- The image is fetched by the same rules, decoded under the same bounds as 3, and kept as a thumbnail (longest edge 800 px, JPEG or PNG). Receivers never contact the site until they open the link.
+- The image is fetched by the same rules, decoded under the same bounds as 3, and kept small (longest edge 800 px, JPEG or PNG; the core's `media::card_picture`). Receivers never contact the site until they open the link.
 
 ### 6.4 Server content: the instance builds the card
 

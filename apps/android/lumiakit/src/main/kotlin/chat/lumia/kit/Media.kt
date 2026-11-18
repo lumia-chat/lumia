@@ -9,6 +9,7 @@ package chat.lumia.kit
 
 import uniffi.lumia_ffi.AttachmentDraft
 import uniffi.lumia_ffi.AttachmentSummary
+import uniffi.lumia_ffi.BlobSummary
 
 /** How long typing pauses before the composer asks for its links' cards (spec 6.4). */
 const val CARD_PAUSE_MS = 500L
@@ -146,6 +147,21 @@ fun mediaShape(kind: String, images: Shown, expired: Boolean = false): MediaShap
     kind == "image" || kind == "gif" || kind == "video" -> MediaShape.PICTURE
     else -> MediaShape.FILE_ROW
 }
+
+/**
+ * The longest side a message's picture is decoded at. A picture is sampled
+ * down by halves, so this is a display picture's 2,560 halved once: enough
+ * for the tallest a picture is drawn (400 dp) on a display of three pixels
+ * a dp, and above a thumbnail's 1,080, which is decoded whole.
+ */
+const val TILE_EDGE = 1280
+
+/**
+ * The still picture a message draws for an attachment: an image's display
+ * picture (an image has no thumbnail), a GIF's first frame, a video's
+ * poster. None for a video without a poster.
+ */
+fun AttachmentSummary.stillBlob(): BlobSummary? = if (kind == "image") main else thumbnail
 
 /** Whether a message's cards are drawn: Preferences' Embeds at Link draws none. */
 fun cardsDrawn(embeds: Shown): Boolean = embeds == Shown.SHOWN

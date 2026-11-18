@@ -15,19 +15,25 @@
 //! computer a personal conversation's. A × puts one away, and a send asks for the cards of
 //! the links whose preview was not put away (spec 6.4, 6.5).
 //!
-//! **Pictures.** The thumbnails (an image's, a GIF's first frame, a video's poster), a GIF
-//! itself and the cards' pictures of the conversation on screen are fetched a few at a
-//! time when its messages are read, opened by the core (which checks them against their
-//! hash and keeps them, under `<host>/media/`), and held here as bytes. A picture is
-//! someone else's choice of bytes: one the core says not to decode (`App::attachment_drawable`)
-//! is held as such and drawn as a file. The display picture is fetched only for the viewer.
+//! **Pictures.** An image's display picture, a GIF's first frame and a video's poster (their
+//! thumbnails; an image has none, #22), a GIF itself and the cards' pictures of the
+//! conversation on screen are fetched a few at a time when its messages are read, opened by
+//! the core (which checks them against their hash and keeps them, under `<host>/media/`),
+//! and held here. A picture is someone else's choice of bytes: one the core says not to
+//! decode (`App::attachment_drawable`) is held as such and drawn as a file.
+//!
+//! An image's display picture is up to 2,560 px a side, and Rune keeps every picture it is
+//! handed decoded whole, with its smaller copies: some 26 MB each, for every picture of the
+//! conversation. So for a message it is held small ([`Picture::Small`], [`SMALL_EDGE`]),
+//! decoded and fitted by the core on a worker; the viewer asks for it as it was sent, under
+//! the blob's own key, and is the only place it is held whole.
 //!
 //! **Playing.** A video or a recording is written under this computer's temporary directory,
 //! named by its attachment's id and an extension its media type gives ([`player_file`]):
 //! for the window's own player where Rune has one (`app::playback`), for the system's
 //! player where it has none.
 //!
-//! Decoding is the toolkit's, in `app`.
+//! Decoding anything else is the toolkit's, in `app`.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -42,6 +48,35 @@ use super::{Conversation, Entry, Failure, Session, Update};
 
 /// How many pictures are asked for at once.
 const AT_ONCE: usize = 4;
+
+/// The longest edge an image is held at for a message: the largest it is drawn there (600 by
+/// 400 points, `tokens::MEDIA_MAX`) on a display of two pixels a point.
+pub const SMALL_EDGE: u32 = 1200;
+
+/// A picture as it is held.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Picture {
+    /// As it was sent, for the toolkit to decode: a GIF, its first frame, a poster, a card's
+    /// picture, and an image's display picture for the viewer.
+    Bytes(Arc<[u8]>),
+    /// An image's display picture made small for a message: RGBA8, row by row.
+    Small {
+        width: u32,
+        height: u32,
+        rgba: Arc<[u8]>,
+    },
+}
+
+/// An image's display picture as a message draws it, from its opened bytes: `None` when its
+/// header names more than may be decoded, or it will not decode. Run on a worker.
+pub fn small(bytes: &[u8]) -> Option<Picture> {
+    let fitted = lumia_core::media::fitted(bytes, SMALL_EDGE)?;
+    Some(Picture::Small {
+        width: fitted.width,
+        height: fitted.height,
+        rgba: Arc::from(fitted.rgba),
+    })
+}
 
 /// The largest picture read to be attached: the core makes it smaller, but it is read whole
 /// first. A larger file of any other kind is refused by the file cap before it is read.
@@ -58,10 +93,11 @@ pub enum MediaUpdate {
         local: u64,
         result: Result<AttachmentDraft, Failure>,
     },
-    /// A picture's bytes, opened, by its key ([`blob_key`], or a card picture's path).
+    /// A picture, opened, by its key ([`blob_key`], [`small_key`], or a card picture's
+    /// path): `None` when it may not be decoded.
     Fetched {
         key: String,
-        bytes: Result<Arc<[u8]>, Failure>,
+        picture: Result<Option<Picture>, Failure>,
     },
     /// A link's card for the composer: `None` when the page gives none.
     Preview {
@@ -142,7 +178,7 @@ pub struct Preview {
 #[derive(Debug, Clone)]
 enum Held {
     Wanted,
-    Bytes(Arc<[u8]>),
+    Here(Picture),
     /// Its header names more than may be decoded: drawn as a file.
     Undrawable,
     /// Not served, or would not open: not asked again while the conversation is open.
@@ -153,6 +189,8 @@ enum Held {
 #[derive(Debug, Clone)]
 enum Source {
     Blob(BlobSummary),
+    /// An image's display picture, made small.
+    Small(BlobSummary),
     Card(String),
 }
 
@@ -205,18 +243,26 @@ impl Default for MediaState {
 }
 
 impl MediaState {
-    /// Every picture held: its key and its bytes.
-    pub fn held(&self) -> impl Iterator<Item = (&str, &Arc<[u8]>)> {
+    /// Every picture held, by its key.
+    pub fn held(&self) -> impl Iterator<Item = (&str, &Picture)> {
         self.held.iter().filter_map(|(key, held)| match held {
-            Held::Bytes(bytes) => Some((key.as_str(), bytes)),
+            Held::Here(picture) => Some((key.as_str(), picture)),
             _ => None,
         })
     }
 
-    /// The bytes of the picture at `key`, when held.
-    pub fn bytes(&self, key: &str) -> Option<&Arc<[u8]>> {
+    /// The picture at `key`, when held.
+    pub fn picture(&self, key: &str) -> Option<&Picture> {
         match self.held.get(key) {
-            Some(Held::Bytes(bytes)) => Some(bytes),
+            Some(Held::Here(picture)) => Some(picture),
+            _ => None,
+        }
+    }
+
+    /// The bytes of the picture at `key`, when it is held as it was sent.
+    pub fn bytes(&self, key: &str) -> Option<&Arc<[u8]>> {
+        match self.picture(key) {
+            Some(Picture::Bytes(bytes)) => Some(bytes),
             _ => None,
         }
     }
@@ -230,6 +276,21 @@ impl MediaState {
 /// The key a blob's picture is held under.
 pub fn blob_key(blob: &BlobSummary) -> String {
     blob.blob_id.clone()
+}
+
+/// The key an image's display picture is held under made small, for a message.
+pub fn small_key(blob: &BlobSummary) -> String {
+    format!("{}/small", blob.blob_id)
+}
+
+/// The key of the still picture a message draws for an attachment: an image's display
+/// picture made small, a GIF's first frame, a video's poster. `None` for one with none.
+pub fn still_key(attachment: &AttachmentSummary) -> Option<String> {
+    if attachment.kind == "image" {
+        Some(small_key(&attachment.main))
+    } else {
+        attachment.thumbnail.as_ref().map(blob_key)
+    }
 }
 
 /// The key a card's picture is held under: its path on the instance, or its blob's.
@@ -626,15 +687,20 @@ impl Session {
         }
     }
 
-    /// Looks over the messages on screen for pictures not yet held: the thumbnails of
-    /// pictures and posters, a GIF itself, and the cards' pictures.
+    /// Looks over the messages on screen for pictures not yet held: an image's display
+    /// picture, a GIF's first frame and itself, a video's poster, and the cards' pictures.
     pub fn want_media(&mut self) {
         let mut wanted: Vec<(String, Source)> = Vec::new();
         for entry in self.entries.iter().filter(|e| !e.deleted) {
             if self.media.show_images {
                 for attachment in entry.attachments.iter().filter(|a| !a.expired) {
-                    if let Some(thumbnail) = &attachment.thumbnail
-                        && matches!(attachment.kind.as_str(), "image" | "gif" | "video")
+                    if attachment.kind == "image" {
+                        wanted.push((
+                            small_key(&attachment.main),
+                            Source::Small(attachment.main.clone()),
+                        ));
+                    } else if let Some(thumbnail) = &attachment.thumbnail
+                        && matches!(attachment.kind.as_str(), "gif" | "video")
                     {
                         wanted.push((blob_key(thumbnail), Source::Blob(thumbnail.clone())));
                     }
@@ -662,7 +728,8 @@ impl Session {
         self.fetch_media();
     }
 
-    /// Asks for one blob's picture: an image's display picture, for the viewer.
+    /// Asks for one blob's picture as it was sent: an image's display picture, for the
+    /// viewer.
     pub fn want_blob(&mut self, blob: &BlobSummary) {
         self.want(blob_key(blob), Source::Blob(blob.clone()));
         self.fetch_media();
@@ -685,13 +752,23 @@ impl Session {
             self.media.in_flight += 1;
             let app = Arc::clone(&app);
             self.task(async move {
-                let bytes = match source {
-                    Source::Blob(blob) => app.attachment_bytes(&blob).await,
-                    Source::Card(url) => app.card_image(&url).await,
+                let as_sent = |bytes: Vec<u8>| {
+                    App::attachment_drawable(&bytes).then(|| Picture::Bytes(Arc::from(bytes)))
+                };
+                let picture = match source {
+                    Source::Blob(blob) => app.attachment_bytes(&blob).await.map(as_sent),
+                    Source::Card(url) => app.card_image(&url).await.map(as_sent),
+                    Source::Small(blob) => match app.attachment_bytes(&blob).await {
+                        // Decoding and fitting a picture is work for a thread that may block.
+                        Ok(bytes) => Ok(tokio::task::spawn_blocking(move || small(&bytes))
+                            .await
+                            .unwrap_or_default()),
+                        Err(e) => Err(e),
+                    },
                 };
                 Update::Media(MediaUpdate::Fetched {
                     key,
-                    bytes: bytes.map(Arc::from).map_err(Failure::from),
+                    picture: picture.map_err(Failure::from),
                 })
             });
         }
@@ -814,11 +891,11 @@ impl Session {
                     self.revision += 1;
                 }
             }
-            MediaUpdate::Fetched { key, bytes } => {
+            MediaUpdate::Fetched { key, picture } => {
                 self.media.in_flight = self.media.in_flight.saturating_sub(1);
-                let held = match bytes {
-                    Ok(bytes) if App::attachment_drawable(bytes) => Held::Bytes(Arc::clone(bytes)),
-                    Ok(_) => Held::Undrawable,
+                let held = match picture {
+                    Ok(Some(picture)) => Held::Here(picture.clone()),
+                    Ok(None) => Held::Undrawable,
                     Err(_) => Held::Missing,
                 };
                 self.media.held.insert(key.clone(), held);

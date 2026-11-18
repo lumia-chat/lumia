@@ -84,8 +84,9 @@ public extension LumiaSession {
         try await client.attachmentBytes(blob)
     }
 
-    /// An attachment's picture (its thumbnail, or its display picture for
-    /// the viewer), decoded once its header is within the bounds.
+    /// An attachment's picture, decoded once its header is within the
+    /// bounds: for a message at `MediaInput.tileEdge` (an image's display
+    /// picture, a GIF's first frame, a video's poster), for the viewer whole.
     func picture(_ blob: BlobSummary, longest: Int = MediaInput.longestEdge) async -> MediaPicture {
         let key = "\(blob.blobId)@\(longest)"
         if let kept = mediaImages.image(key) { return .image(kept) }

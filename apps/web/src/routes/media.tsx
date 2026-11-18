@@ -79,6 +79,21 @@ async function placeholderBlob(placeholder: string): Promise<Blob | null> {
 
 const keyOf = (blob: BlobSummary | null | undefined) => (blob ? "blob:" + blob.blobId : undefined);
 
+/**
+ * The still picture a message draws for an attachment: an image's display
+ * picture (an image has no thumbnail; the viewer draws the same blob), a
+ * GIF's first frame, a video's poster. None for one the server let go.
+ */
+const stillOf = (a: AttachmentSummary): BlobSummary | null => (a.expired ? null : a.kind === "image" ? a.main : a.thumbnail);
+
+/** Loads `stillOf(a)` as a picture. */
+function stillLoad(a: AttachmentSummary): () => Promise<Blob | null> {
+  return () => {
+    const blob = stillOf(a);
+    return blob ? pictureBlob(blob, a.kind === "image" ? a.mediaType : "") : Promise.resolve(null);
+  };
+}
+
 /** Saves a file under its name: a link with `download`, pressed. */
 function saveAs(url: string, name: string) {
   const a = document.createElement("a");
@@ -126,10 +141,7 @@ function tileOf(a: AttachmentSummary, props: MessageMediaProps): MediaTileProps 
     () => (a.placeholder ? "ph:" + a.attachmentId : undefined),
     () => placeholderBlob(a.placeholder),
   );
-  const thumb = useBlob(
-    () => keyOf(a.thumbnail),
-    () => (a.thumbnail ? pictureBlob(a.thumbnail) : Promise.resolve(null)),
-  );
+  const still = useBlob(() => keyOf(stillOf(a)), stillLoad(a));
   // A GIF plays as itself, unless the system asks for less motion and it was not pressed.
   const [played, setPlayed] = createSignal(false);
   const gif = useBlob(
@@ -148,7 +160,7 @@ function tileOf(a: AttachmentSummary, props: MessageMediaProps): MediaTileProps 
     width: a.width,
     height: a.height,
     get src() {
-      return gif.url() ?? thumb.url();
+      return gif.url() ?? still.url();
     },
     get placeholder() {
       return placeholder.url();
@@ -174,7 +186,7 @@ function tileOf(a: AttachmentSummary, props: MessageMediaProps): MediaTileProps 
     // Pressed, it plays: one at a time, paused when it scrolls away.
     mediaRef: (el: HTMLVideoElement) => watchMedia(el, "video"),
     // A picture whose header is out of bounds, or that is not served, is drawn as a file row (spec 5).
-    failed: () => (a.kind !== "video" && thumb.state() === "failed") || (a.kind === "gif" && gif.state() === "failed"),
+    failed: () => (a.kind !== "video" && still.state() === "failed") || (a.kind === "gif" && gif.state() === "failed"),
   };
 }
 
@@ -457,13 +469,10 @@ export function MessageMedia(props: MessageMediaProps) {
 /** What the viewer shows an attachment as (a file is never opened in it). */
 const viewKind = (a: AttachmentSummary): "image" | "gif" | "video" | "audio" => (a.kind === "file" ? "image" : a.kind);
 
-/** The viewer over the window for one attachment: its full picture (or video, or audio) fetched, the thumbnail until then. */
+/** The viewer over the window for one attachment: its full picture (or video, or audio) fetched, its still as the message draws it until then. */
 export function MediaViewer(props: { a: AttachmentSummary; onClose: () => void }) {
   const main = useBlob(() => keyOf(props.a.main), mainLoad(props.a));
-  const thumb = useBlob(
-    () => keyOf(props.a.thumbnail),
-    () => (props.a.thumbnail ? pictureBlob(props.a.thumbnail) : Promise.resolve(null)),
-  );
+  const still = useBlob(() => keyOf(stillOf(props.a)), stillLoad(props.a));
   const placeholder = useBlob(
     () => (props.a.placeholder ? "ph:" + props.a.attachmentId : undefined),
     () => placeholderBlob(props.a.placeholder),
@@ -474,7 +483,7 @@ export function MediaViewer(props: { a: AttachmentSummary; onClose: () => void }
       alt={props.a.alt || undefined}
       kind={viewKind(props.a)}
       src={main.url()}
-      preview={thumb.url() ?? placeholder.url()}
+      preview={still.url() ?? placeholder.url()}
       width={props.a.width}
       height={props.a.height}
       saveHref={main.url()}

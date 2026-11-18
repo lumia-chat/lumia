@@ -498,8 +498,8 @@ fn a_camera_jpeg_is_turned_upright_and_loses_its_metadata() {
     assert!(top[0] > 200 && top[2] < 60, "{top:?}");
     assert!(bottom[2] > 200 && bottom[0] < 60, "{bottom:?}");
 
-    let thumbnail = processed.thumbnail.unwrap();
-    assert_eq!(decoded(&thumbnail).width(), 32);
+    // The display picture is what a conversation draws: no thumbnail.
+    assert_eq!(processed.thumbnail, None);
     assert!(!processed.placeholder.is_empty());
     assert!(processed.placeholder.len() < 40);
 }
@@ -573,8 +573,8 @@ fn a_transparent_picture_stays_png() {
     assert_eq!(processed.media_type, "image/png");
     assert_eq!(processed.name, "logo.png");
     assert_eq!(decoded(&processed.main).to_rgba8(), img);
-    let thumbnail = processed.thumbnail.unwrap();
-    assert!(thumbnail.starts_with(b"\x89PNG"));
+    assert_eq!(processed.thumbnail, None);
+    assert!(!processed.placeholder.is_empty());
 }
 
 #[test]
@@ -678,7 +678,7 @@ fn a_noisy_camera_picture_fits_two_mebibytes() {
     assert!(sealed_len(processed.main.len()) <= Caps::default().image_bytes);
     assert!(processed.width <= 2560 && processed.width >= 640);
     assert!((processed.width * 3).abs_diff(processed.height * 4) <= 4);
-    assert!(sealed_len(processed.thumbnail.unwrap().len()) <= THUMBNAIL_MAX_BYTES);
+    assert_eq!(processed.thumbnail, None);
 }
 
 /// A PNG of `w` x `h` at 16 bits a channel, RGBA.
@@ -756,8 +756,7 @@ fn a_picture_with_a_colour_profile_is_converted_to_srgb() {
         P3
     );
 
-    // A phone's JPEG: the display image and its thumbnail are in sRGB, and
-    // carry no profile.
+    // A phone's JPEG: the display image is in sRGB, and carries no profile.
     let mut jpeg = Vec::new();
     let mut encoder = JpegEncoder::new_with_quality(&mut jpeg, 95);
     encoder.set_icc_profile(display_p3()).unwrap();
@@ -768,8 +767,6 @@ fn a_picture_with_a_colour_profile_is_converted_to_srgb() {
     assert!(!contains(&processed.main, b"ICC_PROFILE"));
     let shown = decoded(&processed.main).to_rgb8();
     assert!(close(shown.get_pixel(8, 8).0, srgb, 4), "{shown:?}");
-    let thumbnail = decoded(&processed.thumbnail.unwrap()).to_rgb8();
-    assert!(close(thumbnail.get_pixel(8, 8).0, srgb, 4), "{thumbnail:?}");
 }
 
 // ---------------------------------------------------------------------------
@@ -1202,12 +1199,24 @@ fn a_placeholder_opens_as_a_small_picture_of_the_same_shape() {
     assert!(placeholder_image(&[1, 2, 3]).is_none());
 }
 
+/// A video with `poster` as the platform's frame of it.
+fn with_poster(poster: &RgbaImage) -> Input {
+    Input {
+        poster: Some(Pixels {
+            rgba: poster.clone().into_raw(),
+            width: poster.width(),
+            height: poster.height(),
+        }),
+        ..input(movie(b"isom", b"vide", IDENTITY), "clip.mp4")
+    }
+}
+
 #[test]
 fn a_thumbnail_is_sharp_across_a_phone_at_three_pixels_a_point() {
-    let processed = process(input(jpeg(2160, 1080), "wide.jpg")).unwrap();
+    let processed = process(with_poster(&noise(2160, 1080, 5))).unwrap();
     let thumbnail = decoded(processed.thumbnail.as_deref().unwrap());
     assert_eq!((thumbnail.width(), thumbnail.height()), (1080, 540));
-    let small = process(input(jpeg(600, 300), "small.jpg")).unwrap();
+    let small = process(with_poster(&noise(600, 300, 5))).unwrap();
     let thumbnail = decoded(small.thumbnail.as_deref().unwrap());
     assert_eq!(
         (thumbnail.width(), thumbnail.height()),
@@ -1224,8 +1233,37 @@ fn a_thumbnail_fits_the_cap_its_instance_names() {
             thumbnail_bytes: 24 * 1024,
             ..Caps::default()
         },
-        ..input(png(&noise(1600, 1200, 5)), "noise.png")
+        ..with_poster(&noise(1600, 1200, 5))
     })
     .unwrap();
     assert!(sealed_len(processed.thumbnail.unwrap().len()) <= 24 * 1024);
+}
+
+#[test]
+fn a_picture_is_fitted_to_be_drawn_small_and_never_enlarged() {
+    let small = fitted(&jpeg(2400, 1200), 1200).unwrap();
+    assert_eq!((small.width, small.height), (1200, 600));
+    assert_eq!(small.rgba.len(), 1200 * 600 * 4);
+    let own = fitted(&jpeg(300, 200), 1200).unwrap();
+    assert_eq!((own.width, own.height), (300, 200));
+    assert!(fitted(b"not a picture", 1200).is_none());
+}
+
+#[test]
+fn a_card_s_picture_is_kept_at_800_and_a_page_that_is_no_picture_gives_none() {
+    let wide = decoded(&card_picture(&jpeg(1600, 800)).unwrap());
+    assert_eq!((wide.width(), wide.height()), (800, 400));
+    let small = decoded(&card_picture(&jpeg(300, 200)).unwrap());
+    assert_eq!(
+        (small.width(), small.height()),
+        (300, 200),
+        "never enlarged"
+    );
+    let mut logo = RgbaImage::from_pixel(30, 20, Rgba([0, 0, 255, 255]));
+    logo.put_pixel(0, 0, Rgba([0, 0, 0, 0]));
+    assert!(card_picture(&png(&logo)).unwrap().starts_with(b"\x89PNG"));
+    // An animated GIF's first frame.
+    let first = decoded(&card_picture(&gif(2)).unwrap());
+    assert_eq!((first.width(), first.height()), (8, 6));
+    assert_eq!(card_picture(b"<html>not a picture</html>"), None);
 }

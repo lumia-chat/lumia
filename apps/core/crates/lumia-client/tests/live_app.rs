@@ -2160,9 +2160,8 @@ async fn a_picture_is_sent_stripped_and_opened_by_another_member() {
     assert_eq!(picture.len() as u64, attachment.size_bytes);
     assert!(!contains(&picture, b"Exif") && !contains(&picture, b"LumiaTestCam"));
     assert!(App::attachment_drawable(&picture));
-    let thumbnail = attachment.thumbnail.clone().unwrap();
-    let small = member.app.attachment_bytes(&thumbnail).await.unwrap();
-    assert!(App::attachment_drawable(&small));
+    // An image has no thumbnail: a conversation draws the display picture.
+    assert_eq!(attachment.thumbnail, None);
     assert!(App::placeholder_image(&attachment.placeholder).is_some());
     // Kept: asked again, it is the same.
     assert_eq!(
@@ -2171,13 +2170,13 @@ async fn a_picture_is_sent_stripped_and_opened_by_another_member() {
     );
 
     // A blob opens only with the key its message names.
-    let mut wrong = thumbnail.clone();
+    let mut wrong = attachment.main.clone();
     wrong.key[0] ^= 1;
     wrong.hash[0] ^= 1;
     assert!(member.app.attachment_bytes(&wrong).await.is_err());
 
     // Deleted, its attachments are no longer served: the owner, who never
-    // kept the thumbnail, cannot fetch it now.
+    // kept the picture, cannot fetch it now.
     let deleted = member.seen();
     owner.app.delete_message(&general, &message_id).unwrap();
     member
@@ -2192,7 +2191,7 @@ async fn a_picture_is_sent_stripped_and_opened_by_another_member() {
         })
         .await
         .expect("the delete reaches the member");
-    assert!(owner.app.attachment_bytes(&thumbnail).await.is_err());
+    assert!(owner.app.attachment_bytes(&attachment.main).await.is_err());
 }
 
 /// An attachment in a personal conversation (specs/media.md 4.2): its keys

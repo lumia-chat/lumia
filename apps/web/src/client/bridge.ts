@@ -338,13 +338,14 @@ export interface AttachmentSummary {
   height: number;
   /** Video and audio; 0 when unknown. */
   durationMs: number;
-  /** ThumbHash in base64, drawn until the thumbnail arrives (`placeholderImage`); empty for none. */
+  /** ThumbHash in base64, drawn until the picture arrives (`placeholderImage`); empty for none. */
   placeholder: string;
   alt: string;
   /** The file's own size, for a file row. */
   sizeBytes: number;
+  /** An image is drawn from this in a conversation as in the viewer. */
   main: BlobSummary;
-  /** At most 400 px: an image's, a GIF's first frame, a video's poster. */
+  /** A GIF's first frame or a video's poster, at most 1,080 px; never an image's. */
   thumbnail: BlobSummary | null;
   /** The server let it go (specs/media.md 4.5): drawn as its name and "No longer available", opening nothing. */
   expired: boolean;

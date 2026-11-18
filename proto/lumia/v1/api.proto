@@ -460,7 +460,7 @@ message ListAccountEventsResponse {
 enum BlobRole {
   BLOB_ROLE_UNSPECIFIED = 0;
   BLOB_ROLE_DISPLAY = 1;    // an IMAGE's main blob: the image cap
-  BLOB_ROLE_THUMBNAIL = 2;  // 512 KiB
+  BLOB_ROLE_THUMBNAIL = 2;  // a GIF's first frame, a poster, a DM card's picture: 512 KiB
   BLOB_ROLE_FILE = 3;       // every other main blob: the file cap
 }
 

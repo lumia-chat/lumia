@@ -40,7 +40,7 @@ import uniffi.lumia_ffi.placeholderImage
 /** The longest side a picture is handed to the core at: its display picture's (spec 3.1), so nothing larger crosses into it. */
 private const val DISPLAY_EDGE = 2560
 
-/** A video's poster frame's longest side: the core makes a 400 px thumbnail of it. */
+/** A video's poster frame's longest side: the core makes a thumbnail of at most 1,080 px of it. */
 private const val POSTER_EDGE = 1280
 
 /** The longest side the viewer decodes a picture at. */
@@ -160,9 +160,9 @@ private fun lengthOf(context: Context, uri: Uri): UInt? {
 
 // Drawing what a message carries
 
-/** Pictures decoded, by blob id or card address, up to 32 MB of them; placeholders by their bytes. */
+/** Pictures decoded, by blob id or card address, up to 64 MB of them (a dozen display pictures at [TILE_EDGE]); placeholders by their bytes. */
 private object MediaPictures {
-    val held = object : LruCache<String, ImageBitmap>(32 * 1024 * 1024) {
+    val held = object : LruCache<String, ImageBitmap>(64 * 1024 * 1024) {
         override fun sizeOf(key: String, value: ImageBitmap): Int = value.width * value.height * 4
     }
 }
@@ -207,9 +207,9 @@ sealed class Fetched<out T> {
     data object Failed : Fetched<Nothing>()
 }
 
-/** An attachment's blob as a picture (a thumbnail, a personal card's picture): fetched and opened by the core, decoded once and kept by blob id. */
+/** An attachment's blob as a picture (a message's still, a personal card's picture): fetched and opened by the core, decoded once and kept by blob id. */
 @Composable
-fun rememberBlobPicture(session: LumiaSession, blob: BlobSummary?, edge: Int = 1024): Fetched<ImageBitmap> {
+fun rememberBlobPicture(session: LumiaSession, blob: BlobSummary?, edge: Int = TILE_EDGE): Fetched<ImageBitmap> {
     val key = blob?.let { "blob:${it.blobId}:$edge" }
     val state = remember(key) { mutableStateOf<Fetched<ImageBitmap>>(key?.let { MediaPictures.held.get(it) }?.let { Fetched.Here(it) } ?: Fetched.Waiting) }
     LaunchedEffect(key) {

@@ -207,7 +207,8 @@ message BlobRef {
 
 enum AttachmentKind {
   ATTACHMENT_KIND_UNSPECIFIED = 0;
-  // A still picture the client made (JPEG or PNG), with a thumbnail.
+  // A still picture the client made (JPEG or PNG). It has no thumbnail:
+  // its main blob is what a conversation draws.
   IMAGE = 1;
   GIF = 2;
   VIDEO = 3;
@@ -233,8 +234,9 @@ message Attachment {
   string alt = 9;
   // The display picture, the GIF, the video, the audio, or the file.
   BlobRef main = 10;
-  // At most 400 px, for IMAGE and GIF, and VIDEO when the sharer's
-  // platform made a poster.
+  // At most 1,080 px: a GIF's first frame, and a VIDEO's poster when the
+  // sharer's platform made one. Never an IMAGE's (specs/media.md 2); one
+  // set by an older client is read by nobody.
   BlobRef thumbnail = 11;
   // Server content: the server let the blobs go (specs/media.md 4.5), so
   // main and thumbnail are empty and clients draw "No longer available".

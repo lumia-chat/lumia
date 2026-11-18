@@ -577,13 +577,15 @@ pub struct AttachmentSummary {
     pub height: u32,
     /// Video and audio; 0 when unknown.
     pub duration_ms: u32,
-    /// ThumbHash, drawn until the thumbnail arrives ([`placeholder_image`]).
+    /// ThumbHash, drawn until the picture arrives ([`placeholder_image`]).
     pub placeholder: Vec<u8>,
     pub alt: String,
     /// The file's own size, for a file row.
     pub size_bytes: u64,
+    /// An image is drawn from this in a conversation as in the viewer.
     pub main: BlobSummary,
-    /// At most 400 px: an image's, a GIF's first frame, a video's poster.
+    /// A GIF's first frame or a video's poster, at most 1,080 px; never an
+    /// image's.
     pub thumbnail: Option<BlobSummary>,
     /// The server let it go (specs/media.md 4.5): drawn as a file row with
     /// its name and "No longer available", opening nothing.
@@ -1761,7 +1763,7 @@ pub fn attachment_drawable(bytes: Vec<u8>) -> bool {
 }
 
 /// An attachment's placeholder as a tiny picture (RGBA8) to scale up and
-/// draw until its thumbnail arrives; none for an empty or malformed one.
+/// draw until its picture arrives; none for an empty or malformed one.
 #[uniffi::export]
 pub fn placeholder_image(placeholder: Vec<u8>) -> Option<Pixels> {
     App::placeholder_image(&placeholder).map(|p| Pixels {

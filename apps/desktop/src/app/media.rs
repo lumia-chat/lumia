@@ -5,11 +5,12 @@
 //! an edit takes out of a message.
 //!
 //! A picture is decoded on Rune's image cache's worker, never in a view or a frame, as an
-//! avatar is (`pictures`). A placeholder is a few dozen pixels from the core
+//! avatar is (`pictures`); an image's display picture arrives from the session already
+//! decoded and made small (`session::media`), and only the viewer holds it whole. A placeholder is a few dozen pixels from the core
 //! (`App::placeholder_image`), made once per attachment.
 //!
 //! Rune draws an animated GIF in motion by itself. Under the system's Reduce Motion the
-//! timeline draws its first frame (the thumbnail) with a GIF badge instead, and a click
+//! timeline draws its first frame (its thumbnail) with a GIF badge instead, and a click
 //! plays it ([`State::play_gif`]).
 //!
 //! Rune has a video player on macOS and Windows and none on Linux. Where it has one, a video
@@ -22,7 +23,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use lumia_client::app::{App, AttachmentSummary};
+use lumia_client::app::{App, AttachmentSummary, BlobSummary};
 use rune::{
     ClipboardContent, Drag, FileDialogOptions, Image, ImageCache, Key, KeyEvent, TextEdit, Tx,
     Waker,
@@ -31,7 +32,7 @@ use rune::{
 use super::State;
 use crate::session::Session;
 use crate::session::Update;
-use crate::session::media::{MediaUpdate, Stage};
+use crate::session::media::{MediaUpdate, Picture, Stage, small, small_key};
 use crate::settings::Media;
 
 /// How long the words must rest before their links are previewed (spec 6.4).
@@ -113,10 +114,18 @@ impl MediaUi {
         }
         self.seen = Some(now);
         let mut images = HashMap::new();
-        for (key, bytes) in session.media.held() {
-            let image = match self.images.remove(key) {
-                Some(image) => image,
-                None => self.cache().load(Arc::clone(bytes)),
+        for (key, picture) in session.media.held() {
+            let image = match (self.images.remove(key), picture) {
+                (Some(image), _) => image,
+                (None, Picture::Bytes(bytes)) => self.cache().load(Arc::clone(bytes)),
+                (
+                    None,
+                    Picture::Small {
+                        width,
+                        height,
+                        rgba,
+                    },
+                ) => self.cache().rgba(*width, *height, Arc::clone(rgba)),
             };
             images.insert(key.to_string(), image);
         }
@@ -472,11 +481,21 @@ impl State {
     }
 }
 
-/// What a test or a scene hands the state as if a picture had arrived.
+/// What a test or a scene hands the state as if a picture had arrived as it was sent: a
+/// GIF, a poster, a card's picture, an image's display picture for the viewer.
 pub fn fetched(key: &str, bytes: &[u8]) -> Update {
     Update::Media(MediaUpdate::Fetched {
         key: key.to_string(),
-        bytes: Ok(Arc::from(bytes)),
+        picture: Ok(App::attachment_drawable(bytes).then(|| Picture::Bytes(Arc::from(bytes)))),
+    })
+}
+
+/// The same for an image's display picture as a message draws it: made small, as the
+/// session's fetch makes it.
+pub fn fetched_small(blob: &BlobSummary, bytes: &[u8]) -> Update {
+    Update::Media(MediaUpdate::Fetched {
+        key: small_key(blob),
+        picture: Ok(small(bytes)),
     })
 }
 

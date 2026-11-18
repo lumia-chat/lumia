@@ -201,7 +201,7 @@ seen share
 wait "$uitest" || { echo "FAIL: the UI test did not pass; see $work/uitest.log"; grep -E "error|failed|XCTAssert" "$work/uitest.log" | head -10; exit 1; }
 uitest=""
 log="$work/uitest-embeds.log"
-# The channel again, landing at its end: the phone's own picture drawn from its thumbnail.
+# The channel again, landing at its end: the phone's own picture drawn from its display picture.
 shoot after 12
 
 # Inline video and embeds (specs/media.md 5 and 6.6), in #watch: the other

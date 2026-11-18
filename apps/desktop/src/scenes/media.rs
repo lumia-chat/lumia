@@ -8,7 +8,7 @@ use lumia_client::app::{
 use lumia_core::media::{Caps, Input, process};
 
 use crate::app::State;
-use crate::app::media::fetched;
+use crate::app::media::{fetched, fetched_small};
 use crate::session::media::{MediaUpdate, Preview, Stage, Waiting, player_file};
 use crate::session::{Entry, Failure, Update};
 
@@ -19,7 +19,8 @@ pub const CLIP: &[u8] = include_bytes!("clip.mp4");
 pub const TONE: &[u8] = include_bytes!("tone.m4a");
 const ICON: &[u8] = include_bytes!("../../../../assets/brand/lumia-original-icon.png");
 
-/// A picture as the core makes it for sending: its attachment, and its thumbnail's bytes.
+/// A picture as the core makes it for sending: its attachment, and its display picture's
+/// bytes.
 fn picture(id: &str, name: &str, bytes: &[u8], alt: &str) -> (AttachmentSummary, Vec<u8>) {
     let made = process(Input {
         bytes: bytes.to_vec(),
@@ -36,7 +37,6 @@ fn picture(id: &str, name: &str, bytes: &[u8], alt: &str) -> (AttachmentSummary,
         blob_id: format!("{id}-{suffix}"),
         ..BlobSummary::default()
     };
-    let thumbnail = made.thumbnail.unwrap_or_default();
     (
         AttachmentSummary {
             attachment_id: id.into(),
@@ -49,10 +49,9 @@ fn picture(id: &str, name: &str, bytes: &[u8], alt: &str) -> (AttachmentSummary,
             alt: alt.into(),
             size_bytes: made.main.len() as u64,
             main: blob("main"),
-            thumbnail: Some(blob("thumb")),
             ..AttachmentSummary::default()
         },
-        thumbnail,
+        made.main,
     )
 }
 
@@ -83,14 +82,19 @@ pub fn media(state: &mut State) {
         file_max_bytes: 10 * 1024 * 1024,
         thumbnail_max_bytes: 512 * 1024,
     });
-    let (portrait, portrait_thumb) = picture(
+    let (portrait, portrait_shown) = picture(
         "a-portrait",
         "portrait.jpg",
         PORTRAIT,
         "Grace at the bench, smiling",
     );
     let (second, _) = picture("a-portrait-2", "portrait.jpg", PORTRAIT, "");
-    let (icon, icon_thumb) = picture("a-icon", "lumia.png", ICON, "The Lumia mark");
+    let (icon, icon_shown) = picture("a-icon", "lumia.png", ICON, "The Lumia mark");
+    let mains = [
+        (portrait.main.clone(), &portrait_shown),
+        (second.main.clone(), &portrait_shown),
+        (icon.main.clone(), &icon_shown),
+    ];
     let now = chrono::Utc::now().timestamp_micros();
     let entry = |id: &str, author: &str, body: &str, ago: i64| Entry {
         id: id.into(),
@@ -182,14 +186,11 @@ pub fn media(state: &mut State) {
         },
     ];
     state.session.revision += 1;
-    for (key, bytes) in [
-        ("a-portrait-thumb", &portrait_thumb),
-        ("a-portrait-2-thumb", &portrait_thumb),
-        ("a-icon-thumb", &icon_thumb),
-        ("/api/v1/cards/9f2c", &icon_thumb),
-        ("/api/v1/cards/7b1e", &icon_thumb),
-    ] {
-        state.receive(&fetched(key, bytes));
+    for (blob, bytes) in &mains {
+        state.receive(&fetched_small(blob, bytes));
+    }
+    for key in ["/api/v1/cards/9f2c", "/api/v1/cards/7b1e"] {
+        state.receive(&fetched(key, &icon_shown));
     }
     // The composer: a picture uploaded with its alt text, a file on its way, one refused,
     // and the card of the link in the words.
@@ -261,7 +262,15 @@ pub fn media_links(state: &mut State) {
 /// `media-viewer`: the portrait opened in the viewer, its display picture arrived.
 pub fn media_viewer(state: &mut State) {
     media(state);
-    let portrait = state.session.entries[0].attachments[0].clone();
+    // By its id: the conversation's first attachment is the one its server let go.
+    let portrait = state
+        .session
+        .entries
+        .iter()
+        .flat_map(|e| &e.attachments)
+        .find(|a| a.attachment_id == "a-portrait")
+        .cloned()
+        .unwrap_or_default();
     state.open_viewer(&portrait);
     state.receive(&fetched("a-portrait-main", PORTRAIT));
     state.tick(chrono::Utc::now().timestamp_micros());

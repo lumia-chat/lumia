@@ -16,9 +16,11 @@ use lumia_client::app::{
     AttachmentDraft, AttachmentSummary, BlobSummary, CardSummary, UploadLimitsSummary,
 };
 use lumia_shell::app::State;
-use lumia_shell::app::media::fetched;
+use lumia_shell::app::media::{fetched, fetched_small};
 use lumia_shell::session::Update;
-use lumia_shell::session::media::{MediaUpdate, Stage, Waiting};
+use lumia_shell::session::media::{
+    MediaUpdate, Picture, SMALL_EDGE, Stage, Waiting, blob_key, small_key, still_key,
+};
 use lumia_shell::settings::Media;
 use lumia_shell::tokens;
 use rune::{ClipboardContent, Key, KeyEvent, Mods, Runtime};
@@ -33,7 +35,7 @@ fn limits() -> Option<UploadLimitsSummary> {
     })
 }
 
-/// The brand's icon made into an attachment by the core, and its thumbnail's bytes.
+/// The brand's icon made into an attachment by the core, and its display picture's bytes.
 fn picture(id: &str) -> (AttachmentSummary, Vec<u8>) {
     let made = lumia_core::media::process(lumia_core::media::Input {
         bytes: ICON.to_vec(),
@@ -62,10 +64,9 @@ fn picture(id: &str) -> (AttachmentSummary, Vec<u8>) {
             alt: "The Lumia mark".into(),
             size_bytes: made.main.len() as u64,
             main: blob("main"),
-            thumbnail: Some(blob("thumb")),
             ..AttachmentSummary::default()
         },
-        made.thumbnail.unwrap(),
+        made.main,
     )
 }
 
@@ -101,7 +102,8 @@ fn card() -> CardSummary {
 fn with_media() -> State {
     let mut state = signed_in();
     state.session.media.limits = limits();
-    let (mark, thumb) = picture("a1");
+    let (mark, shown) = picture("a1");
+    let main = mark.main.clone();
     let now = chrono::Utc::now().timestamp_micros();
     let mut sent = message("p1", "grace", "The mark, as promised.", now - 120_000_000);
     sent.attachments = vec![mark];
@@ -111,8 +113,8 @@ fn with_media() -> State {
     linked.cards = vec![card()];
     state.session.entries = vec![sent, file, linked];
     state.session.revision += 1;
-    state.receive(&fetched("a1-thumb", &thumb));
-    state.receive(&fetched("/api/v1/cards/abc", &thumb));
+    state.receive(&fetched_small(&main, &shown));
+    state.receive(&fetched("/api/v1/cards/abc", &shown));
     state.tick(now);
     state.media.wait();
     state
@@ -159,6 +161,47 @@ fn a_message_draws_its_picture_its_file_and_its_card() {
         rt.take_url_requests(),
         vec!["https://example.com/notes".to_string()]
     );
+}
+
+/// An image has no thumbnail (#22): a message draws its display picture, which the session
+/// holds made small, since Rune keeps what it is handed decoded whole. One sent while images
+/// had thumbnails is drawn the same way, its thumbnail never asked for. The viewer is where
+/// the picture is held as it was sent.
+#[test]
+fn an_image_is_drawn_from_its_display_picture_held_small() {
+    let mut state = with_media();
+    let (mut mark, shown) = picture("a1");
+    assert_eq!(mark.thumbnail, None);
+    let key = still_key(&mark).expect("an image has a still");
+    assert_eq!(key, small_key(&mark.main));
+    let image = state.media.image(&key).expect("held for its tile");
+    assert!(image.is_ready() && image.error().is_none());
+    match state.session.media.picture(&key) {
+        Some(Picture::Small { width, height, .. }) => {
+            assert_eq!((*width, *height), (mark.width, mark.height));
+            assert!(*width <= SMALL_EDGE && *height <= SMALL_EDGE);
+        }
+        other => panic!("held made small, not {other:?}"),
+    }
+    assert!(state.session.media.picture(&blob_key(&mark.main)).is_none());
+    // Bytes that are no picture are a file row's, as a thumbnail's were.
+    state.receive(&fetched_small(&mark.main, b"not a picture"));
+    assert!(state.session.media.undrawable(&key));
+
+    mark.thumbnail = Some(BlobSummary {
+        blob_id: "a1-thumb".into(),
+        ..BlobSummary::default()
+    });
+    assert_eq!(still_key(&mark), Some(key));
+
+    // Opened, the viewer draws the display picture whole, under the blob's own key.
+    let mut rt = runtime(with_media());
+    press(&mut rt, "picture-a1");
+    rt.update(|s, _| s.receive(&fetched(&blob_key(&mark.main), &shown)));
+    assert!(matches!(
+        rt.state.session.media.picture(&blob_key(&mark.main)),
+        Some(Picture::Bytes(_))
+    ));
 }
 
 #[test]

@@ -168,8 +168,9 @@ pub struct Caps {
     pub image_bytes: u64,
     /// Every other main blob (`LUMIA_UPLOAD_FILE_MAX_BYTES`).
     pub file_bytes: u64,
-    /// A thumbnail blob (`UploadLimits.thumbnail_max_bytes`), so a client
-    /// newer than its instance makes thumbnails that instance takes.
+    /// A thumbnail blob: a GIF's first frame, a video's poster
+    /// (`UploadLimits.thumbnail_max_bytes`), so a client newer than its
+    /// instance makes thumbnails that instance takes.
     pub thumbnail_bytes: u64,
 }
 
@@ -259,6 +260,8 @@ pub struct Processed {
     /// is none.
     pub placeholder: Vec<u8>,
     pub main: Vec<u8>,
+    /// A GIF's first frame or a video's poster. An `IMAGE` has none: its
+    /// display picture is what a conversation draws.
     pub thumbnail: Option<Vec<u8>>,
 }
 
@@ -281,7 +284,8 @@ impl std::fmt::Debug for Processed {
 /// Makes an attachment of a file (specs/media.md 3):
 ///
 /// * Platform pixels, or a JPEG, PNG, WebP or single-frame GIF that
-///   decodes within the bounds: an `IMAGE`, re-encoded from its pixels.
+///   decodes within the bounds: an `IMAGE`, re-encoded from its pixels,
+///   with no thumbnail.
 /// * An animated GIF: a `GIF`, byte for byte but its comment and
 ///   application extensions, with its first frame as the thumbnail.
 /// * MP4 and MOV: a `VIDEO` with its metadata boxes freed and its times
@@ -315,20 +319,17 @@ pub fn process(input: Input) -> Result<Processed, MediaError> {
     if !as_file {
         if let Some(pixels) = pixels {
             let image = still::from_pixels(pixels.rgba, pixels.width, pixels.height)?;
-            return image_attachment(
-                still::display(still::shrink(image), image_cap, caps.thumbnail_bytes)?,
+            return Ok(image_attachment(
+                still::display(still::shrink(image), image_cap)?,
                 &name,
-            );
+            ));
         }
         match format {
             Format::Jpeg | Format::Png | Format::WebP => {
                 if let Some(image) = still::decode(&bytes) {
-                    let shown = still::shrink_decoded(&image);
+                    let shown = still::shrink_decoded(&image, still::DISPLAY_EDGE);
                     drop(image);
-                    return image_attachment(
-                        still::display(shown, image_cap, caps.thumbnail_bytes)?,
-                        &name,
-                    );
+                    return Ok(image_attachment(still::display(shown, image_cap)?, &name));
                 }
             }
             Format::Gif => {
@@ -383,13 +384,13 @@ pub fn process(input: Input) -> Result<Processed, MediaError> {
 }
 
 /// An `IMAGE` from a display picture.
-fn image_attachment(made: still::Still, name: &str) -> Result<Processed, MediaError> {
+fn image_attachment(made: still::Still, name: &str) -> Processed {
     let (extension, media_type) = if made.png {
         ("png", "image/png")
     } else {
         ("jpg", "image/jpeg")
     };
-    Ok(Processed {
+    Processed {
         kind: AttachmentKind::Image,
         media_type: media_type.into(),
         name: rename(name, extension),
@@ -398,8 +399,8 @@ fn image_attachment(made: still::Still, name: &str) -> Result<Processed, MediaEr
         duration_ms: 0,
         placeholder: made.placeholder,
         main: made.main,
-        thumbnail: Some(made.thumbnail),
-    })
+        thumbnail: None,
+    }
 }
 
 /// A GIF: animated, a `GIF`; one frame, an `IMAGE`. `None` when it will not
@@ -412,13 +413,12 @@ fn gif(bytes: &[u8], name: &str, caps: Caps) -> Result<Option<Processed>, MediaE
         return Ok(None);
     };
     if frames == 1 {
-        let shown = still::shrink_decoded(&first);
+        let shown = still::shrink_decoded(&first, still::DISPLAY_EDGE);
         drop(first);
-        return image_attachment(
-            still::display(shown, caps.image_bytes, caps.thumbnail_bytes)?,
+        return Ok(Some(image_attachment(
+            still::display(shown, caps.image_bytes)?,
             name,
-        )
-        .map(Some);
+        )));
     }
     let Some(screen) = probe(&stripped) else {
         return Ok(None);
@@ -428,6 +428,7 @@ fn gif(bytes: &[u8], name: &str, caps: Caps) -> Result<Option<Processed>, MediaE
     let preview = still::preview(
         &image::DynamicImage::ImageRgba8(first),
         png,
+        still::THUMBNAIL_EDGE,
         caps.thumbnail_bytes,
     )?;
     finish(
@@ -517,7 +518,31 @@ fn poster_preview(
     };
     let image = still::from_pixels(poster.rgba.clone(), poster.width, poster.height)?;
     let png = image.pixels().any(|p| p.0[3] < 255);
-    still::preview(&image::DynamicImage::ImageRgba8(image), png, thumbnail_cap).map(Some)
+    still::preview(
+        &image::DynamicImage::ImageRgba8(image),
+        png,
+        still::THUMBNAIL_EDGE,
+        thumbnail_cap,
+    )
+    .map(Some)
+}
+
+/// A card's picture as it is kept (spec 6.3): `bytes` decoded within the
+/// bounds (a GIF's first frame), at most 800 px on its longest edge, JPEG or
+/// PNG when it has transparency, within the thumbnail cap. `None` for bytes
+/// that are not a picture the core decodes.
+#[must_use]
+pub fn card_picture(bytes: &[u8]) -> Option<Vec<u8>> {
+    let image = still::decode(bytes)?.to_rgba8();
+    let png = image.pixels().any(|p| p.0[3] < 255);
+    still::preview(
+        &image::DynamicImage::ImageRgba8(image),
+        png,
+        still::CARD_EDGE,
+        THUMBNAIL_MAX_BYTES,
+    )
+    .ok()
+    .map(|p| p.thumbnail)
 }
 
 /// A `FILE`: pictures and movies lose their metadata losslessly (spec
@@ -595,9 +620,24 @@ fn media_type(format: Format, name: &str) -> String {
     .into()
 }
 
+/// A picture someone sent, decoded to be drawn small (spec 5): within the
+/// bounds, upright and in sRGB, its longest edge at most `edge`, never
+/// enlarged. For a shell whose toolkit would otherwise hold every display
+/// picture of a conversation decoded whole. `None` for bytes that are not a
+/// picture the core decodes, or that name more than may be decoded.
+#[must_use]
+pub fn fitted(bytes: &[u8], edge: u32) -> Option<Pixels> {
+    let small = still::shrink_decoded(&still::decode(bytes)?, edge);
+    Some(Pixels {
+        width: small.width(),
+        height: small.height(),
+        rgba: small.into_raw(),
+    })
+}
+
 /// The picture a placeholder (an attachment's ThumbHash) stands for: a few
 /// dozen pixels a side, RGBA8, for a shell to scale up and draw until the
-/// thumbnail arrives. `None` for bytes that are not a ThumbHash.
+/// picture arrives. `None` for bytes that are not a ThumbHash.
 #[must_use]
 pub fn placeholder_image(placeholder: &[u8]) -> Option<Pixels> {
     if placeholder.len() < 5 {

@@ -231,9 +231,9 @@ function blocksOf(m: PreviewMessage): BodyBlock[] {
  * `MessageMedia` (routes/media.tsx) draws it, from the same components
  * where they can be drawn from sample data: the file row is `Attachment`
  * and the card `LinkCard`, as there. `MessageMedia` itself is not used:
- * it fetches each tile's thumbnail and asks the core for a card's embed.
+ * it fetches each tile's picture and asks the core for a card's embed.
  * The picture is drawn here, in the tile's own frame (`lu-media__tile`),
- * since a tile shows only a fetched thumbnail and the sample has no file.
+ * since a tile shows only a fetched picture and the sample has no file.
  */
 function PreviewMedia(props: { m: PreviewMessage; display: Display }) {
   const drawn = () => previewDrawn(props.m, props.display);
