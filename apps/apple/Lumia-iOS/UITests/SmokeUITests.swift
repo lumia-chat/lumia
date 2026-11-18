@@ -2,13 +2,14 @@
 // notification permission prompt, tap a notification, type into a
 // composer, make a choice in Preferences, sign out from the account menu,
 // look into Notification Center, put a link request on the clipboard,
-// choose a picture in the system's photo picker, and read a screen as
+// choose a picture in the system's photo picker, tap twice, pinch and
+// drag in the picture viewer, and read a screen as
 // assistive technology does. scripts/smoke-push.sh, scripts/smoke-media.sh,
 // scripts/smoke-typing.sh, scripts/smoke-preferences.sh,
 // scripts/smoke-signout.sh, scripts/smoke-server-settings.sh, scripts/smoke-rail.sh
 // and scripts/smoke-approve.sh run these tests with the app signed in
 // (the LUMIA_DEV_* environment, passed through xcodebuild's TEST_RUNNER_
-// prefix).
+// prefix); scripts/smoke-viewer.sh runs its test with no account at all.
 import UIKit
 import XCTest
 
@@ -1428,9 +1429,9 @@ final class SmokeUITests: XCTestCase {
     /// with words; the phone draws it in its message. Held, the picture,
     /// the card and the PDF each open their message's actions and nothing
     /// else; tapped, the picture opens full screen with Save to Photos,
-    /// Share and Close, and the PDF the share sheet. Steps under
-    /// LUMIA_UITEST_STEPS: `drawn`, `picker`, `strip`, `sent`, `held`,
-    /// `viewer`, `share`.
+    /// Share and Close, where two taps zoom it, and the PDF the share
+    /// sheet. Steps under LUMIA_UITEST_STEPS: `drawn`, `picker`, `strip`,
+    /// `sent`, `held`, `viewer`, `zoomed`, `share`.
     func testAttachingAPictureFromThePhotoLibrary() throws {
         let env = ProcessInfo.processInfo.environment
         let steps = try XCTUnwrap(env["LUMIA_UITEST_STEPS"])
@@ -1504,6 +1505,13 @@ final class SmokeUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Share"].exists, "the viewer has no Share")
         XCTAssertTrue(anything.matching(NSPredicate(format: "label == %@", label)).firstMatch.waitForExistence(timeout: 20), "the viewer does not say what the picture is")
         reached("viewer")
+        // Two taps in its middle zoom it (to its own size, a pixel a
+        // point: scripts/smoke-viewer.sh measures that on a drawn picture;
+        // this one is for the eye), and its ways out stay over it.
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).doubleTap()
+        sleep(1)
+        XCTAssertTrue(app.buttons["Close"].isHittable, "the zoomed picture covers Close")
+        reached("zoomed")
         app.buttons["Close"].tap()
 
         // Someone else's card, further up: their actions (no Edit message), and the link not opened.
@@ -1690,5 +1698,89 @@ final class SmokeUITests: XCTestCase {
         XCTAssertFalse(app.otherElements["ActivityListView"].waitForExistence(timeout: 2) || app.buttons["Save to Files"].exists, "the recording's row opened the share sheet")
         sleep(1)
         reached("links", under: steps)
+    }
+
+    /// The viewer's zoom by hand (scripts/smoke-viewer.sh, specs/media.md
+    /// 5), on the pictures a debug build draws with no instance
+    /// (`LUMIA_DEV_SCREEN` `viewer` and `viewer-small`). The large one is
+    /// tapped twice at a point, which its first step says in points after
+    /// the screen's size, and twice again there; the small one is tapped
+    /// twice, pinched out as far as it goes and dragged to its leading
+    /// edge. Where the screen turns (an iPad; the app on a phone stays
+    /// upright), each is also turned while zoomed, and the large one
+    /// tapped twice once turned. What the screen shows at each step is the
+    /// script's to check in its screenshot. Steps under
+    /// LUMIA_UITEST_STEPS: `fitted`, which also says whether the screen
+    /// turns, `own`, `back`, then `turned` and `refitted`, each saying the
+    /// turned screen's size, on a screen that turns; `small`, `twice`,
+    /// `furthest`, `dragged`, then `small-turned`.
+    func testTheViewerZoomsByTheCoresRules() throws {
+        let steps = try XCTUnwrap(ProcessInfo.processInfo.environment["LUMIA_UITEST_STEPS"])
+        let turns = UIDevice.current.userInterfaceIdiom == .pad
+        XCUIDevice.shared.orientation = .portrait
+        var app = launch(screen: "viewer")
+        var picture = app.images["Photo, squares"]
+        XCTAssertTrue(picture.waitForExistence(timeout: 60), "the viewer's picture is not an image that says what it is")
+        let room = picture.frame
+        XCTAssertEqual(room, app.windows.firstMatch.frame, "the viewer's picture has the whole screen to zoom in")
+        // Right of the middle and under it, inside one of the picture's squares.
+        let at = CGPoint(x: (room.width * 0.56).rounded(), y: (room.height * 0.53).rounded())
+        let point = picture.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: at.x, dy: at.y))
+        sleep(1)
+        reached("fitted", under: steps, saying: "\(Int(room.width)) \(Int(room.height)) \(Int(at.x)) \(Int(at.y)) \(turns ? "turns" : "upright")")
+        point.doubleTap()
+        sleep(1)
+        reached("own", under: steps)
+        point.doubleTap()
+        sleep(1)
+        reached("back", under: steps)
+        /// Turns the screen on its side and says its size once it has turned.
+        func turn() -> String {
+            XCUIDevice.shared.orientation = .landscapeLeft
+            sleep(2)
+            let turned = picture.frame
+            XCTAssertEqual(turned.size, CGSize(width: room.height, height: room.width), "the viewer's picture did not turn with the screen")
+            return "\(Int(turned.width)) \(Int(turned.height))"
+        }
+        if turns {
+            // Zoomed to its own size again, then turned: the zoom is kept,
+            // in times the size the picture is fitted at, which is another
+            // on the turned screen; two taps then fit it there.
+            point.doubleTap()
+            sleep(1)
+            let turned = turn()
+            reached("turned", under: steps, saying: turned)
+            picture.doubleTap()
+            sleep(1)
+            reached("refitted", under: steps, saying: turned)
+            XCUIDevice.shared.orientation = .portrait
+            sleep(2)
+        }
+
+        app = launch(screen: "viewer-small")
+        picture = app.images["Photo, squares"]
+        XCTAssertTrue(picture.waitForExistence(timeout: 60), "the small picture is not an image that says what it is")
+        sleep(1)
+        reached("small", under: steps)
+        // Off its middle: twice its size still fits the screen, so it stays there.
+        picture.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.52)).doubleTap()
+        sleep(1)
+        reached("twice", under: steps)
+        // Far past four times its own size, which is where it stops.
+        picture.pinch(withScale: 12, velocity: 6)
+        sleep(2)
+        reached("furthest", under: steps)
+        // Wider than the screen now and not as tall: a drag across and
+        // down stops at its leading edge and moves it no way down.
+        picture.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.4)).press(forDuration: 0.05, thenDragTo: picture.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.7)))
+        picture.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.4)).press(forDuration: 0.05, thenDragTo: picture.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.7)))
+        sleep(2)
+        reached("dragged", under: steps)
+        if turns {
+            // Four times its own size fits a screen this large either way
+            // up: it stays that size, in the turned screen's middle.
+            reached("small-turned", under: steps, saying: turn())
+            XCUIDevice.shared.orientation = .portrait
+        }
     }
 }

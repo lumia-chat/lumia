@@ -6,15 +6,18 @@
 // under its words (pictures at their shape or in a grid, a GIF playing
 // unless Reduce Motion is on, a video's poster, an audio player, a file
 // row) and its cards, a card with an embed loading it in its place on a
-// press; the full-screen picture with pinch zoom, Save to Photos and
-// Share; a file shared or saved through the share sheet. Videos and
-// recordings play in their rows (`Playback.swift`). Images and Embeds in
-// Preferences draw every attachment as a row and no cards when set to
-// links; a recording's row still plays it. The kit has the rules
-// (`Media.swift`: how each attachment is drawn, `AttachmentDrawn`, and
-// the files handed to a player or the share sheet, `MediaFiles`, a folder
-// to each so neither removes the other's), the platform's decoding
-// (`MediaInput`) and the session's side (`MediaSession.swift`).
+// press; the full-screen picture, which zooms by the core's rules (opened
+// fitted and never grown, a pinch or two taps in, as far as four times
+// its own size), with Save to Photos and Share; a file shared or saved
+// through the share sheet. Videos and recordings play in their rows
+// (`Playback.swift`). Images and Embeds in Preferences draw every
+// attachment as a row and no cards when set to links; a recording's row
+// still plays it. The kit has the rules (`Media.swift`: how each
+// attachment is drawn, `AttachmentDrawn`, the viewer's zoom as a scroll
+// view carries out the core's, `ViewerZoom`, and the files handed to a
+// player or the share sheet, `MediaFiles`, a folder to each so neither
+// removes the other's), the platform's decoding (`MediaInput`) and the
+// session's side (`MediaSession.swift`).
 import AVFoundation
 import AVKit
 import LumiaFFI
@@ -1149,8 +1152,10 @@ private struct FileShareSheet: View {
 }
 
 /// A picture full screen: its display picture (the thumbnail until it
-/// comes), pinch to zoom and a double tap, its alt text under it and as
-/// what VoiceOver says of it, Save to Photos and Share.
+/// comes, drawn at the display picture's size), fitted into the screen
+/// and never grown past its own size, a pinch and two taps to zoom
+/// (`ViewerPicture`), its alt text under it and as what VoiceOver says of
+/// it, Save to Photos and Share.
 private struct PictureViewer: View {
     @Environment(\.dismiss) private var dismiss
     let attachment: AttachmentSummary
@@ -1164,11 +1169,11 @@ private struct PictureViewer: View {
         ZStack {
             Color.black.ignoresSafeArea()
             if let picture {
-                ZoomingImage(image: UIImage(cgImage: picture))
-                    .ignoresSafeArea()
-                    .accessibilityElement()
-                    .accessibilityLabel(MediaWords.label(attachment))
-                    .accessibilityAddTraits(.isImage)
+                ViewerPicture(
+                    picture: picture,
+                    pixels: ViewerZoom.pixels(width: attachment.width, height: attachment.height, decoded: CGSize(width: picture.width, height: picture.height)),
+                    label: MediaWords.label(attachment)
+                )
             } else if undrawable {
                 Text("This picture can’t be shown.").font(LumiaTokens.textBody.font).foregroundStyle(.white)
             } else {
@@ -1265,56 +1270,134 @@ private struct ViewerButton: View {
     }
 }
 
-/// A picture in a scroll view that pinches to zoom up to four times, and
-/// a double tap zooms in and back.
+/// The viewer's picture over the whole screen, one image to VoiceOver
+/// that says what it is.
+struct ViewerPicture: View {
+    let picture: CGImage
+    /// Its own size, a pixel a point (`ViewerZoom.pixels`).
+    let pixels: CGSize
+    let label: String
+
+    var body: some View {
+        ZoomingImage(picture: picture, pixels: pixels)
+            .ignoresSafeArea()
+            .accessibilityElement()
+            .accessibilityLabel(label)
+            .accessibilityAddTraits(.isImage)
+    }
+}
+
+/// A picture in a scroll view that zooms by the core's rules
+/// (specs/media.md 5, the kit's `ViewerZoom`).
 private struct ZoomingImage: UIViewRepresentable {
-    let image: UIImage
+    let picture: CGImage
+    let pixels: CGSize
 
-    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeUIView(context: Context) -> ZoomingScrollView { ZoomingScrollView(picture: picture, pixels: pixels) }
 
-    func makeUIView(context: Context) -> UIScrollView {
-        let scroll = UIScrollView()
-        scroll.delegate = context.coordinator
-        scroll.minimumZoomScale = 1
-        scroll.maximumZoomScale = 4
-        scroll.showsVerticalScrollIndicator = false
-        scroll.showsHorizontalScrollIndicator = false
-        scroll.backgroundColor = .clear
-        let view = UIImageView(image: image)
-        view.contentMode = .scaleAspectFit
-        view.translatesAutoresizingMaskIntoConstraints = false
-        scroll.addSubview(view)
-        NSLayoutConstraint.activate([
-            view.widthAnchor.constraint(equalTo: scroll.frameLayoutGuide.widthAnchor),
-            view.heightAnchor.constraint(equalTo: scroll.frameLayoutGuide.heightAnchor),
-            view.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor),
-            view.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor),
-            view.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor),
-            view.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor),
-        ])
-        context.coordinator.view = view
-        let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.doubleTapped(_:)))
+    func updateUIView(_ scroll: ZoomingScrollView, context: Context) { scroll.show(picture, pixels: pixels) }
+}
+
+/// The viewer's scroll view (specs/media.md 5). The picture opens fitted
+/// into the bounds, shrunk and never grown past its own size, a pixel a
+/// point, so a small one is drawn as it is in the middle and not
+/// stretched. The scroll view's zoom scale is the core's scale, 1 fitted
+/// and at most four times the picture's own size; a pinch zooms about the
+/// fingers and a drag moves a zoomed picture as far as its edges, both the
+/// scroll view's own. Two taps go where the core's `viewerPressed` says:
+/// from fitted to the picture's own size about the point tapped (twice
+/// fitted when its own is hardly larger), from zoomed back to fitted.
+/// Along a side that fits the bounds the picture stays in the middle.
+/// When the bounds change (the screen turns, a window is resized) or the
+/// picture's size does, it is fitted again and what was shown is kept
+/// inside the new limits (`viewerHeld`).
+private final class ZoomingScrollView: UIScrollView, UIScrollViewDelegate {
+    private let image = UIImageView()
+    private var pixels: CGSize
+    /// The picture in the bounds it was last fitted into; none before the first layout.
+    private var zoom: ViewerZoom?
+
+    init(picture: CGImage, pixels: CGSize) {
+        self.pixels = pixels
+        super.init(frame: .zero)
+        delegate = self
+        minimumZoomScale = ViewerZoom.fittedScale
+        showsVerticalScrollIndicator = false
+        showsHorizontalScrollIndicator = false
+        backgroundColor = .clear
+        // The room is the bounds whole: the picture is fitted into the
+        // screen, not into what the safe area leaves of it.
+        contentInsetAdjustmentBehavior = .never
+        image.image = UIImage(cgImage: picture)
+        // The thumbnail's shape may be a pixel off the display picture's.
+        image.contentMode = .scaleAspectFit
+        addSubview(image)
+        let tap = UITapGestureRecognizer(target: self, action: #selector(doubleTapped(_:)))
         tap.numberOfTapsRequired = 2
-        scroll.addGestureRecognizer(tap)
-        return scroll
+        addGestureRecognizer(tap)
     }
 
-    func updateUIView(_ scroll: UIScrollView, context: Context) {
-        if context.coordinator.view?.image !== image { context.coordinator.view?.image = image }
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("made in code") }
+
+    /// Another picture of the same attachment (its display picture after
+    /// its thumbnail), or the same one again.
+    func show(_ picture: CGImage, pixels: CGSize) {
+        if image.image?.cgImage !== picture { image.image = UIImage(cgImage: picture) }
+        guard pixels != self.pixels else { return }
+        self.pixels = pixels
+        setNeedsLayout()
     }
 
-    final class Coordinator: NSObject, UIScrollViewDelegate {
-        weak var view: UIImageView?
-        func viewForZooming(in scrollView: UIScrollView) -> UIView? { view }
-        @objc func doubleTapped(_ tap: UITapGestureRecognizer) {
-            guard let scroll = tap.view as? UIScrollView else { return }
-            if scroll.zoomScale > 1 {
-                scroll.setZoomScale(1, animated: true)
-            } else {
-                let at = tap.location(in: view)
-                let size = CGSize(width: scroll.bounds.width / 2.5, height: scroll.bounds.height / 2.5)
-                scroll.zoom(to: CGRect(x: at.x - size.width / 2, y: at.y - size.height / 2, width: size.width, height: size.height), animated: true)
-            }
-        }
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        guard bounds.width > 0, bounds.height > 0 else { return }
+        // This runs for every point scrolled, so the core is asked only
+        // when the bounds or the picture's size are new.
+        if zoom?.room != bounds.size || zoom?.pixels != pixels { fit(ViewerZoom(pixels: pixels, room: bounds.size)) }
+        centre()
+    }
+
+    /// Fits the picture into new bounds: the image view at its fitted size,
+    /// the furthest zoom scale, and what was shown before, if anything was,
+    /// kept inside the new limits.
+    private func fit(_ next: ViewerZoom) {
+        let shown = zoom.map { next.held($0.view(scale: zoomScale, offset: contentOffset)) }
+        zoom = next
+        maximumZoomScale = next.furthestScale
+        // The image view's frame is set while it has no zoom on it.
+        zoomScale = ViewerZoom.fittedScale
+        image.frame = CGRect(origin: .zero, size: next.fitted)
+        contentSize = next.fitted
+        contentOffset = .zero
+        if let shown { go(to: shown, of: next) }
+    }
+
+    /// Shows one of the core's views: its scale as the zoom scale, and
+    /// where its picture is as the content's offset.
+    private func go(to view: ViewerView, of zoom: ViewerZoom) {
+        zoomScale = CGFloat(view.scale)
+        contentOffset = zoom.offset(showing: view)
+        centre()
+    }
+
+    /// Along a side that fits the bounds the picture is in their middle;
+    /// a scroll view left alone draws it against its top or leading edge.
+    private func centre() {
+        guard let zoom else { return }
+        image.center = zoom.centre(at: zoomScale)
+    }
+
+    func viewForZooming(in scrollView: UIScrollView) -> UIView? { image }
+
+    func scrollViewDidZoom(_ scrollView: UIScrollView) { centre() }
+
+    @objc private func doubleTapped(_ tap: UITapGestureRecognizer) {
+        guard let zoom else { return }
+        // Where in the bounds, from their top leading corner: a scroll
+        // view's own coordinates move with its content.
+        let at = tap.location(in: self)
+        let next = zoom.doubleTapped(at: CGPoint(x: at.x - bounds.minX, y: at.y - bounds.minY), scale: zoomScale, offset: contentOffset)
+        UIView.animate(withDuration: 0.3) { self.go(to: next, of: zoom) }
     }
 }

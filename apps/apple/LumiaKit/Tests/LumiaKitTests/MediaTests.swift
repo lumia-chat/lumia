@@ -1,6 +1,8 @@
 // Attachments and link cards (specs/media.md) as the phone decides them:
 // the composer's strip and when Send goes, the link previews while
-// composing, how pictures sit in a column, the words said of each, an edit
+// composing, how pictures sit in a column, the viewer's zoom as its scroll
+// view carries out the core's (the cases of
+// `proto/vectors/viewer/cases.json` a phone has), the words said of each, an edit
 // that takes media off, and what the platform decodes before the core
 // makes an attachment (a picture upright and unpremultiplied, a GIF left
 // to the core, the bounds before decoding, a video's poster, length and
@@ -176,6 +178,140 @@ final class MediaTests: XCTestCase {
         let tiles = MediaLayout.tiles(count: 5, column: 304, gap: 2)
         XCTAssertEqual(tiles.map(\.origin), [CGPoint(x: 0, y: 0), CGPoint(x: 102, y: 0), CGPoint(x: 204, y: 0), CGPoint(x: 0, y: 102), CGPoint(x: 102, y: 102)])
         XCTAssertEqual(MediaLayout.grid(count: 1, column: 300, gap: 2).columns, 1)
+    }
+
+    // MARK: The viewer
+
+    /// The viewer's cases every client agrees on, `proto/vectors/viewer/cases.json`.
+    private func viewerCases() throws -> [String: Any] {
+        var root = URL(fileURLWithPath: #filePath)
+        for _ in 0..<6 { root.deleteLastPathComponent() }
+        let data = try Data(contentsOf: root.appendingPathComponent("proto/vectors/viewer/cases.json"))
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+
+    private func size(_ value: Any?) throws -> CGSize {
+        let pair = try XCTUnwrap(value as? [Double])
+        return CGSize(width: pair[0], height: pair[1])
+    }
+
+    private func view(_ value: Any?) throws -> ViewerView {
+        let v = try XCTUnwrap(value as? [String: Double])
+        return ViewerView(scale: Float(try XCTUnwrap(v["scale"])), x: Float(try XCTUnwrap(v["x"])), y: Float(try XCTUnwrap(v["y"])))
+    }
+
+    /// Two views the same to a thousandth, as the cases agree.
+    private func assertSame(_ a: ViewerView, _ b: ViewerView, _ why: String, line: UInt = #line) {
+        XCTAssertEqual(a.scale, b.scale, accuracy: 0.001, why, line: line)
+        XCTAssertEqual(a.x, b.x, accuracy: 0.001, why, line: line)
+        XCTAssertEqual(a.y, b.y, accuracy: 0.001, why, line: line)
+    }
+
+    func testAPictureOpensFittedAndNeverGrownAndZoomsToFourTimesItsOwnSize() throws {
+        // The largest display picture on a phone: fitted across the room,
+        // its own size six and a half times that, and the limit from its
+        // own size, not from fitted.
+        let phone = ViewerZoom(pixels: CGSize(width: 2560, height: 1920), room: CGSize(width: 390, height: 700))
+        XCTAssertEqual(phone.fitted, CGSize(width: 390, height: 292.5))
+        XCTAssertEqual(phone.frame.own, 6.5641, accuracy: 0.001)
+        XCTAssertEqual(phone.furthestScale, 26.2564, accuracy: 0.001)
+        XCTAssertEqual(phone.frame.detailScale, 6.5641, accuracy: 0.001)
+        // One smaller than the room is drawn at its own size, not stretched.
+        let small = ViewerZoom(pixels: CGSize(width: 400, height: 300), room: CGSize(width: 1000, height: 800))
+        XCTAssertEqual(small.fitted, CGSize(width: 400, height: 300))
+        XCTAssertEqual(small.furthestScale, 4)
+        XCTAssertEqual(small.frame.detailScale, 2)
+
+        // Every agreed frame a phone can have: it keeps no margin.
+        let frames = try XCTUnwrap(try viewerCases()["frames"] as? [[String: Any]]).filter { ($0["margin"] as? Double) == 0 }
+        XCTAssertGreaterThanOrEqual(frames.count, 4)
+        for c in frames {
+            let why = c["why"] as? String ?? ""
+            let zoom = ViewerZoom(pixels: try size(c["own"]), room: try size(c["room"]))
+            XCTAssertEqual(zoom.fitted.width, try XCTUnwrap(c["width"] as? Double), accuracy: 0.001, why)
+            XCTAssertEqual(zoom.fitted.height, try XCTUnwrap(c["height"] as? Double), accuracy: 0.001, why)
+            XCTAssertEqual(Double(zoom.frame.own), try XCTUnwrap(c["own_scale"] as? Double), accuracy: 0.001, why)
+            XCTAssertEqual(zoom.furthestScale, try XCTUnwrap(c["max_scale"] as? Double), accuracy: 0.001, why)
+            // Two taps in the middle of a fitted picture go to the detail scale.
+            let tapped = zoom.doubleTapped(at: CGPoint(x: zoom.room.width / 2, y: zoom.room.height / 2), scale: ViewerZoom.fittedScale, offset: .zero)
+            XCTAssertEqual(Double(tapped.scale), try XCTUnwrap(c["detail_scale"] as? Double), accuracy: 0.001, why)
+        }
+    }
+
+    func testTheViewersScrollViewCarriesOutTheAgreedMoves() throws {
+        let moves = try XCTUnwrap(try viewerCases()["moves"] as? [[String: Any]]).filter { (($0["picture"] as? [String: Any])?["margin"] as? Double) == 0 }
+        var carried: [String: Int] = [:]
+        for c in moves {
+            let why = c["why"] as? String ?? ""
+            let picture = try XCTUnwrap(c["picture"] as? [String: Any])
+            let zoom = ViewerZoom(pixels: try size(picture["own"]), room: try size(picture["room"]))
+            let from = try view(c["view"]), gives = try view(c["gives"])
+            let move = try XCTUnwrap(c["move"] as? [String: Any])
+            let kind = try XCTUnwrap(move["kind"] as? String)
+
+            // Whatever the move, what it gives is something the scroll view
+            // shows: a zoom scale inside its limits, and an offset inside
+            // its content that reads back as the same view.
+            XCTAssertGreaterThanOrEqual(CGFloat(gives.scale), ViewerZoom.fittedScale, why)
+            XCTAssertLessThanOrEqual(CGFloat(gives.scale), zoom.furthestScale + 0.001, why)
+            let rests = zoom.offset(showing: gives)
+            let content = zoom.size(at: CGFloat(gives.scale))
+            let furthest = CGPoint(x: max(0, content.width - zoom.room.width), y: max(0, content.height - zoom.room.height))
+            XCTAssertTrue((-0.001...furthest.x + 0.001).contains(rests.x) && (-0.001...furthest.y + 0.001).contains(rests.y), "\(rests) is past the content: \(why)")
+            assertSame(zoom.view(scale: CGFloat(gives.scale), offset: rests), gives, why)
+
+            switch kind {
+            case "pressed":
+                // Two taps, at a point given from the room's centre.
+                let at = try XCTUnwrap(move["at"] as? [Double])
+                let point = CGPoint(x: zoom.room.width / 2 + at[0], y: zoom.room.height / 2 + at[1])
+                assertSame(zoom.doubleTapped(at: point, scale: CGFloat(from.scale), offset: zoom.offset(showing: from)), gives, why)
+            case "pan_by":
+                // A drag is the scroll view's own: its offset moves against
+                // the finger and stops at its content's edges.
+                let by = try XCTUnwrap(move["by"] as? [Double])
+                let start = zoom.offset(showing: from)
+                let size = zoom.size(at: CGFloat(from.scale))
+                let dragged = CGPoint(
+                    x: min(max(start.x - by[0], 0), max(0, size.width - zoom.room.width)),
+                    y: min(max(start.y - by[1], 0), max(0, size.height - zoom.room.height))
+                )
+                assertSame(zoom.view(scale: CGFloat(from.scale), offset: dragged), gives, why)
+            case "held":
+                // The room changed under a view: kept inside the new one.
+                assertSame(zoom.held(from), gives, why)
+            default:
+                // A pinch is the scroll view's own, and the buttons and keys
+                // are the web's and the desktop's.
+                break
+            }
+            carried[kind, default: 0] += 1
+        }
+        for kind in ["pressed", "pan_by", "held"] { XCTAssertGreaterThan(carried[kind] ?? 0, 0, "no \(kind) among the cases") }
+    }
+
+    func testAPictureStaysInTheMiddleAlongASideThatFitsTheRoom() {
+        // 390 by 292.5 fitted in a room 700 tall: the room's middle both ways.
+        let zoom = ViewerZoom(pixels: CGSize(width: 2560, height: 1920), room: CGSize(width: 390, height: 700))
+        XCTAssertEqual(zoom.centre(at: 1), CGPoint(x: 195, y: 350))
+        // Twice that is 780 by 585: its own middle across, where it is
+        // longer than the room, and still the room's middle down.
+        XCTAssertEqual(zoom.centre(at: 2), CGPoint(x: 390, y: 350))
+        XCTAssertEqual(zoom.offset(showing: ViewerView(scale: 2, x: 0, y: 0)), CGPoint(x: 195, y: 0))
+        // Four times is 1,560 by 1,170: longer both ways.
+        XCTAssertEqual(zoom.centre(at: 4), CGPoint(x: 780, y: 585))
+        // A view dragged past the picture's edge is shown at the edge.
+        XCTAssertEqual(zoom.offset(showing: ViewerView(scale: 2, x: 900, y: 40)), .zero)
+        XCTAssertEqual(zoom.offset(showing: ViewerView(scale: 2, x: -900, y: 40)), CGPoint(x: 390, y: 0))
+        // Pulled in past fitted, as a pinch's bounce is: smaller, in the middle.
+        XCTAssertEqual(zoom.centre(at: 0.5), CGPoint(x: 195, y: 350))
+    }
+
+    func testAPicturesOwnSizeIsItsAttachmentsElseAsDecoded() {
+        let decoded = CGSize(width: 1080, height: 810)
+        XCTAssertEqual(ViewerZoom.pixels(width: 2560, height: 1920, decoded: decoded), CGSize(width: 2560, height: 1920), "the thumbnail is drawn at the display picture's size")
+        XCTAssertEqual(ViewerZoom.pixels(width: 0, height: 0, decoded: decoded), decoded)
+        XCTAssertEqual(ViewerZoom.pixels(width: 2560, height: 0, decoded: decoded), decoded)
     }
 
     // MARK: Words

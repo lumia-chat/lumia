@@ -10,7 +10,9 @@
 // `linking-…` and `linkprompt-…` are linking by a prompt's stages.
 // `restore-ask` is Restore's first question, `restore-keep` its devices to
 // keep with none ticked and `restore-keep-1` with one; `removed` is the
-// sign-in screen as a removed phone opens it.
+// sign-in screen as a removed phone opens it. `viewer` and `viewer-small`
+// are the viewer's picture, the largest a display picture is and one
+// smaller than any phone, for looking at its zoom.
 #if DEBUG
 import LumiaFFI
 import LumiaKit
@@ -181,6 +183,49 @@ struct RestoreStepsScene: View {
             RestoreKeepScreen(devices: Self.devices, kept: $kept, busy: false, error: "", back: {}, restore: {})
                 .onAppear { if part == "restore-keep-1" { kept = ["mac"] } }
         }
+    }
+}
+
+/// The viewer's picture with no instance (specs/media.md 5): `viewer` is
+/// 2,560 by 1,920 pixels, the largest a display picture is, in squares of
+/// 320, and `viewer-small` 180 by 120, smaller than any phone, in squares
+/// of 30. Every square is a grey of its own, so a screenshot says which
+/// part of the picture is where and how large it is drawn, which is how
+/// `scripts/smoke-viewer.sh` checks the zoom.
+struct ViewerScene: View {
+    private let picture: CGImage?
+    private let pixels: CGSize
+
+    init(part: String) {
+        let (width, height, side) = part == "viewer-small" ? (180, 120, 30) : (2560, 1920, 320)
+        picture = Self.squares(width: width, height: height, side: side)
+        pixels = CGSize(width: width, height: height)
+    }
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            if let picture { ViewerPicture(picture: picture, pixels: pixels, label: "Photo, squares") }
+        }
+    }
+
+    /// The grey of the nth square, counted across and then down: 48 levels
+    /// five apart from 20, in an order that puts no two alike side by side.
+    static func grey(_ n: Int) -> Int { 20 + 5 * (n * 29 % 48) }
+
+    private static func squares(width: Int, height: Int, side: Int) -> CGImage? {
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0, space: space, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return nil }
+        let across = width / side
+        for row in 0..<height / side {
+            for column in 0..<across {
+                let grey = CGFloat(grey(row * across + column)) / 255
+                context.setFillColor(red: grey, green: grey, blue: grey, alpha: 1)
+                // A bitmap's rows count up from its bottom.
+                context.fill(CGRect(x: column * side, y: height - (row + 1) * side, width: side, height: side))
+            }
+        }
+        return context.makeImage()
     }
 }
 

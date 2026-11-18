@@ -13,8 +13,10 @@
 # (one IMAGE, upright: taller than wide) and opens the attachment with the
 # CLI as the other person; the test holds the picture, the card and the
 # PDF, each opening its message's actions and nothing else, then opens the
-# viewer (Save to Photos, Share, Close) and the PDF's share sheet with a
-# tap. Then inline video and embeds (specs/media.md 5 and 6.6) in #watch:
+# viewer (Save to Photos, Share, Close), zooms the picture with two taps
+# (for the eye; smoke-viewer.sh measures the zoom), and opens the PDF's
+# share sheet with a tap. Then inline video and embeds (specs/media.md 5
+# and 6.6) in #watch:
 # a recording three minutes long, a photo, links to a YouTube video, an X
 # post and a Bluesky post named by its handle (cards from the internet,
 # which the instance builds only with LUMIA_LINK_CARDS=true; without three
@@ -196,6 +198,8 @@ seen held
 echo "a long press on the picture opened its message's actions and not the viewer"
 reached viewer 60
 seen viewer
+reached zoomed 60
+seen zoomed
 reached share 60
 seen share
 wait "$uitest" || { echo "FAIL: the UI test did not pass; see $work/uitest.log"; grep -E "error|failed|XCTAssert" "$work/uitest.log" | head -10; exit 1; }

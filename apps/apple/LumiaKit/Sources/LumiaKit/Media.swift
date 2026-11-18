@@ -3,7 +3,8 @@
 // composer's strip holds and when a send may go (`ComposerAttachments`),
 // which links' cards are previewed while composing and which are kept
 // (`LinkPreviews`), how pictures sit in a message's column
-// (`MediaLayout`), the words a person reads and hears of each
+// (`MediaLayout`), how the viewer's scroll view carries out the core's
+// zoom (`ViewerZoom`), the words a person reads and hears of each
 // (`MediaWords`), how each attachment is drawn, with Images as links too
 // (`AttachmentDrawn`), and the file a player or the share sheet is handed
 // (`MediaFiles`). The processing, the sealing and the fetching are the
@@ -294,6 +295,104 @@ public enum MediaLayout {
         return (0..<count).map { n in
             CGRect(x: CGFloat(n % g.columns) * (g.side + gap), y: CGFloat(n / g.columns) * (g.side + gap), width: g.side, height: g.side)
         }
+    }
+}
+
+// MARK: The viewer
+
+/// The picture viewer's zoom (specs/media.md 5) as a scroll view carries
+/// it out. The rules are the core's (`viewerFrame`, `viewerPressed`,
+/// `viewerHeld`; `proto/vectors/viewer/cases.json` holds the cases every
+/// client agrees on) and none of them is worked out here: a picture opens
+/// fitted, shrunk into the room and never grown past its own size, a
+/// pixel a point; it zooms from there to four times its own size; two
+/// taps on a fitted one go to its own size about the point tapped (twice
+/// fitted when its own is hardly larger), and on a zoomed one back to
+/// fitted. What is here is the scroll view's side of it: the zooming
+/// view's size, which a zoom scale of 1 shows, the furthest zoom scale,
+/// where that view sits while a side of it fits the room, and the core's
+/// view (`scale` in times fitted, `x` and `y` the picture's centre from
+/// the room's) to and from a zoom scale and a content offset. A drag is
+/// the scroll view's own, which stops at its content's edges where the
+/// core's `viewerPanBy` stops; the tests hold the two together.
+public struct ViewerZoom: Equatable, Sendable {
+    /// A scroll view's zoom scale for a fitted picture: the core's scale is in times fitted.
+    public static let fittedScale: CGFloat = 1
+
+    /// The picture's own size, a pixel a point.
+    public let pixels: CGSize
+    /// The room it zooms in: the scroll view's bounds, with no margin kept.
+    public let room: CGSize
+    /// The picture fitted into the room, as the core has it.
+    public let frame: ViewerFrame
+
+    public init(pixels: CGSize, room: CGSize) {
+        self.pixels = pixels
+        self.room = room
+        frame = viewerFrame(ownWidth: Float(pixels.width), ownHeight: Float(pixels.height), roomWidth: Float(room.width), roomHeight: Float(room.height), margin: 0)
+    }
+
+    /// A picture's own size: what its attachment says, which is its
+    /// display picture's, so the thumbnail shown until that comes is drawn
+    /// at the size it will have; of one that says none, the size of the
+    /// picture as decoded.
+    public static func pixels(width: UInt32, height: UInt32, decoded: CGSize) -> CGSize {
+        width > 0 && height > 0 ? CGSize(width: CGFloat(width), height: CGFloat(height)) : decoded
+    }
+
+    /// The fitted picture, in points: the zooming view's size.
+    public var fitted: CGSize { CGSize(width: CGFloat(frame.width), height: CGFloat(frame.height)) }
+
+    /// The furthest zoom scale: four times the picture's own size.
+    public var furthestScale: CGFloat { CGFloat(frame.maxScale) }
+
+    /// The picture's size at a zoom scale.
+    public func size(at scale: CGFloat) -> CGSize {
+        CGSize(width: fitted.width * scale, height: fitted.height * scale)
+    }
+
+    /// Where the zooming view's centre goes in the scroll view's content at
+    /// a zoom scale: the picture's middle along a side longer than the
+    /// room, and the room's middle along one that fits, which a scroll
+    /// view left alone draws against its top or leading edge.
+    public func centre(at scale: CGFloat) -> CGPoint {
+        let size = size(at: scale)
+        return CGPoint(x: max(size.width, room.width) / 2, y: max(size.height, room.height) / 2)
+    }
+
+    /// The core's view of a scroll view at a zoom scale and a content offset.
+    public func view(scale: CGFloat, offset: CGPoint) -> ViewerView {
+        let size = size(at: scale)
+        return ViewerView(
+            scale: Float(scale),
+            x: Float(max(0, (size.width - room.width) / 2) - offset.x),
+            y: Float(max(0, (size.height - room.height) / 2) - offset.y)
+        )
+    }
+
+    /// The content offset that shows a view, once the zoom scale is the
+    /// view's; the view kept inside the frame first (`viewerHeld`), so the
+    /// offset is always one the scroll view rests at.
+    public func offset(showing view: ViewerView) -> CGPoint {
+        let view = held(view)
+        let size = size(at: CGFloat(view.scale))
+        return CGPoint(
+            x: max(0, (size.width - room.width) / 2) - CGFloat(view.x),
+            y: max(0, (size.height - room.height) / 2) - CGFloat(view.y)
+        )
+    }
+
+    /// Two taps at a point of the room, from its top leading corner, with
+    /// the scroll view at a zoom scale and a content offset: the view to
+    /// go to, the core's `viewerPressed`.
+    public func doubleTapped(at point: CGPoint, scale: CGFloat, offset: CGPoint) -> ViewerView {
+        viewerPressed(view: view(scale: scale, offset: offset), x: Float(point.x - room.width / 2), y: Float(point.y - room.height / 2), frame: frame)
+    }
+
+    /// A view shown in another room, as when the screen turns, kept inside
+    /// this one's limits: the core's `viewerHeld`.
+    public func held(_ view: ViewerView) -> ViewerView {
+        viewerHeld(view: view, frame: frame)
     }
 }
 

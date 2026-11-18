@@ -59,6 +59,9 @@ struct RootView: View {
                 RestoreStepsScene(part: devScreen)
             } else if devScreen == "removed" {
                 SignInView(removed: true)
+            } else if let devScreen, devScreen.hasPrefix("viewer") {
+                // The viewer's picture, large and small, for its zoom.
+                ViewerScene(part: devScreen)
             } else {
                 screen
             }
