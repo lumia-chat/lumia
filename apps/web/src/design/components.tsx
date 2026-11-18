@@ -2168,7 +2168,8 @@ export interface ViewerProps {
  * A picture over the whole window, fitted and never drawn larger than its
  * own size. It zooms as specs/media.md 5 says (`client/viewer.ts`), up to
  * four times its own size: about the pointer with the wheel or a
- * trackpad's pinch, to its own size and back with a press on it, and by
+ * trackpad's pinch, about two fingers on a touch screen, to its own size
+ * and back with a press on it, and by
  * the bar's buttons or the keys (+ and − a step, 0 fitted, 1 its own
  * size). A drag moves it while it is zoomed. Save, the alt text, Escape to
  * close; focus kept inside and given back as it closes.
@@ -2197,9 +2198,25 @@ export function Viewer(props: ViewerProps) {
     const f = frame();
     if (f) setView(to(view(), f));
   };
-  const fromCentre = (e: MouseEvent) => {
+  const fromCentre = (e: { clientX: number; clientY: number }) => {
     const r = stage?.getBoundingClientRect();
     return r ? { x: e.clientX - r.left - r.width / 2, y: e.clientY - r.top - r.height / 2 } : { x: 0, y: 0 };
+  };
+  // The fingers on the stage, by pointer: two of them pinch.
+  const fingers = new Map<number, { clientX: number; clientY: number }>();
+  /** Where the first two fingers are: how far apart, and the point between them. */
+  const pinch = () => {
+    const [a, b] = [...fingers.values()];
+    if (!a || !b) return undefined;
+    return { apart: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY), clientX: (a.clientX + b.clientX) / 2, clientY: (a.clientY + b.clientY) / 2 };
+  };
+  /** A finger lifted: the one left goes on as a drag from where it is, and the click it may end with is no press. */
+  const lifted = (e: PointerEvent) => {
+    const pinched = fingers.size > 1;
+    fingers.delete(e.pointerId);
+    const left = [...fingers.values()][0];
+    if (pinched && left) drag = { x: left.clientX, y: left.clientY, moved: Infinity, down: true };
+    else if (drag) drag.down = false;
   };
   // The pointer's last press on the stage: where it is, whether it is still down, and how far it has travelled, which the click that ends it reads.
   let drag: { x: number; y: number; moved: number; down: boolean } | null = null;
@@ -2280,18 +2297,31 @@ export function Viewer(props: ViewerProps) {
         }}
         onPointerDown={(e) => {
           if (!zoomable() || e.button !== 0) return;
-          drag = { x: e.clientX, y: e.clientY, moved: 0, down: true };
+          if (e.pointerType === "touch") fingers.set(e.pointerId, { clientX: e.clientX, clientY: e.clientY });
+          // A second finger makes it a pinch, which ends in no press.
+          drag = { x: e.clientX, y: e.clientY, moved: fingers.size > 1 ? Infinity : 0, down: true };
           if (view().scale > 1) e.currentTarget.setPointerCapture(e.pointerId);
         }}
         onPointerMove={(e) => {
+          if (fingers.size > 1 && fingers.has(e.pointerId)) {
+            // Two fingers: zoomed about the point between them by as much as they spread, and moved with it.
+            const was = pinch();
+            fingers.set(e.pointerId, { clientX: e.clientX, clientY: e.clientY });
+            const now = pinch();
+            if (!was || !now || !was.apart) return;
+            const p = fromCentre(was);
+            move((v, f) => panBy(zoomAt(v, (v.scale * now.apart) / was.apart, p, f), now.clientX - was.clientX, now.clientY - was.clientY, f));
+            return;
+          }
           if (!drag?.down) return;
+          if (fingers.has(e.pointerId)) fingers.set(e.pointerId, { clientX: e.clientX, clientY: e.clientY });
           const dx = e.clientX - drag.x;
           const dy = e.clientY - drag.y;
           drag = { x: e.clientX, y: e.clientY, moved: drag.moved + Math.abs(dx) + Math.abs(dy), down: true };
           if (view().scale > 1) move((v, f) => panBy(v, dx, dy, f));
         }}
-        onPointerUp={() => drag && (drag.down = false)}
-        onPointerCancel={() => drag && (drag.down = false)}
+        onPointerUp={lifted}
+        onPointerCancel={lifted}
         onClick={(e) => {
           // The click a drag ends with is no press.
           if (!zoomable() || !picture() || (drag && drag.moved > 4)) return;
