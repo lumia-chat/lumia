@@ -336,9 +336,9 @@ h1.lu-serverhead__name:hover { background: none; }
   .lu-switch { transition: none; }
 }
 
-/* ── Preferences: Appearance and Messages, the preview of messages beside them (above Messages where the page is narrow) ── */
+/* ── Preferences: Appearance and Messages, the preview of messages beside them (under Messages where the page is narrow) ── */
 .lu-page > .lu-prefs { max-width: calc(620px + var(--space-40) + 480px); container-type: inline-size; }
-.lu-prefs__grid { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-areas: "appearance" "preview" "messages"; gap: var(--space-40); padding: var(--space-16) 0 var(--space-40); }
+.lu-prefs__grid { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-areas: "appearance" "messages" "preview"; gap: var(--space-40); padding: var(--space-16) 0 var(--space-40); }
 @container (min-width: 920px) {
   .lu-prefs__grid { grid-template-columns: minmax(0, 620px) minmax(0, 480px); grid-template-rows: auto 1fr; grid-template-areas: "appearance preview" "messages preview"; }
   .lu-prefs__preview { position: sticky; top: var(--space-16); align-self: start; }

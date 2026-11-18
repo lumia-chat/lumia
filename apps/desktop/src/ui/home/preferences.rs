@@ -26,7 +26,7 @@
 //! The preview is a channel's messages drawn by the timeline's own rows
 //! (`timeline::samples`) under the settings as they are, so each choice shows as it is made:
 //! beside the settings and held in view while they scroll where the pane is wide enough for
-//! both, over the message settings otherwise. Nothing in it presses, and assistive
+//! both, under the message settings otherwise. Nothing in it presses, and assistive
 //! technology reads it as one picture.
 //!
 //! The Updates section is drawn where the shell carries its own updater (`app::updates`: the
@@ -297,9 +297,6 @@ fn messages(s: &State, with_preview: bool, look: Look) -> El {
         "Start from a preset, then change anything below.",
         look,
     );
-    if with_preview {
-        section = section.child(preview(s, look));
-    }
     section = section.child(presets);
     if matching.is_none() {
         section = section.child(
@@ -448,9 +445,13 @@ fn messages(s: &State, with_preview: bool, look: Look) -> El {
             look,
         ),
     ];
-    section
+    section = section
         .child(group("message-settings", rows, look))
-        .child(group("message-switches", switches, look))
+        .child(group("message-switches", switches, look));
+    if with_preview {
+        section = section.child(preview(s, look));
+    }
+    section
 }
 
 /// A sketch's bar, `fraction` of the width it stands in.

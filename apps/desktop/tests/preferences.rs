@@ -722,11 +722,17 @@ fn nothing_in_the_preview_presses_and_it_reads_as_one_picture() {
 }
 
 #[test]
-fn a_wide_window_has_the_preview_beside_the_settings_and_a_narrow_one_over_them() {
+fn a_wide_window_has_the_preview_beside_the_settings_and_a_narrow_one_under_them() {
     let mut narrow = runtime(signed_in());
     narrow.update(|s, _| s.go_home(HomeView::Preferences));
     settle(&mut narrow);
     assert!(inside(&narrow, "messages-card", "preview"));
+    let preview = rect_of(&narrow, "preview");
+    let switches = rect_of(&narrow, "message-switches");
+    assert!(
+        preview[1] >= switches[1] + switches[3],
+        "under the last of the message settings: {preview:?}, {switches:?}"
+    );
 
     let mut wide = Runtime::new(
         signed_in(),

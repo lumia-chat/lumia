@@ -1,7 +1,7 @@
 // Preferences: how Lumia looks in this browser, the "Preferences · Light"
 // and "· Dark" boards. Appearance as three tiles; Messages as three preset
 // cards over outlined groups of compact choices and switches; beside them
-// (above Messages where the page is narrow) a preview of messages drawn by
+// (under Messages where the page is narrow) a preview of messages drawn by
 // the conversation's own rows under the settings as they stand. Each
 // choice takes effect as it is made (`client/preferences.ts`). The
 // desktop's scroll bar choice is not here: a page cannot keep it.
