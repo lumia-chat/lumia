@@ -179,6 +179,12 @@ export interface QuoteSummary {
   /** The reply notifies nobody: sent with the reply bar's "@ On" switch off. */
   silent: boolean;
 }
+/** What was typed into a conversation's composer and not sent, as this browser keeps it. */
+export interface DraftSummary {
+  body: string;
+  /** The message the words were being written in reply to, if any. */
+  reply: QuoteSummary | null;
+}
 /** A mention: an account, or everyone, and its UTF-8 byte range in the body (half-open). */
 export interface MentionSummary {
   /** Empty when it is everyone. */
@@ -814,6 +820,14 @@ export class Bridge {
   }
   messages(channelId: string, limit = 100): Promise<MessageSummary[]> {
     return this.call("messages", channelId, limit);
+  }
+  /** What was typed into a conversation's composer and not sent, from the store in this browser; null when nothing is kept. */
+  draft(channelId: string): Promise<DraftSummary | null> {
+    return this.call("draft", channelId);
+  }
+  /** Keeps what is typed in a conversation's composer, with the message it is a reply to, in place of what was kept; blank words keep nothing. In this browser only. */
+  setDraft(channelId: string, body: string, reply: QuoteSummary | null): Promise<void> {
+    return this.call("setDraft", channelId, body, reply);
   }
   /** Scrollback from the instance, older than the store holds: the newest `limit` below `beforeSeq`, oldest first. Not stored. */
   olderMessages(channelId: string, beforeSeq: number, limit = 100): Promise<{ messages: MessageSummary[]; hasMore: boolean }> {

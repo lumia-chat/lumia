@@ -42,9 +42,10 @@ import {
   type Tone,
 } from "../design/components";
 import { signedOut, type ChannelSummary, type MessageSummary, type ServerSummary } from "../client/bridge";
-import { avatarSrc, channelMembersQuery, checkPush, client, commandError, connection, loadMyStatus, loadOlderMessages, membersQuery, messagesQuery, presence, customStatusOf, presenceOf, queryClient, readStatesQuery, sessionEnded, signOut, snapshotQuery, startGateway, tookSnapshot, typingIn, uploadLimitsQuery, watchPresence } from "../client/state";
+import { avatarSrc, channelMembersQuery, checkPush, client, commandError, connection, draftStore, loadMyStatus, loadOlderMessages, membersQuery, messagesQuery, presence, customStatusOf, presenceOf, queryClient, readStatesQuery, sessionEnded, signOut, snapshotQuery, startGateway, tookSnapshot, typingIn, uploadLimitsQuery, watchPresence } from "../client/state";
 import { useNames } from "../client/names";
 import { preferences, setAsideHidden } from "../client/preferences";
+import { keepDrafts } from "../client/drafts";
 import { ConversationAside, HomeMain, HomeSidebar, type HomeView } from "./home";
 import { Overlay, myStatusDot, type Over } from "./menus";
 import { ServerSettings } from "./server-settings";
@@ -408,6 +409,7 @@ function Frame() {
     setDraft("");
     setError("");
     setReplying(null);
+    drafts.sent(id);
     setNote(null);
     setNoteError("");
     setMediaNote(undefined);
@@ -479,6 +481,25 @@ function Frame() {
     setReplying({ messageId: item.id, authorAccountId: item.authorId, name: item.authorId ? nameOf(item.authorId) : "", text, notify: item.authorId && item.authorId !== accountId() ? true : undefined });
     composerInput?.focus();
   };
+  // What is typed here and not sent is its conversation's, kept in this browser with the reply it answers and
+  // put back when the conversation is on screen again (`client/drafts.ts`). A channel read before joining has no composer.
+  const drafts = keepDrafts({
+    store: draftStore,
+    conversation: () => (preview() ? undefined : channelId()),
+    held: () => {
+      const reply = replying();
+      return { body: draft(), reply: reply ? quoteOf(reply) : null };
+    },
+    restore: (held) => {
+      setDraft(held.body);
+      const q = held.reply;
+      setReplying(q && { messageId: q.messageId, authorAccountId: q.authorAccountId, name: q.authorAccountId ? nameOf(q.authorAccountId) : "", text: q.text, notify: q.authorAccountId && q.authorAccountId !== accountId() ? !q.silent : undefined });
+    },
+    empty: () => {
+      setDraft("");
+      setReplying(null);
+    },
+  });
   const saveEdit = async (item: TimelineItem, body: string, media: EditMedia) => {
     const id = channelId();
     const ch = current();

@@ -26,13 +26,14 @@ import {
   type DeviceEntry,
 } from "../design/components";
 import { ClientError, type ChannelSummary, type DeviceSummary, type DmMessageSummary, type InvitePreviewSummary, type MemberSummary, type MessageSummary, type PasskeySummary, type ProfileSummary, type SnapshotSummary, type UploadLimits } from "../client/bridge";
-import { SERVED_BY_INSTANCE, avatarSrc, client, pictureRefusal, savedInstance, dmChannelsQuery, dmMessagesQuery, enableNotifications, hasIdentityQuery, myStatus, peopleQuery, privateStateQuery, pushState, queryClient, readStatesQuery, rosterQuery, setMyStatus, snapshotQuery, uploadLimitsQuery, type PrivateState } from "../client/state";
+import { SERVED_BY_INSTANCE, avatarSrc, client, draftStore, pictureRefusal, savedInstance, dmChannelsQuery, dmMessagesQuery, enableNotifications, hasIdentityQuery, myStatus, peopleQuery, privateStateQuery, pushState, queryClient, readStatesQuery, rosterQuery, setMyStatus, snapshotQuery, uploadLimitsQuery, type PrivateState } from "../client/state";
 import { NeedsBrowser } from "./private";
 import { useNames } from "../client/names";
 import { preferences } from "../client/preferences";
 import { PreferencesPage } from "./preferences";
 import { addPasskey, passkeysAvailable } from "../client/passkeys";
 import { initialsOf, toneFor } from "./app";
+import { keepDrafts } from "../client/drafts";
 import { Compose, Timeline, createMarkRead, keptItems, quoteOf, thrownRefusal, type EditMedia, type Refusal, type Replying, type TimelineItem } from "./timeline";
 import { attachFiles, filesForSend, filesSent, hasFiles, stripOf } from "./media";
 import { MentionsPage } from "./mentions";
@@ -423,6 +424,7 @@ function Conversation(props: HomeProps) {
     setDraft("");
     setError("");
     setReplying(null);
+    drafts.sent(id);
     setMediaNote(undefined);
     try {
       if (hasFiles(id)) setMediaNote("Sending when the files are uploaded…");
@@ -452,6 +454,26 @@ function Conversation(props: HomeProps) {
     setReplying({ messageId: item.id, authorAccountId: item.authorId, name: m ? who(m) : "", text });
     composerInput?.focus();
   };
+  // What is typed here and not sent is this conversation's, kept in this browser with the reply it answers and
+  // put back when the conversation is on screen again (`client/drafts.ts`).
+  const drafts = keepDrafts({
+    store: draftStore,
+    conversation: () => props.channelId,
+    held: () => {
+      const reply = replying();
+      return { body: draft(), reply: reply ? quoteOf(reply) : null };
+    },
+    restore: (held) => {
+      setDraft(held.body);
+      const q = held.reply;
+      const m = q && byId().get(q.messageId);
+      setReplying(q && { messageId: q.messageId, authorAccountId: q.authorAccountId, name: m ? who(m) : q.authorAccountId ? nameOf(q.authorAccountId) : "", text: q.text });
+    },
+    empty: () => {
+      setDraft("");
+      setReplying(null);
+    },
+  });
   // Only this identity's own, in a personal conversation: the clients check it (architecture 11).
   const saveEdit = async (item: TimelineItem, body: string, media: EditMedia) => {
     const id = props.channelId;

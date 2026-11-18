@@ -1673,6 +1673,94 @@ async function historyStep(which: string, stamp: number) {
   console.log(`  ${which}: scrolled a channel of ${SENT} messages back to its first, past the store into the instance's history, in ${Date.now() - t0} ms`);
 }
 
+// What is typed and not sent (#23): a reply half written in #general stays
+// there, with the reply it answers, when #design is opened and typed in;
+// both are back when their channels are, and after the page is loaded
+// again; a send and an emptied field keep nothing.
+async function draftsStep(which: string, stamp: number) {
+  const ownerDir = resolve(work, `cli-drafts-owner-${which}`);
+  const owner = `drafter${which}${stamp}`;
+  lumia(ownerDir, "instance", "add", instance);
+  lumia(ownerDir, "account", "create", "--handle", owner, "--password", password);
+  const server = lumia(ownerDir, "server-create", `Drafts ${stamp}`).match(/[0-9a-f-]{36}/)?.[0];
+  if (!server) throw new Error("no server id");
+  const general = lumia(ownerDir, "channel-create", server, "general").match(/[0-9a-f-]{36}/)?.[0];
+  if (!general) throw new Error("no channel id");
+  if (!lumia(ownerDir, "channel-create", server, "design").match(/[0-9a-f-]{36}/)) throw new Error("no channel id");
+  lumia(ownerDir, "send", general, "Answer me when you can.");
+  const { ctx, page } = await open(which, "drafts");
+  const t0 = Date.now();
+  try {
+    await trustCard(page);
+    await page.getByLabel("Email or handle").fill(owner);
+    await page.getByRole("textbox", { name: "Password" }).fill(password);
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await later(page);
+    const sidebar = page.locator(".lu-shell__sidebar");
+    const inGeneral = page.getByPlaceholder("Message #general");
+    const inDesign = page.getByPlaceholder("Message #design");
+    const replyBar = page.locator(".lu-replybar", { hasText: `Replying to ${owner}` });
+    /** Waits until `field` holds `words`: a kept draft arrives a moment after its conversation. */
+    const holds = async (field: typeof inGeneral, words: string, what: string) => {
+      await field.waitFor();
+      const deadline = Date.now() + 5_000;
+      while ((await field.inputValue()) !== words) {
+        if (Date.now() > deadline) throw new Error(`${what}: the composer holds ${JSON.stringify(await field.inputValue())}, not ${JSON.stringify(words)}`);
+        await page.waitForTimeout(50);
+      }
+    };
+    await sidebar.getByRole("link", { name: "general" }).click();
+    await inGeneral.waitFor();
+    phase("typed in one channel, then another");
+    const original = page.locator(".lu-msg__part", { has: page.locator(".lu-msg__body", { hasText: "Answer me when you can." }) });
+    await original.hover();
+    await original.getByRole("button", { name: "Reply", exact: true }).click();
+    await replyBar.waitFor();
+    await inGeneral.fill("Half a thought");
+    await sidebar.getByRole("link", { name: "design" }).click();
+    await holds(inDesign, "", "another channel");
+    if ((await page.locator(".lu-replybar").count()) > 0) throw new Error("the reply went to another channel with the reader");
+    await inDesign.fill("Elsewhere");
+    await sidebar.getByRole("link", { name: "general" }).click();
+    await holds(inGeneral, "Half a thought", "back in the first channel");
+    await replyBar.waitFor();
+    await sidebar.getByRole("link", { name: "design" }).click();
+    await holds(inDesign, "Elsewhere", "back in the second channel");
+    phase("the page loaded again");
+    // More typed, left to rest and not sent: kept with no switch, as a crash would find it.
+    await inDesign.fill("Elsewhere, later");
+    await page.waitForTimeout(900);
+    await page.reload();
+    await sidebar.getByRole("link", { name: "design" }).click();
+    await holds(inDesign, "Elsewhere, later", "after a reload");
+    await sidebar.getByRole("link", { name: "general" }).click();
+    await holds(inGeneral, "Half a thought", "after a reload, the first channel");
+    await replyBar.waitFor();
+    await page.screenshot({ path: `${out}/${which}-drafts.png` });
+    phase("sent, and emptied");
+    await inGeneral.press("Enter");
+    await page.locator(".lu-msg__body", { hasText: /^Half a thought$/ }).waitFor();
+    await holds(inGeneral, "", "after the send");
+    await sidebar.getByRole("link", { name: "design" }).click();
+    await holds(inDesign, "Elsewhere, later", "the other channel after a send");
+    await inDesign.fill("");
+    await page.waitForTimeout(900);
+    await page.reload();
+    await sidebar.getByRole("link", { name: "general" }).click();
+    await inGeneral.waitFor();
+    await page.waitForTimeout(500);
+    await holds(inGeneral, "", "a sent draft after a reload");
+    if ((await page.locator(".lu-replybar").count()) > 0) throw new Error("the reply of a sent draft came back");
+    await sidebar.getByRole("link", { name: "design" }).click();
+    await inDesign.waitFor();
+    await page.waitForTimeout(500);
+    await holds(inDesign, "", "an emptied draft after a reload");
+  } finally {
+    await ctx.close();
+  }
+  console.log(`  ${which}: a reply half written kept with its channel through another channel's draft and a reload, a draft left to rest found after a reload, and nothing kept of one sent or emptied, in ${Date.now() - t0} ms`);
+}
+
 async function repliesStep(which: string, stamp: number) {
   const ownerDir = resolve(work, `cli-replies-owner-${which}`);
   const readerDir = resolve(work, `cli-replies-reader-${which}`);
@@ -2839,6 +2927,7 @@ try {
       ["rail", () => railStep(which, stamp)],
       ["membership", () => membershipStep(which, stamp)],
       ["replies", () => repliesStep(which, stamp)],
+      ["drafts", () => draftsStep(which, stamp)],
       ["editing", () => editingStep(which, stamp)],
       ["profile", () => profileStep(which, stamp)],
       ["media", () => mediaStep(which, stamp)],

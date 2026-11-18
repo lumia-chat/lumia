@@ -6,6 +6,7 @@ import { blobUrls } from "./media";
 import { QueryClient, createInfiniteQuery, createQuery, useQueryClient } from "@tanstack/solid-query";
 import { createSignal } from "solid-js";
 import { Bridge, ClientError, claimOwnership, type ClientEvent, type MemberSummary, type MessageSummary, type Opened, type ReadStateSummary, type SnapshotSummary, type StatusSummary } from "./bridge";
+import type { DraftStore } from "./drafts";
 import { type Ended, endedNotice } from "./ended";
 import { type ProfileUpdate, membersWithProfile, peopleWithProfile, profileLog, snapshotWithProfile, withProfile } from "./profiles";
 
@@ -547,6 +548,12 @@ export function readStatesQuery() {
 }
 
 /** Reads a conversation through `seq` and takes the counts the instance answers with. */
+/** Where composers' drafts are kept: the core's store in this browser (`drafts.ts`). */
+export const draftStore: DraftStore = {
+  read: (id) => client().draft(id),
+  keep: (id, body, reply) => client().setDraft(id, body, reply),
+};
+
 export async function markRead(channelId: string, seq: number): Promise<void> {
   await client().markRead(channelId, seq);
   await queryClient.invalidateQueries({ queryKey: ["readStates"] });
