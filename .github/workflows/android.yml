@@ -45,7 +45,9 @@ jobs:
       - run: apps/android/scripts/core.sh --arm64
         env:
           ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.2.12479018
-      # The kit's unit tests (the block rule, who is typing) with the build.
+      # The kit's unit tests (the block rule, who is typing, and the viewer's
+      # zoom asked of the core itself, which core.sh built for this machine
+      # as well) with the build.
       - run: ./gradlew :lumiakit:testDebugUnitTest assembleDebug --no-daemon
         working-directory: apps/android
       # The release build too, signed with a key made here and thrown away:
