@@ -23,9 +23,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use lumia_client::app::{App, AttachmentSummary};
+use lumia_core::viewer::{self, Frame, View};
 use rune::{
-    ClipboardContent, Drag, FileDialogOptions, Image, ImageCache, Key, KeyEvent, TextEdit, Tx,
-    Waker,
+    ClipboardContent, Drag, FileDialogOptions, Image, ImageCache, Key, KeyEvent, MagnifyEvent,
+    TextEdit, Tx, Waker, WheelEvent,
 };
 
 use super::State;
@@ -37,21 +38,50 @@ use crate::settings::Media;
 /// How long the words must rest before their links are previewed (spec 6.4).
 pub const PREVIEW_AFTER_MICROS: i64 = 500_000;
 
-/// The viewer's zoom: from fitting the window to eight times that, a step at a time.
-pub const ZOOM_MIN: f32 = 1.0;
-pub const ZOOM_MAX: f32 = 8.0;
-const ZOOM_STEP: f32 = 1.5;
+/// One notch of a mouse's wheel as Rune reports it, in points: a wheel event that is not
+/// `precise` comes in these.
+const WHEEL_LINE: f32 = if cfg!(target_os = "linux") {
+    120.0
+} else {
+    40.0
+};
 
-/// The picture on the full-screen viewer, and how it is zoomed and moved.
+/// The same notch as the core's wheel rule counts it, a browser's 100.
+const WHEEL_NOTCH: f32 = 100.0;
+
+/// How far a press on the viewer's picture may travel and still be a press, not a drag.
+const PRESS_SLOP: f32 = 4.0;
+
+/// The picture on the full-screen viewer, and how it is zoomed and moved
+/// (`lumia_core::viewer`, specs/media.md 5).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Viewer {
     pub attachment: AttachmentSummary,
-    /// 1 fits the window.
-    pub zoom: f32,
-    /// How far the picture is moved from the centre, in points.
-    pub pan: [f32; 2],
-    /// Where a drag began.
-    grab: [f32; 2],
+    /// Its scale, 1 fitting the window, and its centre from the stage's.
+    pub view: View,
+    /// The view when a drag began.
+    grab: View,
+}
+
+impl Viewer {
+    /// The picture fitted into a stage of `room` points, with the viewer's margin clear
+    /// around it. One of unknown size is taken as a square of the room.
+    pub fn frame(&self, room: [f32; 2]) -> Frame {
+        let a = &self.attachment;
+        #[allow(clippy::cast_precision_loss)]
+        let own = if a.width == 0 || a.height == 0 {
+            [room[0].min(room[1]); 2]
+        } else {
+            [a.width as f32, a.height as f32]
+        };
+        viewer::frame(
+            own[0],
+            own[1],
+            room[0],
+            room[1],
+            crate::tokens::VIEWER_MARGIN,
+        )
+    }
 }
 
 /// The window's side of attachments.
@@ -347,9 +377,8 @@ impl State {
         self.session.want_blob(&attachment.main);
         self.media.viewer = Some(Viewer {
             attachment: attachment.clone(),
-            zoom: ZOOM_MIN,
-            pan: [0.0, 0.0],
-            grab: [0.0, 0.0],
+            view: viewer::FIT,
+            grab: viewer::FIT,
         });
         self.media.seen = None;
     }
@@ -359,44 +388,95 @@ impl State {
         self.media.viewer = None;
     }
 
-    /// Zooms the viewer in (`steps` above 0) or out; back to fitting the window at 0.
-    pub fn zoom_viewer(&mut self, steps: i32) {
+    /// Zooms the viewer in (`steps` above 0) or out by the buttons' step, about the middle;
+    /// back to fitting the window at 0.
+    pub fn zoom_viewer(&mut self, steps: i32, frame: &Frame) {
         let Some(viewer) = &mut self.media.viewer else {
             return;
         };
-        viewer.zoom = if steps == 0 {
-            ZOOM_MIN
+        viewer.view = if steps == 0 {
+            viewer::FIT
         } else {
-            (viewer.zoom * ZOOM_STEP.powi(steps)).clamp(ZOOM_MIN, ZOOM_MAX)
+            viewer::step(viewer::held(viewer.view, frame), steps, frame)
         };
-        if viewer.zoom <= ZOOM_MIN {
-            viewer.pan = [0.0, 0.0];
+    }
+
+    /// The viewer's picture at its own size, a pixel a point.
+    pub fn viewer_own_size(&mut self, frame: &Frame) {
+        if let Some(viewer) = &mut self.media.viewer {
+            viewer.view = viewer::own_size(viewer::held(viewer.view, frame), frame);
         }
     }
 
-    /// Keys on the viewer: + and − zoom, 0 fits the window again. Escape is its modal's.
-    pub fn viewer_key(&mut self, key: &KeyEvent) -> bool {
+    /// Keys on the viewer: + and − zoom, 0 fits the window again and 1 is the picture's own
+    /// size. Escape is its modal's.
+    pub fn viewer_key(&mut self, key: &KeyEvent, frame: &Frame) -> bool {
         match &key.key {
-            Key::Text(t) if t == "+" || t == "=" => self.zoom_viewer(1),
-            Key::Text(t) if t == "-" => self.zoom_viewer(-1),
-            Key::Text(t) if t == "0" => self.zoom_viewer(0),
+            Key::Text(t) if t == "+" || t == "=" => self.zoom_viewer(1, frame),
+            Key::Text(t) if t == "-" => self.zoom_viewer(-1, frame),
+            Key::Text(t) if t == "0" => self.zoom_viewer(0, frame),
+            Key::Text(t) if t == "1" => self.viewer_own_size(frame),
             _ => return false,
         }
         true
     }
 
-    /// A drag on the viewer's picture moves it, while it is zoomed past the window.
-    pub fn pan_viewer(&mut self, drag: &Drag) {
+    /// The wheel over the viewer's stage zooms about the pointer: up is in. A trackpad's
+    /// pinch off macOS is a wheel with Control held. What a trackpad sends after the fingers
+    /// lift is left out, so a flick does not go on zooming.
+    pub fn wheel_viewer(&mut self, wheel: &WheelEvent, frame: &Frame) {
+        if wheel.momentum {
+            return;
+        }
+        // Rune's distance is how far content moves, down being positive; the core's is how
+        // far a page scrolls.
+        let delta = if wheel.precise {
+            -wheel.dy
+        } else {
+            -wheel.dy / WHEEL_LINE * WHEEL_NOTCH
+        };
+        let factor = viewer::wheel_factor(delta, wheel.mods.ctrl);
+        self.scale_viewer(factor, [wheel.x, wheel.y], frame);
+    }
+
+    /// A trackpad's pinch over the viewer's stage zooms about the pointer (macOS).
+    pub fn pinch_viewer(&mut self, pinch: &MagnifyEvent, frame: &Frame) {
+        self.scale_viewer((1.0 + pinch.delta).max(0.01), [pinch.x, pinch.y], frame);
+    }
+
+    /// The viewer's scale times `factor` about `at`, a point of the stage from its corner.
+    fn scale_viewer(&mut self, factor: f32, at: [f32; 2], frame: &Frame) {
         let Some(viewer) = &mut self.media.viewer else {
             return;
         };
-        if viewer.zoom <= ZOOM_MIN {
+        let view = viewer::held(viewer.view, frame);
+        let at = [
+            at[0] - frame.room_width / 2.0,
+            at[1] - frame.room_height / 2.0,
+        ];
+        viewer.view = viewer::zoom_at(view, view.scale * factor, at, frame);
+    }
+
+    /// The pointer on the viewer's picture: a drag moves it while it is zoomed past the
+    /// stage, and a press that goes nowhere zooms in to its own size about the pointer, or
+    /// back to fitting the window.
+    pub fn drag_viewer(&mut self, drag: &Drag, frame: &Frame) {
+        let Some(viewer) = &mut self.media.viewer else {
             return;
-        }
+        };
         match drag.phase {
-            rune::Phase::Down => viewer.grab = viewer.pan,
-            _ if drag.cancelled() => viewer.pan = viewer.grab,
-            _ => viewer.pan = [viewer.grab[0] + drag.dx, viewer.grab[1] + drag.dy],
+            rune::Phase::Down => viewer.grab = viewer::held(viewer.view, frame),
+            _ if drag.cancelled() => viewer.view = viewer.grab,
+            rune::Phase::Up if drag.dx.abs() <= PRESS_SLOP && drag.dy.abs() <= PRESS_SLOP => {
+                // Where the press landed, from the stage's centre: the picture is drawn
+                // about its own, moved by the view.
+                let at = [
+                    viewer.grab.x + drag.start_x - drag.w / 2.0,
+                    viewer.grab.y + drag.start_y - drag.h / 2.0,
+                ];
+                viewer.view = viewer::pressed(viewer.grab, at, frame);
+            }
+            _ => viewer.view = viewer::pan_by(viewer.grab, drag.dx, drag.dy, frame),
         }
     }
 

@@ -319,6 +319,7 @@ pub const SCENES: &[Scene] = &[
     ("media", media::media),
     ("media-links", media::media_links),
     ("media-viewer", media::media_viewer),
+    ("media-viewer-zoomed", media::media_viewer_zoomed),
     ("media-edit", media::media_edit),
     // An attached video and a recording played in the conversation (#21).
     ("media-playing", media::media_playing),

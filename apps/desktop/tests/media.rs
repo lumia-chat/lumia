@@ -15,13 +15,16 @@ use common::*;
 use lumia_client::app::{
     AttachmentDraft, AttachmentSummary, BlobSummary, CardSummary, UploadLimitsSummary,
 };
+use lumia_core::viewer::{self, Frame, View};
 use lumia_shell::app::State;
-use lumia_shell::app::media::fetched;
+use lumia_shell::app::media::{Viewer, fetched};
 use lumia_shell::session::Update;
 use lumia_shell::session::media::{MediaUpdate, Stage, Waiting};
 use lumia_shell::settings::Media;
 use lumia_shell::tokens;
-use rune::{ClipboardContent, Key, KeyEvent, Mods, Runtime};
+use rune::{
+    ClipboardContent, GesturePhase, Key, KeyEvent, MagnifyEvent, Mods, Runtime, WheelEvent,
+};
 
 const ICON: &[u8] = include_bytes!("../../../assets/brand/lumia-original-icon.png");
 
@@ -179,7 +182,7 @@ fn a_picture_opens_in_the_viewer_and_escape_closes_it() {
             mods: Mods::default(),
         });
         settle(&mut rt);
-        let zoom = rt.state.media.viewer.as_ref().unwrap().zoom;
+        let zoom = rt.state.media.viewer.as_ref().unwrap().view.scale;
         assert_eq!(zoom > 1.0, zoomed, "{key}: {zoom}");
     }
     rt.key(KeyEvent {
@@ -189,6 +192,188 @@ fn a_picture_opens_in_the_viewer_and_escape_closes_it() {
     settle(&mut rt);
     assert!(rt.state.media.viewer.is_none());
     assert!(!has(&rt, "viewer"));
+}
+
+/// The viewer open on a picture far larger than the window, and the frame it is fitted in.
+fn viewing_a_large_picture() -> (Runtime<State>, Frame) {
+    let mut state = with_media();
+    let large = &mut state.session.entries[0].attachments[0];
+    (large.width, large.height) = (4000, 2000);
+    let mut rt = runtime(state);
+    press(&mut rt, "picture-a1");
+    settle(&mut rt);
+    let stage = element(&rt, "viewer-stage").rect;
+    let frame = viewed(&rt).frame([stage[2].round(), stage[3].round()]);
+    assert!(frame.own > 2.0, "larger than the window: {frame:?}");
+    (rt, frame)
+}
+
+fn viewed(rt: &Runtime<State>) -> &Viewer {
+    rt.state.media.viewer.as_ref().expect("the viewer is open")
+}
+
+/// Whether the viewer shows `want`, to within the half point a stage whose height is not
+/// whole puts between its middle and the frame's.
+#[track_caller]
+fn assert_views(rt: &Runtime<State>, want: View) {
+    let got = viewed(rt).view;
+    let near = (got.scale - want.scale).abs() < 1e-4
+        && (got.x - want.x).abs() < 0.5
+        && (got.y - want.y).abs() < 0.5;
+    assert!(near, "{got:?}, {want:?} wanted");
+}
+
+/// A point of the viewer's stage, `at` from its centre, in the window.
+fn on_stage(rt: &Runtime<State>, at: [f32; 2]) -> (f32, f32) {
+    let stage = element(rt, "viewer-stage").rect;
+    (
+        stage[0] + stage[2] / 2.0 + at[0],
+        stage[1] + stage[3] / 2.0 + at[1],
+    )
+}
+
+#[test]
+fn a_large_picture_opens_fitted_and_its_own_size_is_a_key_and_a_button_away() {
+    let (mut rt, frame) = viewing_a_large_picture();
+    // Fitted: inside the stage with the margin clear, at its shape.
+    let stage = element(&rt, "viewer-stage").rect;
+    let picture = element(&rt, "viewer-picture").rect;
+    assert!((picture[2] - (stage[2] - 2.0 * tokens::VIEWER_MARGIN)).abs() < 1.0);
+    assert!((picture[2] / picture[3] - 2.0).abs() < 0.01, "{picture:?}");
+    assert_eq!(viewed(&rt).view, viewer::FIT);
+    // Nothing to fit while it is fitted.
+    assert!(!element(&rt, "viewer-fit").focusable);
+
+    press(&mut rt, "viewer-own-size");
+    assert_eq!(viewed(&rt).view.scale, frame.own);
+    // A pixel a point.
+    assert!((element(&rt, "viewer-picture").rect[2] - 4000.0).abs() < 1.0);
+    assert!(!element(&rt, "viewer-own-size").focusable);
+    press(&mut rt, "viewer-fit");
+    assert_eq!(viewed(&rt).view, viewer::FIT);
+    rt.key(KeyEvent {
+        key: Key::Text("1".into()),
+        mods: Mods::default(),
+    });
+    settle(&mut rt);
+    assert_eq!(viewed(&rt).view.scale, frame.own);
+
+    // The buttons step by one and a half, up to four times its own size.
+    press(&mut rt, "viewer-fit");
+    press(&mut rt, "viewer-zoom-in");
+    assert_eq!(viewed(&rt).view.scale, viewer::STEP);
+    for _ in 0..12 {
+        if element(&rt, "viewer-zoom-in").focusable {
+            press(&mut rt, "viewer-zoom-in");
+        }
+    }
+    assert_eq!(viewed(&rt).view.scale, frame.max_scale());
+    assert_eq!(frame.max_scale(), frame.own * 4.0);
+}
+
+#[test]
+fn the_wheel_and_a_pinch_zoom_the_viewer_about_the_pointer() {
+    let (mut rt, frame) = viewing_a_large_picture();
+    let at = [-200.0, 40.0];
+    let (x, y) = on_stage(&rt, at);
+    // Where on the picture the pointer is, as a share of its width.
+    let under = |rt: &Runtime<State>| {
+        let picture = element(rt, "viewer-picture").rect;
+        (x - picture[0]) / picture[2]
+    };
+    let before = under(&rt);
+
+    // A notch of the wheel away from the hand: Rune's line of 40 points (120 on Linux),
+    // the content moving down.
+    let line = if cfg!(target_os = "linux") {
+        120.0
+    } else {
+        40.0
+    };
+    rt.wheel_event(WheelEvent::new(0.0, line).at(x, y));
+    settle(&mut rt);
+    let notch = viewer::wheel_factor(-100.0, false);
+    assert_views(&rt, viewer::zoom_at(viewer::FIT, notch, at, &frame));
+    assert!((viewed(&rt).view.scale - 1.284).abs() < 0.001);
+    assert!(
+        (under(&rt) - before).abs() < 0.002,
+        "the pointer's spot stayed"
+    );
+
+    // A pinch on a trackpad, about the pointer too.
+    let from = viewed(&rt).view;
+    rt.magnify_event(MagnifyEvent::new(0.5).at(x, y));
+    settle(&mut rt);
+    assert_views(&rt, viewer::zoom_at(from, from.scale * 1.5, at, &frame));
+    assert!(
+        (under(&rt) - before).abs() < 0.002,
+        "the pointer's spot stayed"
+    );
+
+    // Two fingers on a trackpad zoom by as far as they move, and what it sends after they
+    // lift (a scroll begun right as one ended) zooms nothing.
+    let touch = |phase, dy| WheelEvent::new(0.0, dy).at(x, y).precise(true).phase(phase);
+    let from = viewed(&rt).view;
+    for (phase, dy) in [
+        (GesturePhase::Began, 0.0),
+        (GesturePhase::Moved, 20.0),
+        (GesturePhase::Ended, 0.0),
+        (GesturePhase::Began, 0.0),
+        (GesturePhase::Moved, 30.0),
+        (GesturePhase::Ended, 0.0),
+    ] {
+        rt.wheel_event(touch(phase, dy));
+    }
+    settle(&mut rt);
+    let moved = viewer::wheel_factor(-20.0, false);
+    assert_views(&rt, viewer::zoom_at(from, from.scale * moved, at, &frame));
+
+    // The wheel towards the hand zooms out, to fitted and no further.
+    for _ in 0..8 {
+        rt.wheel_event(WheelEvent::new(0.0, -line).at(x, y));
+    }
+    settle(&mut rt);
+    assert_eq!(viewed(&rt).view, viewer::FIT);
+    // The conversation under the viewer did not scroll for any of it.
+    assert!(has(&rt, "viewer"));
+}
+
+#[test]
+fn a_press_on_the_viewers_picture_zooms_to_its_own_size_and_a_drag_moves_it() {
+    let (mut rt, frame) = viewing_a_large_picture();
+    let at = [150.0, -30.0];
+    let (x, y) = on_stage(&rt, at);
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    settle(&mut rt);
+    assert_views(&rt, viewer::pressed(viewer::FIT, at, &frame));
+    let zoomed = viewed(&rt).view;
+    assert_eq!(zoomed.scale, frame.own);
+
+    // A drag moves it, and stops where the picture's edge meets the stage's.
+    rt.pointer_down(x, y);
+    rt.pointer_move(x + 120.0, y + 20.0);
+    settle(&mut rt);
+    assert_views(&rt, viewer::pan_by(zoomed, 120.0, 20.0, &frame));
+    rt.pointer_move(x + 9000.0, y);
+    rt.pointer_up(x + 9000.0, y);
+    settle(&mut rt);
+    let held = viewed(&rt).view;
+    assert_eq!(held.scale, zoomed.scale, "a drag is no press");
+    let picture = element(&rt, "viewer-picture").rect;
+    let stage = element(&rt, "viewer-stage").rect;
+    assert!(
+        (picture[0] - stage[0]).abs() < 1.0,
+        "{picture:?} in {stage:?}"
+    );
+
+    // A press on the zoomed picture fits it again.
+    let (x, y) = on_stage(&rt, [0.0, 0.0]);
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    settle(&mut rt);
+    assert_eq!(viewed(&rt).view, viewer::FIT);
+    assert!(rt.state.media.viewer.is_some(), "and does not close it");
 }
 
 #[test]

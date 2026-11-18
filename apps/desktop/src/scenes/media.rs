@@ -276,6 +276,19 @@ pub fn media_viewer(state: &mut State) {
     state.media.wait();
 }
 
+/// `media-viewer-zoomed`: the same at four times its own size, as far as it zooms, dragged
+/// down until its top meets the stage's.
+pub fn media_viewer_zoomed(state: &mut State) {
+    media_viewer(state);
+    if let Some(viewer) = &mut state.media.viewer {
+        viewer.view = lumia_core::viewer::View {
+            scale: 4.0,
+            x: f32::MAX,
+            y: f32::MAX,
+        };
+    }
+}
+
 /// `media-edit`: this account's message with a card being edited, its card's × there.
 pub fn media_edit(state: &mut State) {
     media(state);

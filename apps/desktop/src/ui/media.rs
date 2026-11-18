@@ -33,11 +33,15 @@
 //! opens the link as the message's words have it.
 
 use lumia_client::app::{AttachmentSummary, CardSummary};
-use rune::{Cursor, El, Icon, Player, SurfaceFit, Tx, col, el, icon, row, text, text_input};
+use lumia_core::viewer;
+use rune::{
+    Cursor, El, Icon, MagnifyEvent, Player, SurfaceFit, Tx, WheelEvent, col, el, icon, row, text,
+    text_input,
+};
 
 use super::components::{Look, drawn, icon_button};
 use crate::app::State;
-use crate::app::media::{ZOOM_MAX, ZOOM_MIN, fitted, grid};
+use crate::app::media::{fitted, grid};
 use crate::app::playback::{Clip, clock};
 use crate::session::Entry;
 use crate::session::media::{Stage, Waiting, blob_key, card_key, is_picture, size_words};
@@ -1093,9 +1097,12 @@ pub fn drop_target(look: Look) -> El {
 // ---- The viewer ---------------------------------------------------------------------
 
 /// The picture opened from a message, over the whole window: the display picture (its
-/// thumbnail, then its placeholder, until it has arrived), zoomed with the bar's buttons or
-/// the plus and minus keys, moved by a drag while zoomed, its alt text under it. Escape, the
-/// × or a press beside the picture closes it.
+/// thumbnail, then its placeholder, until it has arrived), fitted to the window and never
+/// drawn larger than its own size, its alt text under it. It zooms as specs/media.md 5 says
+/// (`lumia_core::viewer`), up to four times its own size: about the pointer with the wheel or
+/// a trackpad's pinch, to its own size and back with a press on it, and by the bar's buttons
+/// or the keys (+ and − a step, 0 fitted, 1 its own size). A drag moves it while it is
+/// zoomed. Escape, the × or a press beside the picture closes it.
 pub fn viewer(s: &State, look: Look) -> Option<El> {
     let v = s.media.viewer.as_ref()?;
     let c = look.c;
@@ -1114,6 +1121,11 @@ pub fn viewer(s: &State, look: Look) -> Option<El> {
         })
         .or_else(|| s.media.placeholder(&a.attachment_id));
     let a_save = a.clone();
+    // The room the picture is fitted into, as laid out; the window's until then.
+    let room = rune::memo::layout_with("viewer-stage", |rect| [rect[2].round(), rect[3].round()]);
+    let frame = v.frame(room.unwrap_or([t::MEDIA_MAX * 2.0, t::MEDIA_MAX * 1.5]));
+    // As the stage is now: a window made smaller holds a zoomed picture further in.
+    let view = viewer::held(v.view, &frame);
     let bar = row()
         .key("viewer-bar")
         .w_full()
@@ -1134,23 +1146,34 @@ pub fn viewer(s: &State, look: Look) -> Option<El> {
         )
         .child(zoom_button(
             "viewer-zoom-out",
+            "−",
             "Zoom out",
-            -1,
-            v.zoom > ZOOM_MIN,
+            view.scale > 1.0,
+            move |s: &mut State| s.zoom_viewer(-1, &frame),
             look,
         ))
         .child(zoom_button(
             "viewer-fit",
+            "Fit",
             "Fit to window",
-            0,
-            v.zoom > ZOOM_MIN,
+            view.scale > 1.0,
+            move |s: &mut State| s.zoom_viewer(0, &frame),
+            look,
+        ))
+        .child(zoom_button(
+            "viewer-own-size",
+            "1:1",
+            "Actual size",
+            (view.scale - frame.own).abs() > f32::EPSILON,
+            move |s: &mut State| s.viewer_own_size(&frame),
             look,
         ))
         .child(zoom_button(
             "viewer-zoom-in",
+            "+",
             "Zoom in",
-            1,
-            v.zoom < ZOOM_MAX,
+            view.scale < frame.max_scale(),
+            move |s: &mut State| s.zoom_viewer(1, &frame),
             look,
         ))
         .child(glyph_button(
@@ -1168,17 +1191,7 @@ pub fn viewer(s: &State, look: Look) -> Option<El> {
             State::close_viewer,
             look,
         ));
-    // The room the picture is fitted into, as laid out; the window's until then.
-    let room = rune::memo::layout_with("viewer-stage", |rect| [rect[2].round(), rect[3].round()]);
-    let [room_w, room_h] = room.unwrap_or([t::MEDIA_MAX * 2.0, t::MEDIA_MAX * 1.5]);
-    let fit = fitted(
-        a.width,
-        a.height,
-        (room_w - 2.0 * t::VIEWER_MARGIN).max(1.0),
-        (room_h - 2.0 * t::VIEWER_MARGIN).max(1.0),
-    );
-    // Fitted to the window, never past the picture's own size, then zoomed.
-    let size = [fit[0] * v.zoom, fit[1] * v.zoom];
+    let size = [frame.width * view.scale, frame.height * view.scale];
     let mut stage = el()
         .key("viewer-stage")
         .w_full()
@@ -1186,7 +1199,15 @@ pub fn viewer(s: &State, look: Look) -> Option<El> {
         .min_h(0.0)
         .center()
         .clip_rounded(0.0)
-        .on_background_press(State::close_viewer);
+        .on_background_press(State::close_viewer)
+        .on_wheel(move |s: &mut State, wheel: WheelEvent, _: &mut Tx| {
+            s.wheel_viewer(&wheel, &frame);
+            true
+        })
+        .on_magnify(move |s: &mut State, pinch: MagnifyEvent, _: &mut Tx| {
+            s.pinch_viewer(&pinch, &frame);
+            true
+        });
     if undrawable {
         stage = stage.child(
             text("This picture can’t be shown here. Save it to open it in another app.")
@@ -1195,18 +1216,22 @@ pub fn viewer(s: &State, look: Look) -> Option<El> {
                 .role("status"),
         );
     } else if let Some(picture) = picture {
-        // Centred in the room, and moved from there by a drag while zoomed.
-        let mut shown = el()
+        // Centred in the room, and moved from there by the view. It follows the hand: no
+        // glide between one wheel event's size and the next.
+        let shown = el()
             .key("viewer-picture")
             .size(size[0], size[1])
-            .offset(v.pan[0], v.pan[1])
+            .offset(view.x, view.y)
             .pixels_fit(picture.pixels(), SurfaceFit::Fit)
             .role("img")
             .label(picture_label(a))
-            .on_drag(|s: &mut State, drag, _| s.pan_viewer(drag));
-        if v.zoom > ZOOM_MIN {
-            shown = shown.cursor(Cursor::Grab);
-        }
+            .instant_changes()
+            .cursor(if view.scale > 1.0 {
+                Cursor::Grab
+            } else {
+                Cursor::ZoomIn
+            })
+            .on_drag(move |s: &mut State, drag, _| s.drag_viewer(drag, &frame));
         stage = stage.child(shown);
     }
     let mut frame = col()
@@ -1216,7 +1241,7 @@ pub fn viewer(s: &State, look: Look) -> Option<El> {
         .role("dialog")
         .label(format!("Picture, {}", a.name))
         .modal(true, State::close_viewer)
-        .on_key(|s: &mut State, key, _| s.viewer_key(key))
+        .on_key(move |s: &mut State, key, _| s.viewer_key(key, &frame))
         .no_window_drag()
         .child(bar)
         .child(stage);
@@ -1241,13 +1266,15 @@ pub fn viewer(s: &State, look: Look) -> Option<El> {
 }
 
 /// One of the viewer's zoom buttons: a word in the quiet ink, the design system's small link.
-fn zoom_button(key: &str, label: &str, steps: i32, enabled: bool, look: Look) -> El {
+fn zoom_button(
+    key: &str,
+    glyph: &str,
+    label: &str,
+    enabled: bool,
+    on_press: impl Fn(&mut State) + 'static,
+    look: Look,
+) -> El {
     let c = look.c;
-    let glyph = match steps {
-        s if s < 0 => "−",
-        0 => "1:1",
-        _ => "+",
-    };
     let mut button = el()
         .key(key)
         .h(t::ICON_BUTTON)
@@ -1266,7 +1293,7 @@ fn zoom_button(key: &str, label: &str, steps: i32, enabled: bool, look: Look) ->
             .cursor(Cursor::Pointer)
             .focusable(true)
             .focus_ring(2.0, 0.0, c.focus)
-            .on_press(move |s: &mut State| s.zoom_viewer(steps));
+            .on_press(on_press);
     } else {
         button = button.opacity(0.5);
     }
