@@ -1,8 +1,10 @@
 #!/bin/sh
 # Builds the Rust core for Android and generates its Kotlin bindings:
 #   lumia-ffi as a shared library per ABI through cargo-ndk into
-#   lumiakit's jniLibs, the UniFFI Kotlin file, and the Kotlin tokens
-#   (tokens.py). Nothing it produces is committed (.gitignore). Needs
+#   lumiakit's jniLibs, the UniFFI Kotlin file, the Kotlin tokens
+#   (tokens.py), and in a debug build the same library for this machine
+#   (.build/host), which the kit's unit tests ask the core through.
+#   Nothing it produces is committed (.gitignore). Needs
 #   ANDROID_HOME with an NDK (ANDROID_NDK_HOME, or the newest under
 #   $ANDROID_HOME/ndk), cargo-ndk, and the Rust targets
 #   aarch64-linux-android and x86_64-linux-android.
@@ -46,6 +48,21 @@ rm -rf "$kit/src/main/kotlin/uniffi"
 mkdir -p "$kit/src/main/kotlin"
 cp -R "$out/uniffi" "$kit/src/main/kotlin/uniffi"
 python3 "$here/tokens.py"
+
+# The library for this machine too, where the kit's unit tests run: a test
+# of what the phone asks the core (ViewerTest) loads it through JNA, from
+# the folder lumiakit's build.gradle.kts names. Not for a release, which
+# runs no tests.
+if [ "$profile" = debug ]; then
+  (cd "$core" && cargo build -p lumia-ffi)
+  host="$here/../.build/host"
+  built="${CARGO_TARGET_DIR:-$core/target}/debug"
+  rm -rf "$host" && mkdir -p "$host"
+  for name in liblumia_ffi.dylib liblumia_ffi.so; do
+    if [ -f "$built/$name" ]; then cp "$built/$name" "$host/"; fi
+  done
+  [ -n "$(ls "$host")" ] || { echo "core: no library for this machine in $built"; exit 1; }
+fi
 
 # A release is stripped once the bindings have read the metadata the
 # symbols carry (cargo-ndk no longer strips, and a profile strip would

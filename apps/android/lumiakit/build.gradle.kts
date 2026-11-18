@@ -24,6 +24,12 @@ android {
     buildFeatures {
         compose = true
     }
+    testOptions {
+        // A unit test that asks the core (ViewerTest) loads it through JNA,
+        // which looks here for the library scripts/core.sh built for this
+        // machine: jniLibs holds Android's only.
+        unitTests.all { it.systemProperty("jna.library.path", rootProject.file(".build/host").absolutePath) }
+    }
 }
 
 // The core's TLS verifier (rustls-platform-verifier, Tls.kt) calls a Kotlin
@@ -71,4 +77,7 @@ dependencies {
     api(libs.compose.material3)
     // src/test: the rules that are plain values (Timeline.kt), on the JVM.
     testImplementation(libs.junit)
+    // And JNA as a jar, which has its own native half for the machine the
+    // tests run on; the AAR above has Android's only.
+    testImplementation(libs.jna)
 }

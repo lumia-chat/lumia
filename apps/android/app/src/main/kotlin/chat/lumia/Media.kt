@@ -7,9 +7,10 @@
 // on a press (`Playback.kt`), its files as rows with Save and Share,
 // those its server let go as rows that open nothing, its cards, and a
 // card whose link has an embed loading it in its place on a press; the
-// full-screen viewer with pinch zoom; and what editing a message may take
-// away. The rules are `Media.kt`'s and `Embeds.kt`'s in the kit; the
-// platform's side of a file is `Attachments.kt`'s.
+// full-screen viewer, its picture zoomed and moved by the core's rules
+// (`Viewer.kt` in the kit); and what editing a message may take away. The
+// rules are `Media.kt`'s and `Embeds.kt`'s in the kit; the platform's side
+// of a file is `Attachments.kt`'s.
 package chat.lumia
 
 import android.content.Context
@@ -17,6 +18,8 @@ import android.content.Intent
 import android.graphics.drawable.AnimatedImageDrawable
 import android.graphics.drawable.Drawable
 import android.net.Uri
+import android.os.Build
+import android.view.WindowManager
 import android.widget.ImageView
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -41,8 +44,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -79,10 +81,13 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
@@ -91,6 +96,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -103,9 +110,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.DialogWindowProvider
 import androidx.core.content.FileProvider
+import androidx.core.view.WindowCompat
 import chat.lumia.kit.CARD_PAUSE_MS
 import chat.lumia.kit.Display
+import chat.lumia.kit.FITTED
 import chat.lumia.kit.Fetched
 import chat.lumia.kit.FileKind
 import chat.lumia.kit.LumiaErrorText
@@ -140,6 +150,7 @@ import chat.lumia.kit.rememberCardPicture
 import chat.lumia.kit.roomForAttachments
 import chat.lumia.kit.shownPreviews
 import chat.lumia.kit.sizeWords
+import chat.lumia.kit.zoomOf
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -855,9 +866,20 @@ private fun parseColour(hex: String): Color? {
 
 /**
  * A picture full screen, on black: its display picture (the core fetches
- * and opens it now), pinch to zoom and drag, a double tap back to its
- * size; Save and Share over it, its alt text to a screen reader and under
- * it. A GIF animates here unless the system asks for no motion.
+ * and opens it now), the thumbnail until then; Save and Share over it,
+ * its alt text to a screen reader and under it. A GIF animates here
+ * unless the system asks for no motion.
+ *
+ * It zooms as it does on every client (specs/media.md 5: the core's
+ * rules, through the kit's [chat.lumia.kit.Zoom]). It opens fitted,
+ * shrunk into the viewer and never grown, so a picture smaller than the
+ * screen is its own size, a pixel a dp, in the middle. A pinch zooms
+ * about the fingers, from fitted to four times its own size, and moves it
+ * with them; two taps zoom to its own size about the point tapped, and
+ * two more go back to fitted; a drag moves a zoomed picture as far as its
+ * edges, and one that fits the viewer along a side stays centred along
+ * it. Its own size is the attachment's dimensions, or for one that names
+ * none, those of what is drawn.
  */
 @Composable
 private fun ImageViewer(session: LumiaSession, a: AttachmentSummary, onClose: () -> Unit) {
@@ -873,36 +895,54 @@ private fun ImageViewer(session: LumiaSession, a: AttachmentSummary, onClose: ()
         undrawable = picture == null
     }
     val thumbnail = rememberBlobPicture(session, a.thumbnail)
-    var scale by remember { mutableStateOf(1f) }
-    var offsetX by remember { mutableStateOf(0f) }
-    var offsetY by remember { mutableStateOf(0f) }
+    // How it is zoomed and moved, as the last gesture left it.
+    var view by remember(a.attachmentId) { mutableStateOf(FITTED) }
     val save = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(a.mediaType.ifEmpty { "application/octet-stream" })) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         scope.launch { error = saveTo(context, session, a.main, uri) }
     }
-    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Box(Modifier.fillMaxSize().background(Color.Black)) {
+    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+        WholeScreen()
+        // Black to the screen's edges, and the room what the system's bars leave clear: the bar over it and the words under it are inside that.
+        BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black).safeDrawingPadding()) {
+            val shown = picture ?: (thumbnail as? Fetched.Here)?.value
+            val sized = a.width > 0u && a.height > 0u
+            val ownWidth = if (sized) a.width.toInt() else shown?.width ?: 0
+            val ownHeight = if (sized) a.height.toInt() else shown?.height ?: 0
+            val density = LocalDensity.current.density
+            // The picture fitted into the room, and the view held to it: the room may have changed under a zoomed picture.
+            val room = remember(ownWidth, ownHeight, constraints.maxWidth, constraints.maxHeight, density) {
+                zoomOf(ownWidth, ownHeight, constraints.maxWidth.toFloat(), constraints.maxHeight.toFloat(), density)
+            }
+            val zoom = remember(room, view) { room.holding(view) }
+            // The gestures' handlers are made once, and read the room as it now is through this.
+            val latest by rememberUpdatedState(room)
             Box(
-                Modifier.fillMaxSize()
-                    .pointerInputs(onDoubleTap = { scale = 1f; offsetX = 0f; offsetY = 0f }) { pan, zoom ->
-                        scale = (scale * zoom).coerceIn(1f, 6f)
-                        if (scale == 1f) { offsetX = 0f; offsetY = 0f } else { offsetX += pan.x; offsetY += pan.y }
+                Modifier.fillMaxSize().clipToBounds()
+                    .pointerInputs(onDoubleTap = { at -> view = latest.holding(view).tappedTwice(at.x, at.y).view }) { centroid, pan, spread ->
+                        view = latest.holding(view).pinched(centroid.x, centroid.y, pan.x, pan.y, spread).view
                     }
-                    .graphicsLayer { scaleX = scale; scaleY = scale; translationX = offsetX; translationY = offsetY }
                     .semantics { contentDescription = attachmentLabel(a) },
                 contentAlignment = Alignment.Center,
             ) {
-                val shown = picture ?: (thumbnail as? Fetched.Here)?.value
-                if (a.kind == "gif" && !animationsOff(context)) {
-                    if (shown != null) Image(shown, null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
-                    AnimatedGif(session, a.main, Modifier.fillMaxSize(), ImageView.ScaleType.FIT_CENTER)
-                } else if (shown != null) {
-                    Image(shown, null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+                // The fitted picture in the middle of the room, then zoomed and moved; nothing while its size is not known yet.
+                if (ownWidth > 0 && ownHeight > 0) {
+                    Box(
+                        Modifier.size(zoom.width.dp, zoom.height.dp)
+                            .graphicsLayer { scaleX = zoom.scale; scaleY = zoom.scale; translationX = zoom.shiftX; translationY = zoom.shiftY },
+                    ) {
+                        if (a.kind == "gif" && !animationsOff(context)) {
+                            if (shown != null) Image(shown, null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+                            AnimatedGif(session, a.main, Modifier.fillMaxSize(), ImageView.ScaleType.FIT_CENTER)
+                        } else if (shown != null) {
+                            Image(shown, null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+                        }
+                    }
                 }
                 if (picture == null && !undrawable && bytes !is Fetched.Failed) CircularProgressIndicator(color = Color.White)
             }
             Row(
-                Modifier.fillMaxWidth().statusBarsPadding().background(LumiaTokens.scrim.color).padding(horizontal = LumiaTokens.space4),
+                Modifier.fillMaxWidth().background(LumiaTokens.scrim.color).padding(horizontal = LumiaTokens.space4),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 androidx.compose.material3.IconButton(onClick = onClose) { Icon(Icons.Filled.Close, contentDescription = "Close", tint = Color.White) }
@@ -916,7 +956,7 @@ private fun ImageViewer(session: LumiaSession, a: AttachmentSummary, onClose: ()
                 "This picture can't be shown.".takeIf { undrawable || bytes is Fetched.Failed },
             )
             if (words.isNotEmpty()) {
-                Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(LumiaTokens.scrim.color).navigationBarsPadding().padding(LumiaTokens.space16)) {
+                Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(LumiaTokens.scrim.color).padding(LumiaTokens.space16)) {
                     for (w in words) Text(w, style = LumiaTokens.textBody.style, color = Color.White, modifier = Modifier.clearAndSetSemantics {})
                 }
             }
@@ -924,11 +964,47 @@ private fun ImageViewer(session: LumiaSession, a: AttachmentSummary, onClose: ()
     }
 }
 
-/** Pinch and drag, and a double tap, on the viewer's picture. */
-private fun Modifier.pointerInputs(onDoubleTap: () -> Unit, onTransform: (androidx.compose.ui.geometry.Offset, Float) -> Unit): Modifier =
+/**
+ * The dialog this is drawn in, made the whole screen. Compose lays a
+ * dialog's content out as large as the screen, and the system, left to
+ * it, puts the dialog's window between its bars and cuts off what does
+ * not fit there: a tall picture's foot was, and the room the zoom's rules
+ * were given would not be the room seen. Told to fit no bar and to go
+ * round no cutout, the window is the screen, and what is in it keeps
+ * clear of them by its own padding. Before Android 11 the dialog's
+ * `decorFitsSystemWindows = false` is what puts the window under the bars.
+ */
+@Composable
+private fun WholeScreen() {
+    val window = (LocalView.current.parent as? DialogWindowProvider)?.window ?: return
+    DisposableEffect(window) {
+        window.attributes = window.attributes.apply {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                fitInsetsTypes = 0
+                layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+            } else {
+                layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
+        }
+        // The screen is black under the system's bars now, whatever the theme: their icons light.
+        WindowCompat.getInsetsController(window, window.decorView).apply {
+            isAppearanceLightStatusBars = false
+            isAppearanceLightNavigationBars = false
+        }
+        onDispose {}
+    }
+}
+
+/**
+ * Fingers on the viewer's picture: a pinch or a drag (where the fingers'
+ * centroid was, how far it moved and how many times as far apart they
+ * spread) and two taps (where), each place in px from the corner of what
+ * this is on.
+ */
+private fun Modifier.pointerInputs(onDoubleTap: (Offset) -> Unit, onTransform: (centroid: Offset, pan: Offset, spread: Float) -> Unit): Modifier =
     this
-        .then(Modifier.pointerInput(Unit) { detectTransformGestures { _, pan, zoom, _ -> onTransform(pan, zoom) } })
-        .then(Modifier.pointerInput(Unit) { detectTapGestures(onDoubleTap = { onDoubleTap() }) })
+        .then(Modifier.pointerInput(Unit) { detectTransformGestures { centroid, pan, zoom, _ -> onTransform(centroid, pan, zoom) } })
+        .then(Modifier.pointerInput(Unit) { detectTapGestures(onDoubleTap = { onDoubleTap(it) }) })
 
 /**
  * An attached video playing in its row (spec 5): Media3's view over the
