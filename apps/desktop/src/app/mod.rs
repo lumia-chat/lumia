@@ -460,7 +460,8 @@ impl State {
             self.replies.replying = None;
             self.replies.mention = None;
             self.sent_outside(outside);
-            tx.scroll_to_bottom("messages");
+            // Without a glide: a send from further up is at the newest message at once (#26).
+            tx.scroll_to_bottom_instant("messages");
         }
     }
 

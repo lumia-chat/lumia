@@ -372,6 +372,69 @@ fn messages_one_person_sends_close_together_are_one_block() {
     assert_eq!(below("k2", "k3"), 8.0);
 }
 
+/// Messages are there the frame they arrive, with nothing sliding or fading in (#26): one
+/// added to the conversation on screen, another conversation's in their place, and the
+/// first in a conversation that had none. A bare `Runtime` animates every commit, as a
+/// window does one a press or a key caused, which is what opening a channel and sending are.
+#[test]
+fn messages_appear_whole_in_the_frame_they_arrive() {
+    let mut rt = runtime(signed_in());
+    let now = chrono::Utc::now().timestamp_micros();
+    // Where each row and the list are drawn, and how opaque.
+    let drawn = |rt: &rune::Runtime<State>| {
+        rt.elements()
+            .into_iter()
+            .filter(|e| e.path.contains("messages-scroll-area"))
+            .filter(|e| e.role == "listitem" || e.key.as_deref() == Some("messages"))
+            .map(|e| (e.path, e.rect, e.opacity))
+            .collect::<Vec<_>>()
+    };
+    // One frame after `change`, everything is where it is once the window has come to rest.
+    let mut lands_at_once = |change: &dyn Fn(&mut State), what: &str| {
+        rt.update(|s, _| {
+            change(s);
+            s.session.revision += 1;
+        });
+        rt.frame(1.0 / 60.0);
+        let first = drawn(&rt);
+        settle(&mut rt);
+        assert_eq!(first, drawn(&rt), "{what}");
+        first
+    };
+
+    let rows = lands_at_once(
+        &|s| {
+            s.session
+                .entries
+                .push(message("m4", "grace", "A new one.", now));
+        },
+        "a message added under the others",
+    );
+    assert!(rows.iter().any(|(path, ..)| path.contains("message-m4")));
+
+    let another = |prefix: &'static str| {
+        move |s: &mut State| {
+            s.session.entries = (0..40)
+                .map(|i| {
+                    let id = format!("{prefix}{i}");
+                    message(&id, "grace", "A line.", now - (40 - i) * 600_000_000)
+                })
+                .collect();
+        }
+    };
+    let rows = lands_at_once(&another("n"), "another conversation's messages");
+    assert!(rows.iter().any(|(path, ..)| path.contains("message-n39")));
+
+    let rows = lands_at_once(&|s| s.session.entries.clear(), "a conversation with none");
+    assert!(rows.is_empty(), "the list goes at once too: {rows:?}");
+    let rows = lands_at_once(&another("q"), "the first messages of a conversation");
+    assert!(
+        rows.iter()
+            .any(|(path, _, opacity)| path.contains("message-q39") && *opacity == 1.0),
+        "{rows:?}"
+    );
+}
+
 #[test]
 fn the_message_list_has_a_scroll_bar_that_shows_while_it_scrolls() {
     let mut state = signed_in();

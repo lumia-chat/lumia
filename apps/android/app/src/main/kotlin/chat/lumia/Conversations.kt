@@ -194,8 +194,9 @@ private fun inFront(): Boolean {
  * messages" line when there is one ([newLine], its message's place, -1
  * for none), at the bottom otherwise, and follows new messages down while
  * the reader is at the newest one. Read further up (a jump, the line), it
- * holds still until the reader comes back to the newest. Returns whether
- * the newest message is on screen.
+ * holds still until the reader comes back to the newest. Every one of
+ * these is a jump, never a glide: a message is there at once (#26).
+ * Returns whether the newest message is on screen.
  */
 @Composable
 private fun follow(listState: LazyListState, newestKey: String?, count: Int, firstIndex: Int, newLine: Int, holding: Boolean, onHolding: (Boolean) -> Unit, onLanded: suspend () -> Boolean): Boolean {
@@ -215,7 +216,7 @@ private fun follow(listState: LazyListState, newestKey: String?, count: Int, fir
             }
             return@LaunchedEffect
         }
-        if (!holding) listState.animateScrollToItem(firstIndex + count - 1)
+        if (!holding) listState.scrollToItem(firstIndex + count - 1)
     }
     return newestVisible
 }

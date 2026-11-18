@@ -53,7 +53,7 @@ use std::borrow::Cow;
 use chrono::{DateTime, Local, NaiveDate};
 use lumia_client::app::QuoteSummary;
 use lumia_client::body::Room;
-use rune::{Cursor, El, GrowthSpec, ScrollSpec, col, el, icon, row, text};
+use rune::{Cursor, El, GrowthSpec, ScrollSpec, Transition, col, el, icon, row, text};
 
 use super::body;
 use super::components::{Look, avatar_of};
@@ -264,6 +264,13 @@ pub fn view(s: &State, label: String, look: Look) -> El {
         .child(el().grow(1.0))
         .child(rows)
         .with_scroll_bar("messages", look)
+        // Messages are there at once (#26). Left to Rune, a press or a key that brings rows
+        // (opening a channel, a send) grows each open on the stack's spring, the pinned list
+        // sliding up under them for half a second, and fades the list in where there was
+        // none. Nothing in a row moves by a commit either: a body unfolds and an edit's field
+        // opens in place at once, as the web's do.
+        .instant_changes()
+        .transition(Transition::none())
 }
 
 /// Whether the open conversation has anything to list.
