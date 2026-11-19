@@ -28,8 +28,10 @@
 # name in the open channel following a role given, a title set and the
 # server's choice of the two, each made elsewhere, a role deleted
 # through the sheet that asks first, which says of one nobody holds that
-# nobody does, and this account's own title refused on its card once the
-# instance's ten changes an hour are spent. Then the channel is read as assistive technology has it: each account's
+# nobody does, a member's row and a role's editor saving what was changed
+# in them and nothing a second session changed meanwhile, and this
+# account's own title refused on its card once the instance's ten changes
+# an hour are spent. Then the channel is read as assistive technology has it: each account's
 # messages in a row are one block, and the second account, typing through
 # the CLI, is named under the composer until it falls silent (protocol
 # 6.7), in light and dark. Then drafts (issue #23): a reply and words
@@ -902,6 +904,70 @@ await 'text="Delete Second?"' || { shot role-nobody; echo "FAIL: Delete role did
 case "$(ui)" in *"Nobody holds this role. This can"*) ;; *) shot role-nobody; echo "FAIL: the question about a role nobody holds does not say so; see $work/role-nobody.png"; exit 1 ;; esac
 tap "Keep it"
 [ -n "$(role_field Second roleId)" ] || { echo "FAIL: Keep it deleted the role"; exit 1; }
+# A save sends what was changed here and nothing else, so an editor or a
+# row left open undoes nobody else's change (the core's `changeRole` and
+# `changeMember`). A member's row first: the second account holds Third;
+# its row is opened and Third unticked, another session gives it Second,
+# and Save must take Third and leave Second, where the whole set the row
+# showed would have taken both.
+second=$(role_field Second roleId)
+role_name() { roles_held | field "next((r.get('name', '') for r in d.get('roles', []) if r.get('roleId') == '$1'), '')"; }
+role_perms() { roles_held | field "' '.join(next((r.get('permissions', []) for r in d.get('roles', []) if r.get('roleId') == '$1'), []))"; }
+member_roles() { # the second account's, as the instance has them
+  curl -s -H "accept: application/json" -H "authorization: Bearer $owner" "$instance/api/v1/servers/$server/members" | field "' '.join(sorted(next((m.get('roleIds', []) for m in d.get('members', []) if m.get('accountId') == '$other_id'), [])))"
+}
+elsewhere POST "/servers/$server/roles" '{"role":{"name":"Third","color":"peach"}}'
+third=$(role_field Third roleId)
+[ -n "$second" ] && [ -n "$third" ] || { echo "FAIL: the instance does not have the two roles the member's row is tried with"; exit 1; }
+elsewhere PATCH "/servers/$server/members/$other_id" "{\"addRoleIds\":[\"$third\"]}"
+[ "$(member_roles)" = "$third" ] || { echo "FAIL: the second account was not given the role over HTTP: $(member_roles)"; exit 1; }
+launch servermembers 7
+await "text=\"$other_handle\"" || { shot member-row; echo "FAIL: Members does not list the second account; see $work/member-row.png"; exit 1; }
+tap "$other_handle"
+await 'text="Save"' || { shot member-row; echo "FAIL: a member's row did not open; see $work/member-row.png"; exit 1; }
+at=$(below Third Roles)
+[ -n "$at" ] || { shot member-row; echo "FAIL: the open row does not offer the role the member holds; see $work/member-row.png"; exit 1; }
+# shellcheck disable=SC2086
+"$adb" shell input tap $at
+sleep 1
+elsewhere PATCH "/servers/$server/members/$other_id" "{\"addRoleIds\":[\"$second\"]}"
+sleep 2
+shot member-row
+tap "Save"
+left=""
+for _ in $(seq 1 20); do [ "$(member_roles)" = "$second" ] && { left=yes; break; }; sleep 1; done
+[ -n "$left" ] || { shot member-row; echo "FAIL: a row opened before a role was given elsewhere did not leave the member that role and take only the one unticked: $(member_roles) (given $second, unticked $third); see $work/member-row.png"; exit 1; }
+# The second account as the rest of the script expects it, and the role made for this gone.
+elsewhere PATCH "/servers/$server/members/$other_id" '{"roles":{"roleIds":[]}}'
+elsewhere DELETE "/servers/$server/roles/$third" ''
+# Then a role's editor: Second has Create invites switched on elsewhere and
+# is opened, which must show it on; it is renamed here, and before Save
+# another session switches the permission off. Saved, the instance must
+# have the new name and the permission still off: the role as the editor
+# showed it, whole, would have switched it on again.
+elsewhere PATCH "/servers/$server/roles/$second" '{"grant":["CREATE_INVITES"]}'
+case " $(role_perms "$second") " in *" CREATE_INVITES "*) ;; *) echo "FAIL: the role was not given the permission over HTTP: $(role_perms "$second")"; exit 1 ;; esac
+launch roles 7
+await 'content-desc="More for Second"' || { shot role-open; echo "FAIL: Roles does not list the role; see $work/role-open.png"; exit 1; }
+tap "Second"
+await 'content-desc="Save"' || { shot role-open; echo "FAIL: the role's row did not open its editor; see $work/role-open.png"; exit 1; }
+reveal "Create invites"
+[ "$(node "Create invites" on)" = yes ] || { shot role-open; echo "FAIL: the editor does not show a permission switched on elsewhere before it opened; see $work/role-open.png"; exit 1; }
+reveal Name
+at=$(below Name Name)
+[ -n "$at" ] || { echo "FAIL: no Name field in the role's editor"; exit 1; }
+# shellcheck disable=SC2086
+"$adb" shell input tap $at
+"$adb" shell input text "x"
+sleep 1
+elsewhere PATCH "/servers/$server/roles/$second" '{"revoke":["CREATE_INVITES"]}'
+sleep 2
+shot role-open
+tap "Save"
+role_renamed=""
+for _ in $(seq 1 20); do now=$(role_name "$second"); [ -n "$now" ] && [ "$now" != Second ] && { role_renamed=$now; break; }; sleep 1; done
+[ -n "$role_renamed" ] || { shot role-open; echo "FAIL: the editor's rename did not reach the instance; see $work/role-open.png"; exit 1; }
+case " $(role_perms "$second") " in *" CREATE_INVITES "*) shot role-open; echo "FAIL: saving a rename switched back on the permission another session switched off while the editor was open; see $work/role-open.png"; exit 1 ;; esac
 # A member's own title is theirs to change ten times an hour in a server;
 # the instance refuses the eleventh (RATE_LIMITED), and the card's Edit
 # must say so in the sheet's words, with the page still open over what was
@@ -924,7 +990,7 @@ case "$seen" in *'text="Save"'*) ;; *) shot title-limit; echo "FAIL: the title's
 case "$seen" in *'text="Title 10"'*) shot title-limit; echo "FAIL: the title's field lost what was typed when the save was refused; see $work/title-limit.png"; exit 1 ;; esac
 shot title-limit
 "$adb" shell am force-stop "$bundle" >/dev/null 2>&1 || true
-echo "  roles: ok (the sections; a role made by taps and the instance had it in its colour; one made elsewhere reached the list and Move up put it first; a role and a title given elsewhere were the tag beside the name in the open channel, as the server showed each; Delete role asked first, said who held it, and then the instance had it gone, and said of a role nobody held that nobody did; this account's own title, changed ten times elsewhere, was refused the eleventh on its card in the sheet's words, the page still open)"
+echo "  roles: ok (the sections; a role made by taps and the instance had it in its colour; one made elsewhere reached the list and Move up put it first; a role and a title given elsewhere were the tag beside the name in the open channel, as the server showed each; Delete role asked first, said who held it, and then the instance had it gone, and said of a role nobody held that nobody did; a row opened on a member took the role unticked in it and left the one given elsewhere meanwhile; an editor's rename was saved and left off the permission switched off elsewhere while it was open; this account's own title, changed ten times elsewhere, was refused the eleventh on its card in the sheet's words, the page still open)"
 
 # Blocks, in the channel: the second account's two messages in a row are
 # under its name once, and the second says whose it is and when to a
@@ -1386,4 +1452,4 @@ case "$(ui)" in *"Server settings"*) echo "FAIL: $other_handle, a plain member, 
 [ -n "$drawn" ] || { echo "FAIL: the rail does not draw the server's picture for a member; see $work/member-server.png"; exit 1; }
 "$adb" shell am force-stop "$bundle" >/dev/null 2>&1 || true
 echo "  a member: $work/member-server.png ($other_handle is not offered Server settings, and the rail draws the server's picture)"
-echo "smoke: ok (launched signed in, every screen screenshotted under $work; server settings renamed the server, kept its messages 30 days after saying what that deletes, and a picture set and removed reached the screen and the rail, offered to the owner and not to a member; a role made, moved and deleted, the tag beside a name following a role, a title and the server's choice made elsewhere, and an eleventh change of this account's own title in an hour refused on its card in words; preferences reached from the account menu, kept across a launch and as the phone was turned, dark, Compact, Minimal and the font size 20 drawn, a setting changed after a preset shown as Custom; messages in blocks and someone typing in the channel; a draft and its reply kept through another channel and a force-stop, and cleared by its send; a mention became a notification and its tap opened the channel; Sign out in the account menu ended the session and the push subscription and said nothing; another account signed in on the same phone was the only one it showed and was sent notices for; a session revoked from elsewhere took the subscription with it, and the app went back to sign-in and said so, opened afterwards or open at the time)"
+echo "smoke: ok (launched signed in, every screen screenshotted under $work; server settings renamed the server, kept its messages 30 days after saying what that deletes, and a picture set and removed reached the screen and the rail, offered to the owner and not to a member; a role made, moved and deleted, the tag beside a name following a role, a title and the server's choice made elsewhere, a member's row and a role's editor saving their own changes and undoing nobody else's, and an eleventh change of this account's own title in an hour refused on its card in words; preferences reached from the account menu, kept across a launch and as the phone was turned, dark, Compact, Minimal and the font size 20 drawn, a setting changed after a preset shown as Custom; messages in blocks and someone typing in the channel; a draft and its reply kept through another channel and a force-stop, and cleared by its send; a mention became a notification and its tap opened the channel; Sign out in the account menu ended the session and the push subscription and said nothing; another account signed in on the same phone was the only one it showed and was sent notices for; a session revoked from elsewhere took the subscription with it, and the app went back to sign-in and said so, opened afterwards or open at the time)"

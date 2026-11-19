@@ -70,6 +70,8 @@ import chat.lumia.kit.LumiaNameLine
 import chat.lumia.kit.TagLook
 import chat.lumia.kit.memberMark
 import chat.lumia.kit.memberOffers
+import chat.lumia.kit.editingOf
+import chat.lumia.kit.followed
 import chat.lumia.kit.memberRefusal
 import chat.lumia.kit.roleChoices
 import chat.lumia.kit.rolesHeld
@@ -635,13 +637,17 @@ private fun EditLink(label: String, description: String, lead: Boolean = false, 
  * "Title" against the card, a sheet's page here): the member's roles to
  * tick, those not this account's to give or take with a lock, or their
  * title, up to 32 characters and cleared to have none; Cancel and Save,
- * each back to the card. A refusal is said over the buttons.
+ * each back to the card. A refusal is said over the buttons. Save sends
+ * what the page changed since it opened and nothing else of the member
+ * (`saveMember`), and until something is changed here the page follows
+ * the member (`followed`), as their row in Members does.
  */
 @Composable
 private fun MemberEditPage(session: LumiaSession, server: ServerSummary, member: MemberSummary, name: String, roles: Boolean, done: () -> Unit) {
     val scope = rememberCoroutineScope()
-    var held by rememberSaveable { mutableStateOf(member.roleIds) }
-    var title by rememberSaveable { mutableStateOf(member.title) }
+    var kept by rememberSaveable(stateSaver = MemberEditingSaver) { mutableStateOf(editingOf(member)) }
+    val editing = followed(kept, member)
+    val form = editing.form
     var busy by remember { mutableStateOf(false) }
     var error by rememberSaveable { mutableStateOf("") }
 
@@ -651,7 +657,7 @@ private fun MemberEditPage(session: LumiaSession, server: ServerSummary, member:
             busy = true
             error = ""
             try {
-                saveMember(session, server, member, held.takeIf { roles }, title.takeIf { !roles })
+                saveMember(session, server, member, editing)
                 done()
             } catch (e: Exception) {
                 error = memberRefusal(e.lumiaCode, e.lumiaDetails["field"], e.lumiaMessage)
@@ -670,8 +676,8 @@ private fun MemberEditPage(session: LumiaSession, server: ServerSummary, member:
             Text(if (roles) "Roles" else "Title", style = LumiaTokens.titleServer.style, color = LumiaTokens.ink.color, modifier = Modifier.semantics { heading() })
             Text("$name in ${server.name}", style = LumiaTokens.textSubtitle.style, color = LumiaTokens.inkSecondary.color)
         }
-        if (roles) RoleChoicesList(roleChoices(server.roles, held), enabled = !busy) { id -> held = toggledRole(server.roles, held, id) }
-        else TitleField(title) { title = it }
+        if (roles) RoleChoicesList(roleChoices(server.roles, form.roleIds), enabled = !busy) { id -> kept = editing.copy(form = form.copy(roleIds = toggledRole(server.roles, form.roleIds, id))) }
+        else TitleField(form.title) { if (!busy) kept = editing.copy(form = form.copy(title = it)) }
         if (error.isNotEmpty()) LumiaErrorText(error)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space8, Alignment.End)) {
             LumiaSecondaryButton("Cancel", onClick = done)

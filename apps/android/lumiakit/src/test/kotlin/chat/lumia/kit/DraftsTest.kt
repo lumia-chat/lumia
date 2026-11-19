@@ -183,6 +183,56 @@ class DraftsTest {
     }
 
     @Test
+    fun aSendIsAskedOnlyOnceTheSaveBeforeItIsInTheStore() {
+        // A store that keeps in its own time, as the phone's does: a save handed over is in it once `settled` answers.
+        val store = Store()
+        val rests = Rests()
+        val handed = mutableListOf<() -> Unit>()
+        val order = mutableListOf<String>()
+        val k = DraftKeeper(
+            read = { store.read(HERE) },
+            keep = { body, reply -> handed += { order += "kept \"$body\""; store.keep(HERE, body, reply) } },
+            after = rests.after,
+            settled = { handed.forEach { it() }; handed.clear(); order += "settled" },
+        )
+        k.changed("On their way", null)
+        runBlocking {
+            k.sending {
+                // The core clears a draft of the message's words in the write that queues it: the words must be there for it to find.
+                order += "sent with \"${store.kept[HERE]?.body}\" kept"
+                store.keep(HERE, "", null)
+            }
+        }
+        handed.forEach { it() }
+        // Not the save landing after the send, which would put the sent words back over what the core cleared.
+        assertEquals(listOf("kept \"On their way\"", "settled", "sent with \"On their way\" kept", "kept \"\""), order)
+        assertNull(store.kept[HERE])
+    }
+
+    @Test
+    fun nothingIsKeptOfTheFieldWhileItsWordsAreOnTheirWay() {
+        val store = Store()
+        val rests = Rests()
+        val k = keeper(store, rests)
+        k.changed("Hello", null)
+        runBlocking {
+            k.sending {
+                // Typed on while the core has the send: the field holds the words that are going and more.
+                k.changed("Hello are you", null)
+                assertEquals(emptyList<Long>(), rests.asked)
+            }
+        }
+        // Nothing of them came back to the store, then or once a rest has passed.
+        rests.pass()
+        assertNull(store.kept[HERE])
+        assertEquals(listOf<Pair<String, QuoteSummary?>>("Hello" to null, "" to null), store.writes)
+        // The field as the send left it, the words that went gone from it, is told again and kept.
+        k.changed(afterSend("Hello", "Hello are you"), null)
+        rests.pass()
+        assertEquals(DraftSummary("are you", null), store.kept[HERE])
+    }
+
+    @Test
     fun aSendThatThrowsLeavesTheDraftAsItWas() {
         val store = Store()
         val rests = Rests()

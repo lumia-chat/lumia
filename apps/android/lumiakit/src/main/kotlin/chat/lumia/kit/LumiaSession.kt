@@ -36,6 +36,8 @@ import uniffi.lumia_ffi.StatusSummary
 import uniffi.lumia_ffi.StorageSummary
 import uniffi.lumia_ffi.MessageRoom
 import uniffi.lumia_ffi.MessageSummary
+import uniffi.lumia_ffi.RoleDraft
+import uniffi.lumia_ffi.RoleSummary
 import uniffi.lumia_ffi.RosterSummary
 import uniffi.lumia_ffi.SnapshotSummary
 import uniffi.lumia_ffi.ChannelSummary
@@ -308,10 +310,19 @@ class LumiaSession(
         return snap.servers.firstOrNull { it.serverId == serverId }?.roles?.firstOrNull { !it.isEveryone && it.name.lowercase() == name.lowercase() }?.roleId
     }
 
-    /** A role's name, colour, tag switch and permissions, whole. */
-    suspend fun updateRole(serverId: String, roleId: String, draft: RoleDraft) {
-        took(client.call { updateRole(serverId, roleId, draft.name.trim(), draft.color, draft.hideTag, draft.permissions) })
+    /**
+     * What an editor changed of a role, and nothing else of it: [was] is
+     * the role as the editor opened on it and [now] what it holds at Save,
+     * and the core sends what differs (`changeRole`), so whatever someone
+     * else made of the role meanwhile stays. Answers the role as the
+     * snapshot it answered with has it, which the editor then opens on;
+     * none when it is gone.
+     */
+    suspend fun changeRole(serverId: String, roleId: String, was: RoleDraft, now: RoleDraft): RoleSummary? {
+        val snap = client.call { changeRole(serverId, roleId, was, now) }
+        took(snap)
         refreshTags(serverId)
+        return snap.servers.firstOrNull { it.serverId == serverId }?.roles?.firstOrNull { it.roleId == roleId }
     }
 
     /** A role gone, from whoever held it too. */
@@ -332,15 +343,16 @@ class LumiaSession(
         refreshTags(serverId)
     }
 
-    /** The roles a member is to hold, the whole set. */
-    suspend fun setMemberRoles(serverId: String, accountId: String, roleIds: List<String>) {
-        client.call { setMemberRoles(serverId, accountId, roleIds) }
-        memberChanged(serverId, accountId)
-    }
-
-    /** A member's title in a server, empty for none; this account's own is its own to set. */
-    suspend fun setMemberTitle(serverId: String, accountId: String, title: String) {
-        client.call { setMemberTitle(serverId, accountId, title.trim()) }
+    /**
+     * What was changed of a member, in one request the instance does whole
+     * or not at all (the core's `changeMember`): the roles to [give] them
+     * and to [take] away, their others left as the instance has them, and
+     * their [title] (empty for none; none leaves it as it is), this
+     * account's own being its own to set. Never the whole set of roles a
+     * list a moment old shows them with.
+     */
+    suspend fun changeMember(serverId: String, accountId: String, give: List<String> = emptyList(), take: List<String> = emptyList(), title: String? = null) {
+        client.call { changeMember(serverId, accountId, give, take, title) }
         memberChanged(serverId, accountId)
     }
 
@@ -560,6 +572,7 @@ class LumiaSession(
                 roster = null
                 people = emptyMap()
                 serverMembers = emptyMap()
+                peopleWithStart = false
                 previews.clear()
                 profiles.clear()
                 serverPresence.clear()
@@ -1008,7 +1021,25 @@ class LumiaSession(
 
     // Loading
 
-    /** Loads the snapshot and starts the gateway on every server channel. */
+    /**
+     * Whether `load` is reading every member list beside a loop it just
+     * started, and no connection has been lost or refused since: that
+     * loop's first welcome then reads none of them a second time. Any
+     * later welcome is a reconnect, which may have missed who came and
+     * went, and reads them all.
+     */
+    private var peopleWithStart = false
+
+    /**
+     * Loads the snapshot and starts the gateway on every server channel.
+     * The loop is started as soon as the snapshot says which channels, and
+     * before anything else is asked of the instance: until it runs nothing
+     * on the phone is live and the core takes no send ("not started"), and
+     * what else a launch reads is not quick, every server's members being
+     * up to fifty requests a server. Those are read beside the rest, in the
+     * session's own time: this answers without them, and each list is
+     * drawn as it comes.
+     */
     suspend fun load() {
         try {
             val snap = client.call { snapshot() }
@@ -1018,19 +1049,24 @@ class LumiaSession(
             if (leaving || !signedIn) return
             snapshot = snap
             hasIdentity = client.hasIdentity
-            refreshPrivateMessages()
-            // A device asking to be linked while this phone was closed prompts as it opens.
-            scope.launch { refreshPrompts() }
-            refreshReads()
-            snap.servers.map { it.serverId }.let { refreshPeople(it, it) }
-            refreshDmChannels()
-            if (events == null) {
+            val starting = events == null
+            if (starting) {
+                peopleWithStart = true
                 // With any channel opened to read before the loop ran.
                 val held = snap.channels.filter { it.kind !in personalKinds }.map { it.channelId }
                 start(held + previews.keys.filter { it !in held })
             } else {
                 subscribeGained()
             }
+            // Every list beside a loop just started. One already running (a screen made
+            // again, the phone turned) has kept the lists it holds as they are told, so
+            // only one not held is read.
+            readPeopleBeside(snap, everyone = starting)
+            refreshPrivateMessages()
+            // A device asking to be linked while this phone was closed prompts as it opens.
+            scope.launch { refreshPrompts() }
+            refreshReads()
+            refreshDmChannels()
         } catch (e: Exception) {
             // A session that is over goes back to sign-in. Anything else is said
             // only with nothing held to show; what is held stays on screen.
@@ -1063,8 +1099,20 @@ class LumiaSession(
         subscribeGained()
         refreshReads()
         rereadShown(before, snap)
+        readPeopleBeside(snap, everyone)
+    }
+
+    /**
+     * The member lists of a snapshot's servers read in the session's own
+     * time, which whoever took the snapshot does not wait for. The
+     * gateway's events are handled one at a time, each after the one
+     * before, and a welcome and every account event take the snapshot:
+     * waited for there, a list of thousands held back every message that
+     * arrived behind it.
+     */
+    private fun readPeopleBeside(snap: SnapshotSummary, everyone: Boolean) {
         val ids = snap.servers.map { it.serverId }
-        refreshPeople(ids, if (everyone) ids else ids.filter { it !in serverMembers })
+        scope.launch { refreshPeople(ids, everyone) }
     }
 
     /** How many of a channel's newest messages are read from the store: a page, and more once a jump looks further back. */
@@ -1089,21 +1137,28 @@ class LumiaSession(
     private val peopleReads = Mutex()
 
     /**
-     * The member lists of [serverIds], those of [fetch] read again and the
-     * rest kept; a server left goes. A list that could not be read is as
-     * it was held, and not there where none was (`membersAfter`): a server
-     * whose members are not known has no list, and what counts them (a
-     * role's holders, Members' heading) says nothing instead of none.
+     * The member lists of [serverIds], read again for [everyone] of them
+     * or only where none is held, and the rest kept; a server left goes.
+     * Which are not held is asked once the read before this one is over,
+     * so two asked for together (a launch's and its first event's) read
+     * each list once. A list that could not be read is as it was held, and
+     * not there where none was (`membersAfter`): a server whose members
+     * are not known has no list, and what counts them (a role's holders,
+     * Members' heading) says nothing instead of none.
      */
-    private suspend fun refreshPeople(serverIds: List<String>, fetch: List<String>) = peopleReads.withLock { readPeople(serverIds, fetch) }
+    private suspend fun refreshPeople(serverIds: List<String>, everyone: Boolean) = peopleReads.withLock {
+        readPeople(serverIds, if (everyone) serverIds else serverIds.filter { it !in serverMembers })
+    }
 
     private suspend fun readPeople(serverIds: List<String>, fetch: List<String>) {
         val read = fetch.associateWith { id -> runCatching { client.call { members(id, "") } }.getOrNull() }
         if (leaving || !signedIn) return
-        // Over what is held now, which a tag or a name changed meanwhile may have written.
-        val byServer = membersAfter(serverMembers, serverIds, read)
+        // Over what is held now, which a tag or a name changed meanwhile may have written, and for the
+        // servers the snapshot has now: one joined or left while the lists were read is the next read's.
+        val servers = snapshot?.servers?.map { it.serverId } ?: serverIds
+        val byServer = membersAfter(serverMembers, servers, read)
         serverMembers = byServer
-        people = serverIds.flatMap { byServer[it].orEmpty() }.associateBy { it.accountId }
+        people = servers.flatMap { byServer[it].orEmpty() }.associateBy { it.accountId }
     }
 
     /**
@@ -1187,6 +1242,8 @@ class LumiaSession(
         read = { withContext(draftCalls) { client.now { draft(channelId) } } },
         keep = { body, reply -> if (signedIn) scope.launch(draftCalls) { runCatching { client.now { setDraft(channelId, body, reply) } } } },
         after = { ms, run -> scope.launch { delay(ms); run() }.let { job -> { job.cancel() } } },
+        // The saves go one at a time in the order asked: whatever is asked after them comes back once they are in.
+        settled = { withContext(draftCalls) {} },
     )
 
     // Attachments and link cards (specs/media.md)
@@ -1717,7 +1774,10 @@ class LumiaSession(
         when (event) {
             is ClientEvent.Welcomed -> {
                 connection = ConnectionState.Connected
-                refreshSnapshot(everyone = true)
+                // Every list again after a reconnect; not at the welcome of a loop `load` just started, which is reading them.
+                val read = peopleWithStart
+                peopleWithStart = false
+                refreshSnapshot(everyone = !read)
                 serverPresence.clear()
                 watchPresence(watchingServerIds)
             }
@@ -1740,9 +1800,10 @@ class LumiaSession(
             // A server's roles, some members' roles or titles, or which of the two it shows (architecture 7.5):
             // what the core keeps has it, and the snapshot was taken again for the `AccountApplied` before this.
             is ClientEvent.TagsChanged -> refreshTags(event.serverId)
-            is ClientEvent.Reconnecting -> connection = ConnectionState.Reconnecting(event.attempt)
-            is ClientEvent.Disconnected -> connection = ConnectionState.Disconnected(event.reason)
+            is ClientEvent.Reconnecting -> { peopleWithStart = false; connection = ConnectionState.Reconnecting(event.attempt) }
+            is ClientEvent.Disconnected -> { peopleWithStart = false; connection = ConnectionState.Disconnected(event.reason) }
             is ClientEvent.Closed -> {
+                peopleWithStart = false
                 connection = ConnectionState.Closed(event.reason)
                 events = null
                 closedNotice(event.removed)?.let { removed(it) }

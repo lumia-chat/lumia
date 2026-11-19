@@ -160,22 +160,64 @@ class RolesTest {
     }
 
     @Test
-    fun aRoleSavesOnceSomethingDiffers() {
-        assertFalse(savable(draftOf(mod), mod))
-        assertFalse(savable(draftOf(mod).copy(name = " Moderator "), mod))
-        assertTrue(savable(draftOf(mod).copy(name = "Mods"), mod))
-        assertFalse(savable(draftOf(mod).copy(name = ""), mod))
-        assertTrue(savable(draftOf(mod).copy(color = ""), mod))
-        assertTrue(savable(draftOf(mod).copy(hideTag = true), mod))
-        assertFalse(savable(draftOf(mod).copy(permissions = listOf("SEND_IN_THREADS", "MANAGE_ROLES")), mod))
-        assertTrue(savable(draftOf(mod).copy(permissions = listOf("MANAGE_ROLES")), mod))
+    fun aRoleSavesOnceSomethingDiffersFromWhatItsEditorOpenedOn() {
+        val opened = draftOf(mod)
+        assertFalse(savable(opened, opened))
+        assertFalse(savable(opened.copy(name = " Moderator "), opened))
+        assertTrue(savable(opened.copy(name = "Mods"), opened))
+        assertFalse(savable(opened.copy(name = ""), opened))
+        assertTrue(savable(opened.copy(color = ""), opened))
+        assertTrue(savable(opened.copy(hideTag = true), opened))
+        assertFalse(savable(opened.copy(permissions = listOf("SEND_IN_THREADS", "MANAGE_ROLES")), opened))
+        assertTrue(savable(opened.copy(permissions = listOf("MANAGE_ROLES")), opened))
+    }
+
+    @Test
+    fun someoneElsesChangeToTheRoleDoesNotOfferSave() {
+        // Another admin renamed the role and switched a permission off while the editor was open and untouched.
+        val editing = editingOf(mod)
+        val now = mod.copy(name = "Mods", permissions = listOf("SEND_IN_THREADS"))
+        assertFalse(savable(editing.draft, editing.opened))
+        // And the editor nobody touched is the role as it now is, both halves of it.
+        assertEquals(editingOf(now), followed(editing, now))
+        assertFalse(savable(followed(editing, now).draft, followed(editing, now).opened))
+    }
+
+    @Test
+    fun anEditorSomeoneChangedStaysAsItIsWhileTheRoleChangesUnderneath() {
+        // Renamed here, not yet saved; meanwhile another admin switched Manage roles off.
+        val editing = editingOf(mod).let { it.copy(draft = it.draft.copy(name = "Mods")) }
+        val now = mod.copy(permissions = listOf("SEND_IN_THREADS"))
+        assertEquals(editing, followed(editing, now))
+        // What it opened on still has the permission on, as its draft does: the save names the rename and no permission.
+        assertEquals(mod.permissions, editing.opened.permissions)
+        assertEquals(editing.opened.permissions, editing.draft.permissions)
+        assertTrue(savable(editing.draft, editing.opened))
+        // A space typed after the name is the person's too, though nothing to save yet: the field is not put back under them.
+        val spaced = editingOf(mod).let { it.copy(draft = it.draft.copy(name = "Moderator ")) }
+        assertEquals(spaced, followed(spaced, now))
+        assertFalse(savable(spaced.draft, spaced.opened))
+        // A switch turned and turned back is nothing changed, whatever order it left the permissions in.
+        val turnedBack = editingOf(mod).let { it.copy(draft = it.draft.copy(permissions = turned(turned(it.draft.permissions, "MANAGE_ROLES", false), "MANAGE_ROLES", true))) }
+        assertEquals(editingOf(now), followed(turnedBack, now))
+    }
+
+    @Test
+    fun anEditorOpenedBeforeItsRoleWasKnownIsTheRoleOnceItIs() {
+        // A launch that comes back to the editor: no snapshot yet, so no role.
+        val editing = editingOf(null)
+        assertEquals(editing, followed(editing, null))
+        assertEquals(editingOf(mod), followed(editing, mod))
+        // A new role has none to follow.
+        val named = editing.copy(draft = editing.draft.copy(name = "Design"))
+        assertEquals(named, followed(named, null))
     }
 
     @Test
     fun ofEveryoneOnlyThePermissionsCount() {
         val everyone = role("everyone", name = "Everyone", isEveryone = true, permissions = listOf("VIEW_CHANNEL"))
-        assertFalse(savable(draftOf(everyone), everyone))
-        assertTrue(savable(draftOf(everyone).copy(permissions = emptyList()), everyone))
+        assertFalse(savable(draftOf(everyone), draftOf(everyone)))
+        assertTrue(savable(draftOf(everyone).copy(permissions = emptyList()), draftOf(everyone)))
     }
 
     @Test
@@ -241,8 +283,50 @@ class RolesTest {
         assertEquals(listOf("mod"), toggledRole(ACME, listOf("mod"), "mod"))
         assertEquals(emptyList<String>(), toggledRole(ACME, emptyList(), "admin"))
         assertEquals(emptyList<String>(), toggledRole(ACME, emptyList(), "everyone"))
-        assertTrue(sameRoles(listOf("a", "b"), listOf("b", "a")))
-        assertFalse(sameRoles(listOf("a"), listOf("a", "b")))
+    }
+
+    @Test
+    fun aMembersSaveGivesAndTakesWhatTheFormChangedAndNothingElse() {
+        val opened = MemberForm(listOf("eng", "invite"), "On call")
+        // Nothing changed: nothing to send, whatever order the ticks are in.
+        assertTrue(memberChanges(opened, opened).nothing)
+        assertTrue(memberChanges(opened, MemberForm(listOf("invite", "eng"), " On call ")).nothing)
+        // Design ticked, Invite unticked, the title another: one request for the three.
+        assertEquals(
+            MemberChanges(give = listOf("design"), take = listOf("invite"), title = "Lead"),
+            memberChanges(opened, MemberForm(listOf("eng", "design"), " Lead ")),
+        )
+        // A role alone leaves the title unsaid, and a title alone the roles.
+        assertEquals(MemberChanges(listOf("design"), emptyList(), null), memberChanges(opened, opened.copy(roleIds = opened.roleIds + "design")))
+        assertEquals(MemberChanges(emptyList(), emptyList(), "Lead"), memberChanges(opened, opened.copy(title = "Lead")))
+        // A title cleared is said, as empty.
+        assertEquals(MemberChanges(emptyList(), emptyList(), ""), memberChanges(opened, opened.copy(title = " ")))
+        assertFalse(memberChanges(opened, opened.copy(title = "")).nothing)
+    }
+
+    @Test
+    fun aRoleSomeoneElseGaveIsNotTakenByARowOpenedBeforeIt() {
+        // The row opened on Eng and Invite; Invite is unticked. Meanwhile someone else gave the member Design.
+        val ada = member("ada", roleIds = listOf("eng", "invite"), title = "On call")
+        val editing = editingOf(ada).let { it.copy(form = it.form.copy(roleIds = toggledRole(ACME, it.form.roleIds, "invite"))) }
+        val now = ada.copy(roleIds = listOf("eng", "invite", "design"))
+        // The form is the person's, and stays; its save takes Invite and names nothing else, so Design stays theirs.
+        assertEquals(editing, followed(editing, now))
+        assertEquals(MemberChanges(give = emptyList(), take = listOf("invite"), title = null), memberChanges(followed(editing, now).opened, followed(editing, now).form))
+    }
+
+    @Test
+    fun aFormNobodyTouchedFollowsItsMember() {
+        val ada = member("ada", roleIds = listOf("eng"), title = "On call")
+        val now = ada.copy(roleIds = listOf("eng", "design"), title = "Lead")
+        assertEquals(editingOf(now), followed(editingOf(ada), now))
+        assertTrue(memberChanges(followed(editingOf(ada), now).opened, followed(editingOf(ada), now).form).nothing)
+        // A tick and its untick is nothing changed; a space typed after the title is, though nothing to save yet.
+        val ticked = editingOf(ada).let { it.copy(form = it.form.copy(roleIds = toggledRole(ACME, toggledRole(ACME, it.form.roleIds, "design"), "design"))) }
+        assertEquals(editingOf(now), followed(ticked, now))
+        val spaced = editingOf(ada).let { it.copy(form = it.form.copy(title = "On call ")) }
+        assertEquals(spaced, followed(spaced, now))
+        assertTrue(memberChanges(spaced.opened, spaced.form).nothing)
     }
 
     @Test

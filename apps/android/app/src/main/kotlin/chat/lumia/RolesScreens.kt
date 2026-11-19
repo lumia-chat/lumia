@@ -123,13 +123,16 @@ import chat.lumia.kit.NO_MEMBER_MATCHES
 import chat.lumia.kit.NO_ONE_TO_ADD
 import chat.lumia.kit.READING_MEMBERS
 import chat.lumia.kit.ROLES_HINT_MENU
+import chat.lumia.kit.MemberEditing
+import chat.lumia.kit.MemberForm
 import chat.lumia.kit.RoleChoice
-import chat.lumia.kit.RoleDraft
+import chat.lumia.kit.RoleEditing
 import chat.lumia.kit.TITLE_HINT
 import chat.lumia.kit.addHoldersButton
 import chat.lumia.kit.administratorQuestion
 import chat.lumia.kit.deleteQuestion
-import chat.lumia.kit.draftOf
+import chat.lumia.kit.editingOf
+import chat.lumia.kit.followed
 import chat.lumia.kit.grouped
 import chat.lumia.kit.holderCandidates
 import chat.lumia.kit.holders
@@ -141,6 +144,7 @@ import chat.lumia.kit.lumiaCode
 import chat.lumia.kit.lumiaDetails
 import chat.lumia.kit.lumiaMessage
 import chat.lumia.kit.memberMark
+import chat.lumia.kit.memberChanges
 import chat.lumia.kit.memberOffers
 import chat.lumia.kit.memberRefusal
 import chat.lumia.kit.membersCount
@@ -156,7 +160,6 @@ import chat.lumia.kit.roleRefusal
 import chat.lumia.kit.rolesCount
 import chat.lumia.kit.rolesHeld
 import chat.lumia.kit.rolesInOrder
-import chat.lumia.kit.sameRoles
 import chat.lumia.kit.savable
 import chat.lumia.kit.searched
 import chat.lumia.kit.stepBefore
@@ -170,6 +173,7 @@ import chat.lumia.kit.withheldCaption
 import kotlinx.coroutines.launch
 import uniffi.lumia_ffi.MemberSummary
 import uniffi.lumia_ffi.PermissionChoice
+import uniffi.lumia_ffi.RoleDraft
 import uniffi.lumia_ffi.RoleSummary
 import uniffi.lumia_ffi.ServerSummary
 
@@ -425,9 +429,14 @@ internal fun SmallButton(label: String, icon: ImageVector?, modifier: Modifier =
 
 // A role's editor
 
-private val DraftSaver = listSaver<RoleDraft, Any>(
-    save = { listOf(it.name, it.color, it.hideTag, ArrayList(it.permissions)) },
-    restore = { RoleDraft(it[0] as String, it[1] as String, it[2] as Boolean, (it[3] as List<*>).filterIsInstance<String>()) },
+private fun stored(draft: RoleDraft): List<Any> = listOf(draft.name, draft.color, draft.hideTag, ArrayList(draft.permissions))
+
+private fun draftStored(stored: List<*>): RoleDraft = RoleDraft(stored[0] as String, stored[1] as String, stored[2] as Boolean, (stored[3] as List<*>).filterIsInstance<String>())
+
+/** An editor through a turn of the phone: the role as it opened on it, and the draft. */
+private val EditingSaver = listSaver<RoleEditing, Any>(
+    save = { stored(it.opened) + stored(it.draft) },
+    restore = { RoleEditing(draftStored(it.subList(0, 4)), draftStored(it.subList(4, 8))) },
 )
 
 /**
@@ -443,6 +452,14 @@ private val DraftSaver = listSaver<RoleDraft, Any>(
  * saved, it is that role's editor ([opened]). Everyone's is its
  * permissions only. A role deleted elsewhere takes its editor with it (the
  * shell drops the screen).
+ *
+ * The editor holds the role as it opened on it beside the draft
+ * (`RoleEditing`). Save is offered for a draft that differs from that,
+ * never for what someone else changed of the role, and sends the
+ * difference and nothing else (`LumiaSession.changeRole`): a rename here
+ * does not switch back on a permission another admin switched off
+ * meanwhile. Until something is changed here the editor follows the role
+ * (`followed`); after a save it is the role as the answer has it.
  */
 @Composable
 fun RoleEditorScreen(session: LumiaSession, server: ServerSummary?, roleId: String?, back: () -> Unit, opened: (String) -> Unit, push: (Screen) -> Unit) {
@@ -453,8 +470,12 @@ fun RoleEditorScreen(session: LumiaSession, server: ServerSummary?, roleId: Stri
     val role = roleId?.let { id -> server?.roles?.firstOrNull { it.roleId == id } }
     val everyone = role?.isEveryone == true
     val members = session.serverMembers[serverId]
-    // The role is not known until the snapshot is (a launch that comes back to this screen): the draft starts from it once it is.
-    var draft by rememberSaveable(roleId, role != null, stateSaver = DraftSaver) { mutableStateOf(draftOf(role)) }
+    // What the editor opened on and its draft, as last changed here; what is drawn and saved is that as the role has
+    // changed underneath an editor nobody touched (`followed`). The role is not known until the snapshot is (a launch
+    // that comes back to this screen): an editor opened on nothing follows to it once it is.
+    var kept by rememberSaveable(roleId, stateSaver = EditingSaver) { mutableStateOf(editingOf(role)) }
+    val editing = followed(kept, role)
+    val draft = editing.draft
     var busy by remember { mutableStateOf(false) }
     var error by rememberSaveable { mutableStateOf("") }
     var nameError by rememberSaveable { mutableStateOf("") }
@@ -472,16 +493,19 @@ fun RoleEditorScreen(session: LumiaSession, server: ServerSummary?, roleId: Stri
         everyone -> role.name
         else -> draft.name.trim().ifEmpty { role.name }
     }
-    val canSave = !busy && server != null && (roleId == null || role != null) && savable(draft, role)
+    // Against what the editor opened on, never the role as it now is: someone else's change is nothing to save here.
+    val canSave = !busy && server != null && (roleId == null || role != null) && savable(draft, editing.opened.takeIf { role != null })
 
+    // Nothing is changed while a save is on its way: its answer is what the editor then holds.
     fun change(next: RoleDraft) {
+        if (busy) return
         saved = false
-        draft = next
+        kept = editing.copy(draft = next)
     }
 
     fun save() {
         if (!canSave) return
-        val sent = draft
+        val sent = editing
         scope.launch {
             busy = true
             error = ""
@@ -489,13 +513,14 @@ fun RoleEditorScreen(session: LumiaSession, server: ServerSummary?, roleId: Stri
             saved = false
             try {
                 if (role != null) {
-                    session.updateRole(server.serverId, role.roleId, sent)
-                    draft = draft.copy(name = draft.name.trim())
+                    // What was changed here and nothing else; the role as the answer has it is what the editor now opened on.
+                    val answered = session.changeRole(server.serverId, role.roleId, was = sent.opened, now = sent.draft)
+                    if (answered != null) kept = editingOf(answered)
                     saved = true
                     // The keyboard goes with the edit, and the rest of the screen is there again.
                     focus.clearFocus()
                 } else {
-                    val made = session.createRole(server.serverId, sent)
+                    val made = session.createRole(server.serverId, sent.draft)
                     if (made != null) opened(made) else back()
                 }
             } catch (e: Exception) {
@@ -519,7 +544,8 @@ fun RoleEditorScreen(session: LumiaSession, server: ServerSummary?, roleId: Stri
             holdersBusy = true
             holdersError = ""
             try {
-                session.setMemberRoles(serverId, m.accountId, m.roleIds.filter { it != role.roleId })
+                // This role taken, and nothing else of theirs said: their other roles are as the instance has them.
+                session.changeMember(serverId, m.accountId, take = listOf(role.roleId))
             } catch (e: Exception) {
                 holdersError = refused(e)
             } finally {
@@ -864,8 +890,8 @@ fun RoleHoldersScreen(session: LumiaSession, server: ServerSummary?, roleId: Str
             error = ""
             try {
                 for (accountId in chosen.toList()) {
-                    val member = session.memberOf(serverId, accountId) ?: continue
-                    if (roleId !in member.roleIds) session.setMemberRoles(serverId, accountId, member.roleIds + roleId)
+                    // The role given, a member at a time, and nothing said of their others; one who has it already is as they were.
+                    session.changeMember(serverId, accountId, give = listOf(roleId))
                     chosen = chosen - accountId
                 }
                 back()
@@ -1022,25 +1048,43 @@ private fun RosterRow(session: LumiaSession, server: ServerSummary, m: MemberSum
     }
 }
 
-/** What a save of a member's roles and title sends: each only where it changed, the roles first. */
-internal suspend fun saveMember(session: LumiaSession, server: ServerSummary, member: MemberSummary, roleIds: List<String>?, title: String?) {
-    if (roleIds != null && !sameRoles(roleIds, member.roleIds)) session.setMemberRoles(server.serverId, member.accountId, roleIds)
-    if (title != null && title.trim() != member.title) session.setMemberTitle(server.serverId, member.accountId, title)
+/** A member's form through a turn of the phone: their roles and title as it opened on them, and as it holds them. */
+internal val MemberEditingSaver = listSaver<MemberEditing, Any>(
+    save = { listOf(ArrayList(it.opened.roleIds), it.opened.title, ArrayList(it.form.roleIds), it.form.title) },
+    restore = {
+        val ids = { kept: Any -> (kept as List<*>).filterIsInstance<String>() }
+        MemberEditing(MemberForm(ids(it[0]), it[1] as String), MemberForm(ids(it[2]), it[3] as String))
+    },
+)
+
+/**
+ * What a save of a member's form sends: one request for what the form
+ * changed since it opened (`memberChanges`), the roles to give and to
+ * take and the title where it is another, which the instance does whole
+ * or not at all; none for a form that changed nothing. Never the roles
+ * as the form shows them, whole: one that someone else gave the member
+ * meanwhile is not the form's to take.
+ */
+internal suspend fun saveMember(session: LumiaSession, server: ServerSummary, member: MemberSummary, editing: MemberEditing) {
+    val changes = memberChanges(editing.opened, editing.form)
+    if (!changes.nothing) session.changeMember(server.serverId, member.accountId, changes.give, changes.take, changes.title)
 }
 
 /**
  * A member's editing state under their row (the design's `MemberEdit`):
  * the roles to tick, the title, and Kick, each where `memberOffers` says.
- * Save keeps the roles and the title together and closes the row; Kick
- * asks nothing first; a refusal is said over the buttons and the row stays
- * open.
+ * Save keeps the roles and the title together, in one request, and closes
+ * the row; Kick asks nothing first; a refusal is said over the buttons and
+ * the row stays open. Until something of it is changed here the form
+ * follows the member (`followed`).
  */
 @Composable
 private fun MemberEditor(session: LumiaSession, server: ServerSummary, member: MemberSummary, me: Boolean, close: () -> Unit) {
     val scope = rememberCoroutineScope()
     val offers = memberOffers(server, member, me)
-    var held by rememberSaveable(member.accountId) { mutableStateOf(member.roleIds) }
-    var title by rememberSaveable(member.accountId) { mutableStateOf(member.title) }
+    var kept by rememberSaveable(member.accountId, stateSaver = MemberEditingSaver) { mutableStateOf(editingOf(member)) }
+    val editing = followed(kept, member)
+    val form = editing.form
     var busy by remember { mutableStateOf(false) }
     var error by rememberSaveable(member.accountId) { mutableStateOf("") }
 
@@ -1067,17 +1111,17 @@ private fun MemberEditor(session: LumiaSession, server: ServerSummary, member: M
         if (offers.roles || offers.rolesNote != null) {
             Column(verticalArrangement = Arrangement.spacedBy(LumiaTokens.space6)) {
                 Text("Roles", style = LumiaTokens.textLabel.style, color = LumiaTokens.inkBody.color)
-                if (offers.roles) RoleChoicesList(roleChoices(server.roles, held), enabled = !busy) { id -> held = toggledRole(server.roles, held, id) }
+                if (offers.roles) RoleChoicesList(roleChoices(server.roles, form.roleIds), enabled = !busy) { id -> kept = editing.copy(form = form.copy(roleIds = toggledRole(server.roles, form.roleIds, id))) }
                 else Text(offers.rolesNote ?: "", style = LumiaTokens.textMeta.style, color = LumiaTokens.inkMuted.color)
             }
         }
-        if (offers.title) TitleField(title) { title = it }
+        if (offers.title) TitleField(form.title) { if (!busy) kept = editing.copy(form = form.copy(title = it)) }
         if (error.isNotEmpty()) LumiaErrorText(error)
         Row(horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space8), verticalAlignment = Alignment.CenterVertically) {
             if (offers.kick) KickButton("Kick ${nameOf(member)}", enabled = !busy) { act { session.removeMember(server.serverId, member.accountId) } }
             Spacer(Modifier.weight(1f))
             LumiaSecondaryButton("Cancel", onClick = close)
-            LumiaPrimaryButton("Save", enabled = !busy) { act { saveMember(session, server, member, held.takeIf { offers.roles }, title.takeIf { offers.title }) } }
+            LumiaPrimaryButton("Save", enabled = !busy) { act { saveMember(session, server, member, editing) } }
         }
     }
 }

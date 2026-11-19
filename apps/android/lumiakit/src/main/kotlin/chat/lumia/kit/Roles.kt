@@ -9,6 +9,7 @@
 package chat.lumia.kit
 
 import uniffi.lumia_ffi.MemberSummary
+import uniffi.lumia_ffi.RoleDraft
 import uniffi.lumia_ffi.RoleSummary
 import uniffi.lumia_ffi.ServerSummary
 import uniffi.lumia_ffi.TagSummary
@@ -121,25 +122,58 @@ fun rolesInOrder(roles: List<RoleSummary>, order: List<String>?): List<RoleSumma
 /** What a move says to a screen reader: "Design moved to position 3", its place in the order sent. */
 fun roleMovedWords(name: String, order: List<String>, roleId: String): String = "$name moved to position ${order.indexOf(roleId) + 1}"
 
-/** What a role's editor holds while it is open: its name, a tone or empty for none, the tag switch, and the permissions switched on, by their wire names. */
-data class RoleDraft(val name: String = "", val color: String = "", val hideTag: Boolean = false, val permissions: List<String> = emptyList())
-
-/** The editor's fields for a role, or for a new one: no name, no colour, shown as a tag, nothing granted. */
+/**
+ * The editor's fields for a role, or for a new one: no name, no colour,
+ * shown as a tag, nothing granted. A `RoleDraft` is the core's (its
+ * `changeRole` takes two): a name, a tone or empty for none, the tag
+ * switch, and the permissions switched on, by their wire names.
+ */
 fun draftOf(role: RoleSummary? = null): RoleDraft =
-    if (role == null) RoleDraft() else RoleDraft(role.name, role.color, role.hideTag, role.permissions.toList())
+    if (role == null) RoleDraft("", "", false, emptyList()) else RoleDraft(role.name, role.color, role.hideTag, role.permissions.toList())
 
 private fun sameSet(a: List<String>, b: List<String>): Boolean = a.size == b.size && a.all { it in b }
 
+/** Whether two drafts would save as one role: their names once trimmed, their colour, their tag switch, and their permissions in whatever order. */
+private fun sameDraft(a: RoleDraft, b: RoleDraft): Boolean =
+    a.name.trim() == b.name.trim() && a.color == b.color && a.hideTag == b.hideTag && sameSet(a.permissions, b.permissions)
+
 /**
- * Whether Save is offered: a new role once it has a name, a role once
- * something of it differs and it still has one. Of Everyone only the
- * permissions are compared, since nothing else of it changes.
+ * A role's editor while it is open: the role as the editor opened on it
+ * ([opened]) beside what is being edited ([draft]). Save sends what
+ * differs between the two and nothing else of the role (the core's
+ * `changeRole`), so what someone else has made of it meanwhile, which
+ * neither holds, is not undone by an editor left open.
  */
-fun savable(draft: RoleDraft, role: RoleSummary? = null): Boolean {
-    if (role == null) return draft.name.trim().isNotEmpty()
-    if (role.isEveryone) return !sameSet(draft.permissions, role.permissions)
+data class RoleEditing(val opened: RoleDraft, val draft: RoleDraft)
+
+/** An editor as it opens on a role, or on a new one: nothing of it changed yet. */
+fun editingOf(role: RoleSummary? = null): RoleEditing = draftOf(role).let { RoleEditing(it, it) }
+
+/**
+ * Whether Save is offered: a new role (no [opened]) once it has a name, a
+ * role once something of the draft differs from what the editor opened on
+ * and it still has a name. Never compared with the role as it now is:
+ * someone else's change to it is nothing this editor has to save.
+ */
+fun savable(draft: RoleDraft, opened: RoleDraft? = null): Boolean {
     if (draft.name.trim().isEmpty()) return false
-    return draft.name.trim() != role.name || draft.color != role.color || draft.hideTag != role.hideTag || !sameSet(draft.permissions, role.permissions)
+    return opened == null || !sameDraft(draft, opened)
+}
+
+/**
+ * An editor as the role changes underneath it. One nobody has touched,
+ * its draft still what it opened on, follows: both are the role as it now
+ * is, and so is one whose role was not known yet as it opened. Once
+ * something of it was changed, both stay as they are, so its save sends
+ * that person's changes and nothing else. A name with a space typed after
+ * it is changed, though not yet to be saved: the field is the person's
+ * from the first key. With no role (a new one, or one not known yet)
+ * there is nothing to follow.
+ */
+fun followed(editing: RoleEditing, role: RoleSummary?): RoleEditing {
+    val (opened, draft) = editing
+    val untouched = draft.name == opened.name && sameDraft(draft, opened)
+    return if (role == null || !untouched) editing else editingOf(role)
 }
 
 /** A permission this account does not hold, and so cannot give or take: its switch is shown and not turned. */
@@ -173,8 +207,52 @@ fun toggledRole(roles: List<RoleSummary>, held: List<String>, roleId: String): L
     return if (roleId in held) held.filter { it != roleId } else held + roleId
 }
 
-/** Whether two sets of roles are one: what a save of a member's roles compares. */
-fun sameRoles(a: List<String>, b: List<String>): Boolean = sameSet(a, b)
+/** What a member's form holds, under their row in Members and on their card's Edit: the roles ticked and the title. */
+data class MemberForm(val roleIds: List<String>, val title: String)
+
+fun formOf(member: MemberSummary): MemberForm = MemberForm(member.roleIds.toList(), member.title)
+
+/** A member's form while it is open: their roles and title as it opened on them ([opened]) beside what it holds ([form]). */
+data class MemberEditing(val opened: MemberForm, val form: MemberForm)
+
+/** A form as it opens on a member: nothing of theirs changed yet. */
+fun editingOf(member: MemberSummary): MemberEditing = formOf(member).let { MemberEditing(it, it) }
+
+/**
+ * What a save of a member's form sends, in the one request the instance
+ * does whole or not at all (the core's `changeMember`): the roles to
+ * [give] and to [take], and the [title], none where it is left as it is
+ * and empty to clear it.
+ */
+data class MemberChanges(val give: List<String>, val take: List<String>, val title: String?) {
+    /** Nothing to save: no request is made. */
+    val nothing: Boolean get() = give.isEmpty() && take.isEmpty() && title == null
+}
+
+/**
+ * What a form changed of a member since it [opened]: the roles ticked
+ * that were not theirs then to give, theirs then and not ticked to take,
+ * and the title only where, trimmed, it is another. Never the whole set
+ * the form shows: a role someone else gave them a moment ago is in
+ * neither list, and stays theirs.
+ */
+fun memberChanges(opened: MemberForm, form: MemberForm): MemberChanges = MemberChanges(
+    give = form.roleIds.filter { it !in opened.roleIds }.distinct(),
+    take = opened.roleIds.filter { it !in form.roleIds }.distinct(),
+    title = form.title.trim().takeIf { it != opened.title.trim() },
+)
+
+/**
+ * A member's form as the member changes underneath it, by an editor's
+ * rule: one nobody has touched, the roles ticked and the title's field
+ * as it opened, is the member as they now are; one with something
+ * changed stays as it is, and its save sends that and nothing else.
+ */
+fun followed(editing: MemberEditing, member: MemberSummary): MemberEditing {
+    val (opened, form) = editing
+    val untouched = form.title == opened.title && sameSet(form.roleIds, opened.roleIds)
+    return if (untouched) editingOf(member) else editing
+}
 
 /**
  * What this account may change of a member, on their row in Members and

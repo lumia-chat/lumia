@@ -27,12 +27,14 @@ const val DRAFT_REST_MS = 400L
  * what the composer holds ([changed]), when it goes away or the app is
  * stopped ([flush]) and hands it each send ([sending]), which clears the
  * draft only once the words have gone, all from one thread; [after] calls
- * back on it too.
+ * back on it too. [settled] answers once every save handed to [keep] so
+ * far is in the store, for a store that keeps in its own time.
  */
 class DraftKeeper(
     private val read: suspend () -> DraftSummary?,
     private val keep: (body: String, reply: QuoteSummary?) -> Unit,
     private val after: (ms: Long, run: () -> Unit) -> () -> Unit,
+    private val settled: suspend () -> Unit = {},
 ) {
     // What the composer holds, as last told, and so what the store has or is about to.
     private var body = ""
@@ -41,6 +43,8 @@ class DraftKeeper(
     private var waiting: (() -> Unit)? = null
     /** Whether anything was typed or sent here since the screen appeared. */
     private var touched = false
+    /** Whether a send is with the core: what the field holds meanwhile still has the words that are going, and is not kept. */
+    private var onTheirWay = false
 
     /**
      * The draft kept for the conversation, to put in the field and the
@@ -68,9 +72,14 @@ class DraftKeeper(
      * have rested [DRAFT_REST_MS], each change starting the wait again, so
      * a burst of keys is one write. Told what it already has (the field as
      * it first draws, a kept draft just put in it), it does nothing; an
-     * emptied field is a change like any other, and keeps nothing.
+     * emptied field is a change like any other, and keeps nothing. While
+     * a send is with the core nothing is taken: the field still holds the
+     * words that are going, and kept then they would be the draft of a
+     * message already queued; what it holds once the send has answered is
+     * told again, and kept.
      */
     fun changed(body: String, reply: QuoteSummary?) {
+        if (onTheirWay) return
         if (body == this.body && reply == this.reply) return
         touched = true
         this.body = body
@@ -108,20 +117,30 @@ class DraftKeeper(
 
     /**
      * A send of what the composer holds, in the order that loses nothing.
-     * What waits is kept first ([flush]), so the store has the words while
-     * they are on their way and a phone that dies then has them as a
-     * draft. Then [send], the core's. Only once that has answered without
-     * error is the draft cleared ([sent]); a send that throws leaves the
-     * draft as it is and throws on, the words being the composer's still.
-     * It is not cut short by the screen going away: the core's send, once
-     * asked, is not either, and a draft left behind for words that went
-     * would have them sent a second time.
+     * What waits is kept first ([flush]) and is in the store before the
+     * core is asked ([settled]): a phone that dies before the send has the
+     * words as a draft, and the core, which puts a message in its outbox
+     * and clears a draft of the same words in the one write, finds them to
+     * clear, so one that dies after has the message queued and no draft to
+     * send it twice from. A save still on its way when the core was asked
+     * would land after that write and put the words back. Then [send], the
+     * core's. Once it has answered without error the draft is cleared here
+     * too ([sent]), for a send the core does not clear for and for what
+     * this keeper holds; a send that throws leaves the draft as it is and
+     * throws on, the words being the composer's still. It is not cut short
+     * by the screen going away: the core's send, once asked, is not either.
      */
     suspend fun <T> sending(send: suspend () -> T): T = withContext(NonCancellable) {
         flush()
-        val answer = send()
-        sent()
-        answer
+        onTheirWay = true
+        try {
+            settled()
+            val answer = send()
+            sent()
+            answer
+        } finally {
+            onTheirWay = false
+        }
     }
 }
 
