@@ -1,0 +1,71 @@
+{
+  "parts": ".lu-shell, .gallery-roles__figure, .phone-figure",
+  "boards": [
+    { "tab": "Server settings", "parts": [["RolesSettingsOverview", "Server settings · Overview"]] },
+    {
+      "tab": "Roles",
+      "parts": [
+        ["RolesList", "Roles"],
+        ["RolesListModerator", "Roles · to a moderator"],
+        ["RolesDrag", "Roles · a drag, held"],
+        ["RolesMenu", "Roles · a role’s menu"]
+      ]
+    },
+    {
+      "tab": "Role editor",
+      "parts": [
+        ["RolesEditor", "Role editor"],
+        ["RolesEditorEveryone", "Role editor · Everyone"],
+        ["RolesEditorAsks", "Role editor · asked first"],
+        ["RolesEditorNew", "Role editor · New role"],
+        ["RolesEditorNoTag", "Role editor · not shown as a tag"],
+        ["RolesEditorModerator", "Role editor · what a moderator can’t give"]
+      ]
+    },
+    {
+      "tab": "Members",
+      "parts": [
+        ["RolesMembers", "Members"],
+        ["RolesMembersBelow", "Members · a member below you"],
+        ["RolesMembersAbove", "Members · a member above you"],
+        ["RolesMembersGuest", "Members · a guest"]
+      ]
+    },
+    {
+      "tab": "Tags",
+      "parts": [
+        ["RolesTagsRoles", "Tags · the server shows roles"],
+        ["RolesTagsTitles", "Tags · the server shows titles"],
+        ["RolesTagsTones", "Tags · on each tone"],
+        ["RolesTagsLongest", "Tags · the longest tag"]
+      ]
+    },
+    {
+      "tab": "Profile card",
+      "parts": [
+        ["RolesCardOthers", "Card in a server · as others see it"],
+        ["RolesCardEditor", "Card in a server · to someone who may edit"],
+        ["RolesCardEdits", "Card in a server · what each Edit opens"],
+        ["RolesCardOwn", "Card in a server · your own"],
+        ["RolesCardOwnNoTitle", "Card in a server · your own, no title"],
+        ["RolesCardOwner", "Card in a server · the owner"],
+        ["RolesCardGuest", "Card in a server · a guest"],
+        ["RolesCardUntagged", "Card in a server · a role not shown as a tag"]
+      ]
+    },
+    {
+      "tab": "Roles on phones",
+      "parts": [
+        ["RolesPhoneSettings", "iOS · Server settings"],
+        ["RolesPhoneList", "iOS · Roles"],
+        ["RolesPhoneMenu", "iOS · A role’s menu"],
+        ["RolesPhoneEditor", "iOS · Role editor"],
+        ["RolesPhoneEditorPermissions", "iOS · Role editor, permissions"],
+        ["RolesPhoneEditorEnd", "iOS · Role editor, holders and Delete"],
+        ["RolesPhoneMembers", "iOS · Members"],
+        ["RolesPhoneMember", "iOS · A member, editing"],
+        ["RolesPhoneDelete", "iOS · Delete a role?"]
+      ]
+    }
+  ]
+}
