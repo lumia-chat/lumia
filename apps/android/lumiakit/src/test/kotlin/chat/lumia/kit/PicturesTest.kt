@@ -7,7 +7,7 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 import uniffi.lumia_ffi.MemberSummary
 
-private fun person(id: String, avatar: String) = MemberSummary(id, id, "", "", "", "", avatar, false, false)
+private fun person(id: String, avatar: String) = MemberSummary(id, id, "", "", "", "", avatar, false, false, emptyList(), "", false, false, null, false)
 
 class PicturesTest {
     private val ours = "/api/v1/avatars/" + "0123456789abcdef".repeat(4)

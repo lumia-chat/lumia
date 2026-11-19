@@ -82,7 +82,18 @@ sealed class Screen {
     data object AddServer : Screen()
     data class NewChannel(val serverId: String) : Screen()
     data class Invite(val serverId: String) : Screen()
+    /** A server's settings: its sections, a screen of their own on a phone (architecture 7.5). */
     data class ServerSettings(val serverId: String) : Screen()
+    /** The Overview section: the server's picture, name, tag, history, files and default channels. */
+    data class ServerOverview(val serverId: String) : Screen()
+    /** The Roles section: the server's roles in order. */
+    data class Roles(val serverId: String) : Screen()
+    /** A role's editor, or with no [roleId] a new role's. */
+    data class RoleEditor(val serverId: String, val roleId: String? = null) : Screen()
+    /** "Add members" to a role, from its editor. */
+    data class RoleHolders(val serverId: String, val roleId: String) : Screen()
+    /** The Members section: the server's members, their roles and titles. */
+    data class ServerMembers(val serverId: String) : Screen()
     data class Browse(val serverId: String) : Screen()
     data class Members(val channelId: String) : Screen()
     data class AddPeople(val channelId: String) : Screen()
@@ -126,6 +137,11 @@ private fun Screen.kept(): String = when (this) {
     is Screen.NewChannel -> "new-channel $serverId"
     is Screen.Invite -> "invite $serverId"
     is Screen.ServerSettings -> "server-settings $serverId"
+    is Screen.ServerOverview -> "server-overview $serverId"
+    is Screen.Roles -> "roles $serverId"
+    is Screen.RoleEditor -> if (roleId == null) "role $serverId" else "role $serverId $roleId"
+    is Screen.RoleHolders -> "role-holders $serverId $roleId"
+    is Screen.ServerMembers -> "server-members $serverId"
     is Screen.Browse -> "browse $serverId"
     is Screen.Members -> "members $channelId"
     is Screen.AddPeople -> "add-people $channelId"
@@ -154,6 +170,12 @@ private fun screenOf(kept: String): Screen? {
         "new-channel" -> Screen.NewChannel(id)
         "invite" -> Screen.Invite(id)
         "server-settings" -> Screen.ServerSettings(id)
+        "server-overview" -> Screen.ServerOverview(id)
+        "roles" -> Screen.Roles(id)
+        // A server's id and then the role's; a new role's editor has the server's alone.
+        "role" -> Screen.RoleEditor(id.substringBefore(' '), id.substringAfter(' ', "").ifEmpty { null })
+        "role-holders" -> id.substringAfter(' ', "").takeIf { it.isNotEmpty() }?.let { Screen.RoleHolders(id.substringBefore(' '), it) }
+        "server-members" -> Screen.ServerMembers(id)
         "browse" -> Screen.Browse(id)
         "members" -> Screen.Members(id)
         "add-people" -> Screen.AddPeople(id)
@@ -173,7 +195,7 @@ val PlaceSaver: Saver<Place, String> = Saver(save = { it.kept() }, restore = { p
 val StackSaver: Saver<List<Screen>, Any> = listSaver(save = { stack -> stack.map { it.kept() } }, restore = { kept -> kept.mapNotNull(::screenOf) })
 
 /** The design's compact menu is this wide (`.lu-menu--compact`); `tokens.json` has no name for it. */
-private val MenuWidth = 220.dp
+internal val MenuWidth = 220.dp
 
 /**
  * The rail's own avatar and the menu it opens: the account's own things, as
@@ -231,22 +253,37 @@ internal fun AccountMenu(session: LumiaSession, onOpen: (Screen) -> Unit, signin
     }
 }
 
-/** A row of the menu: a glyph and what it does, a button to TalkBack by its label. */
+/**
+ * A row of a menu: a glyph and what it does, a button to TalkBack by its
+ * label. One that takes something away is in the danger ink ([danger]);
+ * one that would do nothing here is drawn faint and takes no tap.
+ */
 @Composable
-private fun MenuItem(icon: ImageVector, label: String, onClick: () -> Unit) {
+internal fun MenuItem(icon: ImageVector, label: String, danger: Boolean = false, enabled: Boolean = true, onClick: () -> Unit) {
+    val ink = when {
+        !enabled -> LumiaTokens.inkFaint.color
+        danger -> LumiaTokens.danger.color
+        else -> LumiaTokens.inkBody.color
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .height(LumiaTokens.controlHeight)
             .clip(RoundedCornerShape(LumiaTokens.radius8))
-            .clickable(role = Role.Button, onClick = onClick)
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
             .padding(horizontal = LumiaTokens.space10),
         horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space10),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(icon, contentDescription = null, tint = LumiaTokens.inkBody.color, modifier = Modifier.size(18.dp))
-        Text(label, style = LumiaTokens.textCompact.style, color = LumiaTokens.inkBody.color)
+        Icon(icon, contentDescription = null, tint = ink, modifier = Modifier.size(18.dp))
+        Text(label, style = LumiaTokens.textCompact.style, color = ink)
     }
+}
+
+/** The design's rule between a menu's groups (`.lu-menu__rule`). */
+@Composable
+internal fun MenuRule() {
+    Box(Modifier.fillMaxWidth().padding(horizontal = LumiaTokens.space6, vertical = LumiaTokens.space4).height(1.dp).background(LumiaTokens.line.color))
 }
 
 /** Where a count badge is, which decides its size (the phone boards'). */
@@ -337,6 +374,8 @@ fun PanelScreen(
     subtitle: String? = null,
     lead: (@Composable () -> Unit)? = null,
     actions: List<Triple<ImageVector, String, () -> Unit>> = emptyList(),
+    // An action that is not always there to take (a role's Save), drawn after the rest.
+    trailing: (@Composable () -> Unit)? = null,
     content: @Composable () -> Unit,
 ) {
     Box(Modifier.fillMaxSize().background(LumiaTokens.bg.color).statusBarsPadding().padding(start = LumiaTokens.space8, end = LumiaTokens.space8, bottom = LumiaTokens.space8)) {
@@ -359,6 +398,7 @@ fun PanelScreen(
                     if (subtitle != null) Text(subtitle, style = LumiaTokens.textMeta.style, color = LumiaTokens.inkSecondary.color, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 for (a in actions) LumiaIconButton(a.first, a.second, a.third)
+                trailing?.invoke()
             }
             Box(Modifier.fillMaxWidth().height(1.dp).background(LumiaTokens.line.color))
             content()

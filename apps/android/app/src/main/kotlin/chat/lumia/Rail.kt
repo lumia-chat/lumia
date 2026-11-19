@@ -763,7 +763,7 @@ private fun FolderSettings(folder: RailItem.Folder, words: String, onDismiss: ()
 
 /** A tone to choose: its fill in a circle (24), the chosen one ringed in the accent with its ink's check. */
 @Composable
-private fun Swatch(tone: AvatarTone, chosen: Boolean, index: Int, onClick: () -> Unit) {
+internal fun Swatch(tone: AvatarTone, chosen: Boolean, index: Int, onClick: () -> Unit) {
     val accent = LumiaTokens.accent.color
     val line = LumiaTokens.lineStrong.color
     Box(

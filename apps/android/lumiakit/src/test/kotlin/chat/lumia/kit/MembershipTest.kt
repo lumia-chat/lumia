@@ -19,7 +19,7 @@ private fun channel(id: String, server: String = "s", kind: String = TEXT, name:
     ChannelSummary(id, server, name, kind, 0uL, participants, "", private, isDefault, 0u, "")
 
 private fun member(id: String, display: String = "", handle: String = id, nickname: String = "", byInvitation: Boolean = false, dmsOff: Boolean = false) =
-    MemberSummary(id, handle, display, nickname, "", "", "", byInvitation, dmsOff)
+    MemberSummary(id, handle, display, nickname, "", "", "", byInvitation, dmsOff, emptyList(), "", false, false, null, false)
 
 class MembershipTest {
     @Test

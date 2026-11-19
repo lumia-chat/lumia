@@ -78,6 +78,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import uniffi.lumia_ffi.BodyBlock
@@ -274,6 +275,9 @@ fun LumiaMessageRow(
     washed: Boolean = false,
     flashed: Boolean = false,
     onLongPress: (() -> Unit)? = null,
+    // The tag beside the author's name where the row draws the name over its words (architecture 7.5):
+    // their role or their title, as the server shows and the core worked out. None in one line.
+    tag: TagLook? = null,
 ) {
     // Who wrote it, tapped on the avatar or the name: their profile card, where a screen offers one.
     val authorTap = if (onAuthor != null) Modifier.clickable(onClickLabel = "view $author's profile", role = Role.Button, onClick = onAuthor) else Modifier
@@ -347,9 +351,12 @@ fun LumiaMessageRow(
     }
     val head = @Composable { modifier: Modifier ->
         Column(verticalArrangement = Arrangement.spacedBy(measures.within), modifier = modifier) {
-            Row(horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space8), verticalAlignment = Alignment.Bottom) {
-                Text(author, style = LumiaTokens.textAuthor.scaled, color = LumiaTokens.inkEmphasis.color, modifier = authorTap)
-                Text(time, style = LumiaTokens.textMeta.scaled, color = LumiaTokens.inkQuiet.color)
+            LumiaNameLine(
+                LumiaTokens.space8,
+                tag = tag?.let { t -> @Composable { LumiaTag(t.label, tone = t.tone, scale = LocalTextScale.current) } },
+                after = { Text(time, style = LumiaTokens.textMeta.scaled, color = LumiaTokens.inkQuiet.color, maxLines = 1, softWrap = false) },
+            ) {
+                Text(author, style = LumiaTokens.textAuthor.scaled, color = LumiaTokens.inkEmphasis.color, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = authorTap)
             }
             body(Modifier)
         }
@@ -788,17 +795,111 @@ fun LumiaDeviceRow(device: DeviceSummary, label: String, meta: String, icon: Ima
     }
 }
 
+/**
+ * A role, a title or a word beside a name (the design's `lu-tag`): on a
+ * role's [tone] its ground and ink, as an avatar's initials are; [accent],
+ * the accent's soft ground and ink ("You", "Owner", "Guest"); else the
+ * plain chip (a title, a role with no colour). Its words are a server's
+ * own, 32 characters at most: one line, cut with an ellipsis where it has
+ * no room. [small] is a list's size (10.5, 700), else a message's (11.5,
+ * 600), which a conversation draws at its font size ([scale]).
+ */
 @Composable
-fun LumiaTag(text: String) {
+fun LumiaTag(text: String, modifier: Modifier = Modifier, tone: AvatarTone? = null, accent: Boolean = false, small: Boolean = false, scale: Float = 1f) {
+    val ground = when {
+        tone != null -> tone.fill.color
+        accent -> LumiaTokens.accentSoft.color
+        else -> LumiaTokens.chip.color
+    }
+    val ink = when {
+        tone != null -> tone.ink.color
+        accent -> LumiaTokens.accentInk.color
+        else -> LumiaTokens.inkSecondary.color
+    }
     Text(
         text,
-        style = LumiaTokens.textTag.style,
-        color = LumiaTokens.inkSecondary.color,
-        modifier = Modifier
-            .background(LumiaTokens.chip.color, RoundedCornerShape(LumiaTokens.radiusPill))
-            .padding(horizontal = LumiaTokens.space6, vertical = LumiaTokens.space2),
+        style = if (small) LumiaTokens.textTag.style.copy(fontSize = LumiaTokens.textTag.size * TAG_SMALL, fontWeight = FontWeight(LumiaTokens.textCount.weight)) else LumiaTokens.textTag.style.scaled(scale),
+        color = ink,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = modifier
+            .background(ground, RoundedCornerShape(if (small) LumiaTokens.radius5 else LumiaTokens.radius6))
+            .padding(horizontal = if (small) LumiaTokens.space6 else TagSide, vertical = if (small) LumiaTokens.space2 / 2 else LumiaTokens.space2),
     )
 }
+
+/** A tag as the core worked it out and `tagOf` reads it: its words on its tone, or the plain chip. */
+@Composable
+fun LumiaTag(tag: TagLook, modifier: Modifier = Modifier, small: Boolean = false) = LumiaTag(tag.label, modifier, tone = tag.tone, small = small)
+
+/** A list's tag is 10.5 where a message's is 11.5 (`lu-tag--sm`). */
+private const val TAG_SMALL = 10.5f / 11.5f
+
+/** Beside a tag's words, 7 (`lu-tag--md`): `tokens.json` has no name for it. */
+private val TagSide = (LumiaTokens.space6 + LumiaTokens.space8) / 2
+
+/**
+ * A role's colour as a dot (10), in the ink its tag's words are written
+ * in; a ring with nothing in it for a role with no colour.
+ */
+@Composable
+fun LumiaRoleDot(tone: AvatarTone?, modifier: Modifier = Modifier) {
+    val dot = modifier.size(LumiaTokens.space10).clearAndSetSemantics {}
+    if (tone != null) Box(dot.background(tone.ink.color, CircleShape))
+    else Box(dot.border(LumiaTokens.space2 * 3 / 4, LumiaTokens.inkFaint.color, CircleShape))
+}
+
+/**
+ * A name, the tag beside it and what follows them (a message's time) on
+ * one line, [gap] apart. Where the line has no room for all of it the tag
+ * gives way before the name does, cut with its ellipsis down to a quarter
+ * of the line, and then the name is cut in its turn. The name and what
+ * follows stand on the line's foot, as they did before there were tags;
+ * the tag is centred on the name.
+ */
+@Composable
+fun LumiaNameLine(
+    gap: Dp,
+    modifier: Modifier = Modifier,
+    tag: (@Composable () -> Unit)? = null,
+    after: (@Composable () -> Unit)? = null,
+    name: @Composable () -> Unit,
+) {
+    Layout(
+        content = {
+            Box(Modifier.layoutId(NameLineName)) { name() }
+            if (tag != null) Box(Modifier.layoutId(NameLineTag)) { tag() }
+            if (after != null) Box(Modifier.layoutId(NameLineAfter)) { after() }
+        },
+        modifier = modifier,
+    ) { measurables, constraints ->
+        val space = gap.roundToPx()
+        val loose = constraints.copy(minWidth = 0, minHeight = 0)
+        val afterP = measurables.firstOrNull { it.layoutId == NameLineAfter }?.measure(loose)
+        val room = (constraints.maxWidth - (afterP?.let { it.width + space } ?: 0)).coerceAtLeast(0)
+        val tagM = measurables.firstOrNull { it.layoutId == NameLineTag }
+        // What the tag keeps while the name is cut: its own width, or a quarter of the line where it is wider.
+        val kept = if (tagM == null) 0 else minOf(tagM.maxIntrinsicWidth(Constraints.Infinity), room / 4) + space
+        val nameP = measurables.first { it.layoutId == NameLineName }.measure(loose.copy(maxWidth = (room - kept).coerceAtLeast(0)))
+        val tagP = tagM?.measure(loose.copy(maxWidth = (room - nameP.width - space).coerceAtLeast(0)))
+        val height = maxOf(nameP.height, tagP?.height ?: 0, afterP?.height ?: 0)
+        val used = nameP.width + (tagP?.let { it.width + space } ?: 0) + (afterP?.let { it.width + space } ?: 0)
+        layout(used.coerceIn(constraints.minWidth, maxOf(constraints.minWidth, constraints.maxWidth)), height) {
+            var x = 0
+            nameP.placeRelative(x, height - nameP.height)
+            x += nameP.width + space
+            if (tagP != null) {
+                tagP.placeRelative(x, height - nameP.height + (nameP.height - tagP.height) / 2)
+                x += tagP.width + space
+            }
+            afterP?.placeRelative(x, height - afterP.height)
+        }
+    }
+}
+
+private const val NameLineName = "name"
+private const val NameLineTag = "tag"
+private const val NameLineAfter = "after"
 
 /**
  * A row of pills with one chosen: the design's segmented tabs at a form's

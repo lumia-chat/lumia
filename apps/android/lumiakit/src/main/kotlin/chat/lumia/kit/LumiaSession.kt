@@ -28,6 +28,7 @@ import uniffi.lumia_ffi.InstanceSummary
 import uniffi.lumia_ffi.LinkPrompt
 import uniffi.lumia_ffi.MemberSummary
 import uniffi.lumia_ffi.PasskeySummary
+import uniffi.lumia_ffi.PermissionGroup
 import uniffi.lumia_ffi.ProfileSummary
 import uniffi.lumia_ffi.StatusSummary
 import uniffi.lumia_ffi.StorageSummary
@@ -284,6 +285,97 @@ class LumiaSession(
 
     /** What a server's files take, for its settings; only someone who may change them is answered (`MANAGE_SERVER`). */
     suspend fun serverStorage(serverId: String): StorageSummary = client.call { serverStorage(serverId) }
+
+    // Roles, titles and tags (architecture 7.5). The core holds every rule:
+    // what this account may do is in the snapshot's servers and in each
+    // member, and a tag is the member's own `tag`, already worked out. A
+    // change to a server's roles answers with the snapshot, a change to a
+    // member with that member; either way the members are then read again
+    // from what the core kept (`keptMembers`, no request), since a tag may
+    // have changed with it. Someone else's change comes as `TagsChanged`.
+
+    /** The permissions a role's editor offers, under their headings: the core's list, the same on every client; none when it cannot be read. */
+    val rolePermissions: List<PermissionGroup> by lazy { runCatching { uniffi.lumia_ffi.rolePermissions() }.getOrDefault(emptyList()) }
+
+    /** A new role, placed last above Everyone by the instance; answers its id, by its name, which is its alone in the server whatever its capitals. */
+    suspend fun createRole(serverId: String, draft: RoleDraft): String? {
+        val name = draft.name.trim()
+        val snap = client.call { createRole(serverId, name, draft.color, draft.hideTag, draft.permissions) }
+        took(snap)
+        refreshTags(serverId)
+        return snap.servers.firstOrNull { it.serverId == serverId }?.roles?.firstOrNull { !it.isEveryone && it.name.lowercase() == name.lowercase() }?.roleId
+    }
+
+    /** A role's name, colour, tag switch and permissions, whole. */
+    suspend fun updateRole(serverId: String, roleId: String, draft: RoleDraft) {
+        took(client.call { updateRole(serverId, roleId, draft.name.trim(), draft.color, draft.hideTag, draft.permissions) })
+        refreshTags(serverId)
+    }
+
+    /** A role gone, from whoever held it too. */
+    suspend fun deleteRole(serverId: String, roleId: String) {
+        took(client.call { deleteRole(serverId, roleId) })
+        refreshTags(serverId)
+    }
+
+    /** A server's roles in the order of [roleIds]: every role but Everyone once, highest first. */
+    suspend fun reorderRoles(serverId: String, roleIds: List<String>) {
+        took(client.call { reorderRoles(serverId, roleIds) })
+        refreshTags(serverId)
+    }
+
+    /** Whether the tag beside a name in a server is the member's title; false, their role. */
+    suspend fun setTagTitles(serverId: String, titles: Boolean) {
+        took(client.call { setTagTitles(serverId, titles) })
+        refreshTags(serverId)
+    }
+
+    /** The roles a member is to hold, the whole set. */
+    suspend fun setMemberRoles(serverId: String, accountId: String, roleIds: List<String>) {
+        client.call { setMemberRoles(serverId, accountId, roleIds) }
+        memberChanged(serverId, accountId)
+    }
+
+    /** A member's title in a server, empty for none; this account's own is its own to set. */
+    suspend fun setMemberTitle(serverId: String, accountId: String, title: String) {
+        client.call { setMemberTitle(serverId, accountId, title.trim()) }
+        memberChanged(serverId, accountId)
+    }
+
+    /** Someone removed from a server (`MANAGE_MEMBERS`, a member below this account). */
+    suspend fun removeMember(serverId: String, accountId: String) {
+        client.call { removeMember(serverId, accountId) }
+        refreshTags(serverId)
+    }
+
+    /** A member as the core now keeps them; this account's own roles and title are the snapshot's too, which is taken again. */
+    private suspend fun memberChanged(serverId: String, accountId: String) {
+        refreshTags(serverId)
+        if (accountId == me) refreshSnapshot()
+    }
+
+    /**
+     * A server's members read again from what the core kept, each with
+     * their tag as the server now shows it: after a change made here, and
+     * when the core says one came in (`TagsChanged`, after the
+     * `AccountApplied` it came in, the snapshot taken again by then).
+     * Nothing is asked of the instance. A list never read is left for the
+     * snapshot's own read of it.
+     */
+    private suspend fun refreshTags(serverId: String) {
+        if (leaving || !signedIn || serverId !in serverMembers) return
+        val kept = runCatching { client.call { keptMembers(serverId) } }.getOrNull() ?: return
+        if (kept.isEmpty()) return
+        val byServer = serverMembers + (serverId to kept)
+        serverMembers = byServer
+        people = (snapshot?.servers?.map { it.serverId } ?: byServer.keys.toList()).flatMap { byServer[it].orEmpty() }.associateBy { it.accountId }
+    }
+
+    /** A member of a server as the list held has them. */
+    fun memberOf(serverId: String, accountId: String): MemberSummary? = serverMembers[serverId]?.firstOrNull { it.accountId == accountId }
+
+    /** The tag beside a member's name in a server, their role or their title as the server shows; none for none. */
+    fun tagOf(serverId: String, accountId: String): TagLook? = tagOf(memberOf(serverId, accountId)?.tag)
 
     // The rail (architecture 6.9)
 
@@ -1613,6 +1705,9 @@ class LumiaSession(
             // A link session moved (identity spec 4.2.1): this phone's own, or another's prompting here.
             is ClientEvent.LinkSessionUpdated -> { linkFollow(); refreshPrompts() }
             is ClientEvent.ProfileUpdated -> profileUpdated(event)
+            // A server's roles, some members' roles or titles, or which of the two it shows (architecture 7.5):
+            // what the core keeps has it, and the snapshot was taken again for the `AccountApplied` before this.
+            is ClientEvent.TagsChanged -> refreshTags(event.serverId)
             is ClientEvent.Reconnecting -> connection = ConnectionState.Reconnecting(event.attempt)
             is ClientEvent.Disconnected -> connection = ConnectionState.Disconnected(event.reason)
             is ClientEvent.Closed -> {

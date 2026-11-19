@@ -15,6 +15,34 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.outlined.Group
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.VerifiedUser
+import androidx.compose.material3.Icon
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import chat.lumia.kit.AvatarTone
+import chat.lumia.kit.LumiaTag
+import chat.lumia.kit.SettingsSection
+import chat.lumia.kit.TAG_CARD_SUBTITLE
+import chat.lumia.kit.TAG_CARD_TITLE
+import chat.lumia.kit.TAG_NOTE
+import chat.lumia.kit.TAG_ROLES_CAPTION
+import chat.lumia.kit.TAG_ROLES_LABEL
+import chat.lumia.kit.TAG_TITLES_CAPTION
+import chat.lumia.kit.TAG_TITLES_LABEL
+import chat.lumia.kit.grouped
+import chat.lumia.kit.rolesCount
+import chat.lumia.kit.settingsSections
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -80,8 +108,132 @@ import uniffi.lumia_ffi.StorageSummary
 /** The picture in Overview: a rail tile's shape, larger (`tokens.json` has no name for it). */
 private val PictureSize = LumiaTokens.tileSize + LumiaTokens.space12
 
+/**
+ * A server's settings as a phone has them (architecture 7.5, the
+ * "RolesPhoneSettings" board): its sections as a screen of their own, each
+ * pushed over it. Only the sections this account may use are listed
+ * (`settingsSections`): Overview with Manage server, Roles with Manage
+ * roles, Members with Manage members or Manage roles. Roles says how many
+ * the server has at its row's end, Members how many members.
+ */
 @Composable
-fun ServerSettingsScreen(session: LumiaSession, server: ServerSummary?, back: () -> Unit) {
+fun ServerSettingsScreen(session: LumiaSession, server: ServerSummary?, back: () -> Unit, push: (Screen) -> Unit) {
+    val name = server?.name ?: ""
+    val sections = server?.let { settingsSections(it) } ?: emptyList()
+    val members = server?.let { session.serverMembers[it.serverId] }
+    val shape = RoundedCornerShape(LumiaTokens.radius14)
+    PanelScreen(back = name.ifEmpty { "Server" }, onBack = back, title = "Server settings", subtitle = name) {
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).navigationBarsPadding().padding(LumiaTokens.space16)) {
+            Column(Modifier.fillMaxWidth().clip(shape).border(1.dp, LumiaTokens.lineStrong.color, shape)) {
+                sections.forEachIndexed { i, section ->
+                    if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(LumiaTokens.line.color))
+                    val (icon, note, screen) = when (section) {
+                        SettingsSection.OVERVIEW -> Triple(Icons.Outlined.Settings, null, Screen.ServerOverview(server!!.serverId))
+                        SettingsSection.ROLES -> Triple(Icons.Outlined.VerifiedUser, rolesCount(server!!.roles), Screen.Roles(server.serverId))
+                        SettingsSection.MEMBERS -> Triple(Icons.Outlined.Group, members?.takeIf { it.isNotEmpty() }?.let { grouped(it.size.toLong()) }, Screen.ServerMembers(server!!.serverId))
+                    }
+                    Row(
+                        Modifier.fillMaxWidth().height(SectionRow)
+                            .clickable(role = Role.Button) { push(screen) }
+                            .semantics(mergeDescendants = true) {}
+                            .padding(horizontal = LumiaTokens.space14),
+                        horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space10),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(icon, contentDescription = null, tint = LumiaTokens.inkQuiet.color, modifier = Modifier.size(LumiaTokens.space18))
+                        Text(section.label, style = LumiaTokens.textButton.style.copy(fontWeight = FontWeight(LumiaTokens.textMember.weight)), color = LumiaTokens.ink.color, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                        if (note != null) Text(note, style = LumiaTokens.textLinkSm.style.copy(fontWeight = FontWeight(LumiaTokens.textMeta.weight)), color = LumiaTokens.inkMuted.color)
+                        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = LumiaTokens.inkFaint.color, modifier = Modifier.size(LumiaTokens.space18))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** A section's row on the sections' screen, the board's 52 high (`tokens.json` has no name for it). */
+private val SectionRow = LumiaTokens.controlHeight + LumiaTokens.space6
+
+/**
+ * "Tag beside names" (architecture 7.5): what shows beside a member's name
+ * in messages and in the member list, their role or their title, as two
+ * pictured choices. Saved as it is chosen, as the switches are; refused or
+ * not reached, the choice goes back to what the server has and the line
+ * under it says why.
+ */
+@Composable
+private fun TagCard(session: LumiaSession, server: ServerSummary) {
+    val scope = rememberCoroutineScope()
+    // What is chosen while a change is on its way, and after one is refused, what the server has.
+    var titles by remember(server.tagTitles) { mutableStateOf(server.tagTitles) }
+    var busy by remember { mutableStateOf(false) }
+    var error by rememberSaveable { mutableStateOf("") }
+    var saved by rememberSaveable { mutableStateOf(false) }
+
+    fun choose(next: Boolean) {
+        if (busy || next == titles) return
+        titles = next
+        scope.launch {
+            busy = true
+            error = ""
+            saved = false
+            try {
+                session.setTagTitles(server.serverId, next)
+                saved = true
+            } catch (e: Exception) {
+                titles = server.tagTitles
+                error = serverSettingsRefused(e.lumiaCode, e.lumiaDetails["field"]) ?: e.lumiaMessage
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    LumiaCard(TAG_CARD_TITLE, TAG_CARD_SUBTITLE) {
+        Column(verticalArrangement = Arrangement.spacedBy(LumiaTokens.space12)) {
+            Row(Modifier.selectableGroup(), horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space12)) {
+                PictureChoice(TAG_ROLES_LABEL, TAG_ROLES_CAPTION, !titles, { choose(false) }) { modifier -> TagSketch(titles = false, modifier) }
+                PictureChoice(TAG_TITLES_LABEL, TAG_TITLES_CAPTION, titles, { choose(true) }) { modifier -> TagSketch(titles = true, modifier) }
+            }
+            Text(TAG_NOTE, style = LumiaTokens.textMeta.style, color = LumiaTokens.inkSecondary.color)
+            if (error.isNotEmpty()) LumiaErrorText(error)
+            if (saved) Text("Saved.", style = LumiaTokens.textMeta.style, color = LumiaTokens.inkSecondary.color)
+        }
+    }
+}
+
+/**
+ * A small drawing of what the tag beside a name shows (the design's
+ * `TagSketch`): two names, each a face and a bar, with a role's tag in its
+ * tone or a title's on the plain chip.
+ */
+@Composable
+private fun TagSketch(titles: Boolean, modifier: Modifier) {
+    val rows = if (titles) {
+        listOf(Triple(AvatarTone.PEACH, "Designer", null), Triple(AvatarTone.MINT, "Engineer", null))
+    } else {
+        listOf(Triple(AvatarTone.PEACH, "Admin", AvatarTone.INDIGO), Triple(AvatarTone.MINT, "Design", AvatarTone.PEACH))
+    }
+    Column(
+        modifier.background(LumiaTokens.surface.color).padding(horizontal = LumiaTokens.space10).clearAndSetSemantics {},
+        verticalArrangement = Arrangement.spacedBy(LumiaTokens.space10, Alignment.CenterVertically),
+    ) {
+        rows.forEachIndexed { i, (face, words, tone) ->
+            Row(horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space6), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(LumiaTokens.space14).clip(CircleShape).background(face.fill.color))
+                Box(Modifier.width(if (i == 0) LumiaTokens.space28 else LumiaTokens.space24).height(LumiaTokens.space4).clip(RoundedCornerShape(LumiaTokens.radiusPill)).background(LumiaTokens.borderActive.color))
+                LumiaTag(words, Modifier.weight(1f, fill = false), tone = tone, small = true)
+            }
+        }
+    }
+}
+
+/**
+ * The Overview section, pushed over the sections' screen: today's cards,
+ * and "Tag beside names" after the first.
+ */
+@Composable
+fun ServerOverviewScreen(session: LumiaSession, server: ServerSummary?, back: () -> Unit) {
     val context = LocalContext.current
     val focus = LocalFocusManager.current
     val scope = rememberCoroutineScope()
@@ -210,7 +362,7 @@ fun ServerSettingsScreen(session: LumiaSession, server: ServerSummary?, back: ()
     }
 
     val picture = server?.let { session.pictureOf(it.iconUrl) }
-    PanelScreen(back = name.ifEmpty { "Server" }, onBack = back, title = "Server settings", subtitle = name) {
+    PanelScreen(back = "Server settings", onBack = back, title = "Overview", subtitle = name) {
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).navigationBarsPadding().imePadding().padding(LumiaTokens.space16), verticalArrangement = Arrangement.spacedBy(LumiaTokens.space12)) {
             LumiaCard("Overview") {
                 Column(verticalArrangement = Arrangement.spacedBy(LumiaTokens.space12)) {
@@ -243,6 +395,8 @@ fun ServerSettingsScreen(session: LumiaSession, server: ServerSummary?, back: ()
                     LumiaPrimaryButton("Save", Modifier.fillMaxWidth(), enabled = !nameBusy && server != null && serverNameChanged(draft, name)) { saveName() }
                 }
             }
+            // Their role or their title beside a member's name (architecture 7.5), saved as it is chosen.
+            if (server != null) TagCard(session, server)
             LumiaCard("Message history", "How long this server keeps its messages.") {
                 Column(verticalArrangement = Arrangement.spacedBy(LumiaTokens.space12)) {
                     LumiaChoice(

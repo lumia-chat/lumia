@@ -16,7 +16,7 @@ import uniffi.lumia_ffi.ReactionSummary
 import uniffi.lumia_ffi.ReadStateSummary
 
 private fun member(id: String, display: String = "", handle: String = id, nickname: String = "") =
-    MemberSummary(id, handle, display, nickname, "", "", "", false, false)
+    MemberSummary(id, handle, display, nickname, "", "", "", false, false, emptyList(), "", false, false, null, false)
 
 private fun read(id: String, seq: ULong = 0uL, unread: UInt = 0u, mentions: UInt = 0u) = ReadStateSummary(id, seq, unread, mentions)
 

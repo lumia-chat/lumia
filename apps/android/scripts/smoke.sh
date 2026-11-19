@@ -22,7 +22,12 @@
 # saved after it says what it deletes, Show deleted messages turned on and
 # off again, each saved as it is turned, a picture set from elsewhere and
 # removed, and the rail drawing it (a plain member, at the very end, sees
-# the picture and is not offered the screen). Then the channel is read as assistive technology has it: each account's
+# the picture and is not offered the screen). Then roles, titles and tags
+# (architecture 7.5): the sections of Server settings, a role made by taps
+# and one made elsewhere moved over it from its menu, the tag beside a
+# name in the open channel following a role given, a title set and the
+# server's choice of the two, each made elsewhere, and a role deleted
+# through the sheet that asks first. Then the channel is read as assistive technology has it: each account's
 # messages in a row are one block, and the second account, typing through
 # the CLI, is named under the composer until it falls silent (protocol
 # 6.7), in light and dark. Then drafts (issue #23): a reply and words
@@ -298,7 +303,7 @@ shot home
 alive=$(running)
 # The app sends nothing; the CLI's message lands in its view when the gateway is up.
 "$cli" --data-dir "$data" send "$channel" "Still here?" >/dev/null
-for screen in server channel requests devices approve profile preferences new add newchannel invite serversettings browse members addpeople newdm profilecard yoursettings startover needssetup signin link; do shoot "$screen" 7; done
+for screen in server channel requests devices approve profile preferences new add newchannel invite serversettings serveroverview roles newrole servermembers browse members addpeople newdm profilecard yoursettings startover needssetup signin link; do shoot "$screen" 7; done
 [ -n "$alive" ] || { echo "FAIL: the app was not running after launch"; exit 1; }
 
 # Attachments (specs/media.md 5), in a channel of their own so the rest
@@ -742,7 +747,15 @@ renamed="Android smoke renamed"
 launch server 7
 [ "$(node "Server settings" button)" = yes ] || { echo "FAIL: the server's owner is not offered Server settings; see $work/server.png"; exit 1; }
 tap "Server settings"
-await "How long this server keeps its messages." || { echo "FAIL: Server settings did not open"; exit 1; }
+# Its sections are a screen of their own (architecture 7.5); the owner has all three, and Overview is today's cards.
+await 'text="Members"' || { echo "FAIL: Server settings did not open on its sections"; exit 1; }
+seen=$(ui)
+for section in Overview Roles Members; do
+  case "$seen" in *"text=\"$section\""*) ;; *) shot sections; echo "FAIL: the server's owner is not offered the $section section; see $work/sections.png"; exit 1 ;; esac
+done
+shot sections
+tap Overview
+await "How long this server keeps its messages." || { echo "FAIL: Overview did not open"; exit 1; }
 seen=$(ui)
 [ "$(fact "$seen" Forever chosen)" = yes ] || { echo "FAIL: a server that keeps its messages for ever does not show Forever as the choice"; exit 1; }
 case "$seen" in *'content-desc="Android smoke has no picture"'*) ;; *) echo "FAIL: the server's picture is not described as none"; exit 1 ;; esac
@@ -757,6 +770,8 @@ at=$(below "Android smoke" Name)
 tap Save
 await 'text="Saved."' || { shot serversettings-name; echo "FAIL: the name was not saved; see $work/serversettings-name.png"; exit 1; }
 "$cli" --data-dir "$data" servers | grep -q "  $renamed\$" || { echo "FAIL: the instance does not have the name saved"; exit 1; }
+# Message history is under "Tag beside names" now, further down than the screen is tall.
+reveal "Show deleted messages"
 tap "30 days"
 await "Messages older than 30 days will be deleted for everyone. This cannot be undone." \
   || { shot serversettings-shorter; echo "FAIL: choosing a shorter history did not say what it would delete; see $work/serversettings-shorter.png"; exit 1; }
@@ -777,6 +792,8 @@ shot serversettings-deleted
 tap "Show deleted messages"
 until_held showDeleted False False || { echo "FAIL: the instance still shows deleted messages after the switch was turned off"; exit 1; }
 "$cli" --data-dir "$data" server-update "$server" --icon "$picture" >/dev/null
+# The picture is in the first card, at the screen's head.
+reveal "Choose a picture…"
 await 'text="Remove"' || { shot serversettings-picture; echo "FAIL: a picture set from elsewhere did not reach the open screen; see $work/serversettings-picture.png"; exit 1; }
 sleep 2
 shot serversettings-picture
@@ -792,8 +809,89 @@ shot server-picture
 [ -n "$drawn" ] || { echo "FAIL: the rail does not draw the server's picture; see $work/server-picture.png"; exit 1; }
 launch serversettings 7 --es LUMIA_DEV_APPEARANCE dark
 shot serversettings-dark
+launch serveroverview 7 --es LUMIA_DEV_APPEARANCE dark
+shot serveroverview-dark
 "$adb" shell am force-stop "$bundle" >/dev/null 2>&1 || true
-echo "  server settings: ok (offered to the owner; renamed and the instance has it; 30 days said what it would delete, changed nothing until Save, and then the instance had it; Show deleted messages on and off, and the instance had each; a picture set elsewhere reached the open screen, Remove took it away, and set again the rail drew it)"
+echo "  server settings: ok (offered to the owner, its sections first; renamed and the instance has it; 30 days said what it would delete, changed nothing until Save, and then the instance had it; Show deleted messages on and off, and the instance had each; a picture set elsewhere reached the open screen, Remove took it away, and set again the rail drew it)"
+
+# Roles, titles and tags (architecture 7.5), as the server's owner: a role
+# made by taps, which the instance must have in its colour; a second made
+# elsewhere, which must reach the open list and go over the first by Move
+# up from its menu; then, with the channel open, the second account given
+# the role and a title from elsewhere, whose tag must be drawn beside its
+# name with nothing touched, the title once the server shows titles and the
+# role again once it shows roles; and Delete role, which asks first in a
+# sheet saying how many hold it. The CLI has no command for roles, so what
+# is made elsewhere is made over HTTP, as another session of the owner's.
+owner=$(sign_in)
+other_id=$("$cli" --data-dir "$other" whoami | grep -oE "[0-9a-f-]{36}" | head -1)
+roles_held() { curl -s -H "accept: application/json" -H "authorization: Bearer $owner" "$instance/api/v1/servers/$server/roles"; }
+# One field of the role named, as the instance has it; nothing for no such role.
+role_field() { # <name> <field>
+  roles_held | field "next((str(r.get('$2', '')) for r in d.get('roles', []) if r.get('name') == '$1'), '')"
+}
+role_order() { roles_held | field "' '.join(r['name'] for r in d.get('roles', []) if not r.get('isEveryone'))"; }
+elsewhere() { # <method> <path> <json>
+  curl -s -o /dev/null -X "$1" -H "content-type: application/json" -H "accept: application/json" -H "authorization: Bearer $owner" -d "$3" "$instance/api/v1$2"
+}
+launch roles 7
+await "A role is moved from its menu." || { shot roles; echo "FAIL: Roles did not open; see $work/roles.png"; exit 1; }
+tap "New role"
+await 'text="New role"' || { echo "FAIL: New role did not open a role's editor"; exit 1; }
+at=$(below Name Name)
+[ -n "$at" ] || { echo "FAIL: no Name field in a new role's editor"; exit 1; }
+# shellcheck disable=SC2086
+"$adb" shell input tap $at
+"$adb" shell input text "Helpers"
+tap Mint
+tap Save
+made=""
+for _ in $(seq 1 20); do [ "$(role_field Helpers color)" = mint ] && { made=yes; break; }; sleep 1; done
+[ -n "$made" ] || { shot role; echo "FAIL: the instance does not have the role made, in its colour; see $work/role.png"; exit 1; }
+# Saved, the editor is that role's: its header says who holds it, which a new role's does not.
+await "· 0 members" || { shot role; echo "FAIL: a new role saved did not open as its own editor; see $work/role.png"; exit 1; }
+shot role
+elsewhere POST "/servers/$server/roles" '{"role":{"name":"Second","color":"sky"}}'
+tap "Back to Roles"
+await 'content-desc="More for Second"' || { shot roles-two; echo "FAIL: a role made elsewhere did not reach the open list; see $work/roles-two.png"; exit 1; }
+[ "$(role_order)" = "Helpers Second" ] || { echo "FAIL: a new role did not start last, above Everyone: $(role_order)"; exit 1; }
+tap "More for Second"
+await 'text="Move up"' || { shot roles-menu; echo "FAIL: a role's More did not open its menu; see $work/roles-menu.png"; exit 1; }
+shot roles-menu
+tap "Move up"
+moved=""
+for _ in $(seq 1 20); do [ "$(role_order)" = "Second Helpers" ] && { moved=yes; break; }; sleep 1; done
+[ -n "$moved" ] || { shot roles-moved; echo "FAIL: Move up did not put the role over the other on the instance: $(role_order); see $work/roles-moved.png"; exit 1; }
+shot roles-moved
+# The second account's messages are the ones it sent at the start; none is sent here, the blocks further down counting them.
+launch channel 7 --es LUMIA_DEV_CHANNEL general
+await "Two in a row from one person are one block." || { shot channel-tag; echo "FAIL: the channel did not show the second account's messages; see $work/channel-tag.png"; exit 1; }
+case "$(ui)" in *'text="Helpers"'*) echo "FAIL: a tag is drawn beside a name before the role is given"; exit 1 ;; esac
+elsewhere PATCH "/servers/$server/members/$other_id" "{\"roles\":{\"roleIds\":[\"$(role_field Helpers roleId)\"]},\"title\":\"On call\"}"
+await 'text="Helpers"' || { shot channel-tag; echo "FAIL: a role given elsewhere did not become the tag beside the name in the open channel; see $work/channel-tag.png"; exit 1; }
+shot channel-tag
+elsewhere PATCH "/servers/$server" '{"memberTag":"MEMBER_TAG_TITLE"}'
+await 'text="On call"' || { shot channel-title; echo "FAIL: the server showing titles did not turn the tag into the title in the open channel; see $work/channel-title.png"; exit 1; }
+case "$(ui)" in *'text="Helpers"'*) shot channel-title; echo "FAIL: a role's tag is still drawn where the server shows titles; see $work/channel-title.png"; exit 1 ;; esac
+shot channel-title
+elsewhere PATCH "/servers/$server" '{"memberTag":"MEMBER_TAG_ROLE"}'
+await 'text="Helpers"' || { echo "FAIL: the server showing roles again did not bring the role's tag back"; exit 1; }
+# The title goes again, so the second account is as the rest of the script expects it.
+elsewhere PATCH "/servers/$server/members/$other_id" '{"title":""}'
+launch roles 7
+tap "More for Helpers"
+await 'text="Delete role"' || { echo "FAIL: a role's menu has no Delete role"; exit 1; }
+tap "Delete role"
+await 'text="Delete Helpers?"' || { shot role-delete; echo "FAIL: Delete role did not ask first; see $work/role-delete.png"; exit 1; }
+case "$(ui)" in *"1 member holds this role."*) ;; *) shot role-delete; echo "FAIL: the question does not say how many hold the role; see $work/role-delete.png"; exit 1 ;; esac
+shot role-delete
+[ -n "$(role_field Helpers roleId)" ] || { echo "FAIL: the role was deleted before the question was answered"; exit 1; }
+tap "Delete role"
+gone=""
+for _ in $(seq 1 20); do [ -z "$(role_field Helpers roleId)" ] && { gone=yes; break; }; sleep 1; done
+[ -n "$gone" ] || { echo "FAIL: Delete role, confirmed, left the role on the instance"; exit 1; }
+"$adb" shell am force-stop "$bundle" >/dev/null 2>&1 || true
+echo "  roles: ok (the sections; a role made by taps and the instance had it in its colour; one made elsewhere reached the list and Move up put it first; a role and a title given elsewhere were the tag beside the name in the open channel, as the server showed each; Delete role asked first, said who held it, and then the instance had it gone)"
 
 # Blocks, in the channel: the second account's two messages in a row are
 # under its name once, and the second says whose it is and when to a
@@ -1255,4 +1353,4 @@ case "$(ui)" in *"Server settings"*) echo "FAIL: $other_handle, a plain member, 
 [ -n "$drawn" ] || { echo "FAIL: the rail does not draw the server's picture for a member; see $work/member-server.png"; exit 1; }
 "$adb" shell am force-stop "$bundle" >/dev/null 2>&1 || true
 echo "  a member: $work/member-server.png ($other_handle is not offered Server settings, and the rail draws the server's picture)"
-echo "smoke: ok (launched signed in, every screen screenshotted under $work; server settings renamed the server, kept its messages 30 days after saying what that deletes, and a picture set and removed reached the screen and the rail, offered to the owner and not to a member; preferences reached from the account menu, kept across a launch and as the phone was turned, dark, Compact, Minimal and the font size 20 drawn, a setting changed after a preset shown as Custom; messages in blocks and someone typing in the channel; a draft and its reply kept through another channel and a force-stop, and cleared by its send; a mention became a notification and its tap opened the channel; Sign out in the account menu ended the session and the push subscription and said nothing; another account signed in on the same phone was the only one it showed and was sent notices for; a session revoked from elsewhere took the subscription with it, and the app went back to sign-in and said so, opened afterwards or open at the time)"
+echo "smoke: ok (launched signed in, every screen screenshotted under $work; server settings renamed the server, kept its messages 30 days after saying what that deletes, and a picture set and removed reached the screen and the rail, offered to the owner and not to a member; a role made, moved and deleted, and the tag beside a name following a role, a title and the server's choice made elsewhere; preferences reached from the account menu, kept across a launch and as the phone was turned, dark, Compact, Minimal and the font size 20 drawn, a setting changed after a preset shown as Custom; messages in blocks and someone typing in the channel; a draft and its reply kept through another channel and a force-stop, and cleared by its send; a mention became a notification and its tap opened the channel; Sign out in the account menu ended the session and the push subscription and said nothing; another account signed in on the same phone was the only one it showed and was sent notices for; a session revoked from elsewhere took the subscription with it, and the app went back to sign-in and said so, opened afterwards or open at the time)"

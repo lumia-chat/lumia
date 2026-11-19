@@ -61,6 +61,19 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.paneTitle
+import androidx.compose.ui.text.style.TextDecoration
+import chat.lumia.kit.LumiaNameLine
+import chat.lumia.kit.TagLook
+import chat.lumia.kit.memberMark
+import chat.lumia.kit.memberOffers
+import chat.lumia.kit.memberRefusal
+import chat.lumia.kit.roleChoices
+import chat.lumia.kit.rolesHeld
+import chat.lumia.kit.toggledRole
 import chat.lumia.kit.AvatarTone
 import chat.lumia.kit.LumiaAvatar
 import chat.lumia.kit.LumiaCard
@@ -175,6 +188,10 @@ fun MemberRow(
     onLongClick: (() -> Unit)? = null,
     trailing: (@Composable () -> Unit)? = null,
     picture: String? = null,
+    // Their role or their title, as the server shows (architecture 7.5): the member's own `tag`, before any word of the list's.
+    roleTag: TagLook? = null,
+    // Whether [tag] is in the accent ("You").
+    accent: Boolean = false,
 ) {
     val dot = when (status) {
         "ONLINE" -> LumiaTokens.online.color
@@ -197,9 +214,19 @@ fun MemberRow(
             }
         }
         Column(Modifier.weight(1f)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space6), verticalAlignment = Alignment.CenterVertically) {
-                Text(name, style = LumiaTokens.textMember.style, color = if (dim) LumiaTokens.inkQuiet.color else LumiaTokens.ink.color, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-                if (tag != null) LumiaTag(tag)
+            // A long tag (a title) gives way before the name does, and is cut in its turn.
+            LumiaNameLine(
+                LumiaTokens.space6,
+                tag = if (tag != null || roleTag != null) {
+                    {
+                        Row(horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space6), verticalAlignment = Alignment.CenterVertically) {
+                            if (roleTag != null) LumiaTag(roleTag, Modifier.weight(1f, fill = false), small = true)
+                            if (tag != null) LumiaTag(tag, accent = accent, small = true)
+                        }
+                    }
+                } else null,
+            ) {
+                Text(name, style = LumiaTokens.textMember.style, color = if (dim) LumiaTokens.inkQuiet.color else LumiaTokens.ink.color, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             if (!line.isNullOrEmpty()) Text(line, style = LumiaTokens.textMeta.style, color = LumiaTokens.inkSecondary.color, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
@@ -285,6 +312,8 @@ fun ChannelMembersScreen(
                         tone = AvatarTone.of(id),
                         status = server?.let { session.presenceOf(id, it.serverId) },
                         tag = if (me) "You" else null,
+                        accent = true,
+                        roleTag = server?.let { session.tagOf(it.serverId, id) },
                         onClick = { card = id },
                         onLongClick = if (canRemove) ({ menu = id }) else null,
                         trailing = if (canRemove) ({ MemberRemoveButton("Remove ${session.nameOf(id)} from #$name", enabled = !busy) { remove(id) } }) else null,
@@ -442,7 +471,7 @@ fun NewServerDmScreen(session: LumiaSession, server: ServerSummary?, back: () ->
  * bio; Message (a server DM) first, unless they take none here, and
  * Message privately (a personal DM) beside it. Nothing to do for oneself.
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun ProfileCard(
     session: LumiaSession,
@@ -497,16 +526,63 @@ fun ProfileCard(
         }
     }
 
+    // Roles and titles (architecture 7.5; the "Profile card" boards): the member as the server's list has them,
+    // what of theirs is this account's to change, and which of the card's two Edits is open in the card's place.
+    val listed = session.memberOf(server.serverId, accountId)
+    val offers = listed?.let { memberOffers(server, it, me) }
+    val held = listed?.let { rolesHeld(server.roles, it.roleIds) } ?: emptyList()
+    val mark = listed?.let { memberMark(it) }
+    val title = listed?.title ?: ""
+    var editing by rememberSaveable { mutableStateOf<String?>(null) }
+
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = LumiaTokens.surface.color) {
+        if (editing != null && listed != null) {
+            MemberEditPage(session, server, listed, name, roles = editing == EDIT_ROLES) { editing = null }
+            return@ModalBottomSheet
+        }
         Column(Modifier.padding(start = LumiaTokens.space24, end = LumiaTokens.space24, bottom = LumiaTokens.space40), verticalArrangement = Arrangement.spacedBy(LumiaTokens.space16)) {
             Row(horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space14), verticalAlignment = Alignment.CenterVertically) {
                 LumiaAvatar(initialsOf(name), AvatarTone.of(accountId), LumiaTokens.avatarLg, session.avatarOf(accountId))
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(LumiaTokens.space2)) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space6), verticalAlignment = Alignment.CenterVertically) {
-                        Text(name, style = LumiaTokens.titleAuth.style, color = LumiaTokens.ink.color, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-                        if (me) LumiaTag("You")
+                    // This account, and who they are to the server: its owner, or a guest. Being the owner is no role and no tag.
+                    LumiaNameLine(
+                        LumiaTokens.space6,
+                        tag = if (me || mark != null) {
+                            {
+                                Row(horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space6), verticalAlignment = Alignment.CenterVertically) {
+                                    if (me) LumiaTag("You", accent = true)
+                                    if (mark != null) LumiaTag(mark, accent = true)
+                                }
+                            }
+                        } else null,
+                    ) {
+                        Text(name, style = LumiaTokens.titleAuth.style, color = LumiaTokens.ink.color, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    // Their title under the name, with Edit for those who may; "Add a title" where there is none to edit.
+                    if (title.isNotEmpty() || offers?.title == true) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space2), verticalAlignment = Alignment.CenterVertically) {
+                            if (title.isNotEmpty()) Text(title, style = LumiaTokens.textMember.style, color = LumiaTokens.ink.color, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                            if (offers?.title == true) {
+                                if (title.isEmpty()) EditLink("Add a title", "Add a title", lead = true) { editing = EDIT_TITLE }
+                                else EditLink("Edit", "Edit title") { editing = EDIT_TITLE }
+                            }
+                        }
                     }
                     member?.handle?.takeIf { it.isNotEmpty() }?.let { Text("@$it", style = LumiaTokens.textMeta.style, color = LumiaTokens.inkSecondary.color) }
+                }
+            }
+            // Every role they hold, whatever the server shows beside names, one not shown as a tag too.
+            if (held.isNotEmpty() || offers?.roles == true) {
+                Column(verticalArrangement = Arrangement.spacedBy(LumiaTokens.space8)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Roles", style = LumiaTokens.textSection.style, color = LumiaTokens.inkMuted.color, modifier = Modifier.weight(1f))
+                        if (offers?.roles == true) EditLink("Edit", "Edit roles") { editing = EDIT_ROLES }
+                    }
+                    if (held.isNotEmpty()) {
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space6), verticalArrangement = Arrangement.spacedBy(LumiaTokens.space4)) {
+                            for (r in held) LumiaTag(r.label, tone = r.tone)
+                        }
+                    }
                 }
             }
             val pronouns = member?.pronouns ?: ""
@@ -526,6 +602,80 @@ fun ProfileCard(
                 }
                 if (note.isNotEmpty()) LumiaNotice(Icons.Filled.Group, text = note)
             }
+        }
+    }
+}
+
+private const val EDIT_ROLES = "roles"
+private const val EDIT_TITLE = "title"
+
+/**
+ * "Edit" beside a card's title and beside Roles (the boards' underlined
+ * word), and "Add a title": a button named for what it edits, no taller
+ * in the line than its words. [lead] starts the line, with no room before
+ * it.
+ */
+@Composable
+private fun EditLink(label: String, description: String, lead: Boolean = false, onClick: () -> Unit) {
+    TightTarget(LumiaTokens.space18 + LumiaTokens.space2) {
+        Box(
+            Modifier.heightIn(min = LumiaTokens.tileSize).clip(RoundedCornerShape(LumiaTokens.radius8))
+                .clickable(role = Role.Button, onClick = onClick)
+                .semantics { contentDescription = description }
+                .padding(start = if (lead) 0.dp else LumiaTokens.space6, end = LumiaTokens.space6),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(label, style = LumiaTokens.textLinkSm.style.copy(textDecoration = TextDecoration.Underline), color = LumiaTokens.inkBody.color, maxLines = 1)
+        }
+    }
+}
+
+/**
+ * What a card's Edit opens, in the card's place (the boards' "Roles" and
+ * "Title" against the card, a sheet's page here): the member's roles to
+ * tick, those not this account's to give or take with a lock, or their
+ * title, up to 32 characters and cleared to have none; Cancel and Save,
+ * each back to the card. A refusal is said over the buttons.
+ */
+@Composable
+private fun MemberEditPage(session: LumiaSession, server: ServerSummary, member: MemberSummary, name: String, roles: Boolean, done: () -> Unit) {
+    val scope = rememberCoroutineScope()
+    var held by rememberSaveable { mutableStateOf(member.roleIds) }
+    var title by rememberSaveable { mutableStateOf(member.title) }
+    var busy by remember { mutableStateOf(false) }
+    var error by rememberSaveable { mutableStateOf("") }
+
+    fun save() {
+        if (busy) return
+        scope.launch {
+            busy = true
+            error = ""
+            try {
+                saveMember(session, server, member, held.takeIf { roles }, title.takeIf { !roles })
+                done()
+            } catch (e: Exception) {
+                error = memberRefusal(e.lumiaCode, e.lumiaDetails["field"], e.lumiaMessage)
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    Column(
+        Modifier.fillMaxWidth().padding(start = LumiaTokens.space24, end = LumiaTokens.space24, bottom = LumiaTokens.space24).navigationBarsPadding().imePadding()
+            .semantics { paneTitle = if (roles) "Roles" else "Title" },
+        verticalArrangement = Arrangement.spacedBy(LumiaTokens.space16),
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(LumiaTokens.space4)) {
+            Text(if (roles) "Roles" else "Title", style = LumiaTokens.titleServer.style, color = LumiaTokens.ink.color, modifier = Modifier.semantics { heading() })
+            Text("$name in ${server.name}", style = LumiaTokens.textSubtitle.style, color = LumiaTokens.inkSecondary.color)
+        }
+        if (roles) RoleChoicesList(roleChoices(server.roles, held), enabled = !busy) { id -> held = toggledRole(server.roles, held, id) }
+        else TitleField(title) { title = it }
+        if (error.isNotEmpty()) LumiaErrorText(error)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space8, Alignment.End)) {
+            LumiaSecondaryButton("Cancel", onClick = done)
+            LumiaPrimaryButton("Save", enabled = !busy) { save() }
         }
     }
 }
@@ -675,7 +825,7 @@ fun DefaultChannelsCard(session: LumiaSession, server: ServerSummary) {
  * The long press's menu does the same.
  */
 @Composable
-private fun MemberRemoveButton(label: String, enabled: Boolean, onClick: () -> Unit) {
+internal fun MemberRemoveButton(label: String, enabled: Boolean, onClick: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val shape = RoundedCornerShape(LumiaTokens.radius8)

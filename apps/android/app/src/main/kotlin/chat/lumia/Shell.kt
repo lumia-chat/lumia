@@ -37,6 +37,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import chat.lumia.kit.Route
+import chat.lumia.kit.SettingsSection
+import chat.lumia.kit.settingsSections
 import chat.lumia.kit.Unread
 import chat.lumia.kit.unreadIn
 import chat.lumia.kit.withUnread
@@ -163,6 +165,16 @@ fun Shell(store: AppStore, session: LumiaSession, devScreen: String?, devChannel
                 "newchannel" -> { place = Place.Server(first); stack = listOf(Screen.NewChannel(first)) }
                 "invite" -> { place = Place.Server(first); stack = listOf(Screen.Invite(first)) }
                 "serversettings" -> { place = Place.Server(first); stack = listOf(Screen.ServerSettings(first)) }
+                // Roles and titles (architecture 7.5): each section, and the editor of the first role this account manages.
+                "serveroverview" -> { place = Place.Server(first); stack = listOf(Screen.ServerSettings(first), Screen.ServerOverview(first)) }
+                "roles" -> { place = Place.Server(first); stack = listOf(Screen.ServerSettings(first), Screen.Roles(first)) }
+                "role" -> {
+                    place = Place.Server(first)
+                    val role = servers.firstOrNull()?.roles?.firstOrNull { !it.isEveryone && it.canManage }
+                    stack = listOfNotNull(Screen.ServerSettings(first), Screen.Roles(first), role?.let { Screen.RoleEditor(first, it.roleId) })
+                }
+                "newrole" -> { place = Place.Server(first); stack = listOf(Screen.ServerSettings(first), Screen.Roles(first), Screen.RoleEditor(first)) }
+                "servermembers" -> { place = Place.Server(first); stack = listOf(Screen.ServerSettings(first), Screen.ServerMembers(first)) }
                 "browse" -> { place = Place.Server(first); stack = listOf(Screen.Browse(first)) }
                 "preview" -> {
                     place = Place.Server(first)
@@ -200,8 +212,9 @@ fun Shell(store: AppStore, session: LumiaSession, devScreen: String?, devChannel
     // A screen kept from before (the saved state outlasts the process) whose
     // channel or server the account does not have, having left it since or
     // being another account, is dropped once the snapshot says so.
-    LaunchedEffect(channels.map { it.channelId }, servers.map { it.serverId }) {
+    LaunchedEffect(channels.map { it.channelId }, servers.map { Triple(it.serverId, settingsSections(it), it.roles.map { r -> r.roleId }) }) {
         if (session.snapshot == null) return@LaunchedEffect
+        val server = { id: String -> servers.firstOrNull { it.serverId == id } }
         val kept = stack.filter { screen ->
             when (screen) {
                 is Screen.Conversation -> channels.any { it.channelId == screen.id }
@@ -214,8 +227,15 @@ fun Shell(store: AppStore, session: LumiaSession, devScreen: String?, devChannel
                 is Screen.YourSettings -> servers.any { it.serverId == screen.serverId }
                 is Screen.NewChannel -> servers.any { it.serverId == screen.serverId }
                 is Screen.Invite -> servers.any { it.serverId == screen.serverId }
-                // And Server settings once this account may no longer change them.
-                is Screen.ServerSettings -> servers.any { it.serverId == screen.serverId && it.canManage }
+                // And Server settings once this account may no longer change them, each section
+                // by what it takes (`settingsSections`); a role's screens go with a role deleted,
+                // here or elsewhere.
+                is Screen.ServerSettings -> server(screen.serverId)?.let { settingsSections(it).isNotEmpty() } == true
+                is Screen.ServerOverview -> server(screen.serverId)?.let { SettingsSection.OVERVIEW in settingsSections(it) } == true
+                is Screen.Roles -> server(screen.serverId)?.let { SettingsSection.ROLES in settingsSections(it) } == true
+                is Screen.RoleEditor -> server(screen.serverId)?.let { s -> SettingsSection.ROLES in settingsSections(s) && (screen.roleId == null || s.roles.any { it.roleId == screen.roleId }) } == true
+                is Screen.RoleHolders -> server(screen.serverId)?.let { s -> SettingsSection.ROLES in settingsSections(s) && s.roles.any { it.roleId == screen.roleId } } == true
+                is Screen.ServerMembers -> server(screen.serverId)?.let { SettingsSection.MEMBERS in settingsSections(it) } == true
                 else -> true
             }
         }
@@ -272,7 +292,16 @@ fun Shell(store: AppStore, session: LumiaSession, devScreen: String?, devChannel
         Screen.AddServer -> AddServerScreen(session, pop) { id -> replace(emptyList()); place = Place.Server(id) }
         is Screen.NewChannel -> NewChannelScreen(session, servers.firstOrNull { it.serverId == top.serverId }, pop) { id -> place = Place.Server(top.serverId); replace(listOf(Screen.Channel(id))) }
         is Screen.Invite -> InviteScreen(session, servers.firstOrNull { it.serverId == top.serverId }, pop)
-        is Screen.ServerSettings -> ServerSettingsScreen(session, servers.firstOrNull { it.serverId == top.serverId }, pop)
+        // A server's settings: its sections, and each pushed over them (architecture 7.5).
+        is Screen.ServerSettings -> ServerSettingsScreen(session, servers.firstOrNull { it.serverId == top.serverId }, pop, push)
+        is Screen.ServerOverview -> ServerOverviewScreen(session, servers.firstOrNull { it.serverId == top.serverId }, pop)
+        is Screen.Roles -> RolesScreen(session, servers.firstOrNull { it.serverId == top.serverId }, pop, push)
+        // A role's editor is its own screen: what one holds (a draft) is not another's. A new role saved is that role's editor, in its place.
+        is Screen.RoleEditor -> key(top.serverId, top.roleId) {
+            RoleEditorScreen(session, servers.firstOrNull { it.serverId == top.serverId }, top.roleId, pop, opened = { id -> stack = stack.dropLast(1) + Screen.RoleEditor(top.serverId, id) }, push)
+        }
+        is Screen.RoleHolders -> RoleHoldersScreen(session, servers.firstOrNull { it.serverId == top.serverId }, top.roleId, pop)
+        is Screen.ServerMembers -> ServerMembersScreen(session, servers.firstOrNull { it.serverId == top.serverId }, pop)
         // Join opens the channel in the Browse screen's place, so back is the server.
         is Screen.Browse -> BrowseScreen(session, servers.firstOrNull { it.serverId == top.serverId }, pop) { id -> stack = stack.dropLast(1) + Screen.Channel(id) }
         is Screen.Members -> ChannelMembersScreen(session, top.channelId, devCard, pop, push, replace)
@@ -581,8 +610,9 @@ fun ServerScreen(session: LumiaSession, server: ServerSummary, push: (Screen) ->
             item { LumiaLinkButton("Invite people", Modifier.padding(start = LumiaTokens.space2, top = LumiaTokens.space12)) { push(Screen.Invite(server.serverId)) } }
             // Every member's own switches here (architecture 6.8).
             item { LumiaLinkButton("Your settings in ${server.name}", Modifier.padding(start = LumiaTokens.space2)) { push(Screen.YourSettings(server.serverId)) } }
-            // Offered to whoever may change them: the owner, or a member whose roles grant MANAGE_SERVER (architecture 6.7).
-            if (server.canManage) {
+            // Offered to whoever may use one of its sections: Overview with Manage server (architecture 6.7),
+            // Roles with Manage roles, Members with Manage members or Manage roles (7.5).
+            if (settingsSections(server).isNotEmpty()) {
                 item { LumiaLinkButton("Server settings", Modifier.padding(start = LumiaTokens.space2)) { push(Screen.ServerSettings(server.serverId)) } }
             }
         }

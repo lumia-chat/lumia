@@ -752,6 +752,8 @@ fun ChannelScreen(store: AppStore, session: LumiaSession, channelId: String, dis
                                 washed = m.mentionsMe,
                                 flashed = flash == m.messageId,
                                 onLongPress = if (!m.deleted && member) ({ actionsFor = m.messageId }) else null,
+                                // Their role or title, as the server shows: the author's tag in its member list (a message carries none).
+                                tag = server?.let { session.tagOf(it.serverId, m.authorAccountId) },
                             )
                         }
                     }

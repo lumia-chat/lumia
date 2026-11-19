@@ -198,7 +198,7 @@ private fun Section(title: String, subtitle: String, content: @Composable () -> 
  * caption read together, and its place among the three.
  */
 @Composable
-private fun RowScope.PictureChoice(name: String, caption: String?, chosen: Boolean, onChoose: () -> Unit, sketch: @Composable (Modifier) -> Unit) {
+internal fun RowScope.PictureChoice(name: String, caption: String?, chosen: Boolean, onChoose: () -> Unit, sketch: @Composable (Modifier) -> Unit) {
     val accent = LumiaTokens.accent.color
     val outline = LumiaTokens.lineStrong.color
     val shape = RoundedCornerShape(LumiaTokens.radius12)
