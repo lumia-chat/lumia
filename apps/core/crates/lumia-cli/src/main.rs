@@ -9,6 +9,8 @@
 //!     lumia-cli send <channel-id> "the plan" --attach plan.pdf --attach photo.jpg
 //!     lumia-cli attachments <channel-id> <message-id> --out ./downloads
 //!     lumia-cli tail <channel-id>
+//!     lumia-cli role-create <server-id> Moderator --color green --grant manage_messages
+//!     lumia-cli member-update <server-id> <account-id> --give Moderator --title "Staff Engineer"
 //!     lumia-cli scenario all
 //!
 //! State lives under the platform data directory (or `--data-dir`): one
@@ -36,8 +38,9 @@ use lumia_client::ClientError;
 use lumia_core::keystore::Keystore;
 use lumia_core::mls::projection::Projection;
 use lumia_core::proto::{
-    command, event, mention, AddReaction, Command, DmOperation, Mention, QuoteReply,
-    RemoveReaction, SendMessage,
+    command, event, mention, Account, AddReaction, Command, DmOperation, Member, MemberTag,
+    MembershipKind, Mention, Permission, QuoteReply, RemoveReaction, Role, SendMessage,
+    UpdateMemberRequest, UpdateMembershipRequest, UpdateRoleRequest,
 };
 use lumia_core::store::Store;
 use lumia_core::sync::Notice;
@@ -94,7 +97,8 @@ enum Cmd {
     /// Create a server you own.
     ServerCreate { name: String },
     /// Change a server's settings: its name, how long it keeps messages
-    /// (`--retention 0` for ever), its picture (a file), or none (`--no-icon`).
+    /// (`--retention 0` for ever), its picture (a file), or none (`--no-icon`),
+    /// and what the tag beside a name shows (`--tag titles` or `--tag roles`).
     ServerUpdate {
         server_id: String,
         #[arg(long)]
@@ -105,16 +109,89 @@ enum Cmd {
         icon: Option<PathBuf>,
         #[arg(long)]
         no_icon: bool,
+        #[arg(long, value_parser = ["roles", "titles"])]
+        tag: Option<String>,
+    },
+    /// List a server's roles in order, highest first, `@everyone` last:
+    /// id, name, colour, whether it is shown as a tag, and what it grants.
+    Roles { server_id: String },
+    /// Create a role, placed last above `@everyone` (architecture 7.5):
+    /// `--color` one of the nine tones, `--no-tag` for one that is nobody's
+    /// tag, `--grant` (repeatable) a permission by name (`manage_messages`).
+    RoleCreate {
+        server_id: String,
+        name: String,
+        #[arg(long, default_value = "")]
+        color: String,
+        #[arg(long)]
+        no_tag: bool,
+        #[arg(long)]
+        grant: Vec<String>,
+    },
+    /// Change what is named of a role and nothing else: `--name`, `--color`
+    /// (`""` for none), `--tag` or `--no-tag`, and permissions switched on
+    /// (`--grant`) and off (`--revoke`). A role is named by id or by name.
+    RoleUpdate {
+        server_id: String,
+        role: String,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        color: Option<String>,
+        #[arg(long, conflicts_with = "no_tag")]
+        tag: bool,
+        #[arg(long)]
+        no_tag: bool,
+        #[arg(long)]
+        grant: Vec<String>,
+        #[arg(long)]
+        revoke: Vec<String>,
+    },
+    /// Delete a role, from whoever holds it too.
+    RoleDelete { server_id: String, role: String },
+    /// Put a server's roles in this order, highest first: every role but
+    /// `@everyone`, once each, by id or by name.
+    RoleOrder {
+        server_id: String,
+        roles: Vec<String>,
+    },
+    /// List a server's members: account id, handle, member or guest, title,
+    /// and the roles held, highest first.
+    Members { server_id: String },
+    /// Change a member's roles and title in one request: `--give` and
+    /// `--take` (repeatable) a role by id or by name, `--title` (`""` clears
+    /// it). This account's own title is set with `title`.
+    MemberUpdate {
+        server_id: String,
+        account_id: String,
+        #[arg(long)]
+        give: Vec<String>,
+        #[arg(long)]
+        take: Vec<String>,
+        #[arg(long)]
+        title: Option<String>,
+    },
+    /// Set this account's own title in a server (`""` clears it).
+    Title { server_id: String, title: String },
+    /// Remove a member from a server.
+    Kick {
+        server_id: String,
+        account_id: String,
     },
     /// Create a channel in a server.
     ChannelCreate { server_id: String, name: String },
-    /// Mint an invite link for a server (unlimited unless `--max-uses`, open-ended unless `--hours`).
+    /// Mint an invite link for a server (unlimited unless `--max-uses`, open-ended unless `--hours`);
+    /// `--guest` makes whoever takes it a guest, for `--guest-days` (default the instance's).
     InviteCreate {
         server_id: String,
         #[arg(long, default_value_t = 0)]
         max_uses: u32,
         #[arg(long)]
         hours: Option<u32>,
+        #[arg(long)]
+        guest: bool,
+        #[arg(long, default_value_t = 0)]
+        guest_days: u32,
     },
     /// Show what an invite link or code leads to, without signing in.
     Invite { link_or_code: String },
@@ -486,10 +563,14 @@ async fn run(cli: Cli) -> Result<(), ClientError> {
             retention,
             icon,
             no_icon,
+            tag,
         } => {
             let mut server = None;
             if name.is_some() || retention.is_some() {
                 server = Some(api.update_server(&server_id, name, retention).await?);
+            }
+            if let Some(tag) = tag {
+                server = Some(api.set_tag_titles(&server_id, tag == "titles").await?);
             }
             if let Some(path) = icon {
                 let picture = std::fs::read(&path)
@@ -504,7 +585,7 @@ async fn run(cli: Cli) -> Result<(), ClientError> {
             }
             let s = server.ok_or_else(|| ClientError::State("nothing to change".into()))?;
             println!(
-                "{}  {}  retention {}  icon {}",
+                "{}  {}  retention {}  icon {}  tag {}",
                 wire::display(&s.server_id),
                 s.name,
                 if s.retention_days == 0 {
@@ -516,8 +597,150 @@ async fn run(cli: Cli) -> Result<(), ClientError> {
                     "none"
                 } else {
                     &s.icon_url
+                },
+                if s.member_tag == MemberTag::Title as i32 {
+                    "titles"
+                } else {
+                    "roles"
                 }
             );
+            Ok(())
+        }
+        Cmd::Roles { server_id } => {
+            for role in api.roles(&server_id).await?.roles {
+                println!("{}", role_line(&role));
+            }
+            Ok(())
+        }
+        Cmd::RoleCreate {
+            server_id,
+            name,
+            color,
+            no_tag,
+            grant,
+        } => {
+            let role = Role {
+                name,
+                color,
+                hide_tag: no_tag,
+                permissions: permissions_of(&grant)?
+                    .into_iter()
+                    .map(|p| p as i32)
+                    .collect(),
+                ..Default::default()
+            };
+            println!("{}", role_line(&api.create_role(&server_id, role).await?));
+            Ok(())
+        }
+        Cmd::RoleUpdate {
+            server_id,
+            role,
+            name,
+            color,
+            tag,
+            no_tag,
+            grant,
+            revoke,
+        } => {
+            let roles = api.roles(&server_id).await?.roles;
+            let role_id = wire::display(&role_of(&roles, &role)?.role_id);
+            let req = UpdateRoleRequest {
+                name,
+                color,
+                hide_tag: (tag || no_tag).then_some(no_tag),
+                grant: permissions_of(&grant)?
+                    .into_iter()
+                    .map(|p| p as i32)
+                    .collect(),
+                revoke: permissions_of(&revoke)?
+                    .into_iter()
+                    .map(|p| p as i32)
+                    .collect(),
+            };
+            println!(
+                "{}",
+                role_line(&api.change_role(&server_id, &role_id, &req).await?)
+            );
+            Ok(())
+        }
+        Cmd::RoleDelete { server_id, role } => {
+            let roles = api.roles(&server_id).await?.roles;
+            let found = role_of(&roles, &role)?;
+            api.delete_role(&server_id, &wire::display(&found.role_id))
+                .await?;
+            println!("deleted {}", found.name);
+            Ok(())
+        }
+        Cmd::RoleOrder { server_id, roles } => {
+            let held = api.roles(&server_id).await?.roles;
+            let order = roles
+                .iter()
+                .map(|r| role_of(&held, r).map(|found| found.role_id.clone()))
+                .collect::<Result<Vec<_>, _>>()?;
+            for role in api.reorder_roles(&server_id, order).await?.roles {
+                println!("{}", role_line(&role));
+            }
+            Ok(())
+        }
+        Cmd::Members { server_id } => {
+            let roles = api.roles(&server_id).await?.roles;
+            let mut cursor = String::new();
+            loop {
+                let page = api.members(&server_id, "", &cursor).await?;
+                for m in &page.members {
+                    let account = page.accounts.iter().find(|a| a.account_id == m.account_id);
+                    println!("{}", member_line(m, account, &roles));
+                }
+                cursor = page.page.map(|p| p.next_cursor).unwrap_or_default();
+                if cursor.is_empty() {
+                    break;
+                }
+            }
+            Ok(())
+        }
+        Cmd::MemberUpdate {
+            server_id,
+            account_id,
+            give,
+            take,
+            title,
+        } => {
+            if give.is_empty() && take.is_empty() && title.is_none() {
+                return Err(ClientError::State("nothing to change".into()));
+            }
+            let roles = api.roles(&server_id).await?.roles;
+            let ids = |names: &[String]| {
+                names
+                    .iter()
+                    .map(|r| role_of(&roles, r).map(|found| found.role_id.clone()))
+                    .collect::<Result<Vec<_>, _>>()
+            };
+            let req = UpdateMemberRequest {
+                add_role_ids: ids(&give)?,
+                remove_role_ids: ids(&take)?,
+                title,
+                ..Default::default()
+            };
+            let member = api.update_member(&server_id, &account_id, &req).await?;
+            println!("{}", member_line(&member, None, &roles));
+            Ok(())
+        }
+        Cmd::Title { server_id, title } => {
+            let req = UpdateMembershipRequest {
+                title: Some(title),
+                ..Default::default()
+            };
+            let member = api.update_membership(&server_id, &req).await?;
+            let roles = api.roles(&server_id).await?.roles;
+            println!("{}", member_line(&member, None, &roles));
+            Ok(())
+        }
+        Cmd::Kick {
+            server_id,
+            account_id,
+        } => {
+            api.remove_member(&server_id, &account_id).await?;
+            println!("removed {account_id}");
             Ok(())
         }
         Cmd::ChannelCreate { server_id, name } => {
@@ -531,6 +754,8 @@ async fn run(cli: Cli) -> Result<(), ClientError> {
             server_id,
             max_uses,
             hours,
+            guest,
+            guest_days,
         } => {
             let expires_at = hours.map(|h| {
                 prost_types::Timestamp::from(
@@ -542,6 +767,8 @@ async fn run(cli: Cli) -> Result<(), ClientError> {
                 server_id: parse_uuid(&server_id)?,
                 max_uses,
                 expires_at,
+                as_guest: guest,
+                guest_days,
                 ..Default::default()
             };
             let invite = api.create_invite(&req).await?;
@@ -1828,6 +2055,96 @@ async fn save_attachments(
         println!("{} ({} bytes)", path.display(), bytes.len());
     }
     Ok(())
+}
+
+/// A role named by its id or by its name, whatever its capitals; `@everyone`
+/// and `everyone` name the role every member holds.
+fn role_of<'a>(roles: &'a [Role], wanted: &str) -> Result<&'a Role, ClientError> {
+    let id = uuid::Uuid::parse_str(wanted).ok().map(wire::uuid_bytes);
+    let name = wanted.trim_start_matches('@');
+    roles
+        .iter()
+        .find(|r| {
+            id.as_ref() == Some(&r.role_id)
+                || (r.is_everyone && name.eq_ignore_ascii_case("everyone"))
+                || (!r.is_everyone && r.name.eq_ignore_ascii_case(name))
+        })
+        .ok_or_else(|| ClientError::State(format!("no role {wanted}")))
+}
+
+/// Permissions by their names, in the wire's capitals or not (`manage_messages`).
+fn permissions_of(names: &[String]) -> Result<Vec<Permission>, ClientError> {
+    names
+        .iter()
+        .map(|n| {
+            Permission::from_str_name(&n.to_ascii_uppercase())
+                .ok_or_else(|| ClientError::State(format!("no permission {n}")))
+        })
+        .collect()
+}
+
+/// A role as `roles` prints it: id, name, colour, tag, what it grants.
+fn role_line(role: &Role) -> String {
+    let granted: Vec<String> = role
+        .permissions
+        .iter()
+        .filter_map(|p| Permission::try_from(*p).ok())
+        .map(|p| p.as_str_name().to_ascii_lowercase())
+        .collect();
+    format!(
+        "{}  {}  {}  {}  {}",
+        wire::display(&role.role_id),
+        if role.is_everyone {
+            "@everyone"
+        } else {
+            &role.name
+        },
+        if role.color.is_empty() {
+            "-"
+        } else {
+            &role.color
+        },
+        // `@everyone` is never anyone's tag, whatever its switch says.
+        if role.hide_tag || role.is_everyone {
+            "no tag"
+        } else {
+            "tag"
+        },
+        if granted.is_empty() {
+            "-".to_string()
+        } else {
+            granted.join(",")
+        }
+    )
+}
+
+/// A member as `members` prints it: id, handle, kind, title, roles by name in the server's order.
+fn member_line(member: &Member, account: Option<&Account>, roles: &[Role]) -> String {
+    let held: Vec<&str> = roles
+        .iter()
+        .filter(|r| !r.is_everyone && member.role_ids.contains(&r.role_id))
+        .map(|r| r.name.as_str())
+        .collect();
+    format!(
+        "{}  {}  {}  title {}  roles {}",
+        wire::display(&member.account_id),
+        account.map_or("-", |a| a.handle.as_str()),
+        if member.kind == MembershipKind::Guest as i32 {
+            "guest"
+        } else {
+            "member"
+        },
+        if member.title.is_empty() {
+            "-"
+        } else {
+            &member.title
+        },
+        if held.is_empty() {
+            "-".to_string()
+        } else {
+            held.join(",")
+        }
+    )
 }
 
 fn parse_uuid(s: &str) -> Result<Vec<u8>, ClientError> {

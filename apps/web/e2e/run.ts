@@ -1236,7 +1236,7 @@ async function serverSettings(which: string, stamp: number) {
 // member's browser is Chromium's alone: two of Playwright's WebKits open at
 // once share one origin-private file system, and the second cannot open
 // its store ("file is not a database"). There the member's own title is
-// set through the instance instead, and the owner's page still has to
+// set from the CLI instead, and the owner's page still has to
 // draw it with no reload.
 async function rolesStep(which: string, stamp: number) {
   const ownerDir = resolve(work, `cli-roles-owner-${which}`);
@@ -1482,11 +1482,7 @@ async function rolesStep(which: string, stamp: number) {
       await theirs.page.locator(".lu-pcard").getByText("Pilot").waitFor();
       await theirs.page.keyboard.press("Escape");
     } else {
-      const json = { "content-type": "application/json", accept: "application/json" };
-      const pair = (await (await fetch(`${instance}/api/v1/auth/sign-in/password`, { method: "POST", headers: json, body: JSON.stringify({ handleOrEmail: member, password }) })).json()) as { accessToken?: string };
-      if (!pair.accessToken) throw new Error("the suite could not sign in as the member");
-      const set = await fetch(`${instance}/api/v1/servers/${server}/membership`, { method: "PATCH", headers: { ...json, authorization: `Bearer ${pair.accessToken}` }, body: JSON.stringify({ title: "Pilot" }) });
-      if (!set.ok) throw new Error(`the member's title was not set: ${set.status} ${await set.text()}`);
+      lumia(memberDir, "title", server, "Pilot");
     }
     // In the owner's browser with no reload, whoever set it and wherever.
     await tagIn(page).filter({ hasText: "Pilot" }).waitFor({ timeout: 20_000 });
