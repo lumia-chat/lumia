@@ -458,7 +458,7 @@ struct ProfileCard: View {
     /// What this account may change of them, from the card as from their row in Members.
     private var offers: MemberOffers? {
         guard let server, let listed else { return nil }
-        return Roles.offers(server, member: listed, me: me)
+        return rolesMemberOffers(server: server, member: listed, me: me)
     }
     /// Their roles or their title being changed, in the card's place.
     @State private var editing: MemberEditor.Part?
@@ -523,7 +523,7 @@ struct ProfileCard: View {
 
     /// Every role they hold, in the server's order, with Edit for whoever manages roles.
     @ViewBuilder private var rolesPart: some View {
-        let held = Roles.held(server?.roles ?? [], roleIDs: listed?.roleIds ?? [])
+        let held = rolesHeld(roles: server?.roles ?? [], roleIds: listed?.roleIds ?? [])
         let may = offers?.roles ?? false
         if !held.isEmpty || may {
             VStack(alignment: .leading, spacing: LumiaTokens.space6) {
@@ -537,10 +537,10 @@ struct ProfileCard: View {
                     }
                 }
                 if held.isEmpty {
-                    Text(RoleWords.noRoles).font(LumiaTokens.textLabel.font.weight(.regular)).foregroundStyle(LumiaTokens.inkQuiet.color)
+                    Text(Roles.words.noRoles).font(LumiaTokens.textLabel.font.weight(.regular)).foregroundStyle(LumiaTokens.inkQuiet.color)
                 } else {
                     LumiaFlow(spacing: LumiaTokens.space6) {
-                        ForEach(held) { r in LumiaTag(TagLook(label: r.label, tone: r.tone)) }
+                        ForEach(held) { r in LumiaTag(r.look) }
                     }
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel(held.map(\.label).joined(separator: ", "))
@@ -558,7 +558,7 @@ struct ProfileCard: View {
                         Text(name).font(LumiaTokens.titleAuth.font).foregroundStyle(LumiaTokens.ink.color).lineLimit(1)
                         // This account, and who they are to the server, its owner
                         // or a guest: both said, "You" never in the other's place.
-                        ForEach(Roles.cardMarks(me: me, owner: listed?.owner ?? false, guest: listed?.guest ?? false), id: \.self) { mark in
+                        ForEach(rolesCardMarks(me: me, member: listed), id: \.self) { mark in
                             LumiaTag(mark, tone: .accent).accessibilityIdentifier("card-mark")
                         }
                     }

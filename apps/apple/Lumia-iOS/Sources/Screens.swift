@@ -561,13 +561,13 @@ struct ServerOverviewScreen: View {
     /// title, as two pictured choices, saved as one is chosen. A refusal is
     /// said in the note's place and the choice stays as the server has it.
     private func tagBesideNames(_ server: ServerSummary) -> some View {
-        LumiaCard(title: RoleWords.tagTitle, subtitle: RoleWords.tagSubtitle, width: nil) {
+        LumiaCard(title: Roles.words.tagHeading, subtitle: Roles.words.tagSubtitle, width: nil) {
             VStack(alignment: .leading, spacing: LumiaTokens.space16) {
-                ChoiceTiles(label: RoleWords.tagTitle) {
-                    ChoiceTile(name: RoleWords.tagRoles.label, caption: RoleWords.tagRoles.caption, chosen: !server.tagTitles, choose: { Task { await chooseTag(titles: false, server) } }, height: TagSketch.height) {
+                ChoiceTiles(label: Roles.words.tagHeading) {
+                    ChoiceTile(name: Roles.words.tagRolesLabel, caption: Roles.words.tagRolesCaption, chosen: !server.tagTitles, choose: { Task { await chooseTag(titles: false, server) } }, height: TagSketch.height) {
                         TagSketch(titles: false)
                     }
-                    ChoiceTile(name: RoleWords.tagTitles.label, caption: RoleWords.tagTitles.caption, chosen: server.tagTitles, choose: { Task { await chooseTag(titles: true, server) } }, height: TagSketch.height) {
+                    ChoiceTile(name: Roles.words.tagTitlesLabel, caption: Roles.words.tagTitlesCaption, chosen: server.tagTitles, choose: { Task { await chooseTag(titles: true, server) } }, height: TagSketch.height) {
                         TagSketch(titles: true)
                     }
                 }
@@ -575,7 +575,7 @@ struct ServerOverviewScreen: View {
                 if !tagError.isEmpty {
                     LumiaErrorText(tagError)
                 } else {
-                    Text(RoleWords.tagNote).font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkSecondary.color)
+                    Text(Roles.words.tagNote).font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkSecondary.color)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }

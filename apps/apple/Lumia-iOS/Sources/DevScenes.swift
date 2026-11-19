@@ -130,7 +130,7 @@ struct ReactionsScene: View {
 /// member's row, where it gives way before the name does.
 struct TagsScene: View {
     private let title = "Principal Reliability Engineer I"
-    private let role = TagLook(label: "Community and Events Coordinator", tone: .green)
+    private let role = TagLook(label: "Community and Events Coordinator", tone: AvatarTone.green.rawValue)
 
     var body: some View {
         ScrollView {
@@ -138,7 +138,7 @@ struct TagsScene: View {
                 VStack(alignment: .leading, spacing: LumiaTokens.space8) {
                     ForEach([LumiaTag.Size.md, .sm], id: \.self) { size in
                         LumiaFlow(spacing: LumiaTokens.space6) {
-                            ForEach(Roles.tones, id: \.self) { tone in LumiaTag(TagLook(label: tone.rawValue.capitalized, tone: tone), size: size) }
+                            ForEach(Roles.tones, id: \.self) { tone in LumiaTag(TagLook(label: tone.rawValue.capitalized, tone: tone.rawValue), size: size) }
                             LumiaTag("No colour", size: size)
                             LumiaTag("Staff Engineer", size: size)
                             LumiaTag("You", tone: .accent, size: size)

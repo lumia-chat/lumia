@@ -93,7 +93,7 @@ struct ServerScreen: View {
                     // Offered to whoever may use one of its sections (architecture
                     // 6.7 and 7.5): the account's own permissions there, from the
                     // snapshot. With one section it opens on that one.
-                    if !Roles.sections(server).isEmpty {
+                    if !rolesSettingsSections(server: server).isEmpty {
                         Button("Server settings") { path.append(Screen.settings(of: server)) }
                             .buttonStyle(.lumiaLink)
                             .padding(.horizontal, LumiaTokens.space10).padding(.top, LumiaTokens.space4)

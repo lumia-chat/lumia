@@ -1086,7 +1086,7 @@ public struct LumiaTag: View {
 
     /// A member's tag: a role on its tone, or a title (and a role with no colour) on the plain chip.
     public init(_ look: TagLook, size: Size = .md, scale: CGFloat = 1) {
-        self.init(look.label, tone: look.tone.map(Tone.role) ?? .neutral, size: size, scale: scale)
+        self.init(look.label, tone: look.avatarTone.map(Tone.role) ?? .neutral, size: size, scale: scale)
     }
 
     /// The small tag's type: 10.5 at 700, a point under the tag's.

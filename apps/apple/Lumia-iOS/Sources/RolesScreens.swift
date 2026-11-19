@@ -6,7 +6,7 @@
 // server's members, a row opening to its roles, title and Kick. The core
 // holds every rule: what is listed, what may be opened, moved, given and
 // taken are the snapshot's and the member list's own answers, read through
-// `Roles` in LumiaKit, whose words are every client's.
+// the core's `roles…` functions, whose words (`Roles.words`) are every client's.
 import LumiaFFI
 import LumiaKit
 import SwiftUI
@@ -43,7 +43,7 @@ extension Screen {
     /// Where "Server settings" leads for this account: the screen of its
     /// sections, or straight to the one section it has.
     static func settings(of server: ServerSummary) -> Screen {
-        let sections = Roles.sections(server)
+        let sections = rolesSettingsSections(server: server)
         return sections.count == 1 ? section(sections[0], of: server.serverId) : .serverSettings(serverID: server.serverId)
     }
 
@@ -60,7 +60,7 @@ extension Screen {
 /// sections' screen, or the server where this account has one section only.
 @MainActor func settingsBack(_ server: ServerSummary?) -> String {
     guard let server else { return "Server" }
-    return Roles.sections(server).count == 1 ? server.name : "Server settings"
+    return rolesSettingsSections(server: server).count == 1 ? server.name : "Server settings"
 }
 
 // MARK: The sections
@@ -78,7 +78,7 @@ struct ServerSettingsSectionsScreen: View {
         PanelScreen(back: server?.name ?? "Server", title: "Server settings", subtitle: server?.name) {
             ScrollView {
                 if let server {
-                    let sections = Roles.sections(server)
+                    let sections = rolesSettingsSections(server: server)
                     VStack(alignment: .leading, spacing: 0) {
                         if sections.isEmpty {
                             // What let this account in was taken away while the screen was open.
@@ -107,7 +107,7 @@ struct ServerSettingsSectionsScreen: View {
     private func note(_ section: SettingsSection, _ server: ServerSummary) -> String? {
         switch section {
         case .overview: nil
-        case .roles: Roles.rolesCount(server.roles)
+        case .roles: rolesCount(roles: server.roles)
         case .members: session.serverMembers[serverID].map { Roles.grouped($0.count) }
         }
     }
@@ -138,7 +138,7 @@ struct ServerSettingsSectionsScreen: View {
         .buttonStyle(.plain)
         .accessibilityLabel(section.label)
         .accessibilityValue(note ?? "")
-        .accessibilityIdentifier("section-\(section.rawValue)")
+        .accessibilityIdentifier("section-\(section.key)")
     }
 }
 
@@ -166,7 +166,7 @@ struct TagSketch: View {
                 HStack(spacing: LumiaTokens.space8) {
                     Circle().fill(row.face.fill.color).frame(width: Self.face, height: Self.face)
                     Capsule().fill(LumiaTokens.borderActive.color).frame(width: row.name, height: Self.bar)
-                    LumiaTag(TagLook(label: row.tag, tone: row.tone), size: .sm)
+                    LumiaTag(TagLook(label: row.tag, tone: row.tone?.rawValue), size: .sm)
                 }
             }
         }
@@ -236,7 +236,7 @@ struct RoleTicks: View {
                 Button { toggle(choice.id) } label: {
                     HStack(spacing: LumiaTokens.space10) {
                         box(choice)
-                        LumiaRoleDot(tone: choice.tone)
+                        LumiaRoleDot(tone: choice.avatarTone)
                         Text(choice.name).font(LumiaTokens.textCompact.font)
                             .foregroundStyle(choice.locked ? LumiaTokens.inkMuted.color : LumiaTokens.ink.color).lineLimit(1)
                         Spacer(minLength: 0)
@@ -367,8 +367,8 @@ struct DeleteRoleSheet: View {
 
     var body: some View {
         AskSheet(
-            title: RoleWords.deleteTitle(role.name),
-            lines: RoleWords.deleteQuestion(held: Roles.holders(role, members: session.serverMembers[server.serverId])),
+            title: rolesDeleteTitle(roleName: role.name),
+            lines: rolesDeleteQuestion(held: rolesHolders(role: role, members: session.serverMembers[server.serverId])),
             confirm: "Delete role", danger: true, cancel: "Keep it", busy: busy, error: error,
             go: { Task { await delete() } }, stop: keep
         )
@@ -382,7 +382,7 @@ struct DeleteRoleSheet: View {
             try await session.deleteRole(serverID: server.serverId, roleID: role.roleId)
             done()
         } catch {
-            self.error = RoleWords.roleRefusal(code: error.lumiaCode, details: error.lumiaDetails, message: error.lumiaMessage, serverName: server.name)
+            self.error = Roles.roleRefusal(error, serverName: server.name)
         }
     }
 }
@@ -407,11 +407,11 @@ struct RolesScreen: View {
     private var roles: [RoleSummary] { moved ?? server?.roles ?? [] }
 
     var body: some View {
-        PanelScreen(back: settingsBack(server), title: "Roles", subtitle: server.map { "\($0.name) · \(Roles.rolesCount($0.roles))" }) {
+        PanelScreen(back: settingsBack(server), title: "Roles", subtitle: server.map { "\($0.name) · \(rolesCount(roles: $0.roles))" }) {
             ScrollView {
                 if let server {
                     VStack(alignment: .leading, spacing: LumiaTokens.space12) {
-                        Text(RoleWords.rolesHintMenu).font(RoleMetrics.lead.font)
+                        Text(Roles.words.rolesHintMenu).font(RoleMetrics.lead.font)
                             .foregroundStyle(LumiaTokens.inkMuted.color)
                             .fixedSize(horizontal: false, vertical: true)
                         if !error.isEmpty { LumiaErrorText(error).accessibilityIdentifier("roles-error") }
@@ -441,7 +441,7 @@ struct RolesScreen: View {
     }
 
     private func row(_ role: RoleSummary, among roles: [RoleSummary]) -> some View {
-        let locked = Roles.locked(role)
+        let locked = rolesLocked(role: role)
         let moves = !role.isEveryone && !locked
         let held = Roles.holders(role, members: session.serverMembers[serverID])
         return HStack(spacing: 0) {
@@ -449,14 +449,14 @@ struct RolesScreen: View {
                 words(role, held: held, end: "lock", moves: false)
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel(role.name)
-                    .accessibilityValue(RoleWords.rowValue(held: held, hideTag: role.hideTag, locked: true))
+                    .accessibilityValue(PhoneRoleWords.rowValue(held: held, hideTag: role.hideTag, locked: true))
             } else {
                 Button { path.append(.role(serverID: serverID, roleID: role.roleId)) } label: {
                     words(role, held: held, end: "chevron.right", moves: moves).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(role.name)
-                .accessibilityValue(RoleWords.rowValue(held: held, hideTag: role.hideTag, locked: false))
+                .accessibilityValue(PhoneRoleWords.rowValue(held: held, hideTag: role.hideTag, locked: false))
                 .accessibilityIdentifier("role-\(role.name)")
             }
             if moves { menu(role, among: roles) }
@@ -467,7 +467,7 @@ struct RolesScreen: View {
     }
 
     private func words(_ role: RoleSummary, held: Int?, end: String, moves: Bool) -> some View {
-        let locked = Roles.locked(role)
+        let locked = rolesLocked(role: role)
         return HStack(spacing: LumiaTokens.space12) {
             LumiaRoleDot(tone: Roles.tone(of: role.color))
             VStack(alignment: .leading, spacing: 1) {
@@ -508,10 +508,10 @@ struct RolesScreen: View {
                 Button { path.append(.role(serverID: serverID, roleID: role.roleId)) } label: { Label("Edit role", systemImage: "gearshape") }
             }
             Section {
-                Button { step(role, -1) } label: { Label("Move up", systemImage: "arrow.up") }
-                    .disabled(busy || Roles.stepBefore(roles, roleID: role.roleId, step: -1) == nil)
-                Button { step(role, 1) } label: { Label("Move down", systemImage: "arrow.down") }
-                    .disabled(busy || Roles.stepBefore(roles, roleID: role.roleId, step: 1) == nil)
+                Button { step(role, up: true) } label: { Label("Move up", systemImage: "arrow.up") }
+                    .disabled(busy || rolesStepBefore(roles: roles, roleId: role.roleId, up: true) == nil)
+                Button { step(role, up: false) } label: { Label("Move down", systemImage: "arrow.down") }
+                    .disabled(busy || rolesStepBefore(roles: roles, roleId: role.roleId, up: false) == nil)
             }
             Section {
                 Button(role: .destructive) { deleting = role } label: { Label("Delete role", systemImage: "trash") }
@@ -528,23 +528,23 @@ struct RolesScreen: View {
 
     /// A step up or down: the list drawn moved at once, the whole order
     /// sent, and on a refusal the list as it was with the refusal said.
-    private func step(_ role: RoleSummary, _ step: Int) {
+    private func step(_ role: RoleSummary, up: Bool) {
         let now = roles
-        guard !busy, let before = Roles.stepBefore(now, roleID: role.roleId, step: step) else { return }
+        guard !busy, let before = rolesStepBefore(roles: now, roleId: role.roleId, up: up) else { return }
         let drawn = Roles.drawnMoved(now, roleID: role.roleId, beforeID: before)
-        let order = Roles.movedBefore(now, roleID: role.roleId, beforeID: before)
+        let order = rolesMovedBefore(roles: now, roleId: role.roleId, beforeId: before)
         moved = drawn
         error = ""
         busy = true
         if let position = drawn.firstIndex(where: { $0.roleId == role.roleId }) {
-            AccessibilityNotification.Announcement(RoleWords.moved(role.name, position: position + 1)).post()
+            AccessibilityNotification.Announcement(rolesMovedWords(roleName: role.name, position: UInt64(position + 1))).post()
         }
         Task {
             defer { busy = false; moved = nil }
             do {
                 try await session.reorderRoles(serverID: serverID, roleIDs: order)
             } catch {
-                self.error = RoleWords.roleRefusal(code: error.lumiaCode, details: error.lumiaDetails, message: error.lumiaMessage, serverName: server?.name ?? "this server")
+                self.error = Roles.roleRefusal(error, serverName: server?.name ?? "this server")
             }
         }
     }
@@ -569,7 +569,7 @@ extension RoleSummary: @retroactive Identifiable {
 /// being edited (`draft`). Save is offered when the two differ and sends
 /// what differs, so what someone else changed of the role meanwhile is
 /// neither offered to save nor undone by it; an editor nobody has touched
-/// follows the role as it changes (`Roles.followed`).
+/// follows the role as it changes (the core's `rolesFollowed`).
 struct RoleEditorScreen: View {
     @Environment(\.dismiss) private var dismiss
     let session: LumiaSession
@@ -577,7 +577,7 @@ struct RoleEditorScreen: View {
     /// Nil for a new role.
     let roleID: String?
     @Binding var path: [Screen]
-    @State private var draft = Roles.draft()
+    @State private var draft = rolesDraftOf(role: nil)
     /// The role as the editor opened on it, or as its last save left it; nil for a new role.
     @State private var opened: RoleDraft?
     @State private var loaded = false
@@ -613,7 +613,7 @@ struct RoleEditorScreen: View {
         guard role != nil, let held else { return server.name }
         return "\(server.name) · \(Roles.membersCount(held))"
     }
-    private var savable: Bool { loaded && !busy && Roles.savable(draft, opened: opened, everyone: everyone) && (roleID == nil || role != nil) }
+    private var savable: Bool { loaded && !busy && rolesSavable(draft: draft, opened: opened) && (roleID == nil || role != nil) }
 
     var body: some View {
         PanelScreen(back: "Roles", title: roleID == nil ? "New role" : shownName, subtitle: subtitle, actions: [(icon: "checkmark", label: "Save", run: { Task { await save() } })], inactive: savable ? [] : ["Save"]) {
@@ -636,13 +636,13 @@ struct RoleEditorScreen: View {
                         if let server, loaded, !leaving {
                             if roleID != nil, role == nil {
                                 // Deleted elsewhere while it was open.
-                                Text(RoleWords.roleRefusal(code: "NOT_FOUND", details: [:], message: "", serverName: server.name))
+                                Text(rolesRoleRefusal(code: "NOT_FOUND", field: "", message: "", serverName: server.name))
                                     .font(LumiaTokens.textCompact.font).foregroundStyle(LumiaTokens.inkMuted.color)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .padding(LumiaTokens.space16)
                             } else {
                                 VStack(alignment: .leading, spacing: LumiaTokens.space24) {
-                                    if everyone { RoleHint(RoleWords.everyoneSubtitle) } else { identity(server) }
+                                    if everyone { RoleHint(Roles.words.everyoneSubtitle) } else { identity(server) }
                                     permissions(server).id("permissions")
                                     if let role, !everyone {
                                         holders(role)
@@ -682,11 +682,11 @@ struct RoleEditorScreen: View {
         }
         .sheet(isPresented: $askingAdministrator) {
             AskSheet(
-                title: RoleWords.administratorTitle,
-                lines: RoleWords.administratorQuestion(serverName: server?.name ?? "this server", roleName: shownName, held: role == nil ? nil : held),
+                title: Roles.words.administratorTitle,
+                lines: rolesAdministratorQuestion(serverName: server?.name ?? "this server", roleName: shownName, held: role == nil ? nil : held.map { UInt64($0) }),
                 confirm: "Turn on", cancel: "Cancel",
                 go: {
-                    if !draft.permissions.contains(Roles.administrator) { draft.permissions.append(Roles.administrator) }
+                    if !draft.permissions.contains(Roles.words.administrator) { draft.permissions.append(Roles.words.administrator) }
                     askingAdministrator = false
                 },
                 stop: { askingAdministrator = false }
@@ -708,7 +708,7 @@ struct RoleEditorScreen: View {
     /// which is what a save is measured against.
     private func load() {
         guard !loaded, server != nil else { return }
-        draft = Roles.draft(of: role)
+        draft = rolesDraftOf(role: role)
         opened = roleID == nil ? nil : draft
         loaded = true
     }
@@ -718,7 +718,7 @@ struct RoleEditorScreen: View {
     /// over, and the save sends that and nothing else.
     private func follow(_ role: RoleSummary?) {
         guard loaded, let role, let was = opened else { return }
-        let next = Roles.followed(opened: was, draft: draft, role: role)
+        let next = rolesFollowed(opened: was, draft: draft, now: rolesDraftOf(role: role))
         opened = next.opened
         draft = next.draft
     }
@@ -730,7 +730,7 @@ struct RoleEditorScreen: View {
             VStack(alignment: .leading, spacing: LumiaTokens.space6) {
                 LumiaField("Name", text: $draft.name, placeholder: "Moderator", spoken: "Name")
                     .autocorrectionDisabled()
-                RoleHint(RoleWords.roleNameHint(serverName: server.name))
+                RoleHint(rolesNameHint(serverName: server.name))
             }
             VStack(alignment: .leading, spacing: LumiaTokens.space6) {
                 RoleLegend("Colour")
@@ -741,12 +741,12 @@ struct RoleEditorScreen: View {
                 HStack(spacing: LumiaTokens.space16) {
                     VStack(alignment: .leading, spacing: LumiaTokens.space2) {
                         Text("Show as tag").font(LumiaTokens.textMember.font).foregroundStyle(LumiaTokens.ink.color)
-                        RoleHint(RoleWords.tagSwitchCaption(shown: shown))
+                        RoleHint(rolesTagSwitchCaption(shown: shown))
                     }
                     .accessibilityHidden(true)
                     Toggle("Show as tag", isOn: Binding(get: { !draft.hideTag }, set: { draft.hideTag = !$0 }))
                         .labelsHidden().tint(LumiaTokens.accent.color)
-                        .accessibilityHint(RoleWords.tagSwitchCaption(shown: shown))
+                        .accessibilityHint(rolesTagSwitchCaption(shown: shown))
                 }
                 .padding(.vertical, LumiaTokens.space14)
                 .padding(.horizontal, LumiaTokens.space16)
@@ -814,7 +814,7 @@ struct RoleEditorScreen: View {
                 .padding(.trailing, LumiaTokens.space4)
             LumiaAvatar(initials: initials(of: name), tone: .of(session.me), size: LumiaTokens.avatarSm, picture: session.picture(of: session.me))
             Text(name).font(LumiaTokens.textAuthor.font).foregroundStyle(LumiaTokens.ink.color).lineLimit(1)
-            if shows { LumiaTag(TagLook(label: tag, tone: Roles.tone(of: draft.color))) }
+            if shows { LumiaTag(TagLook(label: tag, tone: rolesToneOf(color: draft.color))) }
             Text(time(ofMicros: Int64(openedAt.timeIntervalSince1970 * 1_000_000))).font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkMuted.color)
                 .lineLimit(1)
         }
@@ -836,13 +836,13 @@ struct RoleEditorScreen: View {
                 Text(group.title).font(LumiaTokens.textSection.font).foregroundStyle(LumiaTokens.inkMuted.color)
                     .accessibilityAddTraits(.isHeader)
                 // Administrator, set apart: the one that grants every other.
-                if let apart = group.permissions.first(where: { $0.name == Roles.administrator }) {
+                if let apart = group.permissions.first(where: { $0.name == Roles.words.administrator }) {
                     permission(apart, server, apart: true)
                         .background(LumiaTokens.toneAmber.color.opacity(0.6), in: RoundedRectangle(cornerRadius: LumiaTokens.radius14))
                         .overlay(RoundedRectangle(cornerRadius: LumiaTokens.radius14).strokeBorder(LumiaTokens.toneAmber.color))
                         .overlay(RoundedRectangle(cornerRadius: LumiaTokens.radius14).strokeBorder(LumiaTokens.toneAmberInk.color.opacity(0.22)))
                 }
-                let rest = group.permissions.filter { $0.name != Roles.administrator }
+                let rest = group.permissions.filter { $0.name != Roles.words.administrator }
                 VStack(spacing: 0) {
                     ForEach(Array(rest.enumerated()), id: \.element.name) { index, p in
                         if index > 0 { LumiaTokens.line.color.frame(height: 1) }
@@ -855,10 +855,10 @@ struct RoleEditorScreen: View {
     }
 
     private func permission(_ p: PermissionChoice, _ server: ServerSummary, apart: Bool) -> some View {
-        let withheld = Roles.withheld(grantable: server.grantable, permission: p.name)
+        let withheld = rolesWithheld(grantable: server.grantable, permission: p.name)
         // Everyone's permissions are changed only by one who may.
         let off = withheld || role?.canManage == false
-        let caption = withheld ? RoleWords.withheldCaption(p.detail) : p.detail
+        let caption = withheld ? rolesWithheldCaption(detail: p.detail) : p.detail
         return HStack(spacing: LumiaTokens.space16) {
             VStack(alignment: .leading, spacing: LumiaTokens.space2) {
                 Text(p.label).font(LumiaTokens.textMember.font).foregroundStyle(apart ? LumiaTokens.toneAmberInk.color : LumiaTokens.ink.color)
@@ -879,7 +879,7 @@ struct RoleEditorScreen: View {
 
     /// A switch turned: Administrator is asked about before it goes on.
     private func turn(_ permission: String, on: Bool) {
-        if on, permission == Roles.administrator, !draft.permissions.contains(permission) {
+        if on, permission == Roles.words.administrator, !draft.permissions.contains(permission) {
             askingAdministrator = true
         } else if on {
             if !draft.permissions.contains(permission) { draft.permissions.append(permission) }
@@ -902,7 +902,7 @@ struct RoleEditorScreen: View {
                 .buttonStyle(.lumiaSecondary)
             if !holdersError.isEmpty { LumiaErrorText(holdersError) }
             if holding.isEmpty {
-                RoleHint(RoleWords.nobodyHolds)
+                RoleHint(Roles.words.nobodyHolds)
             } else {
                 VStack(spacing: 0) {
                     ForEach(holding, id: \.accountId) { m in
@@ -927,7 +927,7 @@ struct RoleEditorScreen: View {
         VStack(alignment: .leading, spacing: LumiaTokens.space10) {
             Text("Delete role").font(RoleMetrics.heading.font).foregroundStyle(LumiaTokens.ink.color)
                 .accessibilityAddTraits(.isHeader)
-            RoleHint(RoleWords.deleteRoleHint)
+            RoleHint(Roles.words.deleteRoleHint)
             Button("Delete role") { askingDelete = true }.buttonStyle(.lumiaDanger)
                 .accessibilityIdentifier("delete-role")
         }
@@ -941,7 +941,7 @@ struct RoleEditorScreen: View {
         do {
             try await session.changeMember(serverID: serverID, accountID: member.accountId, take: [role.roleId])
         } catch {
-            holdersError = RoleWords.memberRefusal(code: error.lumiaCode, details: error.lumiaDetails, message: error.lumiaMessage)
+            holdersError = Roles.memberRefusal(error)
         }
     }
 
@@ -961,7 +961,7 @@ struct RoleEditorScreen: View {
                 // Only ever a change of the role the editor opened on, never a second one made.
                 guard let was = opened else { return }
                 try await session.changeRole(serverID: serverID, roleID: roleID, was: was, now: sent)
-                let now = self.role.map { Roles.draft(of: $0) } ?? sent
+                let now = self.role.map { rolesDraftOf(role: $0) } ?? sent
                 opened = now
                 draft = now
                 saved = true
@@ -977,7 +977,7 @@ struct RoleEditorScreen: View {
                 }
             }
         } catch {
-            self.error = RoleWords.roleRefusal(code: error.lumiaCode, details: error.lumiaDetails, message: error.lumiaMessage, serverName: server.name)
+            self.error = Roles.roleRefusal(error, serverName: server.name)
         }
     }
 }
@@ -1011,9 +1011,9 @@ struct RoleMembersScreen: View {
                     let candidates = candidates
                     if candidates.isEmpty {
                         if query.trimmingCharacters(in: .whitespaces).isEmpty {
-                            LumiaEmptyState(icon: "person.2", title: "No one to add") { Text("Everyone who can hold \(role?.name ?? "this role") does.") }
+                            LumiaEmptyState(icon: "person.2", title: "No one to add") { Text(Roles.words.everyoneHolds) }
                         } else {
-                            RoleHint(RoleWords.noMatch).padding(.top, LumiaTokens.space4)
+                            RoleHint(Roles.words.noMemberMatches).padding(.top, LumiaTokens.space4)
                         }
                     }
                     ForEach(candidates, id: \.accountId) { m in
@@ -1048,7 +1048,7 @@ struct RoleMembersScreen: View {
             }
             dismiss()
         } catch {
-            self.error = RoleWords.memberRefusal(code: error.lumiaCode, details: error.lumiaDetails, message: error.lumiaMessage)
+            self.error = Roles.memberRefusal(error)
         }
     }
 }
@@ -1090,14 +1090,14 @@ struct ServerMembersScreen: View {
     private var members: [MemberSummary] { session.serverMembers[serverID] ?? [] }
 
     var body: some View {
-        PanelScreen(back: settingsBack(server), title: "Members", subtitle: server.map { RoleWords.membersIn(members.count, serverName: $0.name) }) {
+        PanelScreen(back: settingsBack(server), title: "Members", subtitle: server.map { PhoneRoleWords.membersIn(members.count, serverName: $0.name) }) {
             ScrollView {
                 if let server {
                     VStack(alignment: .leading, spacing: LumiaTokens.space12) {
                         MemberSearchField(text: $query)
                         let list = Roles.searched(members, query: query)
                         if list.isEmpty {
-                            if !query.trimmingCharacters(in: .whitespaces).isEmpty { RoleHint(RoleWords.noMatch) }
+                            if !query.trimmingCharacters(in: .whitespaces).isEmpty { RoleHint(Roles.words.noMemberMatches) }
                         } else {
                             VStack(spacing: 0) {
                                 ForEach(Array(list.enumerated()), id: \.element.accountId) { index, m in
@@ -1126,13 +1126,13 @@ struct ServerMembersScreen: View {
 
     @ViewBuilder private func row(_ m: MemberSummary, _ server: ServerSummary) -> some View {
         let me = m.accountId == session.me
-        let offers = Roles.offers(server, member: m, me: me)
+        let offers = rolesMemberOffers(server: server, member: m, me: me)
         let isOpen = open == m.accountId && offers.any
-        let held = Roles.held(server.roles, roleIDs: m.roleIds)
+        let held = rolesHeld(roles: server.roles, roleIds: m.roleIds)
         let name = session.name(of: m.accountId)
         let words = VStack(alignment: .leading, spacing: LumiaTokens.space4) {
             HStack(spacing: LumiaTokens.space12) {
-                PersonLine(session: session, member: m, mark: Roles.mark(owner: m.owner, guest: m.guest), line: m.title.isEmpty ? "@\(m.handle)" : "@\(m.handle) · \(m.title)")
+                PersonLine(session: session, member: m, mark: rolesMemberMark(member: m), line: m.title.isEmpty ? "@\(m.handle)" : "@\(m.handle) · \(m.title)")
                 if offers.any {
                     Image(systemName: isOpen ? "chevron.down" : "chevron.right").font(.system(size: RoleMetrics.smallGlyph, weight: .semibold))
                         .foregroundStyle(isOpen ? LumiaTokens.inkQuiet.color : LumiaTokens.inkFaint.color)
@@ -1140,7 +1140,7 @@ struct ServerMembersScreen: View {
             }
             if !held.isEmpty {
                 LumiaFlow(spacing: LumiaTokens.space6) {
-                    ForEach(held) { r in LumiaTag(TagLook(label: r.label, tone: r.tone)) }
+                    ForEach(held) { r in LumiaTag(r.look) }
                 }
                 .padding(.leading, LumiaTokens.avatarMd + LumiaTokens.space12)
             }
@@ -1177,7 +1177,7 @@ struct ServerMembersScreen: View {
     /// A row as heard after the name: the mark, the handle, the title, the roles, and whether it is open.
     private func heard(_ m: MemberSummary, held: [HeldRole], open: Bool?) -> String {
         var parts: [String] = []
-        if let mark = Roles.mark(owner: m.owner, guest: m.guest) { parts.append(mark) }
+        if let mark = rolesMemberMark(member: m) { parts.append(mark) }
         parts.append("@\(m.handle)")
         if !m.title.isEmpty { parts.append(m.title) }
         parts += held.map(\.label)
@@ -1193,7 +1193,7 @@ struct ServerMembersScreen: View {
 /// one request: the roles to give, the roles to take, the title if it
 /// changed, all of it taken or none. Nothing changed, nothing is sent. A
 /// form nobody has touched follows the member as they change underneath
-/// (`Roles.followed`). Kick asks nothing first. A refusal is said over the buttons.
+/// (the core's `rolesMemberFollowed`). Kick asks nothing first. A refusal is said over the buttons.
 struct MemberEditor: View {
     let session: LumiaSession
     let server: ServerSummary
@@ -1203,15 +1203,15 @@ struct MemberEditor: View {
     var parts: Set<Part> = [.roles, .title]
     var kicks = true
     let close: () -> Void
-    @State private var opened = MemberForm()
-    @State private var form = MemberForm()
+    @State private var opened = MemberForm.empty
+    @State private var form = MemberForm.empty
     @State private var loaded = false
     @State private var busy = false
     @State private var error = ""
 
     enum Part { case roles, title }
 
-    private var offers: MemberOffers { Roles.offers(server, member: member, me: me) }
+    private var offers: MemberOffers { rolesMemberOffers(server: server, member: member, me: me) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: LumiaTokens.space16) {
@@ -1220,7 +1220,7 @@ struct MemberEditor: View {
                     VStack(alignment: .leading, spacing: LumiaTokens.space6) {
                         // On a card the editor's own heading says Roles.
                         if parts.count > 1 { RoleLegend("Roles") }
-                        RoleTicks(choices: Roles.choices(server.roles, held: form.roleIDs)) { form.roleIDs = Roles.toggled(server.roles, held: form.roleIDs, roleID: $0) }
+                        RoleTicks(choices: rolesChoices(roles: server.roles, held: form.roleIds)) { form.roleIds = rolesToggled(roles: server.roles, held: form.roleIds, roleId: $0) }
                     }
                 } else if let note = offers.rolesNote {
                     VStack(alignment: .leading, spacing: LumiaTokens.space6) {
@@ -1232,7 +1232,7 @@ struct MemberEditor: View {
             if parts.contains(.title), offers.title {
                 VStack(alignment: .leading, spacing: LumiaTokens.space6) {
                     LumiaField("Title", text: $form.title, placeholder: "Staff Engineer", spoken: "Title")
-                    RoleHint(RoleWords.titleHint)
+                    RoleHint(Roles.words.titleHint)
                 }
             }
             if !error.isEmpty { LumiaErrorText(error).accessibilityIdentifier("member-error") }
@@ -1252,14 +1252,14 @@ struct MemberEditor: View {
         }
         .onAppear {
             guard !loaded else { return }
-            opened = Roles.form(of: member)
+            opened = rolesFormOf(member: member)
             form = opened
             loaded = true
         }
         // The member changed underneath: a form nobody has touched follows them.
         .onChange(of: member) { _, now in
             guard loaded else { return }
-            let next = Roles.followed(opened: opened, form: form, member: now)
+            let next = rolesMemberFollowed(opened: opened, form: form, now: rolesFormOf(member: now))
             opened = next.opened
             form = next.form
         }
@@ -1283,7 +1283,7 @@ struct MemberEditor: View {
             try await what()
             close()
         } catch {
-            self.error = RoleWords.memberRefusal(code: error.lumiaCode, details: error.lumiaDetails, message: error.lumiaMessage)
+            self.error = Roles.memberRefusal(error)
         }
     }
 }

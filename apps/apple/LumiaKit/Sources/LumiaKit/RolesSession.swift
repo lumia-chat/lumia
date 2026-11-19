@@ -24,7 +24,7 @@ public extension LumiaSession {
     /// The tag beside someone's name in a server, their role or their
     /// title as the server shows, as the core worked it out; nil for none.
     func tag(of accountID: String, in serverID: String) -> TagLook? {
-        Roles.tag(of: member(accountID, in: serverID)?.tag)
+        rolesTagLook(tag: member(accountID, in: serverID)?.tag)
     }
 
     /// A server's members as the core keeps them now, with their tags. A
@@ -88,11 +88,11 @@ public extension LumiaSession {
     }
 
     /// A member's form saved: what differs between the form as it opened
-    /// and as it is, in one request (`Roles.memberChanges`). Nothing
-    /// changed, nothing is asked.
+    /// and as it is, in one request (the core's `rolesMemberChanges`).
+    /// Nothing changed, nothing is asked.
     func saveMember(serverID: String, accountID: String, opened: MemberForm, form: MemberForm) async throws {
-        let changes = Roles.memberChanges(opened: opened, form: form)
-        guard !changes.give.isEmpty || !changes.take.isEmpty || changes.title != nil else { return }
+        let changes = rolesMemberChanges(opened: opened, form: form)
+        guard rolesChangesAny(changes: changes) else { return }
         try await changeMember(serverID: serverID, accountID: accountID, give: changes.give, take: changes.take, title: changes.title)
     }
 

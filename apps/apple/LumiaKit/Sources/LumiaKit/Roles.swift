@@ -1,168 +1,97 @@
-// Roles and titles (architecture 7.5), as values the tests cover: what a
-// server's settings, a role's editor, a member's row and the profile card
-// share before anything is drawn. The core says what this account may do
-// (each role's and member's `canManage`, the server's `grantable` and its
-// `canManage…` switches) and the instance decides every write; this reads
-// those into what a screen offers, and holds the words every screen says
-// the same way. The web's `client/roles.ts`, rule for rule and word for word.
+// Roles and titles (architecture 7.5). Every rule and every word is the
+// core's (`lumia_client::roles`, held to `proto/vectors/roles/cases.json`),
+// asked through lumia-ffi's `roles…` functions and `roleWords()`, whose
+// records (`HeldRole`, `RoleChoice`, `MemberForm`, `MemberOffers`,
+// `TagLook`, `SettingsSection`, `RoleWords`) the screens use as they come.
+// What is here is the phone's own: the core's tone names as the phone's
+// colours, counts as `Int`, an error read into the refusal's words, a move
+// drawn before the instance answers, and the few things a phone says that
+// the other clients do not.
 import Foundation
 import LumiaFFI
 
-/// A section of a server's settings.
-public enum SettingsSection: String, CaseIterable, Sendable {
-    case overview, roles, members
+extension HeldRole: Identifiable {
+    public var id: String { roleId }
+}
 
-    public var label: String {
+extension RoleChoice: Identifiable {}
+
+public extension SettingsSection {
+    /// The section's name, as its row says it.
+    var label: String {
         switch self {
         case .overview: "Overview"
         case .roles: "Roles"
         case .members: "Members"
         }
     }
+
+    /// The section as an identifier names it: "overview", "roles", "members".
+    var key: String { label.lowercased() }
 }
 
-// What a role's editor holds while it is open is the core's `RoleDraft`
-// (its name, its tone or empty for none, `hideTag`, and the permissions
-// switched on by their wire names): the editor keeps two, the role as it
-// opened on it and the one being edited, and the core's `changeRole` sends
-// what differs between them.
-
-/// What a member's form holds while it is open, under their row in Members
-/// and on their card: the roles ticked and the title as typed.
-public struct MemberForm: Equatable, Sendable {
-    public var roleIDs: [String]
-    public var title: String
-
-    public init(roleIDs: [String] = [], title: String = "") {
-        self.roleIDs = roleIDs; self.title = title
-    }
-}
-
-/// A role a member holds, as a card and a settings row list it: its name, on its tone or the plain chip.
-public struct HeldRole: Equatable, Identifiable, Sendable {
-    public let roleID: String
-    public let label: String
-    public let tone: AvatarTone?
-    public var id: String { roleID }
-
-    public init(roleID: String, label: String, tone: AvatarTone?) { self.roleID = roleID; self.label = label; self.tone = tone }
-}
-
-/// One of a member's roles to tick.
-public struct RoleChoice: Equatable, Identifiable, Sendable {
-    public let id: String
-    public let name: String
-    public let tone: AvatarTone?
-    public let checked: Bool
-    /// Not this account's to give or take: shown, not changed.
-    public let locked: Bool
-}
-
-/// What this account may change of a member, on their row in Members and on their card.
-public struct MemberOffers: Equatable, Sendable {
-    /// Their roles to tick: with Manage roles, for anyone but a guest.
-    public let roles: Bool
-    /// In the roles' place, for a guest.
-    public let rolesNote: String?
-    /// Their title: this account's own, or that of a member below it with Manage members.
-    public let title: Bool
-    /// Kick: with Manage members, a member below this account, never itself.
-    public let kick: Bool
-
-    public init(roles: Bool, rolesNote: String?, title: Bool, kick: Bool) {
-        self.roles = roles; self.rolesNote = rolesNote; self.title = title; self.kick = kick
-    }
-
+public extension MemberOffers {
     /// Whether a member's row in Members opens at all: there is something of theirs to change.
-    public var any: Bool { roles || rolesNote != nil || title || kick }
+    var any: Bool { rolesOffersAny(offers: self) }
 }
 
-/// A member's tag as a message and a member row draw it: its words, on its tone or, for nil, the plain chip.
-public struct TagLook: Equatable, Sendable {
-    public let label: String
-    public let tone: AvatarTone?
+public extension TagLook {
+    /// The tag's tone as the phone draws it; nil for the plain chip.
+    var avatarTone: AvatarTone? { Roles.tone(tone) }
+}
 
-    public init(label: String, tone: AvatarTone?) { self.label = label; self.tone = tone }
+public extension RoleChoice {
+    var avatarTone: AvatarTone? { Roles.tone(tone) }
+}
+
+public extension HeldRole {
+    /// The role as a tag draws it.
+    var look: TagLook { TagLook(label: label, tone: tone) }
+}
+
+public extension MemberForm {
+    /// A form with nothing in it, before it opens on a member.
+    static let empty = MemberForm(roleIds: [], title: "")
 }
 
 public enum Roles {
-    /// The nine tones a role may have, as the design system names them.
-    public static let tones = AvatarTone.allCases
+    /// Every fixed sentence the roles screens say, the permission asked
+    /// about first and the most characters a name or a title keeps: the core's.
+    public static let words = roleWords()
 
     /// The most characters a role's name or a title keeps.
-    public static let labelMax = 32
+    public static let labelMax = Int(words.labelMax)
 
-    /// The permission whose switch asks before it is turned on.
-    public static let administrator = "ADMINISTRATOR"
+    /// The nine tones a role may have, as the phone draws them.
+    public static let tones = AvatarTone.allCases
 
-    /// A role's or a tag's colour as a tone; nil for none, and for anything that is no tone.
-    public static func tone(of color: String) -> AvatarTone? { AvatarTone(rawValue: color) }
+    /// One of the core's tone names as the phone's colour; nil for none.
+    public static func tone(_ name: String?) -> AvatarTone? { name.flatMap(AvatarTone.init(rawValue:)) }
 
-    /// The sections of a server's settings this account may use, in order:
-    /// Overview with Manage server, Roles with Manage roles, and Members with
-    /// Manage members or Manage roles, since a member's roles are changed there
-    /// too. None, and the settings do not open.
-    public static func sections(canManage: Bool, canManageRoles: Bool, canManageMembers: Bool) -> [SettingsSection] {
-        var sections: [SettingsSection] = []
-        if canManage { sections.append(.overview) }
-        if canManageRoles { sections.append(.roles) }
-        if canManageMembers || canManageRoles { sections.append(.members) }
-        return sections
-    }
+    /// A role's colour as a tone; nil for none, and for anything that is no tone.
+    public static func tone(of color: String) -> AvatarTone? { tone(rolesToneOf(color: color)) }
 
-    public static func sections(_ server: ServerSummary) -> [SettingsSection] {
-        sections(canManage: server.canManage, canManageRoles: server.canManageRoles, canManageMembers: server.canManageMembers)
-    }
-
-    /// "5 roles": a server's roles counted without Everyone.
-    public static func rolesCount(_ roles: [RoleSummary]) -> String {
-        let n = roles.filter { !$0.isEveryone }.count
-        return n == 1 ? "1 role" : "\(n) roles"
+    /// How many of `members` hold a role; nil until the members are known.
+    public static func holders(_ role: RoleSummary, members: [MemberSummary]?) -> Int? {
+        rolesHolders(role: role, members: members).map { Int($0) }
     }
 
     /// "1 member", "1,204 members".
-    public static func membersCount(_ n: Int) -> String {
-        n == 1 ? "1 member" : "\(grouped(n)) members"
+    public static func membersCount(_ n: Int) -> String { rolesMembersCount(n: UInt64(max(0, n))) }
+
+    /// A count with a comma between each three digits.
+    public static func grouped(_ n: Int) -> String { rolesGrouped(n: UInt64(max(0, n))) }
+
+    /// Members found by what is typed in a search.
+    public static func searched(_ members: [MemberSummary], query: String) -> [MemberSummary] {
+        members.filter { rolesFound(query: query, member: $0) }
     }
 
-    /// How many of `members` hold a role; Everyone is held by all of them. Nil until the members are known.
-    public static func holders(_ role: RoleSummary, members: [MemberSummary]?) -> Int? {
-        guard let members else { return nil }
-        return role.isEveryone ? members.count : members.filter { $0.roleIds.contains(role.roleId) }.count
-    }
-
-    /// A role at or above this account's own highest: listed with a lock, and it does not open. Everyone always opens.
-    public static func locked(_ role: RoleSummary) -> Bool { !role.isEveryone && !role.canManage }
-
-    /// Where a role may land when it is moved: before `beforeID`, a role this
-    /// account manages, or before Everyone, which is last. A role is never put
-    /// before one that is locked, since those are at or above this account's
-    /// own highest, and landing where it already is moves nothing.
-    public static func landsBefore(_ roles: [RoleSummary], roleID: String, beforeID: String) -> Bool {
-        guard let from = roles.firstIndex(where: { $0.roleId == roleID }),
-              let to = roles.firstIndex(where: { $0.roleId == beforeID }) else { return false }
-        let moved = roles[from], before = roles[to]
-        if locked(moved) || moved.isEveryone { return false }
-        if to == from || to == from + 1 { return false }
-        return before.isEveryone || !locked(before)
-    }
-
-    /// The whole order a move sends: every role but Everyone, with `roleID` now before `beforeID`.
-    public static func movedBefore(_ roles: [RoleSummary], roleID: String, beforeID: String) -> [String] {
-        var order: [String] = []
-        for r in roles where r.roleId != roleID {
-            if r.roleId == beforeID { order.append(roleID) }
-            if !r.isEveryone { order.append(r.roleId) }
-        }
-        return order
-    }
-
-    /// The role a step up (-1) or down (1) puts `roleID` before; nil where there is no such step (the highest it may go, or last above Everyone).
-    public static func stepBefore(_ roles: [RoleSummary], roleID: String, step: Int) -> String? {
-        guard let at = roles.firstIndex(where: { $0.roleId == roleID }) else { return nil }
-        let i = step == -1 ? at - 1 : at + 2
-        guard roles.indices.contains(i), landsBefore(roles, roleID: roleID, beforeID: roles[i].roleId) else { return nil }
-        return roles[i].roleId
+    /// Who may be given a role from its editor: members who do not hold
+    /// it, a guest never, found by `query`, in the order of their names.
+    public static func candidates(_ members: [MemberSummary], roleID: String, query: String, name: (MemberSummary) -> String) -> [MemberSummary] {
+        searched(members.filter { !$0.guest && !$0.roleIds.contains(roleID) }, query: query)
+            .sorted { name($0).localizedCaseInsensitiveCompare(name($1)) == .orderedAscending }
     }
 
     /// `roles` as a move draws them at once, before the instance answers: `roleID` before `beforeID`.
@@ -176,181 +105,29 @@ public enum Roles {
         return out
     }
 
-    /// The editor's fields for a role, or for a new one: no name, no colour, shown as a tag, nothing granted.
-    public static func draft(of role: RoleSummary? = nil) -> RoleDraft {
-        RoleDraft(name: role?.name ?? "", color: role?.color ?? "", hideTag: role?.hideTag ?? false, permissions: role?.permissions ?? [])
-    }
-
-    private static func sameSet(_ a: [String], _ b: [String]) -> Bool {
-        a.count == b.count && a.allSatisfy(b.contains)
-    }
-
-    private static func trimmed(_ s: String) -> String { s.trimmingCharacters(in: .whitespacesAndNewlines) }
-
-    /// Whether Save is offered: a new role (`opened` nil) once it has a
-    /// name, a role once something of the draft differs from the role as
-    /// the editor opened on it and it still has a name. Of Everyone only
-    /// the permissions are compared, since nothing else of it changes. The
-    /// role as it now is is never compared: someone else's change to it is
-    /// not this editor's to save, and does not light Save.
-    public static func savable(_ draft: RoleDraft, opened: RoleDraft? = nil, everyone: Bool = false) -> Bool {
-        guard let opened else { return !trimmed(draft.name).isEmpty }
-        if everyone { return !sameSet(draft.permissions, opened.permissions) }
-        if trimmed(draft.name).isEmpty { return false }
-        return trimmed(draft.name) != trimmed(opened.name) || draft.color != opened.color || draft.hideTag != opened.hideTag || !sameSet(draft.permissions, opened.permissions)
-    }
-
-    /// Whether an editor holds what it opened on: nothing typed, chosen or
-    /// switched that is still there. A permission switched on and off
-    /// again is as it was, whatever order that leaves the list in.
+    /// Whether an editor holds what it opened on, as typed: nothing typed,
+    /// chosen or switched that is still there, a permission switched on and
+    /// off again as it was. "Saved." stays said while it does.
     public static func untouched(opened: RoleDraft, draft: RoleDraft) -> Bool {
-        draft.name == opened.name && draft.color == opened.color && draft.hideTag == opened.hideTag && sameSet(draft.permissions, opened.permissions)
+        draft.name == opened.name && draft.color == opened.color && draft.hideTag == opened.hideTag
+            && draft.permissions.count == opened.permissions.count && draft.permissions.allSatisfy(opened.permissions.contains)
     }
 
-    /// A role's editor as the role changes underneath it. One nobody has
-    /// touched follows: what it opened on and what it holds are both the
-    /// role as it now is. Once the person has changed something, both stay
-    /// as they are, so the save sends their changes and nothing else, and
-    /// what someone else changed meanwhile stands.
-    public static func followed(opened: RoleDraft, draft: RoleDraft, role: RoleSummary) -> (opened: RoleDraft, draft: RoleDraft) {
-        guard untouched(opened: opened, draft: draft) else { return (opened, draft) }
-        let now = Roles.draft(of: role)
-        return (now, now)
+    /// Why a role was not saved, moved or deleted, in the core's words.
+    public static func roleRefusal(_ error: any Error, serverName: String) -> String {
+        rolesRoleRefusal(code: error.lumiaCode ?? "", field: error.lumiaDetails["field"] ?? "", message: error.lumiaMessage, serverName: serverName)
     }
 
-    /// A permission this account does not hold, and so cannot give or take: its switch is shown and not turned.
-    public static func withheld(grantable: [String], permission: String) -> Bool { !grantable.contains(permission) }
-
-    /// Every role a member holds, in the server's order, without Everyone.
-    public static func held(_ roles: [RoleSummary], roleIDs: [String]) -> [HeldRole] {
-        roles.filter { !$0.isEveryone && roleIDs.contains($0.roleId) }.map { HeldRole(roleID: $0.roleId, label: $0.name, tone: tone(of: $0.color)) }
-    }
-
-    /// A member's roles to tick: the server's in order without Everyone, each not this account's to give or take marked.
-    public static func choices(_ roles: [RoleSummary], held: [String]) -> [RoleChoice] {
-        roles.filter { !$0.isEveryone }.map { RoleChoice(id: $0.roleId, name: $0.name, tone: tone(of: $0.color), checked: held.contains($0.roleId), locked: !$0.canManage) }
-    }
-
-    /// The roles a tick leaves a member with; a locked role is not changed by one.
-    public static func toggled(_ roles: [RoleSummary], held: [String], roleID: String) -> [String] {
-        guard let role = roles.first(where: { $0.roleId == roleID }), !role.isEveryone, role.canManage else { return held }
-        return held.contains(roleID) ? held.filter { $0 != roleID } : held + [roleID]
-    }
-
-    /// What this account may change of a member; `me` when the member is this account itself.
-    public static func offers(canManageRoles: Bool, guest: Bool, canManage: Bool, me: Bool) -> MemberOffers {
-        MemberOffers(
-            roles: canManageRoles && !guest,
-            rolesNote: canManageRoles && guest ? RoleWords.guestRolesNote : nil,
-            title: me || canManage,
-            kick: !me && canManage
-        )
-    }
-
-    public static func offers(_ server: ServerSummary, member: MemberSummary, me: Bool) -> MemberOffers {
-        offers(canManageRoles: server.canManageRoles, guest: member.guest, canManage: member.canManage, me: me)
-    }
-
-    /// The word beside a name on a card and in Members: the server's owner, or a guest.
-    public static func mark(owner: Bool, guest: Bool) -> String? {
-        owner ? "Owner" : guest ? "Guest" : nil
-    }
-
-    /// The words beside the name on a profile card, each a tag in the
-    /// accent: "You" on this account's own, then who they are to the
-    /// server. Both are shown, on every client: "You" does not stand in
-    /// for "Owner" or "Guest".
-    public static func cardMarks(me: Bool, owner: Bool, guest: Bool) -> [String] {
-        (me ? ["You"] : []) + (mark(owner: owner, guest: guest).map { [$0] } ?? [])
-    }
-
-    /// A member's tag as a message and a member row draw it: its words, on its tone or the plain chip.
-    public static func tag(of tag: TagSummary?) -> TagLook? {
-        guard let tag, !tag.label.isEmpty else { return nil }
-        return TagLook(label: tag.label, tone: tone(of: tag.color))
-    }
-
-    /// Members whose name, handle or title has `query` in it, whatever its capitals; all of them for nothing typed.
-    public static func searched(_ members: [MemberSummary], query: String) -> [MemberSummary] {
-        var q = trimmed(query).lowercased()
-        if q.hasPrefix("@") { q.removeFirst() }
-        guard !q.isEmpty else { return members }
-        return members.filter { m in [m.displayName, m.nickname, m.handle, m.title].contains { $0.lowercased().contains(q) } }
-    }
-
-    /// A count with a comma between each three digits, as every client writes it.
-    public static func grouped(_ n: Int) -> String { MessageCounter.grouped(UInt64(max(0, n))) }
-
-    /// A member's form as it opens: the roles they hold and their title.
-    public static func form(of member: MemberSummary) -> MemberForm {
-        MemberForm(roleIDs: member.roleIds, title: member.title)
-    }
-
-    /// What a save of a member's form sends, in one request: the roles to
-    /// give (ticked, and not held when the form opened), the roles to take
-    /// (held then, and not ticked now), and the title only if, trimmed, it
-    /// differs from the one the form opened on. Never the whole set of
-    /// their roles: a role someone else gave them meanwhile is not in
-    /// either list, and stays. All three empty, nothing is sent.
-    public static func memberChanges(opened: MemberForm, form: MemberForm) -> (give: [String], take: [String], title: String?) {
-        let give = form.roleIDs.filter { !opened.roleIDs.contains($0) }
-        let take = opened.roleIDs.filter { !form.roleIDs.contains($0) }
-        let title = trimmed(form.title)
-        return (give, take, title == trimmed(opened.title) ? nil : title)
-    }
-
-    /// Whether a member's form holds what it opened on.
-    public static func untouched(opened: MemberForm, form: MemberForm) -> Bool {
-        form.title == opened.title && sameSet(form.roleIDs, opened.roleIDs)
-    }
-
-    /// A member's form as the member changes underneath it, as a role's
-    /// editor follows its role: untouched, it is the member as they now
-    /// are; touched, it and what it opened on stay.
-    public static func followed(opened: MemberForm, form: MemberForm, member: MemberSummary) -> (opened: MemberForm, form: MemberForm) {
-        guard untouched(opened: opened, form: form) else { return (opened, form) }
-        let now = Roles.form(of: member)
-        return (now, now)
-    }
-
-    /// Who may be given a role from its editor: members who do not hold it, a guest never, by `query`, by name.
-    public static func candidates(_ members: [MemberSummary], roleID: String, query: String, name: (MemberSummary) -> String) -> [MemberSummary] {
-        searched(members.filter { !$0.guest && !$0.roleIds.contains(roleID) }, query: query)
-            .sorted { name($0).localizedCaseInsensitiveCompare(name($1)) == .orderedAscending }
+    /// Why a member's roles or title were not saved, or they were not kicked, in the core's words.
+    public static func memberRefusal(_ error: any Error) -> String {
+        rolesMemberRefusal(code: error.lumiaCode ?? "", field: error.lumiaDetails["field"] ?? "", message: error.lumiaMessage)
     }
 }
 
-// MARK: Words
-
-public enum RoleWords {
-    public static let rolesHint = "In order, highest first. Drag a role to move it. A new role starts last, just above Everyone."
-    /// The same where a role is moved from its menu alone (a phone, a narrow window).
-    public static let rolesHintMenu = "In order, highest first. A role is moved from its menu. A new role starts last, just above Everyone."
-    public static let everyoneSubtitle = "What every member may do before any role adds to it. Guests are not among them."
-    public static let titleHint = "Up to 32 characters. A title grants nothing."
-    public static let guestRolesNote = "Guests aren’t given roles."
-    public static let deleteRoleHint = "Its members lose what it allowed. This can’t be undone."
-    public static let tagNote = "A profile shows a member’s title and roles either way."
-    /// Overview's card of the two: its title and the line under it.
-    public static let tagTitle = "Tag beside names"
-    public static let tagSubtitle = "What shows beside a member’s name in messages and in the member list."
-    public static let tagRoles = (label: "Roles", caption: "Each member’s highest role that is shown as a tag, in the role’s colour.")
-    public static let tagTitles = (label: "Titles", caption: "Each member’s title, in no colour. A member without a title has no tag.")
-
-    /// What the web's screens say that the sheet does not hold: a role nobody
-    /// holds, a search that finds nobody, a card with no roles to list.
-    public static let nobodyHolds = "Nobody holds this role yet."
-    public static let noMatch = "No member matches that."
-    public static let noRoles = "No roles"
-    /// The questions' titles and the gone role's line.
-    public static let administratorTitle = "Turn on Administrator?"
-    public static func deleteTitle(_ roleName: String) -> String { "Delete \(roleName)?" }
-
+/// What a phone says that the other clients' screens do not.
+public enum PhoneRoleWords {
     /// Under Members' title: "128 in Acme".
     public static func membersIn(_ n: Int, serverName: String) -> String { "\(Roles.grouped(n)) in \(serverName)" }
-
-    /// A move from a role's menu as assistive technology hears it, as the rail's moves are said: "Design moved to position 3".
-    public static func moved(_ roleName: String, position: Int) -> String { "\(roleName) moved to position \(position)" }
 
     /// A role's row as heard after its name: "3 members", "41 members, not shown as tag", and for one not this account's to change, why.
     public static func rowValue(held: Int?, hideTag: Bool, locked: Bool) -> String {
@@ -359,71 +136,5 @@ public enum RoleWords {
         if hideTag { parts.append("not shown as tag") }
         if locked { parts.append("not yours to change") }
         return parts.joined(separator: ", ")
-    }
-
-    public static func roleNameHint(serverName: String) -> String {
-        "1 to 32 characters. No other role in \(serverName) can have the same name."
-    }
-
-    /// Under "Show as tag", as it stands.
-    public static func tagSwitchCaption(shown: Bool) -> String {
-        shown ? "This role can be the tag beside a member’s name." : "This role only carries permissions. It is nobody’s tag."
-    }
-
-    /// A permission's line where its switch is not this account's to turn.
-    public static func withheldCaption(_ detail: String) -> String {
-        "\(detail) You don’t hold it, so it is not yours to give or take."
-    }
-
-    /// What is asked before Administrator is turned on: the lines under "Turn on Administrator?". A new role has no holders to count.
-    public static func administratorQuestion(serverName: String, roleName: String, held: Int?) -> [String] {
-        var lines = ["Administrator allows everything in \(serverName), in every channel, whatever a channel’s own permissions say."]
-        if let held, held > 0 { lines.append(held == 1 ? "1 member holds \(roleName)." : "\(Roles.grouped(held)) members hold \(roleName).") }
-        return lines
-    }
-
-    /// What is asked before a role is deleted: the lines under "Delete
-    /// Moderator?". How many hold it is said only when it is known: with
-    /// the member list not read yet, or not read at all, nothing is said
-    /// of holders, since "Nobody holds this role." of a role forty members
-    /// hold is the one thing the question must not say.
-    public static func deleteQuestion(held: Int?) -> [String] {
-        let undone = "This can’t be undone."
-        guard let held else { return [undone] }
-        let first: String
-        switch held {
-        case 0: first = "Nobody holds this role."
-        case 1: first = "1 member holds this role. They lose what it allowed."
-        case let n: first = "\(Roles.grouped(n)) members hold this role. They lose what it allowed."
-        }
-        return [first, undone]
-    }
-
-    /// Why a role was not saved, moved or deleted: `code` and `details` as the error carries them, `message` its own words.
-    public static func roleRefusal(code: String?, details: [String: String], message: String, serverName: String) -> String {
-        switch code {
-        case "PERMISSION_DENIED": "That isn’t yours to change. A role at or above your own highest, or a permission you don’t hold, is not yours to give."
-        case "ALREADY_EXISTS": "Another role in \(serverName) has that name."
-        case "NOT_FOUND": "That role is gone. Someone deleted it."
-        case "INVALID_ARGUMENT" where details["field"] == "name": "A role’s name is 1 to 32 characters on one line, with no hidden characters, and can’t be “everyone”."
-        case "INVALID_ARGUMENT" where details["field"] == "color": "A role’s colour is one of the nine, or none."
-        case "INVALID_ARGUMENT" where details["field"] == "role_ids": "The roles changed while you were moving one. Try again."
-        case "FAILED_PRECONDITION": "This server has as many roles as it can hold."
-        default: message
-        }
-    }
-
-    /// Why a member's roles or title were not saved, or they were not
-    /// kicked. `RATE_LIMITED` is this account's own title, which a server
-    /// lets it change ten times an hour; nothing else of a member is counted.
-    public static func memberRefusal(code: String?, details: [String: String], message: String) -> String {
-        switch code {
-        case "PERMISSION_DENIED": "That isn’t yours to change. They may be at or above your own highest role."
-        case "NOT_FOUND": "They are no longer a member."
-        case "FAILED_PRECONDITION": "A member can’t hold that many roles."
-        case "RATE_LIMITED": "You’ve changed your title too many times this hour. Try again later."
-        case "INVALID_ARGUMENT" where details["field"] == "title": "A title is up to 32 characters on one line, with no hidden characters."
-        default: message
-        }
     }
 }
