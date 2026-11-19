@@ -39,6 +39,8 @@ import uniffi.lumia_ffi.MessageSummary
 import uniffi.lumia_ffi.RoleDraft
 import uniffi.lumia_ffi.RoleSummary
 import uniffi.lumia_ffi.RosterSummary
+import uniffi.lumia_ffi.TagLook
+import uniffi.lumia_ffi.rolesTagLook
 import uniffi.lumia_ffi.SnapshotSummary
 import uniffi.lumia_ffi.ChannelSummary
 import uniffi.lumia_ffi.ChannelAddSummary
@@ -389,7 +391,7 @@ class LumiaSession(
     fun memberOf(serverId: String, accountId: String): MemberSummary? = serverMembers[serverId]?.firstOrNull { it.accountId == accountId }
 
     /** The tag beside a member's name in a server, their role or their title as the server shows; none for none. */
-    fun tagOf(serverId: String, accountId: String): TagLook? = tagOf(memberOf(serverId, accountId)?.tag)
+    fun tagOf(serverId: String, accountId: String): TagLook? = rolesTagLook(memberOf(serverId, accountId)?.tag)
 
     // The rail (architecture 6.9)
 

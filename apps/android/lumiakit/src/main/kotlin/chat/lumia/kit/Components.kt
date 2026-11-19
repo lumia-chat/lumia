@@ -85,6 +85,7 @@ import uniffi.lumia_ffi.BodyBlock
 import uniffi.lumia_ffi.DeviceSummary
 import uniffi.lumia_ffi.MentionSummary
 import uniffi.lumia_ffi.MessageRoom
+import uniffi.lumia_ffi.TagLook
 import uniffi.lumia_ffi.parseBody
 
 /**
@@ -353,7 +354,7 @@ fun LumiaMessageRow(
         Column(verticalArrangement = Arrangement.spacedBy(measures.within), modifier = modifier) {
             LumiaNameLine(
                 LumiaTokens.space8,
-                tag = tag?.let { t -> @Composable { LumiaTag(t.label, tone = t.tone, scale = LocalTextScale.current) } },
+                tag = tag?.let { t -> @Composable { LumiaTag(t.label, tone = avatarTone(t.tone), scale = LocalTextScale.current) } },
                 after = { Text(time, style = LumiaTokens.textMeta.scaled, color = LumiaTokens.inkQuiet.color, maxLines = 1, softWrap = false) },
             ) {
                 Text(author, style = LumiaTokens.textAuthor.scaled, color = LumiaTokens.inkEmphasis.color, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = authorTap)
@@ -830,7 +831,7 @@ fun LumiaTag(text: String, modifier: Modifier = Modifier, tone: AvatarTone? = nu
 
 /** A tag as the core worked it out and `tagOf` reads it: its words on its tone, or the plain chip. */
 @Composable
-fun LumiaTag(tag: TagLook, modifier: Modifier = Modifier, small: Boolean = false) = LumiaTag(tag.label, modifier, tone = tag.tone, small = small)
+fun LumiaTag(tag: TagLook, modifier: Modifier = Modifier, small: Boolean = false) = LumiaTag(tag.label, modifier, tone = avatarTone(tag.tone), small = small)
 
 /** A list's tag is 10.5 where a message's is 11.5 (`lu-tag--sm`). */
 private const val TAG_SMALL = 10.5f / 11.5f

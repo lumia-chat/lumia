@@ -67,15 +67,12 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.text.style.TextDecoration
 import chat.lumia.kit.LumiaNameLine
-import chat.lumia.kit.TagLook
-import chat.lumia.kit.memberMark
-import chat.lumia.kit.memberOffers
+import chat.lumia.kit.avatarTone
 import chat.lumia.kit.editingOf
 import chat.lumia.kit.followed
 import chat.lumia.kit.memberRefusal
-import chat.lumia.kit.roleChoices
-import chat.lumia.kit.rolesHeld
-import chat.lumia.kit.toggledRole
+import chat.lumia.kit.ticked
+import chat.lumia.kit.titled
 import chat.lumia.kit.AvatarTone
 import chat.lumia.kit.LumiaAvatar
 import chat.lumia.kit.LumiaCard
@@ -110,6 +107,12 @@ import kotlinx.coroutines.launch
 import uniffi.lumia_ffi.ChannelSummary
 import uniffi.lumia_ffi.MemberSummary
 import uniffi.lumia_ffi.ServerSummary
+import uniffi.lumia_ffi.TagLook
+import uniffi.lumia_ffi.rolesCardMarks
+import uniffi.lumia_ffi.rolesChoices
+import uniffi.lumia_ffi.rolesHeld
+import uniffi.lumia_ffi.rolesMemberOffers
+import uniffi.lumia_ffi.rolesToggled
 
 // Browse channels
 
@@ -531,9 +534,10 @@ fun ProfileCard(
     // Roles and titles (architecture 7.5; the "Profile card" boards): the member as the server's list has them,
     // what of theirs is this account's to change, and which of the card's two Edits is open in the card's place.
     val listed = session.memberOf(server.serverId, accountId)
-    val offers = listed?.let { memberOffers(server, it, me) }
+    val offers = listed?.let { rolesMemberOffers(server, it, me) }
     val held = listed?.let { rolesHeld(server.roles, it.roleIds) } ?: emptyList()
-    val mark = listed?.let { memberMark(it) }
+    // "You", then "Owner" or "Guest", in the accent beside the name.
+    val marks = rolesCardMarks(me, listed)
     val title = listed?.title ?: ""
     var editing by rememberSaveable { mutableStateOf<String?>(null) }
 
@@ -549,11 +553,10 @@ fun ProfileCard(
                     // This account, and who they are to the server: its owner, or a guest. Being the owner is no role and no tag.
                     LumiaNameLine(
                         LumiaTokens.space6,
-                        tag = if (me || mark != null) {
+                        tag = if (marks.isNotEmpty()) {
                             {
                                 Row(horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space6), verticalAlignment = Alignment.CenterVertically) {
-                                    if (me) LumiaTag("You", accent = true)
-                                    if (mark != null) LumiaTag(mark, accent = true)
+                                    for (word in marks) LumiaTag(word, accent = true)
                                 }
                             }
                         } else null,
@@ -582,7 +585,7 @@ fun ProfileCard(
                     }
                     if (held.isNotEmpty()) {
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space6), verticalArrangement = Arrangement.spacedBy(LumiaTokens.space4)) {
-                            for (r in held) LumiaTag(r.label, tone = r.tone)
+                            for (r in held) LumiaTag(r.label, tone = avatarTone(r.tone))
                         }
                     }
                 }
@@ -660,7 +663,7 @@ private fun MemberEditPage(session: LumiaSession, server: ServerSummary, member:
                 saveMember(session, server, member, editing)
                 done()
             } catch (e: Exception) {
-                error = memberRefusal(e.lumiaCode, e.lumiaDetails["field"], e.lumiaMessage)
+                error = memberRefusal(e)
             } finally {
                 busy = false
             }
@@ -676,8 +679,8 @@ private fun MemberEditPage(session: LumiaSession, server: ServerSummary, member:
             Text(if (roles) "Roles" else "Title", style = LumiaTokens.titleServer.style, color = LumiaTokens.ink.color, modifier = Modifier.semantics { heading() })
             Text("$name in ${server.name}", style = LumiaTokens.textSubtitle.style, color = LumiaTokens.inkSecondary.color)
         }
-        if (roles) RoleChoicesList(roleChoices(server.roles, form.roleIds), enabled = !busy) { id -> kept = editing.copy(form = form.copy(roleIds = toggledRole(server.roles, form.roleIds, id))) }
-        else TitleField(form.title) { if (!busy) kept = editing.copy(form = form.copy(title = it)) }
+        if (roles) RoleChoicesList(rolesChoices(server.roles, form.roleIds), enabled = !busy) { id -> kept = editing.ticked(rolesToggled(server.roles, form.roleIds, id)) }
+        else TitleField(form.title) { if (!busy) kept = editing.titled(it) }
         if (error.isNotEmpty()) LumiaErrorText(error)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space8, Alignment.End)) {
             LumiaSecondaryButton("Cancel", onClick = done)

@@ -99,10 +99,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import chat.lumia.kit.ADMINISTRATOR
 import chat.lumia.kit.AvatarTone
-import chat.lumia.kit.DELETE_ROLE_HINT
-import chat.lumia.kit.EVERYONE_SUBTITLE
 import chat.lumia.kit.LOCKED_CHOICE
 import chat.lumia.kit.LOCKED_ROLE
 import chat.lumia.kit.LumiaAvatar
@@ -118,64 +115,65 @@ import chat.lumia.kit.LumiaSession
 import chat.lumia.kit.LumiaTag
 import chat.lumia.kit.LumiaTokens
 import chat.lumia.kit.NOT_SHOWN_AS_TAG
-import chat.lumia.kit.NO_HOLDERS
-import chat.lumia.kit.NO_MEMBER_MATCHES
-import chat.lumia.kit.NO_ONE_TO_ADD
-import chat.lumia.kit.READING_MEMBERS
-import chat.lumia.kit.ROLES_HINT_MENU
-import chat.lumia.kit.MemberEditing
-import chat.lumia.kit.MemberForm
-import chat.lumia.kit.RoleChoice
-import chat.lumia.kit.RoleEditing
-import chat.lumia.kit.TITLE_HINT
 import chat.lumia.kit.addHoldersButton
-import chat.lumia.kit.administratorQuestion
-import chat.lumia.kit.deleteQuestion
+import chat.lumia.kit.avatarTone
 import chat.lumia.kit.editingOf
 import chat.lumia.kit.followed
 import chat.lumia.kit.grouped
 import chat.lumia.kit.holderCandidates
-import chat.lumia.kit.holders
 import chat.lumia.kit.initialsOf
 import chat.lumia.kit.labelClipped
-import chat.lumia.kit.landsBefore
-import chat.lumia.kit.lockedRole
 import chat.lumia.kit.lumiaCode
 import chat.lumia.kit.lumiaDetails
-import chat.lumia.kit.lumiaMessage
-import chat.lumia.kit.memberMark
-import chat.lumia.kit.memberChanges
-import chat.lumia.kit.memberOffers
 import chat.lumia.kit.memberRefusal
-import chat.lumia.kit.membersCount
-import chat.lumia.kit.movedBefore
 import chat.lumia.kit.nameOf
-import chat.lumia.kit.offersAny
 import chat.lumia.kit.refusalIsOfName
 import chat.lumia.kit.rememberClock
-import chat.lumia.kit.roleChoices
-import chat.lumia.kit.roleMovedWords
-import chat.lumia.kit.roleNameHint
 import chat.lumia.kit.roleRefusal
-import chat.lumia.kit.rolesCount
-import chat.lumia.kit.rolesHeld
+import chat.lumia.kit.roleSentences
 import chat.lumia.kit.rolesInOrder
-import chat.lumia.kit.savable
 import chat.lumia.kit.searched
-import chat.lumia.kit.stepBefore
-import chat.lumia.kit.tagSwitchCaption
+import chat.lumia.kit.ticked
 import chat.lumia.kit.timeOfMicros
-import chat.lumia.kit.toggledRole
+import chat.lumia.kit.titled
 import chat.lumia.kit.toneOf
 import chat.lumia.kit.turned
-import chat.lumia.kit.withheld
-import chat.lumia.kit.withheldCaption
 import kotlinx.coroutines.launch
+import uniffi.lumia_ffi.MemberForm
+import uniffi.lumia_ffi.MemberForms
 import uniffi.lumia_ffi.MemberSummary
 import uniffi.lumia_ffi.PermissionChoice
+import uniffi.lumia_ffi.RoleChoice
 import uniffi.lumia_ffi.RoleDraft
+import uniffi.lumia_ffi.RoleDrafts
 import uniffi.lumia_ffi.RoleSummary
 import uniffi.lumia_ffi.ServerSummary
+import uniffi.lumia_ffi.SettingsSection
+import uniffi.lumia_ffi.rolesAdministratorQuestion
+import uniffi.lumia_ffi.rolesChangesAny
+import uniffi.lumia_ffi.rolesChoices
+import uniffi.lumia_ffi.rolesCount
+import uniffi.lumia_ffi.rolesDeleteQuestion
+import uniffi.lumia_ffi.rolesDeleteTitle
+import uniffi.lumia_ffi.rolesHeld
+import uniffi.lumia_ffi.rolesHolders
+import uniffi.lumia_ffi.rolesLandsBefore
+import uniffi.lumia_ffi.rolesLocked
+import uniffi.lumia_ffi.rolesMemberChanges
+import uniffi.lumia_ffi.rolesMemberMark
+import uniffi.lumia_ffi.rolesMemberOffers
+import uniffi.lumia_ffi.rolesMembersCount
+import uniffi.lumia_ffi.rolesMovedBefore
+import uniffi.lumia_ffi.rolesMovedWords
+import uniffi.lumia_ffi.rolesNameHint
+import uniffi.lumia_ffi.rolesOffersAny
+import uniffi.lumia_ffi.rolesSavable
+import uniffi.lumia_ffi.rolesSectionLabel
+import uniffi.lumia_ffi.rolesStepBefore
+import uniffi.lumia_ffi.rolesTagSwitchCaption
+import uniffi.lumia_ffi.rolesToggled
+import uniffi.lumia_ffi.rolesWithheld
+import uniffi.lumia_ffi.rolesWithheldCaption
 
 // What the boards draw and `tokens.json` has no name for, made from the nearest tokens.
 
@@ -191,9 +189,9 @@ private const val HEADING = 17f / 19f
 /** A hint under a field and a list's lead: 13.5 at the text's own weight (`.lu-settings__subtitle`). */
 private val LeadStyle get() = LumiaTokens.textLabel.style.copy(fontWeight = FontWeight(LumiaTokens.textMeta.weight))
 
-private fun refused(e: Exception, serverName: String): String = roleRefusal(e.lumiaCode, e.lumiaDetails["field"], e.lumiaMessage, serverName)
+private fun refused(e: Exception, serverName: String): String = roleRefusal(e, serverName)
 
-private fun refused(e: Exception): String = memberRefusal(e.lumiaCode, e.lumiaDetails["field"], e.lumiaMessage)
+private fun refused(e: Exception): String = memberRefusal(e)
 
 /**
  * A server's members asked for as one of these screens opens without them
@@ -234,18 +232,20 @@ fun RolesScreen(session: LumiaSession, server: ServerSummary?, back: () -> Unit,
     var asking by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     val roles = rolesInOrder(server?.roles ?: emptyList(), moved)
+    // How many hold each role, asked of the core once for the list as it is, not for every row as it is drawn.
+    val held = remember(roles, members) { roles.associate { it.roleId to rolesHolders(it, members) } }
     AskMembers(session, serverId, members)
 
     fun move(roleId: String, beforeId: String?) {
-        if (server == null || beforeId == null || moved != null || !landsBefore(roles, roleId, beforeId)) return
-        val order = movedBefore(roles, roleId, beforeId)
+        if (server == null || beforeId == null || moved != null || !rolesLandsBefore(roles, roleId, beforeId)) return
+        val order = rolesMovedBefore(roles, roleId, beforeId)
         val name = roles.firstOrNull { it.roleId == roleId }?.name ?: ""
         error = ""
         moved = order
         scope.launch {
             try {
                 session.reorderRoles(server.serverId, order)
-                view.announceForAccessibility(roleMovedWords(name, order, roleId))
+                view.announceForAccessibility(rolesMovedWords(name, (order.indexOf(roleId) + 1).toULong()))
             } catch (e: Exception) {
                 error = refused(e, server.name)
             } finally {
@@ -270,17 +270,17 @@ fun RolesScreen(session: LumiaSession, server: ServerSummary?, back: () -> Unit,
         }
     }
 
-    PanelScreen(back = "Server settings", onBack = back, title = "Roles", subtitle = server?.let { "${it.name} · ${rolesCount(it.roles)}" }) {
+    PanelScreen(back = "Server settings", onBack = back, title = rolesSectionLabel(SettingsSection.ROLES), subtitle = server?.let { "${it.name} · ${rolesCount(it.roles)}" }) {
         LazyColumn(
             Modifier.fillMaxSize().navigationBarsPadding(),
             contentPadding = PaddingValues(LumiaTokens.space16),
             verticalArrangement = Arrangement.spacedBy(LumiaTokens.space6),
         ) {
-            item { Text(ROLES_HINT_MENU, style = LeadStyle, color = LumiaTokens.inkMuted.color, modifier = Modifier.padding(bottom = LumiaTokens.space6)) }
+            item { Text(roleSentences.rolesHintMenu, style = LeadStyle, color = LumiaTokens.inkMuted.color, modifier = Modifier.padding(bottom = LumiaTokens.space6)) }
             if (error.isNotEmpty()) item { LumiaErrorText(error) }
             items(roles, key = { it.roleId }) { role ->
-                val moves = !role.isEveryone && !lockedRole(role)
-                RoleRow(role, holders(role, members), onOpen = { push(Screen.RoleEditor(serverId, role.roleId)) }) {
+                val moves = !role.isEveryone && !rolesLocked(role)
+                RoleRow(role, held[role.roleId], onOpen = { push(Screen.RoleEditor(serverId, role.roleId)) }) {
                     if (moves) {
                         Box(Modifier.padding(end = LumiaTokens.space6)) {
                             IconButton(onClick = { menu = role.roleId }, modifier = Modifier.size(SmallControl)) {
@@ -289,8 +289,8 @@ fun RolesScreen(session: LumiaSession, server: ServerSummary?, back: () -> Unit,
                             RoleMenu(
                                 role.name,
                                 open = menu == role.roleId,
-                                up = stepBefore(roles, role.roleId, -1),
-                                down = stepBefore(roles, role.roleId, 1),
+                                up = rolesStepBefore(roles, role.roleId, up = true),
+                                down = rolesStepBefore(roles, role.roleId, up = false),
                                 onDismiss = { menu = null },
                                 onEdit = { push(Screen.RoleEditor(serverId, role.roleId)) },
                                 onMove = { before -> move(role.roleId, before) },
@@ -308,7 +308,7 @@ fun RolesScreen(session: LumiaSession, server: ServerSummary?, back: () -> Unit,
 
     val asked = roles.firstOrNull { it.roleId == asking }
     if (asked != null) {
-        AskSheet("Delete ${asked.name}?", deleteQuestion(holders(asked, members)), confirm = "Delete role", danger = true, keep = "Keep it", busy = busy, onConfirm = { delete(asked.roleId) }) { asking = null }
+        AskSheet(rolesDeleteTitle(asked.name), rolesDeleteQuestion(held[asked.roleId]), confirm = "Delete role", danger = true, keep = "Keep it", busy = busy, onConfirm = { delete(asked.roleId) }) { asking = null }
     }
 }
 
@@ -319,8 +319,8 @@ fun RolesScreen(session: LumiaSession, server: ServerSummary?, back: () -> Unit,
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun RoleRow(role: RoleSummary, held: Int?, onOpen: () -> Unit, end: @Composable () -> Unit) {
-    val locked = lockedRole(role)
+private fun RoleRow(role: RoleSummary, held: ULong?, onOpen: () -> Unit, end: @Composable () -> Unit) {
+    val locked = rolesLocked(role)
     val shape = RoundedCornerShape(LumiaTokens.radius14)
     Row(
         Modifier.fillMaxWidth().heightIn(min = RoleRowHeight).clip(shape)
@@ -340,7 +340,7 @@ private fun RoleRow(role: RoleSummary, held: Int?, onOpen: () -> Unit, end: @Com
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(LumiaTokens.space2 / 2)) {
                 Text(role.name, style = LumiaTokens.textButtonSecondary.style, color = if (locked) LumiaTokens.inkBody.color else LumiaTokens.ink.color, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space12)) {
-                    if (held != null) Text(membersCount(held), style = LumiaTokens.textMeta.style, color = LumiaTokens.inkMuted.color)
+                    if (held != null) Text(rolesMembersCount(held), style = LumiaTokens.textMeta.style, color = LumiaTokens.inkMuted.color)
                     if (role.hideTag && !role.isEveryone) {
                         Row(horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space4), verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Outlined.VisibilityOff, contentDescription = null, tint = LumiaTokens.inkMuted.color, modifier = Modifier.size(LumiaTokens.space14))
@@ -434,9 +434,9 @@ private fun stored(draft: RoleDraft): List<Any> = listOf(draft.name, draft.color
 private fun draftStored(stored: List<*>): RoleDraft = RoleDraft(stored[0] as String, stored[1] as String, stored[2] as Boolean, (stored[3] as List<*>).filterIsInstance<String>())
 
 /** An editor through a turn of the phone: the role as it opened on it, and the draft. */
-private val EditingSaver = listSaver<RoleEditing, Any>(
+private val EditingSaver = listSaver<RoleDrafts, Any>(
     save = { stored(it.opened) + stored(it.draft) },
-    restore = { RoleEditing(draftStored(it.subList(0, 4)), draftStored(it.subList(4, 8))) },
+    restore = { RoleDrafts(draftStored(it.subList(0, 4)), draftStored(it.subList(4, 8))) },
 )
 
 /**
@@ -454,7 +454,7 @@ private val EditingSaver = listSaver<RoleEditing, Any>(
  * shell drops the screen).
  *
  * The editor holds the role as it opened on it beside the draft
- * (`RoleEditing`). Save is offered for a draft that differs from that,
+ * (`RoleDrafts`). Save is offered for a draft that differs from that,
  * never for what someone else changed of the role, and sends the
  * difference and nothing else (`LumiaSession.changeRole`): a rename here
  * does not switch back on a permission another admin switched off
@@ -486,7 +486,7 @@ fun RoleEditorScreen(session: LumiaSession, server: ServerSummary?, roleId: Stri
     var askingDelete by remember { mutableStateOf(false) }
     AskMembers(session, serverId, members)
 
-    val held = role?.let { holders(it, members) }
+    val held = remember(role, members) { role?.let { rolesHolders(it, members) } }
     val holding = if (role != null && !everyone) (members ?: emptyList()).filter { role.roleId in it.roleIds } else emptyList()
     val shownName = when {
         role == null -> "New role"
@@ -494,7 +494,7 @@ fun RoleEditorScreen(session: LumiaSession, server: ServerSummary?, roleId: Stri
         else -> draft.name.trim().ifEmpty { role.name }
     }
     // Against what the editor opened on, never the role as it now is: someone else's change is nothing to save here.
-    val canSave = !busy && server != null && (roleId == null || role != null) && savable(draft, editing.opened.takeIf { role != null })
+    val canSave = !busy && server != null && (roleId == null || role != null) && rolesSavable(draft, editing.opened.takeIf { role != null })
 
     // Nothing is changed while a save is on its way: its answer is what the editor then holds.
     fun change(next: RoleDraft) {
@@ -534,7 +534,7 @@ fun RoleEditorScreen(session: LumiaSession, server: ServerSummary?, roleId: Stri
 
     // Administrator asks first; every other switch is the draft's at once.
     fun turn(name: String, on: Boolean) {
-        if (on && name == ADMINISTRATOR) askingAdmin = true
+        if (on && name == roleSentences.administrator) askingAdmin = true
         else change(draft.copy(permissions = turned(draft.permissions, name, on)))
     }
 
@@ -575,28 +575,28 @@ fun RoleEditorScreen(session: LumiaSession, server: ServerSummary?, roleId: Stri
         back = "Roles",
         onBack = back,
         title = shownName,
-        subtitle = if (held != null) "$serverName · ${membersCount(held)}" else serverName,
+        subtitle = if (held != null) "$serverName · ${rolesMembersCount(held)}" else serverName,
         trailing = { HeaderAction(Icons.Filled.Check, "Save", enabled = canSave) { save() } },
     ) {
         LazyColumn(Modifier.fillMaxSize().imePadding().navigationBarsPadding(), contentPadding = PaddingValues(LumiaTokens.space16)) {
             if (error.isNotEmpty()) item { Box(Modifier.padding(bottom = LumiaTokens.space12)) { LumiaErrorText(error) } }
             if (saved) item { Text("Saved.", style = LumiaTokens.textMeta.style, color = LumiaTokens.inkSecondary.color, modifier = Modifier.padding(bottom = LumiaTokens.space12)) }
             if (everyone) {
-                item { Text(EVERYONE_SUBTITLE, style = LeadStyle, color = LumiaTokens.inkMuted.color, modifier = Modifier.padding(bottom = LumiaTokens.space16)) }
+                item { Text(roleSentences.everyoneSubtitle, style = LeadStyle, color = LumiaTokens.inkMuted.color, modifier = Modifier.padding(bottom = LumiaTokens.space16)) }
             } else {
                 item {
                     Column(Modifier.padding(bottom = LumiaTokens.space24), verticalArrangement = Arrangement.spacedBy(LumiaTokens.space10)) {
                         Column(verticalArrangement = Arrangement.spacedBy(LumiaTokens.space6)) {
                             LumiaField("Name", draft.name, { nameError = ""; change(draft.copy(name = labelClipped(it))) }, placeholder = "Moderator")
                             if (nameError.isNotEmpty()) LumiaErrorText(nameError)
-                            Text(roleNameHint(serverName), style = LumiaTokens.textMeta.style, color = LumiaTokens.inkMuted.color)
+                            Text(rolesNameHint(serverName), style = LumiaTokens.textMeta.style, color = LumiaTokens.inkMuted.color)
                         }
                         Column(verticalArrangement = Arrangement.spacedBy(LumiaTokens.space6)) {
                             Text("Colour", style = LumiaTokens.textLabel.style, color = LumiaTokens.inkBody.color)
                             ToneChoices(toneOf(draft.color)) { tone -> change(draft.copy(color = tone?.name?.lowercase() ?: "")) }
                         }
                         OutlinedGroup {
-                            ToggleRow("Show as tag", tagSwitchCaption(!draft.hideTag), !draft.hideTag) { shown -> change(draft.copy(hideTag = !shown)) }
+                            ToggleRow("Show as tag", rolesTagSwitchCaption(!draft.hideTag), !draft.hideTag) { shown -> change(draft.copy(hideTag = !shown)) }
                             GroupRule()
                             TagPreview(session, draft)
                         }
@@ -607,13 +607,13 @@ fun RoleEditorScreen(session: LumiaSession, server: ServerSummary?, roleId: Stri
             for (group in session.rolePermissions) {
                 item(key = "group ${group.title}") {
                     val row = @Composable { p: PermissionChoice, apart: Boolean ->
-                        val kept = server == null || withheld(server.grantable, p.name)
-                        ToggleRow(p.label, if (kept) withheldCaption(p.detail) else p.detail, p.name in draft.permissions, enabled = !kept, apart = apart) { on -> turn(p.name, on) }
+                        val kept = server == null || rolesWithheld(server.grantable, p.name)
+                        ToggleRow(p.label, if (kept) rolesWithheldCaption(p.detail) else p.detail, p.name in draft.permissions, enabled = !kept, apart = apart) { on -> turn(p.name, on) }
                     }
                     Column(Modifier.padding(bottom = LumiaTokens.space10), verticalArrangement = Arrangement.spacedBy(LumiaTokens.space10)) {
                         Text(group.title, style = LumiaTokens.textSection.style, color = LumiaTokens.inkMuted.color, modifier = Modifier.semantics { heading() })
                         // Administrator, set apart: the one that grants every other.
-                        val (apart, rest) = group.permissions.partition { it.name == ADMINISTRATOR }
+                        val (apart, rest) = group.permissions.partition { it.name == roleSentences.administrator }
                         if (apart.isNotEmpty()) OutlinedGroup(apart = true) { for (p in apart) row(p, true) }
                         OutlinedGroup {
                             rest.forEachIndexed { i, p ->
@@ -633,7 +633,7 @@ fun RoleEditorScreen(session: LumiaSession, server: ServerSummary?, roleId: Stri
                         }
                         SmallButton("Add members", Icons.Filled.Add) { push(Screen.RoleHolders(serverId, role.roleId)) }
                         if (holdersError.isNotEmpty()) LumiaErrorText(holdersError)
-                        if (holding.isEmpty()) Text(NO_HOLDERS, style = LumiaTokens.textMeta.style, color = LumiaTokens.inkMuted.color)
+                        if (holding.isEmpty()) Text(roleSentences.nobodyHolds, style = LumiaTokens.textMeta.style, color = LumiaTokens.inkMuted.color)
                     }
                 }
                 itemsIndexed(holding, key = { _, m -> "holder ${m.accountId}" }) { i, m ->
@@ -659,7 +659,7 @@ fun RoleEditorScreen(session: LumiaSession, server: ServerSummary?, roleId: Stri
                 item {
                     Column(Modifier.padding(top = LumiaTokens.space24), verticalArrangement = Arrangement.spacedBy(LumiaTokens.space10)) {
                         Heading("Delete role")
-                        Text(DELETE_ROLE_HINT, style = LumiaTokens.textMeta.style, color = LumiaTokens.inkMuted.color)
+                        Text(roleSentences.deleteRoleHint, style = LumiaTokens.textMeta.style, color = LumiaTokens.inkMuted.color)
                         LumiaDangerButton("Delete role", enabled = !busy) { askingDelete = true }
                     }
                 }
@@ -669,19 +669,19 @@ fun RoleEditorScreen(session: LumiaSession, server: ServerSummary?, roleId: Stri
 
     if (askingAdmin) {
         AskSheet(
-            "Turn on Administrator?",
-            administratorQuestion(serverName, shownName, held),
+            roleSentences.administratorTitle,
+            rolesAdministratorQuestion(serverName, shownName, held),
             confirm = "Turn on",
             danger = false,
             keep = "Cancel",
             onConfirm = {
                 askingAdmin = false
-                change(draft.copy(permissions = turned(draft.permissions, ADMINISTRATOR, true)))
+                change(draft.copy(permissions = turned(draft.permissions, roleSentences.administrator, true)))
             },
         ) { askingAdmin = false }
     }
     if (askingDelete && role != null) {
-        AskSheet("Delete ${role.name}?", deleteQuestion(held), confirm = "Delete role", danger = true, keep = "Keep it", busy = busy, onConfirm = { delete() }) { askingDelete = false }
+        AskSheet(rolesDeleteTitle(role.name), rolesDeleteQuestion(held), confirm = "Delete role", danger = true, keep = "Keep it", busy = busy, onConfirm = { delete() }) { askingDelete = false }
     }
 }
 
@@ -908,7 +908,7 @@ fun RoleHoldersScreen(session: LumiaSession, server: ServerSummary?, roleId: Str
             LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(LumiaTokens.space12), verticalArrangement = Arrangement.spacedBy(LumiaTokens.space2)) {
                 item { Box(Modifier.padding(start = LumiaTokens.space4, end = LumiaTokens.space4, bottom = LumiaTokens.space8)) { SearchField("Find a member", query) { query = it } } }
                 if (candidates.isEmpty()) {
-                    item { Text(if (query.isNotBlank()) NO_MEMBER_MATCHES else NO_ONE_TO_ADD, style = LumiaTokens.textMeta.style, color = LumiaTokens.inkMuted.color, modifier = Modifier.padding(LumiaTokens.space10)) }
+                    item { Text(if (query.isNotBlank()) roleSentences.noMemberMatches else roleSentences.everyoneHolds, style = LumiaTokens.textMeta.style, color = LumiaTokens.inkMuted.color, modifier = Modifier.padding(LumiaTokens.space10)) }
                 }
                 items(candidates, key = { it.accountId }) { m ->
                     val on = m.accountId in chosen
@@ -980,20 +980,20 @@ fun ServerMembersScreen(session: LumiaSession, server: ServerSummary?, back: () 
     PanelScreen(
         back = "Server settings",
         onBack = back,
-        title = "Members",
+        title = rolesSectionLabel(SettingsSection.MEMBERS),
         subtitle = server?.let { s -> if (members != null) "${grouped(members.size.toLong())} in ${s.name}" else s.name },
     ) {
         LazyColumn(Modifier.fillMaxSize().imePadding().navigationBarsPadding(), contentPadding = PaddingValues(LumiaTokens.space16)) {
             item { Box(Modifier.padding(bottom = LumiaTokens.space12)) { SearchField("Search members", query) { query = it } } }
             when {
-                members == null -> item { Text(READING_MEMBERS, style = LumiaTokens.textMeta.style, color = LumiaTokens.inkMuted.color) }
-                found.isEmpty() && query.isNotBlank() -> item { Text(NO_MEMBER_MATCHES, style = LumiaTokens.textMeta.style, color = LumiaTokens.inkMuted.color) }
+                members == null -> item { Text(roleSentences.readingMembers, style = LumiaTokens.textMeta.style, color = LumiaTokens.inkMuted.color) }
+                found.isEmpty() && query.isNotBlank() -> item { Text(roleSentences.noMemberMatches, style = LumiaTokens.textMeta.style, color = LumiaTokens.inkMuted.color) }
             }
             if (server != null) {
                 itemsIndexed(found, key = { _, m -> m.accountId }) { i, m ->
                     val me = m.accountId == session.me
-                    val offers = memberOffers(server, m, me)
-                    val opens = offersAny(offers)
+                    val offers = rolesMemberOffers(server, m, me)
+                    val opens = rolesOffersAny(offers)
                     val isOpen = opens && open == m.accountId
                     Column(Modifier.fillMaxWidth().listEdge(first = i == 0, last = i == found.lastIndex)) {
                         RosterRow(session, server, m, opens, isOpen) { open = if (isOpen) null else m.accountId }
@@ -1010,7 +1010,7 @@ fun ServerMembersScreen(session: LumiaSession, server: ServerSummary?, back: () 
 @Composable
 private fun RosterRow(session: LumiaSession, server: ServerSummary, m: MemberSummary, opens: Boolean, open: Boolean, onToggle: () -> Unit) {
     val name = nameOf(m)
-    val mark = memberMark(m)
+    val mark = rolesMemberMark(m)
     val roles = rolesHeld(server.roles, m.roleIds)
     Column(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(LumiaTokens.radius14))
@@ -1042,32 +1042,32 @@ private fun RosterRow(session: LumiaSession, server: ServerSummary, m: MemberSum
                 horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space6),
                 verticalArrangement = Arrangement.spacedBy(LumiaTokens.space4),
             ) {
-                for (r in roles) LumiaTag(r.label, tone = r.tone)
+                for (r in roles) LumiaTag(r.label, tone = avatarTone(r.tone))
             }
         }
     }
 }
 
 /** A member's form through a turn of the phone: their roles and title as it opened on them, and as it holds them. */
-internal val MemberEditingSaver = listSaver<MemberEditing, Any>(
+internal val MemberEditingSaver = listSaver<MemberForms, Any>(
     save = { listOf(ArrayList(it.opened.roleIds), it.opened.title, ArrayList(it.form.roleIds), it.form.title) },
     restore = {
         val ids = { kept: Any -> (kept as List<*>).filterIsInstance<String>() }
-        MemberEditing(MemberForm(ids(it[0]), it[1] as String), MemberForm(ids(it[2]), it[3] as String))
+        MemberForms(MemberForm(ids(it[0]), it[1] as String), MemberForm(ids(it[2]), it[3] as String))
     },
 )
 
 /**
  * What a save of a member's form sends: one request for what the form
- * changed since it opened (`memberChanges`), the roles to give and to
+ * changed since it opened (the core's `rolesMemberChanges`), the roles to give and to
  * take and the title where it is another, which the instance does whole
  * or not at all; none for a form that changed nothing. Never the roles
  * as the form shows them, whole: one that someone else gave the member
  * meanwhile is not the form's to take.
  */
-internal suspend fun saveMember(session: LumiaSession, server: ServerSummary, member: MemberSummary, editing: MemberEditing) {
-    val changes = memberChanges(editing.opened, editing.form)
-    if (!changes.nothing) session.changeMember(server.serverId, member.accountId, changes.give, changes.take, changes.title)
+internal suspend fun saveMember(session: LumiaSession, server: ServerSummary, member: MemberSummary, editing: MemberForms) {
+    val changes = rolesMemberChanges(editing.opened, editing.form)
+    if (rolesChangesAny(changes)) session.changeMember(server.serverId, member.accountId, changes.give, changes.take, changes.title)
 }
 
 /**
@@ -1081,7 +1081,7 @@ internal suspend fun saveMember(session: LumiaSession, server: ServerSummary, me
 @Composable
 private fun MemberEditor(session: LumiaSession, server: ServerSummary, member: MemberSummary, me: Boolean, close: () -> Unit) {
     val scope = rememberCoroutineScope()
-    val offers = memberOffers(server, member, me)
+    val offers = rolesMemberOffers(server, member, me)
     var kept by rememberSaveable(member.accountId, stateSaver = MemberEditingSaver) { mutableStateOf(editingOf(member)) }
     val editing = followed(kept, member)
     val form = editing.form
@@ -1111,11 +1111,11 @@ private fun MemberEditor(session: LumiaSession, server: ServerSummary, member: M
         if (offers.roles || offers.rolesNote != null) {
             Column(verticalArrangement = Arrangement.spacedBy(LumiaTokens.space6)) {
                 Text("Roles", style = LumiaTokens.textLabel.style, color = LumiaTokens.inkBody.color)
-                if (offers.roles) RoleChoicesList(roleChoices(server.roles, form.roleIds), enabled = !busy) { id -> kept = editing.copy(form = form.copy(roleIds = toggledRole(server.roles, form.roleIds, id))) }
+                if (offers.roles) RoleChoicesList(rolesChoices(server.roles, form.roleIds), enabled = !busy) { id -> kept = editing.ticked(rolesToggled(server.roles, form.roleIds, id)) }
                 else Text(offers.rolesNote ?: "", style = LumiaTokens.textMeta.style, color = LumiaTokens.inkMuted.color)
             }
         }
-        if (offers.title) TitleField(form.title) { if (!busy) kept = editing.copy(form = form.copy(title = it)) }
+        if (offers.title) TitleField(form.title) { if (!busy) kept = editing.titled(it) }
         if (error.isNotEmpty()) LumiaErrorText(error)
         Row(horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space8), verticalAlignment = Alignment.CenterVertically) {
             if (offers.kick) KickButton("Kick ${nameOf(member)}", enabled = !busy) { act { session.removeMember(server.serverId, member.accountId) } }
@@ -1131,7 +1131,7 @@ private fun MemberEditor(session: LumiaSession, server: ServerSummary, member: M
 internal fun TitleField(title: String, onTitle: (String) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(LumiaTokens.space6)) {
         LumiaField("Title", title, { onTitle(labelClipped(it)) }, placeholder = "No title")
-        Text(TITLE_HINT, style = LumiaTokens.textMeta.style, color = LumiaTokens.inkMuted.color)
+        Text(roleSentences.titleHint, style = LumiaTokens.textMeta.style, color = LumiaTokens.inkMuted.color)
     }
 }
 
@@ -1152,7 +1152,7 @@ internal fun RoleChoicesList(choices: List<RoleChoice>, enabled: Boolean = true,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Checkbox(checked = c.checked, onCheckedChange = null, enabled = !c.locked, colors = lumiaCheckboxColors())
-                LumiaRoleDot(c.tone)
+                LumiaRoleDot(avatarTone(c.tone))
                 Text(c.name, style = LumiaTokens.textCompact.style, color = if (c.locked) LumiaTokens.inkBody.color else LumiaTokens.ink.color, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                 if (c.locked) Icon(Icons.Outlined.Lock, contentDescription = LOCKED_CHOICE, tint = LumiaTokens.inkFaint.color, modifier = Modifier.size(LumiaTokens.space14))
             }
