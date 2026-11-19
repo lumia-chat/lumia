@@ -18,7 +18,7 @@ use lumia_client::app::{
     DmRequestSummary, Opener, Place as DevicePlace, SnapshotSummary, StoreName, host_of,
 };
 use lumia_client::sqlite::SqliteStore;
-use lumia_shell::app::{HomeView, Place, Route, State};
+use lumia_shell::app::{HomeView, Place, Popover, Route, State};
 use lumia_shell::session::dms::{Answer, DmUpdate};
 use lumia_shell::session::identity::{IdentityUpdate, Setup};
 use lumia_shell::session::{Conversation, Failure, Update};
@@ -828,4 +828,29 @@ fn going_to_a_server_and_back_keeps_home_where_it_was_without_a_channel_behind_i
         "the channel is not open behind Home"
     );
     assert!(words(&rt).contains("Your conversations"));
+}
+
+#[test]
+fn a_conversations_row_has_the_menu_of_the_one_person_it_is_with() {
+    let mut snapshot = home_snapshot();
+    snapshot
+        .channels
+        .push(dm("with-both", "", &["grace", "edsger"]));
+    let mut rt = runtime(at_home(true, snapshot));
+    right_click(&mut rt, "dm-with-grace");
+    assert_eq!(rt.state.popover, Some(Popover::PersonMenu));
+    assert_eq!(
+        rt.state.person.as_ref().map(|p| p.account_id.as_str()),
+        Some("grace")
+    );
+    // At Home, what her card offers there: the personal conversation alone.
+    assert!(rt.find("person-view").is_some());
+    assert!(words(&rt).contains("Message Grace"));
+    assert!(rt.find("person-message-privately").is_none());
+    rt.update(|s, _| s.close_popover());
+    settle(&mut rt);
+
+    // A group has no one person, so no menu.
+    right_click(&mut rt, "dm-with-both");
+    assert!(rt.state.popover.is_none());
 }

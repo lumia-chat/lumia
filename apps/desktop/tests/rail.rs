@@ -44,16 +44,6 @@ fn shape(rt: &Runtime<State>) -> Vec<String> {
         .collect()
 }
 
-fn right_click(rt: &mut Runtime<State>, key: &str) {
-    let (x, y) = rt
-        .find(key)
-        .unwrap_or_else(|| panic!("{key} is not on screen"));
-    rt.pointer_move(x, y);
-    rt.secondary_down(x, y);
-    rt.secondary_up(x, y);
-    settle(rt);
-}
-
 /// A point in the tile keyed `key`, `f` of the way down it.
 fn at(rt: &Runtime<State>, key: &str, f: f32) -> (f32, f32) {
     let ([x, y, w, h], _) = rt

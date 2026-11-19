@@ -9,17 +9,20 @@
 //!
 //! The toolbar shows while the pointer is on its message, and over the message being replied
 //! to. Its buttons are out of the Tab order: a timeline of messages each with three stops
-//! would be no way to move through it. Reaching a message's actions from the keyboard is not
-//! built yet (plan step 9).
+//! would be no way to move through it. A message's actions are also a menu where it is
+//! right-clicked ([`message_context`], #25), which the Menu key and Shift+F10 open from a
+//! control inside the message (its author, a reaction, a quote's line); a message with no
+//! such control is still not reached from the keyboard (plan step 9).
 
 use lumia_client::app::{QuoteSummary, ReactionSummary};
 use rune::{Align, Cursor, El, Side, col, el, icon, row, text};
 
 use super::components::{
     AVATAR_CARD_WIDTH, Look, avatar_of, error_text, link_button, menu, menu_glyph, menu_item,
-    popover, primary_button, secondary_button, shadowed, small_button,
+    menu_rule, popover, primary_button, secondary_button, shadowed, small_button,
 };
 use crate::app::State;
+use crate::app::context;
 use crate::app::replies::Choice;
 use crate::session::{Entry, display_name};
 use crate::settings::Layout;
@@ -377,8 +380,7 @@ pub fn toolbar(s: &State, entry_id: &str, look: Look) -> El {
 pub fn message_menu(s: &State, look: Look) -> Option<El> {
     let id = s.replies.menu_for.clone()?;
     let entry = s.session.entries.iter().find(|e| e.id == id)?;
-    let mine = entry.author_account_id == s.session.me();
-    let mut list = menu(
+    let list = menu(
         "message-menu",
         &format!("more-{id}"),
         "Message actions",
@@ -386,7 +388,14 @@ pub fn message_menu(s: &State, look: Look) -> Option<El> {
         Align::End,
         look,
     );
-    if mine {
+    Some(own_actions(s, list, entry, look))
+}
+
+/// What "More actions" holds, which a message's own menu ends with: Edit message, Copy text
+/// and Delete message, each by its rule.
+fn own_actions(s: &State, mut list: El, entry: &Entry, look: Look) -> El {
+    let id = &entry.id;
+    if entry.author_account_id == s.session.me() {
         let at = id.clone();
         list = list.child(
             menu_item(
@@ -426,7 +435,87 @@ pub fn message_menu(s: &State, look: Look) -> Option<El> {
             .on_press_tx(move |s: &mut State, tx| s.delete_from_menu(&at, tx)),
         );
     }
-    Some(list)
+    list
+}
+
+/// A message's menu where it was right-clicked (`app::context`): what the press was on
+/// first (a selection to copy or quote, a link to open or copy), then Reply and Add reaction
+/// as the toolbar has them, then what "More actions" holds.
+pub fn message_context(s: &State, look: Look) -> Option<El> {
+    let open = s.context.message.as_ref()?;
+    let entry = s.session.entries.iter().find(|e| e.id == open.message_id)?;
+    let item = |key: &'static str,
+                glyph: &'static rune::Icon,
+                label: &str,
+                press: fn(&mut State, &mut rune::Tx)| {
+        menu_item(
+            key,
+            Some(menu_glyph(glyph, look)),
+            label,
+            None,
+            |_s: &mut State| {},
+            look,
+        )
+        .on_press_tx(press)
+    };
+    let mut list = menu(
+        "message-context",
+        context::AT,
+        "Message actions",
+        Side::Bottom,
+        Align::Start,
+        look,
+    );
+    if open.selection.is_some() {
+        list = list.child(item(
+            "context-copy-selection",
+            &icons::FILE,
+            "Copy selection",
+            State::context_copy_selection,
+        ));
+        if open.quotable {
+            list = list.child(item(
+                "context-quote",
+                &icons::REPLY,
+                "Quote reply",
+                State::context_quote,
+            ));
+        }
+        list = list.child(menu_rule(look));
+    }
+    if open.link.is_some() {
+        list = list
+            .child(item(
+                "context-open-link",
+                &icons::GLOBE,
+                "Open link",
+                State::context_open_link,
+            ))
+            .child(item(
+                "context-copy-link",
+                &icons::FILE,
+                "Copy link",
+                State::context_copy_link,
+            ))
+            .child(menu_rule(look));
+    }
+    list = list
+        .child(item(
+            "context-reply",
+            &icons::REPLY,
+            "Reply",
+            State::context_reply,
+        ))
+        .child(menu_item(
+            "context-react",
+            Some(menu_glyph(&icons::EMOJI, look)),
+            "Add reaction",
+            None,
+            State::context_react,
+            look,
+        ))
+        .child(menu_rule(look));
+    Some(own_actions(s, list, entry, look))
 }
 
 /// "Delete this message?": the message's first line, and Cancel or Delete.

@@ -446,6 +446,14 @@ impl Body {
                 para = para.link(link);
             }
             para = para.on_link(open_link);
+            // A right-click on one: the message's menu, with the link's own items first.
+            if let Some(id) = self.id.clone() {
+                para = para.on_link_secondary(
+                    move |s: &mut State, url: &str, at: rune::PointerPress, _: &mut Tx| {
+                        s.open_message_context(&id, [at.x, at.y], Some(url));
+                    },
+                );
+            }
         }
         let mut padded = false;
         for (range, style) in &inline.runs {

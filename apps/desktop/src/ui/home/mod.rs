@@ -257,8 +257,9 @@ fn conversation_row(s: &State, channel: &ChannelSummary, look: Look) -> El {
     let (unread, mentions) = s.session.unread(&channel.channel_id);
     let bold = !active && unread > 0;
     let id = channel.channel_id.clone();
+    let key = format!("dm-{}", channel.channel_id);
     let mut button = row()
-        .key(format!("dm-{}", channel.channel_id))
+        .key(key.clone())
         .w_full()
         .h(t::ROW_HEIGHT_PERSON)
         .px(t::SPACE_10)
@@ -305,6 +306,11 @@ fn conversation_row(s: &State, channel: &ChannelSummary, look: Look) -> El {
         }
     } else {
         button = button.hover(c.hover_row);
+    }
+    // With one other person, the row has their menu; a group has no one person's.
+    let mut others = s.session.others_in(channel);
+    if let (Some(other), None) = (others.next(), others.next()) {
+        button = crate::ui::menus::with_person_menu(button, other, &key);
     }
     el().w_full().role("listitem").child(button)
 }

@@ -53,7 +53,9 @@ use std::borrow::Cow;
 use chrono::{DateTime, Local, NaiveDate};
 use lumia_client::app::QuoteSummary;
 use lumia_client::body::Room;
-use rune::{Cursor, El, GrowthSpec, ScrollSpec, Transition, col, el, icon, row, text};
+use rune::{
+    Cursor, El, GrowthSpec, PointerPress, ScrollSpec, Transition, Tx, col, el, icon, row, text,
+};
 
 use super::body;
 use super::components::{Look, avatar_of};
@@ -208,17 +210,29 @@ pub fn view(s: &State, label: String, look: Look) -> El {
             if change.dragging() {
                 return;
             }
-            let inside = change.selection().and_then(|sel| {
-                let mut ids = sel
-                    .texts()
-                    .iter()
-                    .filter(|t| t.is_selected())
-                    .map(|t| body_of(t.path()));
-                let first = ids.next().flatten()?;
-                ids.all(|id| id == Some(first))
-                    .then(|| (first.to_string(), sel.text().to_string(), sel.backward()))
-            });
+            // The messages whose bodies it is in, in one pass (a selection may hold a
+            // thousand texts), and whether every text of it is in the one body.
+            let (inside, selected) = match change.selection() {
+                Some(sel) => {
+                    let mut ids: Vec<&str> = Vec::new();
+                    let mut bodies_only = true;
+                    for text in sel.texts().iter().filter(|t| t.is_selected()) {
+                        match body_of(text.path()) {
+                            Some(id) if ids.last() == Some(&id) => {}
+                            Some(id) => ids.push(id),
+                            None => bodies_only = false,
+                        }
+                    }
+                    let inside = (bodies_only && ids.len() == 1)
+                        .then(|| (ids[0].to_string(), sel.text().to_string(), sel.backward()));
+                    // Whatever it spans, a right-click on a message in it offers to copy it.
+                    let ids = ids.into_iter().map(str::to_string).collect();
+                    (inside, Some((ids, sel.text().to_string())))
+                }
+                None => (None, None),
+            };
             s.selection_in(inside);
+            s.selected(selected);
         })
         .virtual_rows(
             count,
@@ -551,14 +565,16 @@ fn name_button(name: El, author: &str, author_id: &str, key: &str, look: Look) -
     }
     let anchor = format!("author-{key}");
     let (id, at) = (author_id.to_string(), anchor.clone());
-    el().key(anchor)
+    let button = el()
+        .key(anchor.clone())
         .role("button")
         .label(format!("{author}, profile"))
         .cursor(Cursor::Pointer)
         .focusable(true)
         .focus_ring(2.0, 2.0, look.c.focus)
         .on_press(move |s: &mut State| s.open_person(&id, &at))
-        .child(name)
+        .child(name);
+    super::menus::with_person_menu(button, author_id, &anchor)
 }
 
 /// A message's row, as the layout chosen draws it.
@@ -592,7 +608,13 @@ fn message_frame(
     if let Some(id) = decor.id {
         // The toolbar over the row under the pointer is drawn at the root (`ui::view`), so a
         // row builds none of it; the row only says when the pointer comes onto it.
-        frame = frame.on_hover(move |s: &mut State| s.hovered(&id, true));
+        let at = id.clone();
+        frame = frame
+            .on_hover(move |s: &mut State| s.hovered(&id, true))
+            // Its menu (`app::context`), anywhere on the row.
+            .on_secondary_press(move |s: &mut State, press: PointerPress, _: &mut Tx| {
+                s.open_message_context(&at, [press.x, press.y], None);
+            });
     }
     let row = Row {
         frame,
@@ -687,8 +709,13 @@ fn grouped_frame(s: &State, row_: Row<'_>, place: Place, look: Look) -> El {
             part
         }
     };
-    let name = part(text(author).key("author").font(m.ty.author).color(c.ink), 2);
+    let mut name = part(text(author).key("author").font(m.ty.author).color(c.ink), 2);
     let time = part(text(time).key("time").font(m.ty.meta).color(c.ink_muted), 1);
+    // Beside an avatar the name is text, not a button, and still names the person: their
+    // menu comes up on it, and its card hangs from the avatar.
+    if m.avatar.is_some() && !card_of.is_empty() {
+        name = super::menus::with_person_menu(name, card_of, &format!("avatar-{key}"));
+    }
     let Some(avatar) = m.avatar else {
         // No avatar to open the person's card, so the name does.
         let head = row()
@@ -705,7 +732,7 @@ fn grouped_frame(s: &State, row_: Row<'_>, place: Place, look: Look) -> El {
         let anchor = format!("avatar-{key}");
         let (id, at) = (author_id.to_string(), anchor.clone());
         picture = picture
-            .key(anchor)
+            .key(anchor.clone())
             .radius(avatar / 2.0)
             .role("button")
             .label(format!("{author}, profile"))
@@ -713,6 +740,7 @@ fn grouped_frame(s: &State, row_: Row<'_>, place: Place, look: Look) -> El {
             .focusable(true)
             .focus_ring(2.0, 2.0, c.focus)
             .on_press(move |s: &mut State| s.open_person(&id, &at));
+        picture = super::menus::with_person_menu(picture, author_id, &anchor);
     }
     let head = row().gap(t::SPACE_8).items_center().child(name).child(time);
     frame.child(

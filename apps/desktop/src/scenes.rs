@@ -330,6 +330,16 @@ pub const SCENES: &[Scene] = &[
     ("emoji-picker", replies::emoji_picker),
     ("message-toolbar", replies::message_toolbar),
     ("message-menu", replies::message_menu),
+    // The menus a right-click opens (#25).
+    ("message-context", replies::message_context),
+    (
+        "message-context-selection",
+        replies::message_context_selection,
+    ),
+    ("person-menu", |s| {
+        channels_sample(s);
+        s.open_person_menu("grace", "member-grace", [990.0, 256.0]);
+    }),
     ("edit-message", replies::edit_message),
     ("delete-message", replies::delete_message),
     ("mentions", replies::mentions),

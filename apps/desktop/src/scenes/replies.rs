@@ -203,6 +203,25 @@ pub fn message_menu(state: &mut State) {
     state.open_message_menu("r2");
 }
 
+/// `message-context`: this account's message right-clicked, its menu where the pointer was
+/// (a picture has no pointer, so the scene says where).
+pub fn message_context(state: &mut State) {
+    replies(state);
+    state.replies.replying = None;
+    state.replies.outside = None;
+    state.open_message_context("r2", [560.0, 395.0], None);
+}
+
+/// `message-context-selection`: another's message right-clicked on a link, with words of it
+/// selected: what the press was on comes first in its menu.
+pub fn message_context_selection(state: &mut State) {
+    replies(state);
+    state.replies.replying = None;
+    state.replies.outside = None;
+    state.selected(Some((vec!["r1".into()], "relocation".into())));
+    state.open_message_context("r1", [560.0, 250.0], Some("https://lumia.chat"));
+}
+
 /// `edit-message`: this account's message being edited in place.
 pub fn edit_message(state: &mut State) {
     replies(state);

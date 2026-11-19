@@ -67,7 +67,8 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
         None => screen,
     };
     let screen = match s.popover.and_then(|popover| overlay(s, popover, look)) {
-        Some(popover) => screen.child(popover),
+        // Before it, the place a right-click's menu hangs from, and the picker after it.
+        Some(popover) => screen.child(context_anchor(s)).child(popover),
         None => screen,
     };
     // What floats over the conversation without taking the focus: the @ list over the
@@ -113,6 +114,17 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
     }
 }
 
+/// Where a menu was asked for by a right-click or the Menu key (`app::context`): nothing to
+/// see, only a place for the menu to hang from, since an overlay is anchored to an element.
+fn context_anchor(s: &State) -> El {
+    let [x, y] = s.context.at;
+    rune::el()
+        .key(crate::app::context::AT)
+        .absolute(x, y)
+        .size(0.0, 0.0)
+        .a11y_hidden()
+}
+
 /// Where the middle button came down while it autoscrolls a pane (`app::autoscroll`): a
 /// ring with a dot, as browsers mark it, that the pointer moves away from.
 fn autoscroll_mark(at: [f32; 2], look: Look) -> El {
@@ -155,5 +167,7 @@ fn overlay(s: &State, popover: Popover, look: Look) -> Option<El> {
         Popover::RailMenu => rail::rail_menu(s, look),
         Popover::MoveToFolder => rail::move_to_folder(s, look),
         Popover::FolderSettings => rail::folder_settings(s, look),
+        Popover::MessageContext => replies::message_context(s, look),
+        Popover::PersonMenu => menus::person_menu(s, look),
     }
 }

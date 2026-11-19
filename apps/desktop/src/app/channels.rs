@@ -47,6 +47,8 @@ pub struct ChannelForms {
     /// The profile card's "Message" waiting for its conversation, and why it was refused.
     pub dm_busy: bool,
     pub dm_error: String,
+    /// That "Message" was the person's menu's, with no card open to say why it was refused.
+    pub dm_from_menu: bool,
 }
 
 /// The "Add people" picker of the channel on screen.
@@ -480,6 +482,7 @@ impl State {
                 server_id, result, ..
             } => {
                 form.dm_busy = false;
+                let from_menu = std::mem::take(&mut form.dm_from_menu);
                 match result {
                     Ok(channel) => {
                         if matches!(self.popover, Some(Popover::Person | Popover::NewDm)) {
@@ -491,6 +494,10 @@ impl State {
                         let why = dm_refusal(failure);
                         form.dm_error.clone_from(&why);
                         form.new_dm.error = why;
+                        // Asked from the person's menu: their card says why not.
+                        if from_menu && self.popover.is_none() && self.person.is_some() {
+                            self.open_popover(Popover::Person);
+                        }
                     }
                 }
             }

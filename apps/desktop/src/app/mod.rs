@@ -6,13 +6,14 @@
 //! the product keeps its own state and reactions beside it: [`sign_in`], [`home`]
 //! (personal conversations), [`server`] (making and managing servers), [`account`]
 //! (devices, profile, status), [`setup`] (private messages on this computer: the
-//! recovery phrase, restoring, starting over) and [`prompts`] (another device asking this
-//! one to link it).
+//! recovery phrase, restoring, starting over), [`prompts`] (another device asking this
+//! one to link it) and [`context`] (the menus a right-click opens).
 
 pub mod account;
 pub mod aside;
 pub mod autoscroll;
 pub mod channels;
+pub mod context;
 pub mod drafts;
 pub mod home;
 pub mod links;
@@ -114,6 +115,10 @@ pub enum Popover {
     MoveToFolder,
     /// A folder's name and tone, for the folder `rail.editing` names.
     FolderSettings,
+    /// A message's menu where it was right-clicked, for the message `context.message` names.
+    MessageContext,
+    /// A person's menu where they were right-clicked, for `State::person`.
+    PersonMenu,
 }
 
 /// Whose profile card is open, and the control it hangs from.
@@ -177,6 +182,8 @@ pub struct State {
     pub(crate) drafts: drafts::Drafts,
     /// The rail's drag, its menus and Folder settings (`rail`).
     pub rail: rail::RailUi,
+    /// The menu a right-click opened, and where (`context`).
+    pub context: context::Context,
     /// Whether the system shows times on a 24-hour clock, which the timeline's times
     /// follow. A real launch reads it from the system whenever the window comes in front
     /// (`platform`); a test and a headless picture keep the 12-hour clock.
@@ -228,6 +235,7 @@ impl State {
             replies: replies::Replies::default(),
             drafts: drafts::Drafts::default(),
             rail: rail::RailUi::default(),
+            context: context::Context::default(),
             clock_24: false,
             updater: None,
         };

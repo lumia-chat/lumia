@@ -100,8 +100,9 @@ pub fn sidebar(s: &State, server: &ServerSummary, look: Look) -> El {
         let name = s.session.name_of(&partner);
         let id = dm.channel_id.clone();
         let unread = s.session.unread(&dm.channel_id);
-        dms = dms.child(nav_row(
-            format!("dm-{}", dm.channel_id),
+        let key = format!("dm-{}", dm.channel_id);
+        let row = nav_row(
+            key.clone(),
             &name,
             &with_unread(&format!("Conversation with {name}"), unread),
             NavLead::Avatar(avatar_of(s, &name, &partner, t::AVATAR_XS, look)),
@@ -109,7 +110,9 @@ pub fn sidebar(s: &State, server: &ServerSummary, look: Look) -> El {
             unread,
             move |s: &mut State| s.select_channel(&id),
             look,
-        ));
+        );
+        // The person it is with has their menu on its row.
+        dms = dms.child(super::menus::with_person_menu(row, &partner, &key));
     }
     let messages = if server.can_start_dms {
         section_head(
@@ -668,8 +671,8 @@ pub(super) fn member_row(
     };
     let key = format!("member-{}", member.account_id);
     let (id, anchor) = (member.account_id.clone(), key.clone());
-    row()
-        .key(key)
+    let row = row()
+        .key(key.clone())
         .w_full()
         .px(t::SPACE_10)
         .py(t::SPACE_6)
@@ -686,7 +689,8 @@ pub(super) fn member_row(
         .focus_ring(2.0, 0.0, c.focus)
         .on_press(move |s: &mut State| s.open_person(&id, &anchor))
         .child(picture)
-        .child(words)
+        .child(words);
+    super::menus::with_person_menu(row, &member.account_id, &key)
 }
 
 /// "Find a member": what it holds narrows the aside's list.

@@ -55,6 +55,17 @@ pub fn press(rt: &mut Runtime<State>, key: &str) {
     settle(rt);
 }
 
+/// A right-click on the element keyed `key`: what opens its menu.
+pub fn right_click(rt: &mut Runtime<State>, key: &str) {
+    let (x, y) = rt
+        .find(key)
+        .unwrap_or_else(|| panic!("{key} is not on screen"));
+    rt.pointer_move(x, y);
+    rt.secondary_down(x, y);
+    rt.secondary_up(x, y);
+    settle(rt);
+}
+
 /// "New channel", from the menu under the server's name.
 pub fn open_new_channel(rt: &mut Runtime<State>) {
     press(rt, "server-title");

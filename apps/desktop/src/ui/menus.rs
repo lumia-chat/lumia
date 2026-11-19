@@ -9,7 +9,8 @@
 //! have, and has Devices, which it does. The card has no team, no local time and no call
 //! button, none of which the product knows; it shows the pronouns, the custom status and the
 //! bio of the person's verified profile, and in a server offers a server DM first and a
-//! personal conversation beside it (architecture 6.4).
+//! personal conversation beside it (architecture 6.4). A right-click on a person opens
+//! [`person_menu`], the card's ways to a conversation without the card (#25).
 
 use lumia_client::app::MemberSummary;
 use rune::{Align, Cursor, El, Side, col, el, icon, row, text};
@@ -18,7 +19,7 @@ use super::components::{
     CARD_WIDTH, Look, action_button, avatar_of, menu, menu_glyph, menu_item, menu_rule,
     section_label, shadowed, tag,
 };
-use crate::app::{HomeView, State};
+use crate::app::{HomeView, State, context};
 use crate::session::{Connection, display_name};
 use crate::tokens::{self as t, icons};
 
@@ -332,7 +333,7 @@ pub fn person(s: &State, look: Look) -> Option<El> {
         card = card.child(details);
     }
     if !me {
-        card = card.child(ways_to_talk(s, &name, found, look));
+        card = card.child(ways_to_talk(s, &name, &open.account_id, look));
     }
 
     Some(
@@ -358,10 +359,10 @@ pub fn person(s: &State, look: Look) -> Option<El> {
 /// How to talk to the person on the card. In a server, a server DM first ("Message"),
 /// unless they turned those off there, and a personal conversation beside it ("Message
 /// privately"); at Home, the personal one alone.
-fn ways_to_talk(s: &State, name: &str, found: Option<&MemberSummary>, look: Look) -> El {
-    let first = name.split_whitespace().next().unwrap_or(name).to_string();
-    let in_server = s.server_id().is_some();
-    if !in_server {
+fn ways_to_talk(s: &State, name: &str, account_id: &str, look: Look) -> El {
+    let first = first_name(name);
+    let ways = s.ways_to(account_id);
+    if !ways.in_server {
         return action_button(
             "card-message",
             &format!("Message {first}"),
@@ -373,14 +374,9 @@ fn ways_to_talk(s: &State, name: &str, found: Option<&MemberSummary>, look: Look
     }
     let c = look.c;
     let form = &s.channel_forms;
-    let mut ways = col().w_full().gap(t::SPACE_8);
-    let server = s
-        .server_id()
-        .and_then(|id| s.session.servers().iter().find(|x| x.server_id == id));
-    let takes = !found.is_some_and(|p| p.server_dms_off);
-    let may = server.is_some_and(|x| x.can_start_dms);
-    if takes && may {
-        ways = ways.child(
+    let mut list = col().w_full().gap(t::SPACE_8);
+    if ways.here {
+        list = list.child(
             action_button(
                 "card-message",
                 &format!("Message {first}"),
@@ -390,8 +386,8 @@ fn ways_to_talk(s: &State, name: &str, found: Option<&MemberSummary>, look: Look
             )
             .w_full(),
         );
-    } else if !takes {
-        ways = ways.child(
+    } else if ways.off {
+        list = list.child(
             text("Doesn’t take messages here")
                 .font(t::TEXT_META)
                 .color(c.ink_muted)
@@ -400,9 +396,9 @@ fn ways_to_talk(s: &State, name: &str, found: Option<&MemberSummary>, look: Look
         );
     }
     if !form.dm_error.is_empty() {
-        ways = ways.child(super::components::error_text(&form.dm_error, look));
+        list = list.child(super::components::error_text(&form.dm_error, look));
     }
-    ways.child(
+    list.child(
         super::components::secondary_button(
             "card-message-privately",
             "Message privately",
@@ -412,6 +408,81 @@ fn ways_to_talk(s: &State, name: &str, found: Option<&MemberSummary>, look: Look
         )
         .w_full(),
     )
+}
+
+/// The name a "Message" button calls someone by: the first word of theirs.
+fn first_name(name: &str) -> &str {
+    name.split_whitespace().next().unwrap_or(name)
+}
+
+/// Gives a person's control their menu (`app::context`): a right-click on it, or the Menu
+/// key or Shift+F10 while the keyboard is on it. `anchor` is the key their card hangs from.
+/// On a message's author it is the nearest menu, so it comes up and not the message's.
+pub(super) fn with_person_menu(control: El, account_id: &str, anchor: &str) -> El {
+    let (id, anchor) = (account_id.to_string(), anchor.to_string());
+    control.on_secondary_press(
+        move |s: &mut State, at: rune::PointerPress, _: &mut rune::Tx| {
+            s.open_person_menu(&id, &anchor, [at.x, at.y]);
+        },
+    )
+}
+
+/// A person's menu where they were right-clicked (`app::context`): "View profile", which
+/// opens their card beside the control, and then the ways to a conversation their card
+/// would offer here, by the same rule ([`State::ways_to`]). This account's own is the
+/// first alone.
+pub fn person_menu(s: &State, look: Look) -> Option<El> {
+    let open = s.person.as_ref()?;
+    let name = s.session.name_of(&open.account_id);
+    let mut list = menu(
+        "person-menu",
+        context::AT,
+        &name,
+        Side::Bottom,
+        Align::Start,
+        look,
+    )
+    .child(menu_item(
+        "person-view",
+        Some(menu_glyph(&icons::USER, look)),
+        "View profile",
+        None,
+        State::view_person,
+        look,
+    ));
+    if open.account_id == s.session.me() {
+        return Some(list);
+    }
+    let ways = s.ways_to(&open.account_id);
+    let message = format!("Message {}", first_name(&name));
+    if !ways.in_server {
+        return Some(list.child(menu_item(
+            "person-message",
+            Some(menu_glyph(&icons::COMPOSE, look)),
+            &message,
+            None,
+            State::message_person,
+            look,
+        )));
+    }
+    if ways.here {
+        list = list.child(menu_item(
+            "person-message",
+            Some(menu_glyph(&icons::COMPOSE, look)),
+            &message,
+            None,
+            State::message_person_from_menu,
+            look,
+        ));
+    }
+    Some(list.child(menu_item(
+        "person-message-privately",
+        Some(menu_glyph(&icons::LOCK, look)),
+        "Message privately",
+        None,
+        State::message_person,
+        look,
+    )))
 }
 
 /// The inset block of a card: what the person's profile says about them, a line each.

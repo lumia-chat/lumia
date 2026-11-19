@@ -36,6 +36,9 @@ pub struct Replies {
     /// A selection inside one message's body: the message, the text selected, and whether it
     /// was made backwards; the "Quote reply" button over it quotes it.
     pub selection: Option<(String, String, bool)>,
+    /// The timeline's selection, whatever it spans: the messages whose bodies it is in and
+    /// what a copy of it takes. A right-click on one of them offers that copy (`context`).
+    pub selected: Option<(Vec<String>, String)>,
     /// The `@word` being typed at the caret, which the @ list completes.
     pub mention: Option<MentionQuery>,
     /// The bar after a send naming those mentioned who are not in the channel.
@@ -359,6 +362,13 @@ impl State {
     /// quoted.
     pub fn selection_in(&mut self, selection: Option<(String, String, bool)>) {
         self.replies.selection = selection.filter(|(_, text, _)| !text.trim().is_empty());
+    }
+
+    /// The selection in the timeline changed: the messages whose bodies it is in, and what
+    /// a copy of it takes.
+    pub fn selected(&mut self, selected: Option<(Vec<String>, String)>) {
+        self.replies.selected =
+            selected.filter(|(ids, text)| !ids.is_empty() && !text.trim().is_empty());
     }
 
     /// A reaction from the toolbar, a chip or the picker: added, or taken away when this
