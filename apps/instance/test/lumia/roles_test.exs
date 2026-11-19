@@ -641,6 +641,38 @@ defmodule Lumia.RolesTest do
       assert members |> Enum.map(& &1.title) |> Enum.sort() == ["Designer", "Engineer"]
     end
 
+    test "a guest is told only of the members it shares a channel with", ctx do
+      {:ok, general} = Servers.create_channel(ctx.server.id, ctx.owner.id, "general")
+      alice = member(ctx, "alice")
+      bob = member(ctx, "bob")
+      guest = account("guest")
+      {:ok, _} = Servers.add_member(ctx.server.id, guest.id, ctx.owner.id, kind: "guest")
+      {:ok, _} = Lumia.Channels.enter_quietly(general, guest.id)
+      # A newcomer arrives in #general, the server's first channel: Bob leaves it.
+      :ok = Lumia.Channels.leave(general.id, bob.id)
+
+      {:ok, _} = Servers.set_title(ctx.server.id, alice.id, ctx.owner.id, "Designer")
+      {:ok, _} = Servers.set_title(ctx.server.id, bob.id, ctx.owner.id, "Engineer")
+      run(MembersUpdated)
+
+      # Everyone else hears of both; the guest of Alice alone.
+      assert [%V1.MembersUpdated{members: both}] = told(ctx.owner, :members_updated)
+      assert both |> Enum.map(& &1.title) |> Enum.sort() == ["Designer", "Engineer"]
+      assert [%V1.MembersUpdated{members: [seen]}] = told(guest, :members_updated)
+      assert Lumia.Proto.from_uuid(seen.account_id) == alice.id
+
+      # A change only to someone it does not see appends nothing to its log.
+      {:ok, _} = Servers.set_title(ctx.server.id, bob.id, ctx.owner.id, "Lead")
+      run(MembersUpdated)
+      assert length(told(ctx.owner, :members_updated)) == 2
+      assert length(told(guest, :members_updated)) == 1
+
+      # The server's roles are not the member list: a guest hears of them as anyone does.
+      role(ctx, "mods")
+      run(RolesUpdated)
+      assert [%V1.RolesUpdated{}] = told(guest, :roles_updated)
+    end
+
     test "a server that is gone is told nothing, by any of the jobs" do
       gone = Ecto.UUID.generate()
 

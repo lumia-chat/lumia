@@ -1068,6 +1068,50 @@ defmodule Lumia.Servers do
 
   # ---- Resolution helpers for callers -----------------------------------------
 
+  @doc """
+  The accounts a guest sees of a server's members besides itself, as a
+  query of account ids: those it shares a channel of the server with, a
+  server DM among them (architecture 6.2, authorization 6.4). A guest
+  never sees the rest of the member list.
+  """
+  def seen_by_guest(server_id, account_id) do
+    from other in ChannelMember,
+      join: mine in ChannelMember,
+      on: mine.channel_id == other.channel_id,
+      join: c in Channel,
+      on: c.id == other.channel_id,
+      where:
+        c.server_id == ^server_id and is_nil(c.deleted_at) and mine.account_id == ^account_id,
+      select: other.account_id
+  end
+
+  @doc """
+  What each of `guest_ids` sees of the server's members (`seen_by_guest/2`),
+  itself included: a map of a guest to a set of account ids, read in one
+  query.
+  """
+  def seen_by_guests(_server_id, []), do: %{}
+
+  def seen_by_guests(server_id, guest_ids) do
+    shared =
+      from(other in ChannelMember,
+        join: mine in ChannelMember,
+        on: mine.channel_id == other.channel_id,
+        join: c in Channel,
+        on: c.id == other.channel_id,
+        where:
+          c.server_id == ^server_id and is_nil(c.deleted_at) and mine.account_id in ^guest_ids,
+        distinct: true,
+        select: {mine.account_id, other.account_id}
+      )
+      |> Repo.all()
+      |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+
+    Map.new(guest_ids, fn guest ->
+      {guest, MapSet.new([guest | Map.get(shared, guest, [])])}
+    end)
+  end
+
   @doc "The member map `Lumia.Authz.resolve/2` takes (account_id, kind, role_ids, owner?), or nil if not a member."
   def member_for(server_id, account_id) do
     case Repo.get_by(Member, server_id: server_id, account_id: account_id) do

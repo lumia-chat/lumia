@@ -9,28 +9,61 @@ defmodule Lumia.Servers.Fanout do
   import Ecto.Query
 
   alias Lumia.Accounts
+  alias Lumia.Proto
   alias Lumia.Repo
+  alias Lumia.Servers
   alias Lumia.Servers.Member
   alias Lumia.Servers.Server
   alias Lumia.Tx
+  alias Lumia.V1
 
   @batch 500
 
   @doc """
   Appends each of `events`, `Lumia.V1.AccountEvent` payload tuples, in
-  order to the account log of every member of the server.
+  order to the account log of every member of the server. A guest is told
+  of only the members it sees (authorization 6.4): a `MembersUpdated` it
+  is appended names those alone, and is not appended when it names none
+  of them.
   """
   def to_members(_server_id, []), do: :ok
 
   def to_members(server_id, events) do
-    from(m in Member,
-      where: m.server_id == ^server_id,
-      order_by: m.account_id,
-      select: m.account_id
-    )
-    |> Repo.all()
+    {guests, members} =
+      from(m in Member,
+        where: m.server_id == ^server_id,
+        order_by: m.account_id,
+        select: {m.account_id, m.kind}
+      )
+      |> Repo.all()
+      |> Enum.split_with(fn {_, kind} -> kind == "guest" end)
+
+    members
+    |> Enum.map(&elem(&1, 0))
     |> Enum.chunk_every(@batch)
-    |> Enum.each(&tell(&1, events))
+    |> Enum.each(fn batch -> tell(batch, fn _ -> events end) end)
+
+    guest_ids = Enum.map(guests, &elem(&1, 0))
+    seen = Servers.seen_by_guests(server_id, guest_ids)
+
+    guest_ids
+    |> Enum.chunk_every(@batch)
+    |> Enum.each(fn batch -> tell(batch, &for_guest(events, Map.fetch!(seen, &1))) end)
+  end
+
+  # What a guest is told of `events`: the members it sees, and nothing of
+  # the rest.
+  defp for_guest(events, seen) do
+    Enum.flat_map(events, fn
+      {:members_updated, %V1.MembersUpdated{members: members} = event} ->
+        case Enum.filter(members, &MapSet.member?(seen, Proto.from_uuid(&1.account_id))) do
+          [] -> []
+          kept -> [{:members_updated, %{event | members: kept}}]
+        end
+
+      event ->
+        [event]
+    end)
   end
 
   @doc """
@@ -83,11 +116,12 @@ defmodule Lumia.Servers.Fanout do
     value
   end
 
-  # One batch of members, in one transaction.
-  defp tell(accounts, events) do
+  # One batch of members, in one transaction, each told what `events_for`
+  # answers for it.
+  defp tell(accounts, events_for) do
     {:ok, _} =
       Tx.transact(fn ->
-        for account <- accounts, event <- events do
+        for account <- accounts, event <- events_for.(account) do
           {:ok, _} = Accounts.append_event(account, event)
         end
 

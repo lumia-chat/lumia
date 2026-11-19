@@ -127,6 +127,82 @@ defmodule LumiaWeb.Gateway.SessionChannelTest do
       }
     end
 
+    test "a guest is told of the presence only of those it shares a channel with", ctx do
+      outsider = account("outsider")
+      {:ok, _} = Servers.add_member(ctx.server.id, outsider.id, ctx.account.id)
+      # A newcomer arrives in #general, the server's first channel: the outsider leaves it.
+      :ok = Lumia.Channels.leave(ctx.channel.id, outsider.id)
+      guest = account("guest")
+      {:ok, _} = Servers.add_member(ctx.server.id, guest.id, ctx.account.id, kind: "guest")
+      {:ok, _} = Lumia.Channels.enter_quietly(ctx.channel, guest.id)
+      topic = "presence:server:" <> ctx.server.id
+
+      # The owner (in #general with the guest) and the outsider (in no
+      # channel with it) are present without sockets of their own, so every
+      # frame this test receives is the guest's.
+      present = fn account_id ->
+        test = self()
+
+        pid =
+          spawn_link(fn ->
+            meta = %{status: "ONLINE", custom_status: "", device_id: Ecto.UUID.generate()}
+            {:ok, _} = LumiaWeb.Presence.track(self(), topic, account_id, meta)
+            send(test, :tracked)
+
+            receive do
+              {:status, status} ->
+                {:ok, _} =
+                  LumiaWeb.Presence.update(self(), topic, account_id, %{meta | status: status})
+
+                send(test, :updated)
+                Process.sleep(:infinity)
+            end
+          end)
+
+        assert_receive :tracked
+        pid
+      end
+
+      owner = present.(ctx.account.id)
+      outsider_presence = present.(outsider.id)
+
+      {:ok, _session, tokens} = Auth.create_session(guest.id, Ecto.UUID.generate())
+      {:ok, socket} = connect(Socket, %{}, connect_info: %{auth_token: tokens.access_token})
+      {_welcome, g} = join!(socket)
+      watch = %V1.PresenceUpdate{status: :ONLINE, watch_server_ids: [Proto.uuid(ctx.server.id)]}
+      send_frame(g, {:presence, watch})
+
+      assert_push "frame", %V1.ServerFrame{
+        frame: {:presence_diff, %V1.PresenceDiff{joined: joined}}
+      }
+
+      assert joined |> Enum.map(&Proto.from_uuid(&1.account_id)) |> Enum.sort() ==
+               Enum.sort([ctx.account.id, guest.id])
+
+      # Its own arrival comes back through the topic, and it sees itself.
+      me = Proto.uuid(guest.id)
+
+      assert_push "frame", %V1.ServerFrame{
+        frame: {:presence_diff, %V1.PresenceDiff{joined: [%V1.Presence{account_id: ^me}]}}
+      }
+
+      # The outsider goes away: nothing reaches the guest.
+      send(outsider_presence, {:status, "AWAY"})
+      assert_receive :updated
+      refute_push "frame", %V1.ServerFrame{frame: {:presence_diff, _}}, 200
+
+      # The owner goes away: the guest hears it.
+      send(owner, {:status, "AWAY"})
+      assert_receive :updated
+      them = Proto.uuid(ctx.account.id)
+
+      assert_push "frame", %V1.ServerFrame{
+        frame:
+          {:presence_diff,
+           %V1.PresenceDiff{updated: [%V1.Presence{account_id: ^them, status: :AWAY}]}}
+      }
+    end
+
     test "a server the account is not in is never watched", ctx do
       {_welcome, a} = join!(ctx.socket)
       stranger = account("stranger")

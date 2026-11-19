@@ -379,6 +379,37 @@ defmodule LumiaWeb.RolesApiTest do
       assert found.("_ed") == []
       assert length(found.("")) == 3
     end
+
+    test "a guest is answered with itself and those it shares a channel with", ctx do
+      {:ok, general} = Servers.create_channel(ctx.server.id, ctx.owner.id, "general")
+      guest = account("guest")
+      {:ok, _} = Servers.add_member(ctx.server.id, guest.id, ctx.owner.id, kind: "guest")
+      {:ok, _} = Lumia.Channels.enter_quietly(general, guest.id)
+
+      listed = fn account, params ->
+        conn =
+          build_conn()
+          |> authed(account)
+          |> get("/api/v1/servers/#{ctx.server.id}/members", params)
+
+        %V1.ListMembersResponse{members: members, accounts: accounts} =
+          V1.ListMembersResponse.decode(conn.resp_body)
+
+        assert length(members) == length(accounts)
+        members |> Enum.map(&Proto.from_uuid(&1.account_id)) |> Enum.sort()
+      end
+
+      # The member is in no channel with the guest: never listed to it, searched for or not.
+      assert listed.(guest, %{}) == Enum.sort([ctx.owner.id, guest.id])
+      assert listed.(guest, %{"query" => ctx.member.handle}) == []
+      assert listed.(guest, %{"page_size" => "1"}) |> length() == 1
+      # Anyone else is answered with everyone.
+      assert listed.(ctx.member, %{}) == Enum.sort([ctx.owner.id, ctx.member.id, guest.id])
+
+      # Once they share a channel, the guest sees the member too.
+      {:ok, _} = Lumia.Channels.enter_quietly(general, ctx.member.id)
+      assert listed.(guest, %{}) == Enum.sort([ctx.owner.id, ctx.member.id, guest.id])
+    end
   end
 
   describe "PATCH /servers/{id}" do

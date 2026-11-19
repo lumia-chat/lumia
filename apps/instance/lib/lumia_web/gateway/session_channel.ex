@@ -74,7 +74,12 @@ defmodule LumiaWeb.Gateway.SessionChannel do
         subscriptions: %{},
         account_seq: nil,
         hello: hello,
-        presence: %{status: "ONLINE", custom_status: "", watching: MapSet.new()},
+        presence: %{
+          status: "ONLINE",
+          custom_status: "",
+          watching: MapSet.new(),
+          guest_in: MapSet.new()
+        },
         typing: nil
       )
 
@@ -203,12 +208,17 @@ defmodule LumiaWeb.Gateway.SessionChannel do
     status = presence_status(update.status)
     account_id = socket.assigns.account_id
 
-    wanted =
+    memberships =
       update.watch_server_ids
       |> Enum.map(&Proto.from_uuid/1)
       |> Enum.reject(&is_nil/1)
-      |> Enum.filter(&Lumia.Servers.member_for(&1, account_id))
-      |> MapSet.new()
+      |> Enum.map(&{&1, Lumia.Servers.member_for(&1, account_id)})
+      |> Enum.reject(fn {_, member} -> is_nil(member) end)
+
+    wanted = MapSet.new(memberships, &elem(&1, 0))
+    # Where this account is a guest it is told of only the members it sees
+    # (authorization 6.4).
+    guest_in = for {id, %{kind: :guest}} <- memberships, into: MapSet.new(), do: id
 
     meta = %{
       status: status,
@@ -240,13 +250,17 @@ defmodule LumiaWeb.Gateway.SessionChannel do
           |> LumiaWeb.Presence.list()
           |> Enum.map(fn {id, %{metas: metas}} -> presence_entry(id, metas) end)
 
-        push_frame(
-          socket,
-          {:presence_diff, %V1.PresenceDiff{server_id: Proto.uuid(server_id), joined: joined}}
-        )
+        diff = %V1.PresenceDiff{server_id: Proto.uuid(server_id), joined: joined}
+        push_frame(socket, {:presence_diff, seen_in(diff, server_id, guest_in, account_id)})
       end)
 
-    presence = %{status: status, custom_status: update.custom_status, watching: wanted}
+    presence = %{
+      status: status,
+      custom_status: update.custom_status,
+      watching: wanted,
+      guest_in: guest_in
+    }
+
     {:noreply, assign(socket, presence: presence)}
   end
 
@@ -543,14 +557,20 @@ defmodule LumiaWeb.Gateway.SessionChannel do
       |> Enum.reject(&(Map.has_key?(joins, &1) or LumiaWeb.Presence.get_by_key(topic, &1) != []))
       |> Enum.map(&Proto.uuid/1)
 
-    diff = %V1.PresenceDiff{
-      server_id: Proto.uuid(server_id),
-      joined: joined,
-      updated: updated,
-      left_account_ids: left
-    }
+    diff =
+      seen_in(
+        %V1.PresenceDiff{
+          server_id: Proto.uuid(server_id),
+          joined: joined,
+          updated: updated,
+          left_account_ids: left
+        },
+        server_id,
+        socket.assigns.presence.guest_in,
+        socket.assigns.account_id
+      )
 
-    if joined == [] and updated == [] and left == [] do
+    if diff.joined == [] and diff.updated == [] and diff.left_account_ids == [] do
       {:noreply, socket}
     else
       {:noreply, push_frame(socket, {:presence_diff, diff})}
@@ -692,6 +712,25 @@ defmodule LumiaWeb.Gateway.SessionChannel do
   # ---- Pushing -----------------------------------------------------------------
 
   defp presence_topic(server_id), do: "presence:server:" <> server_id
+
+  # A diff as this session is told it: whole, or where its account is a
+  # guest of the server, of only the members it sees (authorization 6.4),
+  # read again each time since who shares a channel with it can change.
+  defp seen_in(diff, server_id, guest_in, account_id) do
+    if MapSet.member?(guest_in, server_id) do
+      seen = Lumia.Servers.seen_by_guests(server_id, [account_id]) |> Map.fetch!(account_id)
+      sees? = &MapSet.member?(seen, Proto.from_uuid(&1))
+
+      %{
+        diff
+        | joined: Enum.filter(diff.joined, &sees?.(&1.account_id)),
+          updated: Enum.filter(diff.updated, &sees?.(&1.account_id)),
+          left_account_ids: Enum.filter(diff.left_account_ids, sees?)
+      }
+    else
+      diff
+    end
+  end
 
   defp presence_status(:PRESENCE_STATUS_UNSPECIFIED), do: "ONLINE"
   defp presence_status(:OFFLINE), do: "ONLINE"

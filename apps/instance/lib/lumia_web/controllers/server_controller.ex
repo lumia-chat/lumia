@@ -180,6 +180,8 @@ defmodule LumiaWeb.ServerController do
   @page_max 200
 
   def members(conn, %{"server_id" => server_id} = params) do
+    me = conn.assigns.current_account_id
+
     with {:ok, _server} <- member_server(conn, server_id),
          {:ok, cursor} <- decode_cursor(params["cursor"]) do
       size = params["page_size"] |> page_size()
@@ -190,6 +192,7 @@ defmodule LumiaWeb.ServerController do
           order_by: [asc: m.joined_at, asc: m.account_id],
           limit: ^(size + 1)
         )
+        |> seen_by(server_id, me)
         |> named(params["query"])
         |> after_cursor(cursor)
         |> Repo.all()
@@ -212,6 +215,21 @@ defmodule LumiaWeb.ServerController do
         accounts: Enum.map(accounts, &Proto.account/1),
         page: %V1.PageResponse{next_cursor: next_cursor}
       })
+    end
+  end
+
+  # A guest sees itself and those it shares a channel with, never the rest
+  # of the member list (architecture 6.2, authorization 6.4).
+  defp seen_by(query, server_id, account_id) do
+    case Servers.member_for(server_id, account_id) do
+      %{kind: :guest} ->
+        from m in query,
+          where:
+            m.account_id == ^account_id or
+              m.account_id in subquery(Servers.seen_by_guest(server_id, account_id))
+
+      _ ->
+        query
     end
   end
 
