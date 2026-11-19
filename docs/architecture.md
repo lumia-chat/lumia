@@ -287,6 +287,8 @@ Deferred: read receipts (others seeing what one has read; one's own read state i
 
 **A server's files** (Ryan, 2026-11-15). The attachments sent in a server's channels count against the server, as section 16 says, and the instance keeps the count itself, from its own rows, so neither the limit nor the settings below ever list the bucket. The limit is the operator's (`LUMIA_SERVER_STORAGE_MAX_BYTES`, none unless set) until plans exist. Two more settings belong to the server's admins, beside how long messages are kept: **how long attachments are kept**, for ever unless a number of days is set, after which a message keeps its text and says where each file was that it is no longer available; and **what happens when the server is full**, either new uploads are refused until something is deleted or the limit is raised (the default), or the attachments of the oldest messages are let go to make room. Either way it is the admins' choice and not the limit's: no limit deletes anything a server's own settings did not say to delete. [specs/media.md](specs/media.md) section 4.5 has the details.
 
+**What the tag beside a name shows** (Ryan, 2026-11-18), the member's role or the member's title, is the server's to choose in the same way: roles unless its admins say titles. Section 7.5 has what each is.
+
 Members hear of a change through their account logs: after the change commits, a job appends `ServerUpdated`, the server as it now is, to every member's log, in batches and once for a burst of edits, so the request never waits on a large server's fan-out and a member who was offline finds it on resume. A member who joins later gets the server as it is in `MembershipAdded`. A client knows whether to offer the settings from its own memberships in the account snapshot, which carry the member's resolved server-level permissions.
 
 **Rejected.** *Broadcasting the change over PubSub to the server's live sessions only.* Cheaper for a large server, but an offline member's cached name and picture would stay wrong until something else made it ask, and every other cached thing a client holds comes through a log.
@@ -331,7 +333,7 @@ Specified in full in [specs/authorization.md](specs/authorization.md), which own
 
 ### 7.1 Roles
 
-A server has roles. A role has a permission set expressed as named flags in the API (bitfield only as a storage detail). A member has many roles. A channel can override permissions per role or per member. A private channel is a channel whose overwrites deny `@everyone`. A member's display tag is their highest-priority role. Instance administration is a separate layer above servers and is not reachable through server roles.
+A server has roles. A role has a name, a place in the server's order, a colour, whether it is shown as a tag, and a permission set expressed as named flags in the API (bitfield only as a storage detail). A member has many roles. A channel can override permissions per role or per member. A private channel is a channel whose overwrites deny `@everyone`. Instance administration is a separate layer above servers and is not reachable through server roles. What members see of roles, and how a server's roles are managed from the clients, is section 7.5.
 
 ### 7.2 Resolution algorithm
 
@@ -362,6 +364,37 @@ Guests start from an empty permission set rather than `@everyone`, and gain acce
 **Rejected.** *Bumping `acl_version` on member-level changes.* Correct but a re-resolution storm across every session in a large server on every role assignment.
 
 **Failure mode, stated.** A removed member's stale session can exist for at most one reconciler tick plus the staleness bound, but no event committed after the removal can be delivered through it, because any such event either carries a new `acl_version` or arrives after the account-log nudge.
+
+### 7.5 Roles and titles on the clients
+
+**Decision** (Ryan, 2026-11-18). The model above is managed and shown from every client. [specs/authorization.md](specs/authorization.md) has the rules in full; this is what was decided and why.
+
+**Managing roles.** A server's owner, or a member whose roles grant `MANAGE_ROLES`, creates, renames, colours, reorders and deletes roles, sets each role's permissions, and gives roles to members and takes them away. Nobody but the owner manages a role at or above their own highest, and nobody grants a permission they do not hold. A name is 1 to 32 characters once trimmed and is one role's alone in its server, whatever its capitals. A colour is one of the design system's nine tones or none, never a colour of the client's own choosing. A new server has `@everyone` and nothing else; clients call it "Everyone", list it last, and let its permissions be changed and nothing more.
+
+**The order is the instance's.** A client never sends a position. A new role is placed last, just above `@everyone`. Reordering is one request that names the server's roles in their new order; the instance refuses an order that moves a role the actor may not manage or lifts one to or above the actor's own highest, and numbers the roles itself, so no two share a place.
+
+**A tag is a role or a title, and the server says which.** A **title** is free text on a membership, up to 32 characters ("Staff Engineer"), with no permissions and no place in any order. It is the member's own to set; someone holding `MANAGE_MEMBERS` may change or clear the title of a member below them. A server setting, beside the others of section 6.7 and changed as they are, says what the tag beside a name shows in messages and in the member list: **roles** (the default), where it is the member's highest role that is shown as a tag, in that role's colour; or **titles**, where it is the member's title, in no colour. There is no falling back from one to the other: where the server shows titles, a member without one has no tag. A profile card shows both wherever it is opened, the title under the name and every role the member holds. The owner has no tag for being the owner; the card and the settings' member list say who the owner is.
+
+A role's **Show as tag** switch, on unless turned off, keeps a role that only carries permissions ("Can invite") from becoming someone's tag.
+
+**Guests** may have a title. Clients offer them no roles: a guest's roles grant nothing but through channel overwrites (7.3), which no client edits yet.
+
+**The permissions a client offers** are the ones that do something today, under plain headings; the core holds the list so every client offers the same. A flag with nothing behind it yet (`SEND_IN_THREADS`, `START_CALLS`, `MANAGE_WEBHOOKS`, `MANAGE_BOTS`) is not shown, and is kept as it was when a role is saved.
+
+**How clients learn of it.** Every member's client holds the server's roles, and each member's roles and title, so a tag is drawn without asking and offline. The account snapshot carries each server's roles, as `MembershipAdded` does for a server joined later. After a role is created, changed, reordered or deleted, a job appends `RolesUpdated`, the server's roles as they now are, to every member's account log, once for a burst of edits, as `ServerUpdated` is (6.7). After a member's roles or title change, a job appends `MembersUpdated`, those members as they now are, to every member's log, once for a burst. Neither replaces section 7.4: the definition-level bump and the affected member's own `MembershipUpdated` happen in the change's transaction as before, and these two events decide only what clients draw.
+
+**Not built**, each its own step: an editor for channel overwrites, and roles for guests with it; `@role` mentions (6.6), next after this; bans; handing a server to another owner; the audit log's viewer; nicknames.
+
+**Rejected.**
+
+- *Titles as roles without permissions.* A server would hold 50 titles at most, and a job title would sit in the order that decides who manages whom.
+- *Each viewer choosing roles or titles.* What a tag means would differ between two people reading the same message.
+- *Falling back to the role where there is no title.* Two kinds of tag in one conversation, which the server's setting exists to prevent.
+- *Names in the role's colour, and the member list grouped by role.* A tag is what the boards draw; a coloured name must read on every ground in both themes, and grouping can come later without a change to what is kept.
+- *Any colour for a role.* A tag unreadable in one theme or the other.
+- *Positions sent by clients.* The instance stored whatever it was sent: a `MANAGE_ROLES` holder could place a role above their own, and two roles could share a place, leaving a member's tag undecided.
+- *Telling nobody else when a member's roles change.* Cheaper, but a new tag would be missing from everyone else's screen until their client next read the member list.
+- *Starter roles in a new server.* Guesses about how a server is run; the owner needs no role to hold every permission.
 
 ## 8. Delivery and sync
 
