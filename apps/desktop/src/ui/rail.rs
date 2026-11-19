@@ -13,7 +13,7 @@ use rune::{Align, Cursor, Drag, El, PointerPress, Side, Tx, col, el, icon, row, 
 
 use super::components::{
     Look, drawn, field, initials, menu, menu_glyph, menu_item, menu_rule, popover, primary_button,
-    secondary_button, shadowed,
+    secondary_button, shadowed, tone_swatch,
 };
 use crate::app::rail::{Spot, SpotKind, Target};
 use crate::app::{Popover, State};
@@ -638,27 +638,13 @@ pub fn folder_settings(s: &State, look: Look) -> Option<El> {
         .role("radiogroup")
         .label("Colour");
     for tone in TONES {
-        let (ground, ink) = t::tone_named(tone, c);
-        let on = s.rail.tone == tone;
-        let mut swatch = el()
-            .key(format!("folder-tone-{tone}"))
-            .size(t::TONE_SWATCH, t::TONE_SWATCH)
-            .radius(t::TONE_SWATCH / 2.0)
-            .fill(ground)
-            .center()
-            .role("radio")
-            .label(capitalized(tone))
-            .checked(on)
-            .cursor(Cursor::Pointer)
-            .focusable(true)
-            .focus_ring(2.0, 2.0, c.focus)
-            .on_press(move |s: &mut State| s.choose_folder_tone(tone));
-        swatch = if on {
-            shadowed(swatch, look.shadows.ring_current)
-                .child(icon(&icons::CHECK, t::SPACE_14).color(ink))
-        } else {
-            swatch.border(1.0, c.line_strong)
-        };
+        let swatch = tone_swatch(
+            format!("folder-tone-{tone}"),
+            tone,
+            s.rail.tone == tone,
+            move |s: &mut State| s.choose_folder_tone(tone),
+            look,
+        );
         swatches = swatches.child(swatch);
     }
     Some(
@@ -703,12 +689,4 @@ pub fn folder_settings(s: &State, look: Look) -> Option<El> {
                 ),
         ),
     )
-}
-
-fn capitalized(word: &str) -> String {
-    let mut chars = word.chars();
-    chars
-        .next()
-        .map(|first| first.to_uppercase().chain(chars).collect())
-        .unwrap_or_default()
 }

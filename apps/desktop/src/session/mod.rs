@@ -11,8 +11,8 @@
 //! one part of the product lives beside it and reports through its own update type:
 //! [`dms`] (personal conversations), [`servers`] (making and joining servers, channels,
 //! invites), [`channels`] (being in channels, and server DMs), [`identity`] (devices,
-//! linking, the profile and status) and [`reads`] (read state, reactions, the Mentions
-//! lists and finding a message).
+//! linking, the profile and status), [`reads`] (read state, reactions, the Mentions lists
+//! and finding a message) and [`roles`] (roles, titles and tags).
 
 pub mod avatars;
 pub mod browser;
@@ -23,6 +23,7 @@ pub mod media;
 pub mod notices;
 pub mod rail;
 pub mod reads;
+pub mod roles;
 pub mod servers;
 
 use std::collections::{HashMap, HashSet};
@@ -137,6 +138,7 @@ pub enum Update {
     Read(reads::ReadUpdate),
     Rail(rail::RailUpdate),
     Media(media::MediaUpdate),
+    Role(roles::RoleUpdate),
 }
 
 /// What is on screen to read and write: a server's channel, or a personal conversation.
@@ -360,6 +362,8 @@ pub struct Session {
     pub reads: reads::Reads,
     /// The rail's arrangement on its way to the instance.
     pub rail: rail::RailState,
+    /// A server's role order on its way to the instance.
+    pub roles: roles::RolesState,
     pub last_error: Option<String>,
 }
 
@@ -426,6 +430,7 @@ impl Session {
             identity: identity::IdentityState::default(),
             reads: reads::Reads::default(),
             rail: rail::RailState::default(),
+            roles: roles::RolesState::default(),
             last_error: None,
         })
     }
@@ -575,6 +580,7 @@ impl Session {
         self.dm = dms::DmState::default();
         self.identity = identity::IdentityState::default();
         self.rail.forget();
+        self.roles.forget();
         self.revision += 1;
     }
 
@@ -697,14 +703,26 @@ impl Session {
     }
 
     fn load_members(&self, servers: &[ServerSummary]) {
-        let Some(app) = &self.app else { return };
         for server in servers {
-            let (app, server_id) = (Arc::clone(app), server.server_id.clone());
-            self.task(async move {
-                let members = app.members(&server_id, "").await.unwrap_or_default();
-                Update::Members { server_id, members }
-            });
+            self.load_members_of(&server.server_id);
         }
+    }
+
+    /// Asks the instance for a server's members again ([`Update::Members`]): someone joined
+    /// or left it, or its settings are opened to manage them. A list that could not be read
+    /// names no server, and what is held stays.
+    pub fn load_members_of(&self, server_id: &str) {
+        let Some(app) = &self.app else { return };
+        let (app, server_id) = (Arc::clone(app), server_id.to_string());
+        self.task(async move {
+            match app.members(&server_id, "").await {
+                Ok(members) => Update::Members { server_id, members },
+                Err(_) => Update::Members {
+                    server_id: String::new(),
+                    members: Vec::new(),
+                },
+            }
+        });
     }
 
     /// Reads the open conversation's newest messages from the local store, drops the
@@ -1328,6 +1346,7 @@ impl Session {
                     ));
                 }
             }
+            Update::Members { server_id, .. } if server_id.is_empty() => {}
             Update::Members { server_id, members } => {
                 for member in members {
                     self.people
@@ -1335,6 +1354,8 @@ impl Session {
                 }
                 self.members.insert(server_id.clone(), members.clone());
                 self.want_pictures();
+                // The rows already drawn name these people and carry their tags.
+                self.revision += 1;
             }
             Update::Profile {
                 account_id,
@@ -1377,6 +1398,7 @@ impl Session {
             Update::Read(update) => self.apply_read(update),
             Update::Rail(update) => self.apply_rail(update),
             Update::Media(update) => self.apply_media(update),
+            Update::Role(update) => self.apply_role(update),
         }
     }
 
@@ -1400,6 +1422,15 @@ impl Session {
                     .any(|m| !m.notice.is_empty());
                 if notices && self.channel_members.contains_key(channel_id) {
                     self.channel_members(channel_id);
+                }
+                // And who is in the server, which its settings list and count from.
+                if notices
+                    && let Some(server_id) = self
+                        .channel_summary(channel_id)
+                        .map(|channel| channel.server_id.clone())
+                        .filter(|id| !id.is_empty())
+                {
+                    self.load_members_of(&server_id);
                 }
                 if self.channel() == Some(channel_id.as_str()) {
                     self.read_entries();
@@ -1461,9 +1492,10 @@ impl Session {
             }),
             // Linking's to follow (`State::link_session_moved`).
             AppEvent::LinkSessionUpdated { .. } => {}
-            // Nothing here draws a tag yet (plan step 11): when the shell does,
-            // this is where it reads the server's members again.
-            AppEvent::TagsChanged { .. } => {}
+            // What the core keeps has the change already (architecture 7.5): the members
+            // are read again for their tags, and the snapshot the `AccountApplied` before
+            // this asked for says afresh what this account may do there.
+            AppEvent::TagsChanged { server_id } => self.read_members(server_id),
             AppEvent::Error {
                 command_id,
                 message,

@@ -9,11 +9,13 @@ mod emoji;
 mod home;
 mod link;
 mod media;
+mod members;
 mod mentions;
 mod menus;
 mod prompt;
 mod rail;
 mod replies;
+mod roles;
 mod scroll;
 mod server;
 mod server_popovers;
@@ -87,6 +89,12 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
     // A rail tile being dragged, over everything.
     if s.route == Route::Shell
         && let Some(layer) = rail::drag_layer(s, look)
+    {
+        screen = screen.child(layer);
+    }
+    // A role being dragged in a server's settings, over everything.
+    if s.route == Route::Shell
+        && let Some(layer) = roles::drag_layer(s, look)
     {
         screen = screen.child(layer);
     }
@@ -169,5 +177,10 @@ fn overlay(s: &State, popover: Popover, look: Look) -> Option<El> {
         Popover::FolderSettings => rail::folder_settings(s, look),
         Popover::MessageContext => replies::message_context(s, look),
         Popover::PersonMenu => menus::person_menu(s, look),
+        Popover::RoleMenu
+        | Popover::AskAdministrator
+        | Popover::DeleteRole
+        | Popover::AddHolders => roles::overlay(s, popover, look),
+        Popover::CardRoles | Popover::CardTitle => members::overlay(s, popover, look),
     }
 }

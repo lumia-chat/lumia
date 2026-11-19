@@ -1,20 +1,22 @@
 //! A server on screen: the channels this account is in and its server DMs in the sidebar,
 //! each section with its plus (architecture 6.8), the open channel or DM as the
 //! conversation, and the open channel's members as the aside (`channels`), grouped by
-//! presence; the server's members where no channel is open. The name opens the server's
-//! menu (`menus::server`).
+//! presence; the server's members where no channel is open, and none beside the server's
+//! settings. A member's row carries their tag in the server, a role or a title as the server
+//! shows (architecture 7.5). The name opens the server's menu (`menus::server`).
 
 use lumia_client::app::{ChannelSummary, MemberSummary, ServerSummary};
 use rune::{Cursor, El, ScrollSpec, col, el, icon, row, text, text_input};
 
 use super::components::{
-    Look, avatar_of, count_badge, error_text, icon_button, link_button, panel, section_label,
-    small_button, status_dot, tag, toned_notice,
+    Look, avatar_of, count_badge, error_text, icon_button, link_button, panel, role_tag,
+    section_label, small_button, status_dot, tag, toned_notice,
 };
 use super::conversation::{self, Chrome};
 use super::server_popovers as popovers;
 use super::shell::{ASIDE_WIDTH, sidebar_frame};
 use crate::app::channels::ServerPage;
+use crate::app::roles;
 use crate::app::{HomeView, State};
 use crate::session::display_name;
 use crate::tokens::{self as t, icons};
@@ -475,8 +477,12 @@ fn server_dm(s: &State, server: &ServerSummary, channel: &ChannelSummary, look: 
 /// What stands beside the conversation: the open channel's members, none beside a server
 /// DM, and the server's members where no channel is open.
 pub fn aside(s: &State, server: &ServerSummary, look: Look) -> Option<El> {
-    // A page in place of the channel has the server's members beside it.
-    if s.server_settings_open() || s.server_page().is_some() {
+    // A server's settings have the pane to themselves, as their board draws them; any
+    // other page in place of the channel has the server's members beside it.
+    if s.server_settings_open() {
+        return None;
+    }
+    if s.server_page().is_some() {
         return Some(members(s, server, look));
     }
     let open = s
@@ -638,7 +644,7 @@ pub(super) fn member_row(
     if let Some(dot) = dot {
         picture = picture.child(status_dot(t::AVATAR_MD, dot, c.surface));
     }
-    // The name, quieter for someone who is not here, with "You" beside this account's.
+    // The name, quieter for someone who is not here, with their tag beside it.
     let mut named = row().w_full().gap(t::SPACE_6).items_center().child(
         text(name.clone())
             .font(t::TEXT_MEMBER)
@@ -651,8 +657,29 @@ pub(super) fn member_row(
             .shrink()
             .min_w(0.0),
     );
-    if member.account_id == s.session.me() {
+    // Their tag in this server (architecture 7.5), from its own list of them: a row drawn
+    // from another list (a channel's members) names the same person. This account with no
+    // tag is "You", as the web has it.
+    let tagged = s
+        .session
+        .tag_in(&server.server_id, &member.account_id)
+        .or(member.tag.as_ref());
+    let tag_shown = roles::tag_of(tagged);
+    if tag_shown.is_none() && member.account_id == s.session.me() {
         named = named.child(tag("You", look));
+    }
+    if let Some((words, tone)) = tag_shown {
+        // It gives way before the name does: the name keeps the room it needs, and the tag
+        // has what is left of the row, up to the board's share of it, cut with an ellipsis.
+        // The row's name for assistive technology says it.
+        named = named.child(
+            row()
+                .grow(1.0)
+                .min_w(0.0)
+                .max_w(t::MEMBER_TAG)
+                .a11y_hidden()
+                .child(role_tag(words, tone, true, look).key("tag").shrink()),
+        );
     }
     let mut words = col().grow(1.0).min_w(0.0).child(named);
     if !subtitle.is_empty() {
@@ -682,7 +709,10 @@ pub(super) fn member_row(
         .radius(t::RADIUS_10)
         .hover(c.hover_member)
         .role("listitem")
-        .label(format!("{name}, {status}"))
+        .label(match tag_shown {
+            Some((tag, _)) => format!("{name}, {tag}, {status}"),
+            None => format!("{name}, {status}"),
+        })
         // The row opens the person's card, as the board's does.
         .cursor(Cursor::Pointer)
         .focusable(true)

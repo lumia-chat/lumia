@@ -13,6 +13,8 @@ mod account;
 pub mod media;
 mod rail;
 mod replies;
+/// Public for its sample server, which the tests open.
+pub mod roles;
 
 use crate::app::{HomeView, Route, State};
 use crate::session::servers::ServerUpdate;
@@ -28,6 +30,13 @@ pub const SCENES: &[Scene] = &[
     ("live-home", |s| {
         live(s);
         s.go_home(HomeView::Conversations);
+    }),
+    // The real thing's settings, for an account that may manage roles or members there.
+    ("live-roles", |s| {
+        live_settings(s, crate::app::roles::Section::Roles);
+    }),
+    ("live-members", |s| {
+        live_settings(s, crate::app::roles::Section::Members);
     }),
     // Making and managing servers, over a sample account with no instance behind it.
     ("add-server", |s| {
@@ -252,6 +261,41 @@ pub const SCENES: &[Scene] = &[
         s.tick(chrono::Utc::now().timestamp_micros());
         s.pictures.wait();
     }),
+    // Roles, titles and tags (`scenes/roles.rs`, architecture 7.5): the step 11 boards, with
+    // their sample data. Drawn at `--size 1440x901` unless the scene's comment says taller.
+    ("roles-overview", roles::overview),
+    ("roles-list", roles::list),
+    ("roles-list-moderator", roles::list_moderator),
+    ("roles-drag", roles::drag),
+    ("roles-menu", roles::menu),
+    ("roles-menu-first", roles::menu_first),
+    ("roles-editor", roles::editor),
+    ("roles-editor-everyone", roles::editor_everyone),
+    ("roles-ask-administrator", roles::ask_administrator),
+    ("roles-ask-delete", roles::ask_delete),
+    ("roles-editor-new", roles::editor_new),
+    ("roles-editor-no-tag", roles::editor_no_tag),
+    ("roles-editor-moderator", roles::editor_moderator),
+    ("roles-add-members", roles::add_holders),
+    ("roles-members", roles::members),
+    ("roles-members-narrow", roles::members_narrow),
+    ("roles-members-below", roles::members_below),
+    ("roles-members-above", roles::members_above),
+    ("roles-members-guest", roles::members_guest),
+    ("roles-tags-roles", roles::tags_roles),
+    ("roles-tags-titles", roles::tags_titles),
+    ("roles-tags-tones", roles::tags_tones),
+    ("roles-tags-longest", roles::tags_longest),
+    ("roles-tags-longest-title", roles::tags_longest_title),
+    ("roles-card-others", roles::card_others),
+    ("roles-card-editor", roles::card_editor),
+    ("roles-card-edit-roles", roles::card_edit_roles),
+    ("roles-card-edit-title", roles::card_edit_title),
+    ("roles-card-own", roles::card_own),
+    ("roles-card-own-no-title", roles::card_own_no_title),
+    ("roles-card-owner", roles::card_owner),
+    ("roles-card-guest", roles::card_guest),
+    ("roles-card-untagged", roles::card_untagged),
     // The rail as an account arranged it (`ui/rail.rs`, architecture 6.9).
     ("rail-folders", rail::folders),
     ("rail-menu", rail::server_menu),
@@ -667,6 +711,20 @@ pub fn live(state: &mut State) {
         "lumia: the live scene gave up waiting; connection {:?}, error {:?}",
         state.session.connection, state.session.last_error
     );
+}
+
+/// The `live` scene on a section of the server's settings, once the members the settings
+/// ask for again have had a moment to arrive.
+fn live_settings(state: &mut State, section: crate::app::roles::Section) {
+    use std::time::{Duration, Instant};
+    live(state);
+    state.open_server_settings();
+    state.choose_section(section);
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while Instant::now() < deadline {
+        state.drain();
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 /// The `live` scene at Home with the account's first personal conversation open, once the

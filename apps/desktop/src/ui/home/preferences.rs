@@ -46,7 +46,7 @@ use crate::settings::{
 use crate::tokens::{self as t, Colors, icons};
 use crate::ui::components::{
     Look, action_button, check_row, error_text, panel, picture_choice, secondary_button,
-    segmented_compact, switch,
+    segmented_compact, setting_row, settings_group, switch,
 };
 use crate::ui::scroll::WithScrollBar;
 use crate::ui::{conversation, media, replies, timeline};
@@ -148,44 +148,14 @@ fn section(key: &'static str, title: &str, caption: &str, look: Look) -> El {
     )
 }
 
-/// Settings' rows in an outlined box, a rule between each two.
+/// Settings' rows in an outlined box (`components::settings_group`).
 fn group(key: &'static str, rows: Vec<El>, look: Look) -> El {
-    let c = look.c;
-    let mut group = col()
-        .key(key)
-        .w_full()
-        .radius(t::RADIUS_14)
-        .border(1.0, c.line_strong);
-    for (i, setting) in rows.into_iter().enumerate() {
-        group = group.child(if i == 0 {
-            setting
-        } else {
-            setting.border_sides([1.0, 0.0, 0.0, 0.0], c.line)
-        });
-    }
-    group
+    settings_group(key, rows, look)
 }
 
-/// A setting's row: its name over a line on what it does, and its control at the end. The
-/// control says its name to assistive technology itself.
+/// A setting's row (`components::setting_row`).
 fn setting(key: impl Into<String>, name: &str, caption: &str, control: El, look: Look) -> El {
-    let c = look.c;
-    row()
-        .key(key)
-        .w_full()
-        .px(t::SPACE_16)
-        .py(t::SPACE_14)
-        .gap(t::SPACE_16)
-        .items_center()
-        .child(
-            col()
-                .grow(1.0)
-                .min_w(0.0)
-                .gap(t::SPACE_2)
-                .child(text(name).font(t::TEXT_MEMBER).color(c.ink).a11y_hidden())
-                .child(text(caption).font(t::TEXT_META).color(c.ink_muted).wrap()),
-        )
-        .child(control)
+    setting_row(key, name, caption, control, look)
 }
 
 /// A switch's row, its line saying what the setting does as it is now.

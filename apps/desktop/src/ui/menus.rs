@@ -5,20 +5,29 @@
 //! Where they leave the boards. The server's name has no menu drawn, only its chevron; this
 //! one holds what the shell can do in a server: invite, browse its channels, make one (for
 //! whoever may), this account's own settings there, and the server's settings for whoever
-//! may change them. The account menu has no Keyboard shortcuts, which the shell does not
+//! has a section of them (Manage server, Manage roles or Manage members). The account menu has no Keyboard shortcuts, which the shell does not
 //! have, and has Devices, which it does. The card has no team, no local time and no call
 //! button, none of which the product knows; it shows the pronouns, the custom status and the
 //! bio of the person's verified profile, and in a server offers a server DM first and a
 //! personal conversation beside it (architecture 6.4). A right-click on a person opens
 //! [`person_menu`], the card's ways to a conversation without the card (#25).
+//!
+//! In a server the card is the "Profile card" board's (architecture 7.5): the member's title
+//! under the name and every role they hold, whichever of the two the server shows as tags,
+//! with "Owner" or "Guest" beside the name, and Edit beside the title and beside Roles for
+//! whoever may change them (`roles::member_offers`; "Add a title" where there is none).
+//! Each Edit opens its small form in the card's place (`members::card_form`), and the card
+//! comes back when it is saved or cancelled.
 
 use lumia_client::app::MemberSummary;
 use rune::{Align, Cursor, El, Side, col, el, icon, row, text};
 
 use super::components::{
-    CARD_WIDTH, Look, action_button, avatar_of, menu, menu_glyph, menu_item, menu_rule,
-    section_label, shadowed, tag,
+    CARD_WIDTH, Look, action_button, avatar_of, mark, menu, menu_glyph, menu_item, menu_rule,
+    role_tag, section_label, shadowed, text_button,
 };
+use crate::app::role_settings::CardForm;
+use crate::app::roles::{self, TagTone};
 use crate::app::{HomeView, State, context};
 use crate::session::{Connection, display_name};
 use crate::tokens::{self as t, icons};
@@ -75,8 +84,9 @@ pub fn server(s: &State, look: Look) -> Option<El> {
         State::open_your_settings,
         look,
     ));
-    // Offered to whoever may change them; the instance decides all the same.
-    if server.can_manage {
+    // Offered to whoever has a section of them (`roles::settings_sections`); the instance
+    // decides all the same.
+    if s.settings_offered() {
         items = items.child(menu_item(
             "menu-server-settings",
             Some(menu_glyph(&icons::SETTINGS, look)),
@@ -289,9 +299,18 @@ pub fn person(s: &State, look: Look) -> Option<El> {
             .role("heading"),
     );
     if me {
-        named = named.child(tag("You", look));
+        named = named.child(mark("You", look));
+    }
+    // In a server: who they are to it, and what this account may change of them there.
+    let membership = s.card_member();
+    let offers = membership.map(|(server, member)| roles::member_offers(server, member, me));
+    if let Some(word) = membership.and_then(|(_, member)| roles::member_mark(member)) {
+        named = named.child(mark(word, look));
     }
     let mut who = col().w_full().gap(t::SPACE_2).child(named);
+    if let (Some((_, member)), Some(offers)) = (membership, offers) {
+        who = who.children(card_title(&member.title, offers.title, look));
+    }
     if let Some(handle) = found.map(|p| p.handle.as_str()).filter(|h| !h.is_empty()) {
         who = who.child(
             text(format!("@{handle}"))
@@ -329,6 +348,10 @@ pub fn person(s: &State, look: Look) -> Option<El> {
     if s.server_id().is_some() {
         card = card.child(here);
     }
+    if let (Some((server, member)), Some(offers)) = (membership, offers) {
+        let held = roles::roles_held(&server.roles, &member.role_ids);
+        card = card.children(card_roles(&held, offers.roles, look));
+    }
     if let Some(details) = details(found, presence.map(|(_, custom)| custom.as_str()), look) {
         card = card.child(details);
     }
@@ -354,6 +377,87 @@ pub fn person(s: &State, look: Look) -> Option<El> {
         .child(banner)
         .child(card),
     )
+}
+
+/// The title under a card's name, with Edit beside it for whoever may change it; "Add a
+/// title" in its place where there is none to show and it is theirs to give.
+fn card_title(title: &str, editable: bool, look: Look) -> Option<El> {
+    let edit = |words: &str, label: &str| {
+        text_button(
+            "card-edit-title",
+            words,
+            label,
+            |s: &mut State| s.edit_on_card(CardForm::Title),
+            look,
+        )
+    };
+    if title.is_empty() {
+        return editable.then(|| row().w_full().child(edit("Add a title", "Add a title")));
+    }
+    let mut line = row().w_full().gap(t::SPACE_8).items_center().child(
+        text(title.to_string())
+            .key("card-title")
+            .font(t::TEXT_MEMBER)
+            .color(look.c.ink_body)
+            .truncate()
+            .shrink()
+            .min_w(0.0),
+    );
+    if editable {
+        line = line.child(edit("Edit", "Edit title"));
+    }
+    Some(line)
+}
+
+/// Every role the person holds, each a tag on its tone or the plain chip, with Edit beside
+/// the heading for whoever may give and take them. Nothing for someone who holds none, to
+/// someone who may not change that.
+fn card_roles(held: &[roles::HeldRole], editable: bool, look: Look) -> Option<El> {
+    if held.is_empty() && !editable {
+        return None;
+    }
+    let c = look.c;
+    let mut head = row().w_full().items_center().child(
+        text("Roles")
+            .font(t::TEXT_SECTION)
+            .color(c.ink_muted)
+            .role("heading")
+            .grow(1.0),
+    );
+    if editable {
+        head = head.child(text_button(
+            "card-edit-roles",
+            "Edit",
+            "Edit roles",
+            |s: &mut State| s.edit_on_card(CardForm::Roles),
+            look,
+        ));
+    }
+    let listed = if held.is_empty() {
+        text("No roles").font(t::TEXT_CARD_LINE).color(c.ink_quiet)
+    } else {
+        let mut list = row()
+            .key("card-roles-held")
+            .w_full()
+            .gap(t::SPACE_6)
+            .flex_wrap()
+            .role("list")
+            .label("Roles");
+        for role in held {
+            list = list.child(
+                role_tag(
+                    &role.label,
+                    role.tone.map_or(TagTone::Neutral, TagTone::Tone),
+                    false,
+                    look,
+                )
+                .role("listitem")
+                .label(role.label.clone()),
+            );
+        }
+        list
+    };
+    Some(col().w_full().gap(t::SPACE_6).child(head).child(listed))
 }
 
 /// How to talk to the person on the card. In a server, a server DM first ("Message"),

@@ -31,6 +31,8 @@ pub enum Setting {
     ShowDeleted,
     /// How long attachments are kept and what a full server does (specs/media.md 4.5).
     Files,
+    /// Whether the tag beside a name is the member's title or their role (architecture 7.5).
+    Tag,
 }
 
 /// What a finished server-management call reports.
@@ -241,6 +243,21 @@ impl Session {
             Update::Server(ServerUpdate::SettingSaved {
                 server_id,
                 setting: Setting::Files,
+                result: result.map_err(Failure::from),
+            })
+        });
+    }
+
+    /// Whether the tag beside a member's name in a server is their title; false, their role
+    /// ([`ServerUpdate::SettingSaved`]; architecture 7.5).
+    pub fn set_tag_titles(&self, server_id: &str, titles: bool) {
+        let Some(app) = self.client() else { return };
+        let server_id = server_id.to_string();
+        self.task(async move {
+            let result = app.set_tag_titles(&server_id, titles).await;
+            Update::Server(ServerUpdate::SettingSaved {
+                server_id,
+                setting: Setting::Tag,
                 result: result.map_err(Failure::from),
             })
         });

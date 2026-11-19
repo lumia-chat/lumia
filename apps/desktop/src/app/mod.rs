@@ -4,7 +4,8 @@
 //!
 //! This file is the frame: the route, the place, the conversation on screen. Each part of
 //! the product keeps its own state and reactions beside it: [`sign_in`], [`home`]
-//! (personal conversations), [`server`] (making and managing servers), [`account`]
+//! (personal conversations), [`server`] (making and managing servers), [`roles`] and
+//! [`role_settings`] (roles, titles and tags), [`account`]
 //! (devices, profile, status), [`setup`] (private messages on this computer: the
 //! recovery phrase, restoring, starting over), [`prompts`] (another device asking this
 //! one to link it) and [`context`] (the menus a right-click opens).
@@ -25,6 +26,8 @@ pub mod playback;
 pub mod prompts;
 pub mod rail;
 pub mod replies;
+pub mod role_settings;
+pub mod roles;
 pub mod server;
 pub mod server_settings;
 pub mod setup;
@@ -119,6 +122,17 @@ pub enum Popover {
     MessageContext,
     /// A person's menu where they were right-clicked, for `State::person`.
     PersonMenu,
+    /// A role's menu where its row was right-clicked, for the role `roles.menu_for` names.
+    RoleMenu,
+    /// "Turn on Administrator?", against its switch in a role's editor.
+    AskAdministrator,
+    /// "Delete Moderator?", for the role `roles.deleting` names.
+    DeleteRole,
+    /// "Add members" to the role in the editor.
+    AddHolders,
+    /// The profile card's Roles and Title forms, for `roles.card`.
+    CardRoles,
+    CardTitle,
 }
 
 /// Whose profile card is open, and the control it hangs from.
@@ -184,6 +198,9 @@ pub struct State {
     pub rail: rail::RailUi,
     /// The menu a right-click opened, and where (`context`).
     pub context: context::Context,
+    /// Roles and titles: a role's editor, its drag and menu, a member's row, the card's forms
+    /// (`role_settings`).
+    pub roles: role_settings::RoleForms,
     /// Whether the system shows times on a 24-hour clock, which the timeline's times
     /// follow. A real launch reads it from the system whenever the window comes in front
     /// (`platform`); a test and a headless picture keep the 12-hour clock.
@@ -236,6 +253,7 @@ impl State {
             drafts: drafts::Drafts::default(),
             rail: rail::RailUi::default(),
             context: context::Context::default(),
+            roles: role_settings::RoleForms::default(),
             clock_24: false,
             updater: None,
         };
@@ -553,6 +571,7 @@ impl State {
         self.replies = replies::Replies::default();
         self.home = home::Home::default();
         self.server_forms = server::ServerForms::default();
+        self.roles = role_settings::RoleForms::default();
         self.channel_forms = channels::ChannelForms::default();
         self.account = account::Account::default();
         self.setup = setup::SetupForms::default();
@@ -622,6 +641,7 @@ impl State {
             Update::SignedIn(answer) => self.signed_in(answer),
             Update::Snapshot(Ok(_)) => {
                 self.settle();
+                self.settle_settings();
                 // A server or a channel just made may be listed now.
                 self.open_made();
             }
@@ -642,6 +662,10 @@ impl State {
             Update::Notice(update) => self.react_notice(update),
             Update::Avatar(update) => self.react_avatar(update),
             Update::Media(update) => self.react_media(update),
+            Update::Role(update) => {
+                self.react_role(update);
+                self.settle_settings();
+            }
             Update::Gateway(event) => {
                 if matches!(
                     event,

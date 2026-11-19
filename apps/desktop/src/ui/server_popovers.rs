@@ -128,7 +128,7 @@ fn others<'a>(s: &'a State, server_id: &str, filter: &str) -> Vec<&'a MemberSumm
 }
 
 /// A search field over a picker's list.
-fn find(
+pub(super) fn find(
     key: &'static str,
     edit: &rune::TextEdit,
     focus: impl Fn(&mut State) -> &mut rune::TextEdit + 'static,
@@ -161,7 +161,7 @@ fn find(
 }
 
 /// A picker's list, scrolling when the window is short for it.
-fn picker_list(key: &'static str, label: &str, rows: Vec<El>, look: Look) -> El {
+pub(super) fn picker_list(key: &'static str, label: &str, rows: Vec<El>, look: Look) -> El {
     let mut list = col()
         .key(key)
         .w_full()
@@ -185,10 +185,10 @@ fn picker_list(key: &'static str, label: &str, rows: Vec<El>, look: Look) -> El 
 }
 
 /// What choosing a row of a picker does; none for one that cannot be chosen.
-type Choose = Option<Box<dyn Fn(&mut State)>>;
+pub(super) type Choose = Option<Box<dyn Fn(&mut State)>>;
 
 /// One person in a picker: their avatar and name, and `note` at the end when there is one.
-fn person_row(
+pub(super) fn person_row(
     s: &State,
     key: String,
     member: &MemberSummary,

@@ -241,13 +241,13 @@ pub fn defaults_card(s: &State, server: &ServerSummary, look: Look) -> El {
     } else if form.defaults_saving.saved {
         card = card.child(quiet("Saved.", look));
     }
-    card.child(action(primary_button(
+    card.child(primary_button(
         "save-defaults",
         "Save",
         !form.defaults_saving.busy,
         State::save_defaults,
         look,
-    )))
+    ))
 }
 
 /// The open channel's members beside it: "Add people" at the top for those in it, the

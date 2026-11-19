@@ -11,8 +11,11 @@
 //! first has its time in the avatar's column, shown while the pointer is on the row. With
 //! avatars hidden there is no such column: the name starts where the avatar was and opens
 //! the person's card as the avatar does, and a later row's time is in its label alone.
+//! In a server the author's tag stands between the name and the time (architecture 7.5: a
+//! role on its tone or a title on the plain chip, the author's in the server's member list,
+//! since a message carries none); it is no part of a selection or a copy.
 //! **One line**: every message is `12:04  Priya  words` with no avatar, the time and the
-//! name repeated on each, and words that run on wrap under where they start. A reply's
+//! name repeated on each, no tag, and words that run on wrap under where they start. A reply's
 //! reference is a line over the words at that start, and its reactions a row under them.
 //! The font size scales every text of a row (and the composer's, `conversation`), never the
 //! avatars or the room between.
@@ -58,11 +61,12 @@ use rune::{
 };
 
 use super::body;
-use super::components::{Look, avatar_of};
+use super::components::{Look, avatar_of, role_tag};
 use super::media;
 use super::scroll::WithScrollBar;
 use super::{conversation, replies};
 use crate::app::State;
+use crate::app::roles;
 use crate::session::{Entry, Pending};
 use crate::settings::{Avatars, Layout, Reactions, Settings, Spacing};
 use crate::tokens::{self as t, icons};
@@ -577,6 +581,13 @@ fn name_button(name: El, author: &str, author_id: &str, key: &str, look: Look) -
     super::menus::with_person_menu(button, author_id, &anchor)
 }
 
+/// The tag beside a message author's name: theirs in the server on screen, from its member
+/// list (a message carries none). It gives way before the name does where the row is narrow.
+fn author_tag(s: &State, author_id: &str, look: Look) -> Option<El> {
+    let (words, tone) = roles::tag_of(s.session.tag_in(s.server_id()?, author_id))?;
+    Some(role_tag(words, tone, false, look).key("tag").shrink())
+}
+
 /// A message's row, as the layout chosen draws it.
 fn message_frame(
     s: &State,
@@ -711,6 +722,12 @@ fn grouped_frame(s: &State, row_: Row<'_>, place: Place, look: Look) -> El {
     };
     let mut name = part(text(author).key("author").font(m.ty.author).color(c.ink), 2);
     let time = part(text(time).key("time").font(m.ty.meta).color(c.ink_muted), 1);
+    // The author's tag in this server (architecture 7.5), between the name and the time: a
+    // role on its tone or a title on the plain chip, as the core worked it out. One line
+    // draws none, and a row that is not the conversation's (Preferences' preview) has none.
+    let tag = (!card_of.is_empty())
+        .then(|| author_tag(s, card_of, look))
+        .flatten();
     // Beside an avatar the name is text, not a button, and still names the person: their
     // menu comes up on it, and its card hangs from the avatar.
     if m.avatar.is_some() && !card_of.is_empty() {
@@ -719,9 +736,11 @@ fn grouped_frame(s: &State, row_: Row<'_>, place: Place, look: Look) -> El {
     let Some(avatar) = m.avatar else {
         // No avatar to open the person's card, so the name does.
         let head = row()
+            .w_full()
             .gap(t::SPACE_8)
             .items_center()
             .child(name_button(name, author, card_of, key, look))
+            .children(tag)
             .child(time);
         return frame.child(col().w_full().gap(m.under_name).child(head).child(content));
     };
@@ -742,7 +761,13 @@ fn grouped_frame(s: &State, row_: Row<'_>, place: Place, look: Look) -> El {
             .on_press(move |s: &mut State| s.open_person(&id, &at));
         picture = super::menus::with_person_menu(picture, author_id, &anchor);
     }
-    let head = row().gap(t::SPACE_8).items_center().child(name).child(time);
+    let head = row()
+        .w_full()
+        .gap(t::SPACE_8)
+        .items_center()
+        .child(name)
+        .children(tag)
+        .child(time);
     frame.child(
         row().w_full().gap(m.beside).child(picture).child(
             col()

@@ -9,14 +9,17 @@
 //! in the profile card (it takes `accent-hover`, as the sign-in boards' does). A control
 //! that cannot be used is drawn at half strength; the boards draw no disabled state.
 
+use std::rc::Rc;
+
 use rune::{
-    Align, Color, Cursor, El, Icon, Image, Side, SurfaceFit, TextEdit, Tx, col, el, icon, row,
-    text, text_input,
+    Align, Color, Cursor, El, Icon, Image, Side, Span, SurfaceFit, TextEdit, Tx, col, el, icon,
+    row, text, text_input,
 };
 
 use lumia_client::app::ServerSummary;
 
 use crate::app::State;
+use crate::app::roles::TagTone;
 use crate::tokens::{self as t, Colors, Shadows, icons};
 
 /// The colours and shadows of the window's appearance, handed down the view.
@@ -172,6 +175,57 @@ pub fn tag(words: &str, look: Look) -> El {
         .child(text(words).font(t::TEXT_TAG_SMALL).color(look.c.accent_ink))
 }
 
+/// The larger accent tag (the design system's `lu-tag--md`): "You", "Owner" or "Guest" beside
+/// the name on a profile card.
+pub fn mark(words: &str, look: Look) -> El {
+    el().px(t::TAG_PAD)
+        .py(t::SPACE_2)
+        .radius(t::RADIUS_6)
+        .fill(look.c.accent_soft)
+        .child(text(words).font(t::TEXT_TAG).color(look.c.accent_ink))
+}
+
+/// The ground and ink a tag is drawn in: a role's tone, or the plain chip for a role with no
+/// colour and for a title.
+pub fn tag_colors(tone: TagTone, look: Look) -> (Color, Color) {
+    match tone {
+        TagTone::Tone(name) => t::tone_named(name, look.c),
+        TagTone::Neutral => (look.c.chip, look.c.ink_secondary),
+    }
+}
+
+/// A member's tag beside their name (architecture 7.5): a role on its tone or a title on the
+/// plain chip, one line, cut with an ellipsis where its row has no room. `small` is a member
+/// row's (`lu-tag--sm`); the other a message's and a card's (`lu-tag--md`).
+pub fn role_tag(words: &str, tone: TagTone, small: bool, look: Look) -> El {
+    let (ground, ink) = tag_colors(tone, look);
+    let chip = el().fill(ground).min_w(0.0);
+    let chip = if small {
+        chip.px(t::SPACE_6).py(t::SPACE_2 / 2.0).radius(t::RADIUS_5)
+    } else {
+        chip.px(t::TAG_PAD).py(t::SPACE_2).radius(t::RADIUS_6)
+    };
+    chip.child(
+        text(words)
+            .font(if small { t::TEXT_TAG_ROW } else { t::TEXT_TAG })
+            .color(ink)
+            .truncate(),
+    )
+}
+
+/// A role's colour as a dot, in the ink its tag's words are written in; a ring with nothing
+/// in it for a role with no colour.
+pub fn role_dot(tone: Option<&str>, look: Look) -> El {
+    let dot = el()
+        .size(t::ROLE_DOT, t::ROLE_DOT)
+        .radius(t::ROLE_DOT / 2.0)
+        .a11y_hidden();
+    match tone {
+        Some(tone) => dot.fill(t::tone_named(tone, look.c).1),
+        None => dot.border(1.5, look.c.ink_faint),
+    }
+}
+
 /// `element` with a token's shadow layers. The tokens list them as CSS does, the first on
 /// top, and Rune paints them in the order given, so they go on last first: the current
 /// server's ring is a gap in the rail's colour over a wider ring of the accent.
@@ -230,6 +284,34 @@ pub fn field(
     field_with(key, label, edit, placeholder, None, access, submit, look)
 }
 
+/// [`field`] for a role's name or a title: what is typed past 32 characters is not kept, as
+/// the web's field takes no more.
+pub fn field_of_label(
+    key: impl Into<String>,
+    label: &str,
+    edit: &TextEdit,
+    placeholder: &str,
+    access: impl for<'a> Fn(&'a mut State) -> &'a mut TextEdit + 'static,
+    submit: impl Fn(&mut State, &mut rune::Tx) + 'static,
+    look: Look,
+) -> El {
+    let access = Rc::new(access);
+    let kept = Rc::clone(&access);
+    field_built(
+        key,
+        label,
+        edit,
+        placeholder,
+        None,
+        move |s| access(s),
+        submit,
+        Some(Box::new(move |s: &mut State| {
+            crate::app::role_settings::keep_to_label(kept(s));
+        })),
+        look,
+    )
+}
+
 /// The button at the end of a password field that shows what was typed, and hides it
 /// again: the board's eye, 38 points at `radius-9`.
 pub fn reveal_button(
@@ -281,8 +363,36 @@ pub fn field_with(
     submit: impl Fn(&mut State, &mut rune::Tx) + 'static,
     look: Look,
 ) -> El {
+    field_built(
+        key,
+        label,
+        edit,
+        placeholder,
+        trail,
+        access,
+        submit,
+        None,
+        look,
+    )
+}
+
+/// What a field does after each change to its words.
+type Changed = Option<Box<dyn Fn(&mut State)>>;
+
+#[allow(clippy::too_many_arguments)]
+fn field_built(
+    key: impl Into<String>,
+    label: &str,
+    edit: &TextEdit,
+    placeholder: &str,
+    trail: Option<El>,
+    access: impl for<'a> Fn(&'a mut State) -> &'a mut TextEdit + 'static,
+    submit: impl Fn(&mut State, &mut rune::Tx) + 'static,
+    changed: Changed,
+    look: Look,
+) -> El {
     let c = look.c;
-    let input = text_input(edit, t::TEXT_BODY)
+    let mut input = text_input(edit, t::TEXT_BODY)
         .key(key)
         .single_line()
         .label(label)
@@ -292,6 +402,9 @@ pub fn field_with(
         .w_full()
         .on_edit(access)
         .on_submit(submit);
+    if let Some(changed) = changed {
+        input = input.on_input_change(move |s: &mut State, _: &mut Tx| changed(s));
+    }
     // Focused, the border takes `border-focus` and the `ring-field` glow goes round it. An
     // element draws one ring, so the border's is on a box that lies over the frame's border.
     let mut inner = row()
@@ -443,6 +556,102 @@ pub fn action_button(
     }
 }
 
+/// [`action_button`] for what cannot be undone ("Delete role"): `danger`, 40 high, as wide
+/// as its words.
+pub fn danger_action(
+    key: impl Into<String>,
+    label: &str,
+    enabled: bool,
+    press: impl Fn(&mut State) + 'static,
+    look: Look,
+) -> El {
+    let c = look.c;
+    let button = row()
+        .key(key)
+        .h(t::CONTROL_PANE)
+        .px(t::SPACE_18)
+        .center()
+        .radius(t::RADIUS_12)
+        .fill(c.danger)
+        .role("button")
+        .label(label)
+        .disabled(!enabled)
+        .child(text(label).font(t::TEXT_BUTTON_PANE).color(c.on_accent));
+    if enabled {
+        button
+            .cursor(Cursor::Pointer)
+            .focusable(true)
+            .focus_ring(2.0, 2.0, c.focus)
+            .on_press(press)
+    } else {
+        button.opacity(0.5)
+    }
+}
+
+/// A pane's outlined button in the danger ink ("Kick"): `danger` words in a `danger-line`
+/// edge, on `danger-soft` under the pointer.
+pub fn danger_outline(
+    key: impl Into<String>,
+    words: &str,
+    label: &str,
+    enabled: bool,
+    press: impl Fn(&mut State) + 'static,
+    look: Look,
+) -> El {
+    let c = look.c;
+    let button = row()
+        .key(key)
+        .h(t::CONTROL_PANE)
+        .px(t::SPACE_18)
+        .center()
+        .radius(t::RADIUS_12)
+        .fill(c.surface)
+        .border(1.0, c.danger_line)
+        .role("button")
+        .label(label)
+        .disabled(!enabled)
+        .child(text(words).font(t::TEXT_BUTTON_SECONDARY).color(c.danger));
+    if enabled {
+        button
+            .child(hover_layer(t::RADIUS_12).border(1.0, c.danger))
+            .hover(c.danger_soft)
+            .hover_group()
+            .cursor(Cursor::Pointer)
+            .focusable(true)
+            .focus_ring(2.0, 2.0, c.focus)
+            .on_press(press)
+    } else {
+        button.opacity(0.5)
+    }
+}
+
+/// The design system's text button: its words underlined in the secondary ink, beside what
+/// it changes ("Edit" beside a card's title). `label` names it for assistive technology.
+pub fn text_button(
+    key: impl Into<String>,
+    words: &str,
+    label: &str,
+    press: impl Fn(&mut State) + 'static,
+    look: Look,
+) -> El {
+    let c = look.c;
+    el().key(key)
+        .role("button")
+        .label(label)
+        .cursor(Cursor::Pointer)
+        .focusable(true)
+        .focus_ring(2.0, 2.0, c.focus)
+        .radius(t::RADIUS_6)
+        .on_press(press)
+        .child(
+            text(words)
+                .font(t::TEXT_LINK_SM)
+                .color(c.ink_secondary)
+                .spans([Span::new(0, words.len()).underline(c.underline)])
+                .a11y_hidden(),
+        )
+}
+
 /// A quiet text button: a link in the accent.
 pub fn link_button(
     key: impl Into<String>,
@@ -573,7 +782,13 @@ fn outlined(
         button = button.w_full();
     }
     if let Some(glyph) = glyph {
-        button = button.child(icon(glyph, t::SPACE_18).color(ink));
+        button = if matches!(size, Outlined::Small) {
+            button
+                .gap(t::SPACE_8)
+                .child(icon(glyph, t::SPACE_16).color(ink).group_color(c.ink_field))
+        } else {
+            button.child(icon(glyph, t::SPACE_18).color(ink))
+        };
     }
     // Under the pointer the label of a small one turns `ink-field`, and the border of the
     // others `border-hover-form`: a second border over the first, shown with the hover.
@@ -631,6 +846,26 @@ pub fn small_button(
     look: Look,
 ) -> El {
     outlined(key, None, label, enabled, Outlined::Small, press, look)
+}
+
+/// [`small_button`] with a glyph before its words: "New role", "Add members".
+pub fn small_button_with(
+    key: impl Into<String>,
+    glyph: &'static Icon,
+    label: &str,
+    enabled: bool,
+    press: impl Fn(&mut State, &mut Tx) + 'static,
+    look: Look,
+) -> El {
+    outlined(
+        key,
+        Some(glyph),
+        label,
+        enabled,
+        Outlined::Small,
+        press,
+        look,
+    )
 }
 
 /// A button that is only a glyph, with a name for assistive technology and a tooltip.
@@ -1004,6 +1239,19 @@ pub fn switch(
     press: impl Fn(&mut State) + 'static,
     look: Look,
 ) -> El {
+    switch_where(key, label, on, true, press, look)
+}
+
+/// [`switch`], or one that is shown and not this account's to turn (`enabled` false): at
+/// half strength, taking no press.
+pub fn switch_where(
+    key: impl Into<String>,
+    label: &str,
+    on: bool,
+    enabled: bool,
+    press: impl Fn(&mut State) + 'static,
+    look: Look,
+) -> El {
     let c = look.c;
     // The knob is near white on either ground, as a system's switch's is.
     let knob = if look.dark { c.ink } else { c.surface };
@@ -1015,11 +1263,16 @@ pub fn switch(
         .fill(if on { c.accent } else { c.border_hover })
         .role("switch")
         .label(label)
-        .checked(on)
-        .cursor(Cursor::Pointer)
-        .focusable(true)
-        .focus_ring(2.0, 2.0, c.focus)
-        .on_press(press);
+        .checked(on);
+    let track = if enabled {
+        track
+            .cursor(Cursor::Pointer)
+            .focusable(true)
+            .focus_ring(2.0, 2.0, c.focus)
+            .on_press(press)
+    } else {
+        track.disabled(true).opacity(0.5)
+    };
     let track = if on {
         track.child(el().grow(1.0))
     } else {
@@ -1106,6 +1359,90 @@ pub fn picture_choice(
         .on_press(press)
         .child(ring)
         .child(words)
+}
+
+/// Settings' rows in an outlined box, a rule between each two (the design system's
+/// `SettingsGroup`).
+pub fn settings_group(key: impl Into<String>, rows: Vec<El>, look: Look) -> El {
+    let c = look.c;
+    let mut group = col()
+        .key(key)
+        .w_full()
+        .radius(t::RADIUS_14)
+        .border(1.0, c.line_strong);
+    for (i, setting) in rows.into_iter().enumerate() {
+        group = group.child(if i == 0 {
+            setting
+        } else {
+            setting.border_sides([1.0, 0.0, 0.0, 0.0], c.line)
+        });
+    }
+    group
+}
+
+/// A setting's row: its name over a line on what it does, and its control at the end. The
+/// control says its name to assistive technology itself.
+pub fn setting_row(
+    key: impl Into<String>,
+    name: &str,
+    caption: &str,
+    control: El,
+    look: Look,
+) -> El {
+    let c = look.c;
+    let (strong, quiet) = (c.ink, c.ink_muted);
+    row()
+        .key(key)
+        .w_full()
+        .px(t::SPACE_16)
+        .py(t::SPACE_14)
+        .gap(t::SPACE_16)
+        .items_center()
+        .child(
+            col()
+                .grow(1.0)
+                .min_w(0.0)
+                .gap(t::SPACE_2)
+                .child(text(name).font(t::TEXT_MEMBER).color(strong).a11y_hidden())
+                .child(text(caption).font(t::TEXT_META).color(quiet).wrap()),
+        )
+        .child(control)
+}
+
+/// One of the nine tones to choose (a folder's colour, a role's): a disc of its ground,
+/// ringed in the accent with a tick in its ink when it is the one chosen.
+pub fn tone_swatch(
+    key: impl Into<String>,
+    tone: &'static str,
+    on: bool,
+    press: impl Fn(&mut State) + 'static,
+    look: Look,
+) -> El {
+    let c = look.c;
+    let (ground, ink) = t::tone_named(tone, c);
+    let mut name = tone.to_string();
+    if let Some(first) = name.get_mut(0..1) {
+        first.make_ascii_uppercase();
+    }
+    let swatch = el()
+        .key(key)
+        .size(t::TONE_SWATCH, t::TONE_SWATCH)
+        .radius(t::TONE_SWATCH / 2.0)
+        .fill(ground)
+        .center()
+        .role("radio")
+        .label(name)
+        .checked(on)
+        .cursor(Cursor::Pointer)
+        .focusable(true)
+        .focus_ring(2.0, 2.0, c.focus)
+        .on_press(press);
+    if on {
+        shadowed(swatch, look.shadows.ring_current)
+            .child(icon(&icons::CHECK, t::SPACE_14).color(ink))
+    } else {
+        swatch.border(1.0, c.line_strong)
+    }
 }
 
 /// A surface floating beside the control keyed `anchor`, with a title, a line under it and

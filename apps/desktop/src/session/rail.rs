@@ -73,7 +73,13 @@ impl Session {
         if let Some(pending) = &mut self.rail.pending {
             *pending = rail::tidy(pending, &ids);
         }
+        // Members are dressed by the snapshot (their tags, who this account manages): where
+        // a server's roles or this account's standing there changed, they are read again.
+        let redressed = Self::redressed(self.snapshot.as_ref(), &snapshot);
         self.snapshot = Some(snapshot);
+        for server_id in redressed {
+            self.read_members(&server_id);
+        }
     }
 
     /// Keeps `items` as this account's rail ([`RailUpdate::Arranged`]); the rail shows them

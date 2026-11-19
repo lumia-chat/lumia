@@ -1,8 +1,10 @@
-//! A server's settings (architecture 6.7): its name, its picture and how long it keeps its
-//! messages, changed by its owner or a member whose roles grant `MANAGE_SERVER`. The page is
-//! offered only to them (`ServerSummary::can_manage`, from the account's own membership);
-//! the instance decides all the same. Each card saves on its own and says so, worded as the
-//! web's and the phones'.
+//! A server's settings (architecture 6.7 and 7.5), in sections: Overview (its name, its
+//! picture, the channels newcomers join, how long it keeps its messages and files, and what
+//! the tag beside a name shows), Roles and Members (`role_settings`). A section is offered to
+//! whoever may use it ([`roles::settings_sections`]: Manage server, Manage roles, Manage
+//! members), the page to anyone with at least one, and it opens on the first they have; the
+//! instance decides all the same. Each of Overview's cards saves on its own and says so,
+//! worded as the web's and the phones'; "Tag beside names" is saved as it is chosen.
 //!
 //! Shortening how long messages are kept deletes, at the instance's next daily run and for
 //! everyone, what is older than the new limit; the card says so before it is saved. The
@@ -15,6 +17,7 @@ use rune::{FileDialogOptions, TextEdit, Tx};
 
 use super::State;
 use super::account::picture_refusal;
+use super::roles::{self, Section};
 use crate::session::Failure;
 use crate::session::media::size_words;
 use crate::session::servers::Setting;
@@ -72,7 +75,7 @@ pub struct Saving {
 }
 
 impl Saving {
-    fn started() -> Self {
+    pub(super) fn started() -> Self {
         Self {
             busy: true,
             ..Self::default()
@@ -85,6 +88,11 @@ impl Saving {
 pub struct ServerSettings {
     /// The server the page is open for; none when it is not on screen.
     pub server_id: Option<String>,
+    /// The section shown.
+    pub section: Section,
+    /// "Tag beside names": its save, and the choice on its way to the instance.
+    pub tag: Saving,
+    pub tag_choice: Option<bool>,
     pub name: TextEdit,
     pub name_saving: Saving,
     /// The retention chosen on the page, in days; 0 for ever.
@@ -120,36 +128,60 @@ impl State {
             && self.server_id().is_some()
     }
 
-    /// Opens the settings of the server on screen, from what the snapshot says it is.
+    /// Whether the server on screen has settings this account may use: at least one section.
+    pub fn settings_offered(&self) -> bool {
+        self.server_id()
+            .and_then(|id| self.session.server(id))
+            .is_some_and(|server| !roles::settings_sections(server).is_empty())
+    }
+
+    /// Opens the settings of the server on screen, from what the snapshot says it is, on the
+    /// first section this account has there.
     pub fn open_server_settings(&mut self) {
         let Some(server) = self
             .server_id()
-            .and_then(|id| self.session.servers().iter().find(|s| s.server_id == id))
+            .and_then(|id| self.session.server(id))
             .cloned()
         else {
             return;
         };
+        let sections = roles::settings_sections(&server);
+        let Some(section) = sections.first().copied() else {
+            return;
+        };
         self.close_popover();
         self.close_page();
-        self.load_defaults(&server.server_id);
+        self.roles = super::role_settings::RoleForms::default();
         self.server_forms.settings = ServerSettings {
             server_id: Some(server.server_id.clone()),
+            section,
             name: TextEdit::new(&server.name),
             retention: server.retention_days,
             attachment_retention: server.attachment_retention_days,
             delete_oldest_when_full: server.delete_oldest_when_full,
             ..ServerSettings::default()
         };
-        self.session.load_server_storage(&server.server_id);
+        // Whoever joined since the members were last listed is there to manage and to count.
+        self.session.load_members_of(&server.server_id);
+        // What Overview shows is Manage server's to read.
+        if sections.contains(&Section::Overview) {
+            self.load_defaults(&server.server_id);
+            self.session.load_server_storage(&server.server_id);
+        }
     }
 
     /// Back to the channel the page was opened over.
     pub fn close_server_settings(&mut self) {
-        self.server_forms.settings.server_id = None;
+        if self.server_forms.settings.server_id.take().is_some() {
+            // The card's own form is not the page's: it stays.
+            let card = self.roles.card.take();
+            self.roles = super::role_settings::RoleForms::default();
+            self.roles.card = card;
+        }
     }
 
-    /// The server the page is open for, as the snapshot has it.
-    fn settings_server(&self) -> Option<String> {
+    /// The server the page is open for.
+    pub(super) fn settings_server(&self) -> Option<String> {
         self.server_settings_open()
             .then(|| self.server_forms.settings.server_id.clone())
             .flatten()
@@ -311,6 +343,10 @@ impl State {
             Setting::Picture => &mut form.picture,
             Setting::ShowDeleted => &mut form.show_deleted,
             Setting::Files => &mut form.files_saving,
+            Setting::Tag => {
+                form.tag_choice = None;
+                &mut form.tag
+            }
         };
         *saving = Saving::default();
         match result {
@@ -324,7 +360,7 @@ impl State {
                             form.attachment_retention = server.attachment_retention_days;
                             form.delete_oldest_when_full = server.delete_oldest_when_full;
                         }
-                        Setting::Picture | Setting::ShowDeleted => {}
+                        Setting::Picture | Setting::ShowDeleted | Setting::Tag => {}
                     }
                 }
             }

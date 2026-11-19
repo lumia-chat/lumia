@@ -503,3 +503,98 @@ pub fn syntax(dark: bool) -> SyntaxTheme {
         .with(Syntax::Operator, c.ink_secondary)
         .with(Syntax::Variable, c.ink_body)
 }
+
+// ---- Roles and titles, from the boards of plan step 11 -------------------------------------
+
+/// A tag's room either side of its words (the board's 7).
+pub const TAG_PAD: f32 = SPACE_6 + 1.0;
+/// A member row's tag (10.5 at 700): the count style, half a point smaller.
+pub const TEXT_TAG_ROW: TextStyle = TextStyle {
+    size: TEXT_COUNT.size - 0.5,
+    ..TEXT_COUNT
+};
+/// The widest a tag is beside a name in the member list (125): the board's 62% of the room a
+/// name has there, 202.
+pub const MEMBER_TAG: f32 = SPACE_40 * 3.0 + SPACE_4 + 1.0;
+/// A role's colour as a dot (10).
+pub const ROLE_DOT: f32 = SPACE_10;
+/// The sections beside a settings page (196 wide), and one of them (36 tall).
+pub const SECTIONS_WIDTH: f32 = SPACE_40 * 5.0 - SPACE_4;
+pub const SECTION_ITEM: f32 = MENU_ITEM_HEIGHT;
+/// A section's glyph (17), a row's chevron or lock (15), and the glyph of "Not shown as
+/// tag" (13).
+pub const SECTION_GLYPH: f32 = SPACE_18 - 1.0;
+pub const ROW_END_GLYPH: f32 = SPACE_16 - 1.0;
+pub const META_GLYPH: f32 = SPACE_14 - 1.0;
+/// The widest a settings section's content is drawn (640).
+pub const SETTINGS_PAGE: f32 = SPACE_40 * 16.0;
+/// A role's row (at least 56 tall) and the handle it is dragged by (34 wide).
+pub const ROLE_ROW: f32 = SPACE_40 + SPACE_16;
+pub const ROLE_HANDLE: f32 = AVATAR_MD;
+/// The line where a dragged role would land (3 tall).
+pub const ROLE_LINE: f32 = SPACE_2 + 1.0;
+/// The dashes of a lifted role's place, and the gaps between them.
+pub const ROLE_DASH: [f32; 2] = [SPACE_4, SPACE_4 - 1.0];
+/// A style on the line the step 11 boards read it at: 1.6 of its size, which is what their
+/// text takes wherever a style names no line of its own. Rune's own is 1.25, which draws a
+/// role's row six points shorter than its board.
+pub const fn read(style: TextStyle) -> TextStyle {
+    TextStyle {
+        line_height: style.size * 1.6,
+        ..style
+    }
+}
+/// A role's name in its row (14.5 at 600): the secondary button's style.
+pub const TEXT_ROLE: TextStyle = read(TEXT_BUTTON_SECONDARY);
+/// A permission's line under its name (12.5 at 400, read at 1.4).
+pub const TEXT_SET_CAPTION: TextStyle = TextStyle {
+    line_height: TEXT_META.size * 1.4,
+    ..TEXT_META
+};
+/// A line under a field or a heading (12.5 at 400, read at 1.45): the meta style on a line
+/// of 18.
+pub const TEXT_HINT: TextStyle = TextStyle {
+    line_height: SPACE_18,
+    ..TEXT_META
+};
+/// "None" after the nine swatches (12 at 600): the section style, half a point smaller.
+pub const TEXT_SWATCH_NONE: TextStyle = TextStyle {
+    size: TEXT_SECTION.size - 0.5,
+    ..TEXT_SECTION
+};
+/// A question asked first (380 wide), a small form in a card's place (340) and a role's menu
+/// (220).
+pub const ASK_WIDTH: f32 = SPACE_40 * 9.0 + SPACE_10 * 2.0;
+pub const POP_WIDTH: f32 = SPACE_40 * 8.0 + SPACE_10 * 2.0;
+pub const CONTEXT_MENU_WIDTH: f32 = SPACE_40 * 5.0 + SPACE_10 * 2.0;
+/// The roles of a member's row in Members (at most 320 wide), and the room its editing state
+/// leaves under the avatar (14, the avatar's 34 and 12).
+pub const ROSTER_ROLES: f32 = SPACE_40 * 8.0;
+pub const ROSTER_INDENT: f32 = SPACE_14 + AVATAR_MD + SPACE_12;
+/// The preview's avatar in a role's editor (28).
+pub const AVATAR_PREVIEW: f32 = AVATAR_SM;
+
+/// Administrator's row in a role's editor, set apart on amber: the board's amber at 60% over
+/// the surface with an edge of the amber ink at 22%, its words in the amber ink.
+pub fn apart(c: &Colors) -> Caution {
+    Caution {
+        fill: Color {
+            a: 0.6,
+            ..c.tone_amber
+        },
+        edge: Color {
+            a: 0.22,
+            ..c.tone_amber_ink
+        },
+        ink: c.tone_amber_ink,
+        glyph: c.tone_amber_ink,
+    }
+}
+
+/// Six dots: what a role's row is dragged by. Not among the glyphs of `assets/icons` yet; the
+/// web's `Grip`, drawn the same.
+pub static GRIP: rune::Icon = rune::Icon {
+    name: "lumia-grip",
+    view: 16.0,
+    body: "<g fill=\"currentColor\"><circle cx=\"5.5\" cy=\"3.5\" r=\"1.25\"/><circle cx=\"10.5\" cy=\"3.5\" r=\"1.25\"/><circle cx=\"5.5\" cy=\"8\" r=\"1.25\"/><circle cx=\"10.5\" cy=\"8\" r=\"1.25\"/><circle cx=\"5.5\" cy=\"12.5\" r=\"1.25\"/><circle cx=\"10.5\" cy=\"12.5\" r=\"1.25\"/></g>",
+};
