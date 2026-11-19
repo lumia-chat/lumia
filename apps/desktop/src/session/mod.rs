@@ -114,6 +114,12 @@ pub enum Update {
         server_id: String,
         members: Vec<MemberSummary>,
     },
+    /// A server's members could not be read ([`Session::load_members_of`]): what is held of
+    /// them stays, and nothing is said on screen.
+    MembersUnread {
+        server_id: String,
+        failure: Failure,
+    },
     /// A public profile looked up for someone the servers do not list; `None` when the
     /// instance would not show it.
     Profile {
@@ -264,6 +270,50 @@ pub struct Pending {
     pub failed: Option<String>,
 }
 
+/// The requests out for servers' member lists: one at a time for a server. A list is every
+/// page of it (fifty requests for a server of ten thousand), and what asks for one comes in
+/// bursts: someone joining posts a notice in each default channel, and each notice asks.
+#[derive(Debug, Default)]
+struct MemberFetches {
+    /// The servers being asked about, and whether each is to be asked once more when its
+    /// answer comes: something changed while the request was out, which the pages already
+    /// read may have missed.
+    running: HashMap<String, bool>,
+}
+
+impl MemberFetches {
+    /// A server's members are wanted. True when a request is to go out now; while one is
+    /// out it is noted instead, however many times, and goes once when that one ends.
+    fn want(&mut self, server_id: &str) -> bool {
+        match self.running.get_mut(server_id) {
+            Some(again) => {
+                *again = true;
+                false
+            }
+            None => {
+                self.running.insert(server_id.to_string(), false);
+                true
+            }
+        }
+    }
+
+    /// A server's request ended, with a list or without. True when another is to go out,
+    /// which is then the one running.
+    fn ended(&mut self, server_id: &str) -> bool {
+        match self.running.get_mut(server_id) {
+            Some(again) if *again => {
+                *again = false;
+                true
+            }
+            Some(_) => {
+                self.running.remove(server_id);
+                false
+            }
+            None => false,
+        }
+    }
+}
+
 /// Where finished work is posted from runtime threads.
 #[derive(Clone)]
 struct Mailbox {
@@ -304,6 +354,8 @@ pub struct Session {
     /// Whether the members shown came from the instance since this launch, not from what
     /// was kept.
     members_fresh: bool,
+    /// The requests out for servers' member lists.
+    member_fetches: MemberFetches,
     reach: Reach,
     /// Whether this device holds an identity, as last read from the stores.
     holds_identity: bool,
@@ -402,6 +454,7 @@ impl Session {
             loop_started: None,
             loop_held: false,
             members_fresh: false,
+            member_fetches: MemberFetches::default(),
             reach: Reach::default(),
             holds_identity: false,
             watching: Vec::new(),
@@ -530,6 +583,11 @@ impl Session {
         };
         for server in &snapshot.servers {
             let members = app.kept_members(&server.server_id).unwrap_or_default();
+            // A server never listed has no list here, which is not a list of nobody: what
+            // counts its members (who holds a role) says nothing until one is read.
+            if members.is_empty() {
+                continue;
+            }
             for member in &members {
                 self.people
                     .insert(member.account_id.clone(), member.clone());
@@ -568,6 +626,8 @@ impl Session {
         self.connection = Connection::Idle;
         self.people.clear();
         self.members.clear();
+        // An answer still on its way belongs to the account that left.
+        self.member_fetches = MemberFetches::default();
         self.presence.clear();
         self.typing.clear();
         self.forget_pictures();
@@ -702,27 +762,47 @@ impl Session {
         }
     }
 
-    fn load_members(&self, servers: &[ServerSummary]) {
+    fn load_members(&mut self, servers: &[ServerSummary]) {
         for server in servers {
             self.load_members_of(&server.server_id);
         }
     }
 
     /// Asks the instance for a server's members again ([`Update::Members`]): someone joined
-    /// or left it, or its settings are opened to manage them. A list that could not be read
-    /// names no server, and what is held stays.
-    pub fn load_members_of(&self, server_id: &str) {
+    /// or left it, or its settings are opened to manage them. One request is out for a server
+    /// at a time: asked again while it is, the list is read once more when that one has
+    /// answered, however often it was asked meanwhile. A list that could not be read is
+    /// [`Update::MembersUnread`], and what is held stays.
+    pub fn load_members_of(&mut self, server_id: &str) {
+        if self.app.is_some() && self.member_fetches.want(server_id) {
+            self.fetch_members(server_id);
+        }
+    }
+
+    /// Whether a request for a server's members is out.
+    pub fn loading_members(&self, server_id: &str) -> bool {
+        self.member_fetches.running.contains_key(server_id)
+    }
+
+    fn fetch_members(&self, server_id: &str) {
         let Some(app) = &self.app else { return };
         let (app, server_id) = (Arc::clone(app), server_id.to_string());
         self.task(async move {
             match app.members(&server_id, "").await {
                 Ok(members) => Update::Members { server_id, members },
-                Err(_) => Update::Members {
-                    server_id: String::new(),
-                    members: Vec::new(),
+                Err(error) => Update::MembersUnread {
+                    server_id,
+                    failure: Failure::from(error),
                 },
             }
         });
+    }
+
+    /// A request for a server's members answered: the one asked for meanwhile goes out.
+    fn members_answered(&mut self, server_id: &str) {
+        if self.member_fetches.ended(server_id) {
+            self.fetch_members(server_id);
+        }
     }
 
     /// Reads the open conversation's newest messages from the local store, drops the
@@ -1346,7 +1426,6 @@ impl Session {
                     ));
                 }
             }
-            Update::Members { server_id, .. } if server_id.is_empty() => {}
             Update::Members { server_id, members } => {
                 for member in members {
                     self.people
@@ -1356,7 +1435,9 @@ impl Session {
                 self.want_pictures();
                 // The rows already drawn name these people and carry their tags.
                 self.revision += 1;
+                self.members_answered(server_id);
             }
+            Update::MembersUnread { server_id, .. } => self.members_answered(server_id),
             Update::Profile {
                 account_id,
                 profile,

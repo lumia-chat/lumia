@@ -388,3 +388,99 @@ fn private_channels_have_a_section_of_their_own() {
     assert!(rt.find("private-channels").is_some());
     assert!(words(&rt).contains("Private"));
 }
+
+// ---- A server's members, asked of the instance ----------------------------------------------
+
+/// The instance's notice in `channel` that someone joined it.
+fn joined(channel: &str, seq: u64) -> Update {
+    use lumia_client::app::{AppEvent, EventSummary, MessageSummary};
+    Update::Gateway(AppEvent::Applied {
+        channel_id: channel.into(),
+        events: vec![EventSummary {
+            seq,
+            kind: "message_created".into(),
+            message: Some(MessageSummary {
+                message_id: format!("joined-{channel}-{seq}"),
+                channel_id: channel.into(),
+                seq,
+                author_account_id: "alan".into(),
+                body: String::new(),
+                created_at_micros: 0,
+                deleted: false,
+                notice: "joined".into(),
+                notice_account_id: "alan".into(),
+                reply: None,
+                mentions: Vec::new(),
+                reactions: Vec::new(),
+                mentions_me: false,
+                edited: false,
+                attachments: Vec::new(),
+                cards: Vec::new(),
+            }),
+        }],
+    })
+}
+
+/// Waits until no request for `server`'s members is out, and says how many came back
+/// unread meanwhile. Nothing answers at the test's address, so every request does.
+fn unread_until_quiet(state: &mut State, server: &str) -> usize {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
+    let mut unread = 0;
+    loop {
+        unread += state
+            .session
+            .poll()
+            .iter()
+            .filter(|update| {
+                matches!(update, Update::MembersUnread { server_id, .. } if server_id == server)
+            })
+            .count();
+        if !state.session.loading_members(server) {
+            return unread;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "a request for {server}'s members never came back"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn a_burst_of_joins_asks_for_a_servers_members_once_and_once_more() {
+    let mut state = opened();
+    state.receive(&Update::SignedIn(Ok(())));
+    state.receive(&Update::Snapshot(Ok(snapshot())));
+    // The snapshot asked for each server's members, one request a server.
+    assert!(state.session.loading_members("acme") && state.session.loading_members("garden"));
+    assert_eq!(unread_until_quiet(&mut state, "acme"), 1);
+    // A list that could not be read says so as itself, and one that is held stays.
+    state.receive(&Update::Members {
+        server_id: "acme".into(),
+        members: vec![
+            member("me", "ada", "Ada Lovelace"),
+            member("grace", "grace", "Grace Hopper"),
+        ],
+    });
+    assert!(!state.session.loading_members("acme"));
+
+    // Three people join Acme, each with a notice in both of its channels: six notices,
+    // each of which wants the server's members read again.
+    for seq in 1..=3 {
+        state.receive(&joined("general", seq));
+        state.receive(&joined("design", seq));
+    }
+    assert!(state.session.loading_members("acme"));
+    // One request was out, and one more went when it ended, for all that was asked meanwhile.
+    assert_eq!(unread_until_quiet(&mut state, "acme"), 2);
+    assert_eq!(
+        state.session.members["acme"].len(),
+        2,
+        "what was held stays"
+    );
+
+    // Quiet again, the next join asks at once.
+    state.receive(&joined("general", 4));
+    assert!(state.session.loading_members("acme"));
+    assert_eq!(unread_until_quiet(&mut state, "acme"), 1);
+}

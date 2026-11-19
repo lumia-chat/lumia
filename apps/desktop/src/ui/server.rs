@@ -657,14 +657,11 @@ pub(super) fn member_row(
             .shrink()
             .min_w(0.0),
     );
-    // Their tag in this server (architecture 7.5), from its own list of them: a row drawn
-    // from another list (a channel's members) names the same person. This account with no
-    // tag is "You", as the web has it.
-    let tagged = s
-        .session
-        .tag_in(&server.server_id, &member.account_id)
-        .or(member.tag.as_ref());
-    let tag_shown = roles::tag_of(tagged);
+    // Their tag in this server (architecture 7.5), from its own list of them and from nowhere
+    // else: the record this row was handed may be another server's (whoever listed the
+    // person last), whose tag is that server's to show. This account with no tag is "You",
+    // as the web has it.
+    let tag_shown = roles::tag_of(s.session.tag_in(&server.server_id, &member.account_id));
     if tag_shown.is_none() && member.account_id == s.session.me() {
         named = named.child(tag("You", look));
     }

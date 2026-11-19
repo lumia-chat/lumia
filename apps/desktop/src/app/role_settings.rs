@@ -466,10 +466,22 @@ impl State {
             .save_role(&server_id, editor.role_id.as_deref(), role);
     }
 
-    /// How many members hold a role, once the server's members are known.
-    pub fn holders_of(&self, role: &RoleSummary) -> Option<usize> {
+    /// The members of the server whose settings are open, once they are known: none while
+    /// its list has not been read (still on its way, or it could not be), and none for a list
+    /// with nobody in it, which no server's is, this account being in it.
+    pub fn members_known(&self) -> Option<&[MemberSummary]> {
         let id = self.settings_server()?;
-        roles::holders(role, self.session.members.get(&id).map(Vec::as_slice))
+        self.session
+            .members
+            .get(&id)
+            .map(Vec::as_slice)
+            .filter(|all| !all.is_empty())
+    }
+
+    /// How many members hold a role; none while the server's members are not known, which
+    /// is not the same as nobody holding it.
+    pub fn holders_of(&self, role: &RoleSummary) -> Option<usize> {
+        roles::holders(role, self.members_known())
     }
 
     // ---- Deleting -----------------------------------------------------------------------
@@ -661,7 +673,7 @@ impl State {
 
     /// "Add members": the server's members who do not hold the role in the editor.
     pub fn open_add_holders(&mut self) {
-        if self.edited_role().is_none() {
+        if self.edited_role().is_none() || self.members_known().is_none() {
             return;
         }
         self.roles.adding = AddHolders::default();

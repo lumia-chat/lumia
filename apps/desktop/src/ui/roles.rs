@@ -643,7 +643,7 @@ fn editor(s: &State, server: &ServerSummary, look: Look) -> El {
     }
     page = page.child(permissions(s, server, look));
     if let Some(role) = role.filter(|_| !everyone) {
-        page = page.child(holders(s, server, role, look)).child(
+        page = page.child(holders(s, role, look)).child(
             col()
                 .w_full()
                 .gap(t::SPACE_10)
@@ -872,41 +872,43 @@ fn permissions(s: &State, server: &ServerSummary, look: Look) -> El {
     part
 }
 
-/// Who holds the role, each with the way to take it from them, and "Add members".
-fn holders(s: &State, server: &ServerSummary, role: &RoleSummary, look: Look) -> El {
+/// Who holds the role, each with the way to take it from them, and "Add members". While the
+/// server's members are not known (`State::members_known`) it is the heading alone, with no
+/// count and nobody to add: "Nobody holds this role yet." would be a guess.
+fn holders(s: &State, role: &RoleSummary, look: Look) -> El {
     let c = look.c;
-    let held: Vec<&MemberSummary> = s
-        .session
-        .members
-        .get(&server.server_id)
-        .map(|all| {
-            all.iter()
-                .filter(|m| m.role_ids.contains(&role.role_id))
-                .collect()
-        })
-        .unwrap_or_default();
+    let known = s.members_known();
+    let held: Vec<&MemberSummary> = known
+        .unwrap_or_default()
+        .iter()
+        .filter(|m| m.role_ids.contains(&role.role_id))
+        .collect();
     let removing = s.roles.editor.as_ref().and_then(|e| e.removing.as_deref());
+    let mut titled = row()
+        .grow(1.0)
+        .min_w(0.0)
+        .gap(t::SPACE_6)
+        .items_center()
+        .child(heading("Members with this role", look));
+    if known.is_some() {
+        titled = titled.child(count(held.len(), "hold it", look));
+    }
     let head = row()
         .w_full()
         .gap(t::SPACE_16)
         .items_center()
-        .child(
-            row()
-                .grow(1.0)
-                .min_w(0.0)
-                .gap(t::SPACE_6)
-                .items_center()
-                .child(heading("Members with this role", look))
-                .child(count(held.len(), "hold it", look)),
-        )
+        .child(titled)
         .child(small_button_with(
             ADD_HOLDERS,
             &icons::PLUS,
             "Add members",
-            true,
+            known.is_some(),
             |s, _| s.open_add_holders(),
             look,
         ));
+    if known.is_none() {
+        return col().w_full().gap(t::SPACE_10).child(head);
+    }
     let mut list = col()
         .key("role-holders")
         .w_full()
@@ -1129,10 +1131,9 @@ pub fn delete_role(s: &State, look: Look) -> Option<El> {
 /// "Add members": the server's members who do not hold the role in the editor, ticked and
 /// given it together. Guests are not among them, being given no roles.
 pub fn add_holders(s: &State, look: Look) -> Option<El> {
-    let server = s.settings_summary()?;
     let role = s.edited_role()?;
     let form = &s.roles.adding;
-    let all = s.session.members.get(&server.server_id)?;
+    let all = s.members_known()?;
     let mut candidates: Vec<&MemberSummary> = roles::searched(all, &form.filter.text)
         .into_iter()
         .filter(|m| !m.guest && !m.role_ids.contains(&role.role_id))

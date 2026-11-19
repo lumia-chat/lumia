@@ -684,6 +684,7 @@ impl State {
             Update::Read(_)
             | Update::Rail(_)
             | Update::Members { .. }
+            | Update::MembersUnread { .. }
             | Update::Older { .. }
             | Update::Profile { .. }
             | Update::SignedOut => {}

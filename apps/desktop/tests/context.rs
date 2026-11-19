@@ -334,6 +334,59 @@ fn the_menu_offers_what_the_card_would() {
 }
 
 #[test]
+fn whether_someone_takes_server_dms_is_read_from_the_server_on_screen() {
+    // Grace turned server DMs off in Garden alone, and Garden's list is the one read last:
+    // what is held of her across servers says off.
+    let mut rt = runtime(signed_in());
+    rt.update(|s, _| {
+        let mut grace = member("grace", "grace", "Grace Hopper");
+        grace.server_dms_off = true;
+        s.receive(&Update::Members {
+            server_id: "garden".into(),
+            members: vec![member("me", "ada", "Ada Lovelace"), grace],
+        });
+        s.session
+            .channel_members
+            .insert("plots".into(), vec!["me".into(), "grace".into()]);
+    });
+    settle(&mut rt);
+
+    // In Acme she takes them: her menu and her card offer one.
+    right_click(&mut rt, "member-grace");
+    assert!(rt.find("person-message").is_some());
+    press(&mut rt, "person-view");
+    assert!(rt.find("card-message").is_some());
+    assert!(!words(&rt).contains("Doesn’t take messages here"));
+    press(&mut rt, "card-close");
+
+    // In Garden she does not.
+    rt.update(|s, _| s.select_server("garden"));
+    settle(&mut rt);
+    right_click(&mut rt, "member-grace");
+    assert!(rt.find("person-message").is_none());
+    assert!(rt.find("person-message-privately").is_some());
+    press(&mut rt, "person-view");
+    assert!(rt.find("card-message").is_none());
+    assert!(words(&rt).contains("Doesn’t take messages here"));
+    press(&mut rt, "card-close");
+
+    // And the other way about: Acme's list read again after Garden's, she still takes none
+    // in Garden, where the instance would refuse one.
+    rt.update(|s, _| {
+        s.receive(&Update::Members {
+            server_id: "acme".into(),
+            members: vec![
+                member("me", "ada", "Ada Lovelace"),
+                member("grace", "grace", "Grace Hopper"),
+            ],
+        });
+    });
+    settle(&mut rt);
+    right_click(&mut rt, "member-grace");
+    assert!(rt.find("person-message").is_none());
+}
+
+#[test]
 fn a_messages_author_has_the_persons_menu_and_not_the_messages() {
     let mut rt = runtime(signed_in());
     right_click(&mut rt, "avatar-m1");

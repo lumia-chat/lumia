@@ -420,17 +420,23 @@ pub fn administrator_question(
     lines
 }
 
-/// What is asked before a role is deleted: the lines under "Delete Moderator?".
+/// What is asked before a role is deleted: the lines under "Delete Moderator?". Who holds it
+/// is said only when it is known: with the members still being read, or not read at all,
+/// nothing is said of holders, since "nobody" would be a guess about a role forty may hold.
 pub fn delete_question(held: Option<usize>) -> Vec<String> {
-    let first = match held {
-        None | Some(0) => "Nobody holds this role.".to_string(),
-        Some(1) => "1 member holds this role. They lose what it allowed.".to_string(),
-        Some(n) => format!(
+    let holders = match held {
+        None => None,
+        Some(0) => Some("Nobody holds this role.".to_string()),
+        Some(1) => Some("1 member holds this role. They lose what it allowed.".to_string()),
+        Some(n) => Some(format!(
             "{} members hold this role. They lose what it allowed.",
             grouped(n)
-        ),
+        )),
     };
-    vec![first, "This can’t be undone.".to_string()]
+    holders
+        .into_iter()
+        .chain(["This can’t be undone.".to_string()])
+        .collect()
 }
 
 fn field(failure: &Failure) -> Option<&str> {
@@ -444,7 +450,7 @@ pub fn role_refusal(failure: &Failure, server_name: &str) -> String {
         ("ALREADY_EXISTS", _) => format!("Another role in {server_name} has that name."),
         ("NOT_FOUND", _) => "That role is gone. Someone deleted it.".into(),
         ("INVALID_ARGUMENT", Some("name")) => {
-            "A role’s name is 1 to 32 characters, and can’t be “everyone”.".into()
+            "A role’s name is 1 to 32 characters on one line, with no hidden characters, and can’t be “everyone”.".into()
         }
         ("INVALID_ARGUMENT", Some("color")) => "A role’s colour is one of the nine, or none.".into(),
         ("INVALID_ARGUMENT", Some("role_ids")) => {
@@ -464,7 +470,11 @@ pub fn member_refusal(failure: &Failure) -> String {
         ("NOT_FOUND", _) => "They are no longer a member.".into(),
         ("FAILED_PRECONDITION", _) => "A member can’t hold that many roles.".into(),
         ("INVALID_ARGUMENT", Some("title")) => {
-            "A title is up to 32 characters, on one line.".into()
+            "A title is up to 32 characters on one line, with no hidden characters.".into()
+        }
+        // The one limit on these calls: a member's own title, ten changes an hour in a server.
+        ("RATE_LIMITED", _) => {
+            "You’ve changed your title too many times this hour. Try again later.".into()
         }
         _ => failure.message.clone(),
     }
@@ -787,7 +797,16 @@ mod tests {
             delete_question(Some(1))[0],
             "1 member holds this role. They lose what it allowed."
         );
-        assert_eq!(delete_question(Some(0))[0], "Nobody holds this role.");
+        assert_eq!(
+            delete_question(Some(0)),
+            ["Nobody holds this role.", "This can’t be undone."]
+        );
+    }
+
+    #[test]
+    fn a_role_whose_holders_are_not_known_is_not_said_to_have_none() {
+        // The members still being read, or not read at all: the one line, nothing of holders.
+        assert_eq!(delete_question(None), ["This can’t be undone."]);
     }
 
     // ---- a member ----
@@ -948,9 +967,9 @@ mod tests {
             role_refusal(&refused("ALREADY_EXISTS", None), "Acme"),
             "Another role in Acme has that name."
         );
-        assert!(
-            role_refusal(&refused("INVALID_ARGUMENT", Some("name")), "Acme")
-                .contains("1 to 32 characters")
+        assert_eq!(
+            role_refusal(&refused("INVALID_ARGUMENT", Some("name")), "Acme"),
+            "A role’s name is 1 to 32 characters on one line, with no hidden characters, and can’t be “everyone”."
         );
         assert!(
             role_refusal(&refused("INVALID_ARGUMENT", Some("role_ids")), "Acme")
@@ -973,8 +992,14 @@ mod tests {
             member_refusal(&refused("NOT_FOUND", None)),
             "They are no longer a member."
         );
-        assert!(
-            member_refusal(&refused("INVALID_ARGUMENT", Some("title"))).contains("32 characters")
+        assert_eq!(
+            member_refusal(&refused("INVALID_ARGUMENT", Some("title"))),
+            "A title is up to 32 characters on one line, with no hidden characters."
+        );
+        // A member's own title, changed more than ten times in an hour.
+        assert_eq!(
+            member_refusal(&refused("RATE_LIMITED", None)),
+            "You’ve changed your title too many times this hour. Try again later."
         );
         let nope = Failure {
             message: "nope".into(),

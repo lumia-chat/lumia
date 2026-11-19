@@ -266,11 +266,14 @@ pub fn channel_members(
         .get(&channel.channel_id)
         .cloned()
         .unwrap_or_default();
+    // Each as this server's own list has them; someone it does not list (it is still being
+    // read) as they are known elsewhere, for their name and picture alone.
     let mut people: Vec<MemberSummary> = ids
         .iter()
         .map(|id| {
             s.session
-                .person(id)
+                .member_in(&server.server_id, id)
+                .or_else(|| s.session.person(id))
                 .cloned()
                 .unwrap_or_else(|| MemberSummary {
                     account_id: id.clone(),

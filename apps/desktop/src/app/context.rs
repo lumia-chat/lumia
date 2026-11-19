@@ -173,15 +173,17 @@ impl State {
         self.message_person_here();
     }
 
-    /// How this account can message `account_id` from where the shell is.
+    /// How this account can message `account_id` from where the shell is. Whether they take
+    /// server DMs is theirs to say in each server, so it is read from the list of the server
+    /// on screen ([`Session::member_in`]) and never from what another server said of them;
+    /// someone that list does not have is offered one, and the instance decides.
+    ///
+    /// [`Session::member_in`]: crate::session::Session::member_in
     pub fn ways_to(&self, account_id: &str) -> Ways {
-        let server = self
-            .server_id()
-            .and_then(|id| self.session.servers().iter().find(|s| s.server_id == id));
-        let off = self
-            .session
-            .person(account_id)
-            .is_some_and(|p| p.server_dms_off);
+        let server = self.server_id().and_then(|id| self.session.server(id));
+        let off = server
+            .and_then(|s| self.session.member_in(&s.server_id, account_id))
+            .is_some_and(|member| member.server_dms_off);
         Ways {
             in_server: self.server_id().is_some(),
             here: !off && server.is_some_and(|s| s.can_start_dms),

@@ -505,6 +505,79 @@ fn deleting_a_role_asks_first_and_says_how_many_hold_it() {
     assert!(!listed(&rt).contains(&"Engineering".to_string()));
 }
 
+/// The lines under "Delete Engineering?", asked from the role's editor.
+fn delete_lines(rt: &mut Runtime<State>) -> Vec<String> {
+    press(rt, "delete-role");
+    assert_eq!(rt.state.popover, Some(Popover::DeleteRole));
+    let lines = rt
+        .elements()
+        .into_iter()
+        .filter(|e| e.path.contains("/delete-role-question/"))
+        .filter_map(|e| e.text)
+        .filter(|text| !["Cancel", "Delete role"].contains(&text.as_str()))
+        .collect();
+    press(rt, "delete-role-question-cancel");
+    lines
+}
+
+#[test]
+fn a_role_whose_holders_are_not_known_is_not_said_to_have_none() {
+    let mut rt = seen_by("ryan");
+    open(&mut rt, "roles");
+    let eng = format!("role-open-{}", role_id("eng"));
+
+    // The server's members are not read yet (still on their way, or they could not be):
+    // two hold Engineering, and nothing here may say that nobody does.
+    let mut members = rt.state.session.members.get(ACME).cloned().unwrap();
+    rt.update(|s, _| {
+        s.session.members.remove(ACME);
+    });
+    settle(&mut rt);
+    assert_eq!(label_of(&rt, &eng), "Engineering");
+    press(&mut rt, &eng);
+    assert_eq!(
+        delete_lines(&mut rt),
+        ["Delete Engineering?", "This can’t be undone."]
+    );
+    let shown = words(&rt);
+    assert!(!shown.contains("Nobody holds this role"), "{shown}");
+    assert!(!shown.contains("hold it"), "{shown}");
+    // Nor is anyone offered to add, from a list that is not there.
+    press(&mut rt, "add-holders");
+    assert_eq!(rt.state.popover, None);
+
+    // A list with nobody in it is no server's (this account is in it): not known either.
+    rt.update(|s, _| {
+        s.session.members.insert(ACME.into(), Vec::new());
+    });
+    settle(&mut rt);
+    assert_eq!(
+        delete_lines(&mut rt),
+        ["Delete Engineering?", "This can’t be undone."]
+    );
+
+    // Read, and nobody holds it: said, then that it can't be undone.
+    for member in &mut members {
+        member.role_ids.retain(|id| *id != role_id("eng"));
+    }
+    rt.update(move |s, _| {
+        s.receive(&Update::Members {
+            server_id: ACME.into(),
+            members,
+        });
+    });
+    settle(&mut rt);
+    assert_eq!(
+        delete_lines(&mut rt),
+        [
+            "Delete Engineering?",
+            "Nobody holds this role.",
+            "This can’t be undone."
+        ]
+    );
+    assert!(words(&rt).contains("Nobody holds this role yet."));
+}
+
 #[test]
 fn an_editor_closes_when_someone_else_deletes_its_role() {
     let mut rt = seen_by("ryan");
@@ -819,7 +892,10 @@ fn a_members_row_opens_to_their_roles_title_and_kick_and_saves_what_changed() {
             result: Err(refused("INVALID_ARGUMENT", Some("title"))),
         },
     );
-    assert!(words(&rt).contains("A title is up to 32 characters, on one line."));
+    assert!(
+        words(&rt)
+            .contains("A title is up to 32 characters on one line, with no hidden characters.")
+    );
     assert!(
         rt.state.roles.member.is_some(),
         "a refusal leaves the row open"
@@ -1014,6 +1090,55 @@ fn a_role_is_the_tag_beside_a_name_in_messages_and_the_member_list() {
 }
 
 #[test]
+fn a_tag_comes_only_from_the_list_of_the_server_on_screen() {
+    let mut state = opened();
+    acme(&mut state, &Acme::seen_by("ryan"));
+    // Leo's one role in Acme is not shown as a tag. Design Guild, whose list is read after
+    // Acme's, has him as its Admin: what is held of him across servers is now that record.
+    let mut elsewhere = state
+        .session
+        .member_in(ACME, &person_id("leo"))
+        .cloned()
+        .unwrap();
+    elsewhere.tag = Some(TagSummary {
+        label: "Admin".into(),
+        color: "indigo".into(),
+    });
+    state.receive(&Update::Members {
+        server_id: "guild".into(),
+        members: vec![elsewhere],
+    });
+    let mut rt = runtime(state);
+    // #general's members, beside it: no tag of another server's.
+    assert_eq!(
+        label_of(&rt, &format!("member-{}", person_id("leo"))),
+        "Leo Martins, offline"
+    );
+
+    // Maya's roles are taken from her in Acme. Its list has her without a tag from then,
+    // and her row follows it, whatever was held of her before.
+    assert_eq!(
+        label_of(&rt, &format!("member-{}", person_id("maya"))),
+        "Maya Chen, Admin, online"
+    );
+    let mut maya = member(&rt, "maya");
+    maya.role_ids.clear();
+    maya.tag = None;
+    answer(
+        &mut rt,
+        RoleUpdate::Member {
+            server_id: ACME.into(),
+            account_id: person_id("maya"),
+            result: Ok(maya),
+        },
+    );
+    assert_eq!(
+        label_of(&rt, &format!("member-{}", person_id("maya"))),
+        "Maya Chen, online"
+    );
+}
+
+#[test]
 fn a_title_is_the_tag_where_the_server_shows_titles_and_nothing_stands_in_for_one() {
     let mut state = opened();
     acme(
@@ -1130,6 +1255,82 @@ fn a_member_with_no_title_is_offered_one_on_their_own_card() {
         .and_then(|e| e.text);
     assert_eq!(title.as_deref(), Some("Designer"));
     assert_eq!(label_of(&rt, "card-edit-title"), "Edit title");
+}
+
+#[test]
+fn a_title_the_instance_refuses_is_said_where_it_was_typed() {
+    let too_often = "You’ve changed your title too many times this hour. Try again later.";
+    let hidden = "A title is up to 32 characters on one line, with no hidden characters.";
+
+    // On this account's own card: the eleventh change in an hour, then a title with a mark
+    // nobody can see in it.
+    let mut rt = seen_by("sam");
+    card(&mut rt, "sam");
+    press(&mut rt, "card-edit-title");
+    rt.update(|s, _| s.roles.card_title().replace_text("Backend"));
+    settle(&mut rt);
+    for (refusal, said) in [
+        (refused("RATE_LIMITED", None), too_often),
+        (refused("INVALID_ARGUMENT", Some("title")), hidden),
+    ] {
+        press(&mut rt, "card-form-save");
+        assert!(rt.state.roles.card.as_ref().unwrap().member.busy);
+        answer(
+            &mut rt,
+            RoleUpdate::Member {
+                server_id: ACME.into(),
+                account_id: person_id("sam"),
+                result: Err(refusal),
+            },
+        );
+        // The form stays, with what was typed and why it was not taken.
+        assert_eq!(rt.state.popover, Some(Popover::CardTitle));
+        assert_eq!(
+            rt.state.roles.card.as_ref().unwrap().member.title.text,
+            "Backend"
+        );
+        assert!(words(&rt).contains(said), "{}", words(&rt));
+    }
+
+    // And in this account's own row in Members.
+    let mut rt = seen_by("devon");
+    open(&mut rt, "members");
+    press(&mut rt, &format!("roster-{}", person_id("devon")));
+    rt.update(|s, _| s.roles.member_title().replace_text("Principal"));
+    settle(&mut rt);
+    press(&mut rt, "member-save");
+    answer(
+        &mut rt,
+        RoleUpdate::Member {
+            server_id: ACME.into(),
+            account_id: person_id("devon"),
+            result: Err(refused("RATE_LIMITED", None)),
+        },
+    );
+    assert!(rt.state.roles.member.is_some());
+    assert!(words(&rt).contains(too_often), "{}", words(&rt));
+}
+
+#[test]
+fn a_name_the_instance_refuses_is_said_in_the_editor() {
+    let mut rt = seen_by("ryan");
+    open(&mut rt, "roles");
+    press(&mut rt, &format!("role-open-{}", role_id("eng")));
+    rt.update(|s, _| s.roles.role_name().replace_text("Engi\u{200b}neering"));
+    settle(&mut rt);
+    press(&mut rt, "save-role");
+    answer(
+        &mut rt,
+        RoleUpdate::Saved {
+            server_id: ACME.into(),
+            role_id: Some(role_id("eng")),
+            result: Err(refused("INVALID_ARGUMENT", Some("name"))),
+        },
+    );
+    assert!(words(&rt).contains(
+        "A role’s name is 1 to 32 characters on one line, with no hidden characters, and can’t be “everyone”."
+    ));
+    assert!(rt.state.roles.editor.is_some());
 }
 
 #[test]

@@ -11,6 +11,21 @@
 //! was kept. Words still being composed by an input method are not kept until they are
 //! settled. The files waiting over the composer are not kept. Nothing here is sent to the
 //! instance, and signing out forgets every draft in the core.
+//!
+//! The write is made on the window's thread, through the core's second connection to the
+//! instance's store, and so waits for whoever holds the file's write lock (the store is in
+//! WAL mode: the read on opening a conversation waits for nobody). Measured on this Mac
+//! with a release build of the core's store, 2026-11-19: with messages arriving as they are
+//! sent a write took 0.4 ms, 4 ms at most; while the gateway's connection applied a catch-up
+//! in pages of 200 events (2 to 25 ms a transaction) with a request between pages, 0.1 to
+//! 0.4 ms at the median, 22 ms at the 99th percentile, and once in some five hundred writes
+//! 190 ms, SQLite's busy handler sleeping in growing steps while it waits. Nothing holds a
+//! write transaction near the connection's ten-second timeout. So it stays here: at most
+//! a frame or two late, after the keys have rested, while a catch-up runs. Moving it to a
+//! thread of the session's would not take that wait off this one as the core stands:
+//! `App::set_draft` waits for the store's lock while it holds the core's own, which every
+//! read this thread makes of the core takes too (the read counts, after each applied batch).
+//! It would take a write in the core that does not hold that lock while it waits.
 
 use lumia_client::app::QuoteSummary;
 

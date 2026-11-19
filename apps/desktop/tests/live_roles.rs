@@ -2,7 +2,9 @@
 //! and the state the screens call, on two shells: a server's owner and a member who joined by
 //! invite. The owner makes a role, is refused a second of the same name, and gives the first
 //! to the member from Members; the member's own shell tags them from its account log, with
-//! nothing asked. The member sets a title on their own card and the owner's shell has it; the
+//! nothing asked. The member sets a title on their own card and the owner's shell has it, and
+//! is refused, in the sheet's words, a title with a hidden character and an eleventh change
+//! in the hour, as the owner is a role's name with one; the
 //! owner has the server show titles, and back; a second role is moved above the first; the
 //! first is deleted, asked first, and the tag goes on both; and the member is kicked. Runs
 //! only with `LUMIA_DEV_INSTANCE` set; without it it passes having checked nothing, and says
@@ -113,6 +115,28 @@ fn make_role(owner: &mut State, name: &str, color: &str) -> String {
     id
 }
 
+/// Types `title` into the form on this account's own card, saves it, and waits for the
+/// instance to refuse it in the words `said`; the form goes back to the card after.
+fn refused_title(member: &mut State, title: &str, said: &str) {
+    member.edit_on_card(CardForm::Title);
+    assert_eq!(member.popover, Some(Popover::CardTitle));
+    member.roles.card_title().replace_text(title);
+    member.save_card_form();
+    wait(member, "the title refused", |s| {
+        s.roles
+            .card
+            .as_ref()
+            .is_some_and(|card| !card.member.busy && !card.member.error.is_empty())
+    });
+    assert_eq!(member.roles.card.as_ref().unwrap().member.error, said);
+    assert_eq!(
+        member.popover,
+        Some(Popover::CardTitle),
+        "a refusal leaves the form open"
+    );
+    member.close_card_form();
+}
+
 #[test]
 fn roles_titles_and_tags_are_managed_and_reach_the_other_shell() {
     let Ok(instance) = std::env::var("LUMIA_DEV_INSTANCE") else {
@@ -213,6 +237,19 @@ fn roles_titles_and_tags_are_managed_and_reach_the_other_shell() {
         owner.roles.editor.as_ref().unwrap().saving.error,
         format!("Another role in {server_name} has that name.")
     );
+    // Nor one with a character nobody can see in its name.
+    owner.roles.role_name().replace_text("Help\u{200b}ers");
+    owner.save_role();
+    wait(&mut owner, "the second refusal", |s| {
+        s.roles
+            .editor
+            .as_ref()
+            .is_some_and(|e| !e.saving.busy && !e.saving.error.is_empty())
+    });
+    assert_eq!(
+        owner.roles.editor.as_ref().unwrap().saving.error,
+        "A role’s name is 1 to 32 characters on one line, with no hidden characters, and can’t be “everyone”."
+    );
     owner.close_role();
     // The member's shell has the role from its account log.
     let named = server_id.clone();
@@ -264,6 +301,44 @@ fn roles_titles_and_tags_are_managed_and_reach_the_other_shell() {
     });
     // The server shows roles, so the tag is still the role.
     assert_eq!(tag(&owner, &server_id, &member_id), sky);
+
+    // ---- A title the instance refuses is said in the card's form ----------------------
+    // One with a character nobody can see in it.
+    refused_title(
+        &mut member,
+        "Staff\u{200b} Engineer",
+        "A title is up to 32 characters on one line, with no hidden characters.",
+    );
+    // A member's own title changes ten times an hour in a server: that was the first, nine
+    // more are taken (the last back to what it was), and the eleventh is refused.
+    for nth in 2..=10 {
+        let title = if nth == 10 {
+            "Staff Engineer".to_string()
+        } else {
+            format!("Title {nth}")
+        };
+        member.edit_on_card(CardForm::Title);
+        member.roles.card_title().replace_text(&title);
+        member.save_card_form();
+        wait(&mut member, "a title saved again", |s| {
+            s.popover == Some(Popover::Person) && s.roles.card.is_none()
+        });
+        let (at, who) = (server_id.clone(), member_id.clone());
+        assert_eq!(member.session.member_in(&at, &who).unwrap().title, title);
+    }
+    refused_title(
+        &mut member,
+        "One more",
+        "You’ve changed your title too many times this hour. Try again later.",
+    );
+    assert_eq!(
+        member
+            .session
+            .member_in(&server_id, &member_id)
+            .unwrap()
+            .title,
+        "Staff Engineer"
+    );
 
     // ---- The server shows titles, and back ---------------------------------------------
     owner.choose_section(Section::Overview);
