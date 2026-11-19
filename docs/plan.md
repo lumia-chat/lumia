@@ -715,6 +715,7 @@ What was decided, in short (the documents have it whole):
   - The browser suite's roles step once timed out in WebKit at "titles as tags" (the tag still the role 30 s after the switch), then passed twice unchanged. Cause not found.
   - Words chosen by an agent and not by a sheet: the web's "… Your message is kept in #general." for a send that failed in a conversation no longer on screen; a second Return after a failed send sends the words again.
   - On an iPhone 18 Pro the owner's own card cuts their name to make room for "You" and "Owner".
+  - A server's fan-out job holds one database connection for its whole telling and while it waits for the server's lock (`Fanout.one_at_a_time`): with the default queue's ten jobs, several large servers changing at once could take ten of the pool's connections from the HTTP API. The pool against the queue's concurrency, or a queue of its own for fan-out, is to be decided before a server of thousands.
   - A draft read on re-entering a conversation on Android can still race the core's clearing write, by milliseconds; not seen.
 - [ ] Not built, each its own step: the editor for channel overwrites, and roles for guests with it; `@role` mentions, next; bans; handing a server to another owner; the audit log's viewer; nicknames (the column is there and nothing reads it).
 
