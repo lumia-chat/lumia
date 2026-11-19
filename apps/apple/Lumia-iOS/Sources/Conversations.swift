@@ -513,12 +513,18 @@ struct ConversationScreen: View {
         let (attachments, cards) = media.outgoing(body: body)
         // On its way: the field empties, and the words stay kept until the
         // send has returned without an error, so that an app ended meanwhile
-        // has them in the draft if the core does not have the message.
+        // has them in the draft if the core does not have the message. The
+        // core clears a server message's draft itself as it takes the
+        // message; the keeper's own clear after that finds nothing to do.
         let keeper = session.draftKeeper
         keeper.sending(channelID, body: typed, reply: quote)
         draft = ""
         replying = nil
         error = ""
+        // Kept before the send is asked for: a write still on its way could
+        // land after the core had taken the message and cleared its draft,
+        // and leave sent words kept.
+        await keeper.settled()
         do {
             try await session.dmSend(channelID: channelID, body: body, quote: quote, attachments: attachments, cardURLs: cards) { keeper.sent(channelID) }
             media.sent()
@@ -866,12 +872,18 @@ struct ChannelScreen: View {
         let (attachments, cards) = media.outgoing(body: body)
         // On its way: the field empties, and the words stay kept until the
         // send has returned without an error, so that an app ended meanwhile
-        // has them in the draft if the core does not have the message.
+        // has them in the draft if the core does not have the message. The
+        // core clears a server message's draft itself as it takes the
+        // message; the keeper's own clear after that finds nothing to do.
         let keeper = session.draftKeeper
         keeper.sending(channelID, body: typed, reply: quote)
         draft = ""
         replying = nil
         error = ""
+        // Kept before the send is asked for: a write still on its way could
+        // land after the core had taken the message and cleared its draft,
+        // and leave sent words kept.
+        await keeper.settled()
         do {
             let missed = try await session.send(channelID: channelID, body: body, quote: quote, attachments: attachments, cardURLs: cards) { keeper.sent(channelID) }
             media.sent()

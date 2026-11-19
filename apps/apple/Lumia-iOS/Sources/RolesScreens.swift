@@ -561,8 +561,15 @@ extension RoleSummary: @retroactive Identifiable {
 /// Administrator apart and asked first, one this account does not hold
 /// shown and not turned; who holds it, with Remove and Add members; and
 /// Delete role, asked first. One Save, in the header, keeps the role; the
-/// holders are given and taken as they are pressed. Everyone's editor is
+/// holders are given and taken as they are pressed, each a change of that
+/// one role and never the whole set of a member's. Everyone's editor is
 /// its permissions only, and a new role's has no holders and nothing to delete.
+///
+/// The editor holds the role as it opened on it (`opened`) beside the one
+/// being edited (`draft`). Save is offered when the two differ and sends
+/// what differs, so what someone else changed of the role meanwhile is
+/// neither offered to save nor undone by it; an editor nobody has touched
+/// follows the role as it changes (`Roles.followed`).
 struct RoleEditorScreen: View {
     @Environment(\.dismiss) private var dismiss
     let session: LumiaSession
@@ -570,7 +577,9 @@ struct RoleEditorScreen: View {
     /// Nil for a new role.
     let roleID: String?
     @Binding var path: [Screen]
-    @State private var draft = RoleDraft()
+    @State private var draft = Roles.draft()
+    /// The role as the editor opened on it, or as its last save left it; nil for a new role.
+    @State private var opened: RoleDraft?
     @State private var loaded = false
     @State private var busy = false
     @State private var error = ""
@@ -582,7 +591,7 @@ struct RoleEditorScreen: View {
     @State private var holdersError = ""
     @State private var removing: String?
     /// When the preview's message was "sent": as the screen opened.
-    @State private var opened = Date()
+    @State private var openedAt = Date()
 
     private var server: ServerSummary? { session.snapshot?.servers.first { $0.serverId == serverID } }
     private var role: RoleSummary? { roleID.flatMap { id in server?.roles.first { $0.roleId == id } } }
@@ -604,7 +613,7 @@ struct RoleEditorScreen: View {
         guard role != nil, let held else { return server.name }
         return "\(server.name) · \(Roles.membersCount(held))"
     }
-    private var savable: Bool { loaded && !busy && Roles.savable(draft, role: role) && (roleID == nil || role != nil) }
+    private var savable: Bool { loaded && !busy && Roles.savable(draft, opened: opened, everyone: everyone) && (roleID == nil || role != nil) }
 
     var body: some View {
         PanelScreen(back: "Roles", title: roleID == nil ? "New role" : shownName, subtitle: subtitle, actions: [(icon: "checkmark", label: "Save", run: { Task { await save() } })], inactive: savable ? [] : ["Save"]) {
@@ -659,13 +668,17 @@ struct RoleEditorScreen: View {
             }
         }
         .onChange(of: server == nil, initial: true) { _, _ in load() }
-        .onChange(of: draft) { old, now in
+        // The editor of a new role is the editor of the role made, once it is: opened on that.
+        .onChange(of: roleID) { _, _ in
+            loaded = false
+            load()
+        }
+        // The role changed underneath: an editor nobody has touched follows it.
+        .onChange(of: role) { _, now in follow(now) }
+        .onChange(of: draft) { _, now in
             if now.name.count > Roles.labelMax { draft.name = String(now.name.prefix(Roles.labelMax)) }
-            // The name as Save trimmed it is not a change: "Saved." stays said.
-            var trimmed = (old, now)
-            trimmed.0.name = old.name.trimmingCharacters(in: .whitespacesAndNewlines)
-            trimmed.1.name = now.name.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmed.0 != trimmed.1 { saved = false }
+            // The draft as a save or the role itself left it is not a change: "Saved." stays said.
+            if let opened, !Roles.untouched(opened: opened, draft: now) { saved = false }
         }
         .sheet(isPresented: $askingAdministrator) {
             AskSheet(
@@ -691,12 +704,23 @@ struct RoleEditorScreen: View {
         .task { if session.serverMembers[serverID] == nil { await session.refreshMembers(serverID: serverID) } }
     }
 
-    /// The fields as the role has them, once: what is typed afterwards is
-    /// not written over by a change from elsewhere.
+    /// The fields as the role has them, once, and the role as it was then,
+    /// which is what a save is measured against.
     private func load() {
         guard !loaded, server != nil else { return }
         draft = Roles.draft(of: role)
+        opened = roleID == nil ? nil : draft
         loaded = true
+    }
+
+    /// The role as it now is, changed from elsewhere: followed while nothing
+    /// here was changed; once something was, what is typed is not written
+    /// over, and the save sends that and nothing else.
+    private func follow(_ role: RoleSummary?) {
+        guard loaded, let role, let was = opened else { return }
+        let next = Roles.followed(opened: was, draft: draft, role: role)
+        opened = next.opened
+        draft = next.draft
     }
 
     // MARK: Name, colour, tag
@@ -791,7 +815,7 @@ struct RoleEditorScreen: View {
             LumiaAvatar(initials: initials(of: name), tone: .of(session.me), size: LumiaTokens.avatarSm, picture: session.picture(of: session.me))
             Text(name).font(LumiaTokens.textAuthor.font).foregroundStyle(LumiaTokens.ink.color).lineLimit(1)
             if shows { LumiaTag(TagLook(label: tag, tone: Roles.tone(of: draft.color))) }
-            Text(time(ofMicros: Int64(opened.timeIntervalSince1970 * 1_000_000))).font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkMuted.color)
+            Text(time(ofMicros: Int64(openedAt.timeIntervalSince1970 * 1_000_000))).font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkMuted.color)
                 .lineLimit(1)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -915,14 +939,15 @@ struct RoleEditorScreen: View {
         holdersError = ""
         defer { removing = nil }
         do {
-            try await session.setMemberRoles(serverID: serverID, accountID: member.accountId, roleIDs: member.roleIds.filter { $0 != role.roleId })
+            try await session.changeMember(serverID: serverID, accountID: member.accountId, take: [role.roleId])
         } catch {
             holdersError = RoleWords.memberRefusal(code: error.lumiaCode, details: error.lumiaDetails, message: error.lumiaMessage)
         }
     }
 
-    /// One Save: a role as its fields have it, or a new one, which is then
-    /// the role this editor is of.
+    /// One Save: what the fields changed of the role since the editor opened
+    /// on it, after which both are the role as the answer has it; or a new
+    /// role, which is then the role this editor is of.
     private func save() async {
         guard savable, let server else { return }
         busy = true
@@ -932,9 +957,13 @@ struct RoleEditorScreen: View {
         var sent = draft
         sent.name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
         do {
-            if let role {
-                try await session.updateRole(serverID: serverID, roleID: role.roleId, draft: sent)
-                draft.name = sent.name
+            if let roleID {
+                // Only ever a change of the role the editor opened on, never a second one made.
+                guard let was = opened else { return }
+                try await session.changeRole(serverID: serverID, roleID: roleID, was: was, now: sent)
+                let now = self.role.map { Roles.draft(of: $0) } ?? sent
+                opened = now
+                draft = now
                 saved = true
                 AccessibilityNotification.Announcement("Saved").post()
             } else {
@@ -1006,16 +1035,15 @@ struct RoleMembersScreen: View {
         if let at = chosen.firstIndex(of: id) { chosen.remove(at: at) } else { chosen.append(id) }
     }
 
-    /// Each chosen member's roles with this one among them, one member at
-    /// a time; a refusal leaves those not yet given still chosen.
+    /// The role given to each chosen member, one member at a time, whatever
+    /// else each holds; a refusal leaves those not yet given still chosen.
     private func add() async {
         busy = true
         error = ""
         defer { busy = false }
         do {
             for id in chosen {
-                guard let m = session.member(id, in: serverID) else { continue }
-                try await session.setMemberRoles(serverID: serverID, accountID: id, roleIDs: m.roleIds + [roleID])
+                try await session.changeMember(serverID: serverID, accountID: id, give: [roleID])
                 chosen.removeAll { $0 == id }
             }
             dismiss()
@@ -1160,8 +1188,12 @@ struct ServerMembersScreen: View {
 
 /// A member's editing state under their row, and on their card: the roles
 /// to tick, the title, and Kick, each where the core's answers offer it.
-/// Save keeps the roles and the title together, each sent only where it
-/// changed; Kick asks nothing first. A refusal is said over the buttons.
+/// The form holds the member's roles and title as it opened (`opened`)
+/// beside what is ticked and typed (`form`), and Save sends what differs in
+/// one request: the roles to give, the roles to take, the title if it
+/// changed, all of it taken or none. Nothing changed, nothing is sent. A
+/// form nobody has touched follows the member as they change underneath
+/// (`Roles.followed`). Kick asks nothing first. A refusal is said over the buttons.
 struct MemberEditor: View {
     let session: LumiaSession
     let server: ServerSummary
@@ -1171,8 +1203,8 @@ struct MemberEditor: View {
     var parts: Set<Part> = [.roles, .title]
     var kicks = true
     let close: () -> Void
-    @State private var held: [String] = []
-    @State private var title = ""
+    @State private var opened = MemberForm()
+    @State private var form = MemberForm()
     @State private var loaded = false
     @State private var busy = false
     @State private var error = ""
@@ -1188,7 +1220,7 @@ struct MemberEditor: View {
                     VStack(alignment: .leading, spacing: LumiaTokens.space6) {
                         // On a card the editor's own heading says Roles.
                         if parts.count > 1 { RoleLegend("Roles") }
-                        RoleTicks(choices: Roles.choices(server.roles, held: held)) { held = Roles.toggled(server.roles, held: held, roleID: $0) }
+                        RoleTicks(choices: Roles.choices(server.roles, held: form.roleIDs)) { form.roleIDs = Roles.toggled(server.roles, held: form.roleIDs, roleID: $0) }
                     }
                 } else if let note = offers.rolesNote {
                     VStack(alignment: .leading, spacing: LumiaTokens.space6) {
@@ -1199,7 +1231,7 @@ struct MemberEditor: View {
             }
             if parts.contains(.title), offers.title {
                 VStack(alignment: .leading, spacing: LumiaTokens.space6) {
-                    LumiaField("Title", text: $title, placeholder: "Staff Engineer", spoken: "Title")
+                    LumiaField("Title", text: $form.title, placeholder: "Staff Engineer", spoken: "Title")
                     RoleHint(RoleWords.titleHint)
                 }
             }
@@ -1220,17 +1252,25 @@ struct MemberEditor: View {
         }
         .onAppear {
             guard !loaded else { return }
-            held = member.roleIds
-            title = member.title
+            opened = Roles.form(of: member)
+            form = opened
             loaded = true
         }
-        .onChange(of: title) { _, now in
-            if now.count > Roles.labelMax { title = String(now.prefix(Roles.labelMax)) }
+        // The member changed underneath: a form nobody has touched follows them.
+        .onChange(of: member) { _, now in
+            guard loaded else { return }
+            let next = Roles.followed(opened: opened, form: form, member: now)
+            opened = next.opened
+            form = next.form
+        }
+        .onChange(of: form.title) { _, now in
+            if now.count > Roles.labelMax { form.title = String(now.prefix(Roles.labelMax)) }
         }
     }
 
     private func save() async throws {
-        try await session.saveMember(serverID: server.serverId, member: member, roleIDs: parts.contains(.roles) && offers.roles ? held : nil, title: parts.contains(.title) && offers.title ? title : nil)
+        // What is not offered here was never ticked or typed, so it is as the form opened and is not sent.
+        try await session.saveMember(serverID: server.serverId, accountID: member.accountId, opened: opened, form: form)
     }
 
     /// Does it and closes; a refusal is said here and the editor stays.

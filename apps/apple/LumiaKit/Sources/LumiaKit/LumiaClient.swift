@@ -110,24 +110,27 @@ public actor LumiaClient {
     }
     /// Roles and titles (architecture 7.5): a server's roles made, changed,
     /// deleted and put in order, and which of the two its tags show, each
-    /// returning the snapshot as it then is; a member's roles and title,
-    /// each returning the member as the server now shows them; a member
+    /// returning the snapshot as it then is; what was changed of a member,
+    /// returning the member as the server now shows them; a member
     /// removed; and the members the core keeps of a server, each with its
-    /// tag as the server now shows it, read from the local store with no request.
+    /// tag as the server now shows it, read from the local store with no
+    /// request. A change names what changed and nothing else: `changeRole`
+    /// takes the role as its editor opened on it and as it holds it at
+    /// Save, and the core sends what differs (nothing, no request);
+    /// `changeMember` the roles to give and to take and the title, nil to
+    /// leave it, in one request the instance does whole or not at all. So
+    /// an editor left open, or a list a moment old, undoes nobody else's change.
     public func createRole(serverID: String, name: String, color: String, hideTag: Bool, permissions: [String]) throws -> SnapshotSummary {
         try inner.createRole(serverId: serverID, name: name, color: color, hideTag: hideTag, permissions: permissions)
     }
-    public func updateRole(serverID: String, roleID: String, name: String, color: String, hideTag: Bool, permissions: [String]) throws -> SnapshotSummary {
-        try inner.updateRole(serverId: serverID, roleId: roleID, name: name, color: color, hideTag: hideTag, permissions: permissions)
+    public func changeRole(serverID: String, roleID: String, was: RoleDraft, now: RoleDraft) throws -> SnapshotSummary {
+        try inner.changeRole(serverId: serverID, roleId: roleID, was: was, now: now)
     }
     public func deleteRole(serverID: String, roleID: String) throws -> SnapshotSummary { try inner.deleteRole(serverId: serverID, roleId: roleID) }
     public func reorderRoles(serverID: String, roleIDs: [String]) throws -> SnapshotSummary { try inner.reorderRoles(serverId: serverID, roleIds: roleIDs) }
     public func setTagTitles(serverID: String, titles: Bool) throws -> SnapshotSummary { try inner.setTagTitles(serverId: serverID, titles: titles) }
-    public func setMemberRoles(serverID: String, accountID: String, roleIDs: [String]) throws -> MemberSummary {
-        try inner.setMemberRoles(serverId: serverID, accountId: accountID, roleIds: roleIDs)
-    }
-    public func setMemberTitle(serverID: String, accountID: String, title: String) throws -> MemberSummary {
-        try inner.setMemberTitle(serverId: serverID, accountId: accountID, title: title)
+    public func changeMember(serverID: String, accountID: String, give: [String] = [], take: [String] = [], title: String? = nil) throws -> MemberSummary {
+        try inner.changeMember(serverId: serverID, accountId: accountID, give: give, take: take, title: title)
     }
     public func removeMember(serverID: String, accountID: String) throws { try inner.removeMember(serverId: serverID, accountId: accountID) }
     public func keptMembers(serverID: String) throws -> [MemberSummary] { try inner.keptMembers(serverId: serverID) }
@@ -358,9 +361,9 @@ public actor LumiaClient {
     }
     /// The links a composer previews in a conversation, at most three: none
     /// where it cannot have cards (an instance that makes none). It asks
-    /// nothing of the instance, but it takes the core's lock, which a
-    /// draft's write holds while it waits for the store's: so it runs off
-    /// the main thread, beside this actor's other calls.
+    /// nothing of the instance, but it takes the core's lock, which
+    /// whatever call holds it may hold for a while: so it runs off the
+    /// main thread, beside this actor's other calls.
     public nonisolated func previewLinks(channelID: String, body: String) async -> [String] {
         let inner = inner
         return await Task.detached { inner.previewLinks(channelId: channelID, body: body) }.value

@@ -245,6 +245,21 @@ final class DraftsTests: XCTestCase {
         pauses.rest()
         XCTAssertNil(store.kept["random"])
         XCTAssertEqual(random.placed, [nil], "a send that went put something in the field")
+
+        // The core lets a server's message's draft go itself, in the write
+        // that takes the message: nothing here writes the sent words back
+        // after that, at the send's return, at a rest or on leaving.
+        keeper.changed("random", body: "ok then", reply: nil)
+        keeper.sending("random", body: "ok then", reply: nil)
+        let before = store.writes.count
+        store.kept["random"] = nil
+        keeper.changed("random", body: "", reply: nil)
+        keeper.sent("random")
+        pauses.rest()
+        keeper.keepNow("random")
+        keeper.leave("random")
+        XCTAssertNil(store.kept["random"])
+        XCTAssertEqual(Array(store.writes[before...]), ["random: "], "the sent words were written again after the core had let them go")
     }
 
     // A send that fails: the words and the reply are still kept, and are

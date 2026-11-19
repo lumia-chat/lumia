@@ -21,17 +21,20 @@ public enum SettingsSection: String, CaseIterable, Sendable {
     }
 }
 
-/// What a role's editor holds while it is open.
-public struct RoleDraft: Equatable, Sendable {
-    public var name: String
-    /// A tone, or empty for none.
-    public var color: String
-    public var hideTag: Bool
-    /// The permissions switched on, by their wire names.
-    public var permissions: [String]
+// What a role's editor holds while it is open is the core's `RoleDraft`
+// (its name, its tone or empty for none, `hideTag`, and the permissions
+// switched on by their wire names): the editor keeps two, the role as it
+// opened on it and the one being edited, and the core's `changeRole` sends
+// what differs between them.
 
-    public init(name: String = "", color: String = "", hideTag: Bool = false, permissions: [String] = []) {
-        self.name = name; self.color = color; self.hideTag = hideTag; self.permissions = permissions
+/// What a member's form holds while it is open, under their row in Members
+/// and on their card: the roles ticked and the title as typed.
+public struct MemberForm: Equatable, Sendable {
+    public var roleIDs: [String]
+    public var title: String
+
+    public init(roleIDs: [String] = [], title: String = "") {
+        self.roleIDs = roleIDs; self.title = title
     }
 }
 
@@ -175,7 +178,7 @@ public enum Roles {
 
     /// The editor's fields for a role, or for a new one: no name, no colour, shown as a tag, nothing granted.
     public static func draft(of role: RoleSummary? = nil) -> RoleDraft {
-        role.map { RoleDraft(name: $0.name, color: $0.color, hideTag: $0.hideTag, permissions: $0.permissions) } ?? RoleDraft()
+        RoleDraft(name: role?.name ?? "", color: role?.color ?? "", hideTag: role?.hideTag ?? false, permissions: role?.permissions ?? [])
     }
 
     private static func sameSet(_ a: [String], _ b: [String]) -> Bool {
@@ -184,14 +187,35 @@ public enum Roles {
 
     private static func trimmed(_ s: String) -> String { s.trimmingCharacters(in: .whitespacesAndNewlines) }
 
-    /// Whether Save is offered: a new role once it has a name, a role once
-    /// something of it differs and it still has one. Of Everyone only the
-    /// permissions are compared, since nothing else of it changes.
-    public static func savable(_ draft: RoleDraft, role: RoleSummary? = nil) -> Bool {
-        guard let role else { return !trimmed(draft.name).isEmpty }
-        if role.isEveryone { return !sameSet(draft.permissions, role.permissions) }
+    /// Whether Save is offered: a new role (`opened` nil) once it has a
+    /// name, a role once something of the draft differs from the role as
+    /// the editor opened on it and it still has a name. Of Everyone only
+    /// the permissions are compared, since nothing else of it changes. The
+    /// role as it now is is never compared: someone else's change to it is
+    /// not this editor's to save, and does not light Save.
+    public static func savable(_ draft: RoleDraft, opened: RoleDraft? = nil, everyone: Bool = false) -> Bool {
+        guard let opened else { return !trimmed(draft.name).isEmpty }
+        if everyone { return !sameSet(draft.permissions, opened.permissions) }
         if trimmed(draft.name).isEmpty { return false }
-        return trimmed(draft.name) != role.name || draft.color != role.color || draft.hideTag != role.hideTag || !sameSet(draft.permissions, role.permissions)
+        return trimmed(draft.name) != trimmed(opened.name) || draft.color != opened.color || draft.hideTag != opened.hideTag || !sameSet(draft.permissions, opened.permissions)
+    }
+
+    /// Whether an editor holds what it opened on: nothing typed, chosen or
+    /// switched that is still there. A permission switched on and off
+    /// again is as it was, whatever order that leaves the list in.
+    public static func untouched(opened: RoleDraft, draft: RoleDraft) -> Bool {
+        draft.name == opened.name && draft.color == opened.color && draft.hideTag == opened.hideTag && sameSet(draft.permissions, opened.permissions)
+    }
+
+    /// A role's editor as the role changes underneath it. One nobody has
+    /// touched follows: what it opened on and what it holds are both the
+    /// role as it now is. Once the person has changed something, both stay
+    /// as they are, so the save sends their changes and nothing else, and
+    /// what someone else changed meanwhile stands.
+    public static func followed(opened: RoleDraft, draft: RoleDraft, role: RoleSummary) -> (opened: RoleDraft, draft: RoleDraft) {
+        guard untouched(opened: opened, draft: draft) else { return (opened, draft) }
+        let now = Roles.draft(of: role)
+        return (now, now)
     }
 
     /// A permission this account does not hold, and so cannot give or take: its switch is shown and not turned.
@@ -257,11 +281,36 @@ public enum Roles {
     /// A count with a comma between each three digits, as every client writes it.
     public static func grouped(_ n: Int) -> String { MessageCounter.grouped(UInt64(max(0, n))) }
 
-    /// What a save of a member's roles and title sends: each only where it changed, the roles first.
-    public static func memberChanges(_ member: MemberSummary, roleIDs: [String]?, title: String?) -> (roleIDs: [String]?, title: String?) {
-        let roles = roleIDs.flatMap { sameSet($0, member.roleIds) ? nil : $0 }
-        let named = title.map(trimmed).flatMap { $0 == member.title ? nil : $0 }
-        return (roles, named)
+    /// A member's form as it opens: the roles they hold and their title.
+    public static func form(of member: MemberSummary) -> MemberForm {
+        MemberForm(roleIDs: member.roleIds, title: member.title)
+    }
+
+    /// What a save of a member's form sends, in one request: the roles to
+    /// give (ticked, and not held when the form opened), the roles to take
+    /// (held then, and not ticked now), and the title only if, trimmed, it
+    /// differs from the one the form opened on. Never the whole set of
+    /// their roles: a role someone else gave them meanwhile is not in
+    /// either list, and stays. All three empty, nothing is sent.
+    public static func memberChanges(opened: MemberForm, form: MemberForm) -> (give: [String], take: [String], title: String?) {
+        let give = form.roleIDs.filter { !opened.roleIDs.contains($0) }
+        let take = opened.roleIDs.filter { !form.roleIDs.contains($0) }
+        let title = trimmed(form.title)
+        return (give, take, title == trimmed(opened.title) ? nil : title)
+    }
+
+    /// Whether a member's form holds what it opened on.
+    public static func untouched(opened: MemberForm, form: MemberForm) -> Bool {
+        form.title == opened.title && sameSet(form.roleIDs, opened.roleIDs)
+    }
+
+    /// A member's form as the member changes underneath it, as a role's
+    /// editor follows its role: untouched, it is the member as they now
+    /// are; touched, it and what it opened on stay.
+    public static func followed(opened: MemberForm, form: MemberForm, member: MemberSummary) -> (opened: MemberForm, form: MemberForm) {
+        guard untouched(opened: opened, form: form) else { return (opened, form) }
+        let now = Roles.form(of: member)
+        return (now, now)
     }
 
     /// Who may be given a role from its editor: members who do not hold it, a guest never, by `query`, by name.

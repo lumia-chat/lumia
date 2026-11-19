@@ -127,21 +127,59 @@ final class RolesTests: XCTestCase {
         XCTAssertTrue(Roles.savable(draft { $0.name = "Design" }))
     }
 
-    func testARoleSavesOnceSomethingDiffers() {
-        XCTAssertFalse(Roles.savable(draft(mod), role: mod))
-        XCTAssertFalse(Roles.savable(draft(mod) { $0.name = " Moderator " }, role: mod))
-        XCTAssertTrue(Roles.savable(draft(mod) { $0.name = "Mods" }, role: mod))
-        XCTAssertFalse(Roles.savable(draft(mod) { $0.name = "" }, role: mod))
-        XCTAssertTrue(Roles.savable(draft(mod) { $0.color = "" }, role: mod))
-        XCTAssertTrue(Roles.savable(draft(mod) { $0.hideTag = true }, role: mod))
-        XCTAssertFalse(Roles.savable(draft(mod) { $0.permissions = ["SEND_IN_THREADS", "MANAGE_ROLES"] }, role: mod))
-        XCTAssertTrue(Roles.savable(draft(mod) { $0.permissions = ["MANAGE_ROLES"] }, role: mod))
+    func testARoleSavesOnceSomethingDiffersFromWhatTheEditorOpenedOn() {
+        let opened = draft(mod)
+        XCTAssertFalse(Roles.savable(draft(mod), opened: opened))
+        XCTAssertFalse(Roles.savable(draft(mod) { $0.name = " Moderator " }, opened: opened))
+        XCTAssertTrue(Roles.savable(draft(mod) { $0.name = "Mods" }, opened: opened))
+        XCTAssertFalse(Roles.savable(draft(mod) { $0.name = "" }, opened: opened))
+        XCTAssertTrue(Roles.savable(draft(mod) { $0.color = "" }, opened: opened))
+        XCTAssertTrue(Roles.savable(draft(mod) { $0.hideTag = true }, opened: opened))
+        XCTAssertFalse(Roles.savable(draft(mod) { $0.permissions = ["SEND_IN_THREADS", "MANAGE_ROLES"] }, opened: opened))
+        XCTAssertTrue(Roles.savable(draft(mod) { $0.permissions = ["MANAGE_ROLES"] }, opened: opened))
     }
 
     func testOfEveryoneOnlyThePermissionsCount() {
         let everyone = role("everyone", name: "Everyone", isEveryone: true, permissions: ["VIEW_CHANNEL"])
-        XCTAssertFalse(Roles.savable(draft(everyone), role: everyone))
-        XCTAssertTrue(Roles.savable(draft(everyone) { $0.permissions = [] }, role: everyone))
+        XCTAssertFalse(Roles.savable(draft(everyone), opened: draft(everyone), everyone: true))
+        XCTAssertFalse(Roles.savable(draft(everyone) { $0.name = "All" }, opened: draft(everyone), everyone: true))
+        XCTAssertTrue(Roles.savable(draft(everyone) { $0.permissions = [] }, opened: draft(everyone), everyone: true))
+    }
+
+    // Someone else changes the role while its editor is open. Save is about
+    // what this editor changed, so it does not light for their change; an
+    // editor nobody has touched follows the role, and one that was touched
+    // keeps both what it opened on and what it holds, so that the save
+    // sends its own change and nothing else.
+    func testAnEditorFollowsItsRoleUntilItIsTouched() {
+        let opened = draft(mod)
+        var elsewhere = mod
+        elsewhere.permissions = ["SEND_IN_THREADS"]
+        elsewhere.color = "sky"
+
+        // Untouched: both are the role as it now is, and there is nothing to save.
+        var next = Roles.followed(opened: opened, draft: draft(mod), role: elsewhere)
+        XCTAssertEqual(next.opened, draft(elsewhere))
+        XCTAssertEqual(next.draft, draft(elsewhere))
+        XCTAssertFalse(Roles.savable(next.draft, opened: next.opened))
+        // A permission switched on and off again is untouched, whatever order it left.
+        next = Roles.followed(opened: opened, draft: draft(mod) { $0.permissions = ["SEND_IN_THREADS", "MANAGE_ROLES"] }, role: elsewhere)
+        XCTAssertEqual(next.draft, draft(elsewhere))
+
+        // Touched: the name typed stays, and so does what the editor opened on.
+        let renamed = draft(mod) { $0.name = "Mods" }
+        next = Roles.followed(opened: opened, draft: renamed, role: elsewhere)
+        XCTAssertEqual(next.opened, opened)
+        XCTAssertEqual(next.draft, renamed)
+        XCTAssertTrue(Roles.savable(next.draft, opened: next.opened))
+        // Not followed, Save is still not lit by the other's change alone:
+        // a space typed and nothing else is no change to save.
+        let spaced = draft(mod) { $0.name = "Moderator " }
+        next = Roles.followed(opened: opened, draft: spaced, role: elsewhere)
+        XCTAssertEqual(next.draft, spaced)
+        XCTAssertFalse(Roles.savable(next.draft, opened: next.opened), "someone else's change lit Save")
+        XCTAssertTrue(Roles.untouched(opened: opened, draft: draft(mod)))
+        XCTAssertFalse(Roles.untouched(opened: opened, draft: spaced))
     }
 
     func testAPermissionNotHeldIsWithheld() {
@@ -258,16 +296,49 @@ final class RolesTests: XCTestCase {
 
     func testASaveSendsOnlyWhatChangedOfAMember() {
         let devon = member("devon", name: "Devon Park", title: "Staff Engineer", roleIDs: ["mod", "eng"])
-        var changes = Roles.memberChanges(devon, roleIDs: ["eng", "mod"], title: " Staff Engineer ")
-        XCTAssertNil(changes.roleIDs)
+        let opened = Roles.form(of: devon)
+        XCTAssertEqual(opened, MemberForm(roleIDs: ["mod", "eng"], title: "Staff Engineer"))
+        // Nothing changed: nothing to give, to take or to say.
+        var changes = Roles.memberChanges(opened: opened, form: MemberForm(roleIDs: ["eng", "mod"], title: " Staff Engineer "))
+        XCTAssertEqual(changes.give, [])
+        XCTAssertEqual(changes.take, [])
         XCTAssertNil(changes.title)
-        changes = Roles.memberChanges(devon, roleIDs: ["eng"], title: "")
-        XCTAssertEqual(changes.roleIDs, ["eng"])
+        // One unticked, one ticked, the title cleared: each named, and never the whole set.
+        changes = Roles.memberChanges(opened: opened, form: MemberForm(roleIDs: ["eng", "design"], title: ""))
+        XCTAssertEqual(changes.give, ["design"])
+        XCTAssertEqual(changes.take, ["mod"])
         XCTAssertEqual(changes.title, "")
-        // What an editor did not offer is not sent.
-        changes = Roles.memberChanges(devon, roleIDs: nil, title: "Principal")
-        XCTAssertNil(changes.roleIDs)
+        // The title alone, trimmed.
+        changes = Roles.memberChanges(opened: opened, form: MemberForm(roleIDs: ["mod", "eng"], title: " Principal "))
+        XCTAssertEqual(changes.give, [])
+        XCTAssertEqual(changes.take, [])
         XCTAssertEqual(changes.title, "Principal")
+    }
+
+    // A member given a role elsewhere while their form is open: the role is
+    // in neither list of the save, so it stays theirs; an untouched form
+    // follows them, a touched one keeps what it opened on and what it holds.
+    func testAMembersFormFollowsThemUntilItIsTouched() {
+        let devon = member("devon", name: "Devon Park", title: "Staff Engineer", roleIDs: ["mod"])
+        let opened = Roles.form(of: devon)
+        var elsewhere = devon
+        elsewhere.roleIds = ["mod", "design"]
+        elsewhere.title = "Principal"
+
+        var next = Roles.followed(opened: opened, form: opened, member: elsewhere)
+        XCTAssertEqual(next.opened, Roles.form(of: elsewhere))
+        XCTAssertEqual(next.form, Roles.form(of: elsewhere))
+
+        // Mod unticked before the change arrived: Design is not this form's to take.
+        let touched = MemberForm(roleIDs: [], title: "Staff Engineer")
+        next = Roles.followed(opened: opened, form: touched, member: elsewhere)
+        XCTAssertEqual(next.opened, opened)
+        XCTAssertEqual(next.form, touched)
+        let changes = Roles.memberChanges(opened: next.opened, form: next.form)
+        XCTAssertEqual(changes.give, [])
+        XCTAssertEqual(changes.take, ["mod"])
+        XCTAssertNil(changes.title, "a title someone else changed was sent back as it was")
+        XCTAssertFalse(Roles.untouched(opened: opened, form: MemberForm(roleIDs: ["mod"], title: "Staff Engineer ")))
     }
 
     func testWhoMayBeGivenARoleFromItsEditor() {
@@ -360,7 +431,7 @@ final class RolesTests: XCTestCase {
         }
         func refused(_ title: String) async -> String? {
             do {
-                _ = try await client.setMemberTitle(serverID: server.serverId, accountID: me, title: title)
+                _ = try await client.changeMember(serverID: server.serverId, accountID: me, title: title)
                 return nil
             } catch { return said(error) }
         }
@@ -390,6 +461,169 @@ final class RolesTests: XCTestCase {
         XCTAssertEqual(eleventh, "You’ve changed your title too many times this hour. Try again later.")
         let kept = try await client.members(serverID: server.serverId).first { $0.accountId == me }?.title
         XCTAssertEqual(kept, "Founder 10")
+    }
+
+    /// A request of the test's own to the instance, as another session of
+    /// an account makes it: the status, and the answer read as JSON.
+    private func elsewhere(_ instance: String, _ method: String, _ path: String, token: String? = nil, body: [String: Any]? = nil) async throws -> (status: Int, json: [String: Any]) {
+        var request = URLRequest(url: URL(string: "\(instance)/api/v1\(path)")!)
+        request.httpMethod = method
+        request.setValue("application/json", forHTTPHeaderField: "accept")
+        if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "authorization") }
+        if let body {
+            request.setValue("application/json", forHTTPHeaderField: "content-type")
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        }
+        let (data, response) = try await URLSession.shared.data(for: request)
+        return ((response as? HTTPURLResponse)?.statusCode ?? 0, (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:])
+    }
+
+    /// A session of the test's own on an account, beside the phone's.
+    private func signedInBeside(_ instance: String, handle: String, password: String) async throws -> String {
+        let pair = try await elsewhere(instance, "POST", "/auth/sign-in/password", body: ["handleOrEmail": handle, "password": password]).json
+        return try XCTUnwrap(pair["accessToken"] as? String)
+    }
+
+    // Against a running instance (`LUMIA_TEST_INSTANCE`): a role's editor is
+    // open and its name typed over; another session of the account switches
+    // one of its permissions off; the editor's rename is saved. The rename
+    // is taken and the permission is still off: the save sent what the
+    // editor changed, not the role as the editor first saw it.
+    @MainActor
+    func testARenameFromAnEditorLeavesWhatSomeoneElseSwitchedOff() async throws {
+        guard let instance = ProcessInfo.processInfo.environment["LUMIA_TEST_INSTANCE"], let base = URL(string: instance) else {
+            throw XCTSkip("LUMIA_TEST_INSTANCE names no instance")
+        }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lumia-kit-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let (handle, password) = ("editor\(UInt64(Date().timeIntervalSince1970 * 1000))", "a password for the kit's test")
+        let session = await LumiaSession(client: try LumiaClient(baseURL: base, dataDirectory: dir))
+        try await session.createAccount(handle: handle, password: password)
+        let serverID = try await session.client.createServer(name: "Acme").serverId
+        await session.refreshSnapshot()
+        try await session.createRole(serverID: serverID, draft: RoleDraft(name: "Support", color: "sky", hideTag: false, permissions: ["MANAGE_MESSAGES", "MENTION_EVERYONE"]))
+        func role() -> RoleSummary? { session.snapshot?.servers.first { $0.serverId == serverID }?.roles.first { ["Support", "Helpers"].contains($0.name) } }
+        let made = try XCTUnwrap(role())
+        XCTAssertEqual(made.permissions.sorted(), ["MANAGE_MESSAGES", "MENTION_EVERYONE"])
+
+        // The editor opens on the role, and its name is typed over.
+        var opened = Roles.draft(of: made)
+        var draft = opened
+        draft.name = "Helpers"
+
+        // Elsewhere, Mention everyone is switched off.
+        let token = try await signedInBeside(instance, handle: handle, password: password)
+        let patched = try await elsewhere(instance, "PATCH", "/servers/\(serverID)/roles/\(made.roleId)", token: token, body: ["revoke": ["MENTION_EVERYONE"]])
+        XCTAssertEqual(patched.status, 200, "\(patched.json)")
+        await session.refreshSnapshot()
+        let changed = try XCTUnwrap(role())
+        XCTAssertEqual(changed.permissions, ["MANAGE_MESSAGES"])
+        XCTAssertEqual(changed.name, "Support")
+
+        // The editor was touched, so it does not follow, and Save is its rename.
+        (opened, draft) = Roles.followed(opened: opened, draft: draft, role: changed)
+        XCTAssertEqual(opened.permissions.sorted(), ["MANAGE_MESSAGES", "MENTION_EVERYONE"])
+        XCTAssertTrue(Roles.savable(draft, opened: opened))
+        try await session.changeRole(serverID: serverID, roleID: made.roleId, was: opened, now: draft)
+        let saved = try XCTUnwrap(role())
+        XCTAssertEqual(saved.name, "Helpers")
+        XCTAssertEqual(saved.permissions, ["MANAGE_MESSAGES"], "the rename switched back on what someone else had switched off")
+        // As the instance itself lists it, not only as this client holds it.
+        let listed = try await elsewhere(instance, "GET", "/servers/\(serverID)/roles", token: token).json
+        let there = try XCTUnwrap((listed["roles"] as? [[String: Any]])?.first { $0["roleId"] as? String == made.roleId })
+        XCTAssertEqual(there["name"] as? String, "Helpers")
+        XCTAssertEqual(there["permissions"] as? [String], ["MANAGE_MESSAGES"])
+
+        // After its save the editor holds the role as answered, with nothing
+        // to save; an untouched one follows the next change from elsewhere.
+        opened = Roles.draft(of: saved)
+        draft = opened
+        XCTAssertFalse(Roles.savable(draft, opened: opened))
+        let recoloured = try await elsewhere(instance, "PATCH", "/servers/\(serverID)/roles/\(made.roleId)", token: token, body: ["color": "mint"])
+        XCTAssertEqual(recoloured.status, 200, "\(recoloured.json)")
+        await session.refreshSnapshot()
+        (opened, draft) = Roles.followed(opened: opened, draft: draft, role: try XCTUnwrap(role()))
+        XCTAssertEqual(draft.color, "mint")
+        XCTAssertFalse(Roles.savable(draft, opened: opened))
+        // Saved as it opened, it asks nothing and changes nothing.
+        try await session.changeRole(serverID: serverID, roleID: made.roleId, was: opened, now: draft)
+        XCTAssertEqual(role()?.color, "mint")
+    }
+
+    // Against a running instance: a member's form is open and one of their
+    // roles unticked; elsewhere they are given another role; the form is
+    // saved. They keep the role given elsewhere: the save took the one
+    // role, it did not write the set the form first saw. And a save whose
+    // title is refused gives no role: it is one request, all of it or none.
+    @MainActor
+    func testARoleGivenElsewhereStaysWhenAnotherIsTakenInAFormOpenedBefore() async throws {
+        guard let instance = ProcessInfo.processInfo.environment["LUMIA_TEST_INSTANCE"], let base = URL(string: instance) else {
+            throw XCTSkip("LUMIA_TEST_INSTANCE names no instance")
+        }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lumia-kit-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let stamp = UInt64(Date().timeIntervalSince1970 * 1000)
+        let (handle, password) = ("owner\(stamp)", "a password for the kit's test")
+        let session = await LumiaSession(client: try LumiaClient(baseURL: base, dataDirectory: dir.appendingPathComponent("owner")))
+        try await session.createAccount(handle: handle, password: password)
+        let serverID = try await session.client.createServer(name: "Acme").serverId
+        await session.refreshSnapshot()
+        for name in ["Design", "Engineering", "Support"] {
+            try await session.createRole(serverID: serverID, draft: RoleDraft(name: name, color: "", hideTag: false, permissions: []))
+        }
+        let roles = session.snapshot?.servers.first { $0.serverId == serverID }?.roles ?? []
+        let id = { (name: String) in try XCTUnwrap(roles.first { $0.name == name }?.roleId) }
+        let (design, engineering, support) = (try id("Design"), try id("Engineering"), try id("Support"))
+
+        // Someone joins, and holds Engineering.
+        let invite = try await session.client.createInvite(serverID: serverID)
+        let other = try LumiaClient(baseURL: base, dataDirectory: dir.appendingPathComponent("member"))
+        try await other.createAccount(handle: "member\(stamp)", password: password, invite: invite.url)
+        let them = try await other.snapshot().accountId
+        try await session.changeMember(serverID: serverID, accountID: them, give: [engineering])
+        await session.refreshMembers(serverID: serverID)
+        func member() -> MemberSummary? { session.member(them, in: serverID) }
+        XCTAssertEqual(member()?.roleIds, [engineering])
+
+        // Their form opens, and Engineering is unticked.
+        var opened = Roles.form(of: try XCTUnwrap(member()))
+        var form = opened
+        form.roleIDs = Roles.toggled(roles, held: form.roleIDs, roleID: engineering)
+        XCTAssertEqual(form.roleIDs, [])
+
+        // Elsewhere they are given Design, and the phone hears of it.
+        let token = try await signedInBeside(instance, handle: handle, password: password)
+        let given = try await elsewhere(instance, "PATCH", "/servers/\(serverID)/members/\(them)", token: token, body: ["addRoleIds": [design]])
+        XCTAssertEqual(given.status, 200, "\(given.json)")
+        await session.refreshMembers(serverID: serverID)
+        XCTAssertEqual(Set(member()?.roleIds ?? []), [design, engineering])
+        (opened, form) = Roles.followed(opened: opened, form: form, member: try XCTUnwrap(member()))
+        XCTAssertEqual(opened.roleIDs, [engineering])
+
+        // Saved: Engineering taken, Design still theirs, here and on the instance.
+        try await session.saveMember(serverID: serverID, accountID: them, opened: opened, form: form)
+        XCTAssertEqual(member()?.roleIds, [design], "the save wrote the roles the form first saw over the one given elsewhere")
+        let listed = try await session.client.members(serverID: serverID).first { $0.accountId == them }
+        XCTAssertEqual(listed?.roleIds, [design])
+
+        // One request, whole or not at all: a title refused gives no role with it.
+        opened = Roles.form(of: try XCTUnwrap(member()))
+        form = MemberForm(roleIDs: opened.roleIDs + [support], title: "Sup\u{200B}port lead")
+        do {
+            try await session.saveMember(serverID: serverID, accountID: them, opened: opened, form: form)
+            XCTFail("a title with a hidden character was taken")
+        } catch {
+            XCTAssertEqual(RoleWords.memberRefusal(code: error.lumiaCode, details: error.lumiaDetails, message: error.lumiaMessage), "A title is up to 32 characters on one line, with no hidden characters.")
+        }
+        let after = try await session.client.members(serverID: serverID).first { $0.accountId == them }
+        XCTAssertEqual(after?.roleIds, [design], "a role was given though the title sent with it was refused")
+        XCTAssertEqual(after?.title, "")
+        // A role's holders, from its editor: given and taken one role at a time.
+        try await session.changeMember(serverID: serverID, accountID: them, give: [support])
+        try await session.changeMember(serverID: serverID, accountID: them, take: [design])
+        XCTAssertEqual(member()?.roleIds, [support])
+        // Nothing changed, nothing asked: it would be refused were it sent for someone gone.
+        try await session.saveMember(serverID: serverID, accountID: "01890000-0000-7000-8000-00000000dead", opened: opened, form: opened)
     }
 
     func testTheWordsAreTheSheets() {

@@ -50,9 +50,12 @@ public extension LumiaSession {
         await rereadMembers(serverID: serverID)
     }
 
-    /// A role's name, colour, tag switch and permissions, whole; of Everyone only the permissions change.
-    func updateRole(serverID: String, roleID: String, draft: RoleDraft) async throws {
-        take(try await client.updateRole(serverID: serverID, roleID: roleID, name: draft.name, color: draft.color, hideTag: draft.hideTag, permissions: draft.permissions))
+    /// What an editor changed of a role: `was` is the role as the editor
+    /// opened on it, `now` what it holds at Save, and the core sends what
+    /// differs between them and nothing else, so what someone else changed
+    /// of the role meanwhile stands. Of Everyone only the permissions change.
+    func changeRole(serverID: String, roleID: String, was: RoleDraft, now: RoleDraft) async throws {
+        take(try await client.changeRole(serverID: serverID, roleID: roleID, was: was, now: now))
         await rereadMembers(serverID: serverID)
     }
 
@@ -74,24 +77,23 @@ public extension LumiaSession {
         await rereadMembers(serverID: serverID)
     }
 
-    /// The roles a member is to hold, the whole set.
-    func setMemberRoles(serverID: String, accountID: String, roleIDs: [String]) async throws {
-        _ = try await client.setMemberRoles(serverID: serverID, accountID: accountID, roleIDs: roleIDs)
+    /// What was changed of a member, in one request the instance does
+    /// whole or not at all: the roles to give them and to take away, their
+    /// other roles left as the instance has them, and their title, nil to
+    /// leave it as it is and empty to clear it. This account's own title
+    /// is its own to set.
+    func changeMember(serverID: String, accountID: String, give: [String] = [], take: [String] = [], title: String? = nil) async throws {
+        _ = try await client.changeMember(serverID: serverID, accountID: accountID, give: give, take: take, title: title)
         await memberChanged(serverID: serverID, accountID: accountID)
     }
 
-    /// A member's title, up to 32 characters; empty clears it. This account's own is its own to set.
-    func setMemberTitle(serverID: String, accountID: String, title: String) async throws {
-        _ = try await client.setMemberTitle(serverID: serverID, accountID: accountID, title: title)
-        await memberChanged(serverID: serverID, accountID: accountID)
-    }
-
-    /// A member's roles and title as an editor leaves them: each sent only
-    /// where it changed, the roles first; nil for one the editor did not offer.
-    func saveMember(serverID: String, member: MemberSummary, roleIDs: [String]?, title: String?) async throws {
-        let changes = Roles.memberChanges(member, roleIDs: roleIDs, title: title)
-        if let roles = changes.roleIDs { try await setMemberRoles(serverID: serverID, accountID: member.accountId, roleIDs: roles) }
-        if let title = changes.title { try await setMemberTitle(serverID: serverID, accountID: member.accountId, title: title) }
+    /// A member's form saved: what differs between the form as it opened
+    /// and as it is, in one request (`Roles.memberChanges`). Nothing
+    /// changed, nothing is asked.
+    func saveMember(serverID: String, accountID: String, opened: MemberForm, form: MemberForm) async throws {
+        let changes = Roles.memberChanges(opened: opened, form: form)
+        guard !changes.give.isEmpty || !changes.take.isEmpty || changes.title != nil else { return }
+        try await changeMember(serverID: serverID, accountID: accountID, give: changes.give, take: changes.take, title: changes.title)
     }
 
     /// Removes a member from the server.

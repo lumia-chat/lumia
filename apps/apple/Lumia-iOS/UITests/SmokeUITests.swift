@@ -545,8 +545,11 @@ final class SmokeUITests: XCTestCase {
     /// step is announced and waits for `<step>.seen`, the smoke reading the
     /// instance at it: `sections` (Server settings' three, with what each
     /// holds), `made` (New role: Support, in sky, saved from the header),
-    /// `asks` (Administrator turned on asks first), `edited` (renamed
-    /// Helpers, Manage messages and Administrator on, "Saved."), `menu`
+    /// `renaming` (the name typed over; the smoke switches a permission on
+    /// for the role from elsewhere), `asks` (Administrator turned on asks
+    /// first), `edited` (renamed Helpers, Manage messages and Administrator
+    /// on, "Saved.", what was switched on elsewhere still on; the smoke then
+    /// changes the role's colour from elsewhere and the editor follows), `menu`
     /// (the role's More), `moved` (Move up, drawn at once), `given` (Add
     /// members: Priya), `removed` (the Remove beside Priya in Design's
     /// editor), `titled` (Leo's row in Members: a title),
@@ -638,6 +641,10 @@ final class SmokeUITests: XCTestCase {
         // Edit it: its name, a permission, and Administrator, which asks first.
         name.typeText("\n")
         retype(name, "Helpers\n")
+        // With the editor open and its name typed over, the smoke switches
+        // Mention everyone on for the role from elsewhere: not this editor's
+        // change, so its save must leave it standing.
+        reached("renaming", under: steps)
         let manageMessages = app.switches["permission-MANAGE_MESSAGES"], administrator = app.switches["permission-ADMINISTRATOR"]
         reach(administrator)
         XCTAssertEqual(administrator.value as? String, "0")
@@ -662,7 +669,15 @@ final class SmokeUITests: XCTestCase {
         shown(app.staticTexts["role-saved"], "nothing says the role was saved")
         XCTAssertFalse(save.isEnabled, "Save is still offered once the role is saved")
         shown(app.staticTexts["Helpers"], "the header does not say the role's new name")
+        // Saved, the editor holds the role as the instance answered it, what was switched on elsewhere with it.
+        let mentionEveryone = app.switches["permission-MENTION_EVERYONE"]
+        XCTAssertEqual(XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "1"), object: mentionEveryone)], timeout: 10), .completed, "the editor does not show what someone else switched on once it has saved")
+        // The smoke reads the role, then gives it another colour from elsewhere:
+        // nobody has touched the editor since its save, so it follows, with nothing to save.
         reached("edited", under: steps)
+        XCTAssertEqual(XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "isSelected == true"), object: colours.buttons["Mint"])], timeout: 20), .completed, "an editor nobody had touched did not follow its role's colour changed from elsewhere")
+        XCTAssertFalse(colours.buttons["Sky"].isSelected)
+        XCTAssertFalse(save.isEnabled, "someone else's change lit Save")
 
         // Its More: Move up puts it above Can invite, drawn at once.
         back()

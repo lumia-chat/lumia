@@ -96,10 +96,17 @@ public extension LumiaSession {
 /// A message's words stay kept until its send has returned without an
 /// error. The field empties as the send starts, and that is not written:
 /// were the app killed before the core had the message, the words would be
-/// in neither place. So `sending` keeps them, if a rested write had not
-/// yet, `sent` lets them go, and `unsent` puts them back in the field when
-/// nothing was typed there meanwhile, or leaves them kept for the
-/// conversation's next opening when its screen has gone.
+/// in neither place, and the core is not asked at once (its calls take
+/// their turn, behind one that is waiting for the instance). So `sending`
+/// keeps them, if a rested write had not yet, and the screen waits for
+/// that write (`settled`) before it asks for the send, so it cannot land
+/// after the send and put sent words back; `sent` lets them go, and
+/// `unsent` puts them back in the field when nothing was typed there
+/// meanwhile, or leaves them kept for the conversation's next opening when
+/// its screen has gone. The core does the letting go itself for a server's
+/// message, in the one write that puts it in its outbox, when the draft's
+/// words are the message's: `sent` then finds nothing to clear, which
+/// costs nothing, and is what clears a personal conversation's.
 ///
 /// What is held of a conversation is held here and not by its screen, so
 /// that a screen which goes while a send is on its way, and the one that

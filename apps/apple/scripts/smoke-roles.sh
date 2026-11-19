@@ -10,7 +10,9 @@
 # into .build/smoke-roles/, to be looked at beside the boards. Then
 # LumiaUITests/SmokeUITests/testRolesTitlesAndTagsByHand drives the owner's
 # phone and this script reads the instance at each step: a role made, edited
-# (Administrator asked about first), moved up from its menu, given to a
+# (Administrator asked about first; a permission switched on from here while
+# its editor is open stays on through the editor's save, and its colour
+# changed from here afterwards is followed by the editor), moved up from its menu, given to a
 # member and another role taken from her by the Remove beside her, a title
 # set, the tag beside a name in #general following a change made from here
 # while the conversation is on screen, a title and roles changed from a
@@ -243,14 +245,22 @@ reached made 120
 [ "$(role_field Support "r.get('color', '')")" = "sky" ] || fail "Support was not made in sky"
 seen made
 echo "a role made through the screen: Support, in sky, last above Everyone"
+reached renaming 60
+# From elsewhere, while the role's editor is open on the phone with its name typed over.
+support=$(role_field Support "r['roleId']")
+api "$to" PATCH "/servers/$server/roles/$support" '{"grant":["MENTION_EVERYONE"]}' >/dev/null
+[ "$(role_field Support "' '.join(sorted(r.get('permissions', [])))")" = "MENTION_EVERYONE" ] || fail "Mention everyone was not switched on from elsewhere"
+seen renaming
 reached asks 60
 seen asks
 echo "Administrator turned on asks first, in a sheet"
 reached edited 60
-[ "$(role_field Helpers "' '.join(sorted(r.get('permissions', [])))")" = "ADMINISTRATOR MANAGE_MESSAGES" ] || fail "Helpers grants \"$(role_field Helpers "' '.join(sorted(r.get('permissions', [])))")\""
+[ "$(role_field Helpers "' '.join(sorted(r.get('permissions', [])))")" = "ADMINISTRATOR MANAGE_MESSAGES MENTION_EVERYONE" ] || fail "Helpers grants \"$(role_field Helpers "' '.join(sorted(r.get('permissions', [])))")\" after a save from an editor that was open while Mention everyone was switched on elsewhere"
 [ "$(role_field Support "1")" = "gone" ] || fail "the role is still called Support"
+[ "$(role_field Helpers "r.get('color', '')")" = "sky" ] || fail "Helpers is in \"$(role_field Helpers "r.get('color', '')")\""
+api "$to" PATCH "/servers/$server/roles/$support" '{"color":"mint"}' >/dev/null
 seen edited
-echo "the role edited: renamed Helpers, granting Manage messages and Administrator"
+echo "the role edited: renamed Helpers, granting Manage messages and Administrator, and Mention everyone, switched on from elsewhere while the editor was open, still on; then its colour changed from elsewhere for the editor to follow"
 reached menu 60
 seen menu
 reached moved 60
