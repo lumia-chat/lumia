@@ -459,6 +459,10 @@ function onGatewayEvent(e: ClientEvent): void {
       void queryClient.invalidateQueries({ queryKey: ["readStates"] });
       void queryClient.invalidateQueries({ queryKey: ["dmChannels"] });
       break;
+    case "tagsChanged":
+      // What the core keeps has the change already: the members are read from it, and nothing is asked.
+      void membersKept(e.serverId);
+      break;
     case "profileUpdated":
       // Written in where the page holds the person, not asked again (issue #15),
       // and kept for a list already being fetched, whose answer may be older.
@@ -727,6 +731,27 @@ export function membersQuery(serverId: () => string | undefined) {
     },
     enabled: !!serverId(),
   })));
+}
+
+/**
+ * A server's members read again from what the core keeps, where the page
+ * holds them: after `tagsChanged`, and after a change of this account's
+ * own making, whose answer the core has kept (architecture 7.5). A tag is
+ * worked out when the list is read, so this is how a tag follows a role
+ * renamed, a title set or the server showing the other of the two. A list
+ * the core never kept is left to the query.
+ */
+export async function membersKept(serverId: string): Promise<void> {
+  if (!queryClient.getQueryData(["members", serverId])) return;
+  // A fetch on its way would answer with the list as it was.
+  await queryClient.cancelQueries({ queryKey: ["members", serverId] });
+  const kept = await client().keptMembers(serverId);
+  if (kept.length) queryClient.setQueryData(["members", serverId], kept);
+}
+
+/** A member as a call answered them, written into the server's list where the page holds it; `null` takes them out (kicked). */
+export function tookMember(serverId: string, accountId: string, member: MemberSummary | null): void {
+  queryClient.setQueryData<MemberSummary[]>(["members", serverId], (list) => list && (member ? list.map((m) => (m.accountId === accountId ? member : m)) : list.filter((m) => m.accountId !== accountId)));
 }
 
 /** Who is in a channel, as account ids (architecture 6.8). */

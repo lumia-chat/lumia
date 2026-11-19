@@ -170,6 +170,8 @@
 .lu-member__name > :not(.lu-member__label) { flex: none; }
 /* A long tag (a title) gives way before the name does, and is cut in its turn. */
 .lu-member__name > .lu-tag { flex: 0 1 auto; min-width: 0; max-width: 62%; }
+/* The tag gives way before the name does: the name is cut only once the tag is down to a few letters. */
+.lu-member__name:has(> .lu-tag) > .lu-member__label { flex-shrink: 0; max-width: calc(100% - 52px); }
 .lu-member.is-away .lu-member__name { color: var(--ink-body); }
 .lu-members__none { margin: 0; padding: 10px; font-size: 12.5px; color: var(--ink-quiet); }
 .lu-member__sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--ink-muted); }
@@ -1076,6 +1078,7 @@ button.lu-replyref { cursor: pointer; }
 /* A settings page with sections: the list beside the page; folded (a phone), the list is a screen of its own. */
 .lu-settings { flex: 1; min-height: 0; display: flex; }
 .lu-settings > .lu-sections { flex: none; width: 196px; padding: 16px 8px 16px 16px; border-right: 1px solid var(--line); overflow-y: auto; }
+.lu-settings > .lu-sections--screen { flex: 1; width: auto; padding: var(--space-16); border-right: 0; }
 .lu-settings > .lu-page { min-width: 0; }
 .lu-settings__head { display: flex; align-items: center; gap: var(--space-8) var(--space-16); }
 .lu-settings__head > .lu-iconbtn { flex: none; margin: 0 calc(var(--space-8) * -1) 0 calc(var(--space-6) * -1); }
@@ -1124,6 +1127,10 @@ button.lu-role__open { cursor: pointer; }
 .lu-role.is-lifted { border: 1.5px dashed var(--border-dashed); background: none; }
 .lu-role.is-lifted > * { visibility: hidden; }
 .lu-roles__line { height: 3px; margin: -2px 0; border-radius: var(--radius-pill); background: var(--accent); }
+/* The row as it follows the pointer. */
+.lu-roles__ghost { position: fixed; z-index: 40; pointer-events: none; }
+.lu-roles__ghost .lu-role { box-shadow: var(--shadow-floating); }
+.lu-roles__ghost .lu-role__handle { cursor: grabbing; }
 
 /* A member's roles to tick: the picker's rows, a role's dot where a person's avatar would be. */
 .lu-rolepick { max-height: none; }
@@ -1140,6 +1147,7 @@ button.lu-role__open { cursor: pointer; }
 .lu-memberedit__part { min-width: 0; display: flex; flex-direction: column; gap: var(--space-6); }
 .lu-memberedit__legend { font-size: 13.5px; font-weight: 600; color: var(--ink-body); }
 .lu-memberedit__hint { margin: 0; font-size: 12.5px; line-height: 1.45; color: var(--ink-muted); }
+.lu-memberedit__error { margin: 0; font-size: 13px; line-height: 1.4; color: var(--dnd); }
 .lu-memberedit__actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-8); }
 .lu-memberedit__cancel { margin-left: auto; }
 .lu-memberedit .lu-btn--md { height: 40px; }
@@ -1153,6 +1161,7 @@ button.lu-role__open { cursor: pointer; }
 .lu-roster__item + .lu-roster__item { border-top: 1px solid var(--line); }
 .lu-roster__row { width: 100%; display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; grid-template-areas: "face text roles end"; align-items: center; gap: var(--space-4) var(--space-12); padding: 10px 14px; margin: 0; border: 0; border-radius: var(--radius-14); background: none; font: inherit; color: inherit; text-align: start; cursor: pointer; }
 .lu-roster__row:hover { background: var(--hover-member); }
+.lu-roster__row--still, .lu-roster__row--still:hover { background: none; cursor: default; }
 .lu-roster__row > .lu-avatar { grid-area: face; }
 .lu-roster__text { grid-area: text; min-width: 0; display: flex; flex-direction: column; }
 .lu-roster__name { display: flex; align-items: center; gap: var(--space-6); min-width: 0; font-size: 14px; font-weight: 600; color: var(--ink); }

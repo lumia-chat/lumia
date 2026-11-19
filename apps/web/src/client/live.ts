@@ -26,6 +26,15 @@ export interface Kept<T> {
 type Rec = Record<string, unknown>;
 type AnyKept = { key: string; lists?: Record<string, AnyKept | undefined> };
 
+/**
+ * A value as it is under any store that holds it, all the way down: what
+ * can be posted to the worker, which a store's proxies cannot be. A value
+ * no store holds is handed back as it is.
+ */
+export function plain<T>(value: T): T {
+  return unwrap(value);
+}
+
 /** The same elements in the same order. */
 export function sameList<T>(a: readonly T[], b: readonly T[]): boolean {
   return a.length === b.length && a.every((v, i) => v === b[i]);

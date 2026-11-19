@@ -44,6 +44,7 @@ import {
 import { signedOut, type ChannelSummary, type MessageSummary, type ServerSummary } from "../client/bridge";
 import { avatarSrc, channelMembersQuery, checkPush, client, commandError, connection, draftStore, loadMyStatus, loadOlderMessages, membersQuery, messagesQuery, presence, customStatusOf, presenceOf, queryClient, readStatesQuery, sessionEnded, signOut, snapshotQuery, startGateway, tookSnapshot, typingIn, uploadLimitsQuery, watchPresence } from "../client/state";
 import { useNames } from "../client/names";
+import { tagOf } from "../client/roles";
 import { preferences, setAsideHidden } from "../client/preferences";
 import { keepDrafts } from "../client/drafts";
 import type { MenuPoint } from "../client/menus";
@@ -375,6 +376,8 @@ function Frame() {
     }),
   );
   const serverMembers = membersQuery(() => (home() ? undefined : serverId()));
+  // Each member's tag in the server on screen, as the core worked it out (architecture 7.5).
+  const memberTags = createMemo(() => new Map((serverMembers.data ?? []).map((m) => [m.accountId, m.tag] as const)));
   // Attachments (specs/media.md): none where the instance keeps none; a server's channel previews its links' cards, a server DM too.
   const uploadLimits = uploadLimitsQuery();
   const [mediaNote, setMediaNote] = createSignal<string>();
@@ -783,7 +786,7 @@ function Frame() {
         main={
           <Show when={!home()} fallback={<HomeMain {...homeProps()} />}>
             <Switch>
-              <Match when={settingsOpen() && server()}>{(srv) => <ServerSettings server={srv()} snapshot={snapshot.data} back={() => setReading(false)} />}</Match>
+              <Match when={settingsOpen() && server()}>{(srv) => <ServerSettings server={srv()} snapshot={snapshot.data} back={() => setReading(false)} close={() => setSettingsOpen(false)} />}</Match>
               <Match when={page() === "browse" && server()}>{(srv) => <BrowsePage server={srv()} back={() => setReading(false)} open={openPreview} joined={openChannel} />}</Match>
               <Match when={page() === "you" && server()}>{(srv) => <YourSettingsPage server={srv()} back={() => setReading(false)} />}</Match>
               <Match when={page() === "mentions" && server()}>{(srv) => <MentionsPage server={srv()} snapshot={snapshot.data} back={() => setReading(false)} open={toMessage} />}</Match>
@@ -830,6 +833,7 @@ function Frame() {
                               authorName={(m) => nameOf(m.authorId)}
                               authorPhoto={(m) => photoOf(m.authorId)}
                               tone={(m) => toneFor(m.authorId)}
+                              authorTag={(m) => tagOf(memberTags().get(m.authorId))}
                               onOpenProfile={(m, anchor) => openPerson(m.authorId, anchor)}
                               openPerson={openPerson}
                               personMenu={personMenu}
@@ -907,10 +911,11 @@ function Frame() {
           </Show>
         }
         aside={
-          <Show when={home() ? (search().view ?? "dm") === "dm" && search().dm : server() && current()?.kind !== "SERVER_DM"}>
+          // A server's settings have the frame to themselves, as their board does: Members is a section there.
+          <Show when={home() ? (search().view ?? "dm") === "dm" && search().dm : server() && !settingsOpen() && current()?.kind !== "SERVER_DM"}>
             <Show when={!home()} fallback={<ConversationAside {...homeProps()} />}>
               <Switch>
-                <Match when={settingsOpen() || page()}>
+                <Match when={page()}>
                   <MembersAside serverId={serverId() ?? ""} me={accountId()} openPerson={openPerson} personMenu={personMenu} />
                 </Match>
                 <Match when={current()?.kind === "TEXT" && server() && current()}>
@@ -998,7 +1003,9 @@ function MembersAside(props: { serverId: string; me: string; openPerson: (accoun
         const name = m.displayName || m.nickname || m.handle || m.accountId.slice(0, 8);
         // The handle, the pronouns of the verified profile, and the custom status while here.
         const subtitle = [m.handle ? "@" + m.handle : "", m.pronouns, customStatusOf(props.serverId, m.accountId)].filter(Boolean).join(" · ") || undefined;
-        return { id: m.accountId, name, handle: m.handle, initials: initialsOf(name), src: avatarSrc(m.avatarUrl), tone: toneFor(m.accountId), status: presenceOf(props.serverId, m.accountId), subtitle, tag: m.accountId === props.me ? "You" : undefined };
+        // Their tag in the server, a role on its tone or a title on the plain chip (architecture 7.5); this account with none is "You".
+        const tag = tagOf(m.tag);
+        return { id: m.accountId, name, handle: m.handle, initials: initialsOf(name), src: avatarSrc(m.avatarUrl), tone: toneFor(m.accountId), status: presenceOf(props.serverId, m.accountId), subtitle, tag: tag?.label ?? (m.accountId === props.me ? "You" : undefined), tagTone: tag?.tone };
       })
       .sort((a, b) => a.name.localeCompare(b.name));
   });

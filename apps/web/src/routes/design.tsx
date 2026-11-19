@@ -112,6 +112,7 @@ import {
   type TagTone,
 } from "../design/components";
 import { NeedsBrowser, PhraseStep, RestoreAsk, RestoreForm, RestoreKeep, StartOver } from "./private";
+import { ROLES_HINT } from "../client/roles";
 import { endedNotice } from "../client/ended";
 import { LinkPromptCard } from "./link";
 import { MessagesPreview, PreferencesView } from "./preferences";
@@ -1475,7 +1476,6 @@ function RolesSection(props: { roles: RoleEntry[]; reorder?: "drag" | "menu"; st
   );
 }
 
-const ROLES_HINT = "In order, highest first. Drag a role to move it. A new role starts last, just above Everyone.";
 
 /** A role's menu: what a right-click, Shift+F10 or the context menu key opens on its row, and its More button on a phone. */
 function RoleMenu(props: { name: string; first?: boolean; last?: boolean; class?: string }) {
@@ -1526,8 +1526,9 @@ function RolesBoard(props: { onSection: (id: string) => void }) {
   );
 }
 
-// The fourteen permissions a client offers, under their headings (the core
-// will hold the list; plan step 11). Each with one line of what it allows.
+// The fourteen permissions a client offers, under their headings: the
+// core's list (`lumia_client::roles`, which the screens read through
+// `rolePermissions`), written out here as sample data.
 const PERMISSIONS: { heading: string; items: { id: string; name: string; caption: string }[] }[] = [
   {
     heading: "Server",

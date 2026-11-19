@@ -1225,6 +1225,239 @@ async function serverSettings(which: string, stamp: number) {
   console.log(`  ${which}: renamed a server, kept its messages for 30 days after the warning, gave it a picture, a member was not offered the settings and saw a rename arrive, in ${Date.now() - t0} ms`);
 }
 
+// Roles, titles and tags (architecture 7.5, plan step 11), the owner in one
+// browser and a member in another: the settings' sections; a role made,
+// given to the member from its editor, and the tag beside the member's
+// name in both browsers; a role that is nobody's tag; a role moved by its
+// menu and by its handle; Administrator asked first; a name another role
+// has refused; a title set in Members and, once the server shows titles,
+// drawn as the tag in both browsers with no reload; the member's own title
+// from their card; a role deleted after its question; and a kick. The
+// member's browser is Chromium's alone: two of Playwright's WebKits open at
+// once share one origin-private file system, and the second cannot open
+// its store ("file is not a database"). There the member's own title is
+// set through the instance instead, and the owner's page still has to
+// draw it with no reload.
+async function rolesStep(which: string, stamp: number) {
+  const ownerDir = resolve(work, `cli-roles-owner-${which}`);
+  const memberDir = resolve(work, `cli-roles-member-${which}`);
+  const owner = `chief${which}${stamp}`;
+  const member = `crew${which}${stamp}`;
+  lumia(ownerDir, "instance", "add", instance);
+  lumia(ownerDir, "account", "create", "--handle", owner, "--password", password);
+  const server = lumia(ownerDir, "server-create", `Roles ${stamp}`).match(/[0-9a-f-]{36}/)?.[0];
+  if (!server) throw new Error("no server id");
+  const general = lumia(ownerDir, "channel-create", server, "general").match(/[0-9a-f-]{36}/)?.[0];
+  if (!general) throw new Error("no channel id");
+  const code = lumia(ownerDir, "invite-create", server).trim().split(/\s+/)[0];
+  if (!code) throw new Error("no invite code");
+  lumia(memberDir, "instance", "add", instance);
+  lumia(memberDir, "account", "create", "--handle", member, "--password", password, "--invite", code);
+  lumia(memberDir, "send", general, "Reporting for duty.");
+  const signIn = async (page: Page, handle: string) => {
+    await trustCard(page);
+    await page.getByLabel("Email or handle").fill(handle);
+    await page.getByRole("textbox", { name: "Password" }).fill(password);
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await later(page);
+    await page.getByPlaceholder("Message #general").waitFor();
+  };
+  const t0 = Date.now();
+  const mine = await open(which, "roles-owner");
+  const theirs = which === "chromium" ? await open(which, "roles-member") : null;
+  const page = mine.page;
+  live.page = page;
+  try {
+    await signIn(page, owner);
+    if (theirs) {
+      // A sign-in that fails is the member's to be looked at.
+      live.page = theirs.page;
+      await signIn(theirs.page, member);
+      live.page = page;
+    }
+    const sections = page.getByRole("navigation", { name: "Server settings" });
+    const section = (name: string) => sections.getByRole("button", { name });
+    const toSettings = async (name: string) => {
+      if ((await sections.count()) === 0) {
+        await page.getByRole("button", { name: /server menu/ }).click();
+        await page.getByRole("menuitem", { name: "Server settings" }).click();
+      }
+      await section(name).click();
+    };
+    const toGeneral = async () => {
+      await page.getByRole("link", { name: "general" }).click();
+      await page.getByPlaceholder("Message #general").waitFor();
+    };
+    const order = () => page.locator(".lu-role__name").allTextContents();
+    const ordered = async (wanted: string[]) => {
+      for (let i = 0; i < 100 && (await order()).join() !== wanted.join(); i++) await Bun.sleep(100);
+      if ((await order()).join() !== wanted.join()) throw new Error(`the roles read ${(await order()).join(", ")}, not ${wanted.join(", ")}`);
+    };
+    const roleRow = (name: string) => page.locator(".lu-role", { has: page.locator(".lu-role__name", { hasText: new RegExp(`^${name}$`) }) });
+    // The member's message as each browser draws it, and the tag beside its author's name.
+    const tagIn = (p: Page) => p.locator(".lu-msg", { hasText: "Reporting for duty." }).locator(".lu-tag");
+
+    phase("the sections");
+    await page.getByRole("button", { name: /server menu/ }).click();
+    await page.getByRole("menuitem", { name: "Server settings" }).click();
+    for (const name of ["Overview", "Roles", "Members"]) await section(name).waitFor();
+    // Their board has no member list beside it: Members is a section.
+    if ((await page.locator(".lu-shell__aside .lu-member").count()) > 0) throw new Error("the member list is drawn beside the settings");
+
+    phase("a role");
+    await section("Roles").click();
+    await ordered(["Everyone"]);
+    await page.getByRole("button", { name: "New role" }).click();
+    const save = page.getByRole("button", { name: "Save", exact: true });
+    if (!(await save.isDisabled())) throw new Error("a role with no name can be saved");
+    await page.getByLabel("Name").fill("Crew");
+    await page.getByRole("radio", { name: /^sky$/i }).click();
+    await save.click();
+    // Made, it is the role being edited: who holds it can be added.
+    await page.getByRole("heading", { name: /Members with this role/ }).waitFor();
+    await page.getByText("Nobody holds this role yet.").waitFor();
+    await page.getByRole("button", { name: "Add members" }).click();
+    await page.getByRole("checkbox", { name: new RegExp(member) }).click();
+    await page.getByRole("button", { name: "Add", exact: true }).click();
+    await page.locator(".lu-roleedit__holders").getByText(new RegExp(member)).first().waitFor();
+    await page.getByRole("button", { name: "Back to roles" }).click();
+    await roleRow("Crew").getByText("1 member", { exact: true }).waitFor();
+    await roleRow("Everyone").getByText("2 members", { exact: true }).waitFor();
+
+    phase("the tag");
+    if (theirs) await tagIn(theirs.page).filter({ hasText: "Crew" }).waitFor({ timeout: 20_000 });
+    await toGeneral();
+    await tagIn(page).filter({ hasText: "Crew" }).waitFor();
+    if (!(await tagIn(page).getAttribute("class"))?.includes("lu-tone-sky")) throw new Error("the tag is not on its role's tone");
+    await page.locator(".lu-shell__aside .lu-member", { hasText: member }).locator(".lu-tag", { hasText: "Crew" }).waitFor();
+    // A member who manages nothing is offered no settings.
+    if (theirs) {
+      await theirs.page.getByRole("button", { name: /server menu/ }).click();
+      await theirs.page.getByRole("menuitem", { name: "Invite people" }).waitFor();
+      if ((await theirs.page.getByRole("menuitem", { name: "Server settings" }).count()) !== 0) throw new Error("a member is offered the settings");
+      await theirs.page.keyboard.press("Escape");
+    }
+
+    phase("nobody's tag");
+    await toSettings("Roles");
+    await page.getByRole("button", { name: "New role" }).click();
+    await page.getByLabel("Name").fill("Helpers");
+    await page.getByRole("switch", { name: "Show as tag" }).click();
+    await page.getByText("This role only carries permissions. It is nobody’s tag.").waitFor();
+    await save.click();
+    await page.getByRole("heading", { name: /Members with this role/ }).waitFor();
+    await page.getByRole("button", { name: "Back to roles" }).click();
+    await roleRow("Helpers").getByText("Not shown as tag").waitFor();
+    await ordered(["Crew", "Helpers", "Everyone"]);
+
+    phase("moved");
+    await roleRow("Helpers").locator(".lu-role__open").click({ button: "right" });
+    if (!(await page.getByRole("menuitem", { name: "Move down" }).isDisabled())) throw new Error("the last role above Everyone is offered Move down");
+    await page.getByRole("menuitem", { name: "Move up" }).click();
+    await ordered(["Helpers", "Crew", "Everyone"]);
+    // And by its handle: Crew dragged above Helpers, a line where it would land while it is held.
+    const from = await roleRow("Crew").locator(".lu-role__handle").boundingBox();
+    const onto = await roleRow("Helpers").boundingBox();
+    if (!from || !onto) throw new Error("no rows to drag between");
+    await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(from.x + from.width / 2, from.y, { steps: 4 });
+    await page.mouse.move(onto.x + 40, onto.y + 6, { steps: 6 });
+    await page.locator(".lu-roles__line").waitFor();
+    await page.locator(".lu-roles__ghost").waitFor();
+    await page.mouse.up();
+    await ordered(["Crew", "Helpers", "Everyone"]);
+    // As the instance has it, read again.
+    await section("Members").click();
+    await section("Roles").click();
+    await ordered(["Crew", "Helpers", "Everyone"]);
+
+    phase("asked first");
+    await roleRow("Helpers").locator(".lu-role__open").click();
+    const administrator = page.getByRole("switch", { name: "Administrator" });
+    await administrator.click();
+    const question = page.getByRole("dialog", { name: "Turn on Administrator?" });
+    await question.getByText(`Administrator allows everything in Roles ${stamp}, in every channel, whatever a channel’s own permissions say.`).waitFor();
+    await question.getByRole("button", { name: "Cancel" }).click();
+    if ((await administrator.getAttribute("aria-checked")) !== "false") throw new Error("Administrator is on after Cancel");
+    await administrator.click();
+    await question.getByRole("button", { name: "Turn on" }).click();
+    if ((await administrator.getAttribute("aria-checked")) !== "true") throw new Error("Administrator is off after Turn on");
+    await save.click();
+    await page.getByText("Saved.").waitFor();
+
+    phase("a name taken");
+    await page.getByLabel("Name").fill("crew");
+    await save.click();
+    await page.getByText(`Another role in Roles ${stamp} has that name.`).waitFor();
+    await page.getByRole("button", { name: "Back to roles" }).click();
+
+    phase("a title");
+    await section("Members").click();
+    const row = page.locator(".lu-roster__item", { hasText: member });
+    await row.locator(".lu-roster__row").click();
+    if ((await row.getByRole("checkbox", { name: "Crew" }).getAttribute("aria-checked")) !== "true") throw new Error("the member's role is not ticked");
+    await row.getByRole("textbox", { name: "Title" }).fill("Navigator");
+    await row.getByRole("button", { name: "Save", exact: true }).click();
+    await row.getByText("· Navigator").waitFor();
+    await page.locator(".lu-roster__item", { hasText: owner }).locator(".lu-tag", { hasText: "Owner" }).waitFor();
+
+    phase("titles as tags");
+    await section("Overview").click();
+    await page.getByRole("radio", { name: /^Titles/ }).click();
+    // In the member's browser with no reload: the title, on the plain chip.
+    if (theirs) await tagIn(theirs.page).filter({ hasText: "Navigator" }).waitFor({ timeout: 20_000 });
+    await toGeneral();
+    await tagIn(page).filter({ hasText: "Navigator" }).waitFor();
+    if (!(await tagIn(page).getAttribute("class"))?.includes("lu-tag--neutral")) throw new Error("a title's tag is not the plain chip");
+
+    phase("their own title");
+    if (theirs) {
+      await theirs.page.locator(".lu-msg", { hasText: "Reporting for duty." }).getByRole("button", { name: new RegExp(member) }).first().click();
+      const card = theirs.page.locator(".lu-pcard");
+      await card.getByText("Navigator").waitFor();
+      await card.locator(".lu-tag", { hasText: "Crew" }).waitFor();
+      // Their roles are not theirs to change.
+      if ((await card.getByRole("button", { name: "Edit roles" }).count()) !== 0) throw new Error("a member is offered their own roles");
+      await card.getByRole("button", { name: "Edit title" }).click();
+      await theirs.page.getByRole("textbox", { name: "Title" }).fill("Pilot");
+      await theirs.page.getByRole("button", { name: "Save", exact: true }).click();
+      await theirs.page.locator(".lu-pcard").getByText("Pilot").waitFor();
+      await theirs.page.keyboard.press("Escape");
+    } else {
+      const json = { "content-type": "application/json", accept: "application/json" };
+      const pair = (await (await fetch(`${instance}/api/v1/auth/sign-in/password`, { method: "POST", headers: json, body: JSON.stringify({ handleOrEmail: member, password }) })).json()) as { accessToken?: string };
+      if (!pair.accessToken) throw new Error("the suite could not sign in as the member");
+      const set = await fetch(`${instance}/api/v1/servers/${server}/membership`, { method: "PATCH", headers: { ...json, authorization: `Bearer ${pair.accessToken}` }, body: JSON.stringify({ title: "Pilot" }) });
+      if (!set.ok) throw new Error(`the member's title was not set: ${set.status} ${await set.text()}`);
+    }
+    // In the owner's browser with no reload, whoever set it and wherever.
+    await tagIn(page).filter({ hasText: "Pilot" }).waitFor({ timeout: 20_000 });
+    await page.screenshot({ path: `${out}/${which}-roles-titles.png` });
+
+    phase("deleted");
+    await toSettings("Roles");
+    await roleRow("Helpers").locator(".lu-role__open").click();
+    await page.getByRole("button", { name: "Delete role" }).click();
+    const asked = page.getByRole("dialog", { name: "Delete Helpers?" });
+    await asked.getByText("Nobody holds this role.").waitFor();
+    await asked.getByRole("button", { name: "Delete role" }).click();
+    await ordered(["Crew", "Everyone"]);
+    await page.screenshot({ path: `${out}/${which}-roles.png` });
+
+    phase("kicked");
+    await section("Members").click();
+    await row.locator(".lu-roster__row").click();
+    await row.getByRole("button", { name: `Kick ${member}` }).click();
+    await row.waitFor({ state: "detached" });
+    await page.getByRole("heading", { name: /^Members/ }).getByText("1", { exact: true }).waitFor();
+  } finally {
+    await mine.ctx.close();
+    await theirs?.ctx.close();
+  }
+  console.log(`  ${which}: made roles, gave one from its editor and saw its tag${theirs ? " in two browsers" : ""}, moved one by its menu and by its handle, was asked before Administrator, was refused a name taken, set titles and saw them as tags once the server showed titles, deleted a role after its question, and kicked a member, in ${Date.now() - t0} ms`);
+}
+
 // The middle button held over a pane and moved up from where it came down
 // scrolls the pane up, with a mark where it came down, until it comes up
 // (client/autoscroll.ts); a primary drag does none of it. A field being
@@ -3125,6 +3358,7 @@ try {
       ["account", () => account(which, `web${stamp}`, stamp)],
       ["preferences", () => preferencesStep(which, stamp)],
       ["server settings", () => serverSettings(which, stamp)],
+      ["roles", () => rolesStep(which, stamp)],
       ["autoscroll", () => autoscrollStep(which, stamp)],
       ["aside", () => asideStep(which, stamp)],
       ["rail", () => railStep(which, stamp)],

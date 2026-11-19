@@ -8,6 +8,7 @@ import { BrowseRow, Button, Card, ChannelHeader, Checkbox, EmptyState, MemberLis
 import { ClientError, type ChannelSummary, type ServerSummary, type SnapshotSummary } from "../client/bridge";
 import type { MenuPoint } from "../client/menus";
 import { avatarSrc, browseQuery, channelMembersQuery, client, customStatusOf, membersQuery, presence, presenceOf, queryClient, tookSnapshot } from "../client/state";
+import { tagOf } from "../client/roles";
 import { initialsOf, toneFor } from "./app";
 
 /** Why something about a channel was refused. */
@@ -259,7 +260,9 @@ export function ChannelMembersAside(props: {
           props.server.canManageChannels && props.joined && id !== props.me
             ? { label: "Remove from channel", description: `Remove ${name} from #${props.channel.name}`, disabled: busy(), onClick: () => void remove(id) }
             : undefined;
-        return { id, name, handle: m?.handle ?? "", initials: initialsOf(name), src: avatarSrc(m?.avatarUrl), tone: toneFor(id), status: presenceOf(props.server.serverId, id), subtitle, tag: id === props.me ? "You" : undefined, action };
+        // Their tag in the server (architecture 7.5), as the server's own member list has it.
+        const tag = tagOf(m?.tag);
+        return { id, name, handle: m?.handle ?? "", initials: initialsOf(name), src: avatarSrc(m?.avatarUrl), tone: toneFor(id), status: presenceOf(props.server.serverId, id), subtitle, tag: tag?.label ?? (id === props.me ? "You" : undefined), tagTone: tag?.tone, action };
       })
       .sort((a, b) => a.name.localeCompare(b.name));
   });

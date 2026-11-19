@@ -39,6 +39,7 @@ import {
   type MentionOption,
   type MessagePart,
   type ReactionChipProps,
+  type TagTone,
   type Tone,
 } from "../design/components";
 import { frequentEmoji, usedEmoji } from "../design/emoji";
@@ -245,6 +246,8 @@ export interface TimelineProps {
   authorName: (item: TimelineItem) => string;
   authorPhoto: (item: TimelineItem) => string | undefined;
   tone: (item: TimelineItem) => Tone;
+  /** The tag beside the author's name, where the conversation is a server's and the author has one there (architecture 7.5). */
+  authorTag?: (item: TimelineItem) => { label: string; tone: TagTone } | undefined;
   /** The author's card; none where the author is not known. */
   onOpenProfile?: (item: TimelineItem, anchor: HTMLElement) => void;
   /** Someone's card, from a mention of them. */
@@ -733,6 +736,7 @@ export function Timeline(props: TimelineProps) {
                           initials={initialsOf(props.authorName(first))}
                           src={props.authorPhoto(first)}
                           tone={props.tone(first)}
+                          tag={props.authorTag?.(first)}
                           time={t.time}
                           datetime={t.datetime}
                           actions={false}

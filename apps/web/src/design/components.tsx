@@ -4683,8 +4683,8 @@ export interface RoleEntry {
   name: string;
   /** Its colour: one of the nine tones, or none. */
   tone?: Tone | null;
-  /** How many members hold it. */
-  members: number;
+  /** How many members hold it; left out until it is known. */
+  members?: number;
   /** "Show as tag" is off: it carries permissions and is nobody's tag. */
   untagged?: boolean;
   /** `@everyone`: named "Everyone" here, last, never moved. */
@@ -4708,6 +4708,10 @@ export interface RoleListProps {
   onMenu?: (role: RoleEntry, control: HTMLElement, at?: MenuPoint) => void;
   /** A drag held still, for the boards: the role lifted, and the one it would land before. */
   still?: { id: string; before: string };
+  /** Whether a role dragged by its handle may land before another (the last is Everyone, which a role lands before to be last). */
+  lands?: (id: string, before: string) => boolean;
+  /** A drag was let go where the role may land: it goes before `before`. Without it nothing drags. */
+  onMove?: (id: string, before: string) => void;
   class?: string;
 }
 
@@ -4718,36 +4722,106 @@ export interface RoleListProps {
  */
 export function RoleList(props: RoleListProps) {
   const reorder = () => props.reorder ?? "drag";
+  const words = (r: RoleEntry) => (
+    <>
+      <RoleDot tone={r.tone} />
+      <span class="lu-role__text">
+        <span class="lu-role__name">{r.name}</span>
+        <span class="lu-role__meta">
+          <Show when={r.members !== undefined}>
+            <span>{membersWords(r.members ?? 0)}</span>
+          </Show>
+          <Show when={r.untagged}>
+            <span class="lu-role__untagged">
+              <Icon name="eye-off" size={13} strokeWidth={1.9} />
+              Not shown as tag
+            </span>
+          </Show>
+        </span>
+      </span>
+    </>
+  );
+
+  // A drag by a role's handle, as a rail tile's is (pointer events, not
+  // touch): past a few pixels the row's place is dashed and the row follows
+  // the pointer; a line in the accent says where it would land, which is
+  // before the first row whose middle is under the pointer, or before the
+  // last where there is none; Escape puts it back.
+  let list: HTMLUListElement | undefined;
+  const [drag, setDrag] = createSignal<{ id: string; x: number; y: number; grabX: number; grabY: number; width: number; before: string | null } | null>(null);
+  // The row's box as it was pressed: the list may be drawn again before the pointer has moved.
+  let press: { id: string; x: number; y: number; box: DOMRect } | null = null;
+  const beforeAt = (y: number, id: string): string | null => {
+    const rows = [...(list?.querySelectorAll<HTMLElement>("[data-role]") ?? [])];
+    const under = rows.find((el) => {
+      const b = el.getBoundingClientRect();
+      return y < b.top + b.height / 2;
+    });
+    const before = (under ?? rows[rows.length - 1])?.dataset.role;
+    return before && (props.lands ? props.lands(id, before) : before !== id) ? before : null;
+  };
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key !== "Escape") return;
+    e.preventDefault();
+    e.stopPropagation();
+    end();
+  };
+  const onPointerMove = (e: PointerEvent) => {
+    if (!press) return;
+    let d = drag();
+    if (!d) {
+      if (Math.hypot(e.clientX - press.x, e.clientY - press.y) < 5) return;
+      const b = press.box;
+      d = { id: press.id, x: e.clientX, y: e.clientY, grabX: press.x - b.left, grabY: press.y - b.top, width: b.width, before: null };
+      document.addEventListener("keydown", onKey, true);
+    }
+    setDrag({ ...d, x: e.clientX, y: e.clientY, before: beforeAt(e.clientY, d.id) });
+  };
+  const onPointerUp = () => {
+    const d = drag();
+    end();
+    if (d?.before) props.onMove?.(d.id, d.before);
+  };
+  const end = () => {
+    press = null;
+    setDrag(null);
+    window.removeEventListener("pointermove", onPointerMove);
+    window.removeEventListener("pointerup", onPointerUp);
+    window.removeEventListener("pointercancel", end);
+    document.removeEventListener("keydown", onKey, true);
+  };
+  onCleanup(end);
+  const down = (e: PointerEvent & { currentTarget: HTMLElement }, id: string) => {
+    const row = e.currentTarget.closest<HTMLElement>("[data-role]");
+    if (!props.onMove || props.still || !row || e.button !== 0 || e.pointerType === "touch") return;
+    // The handle is no text to select while it is dragged.
+    e.preventDefault();
+    press = { id, x: e.clientX, y: e.clientY, box: row.getBoundingClientRect() };
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", end);
+  };
+  const lifted = () => props.still?.id ?? drag()?.id;
+  const line = () => props.still?.before ?? drag()?.before ?? undefined;
+  const held = () => {
+    const d = drag();
+    const role = d && props.roles.find((r) => r.id === d.id);
+    return d && role ? { d, role } : undefined;
+  };
+
   return (
-    <ul class={cx("lu-roles", props.class)}>
+    <ul ref={list} class={cx("lu-roles", props.class)}>
       <For each={props.roles}>
         {(r) => {
           const moves = () => !r.everyone && !r.locked;
-          const words = () => (
-            <>
-              <RoleDot tone={r.tone} />
-              <span class="lu-role__text">
-                <span class="lu-role__name">{r.name}</span>
-                <span class="lu-role__meta">
-                  <span>{membersWords(r.members)}</span>
-                  <Show when={r.untagged}>
-                    <span class="lu-role__untagged">
-                      <Icon name="eye-off" size={13} strokeWidth={1.9} />
-                      Not shown as tag
-                    </span>
-                  </Show>
-                </span>
-              </span>
-            </>
-          );
           return (
             <>
-              <Show when={props.still?.before === r.id}>
+              <Show when={line() === r.id}>
                 <li aria-hidden="true" class="lu-roles__line"></li>
               </Show>
-              <li class={cx("lu-role", r.locked && "is-locked", props.still?.id === r.id && "is-lifted")}>
+              <li data-role={r.id} class={cx("lu-role", r.locked && "is-locked", lifted() === r.id && "is-lifted")}>
                 <Show when={reorder() === "drag"}>
-                  <span aria-hidden="true" class="lu-role__handle">
+                  <span aria-hidden="true" class="lu-role__handle" onPointerDown={(e) => moves() && down(e, r.id)}>
                     <Show when={moves()}>
                       <Grip />
                     </Show>
@@ -4757,7 +4831,7 @@ export function RoleList(props: RoleListProps) {
                   when={!r.locked}
                   fallback={
                     <div class="lu-role__open" title="At or above your own highest role, so not yours to change">
-                      {words()}
+                      {words(r)}
                       <Icon name="lock" size={15} strokeWidth={1.9} class="lu-role__end" label="Not yours to change" />
                     </div>
                   }
@@ -4769,7 +4843,7 @@ export function RoleList(props: RoleListProps) {
                     onContextMenu={(e) => menuPress(e, props.onMenu && moves() ? (row, at) => props.onMenu?.(r, row, at) : undefined)}
                     onKeyDown={(e) => menuKeyed(e, props.onMenu && moves() ? (row) => props.onMenu?.(r, row) : undefined)}
                   >
-                    {words()}
+                    {words(r)}
                     <Icon name="chevron-right" size={15} strokeWidth={2.2} class="lu-role__end" />
                   </button>
                 </Show>
@@ -4781,6 +4855,23 @@ export function RoleList(props: RoleListProps) {
           );
         }}
       </For>
+      <Show when={held()}>
+        {(h) => (
+          <Portal>
+            <ul aria-hidden="true" class="lu-roles lu-roles__ghost" style={{ left: h().d.x - h().d.grabX + "px", top: h().d.y - h().d.grabY + "px", width: h().d.width + "px" }}>
+              <li class="lu-role">
+                <span class="lu-role__handle">
+                  <Grip />
+                </span>
+                <div class="lu-role__open">
+                  {words(h().role)}
+                  <Icon name="chevron-right" size={15} strokeWidth={2.2} class="lu-role__end" />
+                </div>
+              </li>
+            </ul>
+          </Portal>
+        )}
+      </Show>
     </ul>
   );
 }
@@ -4844,6 +4935,10 @@ export interface MemberEditProps {
   onSave?: () => void;
   /** Kick, where the viewer may: they hold Manage members and the member is below them. */
   onKick?: () => void;
+  /** A save or a kick is on its way: nothing is pressed twice. */
+  busy?: boolean;
+  /** Why it was not saved. */
+  error?: string;
   class?: string;
 }
 
@@ -4876,16 +4971,21 @@ export function MemberEdit(props: MemberEditProps) {
           </div>
         </Show>
       </div>
+      <Show when={props.error}>
+        <p class="lu-memberedit__error" role="alert">
+          {props.error}
+        </p>
+      </Show>
       <div class="lu-memberedit__actions">
         <Show when={props.onKick}>
-          <Button size="md" class="lu-memberedit__kick" aria-label={`Kick ${props.name}`} onClick={() => props.onKick?.()}>
+          <Button size="md" class="lu-memberedit__kick" aria-label={`Kick ${props.name}`} disabled={props.busy} onClick={() => props.onKick?.()}>
             Kick
           </Button>
         </Show>
         <Button size="md" class="lu-memberedit__cancel" onClick={() => props.onCancel?.()}>
           Cancel
         </Button>
-        <Button variant="primary" size="md" type="submit">
+        <Button variant="primary" size="md" type="submit" disabled={props.busy}>
           Save
         </Button>
       </div>
@@ -4905,6 +5005,8 @@ export interface RosterEntry {
   mark?: "Owner" | "Guest";
   /** Every role they hold, highest first. */
   roles?: { label: string; tone?: Tone | null }[];
+  /** Nothing of theirs is the viewer's to change: the row does not open. */
+  still?: boolean;
 }
 
 export interface RosterProps {
@@ -4931,34 +5033,44 @@ export function Roster(props: RosterProps) {
       <ul class="lu-roster__list">
         <For each={props.members}>
           {(m) => {
-            const open = () => props.open === m.id;
+            const open = () => props.open === m.id && !m.still;
+            const row = () => (
+              <>
+                <Avatar initials={m.initials} src={m.src} tone={m.tone} size={34} />
+                <span class="lu-roster__text">
+                  <span class="lu-roster__name">
+                    <span class="lu-roster__label">{m.name}</span>
+                    <Show when={m.mark}>
+                      {(mark) => (
+                        <Tag tone="accent" size="sm">
+                          {mark()}
+                        </Tag>
+                      )}
+                    </Show>
+                  </span>
+                  <span class="lu-roster__sub">
+                    @{m.handle}
+                    <Show when={m.title}> · {m.title}</Show>
+                  </span>
+                </span>
+                <Show when={m.roles?.length}>
+                  <span class="lu-roster__roles">
+                    <For each={m.roles}>{(r) => <Tag tone={r.tone ?? "neutral"}>{r.label}</Tag>}</For>
+                  </span>
+                </Show>
+              </>
+            );
             return (
               <li class={cx("lu-roster__item", open() && "is-open")}>
-                <button type="button" class="lu-roster__row" aria-expanded={open()} onClick={() => props.onToggle?.(m)}>
-                  <Avatar initials={m.initials} src={m.src} tone={m.tone} size={34} />
-                  <span class="lu-roster__text">
-                    <span class="lu-roster__name">
-                      <span class="lu-roster__label">{m.name}</span>
-                      <Show when={m.mark}>
-                        {(mark) => (
-                          <Tag tone="accent" size="sm">
-                            {mark()}
-                          </Tag>
-                        )}
-                      </Show>
-                    </span>
-                    <span class="lu-roster__sub">
-                      @{m.handle}
-                      <Show when={m.title}> · {m.title}</Show>
-                    </span>
-                  </span>
-                  <Show when={m.roles?.length}>
-                    <span class="lu-roster__roles">
-                      <For each={m.roles}>{(r) => <Tag tone={r.tone ?? "neutral"}>{r.label}</Tag>}</For>
-                    </span>
-                  </Show>
-                  <Icon name={open() ? "chevron-down" : "chevron-right"} size={15} strokeWidth={2.2} class="lu-roster__end" />
-                </button>
+                <Show when={!m.still} fallback={<div class="lu-roster__row lu-roster__row--still">{row()}</div>}>
+                  <button type="button" class="lu-roster__row" aria-expanded={open()} onClick={() => props.onToggle?.(m)}>
+                    {row()}
+                    {/* Two glyphs, since one drawn keeps the name it was given. */}
+                    <Show when={open()} fallback={<Icon name="chevron-right" size={15} strokeWidth={2.2} class="lu-roster__end" />}>
+                      <Icon name="chevron-down" size={15} strokeWidth={2.2} class="lu-roster__end" />
+                    </Show>
+                  </button>
+                </Show>
                 <Show when={open()}>
                   <div class="lu-roster__editor">{props.editor?.(m)}</div>
                 </Show>

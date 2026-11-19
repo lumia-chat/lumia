@@ -3,6 +3,8 @@
 // tab with a Web Lock first (architecture 11.4), so two tabs never open
 // the same OPFS store.
 
+import { plain } from "./live";
+
 export interface InstanceSummary {
   host: string;
   operatorName: string;
@@ -641,7 +643,14 @@ export class Bridge {
     const id = this.next++;
     return new Promise<T>((resolve, reject) => {
       this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject });
-      this.worker.postMessage({ id, method, args });
+      try {
+        // What a query holds is a store, and a store's proxies cannot be posted: a member with
+        // a tag or roles is objects within objects, which a store hands out wrapped (plan step 11).
+        this.worker.postMessage({ id, method, args: args.map(plain) });
+      } catch (e) {
+        this.pending.delete(id);
+        throw e;
+      }
     });
   }
 

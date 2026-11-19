@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createMemo, createRoot, createSignal, mapArray } from "solid-js";
 import { createStore, unwrap } from "solid-js/store";
-import { keep, keptById, sameList, sameValue, type Kept } from "./live";
+import { keep, keptById, plain, sameList, sameValue, type Kept } from "./live";
 
 interface File {
   fileId: string;
@@ -194,5 +194,19 @@ describe("sameList", () => {
     expect(sameList([a], [a, b])).toBe(false);
     expect(sameList([a], [{}])).toBe(false);
     expect(sameList([], [])).toBe(true);
+  });
+});
+
+describe("plain", () => {
+  test("what a store holds can be posted once it is plain, objects within objects too", () => {
+    const [held] = createStore({ members: [{ accountId: "ada", roleIds: ["eng"], tag: { label: "Engineering", color: "sky" } }] });
+    expect(() => structuredClone(held.members)).toThrow();
+    expect(structuredClone(plain(held.members))).toEqual([{ accountId: "ada", roleIds: ["eng"], tag: { label: "Engineering", color: "sky" } }]);
+  });
+  test("what no store holds is handed back as it is", () => {
+    const list = [{ a: 1 }];
+    expect(plain(list)).toBe(list);
+    expect(plain("text")).toBe("text");
+    expect(plain(undefined)).toBeUndefined();
   });
 });

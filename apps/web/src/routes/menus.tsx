@@ -15,9 +15,11 @@ import { avatarSrc, channelMembersQuery, client, connection, customStatusOf, mem
 import { channelRefusal, dmRefusal } from "./channels";
 import { offeredWays, personOffers, type MenuPoint, type PersonOffer, type PersonWay } from "../client/menus";
 import { useNames } from "../client/names";
+import { memberMark, memberOffers, rolesHeld, settingsSections } from "../client/roles";
 import { initialsOf, toneFor } from "./app";
 import { messagePerson } from "./home";
 import { FolderSettingsPop, RailMenu } from "./rail";
+import { MemberRolesPop, MemberTitlePop } from "./roles";
 
 /** What is open over the frame, and the element it opened from. */
 export type Over =
@@ -30,6 +32,9 @@ export type Over =
   | { kind: "account"; anchor: HTMLElement }
   | { kind: "person"; anchor: HTMLElement; accountId: string; /** What a way chosen from their menu led to instead, said in the card. */ note?: string }
   | { kind: "personMenu"; anchor: HTMLElement; accountId: string; /** Where the pointer asked; none for the keyboard. */ at?: MenuPoint }
+  /** What a card's Edit opens, in the server on screen (architecture 7.5): a member's roles to tick, or their title. The card comes back as it closes. */
+  | { kind: "memberRoles"; anchor: HTMLElement; accountId: string }
+  | { kind: "memberTitle"; anchor: HTMLElement; accountId: string }
   | { kind: "railMenu"; anchor: HTMLElement; id: string }
   | { kind: "folderSettings"; anchor: HTMLElement; folderId: string };
 
@@ -91,7 +96,7 @@ export function Overlay(props: OverlayProps) {
               >
                 Your settings in {server().name}
               </MenuItem>
-              <Show when={server().canManage}>
+              <Show when={settingsSections(server()).length > 0}>
                 <MenuItem
                   icon="settings"
                   onSelect={() => {
@@ -142,6 +147,9 @@ export function Overlay(props: OverlayProps) {
       </Match>
       <Match when={props.over.kind === "personMenu" && props.over}>
         {(over) => <PersonMenuOver {...props} accountId={(over() as Extract<Over, { kind: "personMenu" }>).accountId} at={(over() as Extract<Over, { kind: "personMenu" }>).at} />}
+      </Match>
+      <Match when={(props.over.kind === "memberRoles" || props.over.kind === "memberTitle") && props.server && props.over}>
+        {(over) => <MemberPop {...props} server={props.server as ServerSummary} kind={over().kind as "memberRoles" | "memberTitle"} accountId={(over() as Extract<Over, { kind: "memberRoles" }>).accountId} />}
       </Match>
       <Match when={props.over.kind === "railMenu" && props.over}>
         {(over) => (
@@ -449,13 +457,13 @@ function usePerson(props: OverlayProps & { accountId: string }) {
       return "";
     },
   };
-  return { ...names, me, name, offers, ways };
+  return { ...names, me, name, offers, ways, members };
 }
 
 // Who someone is: the name, the handle, where they are in the server on
 // screen, what their verified profile says, and a way to write to them.
 function PersonCard(props: OverlayProps & { accountId: string; note?: string }) {
-  const { profile, photoOf, me, name, offers, ways } = usePerson(props);
+  const { profile, photoOf, me, name, offers, ways, members } = usePerson(props);
   const handle = () => (me() ? props.snapshot?.handle : profile(props.accountId)?.handle) || undefined;
   const details = () =>
     (
@@ -481,6 +489,15 @@ function PersonCard(props: OverlayProps & { accountId: string; note?: string }) 
   const action = () => button(offers().action);
   const secondary = () => button(offers().secondary);
   const cardNote = () => note() || offers().note || "";
+  // In a server: their title and roles there, who they are to it, and what of those is this account's to change (architecture 7.5).
+  const member = () => (props.server ? members.data?.find((m) => m.accountId === props.accountId) : undefined);
+  const edits = () => {
+    const [server, m] = [props.server, member()];
+    if (!server || !m) return undefined;
+    const may = memberOffers(server, m, me());
+    const open = (kind: "memberRoles" | "memberTitle") => () => props.open({ kind, anchor: props.over.anchor, accountId: props.accountId });
+    return may.roles || may.title ? { roles: may.roles ? open("memberRoles") : undefined, title: may.title ? open("memberTitle") : undefined } : undefined;
+  };
   return (
     <Popover anchor={props.over.anchor} onClose={props.close} closeLabel="Close profile">
       <ProfileCard
@@ -489,7 +506,10 @@ function PersonCard(props: OverlayProps & { accountId: string; note?: string }) 
         src={photoOf(props.accountId)}
         tone={toneFor(props.accountId)}
         handle={handle()}
-        tag={me() ? "You" : undefined}
+        tag={me() ? "You" : member() && memberMark(member()!)}
+        title={member()?.title || undefined}
+        roles={props.server && member() ? rolesHeld(props.server.roles, member()!.roleIds) : undefined}
+        edit={edits()}
         // Presence is a server's to say; at Home there is none to show.
         status={props.server ? (presenceOf(props.server.serverId, props.accountId) ?? null) : undefined}
         details={details()}
@@ -522,6 +542,28 @@ function PersonMenuOver(props: OverlayProps & { accountId: string; at?: MenuPoin
     <ContextMenu anchor={anchor} at={props.at} onClose={props.close}>
       <PersonMenu name={name()} onProfile={() => card()} ways={offeredWays(offers()).map((o) => ({ label: o.label, onSelect: () => void go(o.way) }))} />
     </ContextMenu>
+  );
+}
+
+// What a card's Edit opened, for the member as the server's list now has
+// them; the card comes back when it is saved or cancelled, and a press
+// outside closes both.
+function MemberPop(props: OverlayProps & { server: ServerSummary; kind: "memberRoles" | "memberTitle"; accountId: string }) {
+  const members = membersQuery(() => props.server.serverId);
+  // Read once: the card opens against the control after this has gone.
+  const anchor = props.over.anchor;
+  const accountId = props.accountId;
+  // The member as they were when the list was first in hand: what is being typed is not written over by a list read again.
+  const member = createMemo<MemberSummary | undefined>((had) => had ?? members.data?.find((m) => m.accountId === accountId));
+  const card = () => props.open({ kind: "person", anchor, accountId });
+  return (
+    <Show when={member()}>
+      {(m) => (
+        <Show when={props.kind === "memberRoles"} fallback={<MemberTitlePop server={props.server} member={m()} anchor={anchor} close={props.close} done={card} />}>
+          <MemberRolesPop server={props.server} member={m()} anchor={anchor} close={props.close} done={card} />
+        </Show>
+      )}
+    </Show>
   );
 }
 
