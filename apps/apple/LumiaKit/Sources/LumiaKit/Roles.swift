@@ -101,11 +101,13 @@ public enum Roles {
         }
     }
 
-    /// Who may be given a role from its editor: those the core's
-    /// `rolesMayBeGiven` lets be offered (no guest, nobody who holds it),
-    /// found by `query`, in the order of their names.
+    /// Who may be given a role from its editor: those the core lets be
+    /// offered (no guest, nobody who holds it; `rolesGivenTo`, one call for
+    /// the whole list), found by `query`, in the order of their names.
     public static func candidates(_ members: [MemberSummary], roleID: String, query: String, name: (MemberSummary) -> String) -> [MemberSummary] {
-        searched(members, query: query).filter { rolesMayBeGiven(roleId: roleID, member: $0) }
+        let found = searched(members, query: query)
+        return rolesGivenTo(roleId: roleID, members: found)
+            .compactMap { i in found.indices.contains(Int(i)) ? found[Int(i)] : nil }
             .sorted { name($0).localizedCaseInsensitiveCompare(name($1)) == .orderedAscending }
     }
 
