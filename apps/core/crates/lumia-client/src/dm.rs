@@ -128,9 +128,12 @@ pub struct DmEngine {
     /// kept in the store (`dm:sent:<id>`) for a send that outlives the
     /// process: the outbox resends it, and the ack or the event records it.
     sent: HashMap<Vec<u8>, (Vec<u8>, u64)>,
-    /// Conversations whose commit was refused on the epoch rule: their
-    /// leaves are reconciled again once the missed events are processed.
-    retry_after_refusal: HashSet<Vec<u8>>,
+    /// Conversations whose commit was refused: their leaves are reconciled
+    /// again once the missed events are processed. A refusal on the epoch
+    /// rule names the epoch the refused commit would have made, and the
+    /// retry waits until the group has reached it, which is the other
+    /// device's commit merged: retried sooner, it is refused again.
+    retry_after_refusal: HashMap<Vec<u8>, Option<u64>>,
 }
 
 impl std::fmt::Debug for DmEngine {
@@ -265,7 +268,7 @@ impl DmEngine {
             participants: HashMap::new(),
             pending: HashMap::new(),
             sent: HashMap::new(),
-            retry_after_refusal: HashSet::new(),
+            retry_after_refusal: HashMap::new(),
         };
         for stored in engine.store.account_events()? {
             if let Ok(ev) = AccountEvent::decode(stored.bytes.as_slice()) {
@@ -893,7 +896,8 @@ impl DmEngine {
                 let mut out = self.on_refused(pending, error)?;
                 // The missed events may already be in; catching up runs the
                 // retry either way.
-                for channel in self.retry_after_refusal.clone() {
+                let channels: Vec<Vec<u8>> = self.retry_after_refusal.keys().cloned().collect();
+                for channel in channels {
                     out.extend(self.catch_up(&channel).await?);
                 }
                 Ok(out)
@@ -998,6 +1002,7 @@ impl DmEngine {
         let Pending::Commit {
             channel_id,
             creating,
+            epoch,
             ..
         } = pending
         else {
@@ -1017,7 +1022,9 @@ impl DmEngine {
             Ok::<_, ClientError>(())
         })?;
         if !creating {
-            self.retry_after_refusal.insert(channel_id);
+            let on_epoch = error.details.get("state").is_some_and(|s| s == "epoch");
+            self.retry_after_refusal
+                .insert(channel_id, on_epoch.then_some(epoch));
         }
         Ok(vec![Outcome::Print(if creating {
             "commit refused: another device created the group first; waiting for its welcome".into()
@@ -1119,7 +1126,7 @@ impl DmEngine {
             }
             out.extend(self.record(&ev, payload, result)?);
         }
-        if self.retry_after_refusal.contains(channel_id) {
+        if self.refusal_settled(channel_id)? {
             // The losing side of two concurrent commits (spec section 12):
             // now on the winner's epoch, reconcile again; what the winner
             // already did is a no-op here, so nothing is proposed twice.
@@ -1133,6 +1140,27 @@ impl DmEngine {
             out.extend(retried);
         }
         Ok(out)
+    }
+
+    /// Whether a conversation's refused commit is to be retried now: one
+    /// refused on the epoch rule once the group has reached the epoch it
+    /// would have made (the other commit merged), any other at once. A
+    /// group no longer held has nothing to retry.
+    fn refusal_settled(&mut self, channel_id: &[u8]) -> Result<bool, ClientError> {
+        let Some(wanted) = self.retry_after_refusal.get(channel_id).copied() else {
+            return Ok(false);
+        };
+        let Some(wanted) = wanted else {
+            return Ok(true);
+        };
+        let provider = Provider::new(&self.store);
+        match Conversation::load(&provider, channel_id)? {
+            Some(group) => Ok(group.epoch() >= wanted),
+            None => {
+                self.retry_after_refusal.remove(channel_id);
+                Ok(false)
+            }
+        }
     }
 
     /// This device's own event coming back through the log. A commit whose
