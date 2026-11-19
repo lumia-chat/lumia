@@ -4,7 +4,8 @@
 //! tag switch with its preview, the permissions under their headings with Administrator
 //! apart, who holds it, Delete), with the two questions asked first.
 //!
-//! What is offered comes from the core through `app::roles`; nothing here decides it. Where
+//! What is offered and what is said come from the core (`lumia_client::roles`, through
+//! `app::roles` where it takes the session's types); nothing here decides it. Where
 //! the boards are silent it does as the web's `routes/roles.tsx` does: a save says "Saved."
 //! beside Save and a refusal is said under the head; a role nobody holds says so where its
 //! holders would be listed; "Add members" lists those who can hold the role and do not, by
@@ -15,7 +16,7 @@
 //! ([`drag_layer`]) so the page's scrolling does not clip them.
 
 use lumia_client::app::{App, MemberSummary, ServerSummary};
-use lumia_client::roles::{PermissionChoice, RoleSummary};
+use lumia_client::roles::{self as core, PermissionChoice, RoleSummary};
 use rune::{Align, Cursor, Drag, El, PointerPress, Side, Tx, col, el, icon, row, text};
 
 use super::components::{
@@ -97,7 +98,8 @@ pub(super) fn hint(words: &str, look: Look) -> El {
 
 /// A count beside a heading: "128" after Members.
 pub(super) fn count(n: usize, what: &str, look: Look) -> El {
-    text(n.to_string())
+    let n = core::grouped(n as u64);
+    text(n.clone())
         .font(t::TEXT_LINK_SM)
         .color(look.c.ink_muted)
         .label(format!("{n} {what}"))
@@ -138,7 +140,10 @@ pub fn sections(s: &State, server: &ServerSummary, look: Look) -> El {
             Section::Members => &icons::MEMBERS,
         };
         let mut item = row()
-            .key(format!("section-{}", section.label().to_lowercase()))
+            .key(format!(
+                "section-{}",
+                roles::section_label(section).to_lowercase()
+            ))
             .w_full()
             .h(t::SECTION_ITEM)
             .px(t::SPACE_10)
@@ -146,7 +151,7 @@ pub fn sections(s: &State, server: &ServerSummary, look: Look) -> El {
             .items_center()
             .radius(t::RADIUS_8)
             .role("tab")
-            .label(section.label())
+            .label(roles::section_label(section))
             .focus_selected(on)
             .cursor(Cursor::Pointer)
             .focusable(true)
@@ -154,7 +159,7 @@ pub fn sections(s: &State, server: &ServerSummary, look: Look) -> El {
             .on_press(move |s: &mut State| s.choose_section(section))
             .child(icon(glyph, t::SECTION_GLYPH).color(if on { c.accent } else { c.ink_faint }))
             .child(
-                text(section.label())
+                text(roles::section_label(section))
                     .font(if on { t::TEXT_NAV_ACTIVE } else { t::TEXT_NAV })
                     .color(if on { c.ink } else { c.ink_quiet })
                     .truncate()
@@ -196,11 +201,9 @@ pub fn section(s: &State, server: &ServerSummary, look: Look) -> El {
                 .grow(1.0)
                 .min_w(0.0)
                 .gap(t::SPACE_4)
+                .child(title("Roles", look).label(format!("Roles, {}", core::roles_count(&listed))))
                 .child(
-                    title("Roles", look).label(format!("Roles, {}", roles::roles_count(&listed))),
-                )
-                .child(
-                    text(roles::ROLES_HINT)
+                    text(core::ROLES_HINT)
                         .font(t::TEXT_CARD_LINE)
                         .color(look.c.ink_muted)
                         .wrap()
@@ -243,7 +246,7 @@ fn role_words(s: &State, role: &RoleSummary, locked: bool, look: Look) -> El {
     let mut meta = row().gap(t::SPACE_12).items_center();
     if let Some(held) = s.holders_of(role) {
         meta = meta.child(
-            text(roles::members_count(held))
+            text(core::members_count(held))
                 .font(t::read(t::TEXT_META))
                 .color(c.ink_muted),
         );
@@ -266,7 +269,7 @@ fn role_words(s: &State, role: &RoleSummary, locked: bool, look: Look) -> El {
         .min_w(0.0)
         .gap(t::SPACE_12)
         .items_center()
-        .child(role_dot(roles::tone_of(&role.color), look))
+        .child(role_dot(core::tone_of(&role.color), look))
         .child(
             col()
                 .grow(1.0)
@@ -286,7 +289,7 @@ fn role_words(s: &State, role: &RoleSummary, locked: bool, look: Look) -> El {
 fn role_label(s: &State, role: &RoleSummary, locked: bool) -> String {
     let mut label = role.name.clone();
     if let Some(held) = s.holders_of(role) {
-        label = format!("{label}, {}", roles::members_count(held));
+        label = format!("{label}, {}", core::members_count(held));
     }
     if role.hide_tag && !role.is_everyone {
         label.push_str(", not shown as tag");
@@ -302,7 +305,7 @@ fn role_label(s: &State, role: &RoleSummary, locked: bool) -> String {
 /// ground with a lock, and does not open.
 fn role_row(s: &State, role: &RoleSummary, look: Look) -> El {
     let c = look.c;
-    let locked = roles::locked_role(role);
+    let locked = core::locked_role(role);
     let moves = !role.is_everyone && !locked;
     let lifted = s
         .roles
@@ -583,12 +586,12 @@ fn editor(s: &State, server: &ServerSummary, look: Look) -> El {
             .w_full()
             .gap(t::SPACE_8)
             .items_center()
-            .child(role_dot(roles::tone_of(&form.color), look))
+            .child(role_dot(core::tone_of(&form.color), look))
             .child(title(named, look)),
     );
     if everyone {
         titled = titled.child(
-            text(roles::EVERYONE_SUBTITLE)
+            text(core::EVERYONE_SUBTITLE)
                 .font(t::TEXT_CARD_LINE)
                 .color(c.ink_muted)
                 .wrap()
@@ -653,7 +656,7 @@ fn editor(s: &State, server: &ServerSummary, look: Look) -> El {
                         .w_full()
                         .gap(t::SPACE_16)
                         .items_center()
-                        .child(hint(roles::DELETE_ROLE_HINT, look).grow(1.0).min_w(0.0))
+                        .child(hint(core::DELETE_ROLE_HINT, look).grow(1.0).min_w(0.0))
                         .child(danger_action(
                             DELETE_ROLE,
                             "Delete role",
@@ -688,7 +691,7 @@ fn identity(s: &State, server: &ServerSummary, look: Look) -> El {
             |s, _| s.save_role(),
             look,
         ))
-        .child(hint(&roles::role_name_hint(&server.name), look));
+        .child(hint(&core::role_name_hint(&server.name), look));
     let mut swatches = row()
         .key("role-tones")
         .gap(t::SPACE_6)
@@ -696,7 +699,7 @@ fn identity(s: &State, server: &ServerSummary, look: Look) -> El {
         .flex_wrap()
         .role("radiogroup")
         .label("Colour");
-    for tone in roles::TONES {
+    for tone in core::TONES {
         swatches = swatches.child(tone_swatch(
             format!("role-tone-{tone}"),
             tone,
@@ -770,7 +773,7 @@ fn identity(s: &State, server: &ServerSummary, look: Look) -> El {
                 .color(c.ink),
         );
     if shown && !form.name.text.trim().is_empty() {
-        let tone = roles::tone_of(&form.color).map_or(TagTone::Neutral, TagTone::Tone);
+        let tone = TagTone::of(Some(&form.color));
         preview = preview.child(role_tag(form.name.text.trim(), tone, false, look).shrink());
     }
     preview = preview.child(text("9:11 AM").font(t::TEXT_META).color(c.ink_muted));
@@ -780,7 +783,7 @@ fn identity(s: &State, server: &ServerSummary, look: Look) -> El {
             line_row(
                 "role-tag-row",
                 "Show as tag",
-                roles::tag_switch_caption(shown),
+                core::tag_switch_caption(shown),
                 switch(
                     "role-shown",
                     "Show as tag",
@@ -814,13 +817,13 @@ fn permissions(s: &State, server: &ServerSummary, look: Look) -> El {
     let apart = t::apart(c);
     let line = |choice: &PermissionChoice, inks: Option<(rune::Color, rune::Color)>| {
         let on = form.permissions.contains(&choice.name);
-        let withheld = roles::withheld(server, &choice.name);
+        let withheld = core::withheld(&server.grantable, &choice.name);
         let name = choice.name.clone();
         line_row(
             format!("permission-{}", choice.name),
             &choice.label,
             &if withheld {
-                roles::withheld_caption(&choice.detail)
+                core::withheld_caption(&choice.detail)
             } else {
                 choice.detail.clone()
             },
@@ -851,7 +854,7 @@ fn permissions(s: &State, server: &ServerSummary, look: Look) -> El {
         let (first, rest): (Vec<_>, Vec<_>) = group
             .permissions
             .iter()
-            .partition(|choice| choice.name == roles::ADMINISTRATOR);
+            .partition(|choice| choice.name == core::ADMINISTRATOR);
         for choice in first {
             part = part.child(
                 col()
@@ -920,7 +923,7 @@ fn holders(s: &State, role: &RoleSummary, look: Look) -> El {
         .label(format!("Members with {}", role.name));
     if held.is_empty() {
         list = list.child(
-            text("Nobody holds this role yet.")
+            text(core::NOBODY_HOLDS)
                 .font(t::TEXT_META)
                 .color(c.ink_quiet)
                 .padding(t::SPACE_10),
@@ -1092,8 +1095,8 @@ pub fn ask_administrator(s: &State, look: Look) -> Option<El> {
     Some(question(
         "ask-administrator",
         "switch-ADMINISTRATOR",
-        "Turn on Administrator?",
-        &roles::administrator_question(&server.name, name, held),
+        core::ADMINISTRATOR_TITLE,
+        &core::administrator_question(&server.name, name, held),
         "",
         action_button(
             "ask-administrator-confirm",
@@ -1114,8 +1117,8 @@ pub fn delete_role(s: &State, look: Look) -> Option<El> {
     Some(question(
         "delete-role-question",
         &deleting.anchor,
-        &format!("Delete {}?", role.name),
-        &roles::delete_question(s.holders_of(role)),
+        &core::delete_title(&role.name),
+        &core::delete_question(s.holders_of(role)),
         &deleting.error,
         danger_action(
             "delete-role-confirm",
@@ -1173,9 +1176,9 @@ pub fn add_holders(s: &State, look: Look) -> Option<El> {
     surface = if rows.is_empty() {
         surface.child(
             text(if form.filter.text.trim().is_empty() {
-                "Everyone who can hold this role already does."
+                core::EVERYONE_HOLDS
             } else {
-                "No member matches that."
+                core::NO_MEMBER_MATCHES
             })
             .font(t::TEXT_META)
             .color(look.c.ink_quiet)

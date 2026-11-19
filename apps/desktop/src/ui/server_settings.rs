@@ -12,6 +12,7 @@
 //! is chosen.
 
 use lumia_client::app::ServerSummary;
+use lumia_client::roles as core;
 use rune::{El, ScrollSpec, Tx, col, el, row, text};
 
 use super::components::{
@@ -20,7 +21,7 @@ use super::components::{
 };
 use super::home::page_column;
 use crate::app::State;
-use crate::app::roles::{self, Section, TagTone};
+use crate::app::roles::{Section, TagTone};
 use crate::app::server_settings::{retention_choices, retention_words, shortens, usage_words};
 use crate::tokens as t;
 use crate::ui::scroll::WithScrollBar;
@@ -119,10 +120,20 @@ fn tag_card(s: &State, server: &ServerSummary, look: Look) -> El {
         .gap(t::SPACE_16)
         .items_start()
         .role("radiogroup")
-        .label("Tag beside names");
-    for (key, (name, caption), value) in [
-        ("tag-roles", roles::TAG_ROLES, false),
-        ("tag-titles", roles::TAG_TITLES, true),
+        .label(core::TAG_HEADING);
+    for (key, name, caption, value) in [
+        (
+            "tag-roles",
+            core::TAG_ROLES_LABEL,
+            core::TAG_ROLES_CAPTION,
+            false,
+        ),
+        (
+            "tag-titles",
+            core::TAG_TITLES_LABEL,
+            core::TAG_TITLES_CAPTION,
+            true,
+        ),
     ] {
         choices = choices.child(picture_choice(
             key,
@@ -134,18 +145,14 @@ fn tag_card(s: &State, server: &ServerSummary, look: Look) -> El {
             look,
         ));
     }
-    let mut card = card(
-        "Tag beside names",
-        "What shows beside a member’s name in messages and in the member list.",
-        look,
-    )
-    .key("server-tag")
-    .w_full()
-    .child(choices);
+    let mut card = card(core::TAG_HEADING, core::TAG_SUBTITLE, look)
+        .key("server-tag")
+        .w_full()
+        .child(choices);
     if !form.tag.error.is_empty() {
         card = card.child(error_text(&form.tag.error, look));
     }
-    card.child(quiet(roles::TAG_NOTE, look))
+    card.child(quiet(core::TAG_NOTE, look))
 }
 
 fn quiet(words: &str, look: Look) -> El {

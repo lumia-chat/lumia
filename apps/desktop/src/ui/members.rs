@@ -13,6 +13,7 @@
 //! go under their name, and the parts of their editing state one under the other.
 
 use lumia_client::app::{MemberSummary, ServerSummary};
+use lumia_client::roles::{self as core, MemberOffers, RoleChoice};
 use rune::{Align, Cursor, El, Side, col, el, icon, row, text, text_input};
 
 use super::components::{
@@ -21,7 +22,7 @@ use super::components::{
 };
 use super::roles::{count, hint};
 use crate::app::role_settings::{CardForm, MemberEdit};
-use crate::app::roles::{self, MemberOffers, RoleChoice, TagTone};
+use crate::app::roles::{self, TagTone};
 use crate::app::{Popover, State};
 use crate::session::display_name;
 use crate::tokens::{self as t, icons};
@@ -96,9 +97,9 @@ pub fn section(s: &State, server: &ServerSummary, look: Look) -> El {
     page = if found.is_empty() {
         page.child(
             text(if all.is_empty() {
-                "Looking…"
+                core::READING_MEMBERS
             } else {
-                "No member matches that."
+                core::NO_MEMBER_MATCHES
             })
             .font(t::TEXT_META)
             .color(c.ink_quiet)
@@ -129,7 +130,7 @@ fn member_item(s: &State, server: &ServerSummary, member: &MemberSummary, look: 
     let name = display_name(member);
     let me = member.account_id == s.session.me();
     let offers = roles::member_offers(server, member, me);
-    let opens = roles::offers_any(offers);
+    let opens = core::offers_any(&offers);
     let open = s
         .roles
         .member
@@ -151,7 +152,7 @@ fn member_item(s: &State, server: &ServerSummary, member: &MemberSummary, look: 
     } else {
         format!("@{} · {}", member.handle, member.title)
     };
-    let held = roles::roles_held(&server.roles, &member.role_ids);
+    let held = core::roles_held(&server.roles, &member.role_ids);
     let mut said = name.clone();
     if let Some(mark) = roles::member_mark(member) {
         said = format!("{said}, {mark}");
@@ -174,7 +175,7 @@ fn member_item(s: &State, server: &ServerSummary, member: &MemberSummary, look: 
         for role in &held {
             tags = tags.child(role_tag(
                 &role.label,
-                role.tone.map_or(TagTone::Neutral, TagTone::Tone),
+                TagTone::of(role.tone.as_deref()),
                 false,
                 look,
             ));
@@ -299,7 +300,7 @@ fn role_choices(
             })
             .checked(choice.checked)
             .child(tick_box)
-            .child(role_dot(choice.tone, look))
+            .child(role_dot(choice.tone.as_deref(), look))
             .child(
                 text(choice.name.clone())
                     .font(t::read(t::TEXT_COMPACT))
@@ -361,12 +362,12 @@ fn member_edit(
                 .child(role_choices(
                     "member-role",
                     &format!("{name}’s roles"),
-                    &roles::role_choices(&s.session.roles_of(&server.server_id), &open.roles),
+                    &core::role_choices(&s.session.roles_of(&server.server_id), &open.roles),
                     State::tick_member_role,
                     look,
                 )),
         );
-    } else if let Some(note) = offers.roles_note {
+    } else if let Some(note) = &offers.roles_note {
         fields = fields.child(
             part()
                 .child(text("Roles").font(t::TEXT_LABEL).color(look.c.ink_body))
@@ -385,7 +386,7 @@ fn member_edit(
                     |s, _| s.save_member(),
                     look,
                 ))
-                .child(hint(roles::TITLE_HINT, look)),
+                .child(hint(core::TITLE_HINT, look)),
         );
     }
     let mut actions = row().w_full().gap(t::SPACE_8).items_center();
@@ -475,7 +476,7 @@ pub fn card_form(s: &State, look: Look) -> Option<El> {
         CardForm::Roles => surface.child(role_choices(
             "card-role",
             &format!("{name}’s roles"),
-            &roles::role_choices(&s.session.roles_of(&server.server_id), &card.member.roles),
+            &core::role_choices(&s.session.roles_of(&server.server_id), &card.member.roles),
             State::tick_card_role,
             look,
         )),
@@ -489,7 +490,7 @@ pub fn card_form(s: &State, look: Look) -> Option<El> {
                 |s, _| s.save_card_form(),
                 look,
             ))
-            .child(hint(roles::TITLE_HINT, look)),
+            .child(hint(core::TITLE_HINT, look)),
     };
     if !card.member.error.is_empty() {
         surface = surface.child(error_text(&card.member.error, look));

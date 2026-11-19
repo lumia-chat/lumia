@@ -411,10 +411,13 @@ fn roles_titles_and_tags_are_managed_and_reach_the_other_shell() {
         ["Support", "Helpers", "Everyone"]
     );
     let listed = owner.roles_listed();
-    assert!(roles::lands_before(&listed, &helpers, &support));
-    owner
-        .session
-        .order_roles(&server_id, roles::moved_before(&listed, &helpers, &support));
+    assert!(lumia_client::roles::lands_before(
+        &listed, &helpers, &support
+    ));
+    owner.session.order_roles(
+        &server_id,
+        lumia_client::roles::moved_before(&listed, &helpers, &support),
+    );
     // Drawn moved at once, before the instance answers.
     assert_eq!(
         owner

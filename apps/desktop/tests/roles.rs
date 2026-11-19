@@ -13,8 +13,8 @@ use std::collections::HashMap;
 
 use common::*;
 use lumia_client::app::{MemberSummary, ServerSummary, SnapshotSummary};
-use lumia_client::roles::{RoleSummary, TagSummary};
-use lumia_shell::app::roles::{self, Section};
+use lumia_client::roles::{self as core, RoleSummary, TagSummary};
+use lumia_shell::app::roles::Section;
 use lumia_shell::app::{Popover, State};
 use lumia_shell::scenes::roles::{ACME, Acme, acme, person_id, role_id};
 use lumia_shell::session::roles::RoleUpdate;
@@ -657,7 +657,7 @@ fn an_editor_left_open_follows_the_role_until_it_is_touched_and_then_saves_its_c
     assert!(rt.state.role_savable());
     let opened = editor.opened.clone().unwrap();
     assert_eq!(opened.name, "Moderator");
-    let sent = lumia_client::roles::changes(&opened, &editor.draft());
+    let sent = core::changes(&opened, &editor.draft());
     assert_eq!(sent.name.as_deref(), Some("Mods"));
     assert!(
         sent.color.is_none()
@@ -1109,7 +1109,10 @@ fn a_members_row_left_open_takes_only_what_was_unticked_in_it() {
     let row = rt.state.roles.member.as_ref().unwrap();
     assert_eq!(row.roles, ids(&["mod", "eng", "invite"]));
     assert_eq!(row.title.text, "Principal Engineer");
-    assert!(roles::member_changes(&row.opened, &row.form()).nothing());
+    assert!(!core::changes_any(&core::member_changes(
+        &row.opened,
+        &row.form()
+    )));
 
     // Engineering is unticked: the row is touched. Someone else then gives Devon Design,
     // which this row never had ticked or unticked.
@@ -1124,8 +1127,8 @@ fn a_members_row_left_open_takes_only_what_was_unticked_in_it() {
     // What Save sends: Engineering to take, and nothing else. Design is not the row's to
     // take, as a whole set of what it had ticked would have taken it.
     assert_eq!(
-        roles::member_changes(&row.opened, &row.form()),
-        roles::MemberChanges {
+        core::member_changes(&row.opened, &row.form()),
+        core::MemberChanges {
             give: Vec::new(),
             take: ids(&["eng"]),
             title: None,

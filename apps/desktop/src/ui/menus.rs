@@ -20,6 +20,7 @@
 //! comes back when it is saved or cancelled.
 
 use lumia_client::app::MemberSummary;
+use lumia_client::roles::{self as core, HeldRole};
 use rune::{Align, Cursor, El, Side, col, el, icon, row, text};
 
 use super::components::{
@@ -298,17 +299,15 @@ pub fn person(s: &State, look: Look) -> Option<El> {
             .min_w(0.0)
             .role("heading"),
     );
-    if me {
-        named = named.child(mark("You", look));
-    }
     // In a server: who they are to it, and what this account may change of them there.
     let membership = s.card_member();
     let offers = membership.map(|(server, member)| roles::member_offers(server, member, me));
-    if let Some(word) = membership.and_then(|(_, member)| roles::member_mark(member)) {
-        named = named.child(mark(word, look));
+    let marked = membership.map(|(_, member)| (member.owner, member.guest));
+    for word in core::card_marks(me, marked) {
+        named = named.child(mark(&word, look));
     }
     let mut who = col().w_full().gap(t::SPACE_2).child(named);
-    if let (Some((_, member)), Some(offers)) = (membership, offers) {
+    if let (Some((_, member)), Some(offers)) = (membership, &offers) {
         who = who.children(card_title(&member.title, offers.title, look));
     }
     if let Some(handle) = found.map(|p| p.handle.as_str()).filter(|h| !h.is_empty()) {
@@ -349,7 +348,7 @@ pub fn person(s: &State, look: Look) -> Option<El> {
         card = card.child(here);
     }
     if let (Some((server, member)), Some(offers)) = (membership, offers) {
-        let held = roles::roles_held(&server.roles, &member.role_ids);
+        let held = core::roles_held(&server.roles, &member.role_ids);
         card = card.children(card_roles(&held, offers.roles, look));
     }
     if let Some(details) = details(found, presence.map(|(_, custom)| custom.as_str()), look) {
@@ -412,7 +411,7 @@ fn card_title(title: &str, editable: bool, look: Look) -> Option<El> {
 /// Every role the person holds, each a tag on its tone or the plain chip, with Edit beside
 /// the heading for whoever may give and take them. Nothing for someone who holds none, to
 /// someone who may not change that.
-fn card_roles(held: &[roles::HeldRole], editable: bool, look: Look) -> Option<El> {
+fn card_roles(held: &[HeldRole], editable: bool, look: Look) -> Option<El> {
     if held.is_empty() && !editable {
         return None;
     }
@@ -434,7 +433,9 @@ fn card_roles(held: &[roles::HeldRole], editable: bool, look: Look) -> Option<El
         ));
     }
     let listed = if held.is_empty() {
-        text("No roles").font(t::TEXT_CARD_LINE).color(c.ink_quiet)
+        text(core::NO_ROLES)
+            .font(t::TEXT_CARD_LINE)
+            .color(c.ink_quiet)
     } else {
         let mut list = row()
             .key("card-roles-held")
@@ -445,14 +446,9 @@ fn card_roles(held: &[roles::HeldRole], editable: bool, look: Look) -> Option<El
             .label("Roles");
         for role in held {
             list = list.child(
-                role_tag(
-                    &role.label,
-                    role.tone.map_or(TagTone::Neutral, TagTone::Tone),
-                    false,
-                    look,
-                )
-                .role("listitem")
-                .label(role.label.clone()),
+                role_tag(&role.label, TagTone::of(role.tone.as_deref()), false, look)
+                    .role("listitem")
+                    .label(role.label.clone()),
             );
         }
         list

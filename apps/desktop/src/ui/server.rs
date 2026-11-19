@@ -665,7 +665,7 @@ pub(super) fn member_row(
     if tag_shown.is_none() && member.account_id == s.session.me() {
         named = named.child(tag("You", look));
     }
-    if let Some((words, tone)) = tag_shown {
+    if let Some((words, tone)) = &tag_shown {
         // It gives way before the name does: the name keeps the room it needs, and the tag
         // has what is left of the row, up to the board's share of it, cut with an ellipsis.
         // The row's name for assistive technology says it.
@@ -675,7 +675,7 @@ pub(super) fn member_row(
                 .min_w(0.0)
                 .max_w(t::MEMBER_TAG)
                 .a11y_hidden()
-                .child(role_tag(words, tone, true, look).key("tag").shrink()),
+                .child(role_tag(words, *tone, true, look).key("tag").shrink()),
         );
     }
     let mut words = col().grow(1.0).min_w(0.0).child(named);

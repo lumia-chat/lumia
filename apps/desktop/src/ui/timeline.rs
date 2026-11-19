@@ -585,7 +585,7 @@ fn name_button(name: El, author: &str, author_id: &str, key: &str, look: Look) -
 /// list (a message carries none). It gives way before the name does where the row is narrow.
 fn author_tag(s: &State, author_id: &str, look: Look) -> Option<El> {
     let (words, tone) = roles::tag_of(s.session.tag_in(s.server_id()?, author_id))?;
-    Some(role_tag(words, tone, false, look).key("tag").shrink())
+    Some(role_tag(&words, tone, false, look).key("tag").shrink())
 }
 
 /// A message's row, as the layout chosen draws it.

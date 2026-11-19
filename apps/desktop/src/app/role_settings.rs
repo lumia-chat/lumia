@@ -1,8 +1,9 @@
 //! Roles and titles in the window (architecture 7.5): the Roles and Members sections of a
 //! server's settings, a role's editor, a role moved by its handle or its menu, and the
-//! profile card's two small forms. What is offered and every word said come from [`roles`]
-//! (the sheet the shells share); what this account may do comes from the core, in the
-//! snapshot and the member list; the instance decides every write.
+//! profile card's two small forms. What is offered and every word said are the core's rules
+//! (`lumia_client::roles`, asked through [`roles`] where it takes the session's types); what
+//! this account may do comes from the core, in the snapshot and the member list; the
+//! instance decides every write.
 //!
 //! How each thing is kept. A role's editor has one Save for its name, colour, tag switch and
 //! permissions; turning Administrator on and deleting ask first. Who holds a role is changed
@@ -17,27 +18,29 @@
 //! What a save sends is what the person changed, never what the form happened to hold. An
 //! editor and a member's form each keep what they opened on (`opened`) beside what is being
 //! edited: Save is offered and its request made from the difference of the two
-//! ([`roles::savable`], [`roles::member_changes`]; the core's `change_role` and
+//! ([`core::savable`], [`core::member_changes`]; the core's `change_role` and
 //! `change_member`), so a form left open while someone else changed the same role or member
 //! undoes nothing of theirs. A form nobody has touched follows what it shows as it changes
-//! underneath ([`roles::followed`], [`State::follow_roles`], after everything the session
+//! underneath ([`core::followed`], [`State::follow_roles`], after everything the session
 //! reports); one the person has changed stays as it is. Taking a role from a holder and
 //! giving it are changes of that one role. Each change of a member is answered by its number,
 //! so two forms open on one person each take their own answer.
 //!
 //! A drag starts once the pointer has gone [`DRAG_START`] from the press on a handle. The
 //! role's place stays, dashed; a line in the accent says where it would land, which is before
-//! the first row whose middle is under the pointer, when [`roles::lands_before`] allows it.
+//! the first row whose middle is under the pointer, when [`core::lands_before`] allows it.
 //! Escape puts it back.
 
 use std::collections::HashMap;
 
 use lumia_client::app::{MemberSummary, ServerSummary};
-use lumia_client::roles::RoleSummary;
+use lumia_client::roles::{
+    self as core, Drafts, Forms, MemberChanges, MemberForm, RoleDraft, RoleSummary,
+};
 use rune::{Drag, LiveRegion, Phase, TextEdit, Tx};
 
 use super::rail::DRAG_START;
-use super::roles::{self, MemberDraft, RoleDraft, Section, Step};
+use super::roles::{self, Section, Step};
 use super::server_settings::Saving;
 use super::{Popover, State};
 use crate::session::roles::RoleUpdate;
@@ -54,8 +57,6 @@ pub struct RoleEditor {
     /// The role as the editor opened on it, and after a save as the answer had it: what
     /// Save is offered against and what the save says the role was. None for a new role.
     pub opened: Option<RoleDraft>,
-    /// The role is Everyone, of which only the permissions change.
-    pub everyone: bool,
     pub name: TextEdit,
     /// A tone, or empty for none.
     pub color: String,
@@ -71,11 +72,10 @@ pub struct RoleEditor {
 
 impl RoleEditor {
     fn of(role: Option<&RoleSummary>) -> Self {
-        let draft = roles::draft_of(role);
+        let draft = core::draft_of(role);
         Self {
             role_id: role.map(|r| r.role_id.clone()),
             opened: role.map(|_| draft.clone()),
-            everyone: role.is_some_and(|r| r.is_everyone),
             name: TextEdit::new(&draft.name),
             color: draft.color,
             hide_tag: draft.hide_tag,
@@ -90,15 +90,16 @@ impl RoleEditor {
         let Some(opened) = self.opened.as_ref().filter(|_| !self.saving.busy) else {
             return;
         };
-        if let Some(now) = roles::followed(opened, &self.draft(), &roles::draft_of(Some(now))) {
-            if self.name.text != now.name {
-                self.name.replace_text(&now.name);
-            }
-            self.color.clone_from(&now.color);
-            self.hide_tag = now.hide_tag;
-            self.permissions.clone_from(&now.permissions);
-            self.opened = Some(now);
+        // Unfollowed, the two come back as they were, and this changes nothing.
+        let Drafts { opened, draft } =
+            core::followed(opened, &self.draft(), &core::draft_of(Some(now)));
+        if self.name.text != draft.name {
+            self.name.replace_text(&draft.name);
         }
+        self.color = draft.color;
+        self.hide_tag = draft.hide_tag;
+        self.permissions = draft.permissions;
+        self.opened = Some(opened);
     }
 
     /// What the editor holds, as the sheet compares it.
@@ -156,7 +157,7 @@ pub struct MemberEdit {
     pub account_id: String,
     /// The member's roles and title as the form opened on them: what its Save is the
     /// difference from.
-    pub opened: MemberDraft,
+    pub opened: MemberForm,
     pub roles: Vec<String>,
     pub title: TextEdit,
     pub busy: bool,
@@ -167,9 +168,9 @@ pub struct MemberEdit {
 
 impl MemberEdit {
     /// What the form holds, as the sheet compares it.
-    pub fn form(&self) -> MemberDraft {
-        MemberDraft {
-            roles: self.roles.clone(),
+    pub fn form(&self) -> MemberForm {
+        MemberForm {
+            role_ids: self.roles.clone(),
             title: self.title.text.clone(),
         }
     }
@@ -179,14 +180,14 @@ impl MemberEdit {
         if self.busy {
             return;
         }
-        let now = roles::member_draft_of(now);
-        if let Some(now) = roles::followed_member(&self.opened, &self.form(), &now) {
-            self.roles.clone_from(&now.roles);
-            if self.title.text != now.title {
-                self.title.replace_text(&now.title);
-            }
-            self.opened = now;
+        // Unfollowed, the two come back as they were, and this changes nothing.
+        let Forms { opened, form } =
+            core::member_followed(&self.opened, &self.form(), &roles::member_form(now));
+        self.roles = form.role_ids;
+        if self.title.text != form.title {
+            self.title.replace_text(&form.title);
         }
+        self.opened = opened;
     }
 }
 
@@ -289,13 +290,13 @@ pub fn drop_before(
                 .is_some_and(|[_, top, _, height]| y < top + height / 2.0)
         })
         .or_else(|| roles.iter().find(|role| role.is_everyone))?;
-    roles::lands_before(roles, dragged, &under.role_id).then(|| under.role_id.clone())
+    core::lands_before(roles, dragged, &under.role_id).then(|| under.role_id.clone())
 }
 
 /// A field's words kept to the most a role's name or a title holds.
 pub fn keep_to_label(edit: &mut TextEdit) {
-    if edit.text.chars().count() > roles::LABEL_MAX {
-        let kept: String = edit.text.chars().take(roles::LABEL_MAX).collect();
+    if edit.text.chars().count() > core::LABEL_MAX {
+        let kept: String = edit.text.chars().take(core::LABEL_MAX).collect();
         edit.replace_text(&kept);
     }
 }
@@ -346,13 +347,15 @@ impl State {
             .editor
             .as_ref()
             .and_then(|e| e.role_id.as_deref())
-            .is_some_and(|id| role_of(id).is_none_or(roles::locked_role));
+            .is_some_and(|id| role_of(id).is_none_or(core::locked_role));
         let unlisted = self
             .roles
             .editor
             .as_ref()
             .and_then(|e| e.role_id.as_deref())
             .is_some_and(|id| role_of(id).is_none());
+        // What the instance's refusal of a change to a deleted role says.
+        let deleted = core::role_refusal("NOT_FOUND", "", "", &server.name);
         let now = self.server_forms.settings.section;
         if !sections.contains(&now) {
             self.server_forms.settings.section = first;
@@ -366,7 +369,7 @@ impl State {
                 self.close_popover();
             }
             if unlisted {
-                self.roles.list_error = "That role is gone. Someone deleted it.".into();
+                self.roles.list_error = deleted;
             }
         }
     }
@@ -417,7 +420,7 @@ impl State {
         let Some(role) = server.roles.iter().find(|r| r.role_id == role_id) else {
             return;
         };
-        if roles::locked_role(role) {
+        if core::locked_role(role) {
             return;
         }
         let editor = RoleEditor::of(Some(role));
@@ -459,13 +462,14 @@ impl State {
 
     /// Whether the editor's Save is offered.
     pub fn role_savable(&self) -> bool {
-        self.roles.editor.as_ref().is_some_and(|e| {
-            !e.saving.busy && roles::savable(&e.draft(), e.opened.as_ref(), e.everyone)
-        })
+        self.roles
+            .editor
+            .as_ref()
+            .is_some_and(|e| !e.saving.busy && core::savable(&e.draft(), e.opened.as_ref()))
     }
 
     /// After anything the session reports: a role's editor and a member's forms that nobody
-    /// has touched follow the role and the member as they now are ([`roles::followed`]).
+    /// has touched follow the role and the member as they now are ([`core::followed`]).
     /// One the person has changed stays, with what it opened on, so its save sends that
     /// change and nothing else.
     pub(super) fn follow_roles(&mut self) {
@@ -525,14 +529,14 @@ impl State {
         let Some(server) = self.settings_summary() else {
             return;
         };
-        if roles::withheld(server, name) {
+        if core::withheld(&server.grantable, name) {
             return;
         }
         let Some(editor) = &mut self.roles.editor else {
             return;
         };
         let on = editor.permissions.iter().any(|p| p == name);
-        if !on && name == roles::ADMINISTRATOR {
+        if !on && name == core::ADMINISTRATOR {
             self.open_popover(Popover::AskAdministrator);
             return;
         }
@@ -548,9 +552,9 @@ impl State {
     pub fn confirm_administrator(&mut self) {
         self.close_popover();
         if let Some(editor) = &mut self.roles.editor
-            && !editor.permissions.iter().any(|p| p == roles::ADMINISTRATOR)
+            && !editor.permissions.iter().any(|p| p == core::ADMINISTRATOR)
         {
-            editor.permissions.push(roles::ADMINISTRATOR.to_string());
+            editor.permissions.push(core::ADMINISTRATOR.to_string());
             editor.saving.saved = false;
         }
     }
@@ -597,7 +601,7 @@ impl State {
 
     /// How many members hold a role; none while the server's members are not known, which
     /// is not the same as nobody holding it.
-    pub fn holders_of(&self, role: &RoleSummary) -> Option<usize> {
+    pub fn holders_of(&self, role: &RoleSummary) -> Option<u64> {
         roles::holders(role, self.members_known())
     }
 
@@ -696,10 +700,10 @@ impl State {
             return;
         };
         let listed = self.roles_listed();
-        if !roles::lands_before(&listed, role_id, before_id) {
+        if !core::lands_before(&listed, role_id, before_id) {
             return;
         }
-        let order = roles::moved_before(&listed, role_id, before_id);
+        let order = core::moved_before(&listed, role_id, before_id);
         let name = listed
             .iter()
             .find(|r| r.role_id == role_id)
@@ -708,13 +712,10 @@ impl State {
         let place = order
             .iter()
             .position(|id| id == role_id)
-            .map_or(0, |i| i + 1);
+            .map_or(0, |i| i as u64 + 1);
         self.roles.list_error.clear();
         self.session.order_roles(&server_id, order);
-        tx.announce(
-            format!("{name} moved to position {place}"),
-            LiveRegion::Polite,
-        );
+        tx.announce(core::moved_words(&name, place), LiveRegion::Polite);
     }
 
     /// Opens a role's menu where it was asked for (a right-click, the Menu key, Shift+F10).
@@ -828,7 +829,7 @@ impl State {
     fn member_edit(member: &MemberSummary) -> MemberEdit {
         MemberEdit {
             account_id: member.account_id.clone(),
-            opened: roles::member_draft_of(member),
+            opened: roles::member_form(member),
             roles: member.role_ids.clone(),
             title: TextEdit::new(&member.title),
             ..MemberEdit::default()
@@ -853,7 +854,7 @@ impl State {
             return;
         };
         let me = account_id == self.session.me();
-        if !roles::offers_any(roles::member_offers(server, member, me)) {
+        if !core::offers_any(&roles::member_offers(server, member, me)) {
             return;
         }
         self.roles.member = Some(Self::member_edit(member));
@@ -868,7 +869,7 @@ impl State {
     pub fn tick_member_role(&mut self, role_id: &str) {
         let listed = self.roles_listed();
         if let Some(open) = &mut self.roles.member {
-            open.roles = roles::toggled_role(&listed, &open.roles, role_id);
+            open.roles = core::toggled_role(&listed, &open.roles, role_id);
             open.error.clear();
         }
     }
@@ -886,8 +887,8 @@ impl State {
         if open.busy {
             return;
         }
-        let changes = roles::member_changes(&open.opened, &open.form());
-        if changes.nothing() {
+        let changes = core::member_changes(&open.opened, &open.form());
+        if !core::changes_any(&changes) {
             self.roles.member = None;
             return;
         }
@@ -970,7 +971,7 @@ impl State {
             .map(|id| self.session.roles_of(id))
             .unwrap_or_default();
         if let Some(card) = &mut self.roles.card {
-            card.member.roles = roles::toggled_role(&listed, &card.member.roles, role_id);
+            card.member.roles = core::toggled_role(&listed, &card.member.roles, role_id);
             card.member.error.clear();
         }
     }
@@ -997,15 +998,15 @@ impl State {
         if card.member.busy {
             return;
         }
-        let all = roles::member_changes(&card.member.opened, &card.member.form());
+        let all = core::member_changes(&card.member.opened, &card.member.form());
         let changes = match card.form {
-            CardForm::Roles => roles::MemberChanges { title: None, ..all },
-            CardForm::Title => roles::MemberChanges {
+            CardForm::Roles => MemberChanges { title: None, ..all },
+            CardForm::Title => MemberChanges {
                 title: all.title,
-                ..roles::MemberChanges::default()
+                ..MemberChanges::default()
             },
         };
-        if changes.nothing() {
+        if !core::changes_any(&changes) {
             self.close_card_form();
             return;
         }

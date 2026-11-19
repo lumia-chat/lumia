@@ -84,7 +84,7 @@ impl Saving {
 }
 
 /// The settings page: which server it is open for, and each card's form.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ServerSettings {
     /// The server the page is open for; none when it is not on screen.
     pub server_id: Option<String>,
@@ -108,6 +108,29 @@ pub struct ServerSettings {
     /// What the server's files take, once the instance said; why not, when it could not.
     pub storage: Option<StorageSummary>,
     pub storage_error: String,
+}
+
+impl Default for ServerSettings {
+    // By hand, the core's sections having no default: a page not open shows Overview.
+    fn default() -> Self {
+        Self {
+            server_id: None,
+            section: Section::Overview,
+            tag: Saving::default(),
+            tag_choice: None,
+            name: TextEdit::default(),
+            name_saving: Saving::default(),
+            retention: 0,
+            retention_saving: Saving::default(),
+            picture: Saving::default(),
+            show_deleted: Saving::default(),
+            attachment_retention: 0,
+            delete_oldest_when_full: false,
+            files_saving: Saving::default(),
+            storage: None,
+            storage_error: String::new(),
+        }
+    }
 }
 
 /// Why a setting was not changed.

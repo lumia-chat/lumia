@@ -1,420 +1,86 @@
-//! Roles and titles (architecture 7.5): what a server's settings, a role's editor, a member's
-//! row and the profile card share that needs no window. The core says what this account may
-//! do (each role's and member's `can_manage`, the server's `grantable` and its `can_manage…`
-//! switches) and the instance decides every write; this reads those into what a screen
-//! offers, and holds the words every screen says the same way.
-//!
-//! It is the web's `client/roles.ts` carried over as it stands: the same functions' answers
-//! and the same words, character for character, with the cases of `roles.test.ts` under it.
-//! Nothing here computes a permission, a tag or an order of its own, and no toolkit type
-//! appears: `role_settings` holds the forms and the window's side.
+//! Roles and titles (architecture 7.5): the core's rules and words for every shell's roles
+//! screens (`lumia_client::roles`, "What a shell offers", held to `proto/vectors/roles`),
+//! asked with what this shell holds. The views and `role_settings` call the core directly
+//! for its words and for anything asked of a role or a form; what is here hands it the
+//! session's types (a server's and a member's summary, a refusal as the session reports it)
+//! and keeps what is only this shell's: a tag's tone as the views draw it, a role menu's step,
+//! and the sections' names in the list beside the page.
 
 use lumia_client::app::{MemberSummary, ServerSummary};
-use lumia_client::roles::{RoleSummary, TagSummary};
+use lumia_client::roles::{self as core, MemberForm, MemberOffers, RoleSummary};
 
 use crate::session::Failure;
 
-/// The nine tones a role may have, as the design system names them.
-pub use lumia_client::roles::TONES;
+/// A section of a server's settings: the core's.
+pub use lumia_client::roles::SettingsSection as Section;
 
-/// The most characters a role's name or a title keeps.
-pub const LABEL_MAX: usize = lumia_client::roles::LABEL_MAX;
-
-/// A role's or a tag's colour as a tone; none for no colour, and for anything that is no
-/// tone.
-pub fn tone_of(color: &str) -> Option<&'static str> {
-    TONES.iter().copied().find(|tone| *tone == color)
-}
-
-/// A section of a server's settings.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Section {
-    #[default]
-    Overview,
-    Roles,
-    Members,
-}
-
-impl Section {
-    /// Its name in the list beside the page.
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Overview => "Overview",
-            Self::Roles => "Roles",
-            Self::Members => "Members",
-        }
+/// A section's name in the list beside the page.
+pub fn section_label(section: Section) -> &'static str {
+    match section {
+        Section::Overview => "Overview",
+        Section::Roles => "Roles",
+        Section::Members => "Members",
     }
 }
 
-/// The sections of a server's settings this account may use, in order: Overview with Manage
-/// server, Roles with Manage roles, and Members with Manage members or Manage roles, since a
-/// member's roles are changed there too. None, and the settings do not open.
+/// The sections of `server`'s settings this account may use, in order
+/// ([`core::settings_sections`]). None, and the settings do not open.
 pub fn settings_sections(server: &ServerSummary) -> Vec<Section> {
-    let mut sections = Vec::new();
-    if server.can_manage {
-        sections.push(Section::Overview);
-    }
-    if server.can_manage_roles {
-        sections.push(Section::Roles);
-    }
-    if server.can_manage_members || server.can_manage_roles {
-        sections.push(Section::Members);
-    }
-    sections
+    core::settings_sections(
+        server.can_manage,
+        server.can_manage_roles,
+        server.can_manage_members,
+    )
 }
 
-/// A count as people write it in English: 1,204.
-fn grouped(n: usize) -> String {
-    let digits = n.to_string();
-    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
-    for (i, digit) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i).is_multiple_of(3) {
-            out.push(',');
-        }
-        out.push(digit);
-    }
-    out
+/// How many of `members` hold a role ([`core::holders`]); none until the members are known.
+pub fn holders(role: &RoleSummary, members: Option<&[MemberSummary]>) -> Option<u64> {
+    let held: Option<Vec<Vec<String>>> =
+        members.map(|all| all.iter().map(|m| m.role_ids.clone()).collect());
+    core::holders(role, held.as_deref())
 }
 
-/// "5 roles": a server's roles counted without Everyone.
-pub fn roles_count(roles: &[RoleSummary]) -> String {
-    match roles.iter().filter(|r| !r.is_everyone).count() {
-        1 => "1 role".into(),
-        n => format!("{n} roles"),
-    }
-}
-
-/// "1 member", "1,204 members".
-pub fn members_count(n: usize) -> String {
-    match n {
-        1 => "1 member".into(),
-        n => format!("{} members", grouped(n)),
-    }
-}
-
-/// How many of `members` hold a role; Everyone is held by all of them. None until the
-/// members are known.
-pub fn holders(role: &RoleSummary, members: Option<&[MemberSummary]>) -> Option<usize> {
-    let members = members?;
-    Some(if role.is_everyone {
-        members.len()
-    } else {
-        members
-            .iter()
-            .filter(|m| m.role_ids.contains(&role.role_id))
-            .count()
-    })
-}
-
-/// A role at or above this account's own highest: listed with a lock, and it does not open.
-/// Everyone always opens.
-pub fn locked_role(role: &RoleSummary) -> bool {
-    !role.is_everyone && !role.can_manage
-}
-
-/// Where a role may land when it is moved: before `before_id`, a role this account manages,
-/// or before Everyone, which is last. A role is never put before one that is locked, since
-/// those are at or above this account's own highest, and landing where it already is moves
-/// nothing.
-pub fn lands_before(roles: &[RoleSummary], role_id: &str, before_id: &str) -> bool {
-    let from = roles.iter().position(|r| r.role_id == role_id);
-    let to = roles.iter().position(|r| r.role_id == before_id);
-    let (Some(from), Some(to)) = (from, to) else {
-        return false;
-    };
-    let (moved, before) = (&roles[from], &roles[to]);
-    if locked_role(moved) || moved.is_everyone {
-        return false;
-    }
-    if to == from || to == from + 1 {
-        return false;
-    }
-    before.is_everyone || !locked_role(before)
-}
-
-/// The whole order a move sends: every role but Everyone, with `role_id` now before
-/// `before_id`.
-pub fn moved_before(roles: &[RoleSummary], role_id: &str, before_id: &str) -> Vec<String> {
-    let mut order = Vec::with_capacity(roles.len());
-    for role in roles {
-        if role.role_id == role_id {
-            continue;
-        }
-        if role.role_id == before_id {
-            order.push(role_id.to_string());
-        }
-        if !role.is_everyone {
-            order.push(role.role_id.clone());
-        }
-    }
-    order
-}
-
-/// A step a role's menu offers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Step {
-    Up,
-    Down,
-}
-
-/// The role a step up or down puts `role_id` before; none where there is no such step (the
-/// highest it may go, or last above Everyone).
-pub fn step_before(roles: &[RoleSummary], role_id: &str, step: Step) -> Option<String> {
-    let at = roles.iter().position(|r| r.role_id == role_id)?;
-    let before = match step {
-        Step::Up => roles.get(at.checked_sub(1)?),
-        Step::Down => roles.get(at + 2),
-    }?;
-    lands_before(roles, role_id, &before.role_id).then(|| before.role_id.clone())
-}
-
-/// What a role's editor holds: its name, its tone (empty for none), whether it is never a
-/// tag, and the permissions switched on, by their wire names. An editor holds two: the role
-/// as it opened on it (`opened`) and the one being edited. The core's own type, since Save
-/// hands it both (`App::change_role`) and it sends what differs.
-pub use lumia_client::roles::RoleDraft;
-
-/// The editor's fields for a role, or for a new one: no name, no colour, shown as a tag,
-/// nothing granted.
-pub fn draft_of(role: Option<&RoleSummary>) -> RoleDraft {
-    role.map_or_else(RoleDraft::default, |role| RoleDraft {
-        name: role.name.clone(),
-        color: role.color.clone(),
-        hide_tag: role.hide_tag,
-        permissions: role.permissions.clone(),
-    })
-}
-
-fn same_set(a: &[String], b: &[String]) -> bool {
-    a.len() == b.len() && a.iter().all(|x| b.contains(x))
-}
-
-/// Whether an editor's draft differs from the role as it opened on it: what the person has
-/// changed. Blanks around the name are not a change, and the order the permissions were
-/// switched in is not one.
-fn changed(opened: &RoleDraft, draft: &RoleDraft) -> bool {
-    draft.name.trim() != opened.name.trim()
-        || draft.color != opened.color
-        || draft.hide_tag != opened.hide_tag
-        || !same_set(&draft.permissions, &opened.permissions)
-}
-
-/// Whether Save is offered: a new role (`opened` none) once it has a name, a role once
-/// something of the draft differs from the role as the editor opened on it and it still has
-/// a name. Never against the role as it now is: what someone else changed of it meanwhile
-/// is not this editor's change, and does not light Save. Of Everyone only the permissions
-/// are compared, since nothing else of it changes.
-pub fn savable(draft: &RoleDraft, opened: Option<&RoleDraft>, everyone: bool) -> bool {
-    let Some(opened) = opened else {
-        return !draft.name.trim().is_empty();
-    };
-    if everyone {
-        return !same_set(&draft.permissions, &opened.permissions);
-    }
-    !draft.name.trim().is_empty() && changed(opened, draft)
-}
-
-/// Whether an editor holds what it opened on: nothing typed, chosen or switched. Stricter
-/// than [`savable`]: blanks typed around the name are no change to save, but they are the
-/// person's typing, which following would throw away. The order of the permissions is not
-/// a change.
-fn untouched(opened: &RoleDraft, draft: &RoleDraft) -> bool {
-    draft.name == opened.name
-        && draft.color == opened.color
-        && draft.hide_tag == opened.hide_tag
-        && same_set(&draft.permissions, &opened.permissions)
-}
-
-/// An editor nobody has touched follows the role as it changes underneath: with the draft
-/// still the role as the editor opened on it, and `now` the role as it is, both become
-/// `now`, which this answers. None when the person has changed something (the draft and
-/// `opened` stay, so a save sends their changes and nothing else) and when the role is as
-/// it opened.
-pub fn followed(opened: &RoleDraft, draft: &RoleDraft, now: &RoleDraft) -> Option<RoleDraft> {
-    (untouched(opened, draft) && !untouched(opened, now)).then(|| now.clone())
-}
-
-/// A member as a form holds them, in their row in Members and in the card's two forms: the
-/// roles ticked, by id, and the title as typed. A form holds two, as a role's editor does:
-/// the member as it opened on them, and the one being edited.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct MemberDraft {
-    pub roles: Vec<String>,
-    pub title: String,
-}
-
-/// A form's fields for a member as the server's list has them.
-pub fn member_draft_of(member: &MemberSummary) -> MemberDraft {
-    MemberDraft {
-        roles: member.role_ids.clone(),
+/// A member's form as the server's list has them.
+pub fn member_form(member: &MemberSummary) -> MemberForm {
+    MemberForm {
+        role_ids: member.role_ids.clone(),
         title: member.title.clone(),
     }
 }
 
-/// What a form changed of a member, which is what its Save sends, in one request: the roles
-/// to give and to take, and the title when it was changed.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct MemberChanges {
-    pub give: Vec<String>,
-    pub take: Vec<String>,
-    pub title: Option<String>,
-}
-
-impl MemberChanges {
-    /// Nothing was changed: Save asks the instance nothing.
-    pub fn nothing(&self) -> bool {
-        self.give.is_empty() && self.take.is_empty() && self.title.is_none()
-    }
-}
-
-/// What `form` changed of the member it opened on (`opened`): the roles ticked that they
-/// did not hold then to give, those they held then that are no longer ticked to take, and
-/// the title, trimmed, only when it differs. Never the whole set: a role someone else gave
-/// or took since the form opened is in neither list, and stays as the instance has it.
-pub fn member_changes(opened: &MemberDraft, form: &MemberDraft) -> MemberChanges {
-    let only_in = |a: &[String], b: &[String]| -> Vec<String> {
-        let mut only: Vec<String> = Vec::new();
-        for id in a {
-            if !b.contains(id) && !only.contains(id) {
-                only.push(id.clone());
-            }
-        }
-        only
-    };
-    let title = form.title.trim();
-    MemberChanges {
-        give: only_in(&form.roles, &opened.roles),
-        take: only_in(&opened.roles, &form.roles),
-        title: (title != opened.title.trim()).then(|| title.to_string()),
-    }
-}
-
-/// Whether a member's form holds what it opened on: the title exactly as it was, and the
-/// same roles ticked in any order.
-fn member_untouched(opened: &MemberDraft, form: &MemberDraft) -> bool {
-    form.title == opened.title && same_set(&form.roles, &opened.roles)
-}
-
-/// [`followed`] for a member's form: untouched, it becomes the member as they now are.
-pub fn followed_member(
-    opened: &MemberDraft,
-    form: &MemberDraft,
-    now: &MemberDraft,
-) -> Option<MemberDraft> {
-    (member_untouched(opened, form) && !member_untouched(opened, now)).then(|| now.clone())
-}
-
-/// A permission this account does not hold, and so cannot give or take: its switch is shown
-/// and not turned.
-pub fn withheld(server: &ServerSummary, permission: &str) -> bool {
-    !server.grantable.iter().any(|p| p == permission)
-}
-
-/// The permission whose switch asks before it is turned on.
-pub const ADMINISTRATOR: &str = "ADMINISTRATOR";
-
-/// A role a member holds, as a card and a settings row list it: its name, on its tone or the
-/// plain chip.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HeldRole {
-    pub role_id: String,
-    pub label: String,
-    pub tone: Option<&'static str>,
-}
-
-/// Every role a member holds, in the server's order, without Everyone.
-pub fn roles_held(roles: &[RoleSummary], role_ids: &[String]) -> Vec<HeldRole> {
-    roles
-        .iter()
-        .filter(|r| !r.is_everyone && role_ids.contains(&r.role_id))
-        .map(|r| HeldRole {
-            role_id: r.role_id.clone(),
-            label: r.name.clone(),
-            tone: tone_of(&r.color),
-        })
-        .collect()
-}
-
-/// One of a member's roles to tick.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RoleChoice {
-    pub id: String,
-    pub name: String,
-    pub tone: Option<&'static str>,
-    pub checked: bool,
-    /// Not this account's to give or take: shown, not changeable.
-    pub locked: bool,
-}
-
-/// A member's roles to tick: the server's in order without Everyone, each not this account's
-/// to give or take marked.
-pub fn role_choices(roles: &[RoleSummary], held: &[String]) -> Vec<RoleChoice> {
-    roles
-        .iter()
-        .filter(|r| !r.is_everyone)
-        .map(|r| RoleChoice {
-            id: r.role_id.clone(),
-            name: r.name.clone(),
-            tone: tone_of(&r.color),
-            checked: held.contains(&r.role_id),
-            locked: !r.can_manage,
-        })
-        .collect()
-}
-
-/// The roles a tick leaves a member with; a locked role is not changed by one.
-pub fn toggled_role(roles: &[RoleSummary], held: &[String], role_id: &str) -> Vec<String> {
-    let changeable = roles
-        .iter()
-        .any(|r| r.role_id == role_id && !r.is_everyone && r.can_manage);
-    if !changeable {
-        return held.to_vec();
-    }
-    if held.iter().any(|id| id == role_id) {
-        held.iter().filter(|id| *id != role_id).cloned().collect()
-    } else {
-        let mut held = held.to_vec();
-        held.push(role_id.to_string());
-        held
-    }
-}
-
-/// What this account may change of a member, on their row in Members and on their card.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct MemberOffers {
-    /// Their roles to tick: with Manage roles, for anyone but a guest.
-    pub roles: bool,
-    /// In the roles' place, for a guest.
-    pub roles_note: Option<&'static str>,
-    /// Their title: this account's own, or that of a member below it with Manage members.
-    pub title: bool,
-    /// Kick: with Manage members, a member below this account, never itself.
-    pub kick: bool,
-}
-
+/// What this account may change of `member` in `server` ([`core::member_offers`]); `me`
+/// when the member is this account.
 pub fn member_offers(server: &ServerSummary, member: &MemberSummary, me: bool) -> MemberOffers {
-    MemberOffers {
-        roles: server.can_manage_roles && !member.guest,
-        roles_note: (server.can_manage_roles && member.guest).then_some(GUEST_ROLES_NOTE),
-        title: me || member.can_manage,
-        kick: !me && member.can_manage,
-    }
+    core::member_offers(server.can_manage_roles, member.guest, member.can_manage, me)
 }
 
-/// Whether a member's row in Members opens at all: there is something of theirs to change.
-pub fn offers_any(offers: MemberOffers) -> bool {
-    offers.roles || offers.roles_note.is_some() || offers.title || offers.kick
-}
-
-/// The word beside a name on a card and in Members: the server's owner, or a guest.
+/// The word beside a member's name: Owner or Guest ([`core::member_mark`]).
 pub fn member_mark(member: &MemberSummary) -> Option<&'static str> {
-    if member.owner {
-        Some("Owner")
-    } else if member.guest {
-        Some("Guest")
-    } else {
-        None
-    }
+    core::member_mark(member.owner, member.guest)
+}
+
+/// The members `query` finds in Members and in "Add members" ([`core::found`]), in the
+/// list's order; all of them for nothing typed.
+pub fn searched<'a>(members: &'a [MemberSummary], query: &str) -> Vec<&'a MemberSummary> {
+    members
+        .iter()
+        .filter(|m| core::found(query, &m.display_name, &m.nickname, &m.handle, &m.title))
+        .collect()
+}
+
+fn field(failure: &Failure) -> &str {
+    failure.details.get("field").map_or("", String::as_str)
+}
+
+/// Why a role was not saved, moved or deleted ([`core::role_refusal`]).
+pub fn role_refusal(failure: &Failure, server_name: &str) -> String {
+    core::role_refusal(&failure.code, field(failure), &failure.message, server_name)
+}
+
+/// Why a member's roles or title were not saved, or they were not kicked
+/// ([`core::member_refusal`]).
+pub fn member_refusal(failure: &Failure) -> String {
+    core::member_refusal(&failure.code, field(failure), &failure.message)
 }
 
 /// What a tag is drawn on: a role's tone, or the plain chip.
@@ -424,150 +90,30 @@ pub enum TagTone {
     Neutral,
 }
 
-/// A member's tag as a message and a member row draw it: its words, on its tone or the plain
-/// chip.
-pub fn tag_of(tag: Option<&TagSummary>) -> Option<(&str, TagTone)> {
-    let tag = tag.filter(|tag| !tag.label.is_empty())?;
-    Some((
-        tag.label.as_str(),
-        tone_of(&tag.color).map_or(TagTone::Neutral, TagTone::Tone),
-    ))
-}
-
-/// Members whose name, handle or title has `query` in it, whatever its capitals; all of them
-/// for nothing typed.
-pub fn searched<'a>(members: &'a [MemberSummary], query: &str) -> Vec<&'a MemberSummary> {
-    let q = query.trim().to_lowercase();
-    let q = q.strip_prefix('@').unwrap_or(&q);
-    if q.is_empty() {
-        return members.iter().collect();
-    }
-    members
-        .iter()
-        .filter(|m| {
-            [&m.display_name, &m.nickname, &m.handle, &m.title]
-                .into_iter()
-                .any(|s| s.to_lowercase().contains(q))
-        })
-        .collect()
-}
-
-// ---- Words --------------------------------------------------------------------------------
-
-pub const ROLES_HINT: &str =
-    "In order, highest first. Drag a role to move it. A new role starts last, just above Everyone.";
-/// The same where a role is moved from its menu alone (a phone, a narrow window).
-pub const ROLES_HINT_MENU: &str = "In order, highest first. A role is moved from its menu. A new role starts last, just above Everyone.";
-pub const EVERYONE_SUBTITLE: &str =
-    "What every member may do before any role adds to it. Guests are not among them.";
-pub const TITLE_HINT: &str = "Up to 32 characters. A title grants nothing.";
-pub const GUEST_ROLES_NOTE: &str = "Guests aren’t given roles.";
-pub const DELETE_ROLE_HINT: &str = "Its members lose what it allowed. This can’t be undone.";
-pub const TAG_NOTE: &str = "A profile shows a member’s title and roles either way.";
-/// The two things the tag beside a name can show: a label and what it means.
-pub const TAG_ROLES: (&str, &str) = (
-    "Roles",
-    "Each member’s highest role that is shown as a tag, in the role’s colour.",
-);
-pub const TAG_TITLES: (&str, &str) = (
-    "Titles",
-    "Each member’s title, in no colour. A member without a title has no tag.",
-);
-
-pub fn role_name_hint(server_name: &str) -> String {
-    format!("1 to 32 characters. No other role in {server_name} can have the same name.")
-}
-
-/// Under "Show as tag", as it stands.
-pub fn tag_switch_caption(shown: bool) -> &'static str {
-    if shown {
-        "This role can be the tag beside a member’s name."
-    } else {
-        "This role only carries permissions. It is nobody’s tag."
+impl TagTone {
+    /// The tone the core named (one of the nine, or none), as the views draw it.
+    pub fn of(tone: Option<&str>) -> Self {
+        tone.and_then(core::tone_of)
+            .map_or(Self::Neutral, Self::Tone)
     }
 }
 
-/// A permission's line where its switch is not this account's to turn.
-pub fn withheld_caption(detail: &str) -> String {
-    format!("{detail} You don’t hold it, so it is not yours to give or take.")
+/// A member's tag as a message and a member row draw it ([`core::tag_of`]): its words, on
+/// its tone or the plain chip.
+pub fn tag_of(tag: Option<&core::TagSummary>) -> Option<(String, TagTone)> {
+    core::tag_of(tag).map(|(words, tone)| (words, TagTone::of(tone.as_deref())))
 }
 
-/// What is asked before Administrator is turned on: the lines under "Turn on
-/// Administrator?". A new role has no holders to count.
-pub fn administrator_question(
-    server_name: &str,
-    role_name: &str,
-    held: Option<usize>,
-) -> Vec<String> {
-    let mut lines = vec![format!(
-        "Administrator allows everything in {server_name}, in every channel, whatever a channel’s own permissions say."
-    )];
-    match held {
-        None | Some(0) => {}
-        Some(1) => lines.push(format!("1 member holds {role_name}.")),
-        Some(n) => lines.push(format!("{} members hold {role_name}.", grouped(n))),
-    }
-    lines
+/// A step a role's menu offers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Step {
+    Up,
+    Down,
 }
 
-/// What is asked before a role is deleted: the lines under "Delete Moderator?". Who holds it
-/// is said only when it is known: with the members still being read, or not read at all,
-/// nothing is said of holders, since "nobody" would be a guess about a role forty may hold.
-pub fn delete_question(held: Option<usize>) -> Vec<String> {
-    let holders = match held {
-        None => None,
-        Some(0) => Some("Nobody holds this role.".to_string()),
-        Some(1) => Some("1 member holds this role. They lose what it allowed.".to_string()),
-        Some(n) => Some(format!(
-            "{} members hold this role. They lose what it allowed.",
-            grouped(n)
-        )),
-    };
-    holders
-        .into_iter()
-        .chain(["This can’t be undone.".to_string()])
-        .collect()
-}
-
-fn field(failure: &Failure) -> Option<&str> {
-    failure.details.get("field").map(String::as_str)
-}
-
-/// Why a role was not saved, moved or deleted.
-pub fn role_refusal(failure: &Failure, server_name: &str) -> String {
-    match (failure.code.as_str(), field(failure)) {
-        ("PERMISSION_DENIED", _) => "That isn’t yours to change. A role at or above your own highest, or a permission you don’t hold, is not yours to give.".into(),
-        ("ALREADY_EXISTS", _) => format!("Another role in {server_name} has that name."),
-        ("NOT_FOUND", _) => "That role is gone. Someone deleted it.".into(),
-        ("INVALID_ARGUMENT", Some("name")) => {
-            "A role’s name is 1 to 32 characters on one line, with no hidden characters, and can’t be “everyone”.".into()
-        }
-        ("INVALID_ARGUMENT", Some("color")) => "A role’s colour is one of the nine, or none.".into(),
-        ("INVALID_ARGUMENT", Some("role_ids")) => {
-            "The roles changed while you were moving one. Try again.".into()
-        }
-        ("FAILED_PRECONDITION", _) => "This server has as many roles as it can hold.".into(),
-        _ => failure.message.clone(),
-    }
-}
-
-/// Why a member's roles or title were not saved, or they were not kicked.
-pub fn member_refusal(failure: &Failure) -> String {
-    match (failure.code.as_str(), field(failure)) {
-        ("PERMISSION_DENIED", _) => {
-            "That isn’t yours to change. They may be at or above your own highest role.".into()
-        }
-        ("NOT_FOUND", _) => "They are no longer a member.".into(),
-        ("FAILED_PRECONDITION", _) => "A member can’t hold that many roles.".into(),
-        ("INVALID_ARGUMENT", Some("title")) => {
-            "A title is up to 32 characters on one line, with no hidden characters.".into()
-        }
-        // The one limit on these calls: a member's own title, ten changes an hour in a server.
-        ("RATE_LIMITED", _) => {
-            "You’ve changed your title too many times this hour. Try again later.".into()
-        }
-        _ => failure.message.clone(),
-    }
+/// The role a step up or down puts `role_id` before ([`core::step_before`]).
+pub fn step_before(roles: &[RoleSummary], role_id: &str, step: Step) -> Option<String> {
+    core::step_before(roles, role_id, step == Step::Up)
 }
 
 #[cfg(test)]
@@ -576,572 +122,102 @@ mod tests {
 
     use super::*;
 
-    fn role(id: &str) -> RoleSummary {
-        RoleSummary {
-            role_id: id.into(),
-            name: id.into(),
-            color: String::new(),
-            position: 0,
-            is_everyone: false,
-            hide_tag: false,
-            permissions: Vec::new(),
-            can_manage: true,
-        }
-    }
-
-    fn ids(list: &[&str]) -> Vec<String> {
-        list.iter().map(|id| (*id).to_string()).collect()
-    }
-
-    /// Acme as Devon sees it: Admin and Moderator are at or above Devon's highest.
-    fn acme() -> Vec<RoleSummary> {
-        vec![
-            RoleSummary {
-                color: "indigo".into(),
-                can_manage: false,
-                ..role("admin")
-            },
-            RoleSummary {
-                color: "green".into(),
-                can_manage: false,
-                ..role("mod")
-            },
-            RoleSummary {
-                color: "peach".into(),
-                ..role("design")
-            },
-            RoleSummary {
-                color: "sky".into(),
-                ..role("eng")
-            },
-            RoleSummary {
-                hide_tag: true,
-                ..role("invite")
-            },
-            RoleSummary {
-                name: "Everyone".into(),
-                is_everyone: true,
-                ..role("everyone")
-            },
-        ]
-    }
-
-    fn server(manage: bool, roles: bool, members: bool) -> ServerSummary {
-        ServerSummary {
-            can_manage: manage,
-            can_manage_roles: roles,
-            can_manage_members: members,
-            ..ServerSummary::default()
-        }
-    }
-
-    fn holding(role_ids: &[&str]) -> MemberSummary {
-        MemberSummary {
-            role_ids: ids(role_ids),
-            ..MemberSummary::default()
-        }
-    }
-
     fn refused(code: &str, field: Option<&str>) -> Failure {
         Failure {
             code: code.into(),
-            message: String::new(),
+            message: "said by the instance".into(),
             details: field
                 .map(|f| HashMap::from([("field".to_string(), f.to_string())]))
                 .unwrap_or_default(),
         }
     }
 
-    // ---- sections ----
-
     #[test]
-    fn each_permission_opens_its_own_and_manage_roles_opens_members_too() {
-        use Section::{Members, Overview, Roles};
+    fn a_refusal_hands_the_core_its_code_its_field_and_its_message() {
         assert_eq!(
-            settings_sections(&server(true, true, true)),
-            [Overview, Roles, Members]
-        );
-        assert_eq!(settings_sections(&server(true, false, false)), [Overview]);
-        assert_eq!(
-            settings_sections(&server(false, true, false)),
-            [Roles, Members]
-        );
-        assert_eq!(settings_sections(&server(false, false, true)), [Members]);
-        assert_eq!(settings_sections(&server(false, false, false)), []);
-    }
-
-    // ---- the list ----
-
-    #[test]
-    fn counts_roles_without_everyone() {
-        assert_eq!(roles_count(&acme()), "5 roles");
-        let one = [
-            role("a"),
-            RoleSummary {
-                is_everyone: true,
-                ..role("everyone")
-            },
-        ];
-        assert_eq!(roles_count(&one), "1 role");
-        assert_eq!(members_count(1), "1 member");
-        assert_eq!(members_count(1204), "1,204 members");
-    }
-
-    #[test]
-    fn counts_who_holds_a_role_and_everyone_holds_everyone() {
-        let acme = acme();
-        let members = [holding(&["eng"]), holding(&["eng", "design"]), holding(&[])];
-        assert_eq!(holders(&acme[3], Some(&members)), Some(2));
-        assert_eq!(holders(&acme[5], Some(&members)), Some(3));
-        assert_eq!(holders(&acme[3], None), None);
-    }
-
-    #[test]
-    fn a_role_not_managed_is_locked_and_everyone_never_is() {
-        let acme = acme();
-        assert!(locked_role(&acme[0]));
-        assert!(!locked_role(&acme[2]));
-        assert!(!locked_role(&RoleSummary {
-            is_everyone: true,
-            can_manage: false,
-            ..role("everyone")
-        }));
-    }
-
-    #[test]
-    fn a_tone_is_one_of_the_nine() {
-        assert_eq!(tone_of("sky"), Some("sky"));
-        assert_eq!(tone_of(""), None);
-        assert_eq!(tone_of("#ff0000"), None);
-    }
-
-    // ---- moving a role ----
-
-    #[test]
-    fn lands_before_a_role_it_manages_or_before_everyone() {
-        let acme = acme();
-        assert!(lands_before(&acme, "eng", "design"));
-        assert!(lands_before(&acme, "design", "everyone"));
-        assert!(lands_before(&acme, "design", "invite"));
-    }
-
-    #[test]
-    fn never_before_a_locked_role_never_where_it_is_and_a_locked_role_and_everyone_do_not_move() {
-        let acme = acme();
-        assert!(!lands_before(&acme, "eng", "mod"));
-        assert!(!lands_before(&acme, "eng", "admin"));
-        assert!(!lands_before(&acme, "eng", "eng"));
-        assert!(!lands_before(&acme, "eng", "invite"));
-        assert!(!lands_before(&acme, "mod", "everyone"));
-        assert!(!lands_before(&acme, "everyone", "design"));
-        assert!(!lands_before(&acme, "gone", "design"));
-    }
-
-    #[test]
-    fn the_order_sent_is_every_role_but_everyone() {
-        let acme = acme();
-        assert_eq!(
-            moved_before(&acme, "eng", "design"),
-            ["admin", "mod", "eng", "design", "invite"]
+            role_refusal(&refused("INVALID_ARGUMENT", Some("color")), "Acme"),
+            "A role’s colour is one of the nine, or none."
         );
         assert_eq!(
-            moved_before(&acme, "design", "everyone"),
-            ["admin", "mod", "eng", "invite", "design"]
-        );
-    }
-
-    #[test]
-    fn a_step_up_or_down_where_there_is_one() {
-        let acme = acme();
-        assert_eq!(
-            step_before(&acme, "eng", Step::Up).as_deref(),
-            Some("design")
+            role_refusal(&refused("ALREADY_EXISTS", None), "Acme"),
+            "Another role in Acme has that name."
         );
         assert_eq!(
-            step_before(&acme, "eng", Step::Down).as_deref(),
-            Some("everyone")
+            member_refusal(&refused("INVALID_ARGUMENT", Some("title"))),
+            "A title is up to 32 characters on one line, with no hidden characters."
         );
+        // No field: an INVALID_ARGUMENT the core has no words for is the instance's own.
         assert_eq!(
-            step_before(&acme, "design", Step::Down).as_deref(),
-            Some("invite")
+            member_refusal(&refused("INVALID_ARGUMENT", None)),
+            "said by the instance"
         );
-        // Design is the highest Devon manages, and Can invite the last above Everyone.
-        assert_eq!(step_before(&acme, "design", Step::Up), None);
-        assert_eq!(step_before(&acme, "invite", Step::Down), None);
-        assert_eq!(step_before(&acme, "admin", Step::Down), None);
-    }
-
-    // ---- the editor ----
-
-    fn moderator() -> RoleSummary {
-        RoleSummary {
-            name: "Moderator".into(),
-            color: "green".into(),
-            permissions: ids(&["MANAGE_ROLES", "SEND_IN_THREADS"]),
-            ..role("mod")
-        }
-    }
-
-    #[test]
-    fn a_new_role_saves_once_it_has_a_name() {
-        assert!(!savable(&draft_of(None), None, false));
-        let named = |name: &str| RoleDraft {
-            name: name.into(),
-            ..draft_of(None)
+        let offline = Failure {
+            message: "transport: offline".into(),
+            ..Failure::default()
         };
-        assert!(!savable(&named("  "), None, false));
-        assert!(savable(&named("Design"), None, false));
+        assert_eq!(role_refusal(&offline, "Acme"), "transport: offline");
     }
 
     #[test]
-    fn a_role_saves_once_something_differs_from_how_the_editor_opened() {
-        let opened = draft_of(Some(&moderator()));
-        let draft = || opened.clone();
-        let named = |name: &str| RoleDraft {
-            name: name.into(),
-            ..draft()
-        };
-        let granting = |permissions: &[&str]| RoleDraft {
-            permissions: ids(permissions),
-            ..draft()
-        };
-        let offered = |draft: &RoleDraft| savable(draft, Some(&opened), false);
-        assert!(!offered(&draft()));
-        assert!(!offered(&named(" Moderator ")));
-        assert!(offered(&named("Mods")));
-        assert!(!offered(&named("")));
-        assert!(offered(&RoleDraft {
-            color: String::new(),
-            ..draft()
-        }));
-        assert!(offered(&RoleDraft {
-            hide_tag: true,
-            ..draft()
-        }));
-        assert!(!offered(&granting(&["SEND_IN_THREADS", "MANAGE_ROLES"])));
-        assert!(offered(&granting(&["MANAGE_ROLES"])));
-    }
-
-    #[test]
-    fn of_everyone_only_the_permissions_count() {
-        let everyone = RoleSummary {
-            name: "Everyone".into(),
-            is_everyone: true,
-            permissions: ids(&["VIEW_CHANNEL"]),
-            ..role("everyone")
-        };
-        let opened = draft_of(Some(&everyone));
-        assert!(!savable(&opened, Some(&opened), true));
-        // Its name is not its editor's to change, whatever a draft holds.
-        assert!(!savable(
-            &RoleDraft {
-                name: "All".into(),
-                ..opened.clone()
-            },
-            Some(&opened),
-            true
-        ));
-        assert!(savable(
-            &RoleDraft {
-                permissions: Vec::new(),
-                ..opened.clone()
-            },
-            Some(&opened),
-            true
-        ));
-    }
-
-    #[test]
-    fn an_editor_nobody_touched_follows_the_role_and_a_touched_one_stays() {
-        let opened = draft_of(Some(&moderator()));
-        let now = RoleDraft {
-            name: "Mods".into(),
-            permissions: ids(&["SEND_IN_THREADS"]),
-            ..opened.clone()
-        };
-        // Untouched: it becomes the role as it now is.
-        assert_eq!(followed(&opened, &opened, &now), Some(now.clone()));
-        // Blanks typed around the name are no change to save, but they are typing: the
-        // editor is touched, and stays.
-        let spaced = RoleDraft {
-            name: "Moderator ".into(),
-            ..opened.clone()
-        };
-        assert!(!savable(&spaced, Some(&opened), false));
-        assert_eq!(followed(&opened, &spaced, &now), None);
-        // Permissions switched off and on again, in another order: untouched.
-        let reswitched = RoleDraft {
-            permissions: opened.permissions.iter().rev().cloned().collect(),
-            ..opened.clone()
-        };
-        assert_eq!(followed(&opened, &reswitched, &now), Some(now.clone()));
-        // The role as it opened: nothing to follow.
-        assert_eq!(followed(&opened, &opened, &opened), None);
-        let reordered = RoleDraft {
-            permissions: ids(&["SEND_IN_THREADS", "MANAGE_ROLES"]),
-            ..opened.clone()
-        };
-        assert_eq!(followed(&opened, &opened, &reordered), None);
-        // Touched: the draft and what it opened on stay, so a save sends this change alone.
-        let touched = RoleDraft {
-            color: "sky".into(),
-            ..opened.clone()
-        };
-        assert_eq!(followed(&opened, &touched, &now), None);
-    }
-
-    // ---- a member's form ----
-
-    fn form(roles: &[&str], title: &str) -> MemberDraft {
-        MemberDraft {
-            roles: ids(roles),
-            title: title.into(),
-        }
-    }
-
-    #[test]
-    fn a_members_form_sends_what_was_ticked_unticked_and_retitled() {
-        let opened = form(&["mod", "eng"], "Staff Engineer");
-        // Design ticked, Moderator unticked, a new title: one change of all three.
-        assert_eq!(
-            member_changes(&opened, &form(&["eng", "design"], " Principal Engineer ")),
-            MemberChanges {
-                give: ids(&["design"]),
-                take: ids(&["mod"]),
-                title: Some("Principal Engineer".into()),
-            }
-        );
-        // Nothing changed, whatever order the ticks are in and whatever blanks were typed.
-        let same = member_changes(&opened, &form(&["eng", "mod"], "Staff Engineer "));
-        assert!(same.nothing(), "{same:?}");
-        // A title emptied is cleared, which is a change; roles alone leave the title out.
-        assert_eq!(
-            member_changes(&opened, &form(&["mod", "eng"], "")).title,
-            Some(String::new())
-        );
-        assert_eq!(
-            member_changes(&opened, &form(&["mod"], "Staff Engineer")),
-            MemberChanges {
-                give: Vec::new(),
-                take: ids(&["eng"]),
-                title: None,
-            }
-        );
-    }
-
-    #[test]
-    fn a_role_given_since_the_form_opened_is_not_the_forms_to_take() {
-        // The form opened on Moderator and Engineering, and Engineering was unticked.
-        // Someone else gave Design meanwhile: it is in neither list, so it stays.
-        let opened = form(&["mod", "eng"], "");
-        let changes = member_changes(&opened, &form(&["mod"], ""));
-        assert_eq!(changes.take, ids(&["eng"]));
-        assert!(changes.give.is_empty() && changes.title.is_none());
-    }
-
-    #[test]
-    fn a_members_form_nobody_touched_follows_them_and_a_touched_one_stays() {
-        let opened = form(&["mod", "eng"], "Staff Engineer");
-        let now = form(&["mod", "eng", "design"], "Principal Engineer");
-        assert_eq!(followed_member(&opened, &opened, &now), Some(now.clone()));
-        assert_eq!(followed_member(&opened, &opened, &opened), None);
-        assert_eq!(
-            followed_member(&opened, &form(&["eng", "mod"], "Staff Engineer"), &now),
-            Some(now.clone()),
-            "the same roles in another order are untouched"
-        );
-        // A blank typed after the title is no change to save, but it is typing.
-        let spaced = form(&["mod", "eng"], "Staff Engineer ");
-        assert!(member_changes(&opened, &spaced).nothing());
-        assert_eq!(followed_member(&opened, &spaced, &now), None);
-        assert_eq!(
-            followed_member(&opened, &form(&["mod"], "Staff Engineer"), &now),
-            None
-        );
-        assert_eq!(
-            followed_member(&opened, &form(&["mod", "eng"], "Staff"), &now),
-            None
-        );
-    }
-
-    #[test]
-    fn a_permission_not_held_is_withheld() {
+    fn a_server_and_a_member_are_handed_over_as_the_core_asks() {
         let server = ServerSummary {
-            grantable: ids(&["MANAGE_ROLES"]),
+            can_manage: false,
+            can_manage_roles: false,
+            can_manage_members: true,
             ..ServerSummary::default()
         };
-        assert!(withheld(&server, "ADMINISTRATOR"));
-        assert!(!withheld(&server, "MANAGE_ROLES"));
-    }
-
-    #[test]
-    fn the_questions_count_who_holds_the_role() {
-        assert_eq!(
-            administrator_question("Acme", "Moderator", Some(3)),
-            [
-                "Administrator allows everything in Acme, in every channel, whatever a channel’s own permissions say.",
-                "3 members hold Moderator."
-            ]
-        );
-        assert_eq!(
-            administrator_question("Acme", "Moderator", Some(1))[1],
-            "1 member holds Moderator."
-        );
-        assert_eq!(administrator_question("Acme", "", None).len(), 1);
-        assert_eq!(
-            administrator_question("Acme", "Moderator", Some(0)).len(),
-            1
-        );
-        assert_eq!(
-            delete_question(Some(3)),
-            [
-                "3 members hold this role. They lose what it allowed.",
-                "This can’t be undone."
-            ]
-        );
-        assert_eq!(
-            delete_question(Some(1))[0],
-            "1 member holds this role. They lose what it allowed."
-        );
-        assert_eq!(
-            delete_question(Some(0)),
-            ["Nobody holds this role.", "This can’t be undone."]
-        );
-    }
-
-    #[test]
-    fn a_role_whose_holders_are_not_known_is_not_said_to_have_none() {
-        // The members still being read, or not read at all: the one line, nothing of holders.
-        assert_eq!(delete_question(None), ["This can’t be undone."]);
-    }
-
-    // ---- a member ----
-
-    #[test]
-    fn their_roles_in_the_servers_order_without_everyone() {
-        let held = |id: &str, tone| HeldRole {
-            role_id: id.into(),
-            label: id.into(),
-            tone,
+        assert_eq!(settings_sections(&server), [Section::Members]);
+        assert_eq!(section_label(Section::Members), "Members");
+        let roles = ServerSummary {
+            can_manage_roles: true,
+            ..ServerSummary::default()
         };
-        assert_eq!(
-            roles_held(&acme(), &ids(&["invite", "everyone", "design"])),
-            [held("design", Some("peach")), held("invite", None)]
-        );
-    }
-
-    #[test]
-    fn the_roles_to_tick_mark_what_is_not_this_accounts_to_give() {
-        let choices = role_choices(&acme(), &ids(&["mod", "eng"]));
-        let named = |keep: fn(&RoleChoice) -> bool| -> Vec<&str> {
-            choices
-                .iter()
-                .filter(|c| keep(c))
-                .map(|c| c.id.as_str())
-                .collect()
-        };
-        assert_eq!(named(|_| true), ["admin", "mod", "design", "eng", "invite"]);
-        assert_eq!(named(|c| c.checked), ["mod", "eng"]);
-        assert_eq!(named(|c| c.locked), ["admin", "mod"]);
-    }
-
-    #[test]
-    fn a_tick_gives_and_takes_and_leaves_a_locked_role_as_it_was() {
-        let acme = acme();
-        assert_eq!(
-            toggled_role(&acme, &ids(&["eng"]), "design"),
-            ["eng", "design"]
-        );
-        assert_eq!(
-            toggled_role(&acme, &ids(&["eng", "design"]), "eng"),
-            ["design"]
-        );
-        assert_eq!(toggled_role(&acme, &ids(&["mod"]), "mod"), ["mod"]);
-        assert!(toggled_role(&acme, &[], "admin").is_empty());
-        assert!(toggled_role(&acme, &[], "everyone").is_empty());
-    }
-
-    #[test]
-    fn what_is_offered_of_a_member() {
-        let roles = server(false, true, false);
-        let none = server(false, false, false);
-        let member = |guest, can_manage| MemberSummary {
-            guest,
-            can_manage,
+        let guest = MemberSummary {
+            guest: true,
+            can_manage: true,
             ..MemberSummary::default()
         };
-        let offers = |roles, roles_note, title, kick| MemberOffers {
-            roles,
-            roles_note,
-            title,
-            kick,
-        };
-        assert_eq!(
-            member_offers(&roles, &member(false, true), false),
-            offers(true, None, true, true)
-        );
-        // Above this account: their roles below its own can still be given and taken.
-        assert_eq!(
-            member_offers(&roles, &member(false, false), false),
-            offers(true, None, false, false)
-        );
-        assert_eq!(
-            member_offers(&roles, &member(true, true), false),
-            offers(false, Some("Guests aren’t given roles."), true, true)
-        );
-        assert_eq!(
-            member_offers(&none, &member(false, true), false),
-            offers(false, None, true, true)
-        );
-        // This account itself: its title is its own, and it is never offered Kick.
-        assert_eq!(
-            member_offers(&none, &member(false, false), true),
-            offers(false, None, true, false)
-        );
-        assert!(!offers_any(member_offers(
-            &none,
-            &member(false, false),
-            false
-        )));
-        assert!(offers_any(member_offers(
-            &roles,
-            &member(true, false),
-            false
-        )));
-    }
-
-    #[test]
-    fn the_owner_and_a_guest_are_marked() {
-        let member = |owner, guest| MemberSummary {
-            owner,
-            guest,
+        let offers = member_offers(&roles, &guest, false);
+        assert!(!offers.roles && offers.roles_note.is_some() && offers.title && offers.kick);
+        assert!(!member_offers(&roles, &guest, true).kick);
+        let owner = MemberSummary {
+            owner: true,
             ..MemberSummary::default()
         };
-        assert_eq!(member_mark(&member(true, false)), Some("Owner"));
-        assert_eq!(member_mark(&member(false, true)), Some("Guest"));
-        assert_eq!(member_mark(&member(false, false)), None);
+        assert_eq!(member_mark(&owner), Some("Owner"));
+        assert_eq!(member_mark(&guest), Some("Guest"));
     }
 
     #[test]
-    fn a_tag_on_its_tone_or_the_plain_chip() {
-        let tag = |label: &str, color: &str| TagSummary {
-            label: label.into(),
-            color: color.into(),
+    fn holders_are_counted_from_the_members_roles() {
+        let role = RoleSummary {
+            role_id: "eng".into(),
+            name: "Engineering".into(),
+            color: String::new(),
+            position: 2,
+            is_everyone: false,
+            hide_tag: false,
+            permissions: Vec::new(),
+            can_manage: true,
         };
+        let holding = |ids: &[&str]| MemberSummary {
+            role_ids: ids.iter().map(|id| (*id).to_string()).collect(),
+            ..MemberSummary::default()
+        };
+        let members = [holding(&["eng"]), holding(&["eng", "design"]), holding(&[])];
+        assert_eq!(holders(&role, Some(&members)), Some(2));
+        assert_eq!(holders(&role, None), None);
         assert_eq!(
-            tag_of(Some(&tag("Moderator", "green"))),
-            Some(("Moderator", TagTone::Tone("green")))
+            member_form(&members[1]),
+            MemberForm {
+                role_ids: vec!["eng".into(), "design".into()],
+                title: String::new(),
+            }
         );
-        assert_eq!(
-            tag_of(Some(&tag("Staff Engineer", ""))),
-            Some(("Staff Engineer", TagTone::Neutral))
-        );
-        assert_eq!(tag_of(None), None);
-        assert_eq!(tag_of(Some(&tag("", "green"))), None);
     }
 
     #[test]
-    fn a_search_reads_the_name_the_handle_and_the_title() {
+    fn a_search_reads_each_members_name_handle_and_title() {
         let person = |name: &str, handle: &str, title: &str| MemberSummary {
             display_name: name.into(),
             handle: handle.into(),
@@ -1158,59 +234,26 @@ mod tests {
                 .map(|p| p.handle.as_str())
                 .collect()
         };
-        assert_eq!(searched(&people, "").len(), 2);
-        assert_eq!(handles("ENGINEER"), ["devon"]);
+        assert_eq!(handles(""), ["devon", "maya"]);
+        assert_eq!(handles("engineer"), ["devon"]);
         assert_eq!(handles("@maya"), ["maya"]);
-        assert_eq!(handles("chen"), ["maya"]);
-        assert!(searched(&people, "nobody").is_empty());
-    }
-
-    // ---- refusals ----
-
-    #[test]
-    fn a_roles_refusal() {
-        assert_eq!(
-            role_refusal(&refused("ALREADY_EXISTS", None), "Acme"),
-            "Another role in Acme has that name."
-        );
-        assert_eq!(
-            role_refusal(&refused("INVALID_ARGUMENT", Some("name")), "Acme"),
-            "A role’s name is 1 to 32 characters on one line, with no hidden characters, and can’t be “everyone”."
-        );
-        assert!(
-            role_refusal(&refused("INVALID_ARGUMENT", Some("role_ids")), "Acme")
-                .contains("Try again")
-        );
-        assert!(
-            role_refusal(&refused("PERMISSION_DENIED", None), "Acme")
-                .contains("isn’t yours to change")
-        );
-        let offline = Failure {
-            message: "transport: offline".into(),
-            ..Failure::default()
-        };
-        assert_eq!(role_refusal(&offline, "Acme"), "transport: offline");
     }
 
     #[test]
-    fn a_members_refusal() {
-        assert_eq!(
-            member_refusal(&refused("NOT_FOUND", None)),
-            "They are no longer a member."
-        );
-        assert_eq!(
-            member_refusal(&refused("INVALID_ARGUMENT", Some("title"))),
-            "A title is up to 32 characters on one line, with no hidden characters."
-        );
-        // A member's own title, changed more than ten times in an hour.
-        assert_eq!(
-            member_refusal(&refused("RATE_LIMITED", None)),
-            "You’ve changed your title too many times this hour. Try again later."
-        );
-        let nope = Failure {
-            message: "nope".into(),
-            ..Failure::default()
+    fn a_tag_is_drawn_on_its_tone_or_the_plain_chip() {
+        let tag = |label: &str, color: &str| core::TagSummary {
+            label: label.into(),
+            color: color.into(),
         };
-        assert_eq!(member_refusal(&nope), "nope");
+        assert_eq!(
+            tag_of(Some(&tag("Moderator", "green"))),
+            Some(("Moderator".into(), TagTone::Tone("green")))
+        );
+        assert_eq!(
+            tag_of(Some(&tag("Staff Engineer", ""))),
+            Some(("Staff Engineer".into(), TagTone::Neutral))
+        );
+        assert_eq!(tag_of(None), None);
+        assert_eq!(TagTone::of(Some("#ff0000")), TagTone::Neutral);
     }
 }
