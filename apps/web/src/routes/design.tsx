@@ -96,6 +96,20 @@ import {
   type Tone,
   PhraseSaveWarning,
   PhraseWordField,
+  ConfirmPop,
+  MemberEdit,
+  RoleChoices,
+  RoleDot,
+  RoleList,
+  Roster,
+  SectionList,
+  SegmentedTabs,
+  TagSketch,
+  ToneSwatches,
+  type RoleChoice,
+  type RoleEntry,
+  type RosterEntry,
+  type TagTone,
 } from "../design/components";
 import { NeedsBrowser, PhraseStep, RestoreAsk, RestoreForm, RestoreKeep, StartOver } from "./private";
 import { endedNotice } from "../client/ended";
@@ -1175,15 +1189,901 @@ const SAMPLE_KEEP: DeviceSummary[] = [
   { deviceId: "safari", kind: "web", label: "", webOrigin: "https://chat.acme.dev", addedAtMicros: new Date(2026, 10, 1).getTime() * 1000, thisDevice: false, revoked: false },
 ];
 
+// ── Roles and titles on the clients (architecture 7.5, plan step 11) ──
+// Seven boards no canvas drew: a server's settings with its sections, its
+// roles, a role's editor, its members, the tag beside a name under each of
+// the server's two settings, the profile card, and the same on phones.
+// Sample data only; nothing here asks the core for anything. Ryan owns
+// Acme and holds no role. Devon's highest role is Moderator, and the
+// figures of what someone may not manage are drawn as Devon sees them.
+
+const ACME_ROLES: RoleEntry[] = [
+  { id: "admin", name: "Admin", tone: "indigo", members: 2 },
+  { id: "mod", name: "Moderator", tone: "green", members: 3 },
+  { id: "design", name: "Design", tone: "peach", members: 12 },
+  { id: "eng", name: "Engineering", tone: "sky", members: 24 },
+  { id: "invite", name: "Can invite", tone: null, members: 41, untagged: true },
+  { id: "everyone", name: "Everyone", tone: null, members: 128, everyone: true },
+];
+
+interface AcmePerson {
+  id: string;
+  name: string;
+  initials: string;
+  tone: Tone;
+  handle: string;
+  title?: string;
+  /** The ids of the roles held. */
+  roles: string[];
+  mark?: "Owner" | "Guest";
+  status?: "online" | "away";
+}
+
+const ACME: Record<"ryan" | "maya" | "devon" | "sam" | "priya" | "leo" | "jordan", AcmePerson> = {
+  ryan: { ...PEOPLE.self, id: "ryan", handle: "ryan", title: "Founder", roles: [], mark: "Owner", status: "online" },
+  maya: { ...PEOPLE.maya, id: "maya", handle: "maya", title: "Head of Design", roles: ["admin", "design"], status: "online" },
+  devon: { ...PEOPLE.devon, id: "devon", handle: "devon", title: "Staff Engineer", roles: ["mod", "eng"], status: "away" },
+  sam: { ...PEOPLE.sam, id: "sam", handle: "sam", title: "Backend Engineer", roles: ["eng", "invite"], status: "online" },
+  priya: { ...PEOPLE.priya, id: "priya", handle: "priya", roles: ["design"] },
+  leo: { ...PEOPLE.leo, id: "leo", handle: "leo", title: "Mobile Lead", roles: ["invite"] },
+  jordan: { id: "jordan", name: "Jordan Lee", initials: "JL", tone: "stone", handle: "jordan", title: "Contractor", roles: [], mark: "Guest" },
+};
+const ACME_MEMBERS: AcmePerson[] = [ACME.ryan, ACME.maya, ACME.devon, ACME.sam, ACME.priya, ACME.leo, ACME.jordan];
+
+/** The roles a person holds, in the server's order, as a card and a settings row list them. */
+function rolesOf(p: AcmePerson): { label: string; tone: Tone | null }[] {
+  return ACME_ROLES.filter((r) => p.roles.includes(r.id)).map((r) => ({ label: r.name, tone: r.tone ?? null }));
+}
+
+/**
+ * The tag beside a name, as the core will work it out (authorization 3.5):
+ * where the server shows roles, the highest role held that is shown as a
+ * tag, in its tone; where it shows titles, the title on the plain chip;
+ * nothing where there is none, and never one in place of the other.
+ */
+function tagOf(p: AcmePerson, shows: "roles" | "titles"): { label: string; tone: TagTone } | undefined {
+  if (shows === "titles") return p.title ? { label: p.title, tone: "neutral" } : undefined;
+  const role = ACME_ROLES.find((r) => p.roles.includes(r.id) && !r.untagged && !r.everyone);
+  return role ? { label: role.name, tone: role.tone ?? "neutral" } : undefined;
+}
+
+function rosterEntry(p: AcmePerson): RosterEntry {
+  return { id: p.id, name: p.name, initials: p.initials, tone: p.tone, handle: p.handle, title: p.title, mark: p.mark, roles: rolesOf(p) };
+}
+
+/** A person's roles to tick; `above` are the roles at or above the viewer's own highest, shown and not changeable. */
+function choicesFor(p: AcmePerson, above: string[] = []): RoleChoice[] {
+  return ACME_ROLES.filter((r) => !r.everyone).map((r) => ({ id: r.id, name: r.name, tone: r.tone, checked: p.roles.includes(r.id), locked: above.includes(r.id) }));
+}
+
+/** The roles at or above Devon's highest: what Devon may not manage. */
+const ABOVE_DEVON = ["admin", "mod"];
+
+function AcmeRail() {
+  return (
+    <ServerRail
+      logoSrc="/brand/lumia-original-icon.svg"
+      homeUnread={3}
+      servers={[
+        { name: "Acme", initials: "A", current: true },
+        { name: "Design Guild", initials: "DG", ink: "indigo", unread: true },
+        { name: "Lumia Builders", initials: "LB", ink: "green", mentions: 2 },
+        { name: "Friends", initials: "F", ink: "amber" },
+      ]}
+      self={{ ...PEOPLE.self, status: "online" }}
+    />
+  );
+}
+
+function AcmeSidebar(props: { channel?: string }) {
+  return (
+    <>
+      <ServerHeader name="Acme" onOpenMenu={() => {}} onNewMessage={() => {}} />
+      <SearchTrigger label="Search Acme" />
+      <QuickTiles
+        items={[
+          { icon: "thread", label: "Threads", count: 2 },
+          { icon: "mention", label: "Mentions", count: 1 },
+          { icon: "saved", label: "Saved" },
+        ]}
+      />
+      <ChannelList
+        sections={[
+          {
+            title: "Channels",
+            items: [{ name: "general", active: props.channel === "general" }, { name: "design", unread: true, mentions: 1 }, { name: "engineering", unread: true }, { name: "random" }],
+          },
+          {
+            title: "Private",
+            items: [
+              { name: "leadership", kind: "private" },
+              { name: "northstar-launch", kind: "private", unread: true },
+            ],
+          },
+          {
+            title: "Direct messages",
+            items: [
+              { name: PEOPLE.maya.name, kind: "dm", initials: "MC", tone: "peach", status: "online", unread: true, count: 2 },
+              { name: PEOPLE.devon.name, kind: "dm", initials: "DP", tone: "purple", status: "away" },
+            ],
+          },
+        ]}
+      />
+    </>
+  );
+}
+
+const SETTINGS_SECTIONS: { id: string; label: string; icon: IconName; note?: string }[] = [
+  { id: "overview", label: "Overview", icon: "settings" },
+  { id: "roles", label: "Roles", icon: "shield", note: "5 roles" },
+  { id: "members", label: "Members", icon: "members", note: "128" },
+];
+
+/** Server settings in the server's main pane: the section list beside the section shown. */
+function SettingsFrame(props: { section: "overview" | "roles" | "members"; tall?: boolean; onSection?: (id: string) => void; children: JSX.Element }) {
+  return (
+    <AppShell
+      height={props.tall ? undefined : 900}
+      class={props.tall ? "gallery-roles__tall" : undefined}
+      rail={<AcmeRail />}
+      sidebar={<AcmeSidebar />}
+      main={
+        <>
+          <ChannelHeader kind="page" name="Server settings" topic="Acme" actions={[]} />
+          <div class="lu-settings">
+            <SectionList label="Server settings" sections={SETTINGS_SECTIONS.map((s) => ({ id: s.id, label: s.label, icon: s.icon }))} value={props.section} onChange={props.onSection} />
+            <div class="lu-page">{props.children}</div>
+          </div>
+        </>
+      }
+    />
+  );
+}
+
+/** A state a board cannot show at once: drawn on a pane of its own (or bare, where it is its own surface), a line under it saying what it is. */
+function Figure(props: { caption: string; wide?: boolean; bare?: boolean; children: JSX.Element }) {
+  return (
+    <figure class={cx("gallery-roles__figure", props.wide && "gallery-roles__figure--wide")}>
+      <Show when={!props.bare} fallback={props.children}>
+        <div class="gallery-roles__pane">{props.children}</div>
+      </Show>
+      <figcaption>{props.caption}</figcaption>
+    </figure>
+  );
+}
+
+// Overview: today's cards (routes/server-settings.tsx) with sample values,
+// and the one control this step adds, "Tag beside names".
+function OverviewSection() {
+  const [shows, setShows] = createSignal<"roles" | "titles">("roles");
+  const [keep, setKeep] = createSignal("0");
+  const [keepFiles, setKeepFiles] = createSignal("0");
+  const [full, setFull] = createSignal("refuse");
+  const days = [
+    { id: "0", label: "Forever" },
+    { id: "365", label: "1 year" },
+    { id: "90", label: "90 days" },
+    { id: "30", label: "30 days" },
+  ];
+  return (
+    <>
+      <Card title="Overview" subtitle="How the server shows on the rail and in invites.">
+        <div class="app__photo">
+          <span class="app__server-picture" aria-hidden="true">
+            A
+          </span>
+          <div class="app__photo-words">
+            <div class="app__row">
+              <Button size="sm">Choose a picture…</Button>
+            </div>
+            <p class="auth__note">A PNG, JPEG, WebP or GIF up to 8 MB. Everyone sees its middle, as a circle.</p>
+          </div>
+        </div>
+        <form class="auth__form" onSubmit={(e) => e.preventDefault()}>
+          <TextField label="Name" value="Acme" placeholder="Acme" autocomplete="off" />
+          <Button variant="primary" size="md" type="submit" disabled>
+            Save
+          </Button>
+        </form>
+      </Card>
+      <Card title="Tag beside names" subtitle="What shows beside a member’s name in messages and in the member list.">
+        <div class="auth__form">
+          <PictureChoices
+            label="Tag beside names"
+            class="lu-pictiles--two"
+            value={shows()}
+            onChange={setShows}
+            options={[
+              { value: "roles", label: "Roles", caption: "Each member’s highest role that is shown as a tag, in the role’s colour.", picture: <TagSketch shows="roles" /> },
+              { value: "titles", label: "Titles", caption: "Each member’s title, in no colour. A member without a title has no tag.", picture: <TagSketch shows="titles" /> },
+            ]}
+          />
+          <p class="auth__note">A profile shows a member’s title and roles either way.</p>
+        </div>
+      </Card>
+      <Card title="Default channels" subtitle="New members join these channels.">
+        <div class="auth__form">
+          <Checkbox label="#general" checked />
+          <Checkbox label="#design" />
+          <Checkbox label="#engineering" />
+          <Checkbox label="#random" checked />
+          <Button variant="primary" size="md">
+            Save
+          </Button>
+        </div>
+      </Card>
+      <Card title="Message history" subtitle="How long this server keeps its messages.">
+        <div class="auth__form">
+          <SegmentedTabs label="Keep messages" tabs={days} value={keep()} onChange={setKeep} />
+          <Button variant="primary" size="md" disabled={keep() === "0"}>
+            Save
+          </Button>
+          <div class="app__switch">
+            <Checkbox label="Show deleted messages" />
+            <p class="auth__note">Off, a deleted message disappears for everyone. On, it stays in its place as “(deleted)”.</p>
+          </div>
+        </div>
+      </Card>
+      <Card title="Files" subtitle="The attachments sent in this server's channels.">
+        <div class="auth__form">
+          <p class="auth__note">412 MB of 2 GB used</p>
+          <SegmentedTabs label="Keep attachments" tabs={days} value={keepFiles()} onChange={setKeepFiles} />
+          <SegmentedTabs
+            label="When the server is full"
+            tabs={[
+              { id: "refuse", label: "Refuse new uploads" },
+              { id: "delete", label: "Delete the oldest attachments" },
+            ]}
+            value={full()}
+            onChange={setFull}
+          />
+          <p class="auth__note">{full() === "delete" ? "When an upload would not fit, the oldest messages’ attachments are deleted for everyone to make room." : "When an upload would not fit, it is refused until files are deleted."}</p>
+          <Button variant="primary" size="md" disabled={keepFiles() === "0" && full() === "refuse"}>
+            Save
+          </Button>
+        </div>
+      </Card>
+    </>
+  );
+}
+
+function SettingsBoard(props: { onSection: (id: string) => void }) {
+  return (
+    <div class="gallery-roles">
+      <p class="gallery-roles__lead">Server settings with sections: Overview, Roles, Members, each shown to those who may use it (Manage server, Manage roles, Manage members). Overview keeps today’s cards and gains “Tag beside names”, saved as it is chosen. The pane scrolls; here it is drawn at its full length.</p>
+      <SettingsFrame section="overview" tall onSection={props.onSection}>
+        <OverviewSection />
+      </SettingsFrame>
+    </div>
+  );
+}
+
+function RolesSection(props: { roles: RoleEntry[]; reorder?: "drag" | "menu"; still?: { id: string; before: string }; hint: string }) {
+  return (
+    <>
+      <div class="lu-settings__head">
+        <div class="lu-settings__headtext">
+          <h2 class="lu-settings__title">Roles</h2>
+          <p class="lu-settings__subtitle">{props.hint}</p>
+        </div>
+        <Button size="sm" icon="plus">
+          New role
+        </Button>
+      </div>
+      <RoleList roles={props.roles} reorder={props.reorder} still={props.still} onOpen={() => {}} onMenu={() => {}} />
+    </>
+  );
+}
+
+const ROLES_HINT = "In order, highest first. Drag a role to move it. A new role starts last, just above Everyone.";
+
+/** A role's menu: what a right-click, Shift+F10 or the context menu key opens on its row, and its More button on a phone. */
+function RoleMenu(props: { name: string; first?: boolean; last?: boolean; class?: string }) {
+  return (
+    <Menu label={props.name} compact class={cx("lu-menu--context", props.class)}>
+      <MenuLabel>{props.name}</MenuLabel>
+      <MenuItem icon="settings">Edit role</MenuItem>
+      <MenuRule />
+      <MenuItem icon="arrow-up" disabled={props.first}>
+        Move up
+      </MenuItem>
+      <MenuItem icon="arrow-down" disabled={props.last}>
+        Move down
+      </MenuItem>
+      <MenuRule />
+      <MenuItem icon="trash" danger>
+        Delete role
+      </MenuItem>
+    </Menu>
+  );
+}
+
+function RolesBoard(props: { onSection: (id: string) => void }) {
+  const lifted = ACME_ROLES.filter((r) => r.id === "eng");
+  return (
+    <div class="gallery-roles">
+      <SettingsFrame section="roles" onSection={props.onSection}>
+        <RolesSection roles={ACME_ROLES} hint={ROLES_HINT} />
+      </SettingsFrame>
+      <div class="gallery-roles__more">
+        <Figure caption="The same list to Devon, who holds Manage roles and whose highest role is Moderator. Admin and Moderator are at or above it: no handle, a lock, and they do not open. The rest are Devon’s to move, change and delete.">
+          <RoleList roles={ACME_ROLES.map((r) => ({ ...r, locked: ABOVE_DEVON.includes(r.id) }))} onOpen={() => {}} />
+        </Figure>
+        <Figure caption="A drag, held: Engineering lifted from its place, which stays dashed, and a line in the accent where it would land, above Design. Escape puts it back. The whole order is sent as one request when it is let go.">
+          <div class="gallery-roles__drag">
+            <RoleList roles={ACME_ROLES} still={{ id: "eng", before: "design" }} />
+            <RoleList class="gallery-roles__ghost" roles={lifted} />
+          </div>
+        </Figure>
+        <Figure bare caption="A role’s menu (right-click, Shift+F10 or the context menu key on its row): the keyboard’s way to do what a drag does. The highest role has no way up, and the last above Everyone no way down.">
+          <div class="pieces__row pieces__row--top">
+            <RoleMenu name="Design" />
+            <RoleMenu name="Admin" first />
+          </div>
+        </Figure>
+      </div>
+    </div>
+  );
+}
+
+// The fourteen permissions a client offers, under their headings (the core
+// will hold the list; plan step 11). Each with one line of what it allows.
+const PERMISSIONS: { heading: string; items: { id: string; name: string; caption: string }[] }[] = [
+  {
+    heading: "Server",
+    items: [
+      { id: "administrator", name: "Administrator", caption: "Everything below, in every channel. A channel’s own permissions do not limit it." },
+      { id: "manage_server", name: "Manage server", caption: "Change the server’s name, picture and settings." },
+      { id: "manage_roles", name: "Manage roles", caption: "Create, change and delete roles below their own highest, and give them to members." },
+      { id: "manage_channels", name: "Manage channels", caption: "Create, change and delete channels, and add or remove people in them." },
+      { id: "manage_members", name: "Manage members", caption: "Kick members below them and change those members’ titles." },
+      { id: "create_invites", name: "Create invites", caption: "Make invite links and send invitations to join the server." },
+    ],
+  },
+  {
+    heading: "Channels",
+    items: [
+      { id: "view_channel", name: "See channels", caption: "See the server’s public channels and join them." },
+      { id: "read_history", name: "Read message history", caption: "Read the messages already in a channel." },
+    ],
+  },
+  {
+    heading: "Messages",
+    items: [
+      { id: "send_messages", name: "Send messages", caption: "Write in the channels they are in." },
+      { id: "attach_files", name: "Attach files", caption: "Add pictures, videos and files to a message." },
+      { id: "add_reactions", name: "Add reactions", caption: "React to messages with emoji." },
+      { id: "mention_everyone", name: "Mention everyone", caption: "Notify a whole channel with @everyone." },
+      { id: "manage_messages", name: "Manage messages", caption: "Delete anyone’s messages." },
+      { id: "start_dms", name: "Start direct messages", caption: "Start a direct message with another member of the server." },
+    ],
+  },
+];
+
+const EVERYONE_ON = ["create_invites", "view_channel", "read_history", "send_messages", "attach_files", "add_reactions", "start_dms"];
+const MODERATOR_ON = ["manage_roles", "manage_channels", "manage_members", "mention_everyone", "manage_messages"];
+
+type EditorPart = "head" | "identity" | "server" | "channels" | "messages" | "holders" | "delete";
+
+/**
+ * A role's editor. A new role has no holders and nothing to delete;
+ * Everyone has its permissions and nothing else. `parts` draws some of it
+ * (a phone's screen, scrolled), `withheld` the permissions the viewer does
+ * not hold and so cannot give.
+ */
+function RoleEditor(props: { role?: RoleEntry; on: string[]; withheld?: string[]; holders?: AcmePerson[]; parts?: EditorPart[]; class?: string }) {
+  const everyone = () => !!props.role?.everyone;
+  const [name, setName] = createSignal(props.role?.name ?? "");
+  const [tone, setTone] = createSignal<Tone | null>(props.role?.tone ?? null);
+  const [tagged, setTagged] = createSignal(!props.role?.untagged);
+  const [on, setOn] = createSignal(props.on);
+  const has = (part: EditorPart) => !props.parts || props.parts.includes(part);
+  const permissions = (heading: string) => PERMISSIONS.find((g) => g.heading === heading)?.items ?? [];
+  const row = (p: { id: string; name: string; caption: string }) => {
+    const withheld = () => !!props.withheld?.includes(p.id);
+    return (
+      <SettingRow
+        name={p.name}
+        caption={withheld() ? `${p.caption} You don’t hold it, so it is not yours to give or take.` : p.caption}
+        control={(ids) => <Toggle labelledBy={ids.name} describedBy={ids.caption} checked={on().includes(p.id)} disabled={withheld()} onChange={(checked) => setOn(checked ? [...on(), p.id] : on().filter((id) => id !== p.id))} />}
+      />
+    );
+  };
+  const group = (heading: string) => (
+    <>
+      <h4 class="lu-roleedit__group">{heading}</h4>
+      <Show when={heading === "Server"}>
+        <SettingsGroup class="lu-setgroup--apart">
+          <For each={permissions(heading).filter((p) => p.id === "administrator")}>{row}</For>
+        </SettingsGroup>
+      </Show>
+      <SettingsGroup>
+        <For each={permissions(heading).filter((p) => p.id !== "administrator")}>{row}</For>
+      </SettingsGroup>
+    </>
+  );
+  return (
+    <div class={cx("lu-roleedit", props.class)}>
+      <Show when={has("head")}>
+        <div class="lu-settings__head">
+          <IconButton icon="back" label="Back to roles" />
+          <div class="lu-settings__headtext">
+            <h2 class="lu-settings__title">
+              <RoleDot tone={tone()} />
+              {props.role ? (everyone() ? "Everyone" : name() || props.role.name) : "New role"}
+            </h2>
+            <Show when={everyone()}>
+              <p class="lu-settings__subtitle">What every member may do before any role adds to it. Guests are not among them.</p>
+            </Show>
+          </div>
+          <Button variant="primary" size="md" disabled={!name().trim()}>
+            Save
+          </Button>
+        </div>
+      </Show>
+      <Show when={has("identity") && !everyone()}>
+        <div class="lu-roleedit__part">
+          <div class="lu-roleedit__field">
+            <TextField label="Name" value={name()} maxLength={32} placeholder="Moderator" autocomplete="off" onInput={(e) => setName(e.currentTarget.value)} />
+            <p class="lu-roleedit__hint">1 to 32 characters. No other role in Acme can have the same name.</p>
+          </div>
+          <div class="lu-roleedit__field">
+            <span class="lu-roleedit__legend">Colour</span>
+            <ToneSwatches label="Colour" value={tone()} onChange={setTone} onNone={() => setTone(null)} />
+          </div>
+          <SettingsGroup>
+            <SettingRow
+              name="Show as tag"
+              caption={tagged() ? "This role can be the tag beside a member’s name." : "This role only carries permissions. It is nobody’s tag."}
+              control={(ids) => <Toggle labelledBy={ids.name} describedBy={ids.caption} checked={tagged()} onChange={setTagged} />}
+            />
+            <div class="lu-roleedit__preview">
+              <span class="lu-roleedit__previewlabel">Preview</span>
+              <Avatar initials="DP" tone="purple" size={28} />
+              <span class="lu-roleedit__previewname">Devon Park</span>
+              <Show when={tagged() && name().trim()}>
+                <Tag tone={tone() ?? "neutral"}>{name().trim()}</Tag>
+              </Show>
+              <span class="lu-roleedit__previewtime">9:11 AM</span>
+            </div>
+          </SettingsGroup>
+        </div>
+      </Show>
+      <Show when={has("server") || has("channels") || has("messages")}>
+        <div class="lu-roleedit__part">
+          <Show when={has("server")}>
+            <h3 class="lu-roleedit__heading">Permissions</h3>
+            {group("Server")}
+          </Show>
+          <Show when={has("channels")}>{group("Channels")}</Show>
+          <Show when={has("messages")}>{group("Messages")}</Show>
+        </div>
+      </Show>
+      <Show when={has("holders") && props.holders}>
+        {(holders) => (
+          <div class="lu-roleedit__part">
+            <div class="lu-roleedit__row">
+              <h3 class="lu-roleedit__heading">
+                Members with this role <span class="lu-settings__count">{holders().length}</span>
+              </h3>
+              <Button size="sm" icon="plus">
+                Add members
+              </Button>
+            </div>
+            <div class="lu-roleedit__holders">
+              <MemberList
+                sections={[
+                  {
+                    members: holders().map((p) => ({
+                      name: p.name,
+                      initials: p.initials,
+                      tone: p.tone,
+                      subtitle: "@" + p.handle,
+                      action: { label: "Remove from role", description: `Remove ${p.name} from ${props.role?.name ?? "this role"}`, onClick: () => {} },
+                    })),
+                  },
+                ]}
+              />
+            </div>
+          </div>
+        )}
+      </Show>
+      <Show when={has("delete") && props.role && !everyone()}>
+        <div class="lu-roleedit__part">
+          <h3 class="lu-roleedit__heading">Delete role</h3>
+          <div class="lu-roleedit__row">
+            <p class="lu-roleedit__hint">Its members lose what it allowed. This can’t be undone.</p>
+            <Button variant="danger" size="md">
+              Delete role
+            </Button>
+          </div>
+        </div>
+      </Show>
+    </div>
+  );
+}
+
+const MODERATOR = ACME_ROLES.find((r) => r.id === "mod");
+const EVERYONE = ACME_ROLES.find((r) => r.everyone);
+const MODERATORS: AcmePerson[] = [ACME.devon, { id: "noor", name: "Noor Haddad", initials: "NH", tone: "green", handle: "noor", roles: ["mod"] }, { id: "alex", name: "Alex Rivera", initials: "AR", tone: "amber", handle: "arivera", roles: ["mod"] }];
+
+/** The two questions the editor asks first. */
+function RoleConfirmations() {
+  return (
+    <>
+      <ConfirmPop title="Turn on Administrator?" confirm="Turn on">
+        <p>Administrator allows everything in Acme, in every channel, whatever a channel’s own permissions say.</p>
+        <p>3 members hold Moderator.</p>
+      </ConfirmPop>
+      <ConfirmPop title="Delete Moderator?" confirm="Delete role" danger>
+        <p>3 members hold this role. They lose what it allowed.</p>
+        <p>This can’t be undone.</p>
+      </ConfirmPop>
+    </>
+  );
+}
+
+function RoleEditorBoard(props: { onSection: (id: string) => void }) {
+  return (
+    <div class="gallery-roles">
+      <p class="gallery-roles__lead">A role’s editor, opened from its row in Roles: its name, colour and tag, its permissions under three headings, who holds it, and Delete. One Save keeps it all. The pane scrolls; here it is drawn at its full length.</p>
+      <SettingsFrame section="roles" tall onSection={props.onSection}>
+        <RoleEditor role={MODERATOR} on={MODERATOR_ON} holders={MODERATORS} />
+      </SettingsFrame>
+      <div class="gallery-roles__more">
+        <Figure wide caption="The editor for Everyone: permissions only. No name, colour, tag switch, holders or Delete.">
+          <RoleEditor role={EVERYONE} on={EVERYONE_ON} />
+        </Figure>
+        <div class="gallery-roles__stack">
+          <Figure bare caption="Asked before Administrator is turned on, against its switch; and before a role is deleted, against Delete role. Cancel has the keyboard first.">
+            <RoleConfirmations />
+          </Figure>
+          <Figure caption="“New role”: the same editor with nothing in it yet. Save is off until it has a name; it is placed last, just above Everyone. No holders, nothing to delete.">
+            <RoleEditor on={[]} parts={["head", "identity"]} />
+          </Figure>
+          <Figure caption="“Show as tag” off, and no colour: the preview has no tag. In Roles the row carries “Not shown as tag”.">
+            <RoleEditor role={ACME_ROLES.find((r) => r.id === "invite")} on={["create_invites"]} parts={["identity"]} />
+          </Figure>
+          <Figure caption="To Devon, editing Engineering: Devon holds neither Administrator nor Manage server, so cannot give them. Each is off, dimmed, and says why.">
+            <RoleEditor role={ACME_ROLES.find((r) => r.id === "eng")} on={[]} withheld={["administrator", "manage_server"]} parts={["server"]} />
+          </Figure>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MembersSection(props: { members: AcmePerson[]; open?: string; editor?: (m: RosterEntry) => JSX.Element; more?: boolean }) {
+  return (
+    <>
+      <div class="lu-settings__head">
+        <div class="lu-settings__headtext">
+          <h2 class="lu-settings__title">
+            Members <span class="lu-settings__count">128</span>
+          </h2>
+        </div>
+      </div>
+      <SearchField label="Search members" />
+      <Roster members={props.members.map(rosterEntry)} open={props.open} editor={props.editor} />
+      <Show when={props.more}>
+        <Button size="sm" block>
+          Show more members
+        </Button>
+      </Show>
+    </>
+  );
+}
+
+/** Devon's editing state as the owner sees it: every role changeable, the title, Kick. */
+const devonEditor = () => <MemberEdit name={ACME.devon.name} roles={choicesFor(ACME.devon)} title={ACME.devon.title ?? ""} onKick={() => {}} />;
+
+function MembersBoard(props: { onSection: (id: string) => void }) {
+  return (
+    <div class="gallery-roles">
+      <SettingsFrame section="members" tall onSection={props.onSection}>
+        <MembersSection members={ACME_MEMBERS} open="devon" editor={devonEditor} more />
+      </SettingsFrame>
+      <div class="gallery-roles__more">
+        <Figure wide caption="To Devon (Manage roles and Manage members, highest role Moderator), Sam’s row: Admin and Moderator are shown and not changeable; the roles below Devon’s own are. Sam is below Devon, so the title and Kick are offered.">
+          <Roster members={[rosterEntry(ACME.sam)]} open="sam" editor={() => <MemberEdit name={ACME.sam.name} roles={choicesFor(ACME.sam, ABOVE_DEVON)} title={ACME.sam.title ?? ""} onKick={() => {}} />} />
+        </Figure>
+        <Figure wide caption="To Devon, Maya’s row: Maya is above Devon, so no title and no Kick; the roles below Devon’s own can still be given and taken, whoever the member is.">
+          <Roster members={[rosterEntry(ACME.maya)]} open="maya" editor={() => <MemberEdit name={ACME.maya.name} roles={choicesFor(ACME.maya, ABOVE_DEVON)} />} />
+        </Figure>
+        <Figure wide caption="A guest: a title and Kick. A guest is offered no roles.">
+          <Roster members={[rosterEntry(ACME.jordan)]} open="jordan" editor={() => <MemberEdit name={ACME.jordan.name} rolesNote="Guests aren’t given roles." title={ACME.jordan.title ?? ""} onKick={() => {}} />} />
+        </Figure>
+      </div>
+    </div>
+  );
+}
+
+// The same morning in #general under each of the server's two settings.
+const TAG_TALK: { who: AcmePerson; time: string; text: string }[] = [
+  { who: ACME.maya, time: "9:04 AM", text: "Morning all. The new onboarding flow is in the design channel if anyone wants a look before standup." },
+  { who: ACME.devon, time: "9:11 AM", text: "Looks great. I’ll check the copy on the second screen against the tone guide." },
+  { who: ACME.sam, time: "9:20 AM", text: "The importer keeps its old path for one more release, so nothing blocks it." },
+  { who: ACME.priya, time: "9:24 AM", text: "Two screens changed since Friday, both in the sign-in card." },
+  { who: ACME.leo, time: "9:31 AM", text: "Mobile gets the same composer this week." },
+  { who: ACME.ryan, time: "9:38 AM", text: "Thanks, everyone. Thursday still stands." },
+  { who: ACME.jordan, time: "9:40 AM", text: "I’ll have the audit notes in by then." },
+];
+
+function TagsShell(props: { shows: "roles" | "titles" }) {
+  const member = (p: AcmePerson) => {
+    const tag = tagOf(p, props.shows);
+    return { name: p.name, initials: p.initials, tone: p.tone, status: p.status, tag: tag?.label, tagTone: tag?.tone };
+  };
+  return (
+    <AppShell
+      height={720}
+      rail={<AcmeRail />}
+      sidebar={<AcmeSidebar channel="general" />}
+      main={
+        <>
+          <ChannelHeader name="general" topic="Company-wide announcements and water-cooler chat" />
+          <MessageList>
+            <Divider variant="day" label="Today" />
+            <For each={TAG_TALK}>
+              {(m) => (
+                <Message author={m.who.name} initials={m.who.initials} tone={m.who.tone} tag={tagOf(m.who, props.shows)} time={m.time} actions={false}>
+                  {m.text}
+                </Message>
+              )}
+            </For>
+          </MessageList>
+          <Composer placeholder="Message #general" />
+        </>
+      }
+      aside={
+        <SidePanel tabs={[{ id: "members", label: "Members", count: 128 }]} value="members" onChange={() => {}}>
+          <SidePanelSearch>
+            <SearchField label="Find a member" />
+          </SidePanelSearch>
+          <SidePanelScroll>
+            <MemberList
+              sections={[
+                { title: "Online · 32", members: [ACME.ryan, ACME.maya, ACME.devon, ACME.sam].map(member) },
+                { title: "Offline · 96", members: [ACME.priya, ACME.leo, ACME.jordan].map(member) },
+              ]}
+              total={128}
+            />
+          </SidePanelScroll>
+        </SidePanel>
+      }
+    />
+  );
+}
+
+const LONGEST_TITLE = "Principal Reliability Engineer I"; // 32 characters
+
+function TagsBoard() {
+  const tones: Tone[] = ["peach", "blue", "purple", "mint", "amber", "sky", "stone", "green", "indigo"];
+  return (
+    <div class="gallery-roles">
+      <p class="gallery-roles__lead">Acme shows roles, the default: beside each name, the member’s highest role that is shown as a tag, on the role’s tone. Leo holds only Can invite, which is not shown as a tag; Ryan owns Acme and holds no role; Jordan is a guest. None of the three has a tag.</p>
+      <TagsShell shows="roles" />
+      <p class="gallery-roles__lead">The same conversation with Acme showing titles: each member’s title on the plain chip, in no colour. Priya has no title, so no tag; her Design role does not stand in for it.</p>
+      <TagsShell shows="titles" />
+      <div class="gallery-roles__more">
+        <Figure wide caption="A role’s tag on each of the nine tones and with no colour, as a message draws it and as the member list does; then a title’s, and the accent’s “New”, which stays as it was.">
+          <div class="pieces__row">
+            <For each={tones}>{(t) => <Tag tone={t}>{t[0]?.toUpperCase() + t.slice(1)}</Tag>}</For>
+            <Tag>No colour</Tag>
+          </div>
+          <div class="pieces__row gallery-roles__gap">
+            <For each={tones}>
+              {(t) => (
+                <Tag tone={t} size="sm">
+                  {t[0]?.toUpperCase() + t.slice(1)}
+                </Tag>
+              )}
+            </For>
+            <Tag size="sm">No colour</Tag>
+          </div>
+          <div class="pieces__row gallery-roles__gap">
+            <Tag>Staff Engineer</Tag>
+            <Tag size="sm">Staff Engineer</Tag>
+            <Tag tone="accent">New</Tag>
+            <Tag tone="accent" size="sm">
+              You
+            </Tag>
+          </div>
+        </Figure>
+        <Figure wide caption="The longest a tag can be, 32 characters: whole in a message where the row has room, and in a member row cut with an ellipsis, the tag giving way before the name does.">
+          <MessageList class="pieces__list">
+            <Message author={ACME.devon.name} initials="DP" tone="purple" tag={{ label: LONGEST_TITLE }} time="9:11 AM" actions={false}>
+              Looks great.
+            </Message>
+            <Message author={ACME.devon.name} initials="DP" tone="purple" tag={{ label: "Community and Events Coordinator", tone: "mint" }} time="9:12 AM" actions={false}>
+              A role’s name can be as long.
+            </Message>
+          </MessageList>
+          <div class="gallery-roles__narrow">
+            <MemberList
+              sections={[
+                {
+                  members: [
+                    { ...PEOPLE.devon, status: "online", tag: LONGEST_TITLE, tagTone: "neutral" },
+                    { ...PEOPLE.priya, status: "online", tag: "Community and Events Coordinator", tagTone: "mint" },
+                  ],
+                },
+              ]}
+            />
+          </div>
+        </Figure>
+      </div>
+    </div>
+  );
+}
+
+function ProfileCardBoard() {
+  const devon = { name: ACME.devon.name, initials: "DP", tone: "purple" as const, handle: "devon", status: "away" as const, title: ACME.devon.title, roles: rolesOf(ACME.devon) };
+  const ways = { action: { label: "Message Devon" }, secondary: { label: "Message privately" } };
+  return (
+    <div class="gallery-roles gallery-roles--cards">
+      <p class="gallery-roles__lead">The profile card in a server: the title under the name and every role the member holds, whichever of the two the server shows as tags. Opened from a name or a member’s row, as today.</p>
+      <div class="gallery-roles__more">
+        <Figure bare caption="As others see it.">
+          <ProfileCard {...devon} {...ways} />
+        </Figure>
+        <Figure bare caption="As someone who may edit sees it (here the owner): Edit beside the title and beside Roles. Someone with Manage roles alone has the second; Manage members and a member below them, the first.">
+          <ProfileCard {...devon} {...ways} edit={{ title: () => {}, roles: () => {} }} />
+        </Figure>
+        <Figure bare caption="What each Edit opens, against it: the roles to tick, those not the viewer’s to change shown with a lock (none here, for the owner); and the title, up to 32 characters, cleared to have none.">
+          <div class="gallery-roles__pops">
+            <Pop title="Roles" subtitle="Devon Park in Acme">
+              <div class="lu-pop__form">
+                <RoleChoices label="Devon Park’s roles" roles={choicesFor(ACME.devon)} />
+                <div class="lu-pop__actions">
+                  <Button size="md">Cancel</Button>
+                  <Button variant="primary" size="md">
+                    Save
+                  </Button>
+                </div>
+              </div>
+            </Pop>
+            <Pop title="Title" subtitle="Devon Park in Acme">
+              <form class="lu-pop__form" onSubmit={(e) => e.preventDefault()}>
+                <TextField label="Title" value="Staff Engineer" maxLength={32} placeholder="No title" autocomplete="off" />
+                <p class="lu-pop__note">Up to 32 characters. A title grants nothing.</p>
+                <div class="lu-pop__actions">
+                  <Button size="md">Cancel</Button>
+                  <Button variant="primary" size="md" type="submit">
+                    Save
+                  </Button>
+                </div>
+              </form>
+            </Pop>
+          </div>
+        </Figure>
+      </div>
+      <div class="gallery-roles__more">
+        <Figure bare caption="A member’s own card: their own title is theirs to edit. Their roles are not, unless they manage roles.">
+          <ProfileCard name={ACME.sam.name} initials="SO" tone="mint" handle="sam" status="online" tag="You" title={ACME.sam.title} roles={rolesOf(ACME.sam)} edit={{ title: () => {} }} />
+        </Figure>
+        <Figure bare caption="Their own card with no title yet: “Add a title” in its place.">
+          <ProfileCard name={ACME.priya.name} initials="PN" tone="amber" handle="priya" status="online" tag="You" roles={rolesOf(ACME.priya)} edit={{ title: () => {} }} />
+        </Figure>
+        <Figure bare caption="The owner, marked on the card. Being the owner is no role and no tag; Ryan holds no roles, so none are listed.">
+          <ProfileCard name={ACME.ryan.name} initials="RW" tone="indigo" handle="ryan" status="online" tag="Owner" title={ACME.ryan.title} action={{ label: "Message Ryan" }} secondary={{ label: "Message privately" }} />
+        </Figure>
+        <Figure bare caption="A guest, to someone who may edit: a title, and no roles to give.">
+          <ProfileCard name={ACME.jordan.name} initials="JL" tone="stone" handle="jordan" status={null} tag="Guest" title={ACME.jordan.title} edit={{ title: () => {} }} action={{ label: "Message Jordan" }} />
+        </Figure>
+        <Figure bare caption="A role that is not shown as a tag is still listed on the card, on the plain chip when it has no colour.">
+          <ProfileCard name={ACME.leo.name} initials="LM" tone="sky" handle="leo" status={null} title={ACME.leo.title} roles={rolesOf(ACME.leo)} action={{ label: "Message Leo" }} />
+        </Figure>
+      </div>
+    </div>
+  );
+}
+
+// The phones: the sections as a screen of their own, then each section as
+// a panel pushed over it. A role is moved from its menu, never dragged.
+function RolePhonesBoard() {
+  const roster = (people: AcmePerson[], open?: string) => <Roster members={people.map(rosterEntry)} open={open} editor={devonEditor} />;
+  const editor = (label: string, parts: EditorPart[]) => (
+    <PhoneFrame label={label}>
+      <PhonePanel back="Roles" title="Moderator" subtitle="Acme · 3 members" actions={[{ icon: "check", label: "Save" }]}>
+        <div class="phone__panel-body">
+          <RoleEditor role={MODERATOR} on={MODERATOR_ON} holders={MODERATORS} parts={parts} />
+        </div>
+      </PhonePanel>
+    </PhoneFrame>
+  );
+  const roles = () => (
+    <div class="phone__panel-body">
+      <p class="lu-settings__subtitle">In order, highest first. A role is moved from its menu. A new role starts last, just above Everyone.</p>
+      <RoleList roles={ACME_ROLES} reorder="menu" onOpen={() => {}} onMenu={() => {}} />
+      <Button size="sm" block icon="plus">
+        New role
+      </Button>
+    </div>
+  );
+  return (
+    <div class="phones">
+      <PhoneFrame label="Server settings: its sections as a screen of their own">
+        <PhonePanel back="Acme" title="Server settings" subtitle="Acme">
+          <div class="phone__panel-body">
+            <SectionList label="Server settings" sections={SETTINGS_SECTIONS} />
+          </div>
+        </PhonePanel>
+      </PhoneFrame>
+      <PhoneFrame label="Roles: no handles; each role has More, Everyone has none">
+        <PhonePanel back="Server settings" title="Roles" subtitle="Acme · 5 roles">
+          {roles()}
+        </PhonePanel>
+      </PhoneFrame>
+      <PhoneFrame label="A role’s menu: Move up and Move down in place of a drag">
+        <PhonePanel back="Server settings" title="Roles" subtitle="Acme · 5 roles">
+          {roles()}
+        </PhonePanel>
+        <RoleMenu name="Design" class="phone__menu" />
+      </PhoneFrame>
+      {editor("A role’s editor: name, colour, tag and its preview", ["identity", "server"])}
+      {editor("The same, further down: its permissions", ["channels", "messages"])}
+      {editor("The same, at its end: who holds it, and Delete role", ["holders", "delete"])}
+      <PhoneFrame label="Members: the roles under the name and handle">
+        <PhonePanel back="Server settings" title="Members" subtitle="128 in Acme">
+          <div class="phone__panel-body">
+            <SearchField label="Search members" />
+            {roster(ACME_MEMBERS)}
+          </div>
+        </PhonePanel>
+      </PhoneFrame>
+      <PhoneFrame label="A member’s editing state: roles, title, Kick">
+        <PhonePanel back="Server settings" title="Members" subtitle="128 in Acme">
+          <div class="phone__panel-body">
+            <SearchField label="Search members" />
+            {roster([ACME.maya, ACME.devon, ACME.sam], "devon")}
+          </div>
+        </PhonePanel>
+      </PhoneFrame>
+      <PhoneFrame label="Deleting a role asks first, in a sheet">
+        <PhonePanel back="Roles" title="Moderator" subtitle="Acme · 3 members" actions={[{ icon: "check", label: "Save" }]}>
+          <div class="phone__panel-body">
+            <RoleEditor role={MODERATOR} on={MODERATOR_ON} holders={MODERATORS} parts={["holders", "delete"]} />
+          </div>
+        </PhonePanel>
+        <div class="phone__scrim" aria-hidden="true"></div>
+        <section class="phone__sheet" role="dialog" aria-modal="true" aria-labelledby="phone-delete-role-title">
+          <span class="phone__sheet-grip" aria-hidden="true"></span>
+          <div class="lu-card__head">
+            <h2 id="phone-delete-role-title" class="lu-card__title">
+              Delete Moderator?
+            </h2>
+            <p class="lu-card__subtitle">3 members hold this role. They lose what it allowed. This can’t be undone.</p>
+          </div>
+          <div class="pieces__row">
+            <Button variant="danger" size="md">
+              Delete role
+            </Button>
+            <Button size="md">Keep it</Button>
+          </div>
+        </section>
+      </PhoneFrame>
+    </div>
+  );
+}
+
+type Board = "split" | "replies" | "home" | "requests" | "devices" | "signin" | "private" | "phone" | "folders" | "preferences" | "settings" | "roles" | "role" | "members" | "tags" | "pcard" | "rolephones" | "pieces";
+
 export function DesignGallery() {
   const { theme, apply } = useTheme();
-  const [board, setBoard] = createSignal<"split" | "replies" | "home" | "requests" | "devices" | "signin" | "private" | "phone" | "folders" | "preferences" | "pieces">("split");
+  const [board, setBoard] = createSignal<Board>("split");
+  // A settings board's section list leads to the board that draws that section.
+  const toSection = (id: string) => setBoard(id === "roles" ? "roles" : id === "members" ? "members" : "settings");
+  const roleBoard = () => {
+    const b = board();
+    return b === "settings" ? <SettingsBoard onSection={toSection} /> : b === "roles" ? <RolesBoard onSection={toSection} /> : b === "role" ? <RoleEditorBoard onSection={toSection} /> : b === "members" ? <MembersBoard onSection={toSection} /> : b === "tags" ? <TagsBoard /> : b === "pcard" ? <ProfileCardBoard /> : b === "rolephones" ? <RolePhonesBoard /> : undefined;
+  };
   return (
     <div class="gallery">
       <header class="gallery__bar">
         <strong>Lumia design system</strong>
         <nav class="gallery__nav" aria-label="Boards">
-          <For each={[["split", "Quiet Split"], ["replies", "Inline replies"], ["home", "Home"], ["requests", "Requests"], ["devices", "Devices"], ["signin", "Sign in"], ["private", "Private messages"], ["phone", "Phone"], ["folders", "Server folders"], ["preferences", "Preferences"], ["pieces", "Pieces"]] as const}>
+          <For each={[["split", "Quiet Split"], ["replies", "Inline replies"], ["home", "Home"], ["requests", "Requests"], ["devices", "Devices"], ["signin", "Sign in"], ["private", "Private messages"], ["phone", "Phone"], ["folders", "Server folders"], ["preferences", "Preferences"], ["settings", "Server settings"], ["roles", "Roles"], ["role", "Role editor"], ["members", "Members"], ["tags", "Tags"], ["pcard", "Profile card"], ["rolephones", "Roles on phones"], ["pieces", "Pieces"]] as const}>
             {([id, label]) => (
               <button type="button" class="gallery__tab" aria-pressed={board() === id} onClick={() => setBoard(id)}>
                 {label}
@@ -1201,7 +2101,7 @@ export function DesignGallery() {
         </nav>
       </header>
       <div class="gallery__board">
-        {board() === "split" ? <QuietSplit /> : board() === "replies" ? <RepliesBoard /> : board() === "home" ? <HomeBoard view="dm" /> : board() === "requests" ? <HomeBoard view="requests" /> : board() === "devices" ? <HomeBoard view="devices" /> : board() === "signin" ? <SignIn /> : board() === "private" ? <PrivateBoard /> : board() === "phone" ? <PhoneBoard /> : board() === "folders" ? <FoldersBoard /> : board() === "preferences" ? <PreferencesBoard /> : <Pieces />}
+        {board() === "split" ? <QuietSplit /> : board() === "replies" ? <RepliesBoard /> : board() === "home" ? <HomeBoard view="dm" /> : board() === "requests" ? <HomeBoard view="requests" /> : board() === "devices" ? <HomeBoard view="devices" /> : board() === "signin" ? <SignIn /> : board() === "private" ? <PrivateBoard /> : board() === "phone" ? <PhoneBoard /> : board() === "folders" ? <FoldersBoard /> : board() === "preferences" ? <PreferencesBoard /> : board() === "pieces" ? <Pieces /> : roleBoard()}
       </div>
     </div>
   );

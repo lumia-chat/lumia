@@ -647,16 +647,26 @@ export function Badge(props: BadgeProps) {
   );
 }
 
+/** What a tag is drawn on: the plain chip (a title, a role with no colour), the accent ("New", "You", "Owner"), or a role's tone. */
+export type TagTone = "neutral" | "accent" | Tone;
+
 export interface TagProps {
-  tone?: "neutral" | "accent";
+  tone?: TagTone;
   size?: "md" | "sm";
   children?: JSX.Element;
   class?: string;
 }
 
-/** Role or New label. */
+/** A role, a title or a word beside a name. Its words are a server's own, so it stays on one line and trims with an ellipsis where it has no room. */
 export function Tag(props: TagProps) {
-  return <span class={cx("lu-tag", "lu-tag--" + (props.tone ?? "neutral"), "lu-tag--" + (props.size ?? "md"), props.class)}>{props.children}</span>;
+  const tone = () => props.tone ?? "neutral";
+  const ground = () => (tone() === "neutral" || tone() === "accent" ? "lu-tag--" + tone() : "lu-tone-" + tone());
+  return <span class={cx("lu-tag", ground(), "lu-tag--" + (props.size ?? "md"), props.class)}>{props.children}</span>;
+}
+
+/** A role's colour as a dot, in the ink its tag's words are written in; a ring with nothing in it for a role with no colour. */
+export function RoleDot(props: { tone?: Tone | null; class?: string }) {
+  return <span aria-hidden="true" class={cx("lu-roledot", props.tone ? "lu-tone-" + props.tone : "lu-roledot--none", props.class)}></span>;
 }
 
 export interface MemberEntry {
@@ -669,6 +679,8 @@ export interface MemberEntry {
   /** A second line under the subtitle, such as a bio. */
   detail?: string;
   tag?: string;
+  /** What the tag is drawn on: the accent unless said ("You", "New"); a role's tone, or the plain chip for a title (architecture 7.5). */
+  tagTone?: TagTone;
   /** Whatever names the person to the screen; handed back by `onOpen`. */
   id?: string;
   /** Something to do to them, at the row's end: Remove, drawn as the dark Quiet Split's member-remove button (`label` is its tooltip, "Remove from channel"; `description` names whom). */
@@ -718,7 +730,7 @@ export function MemberList(props: MemberListProps) {
                           <span class="lu-member__label">{m.name}</span>
                           <Show when={m.status}>{(s) => <span class="lu-sr">, {STATUS_WORD[s()]}</span>}</Show>
                           <Show when={m.tag}>
-                            <Tag tone="accent" size="sm">
+                            <Tag tone={m.tagTone ?? "accent"} size="sm">
                               {m.tag}
                             </Tag>
                           </Show>
@@ -2916,7 +2928,8 @@ export interface MessageProps {
   /** The author's picture. */
   src?: string;
   tone?: Tone;
-  tag?: { label: string; tone?: "neutral" | "accent" };
+  /** Beside the name: the author's highest role that is shown as a tag, in its tone, or their title on the plain chip, as the server says (architecture 7.5). */
+  tag?: { label: string; tone?: TagTone };
   time?: string;
   datetime?: string;
   children?: JSX.Element | string[];
@@ -4013,8 +4026,18 @@ export interface ProfileCardProps {
   src?: string;
   tone?: Tone;
   handle?: string;
-  /** A word beside the name: "You", "New". */
+  /** A word beside the name: "You", "New", and in a server "Owner" or "Guest". */
   tag?: string;
+  /** Their title in the server the card was opened in, under the name (architecture 7.5). */
+  title?: string;
+  /** Every role they hold there, highest first, each in its tone; one with no colour is on the plain chip. */
+  roles?: { label: string; tone?: Tone | null }[];
+  /**
+   * What the viewer may change from the card, each opening against the
+   * control pressed: the title (their own, or that of someone below them)
+   * and the roles (the ones below the viewer's own highest).
+   */
+  edit?: { title?: (pressed: HTMLElement) => void; roles?: (pressed: HTMLElement) => void };
   /** Where the person is: a status, `null` for not here, left out where nowhere says. */
   status?: Status | null;
   /** What their profile says of them, a line each. */
@@ -4051,6 +4074,25 @@ export function ProfileCard(props: ProfileCardProps) {
               <Tag tone="accent">{props.tag}</Tag>
             </Show>
           </div>
+          <Show when={props.title || props.edit?.title}>
+            <p class="lu-pcard__title">
+              <Show
+                when={props.title}
+                fallback={
+                  <Button variant="text" onClick={(e) => props.edit?.title?.(e.currentTarget)}>
+                    Add a title
+                  </Button>
+                }
+              >
+                <span>{props.title}</span>
+                <Show when={props.edit?.title}>
+                  <Button variant="text" aria-label="Edit title" onClick={(e) => props.edit?.title?.(e.currentTarget)}>
+                    Edit
+                  </Button>
+                </Show>
+              </Show>
+            </p>
+          </Show>
           <Show when={props.handle}>
             <p class="lu-pcard__handle">@{props.handle}</p>
           </Show>
@@ -4060,6 +4102,29 @@ export function ProfileCard(props: ProfileCardProps) {
             <span aria-hidden="true" class={"lu-status-" + (props.status ?? "offline")}></span>
             {props.status ? PRESENCE_WORD[props.status] : "Offline"}
           </p>
+        </Show>
+        <Show when={props.roles?.length || props.edit?.roles}>
+          <div class="lu-pcard__roles">
+            <div class="lu-pcard__roleshead">
+              <h3 class="lu-pcard__label">Roles</h3>
+              <Show when={props.edit?.roles}>
+                <Button variant="text" aria-label="Edit roles" onClick={(e) => props.edit?.roles?.(e.currentTarget)}>
+                  Edit
+                </Button>
+              </Show>
+            </div>
+            <Show when={props.roles?.length} fallback={<p class="lu-pcard__none">No roles</p>}>
+              <ul class="lu-pcard__rolelist">
+                <For each={props.roles}>
+                  {(r) => (
+                    <li>
+                      <Tag tone={r.tone ?? "neutral"}>{r.label}</Tag>
+                    </li>
+                  )}
+                </For>
+              </ul>
+            </Show>
+          </div>
         </Show>
         <Show when={props.details?.length}>
           <dl class="lu-pcard__details">
@@ -4160,20 +4225,27 @@ const TONE_WORD: Record<Tone, string> = { peach: "Peach", blue: "Blue", purple: 
 
 export interface ToneSwatchesProps {
   label: string;
-  value: Tone;
+  /** The tone chosen; `null` is no colour, where that is offered. */
+  value: Tone | null;
   onChange?: (tone: Tone) => void;
+  /** Offers no colour too, after the nine: "None" (a role's colour, architecture 7.5). */
+  onNone?: () => void;
   class?: string;
 }
 
 /** The nine tones as round swatches, one chosen: a radio group the arrow keys move through. */
 export function ToneSwatches(props: ToneSwatchesProps) {
+  const options = (): (Tone | null)[] => (props.onNone ? [...TONES, null] : TONES);
   const pick = (e: KeyboardEvent & { currentTarget: HTMLDivElement }) => {
     const step = e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : e.key === "ArrowLeft" || e.key === "ArrowUp" ? -1 : 0;
     if (!step) return;
     e.preventDefault();
-    const next = TONES[(TONES.indexOf(props.value) + step + TONES.length) % TONES.length] ?? "blue";
-    props.onChange?.(next);
-    e.currentTarget.querySelector<HTMLElement>(`[data-tone="${next}"]`)?.focus();
+    const all = options();
+    const next = all[(all.indexOf(props.value) + step + all.length) % all.length];
+    if (next === undefined) return;
+    if (next) props.onChange?.(next);
+    else props.onNone?.();
+    e.currentTarget.querySelector<HTMLElement>(`[data-tone="${next ?? "none"}"]`)?.focus();
   };
   return (
     <div role="radiogroup" aria-label={props.label} class={cx("lu-swatches", props.class)} onKeyDown={pick}>
@@ -4186,6 +4258,11 @@ export function ToneSwatches(props: ToneSwatchesProps) {
           </button>
         )}
       </For>
+      <Show when={props.onNone}>
+        <button type="button" role="radio" aria-checked={props.value === null} tabindex={props.value === null ? 0 : -1} data-tone="none" class="lu-swatch lu-swatch--none" onClick={() => props.onNone?.()}>
+          None
+        </button>
+      </Show>
     </div>
   );
 }
@@ -4258,6 +4335,8 @@ export interface ToggleProps {
   /** The id of what names it (a setting's row) and of what says what its state does (the row's caption). */
   labelledBy?: string;
   describedBy?: string;
+  /** Not this viewer's to turn: a permission they do not hold themselves (architecture 7.5). */
+  disabled?: boolean;
   class?: string;
 }
 
@@ -4271,6 +4350,7 @@ export function Toggle(props: ToggleProps) {
       aria-label={props.label}
       aria-labelledby={props.labelledBy}
       aria-describedby={props.describedBy}
+      disabled={props.disabled}
       class={cx("lu-switch", props.class)}
       onClick={() => props.onChange?.(!props.checked)}
     >
@@ -4533,6 +4613,423 @@ export function FolderSettings(props: FolderSettingsProps) {
         </div>
       </form>
     </section>
+  );
+}
+
+/* ── Roles and titles (architecture 7.5) ───────────────────── */
+// Drawn for the gallery's boards first (plan step 11): nothing here asks
+// the core for anything, and the drag of a role is the screen's to build.
+
+export interface SectionListProps {
+  /** The page whose sections they are: the list's name. */
+  label: string;
+  /** `note` is a word at a row's end where the list is a screen of its own: "5 roles". */
+  sections: { id: string; label: string; icon?: IconName; note?: string }[];
+  /** The section shown; left out where the list is a screen of its own (a phone), each row leading on. */
+  value?: string;
+  onChange?: (id: string) => void;
+  class?: string;
+}
+
+/** A settings page's sections: a list beside the page with the one shown marked; folded, a screen of its own. */
+export function SectionList(props: SectionListProps) {
+  const screen = () => props.value === undefined;
+  return (
+    <nav aria-label={props.label} class={cx("lu-sections", screen() && "lu-sections--screen", props.class)}>
+      <ul class="lu-sections__list">
+        <For each={props.sections}>
+          {(s) => (
+            <li>
+              <button type="button" aria-current={props.value === s.id ? "page" : undefined} class="lu-sections__item" onClick={() => props.onChange?.(s.id)}>
+                <Show when={s.icon}>{(icon) => <Icon name={icon()} size={17} strokeWidth={1.9} />}</Show>
+                <span class="lu-sections__label">{s.label}</span>
+                <Show when={screen()}>
+                  <Show when={s.note}>
+                    <span class="lu-sections__note">{s.note}</span>
+                  </Show>
+                  <Icon name="chevron-right" size={15} strokeWidth={2.2} class="lu-sections__more" />
+                </Show>
+              </button>
+            </li>
+          )}
+        </For>
+      </ul>
+    </nav>
+  );
+}
+
+/** Six dots: what a row is dragged by. Not among the glyphs of `assets/icons` yet. */
+function Grip() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" class="lu-icon">
+      <For each={[3.5, 8, 12.5]}>
+        {(y) => (
+          <>
+            <circle cx="5.5" cy={y} r="1.25" />
+            <circle cx="10.5" cy={y} r="1.25" />
+          </>
+        )}
+      </For>
+    </svg>
+  );
+}
+
+function membersWords(n: number): string {
+  return n === 1 ? "1 member" : `${n.toLocaleString("en-US")} members`;
+}
+
+export interface RoleEntry {
+  id: string;
+  name: string;
+  /** Its colour: one of the nine tones, or none. */
+  tone?: Tone | null;
+  /** How many members hold it. */
+  members: number;
+  /** "Show as tag" is off: it carries permissions and is nobody's tag. */
+  untagged?: boolean;
+  /** `@everyone`: named "Everyone" here, last, never moved. */
+  everyone?: boolean;
+  /** At or above the viewer's own highest role: not theirs to move or change. */
+  locked?: boolean;
+}
+
+export interface RoleListProps {
+  /** The server's roles in order, highest first, Everyone last. */
+  roles: RoleEntry[];
+  /**
+   * How a role is moved: by its handle (`drag`), the row's menu being the
+   * keyboard's way, as on the rail; or by the menu alone, behind a More
+   * button on each row (`menu`, a phone).
+   */
+  reorder?: "drag" | "menu";
+  /** A row was pressed: its editor. */
+  onOpen?: (role: RoleEntry, row: HTMLElement) => void;
+  /** A row's menu was asked for: its More button, a right-click, Shift+F10 or the context menu key. */
+  onMenu?: (role: RoleEntry, control: HTMLElement, at?: MenuPoint) => void;
+  /** A drag held still, for the boards: the role lifted, and the one it would land before. */
+  still?: { id: string; before: string };
+  class?: string;
+}
+
+/**
+ * A server's roles in order: a handle, the colour, the name, how many hold
+ * it, and a quiet mark on one not shown as a tag. Everyone has no handle.
+ * A role the viewer may not manage has none either and does not open.
+ */
+export function RoleList(props: RoleListProps) {
+  const reorder = () => props.reorder ?? "drag";
+  return (
+    <ul class={cx("lu-roles", props.class)}>
+      <For each={props.roles}>
+        {(r) => {
+          const moves = () => !r.everyone && !r.locked;
+          const words = () => (
+            <>
+              <RoleDot tone={r.tone} />
+              <span class="lu-role__text">
+                <span class="lu-role__name">{r.name}</span>
+                <span class="lu-role__meta">
+                  <span>{membersWords(r.members)}</span>
+                  <Show when={r.untagged}>
+                    <span class="lu-role__untagged">
+                      <Icon name="eye-off" size={13} strokeWidth={1.9} />
+                      Not shown as tag
+                    </span>
+                  </Show>
+                </span>
+              </span>
+            </>
+          );
+          return (
+            <>
+              <Show when={props.still?.before === r.id}>
+                <li aria-hidden="true" class="lu-roles__line"></li>
+              </Show>
+              <li class={cx("lu-role", r.locked && "is-locked", props.still?.id === r.id && "is-lifted")}>
+                <Show when={reorder() === "drag"}>
+                  <span aria-hidden="true" class="lu-role__handle">
+                    <Show when={moves()}>
+                      <Grip />
+                    </Show>
+                  </span>
+                </Show>
+                <Show
+                  when={!r.locked}
+                  fallback={
+                    <div class="lu-role__open" title="At or above your own highest role, so not yours to change">
+                      {words()}
+                      <Icon name="lock" size={15} strokeWidth={1.9} class="lu-role__end" label="Not yours to change" />
+                    </div>
+                  }
+                >
+                  <button
+                    type="button"
+                    class="lu-role__open"
+                    onClick={(e) => props.onOpen?.(r, e.currentTarget)}
+                    onContextMenu={(e) => menuPress(e, props.onMenu && moves() ? (row, at) => props.onMenu?.(r, row, at) : undefined)}
+                    onKeyDown={(e) => menuKeyed(e, props.onMenu && moves() ? (row) => props.onMenu?.(r, row) : undefined)}
+                  >
+                    {words()}
+                    <Icon name="chevron-right" size={15} strokeWidth={2.2} class="lu-role__end" />
+                  </button>
+                </Show>
+                <Show when={reorder() === "menu" && moves()}>
+                  <IconButton icon="more" label={`More for ${r.name}`} size={36} aria-haspopup="menu" class="lu-role__menu" onClick={(e) => props.onMenu?.(r, e.currentTarget)} />
+                </Show>
+              </li>
+            </>
+          );
+        }}
+      </For>
+    </ul>
+  );
+}
+
+export interface RoleChoice {
+  id: string;
+  name: string;
+  tone?: Tone | null;
+  checked: boolean;
+  /** Not the viewer's to give or take (at or above their own highest role): shown, not changeable. */
+  locked?: boolean;
+}
+
+export interface RoleChoicesProps {
+  /** The group's name: whose roles they are. */
+  label: string;
+  /** The server's roles in order, without Everyone, which everyone holds. */
+  roles: RoleChoice[];
+  onToggle?: (id: string) => void;
+  class?: string;
+}
+
+/** A member's roles to tick, of the server's in order. */
+export function RoleChoices(props: RoleChoicesProps) {
+  return (
+    <ul aria-label={props.label} class={cx("lu-picklist", "lu-rolepick", props.class)}>
+      <For each={props.roles}>
+        {(r) => (
+          <li>
+            <button type="button" class="lu-pick" role="checkbox" aria-checked={r.checked ? "true" : "false"} disabled={r.locked} onClick={() => props.onToggle?.(r.id)}>
+              <span aria-hidden="true" class={cx("lu-pick__box", r.checked && "is-checked")}>
+                <Show when={r.checked}>
+                  <Icon name="check" size={12} strokeWidth={3} />
+                </Show>
+              </span>
+              <RoleDot tone={r.tone} />
+              <span class="lu-pick__name">{r.name}</span>
+              <Show when={r.locked}>
+                <Icon name="lock" size={14} strokeWidth={1.9} label="Not yours to give or take" />
+              </Show>
+            </button>
+          </li>
+        )}
+      </For>
+    </ul>
+  );
+}
+
+export interface MemberEditProps {
+  /** Whose it is, for the controls' names. */
+  name: string;
+  /** The server's roles to tick; left out where none are offered (a guest). */
+  roles?: RoleChoice[];
+  /** In the roles' place where none are offered: why. */
+  rolesNote?: string;
+  /** Their title, where it is the viewer's to change (their own, or someone below them); left out where it is not. */
+  title?: string;
+  onToggleRole?: (id: string) => void;
+  onTitle?: (title: string) => void;
+  onCancel?: () => void;
+  onSave?: () => void;
+  /** Kick, where the viewer may: they hold Manage members and the member is below them. */
+  onKick?: () => void;
+  class?: string;
+}
+
+/** A member's editing state: their roles added and taken away, their title, and Kick. */
+export function MemberEdit(props: MemberEditProps) {
+  const lid = fieldId();
+  return (
+    <form
+      class={cx("lu-memberedit", props.class)}
+      onSubmit={(e) => {
+        e.preventDefault();
+        props.onSave?.();
+      }}
+    >
+      <div class="lu-memberedit__fields">
+        <Show when={props.roles || props.rolesNote}>
+          <div class="lu-memberedit__part">
+            <span id={lid} class="lu-memberedit__legend">
+              Roles
+            </span>
+            <Show when={props.roles} fallback={<p class="lu-memberedit__hint">{props.rolesNote}</p>}>
+              {(roles) => <RoleChoices label={`${props.name}’s roles`} roles={roles()} onToggle={(id) => props.onToggleRole?.(id)} />}
+            </Show>
+          </div>
+        </Show>
+        <Show when={props.title !== undefined}>
+          <div class="lu-memberedit__part">
+            <TextField label="Title" value={props.title} maxLength={32} placeholder="No title" autocomplete="off" onInput={(e) => props.onTitle?.(e.currentTarget.value)} />
+            <p class="lu-memberedit__hint">Up to 32 characters. A title grants nothing.</p>
+          </div>
+        </Show>
+      </div>
+      <div class="lu-memberedit__actions">
+        <Show when={props.onKick}>
+          <Button size="md" class="lu-memberedit__kick" aria-label={`Kick ${props.name}`} onClick={() => props.onKick?.()}>
+            Kick
+          </Button>
+        </Show>
+        <Button size="md" class="lu-memberedit__cancel" onClick={() => props.onCancel?.()}>
+          Cancel
+        </Button>
+        <Button variant="primary" size="md" type="submit">
+          Save
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+export interface RosterEntry {
+  id: string;
+  name: string;
+  initials: string;
+  src?: string;
+  tone?: Tone;
+  handle: string;
+  title?: string;
+  /** Who they are to the server, beside the name: its owner, or a guest. */
+  mark?: "Owner" | "Guest";
+  /** Every role they hold, highest first. */
+  roles?: { label: string; tone?: Tone | null }[];
+}
+
+export interface RosterProps {
+  members: RosterEntry[];
+  /** The member whose editing state is open under their row. */
+  open?: string;
+  onToggle?: (member: RosterEntry) => void;
+  /** The open row's editing state (`MemberEdit`). */
+  editor?: (member: RosterEntry) => JSX.Element;
+  /** What to say when there is nobody: a search that found none. */
+  empty?: string;
+  class?: string;
+}
+
+/**
+ * A server's members in its settings: the avatar, the name with "Owner" or
+ * "Guest" beside it, the handle and the title under it, and the roles as
+ * tags, under the name where the row is narrow. A row opens its editing
+ * state under itself.
+ */
+export function Roster(props: RosterProps) {
+  return (
+    <div class={cx("lu-roster", props.class)}>
+      <ul class="lu-roster__list">
+        <For each={props.members}>
+          {(m) => {
+            const open = () => props.open === m.id;
+            return (
+              <li class={cx("lu-roster__item", open() && "is-open")}>
+                <button type="button" class="lu-roster__row" aria-expanded={open()} onClick={() => props.onToggle?.(m)}>
+                  <Avatar initials={m.initials} src={m.src} tone={m.tone} size={34} />
+                  <span class="lu-roster__text">
+                    <span class="lu-roster__name">
+                      <span class="lu-roster__label">{m.name}</span>
+                      <Show when={m.mark}>
+                        {(mark) => (
+                          <Tag tone="accent" size="sm">
+                            {mark()}
+                          </Tag>
+                        )}
+                      </Show>
+                    </span>
+                    <span class="lu-roster__sub">
+                      @{m.handle}
+                      <Show when={m.title}> · {m.title}</Show>
+                    </span>
+                  </span>
+                  <Show when={m.roles?.length}>
+                    <span class="lu-roster__roles">
+                      <For each={m.roles}>{(r) => <Tag tone={r.tone ?? "neutral"}>{r.label}</Tag>}</For>
+                    </span>
+                  </Show>
+                  <Icon name={open() ? "chevron-down" : "chevron-right"} size={15} strokeWidth={2.2} class="lu-roster__end" />
+                </button>
+                <Show when={open()}>
+                  <div class="lu-roster__editor">{props.editor?.(m)}</div>
+                </Show>
+              </li>
+            );
+          }}
+        </For>
+      </ul>
+      <Show when={props.empty && props.members.length === 0}>
+        <p class="lu-members__none">{props.empty}</p>
+      </Show>
+    </div>
+  );
+}
+
+export interface ConfirmPopProps {
+  title: string;
+  /** What it costs, in a sentence or two. */
+  children?: JSX.Element;
+  /** The button that goes on, in its own words: "Turn on", "Delete role". */
+  confirm: string;
+  /** What is confirmed cannot be taken back: the button in the danger ink. */
+  danger?: boolean;
+  onCancel?: () => void;
+  onConfirm?: () => void;
+  class?: string;
+}
+
+/** A question asked before something with weight: turning on Administrator, deleting a role. */
+export function ConfirmPop(props: ConfirmPopProps) {
+  return (
+    <Pop title={props.title} class={cx("lu-pop--ask", props.class)}>
+      <div class="lu-pop__words">{props.children}</div>
+      <div class="lu-pop__actions">
+        <Button size="md" onClick={() => props.onCancel?.()}>
+          Cancel
+        </Button>
+        <Button variant={props.danger ? "danger" : "primary"} size="md" onClick={() => props.onConfirm?.()}>
+          {props.confirm}
+        </Button>
+      </div>
+    </Pop>
+  );
+}
+
+/** A small drawing of what the tag beside a name shows: roles in their tones, or titles on the plain chip. */
+export function TagSketch(props: { shows: "roles" | "titles" }) {
+  const rows = (): { face: Tone; name: number; tag: string; tone: TagTone }[] =>
+    props.shows === "roles"
+      ? [
+          { face: "peach", name: 34, tag: "Admin", tone: "indigo" },
+          { face: "mint", name: 26, tag: "Design", tone: "peach" },
+        ]
+      : [
+          { face: "peach", name: 34, tag: "Designer", tone: "neutral" },
+          { face: "mint", name: 26, tag: "Engineer", tone: "neutral" },
+        ];
+  return (
+    <span class="lu-sketch lu-sketch--layout lu-sketch--tags">
+      <For each={rows()}>
+        {(r) => (
+          <span class="lu-sketch__tagrow">
+            <span class={cx("lu-sketch__face", "lu-tone-" + r.face)} />
+            <span class="lu-sketch__bar lu-sketch__bar--name" style={{ width: r.name + "px" }} />
+            <Tag tone={r.tone} size="sm">
+              {r.tag}
+            </Tag>
+          </span>
+        )}
+      </For>
+    </span>
   );
 }
 

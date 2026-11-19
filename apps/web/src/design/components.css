@@ -143,7 +143,9 @@
 .lu-badge--md { min-width: 20px; height: 20px; padding: 0 6px; font-size: 11px; }
 .lu-badge--sm { min-width: 18px; height: 18px; padding: 0 5px; font-size: 10.5px; }
 .lu-dot { display: inline-block; width: 11px; height: 11px; border-radius: var(--radius-round); background: var(--unread); }
-.lu-tag { display: inline-flex; align-items: center; font-weight: 600; line-height: normal; }
+/* A tag's words are a server's own (a role's name, a title, 32 characters at most): one line, cut with an ellipsis at the width of what holds it.
+   On a role's tone (`lu-tone-*`) it is the tone's ground and ink, as an avatar's initials are. */
+.lu-tag { display: inline-block; flex: none; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; font-weight: 600; line-height: normal; }
 .lu-tag--md { font-size: 11.5px; padding: 2px 7px; border-radius: var(--radius-6); }
 .lu-tag--sm { font-size: 10.5px; font-weight: 700; padding: 1px 6px; border-radius: var(--radius-5); }
 .lu-tag--neutral { background: var(--chip); color: var(--ink-secondary); }
@@ -166,6 +168,8 @@
 /* A long name or line is cut at the row's end (or before its Remove), not run under it. */
 .lu-member__label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lu-member__name > :not(.lu-member__label) { flex: none; }
+/* A long tag (a title) gives way before the name does, and is cut in its turn. */
+.lu-member__name > .lu-tag { flex: 0 1 auto; min-width: 0; max-width: 62%; }
 .lu-member.is-away .lu-member__name { color: var(--ink-body); }
 .lu-members__none { margin: 0; padding: 10px; font-size: 12.5px; color: var(--ink-quiet); }
 .lu-member__sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--ink-muted); }
@@ -281,6 +285,7 @@ h1.lu-serverhead__name:hover { background: none; }
 /* The switch. Its knob is the light theme's surface (`lu-in-light`) in either theme. */
 .lu-switch { flex: none; display: flex; justify-content: flex-start; width: 42px; height: 26px; padding: 3px; margin: 0; border: 0; border-radius: 13px; background: var(--border-hover); cursor: pointer; transition: background .15s ease; }
 .lu-switch[aria-checked="true"] { justify-content: flex-end; background: var(--accent); }
+.lu-switch:disabled { opacity: 0.5; cursor: default; }
 .lu-switch__knob { width: 20px; height: 20px; border-radius: var(--radius-round); background: var(--surface); box-shadow: var(--shadow-tab); }
 /* Picture tiles: a drawing over a name and a line, the chosen one ringed 2 out from it in the accent, the others outlined. */
 .lu-pictiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-16); }
@@ -816,6 +821,15 @@ button.lu-mention:hover { text-decoration: underline; text-underline-offset: 3px
 .lu-pcard__named { display: flex; align-items: center; gap: var(--space-8); }
 .lu-pcard__name { margin: 0; min-width: 0; font-family: var(--font-display); font-size: 19px; font-weight: 700; letter-spacing: -0.01em; color: var(--ink); overflow-wrap: anywhere; }
 .lu-pcard__handle { margin: 0; font-size: 13.5px; color: var(--ink-muted); overflow-wrap: anywhere; }
+/* In a server (architecture 7.5): the title under the name, and every role held, each with Edit where it is the viewer's to change. */
+.lu-pcard__title { margin: 0; display: flex; align-items: baseline; flex-wrap: wrap; gap: 0 var(--space-8); font-size: 14px; font-weight: 600; color: var(--ink-body); }
+.lu-pcard__title > span { min-width: 0; overflow-wrap: anywhere; }
+.lu-pcard__roles { display: flex; flex-direction: column; gap: var(--space-6); }
+.lu-pcard__roleshead { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-8); }
+.lu-pcard__label { margin: 0; font-size: 12.5px; font-weight: 600; color: var(--ink-muted); }
+.lu-pcard__rolelist { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--space-6); }
+.lu-pcard__rolelist > li { display: flex; min-width: 0; max-width: 100%; }
+.lu-pcard__none { margin: 0; font-size: 13.5px; color: var(--ink-quiet); }
 .lu-pcard__presence { margin: 0; display: flex; align-items: center; gap: var(--space-8); font-size: 13.5px; color: var(--icon-strong); }
 .lu-pcard__presence > span { flex: none; width: 8px; height: 8px; border-radius: var(--radius-round); }
 .lu-pcard__details { margin: 0; display: flex; flex-direction: column; gap: var(--space-8); padding: 10px 12px; border-radius: var(--radius-12); background: var(--inset); font-size: 13.5px; line-height: 1.4; color: var(--ink-body); }
@@ -825,6 +839,8 @@ button.lu-mention:hover { text-decoration: underline; text-underline-offset: 3px
 .lu-pcard__note { margin: 0; font-size: 13px; line-height: 1.4; color: var(--ink-secondary); }
 .lu-pcard__actions { display: flex; gap: var(--space-8); }
 .lu-pcard__actions--two { flex-direction: column; }
+/* One over the other, each keeps its height: grown along a column they were cut to their words'. */
+.lu-pcard__actions.lu-pcard__actions--two .lu-btn { flex: none; }
 .lu-pcard__actions .lu-btn--secondary { flex: 1; min-width: 0; height: 40px; font-size: 14.5px; }
 .lu-pcard__actions .lu-btn--primary { flex: 1; min-width: 0; height: 40px; font-size: 14.5px; box-shadow: none; }
 
@@ -855,6 +871,8 @@ button.lu-mention:hover { text-decoration: underline; text-underline-offset: 3px
 .lu-swatches { display: flex; flex-wrap: wrap; gap: var(--space-6); }
 .lu-swatch { width: 24px; height: 24px; border-radius: var(--radius-round); box-shadow: inset 0 0 0 1px var(--line-strong); display: flex; align-items: center; justify-content: center; }
 .lu-swatch[aria-checked="true"] { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent); }
+/* No colour, after the nine: the plain chip, in words. */
+.lu-swatch--none { width: auto; padding: 0 10px; border-radius: var(--radius-pill); background: var(--chip); color: var(--ink-secondary); font-size: 12px; font-weight: 600; }
 
 /* ── Choice: one of a few, as the segmented tabs draw a selection ── */
 .lu-choice { display: flex; flex-direction: column; gap: var(--space-6); }
@@ -1048,3 +1066,138 @@ button.lu-replyref { cursor: pointer; }
 @media (prefers-reduced-motion: reduce) {
   .lu-waiting__dots span { animation: none; }
 }
+
+/* ── Roles and titles (architecture 7.5; the boards of plan step 11) ── */
+.lu-sections, .lu-roles, .lu-roster, .lu-memberedit, .lu-roleedit { font-family: var(--font-sans); }
+/* A role's colour as a dot, in the ink its tag's words are written in; a ring with nothing in it for a role with no colour. */
+.lu-roledot { flex: none; display: inline-block; width: 10px; height: 10px; border-radius: var(--radius-round); background: currentColor; }
+.lu-roledot--none { background: none; color: var(--ink-faint); box-shadow: inset 0 0 0 1.5px currentColor; }
+
+/* A settings page with sections: the list beside the page; folded (a phone), the list is a screen of its own. */
+.lu-settings { flex: 1; min-height: 0; display: flex; }
+.lu-settings > .lu-sections { flex: none; width: 196px; padding: 16px 8px 16px 16px; border-right: 1px solid var(--line); overflow-y: auto; }
+.lu-settings > .lu-page { min-width: 0; }
+.lu-settings__head { display: flex; align-items: center; gap: var(--space-8) var(--space-16); }
+.lu-settings__head > .lu-iconbtn { flex: none; margin: 0 calc(var(--space-8) * -1) 0 calc(var(--space-6) * -1); }
+.lu-settings__headtext { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--space-4); }
+.lu-settings__title { margin: 0; display: flex; align-items: center; gap: var(--space-8); font-family: var(--font-display); font-size: 19px; font-weight: 700; letter-spacing: -0.01em; color: var(--ink); }
+.lu-settings__count { font-family: var(--font-sans); font-size: 13px; font-weight: 600; letter-spacing: 0; color: var(--ink-muted); }
+.lu-settings__subtitle { margin: 0; font-size: 13.5px; line-height: 1.45; color: var(--ink-muted); }
+.lu-settings__head > .lu-btn { flex: none; }
+.lu-sections__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.lu-sections__item { width: 100%; display: flex; align-items: center; gap: var(--space-10); height: 36px; padding: 0 10px; margin: 0; border: 0; border-radius: var(--radius-8); background: none; font: inherit; font-size: 14.5px; color: var(--ink-quiet); text-align: start; cursor: pointer; }
+.lu-sections__item .lu-icon { color: var(--ink-faint); }
+.lu-sections__label { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lu-sections__item:hover { background: var(--hover-member); color: var(--ink); }
+.lu-sections__item[aria-current="page"] { background: var(--inset); color: var(--ink); font-weight: 700; }
+.lu-sections__item[aria-current="page"] .lu-icon { color: var(--accent); }
+.lu-sections__note { flex: none; font-size: 13px; font-weight: 400; color: var(--ink-muted); }
+.lu-sections--screen .lu-sections__list { gap: 0; border-radius: var(--radius-14); box-shadow: inset 0 0 0 1px var(--line-strong); }
+.lu-sections--screen .lu-sections__item { height: 52px; padding: 0 14px; border-radius: 0; font-size: 15px; font-weight: 600; color: var(--ink); }
+.lu-sections--screen li:first-child .lu-sections__item { border-radius: var(--radius-14) var(--radius-14) 0 0; }
+.lu-sections--screen li:last-child .lu-sections__item { border-radius: 0 0 var(--radius-14) var(--radius-14); }
+.lu-sections--screen li + li { border-top: 1px solid var(--line); }
+.lu-sections--screen .lu-sections__item .lu-icon { color: var(--ink-quiet); }
+.lu-sections--screen .lu-sections__item .lu-sections__more { color: var(--ink-faint); }
+
+/* The roles in order: each a row with its handle, its colour, its name over how many hold it, and where it leads. */
+.lu-roles { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-6); }
+.lu-role { display: flex; align-items: center; min-height: 56px; border: 1px solid var(--line-strong); border-radius: var(--radius-14); background: var(--surface); }
+.lu-role__handle { flex: none; align-self: stretch; width: 34px; display: flex; align-items: center; justify-content: center; color: var(--ink-faint); cursor: grab; }
+.lu-role__handle:empty { cursor: default; }
+.lu-role__open { flex: 1; min-width: 0; align-self: stretch; display: flex; align-items: center; gap: var(--space-12); padding: 8px 14px; margin: 0; border: 0; border-radius: var(--radius-14); background: none; font: inherit; color: inherit; text-align: start; }
+.lu-role__handle + .lu-role__open { padding-left: var(--space-2); }
+button.lu-role__open { cursor: pointer; }
+.lu-role:has(button.lu-role__open:hover) { background: var(--hover-member); border-color: var(--border-hover); }
+.lu-role__text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.lu-role__name { font-size: 14.5px; font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lu-role__meta { display: flex; flex-wrap: wrap; align-items: center; gap: 0 var(--space-12); font-size: 12.5px; color: var(--ink-muted); }
+.lu-role__untagged { display: inline-flex; align-items: center; gap: var(--space-4); }
+.lu-role__end { color: var(--ink-faint); }
+.lu-role.is-locked .lu-role__end { color: var(--ink-quiet); }
+.lu-role__menu { flex: none; margin-right: var(--space-6); }
+.lu-role:has(.lu-role__menu) .lu-role__open { padding-right: var(--space-6); }
+/* Not the viewer's to manage: no handle, nothing to press, its name quieter. */
+.lu-role.is-locked { background: var(--inset); }
+.lu-role.is-locked .lu-role__name { color: var(--ink-body); }
+/* A drag held: the row's place dashed, as a rail tile's is, and a line in the accent where it would land. */
+.lu-role.is-lifted { border: 1.5px dashed var(--border-dashed); background: none; }
+.lu-role.is-lifted > * { visibility: hidden; }
+.lu-roles__line { height: 3px; margin: -2px 0; border-radius: var(--radius-pill); background: var(--accent); }
+
+/* A member's roles to tick: the picker's rows, a role's dot where a person's avatar would be. */
+.lu-rolepick { max-height: none; }
+.lu-rolepick .lu-pick:disabled .lu-pick__box { background: var(--inset); border-color: var(--line-strong); }
+.lu-rolepick .lu-pick:disabled .lu-pick__box.is-checked { background: var(--ink-faint); border-color: var(--ink-faint); }
+.lu-rolepick .lu-pick > .lu-icon { color: var(--ink-faint); }
+
+/* A member's editing state: roles beside the title where there is room, Kick apart from Cancel and Save. */
+.lu-memberedit { container-type: inline-size; display: flex; flex-direction: column; gap: var(--space-16); }
+.lu-memberedit__fields { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-16); }
+@container (min-width: 520px) {
+  .lu-memberedit__fields:has(> :nth-child(2)) { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-24); }
+}
+.lu-memberedit__part { min-width: 0; display: flex; flex-direction: column; gap: var(--space-6); }
+.lu-memberedit__legend { font-size: 13.5px; font-weight: 600; color: var(--ink-body); }
+.lu-memberedit__hint { margin: 0; font-size: 12.5px; line-height: 1.45; color: var(--ink-muted); }
+.lu-memberedit__actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-8); }
+.lu-memberedit__cancel { margin-left: auto; }
+.lu-memberedit .lu-btn--md { height: 40px; }
+.lu-memberedit .lu-btn--primary.lu-btn--md { font-size: 14.5px; box-shadow: none; }
+.lu-memberedit__kick.lu-btn--secondary { border-color: var(--danger-line); color: var(--danger); }
+.lu-memberedit__kick.lu-btn--secondary:hover { background: var(--danger-soft); border-color: var(--danger); }
+
+/* A server's members in its settings: one outlined list, a row opening its editing state under itself. */
+.lu-roster { container-type: inline-size; }
+.lu-roster__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; border-radius: var(--radius-14); box-shadow: inset 0 0 0 1px var(--line-strong); }
+.lu-roster__item + .lu-roster__item { border-top: 1px solid var(--line); }
+.lu-roster__row { width: 100%; display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; grid-template-areas: "face text roles end"; align-items: center; gap: var(--space-4) var(--space-12); padding: 10px 14px; margin: 0; border: 0; border-radius: var(--radius-14); background: none; font: inherit; color: inherit; text-align: start; cursor: pointer; }
+.lu-roster__row:hover { background: var(--hover-member); }
+.lu-roster__row > .lu-avatar { grid-area: face; }
+.lu-roster__text { grid-area: text; min-width: 0; display: flex; flex-direction: column; }
+.lu-roster__name { display: flex; align-items: center; gap: var(--space-6); min-width: 0; font-size: 14px; font-weight: 600; color: var(--ink); }
+.lu-roster__label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lu-roster__sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--ink-muted); }
+.lu-roster__roles { grid-area: roles; min-width: 0; max-width: 320px; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--space-4) var(--space-6); }
+.lu-roster__end { grid-area: end; color: var(--ink-faint); }
+.lu-roster__item.is-open > .lu-roster__row { border-radius: var(--radius-14) var(--radius-14) 0 0; }
+.lu-roster__item.is-open .lu-roster__end { color: var(--ink-quiet); }
+.lu-roster__editor { padding: var(--space-6) 14px var(--space-16) calc(14px + 34px + var(--space-12)); }
+@container (max-width: 519px) {
+  .lu-roster__row { grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "face text end" ". roles roles"; }
+  .lu-roster__roles { max-width: none; justify-content: flex-start; }
+  .lu-roster__editor { padding-left: 14px; }
+}
+
+/* A role's editor: its parts under small headings, a line under a field, the tag's preview, the holders, Delete at the end. */
+.lu-roleedit { display: flex; flex-direction: column; gap: var(--space-24); }
+.lu-roleedit__part { display: flex; flex-direction: column; gap: var(--space-10); }
+.lu-roleedit__field { display: flex; flex-direction: column; gap: var(--space-6); }
+.lu-roleedit__legend { margin: 0; font-size: 13.5px; font-weight: 600; color: var(--ink-body); }
+.lu-roleedit__hint { margin: 0; font-size: 12.5px; line-height: 1.45; color: var(--ink-muted); }
+.lu-roleedit__heading { margin: 0; font-family: var(--font-display); font-size: 17px; font-weight: 700; letter-spacing: -0.005em; color: var(--ink); }
+.lu-roleedit__group { margin: 0; font-size: 12.5px; font-weight: 600; color: var(--ink-muted); }
+.lu-roleedit__preview { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-8); padding: 12px 16px; border-top: 1px solid var(--line); }
+.lu-roleedit__previewlabel { flex: none; margin-right: var(--space-4); font-size: 12.5px; font-weight: 600; color: var(--ink-muted); }
+.lu-roleedit__previewname { font-size: 15px; font-weight: 700; color: var(--ink); }
+.lu-roleedit__previewtime { font-size: 12.5px; color: var(--ink-muted); }
+/* Administrator, set apart: the one that grants every other. */
+.lu-setgroup--apart { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tone-amber-ink) 22%, var(--tone-amber)); background: color-mix(in srgb, var(--tone-amber) 60%, var(--surface)); }
+.lu-setgroup--apart .lu-setrow__name, .lu-setgroup--apart .lu-setrow__caption { color: var(--tone-amber-ink); }
+.lu-roleedit__holders { display: flex; flex-direction: column; gap: var(--space-8); }
+.lu-roleedit__holders .lu-members { border-radius: var(--radius-14); box-shadow: inset 0 0 0 1px var(--line-strong); padding: var(--space-4); }
+.lu-roleedit__row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-8) var(--space-16); }
+.lu-roleedit__row > .lu-btn { flex: none; }
+.lu-roleedit .lu-btn--danger.lu-btn--md, .lu-roleedit .lu-btn--primary.lu-btn--md { height: 40px; font-size: 14.5px; box-shadow: none; }
+
+/* A question before something with weight: its words wrap, where a deleted message's quoted line is cut. */
+.lu-pop--ask { width: 380px; }
+.lu-pop__words { display: flex; flex-direction: column; gap: var(--space-8); font-size: 13.5px; line-height: 1.45; color: var(--ink-secondary); }
+.lu-pop__words p { margin: 0; }
+.lu-pop .lu-btn--danger.lu-btn--md { height: 40px; font-size: 14.5px; }
+
+/* The tile of what a tag shows (server settings, "Tag beside names"): two names, each with its tag. */
+.lu-pictiles--two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.lu-sketch--tags { justify-content: center; gap: var(--space-12); background: var(--surface); }
+.lu-sketch__tagrow { display: flex; align-items: center; gap: var(--space-8); min-width: 0; }
+.lu-sketch__tagrow .lu-tag { flex: 0 1 auto; min-width: 0; }
