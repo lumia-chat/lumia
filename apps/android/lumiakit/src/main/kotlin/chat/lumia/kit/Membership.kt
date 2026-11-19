@@ -141,6 +141,18 @@ fun serverDmRefused(code: String?, name: String): String? = when (code) {
 fun toSubscribe(channels: List<ChannelSummary>, subscribed: Set<String>): List<String> =
     channels.filter { it.kind !in personalKinds && it.channelId !in subscribed }.map { it.channelId }
 
+/**
+ * The member lists by server once some were asked for again: [read] has
+ * each server asked about, its list, or none where it could not be had. A
+ * list read takes the place of the one held. One that could not be read
+ * leaves what was held, and nothing where nothing was: never an empty
+ * list, which would say that a server has no members and that nobody
+ * holds a role forty do. A server not among [serverIds], left, goes.
+ */
+fun membersAfter(held: Map<String, List<MemberSummary>>, serverIds: List<String>, read: Map<String, List<MemberSummary>?>): Map<String, List<MemberSummary>> = buildMap {
+    for (id in serverIds) (read[id] ?: held[id])?.let { put(id, it) }
+}
+
 // A changed name or picture (issue #15)
 
 /**

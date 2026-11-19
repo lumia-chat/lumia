@@ -204,8 +204,16 @@ class RolesTest {
         assertEquals(1, administratorQuestion("Acme", "Moderator", 0).size)
         assertEquals(listOf("3 members hold this role. They lose what it allowed.", "This can’t be undone."), deleteQuestion(3))
         assertEquals("1 member holds this role. They lose what it allowed.", deleteQuestion(1)[0])
-        assertEquals("Nobody holds this role.", deleteQuestion(0)[0])
-        assertEquals("Nobody holds this role.", deleteQuestion(null)[0])
+        assertEquals(listOf("Nobody holds this role.", "This can’t be undone."), deleteQuestion(0))
+    }
+
+    @Test
+    fun theDeleteQuestionSaysNothingOfHoldersItDoesNotKnow() {
+        // The members not read, or not to be had: forty may hold the role, so "Nobody" is not said.
+        assertEquals(listOf("This can’t be undone."), deleteQuestion(null))
+        assertEquals(listOf("This can’t be undone."), deleteQuestion(holders(ACME[3], null)))
+        // Read, and nobody has it: that is known, and said.
+        assertEquals("Nobody holds this role.", deleteQuestion(holders(ACME[3], listOf(member("a"))))[0])
     }
 
     // A member
@@ -299,7 +307,7 @@ class RolesTest {
     @Test
     fun aRolesRefusalInWords() {
         assertEquals("Another role in Acme has that name.", roleRefusal("ALREADY_EXISTS", null, "", "Acme"))
-        assertTrue(roleRefusal("INVALID_ARGUMENT", "name", "", "Acme").contains("1 to 32 characters"))
+        assertEquals("A role’s name is 1 to 32 characters on one line, with no hidden characters, and can’t be “everyone”.", roleRefusal("INVALID_ARGUMENT", "name", "", "Acme"))
         assertTrue(roleRefusal("INVALID_ARGUMENT", "role_ids", "", "Acme").contains("Try again"))
         assertTrue(roleRefusal("PERMISSION_DENIED", null, "", "Acme").contains("isn’t yours to change"))
         assertEquals("That role is gone. Someone deleted it.", roleRefusal("NOT_FOUND", null, "", "Acme"))
@@ -315,7 +323,9 @@ class RolesTest {
     @Test
     fun aMembersRefusalInWords() {
         assertEquals("They are no longer a member.", memberRefusal("NOT_FOUND", null, ""))
-        assertTrue(memberRefusal("INVALID_ARGUMENT", "title", "").contains("32 characters"))
+        assertEquals("A title is up to 32 characters on one line, with no hidden characters.", memberRefusal("INVALID_ARGUMENT", "title", ""))
+        // A member's own title, changed more than ten times in an hour: the limit said, not the instance's own words.
+        assertEquals("You’ve changed your title too many times this hour. Try again later.", memberRefusal("RATE_LIMITED", null, "rate limited"))
         assertTrue(memberRefusal("PERMISSION_DENIED", null, "").contains("isn’t yours to change"))
         assertEquals("A member can’t hold that many roles.", memberRefusal("FAILED_PRECONDITION", null, ""))
         assertEquals("nope", memberRefusal(null, null, "nope"))

@@ -26,8 +26,10 @@
 # (architecture 7.5): the sections of Server settings, a role made by taps
 # and one made elsewhere moved over it from its menu, the tag beside a
 # name in the open channel following a role given, a title set and the
-# server's choice of the two, each made elsewhere, and a role deleted
-# through the sheet that asks first. Then the channel is read as assistive technology has it: each account's
+# server's choice of the two, each made elsewhere, a role deleted
+# through the sheet that asks first, which says of one nobody holds that
+# nobody does, and this account's own title refused on its card once the
+# instance's ten changes an hour are spent. Then the channel is read as assistive technology has it: each account's
 # messages in a row are one block, and the second account, typing through
 # the CLI, is named under the composer until it falls silent (protocol
 # 6.7), in light and dark. Then drafts (issue #23): a reply and words
@@ -890,8 +892,39 @@ tap "Delete role"
 gone=""
 for _ in $(seq 1 20); do [ -z "$(role_field Helpers roleId)" ] && { gone=yes; break; }; sleep 1; done
 [ -n "$gone" ] || { echo "FAIL: Delete role, confirmed, left the role on the instance"; exit 1; }
+# A role nobody holds says so, the members being read, and is kept. (With
+# the members not read the question says nothing of holders: RolesTest.)
+await 'content-desc="More for Second"' || { shot role-nobody; echo "FAIL: the role left is not in the list after the other was deleted; see $work/role-nobody.png"; exit 1; }
+tap "More for Second"
+await 'text="Delete role"' || { echo "FAIL: the second role's menu has no Delete role"; exit 1; }
+tap "Delete role"
+await 'text="Delete Second?"' || { shot role-nobody; echo "FAIL: Delete role did not ask first about a role nobody holds; see $work/role-nobody.png"; exit 1; }
+case "$(ui)" in *"Nobody holds this role. This can"*) ;; *) shot role-nobody; echo "FAIL: the question about a role nobody holds does not say so; see $work/role-nobody.png"; exit 1 ;; esac
+tap "Keep it"
+[ -n "$(role_field Second roleId)" ] || { echo "FAIL: Keep it deleted the role"; exit 1; }
+# A member's own title is theirs to change ten times an hour in a server;
+# the instance refuses the eleventh (RATE_LIMITED), and the card's Edit
+# must say so in the sheet's words, with the page still open over what was
+# typed. The ten are made elsewhere, as another session of the owner's,
+# whose title it then is for the rest of the script (nothing further down
+# reads it, and the hour's limit keeps it from being cleared).
+for n in 1 2 3 4 5 6 7 8 9 10; do elsewhere PATCH "/servers/$server/membership" "{\"title\":\"Title $n\"}"; done
+launch members 7 --es LUMIA_DEV_CHANNEL general
+await 'text="You"' || { shot title-limit; echo "FAIL: the channel's members do not list this account; see $work/title-limit.png"; exit 1; }
+tap "You"
+await 'content-desc="Edit title"' || { shot title-limit; echo "FAIL: this account's own card does not offer to edit its title; see $work/title-limit.png"; exit 1; }
+tap "Edit title"
+await 'text="Title 10"' || { shot title-limit; echo "FAIL: the card's Edit did not open on the title the instance has; see $work/title-limit.png"; exit 1; }
+tap "Title 10"
+"$adb" shell input text "x"
+tap "Save"
+await "changed your title too many times this hour. Try again later." || { shot title-limit; echo "FAIL: an eleventh change of this account's own title was not refused in the sheet's words; see $work/title-limit.png"; exit 1; }
+seen=$(ui)
+case "$seen" in *'text="Save"'*) ;; *) shot title-limit; echo "FAIL: the title's page closed on a refusal; see $work/title-limit.png"; exit 1 ;; esac
+case "$seen" in *'text="Title 10"'*) shot title-limit; echo "FAIL: the title's field lost what was typed when the save was refused; see $work/title-limit.png"; exit 1 ;; esac
+shot title-limit
 "$adb" shell am force-stop "$bundle" >/dev/null 2>&1 || true
-echo "  roles: ok (the sections; a role made by taps and the instance had it in its colour; one made elsewhere reached the list and Move up put it first; a role and a title given elsewhere were the tag beside the name in the open channel, as the server showed each; Delete role asked first, said who held it, and then the instance had it gone)"
+echo "  roles: ok (the sections; a role made by taps and the instance had it in its colour; one made elsewhere reached the list and Move up put it first; a role and a title given elsewhere were the tag beside the name in the open channel, as the server showed each; Delete role asked first, said who held it, and then the instance had it gone, and said of a role nobody held that nobody did; this account's own title, changed ten times elsewhere, was refused the eleventh on its card in the sheet's words, the page still open)"
 
 # Blocks, in the channel: the second account's two messages in a row are
 # under its name once, and the second says whose it is and when to a
@@ -1353,4 +1386,4 @@ case "$(ui)" in *"Server settings"*) echo "FAIL: $other_handle, a plain member, 
 [ -n "$drawn" ] || { echo "FAIL: the rail does not draw the server's picture for a member; see $work/member-server.png"; exit 1; }
 "$adb" shell am force-stop "$bundle" >/dev/null 2>&1 || true
 echo "  a member: $work/member-server.png ($other_handle is not offered Server settings, and the rail draws the server's picture)"
-echo "smoke: ok (launched signed in, every screen screenshotted under $work; server settings renamed the server, kept its messages 30 days after saying what that deletes, and a picture set and removed reached the screen and the rail, offered to the owner and not to a member; a role made, moved and deleted, and the tag beside a name following a role, a title and the server's choice made elsewhere; preferences reached from the account menu, kept across a launch and as the phone was turned, dark, Compact, Minimal and the font size 20 drawn, a setting changed after a preset shown as Custom; messages in blocks and someone typing in the channel; a draft and its reply kept through another channel and a force-stop, and cleared by its send; a mention became a notification and its tap opened the channel; Sign out in the account menu ended the session and the push subscription and said nothing; another account signed in on the same phone was the only one it showed and was sent notices for; a session revoked from elsewhere took the subscription with it, and the app went back to sign-in and said so, opened afterwards or open at the time)"
+echo "smoke: ok (launched signed in, every screen screenshotted under $work; server settings renamed the server, kept its messages 30 days after saying what that deletes, and a picture set and removed reached the screen and the rail, offered to the owner and not to a member; a role made, moved and deleted, the tag beside a name following a role, a title and the server's choice made elsewhere, and an eleventh change of this account's own title in an hour refused on its card in words; preferences reached from the account menu, kept across a launch and as the phone was turned, dark, Compact, Minimal and the font size 20 drawn, a setting changed after a preset shown as Custom; messages in blocks and someone typing in the channel; a draft and its reply kept through another channel and a force-stop, and cleared by its send; a mention became a notification and its tap opened the channel; Sign out in the account menu ended the session and the push subscription and said nothing; another account signed in on the same phone was the only one it showed and was sent notices for; a session revoked from elsewhere took the subscription with it, and the app went back to sign-in and said so, opened afterwards or open at the time)"

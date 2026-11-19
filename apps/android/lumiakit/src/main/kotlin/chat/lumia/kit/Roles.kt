@@ -64,7 +64,7 @@ fun rolesCount(roles: List<RoleSummary>): String {
 /** "1 member", "1,204 members". */
 fun membersCount(n: Int): String = if (n == 1) "1 member" else "${grouped(n.toLong())} members"
 
-/** How many of [members] hold a role; Everyone is held by all of them. None until the members are known. */
+/** How many of [members] hold a role; Everyone is held by all of them. None while the members are not known, which is not nobody. */
 fun holders(role: RoleSummary, members: List<MemberSummary>?): Int? {
     if (members == null) return null
     return if (role.isEveryone) members.size else members.count { role.roleId in it.roleIds }
@@ -263,22 +263,29 @@ fun administratorQuestion(serverName: String, roleName: String, held: Int?): Lis
     if (held != null && held > 0) add(if (held == 1) "1 member holds $roleName." else "${grouped(held.toLong())} members hold $roleName.")
 }
 
-/** What is asked before a role is deleted: the lines under "Delete Moderator?". */
-fun deleteQuestion(held: Int?): List<String> = listOf(
+/**
+ * What is asked before a role is deleted: the lines under "Delete
+ * Moderator?". How many hold it is said only where it is known: with the
+ * members not read, still on their way or not to be had, [held] is none
+ * and nothing is said of holders, since "Nobody" would be a guess about a
+ * role that forty may hold.
+ */
+fun deleteQuestion(held: Int?): List<String> = buildList {
     when {
-        held == null || held == 0 -> "Nobody holds this role."
-        held == 1 -> "1 member holds this role. They lose what it allowed."
-        else -> "${grouped(held.toLong())} members hold this role. They lose what it allowed."
-    },
-    "This can’t be undone.",
-)
+        held == null -> Unit
+        held == 0 -> add("Nobody holds this role.")
+        held == 1 -> add("1 member holds this role. They lose what it allowed.")
+        else -> add("${grouped(held.toLong())} members hold this role. They lose what it allowed.")
+    }
+    add("This can’t be undone.")
+}
 
 /** Why a role was not saved, moved or deleted: the API's [code] and `details.field`, else the failure's own [message]. */
 fun roleRefusal(code: String?, field: String?, message: String, serverName: String): String = when {
     code == "PERMISSION_DENIED" -> "That isn’t yours to change. A role at or above your own highest, or a permission you don’t hold, is not yours to give."
     code == "ALREADY_EXISTS" -> "Another role in $serverName has that name."
     code == "NOT_FOUND" -> ROLE_GONE
-    code == "INVALID_ARGUMENT" && field == "name" -> "A role’s name is 1 to 32 characters, and can’t be “everyone”."
+    code == "INVALID_ARGUMENT" && field == "name" -> "A role’s name is 1 to 32 characters on one line, with no hidden characters, and can’t be “everyone”."
     code == "INVALID_ARGUMENT" && field == "color" -> "A role’s colour is one of the nine, or none."
     code == "INVALID_ARGUMENT" && field == "role_ids" -> "The roles changed while you were moving one. Try again."
     code == "FAILED_PRECONDITION" -> "This server has as many roles as it can hold."
@@ -290,11 +297,16 @@ const val ROLE_GONE = "That role is gone. Someone deleted it."
 /** Whether a role's refusal is about its name, and so is said under that field. */
 fun refusalIsOfName(code: String?, field: String?): Boolean = code == "ALREADY_EXISTS" || (code == "INVALID_ARGUMENT" && field == "name")
 
-/** Why a member's roles or title were not saved, or they were not kicked. */
+/**
+ * Why a member's roles or title were not saved, or they were not kicked.
+ * `RATE_LIMITED` is the instance's limit on a member's own title, ten
+ * changes an hour in a server; nothing else here is held to one.
+ */
 fun memberRefusal(code: String?, field: String?, message: String): String = when {
     code == "PERMISSION_DENIED" -> "That isn’t yours to change. They may be at or above your own highest role."
     code == "NOT_FOUND" -> "They are no longer a member."
     code == "FAILED_PRECONDITION" -> "A member can’t hold that many roles."
-    code == "INVALID_ARGUMENT" && field == "title" -> "A title is up to 32 characters, on one line."
+    code == "INVALID_ARGUMENT" && field == "title" -> "A title is up to 32 characters on one line, with no hidden characters."
+    code == "RATE_LIMITED" -> "You’ve changed your title too many times this hour. Try again later."
     else -> message
 }

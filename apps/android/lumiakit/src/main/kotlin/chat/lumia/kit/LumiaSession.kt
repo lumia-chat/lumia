@@ -16,6 +16,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import uniffi.lumia_ffi.ClientEvent
 import uniffi.lumia_ffi.DeviceSummary
@@ -1083,14 +1085,40 @@ class LumiaSession(
         runCatching { client.call { dmMessages(channelId) } }.getOrNull()?.let { dmLogs[channelId] = it }
     }
 
-    /** The member lists of [serverIds], those of [fetch] read again and the rest kept; a server left goes. */
-    private suspend fun refreshPeople(serverIds: List<String>, fetch: List<String>) {
-        val byServer = serverMembers.filterKeys { it in serverIds }.toMutableMap()
-        for (id in fetch) {
-            byServer[id] = runCatching { client.call { members(id, "") } }.getOrDefault(emptyList())
-        }
+    /** The reads of member lists, one at a time: a screen that asks for a list while the snapshot's own read of it is on its way waits for that one and asks nothing. */
+    private val peopleReads = Mutex()
+
+    /**
+     * The member lists of [serverIds], those of [fetch] read again and the
+     * rest kept; a server left goes. A list that could not be read is as
+     * it was held, and not there where none was (`membersAfter`): a server
+     * whose members are not known has no list, and what counts them (a
+     * role's holders, Members' heading) says nothing instead of none.
+     */
+    private suspend fun refreshPeople(serverIds: List<String>, fetch: List<String>) = peopleReads.withLock { readPeople(serverIds, fetch) }
+
+    private suspend fun readPeople(serverIds: List<String>, fetch: List<String>) {
+        val read = fetch.associateWith { id -> runCatching { client.call { members(id, "") } }.getOrNull() }
+        if (leaving || !signedIn) return
+        // Over what is held now, which a tag or a name changed meanwhile may have written.
+        val byServer = membersAfter(serverMembers, serverIds, read)
         serverMembers = byServer
         people = serverIds.flatMap { byServer[it].orEmpty() }.associateBy { it.accountId }
+    }
+
+    /**
+     * A server's members asked for where the phone holds no list of them,
+     * its read with the snapshot having failed: the screens that count
+     * them (Roles, a role's editor, Members) ask as they open, so
+     * "Reading the members…" is true and a count is not unknown for good.
+     * With a list held, or one on its way, nothing is asked.
+     */
+    suspend fun askMembers(serverId: String) {
+        if (leaving || !signedIn || serverId in serverMembers) return
+        peopleReads.withLock {
+            val ids = snapshot?.servers?.map { it.serverId } ?: return
+            if (serverId in ids && serverId !in serverMembers) readPeople(ids, listOf(serverId))
+        }
     }
 
     // Actions
@@ -1101,7 +1129,11 @@ class LumiaSession(
      * (and of everyone, for one who may), as the core finds them; a server
      * DM mentions nobody, both being told of every message anyway. Answers
      * who it mentioned that is not in the channel, so not notified, as far
-     * as who is in it is known (`loadChannelMembers`).
+     * as who is in it is known (`loadChannelMembers`). It answers when the
+     * core's send has, without error, and throws when that did: the
+     * composer's words and their draft are let go on the one and kept on
+     * the other (`DraftKeeper.sending`). The channel is read again from the
+     * store in the session's own time, which the answer does not wait for.
      */
     suspend fun sendMessageWith(channelId: String, body: String, reply: QuoteSummary?, cardUrls: List<String> = emptyList()): List<String> {
         val mentions = mentionsIn(channelId, body)
@@ -1114,11 +1146,11 @@ class LumiaSession(
             client.call { sendMessageWithMedia(channelId, body, mentions, reply, draftIds(going), cardUrls) }
             sent(channelId, going)
         }
-        refreshMessages(channelId)
+        scope.launch { refreshMessages(channelId) }
         return outside
     }
 
-    /** Sends to a personal conversation, quoting [quote] or nothing (inside the encryption), with its attachments and cards as a channel's. */
+    /** Sends to a personal conversation, quoting [quote] or nothing (inside the encryption), with its attachments and cards as a channel's, and answering as a channel's send does. */
     suspend fun dmSendWith(channelId: String, body: String, quote: QuoteSummary?, cardUrls: List<String> = emptyList()) {
         val going = readyAttachments(channelId)
         if (going.isEmpty() && cardUrls.isEmpty()) {
@@ -1127,7 +1159,7 @@ class LumiaSession(
             client.call { dmSendWithMedia(channelId, body, quote, draftIds(going), cardUrls) }
             sent(channelId, going)
         }
-        refreshDmLog(channelId)
+        scope.launch { refreshDmLog(channelId) }
     }
 
     // Drafts (issue #23)

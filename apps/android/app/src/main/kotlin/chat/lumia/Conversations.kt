@@ -106,6 +106,7 @@ import chat.lumia.kit.SERVER_DM
 import chat.lumia.kit.Stamp
 import chat.lumia.kit.TEXT
 import chat.lumia.kit.addRefused
+import chat.lumia.kit.afterSend
 import chat.lumia.kit.blockPlaces
 import chat.lumia.kit.dayOfMicros
 import chat.lumia.kit.firstUnread
@@ -257,8 +258,10 @@ private fun BringEditing(listState: LazyListState, item: Int?, onHold: () -> Uni
  * is handed to [put] for the field and the reply bar. What is typed is
  * kept once it has rested (`DRAFT_REST_MS`), and at once as the screen goes
  * away and as the app is stopped, which Android may then end without a
- * word; an emptied field keeps nothing. A send calls the keeper's `sent`,
- * which clears it at once. The field a message is edited in is another
+ * word; an emptied field keeps nothing. A send goes through the keeper's
+ * `sending`, which clears the draft once the core's send has answered
+ * without error and not before, so words that were not sent are still in
+ * the field and still kept. The field a message is edited in is another
  * (`EditField`, in the message's row), so an edit is never a draft and the
  * draft is as it was when the edit ends. The files waiting in the strip are
  * not kept, and a store that fails says nothing.
@@ -330,6 +333,8 @@ fun ConversationScreen(store: AppStore, session: LumiaSession, channelId: String
     val pending = session.attaching[channelId].orEmpty()
     val cards = rememberComposerCards(session, channelId, draft.text)
     var waiting by rememberSaveable { mutableStateOf(false) }
+    // A send on its way to the core: its words stay in the field until it has answered, and nothing else is sent meanwhile.
+    var sending by remember { mutableStateOf(false) }
     val removals = remember { EditRemovals() }
     // The long messages opened while the conversation is.
     val expanded = remember { mutableStateMapOf<String, Boolean>() }
@@ -386,8 +391,13 @@ fun ConversationScreen(store: AppStore, session: LumiaSession, channelId: String
         )
     }
 
-    /** Sends the draft with its files and kept cards, or, while files upload, waits for them ([waiting]). */
+    /**
+     * Sends the draft with its files and kept cards, or, while files upload, waits for them ([waiting]).
+     * The words stay in the field, and their draft in the store, until the core's send has answered without
+     * error (`DraftKeeper.sending`): one that throws leaves both, with why under the last message.
+     */
     fun send() {
+        if (sending) return
         val body = draft.text.trim()
         // Over the limit nothing is sent, and the draft stays.
         val now = session.attaching[channelId].orEmpty()
@@ -395,17 +405,27 @@ fun ConversationScreen(store: AppStore, session: LumiaSession, channelId: String
         if (waitsFor(now)) { waiting = true; return }
         waiting = false
         if (body.isEmpty() && draftIds(now).isEmpty()) return
+        val held = draft.text
         val quote = replying
         val urls = cards.cardUrls(body)
-        draft = TextFieldValue("")
-        replying = null
-        // Sent: nothing of it is kept, from now.
-        keeper.sent()
         error = ""
         holding = false
-        cards.reset()
         session.clearError()
-        scope.launch { try { session.dmSendWith(channelId, body, quote, urls) } catch (e: Exception) { error = e.lumiaMessage } }
+        sending = true
+        scope.launch {
+            try {
+                keeper.sending { session.dmSendWith(channelId, body, quote, urls) }
+                // Gone: the field and the reply bar let go of what went, and only of that.
+                draft = wentFrom(draft, held)
+                if (replying == quote) replying = null
+                cards.reset()
+            } catch (e: Exception) {
+                // Not sent: the words stay in the field and in the draft, with why.
+                error = e.lumiaMessage
+            } finally {
+                sending = false
+            }
+        }
     }
     LaunchedEffect(waiting, pending) { if (waiting && !waitsFor(pending)) send() }
 
@@ -487,7 +507,7 @@ fun ConversationScreen(store: AppStore, session: LumiaSession, channelId: String
                 room = room,
                 strip = { ComposerStrip(session, channelId, cards, waiting) },
                 leading = if (member) ({ AttachButton(session, channelId) }) else null,
-                sendable = maySend(draft.text, pending, false) && !waiting,
+                sendable = maySend(draft.text, pending, false) && !waiting && !sending,
             ) { send() }
             // Nobody is shown typing in a personal conversation, and nothing is sent when this
             // person does (protocol 6.7); the line keeps its room, so the composer sits where a
@@ -569,6 +589,8 @@ fun ChannelScreen(store: AppStore, session: LumiaSession, channelId: String, dis
     val pending = session.attaching[channelId].orEmpty()
     val cards = rememberComposerCards(session, channelId, draft.text)
     var waiting by rememberSaveable { mutableStateOf(false) }
+    // A send on its way to the core: its words stay in the field until it has answered, and nothing else is sent meanwhile.
+    var sending by remember { mutableStateOf(false) }
     val removals = remember { EditRemovals() }
     // The long messages opened while the channel is.
     val expanded = remember { mutableStateMapOf<String, Boolean>() }
@@ -667,8 +689,13 @@ fun ChannelScreen(store: AppStore, session: LumiaSession, channelId: String, dis
         )
     }
 
-    /** Sends the draft with its files and kept cards, or, while files upload, waits for them ([waiting]). */
+    /**
+     * Sends the draft with its files and kept cards, or, while files upload, waits for them ([waiting]).
+     * The words stay in the field, and their draft in the store, until the core's send has answered without
+     * error (`DraftKeeper.sending`): one that throws leaves both, with why under the last message.
+     */
     fun send() {
+        if (sending) return
         val body = draft.text.trim()
         // Over the limit nothing is sent, and the draft stays.
         val now = session.attaching[channelId].orEmpty()
@@ -676,23 +703,28 @@ fun ChannelScreen(store: AppStore, session: LumiaSession, channelId: String, dis
         if (waitsFor(now)) { waiting = true; return }
         waiting = false
         if (body.isEmpty() && draftIds(now).isEmpty()) return
-        val quote = replying?.let { sentQuote(it, mentionOn, session.me) }
+        val held = draft.text
+        val answered = replying
+        val quote = answered?.let { sentQuote(it, mentionOn, session.me) }
         val urls = cards.cardUrls(body)
-        draft = TextFieldValue("")
-        replying = null
-        // Sent: nothing of it is kept, from now.
-        keeper.sent()
         error = ""
         holding = false
         outside = null
-        cards.reset()
         session.clearError()
+        sending = true
         scope.launch {
             try {
-                val missed = session.sendMessageWith(channelId, body, quote, urls)
+                val missed = keeper.sending { session.sendMessageWith(channelId, body, quote, urls) }
+                // Gone: the field and the reply bar let go of what went, and only of that.
+                draft = wentFrom(draft, held)
+                if (replying == answered) replying = null
+                cards.reset()
                 if (missed.isNotEmpty()) outside = Outside(missed)
             } catch (e: Exception) {
+                // Not sent: the words stay in the field and in the draft, with why.
                 error = e.lumiaMessage
+            } finally {
+                sending = false
             }
         }
     }
@@ -795,7 +827,7 @@ fun ChannelScreen(store: AppStore, session: LumiaSession, channelId: String, dis
                     room = room,
                     strip = { ComposerStrip(session, channelId, cards, waiting) },
                     leading = if (member) ({ AttachButton(session, channelId) }) else null,
-                    sendable = maySend(draft.text, pending, false) && !waiting,
+                    sendable = maySend(draft.text, pending, false) && !waiting && !sending,
                 ) { send() }
             } else {
                 // Not in it: read it, and join from here (architecture 6.8).
@@ -841,6 +873,12 @@ fun ChannelScreen(store: AppStore, session: LumiaSession, channelId: String, dis
             onDismiss = { deleting = null },
         )
     }
+}
+
+/** The composer's field once the words it held as [sent] have gone (`afterSend`): empty, or what was typed after them, the caret at its end. */
+private fun wentFrom(field: TextFieldValue, sent: String): TextFieldValue {
+    val left = afterSend(sent, field.text)
+    return if (left == field.text) field else TextFieldValue(left, TextRange(left.length))
 }
 
 /**

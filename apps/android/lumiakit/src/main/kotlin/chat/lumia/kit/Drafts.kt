@@ -11,6 +11,8 @@
 package chat.lumia.kit
 
 import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import uniffi.lumia_ffi.DraftSummary
 import uniffi.lumia_ffi.QuoteSummary
 
@@ -23,8 +25,9 @@ const val DRAFT_REST_MS = 400L
  * empty or all blank keeping nothing; [after] runs something once a time
  * has passed and answers with how to take that back. The screen tells it
  * what the composer holds ([changed]), when it goes away or the app is
- * stopped ([flush]) and when the words were sent ([sent]), all from one
- * thread; [after] calls back on it too.
+ * stopped ([flush]) and hands it each send ([sending]), which clears the
+ * draft only once the words have gone, all from one thread; [after] calls
+ * back on it too.
  */
 class DraftKeeper(
     private val read: suspend () -> DraftSummary?,
@@ -90,8 +93,9 @@ class DraftKeeper(
     /**
      * The words were sent: nothing is kept from this moment, and a save
      * that was waiting is taken back, so it cannot bring them back later.
-     * Words put back in the field after a send that failed are a change,
-     * and kept again.
+     * What the field holds after it (words typed while the send was on its
+     * way) is a change, and kept again. A screen does not call this
+     * itself: [sending] does, once the send has answered.
      */
     fun sent() {
         waiting?.invoke()
@@ -101,6 +105,36 @@ class DraftKeeper(
         reply = null
         keep("", null)
     }
+
+    /**
+     * A send of what the composer holds, in the order that loses nothing.
+     * What waits is kept first ([flush]), so the store has the words while
+     * they are on their way and a phone that dies then has them as a
+     * draft. Then [send], the core's. Only once that has answered without
+     * error is the draft cleared ([sent]); a send that throws leaves the
+     * draft as it is and throws on, the words being the composer's still.
+     * It is not cut short by the screen going away: the core's send, once
+     * asked, is not either, and a draft left behind for words that went
+     * would have them sent a second time.
+     */
+    suspend fun <T> sending(send: suspend () -> T): T = withContext(NonCancellable) {
+        flush()
+        val answer = send()
+        sent()
+        answer
+    }
+}
+
+/**
+ * What a composer's field holds once the words it held as [sent] have
+ * gone, [now] being what it holds as the send answers: nothing, and
+ * whatever was typed after them while they were on their way. A field
+ * changed in some other way meanwhile is left as it is.
+ */
+fun afterSend(sent: String, now: String): String = when {
+    now == sent -> ""
+    now.startsWith(sent) -> now.substring(sent.length).trimStart()
+    else -> now
 }
 
 /**

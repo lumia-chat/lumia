@@ -116,6 +116,23 @@ class MembershipTest {
         assertEquals(emptyList<String>(), toSubscribe(all, setOf("general", "dm", "new")))
     }
 
+    @Test
+    fun aMemberListThatCouldNotBeReadIsNotAnEmptyOne() {
+        val acme = listOf(member("ada"), member("grace"))
+        val held = mapOf("acme" to acme, "left" to listOf(member("ada")))
+        // Read: the new list takes the held one's place; a server left goes.
+        assertEquals(mapOf("acme" to listOf(member("ada"))), membersAfter(held, listOf("acme"), mapOf("acme" to listOf(member("ada")))))
+        // Not to be had, a reconnect's read failing: what was held stays.
+        assertEquals(mapOf("acme" to acme), membersAfter(held, listOf("acme"), mapOf("acme" to null)))
+        // Not asked about: as held.
+        assertEquals(mapOf("acme" to acme), membersAfter(held, listOf("acme"), emptyMap()))
+        // Never read and not to be had: no list at all, so whoever counts its members knows that it does not know.
+        val unread = membersAfter(held, listOf("acme", "new"), mapOf("new" to null))
+        assertFalse("new" in unread)
+        assertNull(unread["new"])
+        assertEquals(acme, unread["acme"])
+    }
+
     private val newPicture = "/api/v1/avatars/" + "3".repeat(64)
 
     private fun ada(display: String = "Ada Lovelace", avatar: String = newPicture) =

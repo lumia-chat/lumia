@@ -65,6 +65,7 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -190,6 +191,19 @@ private fun refused(e: Exception, serverName: String): String = roleRefusal(e.lu
 
 private fun refused(e: Exception): String = memberRefusal(e.lumiaCode, e.lumiaDetails["field"], e.lumiaMessage)
 
+/**
+ * A server's members asked for as one of these screens opens without them
+ * ([members] none: their read with the snapshot not answered yet, or
+ * failed). Until they are here a screen counts nobody: a role's row and
+ * an editor's header say no number, and the delete question nothing of
+ * who holds the role (`deleteQuestion`).
+ */
+@Composable
+private fun AskMembers(session: LumiaSession, serverId: String, members: List<MemberSummary>?) {
+    val unread = members == null
+    LaunchedEffect(serverId, unread) { if (unread && serverId.isNotEmpty()) session.askMembers(serverId) }
+}
+
 // Roles
 
 /**
@@ -216,6 +230,7 @@ fun RolesScreen(session: LumiaSession, server: ServerSummary?, back: () -> Unit,
     var asking by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     val roles = rolesInOrder(server?.roles ?: emptyList(), moved)
+    AskMembers(session, serverId, members)
 
     fun move(roleId: String, beforeId: String?) {
         if (server == null || beforeId == null || moved != null || !landsBefore(roles, roleId, beforeId)) return
@@ -448,6 +463,7 @@ fun RoleEditorScreen(session: LumiaSession, server: ServerSummary?, roleId: Stri
     var holdersBusy by remember { mutableStateOf(false) }
     var askingAdmin by remember { mutableStateOf(false) }
     var askingDelete by remember { mutableStateOf(false) }
+    AskMembers(session, serverId, members)
 
     val held = role?.let { holders(it, members) }
     val holding = if (role != null && !everyone) (members ?: emptyList()).filter { role.roleId in it.roleIds } else emptyList()
@@ -933,6 +949,7 @@ fun ServerMembersScreen(session: LumiaSession, server: ServerSummary?, back: () 
     var query by rememberSaveable { mutableStateOf("") }
     var open by rememberSaveable { mutableStateOf<String?>(null) }
     val found = remember(members, query) { searched(members ?: emptyList(), query) }
+    AskMembers(session, serverId, members)
 
     PanelScreen(
         back = "Server settings",

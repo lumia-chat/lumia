@@ -1,12 +1,15 @@
 // What is typed and not sent (issue #23): when the phone reads a
-// conversation's draft and when it keeps one, against a store that is a
-// map and rests that pass when the test says so; and once against the
+// conversation's draft and when it keeps one, and the order of a send
+// (kept, sent, and only then cleared; kept still when the send throws),
+// against a store that is a map and rests that pass when the test says so; and once against the
 // core itself (the library `scripts/core.sh` builds for this machine),
 // with no instance, where a second client on the same files is the next
 // launch.
 package chat.lumia.kit
 
 import java.nio.file.Files
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -148,10 +151,93 @@ class DraftsTest {
         // The field the send emptied is what the keeper already has.
         k.changed("", null)
         assertEquals(emptyList<Long>(), rests.asked)
-        // The send failed and the screen put the words back: kept again.
+        // What is typed after it is a change like any other: kept again.
         k.changed("Sent words", quote)
         rests.pass()
         assertEquals(DraftSummary("Sent words", quote), store.kept[HERE])
+    }
+
+    @Test
+    fun aSendHasItsWordsKeptUntilItHasAnswered() {
+        val store = Store()
+        val rests = Rests()
+        val k = keeper(store, rests)
+        // Typed and sent before the words had rested: nothing of them is in the store yet.
+        k.changed("On their way", quote)
+        assertNull(store.kept[HERE])
+        var during: DraftSummary? = null
+        val answer = runBlocking {
+            k.sending {
+                // While the core has the send, the store has the draft: a phone that dies here has the words.
+                during = store.kept[HERE]
+                "sent"
+            }
+        }
+        assertEquals("sent", answer)
+        assertEquals(DraftSummary("On their way", quote), during)
+        // Answered without error: cleared, in that order, and nothing waits to bring the words back.
+        assertNull(store.kept[HERE])
+        assertEquals(listOf("On their way" to quote, "" to null), store.writes)
+        rests.pass()
+        assertEquals(2, store.writes.size)
+    }
+
+    @Test
+    fun aSendThatThrowsLeavesTheDraftAsItWas() {
+        val store = Store()
+        val rests = Rests()
+        val k = keeper(store, rests)
+        k.changed("Not gone", quote)
+        val thrown = runCatching { runBlocking { k.sending<Unit> { throw IllegalStateException("the gateway loop has stopped") } } }.exceptionOrNull()
+        // The failure is the screen's to say, and the words are still the conversation's draft.
+        assertEquals("the gateway loop has stopped", thrown?.message)
+        assertEquals(DraftSummary("Not gone", quote), store.kept[HERE])
+        assertEquals(listOf<Pair<String, QuoteSummary?>>("Not gone" to quote), store.writes)
+        // The field still holds them, which is nothing new to the keeper; and the next launch has them.
+        k.changed("Not gone", quote)
+        assertEquals(emptyList<Long>(), rests.asked)
+        assertEquals(DraftSummary("Not gone", quote), keeper(store, rests).read())
+        // Sent again, and through this time: cleared.
+        runBlocking { k.sending { } }
+        assertNull(store.kept[HERE])
+    }
+
+    @Test
+    fun aSendIsNotCutShortByItsScreenGoingAway() {
+        val store = Store()
+        val rests = Rests()
+        val k = keeper(store, rests)
+        k.changed("Sent as the screen left", null)
+        runBlocking {
+            val asked = CompletableDeferred<Unit>()
+            val answered = CompletableDeferred<Unit>()
+            val send = launch {
+                k.sending {
+                    asked.complete(Unit)
+                    answered.await()
+                }
+            }
+            asked.await()
+            // The conversation is left while the core has the send, which goes through all the same.
+            send.cancel()
+            answered.complete(Unit)
+            send.join()
+        }
+        // The words went, so their draft does too: left behind, it would have them sent a second time.
+        assertNull(store.kept[HERE])
+        assertEquals(listOf<Pair<String, QuoteSummary?>>("Sent as the screen left" to null, "" to null), store.writes)
+    }
+
+    @Test
+    fun theFieldLetsGoOfWhatWasSentAndOnlyOfThat() {
+        assertEquals("", afterSend("Hello", "Hello"))
+        assertEquals("", afterSend("Hello\n", "Hello\n"))
+        // Typed on while the send was on its way: those words are not the message's, and stay.
+        assertEquals("are you there?", afterSend("Hello", "Hello are you there?"))
+        assertEquals("next line", afterSend("Hello", "Hello\nnext line"))
+        // Changed in some other way meanwhile: left as it is.
+        assertEquals("Hullo", afterSend("Hello", "Hullo"))
+        assertEquals("", afterSend("Hello", ""))
     }
 
     @Test
@@ -223,7 +309,7 @@ class DraftsTest {
             assertEquals(DraftSummary("Half a thought\n", quote), back.read())
             assertNull(second.now { draft(THERE) })
             // Sent: a third launch finds nothing.
-            back.sent()
+            runBlocking { back.sending { } }
             assertNull(LumiaClient(address, dir).now { draft(HERE) })
         } finally {
             dir.deleteRecursively()
